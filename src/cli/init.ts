@@ -23,6 +23,7 @@ const PRESETS: Record<string, string[]> = {
 interface InitOptions {
   global?: boolean;
   local?: boolean;
+  path?: string;
   team?: string[];
   preset?: string;
   noOmc?: boolean;
@@ -255,18 +256,27 @@ export function registerInit(program: Command): void {
     .description('AI Harness를 초기화합니다')
     .option('--global', '글로벌 설치 (모든 프로젝트에 적용)')
     .option('--local', '프로젝트 로컬 설치 (현재 프로젝트만)')
+    .option('--path <path>', '대상 프로젝트 경로 지정 (기본: 현재 디렉토리)')
     .option('--team <teams...>', '팀 목록 지정 (예: --team frontend backend)')
     .option('--preset <preset>', `프리셋 사용 (${Object.keys(PRESETS).join(', ')})`)
     .option('--no-omc', 'OMC 통합 없이 초기화')
     .option('--dry-run', '파일 변경 없이 계획만 출력')
     .option('--non-interactive', '대화형 프롬프트 없이 실행')
     .action(async (options: InitOptions) => {
-      const cwd = process.cwd();
+      const targetPath = options.path ? resolve(options.path) : process.cwd();
       const home = homedir();
       const dryRun = !!options.dryRun;
       const packageRoot = getPackageRoot();
 
       log.heading('AI Harness 초기화');
+
+      if (options.path) {
+        log.info(`대상 경로: ${targetPath}`);
+        if (!existsSync(targetPath)) {
+          log.error(`경로가 존재하지 않습니다: ${targetPath}`);
+          process.exit(1);
+        }
+      }
 
       // 환경 감지
       const env = detectEnvironment();
@@ -280,7 +290,7 @@ export function registerInit(program: Command): void {
       }
 
       // 스택 감지
-      const stacks = detectStack(cwd);
+      const stacks = detectStack(targetPath);
       if (stacks.length > 0) {
         log.info(`감지된 스택: ${stacks.join(', ')}`);
       }
@@ -319,9 +329,9 @@ export function registerInit(program: Command): void {
           }
           await installHarness(
             'local',
-            cwd,
-            join(cwd, 'CLAUDE.md'),
-            join(cwd, '.claude', 'settings.json'),
+            targetPath,
+            join(targetPath, 'CLAUDE.md'),
+            join(targetPath, '.claude', 'settings.json'),
             teams,
             packageRoot,
             dryRun,
