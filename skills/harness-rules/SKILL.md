@@ -19,4 +19,9 @@ description: 적용 중인 규칙과 마지막 차단 사유를 표시합니다
    - result가 'blocked'인 마지막 이벤트 찾기
    - Hook명, 차단된 도구, 차단 사유 표시
 3. 카테고리별로 정리: [Global - 잠금], [팀별], [가드레일]
+4. 미결정 사항 표시:
+   - .ai-harness/pending-decisions.yaml이 있으면 Read
+   - status가 'pending'인 항목을 카테고리별로 표시
+   - 각 항목에 대해 "지금 결정하시겠습니까?" 제안
+   - 사용자가 결정하면 config.yaml/컨벤션에 반영 + pending에서 제거
 </Steps>
