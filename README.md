@@ -12,7 +12,7 @@ AI 에이전트(Claude Code, Codex, Cursor 등)를 안전하게 제어하고 회
 
 **팀 관리** — 팀 추가/제거, 컨벤션 수정, Hook 관리를 자연어로 수행
 
-**설정 스냅샷** — 변경 사항 이전 상태로 복원, 버전 관리
+**팀 관리** — 팀 추가/제거, 컨벤션 수정, Hook 관리를 자연어로 수행
 
 ## 유저 플로우
 
@@ -81,7 +81,7 @@ Claude: convention-backend.md 참고하여 코드 생성
 "왜 차단됐어?"           → /harness-rules → 마지막 차단 사유 + 대안
 "차단 몇 번 됐어?"      → /harness-metrics → 도구 호출, 차단률, 팀별 분포
 "Hook 느린 것 같아"      → /harness-benchmark → p50/p95/p99 측정
-"설정 롤백해줘"          → /harness-rollback → 이전 스냅샷 복원
+"하네스 진단해줘"        → /harness-doctor → 종합 진단
 ```
 
 ### 전체 흐름 요약
@@ -173,7 +173,6 @@ Claude가 다음을 자동으로 수행합니다:
 | **harness-rules** | "적용된 규칙 보여줘" | 현재 보안 규칙 목록, 마지막 차단 사유 |
 | **harness-metrics** | "차단 몇 번 됐어?" | 도구 호출 횟수, 차단률, 팀별 분포 |
 | **harness-team** | "QA팀 추가해줘" | 팀 추가/제거, 컨벤션 수정 |
-| **harness-rollback** | "이전 설정으로 복원" | 스냅샷 목록 표시, 복원 수행 |
 | **harness-benchmark** | "Hook 성능 측정" | Hook 실행 시간 p50/p95/p99 측정 |
 | **harness-exclude** | "이 프로젝트 제외해줘" | 글로벌 하네스 제외 프로젝트 관리 |
 
@@ -294,7 +293,6 @@ ai-harness/
 │   ├── harness-rules/
 │   ├── harness-metrics/
 │   ├── harness-team/
-│   ├── harness-rollback/
 │   ├── harness-benchmark/
 │   └── harness-exclude/
 │
@@ -305,7 +303,6 @@ ai-harness/
 │   ├── inject-claudemd.mjs     # CLAUDE.md에 하네스 규칙 주입
 │   ├── test-hooks.mjs          # Hook 단위 테스트
 │   ├── benchmark-hooks.mjs     # Hook 성능 측정
-│   └── snapshot.mjs            # 설정 스냅샷 관리
 │
 ├── hooks/                      # 글로벌 Hook 스크립트
 │   ├── block-dangerous.sh      # 위험 명령 차단
@@ -365,7 +362,6 @@ ai-harness/
 | `inject-claudemd.mjs` | CLAUDE.md에 `# harness:start ~ harness:end` 구간 주입 |
 | `test-hooks.mjs` | Hook을 `.test.yaml`에 정의된 케이스로 테스트 |
 | `benchmark-hooks.mjs` | Hook 실행 시간 p50/p95/p99 측정 |
-| `snapshot.mjs` | 설정 스냅샷 생성/목록/복원 |
 
 ## 설계 문서
 
