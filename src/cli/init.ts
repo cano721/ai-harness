@@ -11,6 +11,12 @@ import { inject } from '../engine/claudemd-injector.js';
 import { registerHooks } from '../engine/settings-manager.js';
 import { stringify } from 'yaml';
 import { DEFAULT_CONFIG } from '../types/index.js';
+import {
+  type ConventionAnswers,
+  generateConventionSkill,
+  saveConventionConfig,
+  loadConventionConfig,
+} from '../engine/convention-generator.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -24,6 +30,7 @@ interface InitOptions {
   global?: boolean;
   local?: boolean;
   path?: string;
+  config?: string;
   team?: string[];
   preset?: string;
   noOmc?: boolean;
@@ -116,6 +123,55 @@ function getPackageRoot(): string {
   return resolve(__dirname, '..', '..');
 }
 
+async function collectConventionAnswers(teams: string[]): Promise<ConventionAnswers> {
+  log.heading('프로젝트 컨벤션 설정');
+  console.log('');
+
+  const domain = await askQuestion('  프로젝트 도메인? (예: 채용관리, 이커머스): ');
+  const entitiesRaw = await askQuestion('  주요 엔티티? (쉼표 구분, 예: User,Order): ');
+  const entities = entitiesRaw
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+
+  const answers: ConventionAnswers = {
+    domain: domain || '프로젝트',
+    entities: entities.length > 0 ? entities : ['Entity'],
+  };
+
+  if (teams.includes('backend')) {
+    console.log('');
+    console.log('  [backend 팀 감지]');
+    const basePackage = await askQuestion('  베이스 패키지? (기본: com.company): ');
+    const apiPrefix = await askQuestion('  API 접두사? (기본: /api/v1): ');
+    const dtoPattern = await askQuestion('  DTO 네이밍 패턴? (기본: {Action}{Entity}Request): ');
+    const dbMigration = await askQuestion('  DB 마이그레이션 도구? (flyway/liquibase, 기본: flyway): ');
+    answers.basePackage = basePackage || 'com.company';
+    answers.apiPrefix = apiPrefix || '/api/v1';
+    answers.dtoPattern = dtoPattern || '{Action}{Entity}Request';
+    answers.dbMigration = dbMigration || 'flyway';
+  }
+
+  if (teams.includes('frontend')) {
+    console.log('');
+    console.log('  [frontend 팀 감지]');
+    const framework = await askQuestion('  프레임워크? (react/next/vue, 기본: react): ');
+    const stateManagement = await askQuestion('  상태 관리? (zustand/redux/pinia, 기본: zustand): ');
+    const componentDir = await askQuestion('  컴포넌트 디렉토리? (기본: src/components): ');
+    answers.framework = framework || 'react';
+    answers.stateManagement = stateManagement || 'zustand';
+    answers.componentDir = componentDir || 'src/components';
+  }
+
+  console.log('');
+  const testFramework = await askQuestion('  테스트 프레임워크? (기본: jest): ');
+  const coverageRaw = await askQuestion('  테스트 커버리지 목표? (기본: 80): ');
+  answers.testFramework = testFramework || 'jest';
+  answers.coverageTarget = coverageRaw ? parseInt(coverageRaw, 10) : 80;
+
+  return answers;
+}
+
 async function installHarness(
   scope: Scope,
   targetDir: string,
@@ -124,6 +180,7 @@ async function installHarness(
   teams: string[],
   packageRoot: string,
   dryRun: boolean,
+  conventionAnswers?: ConventionAnswers,
 ): Promise<void> {
   const scopeLabel = scope === 'global' ? '글로벌' : '프로젝트 로컬';
   const harnessDir = join(targetDir, '.ai-harness');
@@ -240,6 +297,14 @@ async function installHarness(
             await copyFile(join(teamSkillsSrc, sf), join(teamSkillsDest, sf));
           }
           log.success(`[${team}] Skill ${skillFiles.length}개`);
+
+          // 컨벤션 답변이 있으면 convention 스킬 파일 생성 (덮어쓰기)
+          if (conventionAnswers) {
+            const conventionFileName = `convention-${team}.md`;
+            const conventionSkillPath = join(teamSkillsDest, conventionFileName);
+            await generateConventionSkill(team, conventionAnswers, conventionSkillPath);
+            log.success(`[${team}] ${conventionFileName} 생성`);
+          }
         }
       }
     }
@@ -262,6 +327,7 @@ export function registerInit(program: Command): void {
     .option('--no-omc', 'OMC 통합 없이 초기화')
     .option('--dry-run', '파일 변경 없이 계획만 출력')
     .option('--non-interactive', '대화형 프롬프트 없이 실행')
+    .option('--config <path>', '컨벤션 설정 파일 경로 (YAML)')
     .action(async (options: InitOptions) => {
       const targetPath = options.path ? resolve(options.path) : process.cwd();
       const home = homedir();
@@ -311,6 +377,18 @@ export function registerInit(program: Command): void {
       }
 
       try {
+        // 컨벤션 답변 수집 (로컬 설치이고 팀이 있을 때만)
+        let conventionAnswers: ConventionAnswers | undefined;
+        const isLocalInstall = scope === 'local' || scope === 'both';
+        if (isLocalInstall && teams.length > 0 && !dryRun) {
+          if (options.config) {
+            conventionAnswers = await loadConventionConfig(resolve(options.config));
+            log.info(`컨벤션 설정 로드: ${options.config}`);
+          } else if (!options.nonInteractive) {
+            conventionAnswers = await collectConventionAnswers(teams);
+          }
+        }
+
         if (scope === 'global' || scope === 'both') {
           await installHarness(
             'global',
@@ -335,7 +413,15 @@ export function registerInit(program: Command): void {
             teams,
             packageRoot,
             dryRun,
+            conventionAnswers,
           );
+
+          // 컨벤션 설정 파일 저장
+          if (conventionAnswers && !dryRun) {
+            const conventionConfigPath = join(targetPath, '.ai-harness', 'convention-config.yaml');
+            await saveConventionConfig(conventionAnswers, conventionConfigPath);
+            log.success(`컨벤션 설정 저장: .ai-harness/convention-config.yaml`);
+          }
         }
 
         log.heading('초기화 완료');
