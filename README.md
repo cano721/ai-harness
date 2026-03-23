@@ -325,7 +325,7 @@ ai-harness/
 │
 ├── templates/                  # 설정/정책 템플릿
 │   ├── lock-policy.yaml        # 규칙 잠금 정책
-│   ├── cost-rates.yaml         # 모델별 토큰 단가
+│   ├── lock-policy.yaml        # 잠금 정책
 │   └── global/
 │       └── skills/convention.md # 기본 컨벤션 템플릿
 │
@@ -424,7 +424,7 @@ ai-harness/
 | 설계 | 28개 기획 문서 + 8개 SDD, 3회 리뷰 완료 | ✅ |
 | Phase 1 | 엔진 6개, CLI 4개, Hook 3개, 템플릿 3개 | ✅ |
 | Phase 2 | 팀별 CLAUDE.md 6개, Hook 6개, Skill 18개, OMC 연동 | ✅ |
-| Phase 3 | 어댑터 3개, 비용 추적, 메트릭, 워크플로우, 온보딩 | ✅ |
+| Phase 3 | 어댑터 3개, 메트릭, 워크플로우, 온보딩 | ✅ |
 | 추가 구현 | 에러 핸들링, 롤백/복구, 트러블슈팅, 벤치마크 | ✅ |
 | 플러그인 전환 | CLI → Claude Code 플러그인 (스킬 9개 + 스크립트 7개) | ✅ |
 

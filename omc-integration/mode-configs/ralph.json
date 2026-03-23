@@ -12,13 +12,18 @@
     ],
     "escalate_after_loops": 5,
     "guardrails": {
-      "max_cost_usd": 10.0,
       "max_files_changed": 30,
       "max_execution_minutes": 60
     },
     "hooks": {
-      "pre": ["block-dangerous", "secret-scanner"],
-      "post": ["audit-logger", "coverage-check"]
+      "pre": [
+        "block-dangerous",
+        "secret-scanner"
+      ],
+      "post": [
+        "audit-logger",
+        "coverage-check"
+      ]
     }
   }
 }

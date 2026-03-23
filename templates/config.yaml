@@ -12,7 +12,6 @@ project:
 teams: []
 guardrails:
   max_files_changed: 20
-  max_cost_usd: 5.0
   max_execution_minutes: 30
 hooks:
   block-dangerous:

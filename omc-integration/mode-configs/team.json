@@ -13,21 +13,33 @@
     "agent_overrides": {
       "code-reviewer": {
         "additional_context": "teams/backend/CLAUDE.md",
-        "focus": ["api-convention", "sql-safety", "exception-handling"]
+        "focus": [
+          "api-convention",
+          "sql-safety",
+          "exception-handling"
+        ]
       },
       "architect": {
         "additional_context": "teams/backend/CLAUDE.md",
-        "focus": ["msa-structure", "domain-boundary", "data-flow"]
+        "focus": [
+          "msa-structure",
+          "domain-boundary",
+          "data-flow"
+        ]
       }
     },
     "guardrails": {
-      "max_cost_usd": 20.0,
       "max_files_changed": 50,
       "max_execution_minutes": 120
     },
     "hooks": {
-      "pre": ["block-dangerous", "secret-scanner"],
-      "post": ["audit-logger"]
+      "pre": [
+        "block-dangerous",
+        "secret-scanner"
+      ],
+      "post": [
+        "audit-logger"
+      ]
     }
   }
 }

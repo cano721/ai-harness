@@ -16,14 +16,21 @@
       "coverage-check"
     ],
     "guardrails": {
-      "max_cost_usd": 5.0,
       "max_files_changed": 20,
       "max_execution_minutes": 30,
       "max_iterations": 10
     },
     "hooks": {
-      "pre": ["block-dangerous", "secret-scanner", "sql-review", "api-compat"],
-      "post": ["audit-logger", "coverage-check"]
+      "pre": [
+        "block-dangerous",
+        "secret-scanner",
+        "sql-review",
+        "api-compat"
+      ],
+      "post": [
+        "audit-logger",
+        "coverage-check"
+      ]
     }
   }
 }

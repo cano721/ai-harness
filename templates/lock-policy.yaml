@@ -7,9 +7,6 @@ bounded:
     min: 60
     max: 100
     default: 80
-  guardrails.max_cost_usd:
-    max: 50.0
-    default: 5.0
   guardrails.max_files_changed:
     max: 50
     default: 20
