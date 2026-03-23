@@ -19,7 +19,7 @@
 - /harness-status : 현재 하네스 상태 확인
 - /harness-doctor : 환경/설정/Hook 종합 진단
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
-- /harness-metrics : 비용 + 사용 메트릭 조회
+- /harness-metrics : 사용 메트릭 조회 (도구 호출, 차단률, 팀별 분포)
 - /harness-team : 팀 추가/수정/제거/목록
 - /harness-rollback : 설정을 이전 스냅샷으로 복원
 - /harness-benchmark : Hook 실행 성능 측정
