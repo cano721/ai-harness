@@ -16,10 +16,8 @@
 
 ## 사용 가능한 스킬
 - /harness-init : 프로젝트 분석 → 컨벤션 자동 생성 → Hook 등록
-- /harness-status : 현재 하네스 상태 확인
-- /harness-doctor : 환경/설정/Hook 종합 진단
+- /harness-status : 상태 확인 + 차단 현황 + 진단 + 미결정 사항
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
-- /harness-metrics : 사용 메트릭 조회 (도구 호출, 차단률, 팀별 분포)
 - /harness-team : 팀 추가/수정/제거/목록
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외
 
