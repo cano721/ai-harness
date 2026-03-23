@@ -1,0 +1,20 @@
+locked:
+  - hooks.block-dangerous
+  - hooks.audit-logger
+  - hooks.secret-scanner
+
+bounded:
+  rules.test_coverage:
+    min: 60
+    max: 100
+    default: 80
+  guardrails.max_cost_usd:
+    max: 50.0
+    default: 5.0
+  guardrails.max_files_changed:
+    max: 50
+    default: 20
+
+free:
+  - hooks.lighthouse
+  - hooks.bundle-size

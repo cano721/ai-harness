@@ -1,0 +1,12 @@
+docs/
+tests/
+.omc/
+.ai-harness/
+custom-agents/
+omc-integration/
+*.test.ts
+*.test.yaml
+vitest.config.ts
+tsconfig.json
+tsup.config.ts
+.gitignore

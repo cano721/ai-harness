@@ -1,0 +1,75 @@
+name: block-dangerous
+tests:
+  - name: "rm -rf 차단"
+    tool: "Bash"
+    input: "rm -rf /"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "rm -rf 변형 차단"
+    tool: "Bash"
+    input: "rm -fr /tmp/data"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "정상 rm 통과"
+    tool: "Bash"
+    input: "rm temp.txt"
+    expect_exit: 0
+
+  - name: "DROP TABLE 차단"
+    tool: "Bash"
+    input: "psql -c 'DROP TABLE users'"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "TRUNCATE TABLE 차단"
+    tool: "Bash"
+    input: "psql -c 'TRUNCATE TABLE orders'"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "SELECT 통과"
+    tool: "Bash"
+    input: "psql -c 'SELECT * FROM users'"
+    expect_exit: 0
+
+  - name: "git push --force 차단"
+    tool: "Bash"
+    input: "git push --force origin main"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "정상 git push 통과"
+    tool: "Bash"
+    input: "git push origin feature/login"
+    expect_exit: 0
+
+  - name: "chmod 777 차단"
+    tool: "Bash"
+    input: "chmod 777 /tmp/script.sh"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "sudo 차단"
+    tool: "Bash"
+    input: "sudo rm file.txt"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "하네스 바이패스 시도 차단"
+    tool: "Bash"
+    input: "export HARNESS_BYPASS=true"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "하네스 uninstall 시도 차단"
+    tool: "Bash"
+    input: "ai-harness uninstall"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "Edit 도구는 검사하지 않음"
+    tool: "Edit"
+    input: "rm -rf /"
+    expect_exit: 0

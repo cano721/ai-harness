@@ -1,0 +1,50 @@
+#!/bin/bash
+# secret-scanner.sh — PreToolUse Hook
+# 민감 정보가 코드에 포함되는 것을 방지한다.
+# Write, Edit 도구 대상으로 동작.
+# exit 0 = 통과, exit 2 = 차단
+
+TOOL_NAME="$1"
+TOOL_INPUT="$2"
+
+# Write, Edit 도구만 검사
+if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" != "Bash" ]; then
+  exit 0
+fi
+
+# 허용 목록: 테스트/예시 파일은 스킵
+if echo "$TOOL_INPUT" | grep -qE '(test|spec|fixture|example|mock|fake|dummy)'; then
+  # EXAMPLE_, DUMMY_, FAKE_ 접두사가 있으면 허용
+  if echo "$TOOL_INPUT" | grep -qE '(EXAMPLE_|DUMMY_|FAKE_|TEST_)'; then
+    exit 0
+  fi
+fi
+
+# AWS Access Key
+if echo "$TOOL_INPUT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
+  echo "BLOCKED: AWS Access Key가 감지되었습니다. 시크릿 매니저를 사용하세요."
+  exit 2
+fi
+
+# Private Key
+if echo "$TOOL_INPUT" | grep -q -- '-----BEGIN.*PRIVATE KEY-----'; then
+  echo "BLOCKED: Private Key가 감지되었습니다. 시크릿 매니저를 사용하세요."
+  exit 2
+fi
+
+# Generic Secret (password, secret, token, api_key 등에 값이 할당된 경우)
+if echo "$TOOL_INPUT" | grep -qiE '(password|secret|api[_-]?key|api[_-]?secret|token)[[:space:]]*[=:][[:space:]]*[^ ]{8,}'; then
+  echo "BLOCKED: 하드코딩된 시크릿이 감지되었습니다. 환경 변수 또는 시크릿 매니저를 사용하세요."
+  exit 2
+fi
+
+# .env 파일 쓰기 시도
+if [ "$TOOL_NAME" = "Write" ]; then
+  if echo "$TOOL_INPUT" | grep -qE '\.env($|\.)'; then
+    echo "BLOCKED: .env 파일 직접 쓰기가 차단되었습니다. .env.example을 사용하세요."
+    exit 2
+  fi
+fi
+
+# 통과
+exit 0

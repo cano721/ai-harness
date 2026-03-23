@@ -1,0 +1,29 @@
+{
+  "mode": "autopilot",
+  "description": "자율 실행 모드 — 하네스 가드레일 내에서 자동 실행",
+  "harness": {
+    "require_approval_gate": [
+      "db-migration",
+      "deploy",
+      "api-breaking-change",
+      "infra-change"
+    ],
+    "auto_verify": [
+      "lint",
+      "test",
+      "security-scan",
+      "bundle-size",
+      "coverage-check"
+    ],
+    "guardrails": {
+      "max_cost_usd": 5.0,
+      "max_files_changed": 20,
+      "max_execution_minutes": 30,
+      "max_iterations": 10
+    },
+    "hooks": {
+      "pre": ["block-dangerous", "secret-scanner", "sql-review", "api-compat"],
+      "post": ["audit-logger", "coverage-check"]
+    }
+  }
+}

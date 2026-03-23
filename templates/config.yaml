@@ -1,0 +1,15 @@
+_schema_version: 1
+teams: []
+guardrails:
+  max_files_changed: 20
+  max_cost_usd: 5.0
+  max_execution_minutes: 30
+hooks:
+  block-dangerous:
+    enabled: true
+  secret-scanner:
+    enabled: true
+  audit-logger:
+    enabled: true
+rules:
+  test_coverage: 80

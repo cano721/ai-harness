@@ -1,0 +1,33 @@
+{
+  "mode": "team",
+  "description": "팀 협업 모드 — 역할별 CLAUDE.md 적용",
+  "harness": {
+    "role_mapping": {
+      "team-plan": "teams/planning/CLAUDE.md",
+      "team-exec:frontend": "teams/frontend/CLAUDE.md",
+      "team-exec:backend": "teams/backend/CLAUDE.md",
+      "team-exec:design": "teams/design/CLAUDE.md",
+      "team-verify:qa": "teams/qa/CLAUDE.md",
+      "team-deploy:devops": "teams/devops/CLAUDE.md"
+    },
+    "agent_overrides": {
+      "code-reviewer": {
+        "additional_context": "teams/backend/CLAUDE.md",
+        "focus": ["api-convention", "sql-safety", "exception-handling"]
+      },
+      "architect": {
+        "additional_context": "teams/backend/CLAUDE.md",
+        "focus": ["msa-structure", "domain-boundary", "data-flow"]
+      }
+    },
+    "guardrails": {
+      "max_cost_usd": 20.0,
+      "max_files_changed": 50,
+      "max_execution_minutes": 120
+    },
+    "hooks": {
+      "pre": ["block-dangerous", "secret-scanner"],
+      "post": ["audit-logger"]
+    }
+  }
+}

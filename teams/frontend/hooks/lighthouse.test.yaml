@@ -1,0 +1,45 @@
+name: lighthouse
+tests:
+  - name: "@import url() 차단"
+    tool: "Write"
+    input: "@import url('https://fonts.googleapis.com/css2?family=Roboto');"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "document.write 차단"
+    tool: "Write"
+    input: "document.write('<script src=\"analytics.js\"></script>');"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "async script 통과"
+    tool: "Write"
+    input: "<script src='app.js' async></script>"
+    expect_exit: 0
+
+  - name: "defer script 통과"
+    tool: "Write"
+    input: "<script src='app.js' defer></script>"
+    expect_exit: 0
+
+  - name: "script without async/defer 차단"
+    tool: "Write"
+    input: "<script src='app.js'></script>"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "!important 과다 사용 경고 (통과)"
+    tool: "Write"
+    input: ".a { color: red !important; } .b { margin: 0 !important; } .c { padding: 0 !important; }"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "!important 2개 이하 통과"
+    tool: "Write"
+    input: ".a { color: red !important; } .b { margin: 0 !important; }"
+    expect_exit: 0
+
+  - name: "Bash 도구는 검사하지 않음"
+    tool: "Bash"
+    input: "document.write('test');"
+    expect_exit: 0

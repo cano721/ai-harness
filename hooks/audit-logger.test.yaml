@@ -1,0 +1,16 @@
+name: audit-logger
+tests:
+  - name: "Bash 명령 로깅 (항상 통과)"
+    tool: "Bash"
+    input: "ls -la"
+    expect_exit: 0
+
+  - name: "Write 명령 로깅 (항상 통과)"
+    tool: "Write"
+    input: "const x = 1;"
+    expect_exit: 0
+
+  - name: "민감 정보 포함해도 통과 (마스킹 후 로깅)"
+    tool: "Bash"
+    input: "curl -H 'Authorization: Bearer secret123' https://api.example.com"
+    expect_exit: 0

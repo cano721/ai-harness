@@ -1,0 +1,24 @@
+{
+  "mode": "ralph",
+  "description": "반복 수정 모드 — 테스트 통과까지 반복",
+  "harness": {
+    "max_loop_count": 10,
+    "require_progress_per_loop": true,
+    "verification_criteria": [
+      "all_tests_pass",
+      "no_lint_errors",
+      "no_security_warnings",
+      "coverage_threshold_met"
+    ],
+    "escalate_after_loops": 5,
+    "guardrails": {
+      "max_cost_usd": 10.0,
+      "max_files_changed": 30,
+      "max_execution_minutes": 60
+    },
+    "hooks": {
+      "pre": ["block-dangerous", "secret-scanner"],
+      "post": ["audit-logger", "coverage-check"]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+name: bundle-size
+tests:
+  - name: "moment import 차단"
+    tool: "Write"
+    input: "import moment from 'moment';"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "dayjs import 통과"
+    tool: "Write"
+    input: "import dayjs from 'dayjs';"
+    expect_exit: 0
+
+  - name: "lodash 전체 import 차단"
+    tool: "Write"
+    input: "import _ from 'lodash';"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "lodash/get 개별 import 통과"
+    tool: "Write"
+    input: "import get from 'lodash/get';"
+    expect_exit: 0
+
+  - name: "lodash-es 개별 import 통과"
+    tool: "Edit"
+    input: "import { get } from 'lodash-es';"
+    expect_exit: 0
+
+  - name: "jquery import 차단"
+    tool: "Write"
+    input: "import $ from 'jquery';"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "import * as 경고 (통과)"
+    tool: "Write"
+    input: "import * as utils from './utils';"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "Bash 도구는 검사하지 않음"
+    tool: "Bash"
+    input: "import moment from 'moment';"
+    expect_exit: 0

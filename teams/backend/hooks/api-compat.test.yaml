@@ -1,0 +1,34 @@
+name: api-compat
+tests:
+  - name: "/api/v1/... 경로 통과"
+    tool: "Write"
+    input: "@GetMapping(\"/api/v1/applicants\")"
+    expect_exit: 0
+
+  - name: "/api/applicants 버전 없는 경로 차단"
+    tool: "Write"
+    input: "@GetMapping(\"/api/applicants\")"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "일반 Java 코드 통과"
+    tool: "Write"
+    input: "public class UserService { private String name; }"
+    expect_exit: 0
+
+  - name: "Bash 도구는 검사하지 않음"
+    tool: "Bash"
+    input: "@GetMapping(\"/api/applicants\")"
+    expect_exit: 0
+
+  - name: "@DeleteMapping 경고 (통과)"
+    tool: "Write"
+    input: "@DeleteMapping(\"/api/v1/users/{id}\")"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "removed 필드 차단"
+    tool: "Edit"
+    input: "// removed: String email;\nprivate String name;"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
