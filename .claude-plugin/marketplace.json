@@ -1,0 +1,32 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ai-harness",
+  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook, 비용 추적",
+  "owner": {
+    "name": "cano721",
+    "email": "cano721@naver.com"
+  },
+  "plugins": [
+    {
+      "name": "ai-harness",
+      "description": "Claude가 프로젝트를 분석하여 팀별 코드 컨벤션을 자동 생성하고, 보안 Hook으로 위험 명령을 차단하며, 모든 AI 액션을 감사 로깅합니다.",
+      "version": "1.0.0",
+      "author": {
+        "name": "cano721",
+        "email": "cano721@naver.com"
+      },
+      "source": "./",
+      "category": "security",
+      "homepage": "https://github.com/cano721/ai-harness",
+      "tags": [
+        "security",
+        "convention",
+        "hooks",
+        "audit",
+        "cost-tracking",
+        "team-management"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "ai-harness",
+  "version": "1.0.0",
+  "description": "AI 에이전트 제어/검증 프레임워크 — 보안 Hook, 팀별 컨벤션, 비용 추적",
+  "author": {
+    "name": "cano721"
+  },
+  "repository": "https://github.com/cano721/ai-harness",
+  "homepage": "https://github.com/cano721/ai-harness",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "security",
+    "hooks",
+    "convention",
+    "harness"
+  ],
+  "skills": "./skills/"
+}
