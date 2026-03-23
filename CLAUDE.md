@@ -9,6 +9,11 @@
 - 프로젝트에 .ai-harness/가 있으면 해당 팀의 컨벤션 스킬을 참고하라
 - .ai-harness/teams/{team}/skills/convention-{team}.md 파일을 읽어서 적용
 
+## 제공 팀
+- 현재: **backend** (제공 중)
+- 준비 중: frontend, qa, devops, planning, design
+- backend 외 팀 요청 시 "아직 준비 중입니다" 안내
+
 ## 사용 가능한 스킬
 - /harness-init : 프로젝트 분석 → 컨벤션 자동 생성 → Hook 등록
 - /harness-status : 현재 하네스 상태 확인

@@ -11,6 +11,13 @@ description: 팀을 추가/수정/제거하거나 목록을 표시합니다
 - 컨벤션을 수정할 때
 </Use_When>
 
+<Available_Teams>
+현재 제공 중: **backend**
+준비 중: frontend, qa, devops, planning, design
+
+backend 외 팀을 요청하면 "아직 준비 중입니다. 현재는 backend 팀만 사용 가능합니다." 안내
+</Available_Teams>
+
 <Steps>
 ### 팀 추가
 1. 사용자가 요청한 팀 확인
