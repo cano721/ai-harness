@@ -21,7 +21,6 @@
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
 - /harness-metrics : 사용 메트릭 조회 (도구 호출, 차단률, 팀별 분포)
 - /harness-team : 팀 추가/수정/제거/목록
-- /harness-benchmark : Hook 실행 성능 측정
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외
 
 ## 자동 동작

@@ -80,7 +80,7 @@ Claude: convention-backend.md 참고하여 코드 생성
 "BE 컨벤션에 캐시 규칙 추가해줘" → convention-backend.md 자동 수정
 "왜 차단됐어?"           → /harness-rules → 마지막 차단 사유 + 대안
 "차단 몇 번 됐어?"      → /harness-metrics → 도구 호출, 차단률, 팀별 분포
-"Hook 느린 것 같아"      → /harness-benchmark → p50/p95/p99 측정
+"하네스 진단해줘"        → /harness-doctor → 환경/설정/Hook 종합 진단
 "하네스 진단해줘"        → /harness-doctor → 종합 진단
 ```
 
@@ -106,7 +106,7 @@ Claude: convention-backend.md 참고하여 코드 생성
                     ┌────────────────────────────────────────┐
                     │         관리 (필요할 때)                 │
                     │  팀 추가/제거, 컨벤션 수정, 메트릭 확인     │
-                    │  진단, 벤치마크, 롤백                    │
+                    │  진단, 제외 관리                          │
                     └────────────────────────────────────────┘
 ```
 
@@ -173,7 +173,6 @@ Claude가 다음을 자동으로 수행합니다:
 | **harness-rules** | "적용된 규칙 보여줘" | 현재 보안 규칙 목록, 마지막 차단 사유 |
 | **harness-metrics** | "차단 몇 번 됐어?" | 도구 호출 횟수, 차단률, 팀별 분포 |
 | **harness-team** | "QA팀 추가해줘" | 팀 추가/제거, 컨벤션 수정 |
-| **harness-benchmark** | "Hook 성능 측정" | Hook 실행 시간 p50/p95/p99 측정 |
 | **harness-exclude** | "이 프로젝트 제외해줘" | 글로벌 하네스 제외 프로젝트 관리 |
 
 ## 팀 프로필
@@ -293,7 +292,6 @@ ai-harness/
 │   ├── harness-rules/
 │   ├── harness-metrics/
 │   ├── harness-team/
-│   ├── harness-benchmark/
 │   └── harness-exclude/
 │
 ├── scripts/                    # 헬퍼 스크립트 (스킬이 내부적으로 호출)
@@ -302,7 +300,6 @@ ai-harness/
 │   ├── copy-team-resources.mjs # 팀별 Hook/스킬 복사
 │   ├── inject-claudemd.mjs     # CLAUDE.md에 하네스 규칙 주입
 │   ├── test-hooks.mjs          # Hook 단위 테스트
-│   ├── benchmark-hooks.mjs     # Hook 성능 측정
 │
 ├── hooks/                      # 글로벌 Hook 스크립트
 │   ├── block-dangerous.sh      # 위험 명령 차단
@@ -361,7 +358,6 @@ ai-harness/
 | `copy-team-resources.mjs` | 팀별 Hook, 기본 스킬, 컨벤션 템플릿 복사 |
 | `inject-claudemd.mjs` | CLAUDE.md에 `# harness:start ~ harness:end` 구간 주입 |
 | `test-hooks.mjs` | Hook을 `.test.yaml`에 정의된 케이스로 테스트 |
-| `benchmark-hooks.mjs` | Hook 실행 시간 p50/p95/p99 측정 |
 
 ## 설계 문서
 
@@ -421,7 +417,7 @@ ai-harness/
 | Phase 1 | 엔진 6개, CLI 4개, Hook 3개, 템플릿 3개 | ✅ |
 | Phase 2 | 팀별 CLAUDE.md 6개, Hook 6개, Skill 18개, OMC 연동 | ✅ |
 | Phase 3 | 어댑터 3개, 메트릭, 워크플로우, 온보딩 | ✅ |
-| 추가 구현 | 에러 핸들링, 롤백/복구, 트러블슈팅, 벤치마크 | ✅ |
+| 추가 구현 | 에러 핸들링, 트러블슈팅 | ✅ |
 | 플러그인 전환 | CLI → Claude Code 플러그인 (스킬 9개 + 스크립트 7개) | ✅ |
 
 ## 향후 계획
