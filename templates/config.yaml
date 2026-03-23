@@ -1,4 +1,14 @@
 _schema_version: 1
+
+# 프로젝트 정보 (init 시 Claude가 분석하여 채움)
+project:
+  name: ""
+  domain: ""
+  description: ""
+  entities: []
+  tech_stack: []
+  base_package: ""
+
 teams: []
 guardrails:
   max_files_changed: 20
