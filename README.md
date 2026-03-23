@@ -12,8 +12,6 @@ AI 에이전트(Claude Code, Codex, Cursor 등)를 안전하게 제어하고 회
 
 **팀 관리** — 팀 추가/제거, 컨벤션 수정, Hook 관리를 자연어로 수행
 
-**팀 관리** — 팀 추가/제거, 컨벤션 수정, Hook 관리를 자연어로 수행
-
 ## 유저 플로우
 
 ### 최초 셋업 (1회)
@@ -310,13 +308,15 @@ ai-harness/
 │
 ├── templates/                  # 설정/정책 템플릿
 │   ├── lock-policy.yaml        # 규칙 잠금 정책
-│   ├── lock-policy.yaml        # 잠금 정책
 │   └── global/
+│       ├── CLAUDE.md           # 글로벌 CLAUDE.md 템플릿
 │       └── skills/convention.md # 기본 컨벤션 템플릿
 │
 ├── global/                     # 글로벌 설정
 │   ├── CLAUDE.md               # 글로벌 규칙 (모든 프로젝트)
-│   └── guardrails/             # 글로벌 가드레일
+│   └── skills/                 # 글로벌 스킬
+│       ├── handoff.md          # 인수인계 스킬
+│       └── onboard.md          # 온보딩 스킬
 │
 ├── docs/                       # 설계 문서 (28개 기획 + 8개 SDD)
 │   ├── 00-index.md             # 문서 목차
@@ -405,7 +405,7 @@ ai-harness/
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | 설계 | 28개 기획 문서 + 8개 SDD, 3회 리뷰 완료 | ✅ |
-| Phase 1 | 엔진 6개, CLI 4개, Hook 3개, 템플릿 3개 | ✅ |
+| Phase 1 | 엔진 6개 + Hook 3개 + 템플릿 3개 (플러그인 전환으로 CLI 제거) | ✅ |
 | Phase 2 | 팀별 CLAUDE.md 6개, Hook 6개, Skill 18개, OMC 연동 | ✅ |
 | Phase 3 | 어댑터 3개, 메트릭, 워크플로우, 온보딩 | ✅ |
 | 추가 구현 | 에러 핸들링, 트러블슈팅 | ✅ |

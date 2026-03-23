@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "ai-harness",
-  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook, 사용 메트릭",
+  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook",
   "owner": {
     "name": "cano721",
     "email": "cano721@naver.com"

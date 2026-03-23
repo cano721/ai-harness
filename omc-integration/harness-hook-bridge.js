@@ -74,7 +74,7 @@ function collectOmcHooks(eventType) {
 function runHook(hookPath) {
   console.log(`[bridge] Running hook: ${hookPath}`);
   try {
-    execFileSync('bash', [hookPath], {
+    execFileSync('bash', [hookPath, toolName, toolInput || ''], {
       env: {
         ...process.env,
         HARNESS_EVENT: event,

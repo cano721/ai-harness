@@ -1,7 +1,7 @@
 {
   "name": "ai-harness",
   "version": "1.0.0",
-  "description": "AI 에이전트 제어/검증 프레임워크 — 보안 Hook, 팀별 컨벤션, 사용 메트릭",
+  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook",
   "author": {
     "name": "cano721"
   },

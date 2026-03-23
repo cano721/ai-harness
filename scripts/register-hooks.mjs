@@ -31,6 +31,11 @@ function register(settingsPath, event, matcher, command) {
     command,
     _managed_by: MANAGED_BY,
   };
+  const isDuplicate = settings.hooks.some(h => h.event === event && h.command === command);
+  if (isDuplicate) {
+    console.log(JSON.stringify({ ok: true, registered: null, skipped: 'duplicate event+command' }));
+    return;
+  }
   settings.hooks.push(hook);
   saveSettings(settingsPath, settings);
   console.log(JSON.stringify({ ok: true, registered: hook }));

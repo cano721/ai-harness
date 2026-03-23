@@ -1,9 +1,5 @@
 # Frontend 팀
 
-## 도메인
-- ATS 채용 관리 시스템 웹 프론트엔드
-- 주요 페이지: JobPostingList, ApplicantKanban, InterviewCalendar, EvaluationForm
-
 ## 필수 규칙
 - moment.js 금지 (dayjs 사용)
 - lodash 전체 import 금지 (개별 import)

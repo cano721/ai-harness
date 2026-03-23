@@ -1,7 +1,7 @@
 {
   "name": "ai-harness",
   "version": "1.0.0",
-  "description": "AI 에이전트 제어/검증 프레임워크 — Claude Code 플러그인",
+  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -18,7 +18,8 @@
     "teams/",
     "templates/",
     "custom-agents/",
-    "omc-integration/"
+    "omc-integration/",
+    "global/"
   ],
   "repository": {
     "type": "git",

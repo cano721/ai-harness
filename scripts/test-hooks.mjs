@@ -19,7 +19,7 @@ function loadTestCases(testYamlPath) {
 }
 
 function runTest(hookPath, testCase) {
-  const { name, toolName, toolInput, expectExit, expectOutput } = testCase;
+  const { name, tool: toolName, input: toolInput, expect_exit: expectExit, expect_output_contains: expectOutput } = testCase;
   const inputStr = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput);
 
   let exitCode = 0;

@@ -11,7 +11,7 @@ GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
 if [ -f "$GLOBAL_CONFIG" ]; then
   CURRENT_DIR="$(pwd)"
   if grep -q "exclude_projects:" "$GLOBAL_CONFIG" 2>/dev/null; then
-    if grep -q "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
+    if grep -qF "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
       exit 0
     fi
   fi
@@ -38,14 +38,14 @@ PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null ||
 MASKED_INPUT="$TOOL_INPUT"
 
 # Bearer/Authorization 토큰 마스킹
-MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/(Bearer|Authorization:?\s*)[A-Za-z0-9._~+\/=-]{10,}/\1***REDACTED***/gi' 2>/dev/null || echo "$MASKED_INPUT")
+MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/([Bb][Ee][Aa][Rr][Ee][Rr]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:?[[:space:]]*)[A-Za-z0-9._~+\/=-]{10,}/\1***REDACTED***/' 2>/dev/null || echo "$MASKED_INPUT")
 
 # password= 뒤의 값 마스킹
-MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/(password\s*[=:]\s*)['"'"'""][^'"'"'"]*['"'"'"]/\1"***REDACTED***"/gi' 2>/dev/null || echo "$MASKED_INPUT")
+MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:][[:space:]]*)['"'"'""][^'"'"'"]*['"'"'"]/\1"***REDACTED***"/' 2>/dev/null || echo "$MASKED_INPUT")
 
 # 200자 초과 시 truncate
 if [ ${#MASKED_INPUT} -gt 200 ]; then
-  MASKED_INPUT="${MASKED_INPUT:0:50}... (truncated)"
+  MASKED_INPUT="${MASKED_INPUT:0:200}... (truncated)"
 fi
 
 # JSON 특수문자 이스케이프

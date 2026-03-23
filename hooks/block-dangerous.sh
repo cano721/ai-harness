@@ -11,7 +11,7 @@ GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
 if [ -f "$GLOBAL_CONFIG" ]; then
   CURRENT_DIR="$(pwd)"
   if grep -q "exclude_projects:" "$GLOBAL_CONFIG" 2>/dev/null; then
-    if grep -q "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
+    if grep -qF "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
       exit 0
     fi
   fi
@@ -56,7 +56,7 @@ if [ "$TOOL_NAME" = "Bash" ]; then
   fi
 
   # sudo 차단
-  if echo "$TOOL_INPUT" | grep -qE '^\s*sudo\s'; then
+  if echo "$TOOL_INPUT" | grep -qE '(^|[;&|])\s*sudo\s'; then
     echo "BLOCKED: sudo 명령은 하네스 보안 정책에 의해 차단됩니다."
     exit 2
   fi
