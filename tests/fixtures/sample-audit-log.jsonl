@@ -1,3 +1,0 @@
-{"timestamp":"2026-03-22T10:00:00.000Z","event_type":"tool_use","tool":"Bash","action":"npm test","result":"success","user":"dev","project":"ats","cost_usd":0.05}
-{"timestamp":"2026-03-22T10:01:00.000Z","event_type":"hook_trigger","tool":"Write","action":"edit file","result":"blocked","user":"dev","project":"ats","hook":"block-dangerous"}
-{"timestamp":"2026-03-22T10:02:00.000Z","event_type":"tool_use","tool":"Read","action":"read file","result":"success","user":"dev","project":"ats","cost_usd":0.01}
