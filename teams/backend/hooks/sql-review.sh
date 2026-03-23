@@ -13,9 +13,11 @@ if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" !
 fi
 
 # SQL 관련 내용이 없으면 통과
-if ! echo "$TOOL_INPUT" | grep -qiE '\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b'; then
+if ! echo "$TOOL_INPUT" | grep -qiE '\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|findAll)\b'; then
   exit 0
 fi
+
+# ── 차단 (exit 2) ─────────────────────────────────────────
 
 # SELECT * 사용 차단
 if echo "$TOOL_INPUT" | grep -qiE 'SELECT\s+\*\s+(FROM|,)'; then
@@ -29,9 +31,39 @@ if echo "$TOOL_INPUT" | grep -qE '"SELECT[^"]*"\s*\+|'"'"'SELECT[^'"'"']*'"'"'\s
   exit 2
 fi
 
+# DELETE FROM (WHERE 없이) 차단
+if echo "$TOOL_INPUT" | grep -qiE 'DELETE\s+FROM\s+\S+' && ! echo "$TOOL_INPUT" | grep -qiE 'DELETE\s+FROM\s+\S+.*\bWHERE\b'; then
+  echo "BLOCKED: WHERE 절 없는 DELETE는 전체 데이터를 삭제합니다. WHERE 조건을 추가하세요."
+  exit 2
+fi
+
+# UPDATE (WHERE 없이) 차단
+if echo "$TOOL_INPUT" | grep -qiE 'UPDATE\s+\S+\s+SET\s+' && ! echo "$TOOL_INPUT" | grep -qiE 'UPDATE\s+\S+\s+SET\s+.*\bWHERE\b'; then
+  echo "BLOCKED: WHERE 절 없는 UPDATE는 전체 데이터를 수정합니다. WHERE 조건을 추가하세요."
+  exit 2
+fi
+
+# nativeQuery + 문자열 연결 차단
+if echo "$TOOL_INPUT" | grep -qE 'nativeQuery\s*=\s*true' && echo "$TOOL_INPUT" | grep -qE '"\s*\+\s*'; then
+  echo "BLOCKED: nativeQuery에서 문자열 연결은 SQL Injection 위험이 있습니다. 파라미터 바인딩(:param)을 사용하세요."
+  exit 2
+fi
+
+# ── 경고 (exit 0 + WARNING) ───────────────────────────────
+
 # WHERE 절 없는 SELECT 경고
 if echo "$TOOL_INPUT" | grep -qiE 'SELECT\s+\S+\s+FROM\s+\S+' && ! echo "$TOOL_INPUT" | grep -qiE '\bWHERE\b'; then
   echo "WARNING: WHERE 절 없는 SELECT는 전체 테이블을 조회합니다. 페이지네이션 또는 조건을 추가하세요."
+fi
+
+# findAll() 조건 없이 경고
+if echo "$TOOL_INPUT" | grep -qE '\.findAll\(\s*\)'; then
+  echo "WARNING: findAll()은 전체 데이터를 조회합니다. 대량 데이터일 경우 Pageable을 사용하세요. (예: findAll(pageable))"
+fi
+
+# LIKE '%...%' 경고 (풀스캔)
+if echo "$TOOL_INPUT" | grep -qiE "LIKE\s+['\"]%"; then
+  echo "WARNING: LIKE '%...' 패턴은 인덱스를 사용하지 못해 풀스캔이 발생합니다. Full-Text Search를 고려하세요."
 fi
 
 # @Transactional 없이 여러 UPDATE/INSERT 경고

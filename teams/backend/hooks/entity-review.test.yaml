@@ -1,0 +1,33 @@
+name: entity-review
+tests:
+  - name: "Entity + @Setter 경고"
+    tool: "Write"
+    input: "@Entity @Setter public class User { }"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "@NoArgsConstructor 누락 경고"
+    tool: "Write"
+    input: "@Entity public class User { private Long id; }"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "정상 Entity 통과"
+    tool: "Write"
+    input: "@Entity @NoArgsConstructor(access = AccessLevel.PROTECTED) @Column(nullable = false) public class User { }"
+    expect_exit: 0
+
+  - name: "Entity 아닌 파일 통과"
+    tool: "Write"
+    input: "public class UserService { }"
+    expect_exit: 0
+
+  - name: "DTO에 @Setter 통과"
+    tool: "Write"
+    input: "@Setter public class CreateUserRequest { }"
+    expect_exit: 0
+
+  - name: "Read 도구 통과"
+    tool: "Read"
+    input: "@Entity @Setter public class User { }"
+    expect_exit: 0
