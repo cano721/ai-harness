@@ -114,10 +114,12 @@ Claude: convention-backend.md 참고하여 코드 생성
 
 ### 설치
 
-Claude Code 플러그인으로 AI Harness 폴더를 등록합니다:
+```bash
+# 마켓플레이스 등록
+claude plugin marketplace add https://github.com/cano721/ai-harness.git
 
-```
-Claude Code → 설정 → 플러그인 → "+ 폴더 추가" → /path/to/ai-harness
+# 플러그인 설치
+claude plugin install ai-harness
 ```
 
 ### 초기화
@@ -132,11 +134,14 @@ Claude Code → 설정 → 플러그인 → "+ 폴더 추가" → /path/to/ai-ha
 
 Claude가 다음을 자동으로 수행합니다:
 
-1. 프로젝트 파일 분석 (package.json, build.gradle, tsconfig.json 등)
-2. 감지된 기술 스택과 코드 패턴 기반으로 팀 추천
-3. 팀별 코드 스타일 가이드 자동 생성 (.ai-harness/teams/{team}/skills/convention-{team}.md)
-4. 보안 Hook 등록 (.claude/settings.json)
-5. 완료 보고
+1. 글로벌/로컬 범위 선택
+2. 프로젝트 코드 분석 (패키지 구조, API 패턴, DTO 네이밍 등)
+3. 프로젝트 도메인 정보 수집 (엔티티, 용어 — 충돌 시 사용자와 논의)
+4. 팀 추천 + 맞춤 컨벤션 생성 (패턴 충돌 시 사용자와 논의)
+5. 보안 Hook 등록
+6. 외부 서비스 스킬 설정 (Jira, Confluence, Figma, Datadog — 대화형 인증)
+7. MCP 서버 설정 (MySQL, Figma — 대화형 연결 정보)
+8. 완료 보고
 
 ### 상태 확인
 
