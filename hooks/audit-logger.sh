@@ -6,6 +6,17 @@
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
 
+# 글로벌 제외 프로젝트 체크
+GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
+if [ -f "$GLOBAL_CONFIG" ]; then
+  CURRENT_DIR="$(pwd)"
+  if grep -q "exclude_projects:" "$GLOBAL_CONFIG" 2>/dev/null; then
+    if grep -q "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
+      exit 0
+    fi
+  fi
+fi
+
 # 로그 디렉토리
 LOG_DIR=".ai-harness/logs"
 mkdir -p "$LOG_DIR"

@@ -4,6 +4,8 @@ import { readFile, writeFile, copyFile, mkdir, chmod, readdir } from 'fs/promise
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { homedir } from 'os';
+import { createInterface } from 'readline';
 import { log } from '../utils/logger.js';
 import { inject } from '../engine/claudemd-injector.js';
 import { registerHooks } from '../engine/settings-manager.js';
@@ -19,11 +21,52 @@ const PRESETS: Record<string, string[]> = {
 };
 
 interface InitOptions {
+  global?: boolean;
+  local?: boolean;
   team?: string[];
   preset?: string;
   noOmc?: boolean;
   dryRun?: boolean;
   nonInteractive?: boolean;
+}
+
+type Scope = 'global' | 'local';
+
+function askQuestion(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function chooseScope(): Promise<Scope> {
+  console.log('');
+  log.heading('설치 범위 선택');
+  console.log('');
+  console.log('  [1] 글로벌 (Global)');
+  console.log('      위치: ~/.ai-harness/, ~/.claude/');
+  console.log('      범위: 모든 프로젝트에 보안 Hook 적용');
+  console.log('      용도: 위험 명령 차단, 시크릿 보호, 감사 로깅');
+  console.log('      특징: 어떤 프로젝트에서든 기본 안전망으로 동작');
+  console.log('');
+  console.log('  [2] 프로젝트 로컬 (Local)');
+  console.log('      위치: ./.ai-harness/, ./.claude/');
+  console.log('      범위: 현재 프로젝트에만 적용');
+  console.log('      용도: 팀별 컨벤션, 팀별 Hook, Skill 설치');
+  console.log('      특징: 프로젝트마다 다른 팀/규칙 적용 가능');
+  console.log('');
+  console.log('  [3] 둘 다 (Global + Local)');
+  console.log('      글로벌로 기본 보안 + 이 프로젝트에 팀별 규칙 추가');
+  console.log('');
+
+  const answer = await askQuestion('  선택 (1/2/3, 기본: 2): ');
+
+  if (answer === '1') return 'global';
+  if (answer === '3') return 'both' as Scope;
+  return 'local';
 }
 
 function detectEnvironment(): { nodeOk: boolean; gitOk: boolean; claudeOk: boolean } {
@@ -69,14 +112,149 @@ function resolveTeams(options: InitOptions): string[] {
 }
 
 function getPackageRoot(): string {
-  // dist/cli 또는 src/cli 위치에서 package root를 찾는다
   return resolve(__dirname, '..', '..');
+}
+
+async function installHarness(
+  scope: Scope,
+  targetDir: string,
+  claudeMdPath: string,
+  settingsPath: string,
+  teams: string[],
+  packageRoot: string,
+  dryRun: boolean,
+): Promise<void> {
+  const scopeLabel = scope === 'global' ? '글로벌' : '프로젝트 로컬';
+  const harnessDir = join(targetDir, '.ai-harness');
+  const hooksDestDir = join(harnessDir, 'hooks');
+  const logsDir = join(harnessDir, 'logs');
+  const hooksSourceDir = join(packageRoot, 'hooks');
+  const claudeMdTemplatePath = join(packageRoot, 'templates', 'global', 'CLAUDE.md');
+
+  log.heading(`${scopeLabel} 설치`);
+  log.info(`설정 위치: ${harnessDir}`);
+  log.info(`Hook 등록: ${settingsPath}`);
+  log.info(`CLAUDE.md: ${claudeMdPath}`);
+
+  if (dryRun) {
+    log.warn('--dry-run 모드: 파일이 변경되지 않습니다.');
+    return;
+  }
+
+  // 1. 디렉토리 생성
+  await mkdir(harnessDir, { recursive: true });
+  await mkdir(hooksDestDir, { recursive: true });
+  await mkdir(logsDir, { recursive: true });
+
+  // 2. config.yaml 생성
+  const configPath = join(harnessDir, 'config.yaml');
+  const config = {
+    ...DEFAULT_CONFIG,
+    scope,
+    teams: scope === 'global' ? [] : teams,
+  };
+  await writeFile(configPath, stringify(config), 'utf-8');
+  log.success('config.yaml 생성');
+
+  // 3. Hook 스크립트 복사
+  const hookFiles = ['block-dangerous.sh', 'secret-scanner.sh', 'audit-logger.sh'];
+  for (const hookFile of hookFiles) {
+    const src = join(hooksSourceDir, hookFile);
+    const dest = join(hooksDestDir, hookFile);
+    if (existsSync(src)) {
+      await copyFile(src, dest);
+      await chmod(dest, 0o755);
+    }
+  }
+  log.success(`Hook ${hookFiles.length}개 복사`);
+
+  // 4. CLAUDE.md 주입
+  if (existsSync(claudeMdTemplatePath)) {
+    const templateContent = await readFile(claudeMdTemplatePath, 'utf-8');
+    await inject(claudeMdPath, templateContent);
+    log.success('CLAUDE.md harness 섹션 주입');
+  }
+
+  // 5. Hook 등록
+  const hookRegistrations = [
+    { event: 'PreToolUse', matcher: '.*', command: join(hooksDestDir, 'block-dangerous.sh') },
+    { event: 'PreToolUse', matcher: '.*', command: join(hooksDestDir, 'secret-scanner.sh') },
+    { event: 'PostToolUse', matcher: '.*', command: join(hooksDestDir, 'audit-logger.sh') },
+  ];
+
+  // 6. 팀별 리소스 복사 (로컬만)
+  if (scope === 'local' && teams.length > 0) {
+    const teamsSourceDir = join(packageRoot, 'teams');
+    if (existsSync(teamsSourceDir)) {
+      log.heading('팀별 리소스 설치');
+      for (const team of teams) {
+        const teamSrc = join(teamsSourceDir, team);
+        if (!existsSync(teamSrc)) {
+          log.warn(`팀 리소스 없음 (건너뜀): ${team}`);
+          continue;
+        }
+
+        const teamDest = join(harnessDir, 'teams', team);
+        await mkdir(teamDest, { recursive: true });
+
+        // 팀 CLAUDE.md 복사
+        const teamClaudeMd = join(teamSrc, 'CLAUDE.md');
+        if (existsSync(teamClaudeMd)) {
+          await copyFile(teamClaudeMd, join(teamDest, 'CLAUDE.md'));
+          const teamContent = await readFile(teamClaudeMd, 'utf-8');
+          await inject(claudeMdPath, teamContent);
+          log.success(`[${team}] CLAUDE.md`);
+        }
+
+        // 팀 hooks 복사
+        const teamHooksSrc = join(teamSrc, 'hooks');
+        if (existsSync(teamHooksSrc)) {
+          const teamHooksDest = join(teamDest, 'hooks');
+          await mkdir(teamHooksDest, { recursive: true });
+          const teamHookFiles = (await readdir(teamHooksSrc)).filter(f => f.endsWith('.sh'));
+          for (const hf of teamHookFiles) {
+            await copyFile(join(teamHooksSrc, hf), join(teamHooksDest, hf));
+            await chmod(join(teamHooksDest, hf), 0o755);
+            const testYaml = hf.replace('.sh', '.test.yaml');
+            if (existsSync(join(teamHooksSrc, testYaml))) {
+              await copyFile(join(teamHooksSrc, testYaml), join(teamHooksDest, testYaml));
+            }
+            const isPostHook = hf.includes('coverage') || hf.includes('audit');
+            hookRegistrations.push({
+              event: isPostHook ? 'PostToolUse' : 'PreToolUse',
+              matcher: '.*',
+              command: join(teamHooksDest, hf),
+            });
+          }
+          log.success(`[${team}] Hook ${teamHookFiles.length}개`);
+        }
+
+        // 팀 skills 복사
+        const teamSkillsSrc = join(teamSrc, 'skills');
+        if (existsSync(teamSkillsSrc)) {
+          const teamSkillsDest = join(teamDest, 'skills');
+          await mkdir(teamSkillsDest, { recursive: true });
+          const skillFiles = await readdir(teamSkillsSrc);
+          for (const sf of skillFiles) {
+            await copyFile(join(teamSkillsSrc, sf), join(teamSkillsDest, sf));
+          }
+          log.success(`[${team}] Skill ${skillFiles.length}개`);
+        }
+      }
+    }
+  }
+
+  // Hook 등록
+  await registerHooks(settingsPath, hookRegistrations);
+  log.success(`Hook ${hookRegistrations.length}개 등록`);
 }
 
 export function registerInit(program: Command): void {
   program
     .command('init')
-    .description('현재 디렉토리에 AI Harness를 초기화합니다')
+    .description('AI Harness를 초기화합니다')
+    .option('--global', '글로벌 설치 (모든 프로젝트에 적용)')
+    .option('--local', '프로젝트 로컬 설치 (현재 프로젝트만)')
     .option('--team <teams...>', '팀 목록 지정 (예: --team frontend backend)')
     .option('--preset <preset>', `프리셋 사용 (${Object.keys(PRESETS).join(', ')})`)
     .option('--no-omc', 'OMC 통합 없이 초기화')
@@ -84,7 +262,9 @@ export function registerInit(program: Command): void {
     .option('--non-interactive', '대화형 프롬프트 없이 실행')
     .action(async (options: InitOptions) => {
       const cwd = process.cwd();
+      const home = homedir();
       const dryRun = !!options.dryRun;
+      const packageRoot = getPackageRoot();
 
       log.heading('AI Harness 초기화');
 
@@ -107,156 +287,57 @@ export function registerInit(program: Command): void {
 
       // 팀 결정
       const teams = resolveTeams(options);
-      log.info(`설정할 팀: ${teams.length > 0 ? teams.join(', ') : '(없음)'}`);
 
-      const harnessDir = join(cwd, '.ai-harness');
-      const configPath = join(harnessDir, 'config.yaml');
-      const hooksDestDir = join(harnessDir, 'hooks');
-      const logsDir = join(harnessDir, 'logs');
-      const claudeMdPath = join(cwd, 'CLAUDE.md');
-      const settingsPath = join(cwd, '.claude', 'settings.json');
-
-      const packageRoot = getPackageRoot();
-      const hooksSourceDir = join(packageRoot, 'hooks');
-      const claudeMdTemplatePath = join(packageRoot, 'templates', 'global', 'CLAUDE.md');
-
-      log.heading('실행 계획');
-      log.info(`1. ${configPath} 생성`);
-      log.info(`2. ${hooksDestDir}/ 에 Hook 스크립트 복사`);
-      log.info(`3. ${claudeMdPath} 에 harness 섹션 주입`);
-      log.info(`4. ${settingsPath} 에 Hook 등록`);
-
-      if (dryRun) {
-        log.warn('--dry-run 모드: 파일이 변경되지 않습니다.');
-        return;
+      // 범위 결정
+      let scope: Scope | 'both';
+      if (options.global) {
+        scope = 'global';
+      } else if (options.local) {
+        scope = 'local';
+      } else if (options.nonInteractive) {
+        scope = 'local';
+      } else {
+        scope = await chooseScope();
       }
 
       try {
-        // 1. .ai-harness 디렉토리 생성
-        await mkdir(harnessDir, { recursive: true });
-        await mkdir(hooksDestDir, { recursive: true });
-        await mkdir(logsDir, { recursive: true });
+        if (scope === 'global' || scope === 'both') {
+          await installHarness(
+            'global',
+            home,
+            join(home, '.claude', 'CLAUDE.md'),
+            join(home, '.claude', 'settings.json'),
+            teams,
+            packageRoot,
+            dryRun,
+          );
+        }
 
-        // 2. config.yaml 생성
-        const config = {
-          ...DEFAULT_CONFIG,
-          teams,
-        };
-        await writeFile(configPath, stringify(config), 'utf-8');
-        log.success(`config.yaml 생성 완료: ${configPath}`);
-
-        // 3. Hook 스크립트 복사
-        const hookFiles = ['block-dangerous.sh', 'secret-scanner.sh', 'audit-logger.sh'];
-        for (const hookFile of hookFiles) {
-          const src = join(hooksSourceDir, hookFile);
-          const dest = join(hooksDestDir, hookFile);
-          if (existsSync(src)) {
-            await copyFile(src, dest);
-            await chmod(dest, 0o755);
-            log.success(`Hook 복사: ${hookFile}`);
-          } else {
-            log.warn(`Hook 파일 없음 (건너뜀): ${src}`);
+        if (scope === 'local' || scope === 'both') {
+          if (teams.length > 0) {
+            log.info(`설정할 팀: ${teams.join(', ')}`);
           }
+          await installHarness(
+            'local',
+            cwd,
+            join(cwd, 'CLAUDE.md'),
+            join(cwd, '.claude', 'settings.json'),
+            teams,
+            packageRoot,
+            dryRun,
+          );
         }
-
-        // 4. CLAUDE.md 주입
-        if (existsSync(claudeMdTemplatePath)) {
-          const templateContent = await readFile(claudeMdTemplatePath, 'utf-8');
-          await inject(claudeMdPath, templateContent);
-          log.success(`CLAUDE.md harness 섹션 주입 완료`);
-        } else {
-          log.warn(`CLAUDE.md 템플릿 없음: ${claudeMdTemplatePath}`);
-        }
-
-        // 5. Hook 등록
-        const hookRegistrations = [
-          {
-            event: 'PreToolUse',
-            matcher: '.*',
-            command: join(hooksDestDir, 'block-dangerous.sh'),
-          },
-          {
-            event: 'PreToolUse',
-            matcher: '.*',
-            command: join(hooksDestDir, 'secret-scanner.sh'),
-          },
-          {
-            event: 'PostToolUse',
-            matcher: '.*',
-            command: join(hooksDestDir, 'audit-logger.sh'),
-          },
-        ];
-
-        // 6. 팀별 리소스 복사 (CLAUDE.md, hooks, skills)
-        const teamsSourceDir = join(packageRoot, 'teams');
-        if (teams.length > 0 && existsSync(teamsSourceDir)) {
-          log.heading('팀별 리소스 설치');
-          for (const team of teams) {
-            const teamSrc = join(teamsSourceDir, team);
-            if (!existsSync(teamSrc)) {
-              log.warn(`팀 리소스 없음 (건너뜀): ${team}`);
-              continue;
-            }
-
-            const teamDest = join(harnessDir, 'teams', team);
-            await mkdir(teamDest, { recursive: true });
-
-            // 팀 CLAUDE.md 복사
-            const teamClaudeMd = join(teamSrc, 'CLAUDE.md');
-            if (existsSync(teamClaudeMd)) {
-              await copyFile(teamClaudeMd, join(teamDest, 'CLAUDE.md'));
-              log.success(`[${team}] CLAUDE.md 복사`);
-
-              // 팀 CLAUDE.md 내용도 프로젝트 CLAUDE.md에 주입
-              const teamContent = await readFile(teamClaudeMd, 'utf-8');
-              await inject(claudeMdPath, teamContent);
-            }
-
-            // 팀 hooks 복사
-            const teamHooksSrc = join(teamSrc, 'hooks');
-            if (existsSync(teamHooksSrc)) {
-              const teamHooksDest = join(teamDest, 'hooks');
-              await mkdir(teamHooksDest, { recursive: true });
-              const teamHookFiles = (await readdir(teamHooksSrc)).filter(f => f.endsWith('.sh'));
-              for (const hf of teamHookFiles) {
-                await copyFile(join(teamHooksSrc, hf), join(teamHooksDest, hf));
-                await chmod(join(teamHooksDest, hf), 0o755);
-                // 테스트 YAML도 복사
-                const testYaml = hf.replace('.sh', '.test.yaml');
-                if (existsSync(join(teamHooksSrc, testYaml))) {
-                  await copyFile(join(teamHooksSrc, testYaml), join(teamHooksDest, testYaml));
-                }
-                // 팀 Hook도 settings.json에 등록
-                const isPostHook = hf.includes('coverage') || hf.includes('audit');
-                hookRegistrations.push({
-                  event: isPostHook ? 'PostToolUse' : 'PreToolUse',
-                  matcher: '.*',
-                  command: join(teamHooksDest, hf),
-                });
-              }
-              log.success(`[${team}] Hook ${teamHookFiles.length}개 복사`);
-            }
-
-            // 팀 skills 복사
-            const teamSkillsSrc = join(teamSrc, 'skills');
-            if (existsSync(teamSkillsSrc)) {
-              const teamSkillsDest = join(teamDest, 'skills');
-              await mkdir(teamSkillsDest, { recursive: true });
-              const skillFiles = await readdir(teamSkillsSrc);
-              for (const sf of skillFiles) {
-                await copyFile(join(teamSkillsSrc, sf), join(teamSkillsDest, sf));
-              }
-              log.success(`[${team}] Skill ${skillFiles.length}개 복사`);
-            }
-          }
-        }
-
-        // Hook 등록 (global + team)
-        await registerHooks(settingsPath, hookRegistrations);
-        log.success(`Hook ${hookRegistrations.length}개 등록 완료: ${settingsPath}`);
 
         log.heading('초기화 완료');
-        log.success(`AI Harness가 성공적으로 초기화되었습니다. (팀: ${teams.length > 0 ? teams.join(', ') : '없음'})`);
+        if (scope === 'global') {
+          log.success('글로벌 설치 완료. 모든 프로젝트에서 보안 Hook이 동작합니다.');
+        } else if (scope === 'local') {
+          log.success(`프로젝트 로컬 설치 완료. (팀: ${teams.length > 0 ? teams.join(', ') : '없음'})`);
+        } else {
+          log.success('글로벌 + 로컬 설치 완료.');
+          log.info('글로벌: 모든 프로젝트에 보안 Hook 적용');
+          log.info(`로컬: 이 프로젝트에 팀별 규칙 적용 (팀: ${teams.length > 0 ? teams.join(', ') : '없음'})`);
+        }
       } catch (err) {
         log.error(`초기화 실패: ${(err as Error).message}`);
         process.exit(1);

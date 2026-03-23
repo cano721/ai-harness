@@ -1,8 +1,10 @@
 export interface HarnessConfig {
   _schema_version: number;
+  scope?: 'global' | 'local';
   config_package?: string;
   config_version?: string;
   teams: string[];
+  exclude_projects?: string[];
   guardrails: {
     max_files_changed: number;
     max_cost_usd: number;

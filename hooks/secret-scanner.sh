@@ -7,6 +7,17 @@
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
 
+# 글로벌 제외 프로젝트 체크
+GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
+if [ -f "$GLOBAL_CONFIG" ]; then
+  CURRENT_DIR="$(pwd)"
+  if grep -q "exclude_projects:" "$GLOBAL_CONFIG" 2>/dev/null; then
+    if grep -q "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
+      exit 0
+    fi
+  fi
+fi
+
 # Write, Edit 도구만 검사
 if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" != "Bash" ]; then
   exit 0

@@ -13,6 +13,7 @@ import { registerMetrics } from './metrics.js';
 import { registerRollback } from './rollback.js';
 import { registerDiagnose } from './diagnose.js';
 import { registerBenchmark } from './benchmark.js';
+import { registerExclude } from './exclude.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
@@ -35,5 +36,6 @@ registerMetrics(program);
 registerRollback(program);
 registerDiagnose(program);
 registerBenchmark(program);
+registerExclude(program);
 
 program.parse();

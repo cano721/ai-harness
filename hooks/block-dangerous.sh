@@ -6,6 +6,17 @@
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
 
+# 글로벌 제외 프로젝트 체크
+GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
+if [ -f "$GLOBAL_CONFIG" ]; then
+  CURRENT_DIR="$(pwd)"
+  if grep -q "exclude_projects:" "$GLOBAL_CONFIG" 2>/dev/null; then
+    if grep -q "  - $CURRENT_DIR" "$GLOBAL_CONFIG" 2>/dev/null; then
+      exit 0
+    fi
+  fi
+fi
+
 # 하네스 자기 보호: 에이전트가 하네스를 비활성화하는 시도 차단
 if echo "$TOOL_INPUT" | grep -qE 'HARNESS_BYPASS|ai-harness\s+(bypass|uninstall)|ai-harness\s+hook\s+disable'; then
   echo "BLOCKED: 에이전트의 하네스 비활성화 시도가 차단되었습니다."
