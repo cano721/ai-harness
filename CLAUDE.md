@@ -20,6 +20,7 @@
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
 - /harness-team : 팀 추가/수정/제거/목록
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외
+- /agent-map : AI 에이전트 아키텍처 문서 자동 생성 (backend 팀 스킬)
 
 ## 자동 동작
 - .claude/settings.json에 Hook이 등록되어 있으면 도구 사용 시 자동 검증
