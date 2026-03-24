@@ -52,7 +52,7 @@ fi
 # ── 경고 (exit 0 + WARNING) ───────────────────────────────
 
 # WHERE 절 없는 SELECT 경고
-if echo "$TOOL_INPUT" | grep -qiE 'SELECT\s+\S+\s+FROM\s+\S+' && ! echo "$TOOL_INPUT" | grep -qiE '\bWHERE\b'; then
+if echo "$TOOL_INPUT" | grep -qiE 'SELECT\s+.+\s+FROM\s+\S+' && ! echo "$TOOL_INPUT" | grep -qiE '\bWHERE\b'; then
   echo "WARNING: WHERE 절 없는 SELECT는 전체 테이블을 조회합니다. 페이지네이션 또는 조건을 추가하세요."
 fi
 

@@ -312,9 +312,8 @@ ai-harness/
 │       ├── CLAUDE.md           # 글로벌 CLAUDE.md 템플릿
 │       └── skills/convention.md # 기본 컨벤션 템플릿
 │
-├── global/                     # 글로벌 설정
-│   ├── CLAUDE.md               # 글로벌 규칙 (모든 프로젝트)
-│   └── skills/                 # 글로벌 스킬
+├── global/                     # 글로벌 스킬
+│   └── skills/                 # 공통 스킬
 │       ├── handoff.md          # 인수인계 스킬
 │       └── onboard.md          # 온보딩 스킬
 │
