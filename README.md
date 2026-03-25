@@ -174,7 +174,7 @@ Claude가 다음을 자동으로 수행합니다:
 
 | 팀 | 핵심 역할 | 컨벤션 | Hook | 스킬 |
 |----|---------|--------|------|------|
-| **BE** | API/DB 개발 | 패키지 구조, DTO 네이밍, REST 규칙 | sql-review, api-compat | entity, migration, api-design, convention |
+| **BE** | API/DB 개발 | 패키지 구조, DTO 네이밍, REST 규칙 | sql-review, api-compat | entity, migration, api-design, convention, agent-map |
 
 ### 준비 중 (향후 제공)
 
