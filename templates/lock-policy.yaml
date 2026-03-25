@@ -2,6 +2,7 @@ locked:
   - hooks.block-dangerous
   - hooks.audit-logger
   - hooks.secret-scanner
+  - hooks.check-architecture
 bounded:
   rules.test_coverage:
     min: 60
