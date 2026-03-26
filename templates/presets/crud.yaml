@@ -1,0 +1,53 @@
+# CRUD 작업 프리셋
+# 에이전트가 CRUD 기능을 추가할 때 최적의 컨텍스트와 작업 순서를 제공합니다.
+name: crud
+description: 새 엔티티에 대한 CRUD API를 추가합니다
+trigger_keywords: ["CRUD 추가", "새 엔티티", "API 추가"]
+
+# 에이전트가 먼저 읽어야 할 파일 (컨텍스트 최소화)
+context:
+  required:
+    - ".ai-harness/teams/{team}/skills/convention-{team}.md"
+    - ".ai-harness/context-map.md"
+  optional:
+    - "src/main/resources/application.yml"
+
+# 작업 순서 (의존성 방향 순서대로)
+steps:
+  - name: "1. Entity 생성"
+    layer: entity
+    description: "JPA Entity + 기본 필드 (audit 포함)"
+    depends_on: []
+
+  - name: "2. Repository 생성"
+    layer: repository
+    description: "JpaRepository 인터페이스"
+    depends_on: ["entity"]
+
+  - name: "3. DTO 생성"
+    layer: dto
+    description: "Request/Response DTO (컨벤션 네이밍 준수)"
+    depends_on: ["entity"]
+
+  - name: "4. Service 생성"
+    layer: service
+    description: "비즈니스 로직 + 트랜잭션"
+    depends_on: ["repository", "dto"]
+
+  - name: "5. Controller 생성"
+    layer: controller
+    description: "REST API 엔드포인트"
+    depends_on: ["service", "dto"]
+
+  - name: "6. 테스트 생성"
+    layer: test
+    description: "Service 단위 테스트 + Controller 통합 테스트"
+    depends_on: ["controller"]
+
+# 검증 체크리스트
+verification:
+  - "의존성 방향 준수 (Entity → Repo → Service → Controller)"
+  - "컨벤션의 네이밍 패턴 일치"
+  - "공통 응답 클래스 사용"
+  - "Validation 어노테이션 포함"
+  - "테스트 커버리지 확인"

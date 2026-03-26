@@ -13,7 +13,9 @@
 
 ## 코드 작성 시
 - 프로젝트에 .ai-harness/가 있으면 해당 팀의 컨벤션 스킬을 참고하라
+- .ai-harness/context-map.md 를 먼저 읽어 프로젝트 지도를 파악하라 (매뉴얼이 아닌 지도)
 - .ai-harness/teams/{team}/skills/convention-{team}.md 파일을 읽어서 적용
+- 새 코드 생성 시 templates/presets/ 의 작업 프리셋을 참고하라 (CRUD, 버그수정, 리팩토링)
 
 ## 제공 팀
 - 현재: **backend** (제공 중)
@@ -27,6 +29,7 @@
 - /harness-team : 팀 추가/수정/제거/목록
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외
 - /harness-metrics : 에이전트 작업 효율 메트릭 분석 + 개선 제안
+- /harness-scaffold : 컨벤션 기반 코드 보일러플레이트 생성 (CRUD, Service 등)
 
 ## 자동 동작
 - .claude/settings.json에 Hook이 등록되어 있으면 도구 사용 시 자동 검증
