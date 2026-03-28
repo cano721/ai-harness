@@ -20,5 +20,20 @@ hooks:
     enabled: true
   audit-logger:
     enabled: true
+  check-architecture:
+    enabled: true
+architecture:
+  layers:
+    - name: Types/Entity
+      patterns: ["dto", "entity", "model", "domain", "type", "vo", "enum"]
+    - name: Config
+      patterns: ["config", "configuration", "properties"]
+    - name: Repository
+      patterns: ["repository", "repo", "dao", "mapper", "persistence"]
+    - name: Service
+      patterns: ["service", "usecase", "application"]
+    - name: Controller
+      patterns: ["controller", "rest", "api", "endpoint", "resource"]
+  direction: "Types/Entity → Config → Repository → Service → Controller"
 rules:
   test_coverage: 80

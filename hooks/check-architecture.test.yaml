@@ -1,0 +1,39 @@
+name: check-architecture
+description: 아키텍처 경계 위반 감지 테스트
+
+tests:
+  - name: "Repository에서 Controller import 차단"
+    tool: Write
+    input: '{"file_path": "/project/src/main/java/com/example/repository/UserRepository.java", "content": "import com.example.controller.UserController;"}'
+    expect: blocked
+    match: "아키텍처 경계 위반"
+
+  - name: "Entity에서 Service import 차단"
+    tool: Edit
+    input: '{"file_path": "/project/src/main/java/com/example/entity/User.java", "new_string": "import com.example.service.UserService;"}'
+    expect: blocked
+    match: "아키텍처 경계 위반"
+
+  - name: "Service에서 Repository import 허용"
+    tool: Write
+    input: '{"file_path": "/project/src/main/java/com/example/service/UserService.java", "content": "import com.example.repository.UserRepository;"}'
+    expect: pass
+
+  - name: "Controller에서 Service import 허용"
+    tool: Write
+    input: '{"file_path": "/project/src/main/java/com/example/controller/UserController.java", "content": "import com.example.service.UserService;"}'
+    expect: pass
+
+  - name: "Java 외 파일 스킵"
+    tool: Write
+    input: '{"file_path": "/project/src/main/resources/application.yml", "content": "server.port: 8080"}'
+    expect: pass
+
+  - name: "비활성화 시 스킵"
+    tool: Write
+    input: '{"file_path": "/project/src/main/java/com/example/repository/UserRepository.java", "content": "import com.example.controller.UserController;"}'
+    config_override:
+      hooks:
+        check-architecture:
+          enabled: false
+    expect: pass
