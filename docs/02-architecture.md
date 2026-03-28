@@ -495,3 +495,49 @@ harness-hook-bridge.js <event> <tool_name> <tool_input>
 ```
 
 OMC가 없으면 브릿지 없이 Claude Code가 직접 `settings.json`의 Hook을 실행한다. OMC 연동은 완전히 선택이며, 하네스의 핵심 기능은 OMC 없이도 동작한다.
+
+## 확장 계획 — 멀티 플랫폼 지원
+
+현재 AI Harness는 Claude Code 전용이지만, 보안 규칙/컨벤션/팀 구조 등 핵심 자산은 플랫폼에 독립적이다. 향후 Codex, Cursor 등 다른 AI 코딩 도구를 지원할 때를 대비하여, **"무엇을 세팅하는가"와 "어디에 세팅하는가"를 분리**하는 구조를 유지한다.
+
+### 공통 코어 (플랫폼 독립)
+
+어떤 플랫폼이든 재사용 가능한 자산:
+
+| 자산 | 설명 | 이식성 |
+|------|------|--------|
+| Hook 스크립트 | `block-dangerous.sh`, `secret-scanner.sh` 등 순수 bash | 그대로 실행 가능 |
+| 컨벤션 | 마크다운 형식의 코딩 규칙 | 어떤 컨텍스트 파일이든 주입 가능 |
+| 아키텍처 레이어 정의 | `config.yaml`의 레이어/패턴 | 플랫폼 무관 |
+| 팀 구조 + 추천 카탈로그 | `teams/` 디렉토리 | 플랫폼 무관 |
+| 컨텍스트 맵 | 프로젝트 지도 마크다운 | 어떤 도구든 참조 가능 |
+
+### 플랫폼 어댑터 (플랫폼별)
+
+각 플랫폼의 세팅 방식에 맞게 변환하는 레이어:
+
+```
+AI Harness (공통 코어)
+  │
+  ├── Claude Code 어댑터 (현재)
+  │   ├── .claude/settings.json에 Hook 등록
+  │   ├── CLAUDE.md에 규칙 주입
+  │   └── skills/SKILL.md 포맷
+  │
+  ├── Codex 어댑터 (향후)
+  │   ├── AGENTS.md에 규칙 주입
+  │   ├── Codex Hook/설정에 등록
+  │   └── Codex 명령어 포맷
+  │
+  └── 기타 어댑터 (향후)
+      └── 해당 플랫폼의 설정 방식에 맞게 변환
+```
+
+### 현재 지켜야 할 원칙
+
+멀티 플랫폼 지원을 당장 구현하지는 않지만, 확장 가능성을 유지하기 위해 다음을 지킨다:
+
+1. **Hook 스크립트는 순수 bash로 유지** — Claude Code 고유 API에 의존하지 않는다
+2. **컨벤션은 일반 마크다운으로 유지** — CLAUDE.md 전용 문법을 쓰지 않는다
+3. **등록 로직은 scripts/에 분리** — `register-hooks.mjs`, `inject-claudemd.mjs` 등이 어댑터 역할을 한다
+4. **config.yaml은 플랫폼 중립** — Claude Code 전용 설정을 넣지 않는다
