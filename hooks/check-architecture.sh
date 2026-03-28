@@ -4,7 +4,7 @@
 # Write, Edit 도구 대상으로 동작.
 # exit 0 = 통과, exit 2 = 차단
 #
-# 의존성 방향: Types → Config → Repository → Service → Controller → UI
+# 의존성 방향: Types → Config → Repository → Service → Controller
 # 하위 레이어가 상위 레이어를 import하면 차단한다.
 
 TOOL_NAME="$1"
@@ -49,18 +49,18 @@ if ! echo "$FILE_PATH" | grep -qE '\.java$'; then
   exit 0
 fi
 
-# 레이어 판별 (파일 경로 기반)
+# 레이어 판별 (디렉토리 경로 기반, 경로 구분자 포함)
 get_layer() {
   local path="$1"
-  if echo "$path" | grep -qiE '(controller|rest|api|endpoint|resource)'; then
+  if echo "$path" | grep -qiE '/(controller|rest|endpoint|resource)/'; then
     echo 5
-  elif echo "$path" | grep -qiE '(service|usecase|application)'; then
+  elif echo "$path" | grep -qiE '/(service|usecase|application)/'; then
     echo 4
-  elif echo "$path" | grep -qiE '(repository|repo|dao|mapper|persistence)'; then
+  elif echo "$path" | grep -qiE '/(repository|repo|dao|mapper|persistence)/'; then
     echo 3
-  elif echo "$path" | grep -qiE '(config|configuration|properties)'; then
+  elif echo "$path" | grep -qiE '/(config|configuration|properties)/'; then
     echo 2
-  elif echo "$path" | grep -qiE '(dto|entity|model|domain|type|vo|enum)'; then
+  elif echo "$path" | grep -qiE '/(dto|entity|model|domain|type|vo|enum)/'; then
     echo 1
   else
     echo 0  # 판별 불가 → 검사 스킵
@@ -92,27 +92,31 @@ check_import_violation() {
   # import 문에서 상위 레이어 참조 감지
   local violations=""
 
-  if [ "$source_layer" -le 3 ]; then  # Repository 이하
+  # Controller import 감지 (Service 이하에서 위반)
+  if [ "$source_layer" -le 4 ]; then
     if echo "$content" | grep -qE 'import\s+.*\.(controller|rest|endpoint|resource)\.'; then
       violations="Controller"
     fi
   fi
 
-  if [ "$source_layer" -le 3 ]; then  # Repository 이하
-    if echo "$content" | grep -qE 'import\s+.*\.(service|usecase|application)\.' | grep -vq 'import\s+.*\.domain\.service\.'; then
-      if echo "$content" | grep -qE 'import\s+.*\.(service|usecase|application)\.'; then
+  # Service import 감지 (Repository 이하에서 위반, domain.service 패키지는 예외)
+  if [ "$source_layer" -le 3 ]; then
+    if echo "$content" | grep -qE 'import\s+.*\.(service|usecase|application)\.'; then
+      if ! echo "$content" | grep -qE 'import\s+.*\.domain\.service\.'; then
         violations="${violations:+$violations, }Service"
       fi
     fi
   fi
 
-  if [ "$source_layer" -le 1 ]; then  # Types/Entity 이하
+  # Repository import 감지 (Types/Entity 이하에서 위반)
+  if [ "$source_layer" -le 1 ]; then
     if echo "$content" | grep -qE 'import\s+.*\.(repository|repo|dao|mapper|persistence)\.'; then
       violations="${violations:+$violations, }Repository"
     fi
   fi
 
-  if [ "$source_layer" -le 1 ]; then  # Types/Entity 이하
+  # Config import 감지 (Types/Entity 이하에서 위반)
+  if [ "$source_layer" -le 1 ]; then
     if echo "$content" | grep -qE 'import\s+.*\.(config|configuration)\.'; then
       violations="${violations:+$violations, }Config"
     fi
@@ -134,16 +138,27 @@ if [ "$SOURCE_LAYER" -eq 0 ]; then
   exit 0
 fi
 
-# 코드 내용에서 import 위반 체크
+# 코드 내용 추출 (jq 사용, fallback으로 grep)
 CONTENT=""
-if [ "$TOOL_NAME" = "Write" ]; then
-  CONTENT=$(echo "$TOOL_INPUT" | grep -oE '"content"\s*:\s*"[^"]*"' | head -1)
-elif [ "$TOOL_NAME" = "Edit" ]; then
-  CONTENT=$(echo "$TOOL_INPUT" | grep -oE '"new_string"\s*:\s*"[^"]*"' | head -1)
+if command -v jq &>/dev/null; then
+  if [ "$TOOL_NAME" = "Write" ]; then
+    CONTENT=$(echo "$TOOL_INPUT" | jq -r '.content // empty' 2>/dev/null)
+  elif [ "$TOOL_NAME" = "Edit" ]; then
+    CONTENT=$(echo "$TOOL_INPUT" | jq -r '.new_string // empty' 2>/dev/null)
+  fi
 fi
 
-VIOLATIONS=$(check_import_violation "$SOURCE_LAYER" "$CONTENT")
-if [ $? -ne 0 ]; then
+# jq 실패 시 grep fallback
+if [ -z "$CONTENT" ]; then
+  if [ "$TOOL_NAME" = "Write" ]; then
+    CONTENT=$(echo "$TOOL_INPUT" | grep -oE '"content"\s*:\s*"[^"]*"' | head -1)
+  elif [ "$TOOL_NAME" = "Edit" ]; then
+    CONTENT=$(echo "$TOOL_INPUT" | grep -oE '"new_string"\s*:\s*"[^"]*"' | head -1)
+  fi
+fi
+
+# 위반 검사 (함수 호출과 결과 캡처 분리)
+if ! VIOLATIONS=$(check_import_violation "$SOURCE_LAYER" "$CONTENT"); then
   echo "BLOCKED: 아키텍처 경계 위반 — ${SOURCE_NAME} 레이어에서 상위 레이어(${VIOLATIONS})를 참조할 수 없습니다."
   echo ""
   echo "의존성 방향: Types/Entity → Config → Repository → Service → Controller"
