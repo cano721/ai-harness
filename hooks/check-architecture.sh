@@ -100,11 +100,12 @@ check_import_violation() {
   fi
 
   # Service import 감지 (Repository 이하에서 위반, domain.service 패키지는 예외)
+  # 개행 변환 후 라인 단위 검사: domain.service 라인을 제외하고 나머지 service import 존재 여부
   if [ "$source_layer" -le 3 ]; then
-    if echo "$content" | grep -qE 'import\s+.*\.(service|usecase|application)\.'; then
-      if ! echo "$content" | grep -qE 'import\s+.*\.domain\.service\.'; then
-        violations="${violations:+$violations, }Service"
-      fi
+    local service_imports
+    service_imports=$(echo "$content" | tr ';' '\n' | grep -E 'import\s+.*\.(service|usecase|application)\.' | grep -vE '\.domain\.service\.' || true)
+    if [ -n "$service_imports" ]; then
+      violations="${violations:+$violations, }Service"
     fi
   fi
 

@@ -57,13 +57,14 @@ if [ "$TOOL_NAME" = "Bash" ]; then
     exit 2
   fi
 
-  # git push --force (main/master) 차단
-  if echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force'; then
+  # git push --force (main/master) 차단 (--force-with-lease는 허용)
+  if echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force' && \
+     ! echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force-with-lease'; then
     echo "BLOCKED: force push는 하네스 보안 정책에 의해 차단됩니다."
     echo ""
     echo "다음과 같이 수정하세요:"
     echo "  - 안전한 대안: git push --force-with-lease"
-    echo "  - 리베이스 후: git push --force-with-lease origin \$(git branch --show-current)"
+    echo "  - 리베이스 후: git push --force-with-lease origin <브랜치명>"
     exit 2
   fi
 
