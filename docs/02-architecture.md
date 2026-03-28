@@ -330,7 +330,7 @@ TOOL_NAME="${1:-}"
 TOOL_INPUT="${2:-}"
 
 if [[ "$TOOL_INPUT" == *"위험 패턴"* ]]; then
-  echo "BLOCKED: 위험 패턴 감지. 대안: ..." >&2
+  echo "BLOCKED: 위험 패턴 감지. 대안: ..."
   exit 2
 fi
 exit 0
