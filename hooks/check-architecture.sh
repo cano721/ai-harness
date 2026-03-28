@@ -52,7 +52,7 @@ fi
 # 레이어 판별 (디렉토리 경로 기반, 경로 구분자 포함)
 get_layer() {
   local path="$1"
-  if echo "$path" | grep -qiE '/(controller|rest|endpoint|resource)/'; then
+  if echo "$path" | grep -qiE '/(controller|rest|api|endpoint|resource)/'; then
     echo 5
   elif echo "$path" | grep -qiE '/(service|usecase|application)/'; then
     echo 4
