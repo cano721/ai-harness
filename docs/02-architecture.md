@@ -73,7 +73,7 @@ hooks/
 | `check-architecture.sh` | PreToolUse | 의존성 방향 위반 감지 (하위→상위 import 차단) | 2: 차단, 0: 통과 |
 | `audit-logger.sh` | PostToolUse | 도구명, 입력, 시각을 JSONL로 기록 | 항상 0 |
 
-**Hook의 핵심 원칙**: exit 2는 차단, exit 0은 통과. 차단 시 사유와 대안을 stderr로 출력하면 에이전트가 이를 읽고 수정한다.
+**Hook의 핵심 원칙**: exit 2는 차단, exit 0은 통과. 차단 시 사유와 대안을 stdout으로 출력하면 에이전트가 이를 읽고 수정한다.
 
 ### 3. Team 계층 — 팀별 특화
 
@@ -319,8 +319,8 @@ teams/data-engineering/
 ### 새 Hook 추가
 
 1. `hooks/` (글로벌) 또는 `teams/{team}/hooks/` (팀별)에 셸 스크립트 작성
-2. 환경 변수 `HARNESS_TOOL_NAME`, `HARNESS_TOOL_INPUT`으로 도구 정보 수신
-3. 차단 시 exit 2 + stderr로 사유/대안 출력, 통과 시 exit 0
+2. 위치 인수 `$1`(도구명), `$2`(도구 입력)로 도구 정보 수신
+3. 차단 시 exit 2 + stdout으로 사유/대안 출력, 통과 시 exit 0
 4. `scripts/register-hooks.mjs register`로 settings.json에 등록
 
 ```bash
