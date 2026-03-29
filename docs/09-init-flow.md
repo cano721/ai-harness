@@ -66,30 +66,44 @@
 
 ### 2단계: 글로벌 세팅 확인
 
-보안 Hook을 모든 프로젝트에 적용할 것을 사용자에게 **안내하고 확인받는다**.
+2가지를 세팅한다: **보안 Hook 등록** + **글로벌 CLAUDE.md 최적화**
+
+#### 2-1. 보안 Hook 등록
 
 ```
-"다음 보안 Hook을 모든 프로젝트에 적용합니다:
-  ✓ block-dangerous     — 위험 명령 차단 (rm -rf, DROP TABLE 등)
-  ✓ secret-scanner      — 시크릿 하드코딩 감지
-  ✓ check-architecture  — 아키텍처 경계 위반 검증
-  ✓ audit-logger        — 모든 도구 사용 로깅
+"보안 Hook을 모든 프로젝트에 적용합니다:
+  ✓ block-dangerous     — 위험 명령 차단
+  ✓ secret-scanner      — 이미 등록됨
+  ★ check-architecture  — 신규 등록
+  ✓ audit-logger        — 이미 등록됨
 
  등록 위치: ~/.claude/settings.json
  진행할까요? (Y/n):"
 ```
 
-이미 등록된 Hook이 있으면:
+#### 2-2. 글로벌 CLAUDE.md 최적화
+
+기존 `~/.claude/CLAUDE.md`를 분석하여 하네스 보안 규칙과 중복을 식별하고, 최소한만 추가한다.
 
 ```
-"글로벌 보안 세팅 상태:
-  ✓ block-dangerous     — 이미 등록됨
-  ✓ secret-scanner      — 이미 등록됨
-  ★ check-architecture  — 신규 등록
-  ✓ audit-logger        — 이미 등록됨
+"글로벌 CLAUDE.md 분석:
+  현재: 45줄
+  보안 관련 규칙: 3줄 발견
 
- check-architecture를 추가 등록합니다. 진행할까요? (Y/n):"
+ 하네스 보안 규칙과 비교:
+  ✓ 이미 있음: '위험 명령 금지' — 추가 안 함
+  ★ 신규: '시크릿 하드코딩 금지' — 1줄 추가
+  ★ 신규: '.env 직접 쓰기 금지' — 1줄 추가
+
+ 기존 규칙 정리도 도와드릴까요? (Y/n):"
 ```
+
+정리 선택 시:
+- 중복 규칙 제거, 유사 규칙 병합, 긴 설명 압축
+- 변경 전/후 줄 수 비교 미리보기 제시
+- 최종 확인 후 적용
+
+**원칙**: 글로벌 CLAUDE.md는 모든 대화에 로드되므로 **최대한 짧게** 유지한다. 하네스는 무조건 추가하지 않고, 기존과 비교하여 없는 것만 최소한으로 추가한다.
 
 ### 3단계: 프로젝트 확인
 
@@ -122,6 +136,8 @@
   [3] ✗ 팀 Hook: entity-review — 엔티티 변경 리뷰
   [4] ✗ 아키텍처 레이어 검증 설정
   [5] ✗ 외부 서비스 연동 (Jira, Confluence 등)
+  [6] ✗ MCP 서버 (MySQL, Figma)
+  [7] ✗ 추천 플러그인 (OMC, pm-skills)
 
  세팅할 항목? (번호 쉼표, all: 전체, skip: 건너뛰기):"
 ```
@@ -131,6 +147,8 @@
 - 컨텍스트 맵이 없으면 → 프로젝트 분석 후 자동 생성
 - 팀 Hook이 없으면 → .claude/settings.json에 등록
 - 외부 서비스 → 대화형으로 인증 정보 수집 후 설정
+- MCP 서버 → 연결 정보 수집 후 .claude/.mcp.json에 설정
+- 추천 플러그인 → `claude plugin install` 실행
 
 ## 4단계 하위 절차 상세
 
@@ -235,7 +253,7 @@
  ✗ 컨벤션 — 문서 작성 컨벤션
  ✗ Skill: prd — PRD 작성
  ✗ Skill: user-story — 유저스토리 작성
- ✗ Skill: estimation — 공수 추정
+ ✗ Skill: estimate — 공수 추정
 ```
 
 ## init 후 프로젝트에 생성되는 파일

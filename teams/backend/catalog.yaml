@@ -1,0 +1,144 @@
+team: backend
+description: "Java/Spring Backend 개발"
+detect:
+  files: ["build.gradle", "pom.xml"]
+  patterns: ["spring-boot", "springframework"]
+
+items:
+  # 필수 (글로벌, locked)
+  - id: block-dangerous
+    type: hook
+    scope: global
+    required: true
+    description: "위험 명령 차단 (rm -rf, DROP TABLE 등)"
+
+  - id: secret-scanner
+    type: hook
+    scope: global
+    required: true
+    description: "시크릿 하드코딩 감지"
+
+  - id: check-architecture
+    type: hook
+    scope: global
+    required: true
+    description: "아키텍처 경계 위반 검증"
+
+  - id: audit-logger
+    type: hook
+    scope: global
+    required: true
+    description: "모든 도구 사용 로깅"
+
+  # 추천 Hook (로컬, opt-in)
+  - id: sql-review
+    type: hook
+    scope: local
+    required: false
+    default: true
+    description: "SQL 검증 (바인딩, SELECT * 체크)"
+
+  - id: api-compat
+    type: hook
+    scope: local
+    required: false
+    default: true
+    description: "API 호환성 검사 (엔드포인트 변경 시)"
+
+  - id: entity-review
+    type: hook
+    scope: local
+    required: false
+    default: true
+    description: "엔티티 변경 리뷰 (필드 추가/삭제 시)"
+
+  # 추천 Skill (로컬, opt-in)
+  - id: convention-backend
+    type: skill
+    scope: local
+    required: false
+    default: true
+    description: "코드 컨벤션 (프로젝트 분석 후 맞춤 생성)"
+
+  - id: api-design
+    type: skill
+    scope: local
+    required: false
+    default: true
+    description: "API 설계 가이드"
+
+  - id: entity
+    type: skill
+    scope: local
+    required: false
+    default: true
+    description: "엔티티 생성"
+
+  - id: migration
+    type: skill
+    scope: local
+    required: false
+    default: true
+    description: "DB 마이그레이션"
+
+  # 추천 설정 (로컬, opt-in)
+  - id: architecture-layers
+    type: config
+    scope: local
+    required: false
+    default: true
+    description: "아키텍처 레이어 검증 — Entity→Config→Repository→Service→Controller"
+
+  - id: context-map
+    type: config
+    scope: local
+    required: false
+    default: true
+    description: "에이전트용 프로젝트 지도 생성"
+
+  - id: test-coverage
+    type: config
+    scope: local
+    required: false
+    default: true
+    description: "테스트 커버리지 80%"
+    value: 80
+
+  # 외부 연동 (글로벌, opt-in)
+  - id: jira
+    type: integration
+    scope: global
+    required: false
+    default: false
+    description: "Jira 이슈 관리"
+
+  - id: confluence
+    type: integration
+    scope: global
+    required: false
+    default: false
+    description: "Confluence 문서 관리"
+
+  - id: mysql-mcp
+    type: mcp
+    scope: local
+    required: false
+    default: false
+    description: "MySQL DB 조회 (read-only)"
+
+  # 추천 플러그인
+  - id: omc
+    type: plugin
+    scope: global
+    required: false
+    default: false
+    description: "AI 오케스트레이션 (autopilot, ralph, team)"
+    install: "oh-my-claudecode@omc"
+
+  - id: pm-skills
+    type: plugin
+    scope: global
+    required: false
+    default: false
+    description: "유저스토리, PRD, 테스트 시나리오 생성"
+    install: "pm-execution@pm-skills"

@@ -100,8 +100,8 @@ teams/
 │   └── skills/
 │       ├── convention-frontend.md
 │       ├── component.md
-│       ├── state-management.md
-│       └── performance.md
+│       ├── e2e.md
+│       └── storybook.md
 ├── devops/
 │   ├── CLAUDE.md
 │   ├── hooks/
@@ -113,17 +113,20 @@ teams/
 │       └── rollback-plan.md
 ├── qa/
 │   ├── CLAUDE.md
+│   ├── hooks/
+│   │   └── coverage-check.sh
 │   └── skills/
 │       ├── convention-qa.md
 │       ├── test-scenario.md
-│       └── coverage-check.md
+│       ├── regression.md
+│       └── smoke-test.md
 ├── planning/
 │   ├── CLAUDE.md
 │   └── skills/
 │       ├── convention-planning.md
 │       ├── prd.md
 │       ├── user-story.md
-│       └── estimation.md
+│       └── estimate.md
 └── design/
     ├── CLAUDE.md
     └── skills/
