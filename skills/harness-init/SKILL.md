@@ -45,20 +45,49 @@ description: 프로젝트에 AI Harness를 초기화합니다 — 팀 선택 →
    - 사용자 확인 후 결정
 
 2. 글로벌 세팅 확인
-   - ~/.claude/settings.json에 보안 Hook 4개가 등록되어 있는지 확인
-   - 상태를 사용자에게 안내하고 **확인받은 후 진행**:
-     ```
-     "다음 보안 Hook을 모든 프로젝트에 적용합니다:
-       ✓ block-dangerous     — 위험 명령 차단
-       ✓ secret-scanner      — 시크릿 하드코딩 감지
-       ✓ check-architecture  — 아키텍처 경계 위반 검증
-       ✓ audit-logger        — 모든 도구 사용 로깅
+   - 2가지를 세팅: **보안 Hook 등록** + **글로벌 CLAUDE.md 최적화**
 
-      등록 위치: ~/.claude/settings.json
-      진행할까요? (Y/n):"
-     ```
-   - 이미 등록된 Hook은 "이미 등록됨"으로 표시, 신규만 추가
-   - Bash로 `node scripts/register-hooks.mjs register ~/.claude/settings.json ...` 실행
+   a. 보안 Hook 등록
+      - ~/.claude/settings.json에 보안 Hook 4개가 등록되어 있는지 확인
+      - 이미 등록된 Hook은 "이미 등록됨"으로 표시, 신규만 추가
+      - 사용자에게 안내하고 **확인받은 후 진행**:
+        ```
+        "보안 Hook을 모든 프로젝트에 적용합니다:
+          ✓ block-dangerous     — 위험 명령 차단
+          ✓ secret-scanner      — 시크릿 하드코딩 감지
+          ★ check-architecture  — 아키텍처 경계 위반 검증 (신규)
+          ✓ audit-logger        — 이미 등록됨
+
+         등록 위치: ~/.claude/settings.json
+         진행할까요? (Y/n):"
+        ```
+      - Bash로 `node scripts/register-hooks.mjs register ~/.claude/settings.json ...` 실행
+
+   b. 글로벌 CLAUDE.md 최적화
+      - ~/.claude/CLAUDE.md를 Read하여 기존 내용 분석
+      - 하네스 보안 규칙과 중복되는 내용 식별:
+        - 이미 있는 규칙 → 추가 안 함
+        - 없는 규칙 → 최소한으로 추가
+      - 분석 결과를 사용자에게 보고:
+        ```
+        "글로벌 CLAUDE.md 분석:
+          현재: 45줄
+          보안 관련 규칙: 3줄 발견
+
+         하네스 보안 규칙과 비교:
+          ✓ 이미 있음: '위험 명령 금지' — 추가 안 함
+          ★ 신규: '시크릿 하드코딩 금지' — 1줄 추가
+          ★ 신규: '.env 직접 쓰기 금지' — 1줄 추가
+
+         기존 규칙 정리도 도와드릴까요? (Y/n):"
+        ```
+      - 정리 선택 시:
+        - 중복 규칙 제거
+        - 유사한 규칙 병합
+        - 불필요하게 긴 설명 압축
+        - 변경 전/후 비교 미리보기 제시
+      - 최종 확인 후 `<!-- harness:start -->` ~ `<!-- harness:end -->` 구간으로 주입
+      - 기존 내용은 구간 밖에서 보존
 
 3. 프로젝트 확인
    - 현재 디렉토리를 분석하여 프로젝트 정보를 파악
