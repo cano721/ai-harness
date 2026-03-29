@@ -1,5 +1,7 @@
 # AI Harness — 팀별 AI 에이전트 셋업 시스템
 
+> [English README](README.en.md)
+
 플러그인을 설치하고 `/harness-init`을 실행하면, 프로젝트를 분석하여 팀에 맞는 보안 Hook, 코드 컨벤션, 스킬을 자동으로 구성합니다. 세팅이 끝나면 하네스는 빠지고, Claude Code가 알아서 동작합니다.
 
 ## 설계 철학
@@ -398,6 +400,9 @@ ai-harness/
 - **Node.js**: >= 18
 - **Git**: 저장소 필수
 - **Claude Code**: 플러그인으로 등록
+- **OS**: macOS, Linux (Windows는 WSL 필수)
+
+> [English README](README.en.md)
 
 ## 라이선스
 

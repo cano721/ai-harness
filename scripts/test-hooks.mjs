@@ -19,8 +19,17 @@ function loadTestCases(testYamlPath) {
 }
 
 function runTest(hookPath, testCase) {
-  const { name, tool: toolName, input: toolInput, expect_exit: expectExit, expect_output_contains: expectOutput } = testCase;
+  const { name, tool: toolName, input: toolInput, expect_exit: expectExit, expect, expect_output_contains: expectOutput, match, config_override: configOverride } = testCase;
   const inputStr = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput);
+
+  // config_override로 비활성화된 경우 스킵
+  if (configOverride) {
+    const hookName = path.basename(hookPath, '.sh');
+    const hookConfig = configOverride?.hooks?.[hookName];
+    if (hookConfig && hookConfig.enabled === false) {
+      return { name, passed: true, exitCode: 0, expectedExit: 0, output: '(skipped: disabled by config_override)' };
+    }
+  }
 
   let exitCode = 0;
   let output = '';
@@ -35,9 +44,18 @@ function runTest(hookPath, testCase) {
     output = err.stdout ?? '';
   }
 
-  const expectedExit = expectExit ?? 0;
+  // expect: blocked → exit 2, expect: pass → exit 0
+  let expectedExit;
+  if (expectExit !== undefined) {
+    expectedExit = expectExit;
+  } else if (expect === 'blocked') {
+    expectedExit = 2;
+  } else {
+    expectedExit = 0;
+  }
   const exitOk = exitCode === expectedExit;
-  const outputOk = expectOutput ? output.includes(expectOutput) : true;
+  const matchStr = expectOutput || match;
+  const outputOk = matchStr ? output.includes(matchStr) : true;
   const passed = exitOk && outputOk;
 
   return { name, passed, exitCode, expectedExit, output: output.trim() };
