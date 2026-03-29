@@ -29,7 +29,7 @@ get_layer() {
     echo 4
   elif echo "$path" | grep -qiE '/(repository|repo|dao|mapper|persistence)/'; then
     echo 3
-  elif echo "$path" | grep -qiE '/(config|configuration)/'; then
+  elif echo "$path" | grep -qiE '/(config|configuration|properties)/'; then
     echo 2
   elif echo "$path" | grep -qiE '/(dto|entity|model|domain|type|vo|enum)/'; then
     echo 1
@@ -75,9 +75,10 @@ while IFS= read -r file; do
     IMPORT_LAYER=0
     IMPORT_NAME=""
 
-    if echo "$import_line" | grep -qiE '\.(controller|rest|endpoint|resource)\.'; then
+    if echo "$import_line" | grep -qiE '\.(controller|rest|api|endpoint|resource)\.'; then
       IMPORT_LAYER=5; IMPORT_NAME="Controller"
-    elif echo "$import_line" | grep -qiE '\.(service|usecase|application)\.'; then
+    elif echo "$import_line" | grep -qiE '\.(service|usecase|application)\.' && \
+         ! echo "$import_line" | grep -qiE '\.domain\.service\.'; then
       IMPORT_LAYER=4; IMPORT_NAME="Service"
     elif echo "$import_line" | grep -qiE '\.(repository|repo|dao|mapper|persistence)\.'; then
       IMPORT_LAYER=3; IMPORT_NAME="Repository"
