@@ -77,36 +77,40 @@ description: 프로젝트에 AI Harness를 초기화합니다 — 팀 선택 →
      - 즉시 결정하기 어려우면 `.ai-harness/pending-decisions.yaml`에 저장
 
 4. 프로젝트 세팅
-   - 이미 세팅된 것과 안 된 것을 구분하여 보여주고 **사용자가 선택**:
+   - `teams/{선택된 팀}/catalog.yaml`을 Read하여 추천 항목 목록을 로드
+   - 각 항목이 이미 세팅되어 있는지 확인:
+     - type: hook → .claude/settings.json에 해당 Hook이 등록되어 있는지
+     - type: skill → .ai-harness/teams/{team}/skills/에 해당 파일이 있는지
+     - type: config → .ai-harness/config.yaml에 해당 설정이 있는지
+     - type: integration → .ai-harness/config.yaml의 integrations에 있는지
+     - type: mcp → .claude/.mcp.json에 해당 서버가 있는지
+     - type: plugin → `claude plugin list`에 해당 플러그인이 있는지
+   - required: true 항목은 ✓ 필수로 표시, required: false 항목은 ✗/✓로 표시
+   - 미세팅 항목만 번호 매겨서 사용자에게 표시:
      ```
-     "[backend] 프로젝트 세팅 상태:
+     "[{team}] 프로젝트 세팅 상태:
 
       이미 세팅됨:
        ✓ 컨벤션 (convention-backend.md)
 
       미세팅 (추천):
-       [1] ✗ 컨텍스트 맵 — 에이전트용 프로젝트 지도
-       [2] ✗ 팀 Hook: api-compat — API 호환성 검사
-       [3] ✗ 팀 Hook: entity-review — 엔티티 변경 리뷰
-       [4] ✗ 팀 Hook: sql-review — SQL 검증
-       [5] ✗ 아키텍처 레이어 검증 설정
-       [6] ✗ 외부 서비스 연동 (Jira, Confluence 등)
-       [7] ✗ MCP 서버 (MySQL, Figma)
-       [8] ✗ 추천 플러그인 (OMC, pm-skills)
+       [1] ✗ {catalog 항목 description}
+       [2] ✗ {catalog 항목 description}
+       ...
 
       세팅할 항목? (번호 쉼표, all: 전체, skip: 건너뛰기):"
      ```
-   - 선택된 항목에 대해 순서대로 세팅:
-     a. **컨벤션 생성**: 범용 템플릿 + 프로젝트 코드 분석 → 맞춤 컨벤션
+   - 선택된 항목에 대해 type별로 세팅 진행:
+     a. **skill (컨벤션)**: 범용 템플릿 + 프로젝트 코드 분석 → 맞춤 컨벤션 생성
         - 패턴 충돌 시 사용자와 논의 (임의 결정하지 않음)
         - 미결정 사항은 pending-decisions.yaml에 저장
-     b. **컨텍스트 맵**: templates/context-map.md 기반으로 프로젝트 지도 생성
-     c. **팀 Hook 등록**: .claude/settings.json에 팀별 Hook 등록
-     d. **config.yaml 생성**: 프로젝트 설정 (팀, 도메인, 엔티티, 아키텍처)
-     e. **CLAUDE.md 주입**: `node scripts/inject-claudemd.mjs inject ...`
-     f. **외부 서비스**: 대화형 인증 정보 수집 → ~/.claude/credentials.md에 저장
-     g. **MCP 서버**: 연결 정보 수집 → .claude/.mcp.json에 설정
-     h. **추천 플러그인**: `claude plugin install` 실행
+     b. **config (컨텍스트 맵)**: templates/context-map.md 기반으로 프로젝트 지도 생성
+     c. **hook**: `node scripts/register-hooks.mjs register ...`로 등록
+     d. **config**: .ai-harness/config.yaml에 설정 추가
+     e. **integration**: 대화형 인증 정보 수집 → ~/.claude/credentials.md에 저장
+     f. **mcp**: 연결 정보 수집 → .claude/.mcp.json에 설정
+     g. **plugin**: `claude plugin install {install 값}` 실행
+   - CLAUDE.md 주입: `node scripts/inject-claudemd.mjs inject ...`
 
 5. 완료 보고
    - 적용된 팀, Hook 수, 생성된 컨벤션 요약
