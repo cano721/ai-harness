@@ -61,7 +61,17 @@ description: 프로젝트에 AI Harness를 초기화합니다 — 팀 선택 →
          등록 위치: ~/.claude/settings.json
          진행할까요? (Y/n):"
         ```
-      - Bash로 `node scripts/register-hooks.mjs register ~/.claude/settings.json ...` 실행
+      - **Hook 경로 동적 탐색**: 플러그인 설치 경로는 사용자마다 다르므로 동적으로 찾는다
+        ```bash
+        # 플러그인 루트 경로 찾기
+        HARNESS_ROOT=$(find ~/.claude/plugins/cache/ai-harness -name "hooks" -type d 2>/dev/null | head -1 | sed 's|/hooks||')
+        ```
+      - 찾은 경로로 Hook 등록:
+        ```bash
+        node "$HARNESS_ROOT/scripts/register-hooks.mjs" register ~/.claude/settings.json \
+          PreToolUse "Bash|Write|Edit" "bash $HARNESS_ROOT/hooks/block-dangerous.sh"
+        ```
+      - `$HARNESS_ROOT`를 찾지 못하면 사용자에게 플러그인 설치 확인 요청
 
    b. 글로벌 CLAUDE.md 최적화
       - ~/.claude/CLAUDE.md를 Read하여 기존 내용 분석
@@ -91,23 +101,40 @@ description: 프로젝트에 AI Harness를 초기화합니다 — 팀 선택 →
 
 3. 프로젝트 확인
    - 현재 디렉토리를 분석하여 프로젝트 정보를 파악
+   - **멀티 모듈 감지**: settings.gradle 또는 하위 디렉토리에 build.gradle이 여러 개 있으면 멀티 모듈
+     - 각 모듈의 역할을 파악하여 사용자에게 표시
+     - **어느 모듈을 분석 대상으로 할지 확인**:
+       ```
+       "멀티 모듈 프로젝트 감지:
+         [1] llm          — API 서버 (Controller, Facade, Service)
+         [2] llm-core     — 핵심 도메인 (Entity, Repository, 공통)
+         [3] llm-scheduler — 스케줄러/배치
+
+        컨벤션 분석 대상 모듈? (쉼표 구분, 기본: 1,2):"
+       ```
+     - 단일 모듈이면 이 질문 스킵
    - 사용자에게 **확인받은 후 진행**:
      ```
      "현재 프로젝트 분석:
-       경로: /Users/khb1122/Desktop/projects/my-service
-       이름: my-service
-       스택: Java 17, Spring Boot 3.2, JPA, MySQL
+       경로: /Users/.../ats-retention
+       이름: ats-retention
+       스택: Java 21, Spring Boot 3.5
+       모듈: llm, llm-core, llm-scheduler
+       분석 대상: llm, llm-core
+       도메인: 22개 (agent, applicant, calendar, interview ...)
        팀: backend (1단계에서 선택)
 
       이 프로젝트에 backend 세팅을 적용할까요? (Y/n):"
      ```
+   - **도메인이 많으면 대표 샘플링**: 10개 이상 도메인 시 대표 3~5개만 집중 분석하고 나머지는 패턴 일관성 확인
    - 도메인 분석 시 불명확한 부분은 사용자에게 질문:
      - 예: "User와 Member가 둘 다 있는데, 같은 개념인가요?"
      - 즉시 결정하기 어려우면 `.ai-harness/pending-decisions.yaml`에 저장
 
 4. 프로젝트 세팅
    - `teams/{선택된 팀}/catalog.yaml`을 Read하여 추천 항목 목록을 로드
-   - 각 항목이 이미 세팅되어 있는지 확인:
+   - **scope: global 항목은 제외** (2단계에서 이미 처리했으므로 중복 표시하지 않음)
+   - scope: local 항목만 대상으로, 이미 세팅되어 있는지 확인:
      - type: hook → .claude/settings.json에 해당 Hook이 등록되어 있는지
      - type: skill → .ai-harness/teams/{team}/skills/에 해당 파일이 있는지
      - type: config → .ai-harness/config.yaml에 해당 설정이 있는지
