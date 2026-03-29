@@ -3,11 +3,15 @@
 ## 전체 흐름도
 
 ```
-/harness-init
+/harness-init (프로젝트 디렉토리에서 실행)
     │
+    │ ── 글로벌 (자동) ──────────────────────────────
     ▼
-[1] 범위 선택 ─────── 글로벌 / 로컬 / 둘 다
+[1] 글로벌 보안 세팅 ── 보안 Hook 4개 + audit-logger
+    │                    ~/.claude/settings.json에 등록
+    │                    이미 있으면 자동 스킵
     │
+    │ ── 로컬 (이 프로젝트) ─────────────────────────
     ▼
 [2] 환경 감지 ─────── Node.js, Git, Claude Code 확인
     │
@@ -24,8 +28,8 @@
 [6] 컨벤션 생성 ───── 범용 템플릿 + 실제 패턴 → 맞춤 컨벤션
     │                  패턴 충돌 시 사용자 논의, 미결정은 pending 저장
     ▼
-[7] Hook 등록 ─────── scripts/register-hooks.mjs
-    │                  .claude/settings.json에 등록
+[7] 팀별 Hook 등록 ── scripts/register-hooks.mjs
+    │                  ./.claude/settings.json에 팀 Hook 등록
     ▼
 [8] 컨텍스트 맵 생성 ── templates/context-map.md 기반
     │                    프로젝트 지도 자동 생성
@@ -36,25 +40,38 @@
 [완료] 적용 요약 + 미결정 사항 안내
 ```
 
+## 글로벌 vs 로컬 분리 원칙
+
+사용자에게 "글로벌/로컬" 선택을 묻지 않는다. **성격에 따라 자동 분리**한다.
+
+| 항목 | 위치 | 이유 |
+|------|------|------|
+| 보안 Hook (block-dangerous, secret-scanner, check-architecture) | **글로벌** `~/.claude/settings.json` | 모든 프로젝트에서 위험 명령 차단 |
+| audit-logger | **글로벌** `~/.claude/settings.json` | 모든 프로젝트에서 로깅 |
+| 인증 정보 | **글로벌** `~/.claude/credentials.md` | 프로젝트와 무관 |
+| 팀 선택/컨벤션 | **로컬** `./.ai-harness/` | 프로젝트마다 다름 |
+| 컨텍스트 맵 | **로컬** `./.ai-harness/context-map.md` | 프로젝트별 구조 |
+| 아키텍처 레이어 | **로컬** `./.ai-harness/config.yaml` | 프로젝트마다 다를 수 있음 |
+| 팀별 Hook | **로컬** `./.claude/settings.json` | 프로젝트별 팀 특화 |
+| 도메인/엔티티 | **로컬** `./.ai-harness/config.yaml` | 프로젝트별 도메인 |
+
 ## 각 단계 상세
 
-### 1단계: 범위 선택
+### 1단계: 글로벌 보안 세팅 (자동)
 
-사용자에게 적용 범위를 묻는다.
+보안 Hook이 `~/.claude/settings.json`에 이미 등록되어 있는지 확인한다. 없으면 자동 등록하고, 있으면 스킵한다.
 
 ```
-"하네스 적용 범위를 선택하세요:
- [1] 글로벌 — 모든 프로젝트에 적용 (~/.ai-harness/, ~/.claude/settings.json)
- [2] 로컬 — 이 프로젝트만 (./.ai-harness/, ./.claude/settings.json)
- [3] 둘 다
+"글로벌 보안 세팅 확인:
+  ✓ block-dangerous — 이미 등록됨
+  ✓ secret-scanner  — 이미 등록됨
+  ✓ audit-logger    — 이미 등록됨
+  ★ check-architecture — 신규 등록
 
- 선택? (기본: 2):"
+ 글로벌 보안 Hook이 모든 프로젝트에 적용됩니다."
 ```
 
-| 범위 | 설정 경로 | Hook 등록 위치 |
-|------|-----------|---------------|
-| 글로벌 | `~/.ai-harness/` | `~/.claude/settings.json` |
-| 로컬 | `./.ai-harness/` | `./.claude/settings.json` |
+이 단계는 **질문 없이 자동**으로 진행된다. 보안 Hook은 필수(locked)이므로 선택의 여지가 없다.
 
 ### 2단계: 환경 감지
 
