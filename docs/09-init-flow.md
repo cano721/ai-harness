@@ -122,6 +122,8 @@
   [3] ✗ 팀 Hook: entity-review — 엔티티 변경 리뷰
   [4] ✗ 아키텍처 레이어 검증 설정
   [5] ✗ 외부 서비스 연동 (Jira, Confluence 등)
+  [6] ✗ MCP 서버 (MySQL, Figma)
+  [7] ✗ 추천 플러그인 (OMC, pm-skills)
 
  세팅할 항목? (번호 쉼표, all: 전체, skip: 건너뛰기):"
 ```
@@ -131,6 +133,8 @@
 - 컨텍스트 맵이 없으면 → 프로젝트 분석 후 자동 생성
 - 팀 Hook이 없으면 → .claude/settings.json에 등록
 - 외부 서비스 → 대화형으로 인증 정보 수집 후 설정
+- MCP 서버 → 연결 정보 수집 후 .claude/.mcp.json에 설정
+- 추천 플러그인 → `claude plugin install` 실행
 
 ## 4단계 하위 절차 상세
 
@@ -235,7 +239,7 @@
  ✗ 컨벤션 — 문서 작성 컨벤션
  ✗ Skill: prd — PRD 작성
  ✗ Skill: user-story — 유저스토리 작성
- ✗ Skill: estimation — 공수 추정
+ ✗ Skill: estimate — 공수 추정
 ```
 
 ## init 후 프로젝트에 생성되는 파일

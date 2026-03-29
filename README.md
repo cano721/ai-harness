@@ -106,7 +106,7 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 
 ## 스킬 목록
 
-5개 스킬로 하네스를 완전히 제어합니다. 모두 자연어로 호출 가능합니다.
+7개 스킬로 하네스를 완전히 제어합니다. 모두 자연어로 호출 가능합니다.
 
 | 스킬 | 사용 예시 | 기능 |
 |------|----------|------|
@@ -115,6 +115,8 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 | **harness-rules** | "적용된 규칙 보여줘" | 현재 보안 규칙 목록, 마지막 차단 사유 |
 | **harness-team** | "QA팀 추가해줘" | 팀 추가/제거, 컨벤션 수정 |
 | **harness-exclude** | "이 프로젝트 제외해줘" | 글로벌 하네스 제외 프로젝트 관리 |
+| **harness-metrics** | "메트릭 분석해줘" | 에이전트 작업 효율 메트릭 분석 + 개선 제안 |
+| **harness-scaffold** | "CRUD 만들어줘" | 컨벤션 기반 코드 보일러플레이트 생성 |
 
 ## 팀 프로필
 
@@ -145,30 +147,35 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 
 ### 글로벌 Hook (모든 팀에 적용)
 
-3개 필수 Hook이 자동으로 등록됩니다:
+4개 필수 Hook이 자동으로 등록됩니다:
 
 **block-dangerous.sh** — 위험 패턴 차단
 
 - `rm -rf` (rm과 -r, -f 플래그 조합)
 - `DROP TABLE/DATABASE/INDEX`
 - `TRUNCATE TABLE`
-- `git push --force`
+- `git push --force` (`--force-with-lease`는 허용)
 - `chmod 777`
 - `sudo` 명령
 
 차단 시 안내: "BLOCKED: [사유]. 대안: [권장 방법]"
-
-**audit-logger.sh** — 모든 액션 감사 로깅
-
-- 누가, 언제, 무엇을 했는지 JSONL 형식으로 기록
-- `.ai-harness/logs/{YYYY-MM-DD}.jsonl`
-- 민감 정보(API 키, 암호) 자동 마스킹
 
 **secret-scanner.sh** — 민감 정보 유출 방지
 
 - API 키, 암호, 개인정보 감지
 - 커밋 전 자동 마스킹
 - 시크릿 문자열을 `.env` 등에 저장하도록 안내
+
+**check-architecture.sh** — 아키텍처 경계 위반 검증
+
+- 의존성 방향 위반 감지 (Types/Entity → Config → Repository → Service → Controller)
+- 하위 레이어에서 상위 레이어 import 시 차단 + 대안 안내
+
+**audit-logger.sh** — 모든 액션 감사 로깅
+
+- 누가, 언제, 무엇을 했는지 JSONL 형식으로 기록
+- `.ai-harness/logs/{YYYY-MM-DD}.jsonl`
+- 민감 정보(API 키, 암호) 자동 마스킹
 
 ### 팀별 Hook
 
@@ -226,12 +233,14 @@ Hook 응답:
 
 ```
 ai-harness/
-├── skills/                     # 5개 스킬 디렉토리
+├── skills/                     # 7개 스킬 디렉토리
 │   ├── harness-init/
 │   ├── harness-status/
 │   ├── harness-rules/
 │   ├── harness-team/
-│   └── harness-exclude/
+│   ├── harness-exclude/
+│   ├── harness-metrics/
+│   └── harness-scaffold/
 │
 ├── scripts/                    # 헬퍼 스크립트 (스킬이 내부적으로 호출)
 │   ├── check-environment.mjs   # Node.js, Git, Claude Code 버전 확인
@@ -239,6 +248,7 @@ ai-harness/
 │   ├── copy-team-resources.mjs # 팀별 Hook/스킬 복사
 │   ├── inject-claudemd.mjs     # CLAUDE.md에 하네스 규칙 주입
 │   ├── test-hooks.mjs          # Hook 단위 테스트
+│   ├── check-architecture-ci.sh # CI용 아키텍처 검증
 │
 ├── hooks/                      # 글로벌 Hook 스크립트
 │   ├── block-dangerous.sh      # 위험 명령 차단
@@ -257,7 +267,10 @@ ai-harness/
 │   └── devops/
 │
 ├── templates/                  # 설정/정책 템플릿
+│   ├── config.yaml             # 프로젝트 설정 템플릿
+│   ├── context-map.md          # 컨텍스트 맵 템플릿
 │   ├── lock-policy.yaml        # 규칙 잠금 정책
+│   ├── presets/                # 작업 프리셋 (CRUD, 버그수정, 리팩토링)
 │   └── global/
 │       ├── CLAUDE.md           # 글로벌 CLAUDE.md 템플릿
 │       └── skills/convention.md # 기본 컨벤션 템플릿
@@ -315,7 +328,7 @@ ai-harness/
 | 06 | [로드맵](docs/06-roadmap.md) | Phase 1~3 단계별 작업 |
 | 07 | [설정 관리 & 업데이트](docs/07-configuration.md) | 버전 업데이트, 잠금 정책 |
 | 08 | [배포 & 패키지 구조](docs/08-distribution.md) | 하이브리드 배포, npm/GitHub 구성 |
-| 09 | [Init 플로우 상세](docs/09-init-flow.md) | 6단계 설치 프로세스 |
+| 09 | [Init 플로우 상세](docs/09-init-flow.md) | 4단계 init 플로우 |
 | 10 | [감사 로깅 설계](docs/10-audit-logging.md) | 로그 포맷, 보존 정책 |
 | 11 | [크로스팀 워크플로우](docs/11-cross-team-workflow.md) | 기획→디자인→개발→QA 파이프라인 |
 | 12 | [비용 추적 모델](docs/12-cost-tracking.md) | 토큰 비용, 한도, 최적화 |
