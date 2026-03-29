@@ -37,6 +37,38 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 B: Controller → Facade → Service → Repository
 - 예시 C: Controller → UseCase → Service → Repository
 
+### 코드 예시 (Service)
+
+```java
+// Service 예시
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class {Entity}Service {
+
+    private final {Entity}Repository repository;
+
+    @Transactional
+    public {Entity}Response create(Create{Entity}Request request) {
+        {Entity} entity = {Entity}.builder()
+            .name(request.name())
+            .build();
+        return {Entity}Response.from(repository.save(entity));
+    }
+
+    public {Entity}Response getById(Long id) {
+        {Entity} entity = repository.findById(id)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND));
+        return {Entity}Response.from(entity);
+    }
+
+    public Page<{Entity}Response> list(Pageable pageable) {
+        return repository.findAll(pageable)
+            .map({Entity}Response::from);
+    }
+}
+```
+
 ## DTO 네이밍
 > init 시 기존 DTO 파일명 분석으로 결정됨
 
@@ -51,6 +83,34 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 A: `dto/` (한 디렉토리)
 - 예시 B: `rq/`, `rs/`, `dto/` (용도별 분리)
 - 예시 C: `model/request/`, `model/response/`
+
+### 코드 예시
+
+```java
+// Request DTO 예시
+public record Create{Entity}Request(
+    @NotBlank String name,
+    @Email String email,
+    @Size(max = 100) String description
+) {}
+
+// Response DTO 예시
+public record {Entity}Response(
+    Long id,
+    String name,
+    String email,
+    LocalDateTime createdAt
+) {
+    public static {Entity}Response from({Entity} entity) {
+        return new {Entity}Response(
+            entity.getId(),
+            entity.getName(),
+            entity.getEmail(),
+            entity.getCreatedAt()
+        );
+    }
+}
+```
 
 ## API 규칙
 > init 시 Controller 클래스 분석으로 결정됨
@@ -75,6 +135,24 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 B: 직접 반환 (void 또는 도메인 객체 직접)
 - 예시 C: `ResponseEntity<T>` 직접 사용
 
+### 코드 예시 (응답 포맷)
+
+```java
+// 공통 응답 클래스 예시
+public record CommonResponse<T>(
+    int code,
+    String message,
+    T data
+) {
+    public static <T> CommonResponse<T> ok(T data) {
+        return new CommonResponse<>(200, "success", data);
+    }
+    public static <T> CommonResponse<T> error(int code, String message) {
+        return new CommonResponse<>(code, message, null);
+    }
+}
+```
+
 ### 페이징
 결정할 것: 페이징 방식
 
@@ -89,6 +167,39 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - `@Operation` (메서드 레벨)
 - `@Schema` (DTO 필드 레벨)
 
+### 코드 예시 (Controller)
+
+```java
+// Controller 예시
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api/v1/{entities}")
+@Tag(name = "{Entity} API")
+public class {Entity}Controller {
+
+    private final {Entity}Service service;
+
+    @PostMapping
+    @Operation(summary = "{Entity} 생성")
+    public CommonResponse<{Entity}Response> create(
+            @Valid @RequestBody Create{Entity}Request request) {
+        return CommonResponse.ok(service.create(request));
+    }
+
+    @GetMapping("/{id}")
+    @Operation(summary = "{Entity} 상세 조회")
+    public CommonResponse<{Entity}Response> getById(@PathVariable Long id) {
+        return CommonResponse.ok(service.getById(id));
+    }
+
+    @GetMapping
+    @Operation(summary = "{Entity} 목록 조회")
+    public CommonResponse<Page<{Entity}Response>> list(Pageable pageable) {
+        return CommonResponse.ok(service.list(pageable));
+    }
+}
+```
+
 ## Entity 규칙
 > init 시 Entity 클래스 분석으로 결정됨
 
@@ -98,6 +209,40 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 A: `@Builder` (생성자에 적용)
 - 예시 B: 정적 팩토리 메서드 (`Entity.create(...)`)
 - 예시 C: 생성자 직접 사용
+
+### 코드 예시 (Entity)
+
+```java
+// Entity 예시
+@Entity
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@Table(name = "{entities}")
+public class {Entity} extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 100)
+    private String name;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private {Entity}Status status;
+
+    @Builder
+    private {Entity}(String name, {Entity}Status status) {
+        this.name = name;
+        this.status = status;
+    }
+
+    // 비즈니스 메서드 (@Setter 대신)
+    public void updateName(String name) {
+        this.name = name;
+    }
+}
+```
 
 ### 필수 어노테이션
 - `@Entity`, `@Getter`
@@ -127,6 +272,41 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 
 - 예시 A: `{상황}{Entity}Exception` → `NotFoundMemberException`
 - 예시 B: `{Entity}{상황}Exception` → `MemberNotFoundException`
+
+### 코드 예시
+
+```java
+// 커스텀 예외 예시
+public class BusinessException extends RuntimeException {
+    private final ErrorCode errorCode;
+
+    public BusinessException(ErrorCode errorCode) {
+        super(errorCode.getMessage());
+        this.errorCode = errorCode;
+    }
+}
+
+// 에러 코드 enum
+public enum ErrorCode {
+    NOT_FOUND(404, "리소스를 찾을 수 없습니다"),
+    DUPLICATE(409, "이미 존재하는 리소스입니다"),
+    INVALID_INPUT(400, "잘못된 입력입니다");
+
+    private final int status;
+    private final String message;
+}
+
+// ControllerAdvice 예시
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<CommonResponse<Void>> handleBusinessException(BusinessException e) {
+        return ResponseEntity
+            .status(e.getErrorCode().getStatus())
+            .body(CommonResponse.error(e.getErrorCode().getStatus(), e.getMessage()));
+    }
+}
+```
 
 ## 로깅
 - `@Slf4j` 사용 (System.out 절대 금지)
@@ -159,6 +339,56 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - Given-When-Then 패턴
 - `@DisplayName("한글 시나리오 설명")` 권장
 - 커버리지 목표: __%
+
+### 코드 예시
+
+```java
+// Service 단위 테스트 예시
+@ExtendWith(MockitoExtension.class)
+class {Entity}ServiceTest {
+
+    @InjectMocks
+    private {Entity}Service service;
+
+    @Mock
+    private {Entity}Repository repository;
+
+    @Test
+    @DisplayName("{Entity} 생성 성공")
+    void create_success() {
+        // given
+        Create{Entity}Request request = new Create{Entity}Request("name", "email@test.com");
+        {Entity} entity = {Entity}.builder().name("name").build();
+        given(repository.save(any())).willReturn(entity);
+
+        // when
+        {Entity}Response result = service.create(request);
+
+        // then
+        assertThat(result.name()).isEqualTo("name");
+        verify(repository).save(any());
+    }
+}
+
+// Controller 통합 테스트 예시
+@WebMvcTest({Entity}Controller.class)
+class {Entity}ControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private {Entity}Service service;
+
+    @Test
+    @DisplayName("{Entity} 목록 조회 API")
+    void list_success() throws Exception {
+        mockMvc.perform(get("/api/v1/{entities}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+}
+```
 
 ## 보안
 결정할 것: 인증/인가 방식
