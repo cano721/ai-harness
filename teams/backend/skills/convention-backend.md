@@ -19,6 +19,28 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - ORM (JPA, MyBatis 등)
 - 마이그레이션 도구 (Flyway, Liquibase 등)
 
+## 프로젝트 구조
+> init 시 build.gradle/settings.gradle 분석으로 결정됨
+
+결정할 것: 단일 모듈 vs 멀티 모듈
+
+- 예시 A: 단일 모듈 (`src/main/java/...`)
+- 예시 B: 멀티 모듈 (api + core + scheduler 등)
+
+### 멀티 모듈 구조 (해당하는 경우)
+
+결정할 것: 각 모듈의 역할
+
+```
+{project}/
+├── {module-api}/          # API 서버 (Controller, Facade)
+├── {module-core}/         # 핵심 도메인 (Entity, Repository, 공통)
+└── {module-scheduler}/    # 스케줄러/배치
+```
+
+- 모듈 간 의존성 방향: core ← api, core ← scheduler (core가 공통)
+- 새 기능 추가 시 어느 모듈에 넣어야 하는지 판단 기준 필요
+
 ## 패키지 구조
 > init 시 소스 디렉토리 분석으로 결정됨
 
@@ -28,6 +50,40 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 B: `{base}.domain.{도메인}.controller / facade / model / service`
 - 예시 C: `{base}.{도메인}.api / application / domain / infrastructure`
 
+### model 하위 디렉토리 (예시 B 사용 시)
+
+결정할 것: model 디렉토리 안의 분류 방식
+
+- 예시 A: `model/` (한 디렉토리에 모든 DTO)
+- 예시 B: `model/rq/`, `model/rs/`, `model/dto/`, `model/enums/` (용도별 분리)
+
+### 코드 예시
+
+```
+{base}.domain.{도메인}/
+├── paths/                   # API 경로 상수
+│   └── {Entity}ApiPaths.java
+├── controller/              # REST Controller
+│   ├── {Entity}Controller.java
+│   └── Find{Entity}Controller.java
+├── facade/                  # Facade (Controller ↔ Service 중간 레이어)
+│   ├── {Entity}Facade.java
+│   └── Find{Entity}Facade.java
+├── service/                 # 비즈니스 로직
+│   ├── find/                # 조회 전용
+│   │   └── Find{Entity}Service.java
+│   └── execute/             # 생성/수정/삭제
+│       └── {Entity}Service.java
+├── model/                   # DTO/VO
+│   ├── rq/                  # Request DTO
+│   ├── rs/                  # Response DTO
+│   ├── dto/                 # 내부 전달 DTO
+│   └── enums/               # Enum
+├── entity/                  # JPA Entity (또는 core 모듈)
+├── repository/              # JPA Repository (또는 core 모듈)
+└── exception/               # 도메인별 예외
+```
+
 ## 레이어 구조
 > init 시 클래스 의존성 분석으로 결정됨
 
@@ -36,6 +92,81 @@ trigger: "컨벤션|convention|코드 규칙|코딩 규칙"
 - 예시 A: Controller → Service → Repository
 - 예시 B: Controller → Facade → Service → Repository
 - 예시 C: Controller → UseCase → Service → Repository
+
+### Facade 패턴 (예시 B 사용 시)
+
+결정할 것: Facade의 역할, Controller/Service와의 분리 기준
+
+- Facade = 여러 Service를 조합하는 레이어 (트랜잭션 경계)
+- Controller는 Facade만 호출, Service를 직접 호출하지 않음
+- Find용/Execute용 Facade를 분리하는 경우도 있음
+
+```java
+// Facade 예시 — 여러 Service를 조합
+@Component
+@RequiredArgsConstructor
+public class {Entity}Facade {
+
+    private final {Entity}Service service;
+    private final NotificationService notificationService;
+
+    @Transactional
+    public {Entity}Rs create(Create{Entity}Rq request) {
+        {Entity} entity = service.create(request);
+        notificationService.notify(entity);
+        return {Entity}Rs.from(entity);
+    }
+}
+
+// Find 전용 Facade (조회 로직이 복잡한 경우 분리)
+@Component
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class Find{Entity}Facade {
+
+    private final Find{Entity}Service findService;
+
+    public Page<{Entity}Rs> list(Pageable pageable) {
+        return findService.list(pageable);
+    }
+}
+```
+
+### Service 하위 분리 (조회/실행 분리)
+
+결정할 것: Service를 역할별로 분리할지
+
+- 예시 A: 하나의 Service에 모든 메서드
+- 예시 B: `find/` (조회), `execute/` (생성/수정/삭제) 패키지 분리
+
+```java
+// find/ — 조회 전용 (readOnly)
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class Find{Entity}Service {
+
+    private final {Entity}Repository repository;
+
+    public {Entity} getById(Long id) {
+        return repository.findById(id)
+            .orElseThrow(() -> new NotFound{Entity}Exception());
+    }
+}
+
+// execute/ — 생성/수정/삭제
+@Service
+@RequiredArgsConstructor
+public class {Entity}Service {
+
+    private final {Entity}Repository repository;
+
+    @Transactional
+    public {Entity} create(Create{Entity}Rq request) {
+        return repository.save(request.toEntity());
+    }
+}
+```
 
 ### 코드 예시 (Service)
 
@@ -127,6 +258,42 @@ public record {Entity}Response(
 
 - 예시 A: Controller에 직접 문자열 (`@GetMapping("/api/v1/users")`)
 - 예시 B: ApiPaths 상수 클래스 분리 (`@GetMapping(UserApiPaths.USERS_V1)`)
+
+### 코드 예시 (ApiPaths — 예시 B 사용 시)
+
+```java
+// 도메인별 API 경로 상수 클래스
+@UtilityClass
+public class {Entity}ApiPaths {
+    public static final String {ENTITY}_V1 = "/api/v1/{entities}";
+    public static final String {ENTITY}_DETAIL_V1 = "/api/v1/{entities}/{id}";
+}
+
+// Controller에서 사용
+@RestController
+@RequiredArgsConstructor
+@RequestMapping({Entity}ApiPaths.{ENTITY}_V1)
+@Tag(name = "{Entity} API")
+public class {Entity}Controller {
+
+    private final {Entity}Facade facade;
+
+    @GetMapping
+    public CommonResponse<Page<{Entity}Rs>> list(Pageable pageable) {
+        return CommonResponse.ok(facade.list(pageable));
+    }
+
+    @GetMapping("/{id}")
+    public CommonResponse<{Entity}Rs> getById(@PathVariable Long id) {
+        return CommonResponse.ok(facade.getById(id));
+    }
+
+    @PostMapping
+    public CommonResponse<{Entity}Rs> create(@Valid @RequestBody Create{Entity}Rq request) {
+        return CommonResponse.ok(facade.create(request));
+    }
+}
+```
 
 ### 응답 포맷
 결정할 것: 공통 응답 래퍼 사용 여부
