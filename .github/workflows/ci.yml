@@ -7,7 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check global hooks
+        run: shellcheck hooks/*.sh
+
+      - name: Check team hooks
+        run: find teams -name "*.sh" -exec shellcheck {} +
+
   test:
+    needs: [shellcheck]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,20 +38,6 @@ jobs:
 
       - name: Run hook tests
         run: npm test
-
-  shellcheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
-
-      - name: Check global hooks
-        run: shellcheck hooks/*.sh
-
-      - name: Check team hooks
-        run: find teams -name "*.sh" -exec shellcheck {} +
 
   lint:
     runs-on: ubuntu-latest

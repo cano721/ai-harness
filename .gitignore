@@ -1,6 +1,5 @@
 node_modules/
 dist/
-.ai-harness/logs/
 **/.ai-harness/logs/
 .omc/
 *.tgz
