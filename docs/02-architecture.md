@@ -137,37 +137,25 @@ teams/
 
 ## 데이터 흐름
 
-### init 시점 (한 번)
+### init 시점 (한 번) — 모든 단계에서 사용자 확인
 
 ```
 /harness-init 실행
     │
     ▼
-[환경 감지] ─── scripts/check-environment.mjs
-    │              Node.js, Git, Claude Code 확인
-    ▼
-[팀 선택] ─── 빌드 파일로 기술 스택 감지 → 팀 추천 → 사용자 선택
+[1. 팀 선택] ─── 기술 스택 감지 → 추천 → 사용자 선택
     │
     ▼
-[프로젝트 분석] ─── 선택된 팀 기반으로 코드 구조/패턴 분석
-    │
+[2. 글로벌 세팅] ─── "보안 Hook을 모든 프로젝트에 적용합니다"
+    │                  → 사용자 확인 후 ~/.claude/settings.json에 등록
     ▼
-[리소스 복사] ─── scripts/copy-team-resources.mjs
-    │              팀 CLAUDE.md, Hook, 기본 Skill 복사
+[3. 프로젝트 확인] ─── "이 프로젝트에 세팅할까요?"
+    │                    → 프로젝트 분석 + 사용자 확인
     ▼
-[컨벤션 생성] ─── 범용 템플릿 + 프로젝트 실제 패턴 → 맞춤 컨벤션
-    │              패턴 충돌 시 사용자와 논의
+[4. 프로젝트 세팅] ─── 미세팅 항목 표시 → 사용자 선택 후 세팅
+    │                    컨벤션, 컨텍스트맵, 팀 Hook, 외부 연동 등
     ▼
-[Hook 등록] ─── scripts/register-hooks.mjs
-    │              .claude/settings.json에 Hook 등록
-    ▼
-[CLAUDE.md 주입] ─── scripts/inject-claudemd.mjs
-    │                  <!-- harness:start/end --> 구간에 규칙 주입
-    ▼
-[컨텍스트 맵] ─── templates/context-map.md 기반으로 프로젝트 지도 생성
-    │
-    ▼
-[외부 연동] ─── Jira, Confluence, MCP 등 선택적 설정
+[완료] 적용 요약
 ```
 
 ### 작업 시점 (상시)
