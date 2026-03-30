@@ -6,6 +6,16 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "test": "node scripts/test-hooks.mjs hooks && node scripts/test-hooks.mjs teams/backend/hooks && node scripts/test-hooks.mjs teams/frontend/hooks && node scripts/test-hooks.mjs teams/qa/hooks && node scripts/test-hooks.mjs teams/devops/hooks",
+    "lint": "eslint scripts/*.mjs",
+    "validate:yaml": "node scripts/validate-yaml.mjs",
+    "shellcheck": "shellcheck hooks/*.sh && find teams -name '*.sh' -exec shellcheck {} +"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "globals": "^17.4.0"
+  },
   "dependencies": {
     "yaml": "^2.6.0"
   },
@@ -25,7 +35,16 @@
     "type": "git",
     "url": "https://github.com/cano721/ai-harness.git"
   },
-  "keywords": ["ai", "harness", "claude", "claude-code", "plugin", "security", "hooks", "convention"],
+  "keywords": [
+    "ai",
+    "harness",
+    "claude",
+    "claude-code",
+    "plugin",
+    "security",
+    "hooks",
+    "convention"
+  ],
   "license": "MIT",
   "author": "cano721"
 }
