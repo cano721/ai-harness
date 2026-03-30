@@ -1,7 +1,7 @@
 ---
 name: test-scenario
 description: 유저 스토리/AC를 입력받아 정상/예외/경계값 포함 테스트 시나리오 생성
-team: qa
+team: global
 trigger: "test-scenario|테스트 시나리오|시나리오|TC|테스트케이스"
 ---
 

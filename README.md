@@ -1,54 +1,73 @@
-# AI Harness — 팀별 AI 에이전트 셋업 시스템
+# AI Harness — Claude Code 플러그인
 
-> [English README](README.en.md)
+AI 에이전트(Claude Code, Codex, Cursor 등)를 안전하게 제어하고 회사 규칙을 자동으로 적용하는 Claude Code 플러그인입니다. 별도 CLI 설치 없이 자연어 명령어로 프로젝트 분석, 팀별 컨벤션 생성, 보안 Hook 관리를 할 수 있습니다.
 
-플러그인을 설치하고 `/harness-init`을 실행하면, 프로젝트를 분석하여 팀에 맞는 보안 Hook, 코드 컨벤션, 스킬을 자동으로 구성합니다. 세팅이 끝나면 하네스는 빠지고, Claude Code가 알아서 동작합니다.
+## 핵심 기능 — Guard + Guide + Harness
 
-## 설계 철학
+### 1. Guard (안전)
+보안 Hook으로 위험한 명령(rm -rf, DROP TABLE, force push) 자동 차단, 민감 정보 유출 방지, 모든 액션 감사 로깅, 인프라 파괴 명령 차단, 변경 파일 수 guardrail
 
-| 철학 | 설명 |
-|------|------|
-| **추천 + 선택** | 베스트 프랙티스를 추천하고, 팀이 선택한다 |
-| **셋업 후 빠지기** | init 시 세팅해주고, 이후엔 Claude Code가 동작. 하네스는 개입하지 않는다 |
-| **차단이 아닌 안내** | 위반 시 구체적 대안 코드를 제시한다 |
-| **팀 자율성** | 각 팀이 자기 도메인, 컨벤션, 스킬을 자유롭게 구성한다 |
-| **최소 강제** | 필수는 보안 Hook 4개뿐. 나머지는 모두 opt-in이다 |
+### 2. Guide (컨벤션)
+Claude가 프로젝트 코드를 분석하여 팀별(기획/디자인/FE/BE) 코드 스타일 자동 생성, 상태 진단, 팀 관리를 자연어로 수행
+
+### 3. Harness (AI 활용 최적화) — NEW
+프로젝트 맞춤 에이전트 자동 생성 (.claude/agents/), 팀별 전문 스킬 생성 (Progressive Disclosure), 워크플로우 패턴 자동 선택 (Pipeline, Fan-out/Fan-in, Producer-Reviewer, Supervisor). "규칙을 아는 Claude"가 아니라 **"프로젝트를 이해하는 Claude"**를 만든다.
 
 ## 유저 플로우
 
-### 초기화 (`/harness-init`)
+### 최초 셋업 (1회)
 
 ```
-[1] 팀 선택 ──── "어떤 팀 설정을 사용할까요?"
-                  기술 스택 감지 → 추천 → 사용자 선택
-    ↓
-[2] 글로벌 세팅 ── "보안 Hook을 모든 프로젝트에 적용합니다"
-                    → 사용자 확인 후 ~/.claude/settings.json에 등록
-    ↓
-[3] 프로젝트 확인 ── "현재 프로젝트: my-service (Java/Spring)"
-                      → "이 프로젝트에 세팅할까요?" 확인
-    ↓
-[4] 프로젝트 세팅 ── 이미 세팅된 것 / 안 된 것 표시
-                      → 세팅할 항목 사용자 선택 후 진행
-    ↓
-[완료] 적용 요약
+1. 플러그인 설치
+   claude plugin install ai-harness
+       ↓
+2. 글로벌 초기화 (모든 프로젝트에 보안 적용)
+   "하네스 글로벌 초기화해줘"
+       ↓
+   → ~/.ai-harness/ 생성
+   → ~/.claude/settings.json에 보안 Hook 등록
+   → 이후 어떤 프로젝트에서든 rm -rf, 시크릿 등 자동 차단
 ```
 
-### 일상 사용
+### 프로젝트별 셋업
+
+```
+1. 프로젝트 디렉토리에서
+   "이 프로젝트에 하네스 초기화해줘"
+       ↓
+2. Claude가 프로젝트 자동 분석
+   "Spring Boot 3.x + React 18 프로젝트입니다.
+    BE: com.company.ats 패키지, /api/v1 버저닝, Flyway 사용
+    FE: src/components 구조, Zustand + React Query
+    backend, frontend 팀을 적용할까요?"
+       ↓
+3. 확인
+   "응"
+       ↓
+4. 자동 완료
+   → .ai-harness/ 생성 (config, hooks, teams)
+   → convention-backend.md, convention-frontend.md 자동 작성
+   → 팀별 Hook 등록 (sql-review, bundle-size 등)
+   → CLAUDE.md에 보안 규칙 주입
+```
+
+### 일상 사용 (개발자)
 
 ```
 평소처럼 Claude Code를 사용하면 됩니다.
-하네스는 세팅만 해주고 빠져있습니다. Claude Code가 동작합니다.
+하네스는 백그라운드에서 투명하게 동작합니다.
 
 개발자: "지원자 목록 조회 API 만들어줘"
     ↓
 Claude: convention-backend.md 참고하여 코드 생성
     → /api/v1/applicants (버저닝 적용)
     → CommonResponse<T> (공통 응답 포맷)
+    → CreateApplicantRequest (DTO 네이밍)
     ↓
-[Claude Code Hook] 코드 작성 시 자동 검증
+[Hook] 코드 작성 시 자동 검증
     → SELECT * 사용? → 차단 + "컬럼을 명시하세요" 안내
     → 시크릿 하드코딩? → 차단 + "환경 변수 사용하세요" 안내
+    → 정상 코드? → 통과 (지연 ~200ms, 체감 없음)
     ↓
 [감사 로그] 모든 액션 .ai-harness/logs/ 에 자동 기록
 ```
@@ -56,9 +75,35 @@ Claude: convention-backend.md 참고하여 코드 생성
 ### 관리 (필요할 때)
 
 ```
-"QA팀 추가해줘"          → /harness-team
-"왜 차단됐어?"           → /harness-rules
-"하네스 상태 보여줘"     → /harness-status
+"QA팀 추가해줘"          → /harness-team → Hook + 컨벤션 자동 설정
+"BE 컨벤션에 캐시 규칙 추가해줘" → convention-backend.md 자동 수정
+"왜 차단됐어?"           → /harness-rules → 마지막 차단 사유 + 대안
+"하네스 상태 보여줘"     → /harness-status → 설정 + 차단 현황 + 진단
+```
+
+### 전체 흐름 요약
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│  플러그인 설치 │ →   │  글로벌 초기화  │ →   │ 프로젝트 초기화│
+│  (1회)       │     │  (1회)        │     │ (프로젝트당 1회)│
+└─────────────┘     └──────────────┘     └──────┬──────┘
+                                                 ↓
+                    ┌────────────────────────────────────────┐
+                    │           일상 사용 (매일)              │
+                    │                                        │
+                    │  개발자 요청 → [Pre Hook 검증] → 실행   │
+                    │                → [Post Hook 로깅]       │
+                    │                                        │
+                    │  컨벤션 참고 → 일관된 코드 생성          │
+                    │  위험 차단 → 안전한 환경                 │
+                    │  감사 로깅 → 추적 가능                   │
+                    └────────────────────────────────────────┘
+                                                 ↓
+                    ┌────────────────────────────────────────┐
+                    │         관리 (필요할 때)                 │
+                    │  팀 추가/제거, 컨벤션 수정, 제외 관리        │
+                    └────────────────────────────────────────┘
 ```
 
 ## 빠른 시작
@@ -83,12 +128,16 @@ claude plugin install ai-harness
 "이 프로젝트 분석해서 컨벤션 만들고 보안 설정해줘"
 ```
 
-Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
+Claude가 다음을 자동으로 수행합니다:
 
-1. **팀 선택** — 기술 스택 감지 → 팀 추천 → 선택
-2. **글로벌 세팅** — 보안 Hook 4개를 모든 프로젝트에 적용 (확인 후)
-3. **프로젝트 확인** — 현재 프로젝트 분석 → 세팅 대상 확인
-4. **프로젝트 세팅** — 미세팅 항목 선택 → 컨벤션/Hook/컨텍스트맵 등 적용
+1. 글로벌/로컬 범위 선택
+2. 프로젝트 코드 분석 (패키지 구조, API 패턴, DTO 네이밍 등)
+3. 프로젝트 도메인 정보 수집 (엔티티, 용어 — 충돌 시 사용자와 논의)
+4. 팀 추천 + 맞춤 컨벤션 생성 (패턴 충돌 시 사용자와 논의)
+5. 보안 Hook 등록
+6. 외부 서비스 스킬 설정 (Jira, Confluence, Figma, Datadog — 대화형 인증)
+7. MCP 서버 설정 (MySQL, Figma — 대화형 연결 정보)
+8. 완료 보고
 
 ### 상태 확인
 
@@ -108,7 +157,7 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 
 ## 스킬 목록
 
-7개 스킬로 하네스를 완전히 제어합니다. 모두 자연어로 호출 가능합니다.
+5개 스킬로 하네스를 완전히 제어합니다. 모두 자연어로 호출 가능합니다.
 
 | 스킬 | 사용 예시 | 기능 |
 |------|----------|------|
@@ -117,67 +166,76 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 | **harness-rules** | "적용된 규칙 보여줘" | 현재 보안 규칙 목록, 마지막 차단 사유 |
 | **harness-team** | "QA팀 추가해줘" | 팀 추가/제거, 컨벤션 수정 |
 | **harness-exclude** | "이 프로젝트 제외해줘" | 글로벌 하네스 제외 프로젝트 관리 |
-| **harness-metrics** | "메트릭 분석해줘" | 에이전트 작업 효율 메트릭 분석 + 개선 제안 |
-| **harness-scaffold** | "CRUD 만들어줘" | 컨벤션 기반 코드 보일러플레이트 생성 |
 
 ## 팀 프로필
 
-현재 **Backend 팀**이 제공됩니다. 다른 팀은 고도화 후 순차 제공 예정입니다.
+4개 팀이 제공됩니다. 테스트/QA와 인프라/배포 기능은 별도 팀이 아닌 글로벌 또는 각 팀에 내장되어 있습니다.
 
-### 제공 중
+### 팀
 
 | 팀 | 핵심 역할 | 컨벤션 | Hook | 스킬 |
 |----|---------|--------|------|------|
-| **BE** | API/DB 개발 | 패키지 구조, DTO 네이밍, REST 규칙 | sql-review, api-compat | entity, migration, api-design, convention, agent-map |
+| **backend** | API/DB 개발 | 패키지 구조, DTO 네이밍, REST 규칙 | sql-review, api-compat, entity-review, coverage-check | entity, migration, api-design, convention, agent-map |
+| **frontend** | React/Vue 개발 | 컴포넌트 구조, 상태 관리, 성능 기준 | bundle-size, lighthouse, coverage-check | component, storybook, e2e, convention |
+| **planning** | PRD/유저스토리 | 문서 형식, 추정 기준 | — | prd, user-story, estimate, convention |
+| **design** | 디자인 시스템 | 접근성, 반응형 기준 | — | figma-to-code, a11y, responsive, convention |
 
-### 준비 중 (향후 제공)
+### 글로벌 (모든 팀에 자동 적용)
 
-| 팀 | 핵심 역할 | 상태 |
-|----|---------|------|
-| FE | React/Vue 개발 | 준비 중 |
-| QA | 테스트/검증 | 준비 중 |
-| DevOps | 인프라/배포 | 준비 중 |
-| 기획 | PRD/유저 스토리 | 준비 중 |
-| 디자인 | 디자인 시스템 | 준비 중 |
+| 구분 | 내용 |
+|------|------|
+| **보안 Hook** | block-dangerous, secret-scanner, guardrails-check |
+| **인프라 Hook** | infra-change-review (terraform destroy, kubectl delete ns 차단) |
+| **로깅 Hook** | audit-logger |
+| **테스트 스킬** | test-scenario, regression, smoke-test |
+| **배포 스킬** | deploy-check, rollback-plan, infra-plan |
+| **협업 스킬** | onboard, handoff |
+
+각 팀에는 테스트 규칙(커버리지 기준, 테스트 패턴)이 포함되어 있으며, 글로벌 스킬을 활용할 수 있습니다.
 
 각 팀은 초기화 후 다음 파일을 받습니다:
 
 - `.ai-harness/teams/{team}/skills/convention-{team}.md` — 팀별 코드 스타일
-- `.ai-harness/teams/{team}/CLAUDE.md` — 팀별 최소 규칙 + 스킬 참조
+- `.ai-harness/teams/{team}/CLAUDE.md` — 팀별 필수 규칙 + 테스트 규칙 + 스킬 참조
 
 ## Hook 시스템
 
 ### 글로벌 Hook (모든 팀에 적용)
 
-4개 필수 Hook이 자동으로 등록됩니다:
+3개 필수 Hook이 자동으로 등록됩니다:
 
-**block-dangerous.sh** — 위험 패턴 차단
+**block-dangerous.sh** — 위험 패턴 차단 (PreToolUse)
 
 - `rm -rf` (rm과 -r, -f 플래그 조합)
 - `DROP TABLE/DATABASE/INDEX`
 - `TRUNCATE TABLE`
-- `git push --force` (`--force-with-lease`는 허용)
+- `git push --force`
 - `chmod 777`
 - `sudo` 명령
+- 하네스 비활성화 시도 (자기 보호)
 
-차단 시 안내: "BLOCKED: [사유]. 대안: [권장 방법]"
+차단 시: "BLOCKED: [사유]. 대안: [권장 방법]" + 감사 로그 기록
 
-**secret-scanner.sh** — 민감 정보 유출 방지
+**secret-scanner.sh** — 민감 정보 유출 방지 (PreToolUse)
 
-- API 키, 암호, 개인정보 감지
-- 커밋 전 자동 마스킹
-- 시크릿 문자열을 `.env` 등에 저장하도록 안내
+- AWS Access Key, Private Key, 하드코딩된 시크릿 감지
+- `.env` 파일 Write/Edit 모두 차단
+- `credentials.json`, `secrets.yaml` 등 민감 파일 수정 차단
+- EXAMPLE_, TEST_ 접두사는 허용 (테스트 코드 보호)
 
-**check-architecture.sh** — 아키텍처 경계 위반 검증
-
-- 의존성 방향 위반 감지 (Types/Entity → Config → Repository → Service → Controller)
-- 하위 레이어에서 상위 레이어 import 시 차단 + 대안 안내
-
-**audit-logger.sh** — 모든 액션 감사 로깅
+**audit-logger.sh** — 모든 액션 감사 로깅 (PreToolUse + PostToolUse)
 
 - 누가, 언제, 무엇을 했는지 JSONL 형식으로 기록
+- PreToolUse → `"result":"attempt"`, PostToolUse → `"result":"success"`
+- 차단 이벤트 → `"result":"blocked"` (별도 로깅)
 - `.ai-harness/logs/{YYYY-MM-DD}.jsonl`
-- 민감 정보(API 키, 암호) 자동 마스킹
+- 민감 정보(API 키, 암호, 토큰) 자동 마스킹
+
+**guardrails-check.sh** — 가드레일 강제 (PreToolUse)
+
+- `config.yaml`의 `max_files_changed` 값을 실제로 체크
+- git 변경 파일 수가 한도에 도달하면 차단
+- 커밋 후 계속 작업하도록 안내
 
 ### 팀별 Hook
 
@@ -235,14 +293,12 @@ Hook 응답:
 
 ```
 ai-harness/
-├── skills/                     # 7개 스킬 디렉토리
+├── skills/                     # 5개 스킬 디렉토리
 │   ├── harness-init/
 │   ├── harness-status/
 │   ├── harness-rules/
 │   ├── harness-team/
-│   ├── harness-exclude/
-│   ├── harness-metrics/
-│   └── harness-scaffold/
+│   └── harness-exclude/
 │
 ├── scripts/                    # 헬퍼 스크립트 (스킬이 내부적으로 호출)
 │   ├── check-environment.mjs   # Node.js, Git, Claude Code 버전 확인
@@ -250,7 +306,8 @@ ai-harness/
 │   ├── copy-team-resources.mjs # 팀별 Hook/스킬 복사
 │   ├── inject-claudemd.mjs     # CLAUDE.md에 하네스 규칙 주입
 │   ├── test-hooks.mjs          # Hook 단위 테스트
-│   ├── check-architecture-ci.sh # CI용 아키텍처 검증
+│   ├── generate-agents.mjs     # [v2] 프로젝트 맞춤 에이전트 생성
+│   ├── validate-generated.mjs  # [v2] 생성 결과 검증
 │
 ├── hooks/                      # 글로벌 Hook 스크립트
 │   ├── block-dangerous.sh      # 위험 명령 차단
@@ -268,11 +325,20 @@ ai-harness/
 │   ├── qa/
 │   └── devops/
 │
-├── templates/                  # 설정/정책 템플릿
-│   ├── config.yaml             # 프로젝트 설정 템플릿
-│   ├── context-map.md          # 컨텍스트 맵 템플릿
+├── templates/                  # 설정/정책/생성 템플릿
+│   ├── config.yaml             # 프로젝트 설정 템플릿 (v2)
 │   ├── lock-policy.yaml        # 규칙 잠금 정책
-│   ├── presets/                # 작업 프리셋 (CRUD, 버그수정, 리팩토링)
+│   ├── agents/                 # [v2] 에이전트 템플릿 5개
+│   │   ├── project-developer.md.tmpl
+│   │   ├── project-reviewer.md.tmpl
+│   │   ├── project-architect.md.tmpl
+│   │   ├── project-planner.md.tmpl
+│   │   └── project-designer.md.tmpl
+│   ├── workflows/              # [v2] 워크플로우 패턴 템플릿 4개
+│   │   ├── pipeline.md.tmpl
+│   │   ├── fan-out-fan-in.md.tmpl
+│   │   ├── producer-reviewer.md.tmpl
+│   │   └── supervisor.md.tmpl
 │   └── global/
 │       ├── CLAUDE.md           # 글로벌 CLAUDE.md 템플릿
 │       └── skills/convention.md # 기본 컨벤션 템플릿
@@ -330,7 +396,7 @@ ai-harness/
 | 06 | [로드맵](docs/06-roadmap.md) | Phase 1~3 단계별 작업 |
 | 07 | [설정 관리 & 업데이트](docs/07-configuration.md) | 버전 업데이트, 잠금 정책 |
 | 08 | [배포 & 패키지 구조](docs/08-distribution.md) | 하이브리드 배포, npm/GitHub 구성 |
-| 09 | [Init 플로우 상세](docs/09-init-flow.md) | 4단계 init 플로우 |
+| 09 | [Init 플로우 상세](docs/09-init-flow.md) | 6단계 설치 프로세스 |
 | 10 | [감사 로깅 설계](docs/10-audit-logging.md) | 로그 포맷, 보존 정책 |
 | 11 | [크로스팀 워크플로우](docs/11-cross-team-workflow.md) | 기획→디자인→개발→QA 파이프라인 |
 | 12 | [비용 추적 모델](docs/12-cost-tracking.md) | 토큰 비용, 한도, 최적화 |
@@ -400,9 +466,6 @@ ai-harness/
 - **Node.js**: >= 18
 - **Git**: 저장소 필수
 - **Claude Code**: 플러그인으로 등록
-- **OS**: macOS, Linux (Windows는 WSL 필수)
-
-> [English README](README.en.md)
 
 ## 라이선스
 

@@ -1,43 +1,58 @@
-# AI Harness — 팀별 AI 에이전트 셋업 시스템
+# AI Harness — Guard + Guide + Harness
 
-## 설계 철학
-- **추천 + 선택**: 하네스가 베스트 프랙티스를 추천하고, 팀이 선택한다
-- **셋업 후 빠지기**: init 시 세팅해주고, 이후엔 Claude Code가 알아서 동작한다. 하네스는 개입하지 않는다
-- **차단이 아닌 안내**: 위반 시 단순 차단이 아니라 구체적 대안 코드를 제시한다
-- **팀 자율성**: 각 팀이 자기 도메인, 컨벤션, 스킬을 자유롭게 구성한다
-- **최소 강제**: 필수는 보안 Hook 4개뿐. 나머지는 모두 opt-in이다
+AI 에이전트를 안전하게 제어하고(Guard), 코드 품질을 강제하며(Guide), AI가 프로젝트를 이해하고 최적으로 활용되도록 셋업한다(Harness).
 
-## 보안 규칙 (항상 적용)
+## 1. Guard (안전)
+
+### 보안 규칙 (항상 적용)
 - 위험 명령 실행 금지 (rm -rf, DROP TABLE, force push, chmod 777, sudo)
 - 시크릿/인증 정보 하드코딩 금지
 - .env, credentials.json 등 민감 파일 커밋 금지
+- 인프라 파괴 명령 차단 (terraform destroy, kubectl delete ns)
+- 변경 파일 수 guardrail (config.yaml의 max_files_changed)
 
-## 코드 작성 시
+### 글로벌 Hook
+- block-dangerous, secret-scanner, guardrails-check, infra-change-review, audit-logger
+
+## 2. Guide (컨벤션)
+
+### 코드 작성 시
 - 프로젝트에 .ai-harness/가 있으면 해당 팀의 컨벤션 스킬을 참고하라
-- .ai-harness/context-map.md 를 먼저 읽어 프로젝트 지도를 파악하라 (매뉴얼이 아닌 지도)
 - .ai-harness/teams/{team}/skills/convention-{team}.md 파일을 읽어서 적용
-- 새 코드 생성 시 templates/presets/ 의 작업 프리셋을 참고하라 (CRUD, 버그수정, 리팩토링)
 
-## 제공 팀
-- 현재: **backend** (제공 중)
-- 준비 중: frontend, qa, devops, planning, design
-- backend 외 팀 요청 시 "아직 준비 중입니다" 안내
+### 제공 팀
+- **backend** — API/DB 개발 (sql-review, api-compat, entity-review, coverage-check)
+- **frontend** — React/Vue 개발 (bundle-size, lighthouse, coverage-check)
+- **planning** — PRD/유저스토리
+- **design** — 디자인 시스템/접근성
+
+### 글로벌 스킬
+- test-scenario, regression, smoke-test, deploy-check, rollback-plan, infra-plan
+
+## 3. Harness (AI 활용 최적화)
+
+### 프로젝트 맞춤 에이전트
+- .ai-harness/agents/ 또는 .claude/agents/에 프로젝트를 이해하는 전문 에이전트가 있으면 활용하라
+- 에이전트는 도메인 지식, 코드 패턴, 컨벤션이 내장되어 있다
+- `_managed_by: ai-harness` 마커가 있는 에이전트는 하네스가 관리
+
+### 팀별 전문 스킬
+- .ai-harness/teams/{team}/skills/develop-{team}.md — 개발 가이드
+- .ai-harness/teams/{team}/skills/review-{team}.md — 리뷰 가이드
+- 스킬의 references/ 하위에 상세 예시와 체크리스트가 있다 (필요할 때만 로드)
+
+### AI 활용 가이드
+- .ai-harness/workflow.md에 이 프로젝트의 최적 워크플로우 패턴이 정의되어 있다
+- 큰 기능은 워크플로우 패턴을 따르면 효율적이다
 
 ## 사용 가능한 스킬
-- /harness-init : 프로젝트 분석 → 컨벤션 자동 생성 → Hook 등록
+- /harness-init : 프로젝트 분석 → 컨벤션 + 에이전트 + 스킬 + 워크플로우 자동 생성
 - /harness-status : 상태 확인 + 차단 현황 + 진단 + 미결정 사항
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
 - /harness-team : 팀 추가/수정/제거/목록
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외
-- /harness-metrics : 에이전트 작업 효율 메트릭 분석 + 개선 제안
-- /harness-scaffold : 컨벤션 기반 코드 보일러플레이트 생성 (CRUD, Service 등)
 
-## init 플로우
-- /harness-init 실행 시 4단계: 팀 선택 → 글로벌 세팅 확인 → 프로젝트 확인 → 프로젝트 세팅
-- 모든 단계에서 사용자에게 확인받은 후 진행
-- 보안 Hook은 글로벌(~/.claude/settings.json), 컨벤션/팀 설정은 로컬(./.ai-harness/)
-
-## 세팅 후 동작 (하네스가 아닌 Claude Code가 실행)
-- .claude/settings.json에 등록된 Hook이 도구 사용 시 자동 검증
+## 자동 동작
+- .claude/settings.json에 Hook이 등록되어 있으면 도구 사용 시 자동 검증
 - 차단 시 사유와 대안을 안내
 - 모든 액션은 감사 로그(.ai-harness/logs/)에 기록

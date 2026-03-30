@@ -1,4 +1,4 @@
-_schema_version: 1
+_schema_version: 2
 
 # 프로젝트 정보 (init 시 Claude가 분석하여 채움)
 project:
@@ -10,6 +10,21 @@ project:
   base_package: ""
 
 teams: []
+
+# [v2] AI 에이전트 (프로젝트를 이해하는 맞춤 에이전트)
+agents:
+  generated: []
+  # 예시:
+  # - name: myapp-developer
+  #   path: .ai-harness/agents/myapp-developer.md
+  #   teams: [backend, frontend]
+
+# [v2] 워크플로우 패턴 (AI 활용 최적화)
+workflow:
+  pattern: ""
+  # pipeline | fan-out-fan-in | producer-reviewer | supervisor
+  path: .ai-harness/workflow.md
+
 guardrails:
   max_files_changed: 20
   max_execution_minutes: 30
@@ -20,20 +35,7 @@ hooks:
     enabled: true
   audit-logger:
     enabled: true
-  check-architecture:
+  guardrails-check:
     enabled: true
-architecture:
-  layers:
-    - name: Types/Entity
-      patterns: ["dto", "entity", "model", "domain", "type", "vo", "enum"]
-    - name: Config
-      patterns: ["config", "configuration", "properties"]
-    - name: Repository
-      patterns: ["repository", "repo", "dao", "mapper", "persistence"]
-    - name: Service
-      patterns: ["service", "usecase", "application"]
-    - name: Controller
-      patterns: ["controller", "rest", "api", "endpoint", "resource"]
-  direction: "Types/Entity → Config → Repository → Service → Controller"
 rules:
   test_coverage: 80

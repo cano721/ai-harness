@@ -1,7 +1,7 @@
 ---
 name: deploy-check
 description: 배포 전 체크리스트 자동 생성 (헬스체크, 롤백 계획, 모니터링, DB 마이그레이션, 캐시)
-team: devops
+team: global
 trigger: "deploy-check|배포 체크|배포 전|pre-deploy|deploy checklist"
 ---
 

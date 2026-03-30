@@ -1,6 +1,8 @@
 #!/bin/bash
-# audit-logger.sh — PostToolUse Hook
+# audit-logger.sh — PreToolUse + PostToolUse Hook
 # 모든 AI 에이전트 액션을 JSONL로 기록한다.
+# PreToolUse: 도구 호출 시도 기록
+# PostToolUse: 도구 실행 완료 기록
 # 항상 exit 0 (로깅 실패가 도구 실행을 차단하면 안 됨)
 
 TOOL_NAME="$1"
@@ -17,8 +19,12 @@ if [ -f "$GLOBAL_CONFIG" ]; then
   fi
 fi
 
-# 로그 디렉토리
-LOG_DIR=".ai-harness/logs"
+# 로그 디렉토리 (로컬 우선, 없으면 홈)
+if [ -d ".ai-harness" ]; then
+  LOG_DIR=".ai-harness/logs"
+else
+  LOG_DIR="$HOME/.ai-harness/logs"
+fi
 mkdir -p "$LOG_DIR"
 
 # 오늘 날짜 로그 파일
@@ -34,6 +40,17 @@ USER=$(git config user.name 2>/dev/null || whoami)
 # 프로젝트 (Git 저장소명)
 PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || basename "$(pwd)")
 
+# 이벤트 타입 (환경 변수로 전달, 없으면 PostToolUse 기본값)
+EVENT_TYPE="${HARNESS_EVENT:-PostToolUse}"
+
+# 결과 판단: PreToolUse면 "attempt", PostToolUse면 "success"
+# 차단된 경우 이 Hook은 실행되지 않으므로 별도 처리 필요 없음
+if [ "$EVENT_TYPE" = "PreToolUse" ]; then
+  RESULT="attempt"
+else
+  RESULT="success"
+fi
+
 # 입력 내용 마스킹
 MASKED_INPUT="$TOOL_INPUT"
 
@@ -42,6 +59,9 @@ MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/([Bb][Ee][Aa][Rr][Ee][Rr]|[Aa][U
 
 # password= 뒤의 값 마스킹
 MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:][[:space:]]*)['"'"'""][^'"'"'"]*['"'"'"]/\1"***REDACTED***"/' 2>/dev/null || echo "$MASKED_INPUT")
+
+# API key 마스킹
+MASKED_INPUT=$(echo "$MASKED_INPUT" | sed -E 's/([Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:][[:space:]]*)['"'"'""][^'"'"'"]*['"'"'"]/\1"***REDACTED***"/' 2>/dev/null || echo "$MASKED_INPUT")
 
 # 200자 초과 시 truncate
 if [ ${#MASKED_INPUT} -gt 200 ]; then
@@ -52,7 +72,7 @@ fi
 MASKED_INPUT=$(echo "$MASKED_INPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')
 
 # JSONL 엔트리 작성
-echo "{\"timestamp\":\"$TIMESTAMP\",\"event_type\":\"tool_use\",\"tool\":\"$TOOL_NAME\",\"action\":\"$MASKED_INPUT\",\"result\":\"success\",\"user\":\"$USER\",\"project\":\"$PROJECT\"}" >> "$LOG_FILE"
+echo "{\"timestamp\":\"$TIMESTAMP\",\"event\":\"$EVENT_TYPE\",\"tool\":\"$TOOL_NAME\",\"action\":\"$MASKED_INPUT\",\"result\":\"$RESULT\",\"user\":\"$USER\",\"project\":\"$PROJECT\"}" >> "$LOG_FILE"
 
 # 항상 통과
 exit 0

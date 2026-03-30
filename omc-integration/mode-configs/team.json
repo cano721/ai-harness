@@ -6,9 +6,7 @@
       "team-plan": "teams/planning/CLAUDE.md",
       "team-exec:frontend": "teams/frontend/CLAUDE.md",
       "team-exec:backend": "teams/backend/CLAUDE.md",
-      "team-exec:design": "teams/design/CLAUDE.md",
-      "team-verify:qa": "teams/qa/CLAUDE.md",
-      "team-deploy:devops": "teams/devops/CLAUDE.md"
+      "team-exec:design": "teams/design/CLAUDE.md"
     },
     "agent_overrides": {
       "code-reviewer": {

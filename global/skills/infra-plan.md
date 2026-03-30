@@ -1,7 +1,7 @@
 ---
 name: infra-plan
 description: Terraform 변경사항을 입력받아 plan 요약 + 영향 분석 (비용/다운타임/보안)
-team: devops
+team: global
 trigger: "infra-plan|terraform|인프라|plan|IaC"
 ---
 

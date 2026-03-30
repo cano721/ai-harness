@@ -1,7 +1,7 @@
 ---
 name: smoke-test
 description: 배포 환경을 입력받아 스모크 테스트 체크리스트 생성 (헬스체크, 핵심 기능, DB, 외부 연동)
-team: qa
+team: global
 trigger: "smoke-test|스모크|smoke|배포 검증|헬스체크"
 ---
 

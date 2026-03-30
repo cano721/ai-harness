@@ -1,7 +1,7 @@
 ---
 name: regression
 description: 변경된 코드/기능을 입력받아 영향 범위 분석 + 회귀 테스트 목록 생성
-team: qa
+team: global
 trigger: "regression|회귀|영향 범위|impact analysis|회귀 테스트"
 ---
 

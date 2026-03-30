@@ -1,7 +1,7 @@
 ---
 name: rollback-plan
 description: 배포 정보를 입력받아 트래픽 전환/DB 롤백/캐시 무효화/알림 포함 롤백 계획 생성
-team: devops
+team: global
 trigger: "rollback-plan|롤백|rollback|배포 실패|rollback plan"
 ---
 

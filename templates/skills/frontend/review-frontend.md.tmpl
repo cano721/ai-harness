@@ -1,0 +1,57 @@
+---
+name: review-frontend
+description: "{{project.name}} 프론트엔드 코드 리뷰 가이드. 컴포넌트 리뷰, 번들 크기 체크, 접근성, 성능, 경계면 검증을 수행. '프론트 리뷰', 'UI 검토', '컴포넌트 리뷰' 요청 시 반드시 이 스킬을 참조할 것."
+_managed_by: ai-harness
+team: frontend
+---
+
+# /review-frontend
+
+{{project.domain}} 도메인의 프론트엔드 코드 리뷰 가이드.
+
+## 리뷰 우선순위
+
+1. **번들 크기** — moment.js, lodash 전체 import, jQuery 사용 금지
+2. **경계면 정합성** — API 응답 shape ↔ 프론트 타입/훅 일치
+3. **컨벤션 준수** — convention-frontend.md 전체 항목
+4. **접근성** — WCAG 2.1 AA 기준
+5. **성능** — Core Web Vitals 기준 충족
+6. **테스트 충분성** — 사용자 행동 기반 테스트
+
+## 컨벤션 체크리스트
+
+### 필수
+- [ ] moment.js 사용하지 않음 (dayjs 사용)
+- [ ] lodash 전체 import 하지 않음 (개별 import)
+- [ ] Props 타입은 interface로 정의
+- [ ] 파일명 PascalCase
+- [ ] 기존 컴포넌트 재사용 여부 확인됨
+
+### 권장
+- [ ] 디자인 토큰 사용 (하드코딩 색상/간격 금지)
+- [ ] 키보드 네비게이션 가능
+- [ ] aria-label 적절히 사용
+- [ ] 동적 import 고려 (큰 컴포넌트)
+
+## 경계면 검증 (백엔드 팀이 있을 때)
+
+| 소비자 | 생산자 | 비교 항목 |
+|--------|--------|----------|
+| fetch 훅 타입 | API 응답 shape | 필드명, 래핑 여부 |
+| fetch URL | API 경로 | 경로 일치 |
+| 에러 핸들링 | 에러 응답 shape | 매칭 |
+
+## 출력 형식
+
+```markdown
+## 리뷰 결과: {파일/PR명}
+
+### 🔴 Critical
+- {파일:라인} — {이슈} → {수정 방법}
+
+### 🟡 Warning
+- {파일:라인} — {이슈} → {권장 방법}
+
+### 🟢 Good
+- {잘한 점}
+```

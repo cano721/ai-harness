@@ -6,7 +6,8 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const [event, toolName, toolInput] = process.argv.slice(2);
 
@@ -20,59 +21,69 @@ if (event !== 'PreToolUse' && event !== 'PostToolUse') {
   process.exit(1);
 }
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PLUGIN_ROOT = resolve(__dirname, '..');
 const PROJECT_ROOT = resolve(process.cwd());
-const HARNESS_HOOKS_DIR = join(PROJECT_ROOT, 'hooks');
-const OMC_HOOKS_DIR = join(PROJECT_ROOT, '.claude', 'hooks');
 
-function loadTeamNames() {
-  const configPath = join(PROJECT_ROOT, '.ai-harness', 'config.yaml');
+// 글로벌 하네스 hooks (플러그인 내장)
+const GLOBAL_HOOKS_DIR = join(PLUGIN_ROOT, 'hooks');
+// 프로젝트 로컬 하네스 hooks
+const LOCAL_HARNESS_DIR = join(PROJECT_ROOT, '.ai-harness');
+// 홈 글로벌 하네스
+const HOME_HARNESS_DIR = join(process.env.HOME || '', '.ai-harness');
+
+function loadTeamNames(harnessDir) {
+  const configPath = join(harnessDir, 'config.yaml');
   if (!existsSync(configPath)) return [];
 
   const content = readFileSync(configPath, 'utf8');
   const teams = [];
-  const teamMatch = content.match(/teams:\s*\n([\s\S]*?)(?=\n\S|\s*$)/);
-  if (teamMatch) {
-    const teamLines = teamMatch[1].split('\n');
-    for (const line of teamLines) {
-      const nameMatch = line.match(/^\s+-?\s*name:\s*(.+)/);
-      if (nameMatch) teams.push(nameMatch[1].trim());
+  const lines = content.split('\n');
+  let inTeams = false;
+  for (const line of lines) {
+    if (/^teams:/.test(line)) { inTeams = true; continue; }
+    if (inTeams && /^\S/.test(line)) break;
+    if (inTeams) {
+      const match = line.match(/^\s+-\s*(.+)/);
+      if (match) teams.push(match[1].trim());
     }
   }
   return teams;
 }
 
-function collectHooks(dir, eventType) {
+function collectShellScripts(dir) {
   if (!existsSync(dir)) return [];
-
-  const subdir = join(dir, eventType);
-  if (existsSync(subdir)) {
-    return readdirSync(subdir)
-      .filter(f => f.endsWith('.sh'))
-      .sort()
-      .map(f => join(subdir, f));
-  }
-
   return readdirSync(dir)
-    .filter(f => f.endsWith('.sh') && f.toLowerCase().includes(eventType.toLowerCase()))
+    .filter(f => f.endsWith('.sh') && !f.endsWith('.test.yaml'))
     .sort()
     .map(f => join(dir, f));
 }
 
-function collectTeamHooks(teams, eventType) {
+function collectGlobalHooks(eventType) {
+  // 글로벌 hooks에서 이벤트 타입에 맞는 것만 필터
+  const allScripts = collectShellScripts(GLOBAL_HOOKS_DIR);
+  if (eventType === 'PreToolUse') {
+    return allScripts.filter(f => !f.includes('audit-logger') && !f.includes('coverage-check'));
+  }
+  // PostToolUse: audit-logger, coverage-check 등
+  return allScripts.filter(f => f.includes('audit-logger'));
+}
+
+function collectTeamHooks(harnessDir, teams, eventType) {
   const hooks = [];
   for (const team of teams) {
-    const teamDir = join(PROJECT_ROOT, 'teams', team, 'hooks');
-    hooks.push(...collectHooks(teamDir, eventType));
+    const teamHooksDir = join(harnessDir, 'teams', team, 'hooks');
+    const scripts = collectShellScripts(teamHooksDir);
+    if (eventType === 'PreToolUse') {
+      hooks.push(...scripts.filter(f => !f.includes('coverage-check')));
+    } else {
+      hooks.push(...scripts.filter(f => f.includes('coverage-check')));
+    }
   }
   return hooks;
 }
 
-function collectOmcHooks(eventType) {
-  return collectHooks(OMC_HOOKS_DIR, eventType);
-}
-
 function runHook(hookPath) {
-  console.log(`[bridge] Running hook: ${hookPath}`);
   try {
     execFileSync('bash', [hookPath, toolName, toolInput || ''], {
       env: {
@@ -80,17 +91,17 @@ function runHook(hookPath) {
         HARNESS_EVENT: event,
         HARNESS_TOOL_NAME: toolName,
         HARNESS_TOOL_INPUT: toolInput || '',
+        HARNESS_PROJECT_ROOT: PROJECT_ROOT,
+        HARNESS_LOCAL_DIR: LOCAL_HARNESS_DIR,
       },
       stdio: 'inherit',
+      timeout: 10000,
     });
-    console.log(`[bridge] Hook passed: ${hookPath}`);
     return 0;
   } catch (err) {
     const code = err.status ?? 1;
     if (code === 2) {
-      console.error(`[bridge] Hook BLOCKED (exit 2): ${hookPath}`);
-    } else {
-      console.error(`[bridge] Hook failed (exit ${code}): ${hookPath}`);
+      console.error(`[bridge] Hook BLOCKED: ${hookPath}`);
     }
     return code;
   }
@@ -100,32 +111,26 @@ function runSequence(hooks) {
   for (const hook of hooks) {
     const code = runHook(hook);
     if (code === 2) {
-      console.error(`[bridge] Execution stopped — hook returned exit 2`);
       process.exit(2);
     }
   }
 }
 
-const teams = loadTeamNames();
-const harnessGlobalHooks = collectHooks(HARNESS_HOOKS_DIR, event);
-const teamHooks = collectTeamHooks(teams, event);
-const omcHooks = collectOmcHooks(event);
+// 로컬 또는 홈 하네스에서 팀 로드
+const localTeams = loadTeamNames(LOCAL_HARNESS_DIR);
+const homeTeams = loadTeamNames(HOME_HARNESS_DIR);
+const teams = localTeams.length > 0 ? localTeams : homeTeams;
+const harnessDir = localTeams.length > 0 ? LOCAL_HARNESS_DIR : HOME_HARNESS_DIR;
 
-console.log(`[bridge] Event: ${event}, Tool: ${toolName}`);
-console.log(`[bridge] Harness global hooks: ${harnessGlobalHooks.length}`);
-console.log(`[bridge] Team hooks: ${teamHooks.length}`);
-console.log(`[bridge] OMC hooks: ${omcHooks.length}`);
+const globalHooks = collectGlobalHooks(event);
+const teamHooks = collectTeamHooks(harnessDir, teams, event);
 
 if (event === 'PreToolUse') {
-  // Pre: global → team → omc
-  runSequence(harnessGlobalHooks);
+  // Pre: global → team
+  runSequence(globalHooks);
   runSequence(teamHooks);
-  runSequence(omcHooks);
 } else {
-  // Post: omc → team → global
-  runSequence(omcHooks);
+  // Post: team → global
   runSequence(teamHooks);
-  runSequence(harnessGlobalHooks);
+  runSequence(globalHooks);
 }
-
-console.log(`[bridge] All hooks completed for ${event}:${toolName}`);

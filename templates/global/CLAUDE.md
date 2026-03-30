@@ -11,5 +11,9 @@
 - Frontend: /convention-frontend
 - 전체: /convention
 
+### 테스트
+- 각 팀 CLAUDE.md에 정의된 커버리지 기준을 준수하라
+- /test-scenario, /regression, /smoke-test 글로벌 스킬을 활용할 수 있다
+
 ### 감사 추적
 - 모든 도구 사용은 감사 로그에 기록됩니다

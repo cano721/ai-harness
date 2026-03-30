@@ -1,0 +1,59 @@
+---
+name: review-backend
+description: "{{project.name}} 백엔드 코드 리뷰 가이드. PR 리뷰, 코드 검토, 컨벤션 체크, 보안 점검, 경계면 검증을 수행. '리뷰해줘', '코드 봐줘', 'PR 검토' 요청 시 반드시 이 스킬을 참조할 것."
+_managed_by: ai-harness
+team: backend
+---
+
+# /review-backend
+
+{{project.domain}} 도메인의 백엔드 코드 리뷰 가이드.
+
+## 리뷰 우선순위
+
+1. **보안** — SQL 인젝션, 하드코딩 시크릿, 인증/인가 누락
+2. **경계면 정합성** — API 응답 shape ↔ 호출측 타입 일치
+3. **컨벤션 준수** — convention-backend.md 전체 항목
+4. **도메인 로직** — 엔티티 관계, 상태 전이, 비즈니스 규칙
+5. **테스트 충분성** — 핵심 경로 + 엣지 케이스
+
+## 컨벤션 체크리스트
+
+### 필수 (위반 시 차단)
+- [ ] SELECT * 사용하지 않음
+- [ ] SQL 파라미터 바인딩 사용 (문자열 연결 금지)
+- [ ] System.out 사용하지 않음 (@Slf4j 사용)
+- [ ] API 버저닝 있음 (/api/v{N}/...)
+- [ ] DDL 변경은 마이그레이션 스크립트로
+
+### 권장
+- [ ] @Operation (Swagger) 작성됨
+- [ ] Entity에 @Setter 없음
+- [ ] @Enumerated(EnumType.STRING) 사용
+- [ ] @NoArgsConstructor(access = PROTECTED)
+- [ ] 테스트 커버리지 기준 충족
+
+## 경계면 검증 (프론트엔드 팀이 있을 때)
+
+API 변경 시 반드시 "양쪽 동시 읽기":
+
+| 생산자 | 소비자 | 비교 항목 |
+|--------|--------|----------|
+| Controller 응답 shape | 프론트 훅 타입 | 필드명, 타입, 래핑 여부 |
+| API 경로 | 프론트 fetch URL | 경로 일치 |
+| 에러 응답 | 프론트 에러 핸들링 | shape 매칭 |
+
+## 출력 형식
+
+```markdown
+## 리뷰 결과: {파일/PR명}
+
+### 🔴 Critical
+- {파일:라인} — {이슈} → {수정 방법}
+
+### 🟡 Warning
+- {파일:라인} — {이슈} → {권장 방법}
+
+### 🟢 Good
+- {잘한 점}
+```

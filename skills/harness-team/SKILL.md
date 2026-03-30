@@ -12,10 +12,11 @@ description: 팀을 추가/수정/제거하거나 목록을 표시합니다
 </Use_When>
 
 <Available_Teams>
-현재 제공 중: **backend**
-준비 중: frontend, qa, devops, planning, design
+제공 중: **backend**, **frontend**, **planning**, **design**
 
-backend 외 팀을 요청하면 "아직 준비 중입니다. 현재는 backend 팀만 사용 가능합니다." 안내
+각 팀은 고유한 Hook, 스킬, 컨벤션을 포함합니다.
+테스트/QA 관련 기능(커버리지 체크, 테스트 시나리오 등)은 각 팀에 내장되어 있습니다.
+인프라/배포 관련 기능(infra-change-review, deploy-check, rollback-plan 등)은 글로벌로 모든 팀에 자동 적용됩니다.
 </Available_Teams>
 
 <Steps>

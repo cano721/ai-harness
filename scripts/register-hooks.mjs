@@ -20,43 +20,98 @@ function saveSettings(settingsPath, settings) {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
 }
 
+// Claude Code Hook 포맷: { hooks: { "PreToolUse": [...], "PostToolUse": [...] } }
+function ensureHooksStructure(settings) {
+  if (!settings.hooks || Array.isArray(settings.hooks)) {
+    settings.hooks = {};
+  }
+  return settings;
+}
+
+function ensureEventArray(settings, event) {
+  ensureHooksStructure(settings);
+  if (!Array.isArray(settings.hooks[event])) {
+    settings.hooks[event] = [];
+  }
+  return settings;
+}
+
 function register(settingsPath, event, matcher, command) {
   const settings = loadSettings(settingsPath);
-  if (!settings.hooks) {
-    settings.hooks = [];
-  }
+  ensureEventArray(settings, event);
+
   const hook = {
-    event,
     matcher,
     command,
     _managed_by: MANAGED_BY,
   };
-  const isDuplicate = settings.hooks.some(h => h.event === event && h.command === command);
+
+  const isDuplicate = settings.hooks[event].some(
+    h => h.matcher === matcher && h.command === command
+  );
   if (isDuplicate) {
-    console.log(JSON.stringify({ ok: true, registered: null, skipped: 'duplicate event+command' }));
+    console.log(JSON.stringify({ ok: true, registered: null, skipped: 'duplicate matcher+command' }));
     return;
   }
-  settings.hooks.push(hook);
+
+  settings.hooks[event].push(hook);
   saveSettings(settingsPath, settings);
-  console.log(JSON.stringify({ ok: true, registered: hook }));
+  console.log(JSON.stringify({ ok: true, registered: { event, ...hook } }));
 }
 
 function unregister(settingsPath) {
   const settings = loadSettings(settingsPath);
-  if (!settings.hooks) {
-    console.log(JSON.stringify({ ok: true, removed: 0 }));
-    return;
+  ensureHooksStructure(settings);
+
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[event])) continue;
+    const before = settings.hooks[event].length;
+    settings.hooks[event] = settings.hooks[event].filter(h => h._managed_by !== MANAGED_BY);
+    removed += before - settings.hooks[event].length;
+    if (settings.hooks[event].length === 0) {
+      delete settings.hooks[event];
+    }
   }
-  const before = settings.hooks.length;
-  settings.hooks = settings.hooks.filter(h => h._managed_by !== MANAGED_BY);
-  const removed = before - settings.hooks.length;
+
   saveSettings(settingsPath, settings);
   console.log(JSON.stringify({ ok: true, removed }));
 }
 
+function unregisterTeam(settingsPath, team) {
+  const settings = loadSettings(settingsPath);
+  ensureHooksStructure(settings);
+
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[event])) continue;
+    const before = settings.hooks[event].length;
+    settings.hooks[event] = settings.hooks[event].filter(
+      h => !(h._managed_by === MANAGED_BY && h._team === team)
+    );
+    removed += before - settings.hooks[event].length;
+    if (settings.hooks[event].length === 0) {
+      delete settings.hooks[event];
+    }
+  }
+
+  saveSettings(settingsPath, settings);
+  console.log(JSON.stringify({ ok: true, removed, team }));
+}
+
 function list(settingsPath) {
   const settings = loadSettings(settingsPath);
-  const hooks = (settings.hooks || []).filter(h => h._managed_by === MANAGED_BY);
+  ensureHooksStructure(settings);
+
+  const hooks = [];
+  for (const event of Object.keys(settings.hooks)) {
+    if (!Array.isArray(settings.hooks[event])) continue;
+    for (const h of settings.hooks[event]) {
+      if (h._managed_by === MANAGED_BY) {
+        hooks.push({ event, ...h });
+      }
+    }
+  }
   console.log(JSON.stringify(hooks));
 }
 
@@ -66,6 +121,7 @@ if (!cmd || !settingsPath) {
   console.error('사용법:');
   console.error('  node scripts/register-hooks.mjs register <settingsPath> <event> <matcher> <command>');
   console.error('  node scripts/register-hooks.mjs unregister <settingsPath>');
+  console.error('  node scripts/register-hooks.mjs unregister-team <settingsPath> <team>');
   console.error('  node scripts/register-hooks.mjs list <settingsPath>');
   process.exit(1);
 }
@@ -80,6 +136,13 @@ try {
     register(settingsPath, event, matcher, command);
   } else if (cmd === 'unregister') {
     unregister(settingsPath);
+  } else if (cmd === 'unregister-team') {
+    const [team] = rest;
+    if (!team) {
+      console.error('unregister-team에는 team이 필요합니다.');
+      process.exit(1);
+    }
+    unregisterTeam(settingsPath, team);
   } else if (cmd === 'list') {
     list(settingsPath);
   } else {
