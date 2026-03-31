@@ -59,26 +59,33 @@ Guard(안전) + Guide(컨벤션) + Harness(AI 최적화) 3축으로 구성됩니
 
 | 경로 | 단계 |
 |------|------|
+| **공통 (개발팀)** | 글로벌 보안 Hook 등록 → 프로젝트 분석 |
 | **Planning** | Runtime 감지 → Planner Bundle 설치 → AGENTS.md/CLAUDE.md 변환 → 26+ Skills 등록 |
-| **Backend** | Global Hooks 등록 → 코드 분석 → Convention 생성 → Team Hooks → context-map → Agents → Workflow → 검증 |
-| **Frontend** | Global Hooks 등록 → 프론트엔드 분석 → Convention 생성 → Team Hooks 등록 |
+| **Backend** | CLAUDE.md 최적화 → 컨벤션 생성 → 팀 Hook → context-map → 맞춤 에이전트 → Task Workflow → 검증 |
+| **Frontend** | 컨벤션 생성 → 팀 Hook 등록 |
 
 ### 일상 사용
 
-```
-평소처럼 사용하는 에이전트에서 바로 작업하면 됩니다.
+초기화 후 평소처럼 에이전트에서 작업하면 3축이 자동으로 동작합니다.
 
+```
 개발자: "지원자 목록 조회 API 만들어줘"
+
+[Harness] task-workflow 매칭 → implement-feature
     ↓
-Claude: convention-backend.md 참고하여 코드 생성
+[Harness] architect 에이전트: 요구사항 분석 + 설계
+    ↓
+[Guide] developer 에이전트: convention-backend.md 참고하여 코드 생성
     → /api/v1/applicants (버저닝 적용)
     → CommonResponse<T> (공통 응답 포맷)
     ↓
-[Claude Code Hook] 코드 작성 시 자동 검증
-    → SELECT * 사용? → 차단 + "컬럼을 명시하세요" 안내
-    → 시크릿 하드코딩? → 차단 + "환경 변수 사용하세요" 안내
+[Guard] Hook이 코드 작성 시 자동 검증
+    → SELECT * 사용? → 차단 + "컬럼을 명시하세요"
+    → 시크릿 하드코딩? → 차단 + "환경 변수 사용하세요"
     ↓
-[감사 로그] 모든 액션 .ai-harness/logs/ 에 자동 기록
+[Harness] reviewer 에이전트: 컨벤션 + 아키텍처 리뷰 (self-review 방지)
+    ↓
+[Guard] 감사 로그: 모든 액션 .ai-harness/logs/ 에 자동 기록
 ```
 
 ```
@@ -86,7 +93,7 @@ Claude: convention-backend.md 참고하여 코드 생성
     ↓
 planner bundle의 jira skill 사용
     ↓
-"create-prd" / "user-stories" / "jira-checklist" 같은 글로벌 스킬로 후속 작업
+"create-prd" / "user-stories" / "jira-checklist" 같은 스킬로 후속 작업
 ```
 
 ### 관리 (필요할 때)
