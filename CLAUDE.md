@@ -3,7 +3,7 @@
 ## 설계 철학
 - **추천 + 선택**: 하네스가 베스트 프랙티스를 추천하고, 팀이 선택한다
 - **셋업 후 빠지기**: init 시 세팅해주고, 이후엔 Claude Code가 알아서 동작한다. 하네스는 개입하지 않는다
-- **최소 강제, 최대 안내**: 강제는 보안 Hook 6개뿐. 나머지는 컨벤션과 워크플로우로 안내한다
+- **최소 강제, 최대 안내**: 강제는 보안 Hook 5개뿐. 나머지는 컨벤션과 워크플로우로 안내한다
 - **팀 자율성**: 각 팀이 자기 도메인, 컨벤션, 스킬을 자유롭게 구성한다
 
 ## 1. Guard (안전)
@@ -16,7 +16,7 @@
 - 변경 파일 수 guardrail (config.yaml의 max_files_changed)
 
 ### 글로벌 Hook
-- block-dangerous, secret-scanner, check-architecture, guardrails-check, infra-change-review, audit-logger
+- block-dangerous, secret-scanner, check-architecture, guardrails-check, infra-change-review
 
 ## 2. Guide (컨벤션)
 
@@ -86,4 +86,3 @@
 ## 세팅 후 동작 (하네스가 아닌 Claude Code가 실행)
 - .claude/settings.json에 등록된 Hook이 도구 사용 시 자동 검증
 - 차단 시 사유와 대안을 안내
-- 모든 액션은 감사 로그(.ai-harness/logs/)에 기록

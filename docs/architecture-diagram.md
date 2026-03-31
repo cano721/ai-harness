@@ -14,8 +14,7 @@ graph TB
             G2[secret-scanner.sh]
             G3[check-architecture.sh]
             G4[guardrails-check.sh]
-            G5[audit-logger.sh]
-            G6[infra-change-review.sh]
+            G5[infra-change-review.sh]
         end
 
         subgraph Guide["📐 Guide (컨벤션)"]
@@ -67,7 +66,6 @@ flowchart LR
         H2["secret-scanner\n<small>API keys, passwords</small>"]
         H3["check-architecture\n<small>레이어 방향 검증</small>"]
         H4["guardrails-check\n<small>파일 수, 실행 시간</small>"]
-        H5["audit-logger\n<small>JSONL 감사 로그</small>"]
     end
 
     subgraph TeamHooks["Team Hooks (선택)"]
@@ -80,13 +78,12 @@ flowchart LR
     end
 
     T1 --> Bash & Write & Edit
-    Bash --> H1 & H2 & H5
-    Write --> H2 & H3 & H4 & H5
-    Edit --> H2 & H3 & H4 & H5
+    Bash --> H1 & H2
+    Write --> H2 & H3 & H4
+    Edit --> H2 & H3 & H4
 
     H1 & H2 & H3 & H4 -->|exit 0: Allow| Pass[✅ 실행 허용]
     H1 & H2 & H3 & H4 -->|exit 2: Block| Block[🚫 실행 차단]
-    H5 -->|non-blocking| Log["📝 .ai-harness/logs/"]
 
     Bash --> TH1 & TH2
     Write --> TH3
@@ -245,7 +242,7 @@ flowchart LR
 graph LR
     Root["ai-harness/"]
 
-    Root --> hooks["hooks/\n(6 global hooks)"]
+    Root --> hooks["hooks/\n(5 global hooks)"]
     Root --> skills["skills/\n(7 core skills)"]
     Root --> teams["teams/\n(6 teams)"]
     Root --> scripts["scripts/\n(10 utilities)"]

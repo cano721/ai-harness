@@ -7,19 +7,9 @@
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
 
-# 차단 로깅 헬퍼
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$SCRIPT_DIR/lib/log-blocked.sh" ]; then
-  # shellcheck disable=SC1091
-  source "$SCRIPT_DIR/lib/log-blocked.sh"
-else
-  log_blocked() { :; }
-fi
-
 block() {
   local MSG="$1"
   echo "BLOCKED: $MSG"
-  log_blocked "infra-change-review" "$TOOL_NAME" "$MSG"
   exit 2
 }
 
