@@ -1,0 +1,33 @@
+name: coverage-check
+tests:
+  - name: "Coverage 85% 통과"
+    tool: "Bash"
+    input: "npm test -- --coverage\nCoverage: 85%\nAll tests passed."
+    expect_exit: 0
+
+  - name: "Coverage 50% 경고 (통과)"
+    tool: "Bash"
+    input: "npm test -- --coverage\nCoverage: 50%\nAll tests passed."
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "FAILED 감지 경고 (통과)"
+    tool: "Bash"
+    input: "npm test\nFAILED: UserService should return user\n1 failed, 5 passed"
+    expect_exit: 0
+    expect_output_contains: "WARNING"
+
+  - name: "테스트와 무관한 ls 명령 통과"
+    tool: "Bash"
+    input: "ls -la"
+    expect_exit: 0
+
+  - name: "Write 도구는 검사하지 않음"
+    tool: "Write"
+    input: "Coverage: 50%\nFAILED: test"
+    expect_exit: 0
+
+  - name: "Coverage 80% 경계값 통과"
+    tool: "Bash"
+    input: "jest --coverage\nCoverage: 80%"
+    expect_exit: 0

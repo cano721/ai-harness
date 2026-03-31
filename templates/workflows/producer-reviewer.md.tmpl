@@ -1,0 +1,51 @@
+# 워크플로우 패턴: Producer-Reviewer
+
+> planning + 개발 팀 프로젝트에 적합. 기획이 산출물을 생성하고, 개발팀이 리뷰/구현한다.
+
+## 적용 조건
+- 팀: {{teams}} (planning + backend/frontend)
+- 에이전트: {{project.name}}-planner, {{project.name}}-developer, {{project.name}}-reviewer
+
+## 기능 개발 파이프라인
+
+```
+[Producer] 기획 산출물 생성
+    └→ {{project.name}}-planner (PRD/유저스토리)
+        ↓
+[Reviewer] 개발팀 리뷰 + 실현 가능성 피드백
+    └→ {{project.name}}-architect (기술 검토)
+        ↓
+[Producer] 피드백 반영 + 확정
+    └→ {{project.name}}-planner (수정)
+        ↓
+[실행] 구현
+    └→ {{project.name}}-developer
+        ↓
+[Reviewer] 코드 리뷰 + 기획 대비 검증
+    └→ {{project.name}}-reviewer
+```
+
+## 단계별 가이드
+
+### 1. 기획 (Producer)
+- PRD 또는 유저스토리 작성
+- 도메인 용어사전과 기존 기능 목록을 참고
+- 수용 기준(AC)을 Given-When-Then으로 명확히
+
+### 2. 기술 리뷰 (Reviewer)
+- 기획 산출물의 기술적 실현 가능성 검토
+- 누락된 엣지 케이스, 성능 영향, 기존 시스템 영향 피드백
+- 최대 2회 리뷰 사이클
+
+### 3. 구현 (Producer → Developer)
+- 확정된 기획을 기반으로 개발
+- AC를 테스트 케이스로 변환
+
+### 4. 완료 검증 (Reviewer)
+- 기획의 AC가 모두 충족되었는지 검증
+- 컨벤션 리뷰
+
+## AI 활용 팁
+- 기획: "이 기능 PRD 작성해줘" → planner 에이전트 활용
+- 기술 검토: "이 PRD 실현 가능한지 검토해줘" → architect 에이전트
+- 구현: "이 유저스토리 구현해줘" → developer 에이전트가 AC 기반 개발

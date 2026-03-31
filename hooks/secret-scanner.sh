@@ -1,11 +1,27 @@
 #!/bin/bash
 # secret-scanner.sh — PreToolUse Hook
 # 민감 정보가 코드에 포함되는 것을 방지한다.
-# Write, Edit 도구 대상으로 동작.
+# Write, Edit, Bash 도구 대상으로 동작.
 # exit 0 = 통과, exit 2 = 차단
 
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
+
+# 차단 로깅 헬퍼
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/lib/log-blocked.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/lib/log-blocked.sh"
+else
+  log_blocked() { :; }
+fi
+
+block() {
+  local MSG="$1"
+  echo "BLOCKED: $MSG"
+  log_blocked "secret-scanner" "$TOOL_NAME" "$MSG"
+  exit 2
+}
 
 # 글로벌 제외 프로젝트 체크
 GLOBAL_CONFIG="$HOME/.ai-harness/config.yaml"
@@ -18,58 +34,45 @@ if [ -f "$GLOBAL_CONFIG" ]; then
   fi
 fi
 
-# Write, Edit 도구만 검사
+# Write, Edit, Bash 도구만 검사
 if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" != "Bash" ]; then
   exit 0
 fi
 
-# 허용 목록: 매칭된 라인 자체가 EXAMPLE_/DUMMY_/FAKE_/TEST_ 접두사를 포함하는 경우만 허용
-# (전역 플래그 방식 제거 — 다른 라인에 허용 접두사가 있어도 실제 시크릿은 차단)
+# 허용 목록: EXAMPLE_, DUMMY_, FAKE_, TEST_ 접두사가 있으면 Generic Secret 체크 스킵 플래그
+SKIP_GENERIC_SECRET=0
+if echo "$TOOL_INPUT" | grep -qE '(EXAMPLE_|DUMMY_|FAKE_|TEST_)'; then
+  SKIP_GENERIC_SECRET=1
+fi
 
 # AWS Access Key
 if echo "$TOOL_INPUT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
-  echo "BLOCKED: AWS Access Key가 감지되었습니다."
-  echo ""
-  echo "다음과 같이 수정하세요:"
-  echo "  - 환경 변수: export AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID}"
-  echo "  - Spring: application.yml에 \${AWS_ACCESS_KEY_ID} 플레이스홀더"
-  echo "  - AWS SDK 기본 자격증명 체인 활용"
-  exit 2
+  block "AWS Access Key가 감지되었습니다. 시크릿 매니저를 사용하세요."
 fi
 
 # Private Key
 if echo "$TOOL_INPUT" | grep -q -- '-----BEGIN.*PRIVATE KEY-----'; then
-  echo "BLOCKED: Private Key가 감지되었습니다."
-  echo ""
-  echo "다음과 같이 수정하세요:"
-  echo "  - 파일 참조: classpath:keys/private.pem (gitignore 추가)"
-  echo "  - 환경 변수: \${PRIVATE_KEY}"
-  echo "  - Vault/AWS Secrets Manager 연동"
-  exit 2
+  block "Private Key가 감지되었습니다. 시크릿 매니저를 사용하세요."
 fi
 
 # Generic Secret (password, secret, token, api_key 등에 값이 할당된 경우)
-# 매칭된 라인에서 허용 접두사(EXAMPLE_, DUMMY_, FAKE_, TEST_)가 포함된 라인을 제외
-if echo "$TOOL_INPUT" | grep -iE '(password|secret|api[_-]?key|api[_-]?secret|token)[[:space:]]*[=:][[:space:]]*[^ ]{8,}' | grep -qvE '(EXAMPLE_|DUMMY_|FAKE_|TEST_)'; then
-  echo "BLOCKED: 하드코딩된 시크릿이 감지되었습니다."
-  echo ""
-  echo "다음과 같이 수정하세요:"
-  echo "  - Spring: \${DB_PASSWORD} 플레이스홀더 사용"
-  echo "  - Node.js: process.env.API_KEY"
-  echo "  - .env.example에 키 이름만 기록 (값 없이)"
-  exit 2
+if [ "$SKIP_GENERIC_SECRET" -eq 0 ]; then
+  if echo "$TOOL_INPUT" | grep -qiE '(password|secret|api[_-]?key|api[_-]?secret|token)[[:space:]]*[=:][[:space:]]*[^ ]{8,}'; then
+    block "하드코딩된 시크릿이 감지되었습니다. 환경 변수 또는 시크릿 매니저를 사용하세요."
+  fi
 fi
 
-# .env 파일 쓰기/수정 시도 (Write + Edit 모두 차단)
+# .env 파일 쓰기/수정 시도 차단 (Write와 Edit 모두)
 if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
-  if echo "$TOOL_INPUT" | grep -qE '\.env($|"|,| |\.)' && ! echo "$TOOL_INPUT" | grep -qE '\.env\.(example|sample|template)'; then
-    echo "BLOCKED: .env 파일 직접 쓰기가 차단되었습니다."
-    echo ""
-    echo "다음과 같이 수정하세요:"
-    echo "  - .env.example 생성 후 값은 빈칸으로"
-    echo "  - README에 환경 변수 설정 방법 안내"
-    echo "  - 사용자에게 직접 .env 작성 요청"
-    exit 2
+  if echo "$TOOL_INPUT" | grep -qE '\.env($|\.)'; then
+    block ".env 파일 직접 쓰기/수정이 차단되었습니다. .env.example을 사용하세요."
+  fi
+fi
+
+# credentials/secrets 파일 쓰기 차단
+if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
+  if echo "$TOOL_INPUT" | grep -qiE '(credentials|secrets)\.(json|yaml|yml|xml|properties)'; then
+    block "민감 정보 파일 직접 수정이 차단되었습니다. 시크릿 매니저를 사용하세요."
   fi
 fi
 
