@@ -1,0 +1,55 @@
+---
+name: develop-backend
+description: "{{project.name}} 백엔드 기능 구현 가이드. API 엔드포인트 추가, 서비스 로직 작성, Entity/DTO 생성, 테스트 작성을 포함한 모든 백엔드 개발 작업에 사용. '기능 만들어줘', 'API 추가해줘', '서비스 구현' 등의 요청 시 반드시 이 스킬을 참조할 것."
+_managed_by: ai-harness
+team: backend
+---
+
+# /develop-backend
+
+{{project.domain}} 도메인의 백엔드 기능 구현 가이드.
+
+## 구현 절차
+
+1. **요구사항 분석** — 도메인 용어(.ai-harness/config.yaml의 entities)와 매핑
+2. **영향 범위 파악** — 기존 엔티티/API와의 관계 확인
+3. **컨벤션 확인** — .ai-harness/teams/backend/skills/convention-backend.md 읽기
+4. **구현 순서**: Entity → Repository → Service → DTO → Controller → 테스트
+5. **리뷰** — /review-backend 또는 {{project.name}}-reviewer에 위임
+
+## 패키지 배치
+
+> init 시 프로젝트 분석 결과로 채워짐
+
+```
+{{analyzed.package_structure}}
+```
+
+## DTO 생성 규칙
+
+> init 시 프로젝트의 실제 DTO 패턴으로 채워짐
+
+- 요청: {{analyzed.dto_request_pattern}} (예: CreateApplicantRequest)
+- 응답: {{analyzed.dto_response_pattern}} (예: ApplicantResponse)
+- 응답 래퍼: {{analyzed.response_wrapper}} (예: CommonResponse<T>)
+
+## API 엔드포인트 작성
+
+```
+{{analyzed.api_versioning}} (예: /api/v1/{resource})
+```
+
+- REST 규칙: 복수형, 케밥/카멜 케이스 (컨벤션 따름)
+- 응답: 공통 래퍼 사용
+- Swagger: @Operation + @Tag 필수
+
+## 테스트 필수
+
+- Given-When-Then 패턴
+- @DisplayName 한글 설명
+- 커버리지 기준 충족 (config.yaml의 rules.test_coverage)
+
+## 참조
+
+- 상세 예시: references/examples.md
+- 체크리스트: references/checklist.md

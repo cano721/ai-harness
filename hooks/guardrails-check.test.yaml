@@ -1,0 +1,16 @@
+name: guardrails-check
+tests:
+  - name: "Bash 도구는 검사하지 않음"
+    tool: "Bash"
+    input: "echo hello"
+    expect_exit: 0
+
+  - name: "Read 도구는 검사하지 않음"
+    tool: "Read"
+    input: "/tmp/test.txt"
+    expect_exit: 0
+
+  - name: "Write 도구는 검사 대상"
+    tool: "Write"
+    input: "const x = 1;"
+    expect_exit: 0

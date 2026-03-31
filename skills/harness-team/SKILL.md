@@ -12,13 +12,15 @@ description: 팀을 추가/수정/제거하거나 목록을 표시합니다
 </Use_When>
 
 <Available_Teams>
-로컬 프로젝트 팀으로 제공 중: **backend**
-글로벌 bundle로 제공 중: **planning**
-준비 중: frontend, qa, devops, design
+로컬 프로젝트 팀: **backend**, **frontend**, **design**
+글로벌 bundle: **planning**
+
+각 팀은 고유한 Hook, 스킬, 컨벤션을 포함합니다.
+테스트/QA 관련 기능(커버리지 체크, 테스트 시나리오 등)은 각 팀에 내장되어 있습니다.
+인프라/배포 관련 기능(infra-change-review, deploy-check 등)은 글로벌로 모든 팀에 자동 적용됩니다.
 
 - planning 요청 시: "planning 팀은 /harness-init 으로 글로벌 planner bundle을 설치합니다." 안내
 - planning 관련 파일을 직접 수정해야 하면 `teams/planning/bundle/`을 기준으로 작업하고, `teams/planning/skills/` 와 `teams/planning/CLAUDE.md` 는 legacy 초안으로 취급한다
-- backend 외 로컬 팀 요청 시: "아직 준비 중입니다. 현재 로컬 프로젝트 팀은 backend만 사용 가능합니다." 안내
 </Available_Teams>
 
 <Steps>

@@ -1,0 +1,57 @@
+name: infra-change-review
+tests:
+  - name: "terraform destroy 차단"
+    tool: "Bash"
+    input: "terraform destroy -auto-approve"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "kubectl delete namespace 차단"
+    tool: "Bash"
+    input: "kubectl delete namespace production"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "kubectl delete ns 차단"
+    tool: "Bash"
+    input: "kubectl delete ns staging"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "helm uninstall 차단"
+    tool: "Bash"
+    input: "helm uninstall my-app --namespace production"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "helm delete 차단"
+    tool: "Bash"
+    input: "helm delete my-release"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "terraform plan 통과"
+    tool: "Bash"
+    input: "terraform plan -out=tfplan"
+    expect_exit: 0
+
+  - name: "helm upgrade 통과"
+    tool: "Bash"
+    input: "helm upgrade my-app ./chart --namespace production"
+    expect_exit: 0
+
+  - name: "terraform 하드코딩 시크릿 차단"
+    tool: "Write"
+    input: "main.tf\nresource \"aws_db_instance\" \"db\" {\n  password = \"MyHardcoded123\"\n}"
+    expect_exit: 2
+    expect_output_contains: "BLOCKED"
+
+  - name: "terraform 변수 참조 통과"
+    tool: "Write"
+    input: "main.tf\nresource \"aws_db_instance\" \"db\" {\n  password = var.db_password\n}"
+    expect_exit: 0
+
+  - name: "Read 도구는 검사하지 않음"
+    tool: "Read"
+    input: "terraform destroy"
+    expect_exit: 0

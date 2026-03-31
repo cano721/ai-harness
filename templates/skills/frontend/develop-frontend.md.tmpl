@@ -1,0 +1,59 @@
+---
+name: develop-frontend
+description: "{{project.name}} 프론트엔드 기능 구현 가이드. 컴포넌트 작성, 페이지 추가, API 연동, 상태 관리, 테스트 작성을 포함한 모든 프론트엔드 작업에 사용. '화면 만들어줘', '컴포넌트 추가', '페이지 구현' 요청 시 반드시 이 스킬을 참조할 것."
+_managed_by: ai-harness
+team: frontend
+---
+
+# /develop-frontend
+
+{{project.domain}} 도메인의 프론트엔드 기능 구현 가이드.
+
+## 구현 절차
+
+1. **요구사항 분석** — 화면 구성, 사용자 인터랙션 파악
+2. **기존 컴포넌트 확인** — 재사용 가능한 컴포넌트 먼저 탐색
+3. **컨벤션 확인** — .ai-harness/teams/frontend/skills/convention-frontend.md 읽기
+4. **구현 순서**: 타입 정의 → 컴포넌트 → API 연동 훅 → 페이지 조합 → 테스트
+5. **리뷰** — /review-frontend 또는 {{project.name}}-reviewer에 위임
+
+## 컴포넌트 구조
+
+> init 시 프로젝트 분석 결과로 채워짐
+
+```
+{{analyzed.component_structure}}
+```
+
+## 상태 관리 패턴
+
+> init 시 프로젝트의 실제 상태 관리 패턴으로 채워짐
+
+- 글로벌 상태: {{analyzed.global_state}} (예: Zustand)
+- 서버 상태: {{analyzed.server_state}} (예: React Query)
+
+## API 연동 훅
+
+```typescript
+// 예시: init 시 프로젝트의 실제 패턴으로 채워짐
+{{analyzed.api_hook_pattern}}
+```
+
+## 성능 기준
+
+| 지표 | 목표 |
+|------|------|
+| 초기 번들 (gzip) | < 300KB |
+| LCP | < 2.5s |
+| CLS | < 0.1 |
+
+## 테스트 필수
+
+- Vitest + Testing Library
+- 사용자 행동 기반 테스트 (구현 세부사항 X)
+- 커버리지 기준 충족
+
+## 참조
+
+- 상세 예시: references/examples.md
+- 체크리스트: references/checklist.md
