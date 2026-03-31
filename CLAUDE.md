@@ -17,7 +17,7 @@
 - 변경 파일 수 guardrail (config.yaml의 max_files_changed)
 
 ### 글로벌 Hook
-- block-dangerous, secret-scanner, guardrails-check, infra-change-review, audit-logger
+- block-dangerous, secret-scanner, check-architecture, guardrails-check, infra-change-review, audit-logger
 
 ## 2. Guide (컨벤션)
 
@@ -39,7 +39,7 @@
 - planning은 runtime(Codex/Claude)에 맞게 글로벌 설치하고, backend/frontend는 프로젝트 로컬 세팅한다
 
 ### 글로벌 스킬
-- test-scenario, regression, smoke-test, deploy-check, rollback-plan, infra-plan
+- test-scenario, regression, smoke-test, deploy-check, rollback-plan, infra-plan, onboard, handoff
 
 ## 3. Harness (AI 활용 최적화)
 
