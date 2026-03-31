@@ -1,4 +1,4 @@
-# AI Harness — Guard + Guide + Harness
+# AI Harness — Guard + Guide + Gear
 
 ## 설계 철학
 - **추천 + 선택**: 하네스가 베스트 프랙티스를 추천하고, 팀이 선택한다
@@ -40,7 +40,7 @@
 ### 글로벌 스킬
 - test-scenario, regression, smoke-test, deploy-check, rollback-plan, infra-plan, onboard, handoff
 
-## 3. Harness (AI 활용 최적화)
+## 3. Gear (AI 활용 최적화)
 
 ### 프로젝트 맞춤 에이전트
 - .ai-harness/agents/ 또는 .claude/agents/에 프로젝트를 이해하는 전문 에이전트가 있으면 활용하라
@@ -70,7 +70,7 @@
 
 ## 사용 가능한 스킬
 - /harness-init : planning은 글로벌 bundle 설치, 개발팀은 프로젝트 분석 → 컨벤션 + 에이전트 + 스킬 + 워크플로우 자동 생성
-- /harness-status : 상태 확인 + 차단 현황 + 진단 + 미결정 사항 (Guard/Guide/Harness 3축 표시)
+- /harness-status : 상태 확인 + 차단 현황 + 진단 + 미결정 사항 (Guard/Guide/Gear 3축 표시)
 - /harness-rules : 적용 중인 규칙 + 마지막 차단 사유
 - /harness-team : 로컬 프로젝트 팀 추가/수정/제거/목록
 - /harness-exclude : 글로벌 하네스에서 프로젝트 제외

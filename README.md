@@ -12,7 +12,7 @@
 - [팀 프로필](#팀-프로필)
 - [Hook 시스템 (Guard)](#hook-시스템)
 - [컨벤션 시스템 (Guide)](#컨벤션-시스템-guide)
-- [Task Workflow 시스템 (Harness)](#task-workflow-시스템-harness)
+- [Task Workflow 시스템 (Gear)](#task-workflow-시스템-gear)
 - [OMC 연동](#omc-연동-oh-my-claudecode)
 - [프로젝트 구조](#프로젝트-구조)
 - [설계 문서](#설계-문서)
@@ -39,7 +39,7 @@
 
 ### Three-Pillar Architecture
 
-Guard(안전) + Guide(컨벤션) + Harness(AI 최적화) 3축으로 구성됩니다.
+Guard(안전) + Guide(컨벤션) + Gear(AI 최적화) 3축으로 구성됩니다.
 
 ![Three-Pillar Architecture](docs/images/1-three-pillar.png)
 
@@ -47,7 +47,7 @@ Guard(안전) + Guide(컨벤션) + Harness(AI 최적화) 3축으로 구성됩니
 |----|------|----------|
 | **Guard** | 보안 — 위험 명령 차단, 시크릿 유출 방지 | 6개 글로벌 Hook |
 | **Guide** | 컨벤션 — 팀별 코드 스타일, 아키텍처 규칙 | CLAUDE.md, convention-*.md, context-map.md |
-| **Harness** | AI 최적화 — 프로젝트 맞춤 에이전트/스킬/워크플로우 | Project-Aware Agents, Domain Skills, Task Workflows |
+| **Gear** | AI 최적화 — 프로젝트 맞춤 에이전트/스킬/워크플로우 | Project-Aware Agents, Domain Skills, Task Workflows |
 
 ## 유저 플로우
 
@@ -352,9 +352,9 @@ Guard가 "하지 마라"라면, Guide는 **"이렇게 해라"**입니다. 프로
 | **강제력** | 시스템 레벨 (100% 차단) | 프롬프트 레벨 (Claude가 따름) |
 | **시점** | 도구 실행 직전 (PreToolUse) | 코드 생성 시 |
 
-## Task Workflow 시스템 (Harness)
+## Task Workflow 시스템 (Gear)
 
-Guard가 "막고", Guide가 "안내"한다면, Harness는 **"프로젝트를 이해하고 잘 해라"**입니다. 프로젝트 맞춤 에이전트와 작업 유형별 워크플로우를 제공합니다.
+Guard가 "막고", Guide가 "안내"한다면, Gear는 **"프로젝트를 이해하고 잘 해라"**입니다. 프로젝트 맞춤 에이전트와 작업 유형별 워크플로우를 제공합니다.
 
 ### 프로젝트 맞춤 에이전트
 

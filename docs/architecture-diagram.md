@@ -25,7 +25,7 @@ graph TB
             GU4[context-map.md]
         end
 
-        subgraph Optimize["⚡ Harness (AI 최적화)"]
+        subgraph Optimize["⚡ Gear (AI 최적화)"]
             O1[Project-Aware Agents]
             O2[Domain Skills]
             O3[Task Workflows]
