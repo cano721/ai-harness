@@ -14,7 +14,7 @@
 - [컨벤션 시스템 (Guide)](#컨벤션-시스템-guide)
 - [Task Workflow 시스템 (Gear)](#task-workflow-시스템-gear)
 - [OMC 연동](#omc-연동-oh-my-claudecode)
-- [프로젝트 구조](#프로젝트-구조)
+- [Init 후 프로젝트 구조](#init-후-프로젝트-구조)
 - [설계 문서](#설계-문서)
 - [구현 현황](#구현-현황)
 - [요구사항](#요구사항)
@@ -399,32 +399,44 @@ oh-my-claudecode와 함께 사용하면 ai-harness의 기능이 강화됩니다.
 | **병렬 실행** | 순차 진행 | team/ultrawork 모드 |
 | **전체 자동화** | Skill이 단계별 진행 | autopilot 모드 |
 
-## 프로젝트 구조
+## Init 후 프로젝트 구조
 
-![File Structure](docs/images/7-file-structure.png)
+`/harness-init`을 실행하면 프로젝트에 다음 파일이 생성됩니다.
 
 ```
-ai-harness/
-├── hooks/              # 5개 글로벌 보안 Hook (.sh)
-├── skills/             # 7개 코어 관리 스킬
-├── teams/              # 6개 팀
-│   ├── planning/bundle/  # Planner Bundle (16 agents + 26 skills)
-│   ├── backend/          # Hooks 4, Skills 5, Conventions
-│   └── frontend/         # Hooks 3, Skills 4, Conventions
-├── templates/
-│   ├── task-workflows/   # 5개 작업 유형별 워크플로우 (implement, bugfix, refactor, review, design)
-│   ├── agents/           # 에이전트 생성 템플릿
-│   ├── skills/           # 스킬 생성 템플릿
-│   ├── workflows/        # (deprecated) 팀 기반 워크플로우
-│   └── presets/          # (deprecated) 작업 프리셋
-├── scripts/            # 10개 헬퍼 유틸리티 (Node.js + Bash)
-├── global/             # 8개 공통 스킬 (test-scenario, deploy-check, onboard 등)
-├── custom-agents/      # 회사 커스텀 에이전트
-├── omc-integration/    # OMC 연동 (hook bridge + mode configs)
-├── docs/               # 설계 문서 (28개 기획 + 8개 SDD)
-├── .ai-harness/        # 런타임 상태 (init 후 생성)
-├── CLAUDE.md           # 플러그인 컨텍스트 (자동 주입)
-└── package.json
+my-project/
+├── .ai-harness/
+│   ├── config.yaml                    # 프로젝트 설정 (스택, 도메인, 팀)
+│   ├── context-map.md                 # 프로젝트 지도 (도메인, 엔트리포인트, 패턴)
+│   ├── teams/backend/
+│   │   ├── CLAUDE.md                  # 팀 규칙 + 스킬 참조
+│   │   └── skills/
+│   │       └── convention-backend.md  # 프로젝트 맞춤 컨벤션 (Guide)
+│   ├── task-workflows/                # 작업 유형별 워크플로우 (Gear)
+│   │   ├── implement-feature.yaml
+│   │   ├── fix-bug.yaml
+│   │   ├── refactor.yaml
+│   │   ├── code-review.yaml
+│   │   └── design.yaml
+│   └── agents/                        # 프로젝트 맞춤 에이전트 원본
+│
+├── .claude/
+│   ├── settings.json                  # 보안 Hook 등록 (Guard)
+│   └── agents/                        # Claude Code에서 사용하는 에이전트
+│       ├── {project}-developer.md     # 도메인 맥락 + 컨벤션 내장
+│       ├── {project}-reviewer.md      # 경계면 검증 + 컨벤션 체크
+│       └── {project}-architect.md     # 도메인 관계도 + 레이어 설계
+│
+└── CLAUDE.md                          # <!-- harness:start --> 구간에 규칙 주입
+```
+
+Planning 팀은 프로젝트가 아닌 글로벌에 설치됩니다:
+
+```
+~/.claude/  (또는 ~/.codex/)
+├── CLAUDE.md (또는 AGENTS.md)    # Planner bundle 컨텍스트
+├── agents/                       # 16개 planner 에이전트
+└── skills/                       # 26+ planner 스킬 (jira, create-prd 등)
 ```
 
 ## 헬퍼 스크립트
