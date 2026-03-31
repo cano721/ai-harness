@@ -54,8 +54,9 @@ if [ "$TOOL_NAME" = "Bash" ]; then
     block "TRUNCATE TABLE은 하네스 보안 정책에 의해 차단됩니다."
   fi
 
-  # git push --force (main/master) 차단
-  if echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force'; then
+  # git push --force 차단 (--force-with-lease는 허용)
+  if echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force' && \
+     ! echo "$TOOL_INPUT" | grep -qE 'git\s+push\s+.*--force-with-lease'; then
     block "force push는 하네스 보안 정책에 의해 차단됩니다. 대안: --force-with-lease 사용"
   fi
 

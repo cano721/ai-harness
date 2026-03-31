@@ -37,5 +37,7 @@ hooks:
     enabled: true
   guardrails-check:
     enabled: true
+  infra-change-review:
+    enabled: true
 rules:
   test_coverage: 80

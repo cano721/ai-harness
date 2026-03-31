@@ -40,10 +40,8 @@ fi
 
 # git 변경 파일 수 체크 (git 저장소일 때만)
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  CHANGED_FILES=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
-  STAGED_FILES=$(git diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
-  UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
-  TOTAL=$((CHANGED_FILES + STAGED_FILES + UNTRACKED))
+  # 변경/스테이지/미추적 파일을 유니크하게 카운팅 (이중 카운팅 방지)
+  TOTAL=$( (git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null) | sort -u | wc -l | tr -d ' ')
 
   if [ "$TOTAL" -ge "$MAX_FILES" ]; then
     echo "BLOCKED: 변경된 파일 수(${TOTAL}개)가 guardrail 한도(${MAX_FILES}개)에 도달했습니다. 현재 변경 사항을 커밋하거나, config.yaml의 max_files_changed를 조정하세요."

@@ -38,11 +38,8 @@ if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" !
   exit 0
 fi
 
-# 허용 목록: EXAMPLE_, DUMMY_, FAKE_, TEST_ 접두사가 있으면 Generic Secret 체크 스킵 플래그
-SKIP_GENERIC_SECRET=0
-if echo "$TOOL_INPUT" | grep -qE '(EXAMPLE_|DUMMY_|FAKE_|TEST_)'; then
-  SKIP_GENERIC_SECRET=1
-fi
+# 허용 접두사 목록 (라인별로 체크)
+ALLOW_PREFIX='(EXAMPLE_|DUMMY_|FAKE_|TEST_)'
 
 # AWS Access Key
 if echo "$TOOL_INPUT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
@@ -55,15 +52,16 @@ if echo "$TOOL_INPUT" | grep -q -- '-----BEGIN.*PRIVATE KEY-----'; then
 fi
 
 # Generic Secret (password, secret, token, api_key 등에 값이 할당된 경우)
-if [ "$SKIP_GENERIC_SECRET" -eq 0 ]; then
-  if echo "$TOOL_INPUT" | grep -qiE '(password|secret|api[_-]?key|api[_-]?secret|token)[[:space:]]*[=:][[:space:]]*[^ ]{8,}'; then
-    block "하드코딩된 시크릿이 감지되었습니다. 환경 변수 또는 시크릿 매니저를 사용하세요."
-  fi
+# 매칭된 라인에 허용 접두사가 없는 경우에만 차단 (라인별 체크)
+if echo "$TOOL_INPUT" | grep -iE '(password|secret|api[_-]?key|api[_-]?secret|token)[[:space:]]*[=:][[:space:]]*[^ ]{8,}' | \
+   grep -qvE "$ALLOW_PREFIX"; then
+  block "하드코딩된 시크릿이 감지되었습니다. 환경 변수 또는 시크릿 매니저를 사용하세요."
 fi
 
-# .env 파일 쓰기/수정 시도 차단 (Write와 Edit 모두)
+# .env 파일 쓰기/수정 시도 차단 (Write와 Edit 모두, .env.example/.env.sample/.env.template 제외)
 if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
-  if echo "$TOOL_INPUT" | grep -qE '\.env($|\.)'; then
+  if echo "$TOOL_INPUT" | grep -qE '\.env($|\.)' && \
+     ! echo "$TOOL_INPUT" | grep -qE '\.env\.(example|sample|template)'; then
     block ".env 파일 직접 쓰기/수정이 차단되었습니다. .env.example을 사용하세요."
   fi
 fi

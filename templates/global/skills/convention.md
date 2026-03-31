@@ -26,5 +26,5 @@ trigger: "컨벤션|convention|코드 규칙"
 - Frontend: /convention-frontend
 - Design: /convention-design
 - Planning: /convention-planning
-- QA: /convention-qa
-- DevOps: /convention-devops
+- 글로벌 테스트: /test-scenario, /regression, /smoke-test
+- 글로벌 배포: /deploy-check, /rollback-plan, /infra-plan

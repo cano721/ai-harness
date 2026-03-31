@@ -65,8 +65,8 @@ function collectGlobalHooks(eventType) {
   if (eventType === 'PreToolUse') {
     return allScripts.filter(f => !f.includes('audit-logger') && !f.includes('coverage-check'));
   }
-  // PostToolUse: audit-logger, coverage-check 등
-  return allScripts.filter(f => f.includes('audit-logger'));
+  // PostToolUse: audit-logger, coverage-check
+  return allScripts.filter(f => f.includes('audit-logger') || f.includes('coverage-check'));
 }
 
 function collectTeamHooks(harnessDir, teams, eventType) {
