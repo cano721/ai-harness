@@ -296,6 +296,80 @@ Hook 응답:
 권장: 동적 임포트 고려
 ```
 
+## 컨벤션 시스템 (Guide)
+
+Guard가 "하지 마라"라면, Guide는 **"이렇게 해라"**입니다. 프로젝트 CLAUDE.md에 주입된 지시에 따라 Claude Code가 컨벤션 문서를 참고하여 코드를 생성합니다.
+
+### 동작 방식
+
+```
+/harness-init 실행
+  → 프로젝트 코드 분석 (Entity, API 패턴, 네이밍 등)
+  → .ai-harness/teams/backend/skills/convention-backend.md 생성
+  → 프로젝트 CLAUDE.md에 "convention-backend.md를 참고하라" 주입
+```
+
+이후 Claude Code가 코드 생성 시 자동으로 컨벤션을 따릅니다:
+
+```
+개발자: "지원자 목록 조회 API 만들어줘"
+  → Claude: convention-backend.md 참고
+  → /api/v1/applicants (버저닝 적용)
+  → CommonResponse<T> (공통 응답 포맷)
+  → SELECT 컬럼 명시 (SELECT * 금지)
+```
+
+### 컨벤션 파일 구성
+
+| 파일 | 역할 |
+|------|------|
+| `.ai-harness/teams/{team}/skills/convention-{team}.md` | 팀별 코드 스타일 (패키지 구조, DTO 네이밍, REST 규칙 등) |
+| `.ai-harness/context-map.md` | 프로젝트 지도 (도메인, 엔트리포인트, 패턴) |
+| `.ai-harness/teams/{team}/CLAUDE.md` | 팀별 규칙 + 스킬 참조 |
+
+### Guard vs Guide
+
+| | Guard (Hook) | Guide (컨벤션) |
+|---|---|---|
+| **방식** | 셸 스크립트 → exit 2로 차단 | CLAUDE.md → 컨벤션 문서 참조 |
+| **강제력** | 시스템 레벨 (100% 차단) | 프롬프트 레벨 (Claude가 따름) |
+| **시점** | 도구 실행 직전 (PreToolUse) | 코드 생성 시 |
+
+## Task Workflow 시스템 (Harness)
+
+Guard가 "막고", Guide가 "안내"한다면, Harness는 **"프로젝트를 이해하고 잘 해라"**입니다. 프로젝트 맞춤 에이전트와 작업 유형별 워크플로우를 제공합니다.
+
+### 프로젝트 맞춤 에이전트
+
+init 시 프로젝트 코드를 분석하여 3개 전문 에이전트를 생성합니다:
+
+| 에이전트 | 역할 |
+|---------|------|
+| `{project}-developer` | 도메인 맥락 + 컨벤션 내장 개발 에이전트 |
+| `{project}-reviewer` | 경계면 검증 + 컨벤션 체크 리뷰 에이전트 |
+| `{project}-architect` | 도메인 관계도 + 레이어 구조 설계 에이전트 |
+
+### 작업 유형별 워크플로우
+
+작업 요청에 따라 적절한 에이전트 조합과 실행 순서가 결정됩니다:
+
+| 작업 | 워크플로우 | 흐름 |
+|------|-----------|------|
+| "기능 만들어줘" | **implement-feature** | architect 분석 → developer 구현 → reviewer 리뷰 → 수정 |
+| "버그 수정해줘" | **fix-bug** | developer 진단 → developer 수정 → reviewer 리뷰 → 회귀확인 |
+| "리팩토링해줘" | **refactor** | architect 계획 → developer 구현 → reviewer 검증 |
+| "코드 리뷰해줘" | **code-review** | reviewer 단독 리뷰 |
+| "설계해줘" | **design** | architect 분석 → architect 설계 → reviewer 검토 |
+
+### Self-Review 방지
+
+모든 워크플로우의 review 단계는 구현 단계와 **다른 에이전트**가 실행합니다:
+
+| 실행 방식 | 분리 수준 |
+|----------|----------|
+| **기본 (Skill)** | Agent 도구로 서브에이전트 호출 → 컨텍스트 분리 |
+| **강화 (OMC team)** | 별도 tmux pane/프로세스 → 완전 분리 |
+
 ## 프로젝트 구조
 
 ![File Structure](docs/images/7-file-structure.png)
