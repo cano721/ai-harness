@@ -405,20 +405,25 @@ oh-my-claudecode와 함께 사용하면 ai-harness의 기능이 강화됩니다.
 
 ```
 ai-harness/
-├── hooks/          # 5개 글로벌 보안 Hook (.sh)
-├── skills/         # 7개 코어 관리 스킬 (harness-init, status, rules, team, exclude, metrics, scaffold)
-├── teams/          # 6개 팀 (planning, backend, frontend, design, devops, qa)
-│   ├── planning/bundle/   # Planner Bundle (16 agents + 26 skills)
-│   ├── backend/           # Hooks 4, Skills 5, Conventions
-│   └── frontend/          # Hooks 3, Skills 4, Conventions
-├── scripts/        # 10개 헬퍼 유틸리티 (Node.js + Bash)
-├── templates/      # 설정, 에이전트, 스킬, task-workflow 템플릿
-├── global/         # 8개 공통 스킬 (test-scenario, deploy-check, onboard 등)
-├── custom-agents/  # 회사 커스텀 에이전트
-├── omc-integration/# OMC 연동 (hook bridge + mode configs)
-├── docs/           # 설계 문서 (28개 기획 + 8개 SDD)
-├── .ai-harness/    # 런타임 상태 (init 후 생성)
-├── CLAUDE.md       # 플러그인 컨텍스트 (자동 주입)
+├── hooks/              # 5개 글로벌 보안 Hook (.sh)
+├── skills/             # 7개 코어 관리 스킬
+├── teams/              # 6개 팀
+│   ├── planning/bundle/  # Planner Bundle (16 agents + 26 skills)
+│   ├── backend/          # Hooks 4, Skills 5, Conventions
+│   └── frontend/         # Hooks 3, Skills 4, Conventions
+├── templates/
+│   ├── task-workflows/   # 5개 작업 유형별 워크플로우 (implement, bugfix, refactor, review, design)
+│   ├── agents/           # 에이전트 생성 템플릿
+│   ├── skills/           # 스킬 생성 템플릿
+│   ├── workflows/        # (deprecated) 팀 기반 워크플로우
+│   └── presets/          # (deprecated) 작업 프리셋
+├── scripts/            # 10개 헬퍼 유틸리티 (Node.js + Bash)
+├── global/             # 8개 공통 스킬 (test-scenario, deploy-check, onboard 등)
+├── custom-agents/      # 회사 커스텀 에이전트
+├── omc-integration/    # OMC 연동 (hook bridge + mode configs)
+├── docs/               # 설계 문서 (28개 기획 + 8개 SDD)
+├── .ai-harness/        # 런타임 상태 (init 후 생성)
+├── CLAUDE.md           # 플러그인 컨텍스트 (자동 주입)
 └── package.json
 ```
 
