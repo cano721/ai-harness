@@ -439,23 +439,6 @@ Planning 팀은 프로젝트가 아닌 글로벌에 설치됩니다:
 └── skills/                       # 26+ planner 스킬 (jira, create-prd 등)
 ```
 
-## 헬퍼 스크립트
-
-스킬들이 내부적으로 호출하는 Node.js 유틸리티입니다. 사용자가 직접 호출할 일은 거의 없습니다.
-
-| 스크립트 | 역할 |
-|---------|------|
-| `check-environment.mjs` | Node.js, Git, Claude Code 버전 확인 |
-| `install-planner-bundle.mjs` | planner bundle을 현재 runtime(Codex/Claude)에 맞게 inspect/install/변환 |
-| `register-hooks.mjs` | Hook을 `.claude/settings.json`에 등록/해제 |
-| `copy-team-resources.mjs` | 팀별 Hook, 기본 스킬, 컨벤션 템플릿 복사 |
-| `inject-claudemd.mjs` | CLAUDE.md에 `harness:start ~ harness:end` 구간 주입 |
-| `test-hooks.mjs` | Hook을 `.test.yaml`에 정의된 케이스로 테스트 |
-| `generate-agents.mjs` | 프로젝트 분석 기반 맞춤 에이전트 생성 (v2) |
-| `validate-generated.mjs` | 생성된 자산 유효성 검증 |
-| `validate-yaml.mjs` | YAML 스키마 유효성 검증 |
-| `check-architecture-ci.sh` | CI용 아키텍처 경계 위반 검증 |
-
 ## 설계 문서
 
 프로젝트의 완전한 설계는 `docs/` 폴더의 28개 기획 문서와 8개 상세 설계 문서(SDD)에 상세히 기술되어 있습니다.
