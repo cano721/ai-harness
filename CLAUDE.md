@@ -57,6 +57,18 @@
 - .ai-harness/workflow.md에 이 프로젝트의 최적 워크플로우 패턴이 정의되어 있다
 - 큰 기능은 워크플로우 패턴을 따르면 효율적이다
 
+### Self-Review 방지
+- 코드를 구현한 에이전트가 같은 코드를 리뷰하면 안 된다
+- task-workflow의 review phase는 implement phase와 반드시 다른 서브에이전트로 실행한다
+- 최소 분리: Agent 도구로 별도 서브에이전트 호출 (컨텍스트 분리)
+- 강화 분리: OMC team 모드로 별도 프로세스 실행
+
+### Task Workflow
+- `.ai-harness/task-workflows/`에 작업 유형별 워크플로우가 정의되어 있다
+- 기능 구현, 버그 수정, 리팩토링 등 작업 유형에 따라 적절한 워크플로우를 참고하라
+- 각 워크플로우는 단계(phases) + 에이전트 배정 + 실행 순서를 정의한다
+- `enforce_separation: true`인 단계는 이전 단계와 반드시 다른 서브에이전트로 실행한다
+
 ## 사용 가능한 스킬
 - /harness-init : planning은 글로벌 bundle 설치, 개발팀은 프로젝트 분석 → 컨벤션 + 에이전트 + 스킬 + 워크플로우 자동 생성
 - /harness-status : 상태 확인 + 차단 현황 + 진단 + 미결정 사항 (Guard/Guide/Harness 3축 표시)

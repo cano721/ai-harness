@@ -1,0 +1,27 @@
+name: code-review
+description: 기존 코드 또는 변경사항을 리뷰합니다
+trigger_keywords: ["코드 리뷰", "리뷰해줘", "review", "PR 리뷰"]
+
+context:
+  required:
+    - ".ai-harness/teams/{team}/skills/convention-{team}.md"
+
+phases:
+  - name: review
+    agent: "{project}-reviewer"
+    description: "컨벤션 준수 + 로직 결함 + 보안 + 성능 검토"
+    steps:
+      - "변경 파일 목록 파악"
+      - "컨벤션 체크리스트 기반 검토"
+      - "아키텍처 경계 위반 확인"
+      - "보안 취약점 스캔"
+      - "심각도별 이슈 분류 (Critical/Major/Minor)"
+    output: "review-report"
+
+verification:
+  - "모든 변경 파일이 리뷰됨"
+  - "이슈가 심각도별로 분류됨"
+
+orchestration:
+  default: "skill"
+  note: "리뷰는 단일 에이전트로 충분. OMC 불필요."

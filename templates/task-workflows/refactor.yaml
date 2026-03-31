@@ -1,0 +1,47 @@
+name: refactor
+description: 코드를 리팩토링합니다 (기능 변경 없이 구조 개선)
+trigger_keywords: ["리팩토링", "refactor", "코드 정리", "구조 개선"]
+
+context:
+  required:
+    - ".ai-harness/context-map.md"
+    - ".ai-harness/teams/{team}/skills/convention-{team}.md"
+
+phases:
+  - name: plan
+    agent: "{project}-architect"
+    description: "기준선 테스트 확보 + 변경 계획 수립"
+    steps:
+      - "기존 테스트 전체 실행 → 기준선 확보"
+      - "변경 범위와 방법 설계"
+      - "사용자에게 계획 보고"
+    output: "refactor-plan"
+
+  - name: implement
+    agent: "{project}-developer"
+    description: "작은 단위로 수정 → 각 단계마다 테스트 확인"
+    input: "refactor-plan"
+    output: "refactor-result"
+
+  - name: review
+    agent: "{project}-reviewer"
+    description: "기능 변경 없음 확인 + 아키텍처 경계 준수 검증"
+    input: "refactor-result"
+    enforce_separation: true
+    output: "review-result"
+
+  - name: fix
+    agent: "{project}-developer"
+    description: "리뷰 피드백 반영"
+    input: "review-result"
+    condition: "review-result.has_issues"
+
+verification:
+  - "기능 변경 없음 (테스트 결과 동일)"
+  - "아키텍처 경계 준수"
+  - "컨벤션 일치"
+  - "불필요한 코드 추가 없음"
+
+orchestration:
+  default: "skill"
+  enhanced: "omc-team"

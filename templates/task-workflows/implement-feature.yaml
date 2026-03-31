@@ -1,0 +1,54 @@
+name: implement-feature
+description: 새 기능을 분석하고 구현합니다
+trigger_keywords: ["기능 구현", "만들어줘", "추가해줘", "feature", "CRUD 추가", "새 엔티티", "API 추가"]
+
+context:
+  required:
+    - ".ai-harness/context-map.md"
+    - ".ai-harness/teams/{team}/skills/convention-{team}.md"
+
+phases:
+  - name: analyze
+    agent: "{project}-architect"
+    description: "요구사항 분석 + 영향 범위 파악 + 설계 방향 결정"
+    skip_condition: "estimated_files < 3"
+    output: "design-brief"
+
+  - name: implement
+    agent: "{project}-developer"
+    description: "컨벤션에 맞게 코드 구현 + 테스트 작성"
+    input: "design-brief"
+    steps:
+      - "Entity/모델 생성"
+      - "Repository/데이터 계층 생성"
+      - "DTO/인터페이스 정의"
+      - "Service 비즈니스 로직"
+      - "Controller/엔드포인트"
+      - "테스트 작성"
+    output: "implementation"
+
+  - name: review
+    agent: "{project}-reviewer"
+    description: "컨벤션 준수 + 아키텍처 경계 + 로직 검증"
+    input: "implementation"
+    enforce_separation: true
+    output: "review-result"
+
+  - name: fix
+    agent: "{project}-developer"
+    description: "리뷰 피드백 반영"
+    input: "review-result"
+    condition: "review-result.has_issues"
+    loop_until: "review.critical_count == 0"
+    max_loops: 3
+
+verification:
+  - "컨벤션 네이밍 패턴 일치"
+  - "의존성 방향 준수"
+  - "테스트 통과"
+  - "리뷰 이슈 모두 해결"
+
+orchestration:
+  default: "skill"
+  enhanced: "omc-team"
+  note: "OMC team 모드 사용 시 각 phase가 별도 프로세스로 실행되어 완전한 에이전트 분리 보장"

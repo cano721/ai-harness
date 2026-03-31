@@ -1,0 +1,42 @@
+name: design
+description: 기능의 설계와 아키텍처를 검토합니다
+trigger_keywords: ["설계해줘", "아키텍처", "design", "구조 설계"]
+
+context:
+  required:
+    - ".ai-harness/context-map.md"
+
+phases:
+  - name: analyze
+    agent: "{project}-architect"
+    description: "현재 구조 분석 + 변경 영향도 파악"
+    steps:
+      - "기존 도메인 구조 파악"
+      - "변경이 필요한 레이어/모듈 식별"
+      - "영향받는 기존 코드 범위 산정"
+    output: "analysis"
+
+  - name: design
+    agent: "{project}-architect"
+    description: "설계안 작성 + 트레이드오프 정리"
+    input: "analysis"
+    steps:
+      - "설계 옵션 도출 (최소 2개)"
+      - "각 옵션의 장단점/트레이드오프 정리"
+      - "권장안 + 근거 제시"
+    output: "design-proposal"
+
+  - name: review
+    agent: "{project}-reviewer"
+    description: "설계안의 컨벤션 준수 + 실현 가능성 검토"
+    input: "design-proposal"
+    enforce_separation: true
+
+verification:
+  - "설계 옵션이 2개 이상 제시됨"
+  - "트레이드오프가 명시됨"
+  - "컨벤션과 아키텍처 경계가 준수됨"
+
+orchestration:
+  default: "skill"
+  enhanced: "omc-team"
