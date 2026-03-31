@@ -99,7 +99,7 @@ planner bundle의 jira skill 사용
 ### 관리 (필요할 때)
 
 ```
-"QA팀 추가해줘"          → /harness-team
+"backend 팀 추가해줘"    → /harness-team
 "왜 차단됐어?"           → /harness-rules
 "하네스 상태 보여줘"     → /harness-status
 ```
