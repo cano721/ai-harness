@@ -8,7 +8,7 @@
   "agentsTargetDir": "agents",
   "templatesTargetDir": "planner-templates",
   "replacements": [
-{
+    {
       "from": "~/.codex",
       "to": "{{TARGET_ROOT_TILDE}}"
     }

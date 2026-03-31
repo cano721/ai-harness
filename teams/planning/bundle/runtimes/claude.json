@@ -16,7 +16,7 @@
       "from": ".codex/config.toml",
       "to": ".claude/settings.json"
     },
-{
+    {
       "from": "~/.codex",
       "to": "{{TARGET_ROOT_TILDE}}"
     },
@@ -24,7 +24,7 @@
       "from": "$HOME/.codex",
       "to": "$HOME/.claude"
     },
-{
+    {
       "from": "$CODEX_HOME",
       "to": "$CLAUDE_HOME"
     },
