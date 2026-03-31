@@ -108,9 +108,16 @@ function detectRuntime(explicitRuntime, scriptPath) {
     };
   }
 
+  if (codexExists && !claudeExists) {
+    return {
+      runtime: 'codex',
+      detectionReason: 'home-only:codex',
+    };
+  }
+
   return {
-    runtime: 'codex',
-    detectionReason: codexExists ? 'home:codex' : 'default:codex',
+    runtime: 'claude',
+    detectionReason: claudeExists ? 'home-both:claude' : 'default:claude',
   };
 }
 
@@ -322,12 +329,19 @@ function install(bundleRoot, runtimeConfig, targetRootAbs, runtime, detectionRea
   };
 }
 
+export { detectRuntime, transformText, parseArgs, isTextFile };
+
 function usage() {
   console.error('사용법:');
   console.error('  node scripts/install-planner-bundle.mjs inspect [--runtime auto|codex|claude] [--bundle-root <path>] [--target-root <path>|--target-dir <path>]');
   console.error('  node scripts/install-planner-bundle.mjs install [--runtime auto|codex|claude] [--bundle-root <path>] [--target-root <path>|--target-dir <path>] [--dry-run]');
   process.exit(1);
 }
+
+const isCLI = process.argv[1] && url.fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (!isCLI) {
+  // imported as module — skip CLI execution
+} else {
 
 const args = parseArgs(process.argv.slice(2));
 const command = args._[0];
@@ -379,3 +393,5 @@ try {
   console.error(`오류: ${error.message}`);
   process.exit(1);
 }
+
+} // end isCLI
