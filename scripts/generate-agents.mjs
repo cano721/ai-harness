@@ -30,7 +30,6 @@ function parseSimpleYaml(content) {
   const result = { project: {}, teams: [], agents: {} };
   const lines = content.split('\n');
   let currentSection = null;
-  let currentSubSection = null;
 
   for (const line of lines) {
     if (/^project:/.test(line)) { currentSection = 'project'; continue; }

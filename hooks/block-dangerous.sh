@@ -9,6 +9,7 @@ TOOL_INPUT="$2"
 # 차단 로깅 헬퍼
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/lib/log-blocked.sh" ]; then
+  # shellcheck source=lib/log-blocked.sh
   source "$SCRIPT_DIR/lib/log-blocked.sh"
 else
   log_blocked() { :; }

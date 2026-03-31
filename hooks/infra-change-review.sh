@@ -7,6 +7,22 @@
 TOOL_NAME="$1"
 TOOL_INPUT="$2"
 
+# 차단 로깅 헬퍼
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/lib/log-blocked.sh" ]; then
+  # shellcheck source=lib/log-blocked.sh
+  source "$SCRIPT_DIR/lib/log-blocked.sh"
+else
+  log_blocked() { :; }
+fi
+
+block() {
+  local MSG="$1"
+  echo "BLOCKED: $MSG"
+  log_blocked "infra-change-review" "$TOOL_NAME" "$MSG"
+  exit 2
+}
+
 # Write, Edit, Bash 도구만 검사
 if [ "$TOOL_NAME" != "Write" ] && [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" != "Bash" ]; then
   exit 0
@@ -16,20 +32,17 @@ fi
 if [ "$TOOL_NAME" = "Bash" ]; then
   # terraform destroy 차단
   if echo "$TOOL_INPUT" | grep -qE 'terraform\s+destroy'; then
-    echo "BLOCKED: terraform destroy는 하네스 보안 정책에 의해 차단됩니다. 인프라 삭제는 수동으로 검토 후 실행하세요."
-    exit 2
+    block "terraform destroy는 하네스 보안 정책에 의해 차단됩니다. 인프라 삭제는 수동으로 검토 후 실행하세요."
   fi
 
   # kubectl delete namespace 차단
   if echo "$TOOL_INPUT" | grep -qE 'kubectl\s+delete\s+namespace|kubectl\s+delete\s+ns\b'; then
-    echo "BLOCKED: kubectl delete namespace는 하네스 보안 정책에 의해 차단됩니다. 네임스페이스 삭제는 수동으로 검토 후 실행하세요."
-    exit 2
+    block "kubectl delete namespace는 하네스 보안 정책에 의해 차단됩니다. 네임스페이스 삭제는 수동으로 검토 후 실행하세요."
   fi
 
   # helm uninstall/delete 차단
   if echo "$TOOL_INPUT" | grep -qE 'helm\s+(uninstall|delete)\b'; then
-    echo "BLOCKED: helm uninstall/delete는 하네스 보안 정책에 의해 차단됩니다. 프로덕션 릴리즈 삭제는 수동으로 검토 후 실행하세요."
-    exit 2
+    block "helm uninstall/delete는 하네스 보안 정책에 의해 차단됩니다. 프로덕션 릴리즈 삭제는 수동으로 검토 후 실행하세요."
   fi
 
   exit 0
@@ -38,8 +51,7 @@ fi
 # Write, Edit 도구: .tf 파일의 하드코딩 시크릿 차단
 if echo "$TOOL_INPUT" | grep -qE '\.tf\b|terraform'; then
   if echo "$TOOL_INPUT" | grep -qiE '(password|secret_key|access_key|api_key|private_key)\s*=\s*"[^$"{][^"]{3,}"'; then
-    echo "BLOCKED: Terraform 파일에 하드코딩된 시크릿이 감지되었습니다. AWS Secrets Manager, Vault 또는 환경 변수를 사용하세요."
-    exit 2
+    block "Terraform 파일에 하드코딩된 시크릿이 감지되었습니다. AWS Secrets Manager, Vault 또는 환경 변수를 사용하세요."
   fi
 fi
 

@@ -5,6 +5,7 @@
 # exit 0 = 통과, exit 2 = 차단
 
 TOOL_NAME="$1"
+# shellcheck disable=SC2034
 TOOL_INPUT="$2"
 
 # Write, Edit 도구만 검사
