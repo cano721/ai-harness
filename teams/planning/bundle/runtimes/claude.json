@@ -16,11 +16,7 @@
       "from": ".codex/config.toml",
       "to": ".claude/settings.json"
     },
-    {
-      "from": "/Users/ago0528/.codex",
-      "to": "{{TARGET_ROOT_ABS}}"
-    },
-    {
+{
       "from": "~/.codex",
       "to": "{{TARGET_ROOT_TILDE}}"
     },
@@ -28,11 +24,7 @@
       "from": "$HOME/.codex",
       "to": "$HOME/.claude"
     },
-    {
-      "from": "config.toml",
-      "to": "settings.json"
-    },
-    {
+{
       "from": "$CODEX_HOME",
       "to": "$CLAUDE_HOME"
     },
@@ -77,8 +69,8 @@
       "to": "exit Claude Code"
     },
     {
-      "from": "AGENTS.md",
-      "to": "CLAUDE.md"
+      "from": "# AGENTS.md",
+      "to": "# CLAUDE.md"
     }
   ]
 }

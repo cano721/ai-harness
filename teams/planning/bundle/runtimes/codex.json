@@ -8,11 +8,7 @@
   "agentsTargetDir": "agents",
   "templatesTargetDir": "planner-templates",
   "replacements": [
-    {
-      "from": "/Users/ago0528/.codex",
-      "to": "{{TARGET_ROOT_ABS}}"
-    },
-    {
+{
       "from": "~/.codex",
       "to": "{{TARGET_ROOT_TILDE}}"
     }
