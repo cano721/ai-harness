@@ -28,8 +28,7 @@ graph TB
         subgraph Optimize["⚡ Harness (AI 최적화)"]
             O1[Project-Aware Agents]
             O2[Domain Skills]
-            O3[Workflow Patterns]
-            O4[Presets]
+            O3[Task Workflows]
         end
     end
 
