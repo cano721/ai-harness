@@ -1,0 +1,16 @@
+{
+  "runtime": "codex",
+  "displayName": "Codex",
+  "homeDirName": ".codex",
+  "contextSource": "AGENTS.md",
+  "contextTarget": "AGENTS.md",
+  "skillsTargetDir": "skills",
+  "agentsTargetDir": "agents",
+  "templatesTargetDir": "planner-templates",
+  "replacements": [
+    {
+      "from": "~/.codex",
+      "to": "{{TARGET_ROOT_TILDE}}"
+    }
+  ]
+}

@@ -2,7 +2,12 @@
 
 > [English README](README.en.md)
 
-플러그인을 설치하고 `/harness-init`을 실행하면, 프로젝트를 분석하여 팀에 맞는 보안 Hook, 코드 컨벤션, 스킬을 자동으로 구성합니다. 세팅이 끝나면 하네스는 빠지고, Claude Code가 알아서 동작합니다.
+플러그인을 설치하고 `/harness-init`을 실행하면, 팀에 맞는 AI 작업 환경을 자동으로 구성합니다.
+
+- **backend** 프로젝트를 분석하여 팀에 맞는 보안 Hook, 코드 컨벤션, 스킬을 자동으로 구성합니다.
+- **planning** 팀은 현재 runtime이 Codex인지 Claude Code인지 감지한 뒤 글로벌 planner bundle을 세팅합니다.
+
+세팅이 끝나면 하네스는 빠지고, Claude Code / Codex 에이전트가 설치된 규칙과 스킬을 사용합니다.
 
 ## 설계 철학
 
@@ -20,16 +25,19 @@
 
 ```
 [1] 팀 선택 ──── "어떤 팀 설정을 사용할까요?"
-                  기술 스택 감지 → 추천 → 사용자 선택
+                  planning / backend / ...
     ↓
-[2] 글로벌 세팅 ── "보안 Hook을 모든 프로젝트에 적용합니다"
-                    → 사용자 확인 후 ~/.claude/settings.json에 등록
+[2-A] planning 선택 시
+      runtime 감지 (Codex / Claude Code)
+      → teams/planning/bundle/common + runtime 규칙 적용
+      → Codex: ~/.codex/AGENTS.md, agents/, skills/
+      → Claude: ~/.claude/CLAUDE.md, agents/, skills/
+      → Jira credential readiness만 점검 후 종료
     ↓
-[3] 프로젝트 확인 ── "현재 프로젝트: my-service (Java/Spring)"
-                      → "이 프로젝트에 세팅할까요?" 확인
-    ↓
-[4] 프로젝트 세팅 ── 이미 세팅된 것 / 안 된 것 표시
-                      → 세팅할 항목 사용자 선택 후 진행
+[2-B] backend 등 개발 팀 선택 시
+      글로벌 보안 Hook 확인
+      → 현재 프로젝트 분석
+      → 로컬 .ai-harness/teams/{team} 세팅
     ↓
 [완료] 적용 요약
 ```
@@ -37,8 +45,7 @@
 ### 일상 사용
 
 ```
-평소처럼 Claude Code를 사용하면 됩니다.
-하네스는 세팅만 해주고 빠져있습니다. Claude Code가 동작합니다.
+평소처럼 사용하는 에이전트에서 바로 작업하면 됩니다.
 
 개발자: "지원자 목록 조회 API 만들어줘"
     ↓
@@ -51,6 +58,14 @@ Claude: convention-backend.md 참고하여 코드 생성
     → 시크릿 하드코딩? → 차단 + "환경 변수 사용하세요" 안내
     ↓
 [감사 로그] 모든 액션 .ai-harness/logs/ 에 자동 기록
+```
+
+```
+기획자: "jira NMRS-15863 보여줘"
+    ↓
+planner bundle의 jira skill 사용
+    ↓
+"create-prd" / "user-stories" / "jira-checklist" 같은 글로벌 스킬로 후속 작업
 ```
 
 ### 관리 (필요할 때)
@@ -75,7 +90,7 @@ claude plugin install ai-harness
 
 ### 초기화
 
-프로젝트에 Claude를 처음 설정할 때:
+개발 팀:
 
 ```
 "하네스 초기화해줘"
@@ -83,12 +98,22 @@ claude plugin install ai-harness
 "이 프로젝트 분석해서 컨벤션 만들고 보안 설정해줘"
 ```
 
-Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
+기획 팀:
 
-1. **팀 선택** — 기술 스택 감지 → 팀 추천 → 선택
-2. **글로벌 세팅** — 보안 Hook 4개를 모든 프로젝트에 적용 (확인 후)
-3. **프로젝트 확인** — 현재 프로젝트 분석 → 세팅 대상 확인
-4. **프로젝트 세팅** — 미세팅 항목 선택 → 컨벤션/Hook/컨텍스트맵 등 적용
+```
+"planning 팀으로 하네스 초기화해줘"
+또는
+"기획자 모드로 글로벌 planner bundle 설치해줘"
+```
+
+초기화 흐름:
+
+1. **팀 선택** — planning / backend 등 팀 선택
+2. **planning** — 현재 runtime 감지 후 `teams/planning/bundle/`을 글로벌 위치에 설치
+   - 설치 전 `inspect`로 runtime, 대상 경로, 설치 개수를 먼저 보여줍니다.
+   - 설치 중 텍스트 자산은 runtime에 맞게 자동 변환됩니다. 예: `AGENTS.md → CLAUDE.md`, `~/.codex → ~/.claude`
+3. **backend** — 보안 Hook 확인 후 현재 프로젝트 분석 및 로컬 `.ai-harness/` 세팅
+4. **완료 요약** — 설치된 자산 수, readiness, 다음 추천 명령 표시
 
 ### 상태 확인
 
@@ -112,23 +137,24 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 
 | 스킬 | 사용 예시 | 기능 |
 |------|----------|------|
-| **harness-init** | "하네스 초기화해줘" | 프로젝트 분석 → 팀 추천 → 컨벤션 생성 → Hook 등록 |
+| **harness-init** | "하네스 초기화해줘" | planning은 글로벌 planner bundle 설치, backend는 프로젝트 로컬 하네스 세팅 |
 | **harness-status** | "하네스 상태 보여줘" | 설정 상태 + 차단 현황 + 진단 + 미결정 사항 |
 | **harness-rules** | "적용된 규칙 보여줘" | 현재 보안 규칙 목록, 마지막 차단 사유 |
-| **harness-team** | "QA팀 추가해줘" | 팀 추가/제거, 컨벤션 수정 |
+| **harness-team** | "backend 팀 추가해줘" | 로컬 프로젝트 팀 추가/제거, 컨벤션 수정 |
 | **harness-exclude** | "이 프로젝트 제외해줘" | 글로벌 하네스 제외 프로젝트 관리 |
 | **harness-metrics** | "메트릭 분석해줘" | 에이전트 작업 효율 메트릭 분석 + 개선 제안 |
 | **harness-scaffold** | "CRUD 만들어줘" | 컨벤션 기반 코드 보일러플레이트 생성 |
 
 ## 팀 프로필
 
-현재 **Backend 팀**이 제공됩니다. 다른 팀은 고도화 후 순차 제공 예정입니다.
+현재 **Backend 팀**과 **Planning 팀(beta)** 이 제공됩니다. 다른 팀은 고도화 후 순차 제공 예정입니다.
 
 ### 제공 중
 
 | 팀 | 핵심 역할 | 컨벤션 | Hook | 스킬 |
 |----|---------|--------|------|------|
 | **BE** | API/DB 개발 | 패키지 구조, DTO 네이밍, REST 규칙 | sql-review, api-compat | entity, migration, api-design, convention, agent-map |
+| **Planning** | PRD, Jira, 유저 스토리, 체크리스트 | 글로벌 AGENTS/CLAUDE + planner bundle | 없음 | create-prd, user-stories, jira, jira-checklist 포함 26개 skill + 16개 agent |
 
 ### 준비 중 (향후 제공)
 
@@ -137,13 +163,19 @@ Claude가 4단계로 세팅합니다 (모든 단계에서 사용자 확인):
 | FE | React/Vue 개발 | 준비 중 |
 | QA | 테스트/검증 | 준비 중 |
 | DevOps | 인프라/배포 | 준비 중 |
-| 기획 | PRD/유저 스토리 | 준비 중 |
 | 디자인 | 디자인 시스템 | 준비 중 |
 
-각 팀은 초기화 후 다음 파일을 받습니다:
+개발 팀은 초기화 후 다음 파일을 받습니다:
 
 - `.ai-harness/teams/{team}/skills/convention-{team}.md` — 팀별 코드 스타일
 - `.ai-harness/teams/{team}/CLAUDE.md` — 팀별 최소 규칙 + 스킬 참조
+
+planning 팀은 로컬 프로젝트 대신 `teams/planning/bundle/`을 설치 소스로 사용합니다:
+
+- `teams/planning/skills/` 와 `teams/planning/CLAUDE.md` 는 아직 검토 중인 legacy planning 자산
+- `teams/planning/bundle/common/` 은 실제 설치되는 planner bundle
+- `teams/planning/bundle/runtimes/` 는 Codex/Claude별 파일명과 경로 매핑 규칙
+- `teams/planning/README.md` 는 legacy와 bundle의 역할 분리를 설명하는 planner 전용 안내서
 
 ## Hook 시스템
 
@@ -248,6 +280,7 @@ ai-harness/
 │   ├── check-environment.mjs   # Node.js, Git, Claude Code 버전 확인
 │   ├── register-hooks.mjs      # Hook 등록/해제
 │   ├── copy-team-resources.mjs # 팀별 Hook/스킬 복사
+│   ├── install-planner-bundle.mjs # planning bundle을 Codex/Claude에 설치
 │   ├── inject-claudemd.mjs     # CLAUDE.md에 하네스 규칙 주입
 │   ├── test-hooks.mjs          # Hook 단위 테스트
 │   ├── check-architecture-ci.sh # CI용 아키텍처 검증
@@ -260,8 +293,13 @@ ai-harness/
 │
 ├── teams/                      # 6개 팀 (기획/디자인/FE/BE/QA/DevOps)
 │   ├── planning/
-│   │   ├── skills/             # 팀별 스킬
-│   │   └── hooks/              # 팀별 Hook
+│   │   ├── README.md           # planner bundle/legacy 구분 안내
+│   │   ├── skills/             # legacy planning drafts (미검토 자산)
+│   │   ├── CLAUDE.md           # legacy planning context
+│   │   └── bundle/             # planner mode 설치 소스
+│   │       ├── common/         # 공통 AGENTS/agents/skills
+│   │       ├── runtimes/       # codex.json / claude.json
+│   │       └── templates/      # policy-template.md
 │   ├── design/
 │   ├── frontend/
 │   ├── backend/
@@ -309,6 +347,7 @@ ai-harness/
 | 스크립트 | 역할 |
 |---------|------|
 | `check-environment.mjs` | Node.js, Git, Claude Code 버전 확인 |
+| `install-planner-bundle.mjs` | planner bundle을 현재 runtime(Codex/Claude)에 맞게 inspect/install 하고 문서를 runtime에 맞게 변환 |
 | `register-hooks.mjs` | Hook을 `.claude/settings.json`에 등록/해제 |
 | `copy-team-resources.mjs` | 팀별 Hook, 기본 스킬, 컨벤션 템플릿 복사 |
 | `inject-claudemd.mjs` | CLAUDE.md에 `# harness:start ~ harness:end` 구간 주입 |

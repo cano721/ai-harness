@@ -1,7 +1,7 @@
 {
   "name": "ai-harness",
   "version": "1.0.0",
-  "description": "AI 에이전트 제어/검증 프레임워크 — 프로젝트 분석 기반 컨벤션 자동 생성, 보안 Hook",
+  "description": "팀별 AI 작업 환경 셋업 패키지 — 개발자용 프로젝트 하네스와 기획자용 글로벌 planner bundle",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -35,16 +35,7 @@
     "type": "git",
     "url": "https://github.com/cano721/ai-harness.git"
   },
-  "keywords": [
-    "ai",
-    "harness",
-    "claude",
-    "claude-code",
-    "plugin",
-    "security",
-    "hooks",
-    "convention"
-  ],
+  "keywords": ["ai", "harness", "claude", "claude-code", "codex", "planner", "plugin", "security", "hooks", "convention"],
   "license": "MIT",
   "author": "cano721"
 }
