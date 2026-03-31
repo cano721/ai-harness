@@ -21,7 +21,7 @@ Guard(안전) + Guide(컨벤션) + Harness(AI 최적화) 3축으로 구성됩니
 |----|------|----------|
 | **Guard** | 보안 — 위험 명령 차단, 시크릿 유출 방지 | 6개 글로벌 Hook |
 | **Guide** | 컨벤션 — 팀별 코드 스타일, 아키텍처 규칙 | CLAUDE.md, convention-*.md, context-map.md |
-| **Harness** | AI 최적화 — 프로젝트 맞춤 에이전트/스킬/워크플로우 | Project-Aware Agents, Domain Skills, Presets |
+| **Harness** | AI 최적화 — 프로젝트 맞춤 에이전트/스킬/워크플로우 | Project-Aware Agents, Domain Skills, Task Workflows |
 
 ### OMC 연동
 
@@ -309,7 +309,7 @@ ai-harness/
 │   ├── backend/           # Hooks 4, Skills 5, Conventions
 │   └── frontend/          # Hooks 3, Skills 4, Conventions
 ├── scripts/        # 10개 헬퍼 유틸리티 (Node.js + Bash)
-├── templates/      # 설정, 에이전트, 스킬, 워크플로우 템플릿
+├── templates/      # 설정, 에이전트, 스킬, task-workflow 템플릿
 ├── global/         # 8개 공통 스킬 (test-scenario, deploy-check, onboard 등)
 ├── custom-agents/  # 회사 커스텀 에이전트
 ├── omc-integration/# OMC 연동 (hook bridge + mode configs)
@@ -354,7 +354,7 @@ ai-harness/
 | 08 | [배포 & 패키지 구조](docs/08-distribution.md) | 하이브리드 배포, npm/GitHub 구성 |
 | 09 | [Init 플로우 상세](docs/09-init-flow.md) | 4단계 init 플로우 |
 | 10 | [감사 로깅 설계](docs/10-audit-logging.md) | 로그 포맷, 보존 정책 |
-| 11 | [크로스팀 워크플로우](docs/11-cross-team-workflow.md) | 기획→디자인→개발→QA 파이프라인 |
+| 11 | [Task Workflow 시스템](docs/11-cross-team-workflow.md) | 작업 유형 기반 워크플로우 + self-review 방지 |
 | 12 | [비용 추적 모델](docs/12-cost-tracking.md) | 토큰 비용, 한도, 최적화 |
 | 13 | [플러그인 개발 가이드](docs/13-plugin-guide.md) | 설정 패키지 작성, 배포 |
 | 14 | [멀티 에이전트 추상화](docs/14-multi-agent-abstraction.md) | 어댑터 패턴, Tier별 전략 |
