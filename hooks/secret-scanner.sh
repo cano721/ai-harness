@@ -62,7 +62,7 @@ fi
 
 # .env 파일 쓰기/수정 시도 (Write + Edit 모두 차단)
 if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
-  if echo "$TOOL_INPUT" | grep -qE '\.env($|[" ,\.])'; then
+  if echo "$TOOL_INPUT" | grep -qE '\.env($|"|,| |\.)' && ! echo "$TOOL_INPUT" | grep -qE '\.env\.(example|sample|template)'; then
     echo "BLOCKED: .env 파일 직접 쓰기가 차단되었습니다."
     echo ""
     echo "다음과 같이 수정하세요:"
