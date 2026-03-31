@@ -1,0 +1,20 @@
+{
+  "id": "planning-bundle",
+  "version": 1,
+  "source": "Curated snapshot of /Users/ago0528/.codex with personal-only skills excluded and Jira skills added for planner mode.",
+  "common": {
+    "contextFile": "AGENTS.md",
+    "agentsDir": "agents",
+    "skillsDir": "skills",
+    "templatesDir": "templates"
+  },
+  "excludedSkills": [
+    ".system",
+    "brunch-post-from-thread",
+    "naver-real-estate-blog-from-thread"
+  ],
+  "supportedRuntimes": [
+    "codex",
+    "claude"
+  ]
+}
