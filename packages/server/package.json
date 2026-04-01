@@ -1,0 +1,25 @@
+{
+  "name": "@ddalkak/server",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@ddalkak/db": "workspace:*",
+    "@ddalkak/shared": "workspace:*",
+    "cors": "^2.8.5",
+    "drizzle-orm": "^0.38.4",
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

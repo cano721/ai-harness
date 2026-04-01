@@ -1,20 +1,26 @@
 {
-  "name": "ai-harness",
-  "version": "2.0.0",
-  "description": "AI 에이전트 셋업 시스템 — Guard + Guide + Harness 3축 구조",
+  "name": "ddalkak",
+  "version": "3.0.0-alpha.0",
+  "description": "AI Agent Governance & Orchestration Platform — 딸깍하면 에이전트가 움직인다",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "build": "pnpm -r run build",
     "test": "node scripts/test-hooks.mjs hooks && node scripts/test-hooks.mjs teams/backend/hooks && node scripts/test-hooks.mjs teams/frontend/hooks",
+    "test:packages": "pnpm -r run test",
     "lint": "eslint scripts/*.mjs",
     "validate:yaml": "node scripts/validate-yaml.mjs",
     "shellcheck": "shellcheck hooks/*.sh && find teams -name '*.sh' -exec shellcheck {} +"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "eslint": "^9.0.0",
-    "globals": "^17.4.0"
+    "globals": "^17.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.2"
   },
   "dependencies": {
     "yaml": "^2.6.0"
@@ -35,7 +41,22 @@
     "type": "git",
     "url": "https://github.com/cano721/ai-harness.git"
   },
-  "keywords": ["ai", "harness", "claude", "claude-code", "codex", "planner", "plugin", "security", "hooks", "convention"],
+  "keywords": [
+    "ddalkak",
+    "ai",
+    "agent",
+    "orchestration",
+    "governance",
+    "claude",
+    "codex",
+    "cursor",
+    "convention"
+  ],
   "license": "MIT",
-  "author": "cano721"
+  "author": "cano721",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
 }

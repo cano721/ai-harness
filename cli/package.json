@@ -1,0 +1,21 @@
+{
+  "name": "ddalkak",
+  "version": "3.0.0-alpha.0",
+  "type": "module",
+  "bin": {
+    "ddalkak": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@ddalkak/server": "workspace:*",
+    "@ddalkak/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
