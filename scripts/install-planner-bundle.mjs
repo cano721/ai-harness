@@ -22,15 +22,18 @@ function parseArgs(argv) {
       args._.push(arg);
       continue;
     }
+
     const key = arg.slice(2);
     const next = argv[i + 1];
     if (!next || next.startsWith('--')) {
       args[key] = true;
       continue;
     }
+
     args[key] = next;
     i += 1;
   }
+
   return args;
 }
 
@@ -69,17 +72,24 @@ function detectRuntime(explicitRuntime, scriptPath) {
     };
   }
 
-  if (process.env.CODEX_THREAD_ID || process.env.CODEX_SHELL || process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
-    return {
-      runtime: 'codex',
-      detectionReason: 'env:codex',
-    };
-  }
-
   if (process.env.CLAUDECODE || process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_PROJECT_DIR) {
     return {
       runtime: 'claude',
       detectionReason: 'env:claude',
+    };
+  }
+
+  if (process.env.CODEX_THREAD_ID) {
+    return {
+      runtime: 'codex',
+      detectionReason: 'env:codex-thread',
+    };
+  }
+
+  if (process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
+    return {
+      runtime: 'codex',
+      detectionReason: 'env:codex-originator',
     };
   }
 
@@ -121,30 +131,6 @@ function detectRuntime(explicitRuntime, scriptPath) {
   };
 }
 
-function loadRuntimeConfig(bundleRoot, runtime) {
-  const configPath = path.join(bundleRoot, 'runtimes', `${runtime}.json`);
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`런타임 설정이 없습니다: ${configPath}`);
-  }
-  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-}
-
-function interpolateReplacement(value, vars) {
-  return value
-    .replaceAll('{{TARGET_ROOT_ABS}}', vars.targetRootAbs)
-    .replaceAll('{{TARGET_ROOT_TILDE}}', vars.targetRootTilde);
-}
-
-function transformText(content, replacements, vars) {
-  let result = content;
-  for (const replacement of replacements) {
-    const from = replacement.from;
-    const to = interpolateReplacement(replacement.to, vars);
-    result = result.split(from).join(to);
-  }
-  return result;
-}
-
 function isTextFile(filePath) {
   return TEXT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
@@ -153,86 +139,204 @@ function bufferEquals(a, b) {
   return a.length === b.length && a.equals(b);
 }
 
+function shouldSkipEntryName(name) {
+  return name === '.DS_Store' || name === '__pycache__';
+}
+
+function walkFiles(rootDir, currentDir = rootDir) {
+  if (!fs.existsSync(currentDir)) {
+    return [];
+  }
+
+  const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    if (shouldSkipEntryName(entry.name)) {
+      continue;
+    }
+
+    const absolutePath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkFiles(rootDir, absolutePath));
+      continue;
+    }
+
+    if (entry.isFile()) {
+      files.push(path.relative(rootDir, absolutePath));
+    }
+  }
+
+  return files.sort();
+}
+
+function countTopLevelDirectories(relativePaths) {
+  const entries = new Set();
+  for (const relativePath of relativePaths) {
+    const topLevelEntry = relativePath.split(path.sep)[0];
+    if (topLevelEntry) {
+      entries.add(topLevelEntry);
+    }
+  }
+  return entries.size;
+}
+
 function ensureBackup(originalPath, targetRoot, backupRoot, dryRun) {
   if (!fs.existsSync(originalPath) || dryRun) {
     return;
   }
+
   const relativePath = path.relative(targetRoot, originalPath);
   const backupPath = path.join(backupRoot, relativePath);
   if (fs.existsSync(backupPath)) {
     return;
   }
+
   ensureDir(path.dirname(backupPath), false);
   fs.copyFileSync(originalPath, backupPath);
 }
 
-function writeTextFile(srcPath, destPath, options) {
-  const sourceMode = fs.statSync(srcPath).mode;
-  const source = fs.readFileSync(srcPath, 'utf-8');
-  const transformed = transformText(source, options.replacements, options.vars);
+function writeAsset(asset, options) {
+  const sourceMode = fs.statSync(asset.srcPath).mode;
+  const source = fs.readFileSync(asset.srcPath);
 
-  if (fs.existsSync(destPath)) {
-    const current = fs.readFileSync(destPath, 'utf-8');
-    if (current === transformed) {
+  if (fs.existsSync(asset.destPath)) {
+    const current = fs.readFileSync(asset.destPath);
+    const isSame = isTextFile(asset.srcPath)
+      ? current.toString('utf-8') === source.toString('utf-8')
+      : bufferEquals(current, source);
+
+    if (isSame) {
       options.summary.skipped += 1;
       return;
     }
-    ensureBackup(destPath, options.targetRootAbs, options.backupRoot, options.dryRun);
+
+    ensureBackup(asset.destPath, options.targetRootAbs, options.backupRoot, options.dryRun);
     options.summary.updated += 1;
   } else {
     options.summary.created += 1;
   }
 
   if (!options.dryRun) {
-    ensureDir(path.dirname(destPath), false);
-    fs.writeFileSync(destPath, transformed, 'utf-8');
-    fs.chmodSync(destPath, sourceMode);
+    ensureDir(path.dirname(asset.destPath), false);
+    fs.copyFileSync(asset.srcPath, asset.destPath);
+    fs.chmodSync(asset.destPath, sourceMode);
   }
 }
 
-function writeBinaryFile(srcPath, destPath, options) {
-  const sourceMode = fs.statSync(srcPath).mode;
-  const source = fs.readFileSync(srcPath);
-
-  if (fs.existsSync(destPath)) {
-    const current = fs.readFileSync(destPath);
-    if (bufferEquals(current, source)) {
-      options.summary.skipped += 1;
-      return;
-    }
-    ensureBackup(destPath, options.targetRootAbs, options.backupRoot, options.dryRun);
-    options.summary.updated += 1;
-  } else {
-    options.summary.created += 1;
+function resolveBundleConfig(runtime, bundleRoot, targetRootAbs) {
+  if (runtime === 'codex') {
+    return {
+      runtime,
+      displayName: 'Codex',
+      bundleRoot,
+      targetRootAbs,
+      contextFilename: 'AGENTS.md',
+      agentsSourceDir: path.join(bundleRoot, 'agents'),
+      skillsSourceDir: path.join(bundleRoot, 'skills'),
+      templatesSourceDir: path.join(bundleRoot, 'planner-templates'),
+      contextTarget: path.join(targetRootAbs, 'AGENTS.md'),
+      agentsTargetDir: path.join(targetRootAbs, 'agents'),
+      skillsTargetDir: path.join(targetRootAbs, 'skills'),
+      templatesTargetDir: path.join(targetRootAbs, 'planner-templates'),
+      agentExtension: '.toml',
+      agentFormat: 'toml',
+    };
   }
 
-  if (!options.dryRun) {
-    ensureDir(path.dirname(destPath), false);
-    fs.copyFileSync(srcPath, destPath);
-    fs.chmodSync(destPath, sourceMode);
+  if (runtime === 'claude') {
+    return {
+      runtime,
+      displayName: 'Claude Code',
+      bundleRoot,
+      targetRootAbs,
+      contextFilename: 'CLAUDE.md',
+      agentsSourceDir: path.join(bundleRoot, 'agents'),
+      skillsSourceDir: path.join(bundleRoot, 'skills'),
+      templatesSourceDir: path.join(bundleRoot, 'planner-templates'),
+      contextTarget: path.join(targetRootAbs, 'CLAUDE.md'),
+      agentsTargetDir: path.join(targetRootAbs, 'agents'),
+      skillsTargetDir: path.join(targetRootAbs, 'plugins', 'marketplaces', 'ai-harness', 'skills'),
+      templatesTargetDir: path.join(targetRootAbs, 'planner-templates'),
+      agentExtension: '.md',
+      agentFormat: 'markdown-frontmatter',
+    };
+  }
+
+  throw new Error(`지원하지 않는 runtime입니다: ${runtime}`);
+}
+
+function validateBundle(bundleConfig) {
+  const requiredPaths = [
+    path.join(bundleConfig.bundleRoot, bundleConfig.contextFilename),
+    bundleConfig.agentsSourceDir,
+    bundleConfig.skillsSourceDir,
+  ];
+
+  for (const requiredPath of requiredPaths) {
+    if (!fs.existsSync(requiredPath)) {
+      throw new Error(`bundle 자산이 없습니다: ${requiredPath}`);
+    }
   }
 }
 
-function copyDirectory(srcDir, destDir, options) {
-  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === '.DS_Store' || entry.name === '__pycache__') {
-      continue;
-    }
-    const srcPath = path.join(srcDir, entry.name);
-    const destPath = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      copyDirectory(srcPath, destPath, options);
-      continue;
-    }
-    if (entry.isFile()) {
-      if (isTextFile(srcPath)) {
-        writeTextFile(srcPath, destPath, options);
-      } else {
-        writeBinaryFile(srcPath, destPath, options);
-      }
-    }
+function getPostInstallActions(bundleConfig) {
+  if (bundleConfig.runtime !== 'claude') {
+    return [];
   }
+
+  return [
+    {
+      type: 'run-skill',
+      skill: 'refresh-planning-subagents',
+      target: path.join(bundleConfig.skillsTargetDir, 'refresh-planning-subagents', 'SKILL.md'),
+      reason: 'Claude Code에서는 planner agents를 복사한 뒤 native subagent 자산을 한 번 더 정리해야 할 수 있습니다.',
+      prompt: '설치된 ~/.claude/agents/*.md 를 기준으로 ai-harness planner subagents를 다시 생성하거나 보정해줘.',
+    },
+  ];
+}
+
+function buildInstallPlan(bundleRoot, runtime, targetRootAbs) {
+  const bundleConfig = resolveBundleConfig(runtime, bundleRoot, targetRootAbs);
+  validateBundle(bundleConfig);
+
+  const agentFiles = walkFiles(bundleConfig.agentsSourceDir);
+  const skillFiles = walkFiles(bundleConfig.skillsSourceDir);
+  const templateFiles = walkFiles(bundleConfig.templatesSourceDir);
+  const assets = [
+    {
+      kind: 'context',
+      srcPath: path.join(bundleConfig.bundleRoot, bundleConfig.contextFilename),
+      destPath: bundleConfig.contextTarget,
+      relativeTargetPath: path.basename(bundleConfig.contextTarget),
+    },
+    ...agentFiles.map((relativePath) => ({
+      kind: 'agent',
+      srcPath: path.join(bundleConfig.agentsSourceDir, relativePath),
+      destPath: path.join(bundleConfig.agentsTargetDir, relativePath),
+      relativeTargetPath: path.join('agents', relativePath),
+    })),
+    ...skillFiles.map((relativePath) => ({
+      kind: 'skill',
+      srcPath: path.join(bundleConfig.skillsSourceDir, relativePath),
+      destPath: path.join(bundleConfig.skillsTargetDir, relativePath),
+      relativeTargetPath: path.join('skills', relativePath),
+    })),
+    ...templateFiles.map((relativePath) => ({
+      kind: 'template',
+      srcPath: path.join(bundleConfig.templatesSourceDir, relativePath),
+      destPath: path.join(bundleConfig.templatesTargetDir, relativePath),
+      relativeTargetPath: path.join('planner-templates', relativePath),
+    })),
+  ];
+
+  return {
+    bundleConfig,
+    assets,
+    sourceAgentCount: countTopLevelDirectories(agentFiles),
+    sourceSkillCount: countTopLevelDirectories(skillFiles),
+    sourceTemplateCount: templateFiles.length,
+  };
 }
 
 function hasAtlassianCredentials() {
@@ -244,92 +348,55 @@ function hasAtlassianCredentials() {
   return /Atlassian/i.test(content);
 }
 
-function inspect(bundleRoot, runtimeConfig, targetRootAbs, runtime, detectionReason) {
-  const commonRoot = path.join(bundleRoot, 'common');
-  const templatesRoot = path.join(bundleRoot, 'templates');
-  const skills = listDirectories(path.join(commonRoot, 'skills'));
-  const agents = listFiles(path.join(commonRoot, 'agents'), '.toml');
-  const templates = listFiles(templatesRoot);
-  const targetSkills = listDirectories(path.join(targetRootAbs, runtimeConfig.skillsTargetDir));
-  const targetAgents = listFiles(path.join(targetRootAbs, runtimeConfig.agentsTargetDir), '.toml');
-  const targetTemplates = runtimeConfig.templatesTargetDir
-    ? listFiles(path.join(targetRootAbs, runtimeConfig.templatesTargetDir))
-    : [];
+function inspect(bundleRoot, runtime, targetRootAbs, detectionReason) {
+  const plan = buildInstallPlan(bundleRoot, runtime, targetRootAbs);
+  const { bundleConfig } = plan;
 
   return {
     runtime,
     detectionReason,
-    displayName: runtimeConfig.displayName,
+    displayName: bundleConfig.displayName,
     bundleRoot,
     targetRoot: targetRootAbs,
-    contextTarget: path.join(targetRootAbs, runtimeConfig.contextTarget),
-    sourceSkillCount: skills.length,
-    sourceAgentCount: agents.length,
-    sourceTemplateCount: templates.length,
-    installedSkillCount: targetSkills.length,
-    installedAgentCount: targetAgents.length,
-    installedTemplateCount: targetTemplates.length,
+    contextTarget: bundleConfig.contextTarget,
+    agentsTargetDir: bundleConfig.agentsTargetDir,
+    skillsTargetDir: bundleConfig.skillsTargetDir,
+    agentFormat: bundleConfig.agentFormat,
+    sourceSkillCount: plan.sourceSkillCount,
+    sourceAgentCount: plan.sourceAgentCount,
+    sourceTemplateCount: plan.sourceTemplateCount,
+    installedSkillCount: listDirectories(bundleConfig.skillsTargetDir).length,
+    installedAgentCount: listFiles(bundleConfig.agentsTargetDir, bundleConfig.agentExtension).length,
+    installedTemplateCount: listFiles(bundleConfig.templatesTargetDir).length,
     atlassianReady: hasAtlassianCredentials(),
+    postInstallActions: getPostInstallActions(bundleConfig),
   };
 }
 
-function install(bundleRoot, runtimeConfig, targetRootAbs, runtime, detectionReason, dryRun) {
+function install(bundleRoot, runtime, targetRootAbs, detectionReason, dryRun) {
+  const plan = buildInstallPlan(bundleRoot, runtime, targetRootAbs);
   const timestamp = new Date().toISOString().replaceAll(':', '').replaceAll('.', '');
-  const commonRoot = path.join(bundleRoot, 'common');
-  const vars = {
-    targetRootAbs,
-    targetRootTilde: path.join('~', runtimeConfig.homeDirName),
-  };
   const summary = { created: 0, updated: 0, skipped: 0 };
   const backupRoot = path.join(targetRootAbs, 'backups', `planner-bundle-${timestamp}`);
 
-  const options = {
-    backupRoot,
-    dryRun,
-    replacements: runtimeConfig.replacements || [],
-    summary,
-    targetRootAbs,
-    vars,
-  };
-
   ensureDir(targetRootAbs, dryRun);
 
-  writeTextFile(
-    path.join(commonRoot, runtimeConfig.contextSource),
-    path.join(targetRootAbs, runtimeConfig.contextTarget),
-    options,
-  );
-
-  copyDirectory(
-    path.join(commonRoot, 'agents'),
-    path.join(targetRootAbs, runtimeConfig.agentsTargetDir),
-    options,
-  );
-
-  copyDirectory(
-    path.join(commonRoot, 'skills'),
-    path.join(targetRootAbs, runtimeConfig.skillsTargetDir),
-    options,
-  );
-
-  if (runtimeConfig.templatesTargetDir) {
-    copyDirectory(
-      path.join(bundleRoot, 'templates'),
-      path.join(targetRootAbs, runtimeConfig.templatesTargetDir),
-      options,
-    );
+  for (const asset of plan.assets) {
+    writeAsset(asset, {
+      backupRoot,
+      dryRun,
+      summary,
+      targetRootAbs,
+    });
   }
 
-  const inspection = inspect(bundleRoot, runtimeConfig, targetRootAbs, runtime, detectionReason);
   return {
-    ...inspection,
+    ...inspect(bundleRoot, runtime, targetRootAbs, detectionReason),
     dryRun,
     summary,
     backupRoot: summary.updated > 0 ? backupRoot : null,
   };
 }
-
-export { detectRuntime, transformText, parseArgs, isTextFile };
 
 function usage() {
   console.error('사용법:');
@@ -338,60 +405,65 @@ function usage() {
   process.exit(1);
 }
 
+export {
+  buildInstallPlan,
+  detectRuntime,
+  isTextFile,
+  parseArgs,
+  resolveBundleConfig,
+};
+
 const isCLI = process.argv[1] && url.fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (!isCLI) {
   // imported as module — skip CLI execution
 } else {
+  const args = parseArgs(process.argv.slice(2));
+  const command = args._[0];
 
-const args = parseArgs(process.argv.slice(2));
-const command = args._[0];
-
-if (!command) {
-  usage();
-}
-
-const scriptDir = path.dirname(url.fileURLToPath(import.meta.url));
-const bundleRoot = args['bundle-root']
-  ? path.resolve(args['bundle-root'])
-  : path.resolve(scriptDir, '..', 'teams', 'planning', 'bundle');
-const detectedRuntime = detectRuntime(args.runtime || 'auto', scriptDir);
-const runtime = detectedRuntime.runtime;
-const runtimeConfig = loadRuntimeConfig(bundleRoot, runtime);
-const targetRootValue = args['target-root'] || args['target-dir'];
-const targetRootAbs = targetRootValue
-  ? path.resolve(targetRootValue)
-  : path.join(os.homedir(), runtimeConfig.homeDirName);
-
-try {
-  if (command === 'inspect') {
-    console.log(JSON.stringify(
-      inspect(bundleRoot, runtimeConfig, targetRootAbs, runtime, detectedRuntime.detectionReason),
-      null,
-      2,
-    ));
-    process.exit(0);
+  if (!command) {
+    usage();
   }
 
-  if (command === 'install') {
-    console.log(JSON.stringify(
-      install(
-        bundleRoot,
-        runtimeConfig,
-        targetRootAbs,
-        runtime,
-        detectedRuntime.detectionReason,
-        Boolean(args['dry-run']),
-      ),
-      null,
-      2,
-    ));
-    process.exit(0);
+  const scriptDir = path.dirname(url.fileURLToPath(import.meta.url));
+  const detectedRuntime = detectRuntime(args.runtime || 'auto', scriptDir);
+  const runtime = detectedRuntime.runtime;
+  const defaultBundleRoot = path.resolve(scriptDir, '..', 'teams', 'planning', `bundle-${runtime}`);
+  const bundleRoot = args['bundle-root']
+    ? path.resolve(args['bundle-root'])
+    : defaultBundleRoot;
+  const targetRootValue = args['target-root'] || args['target-dir'];
+  const targetRootAbs = targetRootValue
+    ? path.resolve(targetRootValue)
+    : path.join(os.homedir(), runtime === 'codex' ? '.codex' : '.claude');
+
+  try {
+    if (command === 'inspect') {
+      console.log(JSON.stringify(
+        inspect(bundleRoot, runtime, targetRootAbs, detectedRuntime.detectionReason),
+        null,
+        2,
+      ));
+      process.exit(0);
+    }
+
+    if (command === 'install') {
+      console.log(JSON.stringify(
+        install(
+          bundleRoot,
+          runtime,
+          targetRootAbs,
+          detectedRuntime.detectionReason,
+          Boolean(args['dry-run']),
+        ),
+        null,
+        2,
+      ));
+      process.exit(0);
+    }
+
+    usage();
+  } catch (error) {
+    console.error(`오류: ${error.message}`);
+    process.exit(1);
   }
-
-  usage();
-} catch (error) {
-  console.error(`오류: ${error.message}`);
-  process.exit(1);
 }
-
-} // end isCLI

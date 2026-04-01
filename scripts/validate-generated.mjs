@@ -13,7 +13,7 @@ import path from 'path';
  *   1. frontmatter 필수 필드 (name, description)
  *   2. 에이전트 파일 < 300줄
  *   3. 스킬 파일 < 500줄
- *   4. _managed_by: ai-harness 존재
+ *   4. Claude Code 미지원 frontmatter 필드 없음
  *   5. .claude/agents/와 .ai-harness/agents/ 동기화
  *
  * 출력 (JSON):
@@ -67,9 +67,15 @@ function validateFile(filePath, type) {
     issues.push({ level: 'error', file: filePath, message: 'frontmatter에 description 필드가 없음' });
   }
 
-  // _managed_by 확인
-  if (!content.includes('_managed_by: ai-harness')) {
-    issues.push({ level: 'warning', file: filePath, message: '_managed_by: ai-harness 마커가 없음' });
+  const unsupportedFields = ['_managed_by', 'sandbox_mode', 'nickname_candidates'];
+  for (const field of unsupportedFields) {
+    if (new RegExp(`^${field}:`, 'm').test(content)) {
+      issues.push({
+        level: 'warning',
+        file: filePath,
+        message: `Claude Code subagent frontmatter 미지원 필드가 남아 있음: ${field}`,
+      });
+    }
   }
 
   // 크기 제한

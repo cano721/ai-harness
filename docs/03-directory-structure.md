@@ -38,17 +38,17 @@ ai-harness/
 │   ├── devops/
 │   ├── frontend/
 │   ├── planning/
-│   │   ├── README.md                 # legacy와 bundle 역할 설명
-│   │   ├── CLAUDE.md                 # legacy planning context
-│   │   ├── skills/                   # legacy planning draft skill
-│   │   └── bundle/                   # planner mode의 실제 설치 소스
-│   │       ├── manifest.json         # bundle 설명, 제외 목록, 지원 runtime
-│   │       ├── common/               # runtime 공통 planner 자산
-│   │       │   ├── AGENTS.md
-│   │       │   ├── agents/
-│   │       │   └── skills/
-│   │       ├── runtimes/             # codex.json / claude.json
-│   │       └── templates/            # policy template 등 planner 보조 파일
+│   │   ├── README.md                 # planner bundle 구조 설명
+│   │   ├── bundle-codex/             # Codex용 실제 배포 번들
+│   │   │   ├── AGENTS.md
+│   │   │   ├── agents/
+│   │   │   ├── skills/
+│   │   │   └── planner-templates/
+│   │   └── bundle-claude/            # Claude Code용 실제 배포 번들
+│   │       ├── CLAUDE.md
+│   │       ├── agents/
+│   │       ├── skills/
+│   │       └── planner-templates/
 │   └── qa/
 │
 ├── templates/                        # 프로젝트 로컬 설정 템플릿
@@ -74,47 +74,38 @@ ai-harness/
 
 backend 같은 개발 팀은 현재 프로젝트에 `.ai-harness/teams/{team}` 형태로 복사되어 사용된다. 즉, 레포 안 `teams/{team}`는 템플릿 소스이고 실제 사용 위치는 프로젝트 내부다.
 
-### 3. `teams/planning/`의 이중 구조
+### 3. `teams/planning/`의 runtime별 번들 구조
 
-planning은 다른 팀과 다르게 두 층으로 관리한다.
+planning은 runtime별 실제 배포 번들을 분리해서 관리한다.
 
-- `teams/planning/CLAUDE.md`, `teams/planning/skills/`
-  - 기존 초안 자산
-  - 아직 검토가 끝나지 않은 legacy source
-  - planner mode의 설치 소스로 사용하지 않는다
-- `teams/planning/bundle/`
-  - planner mode의 공식 설치 소스
-  - Codex와 Claude Code 양쪽에 맞춰 전역 설치된다
+- `teams/planning/bundle-codex/`
+  - Codex용 planner bundle
+  - `AGENTS.md`, `agents/*.toml`, `skills/`, `planner-templates/`를 포함한다
+- `teams/planning/bundle-claude/`
+  - Claude Code용 planner bundle
+  - `CLAUDE.md`, `agents/*.md`, `skills/`, `planner-templates/`를 포함한다
 
 ## planner bundle 상세
 
-### `teams/planning/bundle/common/`
+### `teams/planning/bundle-codex/`
 
-planner mode가 실제로 설치하는 공통 자산이다.
+Codex 전용 실제 배포 번들이다.
 
 - `AGENTS.md`
 - `agents/*.toml`
 - `skills/*`
+- `planner-templates/*`
 
-여기에는 PRD, user story, Jira, checklist 같은 planner 작업 스킬과, 바이브코딩까지 고려한 agent 설정이 함께 들어간다.
+### `teams/planning/bundle-claude/`
 
-### `teams/planning/bundle/runtimes/`
+Claude Code 전용 실제 배포 번들이다.
 
-runtime adapter 설정이다.
+- `CLAUDE.md`
+- `agents/*.md`
+- `skills/*`
+- `planner-templates/*`
 
-- `codex.json`
-  - 대상: `~/.codex`
-  - 컨텍스트 파일: `AGENTS.md`
-- `claude.json`
-  - 대상: `~/.claude`
-  - 컨텍스트 파일: `CLAUDE.md`
-  - 문서/경로 표현을 Claude 방식으로 치환
-
-`install-planner-bundle.mjs`는 이 설정을 읽어 같은 공통 자산을 Codex/Claude 규칙에 맞게 설치한다.
-
-### `teams/planning/bundle/templates/`
-
-planner 전용 보조 템플릿이다. 현재는 정책 문서 초안 작성을 위한 `policy-template.md`가 포함된다.
+`install-planner-bundle.mjs`는 선택된 runtime에 따라 해당 번들을 직접 설치한다.
 
 ## 설치 스코프
 
@@ -130,11 +121,10 @@ planner 전용 보조 템플릿이다. 현재는 정책 문서 초안 작성을 
 | 스크립트 | 역할 |
 |---------|------|
 | `scripts/copy-team-resources.mjs` | backend 등 로컬 팀 자산 복사 |
-| `scripts/install-planner-bundle.mjs` | planner bundle inspect/install, runtime 변환, 백업 처리 |
+| `scripts/install-planner-bundle.mjs` | planner bundle inspect/install, runtime별 번들 선택, 백업 처리 |
 | `scripts/register-hooks.mjs` | 보안 Hook 등록/해제 |
 
 ## 유지보수 원칙
 
-1. planner 관련 새 공식 자산은 `teams/planning/bundle/`에 추가한다.
-2. `teams/planning/skills/`와 `teams/planning/CLAUDE.md`는 legacy로 유지하며, 검토 전까지 shipping source로 쓰지 않는다.
-3. Codex/Claude 차이는 공통 자산을 복제해서 관리하지 말고 `runtimes/*.json`의 변환 규칙으로 흡수한다.
+1. planner 관련 새 공식 자산은 `teams/planning/bundle-codex/` 또는 `teams/planning/bundle-claude/`에 추가한다.
+2. Codex와 Claude의 포맷 차이는 설치 시점 변환보다 각 runtime 번들에서 명시적으로 관리한다.

@@ -33,9 +33,9 @@
 - **design** — 디자인 시스템/접근성
 
 ### planning 팀 특이사항
-- planning 팀은 `teams/planning/bundle/` 을 설치 소스로 사용하며, `teams/planning/skills/` 와 `teams/planning/CLAUDE.md` 는 legacy 초안으로 취급한다
-- planning bundle은 runtime-aware 자산이다. Codex에는 `AGENTS.md`, Claude Code에는 `CLAUDE.md` 형태로 설치된다
-- planning은 runtime(Codex/Claude)에 맞게 글로벌 설치하고, backend/frontend는 프로젝트 로컬 세팅한다
+- planning 팀은 `teams/planning/bundle-codex/` 와 `teams/planning/bundle-claude/` 두 개의 실배포 번들을 설치 소스로 사용한다
+- Codex에는 `bundle-codex/` 의 `AGENTS.md`, `agents/*.toml`, `skills/`, `planner-templates/` 가 설치되고, Claude Code에는 `bundle-claude/` 의 `CLAUDE.md`, `agents/*.md`, `skills/`, `planner-templates/` 가 설치된다
+- planning은 사용자가 고른 runtime(Codex/Claude)에 맞는 번들을 글로벌 설치하고, backend/frontend는 프로젝트 로컬 세팅한다
 
 ### 글로벌 스킬
 - test-scenario, regression, smoke-test, deploy-check, rollback-plan, infra-plan, onboard, handoff
@@ -79,7 +79,7 @@
 
 ## init 플로우
 - /harness-init 실행 시 planning과 개발팀의 분기가 다르다
-- planning: runtime 감지 → `teams/planning/bundle/` 기반 글로벌 설치
+- planning: 사용자 runtime 확인 → `teams/planning/bundle-codex/` 또는 `teams/planning/bundle-claude/` 기반 글로벌 설치
 - 개발팀: 프로젝트 분석 → 컨벤션 → Hook → 에이전트 → 스킬 → 워크플로우 → 검증
 - 모든 단계에서 사용자에게 확인받은 후 진행
 
