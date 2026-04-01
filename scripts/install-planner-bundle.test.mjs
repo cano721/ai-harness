@@ -83,7 +83,7 @@ describe('detectRuntime', () => {
     restoreEnv(envBackup);
   });
 
-  it('CODEX_SHELL만 있으면 codex로 감지하지 않는다', () => {
+  it('CODEX_SHELL만 있으면 codex-shell-fallback으로 감지한다', () => {
     const envBackup = { ...process.env };
     delete process.env.CLAUDECODE;
     delete process.env.CLAUDE_CONFIG_DIR;
@@ -92,9 +92,23 @@ describe('detectRuntime', () => {
     delete process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
     process.env.CODEX_SHELL = '1';
 
-    const result = detectRuntime(undefined, '/home/user/.claude/scripts');
+    const result = detectRuntime(undefined, '/tmp');
+    assert.equal(result.runtime, 'codex');
+    assert.equal(result.detectionReason, 'env:codex-shell-fallback');
+
+    restoreEnv(envBackup);
+  });
+
+  it('CODEX_SHELL이 있어도 Claude 환경 변수가 우선한다', () => {
+    const envBackup = { ...process.env };
+    process.env.CLAUDECODE = '1';
+    delete process.env.CODEX_THREAD_ID;
+    delete process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+    process.env.CODEX_SHELL = '1';
+
+    const result = detectRuntime(undefined, '/tmp');
     assert.equal(result.runtime, 'claude');
-    assert.equal(result.detectionReason, 'path:.claude');
+    assert.equal(result.detectionReason, 'env:claude');
 
     restoreEnv(envBackup);
   });

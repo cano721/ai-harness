@@ -93,6 +93,13 @@ function detectRuntime(explicitRuntime, scriptPath) {
     };
   }
 
+  if (process.env.CODEX_SHELL) {
+    return {
+      runtime: 'codex',
+      detectionReason: 'env:codex-shell-fallback',
+    };
+  }
+
   if (scriptPath.includes(`${path.sep}.claude${path.sep}`)) {
     return {
       runtime: 'claude',
