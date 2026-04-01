@@ -1,0 +1,4 @@
+interface:
+  display_name: "Korean Humanizer"
+  short_description: "Rewrite Korean to sound human"
+  default_prompt: "Use korean-humanizer to rewrite the provided Korean text so it reads like a real person wrote it (less translationese, less template-like), while preserving meaning and keeping tone/honorific level consistent. Avoid inventing facts; ask for missing constraints if needed."

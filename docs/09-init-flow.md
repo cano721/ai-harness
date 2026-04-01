@@ -53,7 +53,7 @@
 | 설치 스코프 | 전역 | 프로젝트 로컬 |
 | 설치 대상 | `~/.codex` 또는 `~/.claude` | `./.ai-harness/` |
 | 프로젝트 분석 | 하지 않음 | 수행 |
-| 설치 소스 | `teams/planning/bundle/` | `teams/backend/` |
+| 설치 소스 | `teams/planning/bundle-codex/` 또는 `teams/planning/bundle-claude/` | `teams/backend/` |
 | 컨텍스트 파일 | `AGENTS.md` 또는 `CLAUDE.md` | `.ai-harness/teams/backend/CLAUDE.md` |
 
 ## 1단계: 팀 선택
@@ -120,6 +120,9 @@ node scripts/install-planner-bundle.mjs inspect --runtime auto
   "detectionReason": "env:claude",
   "targetRoot": "/Users/.../.claude",
   "contextTarget": "/Users/.../.claude/CLAUDE.md",
+  "agentsTargetDir": "/Users/.../.claude/agents",
+  "skillsTargetDir": "/Users/.../.claude/plugins/marketplaces/ai-harness/skills",
+  "agentFormat": "markdown-frontmatter",
   "sourceSkillCount": 26,
   "sourceAgentCount": 16,
   "sourceTemplateCount": 1,
@@ -135,6 +138,8 @@ node scripts/install-planner-bundle.mjs inspect --runtime auto
   detection: env:claude
   target: ~/.claude
   context: ~/.claude/CLAUDE.md
+  agents: ~/.claude/agents/*.md
+  skills: ~/.claude/plugins/marketplaces/ai-harness/skills/
   agents: 16개
   skills: 26개
   templates: 1개
@@ -153,22 +158,22 @@ node scripts/install-planner-bundle.mjs install --runtime auto
 
 설치 규칙:
 
-1. 소스는 항상 `teams/planning/bundle/`을 사용한다.
-2. `teams/planning/skills/`와 `teams/planning/CLAUDE.md`는 legacy 초안이므로 설치 소스로 사용하지 않는다.
-3. Codex일 때:
-   - `AGENTS.md`
-   - `agents/`
-   - `skills/`
-   - `planner-templates/`
-4. Claude Code일 때:
-   - `CLAUDE.md`
-   - `agents/`
-   - `skills/`
-   - `planner-templates/`
-5. 텍스트 자산은 runtime 규칙에 맞게 자동 변환한다.
-   - `AGENTS.md -> CLAUDE.md`
-   - `~/.codex -> ~/.claude`
-   - Codex 관련 문구 -> Claude Code 문구
+1. runtime에 따라 소스를 선택한다.
+   - Codex: `teams/planning/bundle-codex/`
+   - Claude Code: `teams/planning/bundle-claude/`
+2. Codex일 때:
+   - `bundle-codex/AGENTS.md`
+   - `bundle-codex/agents/*.toml`
+   - `bundle-codex/skills/`
+   - `bundle-codex/planner-templates/`
+3. Claude Code일 때:
+   - `bundle-claude/CLAUDE.md`
+   - `bundle-claude/agents/*.md`
+   - `bundle-claude/skills/`
+   - `bundle-claude/planner-templates/`
+4. 설치 위치는 runtime에 따라 다르다.
+   - Codex skill: `~/.codex/skills/`
+   - Claude skill: `~/.claude/plugins/marketplaces/ai-harness/skills/`
 6. 기존 파일이 다르면 `backups/planner-bundle-{timestamp}/` 아래에 백업 후 덮어쓴다.
 
 ### 5-A단계: readiness check
@@ -302,6 +307,6 @@ planning bundle에 포함되는 대표 자산은 다음과 같다.
 
 ## 유지보수 메모
 
-1. planning 관련 공식 자산은 `teams/planning/bundle/`에만 추가한다.
+1. planning 관련 공식 자산은 `teams/planning/bundle-codex/` 또는 `teams/planning/bundle-claude/`에 추가한다.
 2. planning legacy 자산은 참조용으로 남겨두되 init 소스로 사용하지 않는다.
 3. Claude/Codex 차이는 공통 파일을 중복 보관하지 말고 runtime 변환 규칙으로 흡수한다.

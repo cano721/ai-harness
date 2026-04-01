@@ -135,7 +135,7 @@ claude plugin install ai-harness
 초기화 흐름:
 
 1. **팀 선택** — planning / backend 등 팀 선택
-2. **planning** — 현재 runtime 감지 후 `teams/planning/bundle/`을 글로벌 위치에 설치
+2. **planning** — 현재 runtime 감지 후 `teams/planning/bundle-codex/` 또는 `teams/planning/bundle-claude/`를 글로벌 위치에 설치
    - 설치 전 `inspect`로 runtime, 대상 경로, 설치 개수를 먼저 보여줍니다.
    - 설치 중 텍스트 자산은 runtime에 맞게 자동 변환됩니다. 예: `AGENTS.md → CLAUDE.md`, `~/.codex → ~/.claude`
 3. **backend** — 보안 Hook 확인 후 현재 프로젝트 분석 및 로컬 `.ai-harness/` 세팅
@@ -198,12 +198,11 @@ claude plugin install ai-harness
 - `.ai-harness/teams/{team}/skills/convention-{team}.md` — 팀별 코드 스타일
 - `.ai-harness/teams/{team}/CLAUDE.md` — 팀별 최소 규칙 + 스킬 참조
 
-planning 팀은 로컬 프로젝트 대신 `teams/planning/bundle/`을 설치 소스로 사용합니다:
+planning 팀은 로컬 프로젝트 대신 runtime별 planner bundle을 설치 소스로 사용합니다:
 
-- `teams/planning/skills/` 와 `teams/planning/CLAUDE.md` 는 아직 검토 중인 legacy planning 자산
-- `teams/planning/bundle/common/` 은 실제 설치되는 planner bundle
-- `teams/planning/bundle/runtimes/` 는 Codex/Claude별 파일명과 경로 매핑 규칙
-- `teams/planning/README.md` 는 legacy와 bundle의 역할 분리를 설명하는 planner 전용 안내서
+- `teams/planning/bundle-codex/` 는 Codex용 실제 배포 번들
+- `teams/planning/bundle-claude/` 는 Claude Code용 실제 배포 번들
+- `teams/planning/README.md` 는 runtime별 planner bundle 구조를 설명하는 planner 전용 안내서
 
 ## Hook 시스템
 

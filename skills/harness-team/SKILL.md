@@ -20,7 +20,7 @@ description: 팀을 추가/수정/제거하거나 목록을 표시합니다
 인프라/배포 관련 기능(infra-change-review, deploy-check 등)은 글로벌로 모든 팀에 자동 적용됩니다.
 
 - planning 요청 시: "planning 팀은 /harness-init 으로 글로벌 planner bundle을 설치합니다." 안내
-- planning 관련 파일을 직접 수정해야 하면 `teams/planning/bundle/`을 기준으로 작업하고, `teams/planning/skills/` 와 `teams/planning/CLAUDE.md` 는 legacy 초안으로 취급한다
+- planning 관련 파일을 직접 수정해야 하면 `teams/planning/bundle-codex/`, `teams/planning/bundle-claude/`를 기준으로 작업한다
 </Available_Teams>
 
 <Steps>
