@@ -8,19 +8,37 @@ context:
     - ".ai-harness/teams/{team}/skills/convention-{team}.md"
 
 phases:
+  - name: cleanup
+    agent: "{project}-developer"
+    description: "리팩토링 전 죽은 코드 정리 (Step 0)"
+    steps:
+      - "대상 파일 중 300 LOC 이상인 파일 식별"
+      - "미사용 imports, 미사용 exports, 미사용 변수, 디버그 로그 제거"
+      - "정리 결과를 별도 커밋으로 분리"
+    output: "cleanup-result"
+    skip_condition: "max_file_loc < 300"
+
   - name: plan
     agent: "{project}-architect"
     description: "기준선 테스트 확보 + 변경 계획 수립"
     steps:
       - "기존 테스트 전체 실행 → 기준선 확보"
       - "변경 범위와 방법 설계"
-      - "사용자에게 계획 보고"
+      - "Phase별 최대 5개 파일로 분할 계획"
+      - "사용자에게 계획 보고 → 승인 후 진행"
     output: "refactor-plan"
+    approval_gate: true
 
   - name: implement
     agent: "{project}-developer"
-    description: "작은 단위로 수정 → 각 단계마다 테스트 확인"
+    description: "Phase별로 수정 → 각 Phase마다 테스트 확인 → 승인 후 다음 Phase"
     input: "refactor-plan"
+    max_files_per_phase: 5
+    steps:
+      - "Phase별 대상 파일 선정 (최대 5개)"
+      - "구조 개선 수정"
+      - "테스트 실행으로 기능 변경 없음 확인"
+      - "Phase 완료 시 검증 후 다음 Phase 진행"
     output: "refactor-result"
 
   - name: review

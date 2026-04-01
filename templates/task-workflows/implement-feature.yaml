@@ -16,8 +16,9 @@ phases:
 
   - name: implement
     agent: "{project}-developer"
-    description: "컨벤션에 맞게 코드 구현 + 테스트 작성"
+    description: "컨벤션에 맞게 코드 구현 + 테스트 작성 (Phase별 최대 5파일)"
     input: "design-brief"
+    max_files_per_phase: 5
     steps:
       - "Entity/모델 생성"
       - "Repository/데이터 계층 생성"
@@ -25,6 +26,7 @@ phases:
       - "Service 비즈니스 로직"
       - "Controller/엔드포인트"
       - "테스트 작성"
+      - "Phase 완료 시 검증 후 다음 Phase 진행"
     output: "implementation"
 
   - name: review

@@ -15,6 +15,7 @@ phases:
       - "컨벤션 체크리스트 기반 검토"
       - "아키텍처 경계 위반 확인"
       - "보안 취약점 스캔"
+      - "이름 변경(rename)이 포함된 경우 다중 검색 검증"
       - "심각도별 이슈 분류 (Critical/Major/Minor)"
     output: "review-report"
 
