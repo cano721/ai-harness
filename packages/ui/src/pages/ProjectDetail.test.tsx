@@ -768,6 +768,39 @@ describe('ProjectDetail setup-first control plane', () => {
   });
 
   it('shows review blocked-again feedback in Project Detail', async () => {
+    const activityEntries = [
+      {
+        id: 'activity-review-started',
+        projectId: 'project-1',
+        eventType: 'task.started',
+        createdAt: '2026-04-02T00:08:00.000Z',
+        detail: {
+          taskId: 'task-review-blocked',
+          runId: 'run-review-blocked',
+          workflowPhase: {
+            from: 'Review',
+            to: 'Review',
+            outcome: 'advanced',
+          },
+        },
+      },
+      {
+        id: 'activity-review-blocked',
+        projectId: 'project-1',
+        eventType: 'task.failed',
+        createdAt: '2026-04-02T00:10:00.000Z',
+        detail: {
+          taskId: 'task-review-blocked',
+          runId: 'run-review-blocked',
+          workflowPhase: {
+            from: 'Review',
+            to: 'Review',
+            outcome: 'blocked',
+          },
+        },
+      },
+    ];
+
     mockBaseApi({
       analysis: {
         techStack: ['React'],
@@ -828,38 +861,29 @@ describe('ProjectDetail setup-first control plane', () => {
           },
         },
       ],
-      activity: [
-        {
-          id: 'activity-review-started',
+      activity: activityEntries,
+    });
+
+    const originalPost = vi.mocked(api.post).getMockImplementation();
+    vi.mocked(api.post).mockImplementation(async (path: string, body: unknown) => {
+      if (path === '/tasks/task-review-blocked/run') {
+        activityEntries.unshift({
+          id: 'activity-review-retry',
           projectId: 'project-1',
           eventType: 'task.started',
-          createdAt: '2026-04-02T00:08:00.000Z',
+          createdAt: '2026-04-02T00:12:00.000Z',
           detail: {
             taskId: 'task-review-blocked',
-            runId: 'run-review-blocked',
+            runId: 'run-review-retry',
             workflowPhase: {
               from: 'Review',
               to: 'Review',
               outcome: 'advanced',
             },
           },
-        },
-        {
-          id: 'activity-review-blocked',
-          projectId: 'project-1',
-          eventType: 'task.failed',
-          createdAt: '2026-04-02T00:10:00.000Z',
-          detail: {
-            taskId: 'task-review-blocked',
-            runId: 'run-review-blocked',
-            workflowPhase: {
-              from: 'Review',
-              to: 'Review',
-              outcome: 'blocked',
-            },
-          },
-        },
-      ],
+        });
+      }
+      return originalPost ? await originalPost(path, body) : undefined;
     });
 
     renderProjectDetail();
@@ -881,6 +905,7 @@ describe('ProjectDetail setup-first control plane', () => {
     eventSourceInstances[eventSourceInstances.length - 1]?.emit('done', { runId: 'run-review-blocked', exitCode: 1, timedOut: false });
     expect(await screen.findByText('run finished: exitCode 1')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Review' }));
+    expect(screen.getByText('retrying review...')).toBeTruthy();
 
     await waitFor(() => {
       expect(api.patch).toHaveBeenCalledWith('/tasks/task-review-blocked', {
@@ -904,6 +929,52 @@ describe('ProjectDetail setup-first control plane', () => {
       });
       expect(api.post).toHaveBeenCalledWith('/tasks/task-review-blocked/run', { agentId: 'agent-review' });
     });
+    await waitFor(() => {
+      expect(eventSourceInstances[eventSourceInstances.length - 1]?.url).toBe('/api/tasks/runs/run-review-retry/stream');
+    });
+    expect(await screen.findByText('Timeline Detail: started Review')).toBeTruthy();
+    expect(screen.getByText('previous runs')).toBeTruthy();
+    const previousRunButton = screen.getByRole('button', { name: 'Open previous timeline event failed Review for task Implement feature: review blocked again' });
+    expect(previousRunButton.textContent).toContain('blocked');
+    expect(previousRunButton.textContent).toContain('exitCode 1');
+    expect(previousRunButton.textContent).toContain('replaced by started Review');
+    fireEvent.click(screen.getByRole('button', { name: 'Load logs for previous timeline event failed Review for task Implement feature: review blocked again' }));
+    expect(eventSourceInstances[eventSourceInstances.length - 1]?.url).toBe('/api/tasks/runs/run-review-blocked/stream');
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to replacement timeline event started Review for task Implement feature: review blocked again' }));
+    expect(await screen.findByText('Timeline Detail: started Review')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open full timeline for task Implement feature: review blocked again' }));
+    expect(await screen.findByText('Full Timeline')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Jump to replacement full timeline event started Review for task Implement feature: review blocked again' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open run drawer for task Implement feature: review blocked again' }));
+    await screen.findByText('Run Timeline Drawer');
+    const closeDrawerButton = screen.getAllByRole('button', { name: 'Close run drawer for task Implement feature: review blocked again' }).at(-1);
+    expect(closeDrawerButton).toBeTruthy();
+    const drawer = closeDrawerButton!.parentElement?.parentElement;
+    expect(drawer).toBeTruthy();
+    const drawerScope = within(drawer!);
+    expect(drawerScope.getByText('description')).toBeTruthy();
+    expect(drawerScope.getByText('No description')).toBeTruthy();
+    expect(drawerScope.getByText('workflow')).toBeTruthy();
+    expect(drawerScope.getAllByText('Implement Feature').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('current phase')).toBeTruthy();
+    expect(drawerScope.getAllByText('Review').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('agent')).toBeTruthy();
+    expect(drawerScope.getByText('developer')).toBeTruthy();
+    expect(drawerScope.getAllByText('reviewer').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('source')).toBeTruthy();
+    expect(drawerScope.getByText('gear')).toBeTruthy();
+    expect(drawerScope.getByText('separation mode')).toBeTruthy();
+    expect(drawerScope.getByText('enforced')).toBeTruthy();
+    expect(drawerScope.getByText('phase owner')).toBeTruthy();
+    expect(drawerScope.getAllByText('reviewer').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('phase track')).toBeTruthy();
+    expect(drawerScope.getByText('workflow checklist')).toBeTruthy();
+    expect(drawerScope.getByText('No checklist items')).toBeTruthy();
+    expect(drawerScope.getByText('phase actions')).toBeTruthy();
+    expect(drawerScope.getByRole('button', { name: 'Resume task Implement feature: review blocked again from drawer' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Jump to replacement drawer timeline event started Review for task Implement feature: review blocked again' })).toBeTruthy();
+    fireEvent.click(previousRunButton);
+    expect(await screen.findByText('Timeline Detail: failed Review')).toBeTruthy();
   });
 
   it('hydrates Setup Center selection state from the URL', async () => {

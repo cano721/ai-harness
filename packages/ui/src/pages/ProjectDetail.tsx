@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useState, useRef, useEffect } from 'react';
+import { Suspense, lazy, useState, useRef, useEffect } from 'react';
 import { api } from '../api/client.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -83,6 +83,8 @@ interface Task {
 }
 
 type TaskWorkflow = NonNullable<NonNullable<Task['metadata']>['workflow']>;
+
+const RunTimelineDrawer = lazy(() => import('../components/RunTimelineDrawer.js'));
 
 interface CostByProject {
   projectId: string;
@@ -2910,10 +2912,18 @@ export function ProjectDetail() {
   const [newDocName, setNewDocName] = useState('');
   const [newDocContent, setNewDocContent] = useState('');
   const [lastApplyResult, setLastApplyResult] = useState<ProjectSetupApplyResult | null>(null);
+  const [expandedTimelineTaskIds, setExpandedTimelineTaskIds] = useState<Record<string, boolean | undefined>>({});
+  const [drawerTimelineTaskIds, setDrawerTimelineTaskIds] = useState<Record<string, boolean | undefined>>({});
   const [selectedTimelineEventIds, setSelectedTimelineEventIds] = useState<Record<string, string | undefined>>({});
+  const [timelineHistoryEventIds, setTimelineHistoryEventIds] = useState<Record<string, string[] | undefined>>({});
+  const [retrySourceTimelineEventIds, setRetrySourceTimelineEventIds] = useState<Record<string, string | undefined>>({});
+  const [supersededTimelineEventIds, setSupersededTimelineEventIds] = useState<Record<string, string[] | undefined>>({});
+  const [replacementTimelineEventIds, setReplacementTimelineEventIds] = useState<Record<string, string | undefined>>({});
   const [timelineLogsByEventId, setTimelineLogsByEventId] = useState<Record<string, string[] | undefined>>({});
   const [timelineDoneByEventId, setTimelineDoneByEventId] = useState<Record<string, { exitCode: number | null; timedOut: boolean } | undefined>>({});
   const [loadingTimelineEventId, setLoadingTimelineEventId] = useState<string | null>(null);
+  const [pendingRetryTailTaskId, setPendingRetryTailTaskId] = useState<string | null>(null);
+  const [retryingTaskIds, setRetryingTaskIds] = useState<Record<string, boolean>>({});
   const timelineStreamRefs = useRef<Record<string, EventSource | undefined>>({});
   const [setupFocusRequest, setSetupFocusRequest] = useState<{ operationIds: string[]; token: number } | undefined>(undefined);
 
@@ -3103,13 +3113,122 @@ export function ProjectDetail() {
           workflow: resumed.workflow,
         },
       });
-      return api.post(`/tasks/${task.id}/run`, { agentId: reviewer.id });
+      await api.post(`/tasks/${task.id}/run`, { agentId: reviewer.id });
+      return { taskId: task.id };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.taskId) {
+        setPendingRetryTailTaskId(result.taskId);
+      }
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['activity', id, 'task-outcomes'] });
     },
   });
+
+  const openTimelineTail = (entry: ActivityEvent) => {
+    const detail = getTaskTimelineDetail(entry);
+    if (!detail.runId) return;
+
+    timelineStreamRefs.current[entry.id]?.close();
+    setTimelineLogsByEventId((current) => ({ ...current, [entry.id]: [] }));
+    setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: undefined }));
+    setLoadingTimelineEventId(entry.id);
+
+    const es = new EventSource(`/api/tasks/runs/${detail.runId}/stream`);
+    timelineStreamRefs.current[entry.id] = es;
+
+    const appendLog = (line: string) => {
+      setTimelineLogsByEventId((current) => ({
+        ...current,
+        [entry.id]: [...(current[entry.id] ?? []), line],
+      }));
+    };
+
+    const onLogPayload = (payload: { line?: string; stream?: string; chunk?: string }) => {
+      if (payload.line) {
+        appendLog(payload.line);
+        return;
+      }
+      if (payload.chunk) {
+        appendLog(`[${payload.stream ?? 'stdout'}] ${payload.chunk}`.trimEnd());
+      }
+    };
+
+    const handleLogEvent = (event: MessageEvent<string>) => {
+      try {
+        onLogPayload(JSON.parse(event.data) as { line?: string; stream?: string; chunk?: string });
+      } catch {
+        appendLog(event.data);
+      }
+    };
+
+    const handleDone = (event?: Event) => {
+      const messageEvent = event as MessageEvent<string> | undefined;
+      if (messageEvent?.data) {
+        try {
+          const payload = JSON.parse(messageEvent.data) as { exitCode: number | null; timedOut: boolean };
+          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: payload }));
+        } catch {
+          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
+        }
+      } else {
+        setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
+      }
+      setLoadingTimelineEventId((current) => (current === entry.id ? null : current));
+      timelineStreamRefs.current[entry.id]?.close();
+      delete timelineStreamRefs.current[entry.id];
+    };
+
+    es.onmessage = handleLogEvent;
+    es.onerror = handleDone;
+    if ('addEventListener' in es) {
+      es.addEventListener('log', handleLogEvent as EventListener);
+      es.addEventListener('done', handleDone as EventListener);
+    }
+    setLoadingTimelineEventId(null);
+  };
+
+  useEffect(() => {
+    if (!pendingRetryTailTaskId) return;
+    const retryEvent = projectActivity.find((entry) => (
+      entry.detail.taskId === pendingRetryTailTaskId
+      && entry.eventType === 'task.started'
+      && isReviewTimelineEntry(entry)
+    ));
+    if (!retryEvent) return;
+    const previousEventId = retrySourceTimelineEventIds[pendingRetryTailTaskId] ?? selectedTimelineEventIds[pendingRetryTailTaskId];
+    if (previousEventId && previousEventId !== retryEvent.id) {
+      setTimelineHistoryEventIds((current) => ({
+        ...current,
+        [pendingRetryTailTaskId]: [previousEventId, ...(current[pendingRetryTailTaskId] ?? [])]
+          .filter((eventId, index, list) => eventId !== retryEvent.id && list.indexOf(eventId) === index)
+          .slice(0, 3),
+      }));
+      setSupersededTimelineEventIds((current) => ({
+        ...current,
+        [pendingRetryTailTaskId]: [previousEventId, ...(current[pendingRetryTailTaskId] ?? [])]
+          .filter((eventId, index, list) => list.indexOf(eventId) === index)
+          .slice(0, 3),
+      }));
+      setReplacementTimelineEventIds((current) => ({
+        ...current,
+        [previousEventId]: retryEvent.id,
+      }));
+    }
+
+    setSelectedTimelineEventIds((current) => ({
+      ...current,
+      [pendingRetryTailTaskId]: retryEvent.id,
+    }));
+    setRetrySourceTimelineEventIds((current) => ({
+      ...current,
+      [pendingRetryTailTaskId]: undefined,
+    }));
+    setRetryingTaskIds((current) => ({ ...current, [pendingRetryTailTaskId]: false }));
+    openTimelineTail(retryEvent);
+    setPendingRetryTailTaskId(null);
+  }, [projectActivity, pendingRetryTailTaskId, retrySourceTimelineEventIds, selectedTimelineEventIds]);
 
   // ── Derived data ───────────────────────────────────────────────────────────
 
@@ -3229,68 +3348,6 @@ export function ProjectDetail() {
   const gearWorkflowPanelOperationIds = ['gear-workflow-feature', 'gear-workflow-bug', 'gear-workflow-refactor'];
   const applySetupOperations = (axis: SetupAxis, operationIds: string[], force = false) => {
     applySetupAxis.mutate({ axes: [axis], operationIds, force });
-  };
-  const openTimelineTail = (entry: ActivityEvent) => {
-    const detail = getTaskTimelineDetail(entry);
-    if (!detail.runId) return;
-
-    timelineStreamRefs.current[entry.id]?.close();
-    setTimelineLogsByEventId((current) => ({ ...current, [entry.id]: [] }));
-    setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: undefined }));
-    setLoadingTimelineEventId(entry.id);
-
-    const es = new EventSource(`/api/tasks/runs/${detail.runId}/stream`);
-    timelineStreamRefs.current[entry.id] = es;
-
-    const appendLog = (line: string) => {
-      setTimelineLogsByEventId((current) => ({
-        ...current,
-        [entry.id]: [...(current[entry.id] ?? []), line],
-      }));
-    };
-
-    const onLogPayload = (payload: { line?: string; stream?: string; chunk?: string }) => {
-      if (payload.line) {
-        appendLog(payload.line);
-        return;
-      }
-      if (payload.chunk) {
-        appendLog(`[${payload.stream ?? 'stdout'}] ${payload.chunk}`.trimEnd());
-      }
-    };
-
-    const handleLogEvent = (event: MessageEvent<string>) => {
-      try {
-        onLogPayload(JSON.parse(event.data) as { line?: string; stream?: string; chunk?: string });
-      } catch {
-        appendLog(event.data);
-      }
-    };
-
-    const handleDone = (event?: Event) => {
-      const messageEvent = event as MessageEvent<string> | undefined;
-      if (messageEvent?.data) {
-        try {
-          const payload = JSON.parse(messageEvent.data) as { exitCode: number | null; timedOut: boolean };
-          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: payload }));
-        } catch {
-          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
-        }
-      } else {
-        setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
-      }
-      setLoadingTimelineEventId((current) => (current === entry.id ? null : current));
-      timelineStreamRefs.current[entry.id]?.close();
-      delete timelineStreamRefs.current[entry.id];
-    };
-
-    es.onmessage = handleLogEvent;
-    es.onerror = handleDone;
-    if ('addEventListener' in es) {
-      es.addEventListener('log', handleLogEvent as EventListener);
-      es.addEventListener('done', handleDone as EventListener);
-    }
-    setLoadingTimelineEventId(null);
   };
   const workflowPreview = [
     {
@@ -4438,6 +4495,116 @@ export function ProjectDetail() {
               const taskTimeline = getTaskActivityTimeline(projectActivity, task.id);
               const selectedTimelineEntry = taskTimeline.find((entry) => entry.id === selectedTimelineEventIds[task.id]);
               const selectedTimelineDetail = selectedTimelineEntry ? getTaskTimelineDetail(selectedTimelineEntry) : null;
+              const timelineHistoryEntries = (timelineHistoryEventIds[task.id] ?? [])
+                .map((eventId) => taskTimeline.find((entry) => entry.id === eventId))
+                .filter((entry): entry is ActivityEvent => !!entry && entry.id !== selectedTimelineEntry?.id);
+              const supersededIds = supersededTimelineEventIds[task.id] ?? [];
+              const isRetryingReview = retryingTaskIds[task.id] === true;
+              const phaseOwnerLabel = (blockedPhase?.enforceSeparation || activePhase?.enforceSeparation)
+                ? (blockedReviewAgent?.name ?? reviewAgent?.name ?? assignedAgent?.name ?? 'unassigned')
+                : (assignedAgent?.name ?? reviewAgent?.name ?? 'unassigned');
+              const selectedRunStatusLabel =
+                selectedTimelineEntry && timelineDoneByEventId[selectedTimelineEntry.id]
+                  ? `exitCode ${String(timelineDoneByEventId[selectedTimelineEntry.id]?.exitCode ?? 'null')}${timelineDoneByEventId[selectedTimelineEntry.id]?.timedOut ? ', timed out' : ''}`
+                  : loadingTimelineEventId === selectedTimelineEntry?.id
+                    ? 'opening logs'
+                    : 'live or not loaded';
+              const drawerPhaseActions = [];
+              if (workflow && canSendToReview(workflow)) {
+                drawerPhaseActions.push({
+                  key: 'review',
+                  label: reviewAgent ? `Send to ${reviewAgent.name}` : 'Send to Review',
+                  ariaLabel: `Send task ${task.title} to review from drawer`,
+                  onClick: () => transitionTaskPhase.mutate({ task, mode: 'review' }),
+                  disabled: transitionTaskPhase.isPending,
+                  tone: 'yellow' as const,
+                });
+              }
+              if (workflow && activePhase) {
+                drawerPhaseActions.push({
+                  key: 'block',
+                  label: 'Block Phase',
+                  ariaLabel: `Block task ${task.title} from drawer`,
+                  onClick: () => transitionTaskPhase.mutate({ task, mode: 'block' }),
+                  disabled: transitionTaskPhase.isPending,
+                  tone: 'red' as const,
+                });
+              }
+              if (workflow && blockedPhase) {
+                drawerPhaseActions.push({
+                  key: 'resume',
+                  label: 'Resume Phase',
+                  ariaLabel: `Resume task ${task.title} from drawer`,
+                  onClick: () => transitionTaskPhase.mutate({ task, mode: 'resume' }),
+                  disabled: transitionTaskPhase.isPending,
+                  tone: 'neutral' as const,
+                });
+              }
+              if (workflow && canRunReview(workflow, task)) {
+                drawerPhaseActions.push({
+                  key: 'run-review',
+                  label: 'Run Review',
+                  ariaLabel: `Run review for task ${task.title} from drawer`,
+                  onClick: () => runReviewMutation.mutate(task),
+                  disabled: runReviewMutation.isPending,
+                  tone: 'blue' as const,
+                });
+              }
+              if (workflow && nextPhase) {
+                drawerPhaseActions.push({
+                  key: 'advance',
+                  label: nextPhase.status === 'in_progress' ? 'Complete Phase' : 'Advance Phase',
+                  ariaLabel: `Advance task ${task.title} from drawer`,
+                  onClick: () => advanceTaskPhase.mutate(task),
+                  disabled: advanceTaskPhase.isPending,
+                  tone: 'neutral' as const,
+                });
+              }
+              const drawerRows = taskTimeline.map((entry) => {
+                const detail = getTaskTimelineDetail(entry);
+                const doneState = timelineDoneByEventId[entry.id];
+                const replacementEntry = taskTimeline.find((candidate) => candidate.id === replacementTimelineEventIds[entry.id]);
+                const actions = [];
+                actions.push({
+                  key: 'open',
+                  label: 'Open',
+                  ariaLabel: `Open drawer timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`,
+                  onClick: () => setSelectedTimelineEventIds((current) => ({ ...current, [task.id]: entry.id })),
+                  tone: 'neutral' as const,
+                });
+                if (detail.runId) {
+                  actions.push({
+                    key: 'logs',
+                    label: 'Logs',
+                    ariaLabel: `Load logs for drawer timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`,
+                    onClick: () => openTimelineTail(entry),
+                    tone: 'neutral' as const,
+                  });
+                }
+                if (replacementEntry) {
+                  actions.push({
+                    key: 'jump',
+                    label: 'Jump',
+                    ariaLabel: `Jump to replacement drawer timeline event ${getTaskTimelineLabel(replacementEntry)} for task ${task.title}`,
+                    onClick: () => setSelectedTimelineEventIds((current) => ({ ...current, [task.id]: replacementEntry.id })),
+                    tone: 'blue' as const,
+                  });
+                }
+                return {
+                  id: entry.id,
+                  label: getTaskTimelineLabel(entry),
+                  outcome: detail.outcome,
+                  createdAt: detail.createdAt,
+                  replacementLabel: supersededIds.includes(entry.id)
+                    ? `replaced by ${replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}`
+                    : undefined,
+                  doneText: doneState
+                    ? `exitCode ${String(doneState.exitCode ?? 'null')}${doneState.timedOut ? ', timed out' : ''}`
+                    : undefined,
+                  isSelected: selectedTimelineEntry?.id === entry.id,
+                  actions,
+                };
+              });
               return (
                 <div
                   key={task.id}
@@ -4543,6 +4710,11 @@ export function ProjectDetail() {
                             <span style={{ fontSize: 11, color: workflowOutcome.color }}>{workflowOutcome.text}</span>
                           </div>
                         ) : null}
+                        {isRetryingReview ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: 'var(--blue)' }}>retrying review...</span>
+                          </div>
+                        ) : null}
                         {latestActivitySummary ? (
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 11, color: latestActivitySummary.color }}>{latestActivitySummary.text}</span>
@@ -4577,6 +4749,192 @@ export function ProjectDetail() {
                                 </button>
                               );
                             })}
+                            <button
+                              onClick={() => setExpandedTimelineTaskIds((current) => ({
+                                ...current,
+                                [task.id]: !current[task.id],
+                              }))}
+                              aria-label={`${expandedTimelineTaskIds[task.id] ? 'Hide' : 'Open'} full timeline for task ${task.title}`}
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                border: '1px solid var(--border)',
+                                background: 'var(--surface2)',
+                                color: 'var(--text2)',
+                                fontSize: 10,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {expandedTimelineTaskIds[task.id] ? 'Hide Full Timeline' : 'Open Full Timeline'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!selectedTimelineEntry && taskTimeline[0]) {
+                                  setSelectedTimelineEventIds((current) => ({
+                                    ...current,
+                                    [task.id]: taskTimeline[0]!.id,
+                                  }));
+                                }
+                                setDrawerTimelineTaskIds((current) => ({
+                                  ...current,
+                                  [task.id]: !current[task.id],
+                                }));
+                              }}
+                              aria-label={`${drawerTimelineTaskIds[task.id] ? 'Close' : 'Open'} run drawer for task ${task.title}`}
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                border: '1px solid var(--border)',
+                                background: 'rgba(116,185,255,0.12)',
+                                color: 'var(--blue)',
+                                fontSize: 10,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {drawerTimelineTaskIds[task.id] ? 'Close Run Drawer' : 'Open Run Drawer'}
+                            </button>
+                          </div>
+                        ) : null}
+                        {expandedTimelineTaskIds[task.id] ? (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 6,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              background: 'var(--surface2)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text)' }}>Full Timeline</div>
+                            {taskTimeline.map((entry) => {
+                              const detail = getTaskTimelineDetail(entry);
+                              const doneState = timelineDoneByEventId[entry.id];
+                              const replacementEntry = taskTimeline.find((candidate) => candidate.id === replacementTimelineEventIds[entry.id]);
+                              const isSelected = selectedTimelineEntry?.id === entry.id;
+                              return (
+                                <div
+                                  key={`full-${entry.id}`}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    gap: 8,
+                                    padding: '6px 8px',
+                                    borderRadius: 8,
+                                    border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                                    background: 'var(--surface)',
+                                    color: 'var(--text)',
+                                    fontSize: 10,
+                                  }}
+                                >
+                                  <button
+                                    onClick={() => setSelectedTimelineEventIds((current) => ({
+                                      ...current,
+                                      [task.id]: entry.id,
+                                    }))}
+                                    aria-label={`Open full timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`}
+                                    style={{
+                                      display: 'flex',
+                                      flex: 1,
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      gap: 8,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      color: 'inherit',
+                                      padding: 0,
+                                      fontSize: 10,
+                                      cursor: 'pointer',
+                                      textAlign: 'left',
+                                    }}
+                                  >
+                                    <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                      <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
+                                      <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
+                                      <span style={{ color: 'var(--text2)' }}>{detail.createdAt}</span>
+                                      {supersededIds.includes(entry.id) ? (
+                                        <span style={{ color: 'var(--blue)' }}>
+                                          replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                    {doneState ? (
+                                      <span style={{ color: 'var(--text2)' }}>
+                                        exitCode {String(doneState.exitCode ?? 'null')}
+                                        {doneState.timedOut ? ', timed out' : ''}
+                                      </span>
+                                    ) : null}
+                                  </button>
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                    {detail.runId ? (
+                                      <button
+                                        onClick={() => openTimelineTail(entry)}
+                                        aria-label={`Load logs for full timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`}
+                                        style={{
+                                          padding: '3px 8px',
+                                          borderRadius: 999,
+                                          border: '1px solid var(--border)',
+                                          background: 'var(--surface2)',
+                                          color: 'var(--text)',
+                                          fontSize: 10,
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        Logs
+                                      </button>
+                                    ) : null}
+                                    {entry.eventType === 'task.failed' && isReviewTimelineEntry(entry) ? (
+                                      <button
+                                        onClick={() => {
+                                          setRetrySourceTimelineEventIds((current) => ({ ...current, [task.id]: entry.id }));
+                                          setRetryingTaskIds((current) => ({ ...current, [task.id]: true }));
+                                          retryBlockedReviewMutation.mutate(task);
+                                        }}
+                                        aria-label={`Retry full timeline review for task ${task.title}`}
+                                        style={{
+                                          padding: '3px 8px',
+                                          borderRadius: 999,
+                                          border: '1px solid var(--border)',
+                                          background: 'rgba(0,206,201,0.12)',
+                                          color: 'var(--green)',
+                                          fontSize: 10,
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        Retry
+                                      </button>
+                                    ) : null}
+                                    {replacementEntry ? (
+                                      <button
+                                        onClick={() => setSelectedTimelineEventIds((current) => ({
+                                          ...current,
+                                          [task.id]: replacementEntry.id,
+                                        }))}
+                                        aria-label={`Jump to replacement full timeline event ${getTaskTimelineLabel(replacementEntry)} for task ${task.title}`}
+                                        style={{
+                                          padding: '3px 8px',
+                                          borderRadius: 999,
+                                          border: '1px solid var(--border)',
+                                          background: 'rgba(116,185,255,0.12)',
+                                          color: 'var(--blue)',
+                                          fontSize: 10,
+                                          fontWeight: 700,
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        Jump
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         ) : null}
                         {selectedTimelineEntry ? (
@@ -4606,6 +4964,138 @@ export function ProjectDetail() {
                             <div style={{ fontSize: 10, color: 'var(--text2)' }}>
                               at: {selectedTimelineDetail?.createdAt}
                             </div>
+                            {timelineHistoryEntries.length > 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <span style={{ fontSize: 10, color: 'var(--text2)' }}>previous runs</span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                  {timelineHistoryEntries.map((entry) => {
+                                    const detail = getTaskTimelineDetail(entry);
+                                    const doneState = timelineDoneByEventId[entry.id];
+                                    const replacementEntry = taskTimeline.find((candidate) => candidate.id === replacementTimelineEventIds[entry.id]);
+                                    return (
+                                      <div
+                                        key={entry.id}
+                                        style={{
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                          gap: 8,
+                                          padding: '6px 8px',
+                                          borderRadius: 8,
+                                          border: '1px solid var(--border)',
+                                          background: 'var(--surface)',
+                                          color: 'var(--text)',
+                                          fontSize: 10,
+                                          cursor: 'pointer',
+                                          textAlign: 'left',
+                                        }}
+                                      >
+                                        <button
+                                          onClick={() => setSelectedTimelineEventIds((current) => ({
+                                            ...current,
+                                            [task.id]: entry.id,
+                                          }))}
+                                          aria-label={`Open previous timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`}
+                                          style={{
+                                            display: 'flex',
+                                            flex: 1,
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            border: 'none',
+                                            background: 'transparent',
+                                            color: 'inherit',
+                                            padding: 0,
+                                            fontSize: 10,
+                                            cursor: 'pointer',
+                                            textAlign: 'left',
+                                          }}
+                                        >
+                                          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                            <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
+                                            <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
+                                            {supersededIds.includes(entry.id) ? (
+                                              <span style={{ color: 'var(--blue)' }}>
+                                                replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
+                                              </span>
+                                            ) : null}
+                                          </span>
+                                          {doneState ? (
+                                            <span style={{ color: 'var(--text2)' }}>
+                                              exitCode {String(doneState.exitCode ?? 'null')}
+                                              {doneState.timedOut ? ', timed out' : ''}
+                                            </span>
+                                          ) : null}
+                                        </button>
+                                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                          {detail.runId ? (
+                                            <button
+                                              onClick={() => openTimelineTail(entry)}
+                                              aria-label={`Load logs for previous timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`}
+                                              style={{
+                                                padding: '3px 8px',
+                                                borderRadius: 999,
+                                                border: '1px solid var(--border)',
+                                                background: 'var(--surface2)',
+                                                color: 'var(--text)',
+                                                fontSize: 10,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                              }}
+                                            >
+                                              Logs
+                                            </button>
+                                          ) : null}
+                                          {entry.eventType === 'task.failed' && isReviewTimelineEntry(entry) ? (
+                                            <button
+                                              onClick={() => {
+                                                setRetrySourceTimelineEventIds((current) => ({ ...current, [task.id]: entry.id }));
+                                                setRetryingTaskIds((current) => ({ ...current, [task.id]: true }));
+                                                retryBlockedReviewMutation.mutate(task);
+                                              }}
+                                              aria-label={`Retry previous review for task ${task.title}`}
+                                              style={{
+                                                padding: '3px 8px',
+                                                borderRadius: 999,
+                                                border: '1px solid var(--border)',
+                                                background: 'rgba(0,206,201,0.12)',
+                                                color: 'var(--green)',
+                                                fontSize: 10,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                              }}
+                                            >
+                                              Retry
+                                            </button>
+                                          ) : null}
+                                          {replacementEntry ? (
+                                            <button
+                                              onClick={() => setSelectedTimelineEventIds((current) => ({
+                                                ...current,
+                                                [task.id]: replacementEntry.id,
+                                              }))}
+                                              aria-label={`Jump to replacement timeline event ${getTaskTimelineLabel(replacementEntry)} for task ${task.title}`}
+                                              style={{
+                                                padding: '3px 8px',
+                                                borderRadius: 999,
+                                                border: '1px solid var(--border)',
+                                                background: 'rgba(116,185,255,0.12)',
+                                                color: 'var(--blue)',
+                                                fontSize: 10,
+                                                fontWeight: 700,
+                                                cursor: 'pointer',
+                                              }}
+                                            >
+                                              Jump
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                               {selectedTimelineDetail?.runId ? (
                                 <button
@@ -4626,7 +5116,11 @@ export function ProjectDetail() {
                               ) : null}
                               {selectedTimelineEntry.eventType === 'task.failed' && isReviewTimelineEntry(selectedTimelineEntry) ? (
                                 <button
-                                  onClick={() => retryBlockedReviewMutation.mutate(task)}
+                                  onClick={() => {
+                                    setRetrySourceTimelineEventIds((current) => ({ ...current, [task.id]: selectedTimelineEntry.id }));
+                                    setRetryingTaskIds((current) => ({ ...current, [task.id]: true }));
+                                    retryBlockedReviewMutation.mutate(task);
+                                  }}
                                   style={{
                                     padding: '4px 8px',
                                     borderRadius: 8,
@@ -4670,6 +5164,29 @@ export function ProjectDetail() {
                               </div>
                             ) : null}
                           </div>
+                        ) : null}
+                        {drawerTimelineTaskIds[task.id] ? (
+                          <Suspense fallback={<div style={{ fontSize: 11, color: 'var(--text2)' }}>Loading run drawer...</div>}>
+                            <RunTimelineDrawer
+                              title={task.title}
+                              closeAriaLabel={`Close run drawer for task ${task.title}`}
+                              onClose={() => setDrawerTimelineTaskIds((current) => ({ ...current, [task.id]: false }))}
+                              description={task.description ?? 'No description'}
+                              workflowName={workflow?.name ?? 'No workflow'}
+                              workflowSourceLabel={workflow?.source ?? 'local'}
+                              separationModeLabel={workflow?.separationMode ?? 'n/a'}
+                              currentPhaseLabel={activePhase?.label ?? blockedPhase?.label ?? 'n/a'}
+                              phaseOwnerLabel={phaseOwnerLabel}
+                              agentName={assignedAgent?.name ?? 'unassigned'}
+                              reviewerName={reviewAgent?.name ?? 'n/a'}
+                              selectedEventLabel={selectedTimelineEntry ? getTaskTimelineLabel(selectedTimelineEntry) : 'none'}
+                              runStatusLabel={selectedRunStatusLabel}
+                              phases={workflow?.phases ?? []}
+                              checklist={workflow?.checklist ?? []}
+                              phaseActions={drawerPhaseActions}
+                              rows={drawerRows}
+                            />
+                          </Suspense>
                         ) : null}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           {workflow.phases.map((phase) => (
