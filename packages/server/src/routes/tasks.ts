@@ -10,6 +10,26 @@ const createTaskSchema = z.object({
   title: z.string().min(1, 'title is required'),
   description: z.string().optional(),
   agentId: z.string().optional().nullable(),
+  metadata: z.object({
+    workflow: z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      summary: z.string().optional(),
+      source: z.literal('gear'),
+      separationMode: z.enum(['advisory', 'enforced']),
+      lastCompletedPhaseId: z.string().optional(),
+      lastCompletedAgentId: z.string().optional(),
+      lastBlockedReason: z.string().optional(),
+      phases: z.array(z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        objective: z.string().optional(),
+        enforceSeparation: z.boolean().optional(),
+        status: z.enum(['pending', 'in_progress', 'done', 'blocked']).optional(),
+      })).default([]),
+      checklist: z.array(z.string().min(1)).default([]),
+    }).optional(),
+  }).optional(),
 });
 
 const updateTaskSchema = z.object({
@@ -17,9 +37,43 @@ const updateTaskSchema = z.object({
   description: z.string().optional(),
   status: z.string().optional(),
   agentId: z.string().optional().nullable(),
+  metadata: z.object({
+    workflow: z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      summary: z.string().optional(),
+      source: z.literal('gear'),
+      separationMode: z.enum(['advisory', 'enforced']),
+      lastCompletedPhaseId: z.string().optional(),
+      lastCompletedAgentId: z.string().optional(),
+      lastBlockedReason: z.string().optional(),
+      phases: z.array(z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        objective: z.string().optional(),
+        enforceSeparation: z.boolean().optional(),
+        status: z.enum(['pending', 'in_progress', 'done', 'blocked']).optional(),
+      })).default([]),
+      checklist: z.array(z.string().min(1)).default([]),
+    }).optional(),
+  }).optional(),
 });
 
 export const tasksRouter = Router();
+
+async function pickReviewAgent(task: { projectId: string }, lastCompletedAgentId?: string) {
+  const db = await createDb();
+  const projectAgents = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.projectId, task.projectId), eq(agents.status, 'idle')));
+
+  const candidates = lastCompletedAgentId
+    ? projectAgents.filter((agent) => agent.id !== lastCompletedAgentId)
+    : projectAgents;
+  const reviewer = candidates.find((agent) => /review/i.test(agent.name));
+  return reviewer ?? candidates[0] ?? null;
+}
 
 // List tasks (optionally by project)
 tasksRouter.get('/', async (req, res) => {
@@ -45,11 +99,12 @@ tasksRouter.get('/:id', async (req, res) => {
 // Create task
 tasksRouter.post('/', validate(createTaskSchema), async (req, res) => {
   const db = await createDb();
-  const { projectId, title, description, agentId } = req.body;
+  const { projectId, title, description, agentId, metadata } = req.body;
   const [created] = await db.insert(tasks).values({
     projectId,
     title,
     description,
+    metadata: metadata ?? {},
     agentId: agentId ?? null,
   }).returning();
   res.status(201).json({ ok: true, data: created });
@@ -63,6 +118,7 @@ tasksRouter.patch('/:id', validate(updateTaskSchema), async (req, res) => {
   if (req.body.description !== undefined) updates.description = req.body.description;
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.agentId !== undefined) updates.agentId = req.body.agentId;
+  if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
 
   const [result] = await db.update(tasks).set(updates).where(eq(tasks.id, req.params.id as string)).returning();
   if (!result) {
@@ -125,7 +181,47 @@ tasksRouter.post('/:id/run', async (req, res) => {
     return;
   }
 
-  const agentId = req.body.agentId ?? task.agentId;
+  const workflow = (task.metadata as {
+    workflow?: {
+      lastCompletedAgentId?: string;
+      phases?: Array<{ status?: string; enforceSeparation?: boolean }>;
+    };
+  } | null | undefined)?.workflow;
+  const activePhase = workflow?.phases?.find((phase) => phase.status === 'in_progress');
+  const requestedAgentId = req.body.agentId ?? task.agentId;
+  let agentId = requestedAgentId;
+
+  if (activePhase?.enforceSeparation) {
+    if (req.body.agentId && workflow?.lastCompletedAgentId === req.body.agentId) {
+      res.status(409).json({ ok: false, error: 'Separation policy requires a different agent for the active review phase' });
+      return;
+    }
+
+    if (!agentId || workflow?.lastCompletedAgentId === agentId) {
+      const reviewAgent = await pickReviewAgent(task, workflow?.lastCompletedAgentId);
+      if (!reviewAgent) {
+        const blockedWorkflow = workflow
+          ? {
+              ...workflow,
+              lastBlockedReason: 'No idle reviewer agent available for the active review phase.',
+              phases: (workflow.phases ?? []).map((phase) => (
+                phase.status === 'in_progress' ? { ...phase, status: 'blocked' } : phase
+              )),
+            }
+          : workflow;
+
+        await db.update(tasks).set({
+          status: 'blocked',
+          metadata: blockedWorkflow ? { ...(task.metadata as Record<string, unknown>), workflow: blockedWorkflow } : task.metadata,
+          updatedAt: new Date(),
+        }).where(eq(tasks.id, req.params.id as string));
+        res.status(409).json({ ok: false, error: 'Separation policy requires an idle reviewer agent for the active review phase' });
+        return;
+      }
+      agentId = reviewAgent.id;
+    }
+  }
+
   if (!agentId) {
     res.status(400).json({ ok: false, error: 'No agent assigned' });
     return;

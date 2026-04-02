@@ -75,9 +75,35 @@ export interface Task {
   agentId?: string;
   title: string;
   description?: string;
+  metadata?: TaskMetadata;
   status: TaskStatus;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface TaskWorkflowPhase {
+  id: string;
+  label: string;
+  objective?: string;
+  enforceSeparation?: boolean;
+  status?: 'pending' | 'in_progress' | 'done' | 'blocked';
+}
+
+export interface TaskWorkflowMetadata {
+  id: string;
+  name: string;
+  summary?: string;
+  source: 'gear';
+  separationMode: 'advisory' | 'enforced';
+  phases: TaskWorkflowPhase[];
+  checklist: string[];
+  lastCompletedPhaseId?: string;
+  lastCompletedAgentId?: string;
+  lastBlockedReason?: string;
+}
+
+export interface TaskMetadata {
+  workflow?: TaskWorkflowMetadata;
 }
 
 export interface TaskRun {

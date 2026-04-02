@@ -21,6 +21,8 @@ const eventSourceInstances: Array<{
   url: string;
   onmessage: ((event: MessageEvent<string>) => void) | null;
   onerror: (() => void) | null;
+  addEventListener: (type: string, listener: EventListener) => void;
+  emit: (type: string, payload: unknown) => void;
   close: () => void;
 }> = [];
 
@@ -31,9 +33,27 @@ class MockEventSource {
 
   onerror: (() => void) | null = null;
 
+  listeners = new Map<string, EventListener[]>();
+
   constructor(url: string) {
     this.url = url;
-    eventSourceInstances.push(this);
+    eventSourceInstances.push(this as unknown as (typeof eventSourceInstances)[number]);
+  }
+
+  addEventListener(type: string, listener: EventListener) {
+    const current = this.listeners.get(type) ?? [];
+    this.listeners.set(type, [...current, listener]);
+  }
+
+  emit(type: string, payload: unknown) {
+    const event = { data: JSON.stringify(payload) } as MessageEvent<string>;
+    if (type === 'message') {
+      this.onmessage?.(event);
+      return;
+    }
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event as unknown as Event);
+    }
   }
 
   close() {}
@@ -84,18 +104,30 @@ function renderProjectDetail(initialEntry = '/projects/project-1') {
 function mockBaseApi({
   analysis,
   setupStatus,
+  agents = [],
+  tasks = [],
+  activity = [],
+  runLogs = {},
 }: {
   analysis: Record<string, unknown>;
   setupStatus: Record<string, unknown>;
+  agents?: Array<Record<string, unknown>>;
+  tasks?: Array<Record<string, unknown>>;
+  activity?: Array<Record<string, unknown>>;
+  runLogs?: Record<string, string[]>;
 }) {
   const getImpl = async (path: string) => {
     if (path === '/projects/project-1') return project;
     if (path === '/projects/project-1/setup/status') return setupStatus;
-    if (path === '/agents') return [];
-    if (path === '/tasks') return [];
+    if (path === '/agents') return agents;
+    if (path === '/tasks') return tasks;
+    if (path.startsWith('/tasks/runs/') && path.endsWith('/logs')) {
+      const runId = path.split('/')[3] ?? '';
+      return runLogs[runId] ?? [];
+    }
     if (path === '/costs/by-project') return [];
     if (path === '/relations/project-1') return [];
-    if (path === '/activity?projectId=project-1&limit=5') return [];
+    if (path === '/activity?projectId=project-1&limit=20') return activity;
     throw new Error(`Unhandled GET ${path}`);
   };
 
@@ -113,10 +145,11 @@ function mockBaseApi({
         title: (body as { title: string }).title,
       };
     }
-    if (path === '/tasks/task-1/run') {
+    if (path.startsWith('/tasks/') && path.endsWith('/run')) {
+      const taskId = path.split('/')[2] ?? 'task-1';
       return {
-        id: 'run-1',
-        taskId: 'task-1',
+        id: `run-${taskId}`,
+        taskId,
         status: 'running',
       };
     }
@@ -324,6 +357,8 @@ describe('ProjectDetail setup-first control plane', () => {
     expect(screen.getByText('Review in separate agent')).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByText('Validate')).toBeTruthy();
+    expect(screen.getByText('Task Checklist')).toBeTruthy();
+    expect(screen.getByText('- Keep review in a separate agent')).toBeTruthy();
     fireEvent.change(taskInput, { target: { value: 'Implement feature: setup-aware task creation' } });
     fireEvent.click(screen.getByRole('button', { name: '실행' }));
 
@@ -332,10 +367,24 @@ describe('ProjectDetail setup-first control plane', () => {
         projectId: 'project-1',
         title: 'Implement feature: setup-aware task creation',
         description: expect.stringContaining('Workflow: Implement Feature'),
+        metadata: {
+          workflow: {
+            id: 'implement-feature',
+            name: 'Implement Feature',
+            summary: 'Use the standard feature delivery path with context, implementation, validation, and review.',
+            source: 'gear',
+            separationMode: 'enforced',
+            phases: expect.arrayContaining([
+              expect.objectContaining({ id: 'context', label: 'Context' }),
+              expect.objectContaining({ id: 'review', label: 'Review', enforceSeparation: true }),
+            ]),
+            checklist: expect.arrayContaining(['Keep review in a separate agent']),
+          },
+        },
       });
       expect(api.post).toHaveBeenCalledWith('/tasks/task-1/run', {});
     });
-    expect(eventSourceInstances[0]?.url).toBe('/api/tasks/runs/run-1/stream');
+    expect(eventSourceInstances[0]?.url).toBe('/api/tasks/runs/run-task-1/stream');
     fireEvent.click(screen.getByRole('button', { name: 'Focus CLAUDE.md in Setup' }));
     fireEvent.click(screen.getByRole('button', { name: 'Preview Plan' }));
 
@@ -514,6 +563,346 @@ describe('ProjectDetail setup-first control plane', () => {
         axes: ['guard'],
         operationIds: ['guard-hooks'],
       });
+    });
+  });
+
+  it('focuses reviewer setup from a blocked review task reason', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['React'],
+        git: { isRepo: true, branch: 'main' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 70, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: false,
+        mode: 'workspace',
+        summary: 'Reviewer setup is still required.',
+        axes: [
+          {
+            axis: 'guard',
+            label: 'Guard',
+            ready: true,
+            readiness: 100,
+            summary: 'Guard ready.',
+            operations: [],
+          },
+          {
+            axis: 'guide',
+            label: 'Guide',
+            ready: true,
+            readiness: 100,
+            summary: 'Guide ready.',
+            operations: [],
+          },
+          {
+            axis: 'gear',
+            label: 'Gear',
+            ready: false,
+            readiness: 50,
+            summary: 'Reviewer setup missing.',
+            operations: [
+              { id: 'gear-reviewer-agent', axis: 'gear', title: 'Reviewer agent', description: 'Prepare review execution assets.', path: '.claude/agents/reviewer.md', scope: 'project', status: 'pending' },
+            ],
+          },
+        ],
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'idle' },
+      ],
+      tasks: [
+        {
+          id: 'task-blocked',
+          projectId: 'project-1',
+          agentId: 'agent-dev',
+          title: 'Implement feature: missing reviewer',
+          status: 'blocked',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          metadata: {
+            workflow: {
+              id: 'implement-feature',
+              name: 'Implement Feature',
+              separationMode: 'enforced',
+              lastBlockedReason: 'No idle reviewer agent available for the active review phase.',
+              phases: [
+                { id: 'implement', label: 'Implement', status: 'done' },
+                { id: 'review', label: 'Review', status: 'blocked', enforceSeparation: true },
+              ],
+              checklist: [],
+            },
+          },
+        },
+      ],
+    });
+
+    renderProjectDetail();
+
+    expect(await screen.findByText('No idle reviewer agent available for the active review phase.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Reviewer Setup' }));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/projects/project-1/setup/apply', {
+        axes: ['gear'],
+        operationIds: ['gear-reviewer-agent'],
+        force: false,
+      });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Focus Reviewer Setup' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Plan' }));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/projects/project-1/setup/plan', {
+        axes: ['gear'],
+        operationIds: ['gear-reviewer-agent'],
+      });
+    });
+  });
+
+  it('resumes a blocked review task from Project Detail when a reviewer is available', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['React'],
+        git: { isRepo: true, branch: 'main' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 80, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Reviewer assets are ready.',
+        axes: [
+          { axis: 'guard', label: 'Guard', ready: true, readiness: 100, summary: 'Guard ready.', operations: [] },
+          { axis: 'guide', label: 'Guide', ready: true, readiness: 100, summary: 'Guide ready.', operations: [] },
+          {
+            axis: 'gear',
+            label: 'Gear',
+            ready: true,
+            readiness: 100,
+            summary: 'Gear ready.',
+            operations: [
+              { id: 'gear-reviewer-agent', axis: 'gear', title: 'Reviewer agent', description: 'Prepare review execution assets.', path: '.claude/agents/reviewer.md', scope: 'project', status: 'ready' },
+            ],
+          },
+        ],
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'busy' },
+        { id: 'agent-review', projectId: 'project-1', name: 'reviewer', adapterType: 'claude_local', status: 'idle' },
+      ],
+      tasks: [
+        {
+          id: 'task-review-recovery',
+          projectId: 'project-1',
+          agentId: 'agent-dev',
+          title: 'Implement feature: blocked review recovery',
+          status: 'blocked',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          metadata: {
+            workflow: {
+              id: 'implement-feature',
+              name: 'Implement Feature',
+              separationMode: 'enforced',
+              lastBlockedReason: 'No idle reviewer agent available for the active review phase.',
+              phases: [
+                { id: 'implement', label: 'Implement', status: 'done' },
+                { id: 'review', label: 'Review', status: 'blocked', enforceSeparation: true },
+              ],
+              checklist: [],
+            },
+          },
+        },
+      ],
+    });
+
+    renderProjectDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume review for task Implement feature: blocked review recovery' }));
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/tasks/task-review-recovery', {
+        status: 'in_progress',
+        agentId: 'agent-review',
+        metadata: {
+          workflow: {
+            id: 'implement-feature',
+            name: 'Implement Feature',
+            separationMode: 'enforced',
+            phases: [
+              { id: 'implement', label: 'Implement', status: 'done' },
+              { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+            ],
+            checklist: [],
+          },
+        },
+      });
+      expect(api.post).toHaveBeenCalledWith('/tasks/task-review-recovery/run', { agentId: 'agent-review' });
+    });
+  });
+
+  it('shows review blocked-again feedback in Project Detail', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['React'],
+        git: { isRepo: true, branch: 'main' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 100, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Setup ready.',
+        axes: [
+          { axis: 'guard', label: 'Guard', ready: true, readiness: 100, summary: 'Guard ready.', operations: [] },
+          { axis: 'guide', label: 'Guide', ready: true, readiness: 100, summary: 'Guide ready.', operations: [] },
+          { axis: 'gear', label: 'Gear', ready: true, readiness: 100, summary: 'Gear ready.', operations: [] },
+        ],
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'busy' },
+        { id: 'agent-review', projectId: 'project-1', name: 'reviewer', adapterType: 'claude_local', status: 'idle' },
+      ],
+      tasks: [
+        {
+          id: 'task-review-blocked',
+          projectId: 'project-1',
+          agentId: 'agent-dev',
+          title: 'Implement feature: review blocked again',
+          status: 'blocked',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          metadata: {
+            workflow: {
+              id: 'implement-feature',
+              name: 'Implement Feature',
+              source: 'gear',
+              separationMode: 'enforced',
+              lastCompletedPhaseId: 'implement',
+              lastCompletedAgentId: 'agent-dev',
+              phases: [
+                { id: 'implement', label: 'Implement', status: 'done' },
+                { id: 'review', label: 'Review', status: 'blocked', enforceSeparation: true },
+              ],
+              checklist: [],
+            },
+          },
+        },
+      ],
+      activity: [
+        {
+          id: 'activity-review-started',
+          projectId: 'project-1',
+          eventType: 'task.started',
+          createdAt: '2026-04-02T00:08:00.000Z',
+          detail: {
+            taskId: 'task-review-blocked',
+            runId: 'run-review-blocked',
+            workflowPhase: {
+              from: 'Review',
+              to: 'Review',
+              outcome: 'advanced',
+            },
+          },
+        },
+        {
+          id: 'activity-review-blocked',
+          projectId: 'project-1',
+          eventType: 'task.failed',
+          createdAt: '2026-04-02T00:10:00.000Z',
+          detail: {
+            taskId: 'task-review-blocked',
+            runId: 'run-review-blocked',
+            workflowPhase: {
+              from: 'Review',
+              to: 'Review',
+              outcome: 'blocked',
+            },
+          },
+        },
+      ],
+    });
+
+    renderProjectDetail();
+
+    expect(await screen.findByText('Review blocked again. Inspect the reviewer run or retry with another reviewer.')).toBeTruthy();
+    expect(screen.getByText('Review run started.')).toBeTruthy();
+    expect(screen.getByText('recent run timeline')).toBeTruthy();
+    expect(screen.getByText('started Review')).toBeTruthy();
+    expect(screen.getByText('failed Review')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open timeline event failed Review for task Implement feature: review blocked again' }));
+    expect(screen.getByText('Timeline Detail: failed Review')).toBeTruthy();
+    expect(screen.getByText('event: task.failed')).toBeTruthy();
+    expect(screen.getByText('phase: Review -> Review')).toBeTruthy();
+    expect(screen.getByText('outcome: blocked')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Load Run Logs' }));
+    expect(eventSourceInstances[eventSourceInstances.length - 1]?.url).toBe('/api/tasks/runs/run-review-blocked/stream');
+    eventSourceInstances[eventSourceInstances.length - 1]?.emit('log', { line: '[stderr] review failed' });
+    expect(await screen.findByText('[stderr] review failed')).toBeTruthy();
+    eventSourceInstances[eventSourceInstances.length - 1]?.emit('done', { runId: 'run-review-blocked', exitCode: 1, timedOut: false });
+    expect(await screen.findByText('run finished: exitCode 1')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Review' }));
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/tasks/task-review-blocked', {
+        status: 'in_progress',
+        agentId: 'agent-review',
+        metadata: {
+          workflow: {
+            id: 'implement-feature',
+            name: 'Implement Feature',
+            source: 'gear',
+            separationMode: 'enforced',
+            lastCompletedPhaseId: 'implement',
+            lastCompletedAgentId: 'agent-dev',
+            phases: [
+              { id: 'implement', label: 'Implement', status: 'done' },
+              { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+            ],
+            checklist: [],
+          },
+        },
+      });
+      expect(api.post).toHaveBeenCalledWith('/tasks/task-review-blocked/run', { agentId: 'agent-review' });
     });
   });
 

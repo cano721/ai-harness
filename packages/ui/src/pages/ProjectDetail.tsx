@@ -55,10 +55,34 @@ interface Agent {
 interface Task {
   id: string;
   projectId: string;
+  agentId?: string;
   title: string;
+  description?: string;
+  metadata?: {
+    workflow?: {
+      id: string;
+      name: string;
+      summary?: string;
+      source: 'gear';
+      separationMode: 'advisory' | 'enforced';
+      lastCompletedPhaseId?: string;
+      lastCompletedAgentId?: string;
+      lastBlockedReason?: string;
+      phases: Array<{
+        id: string;
+        label: string;
+        objective?: string;
+        enforceSeparation?: boolean;
+        status?: 'pending' | 'in_progress' | 'done' | 'blocked';
+      }>;
+      checklist: string[];
+    };
+  };
   status: string;
   createdAt: string;
 }
+
+type TaskWorkflow = NonNullable<NonNullable<Task['metadata']>['workflow']>;
 
 interface CostByProject {
   projectId: string;
@@ -79,7 +103,7 @@ interface ActivityEvent {
   id: string;
   projectId: string;
   eventType: string;
-  detail: string;
+  detail: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -172,7 +196,15 @@ interface WorkflowTaskTemplate {
   name: string;
   summary: string;
   titleSuggestion: string;
-  phases: string[];
+  phases: Array<{
+    id: string;
+    label: string;
+    objective?: string;
+    enforceSeparation?: boolean;
+    status?: 'pending' | 'in_progress' | 'done' | 'blocked';
+  }>;
+  checklist: string[];
+  separationMode: 'advisory' | 'enforced';
   separationNote?: string;
   descriptionLines: string[];
 }
@@ -224,6 +256,267 @@ function relativeTime(dateStr: string): string {
   if (hours < 24) return `${hours}시간 전`;
   const days = Math.floor(hours / 24);
   return `${days}일 전`;
+}
+
+function getNextPhase(workflow?: TaskWorkflow) {
+  return workflow?.phases.find((phase) => phase.status === 'in_progress' || phase.status === 'pending');
+}
+
+function getActivePhase(workflow?: TaskWorkflow) {
+  return workflow?.phases.find((phase) => phase.status === 'in_progress');
+}
+
+function getBlockedPhase(workflow?: TaskWorkflow) {
+  return workflow?.phases.find((phase) => phase.status === 'blocked');
+}
+
+function canSendToReview(workflow?: TaskWorkflow) {
+  if (!workflow || workflow.separationMode !== 'enforced') return false;
+  const activeIndex = workflow.phases.findIndex((phase) => phase.status === 'in_progress');
+  const reviewIndex = workflow.phases.findIndex((phase) => phase.enforceSeparation && phase.status === 'pending');
+  return activeIndex >= 0 && reviewIndex === activeIndex + 1;
+}
+
+function canRunReview(workflow?: TaskWorkflow, task?: Task) {
+  if (!workflow || !task?.agentId) return false;
+  return workflow.phases.some((phase) => phase.enforceSeparation && phase.status === 'in_progress');
+}
+
+function needsReviewerSetup(workflow?: TaskWorkflow) {
+  return workflow?.lastBlockedReason?.includes('reviewer agent') ?? false;
+}
+
+function pickReviewerAgent(agents: Agent[], task: Task) {
+  const projectAgents = agents.filter((agent) => agent.projectId === task.projectId && agent.id !== task.agentId);
+  const reviewer = projectAgents.find((agent) => /review/i.test(agent.name) && agent.status === 'idle');
+  if (reviewer) return reviewer;
+  return projectAgents.find((agent) => agent.status === 'idle') ?? null;
+}
+
+function clearBlockedReason(workflow: TaskWorkflow) {
+  if (!workflow.lastBlockedReason) return workflow;
+  const { lastBlockedReason: _lastBlockedReason, ...rest } = workflow;
+  return rest;
+}
+
+function advanceWorkflow(workflow: TaskWorkflow) {
+  const currentIndex = workflow.phases.findIndex((phase) => phase.status === 'in_progress');
+  const fallbackIndex = workflow.phases.findIndex((phase) => phase.status === 'pending');
+  const activeIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
+
+  if (activeIndex < 0) {
+    return {
+      workflow,
+      status: 'done' as const,
+    };
+  }
+
+  const phases = workflow.phases.map((phase, index) => {
+    if (index < activeIndex) return { ...phase, status: 'done' as const };
+    if (index === activeIndex) return { ...phase, status: 'done' as const };
+    if (index === activeIndex + 1) return { ...phase, status: 'in_progress' as const };
+    return { ...phase, status: phase.status ?? 'pending' as const };
+  });
+
+  return {
+    workflow: { ...workflow, phases },
+    status: activeIndex === phases.length - 1 ? 'done' as const : 'in_progress' as const,
+  };
+}
+
+function sendWorkflowToReview(workflow: TaskWorkflow) {
+  const nextWorkflow = clearBlockedReason(workflow);
+  const activeIndex = workflow.phases.findIndex((phase) => phase.status === 'in_progress');
+  const reviewIndex = workflow.phases.findIndex((phase) => phase.enforceSeparation && phase.status === 'pending');
+
+  if (activeIndex < 0 || reviewIndex !== activeIndex + 1) {
+    return {
+      workflow,
+      status: 'in_progress' as const,
+    };
+  }
+
+  const phases = workflow.phases.map((phase, index) => {
+    if (index < activeIndex) return { ...phase, status: 'done' as const };
+    if (index === activeIndex) return { ...phase, status: 'done' as const };
+    if (index === reviewIndex) return { ...phase, status: 'in_progress' as const };
+    return { ...phase, status: phase.status ?? 'pending' as const };
+  });
+
+  return {
+    workflow: { ...nextWorkflow, phases },
+    status: 'in_progress' as const,
+  };
+}
+
+function blockWorkflow(workflow: TaskWorkflow) {
+  const activeIndex = workflow.phases.findIndex((phase) => phase.status === 'in_progress');
+  if (activeIndex < 0) {
+    return { workflow, status: 'blocked' as const };
+  }
+
+  const phases = workflow.phases.map((phase, index) => (
+    index === activeIndex ? { ...phase, status: 'blocked' as const } : phase
+  ));
+
+  return {
+    workflow: { ...workflow, phases },
+    status: 'blocked' as const,
+  };
+}
+
+function resumeWorkflow(workflow: TaskWorkflow) {
+  const nextWorkflow = clearBlockedReason(workflow);
+  const blockedIndex = workflow.phases.findIndex((phase) => phase.status === 'blocked');
+  if (blockedIndex < 0) {
+    return { workflow: nextWorkflow, status: 'in_progress' as const };
+  }
+
+  const phases = workflow.phases.map((phase, index) => (
+    index === blockedIndex ? { ...phase, status: 'in_progress' as const } : phase
+  ));
+
+  return {
+    workflow: { ...nextWorkflow, phases },
+    status: 'in_progress' as const,
+  };
+}
+
+function getWorkflowOutcomeSummary(task: Task, workflow?: TaskWorkflow) {
+  if (!workflow) return null;
+
+  const blockedPhase = getBlockedPhase(workflow);
+  if (blockedPhase?.enforceSeparation && !workflow.lastBlockedReason) {
+    return {
+      text: 'Review blocked again. Inspect the reviewer run or retry with another reviewer.',
+      color: 'var(--red)',
+    };
+  }
+
+  const completedPhase = workflow.lastCompletedPhaseId
+    ? workflow.phases.find((phase) => phase.id === workflow.lastCompletedPhaseId)
+    : undefined;
+  if (!completedPhase?.enforceSeparation) return null;
+
+  return {
+    text: task.status === 'done'
+      ? 'Review completed. Workflow is done.'
+      : `Review completed. Next: ${getNextPhase(workflow)?.label ?? 'follow-up ready'}.`,
+    color: 'var(--green)',
+  };
+}
+
+function getLatestTaskActivity(events: ActivityEvent[], taskId: string) {
+  return events.find((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'));
+}
+
+function getTaskActivityTimeline(events: ActivityEvent[], taskId: string) {
+  return events
+    .filter((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'))
+    .slice(0, 3);
+}
+
+function getTaskActivitySummary(entry?: ActivityEvent) {
+  if (!entry) return null;
+
+  const workflowPhase = entry.detail.workflowPhase as {
+    from?: string;
+    to?: string;
+    outcome?: 'advanced' | 'completed' | 'blocked' | 'unchanged';
+  } | undefined;
+  const fromLabel = workflowPhase?.from?.toLowerCase();
+  const toLabel = workflowPhase?.to?.toLowerCase();
+  const isReviewRun = fromLabel?.includes('review') || toLabel?.includes('review');
+
+  if (entry.eventType === 'task.started') {
+    return {
+      text: isReviewRun ? 'Review run started.' : 'Run started.',
+      color: 'var(--blue)',
+    };
+  }
+
+  if (entry.eventType === 'task.completed') {
+    return {
+      text: isReviewRun ? 'Last review passed.' : 'Last run passed.',
+      color: 'var(--green)',
+    };
+  }
+
+  if (entry.eventType === 'task.failed') {
+    return {
+      text: isReviewRun ? 'Last review failed.' : 'Last run failed.',
+      color: 'var(--red)',
+    };
+  }
+
+  return null;
+}
+
+function getTaskTimelineLabel(entry: ActivityEvent) {
+  const workflowPhase = entry.detail.workflowPhase as {
+    from?: string;
+    to?: string;
+    outcome?: 'advanced' | 'completed' | 'blocked' | 'unchanged';
+  } | undefined;
+  const phaseLabel = workflowPhase?.to ?? workflowPhase?.from;
+
+  if (entry.eventType === 'task.started') {
+    return phaseLabel ? `started ${phaseLabel}` : 'started';
+  }
+
+  if (entry.eventType === 'task.completed') {
+    return phaseLabel ? `passed ${phaseLabel}` : 'passed';
+  }
+
+  if (entry.eventType === 'task.failed') {
+    return phaseLabel ? `failed ${phaseLabel}` : 'failed';
+  }
+
+  return entry.eventType.replace('task.', '');
+}
+
+function getTaskTimelineColor(eventType: string) {
+  if (eventType === 'task.started') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+  if (eventType === 'task.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
+  if (eventType === 'task.failed') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  return { bg: 'var(--surface3)', color: 'var(--text2)' };
+}
+
+function getTaskTimelineDetail(entry: ActivityEvent) {
+  const workflowPhase = entry.detail.workflowPhase as {
+    from?: string;
+    to?: string;
+    outcome?: 'advanced' | 'completed' | 'blocked' | 'unchanged';
+  } | undefined;
+
+  const phaseLine = workflowPhase?.from || workflowPhase?.to
+    ? `${workflowPhase?.from ?? 'unknown'} -> ${workflowPhase?.to ?? workflowPhase?.from ?? 'unknown'}`
+    : 'No phase transition detail';
+
+  return {
+    eventLabel: entry.eventType,
+    phaseLine,
+    outcome: workflowPhase?.outcome ?? 'unchanged',
+    createdAt: relativeTime(entry.createdAt),
+    runId: typeof entry.detail.runId === 'string' ? entry.detail.runId : undefined,
+  };
+}
+
+function isReviewTimelineEntry(entry: ActivityEvent) {
+  const workflowPhase = entry.detail.workflowPhase as {
+    from?: string;
+    to?: string;
+  } | undefined;
+  const label = `${workflowPhase?.from ?? ''} ${workflowPhase?.to ?? ''}`.toLowerCase();
+  return label.includes('review');
+}
+
+function formatActivityDetail(detail: Record<string, unknown>) {
+  const message = detail.message;
+  if (typeof message === 'string') return message;
+  const title = detail.title;
+  if (typeof title === 'string') return title;
+  return 'Activity event';
 }
 
 // ─── Shared Components ────────────────────────────────────────────────────────
@@ -635,7 +928,7 @@ function ScorePanel({ scores }: { scores: ProjectAnalysis['scores'] }) {
 function GuardSection({ projectId, guardScore }: { projectId: string; guardScore?: number }) {
   const { data: activity = [] } = useQuery({
     queryKey: ['activity', projectId],
-    queryFn: () => api.get<ActivityEvent[]>(`/activity?projectId=${projectId}&limit=5`),
+    queryFn: () => api.get<ActivityEvent[]>(`/activity?projectId=${projectId}&limit=20`),
     enabled: !!projectId,
   });
 
@@ -688,7 +981,7 @@ function GuardSection({ projectId, guardScore }: { projectId: string; guardScore
                 border: '1px solid rgba(255,107,107,0.2)',
               }}
             >
-              {e.detail} <span style={{ color: 'var(--text2)', marginLeft: 6 }}>({relativeTime(e.createdAt)})</span>
+              {formatActivityDetail(e.detail)} <span style={{ color: 'var(--text2)', marginLeft: 6 }}>({relativeTime(e.createdAt)})</span>
             </div>
           ))}
         </div>
@@ -2264,6 +2557,22 @@ function TaskInputBar({
         projectId,
         title: input.trim(),
         description: description.trim() || undefined,
+        metadata: selectedTemplate
+          ? {
+              workflow: {
+                id: selectedTemplate.id,
+                name: selectedTemplate.name,
+                summary: selectedTemplate.summary,
+                source: 'gear' as const,
+                separationMode: selectedTemplate.separationMode,
+                phases: selectedTemplate.phases.map((phase, index) => ({
+                  ...phase,
+                  status: index === 0 ? 'in_progress' : 'pending',
+                })),
+                checklist: selectedTemplate.checklist,
+              },
+            }
+          : undefined,
       });
       const runResult = await api.post<TaskRun>(`/tasks/${task.id}/run`, {});
 
@@ -2450,7 +2759,7 @@ function TaskInputBar({
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {selectedTemplate.phases.map((phase) => (
                 <span
-                  key={phase}
+                  key={phase.id}
                   style={{
                     padding: '3px 8px',
                     borderRadius: 999,
@@ -2460,10 +2769,20 @@ function TaskInputBar({
                     fontWeight: 700,
                   }}
                 >
-                  {phase}
+                  {phase.label}
                 </span>
               ))}
             </div>
+            {selectedTemplate.checklist.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text2)' }}>Task Checklist</div>
+                {selectedTemplate.checklist.map((item) => (
+                  <div key={item} style={{ fontSize: 11, color: 'var(--text2)' }}>
+                    - {item}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -2591,7 +2910,19 @@ export function ProjectDetail() {
   const [newDocName, setNewDocName] = useState('');
   const [newDocContent, setNewDocContent] = useState('');
   const [lastApplyResult, setLastApplyResult] = useState<ProjectSetupApplyResult | null>(null);
+  const [selectedTimelineEventIds, setSelectedTimelineEventIds] = useState<Record<string, string | undefined>>({});
+  const [timelineLogsByEventId, setTimelineLogsByEventId] = useState<Record<string, string[] | undefined>>({});
+  const [timelineDoneByEventId, setTimelineDoneByEventId] = useState<Record<string, { exitCode: number | null; timedOut: boolean } | undefined>>({});
+  const [loadingTimelineEventId, setLoadingTimelineEventId] = useState<string | null>(null);
+  const timelineStreamRefs = useRef<Record<string, EventSource | undefined>>({});
   const [setupFocusRequest, setSetupFocusRequest] = useState<{ operationIds: string[]; token: number } | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      Object.values(timelineStreamRefs.current).forEach((stream) => stream?.close());
+      timelineStreamRefs.current = {};
+    };
+  }, []);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -2686,6 +3017,12 @@ export function ProjectDetail() {
     queryFn: () => api.get<Task[]>('/tasks'),
   });
 
+  const { data: projectActivity = [] } = useQuery({
+    queryKey: ['activity', id, 'task-outcomes'],
+    queryFn: () => api.get<ActivityEvent[]>(`/activity?projectId=${id}&limit=20`),
+    enabled: !!id,
+  });
+
   const { data: costsByProject } = useQuery({
     queryKey: ['costs-by-project'],
     queryFn: () => api.get<CostByProject[]>('/costs/by-project'),
@@ -2695,6 +3032,83 @@ export function ProjectDetail() {
     queryKey: ['relations', id],
     queryFn: () => api.get<Relation[]>(`/relations/${id}`),
     enabled: !!id,
+  });
+
+  const advanceTaskPhase = useMutation({
+    mutationFn: async (task: Task) => {
+      const workflow = task.metadata?.workflow;
+      if (!workflow) return null;
+
+      const next = advanceWorkflow(workflow);
+      return api.patch<Task>(`/tasks/${task.id}`, {
+        status: next.status,
+        metadata: {
+          workflow: next.workflow,
+        },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
+  const transitionTaskPhase = useMutation({
+    mutationFn: async ({ task, mode }: { task: Task; mode: 'review' | 'block' | 'resume' }) => {
+      const workflow = task.metadata?.workflow;
+      if (!workflow) return null;
+      const reviewer = mode === 'review' ? pickReviewerAgent(allAgents ?? [], task) : null;
+
+      const next =
+        mode === 'review'
+          ? sendWorkflowToReview(workflow)
+          : mode === 'block'
+            ? blockWorkflow(workflow)
+            : resumeWorkflow(workflow);
+
+      return api.patch<Task>(`/tasks/${task.id}`, {
+        status: next.status,
+        agentId: mode === 'review' ? reviewer?.id ?? null : task.agentId ?? null,
+        metadata: {
+          workflow: next.workflow,
+        },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
+  const runReviewMutation = useMutation({
+    mutationFn: async (task: Task) => {
+      if (!task.agentId) return null;
+      return api.post(`/tasks/${task.id}/run`, { agentId: task.agentId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+
+  const retryBlockedReviewMutation = useMutation({
+    mutationFn: async (task: Task) => {
+      const workflow = task.metadata?.workflow;
+      if (!workflow) return null;
+      const reviewer = pickReviewerAgent(allAgents ?? [], task);
+      if (!reviewer) return null;
+      const resumed = resumeWorkflow(workflow);
+      await api.patch<Task>(`/tasks/${task.id}`, {
+        status: resumed.status,
+        agentId: reviewer.id,
+        metadata: {
+          workflow: resumed.workflow,
+        },
+      });
+      return api.post(`/tasks/${task.id}/run`, { agentId: reviewer.id });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
   });
 
   // ── Derived data ───────────────────────────────────────────────────────────
@@ -2816,6 +3230,68 @@ export function ProjectDetail() {
   const applySetupOperations = (axis: SetupAxis, operationIds: string[], force = false) => {
     applySetupAxis.mutate({ axes: [axis], operationIds, force });
   };
+  const openTimelineTail = (entry: ActivityEvent) => {
+    const detail = getTaskTimelineDetail(entry);
+    if (!detail.runId) return;
+
+    timelineStreamRefs.current[entry.id]?.close();
+    setTimelineLogsByEventId((current) => ({ ...current, [entry.id]: [] }));
+    setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: undefined }));
+    setLoadingTimelineEventId(entry.id);
+
+    const es = new EventSource(`/api/tasks/runs/${detail.runId}/stream`);
+    timelineStreamRefs.current[entry.id] = es;
+
+    const appendLog = (line: string) => {
+      setTimelineLogsByEventId((current) => ({
+        ...current,
+        [entry.id]: [...(current[entry.id] ?? []), line],
+      }));
+    };
+
+    const onLogPayload = (payload: { line?: string; stream?: string; chunk?: string }) => {
+      if (payload.line) {
+        appendLog(payload.line);
+        return;
+      }
+      if (payload.chunk) {
+        appendLog(`[${payload.stream ?? 'stdout'}] ${payload.chunk}`.trimEnd());
+      }
+    };
+
+    const handleLogEvent = (event: MessageEvent<string>) => {
+      try {
+        onLogPayload(JSON.parse(event.data) as { line?: string; stream?: string; chunk?: string });
+      } catch {
+        appendLog(event.data);
+      }
+    };
+
+    const handleDone = (event?: Event) => {
+      const messageEvent = event as MessageEvent<string> | undefined;
+      if (messageEvent?.data) {
+        try {
+          const payload = JSON.parse(messageEvent.data) as { exitCode: number | null; timedOut: boolean };
+          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: payload }));
+        } catch {
+          setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
+        }
+      } else {
+        setTimelineDoneByEventId((current) => ({ ...current, [entry.id]: { exitCode: null, timedOut: false } }));
+      }
+      setLoadingTimelineEventId((current) => (current === entry.id ? null : current));
+      timelineStreamRefs.current[entry.id]?.close();
+      delete timelineStreamRefs.current[entry.id];
+    };
+
+    es.onmessage = handleLogEvent;
+    es.onerror = handleDone;
+    if ('addEventListener' in es) {
+      es.addEventListener('log', handleLogEvent as EventListener);
+      es.addEventListener('done', handleDone as EventListener);
+    }
+    setLoadingTimelineEventId(null);
+  };
   const workflowPreview = [
     {
       id: 'implement-feature',
@@ -2865,13 +3341,80 @@ export function ProjectDetail() {
           : 'Refactor: ',
     phases:
       workflow.id === 'implement-feature'
-        ? ['Context', 'Implement', 'Validate', 'Review']
+        ? [
+            { id: 'context', label: 'Context', objective: 'Read project setup assets before coding.' },
+            { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.' },
+            { id: 'validate', label: 'Validate', objective: 'Verify behavior and regression safety.' },
+            { id: 'review', label: 'Review', objective: 'Request a separate review pass.', enforceSeparation: true },
+          ]
         : workflow.id === 'fix-bug'
-          ? ['Reproduce', 'Fix', 'Regression', 'Verify']
-          : ['Boundary', 'Protect', 'Refactor', 'Review'],
+          ? [
+              { id: 'reproduce', label: 'Reproduce', objective: 'Capture the failing path first.' },
+              { id: 'fix', label: 'Fix', objective: 'Apply the smallest safe fix.' },
+              { id: 'regression', label: 'Regression', objective: 'Add or update a regression check.' },
+              { id: 'verify', label: 'Verify', objective: 'Re-check adjacent flows.' },
+            ]
+          : [
+              { id: 'boundary', label: 'Boundary', objective: 'Document the refactor boundary.' },
+              { id: 'protect', label: 'Protect', objective: 'Lock behavior with tests or checks.' },
+              { id: 'refactor', label: 'Refactor', objective: 'Change the internals in small checkpoints.' },
+              { id: 'review', label: 'Review', objective: 'Run architecture and regression review separately.', enforceSeparation: true },
+            ],
+    checklist:
+      workflow.id === 'implement-feature'
+        ? ['Read context map and conventions first', 'Keep review in a separate agent', 'Verify the user-facing path before finishing']
+        : workflow.id === 'fix-bug'
+          ? ['Record reproduction steps', 'Add a regression check', 'Verify adjacent flows remain stable']
+          : ['Describe the boundary before changes', 'Protect behavior with tests or checks', 'Use a separate review pass before marking done'],
+    separationMode: workflow.id === 'implement-feature' || workflow.id === 'refactor' ? 'enforced' : 'advisory',
     separationNote: workflow.id === 'implement-feature' || workflow.id === 'refactor' ? 'Review in separate agent' : undefined,
     descriptionLines: [
       `Workflow: ${workflow.name}`,
+      '',
+      'Phases:',
+      ...(
+        workflow.id === 'implement-feature'
+          ? [
+              '1. Context - Read project setup assets before coding.',
+              '2. Implement - Ship the smallest coherent slice.',
+              '3. Validate - Verify behavior and regression safety.',
+              '4. Review - Request a separate review pass.',
+            ]
+          : workflow.id === 'fix-bug'
+            ? [
+                '1. Reproduce - Capture the failing path first.',
+                '2. Fix - Apply the smallest safe fix.',
+                '3. Regression - Add or update a regression check.',
+                '4. Verify - Re-check adjacent flows.',
+              ]
+            : [
+                '1. Boundary - Document the refactor boundary.',
+                '2. Protect - Lock behavior with tests or checks.',
+                '3. Refactor - Change the internals in small checkpoints.',
+                '4. Review - Run architecture and regression review separately.',
+              ]
+      ),
+      '',
+      'Checklist:',
+      ...(
+        workflow.id === 'implement-feature'
+          ? [
+              '- Read context map and conventions first',
+              '- Keep review in a separate agent',
+              '- Verify the user-facing path before finishing',
+            ]
+          : workflow.id === 'fix-bug'
+            ? [
+                '- Record reproduction steps',
+                '- Add a regression check',
+                '- Verify adjacent flows remain stable',
+              ]
+            : [
+                '- Describe the boundary before changes',
+                '- Protect behavior with tests or checks',
+                '- Use a separate review pass before marking done',
+              ]
+      ),
       '',
       ...workflow.steps.map((step, index) => `${index + 1}. ${step}`),
     ],
@@ -3879,31 +4422,404 @@ export function ProjectDetail() {
               <div style={{ padding: 16, textAlign: 'center', color: 'var(--text2)', fontSize: 13 }}>No tasks</div>
             ) : tasks.map((task) => {
               const s = statusStyle[task.status] ?? statusStyle.todo;
+              const workflow = task.metadata?.workflow;
+              const nextPhase = getNextPhase(workflow);
+              const activePhase = getActivePhase(workflow);
+              const blockedPhase = getBlockedPhase(workflow);
+              const assignedAgent = agents.find((agent) => agent.id === task.agentId);
+              const reviewAgent = workflow && canSendToReview(workflow) ? pickReviewerAgent(agents, task) : null;
+              const blockedReviewAgent =
+                workflow && blockedPhase?.enforceSeparation
+                  ? pickReviewerAgent(agents, task)
+                  : null;
+              const workflowOutcome = getWorkflowOutcomeSummary(task, workflow);
+              const latestActivity = getLatestTaskActivity(projectActivity, task.id);
+              const latestActivitySummary = getTaskActivitySummary(latestActivity);
+              const taskTimeline = getTaskActivityTimeline(projectActivity, task.id);
+              const selectedTimelineEntry = taskTimeline.find((entry) => entry.id === selectedTimelineEventIds[task.id]);
+              const selectedTimelineDetail = selectedTimelineEntry ? getTaskTimelineDetail(selectedTimelineEntry) : null;
               return (
                 <div
                   key={task.id}
                   style={{
                     display: 'flex',
-                    alignItems: 'center',
+                    alignItems: 'flex-start',
                     justifyContent: 'space-between',
                     padding: '8px 0',
                     borderBottom: '1px solid var(--border)',
+                    gap: 12,
                   }}
                 >
-                  <div style={{ fontSize: 13, flex: 1, marginRight: 8 }}>{task.title}</div>
-                  <span
-                    style={{
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      background: s.bg,
-                      color: s.color,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {task.status}
-                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{task.title}</div>
+                    {workflow ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            background: 'rgba(116,185,255,0.12)',
+                            color: 'var(--blue)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {workflow.name}
+                        </span>
+                        <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+                          {workflow.phases.length} phase{workflow.phases.length === 1 ? '' : 's'}
+                        </span>
+                        {nextPhase ? <span style={{ fontSize: 11, color: 'var(--text2)' }}>next: {nextPhase.label}</span> : null}
+                        {workflow.separationMode === 'enforced' ? (
+                          <span style={{ fontSize: 11, color: 'var(--yellow)' }}>separate review required</span>
+                        ) : null}
+                        {assignedAgent ? <span style={{ fontSize: 11, color: 'var(--text2)' }}>agent: {assignedAgent.name}</span> : null}
+                        {reviewAgent ? <span style={{ fontSize: 11, color: 'var(--text2)' }}>reviewer: {reviewAgent.name}</span> : null}
+                        </div>
+                        {workflow.lastBlockedReason ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: 'var(--red)' }}>{workflow.lastBlockedReason}</span>
+                            {needsReviewerSetup(workflow) ? (
+                              <>
+                                {blockedReviewAgent ? (
+                                  <button
+                                    onClick={() => retryBlockedReviewMutation.mutate(task)}
+                                    disabled={retryBlockedReviewMutation.isPending}
+                                    aria-label={`Resume review for task ${task.title}`}
+                                    style={{
+                                      padding: '3px 8px',
+                                      borderRadius: 999,
+                                      border: '1px solid var(--border)',
+                                      background: 'rgba(0,206,201,0.12)',
+                                      color: 'var(--green)',
+                                      fontSize: 10,
+                                      fontWeight: 700,
+                                      cursor: retryBlockedReviewMutation.isPending ? 'not-allowed' : 'pointer',
+                                      opacity: retryBlockedReviewMutation.isPending ? 0.6 : 1,
+                                    }}
+                                  >
+                                    {retryBlockedReviewMutation.isPending ? 'Resuming Review...' : `Resume Review with ${blockedReviewAgent.name}`}
+                                  </button>
+                                ) : null}
+                                <button
+                                  onClick={() => applySetupOperations('gear', ['gear-reviewer-agent'])}
+                                  disabled={applySetupAxis.isPending}
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: 999,
+                                    border: '1px solid var(--border)',
+                                    background: 'rgba(116,185,255,0.12)',
+                                    color: 'var(--blue)',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    cursor: applySetupAxis.isPending ? 'not-allowed' : 'pointer',
+                                    opacity: applySetupAxis.isPending ? 0.6 : 1,
+                                  }}
+                                >
+                                  {applySetupAxis.isPending ? 'Applying Reviewer Setup...' : 'Apply Reviewer Setup'}
+                                </button>
+                                <button
+                                  onClick={() => requestSetupFocus(['gear-reviewer-agent'])}
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: 999,
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--surface2)',
+                                    color: 'var(--text)',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Focus Reviewer Setup
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {workflowOutcome ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: workflowOutcome.color }}>{workflowOutcome.text}</span>
+                          </div>
+                        ) : null}
+                        {latestActivitySummary ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: latestActivitySummary.color }}>{latestActivitySummary.text}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text2)' }}>{relativeTime(latestActivity!.createdAt)}</span>
+                          </div>
+                        ) : null}
+                        {taskTimeline.length > 0 ? (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text2)' }}>recent run timeline</span>
+                            {taskTimeline.map((entry) => {
+                              const tone = getTaskTimelineColor(entry.eventType);
+                              return (
+                                <button
+                                  key={entry.id}
+                                  onClick={() => setSelectedTimelineEventIds((current) => ({
+                                    ...current,
+                                    [task.id]: current[task.id] === entry.id ? undefined : entry.id,
+                                  }))}
+                                  aria-label={`Open timeline event ${getTaskTimelineLabel(entry)} for task ${task.title}`}
+                                  style={{
+                                    padding: '2px 8px',
+                                    borderRadius: 999,
+                                    background: tone.bg,
+                                    color: tone.color,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    border: selectedTimelineEventIds[task.id] === entry.id ? `1px solid ${tone.color}` : '1px solid transparent',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {getTaskTimelineLabel(entry)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                        {selectedTimelineEntry ? (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              background: 'var(--surface2)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text)' }}>
+                              Timeline Detail: {getTaskTimelineLabel(selectedTimelineEntry)}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text2)' }}>
+                              event: {selectedTimelineDetail?.eventLabel}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text2)' }}>
+                              phase: {selectedTimelineDetail?.phaseLine}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text2)' }}>
+                              outcome: {selectedTimelineDetail?.outcome}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text2)' }}>
+                              at: {selectedTimelineDetail?.createdAt}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              {selectedTimelineDetail?.runId ? (
+                                <button
+                                  onClick={() => openTimelineTail(selectedTimelineEntry)}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: 8,
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--surface)',
+                                    color: 'var(--text)',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {loadingTimelineEventId === selectedTimelineEntry.id ? 'Opening Run Tail...' : 'Load Run Logs'}
+                                </button>
+                              ) : null}
+                              {selectedTimelineEntry.eventType === 'task.failed' && isReviewTimelineEntry(selectedTimelineEntry) ? (
+                                <button
+                                  onClick={() => retryBlockedReviewMutation.mutate(task)}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: 8,
+                                    border: '1px solid var(--border)',
+                                    background: 'rgba(0,206,201,0.12)',
+                                    color: 'var(--green)',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Retry Review
+                                </button>
+                              ) : null}
+                            </div>
+                            {timelineLogsByEventId[selectedTimelineEntry.id]?.length ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 4,
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  background: '#111',
+                                  color: '#dfe6e9',
+                                  fontSize: 10,
+                                  fontFamily: 'monospace',
+                                  maxHeight: 120,
+                                  overflow: 'auto',
+                                }}
+                              >
+                                {timelineLogsByEventId[selectedTimelineEntry.id]!.map((line, index) => (
+                                  <div key={`${selectedTimelineEntry.id}-${index}`}>{line}</div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {timelineDoneByEventId[selectedTimelineEntry.id] ? (
+                              <div style={{ fontSize: 10, color: 'var(--text2)' }}>
+                                run finished: exitCode {String(timelineDoneByEventId[selectedTimelineEntry.id]?.exitCode ?? 'null')}
+                                {timelineDoneByEventId[selectedTimelineEntry.id]?.timedOut ? ', timed out' : ''}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {workflow.phases.map((phase) => (
+                            <span
+                              key={phase.id}
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                background:
+                                  phase.status === 'done'
+                                    ? 'rgba(0,206,201,0.1)'
+                                    : phase.status === 'in_progress'
+                                      ? 'rgba(116,185,255,0.12)'
+                                      : phase.status === 'blocked'
+                                        ? 'rgba(255,107,107,0.12)'
+                                        : 'var(--surface3)',
+                                color:
+                                  phase.status === 'done'
+                                    ? 'var(--green)'
+                                    : phase.status === 'in_progress'
+                                      ? 'var(--blue)'
+                                      : phase.status === 'blocked'
+                                        ? 'var(--red)'
+                                        : 'var(--text2)',
+                                fontSize: 10,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {phase.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {workflow && canSendToReview(workflow) ? (
+                      <button
+                        onClick={() => transitionTaskPhase.mutate({ task, mode: 'review' })}
+                        disabled={transitionTaskPhase.isPending}
+                        aria-label={`Send task ${task.title} to review`}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'rgba(253,203,110,0.12)',
+                          color: 'var(--yellow)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: transitionTaskPhase.isPending ? 'not-allowed' : 'pointer',
+                          opacity: transitionTaskPhase.isPending ? 0.6 : 1,
+                        }}
+                      >
+                        {reviewAgent ? `Send to ${reviewAgent.name}` : 'Send to Review'}
+                      </button>
+                    ) : null}
+                    {workflow && activePhase ? (
+                      <button
+                        onClick={() => transitionTaskPhase.mutate({ task, mode: 'block' })}
+                        disabled={transitionTaskPhase.isPending}
+                        aria-label={`Block task ${task.title}`}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'rgba(255,107,107,0.08)',
+                          color: 'var(--red)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: transitionTaskPhase.isPending ? 'not-allowed' : 'pointer',
+                          opacity: transitionTaskPhase.isPending ? 0.6 : 1,
+                        }}
+                      >
+                        Block Phase
+                      </button>
+                    ) : null}
+                    {workflow && blockedPhase ? (
+                      <button
+                        onClick={() => transitionTaskPhase.mutate({ task, mode: 'resume' })}
+                        disabled={transitionTaskPhase.isPending}
+                        aria-label={`Resume task ${task.title}`}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface2)',
+                          color: 'var(--text)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: transitionTaskPhase.isPending ? 'not-allowed' : 'pointer',
+                          opacity: transitionTaskPhase.isPending ? 0.6 : 1,
+                        }}
+                      >
+                        Resume Phase
+                      </button>
+                    ) : null}
+                    {workflow && canRunReview(workflow, task) ? (
+                      <button
+                        onClick={() => runReviewMutation.mutate(task)}
+                        disabled={runReviewMutation.isPending}
+                        aria-label={`Run review for task ${task.title}`}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'rgba(116,185,255,0.12)',
+                          color: 'var(--blue)',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: runReviewMutation.isPending ? 'not-allowed' : 'pointer',
+                          opacity: runReviewMutation.isPending ? 0.6 : 1,
+                        }}
+                      >
+                        Run Review
+                      </button>
+                    ) : null}
+                    {workflow && nextPhase ? (
+                      <button
+                        onClick={() => advanceTaskPhase.mutate(task)}
+                        disabled={advanceTaskPhase.isPending}
+                        aria-label={`Advance task ${task.title}`}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface2)',
+                          color: 'var(--text)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: advanceTaskPhase.isPending ? 'not-allowed' : 'pointer',
+                          opacity: advanceTaskPhase.isPending ? 0.6 : 1,
+                        }}
+                      >
+                        {nextPhase.status === 'in_progress' ? 'Complete Phase' : 'Advance Phase'}
+                      </button>
+                    ) : null}
+                    <span
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: s.bg,
+                        color: s.color,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {task.status}
+                    </span>
+                  </div>
                 </div>
               );
             })}

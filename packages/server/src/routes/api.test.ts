@@ -200,6 +200,7 @@ describe('Guardrails API', () => {
 describe('Tasks API', () => {
   let projectId: string;
   let agentId: string;
+  let reviewerAgentId: string;
   let taskId: string;
 
   it('setup: create project and agent', async () => {
@@ -207,14 +208,35 @@ describe('Tasks API', () => {
     projectId = ((await res.json()) as any).data.id;
     res = await post('/agents', { projectId, name: 'runner', adapterType: 'claude_local' });
     agentId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId, name: 'reviewer', adapterType: 'codex_local' });
+    reviewerAgentId = ((await res.json()) as any).data.id;
   });
 
   it('POST /tasks creates task', async () => {
-    const res = await post('/tasks', { projectId, title: 'Do something', agentId });
+    const res = await post('/tasks', {
+      projectId,
+      title: 'Do something',
+      agentId,
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          phases: [
+            { id: 'context', label: 'Context' },
+            { id: 'review', label: 'Review', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+        },
+      },
+    });
     const json = await res.json() as any;
     expect(res.status).toBe(201);
     expect(json.data.title).toBe('Do something');
     expect(json.data.status).toBe('todo');
+    expect(json.data.metadata.workflow.id).toBe('implement-feature');
+    expect(json.data.metadata.workflow.phases).toHaveLength(2);
     taskId = json.data.id;
   });
 
@@ -222,6 +244,7 @@ describe('Tasks API', () => {
     const res = await get(`/tasks?projectId=${projectId}`);
     const json = await res.json() as any;
     expect(json.data.length).toBe(1);
+    expect(json.data[0].metadata.workflow.name).toBe('Implement Feature');
   });
 
   it('POST /tasks/:id/checkout assigns agent', async () => {
@@ -246,6 +269,85 @@ describe('Tasks API', () => {
     const json = await res.json() as any;
     expect(json.ok).toBe(true);
     expect(Array.isArray(json.data)).toBe(true);
+  });
+
+  it('POST /tasks/:id/run auto-selects an idle reviewer for the active review phase', async () => {
+    const res = await patch(`/tasks/${taskId}`, {
+      agentId,
+      status: 'in_progress',
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          lastCompletedPhaseId: 'implement',
+          lastCompletedAgentId: agentId,
+          phases: [
+            { id: 'implement', label: 'Implement', status: 'done' },
+            { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const runRes = await post(`/tasks/${taskId}/run`, {});
+    expect(runRes.status).toBe(200);
+    const json = await runRes.json() as any;
+    expect(json.ok).toBe(true);
+    expect(json.data.agentId).toBe(reviewerAgentId);
+  });
+
+  it('POST /tasks/:id/run returns 409 when review phase is forced onto the same previous agent', async () => {
+    const runRes = await post(`/tasks/${taskId}/run`, { agentId });
+    expect(runRes.status).toBe(409);
+    const json = await runRes.json() as any;
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('Separation policy');
+  });
+
+  it('POST /tasks/:id/run blocks the task when no idle reviewer is available', async () => {
+    let res = await post('/projects', { name: 'reviewer-missing-project' });
+    const reviewerMissingProjectId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId: reviewerMissingProjectId, name: 'implementer', adapterType: 'claude_local' });
+    const implementerId = ((await res.json()) as any).data.id;
+    await patch(`/agents/${implementerId}`, { status: 'running' });
+
+    res = await post('/tasks', {
+      projectId: reviewerMissingProjectId,
+      title: 'Needs reviewer',
+      agentId: implementerId,
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          lastCompletedPhaseId: 'implement',
+          lastCompletedAgentId: implementerId,
+          phases: [
+            { id: 'implement', label: 'Implement', status: 'done' },
+            { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+        },
+      },
+    });
+    const blockedTaskId = ((await res.json()) as any).data.id;
+
+    const runRes = await post(`/tasks/${blockedTaskId}/run`, {});
+    expect(runRes.status).toBe(409);
+    const runJson = await runRes.json() as any;
+    expect(runJson.ok).toBe(false);
+    expect(runJson.error).toContain('idle reviewer agent');
+
+    const taskRes = await get(`/tasks/${blockedTaskId}`);
+    const taskJson = await taskRes.json() as any;
+    expect(taskJson.data.status).toBe('blocked');
+    expect(taskJson.data.metadata.workflow.lastBlockedReason).toContain('No idle reviewer agent available');
+    expect(taskJson.data.metadata.workflow.phases[1].status).toBe('blocked');
   });
 });
 

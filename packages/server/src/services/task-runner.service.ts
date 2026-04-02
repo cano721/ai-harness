@@ -25,6 +25,34 @@ export interface TaskDoneEvent {
   timedOut: boolean;
 }
 
+interface TaskWorkflowMetadata {
+  id: string;
+  name: string;
+  summary?: string;
+  source: 'gear';
+  separationMode: 'advisory' | 'enforced';
+  lastCompletedPhaseId?: string;
+  lastCompletedAgentId?: string;
+  phases: Array<{
+    id: string;
+    label: string;
+    objective?: string;
+    enforceSeparation?: boolean;
+    status?: 'pending' | 'in_progress' | 'done' | 'blocked';
+  }>;
+  checklist: string[];
+}
+
+interface WorkflowRunTransition {
+  workflow?: TaskWorkflowMetadata;
+  taskStatus: 'in_progress' | 'done' | 'blocked';
+  phaseTransition?: {
+    from?: string;
+    to?: string;
+    outcome: 'advanced' | 'completed' | 'blocked' | 'unchanged';
+  };
+}
+
 export const taskEvents = new EventEmitter();
 taskEvents.setMaxListeners(100);
 
@@ -36,6 +64,93 @@ export function getRunLogs(runId: string): string[] {
 
 export function isRunActive(runId: string): boolean {
   return activeLogs.has(runId);
+}
+
+export function applyWorkflowRunResult(
+  workflow: TaskWorkflowMetadata | undefined,
+  exitCode: number | null,
+  agentId?: string,
+): WorkflowRunTransition {
+  if (!workflow) {
+    return {
+      workflow: undefined,
+      taskStatus: exitCode === 0 ? 'done' : 'blocked',
+      phaseTransition: {
+        outcome: 'unchanged',
+      },
+    };
+  }
+
+  const activeIndex = workflow.phases.findIndex((phase) => phase.status === 'in_progress');
+  if (activeIndex < 0) {
+    return {
+      workflow,
+      taskStatus: exitCode === 0 ? 'done' : 'blocked',
+      phaseTransition: {
+        outcome: 'unchanged',
+      },
+    };
+  }
+
+  const activePhase = workflow.phases[activeIndex];
+
+  if (exitCode !== 0) {
+    const blockedPhases = workflow.phases.map((phase, index) => (
+      index === activeIndex ? { ...phase, status: 'blocked' as const } : phase
+    ));
+
+    return {
+      workflow: { ...workflow, phases: blockedPhases },
+      taskStatus: 'blocked',
+      phaseTransition: {
+        from: activePhase.label,
+        to: activePhase.label,
+        outcome: 'blocked',
+      },
+    };
+  }
+
+  const completedPhases = workflow.phases.map((phase, index) => (
+    index === activeIndex ? { ...phase, status: 'done' as const } : phase
+  ));
+  const nextPendingIndex = completedPhases.findIndex((phase, index) => index > activeIndex && phase.status === 'pending');
+
+  if (nextPendingIndex >= 0) {
+    const nextPhase = completedPhases[nextPendingIndex];
+    completedPhases[nextPendingIndex] = {
+      ...nextPhase,
+      status: 'in_progress',
+    };
+
+    return {
+      workflow: {
+        ...workflow,
+        phases: completedPhases,
+        lastCompletedPhaseId: activePhase.id,
+        lastCompletedAgentId: agentId ?? workflow.lastCompletedAgentId,
+      },
+      taskStatus: 'in_progress',
+      phaseTransition: {
+        from: activePhase.label,
+        to: nextPhase.label,
+        outcome: 'advanced',
+      },
+    };
+  }
+
+  return {
+    workflow: {
+      ...workflow,
+      phases: completedPhases,
+      lastCompletedPhaseId: activePhase.id,
+      lastCompletedAgentId: agentId ?? workflow.lastCompletedAgentId,
+    },
+    taskStatus: 'done',
+    phaseTransition: {
+      from: activePhase.label,
+      outcome: 'completed',
+    },
+  };
 }
 
 export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; exitCode: number | null }> {
@@ -94,10 +209,26 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     ...(skillNames ? { DDALKAK_SKILLS: skillNames } : {}),
   };
 
+  const workflow = (task.metadata as { workflow?: TaskWorkflowMetadata } | null | undefined)?.workflow;
+  const workflowPrompt = workflow
+    ? [
+        `Workflow Template: ${workflow.name}${workflow.summary ? ` - ${workflow.summary}` : ''}`,
+        workflow.phases.length > 0
+          ? `Phases:\n${workflow.phases.map((phase, index) => `${index + 1}. ${phase.label}${phase.objective ? ` - ${phase.objective}` : ''}${phase.enforceSeparation ? ' (separate agent required)' : ''}`).join('\n')}`
+          : undefined,
+        workflow.checklist.length > 0
+          ? `Checklist:\n${workflow.checklist.map((item) => `- ${item}`).join('\n')}`
+          : undefined,
+        workflow.separationMode === 'enforced'
+          ? 'Separation Policy: review or verification phases must run in a separate agent/runtime context.'
+          : undefined,
+      ].filter(Boolean).join('\n\n')
+    : undefined;
+
   // Execute
   const result = await adapter.execute({
     runId,
-    prompt: task.description ? `${task.title}\n\n${task.description}` : task.title,
+    prompt: [task.title, task.description, workflowPrompt].filter(Boolean).join('\n\n'),
     cwd,
     env,
     timeoutSec: opts.timeoutSec ?? 300,
@@ -117,15 +248,30 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     tokensOut: result.usage?.outputTokens ?? null,
   }).where(eq(taskRuns.id, run.id));
 
-  const taskStatus = result.exitCode === 0 ? 'done' : 'blocked';
-  await db.update(tasks).set({ status: taskStatus, updatedAt: new Date() }).where(eq(tasks.id, opts.taskId));
+  const transition = applyWorkflowRunResult(workflow, result.exitCode, opts.agentId);
+  const taskMetadata =
+    task.metadata && typeof task.metadata === 'object' && !Array.isArray(task.metadata)
+      ? task.metadata as Record<string, unknown>
+      : {};
+
+  await db.update(tasks).set({
+    status: transition.taskStatus,
+    metadata: transition.workflow ? { ...taskMetadata, workflow: transition.workflow } : taskMetadata,
+    updatedAt: new Date(),
+  }).where(eq(tasks.id, opts.taskId));
   await db.update(agents).set({ status: 'idle', lastHeartbeat: new Date() }).where(eq(agents.id, opts.agentId));
 
   await db.insert(activityLog).values({
     projectId: project.id,
     agentId: agent.id,
     eventType: result.exitCode === 0 ? 'task.completed' : 'task.failed',
-    detail: { taskId: task.id, runId, exitCode: result.exitCode, timedOut: result.timedOut },
+    detail: {
+      taskId: task.id,
+      runId,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      workflowPhase: transition.phaseTransition,
+    },
   });
 
   // Upsert cost daily — accumulate same date+agent+project

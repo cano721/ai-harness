@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, integer, real } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, integer, real, jsonb } from 'drizzle-orm/pg-core';
 import { projects } from './projects.js';
 import { agents } from './agents.js';
 
@@ -8,6 +8,7 @@ export const tasks = pgTable('tasks', {
   agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
   title: varchar('title', { length: 500 }).notNull(),
   description: text('description'),
+  metadata: jsonb('metadata').default({}).notNull(),
   status: varchar('status', { length: 50 }).notNull().default('todo'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
