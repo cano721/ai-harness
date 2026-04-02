@@ -34,6 +34,11 @@ export function listWorkers(): WorkerRegistration[] {
   return [...workers.values()];
 }
 
+export function getWorker(workerId: string): WorkerRegistration | null {
+  ensureLocalWorker();
+  return workers.get(workerId) ?? null;
+}
+
 export function registerWorker(input: Omit<WorkerRegistration, 'activeRunCount' | 'lastHeartbeat'> & Partial<Pick<WorkerRegistration, 'activeRunCount' | 'lastHeartbeat'>>) {
   ensureLocalWorker();
   const worker: WorkerRegistration = {
@@ -48,6 +53,13 @@ export function registerWorker(input: Omit<WorkerRegistration, 'activeRunCount' 
 export function getDefaultLocalWorker(): WorkerRegistration {
   ensureLocalWorker();
   return workers.get('local-inline-worker')!;
+}
+
+export function canWorkerAcceptRun(workerId: string): boolean {
+  const worker = getWorker(workerId);
+  if (!worker) return false;
+  if (worker.status === 'offline') return false;
+  return worker.activeRunCount < worker.concurrency;
 }
 
 export function heartbeatWorker(workerId: string) {
@@ -65,10 +77,11 @@ export function heartbeatWorker(workerId: string) {
 export function markWorkerBusy(workerId: string) {
   const worker = workers.get(workerId);
   if (!worker) return;
+  const nextActive = worker.activeRunCount + 1;
   workers.set(workerId, {
     ...worker,
     status: 'busy',
-    activeRunCount: worker.activeRunCount + 1,
+    activeRunCount: nextActive,
     lastHeartbeat: new Date(),
   });
 }
@@ -76,10 +89,11 @@ export function markWorkerBusy(workerId: string) {
 export function markWorkerIdle(workerId: string) {
   const worker = workers.get(workerId);
   if (!worker) return;
+  const nextActive = Math.max(0, worker.activeRunCount - 1);
   workers.set(workerId, {
     ...worker,
-    status: 'idle',
-    activeRunCount: Math.max(0, worker.activeRunCount - 1),
+    status: nextActive > 0 ? 'busy' : 'idle',
+    activeRunCount: nextActive,
     lastHeartbeat: new Date(),
   });
 }

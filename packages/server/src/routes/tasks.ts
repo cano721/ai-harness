@@ -326,6 +326,12 @@ tasksRouter.post('/:id/run', async (req, res) => {
     return;
   }
 
+  const dispatchMode = req.body?.dispatchMode;
+  if (dispatchMode && dispatchMode !== 'local-inline' && dispatchMode !== 'remote-queued') {
+    res.status(400).json({ ok: false, error: 'Invalid dispatchMode' });
+    return;
+  }
+
   const dispatch = await dispatchTaskRun({
     task: {
       id: task.id,
@@ -333,9 +339,10 @@ tasksRouter.post('/:id/run', async (req, res) => {
       agentId: task.agentId,
       metadata: task.metadata,
     },
-    requestedAgentId: req.body.agentId,
-    timeoutSec: req.body.timeoutSec ?? 300,
-    maxTurns: req.body.maxTurns ?? 20,
+    requestedAgentId: req.body?.agentId,
+    dispatchMode,
+    timeoutSec: req.body?.timeoutSec ?? 300,
+    maxTurns: req.body?.maxTurns ?? 20,
   });
 
   if (!dispatch.ok) {

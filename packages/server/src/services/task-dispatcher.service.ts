@@ -20,6 +20,7 @@ interface DispatchTask {
 interface DispatchTaskRunOptions {
   task: DispatchTask;
   requestedAgentId?: string | null;
+  dispatchMode?: 'local-inline' | 'remote-queued';
   timeoutSec?: number;
   maxTurns?: number;
 }
@@ -33,11 +34,11 @@ interface DispatchBlockedResult {
 interface DispatchAcceptedResult {
   ok: true;
   agentId: string;
-  status: 'started';
-  dispatchMode: 'local-inline';
-  queueState: 'running';
+  status: 'started' | 'queued';
+  dispatchMode: 'local-inline' | 'remote-queued';
+  queueState: 'running' | 'queued';
   queueId: string;
-  workerId: string;
+  workerId: string | null;
 }
 
 export type DispatchTaskRunResult = DispatchBlockedResult | DispatchAcceptedResult;
@@ -60,6 +61,7 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
   const db = await createDb();
   const workflow = (opts.task.metadata as { workflow?: DispatchWorkflowMetadata } | null | undefined)?.workflow;
   const activePhase = workflow?.phases?.find((phase) => phase.status === 'in_progress');
+  const dispatchMode = opts.dispatchMode ?? 'local-inline';
   const timeoutSec = opts.timeoutSec ?? 300;
   const maxTurns = opts.maxTurns ?? 20;
   let agentId = opts.requestedAgentId ?? opts.task.agentId ?? undefined;
@@ -110,15 +112,43 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
     };
   }
 
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+  if (!agent) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Assigned agent not found',
+    };
+  }
+
+  const capabilityLabels = activePhase?.enforceSeparation
+    ? ['review pass']
+    : ['implementation'];
+
   const queueItem = enqueueRun({
     taskId: opts.task.id,
     projectId: opts.task.projectId,
     agentId,
+    adapterType: agent.adapterType,
     phaseId: activePhase?.id,
+    capabilityLabels,
     separationRequired: activePhase?.enforceSeparation === true,
     timeoutSec,
     maxTurns,
   });
+
+  if (dispatchMode === 'remote-queued') {
+    return {
+      ok: true,
+      agentId,
+      status: 'queued',
+      dispatchMode,
+      queueState: 'queued',
+      queueId: queueItem.id,
+      workerId: null,
+    };
+  }
+
   const worker = getDefaultLocalWorker();
   leaseRun(queueItem.id, worker.id);
   markRunRunning(queueItem.id);
@@ -139,7 +169,7 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
     ok: true,
     agentId,
     status: 'started',
-    dispatchMode: 'local-inline',
+    dispatchMode,
     queueState: 'running',
     queueId: queueItem.id,
     workerId: worker.id,

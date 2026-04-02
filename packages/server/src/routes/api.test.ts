@@ -437,9 +437,33 @@ describe('Tasks API', () => {
     expect(taskJson.data.metadata.workflow.lastBlockedReason).toContain('No idle reviewer agent available');
     expect(taskJson.data.metadata.workflow.phases[1].status).toBe('blocked');
   });
+
+  it('POST /tasks/:id/run supports remote queued dispatch mode', async () => {
+    let res = await post('/projects', { name: 'remote-dispatch-project' });
+    const remoteProjectId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId: remoteProjectId, name: 'remote-runner', adapterType: 'codex_local' });
+    const remoteAgentId = ((await res.json()) as any).data.id;
+    res = await post('/tasks', { projectId: remoteProjectId, title: 'Remote queue run', agentId: remoteAgentId });
+    const remoteTaskId = ((await res.json()) as any).data.id;
+
+    const runRes = await post(`/tasks/${remoteTaskId}/run`, { dispatchMode: 'remote-queued' });
+    expect(runRes.status).toBe(200);
+    const runJson = await runRes.json() as any;
+    expect(runJson.ok).toBe(true);
+    expect(runJson.data.dispatchMode).toBe('remote-queued');
+    expect(runJson.data.queueState).toBe('queued');
+    expect(runJson.data.status).toBe('queued');
+    expect(runJson.data.workerId).toBeNull();
+  });
 });
 
 describe('Workers API', () => {
+  let projectId: string;
+  let agentId: string;
+  let taskId: string;
+  let queuedRunId: string;
+  let failedRunId: string;
+
   it('GET /workers returns the local inline worker', async () => {
     const res = await get('/workers');
     const json = await res.json() as any;
@@ -471,6 +495,56 @@ describe('Workers API', () => {
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
     expect(json.data.id).toBe('remote-worker-1');
+  });
+
+  it('setup: create queueable task for remote worker lease', async () => {
+    let res = await post('/projects', { name: 'remote-worker-lease-project' });
+    projectId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId, name: 'remote-lease-agent', adapterType: 'codex_local' });
+    agentId = ((await res.json()) as any).data.id;
+    res = await post('/tasks', { projectId, title: 'Leased by remote worker', agentId });
+    taskId = ((await res.json()) as any).data.id;
+  });
+
+  it('POST /workers/:id/lease leases a queued run for a compatible remote worker', async () => {
+    const runRes = await post(`/tasks/${taskId}/run`, { dispatchMode: 'remote-queued' });
+    const runJson = await runRes.json() as any;
+    queuedRunId = runJson.data.queueId;
+    expect(runRes.status).toBe(200);
+    expect(runJson.data.queueState).toBe('queued');
+
+    const leaseRes = await post('/workers/remote-worker-1/lease', { queueId: queuedRunId });
+    const leaseJson = await leaseRes.json() as any;
+    expect(leaseRes.status).toBe(200);
+    expect(leaseJson.ok).toBe(true);
+    expect(leaseJson.data.id).toBe(queuedRunId);
+    expect(leaseJson.data.state).toBe('leased');
+    expect(leaseJson.data.workerId).toBe('remote-worker-1');
+  });
+
+  it('POST /workers/:id/runs/:runRequestId/complete marks a leased run as completed', async () => {
+    const completeRes = await post(`/workers/remote-worker-1/runs/${queuedRunId}/complete`, {});
+    const completeJson = await completeRes.json() as any;
+    expect(completeRes.status).toBe(200);
+    expect(completeJson.ok).toBe(true);
+    expect(completeJson.data.id).toBe(queuedRunId);
+    expect(completeJson.data.state).toBe('completed');
+  });
+
+  it('POST /workers/:id/runs/:runRequestId/fail marks a leased run as failed', async () => {
+    const runRes = await post(`/tasks/${taskId}/run`, { dispatchMode: 'remote-queued' });
+    const runJson = await runRes.json() as any;
+    failedRunId = runJson.data.queueId;
+
+    const leaseRes = await post('/workers/remote-worker-1/lease', { queueId: failedRunId });
+    expect(leaseRes.status).toBe(200);
+
+    const failRes = await post(`/workers/remote-worker-1/runs/${failedRunId}/fail`, {});
+    const failJson = await failRes.json() as any;
+    expect(failRes.status).toBe(200);
+    expect(failJson.ok).toBe(true);
+    expect(failJson.data.id).toBe(failedRunId);
+    expect(failJson.data.state).toBe('failed');
   });
 });
 
