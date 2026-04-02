@@ -17,6 +17,7 @@ import { costsRouter } from './routes/costs.js';
 import { activityRouter } from './routes/activity.js';
 import { skillsRouter } from './routes/skills.js';
 import { metricsRouter } from './routes/metrics.js';
+import { workersRouter } from './routes/workers.js';
 
 export function createApp() {
   const app = express();
@@ -40,6 +41,7 @@ export function createApp() {
   app.use(`${API_PREFIX}/activity`, activityRouter);
   app.use(`${API_PREFIX}/skills`, skillsRouter);
   app.use(`${API_PREFIX}/metrics`, metricsRouter);
+  app.use(`${API_PREFIX}/workers`, workersRouter);
 
   // Health check
   app.get(`${API_PREFIX}/health`, (_req, res) => {

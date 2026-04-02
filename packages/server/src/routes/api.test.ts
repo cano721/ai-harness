@@ -439,6 +439,41 @@ describe('Tasks API', () => {
   });
 });
 
+describe('Workers API', () => {
+  it('GET /workers returns the local inline worker', async () => {
+    const res = await get('/workers');
+    const json = await res.json() as any;
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.some((worker: any) => worker.id === 'local-inline-worker')).toBe(true);
+  });
+
+  it('POST /workers/register registers a remote worker', async () => {
+    const res = await post('/workers/register', {
+      id: 'remote-worker-1',
+      name: 'Remote Worker 1',
+      runtimeKind: 'remote',
+      adapterTypes: ['codex_local'],
+      capabilityLabels: ['implementation', 'review pass'],
+      concurrency: 2,
+      status: 'idle',
+    });
+    const json = await res.json() as any;
+    expect(res.status).toBe(201);
+    expect(json.ok).toBe(true);
+    expect(json.data.id).toBe('remote-worker-1');
+    expect(json.data.runtimeKind).toBe('remote');
+  });
+
+  it('POST /workers/:id/heartbeat refreshes worker heartbeat', async () => {
+    const res = await post('/workers/remote-worker-1/heartbeat', {});
+    const json = await res.json() as any;
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.id).toBe('remote-worker-1');
+  });
+});
+
 describe('Project Setup API', () => {
   const setupDir = mkdtempSync(join(tmpdir(), 'ddalkak-setup-'));
   const partialSetupDir = mkdtempSync(join(tmpdir(), 'ddalkak-setup-partial-'));

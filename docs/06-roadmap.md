@@ -47,6 +47,25 @@
 
 ---
 
+## Phase 4: Control Plane 완성도 + Execution V2
+
+**목표**: setup-first control plane 위에 queue/worker 기반 execution plane을 얹는다.
+
+| # | 항목 | 설명 |
+|---|------|------|
+| 4-1 | setup control plane polish | Project Detail / Tasks / Run Inspector의 loading, recovery, activity UX 보강 |
+| 4-2 | workflow task model 강화 | phase objective, checklist policy, reviewer separation을 task/run 정책으로 승격 |
+| 4-3 | dispatch 경계 분리 | route에서 direct run 호출 제거, dispatcher/queue/service 경계 도입 |
+| 4-4 | local worker queue mode | local runtime도 queue lease 기반으로 실행 |
+| 4-5 | remote worker | worker registration, heartbeat, capacity 기반 분산 실행 |
+| 4-6 | hard separation orchestration | review phase의 agent/worker/runtime 분리 강제 |
+
+참고:
+- 현재 완료/남은 일은 `29-next-steps.md`
+- 실행 계층 확장 설계는 `30-execution-v2.md`
+
+---
+
 ## 우선순위 원칙
 
 1. **안전 > 효율 > 편의**: 사고 방지가 최우선

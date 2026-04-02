@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createDb, tasks, taskRuns, agents, activityLog } from '@ddalkak/db';
 import { eq, and, ne } from 'drizzle-orm';
 import { runTask, getRunLogs, isRunActive, taskEvents, type TaskLogEvent, type TaskDoneEvent } from '../services/task-runner.service.js';
+import { dispatchTaskRun } from '../services/task-dispatcher.service.js';
 import { z } from 'zod';
 import { validate } from '../middleware/validation.js';
 
@@ -72,20 +73,6 @@ const updateTaskSchema = z.object({
 });
 
 export const tasksRouter = Router();
-
-async function pickReviewAgent(task: { projectId: string }, lastCompletedAgentId?: string) {
-  const db = await createDb();
-  const projectAgents = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.projectId, task.projectId), eq(agents.status, 'idle')));
-
-  const candidates = lastCompletedAgentId
-    ? projectAgents.filter((agent) => agent.id !== lastCompletedAgentId)
-    : projectAgents;
-  const reviewer = candidates.find((agent) => /review/i.test(agent.name));
-  return reviewer ?? candidates[0] ?? null;
-}
 
 type ChecklistEntry = string | { id: string; label: string; kind: 'required' | 'advisory' | 'evidence' };
 
@@ -339,61 +326,35 @@ tasksRouter.post('/:id/run', async (req, res) => {
     return;
   }
 
-  const workflow = (task.metadata as {
-    workflow?: {
-      lastCompletedAgentId?: string;
-      phases?: Array<{ status?: string; enforceSeparation?: boolean }>;
-    };
-  } | null | undefined)?.workflow;
-  const activePhase = workflow?.phases?.find((phase) => phase.status === 'in_progress');
-  const requestedAgentId = req.body.agentId ?? task.agentId;
-  let agentId = requestedAgentId;
+  const dispatch = await dispatchTaskRun({
+    task: {
+      id: task.id,
+      projectId: task.projectId,
+      agentId: task.agentId,
+      metadata: task.metadata,
+    },
+    requestedAgentId: req.body.agentId,
+    timeoutSec: req.body.timeoutSec ?? 300,
+    maxTurns: req.body.maxTurns ?? 20,
+  });
 
-  if (activePhase?.enforceSeparation) {
-    if (req.body.agentId && workflow?.lastCompletedAgentId === req.body.agentId) {
-      res.status(409).json({ ok: false, error: 'Separation policy requires a different agent for the active review phase' });
-      return;
-    }
-
-    if (!agentId || workflow?.lastCompletedAgentId === agentId) {
-      const reviewAgent = await pickReviewAgent(task, workflow?.lastCompletedAgentId);
-      if (!reviewAgent) {
-        const blockedWorkflow = workflow
-          ? {
-              ...workflow,
-              lastBlockedReason: 'No idle reviewer agent available for the active review phase.',
-              phases: (workflow.phases ?? []).map((phase) => (
-                phase.status === 'in_progress' ? { ...phase, status: 'blocked' } : phase
-              )),
-            }
-          : workflow;
-
-        await db.update(tasks).set({
-          status: 'blocked',
-          metadata: blockedWorkflow ? { ...(task.metadata as Record<string, unknown>), workflow: blockedWorkflow } : task.metadata,
-          updatedAt: new Date(),
-        }).where(eq(tasks.id, req.params.id as string));
-        res.status(409).json({ ok: false, error: 'Separation policy requires an idle reviewer agent for the active review phase' });
-        return;
-      }
-      agentId = reviewAgent.id;
-    }
-  }
-
-  if (!agentId) {
-    res.status(400).json({ ok: false, error: 'No agent assigned' });
+  if (!dispatch.ok) {
+    res.status(dispatch.status).json({ ok: false, error: dispatch.error });
     return;
   }
 
-  // Run async - return immediately with runId
-  const timeoutSec = req.body.timeoutSec ?? 300;
-  const maxTurns = req.body.maxTurns ?? 20;
-
-  // Start task in background
-  runTask({ taskId: task.id, agentId, timeoutSec, maxTurns })
-    .catch((err) => console.error('Task run error:', err));
-
-  res.json({ ok: true, data: { taskId: task.id, agentId, status: 'started' } });
+  res.json({
+    ok: true,
+    data: {
+      taskId: task.id,
+      agentId: dispatch.agentId,
+      status: dispatch.status,
+      dispatchMode: dispatch.dispatchMode,
+      queueState: dispatch.queueState,
+      queueId: dispatch.queueId,
+      workerId: dispatch.workerId,
+    },
+  });
 });
 
 // Get task run history
