@@ -160,7 +160,7 @@ describe('migrateFromAiHarness', () => {
 
     const result = await migrateFromAiHarness(TEST_DIR);
     expect(result.migrated).toBe(true);
-    expect(result.details).toContain('Migrated config.yaml');
+    expect(result.details.some(d => d.message === 'Migrated config.yaml')).toBe(true);
     expect(existsSync(join(TEST_DIR, '.ddalkak', 'config.yaml'))).toBe(true);
   });
 
@@ -171,7 +171,7 @@ describe('migrateFromAiHarness', () => {
 
     const result = await migrateFromAiHarness(TEST_DIR);
     expect(result.migrated).toBe(true);
-    expect(result.details).toContain('Migrated context-map.md');
+    expect(result.details.some(d => d.message === 'Migrated context-map.md')).toBe(true);
   });
 
   it('preserves original .ai-harness/', async () => {
@@ -181,5 +181,80 @@ describe('migrateFromAiHarness', () => {
 
     await migrateFromAiHarness(TEST_DIR);
     expect(existsSync(oldDir)).toBe(true);
+  });
+
+  it('migrates agents/ directory', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(join(oldDir, 'agents'), { recursive: true });
+    writeFileSync(join(oldDir, 'agents', 'my-agent.md'), '# My Agent');
+
+    const result = await migrateFromAiHarness(TEST_DIR);
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(TEST_DIR, '.ddalkak', 'agents', 'my-agent.md'))).toBe(true);
+    expect(result.details.some(d => d.status === 'migrated' && d.message.includes('my-agent.md'))).toBe(true);
+  });
+
+  it('migrates skills/ directory', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(join(oldDir, 'skills'), { recursive: true });
+    writeFileSync(join(oldDir, 'skills', 'my-skill.md'), '# My Skill');
+
+    const result = await migrateFromAiHarness(TEST_DIR);
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(TEST_DIR, '.ddalkak', 'skills', 'my-skill.md'))).toBe(true);
+  });
+
+  it('migrates hooks/ directory', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(join(oldDir, 'hooks'), { recursive: true });
+    writeFileSync(join(oldDir, 'hooks', 'pre-commit.sh'), '#!/bin/bash');
+
+    const result = await migrateFromAiHarness(TEST_DIR);
+    expect(result.migrated).toBe(true);
+    expect(existsSync(join(TEST_DIR, '.ddalkak', 'hooks', 'pre-commit.sh'))).toBe(true);
+    expect(result.details.some(d => d.status === 'migrated' && d.message.includes('pre-commit.sh'))).toBe(true);
+  });
+
+  it('skips existing files without --force', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(oldDir, { recursive: true });
+    writeFileSync(join(oldDir, 'config.yaml'), 'name: "new"');
+
+    // Create existing file
+    mkdirSync(join(TEST_DIR, '.ddalkak'), { recursive: true });
+    writeFileSync(join(TEST_DIR, '.ddalkak', 'config.yaml'), 'name: "existing"');
+
+    const result = await migrateFromAiHarness(TEST_DIR);
+    expect(result.details.some(d => d.status === 'skipped')).toBe(true);
+    // Existing file should not be overwritten
+    const content = readFileSync(join(TEST_DIR, '.ddalkak', 'config.yaml'), 'utf-8');
+    expect(content).toContain('existing');
+  });
+
+  it('overwrites existing files with --force', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(oldDir, { recursive: true });
+    writeFileSync(join(oldDir, 'config.yaml'), 'name: "new"');
+
+    mkdirSync(join(TEST_DIR, '.ddalkak'), { recursive: true });
+    writeFileSync(join(TEST_DIR, '.ddalkak', 'config.yaml'), 'name: "existing"');
+
+    const result = await migrateFromAiHarness(TEST_DIR, { force: true });
+    expect(result.details.some(d => d.status === 'migrated' && d.message.includes('config.yaml'))).toBe(true);
+    const content = readFileSync(join(TEST_DIR, '.ddalkak', 'config.yaml'), 'utf-8');
+    expect(content).toContain('new');
+  });
+
+  it('dry-run does not write any files', async () => {
+    const oldDir = join(TEST_DIR, '.ai-harness');
+    mkdirSync(join(oldDir, 'agents'), { recursive: true });
+    writeFileSync(join(oldDir, 'config.yaml'), 'name: "test"');
+    writeFileSync(join(oldDir, 'agents', 'agent.md'), '# Agent');
+
+    const result = await migrateFromAiHarness(TEST_DIR, { dryRun: true });
+    expect(result.migrated).toBe(true);
+    expect(result.details.some(d => d.status === 'migrated')).toBe(true);
+    // Nothing should be written
+    expect(existsSync(join(TEST_DIR, '.ddalkak'))).toBe(false);
   });
 });

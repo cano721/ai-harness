@@ -146,6 +146,55 @@ export interface ExecutionResult {
   summary?: string;
 }
 
+// --- Project Analysis ---
+export interface ProjectAnalysis {
+  techStack: string[];
+  git: { isRepo: boolean; url?: string; branch?: string };
+  claudeMd: { exists: boolean; content?: string };
+  agents: { name: string; path: string }[];
+  hooks: { event: string; commands: string[] }[];
+  mcpServers: { name: string; command: string; args?: string[] }[];
+  docs: { name: string; path: string }[];  // .ddalkak/docs/*.md
+  skills: { name: string; path: string }[];
+  workflows: { name: string; path: string }[];  // .ddalkak/workflows/*.md
+  conventions: { category: string; rule: string }[];
+  guardrails: Record<string, string | number>;
+  installedCLIs: { claude: boolean; codex: boolean; cursor: boolean };
+  claudeMdQuality: {
+    score: number;
+    missingSections: string[];
+    suggestions: string[];
+  };
+  scores: {
+    guard: { score: number; details: { label: string; done: boolean }[] };
+    guide: { score: number; details: { label: string; done: boolean }[] };
+    gear: { score: number; details: { label: string; done: boolean }[] };
+  };
+}
+
+// --- Claude MD Analysis ---
+export interface ClaudeMdAnalysis {
+  score: number;
+  strengths: string[];
+  improvements: string[];
+  summary: string;
+}
+
+// --- Setup Analysis ---
+export interface SetupImprovement {
+  message: string;
+  target: string;
+  action: string;
+}
+
+export interface SetupAnalysis {
+  score: number;
+  guard: { strengths: string[]; improvements: SetupImprovement[] };
+  guide: { strengths: string[]; improvements: SetupImprovement[] };
+  gear: { strengths: string[]; improvements: SetupImprovement[] };
+  summary: string;
+}
+
 // --- API ---
 export interface ApiResponse<T = unknown> {
   ok: boolean;

@@ -22,6 +22,12 @@ async function main() {
     case 'run':
       await import('./commands/run.js').then((m) => m.runCommand(args.slice(1)));
       break;
+    case 'stop':
+      await import('./commands/stop.js').then((m) => m.stopCommand(args.slice(1)));
+      break;
+    case 'status':
+      await import('./commands/status.js').then((m) => m.statusCommand(args.slice(1)));
+      break;
     case undefined:
     case '--help':
     case '-h':
@@ -48,6 +54,8 @@ function printHelp() {
 
   Commands:
     start         Start the Ddalkak server and dashboard
+    stop          Stop the running server
+    status        Show server status
     init [path]   Initialize .ddalkak/ in a project
     migrate [path] Migrate .ai-harness/ to .ddalkak/
     run "prompt"  Run a task with an agent

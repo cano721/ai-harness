@@ -9,6 +9,8 @@ TOOL_INPUT="$2"
 block() {
   local MSG="$1"
   echo "BLOCKED: $MSG"
+  HOOK_TOOL_NAME="$TOOL_NAME" HOOK_TOOL_INPUT="$TOOL_INPUT" \
+    node "$(dirname "$0")/../scripts/report-security.mjs" "DANGEROUS_COMMAND" "$MSG" &
   exit 2
 }
 

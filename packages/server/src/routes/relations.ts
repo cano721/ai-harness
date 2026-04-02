@@ -1,6 +1,14 @@
 import { Router } from 'express';
 import { createDb, projectRelations, projects } from '@ddalkak/db';
 import { eq, or } from 'drizzle-orm';
+import { z } from 'zod';
+import { validate } from '../middleware/validation.js';
+
+const createRelationSchema = z.object({
+  sourceProjectId: z.string().min(1, 'sourceProjectId is required'),
+  targetProjectId: z.string().min(1, 'targetProjectId is required'),
+  type: z.string().optional(),
+});
 
 export const relationsRouter = Router();
 
@@ -29,7 +37,7 @@ relationsRouter.get('/:projectId', async (req, res) => {
 });
 
 // Create relation
-relationsRouter.post('/', async (req, res) => {
+relationsRouter.post('/', validate(createRelationSchema), async (req, res) => {
   const db = await createDb();
   const { sourceProjectId, targetProjectId, type } = req.body;
 

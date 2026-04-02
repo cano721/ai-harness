@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
-import { createDb, tasks, agents, taskRuns, activityLog, projects } from '@ddalkak/db';
-import { eq } from 'drizzle-orm';
+import { EventEmitter } from 'events';
+import { createDb, tasks, agents, taskRuns, activityLog, projects, costDaily } from '@ddalkak/db';
+import { eq, sql } from 'drizzle-orm';
 import { getAdapter } from '../adapters/index.js';
 import { DEFAULT_PORT, DEFAULT_HOST } from '@ddalkak/shared';
+import { loadSkills } from './skill-loader.service.js';
 
 interface RunTaskOptions {
   taskId: string;
@@ -11,10 +13,29 @@ interface RunTaskOptions {
   maxTurns?: number;
 }
 
+export interface TaskLogEvent {
+  runId: string;
+  stream: 'stdout' | 'stderr';
+  chunk: string;
+}
+
+export interface TaskDoneEvent {
+  runId: string;
+  exitCode: number | null;
+  timedOut: boolean;
+}
+
+export const taskEvents = new EventEmitter();
+taskEvents.setMaxListeners(100);
+
 const activeLogs = new Map<string, string[]>();
 
 export function getRunLogs(runId: string): string[] {
   return activeLogs.get(runId) ?? [];
+}
+
+export function isRunActive(runId: string): boolean {
+  return activeLogs.has(runId);
 }
 
 export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; exitCode: number | null }> {
@@ -59,15 +80,19 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
   activeLogs.set(runId, logs);
 
   // Build env
+  const cwd = project.path ?? process.cwd();
+
+  const skills = await loadSkills(cwd);
+  const skillNames = skills.map(s => s.name).join(',');
+
   const env: Record<string, string> = {
     DDALKAK_AGENT_ID: agent.id,
     DDALKAK_API_URL: `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
     DDALKAK_RUN_ID: runId,
     DDALKAK_TASK_ID: task.id,
     DDALKAK_PROJECT_ID: project.id,
+    ...(skillNames ? { DDALKAK_SKILLS: skillNames } : {}),
   };
-
-  const cwd = project.path ?? process.cwd();
 
   // Execute
   const result = await adapter.execute({
@@ -79,6 +104,7 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     maxTurns: opts.maxTurns ?? 20,
     onLog: (stream, chunk) => {
       logs.push(`[${stream}] ${chunk}`);
+      taskEvents.emit('log', { runId, stream, chunk } satisfies TaskLogEvent);
     },
   });
 
@@ -101,6 +127,29 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     eventType: result.exitCode === 0 ? 'task.completed' : 'task.failed',
     detail: { taskId: task.id, runId, exitCode: result.exitCode, timedOut: result.timedOut },
   });
+
+  // Upsert cost daily — accumulate same date+agent+project
+  if (result.costUsd != null || result.usage != null) {
+    const today = new Date().toISOString().slice(0, 10);
+    await db.insert(costDaily).values({
+      projectId: project.id,
+      agentId: agent.id,
+      date: today,
+      totalUsd: result.costUsd ?? 0,
+      tokensIn: result.usage?.inputTokens ?? 0,
+      tokensOut: result.usage?.outputTokens ?? 0,
+    }).onConflictDoUpdate({
+      target: [costDaily.projectId, costDaily.agentId, costDaily.date],
+      set: {
+        totalUsd: sql`${costDaily.totalUsd} + excluded.total_usd`,
+        tokensIn: sql`${costDaily.tokensIn} + excluded.tokens_in`,
+        tokensOut: sql`${costDaily.tokensOut} + excluded.tokens_out`,
+      },
+    });
+  }
+
+  // Emit done event for SSE subscribers
+  taskEvents.emit('done', { runId, exitCode: result.exitCode, timedOut: result.timedOut } satisfies TaskDoneEvent);
 
   // Cleanup logs after 10 minutes
   setTimeout(() => activeLogs.delete(runId), 600_000);

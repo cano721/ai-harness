@@ -10,7 +10,9 @@ const navItems = [
   { label: 'Audit Log', path: '/activity', icon: '📝' },
   { section: 'Workspace' },
   { label: 'Projects', path: '/projects', icon: '📦' },
+  { label: 'Org Chart', path: '/orgchart', icon: '🗂' },
   { label: 'Costs', path: '/costs', icon: '💰' },
+  { label: 'Metrics', path: '/metrics', icon: '📈' },
   { label: 'Settings', path: '/settings', icon: '⚙' },
 ];
 

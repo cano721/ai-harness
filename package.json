@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
     "build": "pnpm -r run build",
+    "db:generate": "pnpm --filter @ddalkak/db run generate",
+    "db:migrate": "pnpm --filter @ddalkak/db run migrate",
     "test": "node scripts/test-hooks.mjs hooks && node scripts/test-hooks.mjs teams/backend/hooks && node scripts/test-hooks.mjs teams/frontend/hooks",
     "test:packages": "pnpm -r run test",
     "lint": "eslint scripts/*.mjs",

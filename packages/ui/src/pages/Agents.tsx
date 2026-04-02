@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 
 interface Agent {
@@ -27,6 +28,7 @@ const adapterIcons: Record<string, { icon: string; color: string }> = {
 };
 
 export function Agents() {
+  const navigate = useNavigate();
   const { data: agents, isLoading } = useQuery({ queryKey: ['agents'], queryFn: () => api.get<Agent[]>('/agents') });
 
   return (
@@ -47,7 +49,7 @@ export function Agents() {
             const adapter = adapterIcons[agent.adapterType] ?? { icon: '?', color: '#888' };
             const status = statusColors[agent.status] ?? statusColors.idle;
             return (
-              <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12 }}>
+              <div key={agent.id} onClick={() => navigate(`/agents/${agent.id}`)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, cursor: 'pointer' }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg, ${adapter.color}, ${adapter.color}88)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>{adapter.icon}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{agent.name}</div>

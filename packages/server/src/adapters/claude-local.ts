@@ -2,6 +2,24 @@ import { execSync } from 'child_process';
 import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from './adapter.interface.js';
 import { runChildProcess, killProcess } from './process-runner.js';
 
+// Claude Opus 4 pricing (per 1M tokens, USD)
+const CLAUDE_INPUT_COST_PER_M = 15.0;
+const CLAUDE_OUTPUT_COST_PER_M = 75.0;
+const CLAUDE_CACHE_READ_COST_PER_M = 1.5;
+
+interface ClaudeJsonOutput {
+  type?: string;
+  subtype?: string;
+  result?: string;
+  is_error?: boolean;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+}
+
 export class ClaudeLocalAdapter implements AgentAdapter {
   type = 'claude_local';
 
@@ -17,11 +35,13 @@ export class ClaudeLocalAdapter implements AgentAdapter {
   async execute(opts: AdapterExecuteOptions): Promise<AdapterExecuteResult> {
     const args = [
       '--print',
-      '--output-format', 'text',
+      '--output-format', 'json',
       '--max-turns', String(opts.maxTurns ?? 20),
       '--dangerously-skip-permissions',
       opts.prompt,
     ];
+
+    const stdoutChunks: string[] = [];
 
     const result = await runChildProcess({
       runId: opts.runId,
@@ -30,14 +50,39 @@ export class ClaudeLocalAdapter implements AgentAdapter {
       cwd: opts.cwd,
       env: opts.env,
       timeoutSec: opts.timeoutSec,
-      onLog: opts.onLog,
+      onLog: (stream, chunk) => {
+        if (stream === 'stdout') stdoutChunks.push(chunk);
+        opts.onLog(stream, chunk);
+      },
       onSpawn: opts.onSpawn,
     });
+
+    let usage: AdapterExecuteResult['usage'];
+    let costUsd: number | undefined;
+
+    try {
+      const raw = stdoutChunks.join('');
+      const parsed: ClaudeJsonOutput = JSON.parse(raw);
+      if (parsed.usage) {
+        const inputTokens = parsed.usage.input_tokens ?? 0;
+        const outputTokens = parsed.usage.output_tokens ?? 0;
+        const cachedTokens = parsed.usage.cache_read_input_tokens ?? 0;
+        usage = { inputTokens, outputTokens, cachedTokens };
+        costUsd =
+          (inputTokens / 1_000_000) * CLAUDE_INPUT_COST_PER_M +
+          (outputTokens / 1_000_000) * CLAUDE_OUTPUT_COST_PER_M +
+          (cachedTokens / 1_000_000) * CLAUDE_CACHE_READ_COST_PER_M;
+      }
+    } catch {
+      // JSON parse failed — no usage data available
+    }
 
     return {
       exitCode: result.exitCode,
       signal: result.signal,
       timedOut: result.timedOut,
+      usage,
+      costUsd,
     };
   }
 

@@ -1,5 +1,5 @@
-import { readFile, writeFile, mkdir, access, readdir } from 'fs/promises';
-import { join, basename } from 'path';
+import { readFile, writeFile, mkdir, access, readdir, copyFile } from 'fs/promises';
+import { join, relative } from 'path';
 import { existsSync } from 'fs';
 import { execSync } from 'child_process';
 
@@ -138,7 +138,13 @@ export async function detectTechStack(projectPath: string): Promise<string[]> {
 // --- Git detection ---
 
 export function isGitRepo(projectPath: string): boolean {
-  return existsSync(join(projectPath, '.git'));
+  if (existsSync(join(projectPath, '.git'))) return true;
+  try {
+    const toplevel = execSync('git rev-parse --show-toplevel', { cwd: projectPath, encoding: 'utf-8', timeout: 5000 }).trim();
+    return toplevel === projectPath || toplevel === projectPath.replace(/\/$/, '');
+  } catch {
+    return false;
+  }
 }
 
 export function getGitUrl(projectPath: string): string | undefined {
@@ -151,23 +157,91 @@ export function getGitUrl(projectPath: string): string | undefined {
 
 // --- Migration from .ai-harness/ ---
 
-export async function migrateFromAiHarness(projectPath: string): Promise<{ migrated: boolean; details: string[] }> {
+export interface MigrateOptions {
+  dryRun?: boolean;
+  force?: boolean;
+}
+
+export interface MigrateResult {
+  migrated: boolean;
+  details: MigrateDetail[];
+}
+
+export interface MigrateDetail {
+  status: 'migrated' | 'skipped' | 'error';
+  message: string;
+}
+
+async function copyDirRecursive(
+  srcDir: string,
+  destDir: string,
+  options: MigrateOptions,
+  details: MigrateDetail[],
+): Promise<void> {
+  const entries = await readdir(srcDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const srcPath = join(srcDir, entry.name);
+    const destPath = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      if (!options.dryRun) await mkdir(destPath, { recursive: true });
+      await copyDirRecursive(srcPath, destPath, options, details);
+    } else {
+      const relPath = relative(srcDir, srcPath);
+      if (existsSync(destPath) && !options.force) {
+        details.push({ status: 'skipped', message: `Skipped (already exists): ${entry.name}` });
+        continue;
+      }
+      if (!options.dryRun) {
+        await mkdir(destDir, { recursive: true });
+        await copyFile(srcPath, destPath);
+      }
+      details.push({ status: 'migrated', message: `Migrated: ${entry.name}` });
+    }
+  }
+}
+
+export async function migrateFromAiHarness(
+  projectPath: string,
+  options: MigrateOptions = {},
+): Promise<MigrateResult> {
   const oldDir = join(projectPath, '.ai-harness');
-  const details: string[] = [];
+  const details: MigrateDetail[] = [];
 
   if (!existsSync(oldDir)) {
-    return { migrated: false, details: ['No .ai-harness/ directory found'] };
+    return { migrated: false, details: [{ status: 'skipped', message: 'No .ai-harness/ directory found' }] };
   }
 
-  await ensureDdalkakDir(projectPath);
+  if (!options.dryRun) await ensureDdalkakDir(projectPath);
   const newDir = join(projectPath, DDALKAK_DIR);
 
   // Migrate config.yaml
   const oldConfig = join(oldDir, 'config.yaml');
   if (existsSync(oldConfig)) {
-    const content = await readFile(oldConfig, 'utf-8');
-    await writeFile(join(newDir, CONFIG_FILE), content, 'utf-8');
-    details.push('Migrated config.yaml');
+    const destConfig = join(newDir, CONFIG_FILE);
+    if (existsSync(destConfig) && !options.force) {
+      details.push({ status: 'skipped', message: 'Skipped (already exists): config.yaml' });
+    } else {
+      if (!options.dryRun) {
+        const content = await readFile(oldConfig, 'utf-8');
+        await writeFile(destConfig, content, 'utf-8');
+      }
+      details.push({ status: 'migrated', message: 'Migrated config.yaml' });
+    }
+  }
+
+  // Migrate context-map.md
+  const contextMap = join(oldDir, 'context-map.md');
+  if (existsSync(contextMap)) {
+    const destMap = join(newDir, 'context-map.md');
+    if (existsSync(destMap) && !options.force) {
+      details.push({ status: 'skipped', message: 'Skipped (already exists): context-map.md' });
+    } else {
+      if (!options.dryRun) {
+        const content = await readFile(contextMap, 'utf-8');
+        await writeFile(destMap, content, 'utf-8');
+      }
+      details.push({ status: 'migrated', message: 'Migrated context-map.md' });
+    }
   }
 
   // Migrate teams/ conventions
@@ -177,21 +251,48 @@ export async function migrateFromAiHarness(projectPath: string): Promise<{ migra
     for (const team of teams) {
       const convFile = join(teamsDir, team, 'skills', `convention-${team}.md`);
       if (existsSync(convFile)) {
-        const skillsDir = join(newDir, 'skills');
-        await mkdir(skillsDir, { recursive: true });
-        const content = await readFile(convFile, 'utf-8');
-        await writeFile(join(skillsDir, `convention-${team}.md`), content, 'utf-8');
-        details.push(`Migrated convention-${team}.md`);
+        const destFile = join(newDir, 'skills', `convention-${team}.md`);
+        if (existsSync(destFile) && !options.force) {
+          details.push({ status: 'skipped', message: `Skipped (already exists): convention-${team}.md` });
+        } else {
+          if (!options.dryRun) {
+            await mkdir(join(newDir, 'skills'), { recursive: true });
+            const content = await readFile(convFile, 'utf-8');
+            await writeFile(destFile, content, 'utf-8');
+          }
+          details.push({ status: 'migrated', message: `Migrated convention-${team}.md` });
+        }
       }
     }
   }
 
-  // Migrate context-map.md
-  const contextMap = join(oldDir, 'context-map.md');
-  if (existsSync(contextMap)) {
-    const content = await readFile(contextMap, 'utf-8');
-    await writeFile(join(newDir, 'context-map.md'), content, 'utf-8');
-    details.push('Migrated context-map.md');
+  // Migrate .ai-harness/agents/ → .ddalkak/agents/
+  const oldAgentsDir = join(oldDir, 'agents');
+  if (existsSync(oldAgentsDir)) {
+    await copyDirRecursive(oldAgentsDir, join(newDir, 'agents'), options, details);
+  }
+
+  // Migrate .ai-harness/skills/ → .ddalkak/skills/
+  const oldSkillsDir = join(oldDir, 'skills');
+  if (existsSync(oldSkillsDir)) {
+    await copyDirRecursive(oldSkillsDir, join(newDir, 'skills'), options, details);
+  }
+
+  // Migrate teams/*/skills/ → .ddalkak/skills/ (all skill files, not just conventions)
+  if (existsSync(teamsDir)) {
+    const teams = await readdir(teamsDir).catch(() => []);
+    for (const team of teams) {
+      const teamSkillsDir = join(teamsDir, team, 'skills');
+      if (existsSync(teamSkillsDir)) {
+        await copyDirRecursive(teamSkillsDir, join(newDir, 'skills'), options, details);
+      }
+    }
+  }
+
+  // Migrate .ai-harness/hooks/ → .ddalkak/hooks/
+  const oldHooksDir = join(oldDir, 'hooks');
+  if (existsSync(oldHooksDir)) {
+    await copyDirRecursive(oldHooksDir, join(newDir, 'hooks'), options, details);
   }
 
   return { migrated: true, details };

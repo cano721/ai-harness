@@ -464,6 +464,158 @@ function LanguageEditor({ agentType, currentLanguage }: { agentType: string; cur
   );
 }
 
+function CodexSettingsSection({ agentType, settings }: { agentType: string; settings: any }) {
+  const queryClient = useQueryClient();
+  const [editingKey, setEditingKey] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [editingModel, setEditingModel] = useState(false);
+  const [model, setModel] = useState(settings?.model ?? '');
+
+  const models = ['o4-mini', 'o3', 'gpt-4o', 'gpt-4o-mini'];
+
+  const saveApiKey = useMutation({
+    mutationFn: () => fetch(`/api/settings/${agentType}/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'apiKey', value: apiKey }),
+    }).then(r => r.json()),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['settings'] }); setEditingKey(false); setApiKey(''); },
+  });
+
+  const saveModel = useMutation({
+    mutationFn: () => fetch(`/api/settings/${agentType}/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'model', value: model }),
+    }).then(r => r.json()),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['settings'] }); setEditingModel(false); },
+  });
+
+  const inputStyle = { padding: '4px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 11, fontFamily: "'SF Mono', monospace", outline: 'none' } as const;
+
+  return (
+    <>
+      <Expandable label="API Key">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 11, color: 'var(--text2)', flex: 1 }}>
+            {settings?.apiKey ? '••••••••' + String(settings.apiKey).slice(-4) : 'Not set'}
+          </span>
+          {editingKey ? (
+            <>
+              <input style={{ ...inputStyle, flex: 1 }} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-..." />
+              <button onClick={() => saveApiKey.mutate()} disabled={!apiKey} style={{ padding: '2px 8px', borderRadius: 3, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'pointer' }}>Save</button>
+              <button onClick={() => setEditingKey(false)} style={{ padding: '2px 6px', borderRadius: 3, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text2)', fontSize: 10, cursor: 'pointer' }}>x</button>
+            </>
+          ) : (
+            <button onClick={() => setEditingKey(true)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--accent2)', fontSize: 10, cursor: 'pointer' }}>Set Key</button>
+          )}
+        </div>
+      </Expandable>
+
+      <Expandable label={`Model — ${settings?.model ?? 'not set'}`}>
+        {editingModel ? (
+          <div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+              {models.map(m => (
+                <button key={m} onClick={() => setModel(m)} style={{
+                  padding: '4px 10px', borderRadius: 6, fontSize: 10, cursor: 'pointer',
+                  border: m === model ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  background: m === model ? 'rgba(108,92,231,0.15)' : 'var(--surface3)',
+                  color: m === model ? 'var(--accent2)' : 'var(--text2)',
+                }}>{m}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input style={{ ...inputStyle, flex: 1 }} value={model} onChange={e => setModel(e.target.value)} placeholder="custom model name" />
+              <button onClick={() => saveModel.mutate()} style={{ padding: '3px 10px', borderRadius: 4, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'pointer' }}>Save</button>
+              <button onClick={() => setEditingModel(false)} style={{ padding: '3px 10px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text2)', fontSize: 10, cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--text2)', flex: 1 }}>{settings?.model ?? 'Default model will be used'}</span>
+            <button onClick={() => { setModel(settings?.model ?? ''); setEditingModel(true); }} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--accent2)', fontSize: 10, cursor: 'pointer' }}>Change</button>
+          </div>
+        )}
+      </Expandable>
+
+      {settings?.provider !== undefined && (
+        <Expandable label={`Provider — ${settings.provider ?? 'not set'}`}>
+          <JsonBlock data={{ provider: settings.provider }} />
+        </Expandable>
+      )}
+    </>
+  );
+}
+
+function CursorSettingsSection({ agentType, settings, configPath }: { agentType: string; settings: any; configPath?: string }) {
+  const queryClient = useQueryClient();
+  const [editingRules, setEditingRules] = useState(false);
+  const [rulesContent, setRulesContent] = useState('');
+
+  const { data: rulesData } = useQuery({
+    queryKey: ['cursor-rules', agentType],
+    queryFn: async () => {
+      try {
+        const res = await fetch(`/api/settings/${agentType}/claudemd`);
+        const json = await res.json();
+        return json.ok ? json.data : null;
+      } catch { return null; }
+    },
+  });
+
+  const saveRules = useMutation({
+    mutationFn: () => fetch(`/api/settings/${agentType}/claudemd`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: rulesContent }),
+    }).then(r => r.json()),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['cursor-rules'] }); setEditingRules(false); },
+  });
+
+  return (
+    <>
+      {configPath && (
+        <Expandable label="Config Path">
+          <code style={{ fontSize: 12, color: 'var(--text2)', fontFamily: "'SF Mono', monospace" }}>{configPath}</code>
+        </Expandable>
+      )}
+
+      <Expandable label="Rules File (.cursorrules)">
+        {rulesData ? (
+          editingRules ? (
+            <div>
+              <textarea
+                value={rulesContent}
+                onChange={e => setRulesContent(e.target.value)}
+                style={{ width: '100%', height: 200, padding: 10, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 11, fontFamily: "'SF Mono', monospace", outline: 'none', resize: 'vertical', lineHeight: 1.5 }}
+              />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button onClick={() => saveRules.mutate()} style={{ padding: '3px 10px', borderRadius: 4, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 10, cursor: 'pointer' }}>Save</button>
+                <button onClick={() => setEditingRules(false)} style={{ padding: '3px 10px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text2)', fontSize: 10, cursor: 'pointer' }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <pre style={{ background: 'var(--surface3)', borderRadius: 6, padding: 10, fontSize: 11, fontFamily: "'SF Mono', monospace", color: 'var(--text)', overflow: 'auto', maxHeight: 200, margin: 0, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {rulesData.content || 'No rules defined.'}
+              </pre>
+              <div style={{ marginTop: 6 }}>
+                <button onClick={() => { setRulesContent(rulesData.content ?? ''); setEditingRules(true); }} style={{ padding: '3px 10px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--accent2)', fontSize: 10, cursor: 'pointer' }}>Edit</button>
+              </div>
+              {rulesData.path && <div style={{ fontSize: 10, color: 'var(--text2)', marginTop: 4, fontFamily: "'SF Mono', monospace" }}>{rulesData.path}</div>}
+            </div>
+          )
+        ) : (
+          <div style={{ fontSize: 11, color: 'var(--text2)', padding: 4 }}>Rules file not available for this agent type.</div>
+        )}
+      </Expandable>
+
+      <Expandable label="Raw Settings (JSON)">
+        <JsonBlock data={settings} />
+      </Expandable>
+    </>
+  );
+}
+
 function ClaudeMdEditor({ agentType }: { agentType: string }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -638,55 +790,77 @@ function AgentCard({ agent }: { agent: AgentSettings }) {
 
       {agent.installed ? (
         <div style={{ padding: '4px 18px' }}>
-          {/* Config path */}
-          <Expandable label="Config Path">
-            <code style={{ fontSize: 12, color: 'var(--text2)', fontFamily: "'SF Mono', monospace" }}>{agent.configPath}</code>
-          </Expandable>
+          {agent.type === 'codex_local' ? (
+            /* Codex-specific sections */
+            <CodexSettingsSection agentType={agent.type} settings={s} />
+          ) : agent.type === 'cursor_local' ? (
+            /* Cursor-specific sections */
+            <CursorSettingsSection agentType={agent.type} settings={s} configPath={agent.configPath} />
+          ) : (
+            /* Claude (and fallback) sections */
+            <>
+              {/* Config path */}
+              <Expandable label="Config Path">
+                <code style={{ fontSize: 12, color: 'var(--text2)', fontFamily: "'SF Mono', monospace" }}>{agent.configPath}</code>
+              </Expandable>
 
-          {/* Permission Mode */}
-          {permMode && (
-            <Expandable label={`Permission Mode — ${permMode}`}>
-              <PermissionModeEditor agentType={agent.type} currentMode={permMode} permissions={s.permissions} />
-            </Expandable>
+              {/* Permission Mode */}
+              {permMode && (
+                <Expandable label={`Permission Mode — ${permMode}`}>
+                  <PermissionModeEditor agentType={agent.type} currentMode={permMode} permissions={s.permissions} />
+                </Expandable>
+              )}
+
+              {/* MCP Servers — detail + add/delete */}
+              <Expandable label="MCP Servers" count={Object.keys(s.mcpServers ?? {}).length}>
+                <McpDetailList agentType={agent.type} servers={s.mcpServers ?? {}} />
+              </Expandable>
+
+              {/* CLAUDE.md */}
+              <Expandable label="CLAUDE.md">
+                <ClaudeMdEditor agentType={agent.type} />
+              </Expandable>
+
+              {/* Plugins — with toggle + marketplace source */}
+              {(plugins.length > 0 || disabledPlugins.length > 0) && (
+                <Expandable label="Plugins" count={plugins.length + disabledPlugins.length}>
+                  <PluginToggleList agentType={agent.type} enabledPlugins={s.enabledPlugins ?? {}} marketplaces={s.extraKnownMarketplaces ?? {}} />
+                </Expandable>
+              )}
+
+              {/* Env vars */}
+              <Expandable label="Environment Variables" count={envVars.length}>
+                <EnvVarEditor agentType={agent.type} envVars={s.env ?? {}} />
+              </Expandable>
+
+              {/* Language */}
+              <Expandable label={`Language — ${language ?? 'not set'}`}>
+                <LanguageEditor agentType={agent.type} currentLanguage={language} />
+              </Expandable>
+
+              {/* Raw JSON */}
+              <Expandable label="Raw Settings (JSON)">
+                <JsonBlock data={agent.settings} />
+              </Expandable>
+            </>
           )}
-
-          {/* MCP Servers — detail + add/delete */}
-          <Expandable label="MCP Servers" count={Object.keys(s.mcpServers ?? {}).length}>
-            <McpDetailList agentType={agent.type} servers={s.mcpServers ?? {}} />
-          </Expandable>
-
-          {/* CLAUDE.md */}
-          {agent.type === 'claude_local' && (
-            <Expandable label="CLAUDE.md">
-              <ClaudeMdEditor agentType={agent.type} />
-            </Expandable>
-          )}
-
-          {/* Plugins — with toggle + marketplace source */}
-          {(plugins.length > 0 || disabledPlugins.length > 0) && (
-            <Expandable label="Plugins" count={plugins.length + disabledPlugins.length}>
-              <PluginToggleList agentType={agent.type} enabledPlugins={s.enabledPlugins ?? {}} marketplaces={s.extraKnownMarketplaces ?? {}} />
-            </Expandable>
-          )}
-
-          {/* Env vars */}
-          <Expandable label="Environment Variables" count={envVars.length}>
-            <EnvVarEditor agentType={agent.type} envVars={s.env ?? {}} />
-          </Expandable>
-
-          {/* Language */}
-          <Expandable label={`Language — ${language ?? 'not set'}`}>
-            <LanguageEditor agentType={agent.type} currentLanguage={language} />
-          </Expandable>
-
-          {/* Raw JSON */}
-          <Expandable label="Raw Settings (JSON)">
-            <JsonBlock data={agent.settings} />
-          </Expandable>
         </div>
       ) : (
-        <div style={{ padding: '24px 18px', textAlign: 'center', color: 'var(--text2)', fontSize: 13 }}>
-          {meta.name} CLI is not installed or config file not found.
+        <div style={{ padding: '24px 18px', textAlign: 'center' }}>
+          <div style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 12 }}>
+            {meta.name} CLI is not installed or config file not found.
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.6 }}>
+            {agent.type === 'codex_local' && (
+              <span>Install Codex CLI: <code style={{ color: 'var(--accent2)', fontFamily: "'SF Mono', monospace" }}>npm install -g @openai/codex</code></span>
+            )}
+            {agent.type === 'cursor_local' && (
+              <span>Install Cursor from <code style={{ color: 'var(--accent2)', fontFamily: "'SF Mono', monospace" }}>cursor.com</code> and enable CLI access</span>
+            )}
+            {agent.type === 'claude_local' && (
+              <span>Install Claude Code: <code style={{ color: 'var(--accent2)', fontFamily: "'SF Mono', monospace" }}>npm install -g @anthropic-ai/claude-code</code></span>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, jsonb, real, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, jsonb, real, integer, uniqueIndex } from 'drizzle-orm/pg-core';
 import { projects } from './projects.js';
 import { agents } from './agents.js';
 
@@ -19,4 +19,6 @@ export const costDaily = pgTable('cost_daily', {
   totalUsd: real('total_usd').notNull().default(0),
   tokensIn: integer('tokens_in').notNull().default(0),
   tokensOut: integer('tokens_out').notNull().default(0),
-});
+}, (t) => [
+  uniqueIndex('cost_daily_project_agent_date_idx').on(t.projectId, t.agentId, t.date),
+]);

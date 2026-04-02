@@ -1,5 +1,8 @@
 import { startServer } from '@ddalkak/server';
 import { DEFAULT_PORT, DEFAULT_HOST } from '@ddalkak/shared';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 export async function startCommand(args: string[]) {
   let port = DEFAULT_PORT;
@@ -17,6 +20,11 @@ export async function startCommand(args: string[]) {
       open = false;
     }
   }
+
+  // Write PID file
+  const ddalkakDir = join(homedir(), '.ddalkak');
+  mkdirSync(ddalkakDir, { recursive: true });
+  writeFileSync(join(ddalkakDir, 'server.pid'), String(process.pid), 'utf-8');
 
   await startServer({ port, host, open });
 }

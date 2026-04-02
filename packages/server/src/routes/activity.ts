@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { createDb, activityLog, agents, projects } from '@ddalkak/db';
 import { eq, desc, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { validate } from '../middleware/validation.js';
 
 export const activityRouter = Router();
 
@@ -41,6 +43,30 @@ activityRouter.get('/', async (req, res) => {
   }));
 
   res.json({ ok: true, data: enriched });
+});
+
+const securityEventSchema = z.object({
+  projectId: z.string().uuid('projectId must be a valid UUID'),
+  agentId: z.string().uuid('agentId must be a valid UUID').optional(),
+  eventType: z.string().min(1, 'eventType is required'),
+  detail: z.record(z.string(), z.unknown()).optional().default({}),
+});
+
+// Log a security event
+activityRouter.post('/security', validate(securityEventSchema), async (req, res) => {
+  const db = await createDb();
+  const { projectId, agentId, eventType, detail } = req.body;
+
+  const normalizedEventType = eventType.startsWith('security.') ? eventType : `security.${eventType}`;
+
+  const [created] = await db.insert(activityLog).values({
+    projectId,
+    agentId: agentId ?? null,
+    eventType: normalizedEventType,
+    detail,
+  }).returning();
+
+  res.status(201).json({ ok: true, data: created });
 });
 
 // Security events (blocked actions)

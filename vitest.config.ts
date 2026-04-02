@@ -6,5 +6,7 @@ export default defineConfig({
       'packages/*/src/**/*.test.ts',
       'cli/src/**/*.test.ts',
     ],
+    pool: 'forks',
+    singleFork: true,
   },
 });
