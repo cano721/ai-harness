@@ -23,7 +23,6 @@ export async function runChildProcess(opts: RunProcessOptions): Promise<RunProce
   return new Promise((resolve) => {
     const mergedEnv = { ...process.env, ...opts.env };
 
-    // Remove Claude Code nesting guard vars
     delete mergedEnv.CLAUDECODE;
     delete mergedEnv.CLAUDE_CODE_ENTRYPOINT;
     delete mergedEnv.CLAUDE_CODE_SESSION;
@@ -55,7 +54,9 @@ export async function runChildProcess(opts: RunProcessOptions): Promise<RunProce
       timedOut = true;
       child.kill('SIGTERM');
       setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
+        if (!child.killed) {
+          child.kill('SIGKILL');
+        }
       }, 5000);
     }, opts.timeoutSec * 1000);
 
@@ -80,9 +81,10 @@ export async function runChildProcess(opts: RunProcessOptions): Promise<RunProce
 
 export function killProcess(runId: string): boolean {
   const proc = runningProcesses.get(runId);
-  if (proc) {
-    proc.kill('SIGTERM');
-    return true;
+  if (!proc) {
+    return false;
   }
-  return false;
+
+  proc.kill('SIGTERM');
+  return true;
 }

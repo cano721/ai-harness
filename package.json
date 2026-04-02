@@ -12,7 +12,7 @@
     "db:generate": "pnpm --filter @ddalkak/db run generate",
     "db:migrate": "pnpm --filter @ddalkak/db run migrate",
     "test": "node scripts/test-hooks.mjs hooks && node scripts/test-hooks.mjs teams/backend/hooks && node scripts/test-hooks.mjs teams/frontend/hooks",
-    "test:packages": "pnpm -r run test",
+    "test:packages": "vitest run",
     "lint": "eslint scripts/*.mjs",
     "validate:yaml": "node scripts/validate-yaml.mjs",
     "shellcheck": "shellcheck hooks/*.sh && find teams -name '*.sh' -exec shellcheck {} +"
@@ -22,6 +22,7 @@
     "eslint": "^9.0.0",
     "globals": "^17.4.0",
     "typescript": "^5.7.0",
+    "vite": "^6.4.1",
     "vitest": "^4.1.2"
   },
   "dependencies": {

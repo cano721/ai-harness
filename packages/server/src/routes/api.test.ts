@@ -2,6 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../app.js';
 import { createDb, closeDb } from '@ddalkak/db';
 import type { Express } from 'express';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 let port: number;
 let close: () => void;
@@ -243,6 +246,159 @@ describe('Tasks API', () => {
     const json = await res.json() as any;
     expect(json.ok).toBe(true);
     expect(Array.isArray(json.data)).toBe(true);
+  });
+});
+
+describe('Project Setup API', () => {
+  const setupDir = mkdtempSync(join(tmpdir(), 'ddalkak-setup-'));
+  const partialSetupDir = mkdtempSync(join(tmpdir(), 'ddalkak-setup-partial-'));
+  let projectId: string;
+  let partialProjectId: string;
+
+  afterAll(() => {
+    rmSync(setupDir, { recursive: true, force: true });
+    rmSync(partialSetupDir, { recursive: true, force: true });
+  });
+
+  it('setup: create local project with path', async () => {
+    writeFileSync(join(setupDir, 'package.json'), JSON.stringify({ name: 'setup-test', dependencies: { react: '^19.0.0' } }, null, 2));
+    writeFileSync(join(setupDir, 'tsconfig.json'), '{}');
+
+    const res = await post('/projects', { name: 'setup-project', path: setupDir });
+    expect(res.status).toBe(201);
+    projectId = ((await res.json()) as any).data.id;
+  });
+
+  it('setup: create partially configured project with existing CLAUDE.md', async () => {
+    writeFileSync(join(partialSetupDir, 'package.json'), JSON.stringify({ name: 'partial-setup-test', dependencies: { react: '^19.0.0' } }, null, 2));
+    writeFileSync(join(partialSetupDir, 'tsconfig.json'), '{}');
+    writeFileSync(join(partialSetupDir, 'CLAUDE.md'), '# Existing guide asset\n', 'utf-8');
+
+    const res = await post('/projects', { name: 'partial-setup-project', path: partialSetupDir });
+    expect(res.status).toBe(201);
+    partialProjectId = ((await res.json()) as any).data.id;
+  });
+
+  it('GET /projects/:id/setup/status returns axes', async () => {
+    const res = await get(`/projects/${projectId}/setup/status`);
+    const json = await res.json() as any;
+    const guideAxis = json.data.axes.find((axis: any) => axis.axis === 'guide');
+    const claudeOperation = guideAxis.operations.find((operation: any) => operation.id === 'guide-claude');
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.axes).toHaveLength(3);
+    expect(json.data.axes.map((axis: any) => axis.axis)).toEqual(['guard', 'guide', 'gear']);
+    expect(claudeOperation.preview.summary).toContain('project summary guide');
+    expect(claudeOperation.drift.state).toBe('missing');
+    expect(claudeOperation.preview.diffSummary.additions).toBeGreaterThan(0);
+    expect(claudeOperation.preview.diffSummary.additionsSample.length).toBeGreaterThan(0);
+    expect(claudeOperation.preview.comparePreview.baseline.length).toBeGreaterThan(0);
+    expect(claudeOperation.preview.comparePreview.current).toEqual([]);
+  });
+
+  it('GET /projects/:id/setup/status reflects partial setup state', async () => {
+    const res = await get(`/projects/${partialProjectId}/setup/status`);
+    const json = await res.json() as any;
+    const guideAxis = json.data.axes.find((axis: any) => axis.axis === 'guide');
+    const claudeOperation = guideAxis.operations.find((operation: any) => operation.id === 'guide-claude');
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(guideAxis.ready).toBe(false);
+    expect(guideAxis.readiness).toBeGreaterThan(0);
+    expect(guideAxis.readiness).toBeLessThan(100);
+    expect(claudeOperation.status).toBe('ready');
+    expect(claudeOperation.preview.diffSummary.removals).toBeGreaterThan(0);
+    expect(claudeOperation.preview.diffSummary.removalsSample.length).toBeGreaterThan(0);
+    expect(claudeOperation.preview.comparePreview.current.length).toBeGreaterThan(0);
+    expect(guideAxis.operations.some((operation: any) => operation.status === 'pending')).toBe(true);
+  });
+
+  it('POST /projects/:id/setup/plan previews pending work', async () => {
+    const res = await post(`/projects/${projectId}/setup/plan`, { axes: ['guard', 'guide', 'gear'] });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.totals.pending).toBeGreaterThan(0);
+  });
+
+  it('POST /projects/:id/setup/plan can narrow to selected operations', async () => {
+    const res = await post(`/projects/${projectId}/setup/plan`, {
+      axes: ['guide'],
+      operationIds: ['guide-claude'],
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.axes).toHaveLength(1);
+    expect(json.data.axes[0].axis).toBe('guide');
+    expect(json.data.axes[0].operations.map((operation: any) => operation.id)).toEqual(['guide-claude']);
+    expect(json.data.totals.pending).toBe(1);
+  });
+
+  it('POST /projects/:id/setup/apply can write only the selected operation', async () => {
+    const res = await post(`/projects/${projectId}/setup/apply`, {
+      axes: ['guide'],
+      operationIds: ['guide-claude'],
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.results.map((result: any) => result.id)).toEqual(['guide-claude']);
+    expect(existsSync(join(setupDir, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(join(setupDir, '.ddalkak', 'docs', 'convention.md'))).toBe(false);
+  });
+
+  it('POST /projects/:id/setup/apply writes setup assets', async () => {
+    const res = await post(`/projects/${projectId}/setup/apply`, { axes: ['guard', 'guide', 'gear'] });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.results.some((result: any) => result.outcome === 'created' || result.outcome === 'updated')).toBe(true);
+    expect(existsSync(join(setupDir, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(join(setupDir, '.ddalkak', 'docs', 'convention.md'))).toBe(true);
+    expect(existsSync(join(setupDir, '.claude', 'agents', 'developer.md'))).toBe(true);
+  });
+
+  it('GET /projects/:id/setup/status reports fully ready project after apply', async () => {
+    const res = await get(`/projects/${projectId}/setup/status`);
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.ready).toBe(true);
+    expect(json.data.axes.every((axis: any) => axis.ready)).toBe(true);
+    expect(json.data.axes.every((axis: any) => axis.readiness === 100)).toBe(true);
+  });
+
+  it('POST /projects/:id/setup/apply is idempotent on repeated runs', async () => {
+    const res = await post(`/projects/${projectId}/setup/apply`, { axes: ['guard', 'guide', 'gear'] });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.results.every((result: any) => result.outcome !== 'error')).toBe(true);
+    expect(json.data.results.some((result: any) => result.outcome === 'skipped' || result.outcome === 'updated')).toBe(true);
+  });
+
+  it('POST /projects/:id/setup/apply with force resets managed files to baseline', async () => {
+    writeFileSync(join(setupDir, 'CLAUDE.md'), '# User customized\n', 'utf-8');
+
+    const res = await post(`/projects/${projectId}/setup/apply`, { axes: ['guide'], force: true });
+    const json = await res.json() as any;
+    const claudeResult = json.data.results.find((result: any) => result.id === 'guide-claude');
+    const claudeMd = readFileSync(join(setupDir, 'CLAUDE.md'), 'utf-8');
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(claudeResult.outcome).toBe('updated');
+    expect(claudeMd).toContain('Ddalkak control plane');
+    expect(claudeMd).not.toBe('# User customized\n');
   });
 });
 

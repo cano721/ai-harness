@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
-import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from './adapter.interface.js';
-import { runChildProcess, killProcess } from './process-runner.js';
+import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from '@ddalkak/adapter-utils';
+import { runChildProcess, killProcess } from '@ddalkak/adapter-utils';
 
 export class CursorLocalAdapter implements AgentAdapter {
   type = 'cursor_local';
@@ -15,16 +15,10 @@ export class CursorLocalAdapter implements AgentAdapter {
   }
 
   async execute(opts: AdapterExecuteOptions): Promise<AdapterExecuteResult> {
-    const args = [
-      '--headless',
-      '--max-turns', String(opts.maxTurns ?? 20),
-      opts.prompt,
-    ];
-
     const result = await runChildProcess({
       runId: opts.runId,
       command: 'cursor',
-      args,
+      args: ['--headless', '--max-turns', String(opts.maxTurns ?? 20), opts.prompt],
       cwd: opts.cwd,
       env: opts.env,
       timeoutSec: opts.timeoutSec,

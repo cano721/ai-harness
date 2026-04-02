@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { createDb, projects, agents, conventions } from '@ddalkak/db';
 import { eq } from 'drizzle-orm';
-import type { ApiResponse, Project } from '@ddalkak/shared';
+import type { ApiResponse, Project, SetupAxis } from '@ddalkak/shared';
 import { z } from 'zod';
 import { validate } from '../middleware/validation.js';
 import { analyzeProject } from '../services/project-analyzer.service.js';
+import { applyProjectSetup, getProjectSetupPlan, getProjectSetupStatus } from '../services/project-setup.service.js';
 import { writeFile, mkdir, readFile, access } from 'fs/promises';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
@@ -169,6 +170,12 @@ const updateProjectSchema = z.object({
   description: z.string().optional(),
 });
 
+const setupAxesSchema = z.object({
+  axes: z.array(z.enum(['guard', 'guide', 'gear'])).optional(),
+  operationIds: z.array(z.string().min(1)).optional(),
+  force: z.boolean().optional(),
+});
+
 export const projectsRouter = Router();
 
 // Analyze project
@@ -222,8 +229,8 @@ projectsRouter.post('/', validate(createProjectSchema), async (req, res) => {
       // Register detected CLIs as agents
       const cliMap: Array<{ key: keyof typeof analysis.installedCLIs; adapterType: string }> = [
         { key: 'claude', adapterType: 'claude_local' },
-        { key: 'codex', adapterType: 'codex' },
-        { key: 'cursor', adapterType: 'cursor' },
+        { key: 'codex', adapterType: 'codex_local' },
+        { key: 'cursor', adapterType: 'cursor_local' },
       ];
       for (const { key, adapterType } of cliMap) {
         if (analysis.installedCLIs[key]) {
@@ -261,6 +268,65 @@ projectsRouter.patch('/:id', validate(updateProjectSchema), async (req, res) => 
     return;
   }
   res.json({ ok: true, data: result });
+});
+
+projectsRouter.get('/:id/setup/status', async (req, res) => {
+  const db = await createDb();
+  const [project] = await db.select().from(projects).where(eq(projects.id, req.params.id as string));
+  if (!project?.path) {
+    res.status(404).json({ ok: false, error: 'Project not found or no path set' });
+    return;
+  }
+
+  try {
+    const analysis = await analyzeProject(project.path);
+    const status = await getProjectSetupStatus(project.id, analysis);
+    res.json({ ok: true, data: status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+projectsRouter.post('/:id/setup/plan', validate(setupAxesSchema), async (req, res) => {
+  const db = await createDb();
+  const [project] = await db.select().from(projects).where(eq(projects.id, req.params.id as string));
+  if (!project?.path) {
+    res.status(404).json({ ok: false, error: 'Project not found or no path set' });
+    return;
+  }
+
+  try {
+    const analysis = await analyzeProject(project.path);
+    const plan = await getProjectSetupPlan(
+      project.id,
+      analysis,
+      req.body.axes as SetupAxis[] | undefined,
+      req.body.operationIds as string[] | undefined,
+    );
+    res.json({ ok: true, data: plan });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+projectsRouter.post('/:id/setup/apply', validate(setupAxesSchema), async (req, res) => {
+  const db = await createDb();
+  const [project] = await db.select().from(projects).where(eq(projects.id, req.params.id as string));
+  if (!project?.path) {
+    res.status(404).json({ ok: false, error: 'Project not found or no path set' });
+    return;
+  }
+
+  try {
+    const analysis = await analyzeProject(project.path);
+    const result = await applyProjectSetup(project.id, analysis, req.body.axes as SetupAxis[] | undefined, {
+      force: req.body.force === true,
+      operationIds: req.body.operationIds as string[] | undefined,
+    });
+    res.json({ ok: true, data: result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // Setup: Generate CLAUDE.md

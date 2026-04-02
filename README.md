@@ -18,12 +18,12 @@
 - [설계 문서](#설계-문서)
 - [요구사항](#요구사항)
 
-플러그인을 설치하고 `/harness-init`을 실행하면, 팀에 맞는 AI 작업 환경을 자동으로 구성합니다.
+AI Harness는 로컬 AI 런타임 위에 얹는 경량 control plane입니다. 플러그인을 설치하고 `/harness-init`을 실행하면, 팀에 맞는 AI 작업 환경을 자동으로 구성합니다.
 
 - **backend** 프로젝트를 분석하여 팀에 맞는 보안 Hook, 코드 컨벤션, 스킬을 자동으로 구성합니다.
 - **planning** 팀은 현재 runtime이 Codex인지 Claude Code인지 감지한 뒤 글로벌 planner bundle을 세팅합니다.
 
-세팅이 끝나면 하네스는 빠지고, Claude Code / Codex 에이전트가 설치된 규칙과 스킬을 사용합니다.
+세팅이 끝나면 하네스는 빠지고, Claude Code / Codex 에이전트가 설치된 규칙과 스킬을 사용합니다. 즉, 실행 주체는 에이전트이고 하네스는 가드레일과 프로젝트 지도를 제공하는 control plane 역할에 머뭅니다.
 
 ## 설계 철학
 
@@ -38,7 +38,7 @@
 
 ### Three-Pillar Architecture
 
-Guard(안전) + Guide(컨벤션) + Gear(AI 최적화) 3축으로 구성됩니다.
+Guard(안전) + Guide(컨벤션) + Gear(AI 최적화) 3축으로 구성됩니다. 이 3축은 각각 실행 차단, 작업 방향 제시, 런타임 최적화에 대응하며 함께 AI 작업의 운영면을 담당합니다.
 
 ![Three-Pillar Architecture](docs/images/1-three-pillar.png)
 

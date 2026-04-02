@@ -195,6 +195,84 @@ export interface SetupAnalysis {
   summary: string;
 }
 
+export type SetupAxis = 'guard' | 'guide' | 'gear';
+
+export interface ProjectSetupOperation {
+  id: string;
+  axis: SetupAxis;
+  title: string;
+  description: string;
+  path?: string;
+  scope: 'project';
+  status: 'pending' | 'ready';
+  preview?: {
+    kind: 'file' | 'config';
+    summary: string;
+    excerpt?: string[];
+    diffSummary?: {
+      additions: number;
+      removals: number;
+      summary: string;
+      additionsSample?: string[];
+      removalsSample?: string[];
+    };
+    comparePreview?: {
+      baseline: string[];
+      current: string[];
+    };
+  };
+  drift?: {
+    state: 'aligned' | 'drifted' | 'missing';
+    summary: string;
+  };
+}
+
+export interface ProjectSetupAxisStatus {
+  axis: SetupAxis;
+  label: string;
+  ready: boolean;
+  readiness: number;
+  summary: string;
+  operations: ProjectSetupOperation[];
+}
+
+export interface ProjectSetupStatus {
+  projectId: string;
+  ready: boolean;
+  mode: 'workspace';
+  axes: ProjectSetupAxisStatus[];
+  summary: string;
+}
+
+export interface ProjectSetupPlan {
+  projectId: string;
+  axes: ProjectSetupAxisStatus[];
+  totals: {
+    ready: number;
+    pending: number;
+  };
+  summary: string;
+}
+
+export interface ProjectSetupRequest {
+  axes?: SetupAxis[];
+  operationIds?: string[];
+  force?: boolean;
+}
+
+export interface ProjectSetupApplyResult {
+  projectId: string;
+  appliedAxes: SetupAxis[];
+  results: Array<{
+    id: string;
+    axis: SetupAxis;
+    title: string;
+    outcome: 'created' | 'updated' | 'skipped' | 'error';
+    detail: string;
+    path?: string;
+  }>;
+}
+
 // --- API ---
 export interface ApiResponse<T = unknown> {
   ok: boolean;

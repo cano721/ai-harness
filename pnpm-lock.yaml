@@ -24,6 +24,9 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      vite:
+        specifier: ^6.4.1
+        version: 6.4.1(@types/node@25.5.0)(tsx@4.21.0)(yaml@2.8.3)
       vitest:
         specifier: ^4.1.2
         version: 4.1.2(@types/node@25.5.0)(vite@6.4.1(@types/node@25.5.0)(tsx@4.21.0)(yaml@2.8.3))
@@ -43,6 +46,54 @@ importers:
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/adapter-claude-local:
+    dependencies:
+      '@ddalkak/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
+    devDependencies:
+      '@types/node':
+        specifier: ^25.5.0
+        version: 25.5.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/adapter-codex-local:
+    dependencies:
+      '@ddalkak/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
+    devDependencies:
+      '@types/node':
+        specifier: ^25.5.0
+        version: 25.5.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/adapter-cursor-local:
+    dependencies:
+      '@ddalkak/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
+    devDependencies:
+      '@types/node':
+        specifier: ^25.5.0
+        version: 25.5.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/adapter-utils:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.5.0
+        version: 25.5.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -71,6 +122,18 @@ importers:
 
   packages/server:
     dependencies:
+      '@ddalkak/adapter-claude-local':
+        specifier: workspace:*
+        version: link:../adapter-claude-local
+      '@ddalkak/adapter-codex-local':
+        specifier: workspace:*
+        version: link:../adapter-codex-local
+      '@ddalkak/adapter-cursor-local':
+        specifier: workspace:*
+        version: link:../adapter-cursor-local
+      '@ddalkak/adapter-utils':
+        specifier: workspace:*
+        version: link:../adapter-utils
       '@ddalkak/db':
         specifier: workspace:*
         version: link:../db

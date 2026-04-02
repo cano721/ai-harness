@@ -85,10 +85,40 @@ export async function analyzeProject(projectPath: string): Promise<ProjectAnalys
       const settings = JSON.parse(settingsContent);
 
       if (settings.hooks && typeof settings.hooks === 'object') {
-        hooks = Object.entries(settings.hooks as Record<string, unknown>).map(([event, cmds]) => ({
-          event,
-          commands: Array.isArray(cmds) ? cmds.map(String) : [String(cmds)],
-        }));
+        hooks = Object.entries(settings.hooks as Record<string, unknown>).map(([event, handlers]) => {
+          const commands: string[] = [];
+          if (Array.isArray(handlers)) {
+            for (const handler of handlers) {
+              if (typeof handler === 'string') {
+                commands.push(handler);
+                continue;
+              }
+              if (!handler || typeof handler !== 'object') {
+                continue;
+              }
+
+              const directCommand = (handler as Record<string, unknown>).command;
+              if (typeof directCommand === 'string') {
+                commands.push(directCommand);
+              }
+
+              const nestedHooks = (handler as Record<string, unknown>).hooks;
+              if (Array.isArray(nestedHooks)) {
+                for (const hook of nestedHooks) {
+                  if (!hook || typeof hook !== 'object') {
+                    continue;
+                  }
+                  const nestedCommand = (hook as Record<string, unknown>).command;
+                  if (typeof nestedCommand === 'string') {
+                    commands.push(nestedCommand);
+                  }
+                }
+              }
+            }
+          }
+
+          return { event, commands };
+        }).filter((entry) => entry.commands.length > 0);
       }
 
       if (settings.mcpServers && typeof settings.mcpServers === 'object') {

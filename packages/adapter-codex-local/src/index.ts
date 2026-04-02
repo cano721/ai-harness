@@ -1,16 +1,11 @@
 import { execSync } from 'child_process';
-import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from './adapter.interface.js';
-import { runChildProcess, killProcess } from './process-runner.js';
+import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from '@ddalkak/adapter-utils';
+import { runChildProcess, killProcess } from '@ddalkak/adapter-utils';
 
-// GPT-4o pricing (per 1M tokens, USD) — used as Codex default
 const CODEX_INPUT_COST_PER_M = 2.5;
 const CODEX_OUTPUT_COST_PER_M = 10.0;
 
-// Codex CLI may print token summary lines like:
-//   "Tokens used: 1234 input, 567 output"
-// or JSON with usage field
-function parseCodexUsage(stdout: string): AdapterExecuteResult['usage'] | undefined {
-  // Try JSON parse first
+export function parseCodexUsage(stdout: string): AdapterExecuteResult['usage'] | undefined {
   try {
     const parsed = JSON.parse(stdout);
     if (parsed?.usage) {
@@ -20,16 +15,14 @@ function parseCodexUsage(stdout: string): AdapterExecuteResult['usage'] | undefi
       };
     }
   } catch {
-    // not JSON
+    // fall through to plaintext heuristics
   }
 
-  // Try plain text patterns
   const tokenMatch = stdout.match(/[Tt]okens?\s+used[:\s]+(\d+)\s+input[,\s]+(\d+)\s+output/);
   if (tokenMatch) {
     return { inputTokens: parseInt(tokenMatch[1], 10), outputTokens: parseInt(tokenMatch[2], 10) };
   }
 
-  // OpenAI-style: "prompt_tokens: 123" / "completion_tokens: 456"
   const promptMatch = stdout.match(/prompt_tokens[:\s]+(\d+)/);
   const completionMatch = stdout.match(/completion_tokens[:\s]+(\d+)/);
   if (promptMatch && completionMatch) {
@@ -52,23 +45,19 @@ export class CodexLocalAdapter implements AgentAdapter {
   }
 
   async execute(opts: AdapterExecuteOptions): Promise<AdapterExecuteResult> {
-    const args = [
-      '--quiet',
-      '--full-auto',
-      opts.prompt,
-    ];
-
     const stdoutChunks: string[] = [];
 
     const result = await runChildProcess({
       runId: opts.runId,
       command: 'codex',
-      args,
+      args: ['--quiet', '--full-auto', opts.prompt],
       cwd: opts.cwd,
       env: opts.env,
       timeoutSec: opts.timeoutSec,
       onLog: (stream, chunk) => {
-        if (stream === 'stdout') stdoutChunks.push(chunk);
+        if (stream === 'stdout') {
+          stdoutChunks.push(chunk);
+        }
         opts.onLog(stream, chunk);
       },
       onSpawn: opts.onSpawn,

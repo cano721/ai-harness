@@ -3,7 +3,7 @@ import cors from 'cors';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
-import { API_PREFIX } from '@ddalkak/shared';
+import { API_PREFIX, APP_VERSION } from '@ddalkak/shared';
 import { heartbeatService } from './services/heartbeat.service.js';
 import { projectsRouter } from './routes/projects.js';
 import { agentsRouter } from './routes/agents.js';
@@ -43,7 +43,7 @@ export function createApp() {
 
   // Health check
   app.get(`${API_PREFIX}/health`, (_req, res) => {
-    res.json({ ok: true, version: '3.0.0-alpha.0' });
+    res.json({ ok: true, version: APP_VERSION });
   });
 
   // Serve UI static files (production)

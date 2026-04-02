@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar.js';
 import { Dashboard } from './pages/Dashboard.js';
@@ -15,10 +16,22 @@ import { OrgChart } from './pages/OrgChart.js';
 import { Metrics } from './pages/Metrics.js';
 
 export default function App() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar />
-      <main style={{ flex: 1, overflow: 'auto' }}>
+    <div className="app-shell">
+      <Sidebar open={sidebarOpen} onNavigate={() => setSidebarOpen(false)} />
+      {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Close navigation" />}
+      <main className="app-main">
+        <div className="topbar">
+          <button className="topbar-menu" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle navigation">
+            Menu
+          </button>
+          <div className="topbar-copy">
+            <span className="topbar-eyebrow">Ddalkak Platform</span>
+            <strong>Agent control plane for Guard, Guide, Gear</strong>
+          </div>
+        </div>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/settings" element={<Settings />} />

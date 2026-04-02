@@ -9,6 +9,10 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
+    "@ddalkak/adapter-claude-local": "workspace:*",
+    "@ddalkak/adapter-codex-local": "workspace:*",
+    "@ddalkak/adapter-cursor-local": "workspace:*",
+    "@ddalkak/adapter-utils": "workspace:*",
     "@ddalkak/db": "workspace:*",
     "@ddalkak/shared": "workspace:*",
     "cors": "^2.8.5",

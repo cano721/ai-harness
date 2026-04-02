@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import { api } from '../api/client.js';
 
@@ -83,16 +83,98 @@ interface ActivityEvent {
   createdAt: string;
 }
 
-interface SetupStep {
-  name: string;
-  action: 'created' | 'skipped' | 'error';
-  detail: string;
+type SetupAxis = 'guard' | 'guide' | 'gear';
+
+interface SetupOperation {
+  id: string;
+  axis: SetupAxis;
+  title: string;
+  description: string;
+  path?: string;
+  scope: 'project';
+  status: 'pending' | 'ready';
+  preview?: {
+    kind: 'file' | 'config';
+    summary: string;
+    excerpt?: string[];
+    diffSummary?: {
+      additions: number;
+      removals: number;
+      summary: string;
+      additionsSample?: string[];
+      removalsSample?: string[];
+    };
+    comparePreview?: {
+      baseline: string[];
+      current: string[];
+    };
+  };
+  drift?: {
+    state: 'aligned' | 'drifted' | 'missing';
+    summary: string;
+  };
+}
+
+interface SetupAxisStatus {
+  axis: SetupAxis;
+  label: string;
+  ready: boolean;
+  readiness: number;
+  summary: string;
+  operations: SetupOperation[];
+}
+
+interface ProjectSetupStatus {
+  projectId: string;
+  ready: boolean;
+  mode: 'workspace';
+  axes: SetupAxisStatus[];
+  summary: string;
+}
+
+interface ProjectSetupPlan {
+  projectId: string;
+  axes: SetupAxisStatus[];
+  totals: {
+    ready: number;
+    pending: number;
+  };
+  summary: string;
+}
+
+interface ProjectSetupRequest {
+  axes?: SetupAxis[];
+  operationIds?: string[];
+  force?: boolean;
+}
+
+interface ProjectSetupApplyResult {
+  projectId: string;
+  appliedAxes: SetupAxis[];
+  results: Array<{
+    id: string;
+    axis: SetupAxis;
+    title: string;
+    outcome: 'created' | 'updated' | 'skipped' | 'error';
+    detail: string;
+    path?: string;
+  }>;
 }
 
 interface TaskRun {
   id: string;
   taskId: string;
   status: string;
+}
+
+interface WorkflowTaskTemplate {
+  id: string;
+  name: string;
+  summary: string;
+  titleSuggestion: string;
+  phases: string[];
+  separationNote?: string;
+  descriptionLines: string[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -115,6 +197,13 @@ const adapterIcons: Record<string, { icon: string; color: string }> = {
   codex_local: { icon: 'X', color: '#74b9ff' },
   cursor_local: { icon: 'Cu', color: '#a29bfe' },
 };
+
+const setupSearchParamKeys = {
+  axes: 'setupAxes',
+  operations: 'setupOps',
+  expanded: 'setupExpanded',
+  query: 'setupQuery',
+} as const;
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
@@ -149,11 +238,12 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionCard({ title, titleExtra, children }: { title: string; titleExtra?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontSize: 14, fontWeight: 600 }}>
-        {title}
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
+        {titleExtra}
       </div>
       <div style={{ padding: '12px 18px' }}>{children}</div>
     </div>
@@ -187,6 +277,279 @@ function Badge({ children, color = 'blue' }: { children: React.ReactNode; color?
   );
 }
 
+function axisBadgeColor(axis: SetupAxis): 'green' | 'blue' | 'orange' {
+  if (axis === 'guard') return 'green';
+  if (axis === 'guide') return 'blue';
+  return 'orange';
+}
+
+function findSetupOperation(setupStatus: ProjectSetupStatus | undefined, operationId: string) {
+  return setupStatus?.axes.flatMap((axis) => axis.operations).find((operation) => operation.id === operationId);
+}
+
+function findApplyResult(lastApplyResult: ProjectSetupApplyResult | null, operationId: string) {
+  return lastApplyResult?.results.find((result) => result.id === operationId);
+}
+
+function summarizeApplyResults(
+  lastApplyResult: ProjectSetupApplyResult | null,
+  operationIds: string[],
+): string | null {
+  if (!lastApplyResult) {
+    return null;
+  }
+
+  const matches = lastApplyResult.results.filter((result) => operationIds.includes(result.id));
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const summary = matches
+    .map((result) => `${result.outcome} ${result.title}`)
+    .join(', ');
+
+  return `Last apply: ${summary}`;
+}
+
+function buildApplyResolutionSummary(
+  lastApplyResult: ProjectSetupApplyResult | null,
+  setupStatus?: ProjectSetupStatus,
+) {
+  if (!lastApplyResult) {
+    return null;
+  }
+
+  const operations = setupStatus?.axes.flatMap((axis) => axis.operations) ?? [];
+  const operationMap = new Map(operations.map((operation) => [operation.id, operation]));
+  const changedResults = lastApplyResult.results.filter((result) => result.outcome === 'created' || result.outcome === 'updated');
+  const skippedCount = lastApplyResult.results.filter((result) => result.outcome === 'skipped').length;
+  const errorCount = lastApplyResult.results.filter((result) => result.outcome === 'error').length;
+
+  let alignedCount = 0;
+  let driftedCount = 0;
+  let missingCount = 0;
+  const changedTitles: string[] = [];
+  const alignedTitles: string[] = [];
+  const driftedTitles: string[] = [];
+  const missingTitles: string[] = [];
+  const changedItems: Array<{ id: string; title: string; axis: SetupAxis }> = [];
+  const alignedItems: Array<{ id: string; title: string; axis: SetupAxis }> = [];
+  const driftedItems: Array<{ id: string; title: string; axis: SetupAxis }> = [];
+  const missingItems: Array<{ id: string; title: string; axis: SetupAxis }> = [];
+
+  for (const result of changedResults) {
+    const operation = operationMap.get(result.id);
+    const title = operation?.title ?? result.title;
+    const axis = operation?.axis ?? result.axis;
+    changedTitles.push(title);
+    changedItems.push({ id: result.id, title, axis });
+    if (!operation) {
+      continue;
+    }
+    if (operation.drift?.state === 'drifted') {
+      driftedCount += 1;
+      driftedTitles.push(title);
+      driftedItems.push({ id: result.id, title, axis });
+      continue;
+    }
+    if (operation.drift?.state === 'missing' || operation.status === 'pending') {
+      missingCount += 1;
+      missingTitles.push(title);
+      missingItems.push({ id: result.id, title, axis });
+      continue;
+    }
+    alignedCount += 1;
+    alignedTitles.push(title);
+    alignedItems.push({ id: result.id, title, axis });
+  }
+
+  return {
+    changedCount: changedResults.length,
+    skippedCount,
+    errorCount,
+    alignedCount,
+    driftedCount,
+    missingCount,
+    changedTitles,
+    alignedTitles,
+    driftedTitles,
+    missingTitles,
+    changedItems,
+    alignedItems,
+    driftedItems,
+    missingItems,
+  };
+}
+
+function isManagedDoc(name: string) {
+  return ['convention', 'architecture', 'review'].includes(name);
+}
+
+function isManagedAgentAsset(name: string) {
+  return ['developer', 'reviewer'].includes(name);
+}
+
+function isManagedWorkflowAsset(name: string) {
+  return ['implement-feature', 'fix-bug', 'refactor'].includes(name);
+}
+
+function SetupPanelMeta({ axis, operation }: { axis: SetupAxis; operation?: SetupOperation }) {
+  const status =
+    operation?.drift?.state === 'drifted'
+      ? { label: 'Drifted', color: 'orange' as const }
+      : operation?.status === 'ready'
+        ? { label: 'Ready', color: 'green' as const }
+        : operation?.status === 'pending'
+          ? { label: 'Missing', color: 'yellow' as const }
+          : { label: 'Managed by Setup', color: 'gray' as const };
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Badge color={axisBadgeColor(axis)}>{axis.toUpperCase()}</Badge>
+      <Badge color={status.color}>{status.label}</Badge>
+    </div>
+  );
+}
+
+function SetupManagedBanner({
+  axis,
+  operation,
+  summary,
+  hint,
+  lastApplySummary,
+  focusActionLabel,
+  onFocusAction,
+  focusActionDisabled,
+  actionLabel,
+  onAction,
+  actionDisabled,
+  secondaryActionLabel,
+  onSecondaryAction,
+  secondaryActionDisabled,
+}: {
+  axis: SetupAxis;
+  operation?: SetupOperation;
+  summary: string;
+  hint?: string;
+  lastApplySummary?: string | null;
+  focusActionLabel?: string;
+  onFocusAction?: () => void;
+  focusActionDisabled?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
+  secondaryActionDisabled?: boolean;
+}) {
+  const state =
+    operation?.drift?.state === 'drifted'
+      ? 'Drifted'
+      : operation?.status === 'ready'
+        ? 'Ready'
+        : operation?.status === 'pending'
+          ? 'Missing'
+          : 'Managed by Setup';
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: 12,
+        borderRadius: 10,
+        border: '1px solid var(--border)',
+        background: 'var(--surface2)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: 12,
+        alignItems: 'flex-start',
+        flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+          <Badge color={axisBadgeColor(axis)}>{axis.toUpperCase()}</Badge>
+          <Badge color={operation?.drift?.state === 'drifted' ? 'orange' : operation?.status === 'ready' ? 'green' : operation?.status === 'pending' ? 'yellow' : 'gray'}>{state}</Badge>
+          <span style={{ fontSize: 11, color: 'var(--text2)' }}>Managed by Setup</span>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.5 }}>{summary}</div>
+        {operation?.drift && (
+          <div style={{ fontSize: 11, color: operation.drift.state === 'drifted' ? '#fd963c' : 'var(--text2)', marginTop: 6 }}>
+            {operation.drift.summary}
+          </div>
+        )}
+        {hint && (
+          <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6 }}>{hint}</div>
+        )}
+        {lastApplySummary && (
+          <div style={{ fontSize: 11, color: 'var(--blue)', marginTop: 6 }}>{lastApplySummary}</div>
+        )}
+      </div>
+      {(focusActionLabel && onFocusAction) || (actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+          {focusActionLabel && onFocusAction && (
+            <button
+              onClick={onFocusAction}
+              disabled={focusActionDisabled}
+              style={{
+                padding: '7px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text2)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: focusActionDisabled ? 'not-allowed' : 'pointer',
+                opacity: focusActionDisabled ? 0.6 : 1,
+              }}
+            >
+              {focusActionLabel}
+            </button>
+          )}
+          {secondaryActionLabel && onSecondaryAction && (
+            <button
+              onClick={onSecondaryAction}
+              disabled={secondaryActionDisabled}
+              style={{
+                padding: '7px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text2)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: secondaryActionDisabled ? 'not-allowed' : 'pointer',
+                opacity: secondaryActionDisabled ? 0.6 : 1,
+              }}
+            >
+              {secondaryActionLabel}
+            </button>
+          )}
+          {actionLabel && onAction && (
+            <button
+              onClick={onAction}
+              disabled={actionDisabled}
+              style={{
+                padding: '7px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: actionDisabled ? 'not-allowed' : 'pointer',
+                opacity: actionDisabled ? 0.6 : 1,
+              }}
+            >
+              {actionLabel}
+            </button>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SkeletonBlock({ width = '100%', height = 16 }: { width?: string | number; height?: number }) {
   return (
     <div
@@ -198,68 +561,6 @@ function SkeletonBlock({ width = '100%', height = 16 }: { width?: string | numbe
         animation: 'pulse 1.5s ease-in-out infinite',
       }}
     />
-  );
-}
-
-function GuidanceModal({ title, content, onClose }: { title: string; content: string; onClose: () => void }) {
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.6)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 100,
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 16,
-          padding: 24,
-          width: 480,
-          maxWidth: '90vw',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>{title}</h3>
-        <pre
-          style={{
-            fontSize: 12,
-            color: 'var(--text)',
-            background: 'var(--surface2)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            padding: 14,
-            overflowX: 'auto',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
-          }}
-        >
-          {content}
-        </pre>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '7px 16px',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
-            닫기
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -396,503 +697,1548 @@ function GuardSection({ projectId, guardScore }: { projectId: string; guardScore
   );
 }
 
-// ─── Feature 3: Setup Button ──────────────────────────────────────────────────
-
-function SetupButton({ projectId }: { projectId: string }) {
-  const job = getOrCreateSetupJob(projectId);
-  const [, forceUpdate] = useState(0);
-  const rerender = () => forceUpdate((n) => n + 1);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [seen, setSeen] = useState(false);
-
-  useState(() => { job.listeners.add(rerender); });
-
-  const runSetup = () => {
-    job.state = 'running';
-    job.statusMessage = '연결 중...';
-    notifySetupListeners(job);
-
-    const es = new EventSource(`/api/projects/${projectId}/setup`);
-
-    es.addEventListener('status', (e) => {
-      job.statusMessage = JSON.parse(e.data).message;
-      notifySetupListeners(job);
-    });
-
-    es.addEventListener('done', (e) => {
-      job.steps = JSON.parse(e.data).steps;
-      job.state = 'done';
-      es.close();
-      notifySetupListeners(job);
-    });
-
-    es.addEventListener('error', () => {
-      job.state = 'error';
-      es.close();
-      notifySetupListeners(job);
-    });
-
-    es.onerror = () => {
-      job.state = 'error';
-      es.close();
-      notifySetupListeners(job);
-    };
-  };
-
-  const handleClick = () => {
-    if (job.state === 'idle' || job.state === 'error') {
-      runSetup();
-    } else if (job.state === 'done') {
-      setModalOpen(true);
-      setSeen(true);
-    }
-    // running → ignore
-  };
-
-  const { state, steps, statusMessage } = job;
-  const isRunning = state === 'running';
-  const isDone = state === 'done';
-  const hasBadge = isDone && !seen;
-
-  return (
-    <>
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        {hasBadge && (
-          <div style={{ position: 'absolute', top: -6, left: -6, width: 18, height: 18, background: 'var(--green)', color: '#fff', borderRadius: '50%', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>✓</div>
-        )}
-        <button
-          onClick={handleClick}
-          disabled={isRunning}
-          style={{
-            padding: '8px 20px',
-            borderRadius: 8,
-            border: '1px solid var(--border)',
-            background: isDone ? 'var(--surface2)' : 'var(--accent)',
-            color: isDone ? 'var(--text)' : '#fff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: isRunning ? 'not-allowed' : 'pointer',
-            opacity: isRunning ? 0.6 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          {isRunning && (
-            <div style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.3)', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-          )}
-          {state === 'idle' ? '프로젝트 셋업' :
-           state === 'running' ? '셋업 중...' :
-           state === 'done' ? '셋업 완료 보기' :
-           '프로젝트 셋업'}
-          {state === 'error' && <span style={{ fontSize: 11, color: 'var(--red)', marginLeft: 2 }}>실패</span>}
-        </button>
-      </div>
-
-      {isRunning && statusMessage && (
-        <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8 }}>{statusMessage}</span>
-      )}
-
-      {isDone && modalOpen && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setModalOpen(false)}
-        >
-          <div
-            style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 24, width: 520, maxWidth: '90vw' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600 }}>셋업 결과</h3>
-              <button
-                onClick={() => setModalOpen(false)}
-                style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', fontSize: 11, cursor: 'pointer' }}
-              >
-                닫기
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {steps.map((step, i) => (
-                <div
-                  key={i}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}
-                >
-                  <span style={{ width: 16, textAlign: 'center' }}>
-                    {step.action === 'created'
-                      ? <span style={{ color: 'var(--green)', fontSize: 12 }}>✓</span>
-                      : <span style={{ color: 'var(--text2)', fontSize: 12 }}>—</span>}
-                  </span>
-                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{step.name}</span>
-                  <span style={{ fontSize: 11, color: 'var(--text2)', maxWidth: 160, textAlign: 'right' }}>{step.detail}</span>
-                </div>
-              ))}
-            </div>
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ─── Feature 4: Setup Analysis Panel ─────────────────────────────────────────
-
-interface SetupImprovement {
-  message: string;
-  target: string;
-  action: string;
-}
-
-interface SetupAnalysis {
-  score: number;
-  guard: { strengths: string[]; improvements: SetupImprovement[] };
-  guide: { strengths: string[]; improvements: SetupImprovement[] };
-  gear: { strengths: string[]; improvements: SetupImprovement[] };
-  summary: string;
-}
-
-// 모듈 레벨 — 셋업 상태 (컴포넌트 언마운트해도 유지)
-interface SetupJob {
-  state: 'idle' | 'running' | 'done' | 'error';
-  steps: SetupStep[];
-  statusMessage: string;
-  listeners: Set<() => void>;
-}
-const setupJobs = new Map<string, SetupJob>();
-
-function getOrCreateSetupJob(projectId: string): SetupJob {
-  if (!setupJobs.has(projectId)) {
-    setupJobs.set(projectId, { state: 'idle', steps: [], statusMessage: '', listeners: new Set() });
-  }
-  return setupJobs.get(projectId)!;
-}
-
-function notifySetupListeners(job: SetupJob) {
-  job.listeners.forEach((fn) => fn());
-}
-
-// 모듈 레벨 — 분석 상태 (컴포넌트 언마운트해도 유지)
-interface AnalysisJob {
-  state: AnalysisState;
-  result: SetupAnalysis | null;
-  statusMessage: string;
-  improved: Set<string>;
-  improveProgress: { current: number; total: number };
-  improveResults: Array<{ target: string; success: boolean }>;
-  eventSource: EventSource | null;
-  listeners: Set<() => void>;
-}
-const analysisJobs = new Map<string, AnalysisJob>();
-
-function getOrCreateJob(projectId: string): AnalysisJob {
-  if (!analysisJobs.has(projectId)) {
-    analysisJobs.set(projectId, {
-      state: 'idle', result: null, statusMessage: '', improved: new Set(),
-      improveProgress: { current: 0, total: 0 }, improveResults: [],
-      eventSource: null, listeners: new Set(),
-    });
-  }
-  return analysisJobs.get(projectId)!;
-}
-
-function notifyListeners(job: AnalysisJob) {
-  job.listeners.forEach((fn) => fn());
-}
-
-const setupAxisConfig = {
-  guard: { label: 'Guard', dotColor: 'var(--green)' },
-  guide: { label: 'Guide', dotColor: 'var(--blue)' },
-  gear:  { label: 'Gear',  dotColor: '#fd963c' },
-} as const;
-
-type AnalysisState = 'idle' | 'analyzing' | 'done' | 'improving' | 'improved' | 'error';
-
-function SetupAnalysisButton({ projectId }: { projectId: string }) {
+function SetupCenter({
+  projectId,
+  hasPath,
+  setupStatus,
+  isLoading,
+  analysis,
+  lastApplyResult,
+  onApplySuccess,
+  onOpenSettings,
+  focusRequest,
+}: {
+  projectId: string;
+  hasPath: boolean;
+  setupStatus?: ProjectSetupStatus;
+  isLoading: boolean;
+  analysis?: ProjectAnalysis;
+  lastApplyResult: ProjectSetupApplyResult | null;
+  onApplySuccess: (result: ProjectSetupApplyResult) => void;
+  onOpenSettings: () => void;
+  focusRequest?: { operationIds: string[]; token: number };
+}) {
   const queryClient = useQueryClient();
-  const job = getOrCreateJob(projectId);
-  const [, forceUpdate] = useState(0);
-  const rerender = () => forceUpdate((n) => n + 1);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedImprovements, setSelectedImprovements] = useState<Set<string>>(new Set());
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedAxes, setSelectedAxes] = useState<SetupAxis[]>([]);
+  const [selectedOperationIds, setSelectedOperationIds] = useState<string[]>([]);
+  const [expandedAxis, setExpandedAxis] = useState<SetupAxis | null>(null);
+  const [operationQuery, setOperationQuery] = useState(() => searchParams.get(setupSearchParamKeys.query) ?? '');
+  const [selectionHydrated, setSelectionHydrated] = useState(false);
 
-  // 마운트 시 리스너 등록, 언마운트 시 해제 (SSE는 유지)
-  useState(() => { job.listeners.add(rerender); });
-  const unmountRef = { current: false };
-  // cleanup on unmount
-  if (typeof window !== 'undefined') {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useState(() => {
-      return () => { job.listeners.delete(rerender); };
-    });
-  }
-
-  const analyze = () => {
-    job.state = 'analyzing';
-    job.statusMessage = '연결 중...';
-    job.result = null;
-    setSeen(false);
-    job.improved = new Set();
-    job.improveResults = [];
-    notifyListeners(job);
-
-    if (job.eventSource) job.eventSource.close();
-    const es = new EventSource(`/api/projects/${projectId}/analyze-setup`);
-    job.eventSource = es;
-
-    es.addEventListener('status', (e) => {
-      job.statusMessage = JSON.parse(e.data).message;
-      notifyListeners(job);
-    });
-
-    es.addEventListener('done', (e) => {
-      job.result = JSON.parse(e.data);
-      job.state = 'done';
-      job.eventSource = null;
-      es.close();
-      notifyListeners(job);
-    });
-
-    es.addEventListener('error', () => {
-      job.state = 'error';
-      job.eventSource = null;
-      es.close();
-      notifyListeners(job);
-    });
-
-    es.onerror = () => {
-      job.state = 'error';
-      job.eventSource = null;
-      es.close();
-      notifyListeners(job);
-    };
-  };
-
-  const handleClick = () => {
-    if (job.state === 'idle' || job.state === 'error') {
-      analyze();
-    } else if (job.state === 'done' || job.state === 'improved') {
-      setModalOpen(true);
-      setSeen(true);
-    }
-  };
-
-  const toggleImprovement = (key: string) => {
-    setSelectedImprovements((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const improveBatch = async () => {
-    if (!job.result) return;
-
-    const items: Array<{ key: string; target: string; action: string }> = [];
-    for (const key of selectedImprovements) {
-      const [axis, idxStr] = key.split('-');
-      const idx = parseInt(idxStr);
-      const item = job.result[axis as 'guard' | 'guide' | 'gear'].improvements[idx];
-      if (item) items.push({ key, target: item.target, action: item.action });
-    }
-
-    setModalOpen(false);
-    job.state = 'improving';
-    job.improveProgress = { current: 0, total: items.length };
-    notifyListeners(job);
-
-    try {
-      const response = await api.post<{ results: Array<{ target: string; success: boolean }> }>(
-        `/projects/${projectId}/improve-batch`,
-        { items: items.map(i => ({ target: i.target, action: i.action })) }
-      );
-
-      for (const item of items) {
-        const r = response.results.find(r => r.target === item.target);
-        if (r?.success) job.improved.add(item.key);
+  useEffect(() => {
+    if (!setupStatus || selectedAxes.length > 0 || selectedOperationIds.length > 0) {
+      if (setupStatus && !selectionHydrated && (selectedAxes.length > 0 || selectedOperationIds.length > 0)) {
+        setSelectionHydrated(true);
       }
-
-      job.improveResults = response.results;
-    } catch {
-      job.improveResults = items.map(i => ({ target: i.target, success: false }));
+      return;
     }
 
-    job.state = 'improved';
-    notifyListeners(job);
-    queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+    const validAxes = setupStatus.axes.map((axis) => axis.axis);
+    const validOperationIds = new Set(setupStatus.axes.flatMap((axis) => axis.operations.map((operation) => operation.id)));
+    const urlAxes = (searchParams.get(setupSearchParamKeys.axes) ?? '')
+      .split(',')
+      .filter((value): value is SetupAxis => validAxes.includes(value as SetupAxis));
+    const urlOperationIds = (searchParams.get(setupSearchParamKeys.operations) ?? '')
+      .split(',')
+      .filter((value) => validOperationIds.has(value));
+    const urlExpanded = searchParams.get(setupSearchParamKeys.expanded);
+
+    if (urlAxes.length > 0 && urlOperationIds.length > 0) {
+      setSelectionHydrated(true);
+      setSelectedAxes(urlAxes);
+      setSelectedOperationIds(urlOperationIds);
+      if (urlExpanded && validAxes.includes(urlExpanded as SetupAxis)) {
+        setExpandedAxis(urlExpanded as SetupAxis);
+      }
+      return;
+    }
+
+    const incomplete = setupStatus.axes.filter((axis) => !axis.ready).map((axis) => axis.axis);
+    const defaultAxes = incomplete.length > 0 ? incomplete : setupStatus.axes.map((axis) => axis.axis);
+    const defaultOperationIds = setupStatus.axes
+      .filter((axis) => defaultAxes.includes(axis.axis))
+      .flatMap((axis) => {
+        const pending = axis.operations.filter((operation) => operation.status === 'pending');
+        return (pending.length > 0 ? pending : axis.operations).map((operation) => operation.id);
+      });
+
+    setSelectionHydrated(true);
+    setSelectedAxes(defaultAxes);
+    setSelectedOperationIds(defaultOperationIds);
+  }, [searchParams, selectedAxes.length, selectedOperationIds.length, selectionHydrated, setupStatus]);
+
+  useEffect(() => {
+    if (!setupStatus || !selectionHydrated) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    if (selectedAxes.length > 0 && selectedOperationIds.length > 0) {
+      nextParams.set(setupSearchParamKeys.axes, selectedAxes.join(','));
+      nextParams.set(setupSearchParamKeys.operations, selectedOperationIds.join(','));
+    } else {
+      nextParams.delete(setupSearchParamKeys.axes);
+      nextParams.delete(setupSearchParamKeys.operations);
+    }
+    if (expandedAxis) {
+      nextParams.set(setupSearchParamKeys.expanded, expandedAxis);
+    } else {
+      nextParams.delete(setupSearchParamKeys.expanded);
+    }
+    if (operationQuery.trim()) {
+      nextParams.set(setupSearchParamKeys.query, operationQuery.trim());
+    } else {
+      nextParams.delete(setupSearchParamKeys.query);
+    }
+
+    const current = searchParams.toString();
+    const next = nextParams.toString();
+    if (current !== next) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [expandedAxis, operationQuery, searchParams, selectedAxes, selectedOperationIds, selectionHydrated, setSearchParams, setupStatus]);
+
+  useEffect(() => {
+    if (!setupStatus || !focusRequest || focusRequest.operationIds.length === 0) {
+      return;
+    }
+
+    const operations = setupStatus.axes
+      .flatMap((axis) => axis.operations)
+      .filter((operation) => focusRequest.operationIds.includes(operation.id));
+    if (operations.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(operations.map((operation) => operation.id)));
+    const uniqueAxes = Array.from(new Set(operations.map((operation) => operation.axis)));
+    setSelectedOperationIds(uniqueIds);
+    setSelectedAxes(uniqueAxes);
+    setExpandedAxis(operations[0].axis);
+    setOperationQuery('');
+  }, [focusRequest, setupStatus]);
+
+  const planMutation = useMutation({
+    mutationFn: ({ axes, operationIds }: ProjectSetupRequest) =>
+      api.post<ProjectSetupPlan>(`/projects/${projectId}/setup/plan`, { axes, operationIds }),
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: ({ axes, operationIds }: ProjectSetupRequest) =>
+      api.post<ProjectSetupApplyResult>(`/projects/${projectId}/setup/apply`, { axes, operationIds }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['project-analysis', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['db-conventions', projectId] });
+      onApplySuccess(result);
+    },
+  });
+
+  const getAxisOperationIds = (axis: SetupAxis) => {
+    const axisStatus = setupStatus?.axes.find((item) => item.axis === axis);
+    return axisStatus ? axisStatus.operations.map((operation) => operation.id) : [];
   };
 
-  const { state, result: setupAnalysis, statusMessage, improveProgress, improved, improveResults } = job;
+  const toggleAxis = (axis: SetupAxis) => {
+    const axisOperationIds = getAxisOperationIds(axis);
+    const axisSelected = axisOperationIds.length > 0 && axisOperationIds.every((operationId) => selectedOperationIds.includes(operationId));
 
-  const scoreColor = setupAnalysis
-    ? setupAnalysis.score >= 80 ? 'var(--green)' : setupAnalysis.score >= 50 ? 'var(--yellow)' : 'var(--red)'
-    : 'var(--text)';
+    if (axisSelected) {
+      setSelectedAxes((prev) => prev.filter((value) => value !== axis));
+      setSelectedOperationIds((prev) => prev.filter((operationId) => !axisOperationIds.includes(operationId)));
+      return;
+    }
 
-  const [seen, setSeen] = useState(false);
-  const isDisabled = state === 'analyzing' || state === 'improving';
-  const hasBadge = !seen && (state === 'done' || state === 'improved');
+    setSelectedAxes((prev) => prev.includes(axis) ? prev : [...prev, axis]);
+    setSelectedOperationIds((prev) => Array.from(new Set([...prev, ...axisOperationIds])));
+  };
+
+  const toggleExpandedAxis = (axis: SetupAxis) => {
+    setExpandedAxis((prev) => prev === axis ? null : axis);
+  };
+
+  const toggleOperation = (axis: SetupAxis, operationId: string) => {
+    const axisOperationIds = getAxisOperationIds(axis);
+    const isSelected = selectedOperationIds.includes(operationId);
+
+    if (isSelected) {
+      const nextOperationIds = selectedOperationIds.filter((value) => value !== operationId);
+      setSelectedOperationIds(nextOperationIds);
+      if (!nextOperationIds.some((value) => axisOperationIds.includes(value))) {
+        setSelectedAxes((prev) => prev.filter((value) => value !== axis));
+      }
+      return;
+    }
+
+    setSelectedOperationIds((prev) => [...prev, operationId]);
+    setSelectedAxes((prev) => prev.includes(axis) ? prev : [...prev, axis]);
+  };
+
+  const selectOperations = (predicate: (operation: SetupOperation) => boolean) => {
+    if (!setupStatus) {
+      return;
+    }
+
+    const selected = setupStatus.axes
+      .flatMap((axis) => axis.operations)
+      .filter(predicate);
+
+    setSelectedOperationIds(selected.map((operation) => operation.id));
+    setSelectedAxes(Array.from(new Set(selected.map((operation) => operation.axis))));
+  };
+
+  const selectPendingOnly = () => {
+    selectOperations((operation) => operation.status === 'pending');
+  };
+
+  const selectDriftedOnly = () => {
+    selectOperations((operation) => operation.drift?.state === 'drifted');
+  };
+
+  const clearSelection = () => {
+    setSelectedAxes([]);
+    setSelectedOperationIds([]);
+  };
+
+  const focusChangedOperations = () => {
+    if (!lastApplyResult) {
+      return;
+    }
+
+    const changedIds = lastApplyResult.results
+      .filter((result) => result.outcome === 'created' || result.outcome === 'updated')
+      .map((result) => result.id);
+    if (changedIds.length === 0) {
+      return;
+    }
+
+    const changedOperations = setupStatus?.axes
+      .flatMap((axis) => axis.operations)
+      .filter((operation) => changedIds.includes(operation.id)) ?? [];
+
+    setSelectedOperationIds(changedIds);
+    setSelectedAxes(Array.from(new Set(changedOperations.map((operation) => operation.axis))));
+    if (changedOperations.length > 0) {
+      setExpandedAxis(changedOperations[0].axis);
+    }
+  };
+
+  const focusSingleOperation = (operationId: string) => {
+    const operation = setupStatus?.axes.flatMap((axis) => axis.operations).find((item) => item.id === operationId);
+    if (!operation) {
+      return;
+    }
+
+    setSelectedOperationIds([operationId]);
+    setSelectedAxes([operation.axis]);
+    setExpandedAxis(operation.axis);
+  };
+
+  const focusOperationGroup = (operationIds: string[]) => {
+    if (!setupStatus || operationIds.length === 0) {
+      return;
+    }
+
+    const operations = setupStatus.axes
+      .flatMap((axis) => axis.operations)
+      .filter((operation) => operationIds.includes(operation.id));
+    if (operations.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(operations.map((operation) => operation.id)));
+    const uniqueAxes = Array.from(new Set(operations.map((operation) => operation.axis)));
+    setSelectedOperationIds(uniqueIds);
+    setSelectedAxes(uniqueAxes);
+    setExpandedAxis(operations[0].axis);
+  };
+
+  const keepSelectedOperations = (predicate: (operation: SetupOperation) => boolean) => {
+    const nextOperations = selectedOperations.filter(predicate);
+    if (nextOperations.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(nextOperations.map((operation) => operation.id)));
+    const uniqueAxes = Array.from(new Set(nextOperations.map((operation) => operation.axis)));
+    setSelectedOperationIds(uniqueIds);
+    setSelectedAxes(uniqueAxes);
+    setExpandedAxis(nextOperations[0].axis);
+  };
+
+  const setOperationSelection = (operations: SetupOperation[]) => {
+    if (operations.length === 0) {
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(operations.map((operation) => operation.id)));
+    const uniqueAxes = Array.from(new Set(operations.map((operation) => operation.axis)));
+    setSelectedOperationIds(uniqueIds);
+    setSelectedAxes(uniqueAxes);
+    setExpandedAxis(operations[0].axis);
+  };
+
+  const activeAxes = selectedAxes.filter((axis, index, values) => values.indexOf(axis) === index)
+    .filter((axis) => getAxisOperationIds(axis).some((operationId) => selectedOperationIds.includes(operationId)));
+  const allOperations = setupStatus?.axes.flatMap((axis) => axis.operations) ?? [];
+  const selectedOperations = allOperations.filter((operation) => selectedOperationIds.includes(operation.id));
+  const normalizedOperationQuery = operationQuery.trim().toLowerCase();
+  const matchesOperationQuery = (operation: SetupOperation) => {
+    if (!normalizedOperationQuery) {
+      return true;
+    }
+    return [operation.title, operation.description, operation.path ?? '', operation.id]
+      .some((value) => value.toLowerCase().includes(normalizedOperationQuery));
+  };
+  const visibleOperations = allOperations.filter(matchesOperationQuery);
+  const selectedByAxis = activeAxes.map((axis) => ({
+    axis,
+    count: selectedOperations.filter((operation) => operation.axis === axis).length,
+  }));
+  const visibleSelectedOperations = selectedOperations.filter(matchesOperationQuery);
+  const visibleOperationCount = visibleOperations.length;
+  const visibleSelectedIds = new Set(visibleSelectedOperations.map((operation) => operation.id));
+  const hiddenSelectedOperations = selectedOperations.filter((operation) => !visibleSelectedIds.has(operation.id));
+  const selectedPendingCount = selectedOperations.filter((operation) => operation.status === 'pending').length;
+  const selectedAlignedCount = selectedOperations.filter((operation) => operation.drift?.state === 'aligned').length;
+  const selectedDriftedCount = selectedOperations.filter((operation) => operation.drift?.state === 'drifted').length;
+  const selectedMissingCount = selectedOperations.filter((operation) => operation.drift?.state === 'missing' || operation.status === 'pending').length;
+
+  const previewPlan = () => {
+    if (activeAxes.length === 0 || selectedOperationIds.length === 0) {
+      return;
+    }
+    planMutation.mutate({ axes: activeAxes, operationIds: selectedOperationIds });
+  };
+
+  const applySetup = () => {
+    if (activeAxes.length === 0 || selectedOperationIds.length === 0) {
+      return;
+    }
+    applyMutation.mutate({ axes: activeAxes, operationIds: selectedOperationIds });
+  };
+
+  const axisColor: Record<SetupAxis, string> = {
+    guard: 'var(--green)',
+    guide: 'var(--blue)',
+    gear: '#fd963c',
+  };
+  const cliInstalled = analysis ? Object.values(analysis.installedCLIs).some(Boolean) : true;
+  const applyResolutionSummary = buildApplyResolutionSummary(lastApplyResult, setupStatus);
+
+  const renderDiffSamples = (diffSummary?: NonNullable<SetupOperation['preview']>['diffSummary']) => {
+    if (!diffSummary || (diffSummary.additionsSample?.length ?? 0) === 0 && (diffSummary.removalsSample?.length ?? 0) === 0) {
+      return null;
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+        {diffSummary.additionsSample && diffSummary.additionsSample.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--green)', fontWeight: 700 }}>Baseline sample</span>
+            <pre
+              style={{
+                fontSize: 10,
+                color: 'var(--green)',
+                background: 'rgba(0,206,201,0.08)',
+                border: '1px solid rgba(0,206,201,0.2)',
+                borderRadius: 6,
+                padding: 8,
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {diffSummary.additionsSample.map((line: string) => `+ ${line}`).join('\n')}
+            </pre>
+          </div>
+        )}
+        {diffSummary.removalsSample && diffSummary.removalsSample.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 10, color: '#fd963c', fontWeight: 700 }}>Current sample</span>
+            <pre
+              style={{
+                fontSize: 10,
+                color: '#fd963c',
+                background: 'rgba(253,150,60,0.08)',
+                border: '1px solid rgba(253,150,60,0.2)',
+                borderRadius: 6,
+                padding: 8,
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {diffSummary.removalsSample.map((line: string) => `- ${line}`).join('\n')}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderComparePreview = (
+    comparePreview?: NonNullable<SetupOperation['preview']>['comparePreview'],
+    driftState?: NonNullable<SetupOperation['drift']>['state'],
+  ) => {
+    if (!comparePreview || driftState === 'aligned') {
+      return null;
+    }
+
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 8,
+          marginTop: 8,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 10, color: 'var(--green)', fontWeight: 700 }}>Baseline</span>
+          <pre
+            style={{
+              fontSize: 10,
+              color: 'var(--green)',
+              background: 'rgba(0,206,201,0.08)',
+              border: '1px solid rgba(0,206,201,0.2)',
+              borderRadius: 6,
+              padding: 8,
+              margin: 0,
+              minHeight: 88,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {comparePreview.baseline.length > 0 ? comparePreview.baseline.join('\n') : '(missing)'}
+          </pre>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 10, color: '#fd963c', fontWeight: 700 }}>Current</span>
+          <pre
+            style={{
+              fontSize: 10,
+              color: '#fd963c',
+              background: 'rgba(253,150,60,0.08)',
+              border: '1px solid rgba(253,150,60,0.2)',
+              borderRadius: 6,
+              padding: 8,
+              margin: 0,
+              minHeight: 88,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {comparePreview.current.length > 0 ? comparePreview.current.join('\n') : '(missing)'}
+          </pre>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <>
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        {state === 'done' && (
-          <div style={{ position: 'absolute', top: -6, left: -6, width: 18, height: 18, background: 'var(--red)', color: '#fff', borderRadius: '50%', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>!</div>
-        )}
-        {state === 'improved' && (
-          <div style={{ position: 'absolute', top: -6, left: -6, width: 18, height: 18, background: 'var(--green)', color: '#fff', borderRadius: '50%', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>✓</div>
-        )}
-        <button
-          onClick={handleClick}
-          disabled={isDisabled}
-          style={{
-            padding: hasBadge ? '8px 20px 8px 24px' : '8px 20px',
-            borderRadius: 8,
-            border: '1px solid var(--border)',
-            background: 'var(--surface2)',
-            color: 'var(--text)',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: isDisabled ? 'not-allowed' : 'pointer',
-            opacity: isDisabled ? 0.6 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          {state === 'analyzing' && (
-            <div style={{ width: 12, height: 12, border: '2px solid var(--surface3)', borderTop: '2px solid var(--accent)', borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-          )}
-          {state === 'idle' || state === 'error' ? '셋업 분석' :
-           state === 'analyzing' ? '분석 중...' :
-           state === 'done' ? '분석 결과 보기' :
-           state === 'improving' ? '개선 중...' :
-           state === 'improved' ? '개선 완료 보기' : '셋업 분석'}
-          {state === 'error' && <span style={{ fontSize: 11, color: 'var(--red)', marginLeft: 2 }}>실패</span>}
-        </button>
-      </div>
-
-      {state === 'analyzing' && statusMessage && (
-        <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8 }}>{statusMessage}</span>
-      )}
-
-      {(state === 'done' || state === 'improved') && modalOpen && setupAnalysis && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
-          onClick={() => setModalOpen(false)}
-        >
-          <div
-            style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: 24, width: 560, maxWidth: '90vw', maxHeight: '80vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600 }}>셋업 분석 결과</h3>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => { setModalOpen(false); analyze(); }}
-                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', fontSize: 11, cursor: 'pointer' }}
-                >
-                  재분석
-                </button>
-                <button
-                  onClick={() => setModalOpen(false)}
-                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', fontSize: 11, cursor: 'pointer' }}
-                >
-                  닫기
-                </button>
+    <SectionCard title="Project Setup Center">
+      {!hasPath ? (
+        <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+          프로젝트 경로가 있어야 setup 상태를 계산할 수 있습니다.
+        </div>
+      ) : isLoading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <SkeletonBlock height={16} />
+          <SkeletonBlock width="80%" height={16} />
+          <SkeletonBlock width="60%" height={16} />
+        </div>
+      ) : setupStatus ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+                {setupStatus.ready ? 'Workspace ready' : 'Setup required'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 720 }}>
+                {setupStatus.summary}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6 }}>
+                Project-local assets are managed here. Global runtime settings remain in Settings.
               </div>
             </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                onClick={selectPendingOnly}
+                disabled={!setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.status === 'pending'))}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: !setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.status === 'pending')) ? 'not-allowed' : 'pointer',
+                  opacity: !setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.status === 'pending')) ? 0.5 : 1,
+                }}
+              >
+                Pending Only
+              </button>
+              <button
+                onClick={selectDriftedOnly}
+                disabled={!setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.drift?.state === 'drifted'))}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: !setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.drift?.state === 'drifted')) ? 'not-allowed' : 'pointer',
+                  opacity: !setupStatus.axes.some((axis) => axis.operations.some((operation) => operation.drift?.state === 'drifted')) ? 0.5 : 1,
+                }}
+              >
+                Drifted Only
+              </button>
+              <button
+                onClick={clearSelection}
+                disabled={selectedOperationIds.length === 0}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: selectedOperationIds.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: selectedOperationIds.length === 0 ? 0.5 : 1,
+                }}
+              >
+                Clear
+              </button>
+              <button
+                onClick={previewPlan}
+                disabled={activeAxes.length === 0 || selectedOperationIds.length === 0 || planMutation.isPending}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface2)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: activeAxes.length === 0 || selectedOperationIds.length === 0 || planMutation.isPending ? 'not-allowed' : 'pointer',
+                  opacity: activeAxes.length === 0 || selectedOperationIds.length === 0 || planMutation.isPending ? 0.6 : 1,
+                }}
+              >
+                {planMutation.isPending ? 'Planning...' : 'Preview Plan'}
+              </button>
+              <button
+                onClick={applySetup}
+                disabled={activeAxes.length === 0 || selectedOperationIds.length === 0 || applyMutation.isPending}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: activeAxes.length === 0 || selectedOperationIds.length === 0 || applyMutation.isPending ? 'not-allowed' : 'pointer',
+                  opacity: activeAxes.length === 0 || selectedOperationIds.length === 0 || applyMutation.isPending ? 0.6 : 1,
+                }}
+              >
+                {applyMutation.isPending ? 'Applying...' : 'Apply Setup'}
+              </button>
+            </div>
+          </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <span style={{ fontSize: 15, fontWeight: 700, color: scoreColor }}>셋업 점수: {setupAnalysis.score}/100</span>
+          {!cliInstalled && (
+            <div
+              style={{
+                border: '1px solid rgba(253, 203, 110, 0.35)',
+                borderRadius: 12,
+                background: 'rgba(253,203,110,0.08)',
+                padding: 12,
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 12,
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', marginBottom: 4 }}>
+                  Runtime CLI not detected
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  Setup stays project-local, but task execution will remain limited until Claude, Codex, or Cursor CLI is configured in Settings.
+                </div>
+              </div>
+              <button
+                onClick={onOpenSettings}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Open Settings
+              </button>
+            </div>
+          )}
 
-              {(['guard', 'guide', 'gear'] as const).map((axis) => {
-                const cfg = setupAxisConfig[axis];
-                const { strengths, improvements } = setupAnalysis[axis];
-                return (
-                  <div key={axis} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: cfg.dotColor, flexShrink: 0 }} />
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>{cfg.label}</span>
+          <div
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              background: 'var(--surface2)',
+              padding: 12,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ minWidth: 240, flex: '1 1 280px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Operation Filter</div>
+              <input
+                type="text"
+                value={operationQuery}
+                onChange={(event) => setOperationQuery(event.target.value)}
+                placeholder="Search by title, path, or operation id"
+                aria-label="Filter setup operations"
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge color="gray">{visibleOperationCount} visible op(s)</Badge>
+              <button
+                onClick={() => setOperationSelection(visibleOperations)}
+                disabled={visibleOperationCount === 0}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: visibleOperationCount === 0 ? 'not-allowed' : 'pointer',
+                  opacity: visibleOperationCount === 0 ? 0.5 : 1,
+                }}
+              >
+                Select Visible
+              </button>
+              <button
+                onClick={() => setOperationSelection(visibleSelectedOperations)}
+                disabled={visibleSelectedOperations.length === 0}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: visibleSelectedOperations.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: visibleSelectedOperations.length === 0 ? 0.5 : 1,
+                }}
+              >
+                Focus Visible
+              </button>
+              <button
+                onClick={() => {
+                  const remainingOperations = selectedOperations.filter((operation) => !matchesOperationQuery(operation));
+                  if (remainingOperations.length === 0) {
+                    clearSelection();
+                    return;
+                  }
+                  setOperationSelection(remainingOperations);
+                }}
+                disabled={visibleSelectedOperations.length === 0}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: visibleSelectedOperations.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: visibleSelectedOperations.length === 0 ? 0.5 : 1,
+                }}
+              >
+                Deselect Visible
+              </button>
+              {operationQuery.trim() && (
+                <button
+                  onClick={() => setOperationQuery('')}
+                  style={{
+                    padding: '7px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border)',
+                    background: 'transparent',
+                    color: 'var(--text2)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Clear Filter
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              background: 'var(--surface2)',
+              padding: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>Selected Scope</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <Badge color="blue">{selectedOperationIds.length} operation(s)</Badge>
+                <Badge color="gray">{activeAxes.length} axis(es)</Badge>
+              </div>
+            </div>
+            {selectedOperations.length > 0 ? (
+              <>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {selectedByAxis.map((item) => (
+                    <Badge key={item.axis} color={axisBadgeColor(item.axis)}>
+                      {item.axis.toUpperCase()} {item.count}
+                    </Badge>
+                  ))}
+                  {selectedPendingCount > 0 && <Badge color="yellow">{selectedPendingCount} pending</Badge>}
+                  {selectedAlignedCount > 0 && <Badge color="green">{selectedAlignedCount} aligned</Badge>}
+                  {selectedDriftedCount > 0 && <Badge color="orange">{selectedDriftedCount} drifted</Badge>}
+                  {selectedMissingCount > 0 && <Badge color="yellow">{selectedMissingCount} missing</Badge>}
+                  {visibleSelectedOperations.length > 0 && <Badge color="blue">{visibleSelectedOperations.length} visible selected</Badge>}
+                  {hiddenSelectedOperations.length > 0 && <Badge color="gray">{hiddenSelectedOperations.length} hidden selected</Badge>}
+                </div>
+                {hiddenSelectedOperations.length > 0 && (
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(253, 203, 110, 0.35)',
+                      background: 'rgba(253,203,110,0.08)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.5 }}>
+                      {hiddenSelectedOperations.length} selected operation(s) are hidden by the current filter. Preview and apply still include them until you scope the selection down.
                     </div>
-                    <div style={{ paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {strengths.map((s, i) => (
-                        <div key={i} style={{ fontSize: 12, color: 'var(--green)' }}>✓ {s}</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => setOperationSelection(visibleSelectedOperations)}
+                        disabled={visibleSelectedOperations.length === 0}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: visibleSelectedOperations.length === 0 ? 'not-allowed' : 'pointer',
+                          opacity: visibleSelectedOperations.length === 0 ? 0.5 : 1,
+                        }}
+                      >
+                        Scope to Visible
+                      </button>
+                      <button
+                        onClick={() => setOperationQuery('')}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'transparent',
+                          color: 'var(--text2)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Show All
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => keepSelectedOperations((operation) => operation.status === 'pending')}
+                    disabled={selectedPendingCount === 0}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: selectedPendingCount === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedPendingCount === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    Keep Pending
+                  </button>
+                  <button
+                    onClick={() => keepSelectedOperations((operation) => operation.drift?.state === 'aligned')}
+                    disabled={selectedAlignedCount === 0}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: selectedAlignedCount === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedAlignedCount === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    Keep Aligned
+                  </button>
+                  <button
+                    onClick={() => keepSelectedOperations((operation) => operation.drift?.state === 'drifted')}
+                    disabled={selectedDriftedCount === 0}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: selectedDriftedCount === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedDriftedCount === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    Keep Drifted
+                  </button>
+                  <button
+                    onClick={() => keepSelectedOperations((operation) => operation.drift?.state === 'missing' || operation.status === 'pending')}
+                    disabled={selectedMissingCount === 0}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: selectedMissingCount === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedMissingCount === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    Keep Missing
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {visibleSelectedOperations.map((operation) => (
+                    <button
+                      key={operation.id}
+                      onClick={() => focusSingleOperation(operation.id)}
+                      aria-label={`Focus selected ${operation.title}`}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: 999,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {operation.title}
+                    </button>
+                  ))}
+                </div>
+                {visibleSelectedOperations.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                    Current filter hides all selected operations. Clear the filter to inspect the full scope.
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                No setup items selected. Choose one or more operations to preview or apply.
+              </div>
+            )}
+          </div>
+
+          {applyResolutionSummary && (
+            <div
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                background: 'var(--surface2)',
+                padding: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>Apply Impact</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <Badge color="blue">{applyResolutionSummary.changedCount} changed</Badge>
+                  {applyResolutionSummary.alignedCount > 0 && (
+                    <Badge color="green">{applyResolutionSummary.alignedCount} aligned</Badge>
+                  )}
+                  {applyResolutionSummary.driftedCount > 0 && (
+                    <Badge color="orange">{applyResolutionSummary.driftedCount} drifted</Badge>
+                  )}
+                  {applyResolutionSummary.missingCount > 0 && (
+                    <Badge color="yellow">{applyResolutionSummary.missingCount} missing</Badge>
+                  )}
+                  {applyResolutionSummary.skippedCount > 0 && (
+                    <Badge color="gray">{applyResolutionSummary.skippedCount} skipped</Badge>
+                  )}
+                  {applyResolutionSummary.errorCount > 0 && (
+                    <Badge color="red">{applyResolutionSummary.errorCount} error</Badge>
+                  )}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                {applyResolutionSummary.changedCount > 0
+                  ? `${applyResolutionSummary.changedCount} setup item(s) changed. ${applyResolutionSummary.alignedCount} are currently aligned, ${applyResolutionSummary.driftedCount} still drifted, ${applyResolutionSummary.missingCount} still missing.`
+                  : `No setup items changed. ${applyResolutionSummary.skippedCount} item(s) were skipped${applyResolutionSummary.errorCount > 0 ? ` and ${applyResolutionSummary.errorCount} error(s) remain.` : '.'}`}
+              </div>
+              {applyResolutionSummary.changedTitles.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div>
+                    <button
+                      onClick={focusChangedOperations}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Focus Changed
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                      Changed now: {applyResolutionSummary.changedTitles.join(', ')}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {applyResolutionSummary.changedItems.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => focusSingleOperation(item.id)}
+                          aria-label={`Focus changed ${item.title}`}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--text)',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {item.title}
+                        </button>
                       ))}
-                      {improvements.map((item, i) => {
-                        const key = `${axis}-${i}`;
-                        const done = improved.has(key);
-                        const checked = selectedImprovements.has(key);
+                    </div>
+                  </div>
+                  {applyResolutionSummary.alignedTitles.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 11, color: 'var(--green)' }}>
+                          Aligned: {applyResolutionSummary.alignedTitles.join(', ')}
+                        </div>
+                        <button
+                          onClick={() => focusOperationGroup(applyResolutionSummary.alignedItems.map((item) => item.id))}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--green)',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Focus Aligned
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {applyResolutionSummary.alignedItems.map((item) => (
+                          <button
+                            key={item.id}
+                            onClick={() => focusSingleOperation(item.id)}
+                            aria-label={`Focus aligned ${item.title}`}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                              color: 'var(--text)',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {applyResolutionSummary.driftedTitles.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 11, color: '#fd963c' }}>
+                          Still drifted: {applyResolutionSummary.driftedTitles.join(', ')}
+                        </div>
+                        <button
+                          onClick={() => focusOperationGroup(applyResolutionSummary.driftedItems.map((item) => item.id))}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: '#fd963c',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Focus Drifted
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {applyResolutionSummary.driftedItems.map((item) => (
+                          <button
+                            key={item.id}
+                            onClick={() => focusSingleOperation(item.id)}
+                            aria-label={`Focus drifted ${item.title}`}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                              color: 'var(--text)',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {applyResolutionSummary.missingTitles.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 11, color: 'var(--yellow)' }}>
+                          Still missing: {applyResolutionSummary.missingTitles.join(', ')}
+                        </div>
+                        <button
+                          onClick={() => focusOperationGroup(applyResolutionSummary.missingItems.map((item) => item.id))}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--yellow)',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Focus Missing
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {applyResolutionSummary.missingItems.map((item) => (
+                          <button
+                            key={item.id}
+                            onClick={() => focusSingleOperation(item.id)}
+                            aria-label={`Focus missing ${item.title}`}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                              color: 'var(--text)',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+            {setupStatus.axes.map((axis) => {
+              const selectedCount = axis.operations.filter((operation) => selectedOperationIds.includes(operation.id)).length;
+              const checked = selectedCount === axis.operations.length && axis.operations.length > 0;
+              const partiallySelected = selectedCount > 0 && selectedCount < axis.operations.length;
+              const readyCount = axis.operations.filter((operation) => operation.status === 'ready').length;
+              const pendingCount = axis.operations.length - readyCount;
+              const previewAxis = planMutation.data?.axes.find((item) => item.axis === axis.axis);
+              const visibleAxisOperations = axis.operations.filter(matchesOperationQuery);
+              return (
+                <div
+                  key={axis.axis}
+                  style={{
+                    padding: 14,
+                    borderRadius: 12,
+                    border: checked ? `1px solid ${axisColor[axis.axis]}` : '1px solid var(--border)',
+                    background: checked ? 'var(--surface2)' : 'var(--surface)',
+                  }}
+                >
+                  <button
+                    onClick={() => toggleAxis(axis.axis)}
+                    style={{
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      padding: 0,
+                      width: '100%',
+                      cursor: 'pointer',
+                    }}
+                  >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input type="checkbox" readOnly checked={checked} style={{ pointerEvents: 'none' }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: axisColor[axis.axis] }}>{axis.label}</span>
+                    </div>
+                    <Badge color={axis.ready ? 'green' : 'yellow'}>{axis.readiness}%</Badge>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, minHeight: 54 }}>
+                    {axis.summary}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text2)' }}>{pendingCount} pending</span>
+                    <span style={{ fontSize: 11, color: 'var(--text2)' }}>{readyCount} ready</span>
+                    <span style={{ fontSize: 11, color: partiallySelected ? axisColor[axis.axis] : 'var(--text2)' }}>
+                      {selectedCount} selected
+                    </span>
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {visibleAxisOperations.slice(0, 3).map((operation) => (
+                      <div key={operation.id} style={{ fontSize: 11, color: operation.status === 'ready' ? 'var(--green)' : 'var(--text2)' }}>
+                        {operation.status === 'ready' ? '✓' : '•'} {operation.title}
+                      </div>
+                    ))}
+                    {visibleAxisOperations.length > 3 && (
+                      <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                        + {visibleAxisOperations.length - 3} more
+                      </div>
+                    )}
+                    {visibleAxisOperations.length === 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                        No operations match the current filter
+                      </div>
+                    )}
+                  </div>
+                  </button>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginTop: 10 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+                      {previewAxis ? 'Using current preview plan' : 'Using current setup status'}
+                    </span>
+                    <button
+                      onClick={() => toggleExpandedAxis(axis.axis)}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text2)',
+                        fontSize: 11,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {expandedAxis === axis.axis ? 'Hide Ops' : 'Show Ops'}
+                    </button>
+                  </div>
+
+                  {expandedAxis === axis.axis && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                        borderTop: '1px solid var(--border)',
+                        paddingTop: 10,
+                      }}
+                    >
+                      {visibleAxisOperations.length === 0 && (
+                        <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                          No operations match the current filter in this axis.
+                        </div>
+                      )}
+                      {visibleAxisOperations.map((operation) => {
+                        const previewOperation = previewAxis?.operations.find((item) => item.id === operation.id);
+                        const effectiveOperation = previewOperation ?? operation;
+                        const applyResult = findApplyResult(lastApplyResult, operation.id);
+                        const operationSelected = selectedOperationIds.includes(operation.id);
                         return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            {done ? (
-                              <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ {item.message} <span style={{ fontSize: 11, color: 'var(--text2)' }}>반영됨</span></span>
-                            ) : (
-                              <>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleImprovement(key)}
-                                  style={{ cursor: 'pointer', flexShrink: 0 }}
-                                />
-                                <span style={{ fontSize: 12, color: 'var(--yellow)' }}>⚠ {item.message}</span>
-                              </>
+                          <div
+                            key={operation.id}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              background: 'var(--surface)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={operationSelected}
+                                    onChange={() => toggleOperation(axis.axis, operation.id)}
+                                    aria-label={`Select ${operation.title}`}
+                                  />
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text)' }}>{operation.title}</span>
+                                </label>
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <Badge color={operationSelected ? axisBadgeColor(axis.axis) : 'gray'}>
+                                  {operationSelected ? 'selected' : 'not selected'}
+                                </Badge>
+                                <Badge color={operation.status === 'ready' ? 'green' : 'yellow'}>
+                                  {operation.status === 'ready' ? 'ready' : operationSelected && previewAxis ? 'will apply' : 'pending'}
+                                </Badge>
+                                {effectiveOperation.drift && (
+                                  <Badge color={effectiveOperation.drift.state === 'drifted' ? 'orange' : effectiveOperation.drift.state === 'aligned' ? 'green' : 'yellow'}>
+                                    {effectiveOperation.drift.state}
+                                  </Badge>
+                                )}
+                                {applyResult && (
+                                  <Badge color={applyResult.outcome === 'error' ? 'red' : applyResult.outcome === 'skipped' ? 'gray' : 'blue'}>
+                                    {applyResult.outcome}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6, lineHeight: 1.5 }}>{effectiveOperation.description}</div>
+                            {effectiveOperation.preview?.summary && (
+                              <div style={{ fontSize: 11, color: 'var(--text)', marginTop: 6 }}>{effectiveOperation.preview.summary}</div>
+                            )}
+                            {effectiveOperation.preview?.diffSummary && (
+                              <div style={{ fontSize: 11, color: effectiveOperation.preview.diffSummary.removals > 0 ? '#fd963c' : 'var(--text2)', marginTop: 6 }}>
+                                {effectiveOperation.preview.diffSummary.summary}
+                              </div>
+                            )}
+                            {renderDiffSamples(effectiveOperation.preview?.diffSummary)}
+                            {renderComparePreview(effectiveOperation.preview?.comparePreview, effectiveOperation.drift?.state)}
+                            {effectiveOperation.drift && (
+                              <div style={{ fontSize: 11, color: effectiveOperation.drift.state === 'drifted' ? '#fd963c' : 'var(--text2)', marginTop: 6 }}>
+                                {effectiveOperation.drift.summary}
+                              </div>
+                            )}
+                            {effectiveOperation.path && (
+                              <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6, fontFamily: 'monospace' }}>{effectiveOperation.path}</div>
+                            )}
+                            {effectiveOperation.preview?.excerpt && effectiveOperation.preview.excerpt.length > 0 && (
+                              <pre
+                                style={{
+                                  fontSize: 10,
+                                  color: 'var(--text2)',
+                                  background: 'var(--surface2)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 6,
+                                  padding: 8,
+                                  marginTop: 6,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {effectiveOperation.preview.excerpt.join('\n')}
+                              </pre>
+                            )}
+                            {applyResult && (
+                              <div style={{ fontSize: 11, color: 'var(--blue)', marginTop: 6 }}>{applyResult.detail}</div>
                             )}
                           </div>
                         );
                       })}
                     </div>
-                  </div>
-                );
-              })}
-
-              <div style={{ fontSize: 11, color: 'var(--text2)', paddingTop: 4, borderTop: '1px solid var(--border)' }}>
-                {setupAnalysis.summary}
-              </div>
-
-              {state === 'improved' && improveResults.length > 0 && (
-                <div style={{ fontSize: 11, color: 'var(--text2)', paddingTop: 4 }}>
-                  {`${improveResults.length}개 중 ${improveResults.filter((r) => r.success).length}개 반영 성공`}
+                  )}
                 </div>
-              )}
+              );
+            })}
+          </div>
 
-              <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 4 }}>
-                <button
-                  onClick={improveBatch}
-                  disabled={selectedImprovements.size === 0}
-                  style={{
-                    padding: '8px 20px',
-                    borderRadius: 8,
-                    border: 'none',
-                    background: selectedImprovements.size === 0 ? 'var(--surface3)' : 'var(--accent)',
-                    color: selectedImprovements.size === 0 ? 'var(--text2)' : '#fff',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: selectedImprovements.size === 0 ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {`선택 항목 일괄 개선 (${selectedImprovements.size}개)`}
-                </button>
+          {planMutation.data && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface2)', padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>Setup Plan</strong>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+                    {planMutation.data.totals.pending} pending, {planMutation.data.totals.ready} already ready
+                  </span>
+                  <button
+                    onClick={() => {
+                      const planOperations = planMutation.data.axes.flatMap((axis) => axis.operations);
+                      setOperationSelection(planOperations);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Focus Plan
+                  </button>
+                  <button
+                    onClick={() => {
+                      const pendingPlanOperations = planMutation.data.axes.flatMap((axis) =>
+                        axis.operations.filter((operation) => operation.status === 'pending'),
+                      );
+                      setOperationSelection(pendingPlanOperations);
+                    }}
+                    disabled={planMutation.data.totals.pending === 0}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: planMutation.data.totals.pending === 0 ? 'not-allowed' : 'pointer',
+                      opacity: planMutation.data.totals.pending === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    Keep Pending from Plan
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>{planMutation.data.summary}</div>
+              <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 12 }}>
+                {selectedOperationIds.length} selected operation(s) across {activeAxes.length} axis(es)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {planMutation.data.axes.map((axis) => (
+                  <div key={axis.axis}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: axisColor[axis.axis] }}>{axis.label}</div>
+                      <button
+                        onClick={() => setOperationSelection(axis.operations)}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Focus {axis.label} Plan
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {axis.operations.map((operation) => (
+                        <div
+                          key={operation.id}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            fontSize: 11,
+                            color: 'var(--text2)',
+                            alignItems: 'flex-start',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span>{operation.title}</span>
+                              {selectedOperationIds.includes(operation.id) && <Badge color={axisBadgeColor(axis.axis)}>selected</Badge>}
+                            </div>
+                            {operation.preview?.diffSummary && (
+                              <span style={{ color: operation.preview.diffSummary.removals > 0 ? '#fd963c' : 'var(--text2)' }}>
+                                {operation.preview.diffSummary.summary}
+                              </span>
+                            )}
+                            {operation.preview?.diffSummary && (
+                              <span style={{ color: 'var(--text2)', fontSize: 10 }}>
+                                {[...(operation.preview.diffSummary.additionsSample ?? []).map((line) => `+ ${line}`), ...(operation.preview.diffSummary.removalsSample ?? []).map((line) => `- ${line}`)].slice(0, 2).join(' | ')}
+                              </span>
+                            )}
+                            {operation.preview?.comparePreview && operation.drift?.state !== 'aligned' && (
+                              <span style={{ color: 'var(--text2)', fontSize: 10 }}>
+                                baseline: {operation.preview.comparePreview.baseline[0] ?? '(missing)'} | current: {operation.preview.comparePreview.current[0] ?? '(missing)'}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span>{operation.status === 'ready' ? 'already ready' : 'will apply'}</span>
+                            <button
+                              onClick={() => setOperationSelection([operation])}
+                              aria-label={`Focus plan item ${operation.title}`}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: 8,
+                                border: '1px solid var(--border)',
+                                background: 'var(--surface)',
+                                color: 'var(--text)',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Focus
+                            </button>
+                            <button
+                              onClick={() => applyMutation.mutate({ axes: [axis.axis], operationIds: [operation.id] })}
+                              aria-label={`Apply plan item ${operation.title}`}
+                              disabled={applyMutation.isPending}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: 8,
+                                border: '1px solid var(--border)',
+                                background: 'var(--surface)',
+                                color: 'var(--text)',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: applyMutation.isPending ? 'not-allowed' : 'pointer',
+                                opacity: applyMutation.isPending ? 0.6 : 1,
+                              }}
+                            >
+                              {applyMutation.isPending ? 'Applying...' : 'Apply This'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
 
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          </div>
+          {lastApplyResult && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface2)', padding: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Apply Result</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {lastApplyResult.results.map((result) => (
+                  <div
+                    key={result.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      fontSize: 11,
+                      color: 'var(--text2)',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span>
+                      <strong style={{ color: axisColor[result.axis] }}>{result.axis.toUpperCase()}</strong> {result.title}
+                    </span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span>{result.outcome}</span>
+                      <button
+                        onClick={() => focusSingleOperation(result.id)}
+                        aria-label={`Focus apply result ${result.title}`}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Focus in Setup
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
-    </>
+      ) : null}
+    </SectionCard>
   );
 }
 
-// ─── Feature 5: Inline Task Input + Log Panel ─────────────────────────────────
+// ─── Feature 3: Inline Task Input + Log Panel ─────────────────────────────────
 
-function TaskInputBar({ projectId }: { projectId: string }) {
+function TaskInputBar({
+  projectId,
+  workflowTemplates,
+}: {
+  projectId: string;
+  workflowTemplates: WorkflowTaskTemplate[];
+}) {
   const [input, setInput] = useState('');
+  const [description, setDescription] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
+  const selectedTemplate = workflowTemplates.find((template) => template.id === selectedTemplateId) ?? null;
 
   useEffect(() => {
     if (logRef.current) {
@@ -914,7 +2260,11 @@ function TaskInputBar({ projectId }: { projectId: string }) {
     setLogOpen(true);
 
     try {
-      const task = await api.post<Task>('/tasks', { projectId, title: input.trim() });
+      const task = await api.post<Task>('/tasks', {
+        projectId,
+        title: input.trim(),
+        description: description.trim() || undefined,
+      });
       const runResult = await api.post<TaskRun>(`/tasks/${task.id}/run`, {});
 
       const es = new EventSource(`/api/tasks/runs/${runResult.id}/stream`);
@@ -942,11 +2292,21 @@ function TaskInputBar({ projectId }: { projectId: string }) {
       };
 
       setInput('');
+      setDescription('');
+      setSelectedTemplateId(null);
+      setDescriptionOpen(false);
     } catch {
       setLogs(['실행 중 오류가 발생했습니다.']);
       setExitCode(1);
       setRunning(false);
     }
+  };
+
+  const applyWorkflowTemplate = (template: WorkflowTaskTemplate) => {
+    setSelectedTemplateId(template.id);
+    setInput((prev) => prev.trim().length > 0 ? prev : template.titleSuggestion);
+    setDescription(template.descriptionLines.join('\n'));
+    setDescriptionOpen(true);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -963,7 +2323,7 @@ function TaskInputBar({ projectId }: { projectId: string }) {
         zIndex: 50,
       }}
     >
-      {logOpen && (
+      {logOpen ? (
         <div
           ref={logRef}
           style={{
@@ -977,10 +2337,12 @@ function TaskInputBar({ projectId }: { projectId: string }) {
             borderTop: '1px solid var(--border)',
           }}
         >
-          {logs.map((line, i) => (
-            <div key={i} style={{ lineHeight: 1.6 }}>{line}</div>
+          {logs.map((line, index) => (
+            <div key={`${index}-${line}`} style={{ lineHeight: 1.6 }}>
+              {line}
+            </div>
           ))}
-          {exitCode !== null && (
+          {exitCode !== null ? (
             <div
               style={{
                 marginTop: 8,
@@ -988,70 +2350,224 @@ function TaskInputBar({ projectId }: { projectId: string }) {
                 color: exitCode === 0 ? '#00cec9' : '#ff6b6b',
               }}
             >
-              {exitCode === 0 ? `✓ 완료 (exit code: 0)` : `✗ 실패 (exit code: ${exitCode})`}
+              {exitCode === 0 ? '완료 (exit code: 0)' : `실패 (exit code: ${exitCode})`}
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 8,
+          flexDirection: 'column',
+          gap: 10,
           padding: '12px 18px',
         }}
       >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={running}
-          placeholder="에이전트에게 지시..."
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--text2)' }}>Workflow template</span>
+          {workflowTemplates.map((template) => {
+            const active = template.id === selectedTemplateId;
+
+            return (
+              <button
+                key={template.id}
+                onClick={() => applyWorkflowTemplate(template)}
+                disabled={running}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 999,
+                  border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                  background: active ? 'rgba(116,185,255,0.12)' : 'var(--surface2)',
+                  color: active ? 'var(--text)' : 'var(--text2)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: running ? 'not-allowed' : 'pointer',
+                  opacity: running ? 0.6 : 1,
+                }}
+              >
+                {template.name}
+              </button>
+            );
+          })}
+          {selectedTemplate ? (
+            <button
+              onClick={() => {
+                setSelectedTemplateId(null);
+                setDescription('');
+                setDescriptionOpen(false);
+              }}
+              disabled={running}
+              style={{
+                padding: '5px 10px',
+                borderRadius: 999,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text2)',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: running ? 'not-allowed' : 'pointer',
+                opacity: running ? 0.6 : 1,
+              }}
+            >
+              Clear Template
+            </button>
+          ) : null}
+        </div>
+
+        {selectedTemplate ? (
+          <div
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              background: 'var(--surface2)',
+              padding: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{selectedTemplate.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 2 }}>{selectedTemplate.summary}</div>
+              </div>
+              {selectedTemplate.separationNote ? (
+                <span
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'rgba(253,203,110,0.12)',
+                    color: 'var(--yellow)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {selectedTemplate.separationNote}
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {selectedTemplate.phases.map((phase) => (
+                <span
+                  key={phase}
+                  style={{
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    background: 'var(--surface3)',
+                    color: 'var(--text2)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {phase}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {descriptionOpen ? (
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            disabled={running}
+            aria-label="Task description"
+            placeholder="Task description"
+            style={{
+              width: '100%',
+              minHeight: 110,
+              fontSize: 12,
+              fontFamily: 'monospace',
+              background: 'var(--surface2)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: 12,
+              color: 'var(--text)',
+              resize: 'vertical',
+              boxSizing: 'border-box',
+              opacity: running ? 0.6 : 1,
+            }}
+          />
+        ) : null}
+
+        <div
           style={{
-            flex: 1,
-            padding: '9px 14px',
-            borderRadius: 8,
-            border: '1px solid var(--border)',
-            background: 'var(--surface2)',
-            color: 'var(--text)',
-            fontSize: 13,
-            outline: 'none',
-            opacity: running ? 0.6 : 1,
-          }}
-        />
-        <button
-          onClick={run}
-          disabled={running || !input.trim()}
-          style={{
-            padding: '9px 18px',
-            borderRadius: 8,
-            border: 'none',
-            background: running || !input.trim() ? 'var(--surface3)' : 'var(--accent)',
-            color: '#fff',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: running || !input.trim() ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            width: '100%',
           }}
         >
-          {running ? '실행 중...' : '실행'}
-        </button>
-        {logs.length > 0 && (
-          <button
-            onClick={() => setLogOpen((v) => !v)}
+          <input
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={running}
+            placeholder="에이전트에게 지시..."
             style={{
-              padding: '9px 12px',
+              flex: 1,
+              padding: '9px 14px',
               borderRadius: 8,
               border: '1px solid var(--border)',
               background: 'var(--surface2)',
-              color: 'var(--text2)',
-              fontSize: 12,
-              cursor: 'pointer',
+              color: 'var(--text)',
+              fontSize: 13,
+              outline: 'none',
+              opacity: running ? 0.6 : 1,
+            }}
+          />
+          {!descriptionOpen ? (
+            <button
+              onClick={() => setDescriptionOpen(true)}
+              disabled={running}
+              style={{
+                padding: '9px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--surface2)',
+                color: 'var(--text2)',
+                fontSize: 12,
+                cursor: running ? 'not-allowed' : 'pointer',
+                opacity: running ? 0.6 : 1,
+              }}
+            >
+              Description
+            </button>
+          ) : null}
+          <button
+            onClick={run}
+            disabled={running || !input.trim()}
+            style={{
+              padding: '9px 18px',
+              borderRadius: 8,
+              border: 'none',
+              background: running || !input.trim() ? 'var(--surface3)' : 'var(--accent)',
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: running || !input.trim() ? 'not-allowed' : 'pointer',
             }}
           >
-            {logOpen ? '접기' : '로그'}
+            {running ? '실행 중...' : '실행'}
           </button>
-        )}
+          {logs.length > 0 ? (
+            <button
+              onClick={() => setLogOpen((value) => !value)}
+              style={{
+                padding: '9px 12px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--surface2)',
+                color: 'var(--text2)',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              {logOpen ? '접기' : '로그'}
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1067,10 +2583,6 @@ export function ProjectDetail() {
   const [claudeMdExpanded, setClaudeMdExpanded] = useState(false);
   const [claudeMdEditing, setClaudeMdEditing] = useState(false);
   const [claudeMdDraft, setClaudeMdDraft] = useState('');
-  const [guidanceModal, setGuidanceModal] = useState<{ title: string; content: string } | null>(null);
-  const [addingConvention, setAddingConvention] = useState(false);
-  const [conventionCategory, setConventionCategory] = useState('');
-  const [conventionRule, setConventionRule] = useState('');
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const [editingDoc, setEditingDoc] = useState<string | null>(null);
   const [docDraft, setDocDraft] = useState('');
@@ -1078,49 +2590,32 @@ export function ProjectDetail() {
   const [addingDoc, setAddingDoc] = useState(false);
   const [newDocName, setNewDocName] = useState('');
   const [newDocContent, setNewDocContent] = useState('');
+  const [lastApplyResult, setLastApplyResult] = useState<ProjectSetupApplyResult | null>(null);
+  const [setupFocusRequest, setSetupFocusRequest] = useState<{ operationIds: string[]; token: number } | undefined>(undefined);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
-  const setupClaudeMd = useMutation({
-    mutationFn: () => api.post(`/projects/${id}/setup/claudemd`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
-  });
   const updateClaudeMd = useMutation({
     mutationFn: (content: string) => api.patch(`/projects/${id}/setup/claudemd`, { content }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
       setClaudeMdEditing(false);
     },
   });
   const deleteClaudeMd = useMutation({
     mutationFn: () => api.delete(`/projects/${id}/setup/claudemd`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
-  });
-  const setupHooks = useMutation({
-    mutationFn: () => api.post(`/projects/${id}/setup/hooks`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
+    },
   });
   const deleteHooks = useMutation({
     mutationFn: () => api.delete(`/projects/${id}/setup/hooks`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
-  });
-  const setupConventions = useMutation({
-    mutationFn: () => api.post(`/projects/${id}/setup/conventions`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
-  });
-  const addConvention = useMutation({
-    mutationFn: ({ category, rule }: { category: string; rule: string }) =>
-      api.post(`/conventions/${id}`, { category, rule }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['db-conventions', id] });
-      setAddingConvention(false);
-      setConventionCategory('');
-      setConventionRule('');
+      queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
     },
-  });
-  const deleteConvention = useMutation({
-    mutationFn: (conventionId: string) => api.delete(`/conventions/${id}/${conventionId}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['db-conventions', id] }),
   });
   const updateDoc = useMutation({
     mutationFn: ({ name, content }: { name: string; content: string }) =>
@@ -1129,6 +2624,7 @@ export function ProjectDetail() {
       setDocContents((prev) => ({ ...prev, [name]: content }));
       setEditingDoc(null);
       queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
     },
   });
   const addDoc = useMutation({
@@ -1137,6 +2633,7 @@ export function ProjectDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
       setAddingDoc(false);
       setNewDocName('');
       setNewDocContent('');
@@ -1144,7 +2641,20 @@ export function ProjectDetail() {
   });
   const deleteDoc = useMutation({
     mutationFn: (name: string) => api.delete(`/projects/${id}/docs/${name}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-analysis'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
+    },
+  });
+  const applySetupAxis = useMutation({
+    mutationFn: ({ axes, operationIds, force = false }: ProjectSetupRequest) =>
+      api.post<ProjectSetupApplyResult>(`/projects/${id}/setup/apply`, { axes, operationIds, force }),
+    onSuccess: (result) => {
+      setLastApplyResult(result);
+      queryClient.invalidateQueries({ queryKey: ['project-analysis', id] });
+      queryClient.invalidateQueries({ queryKey: ['project-setup-status', id] });
+      queryClient.invalidateQueries({ queryKey: ['db-conventions', id] });
+    },
   });
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -1159,6 +2669,11 @@ export function ProjectDetail() {
     queryKey: ['project-analysis', id, project?.path],
     queryFn: () => api.post<ProjectAnalysis>('/projects/analyze', { path: project!.path }),
     enabled: !!project?.path,
+  });
+  const { data: setupStatus, isLoading: setupStatusLoading } = useQuery({
+    queryKey: ['project-setup-status', id],
+    queryFn: () => api.get<ProjectSetupStatus>(`/projects/${id}/setup/status`),
+    enabled: !!id && !!project?.path,
   });
 
   const { data: allAgents } = useQuery({
@@ -1182,12 +2697,6 @@ export function ProjectDetail() {
     enabled: !!id,
   });
 
-  const { data: dbConventions = [] } = useQuery({
-    queryKey: ['db-conventions', id],
-    queryFn: () => api.get<{ id: string; category: string; rule: string }[]>(`/conventions/${id}`),
-    enabled: !!id,
-  });
-
   // ── Derived data ───────────────────────────────────────────────────────────
 
   const agents = (allAgents ?? []).filter((a) => a.projectId === id);
@@ -1205,6 +2714,168 @@ export function ProjectDetail() {
   }
 
   const hasPath = !!project.path;
+  const guideClaudeOperation = findSetupOperation(setupStatus, 'guide-claude');
+  const guardHooksOperation = findSetupOperation(setupStatus, 'guard-hooks');
+  const guideContextMapOperation = findSetupOperation(setupStatus, 'guide-context-map');
+  const guideConventionDocOperation = findSetupOperation(setupStatus, 'guide-convention-doc');
+  const guideArchitectureDocOperation = findSetupOperation(setupStatus, 'guide-architecture-doc');
+  const guideReviewDocOperation = findSetupOperation(setupStatus, 'guide-review-doc');
+  const gearDeveloperAgentOperation = findSetupOperation(setupStatus, 'gear-developer-agent');
+  const gearReviewerAgentOperation = findSetupOperation(setupStatus, 'gear-reviewer-agent');
+  const gearWorkflowFeatureOperation = findSetupOperation(setupStatus, 'gear-workflow-feature');
+  const gearWorkflowBugOperation = findSetupOperation(setupStatus, 'gear-workflow-bug');
+  const gearWorkflowRefactorOperation = findSetupOperation(setupStatus, 'gear-workflow-refactor');
+  const missingGuideDocs = [
+    { label: 'context-map.md', operation: guideContextMapOperation },
+    { label: 'convention.md', operation: guideConventionDocOperation },
+    { label: 'architecture.md', operation: guideArchitectureDocOperation },
+    { label: 'review.md', operation: guideReviewDocOperation },
+  ].filter((item) => item.operation?.status !== 'ready');
+  const missingGearAgentAssets = [
+    { label: 'developer.md', operation: gearDeveloperAgentOperation },
+    { label: 'reviewer.md', operation: gearReviewerAgentOperation },
+  ].filter((item) => item.operation?.status !== 'ready');
+  const missingGearWorkflowAssets = [
+    { label: 'implement-feature.md', operation: gearWorkflowFeatureOperation },
+    { label: 'fix-bug.md', operation: gearWorkflowBugOperation },
+    { label: 'refactor.md', operation: gearWorkflowRefactorOperation },
+  ].filter((item) => item.operation?.status !== 'ready');
+  const guideDocsPanelOperation =
+    missingGuideDocs.length === 0
+      ? guideConventionDocOperation ?? guideContextMapOperation
+      : guideContextMapOperation
+        ? { ...guideContextMapOperation, status: 'pending' as const }
+        : guideConventionDocOperation
+          ? { ...guideConventionDocOperation, status: 'pending' as const }
+          : undefined;
+  const gearAgentsPanelOperation =
+    missingGearAgentAssets.length === 0
+      ? gearDeveloperAgentOperation ?? gearReviewerAgentOperation
+      : gearDeveloperAgentOperation
+        ? { ...gearDeveloperAgentOperation, status: 'pending' as const }
+        : gearReviewerAgentOperation
+          ? { ...gearReviewerAgentOperation, status: 'pending' as const }
+          : undefined;
+  const gearWorkflowsPanelOperation =
+    missingGearWorkflowAssets.length === 0
+      ? gearWorkflowFeatureOperation ?? gearWorkflowBugOperation ?? gearWorkflowRefactorOperation
+      : gearWorkflowFeatureOperation
+        ? { ...gearWorkflowFeatureOperation, status: 'pending' as const }
+        : gearWorkflowBugOperation
+          ? { ...gearWorkflowBugOperation, status: 'pending' as const }
+          : gearWorkflowRefactorOperation
+          ? { ...gearWorkflowRefactorOperation, status: 'pending' as const }
+            : undefined;
+  const claudeApplySummary = summarizeApplyResults(lastApplyResult, ['guide-claude']);
+  const hooksApplySummary = summarizeApplyResults(lastApplyResult, ['guard-hooks', 'guard-config']);
+  const guideDocsApplySummary = summarizeApplyResults(lastApplyResult, [
+    'guide-context-map',
+    'guide-convention-doc',
+    'guide-architecture-doc',
+    'guide-review-doc',
+    'guide-conventions-data',
+  ]);
+  const gearAgentsApplySummary = summarizeApplyResults(lastApplyResult, [
+    'gear-developer-agent',
+    'gear-reviewer-agent',
+  ]);
+  const gearWorkflowsApplySummary = summarizeApplyResults(lastApplyResult, [
+    'gear-workflow-feature',
+    'gear-workflow-bug',
+    'gear-workflow-refactor',
+  ]);
+  const requestSetupFocus = (operationIds: string[]) => {
+    setSetupFocusRequest({ operationIds, token: Date.now() });
+  };
+  const managedDocOperationIds: Record<string, string> = {
+    context: 'guide-context-map',
+    convention: 'guide-convention-doc',
+    architecture: 'guide-architecture-doc',
+    review: 'guide-review-doc',
+  };
+  const managedAgentOperationIds: Record<string, string> = {
+    developer: 'gear-developer-agent',
+    reviewer: 'gear-reviewer-agent',
+  };
+  const managedWorkflowOperationIds: Record<string, string> = {
+    'implement-feature': 'gear-workflow-feature',
+    'fix-bug': 'gear-workflow-bug',
+    refactor: 'gear-workflow-refactor',
+  };
+  const guardPanelOperationIds = ['guard-hooks', 'guard-config'];
+  const claudePanelOperationIds = ['guide-claude'];
+  const guideDocsPanelOperationIds = [
+    'guide-context-map',
+    'guide-convention-doc',
+    'guide-architecture-doc',
+    'guide-review-doc',
+    'guide-conventions-data',
+  ];
+  const gearAgentPanelOperationIds = ['gear-developer-agent', 'gear-reviewer-agent'];
+  const gearWorkflowPanelOperationIds = ['gear-workflow-feature', 'gear-workflow-bug', 'gear-workflow-refactor'];
+  const applySetupOperations = (axis: SetupAxis, operationIds: string[], force = false) => {
+    applySetupAxis.mutate({ axes: [axis], operationIds, force });
+  };
+  const workflowPreview = [
+    {
+      id: 'implement-feature',
+      name: 'Implement Feature',
+      steps: [
+        'Read context map and convention docs.',
+        'Define the target layer and interface.',
+        'Implement the smallest coherent slice.',
+        'Validate behavior and request review.',
+      ],
+    },
+    {
+      id: 'fix-bug',
+      name: 'Fix Bug',
+      steps: [
+        'Reproduce the issue and isolate the failing path.',
+        'Apply the smallest safe fix.',
+        'Add or update a regression check.',
+        'Verify adjacent flows remain stable.',
+      ],
+    },
+    {
+      id: 'refactor',
+      name: 'Refactor',
+      steps: [
+        'Document the boundary being refactored.',
+        'Keep behavior locked with tests or targeted verification.',
+        'Refactor in small checkpoints.',
+        'Review for architecture leaks and regressions.',
+      ],
+    },
+  ];
+  const workflowTaskTemplates: WorkflowTaskTemplate[] = workflowPreview.map((workflow) => ({
+    id: workflow.id,
+    name: workflow.name,
+    summary:
+      workflow.id === 'implement-feature'
+        ? 'Use the standard feature delivery path with context, implementation, validation, and review.'
+        : workflow.id === 'fix-bug'
+          ? 'Bias toward reproduction, the smallest safe fix, and regression coverage.'
+          : 'Keep behavior stable while improving structure in small checkpoints.',
+    titleSuggestion:
+      workflow.id === 'implement-feature'
+        ? 'Implement feature: '
+        : workflow.id === 'fix-bug'
+          ? 'Fix bug: '
+          : 'Refactor: ',
+    phases:
+      workflow.id === 'implement-feature'
+        ? ['Context', 'Implement', 'Validate', 'Review']
+        : workflow.id === 'fix-bug'
+          ? ['Reproduce', 'Fix', 'Regression', 'Verify']
+          : ['Boundary', 'Protect', 'Refactor', 'Review'],
+    separationNote: workflow.id === 'implement-feature' || workflow.id === 'refactor' ? 'Review in separate agent' : undefined,
+    descriptionLines: [
+      `Workflow: ${workflow.name}`,
+      '',
+      ...workflow.steps.map((step, index) => `${index + 1}. ${step}`),
+    ],
+  }));
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1245,11 +2916,19 @@ export function ProjectDetail() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-        {/* 2. 프로젝트 셋업 + 셋업 분석 */}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          {id && <SetupButton projectId={id} />}
-          {id && <SetupAnalysisButton projectId={id} />}
-        </div>
+        {id && (
+          <SetupCenter
+            projectId={id}
+            hasPath={hasPath}
+            setupStatus={setupStatus}
+            isLoading={setupStatusLoading}
+            analysis={analysis}
+            lastApplyResult={lastApplyResult}
+            onApplySuccess={setLastApplyResult}
+            onOpenSettings={() => navigate('/settings')}
+            focusRequest={setupFocusRequest}
+          />
+        )}
 
         {/* 3 + 4. 프로젝트 개요 (with Score Panel) */}
         <SectionCard title="프로젝트 개요">
@@ -1303,7 +2982,10 @@ export function ProjectDetail() {
         )}
 
         {/* 7. CLAUDE.md */}
-        <SectionCard title="CLAUDE.md">
+        <SectionCard
+          title="CLAUDE.md Detail Panel"
+          titleExtra={<SetupPanelMeta axis="guide" operation={guideClaudeOperation} />}
+        >
           {!hasPath ? (
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>프로젝트 경로를 설정하면 CLAUDE.md 상태를 확인할 수 있습니다.</div>
           ) : analysisLoading ? (
@@ -1313,6 +2995,18 @@ export function ProjectDetail() {
             </div>
           ) : analysis?.claudeMd.exists ? (
             <div>
+              <SetupManagedBanner
+                axis="guide"
+                operation={guideClaudeOperation}
+                summary="CLAUDE.md는 Guide 축의 핵심 요약 문서입니다. 내용이 이미 있으면 여기서 직접 수정하고, 구조적인 누락은 Setup Center에서 다시 맞춥니다."
+                hint="직접 편집은 유지되지만, 새로 만드는 흐름은 Setup Center를 기준으로 관리합니다."
+                lastApplySummary={claudeApplySummary}
+                focusActionLabel="Focus CLAUDE.md in Setup"
+                onFocusAction={() => requestSetupFocus(claudePanelOperationIds)}
+                secondaryActionLabel="Reset via Setup"
+                onSecondaryAction={() => applySetupOperations('guide', claudePanelOperationIds, true)}
+                secondaryActionDisabled={applySetupAxis.isPending}
+              />
               {claudeMdEditing ? (
                 <div>
                   <textarea
@@ -1442,27 +3136,39 @@ export function ProjectDetail() {
             </div>
           ) : (
             <div>
+              <SetupManagedBanner
+                axis="guide"
+                operation={guideClaudeOperation}
+                summary="이 자산은 Setup Center가 프로젝트 로컬에 생성합니다."
+                hint="직접 생성 대신 Setup Center 또는 아래 버튼으로 Guide 축을 적용하세요."
+                lastApplySummary={claudeApplySummary}
+                focusActionLabel="Focus CLAUDE.md in Setup"
+                onFocusAction={() => requestSetupFocus(claudePanelOperationIds)}
+                actionLabel={applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup'}
+                onAction={() => applySetupOperations('guide', claudePanelOperationIds)}
+                actionDisabled={applySetupAxis.isPending}
+              />
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
                 이 프로젝트에 CLAUDE.md가 없습니다. CLAUDE.md를 추가하면 Claude가 프로젝트 컨텍스트를 자동으로 이해합니다.
               </div>
               <button
-                onClick={() => setupClaudeMd.mutate()}
-                disabled={setupClaudeMd.isPending}
+                onClick={() => applySetupOperations('guide', claudePanelOperationIds)}
+                disabled={applySetupAxis.isPending}
                 style={{
                   padding: '8px 16px',
                   borderRadius: 8,
                   border: 'none',
-                  background: setupClaudeMd.isPending ? 'var(--surface3)' : 'var(--accent)',
+                  background: applySetupAxis.isPending ? 'var(--surface3)' : 'var(--accent)',
                   color: '#fff',
                   fontSize: 13,
                   fontWeight: 600,
-                  cursor: setupClaudeMd.isPending ? 'not-allowed' : 'pointer',
-                  opacity: setupClaudeMd.isPending ? 0.6 : 1,
+                  cursor: applySetupAxis.isPending ? 'not-allowed' : 'pointer',
+                  opacity: applySetupAxis.isPending ? 0.6 : 1,
                 }}
               >
-                {setupClaudeMd.isPending ? '생성 중...' : 'CLAUDE.md 생성'}
+                {applySetupAxis.isPending ? '적용 중...' : 'Create via Setup'}
               </button>
-              {setupClaudeMd.isError && (
+              {applySetupAxis.isError && (
                 <span style={{ fontSize: 11, color: 'var(--red)', marginLeft: 8 }}>생성 실패</span>
               )}
             </div>
@@ -1470,7 +3176,10 @@ export function ProjectDetail() {
         </SectionCard>
 
         {/* 7. Hooks */}
-        <SectionCard title="Hooks">
+        <SectionCard
+          title="Hook Detail Panel"
+          titleExtra={<SetupPanelMeta axis="guard" operation={guardHooksOperation} />}
+        >
           {!hasPath ? (
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>프로젝트 경로를 설정하면 Hook 상태를 확인할 수 있습니다.</div>
           ) : analysisLoading ? (
@@ -1480,6 +3189,18 @@ export function ProjectDetail() {
             </div>
           ) : analysis && analysis.hooks.length > 0 ? (
             <div>
+              <SetupManagedBanner
+                axis="guard"
+                operation={guardHooksOperation}
+                summary="Workspace-local hooks와 .ddalkak/config.yaml은 Guard 축에서 함께 관리합니다. 현재 Hook 설정은 여기서 검토하고, 정책 누락은 Setup Center에서 보완합니다."
+                hint="Hook 삭제는 detail action으로 남겨두되, 다시 적용하는 기준은 Setup Center입니다."
+                lastApplySummary={hooksApplySummary}
+                focusActionLabel="Focus Hooks in Setup"
+                onFocusAction={() => requestSetupFocus(guardPanelOperationIds)}
+                secondaryActionLabel="Reset via Setup"
+                onSecondaryAction={() => applySetupOperations('guard', guardPanelOperationIds, true)}
+                secondaryActionDisabled={applySetupAxis.isPending}
+              />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {analysis.hooks.map((hook, i) => (
                   <div
@@ -1526,27 +3247,39 @@ export function ProjectDetail() {
             </div>
           ) : (
             <div>
+              <SetupManagedBanner
+                axis="guard"
+                operation={guardHooksOperation}
+                summary="이 프로젝트에는 아직 Guard hook이 없습니다."
+                hint="보안 Hook 생성은 Setup Center에서 Guard 축을 적용하는 것이 기본 경로입니다."
+                lastApplySummary={hooksApplySummary}
+                focusActionLabel="Focus Hooks in Setup"
+                onFocusAction={() => requestSetupFocus(guardPanelOperationIds)}
+                actionLabel={applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup'}
+                onAction={() => applySetupOperations('guard', guardPanelOperationIds)}
+                actionDisabled={applySetupAxis.isPending}
+              />
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
                 보안 Hook을 적용하면 위험 명령을 자동 차단합니다.
               </div>
               <button
-                onClick={() => setupHooks.mutate()}
-                disabled={setupHooks.isPending}
+                onClick={() => applySetupOperations('guard', guardPanelOperationIds)}
+                disabled={applySetupAxis.isPending}
                 style={{
                   padding: '8px 16px',
                   borderRadius: 8,
                   border: 'none',
-                  background: setupHooks.isPending ? 'var(--surface3)' : 'var(--accent)',
+                  background: applySetupAxis.isPending ? 'var(--surface3)' : 'var(--accent)',
                   color: '#fff',
                   fontSize: 13,
                   fontWeight: 600,
-                  cursor: setupHooks.isPending ? 'not-allowed' : 'pointer',
-                  opacity: setupHooks.isPending ? 0.6 : 1,
+                  cursor: applySetupAxis.isPending ? 'not-allowed' : 'pointer',
+                  opacity: applySetupAxis.isPending ? 0.6 : 1,
                 }}
               >
-                {setupHooks.isPending ? '적용 중...' : '보안 Hook 적용'}
+                {applySetupAxis.isPending ? '적용 중...' : 'Create via Setup'}
               </button>
-              {setupHooks.isError && (
+              {applySetupAxis.isError && (
                 <span style={{ fontSize: 11, color: 'var(--red)', marginLeft: 8 }}>적용 실패</span>
               )}
             </div>
@@ -1554,7 +3287,17 @@ export function ProjectDetail() {
         </SectionCard>
 
         {/* 8. 프로젝트 문서 */}
-        <SectionCard title="프로젝트 문서">
+        <SectionCard
+          title="프로젝트 문서 Detail Panel"
+          titleExtra={
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge color="blue">GUIDE</Badge>
+              <Badge color={missingGuideDocs.length === 0 ? 'green' : 'yellow'}>
+                {missingGuideDocs.length === 0 ? 'Ready' : 'Missing'}
+              </Badge>
+            </div>
+          }
+        >
           {!hasPath ? (
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>프로젝트 경로를 설정하면 문서 목록을 확인할 수 있습니다.</div>
           ) : analysisLoading ? (
@@ -1564,6 +3307,25 @@ export function ProjectDetail() {
             </div>
           ) : analysis && analysis.docs.length > 0 ? (
             <div>
+              <SetupManagedBanner
+                axis="guide"
+                operation={guideDocsPanelOperation}
+                summary={
+                  missingGuideDocs.length === 0
+                    ? 'Guide 표준 문서와 context map이 준비되어 있습니다. 기존 문서는 여기서 직접 수정하고, 구조 문서 누락은 Setup Center에서 다시 맞춥니다.'
+                    : `Guide 표준 자산 중 ${missingGuideDocs.map((item) => item.label).join(', ')} 이(가) 아직 없습니다.`
+                }
+                hint="표준 Guide 문서는 Setup Center가 생성하고, 커스텀 문서는 아래에서 직접 추가할 수 있습니다."
+                lastApplySummary={guideDocsApplySummary}
+                focusActionLabel="Focus Guide Docs in Setup"
+                onFocusAction={() => requestSetupFocus(guideDocsPanelOperationIds)}
+                secondaryActionLabel={missingGuideDocs.length === 0 ? 'Reset via Setup' : undefined}
+                onSecondaryAction={missingGuideDocs.length === 0 ? (() => applySetupOperations('guide', guideDocsPanelOperationIds, true)) : undefined}
+                secondaryActionDisabled={applySetupAxis.isPending}
+                actionLabel={missingGuideDocs.length > 0 ? (applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup') : undefined}
+                onAction={missingGuideDocs.length > 0 ? (() => applySetupOperations('guide', guideDocsPanelOperationIds)) : undefined}
+                actionDisabled={applySetupAxis.isPending}
+              />
               {analysis.docs.map((d) => (
                 <div key={d.name} style={{ borderBottom: '1px solid var(--border)' }}>
                   <div
@@ -1586,7 +3348,33 @@ export function ProjectDetail() {
                       }
                     }}
                   >
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>{d.name}</span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 500 }}>{d.name}</span>
+                      <Badge color={isManagedDoc(d.name) ? 'blue' : 'gray'}>
+                        {isManagedDoc(d.name) ? 'managed' : 'custom'}
+                      </Badge>
+                      {isManagedDoc(d.name) && managedDocOperationIds[d.name] && (
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            requestSetupFocus([managedDocOperationIds[d.name]]);
+                          }}
+                          aria-label={`Focus ${d.name} in Setup`}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--text2)',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Focus in Setup
+                        </button>
+                      )}
+                    </div>
                     <span style={{ fontSize: 11, color: 'var(--text2)' }}>{expandedDoc === d.name ? '▼' : '▶'}</span>
                   </div>
                   {expandedDoc === d.name && (
@@ -1749,6 +3537,22 @@ export function ProjectDetail() {
             </div>
           ) : (
             <div>
+              <SetupManagedBanner
+                axis="guide"
+                operation={guideDocsPanelOperation}
+                summary="표준 Guide 문서와 context map은 Setup Center가 프로젝트 로컬에 생성합니다."
+                hint={
+                  missingGuideDocs.length > 0
+                    ? `현재 누락: ${missingGuideDocs.map((item) => item.label).join(', ')}`
+                    : '커스텀 문서는 아래에서 직접 추가할 수 있습니다.'
+                }
+                lastApplySummary={guideDocsApplySummary}
+                focusActionLabel="Focus Guide Docs in Setup"
+                onFocusAction={() => requestSetupFocus(guideDocsPanelOperationIds)}
+                actionLabel={applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup'}
+                onAction={() => applySetupOperations('guide', guideDocsPanelOperationIds)}
+                actionDisabled={applySetupAxis.isPending}
+              />
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>
                 프로젝트 셋업을 실행하면 자동으로 생성됩니다. (.ddalkak/docs/)
               </div>
@@ -1820,7 +3624,29 @@ export function ProjectDetail() {
         </SectionCard>
 
         {/* 10. 에이전트 */}
-        <SectionCard title={`에이전트 (${agents.length})`}>
+        <SectionCard
+          title={`에이전트 Detail Panel (${agents.length})`}
+          titleExtra={<SetupPanelMeta axis="gear" operation={gearAgentsPanelOperation} />}
+        >
+          <SetupManagedBanner
+            axis="gear"
+            operation={gearAgentsPanelOperation}
+            summary={
+              missingGearAgentAssets.length === 0
+                ? 'Project-local agent profiles are ready. Runtime-attached agents remain a separate operational layer below.'
+                : `Gear agent assets are missing: ${missingGearAgentAssets.map((item) => item.label).join(', ')}.`
+            }
+            hint="Gear in this phase prepares reusable project-local execution assets. Runtime registration and execution stay in the existing agent/task flow."
+            lastApplySummary={gearAgentsApplySummary}
+            focusActionLabel="Focus Gear Agents in Setup"
+            onFocusAction={() => requestSetupFocus(gearAgentPanelOperationIds)}
+            secondaryActionLabel={missingGearAgentAssets.length === 0 ? 'Reset via Setup' : undefined}
+            onSecondaryAction={missingGearAgentAssets.length === 0 ? (() => applySetupOperations('gear', gearAgentPanelOperationIds, true)) : undefined}
+            secondaryActionDisabled={applySetupAxis.isPending}
+            actionLabel={missingGearAgentAssets.length > 0 ? (applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup') : undefined}
+            onAction={missingGearAgentAssets.length > 0 ? (() => applySetupOperations('gear', gearAgentPanelOperationIds)) : undefined}
+            actionDisabled={applySetupAxis.isPending}
+          />
           {hasPath && analysis && (
             <>
               {analysis.agents.length > 0 && (
@@ -1828,7 +3654,30 @@ export function ProjectDetail() {
                   <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>.claude/agents/</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {analysis.agents.map((a) => (
-                      <Badge key={a.name} color="blue">{a.name}</Badge>
+                      <span key={a.name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                        <Badge color="blue">{a.name}</Badge>
+                        <Badge color={isManagedAgentAsset(a.name) ? 'blue' : 'gray'}>
+                          {isManagedAgentAsset(a.name) ? 'managed' : 'custom'}
+                        </Badge>
+                        {isManagedAgentAsset(a.name) && managedAgentOperationIds[a.name] && (
+                          <button
+                            onClick={() => requestSetupFocus([managedAgentOperationIds[a.name]])}
+                            aria-label={`Focus ${a.name} agent in Setup`}
+                            style={{
+                              padding: '3px 8px',
+                              borderRadius: 999,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                              color: 'var(--text2)',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Focus in Setup
+                          </button>
+                        )}
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -1902,19 +3751,95 @@ export function ProjectDetail() {
         </SectionCard>
 
         {/* 11. 워크플로우 */}
-        <SectionCard title="워크플로우">
+        <SectionCard
+          title="워크플로우 Detail Panel"
+          titleExtra={<SetupPanelMeta axis="gear" operation={gearWorkflowsPanelOperation} />}
+        >
+          <SetupManagedBanner
+            axis="gear"
+            operation={gearWorkflowsPanelOperation}
+            summary={
+              missingGearWorkflowAssets.length === 0
+                ? 'Project-local execution workflows are ready for feature, bug, and refactor work.'
+                : `Gear workflow assets are missing: ${missingGearWorkflowAssets.map((item) => item.label).join(', ')}.`
+            }
+            hint="These workflows prepare execution patterns only. They do not replace the current task runner or runtime attach flow."
+            lastApplySummary={gearWorkflowsApplySummary}
+            focusActionLabel="Focus Gear Workflows in Setup"
+            onFocusAction={() => requestSetupFocus(gearWorkflowPanelOperationIds)}
+            secondaryActionLabel={missingGearWorkflowAssets.length === 0 ? 'Reset via Setup' : undefined}
+            onSecondaryAction={missingGearWorkflowAssets.length === 0 ? (() => applySetupOperations('gear', gearWorkflowPanelOperationIds, true)) : undefined}
+            secondaryActionDisabled={applySetupAxis.isPending}
+            actionLabel={missingGearWorkflowAssets.length > 0 ? (applySetupAxis.isPending ? 'Applying Setup...' : 'Create via Setup') : undefined}
+            onAction={missingGearWorkflowAssets.length > 0 ? (() => applySetupOperations('gear', gearWorkflowPanelOperationIds)) : undefined}
+            actionDisabled={applySetupAxis.isPending}
+          />
           {hasPath && analysis ? (
-            analysis.workflows && analysis.workflows.length > 0 ? (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {analysis.workflows.map((w) => (
-                  <Badge key={w.name} color="orange">{w.name}</Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {analysis.workflows && analysis.workflows.length > 0 ? (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {analysis.workflows.map((w) => (
+                    <span key={w.name} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <Badge color="orange">{w.name}</Badge>
+                      <Badge color={isManagedWorkflowAsset(w.name) ? 'orange' : 'gray'}>
+                        {isManagedWorkflowAsset(w.name) ? 'managed' : 'custom'}
+                      </Badge>
+                      {isManagedWorkflowAsset(w.name) && managedWorkflowOperationIds[w.name] && (
+                        <button
+                          onClick={() => requestSetupFocus([managedWorkflowOperationIds[w.name]])}
+                          aria-label={`Focus ${w.name} workflow in Setup`}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                            color: 'var(--text2)',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Focus in Setup
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+                  프로젝트 셋업을 실행하면 자동으로 생성됩니다.
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  gap: 10,
+                }}
+              >
+                {workflowPreview.map((workflow) => (
+                  <div
+                    key={workflow.name}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 10,
+                      background: 'var(--surface2)',
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{workflow.name}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {workflow.steps.map((step, index) => (
+                        <div key={step} style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.5 }}>
+                          {index + 1}. {step}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-            ) : (
-              <div style={{ fontSize: 13, color: 'var(--text2)' }}>
-                프로젝트 셋업을 실행하면 자동으로 생성됩니다.
-              </div>
-            )
+            </div>
           ) : (
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>
               프로젝트 경로를 설정하세요.
@@ -2030,16 +3955,7 @@ export function ProjectDetail() {
       </div>
 
       {/* 14. Feature 5: Inline Task Input Bar (sticky bottom) */}
-      {id && <TaskInputBar projectId={id} />}
-
-      {/* Modals */}
-      {guidanceModal && (
-        <GuidanceModal
-          title={guidanceModal.title}
-          content={guidanceModal.content}
-          onClose={() => setGuidanceModal(null)}
-        />
-      )}
+      {id && <TaskInputBar projectId={id} workflowTemplates={workflowTaskTemplates} />}
 
     </div>
   );

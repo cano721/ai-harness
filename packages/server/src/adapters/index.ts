@@ -1,9 +1,9 @@
-import type { AgentAdapter } from './adapter.interface.js';
-import { ClaudeLocalAdapter } from './claude-local.js';
-import { CodexLocalAdapter } from './codex-local.js';
-import { CursorLocalAdapter } from './cursor-local.js';
+import type { AgentAdapter } from '@ddalkak/adapter-utils';
+import { ClaudeLocalAdapter } from '@ddalkak/adapter-claude-local';
+import { CodexLocalAdapter } from '@ddalkak/adapter-codex-local';
+import { CursorLocalAdapter } from '@ddalkak/adapter-cursor-local';
 
-export type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from './adapter.interface.js';
+export type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from '@ddalkak/adapter-utils';
 
 const adapters: Record<string, AgentAdapter> = {
   claude_local: new ClaudeLocalAdapter(),

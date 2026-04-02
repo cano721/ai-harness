@@ -1,22 +1,16 @@
 import { execSync } from 'child_process';
-import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from './adapter.interface.js';
-import { runChildProcess, killProcess } from './process-runner.js';
+import type { AgentAdapter, AdapterDetectResult, AdapterExecuteOptions, AdapterExecuteResult } from '@ddalkak/adapter-utils';
+import { runChildProcess, killProcess } from '@ddalkak/adapter-utils';
 
-// Claude Opus 4 pricing (per 1M tokens, USD)
 const CLAUDE_INPUT_COST_PER_M = 15.0;
 const CLAUDE_OUTPUT_COST_PER_M = 75.0;
 const CLAUDE_CACHE_READ_COST_PER_M = 1.5;
 
 interface ClaudeJsonOutput {
-  type?: string;
-  subtype?: string;
-  result?: string;
-  is_error?: boolean;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
     cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
   };
 }
 
@@ -51,7 +45,9 @@ export class ClaudeLocalAdapter implements AgentAdapter {
       env: opts.env,
       timeoutSec: opts.timeoutSec,
       onLog: (stream, chunk) => {
-        if (stream === 'stdout') stdoutChunks.push(chunk);
+        if (stream === 'stdout') {
+          stdoutChunks.push(chunk);
+        }
         opts.onLog(stream, chunk);
       },
       onSpawn: opts.onSpawn,
@@ -61,8 +57,7 @@ export class ClaudeLocalAdapter implements AgentAdapter {
     let costUsd: number | undefined;
 
     try {
-      const raw = stdoutChunks.join('');
-      const parsed: ClaudeJsonOutput = JSON.parse(raw);
+      const parsed: ClaudeJsonOutput = JSON.parse(stdoutChunks.join(''));
       if (parsed.usage) {
         const inputTokens = parsed.usage.input_tokens ?? 0;
         const outputTokens = parsed.usage.output_tokens ?? 0;
@@ -74,7 +69,7 @@ export class ClaudeLocalAdapter implements AgentAdapter {
           (cachedTokens / 1_000_000) * CLAUDE_CACHE_READ_COST_PER_M;
       }
     } catch {
-      // JSON parse failed — no usage data available
+      // Best effort only. Some runs may not expose structured usage output.
     }
 
     return {

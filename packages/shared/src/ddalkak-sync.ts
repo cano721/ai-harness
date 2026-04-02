@@ -140,7 +140,12 @@ export async function detectTechStack(projectPath: string): Promise<string[]> {
 export function isGitRepo(projectPath: string): boolean {
   if (existsSync(join(projectPath, '.git'))) return true;
   try {
-    const toplevel = execSync('git rev-parse --show-toplevel', { cwd: projectPath, encoding: 'utf-8', timeout: 5000 }).trim();
+    const toplevel = execSync('git rev-parse --show-toplevel', {
+      cwd: projectPath,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    }).trim();
     return toplevel === projectPath || toplevel === projectPath.replace(/\/$/, '');
   } catch {
     return false;
@@ -149,7 +154,12 @@ export function isGitRepo(projectPath: string): boolean {
 
 export function getGitUrl(projectPath: string): string | undefined {
   try {
-    return execSync('git config --get remote.origin.url', { cwd: projectPath, encoding: 'utf-8', timeout: 5000 }).trim();
+    return execSync('git config --get remote.origin.url', {
+      cwd: projectPath,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    }).trim();
   } catch {
     return undefined;
   }

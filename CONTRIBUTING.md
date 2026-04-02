@@ -15,13 +15,13 @@ Thank you for your interest in contributing to AI Harness! This guide will help 
 ```bash
 git clone https://github.com/cano721/ai-harness.git
 cd ai-harness
-npm install
+pnpm install
 ```
 
 ### Running Tests
 
 ```bash
-npm test
+pnpm test
 ```
 
 This runs Hook unit tests defined in `*.test.yaml` files.
@@ -48,10 +48,12 @@ This runs Hook unit tests defined in `*.test.yaml` files.
    git checkout -b feat/your-feature
    ```
 3. Make your changes
-4. Run tests: `npm test`
-5. Run lint: `npm run lint`
+4. Run tests: `pnpm test` and `pnpm test:packages`
+5. Run lint: `pnpm lint`
 6. Commit with a clear message
 7. Open a Pull Request using the PR template
+
+This repository uses `pnpm` workspaces. Do not commit `package-lock.json`.
 
 ## Code Guidelines
 

@@ -10,7 +10,7 @@
 - .gitignore
 - bin/ai-harness.js (stub)
 ```
-**검증**: `npm install` + `npx tsc --noEmit` 성공
+**검증**: `pnpm install` + `pnpm exec tsc --noEmit` 성공
 
 ### Step 2: 타입 정의
 ```
@@ -43,14 +43,14 @@
 - tests/unit/config-loader.test.ts
 - tests/fixtures/sample-config.yaml
 ```
-**검증**: `npm test -- config-loader` 통과
+**검증**: `pnpm test -- config-loader` 통과
 
 ### Step 6: config-merger + 테스트
 ```
 - src/engine/config-merger.ts
 - tests/unit/config-merger.test.ts
 ```
-**검증**: `npm test -- config-merger` 통과
+**검증**: `pnpm test -- config-merger` 통과
 
 ### Step 7: lock-enforcer + 테스트
 ```
@@ -58,7 +58,7 @@
 - tests/unit/lock-enforcer.test.ts
 - tests/fixtures/sample-lock-policy.yaml
 ```
-**검증**: `npm test -- lock-enforcer` 통과
+**검증**: `pnpm test -- lock-enforcer` 통과
 
 ### Step 8: claudemd-injector + 테스트
 ```
@@ -66,7 +66,7 @@
 - tests/unit/claudemd-injector.test.ts
 - tests/fixtures/sample-claude.md
 ```
-**검증**: `npm test -- claudemd-injector` 통과
+**검증**: `pnpm test -- claudemd-injector` 통과
 
 ### Step 9: settings-manager + 테스트
 ```
@@ -74,7 +74,7 @@
 - tests/unit/settings-manager.test.ts
 - tests/fixtures/sample-settings.json
 ```
-**검증**: `npm test -- settings-manager` 통과
+**검증**: `pnpm test -- settings-manager` 통과
 
 ### Step 10: hook-tester + 테스트
 ```
