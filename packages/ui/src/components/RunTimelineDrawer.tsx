@@ -15,6 +15,21 @@ interface DrawerAction {
   tone?: 'neutral' | 'blue' | 'green' | 'yellow' | 'red';
 }
 
+interface DrawerAlert {
+  label: string;
+  tone: 'blue' | 'green' | 'yellow' | 'red';
+}
+
+interface DrawerChecklistItem {
+  label: string;
+  kind: 'required' | 'advisory' | 'evidence';
+  done: boolean;
+  highlighted?: boolean;
+  ariaLabel: string;
+  onToggle: () => void;
+  disabled?: boolean;
+}
+
 interface DrawerRow {
   id: string;
   label: string;
@@ -33,15 +48,21 @@ interface RunTimelineDrawerProps {
   description: string;
   workflowName: string;
   workflowSourceLabel: string;
+  setupOriginLabels: string[];
   separationModeLabel: string;
+  alerts: DrawerAlert[];
   currentPhaseLabel: string;
+  phaseObjectiveLabel: string;
+  phasePolicyLines: string[];
   phaseOwnerLabel: string;
   agentName: string;
+  agentCapabilityLabels: string[];
   reviewerName: string;
+  reviewerCapabilityLabels: string[];
   selectedEventLabel: string;
   runStatusLabel: string;
   phases: DrawerPhase[];
-  checklist: string[];
+  checklistItems: DrawerChecklistItem[];
   phaseActions: DrawerAction[];
   rows: DrawerRow[];
 }
@@ -68,6 +89,12 @@ function getPhaseStyle(status: PhaseStatus) {
   return { background: 'var(--surface3)', color: 'var(--text2)' };
 }
 
+function getChecklistKindStyle(kind: DrawerChecklistItem['kind']) {
+  if (kind === 'required') return { background: 'rgba(255,107,107,0.08)', color: 'var(--red)' };
+  if (kind === 'evidence') return { background: 'rgba(253,203,110,0.12)', color: 'var(--yellow)' };
+  return { background: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+}
+
 export default function RunTimelineDrawer({
   title,
   closeAriaLabel,
@@ -75,15 +102,21 @@ export default function RunTimelineDrawer({
   description,
   workflowName,
   workflowSourceLabel,
+  setupOriginLabels,
   separationModeLabel,
+  alerts,
   currentPhaseLabel,
+  phaseObjectiveLabel,
+  phasePolicyLines,
   phaseOwnerLabel,
   agentName,
+  agentCapabilityLabels,
   reviewerName,
+  reviewerCapabilityLabels,
   selectedEventLabel,
   runStatusLabel,
   phases,
-  checklist,
+  checklistItems,
   phaseActions,
   rows,
 }: RunTimelineDrawerProps) {
@@ -143,6 +176,10 @@ export default function RunTimelineDrawer({
           <div style={{ fontSize: 10, color: 'var(--text2)' }}>current phase</div>
           <div style={{ fontSize: 11, fontWeight: 700 }}>{currentPhaseLabel}</div>
         </div>
+        <div style={{ gridColumn: '1 / -1', padding: '8px 10px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text2)' }}>phase objective</div>
+          <div style={{ fontSize: 11, fontWeight: 700 }}>{phaseObjectiveLabel}</div>
+        </div>
         <div style={{ padding: '8px 10px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: 10, color: 'var(--text2)' }}>agent</div>
           <div style={{ fontSize: 11, fontWeight: 700 }}>{agentName}</div>
@@ -176,6 +213,126 @@ export default function RunTimelineDrawer({
         </div>
       </div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+        <div style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text2)', marginBottom: 6 }}>setup origin</div>
+          {setupOriginLabels.length ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {setupOriginLabels.map((label) => (
+                <span
+                  key={`setup-origin-${label}`}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'rgba(0,206,201,0.12)',
+                    color: 'var(--green)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--text2)' }}>No setup origin data</div>
+          )}
+        </div>
+        <div style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text2)', marginBottom: 6 }}>phase policy</div>
+          {phasePolicyLines.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {phasePolicyLines.map((line) => (
+                <div key={`phase-policy-${line}`} style={{ fontSize: 11, color: 'var(--text)' }}>
+                  - {line}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--text2)' }}>No phase policy notes</div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 10, color: 'var(--text2)' }}>orchestration alerts</div>
+        {alerts.length ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {alerts.map((alert) => {
+              const tone = getActionStyle(alert.tone);
+              return (
+                <span
+                  key={`drawer-alert-${alert.label}`}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: tone.background,
+                    color: tone.color,
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {alert.label}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: 'var(--text2)' }}>No orchestration alerts</div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+        <div style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text2)', marginBottom: 6 }}>agent capabilities</div>
+          {agentCapabilityLabels.length ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {agentCapabilityLabels.map((label) => (
+                <span
+                  key={`agent-capability-${label}`}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'rgba(116,185,255,0.12)',
+                    color: 'var(--blue)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--text2)' }}>No agent capability data</div>
+          )}
+        </div>
+        <div style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text2)', marginBottom: 6 }}>reviewer capabilities</div>
+          {reviewerCapabilityLabels.length ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {reviewerCapabilityLabels.map((label) => (
+                <span
+                  key={`reviewer-capability-${label}`}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'rgba(253,203,110,0.12)',
+                    color: 'var(--yellow)',
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--text2)' }}>No reviewer capability data</div>
+          )}
+        </div>
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
         <div style={{ fontSize: 10, color: 'var(--text2)' }}>phase track</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -202,12 +359,50 @@ export default function RunTimelineDrawer({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
         <div style={{ fontSize: 10, color: 'var(--text2)' }}>workflow checklist</div>
-        {checklist.length ? (
+        {checklistItems.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {checklist.map((item) => (
-              <div key={`drawer-checklist-${item}`} style={{ fontSize: 11, color: 'var(--text)' }}>
-                - {item}
-              </div>
+            {checklistItems.map((item) => (
+              (() => {
+                const kindStyle = getChecklistKindStyle(item.kind);
+                return (
+                  <button
+                    key={`drawer-checklist-${item.label}`}
+                    onClick={item.onToggle}
+                    disabled={item.disabled}
+                    aria-label={item.ariaLabel}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 8px',
+                      borderRadius: 8,
+                      border: item.highlighted ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      background: item.done ? 'rgba(0,206,201,0.08)' : 'var(--surface)',
+                      color: item.done ? 'var(--green)' : 'var(--text)',
+                      fontSize: 11,
+                      cursor: item.disabled ? 'not-allowed' : 'pointer',
+                      opacity: item.disabled ? 0.6 : 1,
+                      textAlign: 'left',
+                      boxShadow: item.highlighted ? '0 0 0 1px rgba(116,185,255,0.18)' : 'none',
+                    }}
+                  >
+                    <span style={{ fontWeight: 700 }}>{item.done ? 'Done' : 'Todo'}</span>
+                    <span
+                      style={{
+                        padding: '2px 6px',
+                        borderRadius: 999,
+                        background: kindStyle.background,
+                        color: kindStyle.color,
+                        fontSize: 10,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {item.kind}
+                    </span>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })()
             ))}
           </div>
         ) : (

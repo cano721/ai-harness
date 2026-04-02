@@ -1,9 +1,17 @@
 import { Router } from 'express';
-import { createDb, tasks, taskRuns, agents } from '@ddalkak/db';
+import { createDb, tasks, taskRuns, agents, activityLog } from '@ddalkak/db';
 import { eq, and, ne } from 'drizzle-orm';
 import { runTask, getRunLogs, isRunActive, taskEvents, type TaskLogEvent, type TaskDoneEvent } from '../services/task-runner.service.js';
 import { z } from 'zod';
 import { validate } from '../middleware/validation.js';
+
+const checklistEntrySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum(['required', 'advisory', 'evidence']),
+});
+
+const checklistEntryArraySchema = z.array(z.union([z.string().min(1), checklistEntrySchema]));
 
 const createTaskSchema = z.object({
   projectId: z.string().min(1, 'projectId is required'),
@@ -28,6 +36,8 @@ const createTaskSchema = z.object({
         status: z.enum(['pending', 'in_progress', 'done', 'blocked']).optional(),
       })).default([]),
       checklist: z.array(z.string().min(1)).default([]),
+      phaseChecklistMap: z.record(z.string(), checklistEntryArraySchema).optional(),
+      completedChecklist: z.array(z.string().min(1)).optional(),
     }).optional(),
   }).optional(),
 });
@@ -55,6 +65,8 @@ const updateTaskSchema = z.object({
         status: z.enum(['pending', 'in_progress', 'done', 'blocked']).optional(),
       })).default([]),
       checklist: z.array(z.string().min(1)).default([]),
+      phaseChecklistMap: z.record(z.string(), checklistEntryArraySchema).optional(),
+      completedChecklist: z.array(z.string().min(1)).optional(),
     }).optional(),
   }).optional(),
 });
@@ -73,6 +85,123 @@ async function pickReviewAgent(task: { projectId: string }, lastCompletedAgentId
     : projectAgents;
   const reviewer = candidates.find((agent) => /review/i.test(agent.name));
   return reviewer ?? candidates[0] ?? null;
+}
+
+type ChecklistEntry = string | { id: string; label: string; kind: 'required' | 'advisory' | 'evidence' };
+
+function normalizeChecklistEntry(entry: ChecklistEntry) {
+  if (typeof entry === 'string') {
+    return { id: entry, label: entry, kind: 'required' as const };
+  }
+  return entry;
+}
+
+function getChecklistToggleEvent(
+  task: { id: string; projectId: string; agentId: string | null; metadata?: unknown },
+  nextMetadata: unknown,
+) {
+  const currentWorkflow = (task.metadata as {
+    workflow?: {
+      id?: string;
+      name?: string;
+      phases?: Array<{ label?: string; status?: string }>;
+      phaseChecklistMap?: Record<string, ChecklistEntry[]>;
+      completedChecklist?: string[];
+    };
+  } | null | undefined)?.workflow;
+  const nextWorkflow = (nextMetadata as {
+    workflow?: {
+      id?: string;
+      name?: string;
+      phases?: Array<{ label?: string; status?: string }>;
+      phaseChecklistMap?: Record<string, ChecklistEntry[]>;
+      completedChecklist?: string[];
+    };
+  } | null | undefined)?.workflow;
+
+  if (!currentWorkflow || !nextWorkflow) return null;
+
+  const previous = new Set(currentWorkflow.completedChecklist ?? []);
+  const next = new Set(nextWorkflow.completedChecklist ?? []);
+  const completedItem = [...next].find((item) => !previous.has(item));
+  const reopenedItem = [...previous].find((item) => !next.has(item));
+  const checklistItemId = completedItem ?? reopenedItem;
+
+  if (!checklistItemId) return null;
+
+  const checklistEntries = Object.values(nextWorkflow.phaseChecklistMap ?? {}).flat().map(normalizeChecklistEntry);
+  const matchedEntry = checklistEntries.find((entry) => entry.id === checklistItemId || entry.label === checklistItemId);
+
+  const activePhase = nextWorkflow.phases?.find((phase) => phase.status === 'in_progress' || phase.status === 'blocked');
+  const phaseLabel = activePhase?.label ?? 'Checklist';
+
+  return {
+    projectId: task.projectId,
+    agentId: task.agentId,
+    eventType: 'task.checklist.toggled',
+    detail: {
+      taskId: task.id,
+      workflowId: nextWorkflow.id,
+      workflowName: nextWorkflow.name,
+      checklistItem: matchedEntry?.label ?? checklistItemId,
+      checklistItemId,
+      checklistKind: matchedEntry?.kind ?? 'required',
+      state: completedItem ? 'completed' : 'reopened',
+      workflowPhase: {
+        from: phaseLabel,
+        to: phaseLabel,
+        outcome: completedItem ? 'completed' : 'unchanged',
+      },
+    },
+  };
+}
+
+function getWorkflowTransitionBlock(
+  currentMetadata: unknown,
+  nextMetadata: unknown,
+) {
+  const currentWorkflow = (currentMetadata as {
+    workflow?: {
+      phases?: Array<{ id?: string; label?: string; status?: string }>;
+      checklist?: string[];
+      phaseChecklistMap?: Record<string, ChecklistEntry[]>;
+      completedChecklist?: string[];
+    };
+  } | null | undefined)?.workflow;
+  const nextWorkflow = (nextMetadata as {
+    workflow?: {
+      phases?: Array<{ id?: string; label?: string; status?: string }>;
+      checklist?: string[];
+      phaseChecklistMap?: Record<string, ChecklistEntry[]>;
+      completedChecklist?: string[];
+    };
+  } | null | undefined)?.workflow;
+
+  if (!currentWorkflow || !nextWorkflow) return null;
+
+  const currentActivePhase = currentWorkflow.phases?.find((phase) => phase.status === 'in_progress');
+  if (!currentActivePhase?.id) return null;
+
+  const nextSamePhase = nextWorkflow.phases?.find((phase) => phase.id === currentActivePhase.id);
+  if (!nextSamePhase || nextSamePhase.status === 'in_progress' || nextSamePhase.status === 'blocked') return null;
+
+  const phaseScopedEntries = nextWorkflow.phaseChecklistMap?.[currentActivePhase.id]
+    ?? currentWorkflow.phaseChecklistMap?.[currentActivePhase.id];
+  const checklistEntries = (phaseScopedEntries?.length ? phaseScopedEntries : (nextWorkflow.checklist ?? currentWorkflow.checklist ?? []))
+    .map(normalizeChecklistEntry);
+  const remainingRequired = checklistEntries.filter((entry) => (
+    entry.kind === 'required'
+    && !(nextWorkflow.completedChecklist ?? []).includes(entry.id)
+    && !(nextWorkflow.completedChecklist ?? []).includes(entry.label)
+  ));
+
+  if (remainingRequired.length === 0) return null;
+
+  return {
+    phaseId: currentActivePhase.id,
+    phaseLabel: currentActivePhase.label ?? currentActivePhase.id,
+    remainingRequired,
+  };
 }
 
 // List tasks (optionally by project)
@@ -113,6 +242,29 @@ tasksRouter.post('/', validate(createTaskSchema), async (req, res) => {
 // Update task
 tasksRouter.patch('/:id', validate(updateTaskSchema), async (req, res) => {
   const db = await createDb();
+  const [existingTask] = await db.select().from(tasks).where(eq(tasks.id, req.params.id as string));
+  if (!existingTask) {
+    res.status(404).json({ ok: false, error: 'Task not found' });
+    return;
+  }
+
+  const workflowTransitionBlock = req.body.metadata !== undefined
+    ? getWorkflowTransitionBlock(existingTask.metadata, req.body.metadata)
+    : null;
+
+  if (workflowTransitionBlock) {
+    res.status(409).json({
+      ok: false,
+      error: `Complete required checklist items before leaving ${workflowTransitionBlock.phaseLabel}: ${workflowTransitionBlock.remainingRequired.map((entry) => entry.label).join(', ')}`,
+      data: {
+        phaseId: workflowTransitionBlock.phaseId,
+        phaseLabel: workflowTransitionBlock.phaseLabel,
+        requiredItems: workflowTransitionBlock.remainingRequired,
+      },
+    });
+    return;
+  }
+
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (req.body.title !== undefined) updates.title = req.body.title;
   if (req.body.description !== undefined) updates.description = req.body.description;
@@ -121,9 +273,15 @@ tasksRouter.patch('/:id', validate(updateTaskSchema), async (req, res) => {
   if (req.body.metadata !== undefined) updates.metadata = req.body.metadata;
 
   const [result] = await db.update(tasks).set(updates).where(eq(tasks.id, req.params.id as string)).returning();
-  if (!result) {
-    res.status(404).json({ ok: false, error: 'Task not found' });
-    return;
+  const checklistEvent = req.body.metadata !== undefined
+    ? getChecklistToggleEvent(existingTask, req.body.metadata)
+    : null;
+
+  if (result && checklistEvent) {
+    await db.insert(activityLog).values({
+      ...checklistEvent,
+      agentId: req.body.agentId ?? checklistEvent.agentId ?? null,
+    });
   }
   res.json({ ok: true, data: result });
 });

@@ -355,20 +355,22 @@ describe('ProjectDetail setup-first control plane', () => {
     expect((screen.getByRole('textbox', { name: 'Task description' }) as HTMLTextAreaElement).value).toContain('Workflow: Implement Feature');
     expect(screen.getByText('Use the standard feature delivery path with context, implementation, validation, and review.')).toBeTruthy();
     expect(screen.getByText('Review in separate agent')).toBeTruthy();
-    expect(screen.getByText('Context')).toBeTruthy();
-    expect(screen.getByText('Validate')).toBeTruthy();
+    expect(screen.getAllByText('Context').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Validate').length).toBeGreaterThan(0);
     expect(screen.getByText('Task Checklist')).toBeTruthy();
-    expect(screen.getByText('- Keep review in a separate agent')).toBeTruthy();
+    expect(screen.getByText('- Read context map and conventions first (required)')).toBeTruthy();
+    expect(screen.getByText('- Verify the user-facing path before finishing (evidence)')).toBeTruthy();
+    expect(screen.getByText('- Keep review in a separate agent (required)')).toBeTruthy();
     fireEvent.change(taskInput, { target: { value: 'Implement feature: setup-aware task creation' } });
     fireEvent.click(screen.getByRole('button', { name: '실행' }));
 
     await waitFor(() => {
-      expect(api.post).toHaveBeenCalledWith('/tasks', {
+      expect(api.post).toHaveBeenCalledWith('/tasks', expect.objectContaining({
         projectId: 'project-1',
         title: 'Implement feature: setup-aware task creation',
         description: expect.stringContaining('Workflow: Implement Feature'),
         metadata: {
-          workflow: {
+          workflow: expect.objectContaining({
             id: 'implement-feature',
             name: 'Implement Feature',
             summary: 'Use the standard feature delivery path with context, implementation, validation, and review.',
@@ -379,9 +381,13 @@ describe('ProjectDetail setup-first control plane', () => {
               expect.objectContaining({ id: 'review', label: 'Review', enforceSeparation: true }),
             ]),
             checklist: expect.arrayContaining(['Keep review in a separate agent']),
-          },
+            phaseChecklistMap: expect.objectContaining({
+              context: expect.arrayContaining([expect.objectContaining({ label: 'Read context map and conventions first', kind: 'required' })]),
+              review: expect.arrayContaining([expect.objectContaining({ label: 'Keep review in a separate agent', kind: 'required' })]),
+            }),
+          }),
         },
-      });
+      }));
       expect(api.post).toHaveBeenCalledWith('/tasks/task-1/run', {});
     });
     expect(eventSourceInstances[0]?.url).toBe('/api/tasks/runs/run-task-1/stream');
@@ -767,6 +773,105 @@ describe('ProjectDetail setup-first control plane', () => {
     });
   });
 
+  it('shows required handoff blockers from the server in Project Detail', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['React'],
+        git: { isRepo: true, branch: 'main' },
+        claudeMd: { exists: true, content: '# CLAUDE' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 80, details: [] },
+          guide: { score: 90, details: [] },
+          gear: { score: 70, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Setup is ready.',
+        axes: [],
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'idle' },
+      ],
+      tasks: [
+        {
+          id: 'task-blocked-handoff',
+          projectId: 'project-1',
+          agentId: 'agent-dev',
+          title: 'Implement feature: blocked by required checklist',
+          status: 'in_progress',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          metadata: {
+            workflow: {
+              id: 'implement-feature',
+              name: 'Implement Feature',
+              source: 'gear',
+              separationMode: 'enforced',
+              phases: [
+                { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'in_progress' },
+                { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'pending', enforceSeparation: true },
+              ],
+              checklist: ['Read context map'],
+              phaseChecklistMap: {
+                implement: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+              },
+              completedChecklist: [],
+            },
+          },
+        },
+      ],
+      activity: [],
+    });
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(api.patch)
+      .mockRejectedValueOnce({
+        status: 409,
+        body: {
+          error: 'Complete required checklist items before leaving Implement: Read context map',
+          data: {
+            phaseId: 'implement',
+            phaseLabel: 'Implement',
+            requiredItems: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+          },
+        },
+      })
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce({
+        status: 409,
+        body: {
+          error: 'Complete required checklist items before leaving Implement: Read context map',
+          data: {
+            phaseId: 'implement',
+            phaseLabel: 'Implement',
+            requiredItems: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+          },
+        },
+      });
+
+    renderProjectDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Advance task Implement feature: blocked by required checklist' }));
+
+    expect(await screen.findByText('Required checklist items are blocking Implement handoff.')).toBeTruthy();
+    expect(await screen.findByText('Run Timeline Drawer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Complete required blocker Read context map for task Implement feature: blocked by required checklist' }));
+    expect(await screen.findByText('Required blockers cleared. Retry the handoff when ready.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry handoff to review for task Implement feature: blocked by required checklist' }));
+    expect(await screen.findByText('Handoff blocked again. Resolve the remaining required checklist items.')).toBeTruthy();
+  });
+
   it('shows review blocked-again feedback in Project Detail', async () => {
     const activityEntries = [
       {
@@ -853,8 +958,8 @@ describe('ProjectDetail setup-first control plane', () => {
               lastCompletedPhaseId: 'implement',
               lastCompletedAgentId: 'agent-dev',
               phases: [
-                { id: 'implement', label: 'Implement', status: 'done' },
-                { id: 'review', label: 'Review', status: 'blocked', enforceSeparation: true },
+                { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'done' },
+                { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'blocked', enforceSeparation: true },
               ],
               checklist: [],
             },
@@ -920,8 +1025,8 @@ describe('ProjectDetail setup-first control plane', () => {
             lastCompletedPhaseId: 'implement',
             lastCompletedAgentId: 'agent-dev',
             phases: [
-              { id: 'implement', label: 'Implement', status: 'done' },
-              { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+              { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'done' },
+              { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'in_progress', enforceSeparation: true },
             ],
             checklist: [],
           },
@@ -958,6 +1063,8 @@ describe('ProjectDetail setup-first control plane', () => {
     expect(drawerScope.getAllByText('Implement Feature').length).toBeGreaterThan(0);
     expect(drawerScope.getByText('current phase')).toBeTruthy();
     expect(drawerScope.getAllByText('Review').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('phase objective')).toBeTruthy();
+    expect(drawerScope.getByText('Request a separate review pass.')).toBeTruthy();
     expect(drawerScope.getByText('agent')).toBeTruthy();
     expect(drawerScope.getByText('developer')).toBeTruthy();
     expect(drawerScope.getAllByText('reviewer').length).toBeGreaterThan(0);
@@ -967,6 +1074,25 @@ describe('ProjectDetail setup-first control plane', () => {
     expect(drawerScope.getByText('enforced')).toBeTruthy();
     expect(drawerScope.getByText('phase owner')).toBeTruthy();
     expect(drawerScope.getAllByText('reviewer').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('setup origin')).toBeTruthy();
+    expect(drawerScope.getByText('gear workflow')).toBeTruthy();
+    expect(drawerScope.getByText('CLAUDE.md')).toBeTruthy();
+    expect(drawerScope.getByText('reviewer agent asset')).toBeTruthy();
+    expect(drawerScope.getByText('phase policy')).toBeTruthy();
+    expect(drawerScope.getByText(/Use a different agent than the previous completed phase\./)).toBeTruthy();
+    expect(drawerScope.getByText(/Reviewer handoff is ready for reviewer\./)).toBeTruthy();
+    expect(drawerScope.getByText(/Resolve the blocking condition before resuming this phase\./)).toBeTruthy();
+    expect(drawerScope.getByText('orchestration alerts')).toBeTruthy();
+    expect(drawerScope.getByText('Agent assigned: developer')).toBeTruthy();
+    expect(drawerScope.getByText('Phase blocked')).toBeTruthy();
+    expect(drawerScope.getByText('Separation enforced')).toBeTruthy();
+    expect(drawerScope.getByText('Reviewer ready: reviewer')).toBeTruthy();
+    expect(drawerScope.getByText('agent capabilities')).toBeTruthy();
+    expect(drawerScope.getByText('code changes')).toBeTruthy();
+    expect(drawerScope.getAllByText('review pass').length).toBeGreaterThan(0);
+    expect(drawerScope.getByText('reviewer capabilities')).toBeTruthy();
+    expect(drawerScope.getByText('analysis')).toBeTruthy();
+    expect(drawerScope.getAllByText('separate context').length).toBeGreaterThan(0);
     expect(drawerScope.getByText('phase track')).toBeTruthy();
     expect(drawerScope.getByText('workflow checklist')).toBeTruthy();
     expect(drawerScope.getByText('No checklist items')).toBeTruthy();

@@ -19,7 +19,19 @@ interface Task {
       lastCompletedAgentId?: string;
       lastBlockedReason?: string;
       checklist?: string[];
-      phases: Array<{ id: string; label: string; status?: 'pending' | 'in_progress' | 'done' | 'blocked'; enforceSeparation?: boolean }>;
+      phaseChecklistMap?: Record<string, Array<string | {
+        id: string;
+        label: string;
+        kind: 'required' | 'advisory' | 'evidence';
+      }>>;
+      completedChecklist?: string[];
+      phases: Array<{
+        id: string;
+        label: string;
+        objective?: string;
+        status?: 'pending' | 'in_progress' | 'done' | 'blocked';
+        enforceSeparation?: boolean;
+      }>;
     };
   };
   status: string;
@@ -28,6 +40,7 @@ interface Task {
 }
 
 type TaskWorkflow = NonNullable<NonNullable<Task['metadata']>['workflow']>;
+type ChecklistEntry = { id: string; label: string; kind: 'required' | 'advisory' | 'evidence' };
 
 const RunTimelineDrawer = lazy(() => import('../components/RunTimelineDrawer.js'));
 
@@ -47,6 +60,17 @@ interface Agent {
   status: string;
 }
 
+interface TaskPhaseBlockInfo {
+  phaseId: string;
+  phaseLabel: string;
+  requiredItems: Array<{ id: string; label: string; kind: 'required' | 'advisory' | 'evidence' }>;
+}
+
+interface TaskHandoffRetryState {
+  status: 'starting' | 'started' | 'blocked';
+  action: 'review' | 'advance';
+}
+
 const statusStyle: Record<string, { bg: string; color: string }> = {
   todo: { bg: 'var(--surface3)', color: 'var(--text2)' },
   in_progress: { bg: 'rgba(116,185,255,0.1)', color: 'var(--blue)' },
@@ -64,6 +88,65 @@ function getActivePhase(workflow?: TaskWorkflow) {
 
 function getBlockedPhase(workflow?: TaskWorkflow) {
   return workflow?.phases.find((phase) => phase.status === 'blocked');
+}
+
+function normalizeChecklistEntry(entry: string | ChecklistEntry): ChecklistEntry {
+  if (typeof entry === 'string') {
+    return { id: entry, label: entry, kind: 'required' };
+  }
+  return entry;
+}
+
+function getChecklistScope(workflow?: TaskWorkflow, phase?: TaskWorkflow['phases'][number]) {
+  if (!workflow) return [];
+  const phaseScoped = phase?.id ? workflow.phaseChecklistMap?.[phase.id] : undefined;
+  return (phaseScoped?.length ? phaseScoped : (workflow.checklist ?? [])).map(normalizeChecklistEntry);
+}
+
+function getRemainingChecklistState(workflow?: TaskWorkflow, phase?: TaskWorkflow['phases'][number]) {
+  const remaining = getChecklistScope(workflow, phase).filter((item) => !(workflow?.completedChecklist ?? []).includes(item.id));
+  return {
+    remaining,
+    required: remaining.filter((item) => item.kind === 'required'),
+    evidence: remaining.filter((item) => item.kind === 'evidence'),
+    advisory: remaining.filter((item) => item.kind === 'advisory'),
+  };
+}
+
+function getChecklistActionTone(state: ReturnType<typeof getRemainingChecklistState>) {
+  if (state.required.length > 0) return 'red' as const;
+  if (state.evidence.length > 0) return 'yellow' as const;
+  if (state.advisory.length > 0) return 'blue' as const;
+  return 'neutral' as const;
+}
+
+function getChecklistActionSuffix(state: ReturnType<typeof getRemainingChecklistState>) {
+  if (state.required.length > 0) return `${state.required.length} required open`;
+  if (state.evidence.length > 0) return `${state.evidence.length} evidence open`;
+  if (state.advisory.length > 0) return `${state.advisory.length} advisory open`;
+  return null;
+}
+
+function parseTaskPhaseBlockInfo(error: unknown): TaskPhaseBlockInfo | null {
+  if (!error || typeof error !== 'object') return null;
+  const maybeBody = (error as { body?: unknown }).body;
+  if (!maybeBody || typeof maybeBody !== 'object') return null;
+  const data = (maybeBody as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return null;
+  const phaseId = typeof (data as { phaseId?: unknown }).phaseId === 'string' ? (data as { phaseId: string }).phaseId : null;
+  const phaseLabel = typeof (data as { phaseLabel?: unknown }).phaseLabel === 'string' ? (data as { phaseLabel: string }).phaseLabel : null;
+  const requiredItems = Array.isArray((data as { requiredItems?: unknown }).requiredItems)
+    ? (data as { requiredItems: Array<{ id?: unknown; label?: unknown; kind?: unknown }> }).requiredItems
+        .filter((item) => typeof item?.id === 'string' && typeof item?.label === 'string' && typeof item?.kind === 'string')
+        .map((item) => ({
+          id: item.id as string,
+          label: item.label as string,
+          kind: item.kind as 'required' | 'advisory' | 'evidence',
+        }))
+    : [];
+
+  if (!phaseId || !phaseLabel || requiredItems.length === 0) return null;
+  return { phaseId, phaseLabel, requiredItems };
 }
 
 function canSendToReview(workflow?: TaskWorkflow) {
@@ -87,6 +170,148 @@ function pickReviewerAgent(agents: Agent[], task: Task) {
   const reviewer = projectAgents.find((agent) => /review/i.test(agent.name) && agent.status === 'idle');
   if (reviewer) return reviewer;
   return projectAgents.find((agent) => agent.status === 'idle') ?? null;
+}
+
+function buildAgentCapabilities(agent: Agent | null | undefined, phase?: TaskWorkflow['phases'][number], workflow?: TaskWorkflow) {
+  const values = new Set<string>();
+  const phaseText = `${phase?.id ?? ''} ${phase?.label ?? ''} ${phase?.objective ?? ''}`.toLowerCase();
+  const agentText = `${agent?.name ?? ''} ${agent?.adapterType ?? ''}`.toLowerCase();
+
+  if (agentText.includes('claude')) values.add('analysis');
+  if (agentText.includes('codex')) values.add('code changes');
+  if (agentText.includes('cursor')) values.add('editor workflow');
+  if (phaseText.match(/implement|fix|refactor|boundary|context/)) values.add('implementation');
+  if (phaseText.match(/validate|verify|regression|protect|test/)) values.add('validation');
+  if (phaseText.match(/review/)) values.add('review pass');
+  if (phase?.enforceSeparation || workflow?.separationMode === 'enforced') values.add('separate context');
+  if (agentText.includes('review')) values.add('review pass');
+  if (agentText.includes('develop') || agentText.includes('builder')) values.add('implementation');
+  if (values.size === 0) values.add('general purpose');
+
+  return [...values];
+}
+
+function buildSetupOrigins(workflow?: TaskWorkflow, phase?: TaskWorkflow['phases'][number]) {
+  const values = new Set<string>();
+  if (workflow?.source === 'gear') values.add('gear workflow');
+  values.add('CLAUDE.md');
+  values.add('context map');
+
+  const phaseText = `${phase?.id ?? ''} ${phase?.label ?? ''}`.toLowerCase();
+  if (phaseText.match(/implement|fix|refactor|boundary/)) values.add('developer agent asset');
+  if (phaseText.match(/review/) || workflow?.separationMode === 'enforced') values.add('reviewer agent asset');
+  if (phaseText.match(/validate|verify|regression|protect|test/)) values.add('review guide');
+
+  return [...values];
+}
+
+function buildPhasePolicyLines(workflow?: TaskWorkflow, phase?: TaskWorkflow['phases'][number], reviewAgent?: Agent | null) {
+  const lines = new Set<string>();
+  const phaseText = `${phase?.id ?? ''} ${phase?.label ?? ''}`.toLowerCase();
+  const remainingChecklist = getRemainingChecklistState(workflow, phase);
+
+  if (workflow?.separationMode === 'enforced' || phase?.enforceSeparation) {
+    lines.add('Use a different agent than the previous completed phase.');
+  }
+  if (phaseText.match(/review/)) {
+    lines.add(reviewAgent ? `Reviewer handoff is ready for ${reviewAgent.name}.` : 'Reviewer assignment is required before running review.');
+  }
+  if (phaseText.match(/validate|verify|regression|protect|test/)) {
+    lines.add('Collect verification evidence before advancing the workflow.');
+  }
+  if (phaseText.match(/implement|fix|refactor|boundary/)) {
+    lines.add('Keep the scope small and hand off cleanly to validation or review.');
+  }
+  if (remainingChecklist.required.length > 0) {
+    lines.add(`Complete ${remainingChecklist.required.length} required checklist item(s) before phase handoff.`);
+  }
+  if (remainingChecklist.evidence.length > 0) {
+    lines.add(`Capture evidence for ${remainingChecklist.evidence.length} checklist item(s) before phase handoff.`);
+  }
+  if (remainingChecklist.advisory.length > 0) {
+    lines.add(`${remainingChecklist.advisory.length} advisory checklist reminder(s) are still open.`);
+  }
+  if (phase?.status === 'blocked') {
+    lines.add('Resolve the blocking condition before resuming this phase.');
+  }
+  if (lines.size === 0) {
+    lines.add('No additional orchestration policy is required for this phase.');
+  }
+
+  return [...lines];
+}
+
+function buildOrchestrationAlerts(
+  task: Task,
+  workflow?: TaskWorkflow,
+  phase?: TaskWorkflow['phases'][number],
+  assignedAgent?: Agent | null,
+  reviewAgent?: Agent | null,
+) {
+  const alerts: Array<{ label: string; tone: 'blue' | 'green' | 'yellow' | 'red' }> = [];
+  const phaseText = `${phase?.id ?? ''} ${phase?.label ?? ''}`.toLowerCase();
+  const remainingChecklist = getRemainingChecklistState(workflow, phase);
+
+  if (assignedAgent) {
+    alerts.push({ label: `Agent assigned: ${assignedAgent.name}`, tone: 'blue' });
+  } else {
+    alerts.push({ label: 'Primary agent unassigned', tone: 'yellow' });
+  }
+  if (phase?.status === 'blocked' || task.status === 'blocked') {
+    alerts.push({ label: 'Phase blocked', tone: 'red' });
+  }
+  if (workflow?.separationMode === 'enforced' || phase?.enforceSeparation) {
+    alerts.push({ label: 'Separation enforced', tone: 'yellow' });
+  }
+  if (phaseText.match(/review/)) {
+    alerts.push(reviewAgent
+      ? { label: `Reviewer ready: ${reviewAgent.name}`, tone: 'green' }
+      : { label: 'Reviewer missing', tone: 'red' });
+  }
+  if (phaseText.match(/validate|verify|regression|protect|test/) && task.status !== 'done') {
+    alerts.push({ label: 'Validation evidence needed', tone: 'yellow' });
+  }
+  if (remainingChecklist.required.length > 0) {
+    alerts.push({ label: `${remainingChecklist.required.length} required checklist item(s) open`, tone: 'red' });
+  }
+  if (remainingChecklist.evidence.length > 0) {
+    alerts.push({ label: `${remainingChecklist.evidence.length} evidence item(s) still needed`, tone: 'yellow' });
+  }
+  if (remainingChecklist.advisory.length > 0) {
+    alerts.push({ label: `${remainingChecklist.advisory.length} advisory reminder(s) open`, tone: 'blue' });
+  }
+
+  return alerts;
+}
+
+function toggleWorkflowChecklist(workflow: TaskWorkflow, itemId: string) {
+  const completed = new Set(workflow.completedChecklist ?? []);
+  if (completed.has(itemId)) {
+    completed.delete(itemId);
+  } else {
+    completed.add(itemId);
+  }
+
+  return {
+    ...workflow,
+    completedChecklist: [...completed],
+  };
+}
+
+function confirmChecklistHandoff(workflow: TaskWorkflow | undefined, actionLabel: string) {
+  const activePhase = getActivePhase(workflow) ?? getBlockedPhase(workflow) ?? workflow?.phases.find((phase) => phase.status === 'pending');
+  const remaining = getRemainingChecklistState(workflow, activePhase);
+  if (remaining.remaining.length === 0) return true;
+
+  const sections = [
+    remaining.required.length > 0 ? `Required:\n- ${remaining.required.map((item) => item.label).join('\n- ')}` : null,
+    remaining.evidence.length > 0 ? `Evidence:\n- ${remaining.evidence.map((item) => item.label).join('\n- ')}` : null,
+    remaining.advisory.length > 0 ? `Advisory:\n- ${remaining.advisory.map((item) => item.label).join('\n- ')}` : null,
+  ].filter(Boolean).join('\n\n');
+
+  return window.confirm(
+    `${actionLabel} before leaving ${remaining.remaining.length} checklist item(s) open?\n\n${sections}`,
+  );
 }
 
 function clearBlockedReason(workflow: TaskWorkflow) {
@@ -215,6 +440,11 @@ function getTaskActivityTimeline(events: ActivityEntry[], taskId: string) {
 function getTaskActivitySummary(entry?: ActivityEntry) {
   if (!entry) return null;
 
+  const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
+  const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
+  const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
+  const checklistSuffix = checklistKind ? ` (${checklistKind})` : '';
+
   const workflowPhase = entry.detail.workflowPhase as {
     from?: string;
     to?: string;
@@ -245,10 +475,23 @@ function getTaskActivitySummary(entry?: ActivityEntry) {
     };
   }
 
+  if (entry.eventType === 'task.checklist.toggled' && checklistItem) {
+    return {
+      text: checklistState === 'reopened'
+        ? `Checklist reopened: ${checklistItem}${checklistSuffix}.`
+        : `Checklist completed: ${checklistItem}${checklistSuffix}.`,
+      color: checklistState === 'reopened' ? 'var(--yellow)' : 'var(--green)',
+    };
+  }
+
   return null;
 }
 
 function getTaskTimelineLabel(entry: ActivityEntry) {
+  const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
+  const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
+  const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
+  const checklistSuffix = checklistKind ? ` (${checklistKind})` : '';
   const workflowPhase = entry.detail.workflowPhase as {
     from?: string;
     to?: string;
@@ -268,6 +511,11 @@ function getTaskTimelineLabel(entry: ActivityEntry) {
     return phaseLabel ? `failed ${phaseLabel}` : 'failed';
   }
 
+  if (entry.eventType === 'task.checklist.toggled') {
+    if (!checklistItem) return 'checklist updated';
+    return checklistState === 'reopened' ? `reopened ${checklistItem}${checklistSuffix}` : `checked ${checklistItem}${checklistSuffix}`;
+  }
+
   return entry.eventType.replace('task.', '');
 }
 
@@ -275,10 +523,15 @@ function getTaskTimelineColor(eventType: string) {
   if (eventType === 'task.started') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
   if (eventType === 'task.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   if (eventType === 'task.failed') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  if (eventType === 'task.checklist.toggled') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   return { bg: 'var(--surface3)', color: 'var(--text2)' };
 }
 
 function getTaskTimelineDetail(entry: ActivityEntry) {
+  const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
+  const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
+  const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
+  const checklistSuffix = checklistKind ? ` (${checklistKind})` : '';
   const workflowPhase = entry.detail.workflowPhase as {
     from?: string;
     to?: string;
@@ -292,7 +545,9 @@ function getTaskTimelineDetail(entry: ActivityEntry) {
   return {
     eventLabel: entry.eventType,
     phaseLine,
-    outcome: workflowPhase?.outcome ?? 'unchanged',
+    outcome: checklistItem
+      ? `${checklistState === 'reopened' ? 'reopened' : 'completed'} ${checklistItem}${checklistSuffix}`
+      : (workflowPhase?.outcome ?? 'unchanged'),
     createdAt: new Date(entry.createdAt).toLocaleString(),
     runId: typeof entry.detail.runId === 'string' ? entry.detail.runId : undefined,
   };
@@ -328,6 +583,11 @@ export function Tasks() {
   const [loadingTimelineEventId, setLoadingTimelineEventId] = useState<string | null>(null);
   const [pendingRetryTailTaskId, setPendingRetryTailTaskId] = useState<string | null>(null);
   const [retryingTaskIds, setRetryingTaskIds] = useState<Record<string, boolean>>({});
+  const [phaseBlockByTaskId, setPhaseBlockByTaskId] = useState<Record<string, TaskPhaseBlockInfo | undefined>>({});
+  const [focusedChecklistItemByTaskId, setFocusedChecklistItemByTaskId] = useState<Record<string, string | undefined>>({});
+  const [handoffReadyByTaskId, setHandoffReadyByTaskId] = useState<Record<string, boolean | undefined>>({});
+  const [recoveredWorkflowByTaskId, setRecoveredWorkflowByTaskId] = useState<Record<string, TaskWorkflow | undefined>>({});
+  const [handoffRetryStateByTaskId, setHandoffRetryStateByTaskId] = useState<Record<string, TaskHandoffRetryState | undefined>>({});
   const timelineStreamRefs = useRef<Record<string, EventSource | undefined>>({});
   const { data: projects } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<any[]>('/projects') });
 
@@ -356,8 +616,42 @@ export function Tasks() {
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, task) => {
+      setPhaseBlockByTaskId((current) => ({ ...current, [task.id]: undefined }));
+      setHandoffReadyByTaskId((current) => ({ ...current, [task.id]: undefined }));
+      setRecoveredWorkflowByTaskId((current) => ({ ...current, [task.id]: undefined }));
+      setHandoffRetryStateByTaskId((current) => {
+        const retryState = current[task.id];
+        if (!retryState) return current;
+        return {
+          ...current,
+          [task.id]: {
+            ...retryState,
+            status: 'started',
+          },
+        };
+      });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (error, task) => {
+      const block = parseTaskPhaseBlockInfo(error);
+      if (!block) return;
+      setPhaseBlockByTaskId((current) => ({ ...current, [task.id]: block }));
+      setFocusedChecklistItemByTaskId((current) => ({ ...current, [task.id]: block.requiredItems[0]?.id }));
+      setHandoffReadyByTaskId((current) => ({ ...current, [task.id]: undefined }));
+      setRecoveredWorkflowByTaskId((current) => ({ ...current, [task.id]: undefined }));
+      setHandoffRetryStateByTaskId((current) => {
+        const retryState = current[task.id];
+        if (!retryState) return current;
+        return {
+          ...current,
+          [task.id]: {
+            ...retryState,
+            status: 'blocked',
+          },
+        };
+      });
+      setDrawerTimelineTaskIds((current) => ({ ...current, [task.id]: true }));
     },
   });
 
@@ -382,8 +676,85 @@ export function Tasks() {
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      setPhaseBlockByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      setHandoffReadyByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      setRecoveredWorkflowByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      setHandoffRetryStateByTaskId((current) => {
+        const retryState = current[variables.task.id];
+        if (!retryState) return current;
+        return {
+          ...current,
+          [variables.task.id]: {
+            ...retryState,
+            status: 'started',
+          },
+        };
+      });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (error, variables) => {
+      const block = parseTaskPhaseBlockInfo(error);
+      if (!block) return;
+      setPhaseBlockByTaskId((current) => ({ ...current, [variables.task.id]: block }));
+      setFocusedChecklistItemByTaskId((current) => ({ ...current, [variables.task.id]: block.requiredItems[0]?.id }));
+      setHandoffReadyByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      setRecoveredWorkflowByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      setHandoffRetryStateByTaskId((current) => {
+        const retryState = current[variables.task.id];
+        if (!retryState) return current;
+        return {
+          ...current,
+          [variables.task.id]: {
+            ...retryState,
+            status: 'blocked',
+          },
+        };
+      });
+      setDrawerTimelineTaskIds((current) => ({ ...current, [variables.task.id]: true }));
+    },
+  });
+
+  const toggleChecklistMutation = useMutation({
+    mutationFn: async ({ task, item }: { task: Task; item: string }) => {
+      const workflow = task.metadata?.workflow;
+      if (!workflow) return;
+      return api.patch(`/tasks/${task.id}`, {
+        metadata: {
+          workflow: toggleWorkflowChecklist(workflow, item),
+        },
+      });
+    },
+    onSuccess: (_data, variables) => {
+      const wasCompleted = (variables.task.metadata?.workflow?.completedChecklist ?? []).includes(variables.item);
+      const nextWorkflow = variables.task.metadata?.workflow
+        ? toggleWorkflowChecklist(variables.task.metadata.workflow, variables.item)
+        : undefined;
+      setPhaseBlockByTaskId((current) => {
+        const block = current[variables.task.id];
+        if (!block || wasCompleted) return { ...current, [variables.task.id]: undefined };
+        const remainingItems = block.requiredItems.filter((item) => item.id !== variables.item);
+        return {
+          ...current,
+          [variables.task.id]: remainingItems.length > 0 ? { ...block, requiredItems: remainingItems } : undefined,
+        };
+      });
+      setFocusedChecklistItemByTaskId((current) => ({ ...current, [variables.task.id]: wasCompleted ? undefined : variables.item }));
+      setHandoffReadyByTaskId((current) => {
+        const block = phaseBlockByTaskId[variables.task.id];
+        if (wasCompleted || !block) return { ...current, [variables.task.id]: undefined };
+        return { ...current, [variables.task.id]: block.requiredItems.length === 1 ? true : undefined };
+      });
+      setRecoveredWorkflowByTaskId((current) => {
+        const block = phaseBlockByTaskId[variables.task.id];
+        if (wasCompleted || !block || block.requiredItems.length !== 1 || !nextWorkflow) {
+          return { ...current, [variables.task.id]: undefined };
+        }
+        return { ...current, [variables.task.id]: nextWorkflow };
+      });
+      setHandoffRetryStateByTaskId((current) => ({ ...current, [variables.task.id]: undefined }));
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['activity'] });
     },
   });
 
@@ -582,6 +953,11 @@ export function Tasks() {
                 ? pickReviewerAgent(agents ?? [], task)
                 : null;
             const workflowOutcome = getWorkflowOutcomeSummary(task, workflow);
+            const taskPhaseBlock = phaseBlockByTaskId[task.id];
+            const focusedChecklistItemId = focusedChecklistItemByTaskId[task.id];
+            const handoffReady = handoffReadyByTaskId[task.id] === true;
+            const recoveredWorkflow = recoveredWorkflowByTaskId[task.id];
+            const handoffRetryState = handoffRetryStateByTaskId[task.id];
             const latestActivity = getLatestTaskActivity(activity, task.id);
             const latestActivitySummary = getTaskActivitySummary(latestActivity);
             const taskTimeline = getTaskActivityTimeline(activity, task.id);
@@ -595,21 +971,80 @@ export function Tasks() {
             const phaseOwnerLabel = (blockedPhase?.enforceSeparation || activePhase?.enforceSeparation)
               ? (blockedReviewAgent?.name ?? reviewAgent?.name ?? assignedAgent?.name ?? 'unassigned')
               : (assignedAgent?.name ?? reviewAgent?.name ?? 'unassigned');
+            const currentOrBlockedPhase = activePhase ?? blockedPhase;
+            const reviewPhase = workflow?.phases.find((phase) => phase.enforceSeparation)
+              ?? workflow?.phases.find((phase) => /review/i.test(`${phase.id} ${phase.label}`));
+            const phaseObjectiveLabel = currentOrBlockedPhase?.objective ?? 'No explicit objective';
+            const setupOriginLabels = buildSetupOrigins(workflow, currentOrBlockedPhase);
+            const phasePolicyLines = buildPhasePolicyLines(workflow, currentOrBlockedPhase, blockedReviewAgent ?? reviewAgent);
+            const orchestrationAlerts = buildOrchestrationAlerts(
+              task,
+              workflow,
+              currentOrBlockedPhase,
+              assignedAgent,
+              blockedReviewAgent ?? reviewAgent,
+            );
+            const effectivePhasePolicyLines = taskPhaseBlock
+              ? [
+                  `Server blocked handoff until ${taskPhaseBlock.phaseLabel} required items are complete.`,
+                  ...taskPhaseBlock.requiredItems.map((item) => `Required: ${item.label}`),
+                  ...phasePolicyLines,
+                ]
+              : phasePolicyLines;
+            const effectiveOrchestrationAlerts = taskPhaseBlock
+              ? [{ label: `${taskPhaseBlock.requiredItems.length} required item(s) blocking handoff`, tone: 'red' as const }, ...orchestrationAlerts]
+              : orchestrationAlerts;
+            const agentCapabilityLabels = buildAgentCapabilities(assignedAgent, currentOrBlockedPhase, workflow);
+            const reviewerCapabilityLabels = buildAgentCapabilities(
+              blockedReviewAgent ?? reviewAgent ?? (currentOrBlockedPhase?.enforceSeparation ? assignedAgent : null),
+              reviewPhase ?? currentOrBlockedPhase,
+              workflow,
+            );
             const selectedRunStatusLabel =
               selectedTimelineEntry && timelineDoneByEventId[selectedTimelineEntry.id]
                 ? `exitCode ${String(timelineDoneByEventId[selectedTimelineEntry.id]?.exitCode ?? 'null')}${timelineDoneByEventId[selectedTimelineEntry.id]?.timedOut ? ', timed out' : ''}`
                 : loadingTimelineEventId === selectedTimelineEntry?.id
                   ? 'opening logs'
                   : 'live or not loaded';
+            const inlineChecklistState = getRemainingChecklistState(workflow, currentOrBlockedPhase);
+            const inlineChecklistSuffix = getChecklistActionSuffix(inlineChecklistState);
+            const inlineChecklistTone = getChecklistActionTone(inlineChecklistState);
+            const inlineChecklistStyle =
+              inlineChecklistTone === 'red'
+                ? { background: 'rgba(255,107,107,0.08)', color: 'var(--red)' }
+                : inlineChecklistTone === 'yellow'
+                  ? { background: 'rgba(253,203,110,0.12)', color: 'var(--yellow)' }
+                  : inlineChecklistTone === 'blue'
+                    ? { background: 'rgba(116,185,255,0.12)', color: 'var(--blue)' }
+                    : { background: 'var(--surface2)', color: 'var(--text)' };
+            const completedChecklist = new Set(workflow?.completedChecklist ?? []);
+            const checklistScope = getChecklistScope(workflow, currentOrBlockedPhase);
+            const remainingChecklist = getRemainingChecklistState(workflow, currentOrBlockedPhase);
+            const checklistActionSuffix = getChecklistActionSuffix(remainingChecklist);
+            const checklistActionTone = getChecklistActionTone(remainingChecklist);
+            const checklistItems = checklistScope.map((item) => ({
+              label: item.label,
+              kind: item.kind,
+              done: completedChecklist.has(item.id),
+              highlighted: focusedChecklistItemId === item.id,
+              ariaLabel: `${completedChecklist.has(item.id) ? 'Mark' : 'Complete'} checklist item ${item.label} for task ${task.title}`,
+              onToggle: () => toggleChecklistMutation.mutate({ task, item: item.id }),
+              disabled: toggleChecklistMutation.isPending,
+            }));
             const drawerPhaseActions = [];
             if (workflow && canSendToReview(workflow)) {
               drawerPhaseActions.push({
                 key: 'review',
-                label: reviewAgent ? `Send to ${reviewAgent.name}` : 'Send to Review',
+                label: reviewAgent
+                  ? (checklistActionSuffix ? `Send to ${reviewAgent.name} with ${checklistActionSuffix}` : `Send to ${reviewAgent.name}`)
+                  : (checklistActionSuffix ? `Send to Review with ${checklistActionSuffix}` : 'Send to Review'),
                 ariaLabel: `Send task ${task.title} to review from drawer`,
-                onClick: () => transitionTaskPhase.mutate({ task, mode: 'review' }),
+                onClick: () => {
+                  if (!confirmChecklistHandoff(workflow, 'Send to review')) return;
+                  transitionTaskPhase.mutate({ task, mode: 'review' });
+                },
                 disabled: transitionTaskPhase.isPending,
-                tone: 'yellow' as const,
+                tone: checklistActionSuffix ? checklistActionTone : 'yellow' as const,
               });
             }
             if (workflow && activePhase) {
@@ -645,11 +1080,16 @@ export function Tasks() {
             if (workflow && nextPhase) {
               drawerPhaseActions.push({
                 key: 'advance',
-                label: nextPhase.status === 'in_progress' ? 'Complete Phase' : 'Advance Phase',
+                label: nextPhase.status === 'in_progress'
+                  ? (checklistActionSuffix ? `Complete Phase (${checklistActionSuffix})` : 'Complete Phase')
+                  : (checklistActionSuffix ? `Advance Phase (${checklistActionSuffix})` : 'Advance Phase'),
                 ariaLabel: `Advance task ${task.title} from drawer`,
-                onClick: () => advanceTaskPhase.mutate(task),
+                onClick: () => {
+                  if (!confirmChecklistHandoff(workflow, 'Advance phase')) return;
+                  advanceTaskPhase.mutate(task);
+                },
                 disabled: advanceTaskPhase.isPending,
-                tone: 'neutral' as const,
+                tone: checklistActionSuffix ? checklistActionTone : 'neutral' as const,
               });
             }
             const drawerRows = taskTimeline.map((entry) => {
@@ -709,6 +1149,11 @@ export function Tasks() {
                         </span>
                         <span style={{ fontSize: 10, color: 'var(--text2)' }}>{workflow.phases.length} phases</span>
                         {nextPhase ? <span style={{ fontSize: 10, color: 'var(--text2)' }}>next: {nextPhase.label}</span> : null}
+                        {checklistScope.length ? (
+                          <span style={{ fontSize: 10, color: 'var(--text2)' }}>
+                            phase checklist: {checklistScope.filter((item) => completedChecklist.has(item.id)).length}/{checklistScope.length}
+                          </span>
+                        ) : null}
                         {workflow.separationMode === 'enforced' ? (
                           <span style={{ fontSize: 10, color: 'var(--yellow)' }}>separate review required</span>
                         ) : null}
@@ -1218,15 +1663,21 @@ export function Tasks() {
                             description={task.description ?? 'No description'}
                             workflowName={workflow?.name ?? 'No workflow'}
                             workflowSourceLabel={workflow?.source ?? 'local'}
+                            setupOriginLabels={setupOriginLabels}
                             separationModeLabel={workflow?.separationMode ?? 'n/a'}
+                            alerts={effectiveOrchestrationAlerts}
                             currentPhaseLabel={activePhase?.label ?? blockedPhase?.label ?? 'n/a'}
+                            phaseObjectiveLabel={phaseObjectiveLabel}
+                            phasePolicyLines={effectivePhasePolicyLines}
                             phaseOwnerLabel={phaseOwnerLabel}
                             agentName={assignedAgent?.name ?? 'unassigned'}
+                            agentCapabilityLabels={agentCapabilityLabels}
                             reviewerName={reviewAgent?.name ?? 'n/a'}
+                            reviewerCapabilityLabels={reviewerCapabilityLabels}
                             selectedEventLabel={selectedTimelineEntry ? getTaskTimelineLabel(selectedTimelineEntry) : 'none'}
                             runStatusLabel={selectedRunStatusLabel}
                             phases={workflow?.phases ?? []}
-                            checklist={workflow?.checklist ?? []}
+                            checklistItems={checklistItems}
                             phaseActions={drawerPhaseActions}
                             rows={drawerRows}
                           />
@@ -1267,15 +1718,189 @@ export function Tasks() {
                   ) : null}
                   <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 2 }}>{new Date(task.createdAt).toLocaleString()}</div>
                 </div>
+                {taskPhaseBlock ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,107,107,0.18)',
+                      background: 'rgba(255,107,107,0.08)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--red)' }}>
+                      Required checklist items are blocking {taskPhaseBlock.phaseLabel} handoff.
+                    </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {taskPhaseBlock.requiredItems.map((item) => (
+                          <button
+                            key={`task-block-${task.id}-${item.id}`}
+                            onClick={() => {
+                              setDrawerTimelineTaskIds((current) => ({ ...current, [task.id]: true }));
+                              setFocusedChecklistItemByTaskId((current) => ({ ...current, [task.id]: item.id }));
+                              toggleChecklistMutation.mutate({ task, item: item.id });
+                            }}
+                            aria-label={`Complete required blocker ${item.label} for task ${task.title}`}
+                            disabled={toggleChecklistMutation.isPending}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              border: '1px solid rgba(255,107,107,0.18)',
+                              background: 'rgba(255,107,107,0.12)',
+                              color: 'var(--red)',
+                              fontSize: 10,
+                              fontWeight: 700,
+                              cursor: toggleChecklistMutation.isPending ? 'not-allowed' : 'pointer',
+                              opacity: toggleChecklistMutation.isPending ? 0.6 : 1,
+                            }}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
+                {handoffRetryState ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border:
+                        handoffRetryState.status === 'blocked'
+                          ? '1px solid rgba(255,107,107,0.18)'
+                          : handoffRetryState.status === 'started'
+                            ? '1px solid rgba(0,206,201,0.18)'
+                            : '1px solid rgba(116,185,255,0.18)',
+                      background:
+                        handoffRetryState.status === 'blocked'
+                          ? 'rgba(255,107,107,0.08)'
+                          : handoffRetryState.status === 'started'
+                            ? 'rgba(0,206,201,0.08)'
+                            : 'rgba(116,185,255,0.08)',
+                      color:
+                        handoffRetryState.status === 'blocked'
+                          ? 'var(--red)'
+                          : handoffRetryState.status === 'started'
+                            ? 'var(--green)'
+                            : 'var(--blue)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {handoffRetryState.status === 'blocked'
+                      ? 'Handoff blocked again. Resolve the remaining required checklist items.'
+                      : handoffRetryState.status === 'started'
+                        ? 'Handoff started. Follow the active phase or review run.'
+                        : `Retrying ${handoffRetryState.action === 'review' ? 'review handoff' : 'phase advance'}...`}
+                  </div>
+                ) : null}
+                {handoffReady ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(0,206,201,0.18)',
+                      background: 'rgba(0,206,201,0.08)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--green)' }}>
+                      Required blockers cleared. Retry the handoff when ready.
+                    </div>
+                    <button
+                      onClick={() => setDrawerTimelineTaskIds((current) => ({ ...current, [task.id]: true }))}
+                      aria-label={`Open run drawer recovery for task ${task.title}`}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open Recovery
+                    </button>
+                    {recoveredWorkflow && canSendToReview(recoveredWorkflow) ? (
+                      <button
+                        onClick={() => {
+                          setHandoffRetryStateByTaskId((current) => ({
+                            ...current,
+                            [task.id]: { status: 'starting', action: 'review' },
+                          }));
+                          transitionTaskPhase.mutate({
+                            task: { ...task, metadata: { ...task.metadata, workflow: recoveredWorkflow } },
+                            mode: 'review',
+                          });
+                        }}
+                        aria-label={`Retry handoff to review for task ${task.title}`}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(253,203,110,0.18)',
+                          background: 'rgba(253,203,110,0.12)',
+                          color: 'var(--yellow)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Retry Send to Review
+                      </button>
+                    ) : recoveredWorkflow && getNextPhase(recoveredWorkflow) ? (
+                      <button
+                        onClick={() => {
+                          setHandoffRetryStateByTaskId((current) => ({
+                            ...current,
+                            [task.id]: { status: 'starting', action: 'advance' },
+                          }));
+                          advanceTaskPhase.mutate({
+                            ...task,
+                            metadata: { ...task.metadata, workflow: recoveredWorkflow },
+                          });
+                        }}
+                        aria-label={`Retry phase advance for task ${task.title}`}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(0,206,201,0.18)',
+                          background: 'rgba(0,206,201,0.08)',
+                          color: 'var(--green)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Retry Advance Phase
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   {workflow && canSendToReview(workflow) ? (
                     <button
-                      onClick={() => transitionTaskPhase.mutate({ task, mode: 'review' })}
+                      onClick={() => {
+                        if (!confirmChecklistHandoff(workflow, 'Send to review')) return;
+                        transitionTaskPhase.mutate({ task, mode: 'review' });
+                      }}
                       disabled={transitionTaskPhase.isPending}
                       aria-label={`Send task ${task.title} to review`}
-                      style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'rgba(253,203,110,0.12)', color: 'var(--yellow)', fontSize: 11, fontWeight: 700, cursor: transitionTaskPhase.isPending ? 'not-allowed' : 'pointer', opacity: transitionTaskPhase.isPending ? 0.6 : 1 }}
+                      style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid var(--border)', background: inlineChecklistSuffix ? inlineChecklistStyle.background : 'rgba(253,203,110,0.12)', color: inlineChecklistSuffix ? inlineChecklistStyle.color : 'var(--yellow)', fontSize: 11, fontWeight: 700, cursor: transitionTaskPhase.isPending ? 'not-allowed' : 'pointer', opacity: transitionTaskPhase.isPending ? 0.6 : 1 }}
                     >
-                      {reviewAgent ? `Send to ${reviewAgent.name}` : 'Send to Review'}
+                      {reviewAgent
+                        ? (inlineChecklistSuffix ? `Send to ${reviewAgent.name} (${inlineChecklistSuffix})` : `Send to ${reviewAgent.name}`)
+                        : (inlineChecklistSuffix ? `Send to Review (${inlineChecklistSuffix})` : 'Send to Review')}
                     </button>
                   ) : null}
                   {workflow && activePhase ? (
@@ -1310,12 +1935,17 @@ export function Tasks() {
                   ) : null}
                   {workflow && nextPhase ? (
                     <button
-                      onClick={() => advanceTaskPhase.mutate(task)}
+                      onClick={() => {
+                        if (!confirmChecklistHandoff(workflow, 'Advance phase')) return;
+                        advanceTaskPhase.mutate(task);
+                      }}
                       disabled={advanceTaskPhase.isPending}
                       aria-label={`Advance task ${task.title}`}
-                      style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 11, fontWeight: 600, cursor: advanceTaskPhase.isPending ? 'not-allowed' : 'pointer', opacity: advanceTaskPhase.isPending ? 0.6 : 1 }}
+                      style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid var(--border)', background: inlineChecklistSuffix ? inlineChecklistStyle.background : 'var(--surface2)', color: inlineChecklistSuffix ? inlineChecklistStyle.color : 'var(--text)', fontSize: 11, fontWeight: 600, cursor: advanceTaskPhase.isPending ? 'not-allowed' : 'pointer', opacity: advanceTaskPhase.isPending ? 0.6 : 1 }}
                     >
-                      {nextPhase.status === 'in_progress' ? 'Complete Phase' : 'Advance Phase'}
+                      {nextPhase.status === 'in_progress'
+                        ? (inlineChecklistSuffix ? `Complete Phase (${inlineChecklistSuffix})` : 'Complete Phase')
+                        : (inlineChecklistSuffix ? `Advance Phase (${inlineChecklistSuffix})` : 'Advance Phase')}
                     </button>
                   ) : null}
                   <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 10, fontWeight: 600, background: s.bg, color: s.color }}>{task.status}</span>

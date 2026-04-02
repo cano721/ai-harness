@@ -89,6 +89,12 @@ export interface TaskWorkflowPhase {
   status?: 'pending' | 'in_progress' | 'done' | 'blocked';
 }
 
+export interface TaskChecklistEntry {
+  id: string;
+  label: string;
+  kind: 'required' | 'advisory' | 'evidence';
+}
+
 export interface TaskWorkflowMetadata {
   id: string;
   name: string;
@@ -97,6 +103,8 @@ export interface TaskWorkflowMetadata {
   separationMode: 'advisory' | 'enforced';
   phases: TaskWorkflowPhase[];
   checklist: string[];
+  phaseChecklistMap?: Record<string, Array<string | TaskChecklistEntry>>;
+  completedChecklist?: string[];
   lastCompletedPhaseId?: string;
   lastCompletedAgentId?: string;
   lastBlockedReason?: string;

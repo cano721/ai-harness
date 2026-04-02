@@ -264,6 +264,94 @@ describe('Tasks API', () => {
     expect(json.data.status).toBe('done');
   });
 
+  it('PATCH /tasks/:id logs checklist toggle activity', async () => {
+    const res = await patch(`/tasks/${taskId}`, {
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          phases: [
+            { id: 'context', label: 'Context', status: 'in_progress' },
+            { id: 'review', label: 'Review', status: 'pending', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+          completedChecklist: ['Keep review separate'],
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+
+    const activityRes = await get(`/activity?projectId=${projectId}&eventType=task.checklist.toggled&limit=10`);
+    const activityJson = await activityRes.json() as any;
+    expect(activityJson.ok).toBe(true);
+    expect(activityJson.data.length).toBeGreaterThan(0);
+    expect(activityJson.data[0].detail.taskId).toBe(taskId);
+    expect(activityJson.data[0].detail.checklistItem).toBe('Keep review separate');
+    expect(activityJson.data[0].detail.state).toBe('completed');
+  });
+
+  it('PATCH /tasks/:id blocks phase handoff when required checklist items are still open', async () => {
+    const res = await patch(`/tasks/${taskId}`, {
+      status: 'in_progress',
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          phases: [
+            { id: 'context', label: 'Context', status: 'done' },
+            { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+          phaseChecklistMap: {
+            context: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+            review: [{ id: 'review-required', label: 'Keep review separate', kind: 'required' }],
+          },
+          completedChecklist: [],
+        },
+      },
+    });
+
+    expect(res.status).toBe(409);
+    const json = await res.json() as any;
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('Complete required checklist items before leaving Context');
+    expect(json.data.requiredItems[0].label).toBe('Read context map');
+  });
+
+  it('PATCH /tasks/:id allows phase handoff when only evidence checklist items remain open', async () => {
+    const res = await patch(`/tasks/${taskId}`, {
+      status: 'in_progress',
+      metadata: {
+        workflow: {
+          id: 'implement-feature',
+          name: 'Implement Feature',
+          source: 'gear',
+          separationMode: 'enforced',
+          phases: [
+            { id: 'context', label: 'Context', status: 'done' },
+            { id: 'review', label: 'Review', status: 'in_progress', enforceSeparation: true },
+          ],
+          checklist: ['Keep review separate'],
+          phaseChecklistMap: {
+            context: [{ id: 'context-evidence', label: 'Capture validation note', kind: 'evidence' }],
+            review: [{ id: 'review-required', label: 'Keep review separate', kind: 'required' }],
+          },
+          completedChecklist: [],
+        },
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as any;
+    expect(json.ok).toBe(true);
+    expect(json.data.metadata.workflow.phases[0].status).toBe('done');
+    expect(json.data.metadata.workflow.phases[1].status).toBe('in_progress');
+  });
+
   it('GET /tasks/:id/runs returns run history', async () => {
     const res = await get(`/tasks/${taskId}/runs`);
     const json = await res.json() as any;

@@ -246,6 +246,250 @@ describe('Tasks page workflow task model', () => {
     });
   });
 
+  it('toggles workflow checklist progress from the run drawer', async () => {
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path === '/tasks') {
+        return [
+          {
+            id: 'task-6',
+            projectId: 'project-1',
+            agentId: 'agent-dev',
+            title: 'Implement feature: checklist control',
+            status: 'in_progress',
+            createdAt: '2026-04-02T00:00:00.000Z',
+            updatedAt: '2026-04-02T00:00:00.000Z',
+            description: 'Use the workflow checklist from the drawer.',
+            metadata: {
+              workflow: {
+                id: 'implement-feature',
+                name: 'Implement Feature',
+                source: 'gear',
+                separationMode: 'enforced',
+                phases: [
+                  { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'in_progress' },
+                  { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'pending', enforceSeparation: true },
+                ],
+                checklist: ['Add regression coverage'],
+              },
+            },
+          },
+        ];
+      }
+
+      if (path === '/projects') {
+        return [{ id: 'project-1', name: 'Control Plane Test' }];
+      }
+
+      if (path === '/agents') {
+        return [
+          { id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'idle' },
+          { id: 'agent-review', projectId: 'project-1', name: 'reviewer', adapterType: 'claude_local', status: 'idle' },
+        ];
+      }
+
+      if (path === '/activity?limit=100') {
+        return [
+          {
+            id: 'activity-task-6-started',
+            projectId: 'project-1',
+            eventType: 'task.started',
+            createdAt: '2026-04-02T00:01:00.000Z',
+            detail: {
+              taskId: 'task-6',
+              runId: 'run-task-6',
+              workflowPhase: {
+                from: 'Implement',
+                to: 'Implement',
+                outcome: 'advanced',
+              },
+            },
+          },
+          {
+            id: 'activity-task-6-checklist',
+            projectId: 'project-1',
+            eventType: 'task.checklist.toggled',
+            createdAt: '2026-04-02T00:02:00.000Z',
+            detail: {
+              taskId: 'task-6',
+              checklistItem: 'Add regression coverage',
+              checklistKind: 'evidence',
+              state: 'completed',
+              workflowPhase: {
+                from: 'Implement',
+                to: 'Implement',
+                outcome: 'completed',
+              },
+            },
+          },
+        ];
+      }
+
+      throw new Error(`Unhandled GET ${path}`);
+    });
+
+    vi.mocked(api.post).mockResolvedValue({ id: 'task-6' });
+    vi.mocked(api.patch).mockResolvedValue(undefined);
+
+    renderTasks();
+
+    expect(await screen.findByText('phase checklist: 0/1')).toBeTruthy();
+    expect(screen.getByText('checked Add regression coverage (evidence)')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open run drawer for task Implement feature: checklist control' }));
+    await screen.findByText('Run Timeline Drawer');
+    expect(screen.getByText('1 required checklist item(s) open')).toBeTruthy();
+    expect(screen.getByText(/Complete 1 required checklist item\(s\) before phase handoff\./)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Advance task Implement feature: checklist control from drawer' }).textContent).toContain('1 required open');
+    fireEvent.click(screen.getByRole('button', { name: 'Complete checklist item Add regression coverage for task Implement feature: checklist control' }));
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith('/tasks/task-6', {
+        metadata: {
+          workflow: {
+            id: 'implement-feature',
+            name: 'Implement Feature',
+            source: 'gear',
+            separationMode: 'enforced',
+            phases: [
+              { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'in_progress' },
+              { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'pending', enforceSeparation: true },
+            ],
+            checklist: ['Add regression coverage'],
+            completedChecklist: ['Add regression coverage'],
+          },
+        },
+      });
+    });
+  });
+
+  it('asks for confirmation before advancing with checklist items still open', async () => {
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path === '/tasks') {
+        return [
+          {
+            id: 'task-7',
+            projectId: 'project-1',
+            agentId: 'agent-dev',
+            title: 'Implement feature: confirm handoff',
+            status: 'in_progress',
+            createdAt: '2026-04-02T00:00:00.000Z',
+            updatedAt: '2026-04-02T00:00:00.000Z',
+            metadata: {
+              workflow: {
+                id: 'implement-feature',
+                name: 'Implement Feature',
+                source: 'gear',
+                separationMode: 'enforced',
+                phases: [
+                  { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'in_progress' },
+                  { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'pending', enforceSeparation: true },
+                ],
+                checklist: ['Add regression coverage'],
+              },
+            },
+          },
+        ];
+      }
+      if (path === '/projects') {
+        return [{ id: 'project-1', name: 'Control Plane Test' }];
+      }
+      if (path === '/agents') {
+        return [{ id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'idle' }];
+      }
+      if (path === '/activity?limit=100') {
+        return [];
+      }
+      throw new Error(`Unhandled GET ${path}`);
+    });
+
+    vi.mocked(api.post).mockResolvedValue({ id: 'task-7' });
+    vi.mocked(api.patch).mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    renderTasks();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Advance task Implement feature: confirm handoff' }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Advance phase before leaving 1 checklist item(s) open?'),
+    );
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Required:\n- Add regression coverage'),
+    );
+    expect(api.patch).not.toHaveBeenCalled();
+  });
+
+  it('shows required handoff blockers from the server when phase transition is rejected', async () => {
+    vi.mocked(api.get).mockImplementation(async (path: string) => {
+      if (path === '/tasks') {
+        return [
+          {
+            id: 'task-8',
+            projectId: 'project-1',
+            agentId: 'agent-dev',
+            title: 'Implement feature: server handoff blocker',
+            status: 'in_progress',
+            createdAt: '2026-04-02T00:00:00.000Z',
+            updatedAt: '2026-04-02T00:00:00.000Z',
+            metadata: {
+              workflow: {
+                id: 'implement-feature',
+                name: 'Implement Feature',
+                source: 'gear',
+                separationMode: 'enforced',
+                phases: [
+                  { id: 'implement', label: 'Implement', objective: 'Ship the smallest coherent slice.', status: 'in_progress' },
+                  { id: 'review', label: 'Review', objective: 'Request a separate review pass.', status: 'pending', enforceSeparation: true },
+                ],
+                checklist: ['Read context map'],
+                phaseChecklistMap: {
+                  implement: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+                },
+                completedChecklist: [],
+              },
+            },
+          },
+        ];
+      }
+      if (path === '/projects') {
+        return [{ id: 'project-1', name: 'Control Plane Test' }];
+      }
+      if (path === '/agents') {
+        return [{ id: 'agent-dev', projectId: 'project-1', name: 'developer', adapterType: 'codex_local', status: 'idle' }];
+      }
+      if (path === '/activity?limit=100') {
+        return [];
+      }
+      throw new Error(`Unhandled GET ${path}`);
+    });
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(api.post).mockResolvedValue({ id: 'task-8' });
+    vi.mocked(api.patch)
+      .mockRejectedValueOnce({
+        status: 409,
+        body: {
+          error: 'Complete required checklist items before leaving Implement: Read context map',
+          data: {
+            phaseId: 'implement',
+            phaseLabel: 'Implement',
+            requiredItems: [{ id: 'context-required', label: 'Read context map', kind: 'required' }],
+          },
+        },
+      })
+      .mockResolvedValue(undefined);
+
+    renderTasks();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Advance task Implement feature: server handoff blocker' }));
+
+    expect(await screen.findByText('Required checklist items are blocking Implement handoff.')).toBeTruthy();
+    expect(await screen.findByText('Run Timeline Drawer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Complete required blocker Read context map for task Implement feature: server handoff blocker' }));
+    expect(await screen.findByText('Required blockers cleared. Retry the handoff when ready.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry handoff to review for task Implement feature: server handoff blocker' }));
+    expect(await screen.findByText('Handoff started. Follow the active phase or review run.')).toBeTruthy();
+  });
+
   it('blocks and resumes the active workflow phase', async () => {
     vi.mocked(api.get).mockImplementation(async (path: string) => {
       if (path === '/tasks') {

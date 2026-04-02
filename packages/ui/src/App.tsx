@@ -1,19 +1,59 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar.js';
-import { Dashboard } from './pages/Dashboard.js';
-import { Settings } from './pages/Settings.js';
-import { Projects } from './pages/Projects.js';
-import { ProjectDetail } from './pages/ProjectDetail.js';
-import { Agents } from './pages/Agents.js';
-import { AgentDetail } from './pages/AgentDetail.js';
-import { Tasks } from './pages/Tasks.js';
-import { Conventions } from './pages/Conventions.js';
-import { Security } from './pages/Security.js';
-import { Activity } from './pages/Activity.js';
-import { Costs } from './pages/Costs.js';
-import { OrgChart } from './pages/OrgChart.js';
-import { Metrics } from './pages/Metrics.js';
+
+const Dashboard = lazy(async () => {
+  const module = await import('./pages/Dashboard.js');
+  return { default: module.Dashboard };
+});
+const Settings = lazy(async () => {
+  const module = await import('./pages/Settings.js');
+  return { default: module.Settings };
+});
+const Projects = lazy(async () => {
+  const module = await import('./pages/Projects.js');
+  return { default: module.Projects };
+});
+const ProjectDetail = lazy(async () => {
+  const module = await import('./pages/ProjectDetail.js');
+  return { default: module.ProjectDetail };
+});
+const Agents = lazy(async () => {
+  const module = await import('./pages/Agents.js');
+  return { default: module.Agents };
+});
+const AgentDetail = lazy(async () => {
+  const module = await import('./pages/AgentDetail.js');
+  return { default: module.AgentDetail };
+});
+const Tasks = lazy(async () => {
+  const module = await import('./pages/Tasks.js');
+  return { default: module.Tasks };
+});
+const Conventions = lazy(async () => {
+  const module = await import('./pages/Conventions.js');
+  return { default: module.Conventions };
+});
+const Security = lazy(async () => {
+  const module = await import('./pages/Security.js');
+  return { default: module.Security };
+});
+const Activity = lazy(async () => {
+  const module = await import('./pages/Activity.js');
+  return { default: module.Activity };
+});
+const Costs = lazy(async () => {
+  const module = await import('./pages/Costs.js');
+  return { default: module.Costs };
+});
+const OrgChart = lazy(async () => {
+  const module = await import('./pages/OrgChart.js');
+  return { default: module.OrgChart };
+});
+const Metrics = lazy(async () => {
+  const module = await import('./pages/Metrics.js');
+  return { default: module.Metrics };
+});
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -32,21 +72,23 @@ export default function App() {
             <strong>Agent control plane for Guard, Guide, Gear</strong>
           </div>
         </div>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/projects" element={<Projects />} />
-          <Route path="/projects/:id" element={<ProjectDetail />} />
-          <Route path="/agents" element={<Agents />} />
-          <Route path="/agents/:id" element={<AgentDetail />} />
-          <Route path="/tasks" element={<Tasks />} />
-          <Route path="/conventions" element={<Conventions />} />
-          <Route path="/security" element={<Security />} />
-          <Route path="/activity" element={<Activity />} />
-          <Route path="/costs" element={<Costs />} />
-          <Route path="/orgchart" element={<OrgChart />} />
-          <Route path="/metrics" element={<Metrics />} />
-        </Routes>
+        <Suspense fallback={<div style={{ color: 'var(--text2)', padding: 24 }}>Loading page...</div>}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/agents/:id" element={<AgentDetail />} />
+            <Route path="/tasks" element={<Tasks />} />
+            <Route path="/conventions" element={<Conventions />} />
+            <Route path="/security" element={<Security />} />
+            <Route path="/activity" element={<Activity />} />
+            <Route path="/costs" element={<Costs />} />
+            <Route path="/orgchart" element={<OrgChart />} />
+            <Route path="/metrics" element={<Metrics />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
