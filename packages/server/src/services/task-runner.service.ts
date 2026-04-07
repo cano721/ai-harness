@@ -5,12 +5,14 @@ import { eq, sql } from 'drizzle-orm';
 import { getAdapter } from '../adapters/index.js';
 import { DEFAULT_PORT, DEFAULT_HOST } from '@ddalkak/shared';
 import { loadSkills } from './skill-loader.service.js';
+import type { ExecutionEvidence } from './execution-evidence.service.js';
 
 interface RunTaskOptions {
   taskId: string;
   agentId: string;
   timeoutSec?: number;
   maxTurns?: number;
+  executionEvidence?: ExecutionEvidence;
 }
 
 export interface TaskLogEvent {
@@ -157,7 +159,6 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
   const db = await createDb();
   const runId = randomUUID();
 
-  // Get task, agent, project
   const [task] = await db.select().from(tasks).where(eq(tasks.id, opts.taskId));
   const [agent] = await db.select().from(agents).where(eq(agents.id, opts.agentId));
   if (!task || !agent) throw new Error('Task or agent not found');
@@ -171,34 +172,33 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
   const detected = await adapter.detect();
   if (!detected.installed) throw new Error(`${agent.adapterType} is not installed`);
 
-  // Update statuses
   await db.update(tasks).set({ status: 'in_progress', agentId: opts.agentId, updatedAt: new Date() }).where(eq(tasks.id, opts.taskId));
   await db.update(agents).set({ status: 'running', lastHeartbeat: new Date() }).where(eq(agents.id, opts.agentId));
 
-  // Create task run record
   const [run] = await db.insert(taskRuns).values({
     taskId: opts.taskId,
     agentId: opts.agentId,
     runId,
   }).returning();
 
-  // Log activity
   await db.insert(activityLog).values({
     projectId: project.id,
     agentId: agent.id,
     eventType: 'task.started',
-    detail: { taskId: task.id, runId, title: task.title },
+    detail: {
+      taskId: task.id,
+      runId,
+      title: task.title,
+      execution: opts.executionEvidence,
+    },
   });
 
-  // Collect logs
   const logs: string[] = [];
   activeLogs.set(runId, logs);
 
-  // Build env
   const cwd = project.path ?? process.cwd();
-
   const skills = await loadSkills(cwd);
-  const skillNames = skills.map(s => s.name).join(',');
+  const skillNames = skills.map((s) => s.name).join(',');
 
   const env: Record<string, string> = {
     DDALKAK_AGENT_ID: agent.id,
@@ -225,7 +225,6 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
       ].filter(Boolean).join('\n\n')
     : undefined;
 
-  // Execute
   const result = await adapter.execute({
     runId,
     prompt: [task.title, task.description, workflowPrompt].filter(Boolean).join('\n\n'),
@@ -239,7 +238,6 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     },
   });
 
-  // Update records
   await db.update(taskRuns).set({
     endedAt: new Date(),
     exitCode: result.exitCode,
@@ -271,10 +269,10 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       workflowPhase: transition.phaseTransition,
+      execution: opts.executionEvidence,
     },
   });
 
-  // Upsert cost daily — accumulate same date+agent+project
   if (result.costUsd != null || result.usage != null) {
     const today = new Date().toISOString().slice(0, 10);
     await db.insert(costDaily).values({
@@ -294,10 +292,8 @@ export async function runTask(opts: RunTaskOptions): Promise<{ runId: string; ex
     });
   }
 
-  // Emit done event for SSE subscribers
   taskEvents.emit('done', { runId, exitCode: result.exitCode, timedOut: result.timedOut } satisfies TaskDoneEvent);
 
-  // Cleanup logs after 10 minutes
   setTimeout(() => activeLogs.delete(runId), 600_000);
 
   return { runId, exitCode: result.exitCode };

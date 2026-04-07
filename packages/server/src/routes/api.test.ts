@@ -701,6 +701,208 @@ describe('Project Setup API', () => {
   });
 });
 
+describe('Project Goal Automation API', () => {
+  let projectId: string;
+  let developerAgentId: string;
+  let reviewerAgentId: string;
+  let verifierAgentId: string;
+  let rootGoalId: string;
+  let middleGoalId: string;
+  let goalId: string;
+  let foreignProjectId: string;
+  let foreignGoalId: string;
+
+  it('setup: create project and automation agents', async () => {
+    let res = await post('/projects', { name: 'goal-automation-project' });
+    projectId = ((await res.json()) as any).data.id;
+
+    res = await post('/agents', { projectId, name: 'Developer', adapterType: 'codex_local' });
+    developerAgentId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId, name: 'Reviewer', adapterType: 'claude_local' });
+    reviewerAgentId = ((await res.json()) as any).data.id;
+    res = await post('/agents', { projectId, name: 'Verifier', adapterType: 'claude_local' });
+    verifierAgentId = ((await res.json()) as any).data.id;
+  });
+
+  it('POST /projects/:id/goals creates goal tree entries', async () => {
+    let res = await post(`/projects/${projectId}/goals`, {
+      title: 'AI Harness ddalkak-platform branch goal',
+      description: 'Top-level delivery goal',
+      status: 'active',
+    });
+    rootGoalId = ((await res.json()) as any).data.id;
+
+    res = await post(`/projects/${projectId}/goals`, {
+      title: 'Execution control plane readiness',
+      description: 'Stabilize intermediate delivery milestones.',
+      parentGoalId: rootGoalId,
+      status: 'planned',
+    });
+    middleGoalId = ((await res.json()) as any).data.id;
+
+    res = await post(`/projects/${projectId}/goals`, {
+      title: 'Production-grade execution v2',
+      description: 'Ship dispatcher, queue, and worker registry maturity.',
+      parentGoalId: middleGoalId,
+      status: 'planned',
+    });
+    const json = await res.json() as any;
+    expect(res.status).toBe(201);
+    goalId = json.data.id;
+
+    const goalsRes = await get(`/projects/${projectId}/goals`);
+    const goalsJson = await goalsRes.json() as any;
+    expect(goalsJson.data.length).toBe(3);
+  });
+
+  it('POST /projects/:id/goals rejects parentGoalId from a different project', async () => {
+    let res = await post('/projects', { name: 'goal-parent-validation-project' });
+    foreignProjectId = ((await res.json()) as any).data.id;
+
+    res = await post(`/projects/${foreignProjectId}/goals`, {
+      title: 'Foreign goal root',
+      status: 'planned',
+    });
+    foreignGoalId = ((await res.json()) as any).data.id;
+
+    res = await post(`/projects/${projectId}/goals`, {
+      title: 'Invalid cross-project child',
+      parentGoalId: foreignGoalId,
+      status: 'planned',
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(400);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('same project');
+  });
+
+  it('PATCH /projects/:id/goals/:goalId rejects parentGoalId from a different project', async () => {
+    const res = await patch(`/projects/${projectId}/goals/${goalId}`, {
+      parentGoalId: foreignGoalId,
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(400);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('same project');
+  });
+
+  it('PATCH /projects/:id/goals/:goalId rejects descendant parentGoalId cycles', async () => {
+    const res = await patch(`/projects/${projectId}/goals/${rootGoalId}`, {
+      parentGoalId: goalId,
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(400);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('descendant');
+
+    const goalsRes = await get(`/projects/${projectId}/goals`);
+    const goalsJson = await goalsRes.json() as any;
+    expect(goalsJson.data.find((goal: any) => goal.id === rootGoalId).parentGoalId).toBeNull();
+  });
+
+  it('PUT /projects/:id/automation attaches project agents to the automation routine', async () => {
+    const res = await fetch(`${base}/projects/${projectId}/automation`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'AI Harness Goal Automation',
+        description: 'Keep goals moving across implementation, review, and verification.',
+        status: 'paused',
+        heartbeatMinutes: 2,
+        developerAgentId,
+        reviewerAgentId,
+        verifierAgentId,
+      }),
+    });
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.developerAgentId).toBe(developerAgentId);
+    expect(json.data.reviewerAgentId).toBe(reviewerAgentId);
+    expect(json.data.verifierAgentId).toBe(verifierAgentId);
+    expect(json.data.status).toBe('paused');
+  });
+
+  it('POST /projects/:id/automation/run returns 409 when routine is paused', async () => {
+    const res = await post(`/projects/${projectId}/automation/run`, {});
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(409);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('paused');
+  });
+
+  it('POST /projects/:id/automation/run creates the implementation task first when routine is active', async () => {
+    const activateRes = await fetch(`${base}/projects/${projectId}/automation`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'AI Harness Goal Automation',
+        description: 'Keep goals moving across implementation, review, and verification.',
+        status: 'active',
+        heartbeatMinutes: 2,
+        developerAgentId,
+        reviewerAgentId,
+        verifierAgentId,
+      }),
+    });
+    expect(activateRes.status).toBe(200);
+
+    const res = await post(`/projects/${projectId}/automation/run`, {});
+    const json = await res.json() as any;
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.createdTasks).toHaveLength(1);
+    expect(json.data.createdTasks[0].stage).toBe('implement');
+
+    const tasksRes = await get(`/tasks?projectId=${projectId}`);
+    const tasksJson = await tasksRes.json() as any;
+    expect(tasksJson.data[0].metadata.goalAutomation.goalId).toBe(goalId);
+    expect(tasksJson.data[0].metadata.goalAutomation.stage).toBe('implement');
+  });
+
+  it('automation advances to review, then verify, then marks the goal achieved', async () => {
+    let tasksRes = await get(`/tasks?projectId=${projectId}`);
+    let tasksJson = await tasksRes.json() as any;
+    const implementTask = tasksJson.data.find((task: any) => task.metadata.goalAutomation.stage === 'implement');
+    await patch(`/tasks/${implementTask.id}`, { status: 'done' });
+
+    let runRes = await post(`/projects/${projectId}/automation/run`, {});
+    let runJson = await runRes.json() as any;
+    expect(runJson.data.createdTasks[0].stage).toBe('review');
+
+    tasksRes = await get(`/tasks?projectId=${projectId}`);
+    tasksJson = await tasksRes.json() as any;
+    const reviewTask = tasksJson.data.find((task: any) => task.metadata.goalAutomation.stage === 'review');
+    await patch(`/tasks/${reviewTask.id}`, { status: 'done' });
+
+    runRes = await post(`/projects/${projectId}/automation/run`, {});
+    runJson = await runRes.json() as any;
+    expect(runJson.data.createdTasks[0].stage).toBe('verify');
+
+    tasksRes = await get(`/tasks?projectId=${projectId}`);
+    tasksJson = await tasksRes.json() as any;
+    const verifyTask = tasksJson.data.find((task: any) => task.metadata.goalAutomation.stage === 'verify');
+    await patch(`/tasks/${verifyTask.id}`, { status: 'done' });
+
+    runRes = await post(`/projects/${projectId}/automation/run`, {});
+    runJson = await runRes.json() as any;
+    expect(runJson.data.createdTasks).toHaveLength(0);
+    expect(runJson.data.updatedGoals.some((goal: any) => goal.goalId === goalId && goal.status === 'achieved')).toBe(true);
+
+    const goalsRes = await get(`/projects/${projectId}/goals`);
+    const goalsJson = await goalsRes.json() as any;
+    expect(goalsJson.data.find((goal: any) => goal.id === goalId).status).toBe('achieved');
+    expect(goalsJson.data.find((goal: any) => goal.id === middleGoalId).status).toBe('achieved');
+    expect(goalsJson.data.find((goal: any) => goal.id === rootGoalId).status).toBe('achieved');
+  });
+});
+
 describe('Task Atomic Checkout', () => {
   let projectId: string;
   let agentId: string;

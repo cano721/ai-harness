@@ -15,6 +15,13 @@
       "when": 1775118600000,
       "tag": "0001_task_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775203200000,
+      "tag": "0002_goal_automation",
+      "breakpoints": true
     }
   ]
 }

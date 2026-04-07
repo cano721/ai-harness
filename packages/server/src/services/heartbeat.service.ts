@@ -1,9 +1,11 @@
 import { createDb, agents, activityLog } from '@ddalkak/db';
 import { eq, and, lt, isNotNull } from 'drizzle-orm';
 import { HEARTBEAT_INTERVAL_MS, HEARTBEAT_TIMEOUT_MS } from '@ddalkak/shared';
+import { runActiveGoalAutomations } from './goal-automation.service.js';
 
 export class HeartbeatService {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private automationRunning = false;
 
   start(intervalMs = HEARTBEAT_INTERVAL_MS): void {
     if (this.timer) return;
@@ -48,6 +50,14 @@ export class HeartbeatService {
           timeoutMs: HEARTBEAT_TIMEOUT_MS,
         },
       });
+    }
+
+    if (this.automationRunning) return;
+    this.automationRunning = true;
+    try {
+      await runActiveGoalAutomations();
+    } finally {
+      this.automationRunning = false;
     }
   }
 }

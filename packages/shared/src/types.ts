@@ -112,6 +112,19 @@ export interface TaskWorkflowMetadata {
 
 export interface TaskMetadata {
   workflow?: TaskWorkflowMetadata;
+  goalAutomation?: TaskGoalAutomationMetadata;
+}
+
+export type GoalStatus = 'planned' | 'active' | 'achieved' | 'blocked';
+export type ProjectAutomationRoutineStatus = 'active' | 'paused';
+export type ProjectAutomationTaskStage = 'implement' | 'review' | 'verify';
+
+export interface TaskGoalAutomationMetadata {
+  goalId: string;
+  goalTitle: string;
+  stage: ProjectAutomationTaskStage;
+  routineId?: string;
+  createdBy: 'goal-automation';
 }
 
 export interface TaskRun {
@@ -305,6 +318,56 @@ export interface ProjectSetupApplyResult {
     detail: string;
     path?: string;
   }>;
+}
+
+// --- Goals / Automation ---
+export interface Goal {
+  id: string;
+  projectId: string;
+  parentGoalId?: string | null;
+  title: string;
+  description?: string | null;
+  status: GoalStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProjectAutomationRoutine {
+  id: string;
+  projectId: string;
+  name: string;
+  description?: string | null;
+  status: ProjectAutomationRoutineStatus;
+  heartbeatMinutes: number;
+  developerAgentId?: string | null;
+  reviewerAgentId?: string | null;
+  verifierAgentId?: string | null;
+  lastEvaluatedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProjectAutomationRunResult {
+  projectId: string;
+  routineId?: string | null;
+  evaluatedAt: string;
+  createdTasks: Array<{
+    taskId: string;
+    goalId: string;
+    goalTitle: string;
+    stage: ProjectAutomationTaskStage;
+    agentId?: string | null;
+    title: string;
+  }>;
+  updatedGoals: Array<{
+    goalId: string;
+    status: GoalStatus;
+  }>;
+  skippedGoals: Array<{
+    goalId: string;
+    reason: string;
+  }>;
+  summary: string;
 }
 
 // --- API ---

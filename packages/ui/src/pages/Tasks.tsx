@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
+import { parseExecutionEvidence } from './taskExecutionEvidence.js';
 
 interface Task {
   id: string;
@@ -431,15 +432,77 @@ function getLatestTaskActivity(events: ActivityEntry[], taskId: string) {
   return events.find((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'));
 }
 
+function getExecutionSnapshotKey(entry: ActivityEntry) {
+  const execution = parseExecutionEvidence(entry.detail);
+  if (!execution) return null;
+  return `${execution.queueState}/${execution.workerStatus}/${execution.workerHealth}/${execution.workerCapacityLabel}`;
+}
+
+function hasExecutionEvidence(entry: ActivityEntry) {
+  return parseExecutionEvidence(entry.detail) !== null;
+}
+
+function getPreferredTimelineEntry(entries: ActivityEntry[]) {
+  return entries.find((entry) => hasExecutionEvidence(entry)) ?? entries[0];
+}
+
 function getTaskActivityTimeline(events: ActivityEntry[], taskId: string) {
-  return events
-    .filter((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'))
-    .slice(0, 3);
+  const taskEvents = events.filter((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'));
+  if (taskEvents.length <= 3) return taskEvents;
+
+  const selected: ActivityEntry[] = [];
+  const selectedIds = new Set<string>();
+  const remember = (entry: ActivityEntry) => {
+    if (selected.length >= 3 || selectedIds.has(entry.id)) return;
+    selected.push(entry);
+    selectedIds.add(entry.id);
+  };
+
+  const latestEvent = taskEvents[0];
+  if (latestEvent) remember(latestEvent);
+
+  for (const entry of taskEvents) {
+    if (entry.eventType === 'task.worker.heartbeat') continue;
+    if (!hasExecutionEvidence(entry)) continue;
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  for (const entry of taskEvents) {
+    if (entry.eventType === 'task.worker.heartbeat') continue;
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  const seenSnapshots = new Set<string>();
+  for (const entry of selected) {
+    const snapshot = getExecutionSnapshotKey(entry);
+    if (snapshot) seenSnapshots.add(snapshot);
+  }
+
+  for (const entry of taskEvents) {
+    if (entry.eventType !== 'task.worker.heartbeat') continue;
+    if (selectedIds.has(entry.id)) continue;
+    const snapshot = getExecutionSnapshotKey(entry);
+    if (snapshot && seenSnapshots.has(snapshot)) continue;
+    remember(entry);
+    if (snapshot) seenSnapshots.add(snapshot);
+    if (selected.length >= 3) return selected;
+  }
+
+  for (const entry of taskEvents) {
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  return selected;
 }
 
 function getTaskActivitySummary(entry?: ActivityEntry) {
   if (!entry) return null;
 
+  const execution = parseExecutionEvidence(entry.detail);
+  const executionSuffix = execution ? ` (${execution.summaryLabel})` : '';
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -456,22 +519,64 @@ function getTaskActivitySummary(entry?: ActivityEntry) {
 
   if (entry.eventType === 'task.started') {
     return {
-      text: isReviewRun ? 'Review run started.' : 'Run started.',
+      text: `${isReviewRun ? 'Review run started.' : 'Run started.'}${executionSuffix}`,
       color: 'var(--blue)',
     };
   }
 
   if (entry.eventType === 'task.completed') {
     return {
-      text: isReviewRun ? 'Last review passed.' : 'Last run passed.',
+      text: `${isReviewRun ? 'Last review passed.' : 'Last run passed.'}${executionSuffix}`,
       color: 'var(--green)',
     };
   }
 
   if (entry.eventType === 'task.failed') {
     return {
-      text: isReviewRun ? 'Last review failed.' : 'Last run failed.',
+      text: `${isReviewRun ? 'Last review failed.' : 'Last run failed.'}${executionSuffix}`,
       color: 'var(--red)',
+    };
+  }
+
+  if (entry.eventType === 'task.dispatch.accepted') {
+    return {
+      text: `Dispatch accepted.${executionSuffix}`,
+      color: 'var(--blue)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.leased') {
+    return {
+      text: `Worker lease acquired.${executionSuffix}`,
+      color: 'var(--blue)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.completed') {
+    return {
+      text: `Worker completed queued run.${executionSuffix}`,
+      color: 'var(--green)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.failed' || entry.eventType === 'task.worker.cancelled') {
+    return {
+      text: `Worker run ended with ${entry.eventType.endsWith('cancelled') ? 'cancellation' : 'failure'}.${executionSuffix}`,
+      color: 'var(--red)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.capacity_blocked') {
+    return {
+      text: `Worker capacity blocked retry.${executionSuffix}`,
+      color: 'var(--yellow)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.heartbeat') {
+    return {
+      text: `Worker heartbeat refreshed.${executionSuffix}`,
+      color: 'var(--blue)',
     };
   }
 
@@ -488,6 +593,7 @@ function getTaskActivitySummary(entry?: ActivityEntry) {
 }
 
 function getTaskTimelineLabel(entry: ActivityEntry) {
+  const execution = parseExecutionEvidence(entry.detail);
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -516,6 +622,16 @@ function getTaskTimelineLabel(entry: ActivityEntry) {
     return checklistState === 'reopened' ? `reopened ${checklistItem}${checklistSuffix}` : `checked ${checklistItem}${checklistSuffix}`;
   }
 
+  if (entry.eventType === 'task.dispatch.accepted') {
+    return `dispatch ${execution?.queueState ?? 'accepted'}`;
+  }
+  if (entry.eventType === 'task.worker.leased') return 'worker leased';
+  if (entry.eventType === 'task.worker.completed') return 'worker completed';
+  if (entry.eventType === 'task.worker.failed') return 'worker failed';
+  if (entry.eventType === 'task.worker.cancelled') return 'worker cancelled';
+  if (entry.eventType === 'task.worker.capacity_blocked') return 'worker capacity blocked';
+  if (entry.eventType === 'task.worker.heartbeat') return 'worker heartbeat';
+
   return entry.eventType.replace('task.', '');
 }
 
@@ -523,11 +639,18 @@ function getTaskTimelineColor(eventType: string) {
   if (eventType === 'task.started') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
   if (eventType === 'task.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   if (eventType === 'task.failed') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  if (eventType === 'task.dispatch.accepted') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+  if (eventType === 'task.worker.leased') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+  if (eventType === 'task.worker.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
+  if (eventType === 'task.worker.failed' || eventType === 'task.worker.cancelled') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  if (eventType === 'task.worker.capacity_blocked') return { bg: 'rgba(253,203,110,0.12)', color: 'var(--yellow)' };
+  if (eventType === 'task.worker.heartbeat') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
   if (eventType === 'task.checklist.toggled') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   return { bg: 'var(--surface3)', color: 'var(--text2)' };
 }
 
 function getTaskTimelineDetail(entry: ActivityEntry) {
+  const execution = parseExecutionEvidence(entry.detail);
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -550,6 +673,9 @@ function getTaskTimelineDetail(entry: ActivityEntry) {
       : (workflowPhase?.outcome ?? 'unchanged'),
     createdAt: new Date(entry.createdAt).toLocaleString(),
     runId: typeof entry.detail.runId === 'string' ? entry.detail.runId : undefined,
+    executionSummaryLabel: execution?.summaryLabel,
+    executionBadges: execution?.badges ?? [],
+    executionLines: execution?.lines ?? [],
   };
 }
 
@@ -567,7 +693,12 @@ export function Tasks() {
   const queryClient = useQueryClient();
   const { data: tasks, isLoading } = useQuery({ queryKey: ['tasks'], queryFn: () => api.get<Task[]>('/tasks') });
   const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: () => api.get<Agent[]>('/agents') });
-  const { data: activity = [] } = useQuery({ queryKey: ['activity', 'tasks-page'], queryFn: () => api.get<ActivityEntry[]>('/activity?limit=100') });
+  const { data: activity = [] } = useQuery({
+    queryKey: ['activity', 'tasks-page'],
+    queryFn: () => api.get<ActivityEntry[]>('/activity?limit=100'),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
+  });
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -588,6 +719,7 @@ export function Tasks() {
   const [handoffReadyByTaskId, setHandoffReadyByTaskId] = useState<Record<string, boolean | undefined>>({});
   const [recoveredWorkflowByTaskId, setRecoveredWorkflowByTaskId] = useState<Record<string, TaskWorkflow | undefined>>({});
   const [handoffRetryStateByTaskId, setHandoffRetryStateByTaskId] = useState<Record<string, TaskHandoffRetryState | undefined>>({});
+  const [, setExecutionEvidenceClock] = useState(() => Date.now());
   const timelineStreamRefs = useRef<Record<string, EventSource | undefined>>({});
   const { data: projects } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<any[]>('/projects') });
 
@@ -595,6 +727,15 @@ export function Tasks() {
     return () => {
       Object.values(timelineStreamRefs.current).forEach((stream) => stream?.close());
       timelineStreamRefs.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setExecutionEvidenceClock(Date.now());
+    }, 15_000);
+    return () => {
+      clearInterval(timer);
     };
   }, []);
 
@@ -766,6 +907,7 @@ export function Tasks() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['activity', 'tasks-page'] });
     },
   });
 
@@ -961,8 +1103,9 @@ export function Tasks() {
             const latestActivity = getLatestTaskActivity(activity, task.id);
             const latestActivitySummary = getTaskActivitySummary(latestActivity);
             const taskTimeline = getTaskActivityTimeline(activity, task.id);
-              const selectedTimelineEntry = taskTimeline.find((entry) => entry.id === selectedTimelineEventIds[task.id]);
-              const selectedTimelineDetail = selectedTimelineEntry ? getTaskTimelineDetail(selectedTimelineEntry) : null;
+            const selectedTimelineEntry = taskTimeline.find((entry) => entry.id === selectedTimelineEventIds[task.id]);
+            const selectedTimelineDetail = selectedTimelineEntry ? getTaskTimelineDetail(selectedTimelineEntry) : null;
+            const preferredTimelineEntry = getPreferredTimelineEntry(taskTimeline);
             const timelineHistoryEntries = (timelineHistoryEventIds[task.id] ?? [])
               .map((eventId) => taskTimeline.find((entry) => entry.id === eventId))
               .filter((entry): entry is ActivityEntry => !!entry && entry.id !== selectedTimelineEntry?.id);
@@ -1005,7 +1148,7 @@ export function Tasks() {
                 ? `exitCode ${String(timelineDoneByEventId[selectedTimelineEntry.id]?.exitCode ?? 'null')}${timelineDoneByEventId[selectedTimelineEntry.id]?.timedOut ? ', timed out' : ''}`
                 : loadingTimelineEventId === selectedTimelineEntry?.id
                   ? 'opening logs'
-                  : 'live or not loaded';
+                  : selectedTimelineDetail?.executionSummaryLabel ?? 'live or not loaded';
             const inlineChecklistState = getRemainingChecklistState(workflow, currentOrBlockedPhase);
             const inlineChecklistSuffix = getChecklistActionSuffix(inlineChecklistState);
             const inlineChecklistTone = getChecklistActionTone(inlineChecklistState);
@@ -1125,7 +1268,7 @@ export function Tasks() {
               return {
                 id: entry.id,
                 label: getTaskTimelineLabel(entry),
-                outcome: detail.outcome,
+                outcome: detail.executionSummaryLabel ? `${detail.outcome} · ${detail.executionSummaryLabel}` : detail.outcome,
                 createdAt: detail.createdAt,
                 replacementLabel: supersededIds.includes(entry.id)
                   ? `replaced by ${replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}`
@@ -1259,10 +1402,10 @@ export function Tasks() {
                           </button>
                           <button
                             onClick={() => {
-                              if (!selectedTimelineEntry && taskTimeline[0]) {
+                              if (!selectedTimelineEntry && preferredTimelineEntry) {
                                 setSelectedTimelineEventIds((current) => ({
                                   ...current,
-                                  [task.id]: taskTimeline[0]!.id,
+                                  [task.id]: preferredTimelineEntry.id,
                                 }));
                               }
                               setDrawerTimelineTaskIds((current) => ({
@@ -1345,6 +1488,9 @@ export function Tasks() {
                                     <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
                                     <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
                                     <span style={{ color: 'var(--text2)' }}>{detail.createdAt}</span>
+                                    {detail.executionSummaryLabel ? (
+                                      <span style={{ color: 'var(--blue)' }}>{detail.executionSummaryLabel}</span>
+                                    ) : null}
                                     {supersededIds.includes(entry.id) ? (
                                       <span style={{ color: 'var(--blue)' }}>
                                         replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
@@ -1453,6 +1599,11 @@ export function Tasks() {
                             <div style={{ fontSize: 10, color: 'var(--text2)' }}>
                               at: {selectedTimelineDetail?.createdAt}
                             </div>
+                            {selectedTimelineDetail?.executionLines?.map((line) => (
+                              <div key={`timeline-detail-execution-${line}`} style={{ fontSize: 10, color: 'var(--text2)' }}>
+                                {line}
+                              </div>
+                            ))}
                             {timelineHistoryEntries.length > 0 ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <span style={{ fontSize: 10, color: 'var(--text2)' }}>previous runs</span>
@@ -1501,11 +1652,14 @@ export function Tasks() {
                                           }}
                                         >
                                           <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                                            <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
-                                            <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
-                                            {supersededIds.includes(entry.id) ? (
-                                              <span style={{ color: 'var(--blue)' }}>
-                                                replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
+                                          <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
+                                          <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
+                                          {detail.executionSummaryLabel ? (
+                                            <span style={{ color: 'var(--blue)' }}>{detail.executionSummaryLabel}</span>
+                                          ) : null}
+                                          {supersededIds.includes(entry.id) ? (
+                                            <span style={{ color: 'var(--blue)' }}>
+                                              replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
                                               </span>
                                             ) : null}
                                           </span>
@@ -1676,6 +1830,8 @@ export function Tasks() {
                             reviewerCapabilityLabels={reviewerCapabilityLabels}
                             selectedEventLabel={selectedTimelineEntry ? getTaskTimelineLabel(selectedTimelineEntry) : 'none'}
                             runStatusLabel={selectedRunStatusLabel}
+                            executionBadges={selectedTimelineDetail?.executionBadges ?? []}
+                            executionSummaryLines={selectedTimelineDetail?.executionLines ?? []}
                             phases={workflow?.phases ?? []}
                             checklistItems={checklistItems}
                             phaseActions={drawerPhaseActions}

@@ -18,6 +18,7 @@ import { activityRouter } from './routes/activity.js';
 import { skillsRouter } from './routes/skills.js';
 import { metricsRouter } from './routes/metrics.js';
 import { workersRouter } from './routes/workers.js';
+import { projectGoalsRouter } from './routes/project-goals.js';
 
 export function createApp() {
   const app = express();
@@ -30,6 +31,7 @@ export function createApp() {
 
   // API routes
   app.use(`${API_PREFIX}/projects`, projectsRouter);
+  app.use(`${API_PREFIX}/projects`, projectGoalsRouter);
   app.use(`${API_PREFIX}/agents`, agentsRouter);
   app.use(`${API_PREFIX}/settings`, settingsRouter);
   app.use(`${API_PREFIX}/dashboard`, dashboardRouter);

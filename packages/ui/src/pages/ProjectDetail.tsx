@@ -1,7 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Suspense, lazy, useState, useRef, useEffect } from 'react';
+import type {
+  Goal as SharedGoal,
+  GoalStatus,
+  ProjectAutomationRoutine as SharedProjectAutomationRoutine,
+  ProjectAutomationRoutineStatus,
+  ProjectAutomationRunResult,
+  ProjectAutomationTaskStage,
+  TaskGoalAutomationMetadata,
+} from '@ddalkak/shared';
 import { api } from '../api/client.js';
+import { parseExecutionEvidence } from './taskExecutionEvidence.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -44,6 +54,19 @@ interface Project {
   createdAt: string;
 }
 
+type Goal = Omit<SharedGoal, 'status' | 'createdAt' | 'updatedAt'> & {
+  status: GoalStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ProjectAutomationRoutine = Omit<SharedProjectAutomationRoutine, 'status' | 'lastEvaluatedAt' | 'createdAt' | 'updatedAt'> & {
+  status: ProjectAutomationRoutineStatus;
+  lastEvaluatedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 interface Agent {
   id: string;
   projectId: string;
@@ -83,6 +106,7 @@ interface Task {
       }>;
       checklist: string[];
     };
+    goalAutomation?: TaskGoalAutomationMetadata;
   };
   status: string;
   createdAt: string;
@@ -258,6 +282,8 @@ const setupSearchParamKeys = {
   query: 'setupQuery',
 } as const;
 
+const MAX_GOAL_TREE_DEPTH = 24;
+
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
 function formatUsd(n: number) {
@@ -266,6 +292,47 @@ function formatUsd(n: number) {
 
 function formatTokens(n: number) {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n);
+}
+
+function getGoalStatusColor(status: Goal['status']): 'blue' | 'green' | 'gray' | 'yellow' | 'orange' | 'red' {
+  if (status === 'achieved') return 'green';
+  if (status === 'active') return 'blue';
+  if (status === 'blocked') return 'red';
+  return 'gray';
+}
+
+function getGoalAutomationTaskMeta(task: Task) {
+  return task.metadata?.goalAutomation;
+}
+
+function getGoalStageSummary(tasks: Task[], goalId: string) {
+  const goalTasks = tasks
+    .filter((task) => getGoalAutomationTaskMeta(task)?.goalId === goalId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const stages: ProjectAutomationTaskStage[] = ['implement', 'review', 'verify'];
+
+  return stages.map((stage) => {
+    const task = goalTasks.find((candidate) => getGoalAutomationTaskMeta(candidate)?.stage === stage);
+    return {
+      stage,
+      task,
+      status: task?.status ?? 'missing',
+    };
+  });
+}
+
+function pickDefaultAutomationAgents(projectAgents: Agent[]) {
+  const reviewer = projectAgents.find((agent) => /review/i.test(agent.name));
+  const verifier = projectAgents.find((agent) => /verif|qa|test/i.test(agent.name));
+  const developer = projectAgents.find((agent) => agent.id !== reviewer?.id && agent.id !== verifier?.id)
+    ?? projectAgents[0]
+    ?? null;
+
+  return {
+    developerAgentId: developer?.id ?? '',
+    reviewerAgentId: reviewer?.id ?? '',
+    verifierAgentId: verifier?.id ?? '',
+  };
 }
 
 function relativeTime(dateStr: string): string {
@@ -348,6 +415,21 @@ function parseTaskPhaseBlockInfo(error: unknown): TaskPhaseBlockInfo | null {
 
   if (!phaseId || !phaseLabel || requiredItems.length === 0) return null;
   return { phaseId, phaseLabel, requiredItems };
+}
+
+function getApiErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' ? status : null;
+}
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (!error || typeof error !== 'object') return fallback;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === 'string' && message.trim().length > 0) {
+    return message;
+  }
+  return fallback;
 }
 
 function canSendToReview(workflow?: TaskWorkflow) {
@@ -632,15 +714,77 @@ function getLatestTaskActivity(events: ActivityEvent[], taskId: string) {
   return events.find((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'));
 }
 
+function getExecutionSnapshotKey(entry: ActivityEvent) {
+  const execution = parseExecutionEvidence(entry.detail);
+  if (!execution) return null;
+  return `${execution.queueState}/${execution.workerStatus}/${execution.workerHealth}/${execution.workerCapacityLabel}`;
+}
+
+function hasExecutionEvidence(entry: ActivityEvent) {
+  return parseExecutionEvidence(entry.detail) !== null;
+}
+
+function getPreferredTimelineEntry(entries: ActivityEvent[]) {
+  return entries.find((entry) => hasExecutionEvidence(entry)) ?? entries[0];
+}
+
 function getTaskActivityTimeline(events: ActivityEvent[], taskId: string) {
-  return events
-    .filter((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'))
-    .slice(0, 3);
+  const taskEvents = events.filter((event) => event.detail.taskId === taskId && event.eventType.startsWith('task.'));
+  if (taskEvents.length <= 3) return taskEvents;
+
+  const selected: ActivityEvent[] = [];
+  const selectedIds = new Set<string>();
+  const remember = (entry: ActivityEvent) => {
+    if (selected.length >= 3 || selectedIds.has(entry.id)) return;
+    selected.push(entry);
+    selectedIds.add(entry.id);
+  };
+
+  const latestEvent = taskEvents[0];
+  if (latestEvent) remember(latestEvent);
+
+  for (const entry of taskEvents) {
+    if (entry.eventType === 'task.worker.heartbeat') continue;
+    if (!hasExecutionEvidence(entry)) continue;
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  for (const entry of taskEvents) {
+    if (entry.eventType === 'task.worker.heartbeat') continue;
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  const seenSnapshots = new Set<string>();
+  for (const entry of selected) {
+    const snapshot = getExecutionSnapshotKey(entry);
+    if (snapshot) seenSnapshots.add(snapshot);
+  }
+
+  for (const entry of taskEvents) {
+    if (entry.eventType !== 'task.worker.heartbeat') continue;
+    if (selectedIds.has(entry.id)) continue;
+    const snapshot = getExecutionSnapshotKey(entry);
+    if (snapshot && seenSnapshots.has(snapshot)) continue;
+    remember(entry);
+    if (snapshot) seenSnapshots.add(snapshot);
+    if (selected.length >= 3) return selected;
+  }
+
+  for (const entry of taskEvents) {
+    remember(entry);
+    if (selected.length >= 3) return selected;
+  }
+
+  return selected;
 }
 
 function getTaskActivitySummary(entry?: ActivityEvent) {
   if (!entry) return null;
 
+  const execution = parseExecutionEvidence(entry.detail);
+  const executionSuffix = execution ? ` (${execution.summaryLabel})` : '';
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -657,22 +801,64 @@ function getTaskActivitySummary(entry?: ActivityEvent) {
 
   if (entry.eventType === 'task.started') {
     return {
-      text: isReviewRun ? 'Review run started.' : 'Run started.',
+      text: `${isReviewRun ? 'Review run started.' : 'Run started.'}${executionSuffix}`,
       color: 'var(--blue)',
     };
   }
 
   if (entry.eventType === 'task.completed') {
     return {
-      text: isReviewRun ? 'Last review passed.' : 'Last run passed.',
+      text: `${isReviewRun ? 'Last review passed.' : 'Last run passed.'}${executionSuffix}`,
       color: 'var(--green)',
     };
   }
 
   if (entry.eventType === 'task.failed') {
     return {
-      text: isReviewRun ? 'Last review failed.' : 'Last run failed.',
+      text: `${isReviewRun ? 'Last review failed.' : 'Last run failed.'}${executionSuffix}`,
       color: 'var(--red)',
+    };
+  }
+
+  if (entry.eventType === 'task.dispatch.accepted') {
+    return {
+      text: `Dispatch accepted.${executionSuffix}`,
+      color: 'var(--blue)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.leased') {
+    return {
+      text: `Worker lease acquired.${executionSuffix}`,
+      color: 'var(--blue)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.completed') {
+    return {
+      text: `Worker completed queued run.${executionSuffix}`,
+      color: 'var(--green)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.failed' || entry.eventType === 'task.worker.cancelled') {
+    return {
+      text: `Worker run ended with ${entry.eventType.endsWith('cancelled') ? 'cancellation' : 'failure'}.${executionSuffix}`,
+      color: 'var(--red)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.capacity_blocked') {
+    return {
+      text: `Worker capacity blocked retry.${executionSuffix}`,
+      color: 'var(--yellow)',
+    };
+  }
+
+  if (entry.eventType === 'task.worker.heartbeat') {
+    return {
+      text: `Worker heartbeat refreshed.${executionSuffix}`,
+      color: 'var(--blue)',
     };
   }
 
@@ -689,6 +875,7 @@ function getTaskActivitySummary(entry?: ActivityEvent) {
 }
 
 function getTaskTimelineLabel(entry: ActivityEvent) {
+  const execution = parseExecutionEvidence(entry.detail);
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -717,6 +904,16 @@ function getTaskTimelineLabel(entry: ActivityEvent) {
     return checklistState === 'reopened' ? `reopened ${checklistItem}${checklistSuffix}` : `checked ${checklistItem}${checklistSuffix}`;
   }
 
+  if (entry.eventType === 'task.dispatch.accepted') {
+    return `dispatch ${execution?.queueState ?? 'accepted'}`;
+  }
+  if (entry.eventType === 'task.worker.leased') return 'worker leased';
+  if (entry.eventType === 'task.worker.completed') return 'worker completed';
+  if (entry.eventType === 'task.worker.failed') return 'worker failed';
+  if (entry.eventType === 'task.worker.cancelled') return 'worker cancelled';
+  if (entry.eventType === 'task.worker.capacity_blocked') return 'worker capacity blocked';
+  if (entry.eventType === 'task.worker.heartbeat') return 'worker heartbeat';
+
   return entry.eventType.replace('task.', '');
 }
 
@@ -724,11 +921,18 @@ function getTaskTimelineColor(eventType: string) {
   if (eventType === 'task.started') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
   if (eventType === 'task.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   if (eventType === 'task.failed') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  if (eventType === 'task.dispatch.accepted') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+  if (eventType === 'task.worker.leased') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
+  if (eventType === 'task.worker.completed') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
+  if (eventType === 'task.worker.failed' || eventType === 'task.worker.cancelled') return { bg: 'rgba(255,107,107,0.12)', color: 'var(--red)' };
+  if (eventType === 'task.worker.capacity_blocked') return { bg: 'rgba(253,203,110,0.12)', color: 'var(--yellow)' };
+  if (eventType === 'task.worker.heartbeat') return { bg: 'rgba(116,185,255,0.12)', color: 'var(--blue)' };
   if (eventType === 'task.checklist.toggled') return { bg: 'rgba(0,206,201,0.12)', color: 'var(--green)' };
   return { bg: 'var(--surface3)', color: 'var(--text2)' };
 }
 
 function getTaskTimelineDetail(entry: ActivityEvent) {
+  const execution = parseExecutionEvidence(entry.detail);
   const checklistItem = typeof entry.detail.checklistItem === 'string' ? entry.detail.checklistItem : undefined;
   const checklistState = typeof entry.detail.state === 'string' ? entry.detail.state : undefined;
   const checklistKind = typeof entry.detail.checklistKind === 'string' ? entry.detail.checklistKind : undefined;
@@ -751,6 +955,9 @@ function getTaskTimelineDetail(entry: ActivityEvent) {
       : (workflowPhase?.outcome ?? 'unchanged'),
     createdAt: relativeTime(entry.createdAt),
     runId: typeof entry.detail.runId === 'string' ? entry.detail.runId : undefined,
+    executionSummaryLabel: execution?.summaryLabel,
+    executionBadges: execution?.badges ?? [],
+    executionLines: execution?.lines ?? [],
   };
 }
 
@@ -3189,6 +3396,20 @@ export function ProjectDetail() {
   const [handoffReadyByTaskId, setHandoffReadyByTaskId] = useState<Record<string, boolean | undefined>>({});
   const [recoveredWorkflowByTaskId, setRecoveredWorkflowByTaskId] = useState<Record<string, TaskWorkflow | undefined>>({});
   const [handoffRetryStateByTaskId, setHandoffRetryStateByTaskId] = useState<Record<string, TaskHandoffRetryState | undefined>>({});
+  const [newGoalTitle, setNewGoalTitle] = useState('');
+  const [newGoalDescription, setNewGoalDescription] = useState('');
+  const [newGoalParentId, setNewGoalParentId] = useState('');
+  const [automationDraft, setAutomationDraft] = useState({
+    name: 'Project Goal Automation',
+    description: '',
+    status: 'paused' as 'active' | 'paused',
+    heartbeatMinutes: 2,
+    developerAgentId: '',
+    reviewerAgentId: '',
+    verifierAgentId: '',
+  });
+  const [lastAutomationRun, setLastAutomationRun] = useState<ProjectAutomationRunResult | null>(null);
+  const [, setExecutionEvidenceClock] = useState(() => Date.now());
   const timelineStreamRefs = useRef<Record<string, EventSource | undefined>>({});
   const [setupFocusRequest, setSetupFocusRequest] = useState<{ operationIds: string[]; token: number } | undefined>(undefined);
 
@@ -3196,6 +3417,15 @@ export function ProjectDetail() {
     return () => {
       Object.values(timelineStreamRefs.current).forEach((stream) => stream?.close());
       timelineStreamRefs.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setExecutionEvidenceClock(Date.now());
+    }, 15_000);
+    return () => {
+      clearInterval(timer);
     };
   }, []);
 
@@ -3262,12 +3492,74 @@ export function ProjectDetail() {
       queryClient.invalidateQueries({ queryKey: ['db-conventions', id] });
     },
   });
+  const createGoalMutation = useMutation({
+    mutationFn: (payload: { title: string; description?: string; parentGoalId?: string | null; status?: Goal['status'] }) =>
+      api.post<Goal>(`/projects/${id}/goals`, payload),
+    onSuccess: () => {
+      setNewGoalTitle('');
+      setNewGoalDescription('');
+      setNewGoalParentId('');
+      queryClient.invalidateQueries({ queryKey: ['project-goals', id] });
+    },
+  });
+  const updateGoalMutation = useMutation({
+    mutationFn: ({ goalId, payload }: { goalId: string; payload: Partial<Pick<Goal, 'status' | 'title' | 'description' | 'parentGoalId'>> }) =>
+      api.patch<Goal>(`/projects/${id}/goals/${goalId}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-goals', id] });
+    },
+  });
+  const saveAutomationMutation = useMutation({
+    mutationFn: () => api.put<ProjectAutomationRoutine>(`/projects/${id}/automation`, {
+      name: automationDraft.name,
+      description: automationDraft.description || undefined,
+      status: automationDraft.status,
+      heartbeatMinutes: Number(automationDraft.heartbeatMinutes),
+      developerAgentId: automationDraft.developerAgentId || null,
+      reviewerAgentId: automationDraft.reviewerAgentId || null,
+      verifierAgentId: automationDraft.verifierAgentId || null,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-automation', id] });
+    },
+  });
+  const runAutomationMutation = useMutation({
+    mutationFn: () => api.post<ProjectAutomationRunResult>(`/projects/${id}/automation/run`, {}),
+    onSuccess: (result) => {
+      setLastAutomationRun(result);
+      queryClient.invalidateQueries({ queryKey: ['project-goals', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['activity', id, 'task-outcomes'] });
+    },
+  });
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', id],
     queryFn: () => api.get<Project>(`/projects/${id}`),
+    enabled: !!id,
+  });
+
+  const {
+    data: projectGoals = [],
+    isLoading: projectGoalsLoading,
+    isError: projectGoalsFailed,
+    error: projectGoalsError,
+  } = useQuery({
+    queryKey: ['project-goals', id],
+    queryFn: () => api.get<Goal[]>(`/projects/${id}/goals`),
+    enabled: !!id,
+  });
+
+  const {
+    data: automationRoutine,
+    isLoading: automationRoutineLoading,
+    isError: automationRoutineFailed,
+    error: automationRoutineError,
+  } = useQuery({
+    queryKey: ['project-automation', id],
+    queryFn: () => api.get<ProjectAutomationRoutine | null>(`/projects/${id}/automation`),
     enabled: !!id,
   });
 
@@ -3287,6 +3579,30 @@ export function ProjectDetail() {
     queryFn: () => api.get<Agent[]>('/agents'),
   });
 
+  useEffect(() => {
+    const projectAgents = (allAgents ?? []).filter((agent) => agent.projectId === id);
+    const defaults = pickDefaultAutomationAgents(projectAgents);
+    if (automationRoutine) {
+      setAutomationDraft({
+        name: automationRoutine.name,
+        description: automationRoutine.description ?? '',
+        status: automationRoutine.status,
+        heartbeatMinutes: automationRoutine.heartbeatMinutes,
+        developerAgentId: automationRoutine.developerAgentId ?? '',
+        reviewerAgentId: automationRoutine.reviewerAgentId ?? '',
+        verifierAgentId: automationRoutine.verifierAgentId ?? '',
+      });
+      return;
+    }
+
+    setAutomationDraft((current) => ({
+      ...current,
+      developerAgentId: current.developerAgentId || defaults.developerAgentId,
+      reviewerAgentId: current.reviewerAgentId || defaults.reviewerAgentId,
+      verifierAgentId: current.verifierAgentId || defaults.verifierAgentId,
+    }));
+  }, [allAgents, automationRoutine, id]);
+
   const { data: allTasks } = useQuery({
     queryKey: ['tasks'],
     queryFn: () => api.get<Task[]>('/tasks'),
@@ -3294,8 +3610,10 @@ export function ProjectDetail() {
 
   const { data: projectActivity = [] } = useQuery({
     queryKey: ['activity', id, 'task-outcomes'],
-    queryFn: () => api.get<ActivityEvent[]>(`/activity?projectId=${id}&limit=20`),
+    queryFn: () => api.get<ActivityEvent[]>(`/activity?projectId=${id}&limit=100`),
     enabled: !!id,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: costsByProject } = useQuery({
@@ -3610,7 +3928,29 @@ export function ProjectDetail() {
 
   const agents = (allAgents ?? []).filter((a) => a.projectId === id);
   const tasks = (allTasks ?? []).filter((t) => t.projectId === id).slice(0, 10);
+  const projectTasks = (allTasks ?? []).filter((t) => t.projectId === id);
+  const topLevelGoals = projectGoals.filter((goal) => !goal.parentGoalId);
   const cost = (costsByProject ?? []).find((c) => c.projectId === id);
+  const automationDefaults = pickDefaultAutomationAgents(agents);
+  const recommendedDeveloperAgent = agents.find((agent) => agent.id === automationDefaults.developerAgentId) ?? null;
+  const recommendedReviewerAgent = agents.find((agent) => agent.id === automationDefaults.reviewerAgentId) ?? null;
+  const recommendedVerifierAgent = agents.find((agent) => agent.id === automationDefaults.verifierAgentId) ?? null;
+  const goalAutomationLoadError = [
+    projectGoalsFailed ? getApiErrorMessage(projectGoalsError, 'Failed to load project goals.') : null,
+    automationRoutineFailed ? getApiErrorMessage(automationRoutineError, 'Failed to load automation routine.') : null,
+  ].filter((message): message is string => !!message).join(' ');
+  const saveAutomationErrorMessage = saveAutomationMutation.isError
+    ? getApiErrorMessage(saveAutomationMutation.error, 'Failed to save automation routine.')
+    : null;
+  const runAutomationErrorMessage = runAutomationMutation.isError
+    ? getApiErrorMessage(runAutomationMutation.error, 'Failed to run goal check.')
+    : null;
+  const runAutomationErrorStatus = runAutomationMutation.isError ? getApiErrorStatus(runAutomationMutation.error) : null;
+  const goalMutationErrorMessage = createGoalMutation.isError
+    ? getApiErrorMessage(createGoalMutation.error, 'Failed to add goal.')
+    : updateGoalMutation.isError
+      ? getApiErrorMessage(updateGoalMutation.error, 'Failed to update goal.')
+      : null;
 
   // ── Early returns ──────────────────────────────────────────────────────────
 
@@ -3757,6 +4097,106 @@ export function ProjectDetail() {
       ],
     },
   ];
+  const renderGoalRow = (goal: Goal, depth = 0, ancestry: Set<string> = new Set()): React.ReactNode => {
+    if (depth > MAX_GOAL_TREE_DEPTH || ancestry.has(goal.id)) {
+      return (
+        <div
+          key={`${goal.id}-guard-${depth}`}
+          style={{
+            border: '1px dashed var(--border)',
+            borderRadius: 10,
+            background: 'var(--surface2)',
+            padding: 12,
+            marginLeft: Math.max(0, depth - 1) * 18,
+            fontSize: 12,
+            color: 'var(--text2)',
+          }}
+        >
+          Goal tree guard prevented recursive rendering.
+        </div>
+      );
+    }
+
+    const nextAncestry = new Set(ancestry);
+    nextAncestry.add(goal.id);
+    const stageSummary = getGoalStageSummary(projectTasks, goal.id);
+    const allChildGoals = projectGoals.filter((candidate) => candidate.parentGoalId === goal.id);
+    const childGoals = allChildGoals.filter((candidate) => !nextAncestry.has(candidate.id));
+    const hasCircularChild = childGoals.length !== allChildGoals.length;
+
+    return (
+      <div key={goal.id} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            background: 'var(--surface2)',
+            padding: 12,
+            marginLeft: depth * 18,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{goal.title}</span>
+                <Badge color={getGoalStatusColor(goal.status)}>{goal.status}</Badge>
+                {allChildGoals.length > 0 ? <Badge color="gray">{allChildGoals.length} child goal{allChildGoals.length === 1 ? '' : 's'}</Badge> : null}
+              </div>
+              {goal.description ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>{goal.description}</div>
+              ) : null}
+              {hasCircularChild ? (
+                <div style={{ fontSize: 11, color: '#f59e0b' }}>
+                  Circular child goal references were skipped to keep rendering stable.
+                </div>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                aria-label={`Goal status ${goal.title}`}
+                value={goal.status}
+                onChange={(event) => updateGoalMutation.mutate({ goalId: goal.id, payload: { status: event.target.value as Goal['status'] } })}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                }}
+              >
+                <option value="planned">planned</option>
+                <option value="active">active</option>
+                <option value="achieved">achieved</option>
+                <option value="blocked">blocked</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {stageSummary.map((item) => (
+              <Badge
+                key={`${goal.id}-${item.stage}`}
+                color={
+                  item.status === 'done'
+                    ? 'green'
+                    : item.status === 'in_progress'
+                      ? 'blue'
+                      : item.status === 'blocked'
+                        ? 'red'
+                        : item.status === 'todo'
+                          ? 'yellow'
+                          : 'gray'
+                }
+              >
+                {item.stage}: {item.status}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        {childGoals.map((childGoal) => renderGoalRow(childGoal, depth + 1, nextAncestry))}
+      </div>
+    );
+  };
   const workflowTaskTemplates: WorkflowTaskTemplate[] = workflowPreview.map((workflow) => {
     const phaseChecklistMap: Record<string, ChecklistEntry[]> =
       workflow.id === 'implement-feature'
@@ -3969,6 +4409,345 @@ export function ProjectDetail() {
               ) : null}
             </div>
           )}
+        </SectionCard>
+
+        <SectionCard title="Goal Automation Center">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                background: 'var(--surface2)',
+                padding: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Paperclip-style project loop</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Goals stay attached to this project. The automation routine checks progress, creates the next implementation/review/verify task, and keeps the project moving without manual triage.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Badge color={automationDraft.status === 'active' ? 'green' : 'gray'}>
+                    {automationDraft.status === 'active' ? 'active' : 'paused'}
+                  </Badge>
+                  {automationRoutine?.lastEvaluatedAt ? (
+                    <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+                      last check {relativeTime(automationRoutine.lastEvaluatedAt)}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              {(automationRoutineLoading || projectGoalsLoading) ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  Loading goal automation settings...
+                </div>
+              ) : null}
+              {goalAutomationLoadError ? (
+                <div
+                  style={{
+                    border: '1px solid var(--red)',
+                    borderRadius: 8,
+                    background: 'rgba(255,107,107,0.08)',
+                    color: 'var(--red)',
+                    fontSize: 12,
+                    padding: '8px 10px',
+                  }}
+                >
+                  {goalAutomationLoadError}
+                </div>
+              ) : null}
+              {!automationRoutineLoading && !automationRoutineFailed && !automationRoutine ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  No saved routine yet. Review recommended agents, then save automation to activate this loop.
+                </div>
+              ) : null}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Routine Name</span>
+                  <input
+                    value={automationDraft.name}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, name: event.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Heartbeat (minutes)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={automationDraft.heartbeatMinutes}
+                    onChange={(event) => setAutomationDraft((current) => ({
+                      ...current,
+                      heartbeatMinutes: Number(event.target.value || 2),
+                    }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Developer Agent</span>
+                  {recommendedDeveloperAgent ? (
+                    <span style={{ fontSize: 10, color: 'var(--text2)' }}>
+                      Recommended: {recommendedDeveloperAgent.name}
+                    </span>
+                  ) : null}
+                  <select
+                    value={automationDraft.developerAgentId}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, developerAgentId: event.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  >
+                    <option value="">Unassigned</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Reviewer Agent</span>
+                  {recommendedReviewerAgent ? (
+                    <span style={{ fontSize: 10, color: 'var(--text2)' }}>
+                      Recommended: {recommendedReviewerAgent.name}
+                    </span>
+                  ) : null}
+                  <select
+                    value={automationDraft.reviewerAgentId}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, reviewerAgentId: event.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  >
+                    <option value="">Unassigned</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Verifier Agent</span>
+                  {recommendedVerifierAgent ? (
+                    <span style={{ fontSize: 10, color: 'var(--text2)' }}>
+                      Recommended: {recommendedVerifierAgent.name}
+                    </span>
+                  ) : null}
+                  <select
+                    value={automationDraft.verifierAgentId}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, verifierAgentId: event.target.value }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  >
+                    <option value="">Unassigned</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>Routine Status</span>
+                  <select
+                    value={automationDraft.status}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, status: event.target.value as 'active' | 'paused' }))}
+                    style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                  >
+                    <option value="paused">paused</option>
+                    <option value="active">active</option>
+                  </select>
+                </label>
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text2)' }}>Routine Description</span>
+                <textarea
+                  value={automationDraft.description}
+                  onChange={(event) => setAutomationDraft((current) => ({ ...current, description: event.target.value }))}
+                  style={{ minHeight: 84, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }}
+                />
+              </label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => saveAutomationMutation.mutate()}
+                  disabled={saveAutomationMutation.isPending}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: 'var(--accent)',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: saveAutomationMutation.isPending ? 'not-allowed' : 'pointer',
+                    opacity: saveAutomationMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  {saveAutomationMutation.isPending ? 'Saving...' : 'Save Automation'}
+                </button>
+                <button
+                  onClick={() => runAutomationMutation.mutate()}
+                  disabled={runAutomationMutation.isPending}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: runAutomationMutation.isPending ? 'not-allowed' : 'pointer',
+                    opacity: runAutomationMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  {runAutomationMutation.isPending ? 'Running...' : 'Run Goal Check Now'}
+                </button>
+              </div>
+              {saveAutomationErrorMessage ? (
+                <div
+                  style={{
+                    border: '1px solid var(--red)',
+                    borderRadius: 8,
+                    background: 'rgba(255,107,107,0.08)',
+                    color: 'var(--red)',
+                    fontSize: 12,
+                    padding: '8px 10px',
+                  }}
+                >
+                  Save failed: {saveAutomationErrorMessage}
+                </div>
+              ) : null}
+              {runAutomationErrorMessage ? (
+                <div
+                  style={{
+                    border: `1px solid ${runAutomationErrorStatus === 409 ? 'var(--yellow)' : 'var(--red)'}`,
+                    borderRadius: 8,
+                    background: runAutomationErrorStatus === 409 ? 'rgba(253,203,110,0.16)' : 'rgba(255,107,107,0.08)',
+                    color: runAutomationErrorStatus === 409 ? 'var(--yellow)' : 'var(--red)',
+                    fontSize: 12,
+                    padding: '8px 10px',
+                  }}
+                >
+                  {runAutomationErrorStatus === 409 ? `Blocked: ${runAutomationErrorMessage}` : `Run failed: ${runAutomationErrorMessage}`}
+                </div>
+              ) : null}
+              {lastAutomationRun ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>Last automation run</div>
+                  <div>{lastAutomationRun.summary}</div>
+                  {lastAutomationRun.createdTasks.length > 0 ? (
+                    <div style={{ marginTop: 6 }}>
+                      Created: {lastAutomationRun.createdTasks.map((task) => `${task.goalTitle} (${task.stage})`).join(', ')}
+                    </div>
+                  ) : null}
+                  {lastAutomationRun.skippedGoals.length > 0 ? (
+                    <div style={{ marginTop: 6, color: 'var(--yellow)' }}>
+                      Waiting on: {lastAutomationRun.skippedGoals.map((item) => item.reason).join(' / ')}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Goal Tree</div>
+                <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                  Attach goals here and the routine will keep creating the next task chain.
+                </div>
+              </div>
+              {projectGoalsLoading ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>Loading goal tree...</div>
+              ) : null}
+              {goalMutationErrorMessage ? (
+                <div
+                  style={{
+                    border: '1px solid var(--red)',
+                    borderRadius: 8,
+                    background: 'rgba(255,107,107,0.08)',
+                    color: 'var(--red)',
+                    fontSize: 12,
+                    padding: '8px 10px',
+                  }}
+                >
+                  {goalMutationErrorMessage}
+                </div>
+              ) : null}
+              {!projectGoalsLoading && topLevelGoals.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {topLevelGoals.map((goal) => renderGoalRow(goal))}
+                </div>
+              ) : !projectGoalsLoading ? (
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  No goals yet. Add a top-level goal or child milestone and attach automation agents above.
+                </div>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                border: '1px dashed var(--border)',
+                borderRadius: 10,
+                padding: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700 }}>Add Goal</div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text2)' }}>Title</span>
+                <input
+                  value={newGoalTitle}
+                  onChange={(event) => setNewGoalTitle(event.target.value)}
+                  placeholder="Production-grade execution v2"
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text2)' }}>Description</span>
+                <textarea
+                  value={newGoalDescription}
+                  onChange={(event) => setNewGoalDescription(event.target.value)}
+                  placeholder="Describe the expected outcome, completion signal, and any review criteria."
+                  style={{ minHeight: 84, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text2)' }}>Parent Goal</span>
+                <select
+                  value={newGoalParentId}
+                  onChange={(event) => setNewGoalParentId(event.target.value)}
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12 }}
+                >
+                  <option value="">No parent (top-level goal)</option>
+                  {projectGoals.map((goal) => (
+                    <option key={goal.id} value={goal.id}>{goal.title}</option>
+                  ))}
+                </select>
+              </label>
+              <div>
+                <button
+                  onClick={() => createGoalMutation.mutate({
+                    title: newGoalTitle.trim(),
+                    description: newGoalDescription.trim() || undefined,
+                    parentGoalId: newGoalParentId || null,
+                    status: 'planned',
+                  })}
+                  disabled={!newGoalTitle.trim() || createGoalMutation.isPending}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: !newGoalTitle.trim() ? 'var(--surface3)' : 'var(--accent)',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: !newGoalTitle.trim() || createGoalMutation.isPending ? 'not-allowed' : 'pointer',
+                    opacity: !newGoalTitle.trim() || createGoalMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  {createGoalMutation.isPending ? 'Adding...' : 'Add Goal'}
+                </button>
+              </div>
+            </div>
+          </div>
         </SectionCard>
 
         {/* 5. Guard Status */}
@@ -4898,6 +5677,7 @@ export function ProjectDetail() {
               const taskTimeline = getTaskActivityTimeline(projectActivity, task.id);
               const selectedTimelineEntry = taskTimeline.find((entry) => entry.id === selectedTimelineEventIds[task.id]);
               const selectedTimelineDetail = selectedTimelineEntry ? getTaskTimelineDetail(selectedTimelineEntry) : null;
+              const preferredTimelineEntry = getPreferredTimelineEntry(taskTimeline);
               const timelineHistoryEntries = (timelineHistoryEventIds[task.id] ?? [])
                 .map((eventId) => taskTimeline.find((entry) => entry.id === eventId))
                 .filter((entry): entry is ActivityEvent => !!entry && entry.id !== selectedTimelineEntry?.id);
@@ -4940,7 +5720,7 @@ export function ProjectDetail() {
                   ? `exitCode ${String(timelineDoneByEventId[selectedTimelineEntry.id]?.exitCode ?? 'null')}${timelineDoneByEventId[selectedTimelineEntry.id]?.timedOut ? ', timed out' : ''}`
                   : loadingTimelineEventId === selectedTimelineEntry?.id
                     ? 'opening logs'
-                    : 'live or not loaded';
+                    : selectedTimelineDetail?.executionSummaryLabel ?? 'live or not loaded';
               const completedChecklist = new Set(workflow?.completedChecklist ?? []);
               const checklistScope = getChecklistScope(workflow, currentOrBlockedPhase);
               const remainingChecklist = getRemainingChecklistState(workflow, currentOrBlockedPhase);
@@ -5057,7 +5837,7 @@ export function ProjectDetail() {
                 return {
                   id: entry.id,
                   label: getTaskTimelineLabel(entry),
-                  outcome: detail.outcome,
+                  outcome: detail.executionSummaryLabel ? `${detail.outcome} · ${detail.executionSummaryLabel}` : detail.outcome,
                   createdAt: detail.createdAt,
                   replacementLabel: supersededIds.includes(entry.id)
                     ? `replaced by ${replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}`
@@ -5239,10 +6019,10 @@ export function ProjectDetail() {
                             </button>
                             <button
                               onClick={() => {
-                                if (!selectedTimelineEntry && taskTimeline[0]) {
+                                if (!selectedTimelineEntry && preferredTimelineEntry) {
                                   setSelectedTimelineEventIds((current) => ({
                                     ...current,
-                                    [task.id]: taskTimeline[0]!.id,
+                                    [task.id]: preferredTimelineEntry.id,
                                   }));
                                 }
                                 setDrawerTimelineTaskIds((current) => ({
@@ -5325,6 +6105,9 @@ export function ProjectDetail() {
                                       <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
                                       <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
                                       <span style={{ color: 'var(--text2)' }}>{detail.createdAt}</span>
+                                      {detail.executionSummaryLabel ? (
+                                        <span style={{ color: 'var(--blue)' }}>{detail.executionSummaryLabel}</span>
+                                      ) : null}
                                       {supersededIds.includes(entry.id) ? (
                                         <span style={{ color: 'var(--blue)' }}>
                                           replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
@@ -5433,6 +6216,11 @@ export function ProjectDetail() {
                             <div style={{ fontSize: 10, color: 'var(--text2)' }}>
                               at: {selectedTimelineDetail?.createdAt}
                             </div>
+                            {selectedTimelineDetail?.executionLines?.map((line) => (
+                              <div key={`timeline-detail-execution-${line}`} style={{ fontSize: 10, color: 'var(--text2)' }}>
+                                {line}
+                              </div>
+                            ))}
                             {timelineHistoryEntries.length > 0 ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <span style={{ fontSize: 10, color: 'var(--text2)' }}>previous runs</span>
@@ -5481,11 +6269,14 @@ export function ProjectDetail() {
                                           }}
                                         >
                                           <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                                            <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
-                                            <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
-                                            {supersededIds.includes(entry.id) ? (
-                                              <span style={{ color: 'var(--blue)' }}>
-                                                replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
+                                          <span style={{ fontWeight: 700 }}>{getTaskTimelineLabel(entry)}</span>
+                                          <span style={{ color: 'var(--text2)' }}>{detail.outcome}</span>
+                                          {detail.executionSummaryLabel ? (
+                                            <span style={{ color: 'var(--blue)' }}>{detail.executionSummaryLabel}</span>
+                                          ) : null}
+                                          {supersededIds.includes(entry.id) ? (
+                                            <span style={{ color: 'var(--blue)' }}>
+                                              replaced by {replacementEntry ? getTaskTimelineLabel(replacementEntry) : 'retry'}
                                               </span>
                                             ) : null}
                                           </span>
@@ -5656,6 +6447,8 @@ export function ProjectDetail() {
                               reviewerCapabilityLabels={reviewerCapabilityLabels}
                               selectedEventLabel={selectedTimelineEntry ? getTaskTimelineLabel(selectedTimelineEntry) : 'none'}
                               runStatusLabel={selectedRunStatusLabel}
+                              executionBadges={selectedTimelineDetail?.executionBadges ?? []}
+                              executionSummaryLines={selectedTimelineDetail?.executionLines ?? []}
                               phases={workflow?.phases ?? []}
                               checklistItems={checklistItems}
                               phaseActions={drawerPhaseActions}

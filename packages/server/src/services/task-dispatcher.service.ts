@@ -1,8 +1,9 @@
-import { createDb, agents, tasks } from '@ddalkak/db';
+import { createDb, agents, tasks, activityLog } from '@ddalkak/db';
 import { and, eq } from 'drizzle-orm';
 import { runTask } from './task-runner.service.js';
 import { completeRun, enqueueRun, leaseRun, markRunRunning } from './run-queue.service.js';
-import { getDefaultLocalWorker, markWorkerBusy, markWorkerIdle } from './worker-registry.service.js';
+import { getDefaultLocalWorker, getWorker, markWorkerBusy, markWorkerIdle } from './worker-registry.service.js';
+import { buildExecutionEvidence, type ExecutionEvidence } from './execution-evidence.service.js';
 
 interface DispatchWorkflowMetadata {
   lastCompletedAgentId?: string;
@@ -39,6 +40,7 @@ interface DispatchAcceptedResult {
   queueState: 'running' | 'queued';
   queueId: string;
   workerId: string | null;
+  execution: ExecutionEvidence;
 }
 
 export type DispatchTaskRunResult = DispatchBlockedResult | DispatchAcceptedResult;
@@ -138,6 +140,23 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
   });
 
   if (dispatchMode === 'remote-queued') {
+    const execution = buildExecutionEvidence({
+      dispatchMode,
+      queueItem,
+      waitReason: 'waiting for worker lease',
+    });
+    await db.insert(activityLog).values({
+      projectId: opts.task.projectId,
+      agentId,
+      eventType: 'task.dispatch.accepted',
+      detail: {
+        taskId: opts.task.id,
+        queueId: queueItem.id,
+        status: 'queued',
+        execution,
+      },
+    });
+
     return {
       ok: true,
       agentId,
@@ -146,15 +165,34 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
       queueState: 'queued',
       queueId: queueItem.id,
       workerId: null,
+      execution,
     };
   }
 
   const worker = getDefaultLocalWorker();
-  leaseRun(queueItem.id, worker.id);
-  markRunRunning(queueItem.id);
+  const leasedItem = leaseRun(queueItem.id, worker.id);
+  const runningItem = markRunRunning(queueItem.id) ?? leasedItem ?? queueItem;
   markWorkerBusy(worker.id);
+  const busyWorker = getWorker(worker.id) ?? worker;
+  const execution = buildExecutionEvidence({
+    dispatchMode,
+    queueItem: runningItem,
+    worker: busyWorker,
+  });
 
-  runTask({ taskId: opts.task.id, agentId, timeoutSec, maxTurns })
+  await db.insert(activityLog).values({
+    projectId: opts.task.projectId,
+    agentId,
+    eventType: 'task.dispatch.accepted',
+    detail: {
+      taskId: opts.task.id,
+      queueId: queueItem.id,
+      status: 'started',
+      execution,
+    },
+  });
+
+  runTask({ taskId: opts.task.id, agentId, timeoutSec, maxTurns, executionEvidence: execution })
     .then((result) => {
       completeRun(queueItem.id, result.exitCode === 0 ? 'completed' : 'failed');
     })
@@ -173,5 +211,6 @@ export async function dispatchTaskRun(opts: DispatchTaskRunOptions): Promise<Dis
     queueState: 'running',
     queueId: queueItem.id,
     workerId: worker.id,
+    execution,
   };
 }

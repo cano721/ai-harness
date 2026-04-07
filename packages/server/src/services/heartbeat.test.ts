@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../app.js';
-import { createDb, closeDb, agents, projects, activityLog } from '@ddalkak/db';
+import { createDb, closeDb, agents, projects, activityLog, goals, projectAutomationRoutines, tasks } from '@ddalkak/db';
 import { eq } from 'drizzle-orm';
 import type { Express } from 'express';
 import { HeartbeatService } from './heartbeat.service.js';
@@ -125,5 +125,103 @@ describe('HeartbeatService.checkTimeouts', () => {
 
     const [updated] = await db.select().from(agents).where(eq(agents.id, agent.id));
     expect(updated.status).toBe('running');
+  });
+
+  it('runs active goal automation checks during heartbeat', async () => {
+    const db = await createDb(':memory:');
+
+    const [project] = await db.insert(projects).values({ name: 'automation-heartbeat-test' }).returning();
+    const [developer] = await db.insert(agents).values({
+      projectId: project.id,
+      name: 'Developer',
+      adapterType: 'codex_local',
+      status: 'idle',
+    }).returning();
+    const [goal] = await db.insert(goals).values({
+      projectId: project.id,
+      title: 'Production-grade execution v2',
+      status: 'planned',
+    }).returning();
+    await db.insert(projectAutomationRoutines).values({
+      projectId: project.id,
+      name: 'Goal Automation',
+      status: 'active',
+      heartbeatMinutes: 2,
+      developerAgentId: developer.id,
+    });
+
+    const service = new HeartbeatService();
+    await service.checkTimeouts();
+
+    const createdTasks = await db.select().from(tasks).where(eq(tasks.projectId, project.id));
+    expect(createdTasks).toHaveLength(1);
+    expect(createdTasks[0].metadata).toMatchObject({
+      goalAutomation: {
+        goalId: goal.id,
+        stage: 'implement',
+      },
+    });
+  });
+
+  it('respects heartbeatMinutes before creating the next automation stage task', async () => {
+    const db = await createDb(':memory:');
+
+    const [project] = await db.insert(projects).values({ name: 'automation-interval-test' }).returning();
+    const [developer] = await db.insert(agents).values({
+      projectId: project.id,
+      name: 'Developer',
+      adapterType: 'codex_local',
+      status: 'idle',
+    }).returning();
+    const [reviewer] = await db.insert(agents).values({
+      projectId: project.id,
+      name: 'Reviewer',
+      adapterType: 'claude_local',
+      status: 'idle',
+    }).returning();
+    const [goal] = await db.insert(goals).values({
+      projectId: project.id,
+      title: 'Interval guarded goal',
+      status: 'planned',
+    }).returning();
+    const [routine] = await db.insert(projectAutomationRoutines).values({
+      projectId: project.id,
+      name: 'Goal Automation',
+      status: 'active',
+      heartbeatMinutes: 10,
+      developerAgentId: developer.id,
+      reviewerAgentId: reviewer.id,
+    }).returning();
+
+    const service = new HeartbeatService();
+    await service.checkTimeouts();
+
+    let createdTasks = await db.select().from(tasks).where(eq(tasks.projectId, project.id));
+    expect(createdTasks).toHaveLength(1);
+    expect((createdTasks[0].metadata as any).goalAutomation.stage).toBe('implement');
+
+    await db.update(tasks)
+      .set({ status: 'done', updatedAt: new Date() })
+      .where(eq(tasks.id, createdTasks[0].id));
+
+    await service.checkTimeouts();
+
+    createdTasks = await db.select().from(tasks).where(eq(tasks.projectId, project.id));
+    expect(createdTasks).toHaveLength(1);
+
+    await db.update(projectAutomationRoutines)
+      .set({
+        lastEvaluatedAt: new Date(Date.now() - 11 * 60_000),
+        updatedAt: new Date(),
+      })
+      .where(eq(projectAutomationRoutines.id, routine.id));
+
+    await service.checkTimeouts();
+
+    createdTasks = await db.select().from(tasks).where(eq(tasks.projectId, project.id));
+    expect(createdTasks).toHaveLength(2);
+    const reviewTask = createdTasks.find((task) => (task.metadata as any).goalAutomation.stage === 'review');
+    expect(reviewTask).toBeDefined();
+    expect((reviewTask!.metadata as any).goalAutomation.goalId).toBe(goal.id);
   });
 });

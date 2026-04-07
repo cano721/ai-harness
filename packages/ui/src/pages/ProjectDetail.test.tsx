@@ -104,6 +104,8 @@ function renderProjectDetail(initialEntry = '/projects/project-1') {
 function mockBaseApi({
   analysis,
   setupStatus,
+  goals = [],
+  automation = null,
   agents = [],
   tasks = [],
   activity = [],
@@ -111,6 +113,8 @@ function mockBaseApi({
 }: {
   analysis: Record<string, unknown>;
   setupStatus: Record<string, unknown>;
+  goals?: Array<Record<string, unknown>>;
+  automation?: Record<string, unknown> | null;
   agents?: Array<Record<string, unknown>>;
   tasks?: Array<Record<string, unknown>>;
   activity?: Array<Record<string, unknown>>;
@@ -118,6 +122,8 @@ function mockBaseApi({
 }) {
   const getImpl = async (path: string) => {
     if (path === '/projects/project-1') return project;
+    if (path === '/projects/project-1/goals') return goals;
+    if (path === '/projects/project-1/automation') return automation;
     if (path === '/projects/project-1/setup/status') return setupStatus;
     if (path === '/agents') return agents;
     if (path === '/tasks') return tasks;
@@ -127,7 +133,7 @@ function mockBaseApi({
     }
     if (path === '/costs/by-project') return [];
     if (path === '/relations/project-1') return [];
-    if (path === '/activity?projectId=project-1&limit=20') return activity;
+    if (path === '/activity?projectId=project-1&limit=20' || path === '/activity?projectId=project-1&limit=100') return activity;
     throw new Error(`Unhandled GET ${path}`);
   };
 
@@ -215,6 +221,38 @@ function mockBaseApi({
         results: [],
       };
     }
+    if (path === '/projects/project-1/goals') {
+      return {
+        id: 'goal-created',
+        projectId: 'project-1',
+        title: (body as { title: string }).title,
+        description: (body as { description?: string }).description ?? null,
+        parentGoalId: (body as { parentGoalId?: string | null }).parentGoalId ?? null,
+        status: 'planned',
+        createdAt: '2026-04-02T00:00:00.000Z',
+        updatedAt: '2026-04-02T00:00:00.000Z',
+      };
+    }
+    if (path === '/projects/project-1/automation/run') {
+      return {
+        projectId: 'project-1',
+        routineId: 'routine-1',
+        evaluatedAt: '2026-04-03T00:00:00.000Z',
+        createdTasks: [
+          {
+            taskId: 'task-goal-1',
+            goalId: 'goal-1',
+            goalTitle: 'UX and product polish',
+            stage: 'implement',
+            agentId: 'agent-dev',
+            title: 'Advance UX and product polish',
+          },
+        ],
+        updatedGoals: [{ goalId: 'goal-1', status: 'active' }],
+        skippedGoals: [],
+        summary: 'Created 1 automation task(s).',
+      };
+    }
     if (path === '/projects/project-1/setup/plan') {
       const { axes = [], operationIds = [] } = body as { axes?: string[]; operationIds?: string[] };
       return {
@@ -265,7 +303,24 @@ function mockBaseApi({
   });
 
   vi.mocked(api.patch).mockResolvedValue(undefined);
-  vi.mocked(api.put).mockResolvedValue(undefined);
+  vi.mocked(api.put).mockImplementation(async (path: string, body: unknown) => {
+    if (path === '/projects/project-1/automation') {
+      return {
+        id: 'routine-1',
+        projectId: 'project-1',
+        name: (body as { name: string }).name,
+        description: (body as { description?: string }).description ?? null,
+        status: (body as { status: string }).status,
+        heartbeatMinutes: (body as { heartbeatMinutes: number }).heartbeatMinutes,
+        developerAgentId: (body as { developerAgentId?: string | null }).developerAgentId ?? null,
+        reviewerAgentId: (body as { reviewerAgentId?: string | null }).reviewerAgentId ?? null,
+        verifierAgentId: (body as { verifierAgentId?: string | null }).verifierAgentId ?? null,
+        createdAt: '2026-04-02T00:00:00.000Z',
+        updatedAt: '2026-04-02T00:00:00.000Z',
+      };
+    }
+    return undefined;
+  });
   vi.mocked(api.delete).mockResolvedValue(undefined);
 }
 
@@ -1456,5 +1511,227 @@ describe('ProjectDetail setup-first control plane', () => {
         operationIds: ['guide-claude'],
       });
     });
+  });
+
+  it('surfaces goal automation controls and can run the goal check loop', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['TypeScript'],
+        git: { isRepo: true, branch: 'feature/ddalkak-platform' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 100, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Workspace is ready.',
+        axes: [],
+      },
+      goals: [
+        {
+          id: 'goal-root',
+          projectId: 'project-1',
+          title: 'AI Harness ddalkak-platform branch goal',
+          description: 'Top-level branch goal',
+          status: 'active',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          updatedAt: '2026-04-02T00:00:00.000Z',
+        },
+        {
+          id: 'goal-1',
+          projectId: 'project-1',
+          parentGoalId: 'goal-root',
+          title: 'UX and product polish',
+          description: 'Finish polish items',
+          status: 'planned',
+          createdAt: '2026-04-02T00:00:00.000Z',
+          updatedAt: '2026-04-02T00:00:00.000Z',
+        },
+      ],
+      automation: {
+        id: 'routine-1',
+        projectId: 'project-1',
+        name: 'AI Harness Goal Automation',
+        description: 'Keep the branch goal moving.',
+        status: 'active',
+        heartbeatMinutes: 2,
+        developerAgentId: 'agent-dev',
+        reviewerAgentId: 'agent-review',
+        verifierAgentId: 'agent-verify',
+        lastEvaluatedAt: '2026-04-03T00:00:00.000Z',
+        createdAt: '2026-04-02T00:00:00.000Z',
+        updatedAt: '2026-04-02T00:00:00.000Z',
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'AI Harness Developer', adapterType: 'codex_local', status: 'idle' },
+        { id: 'agent-review', projectId: 'project-1', name: 'AI Harness Reviewer', adapterType: 'claude_local', status: 'idle' },
+        { id: 'agent-verify', projectId: 'project-1', name: 'AI Harness Verifier', adapterType: 'claude_local', status: 'idle' },
+      ],
+      tasks: [],
+    });
+
+    renderProjectDetail();
+
+    expect(await screen.findByText('Goal Automation Center')).toBeTruthy();
+    expect((await screen.findAllByText('AI Harness ddalkak-platform branch goal')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('UX and product polish')).length).toBeGreaterThan(0);
+    expect(await screen.findByDisplayValue('AI Harness Goal Automation')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Goal Check Now' }));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/projects/project-1/automation/run', {});
+    });
+
+    expect(await screen.findByText('Last automation run')).toBeTruthy();
+    expect(await screen.findByText('Created 1 automation task(s).')).toBeTruthy();
+    expect(await screen.findByText(/UX and product polish \(implement\)/)).toBeTruthy();
+  });
+
+  it('keeps saved unassigned automation agents distinct from recommended defaults', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['TypeScript'],
+        git: { isRepo: true, branch: 'feature/ddalkak-platform' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 100, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Workspace is ready.',
+        axes: [],
+      },
+      goals: [],
+      automation: {
+        id: 'routine-1',
+        projectId: 'project-1',
+        name: 'AI Harness Goal Automation',
+        description: 'Keep the branch goal moving.',
+        status: 'paused',
+        heartbeatMinutes: 2,
+        developerAgentId: null,
+        reviewerAgentId: null,
+        verifierAgentId: null,
+        lastEvaluatedAt: null,
+        createdAt: '2026-04-02T00:00:00.000Z',
+        updatedAt: '2026-04-02T00:00:00.000Z',
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'AI Harness Developer', adapterType: 'codex_local', status: 'idle' },
+        { id: 'agent-review', projectId: 'project-1', name: 'AI Harness Reviewer', adapterType: 'claude_local', status: 'idle' },
+        { id: 'agent-verify', projectId: 'project-1', name: 'AI Harness Verifier', adapterType: 'claude_local', status: 'idle' },
+      ],
+      tasks: [],
+    });
+
+    renderProjectDetail();
+
+    const developerSelect = await screen.findByRole('combobox', { name: /Developer Agent/i }) as HTMLSelectElement;
+    const reviewerSelect = await screen.findByRole('combobox', { name: /Reviewer Agent/i }) as HTMLSelectElement;
+    const verifierSelect = await screen.findByRole('combobox', { name: /Verifier Agent/i }) as HTMLSelectElement;
+
+    expect(developerSelect.value).toBe('');
+    expect(reviewerSelect.value).toBe('');
+    expect(verifierSelect.value).toBe('');
+    expect(await screen.findByText('Recommended: AI Harness Developer')).toBeTruthy();
+    expect(await screen.findByText('Recommended: AI Harness Reviewer')).toBeTruthy();
+    expect(await screen.findByText('Recommended: AI Harness Verifier')).toBeTruthy();
+  });
+
+  it('shows blocked feedback when goal check run returns paused 409', async () => {
+    mockBaseApi({
+      analysis: {
+        techStack: ['TypeScript'],
+        git: { isRepo: true, branch: 'feature/ddalkak-platform' },
+        claudeMd: { exists: true, content: '# Guide' },
+        agents: [],
+        hooks: [],
+        mcpServers: [],
+        docs: [],
+        skills: [],
+        workflows: [],
+        conventions: [],
+        guardrails: {},
+        installedCLIs: { claude: true, codex: true, cursor: false },
+        scores: {
+          guard: { score: 100, details: [] },
+          guide: { score: 100, details: [] },
+          gear: { score: 100, details: [] },
+        },
+      },
+      setupStatus: {
+        projectId: 'project-1',
+        ready: true,
+        mode: 'workspace',
+        summary: 'Workspace is ready.',
+        axes: [],
+      },
+      goals: [],
+      automation: {
+        id: 'routine-1',
+        projectId: 'project-1',
+        name: 'AI Harness Goal Automation',
+        description: 'Keep the branch goal moving.',
+        status: 'paused',
+        heartbeatMinutes: 2,
+        developerAgentId: 'agent-dev',
+        reviewerAgentId: null,
+        verifierAgentId: null,
+        lastEvaluatedAt: '2026-04-03T00:00:00.000Z',
+        createdAt: '2026-04-02T00:00:00.000Z',
+        updatedAt: '2026-04-02T00:00:00.000Z',
+      },
+      agents: [
+        { id: 'agent-dev', projectId: 'project-1', name: 'AI Harness Developer', adapterType: 'codex_local', status: 'idle' },
+      ],
+      tasks: [],
+    });
+
+    const basePost = vi.mocked(api.post).getMockImplementation();
+    vi.mocked(api.post).mockImplementation(async (path: string, body: unknown) => {
+      if (path === '/projects/project-1/automation/run') {
+        const error = new Error('Automation routine is paused') as Error & { status?: number; body?: unknown };
+        error.status = 409;
+        error.body = { error: 'Automation routine is paused' };
+        throw error;
+      }
+      if (!basePost) throw new Error('Base POST handler missing');
+      return basePost(path, body);
+    });
+
+    renderProjectDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Goal Check Now' }));
+
+    expect(await screen.findByText('Blocked: Automation routine is paused')).toBeTruthy();
   });
 });
