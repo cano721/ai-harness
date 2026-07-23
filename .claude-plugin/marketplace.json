@@ -1,0 +1,13 @@
+{
+  "name": "khb-tools",
+  "owner": {
+    "name": "khb1122"
+  },
+  "plugins": [
+    {
+      "name": "harness-metrics",
+      "source": "./harness-metrics",
+      "description": "에이전트 활동 자동 수집·집계 (/metrics, /harvest-learnings). SessionEnd hook 자동 등록."
+    }
+  ]
+}
