@@ -1,10 +1,15 @@
 # ai-harness
 
-에이전트 활동 기록 기반 하네스 자동 개선 — Claude Code 플러그인.
+에이전트 활동 기록 기반 하네스 자동 개선 — Claude Code · Codex CLI 듀얼 플러그인.
 
 ```bash
+# Claude Code
 claude plugin marketplace add cano721/ai-harness
 claude plugin enable ai-harness@ai-harness
+
+# Codex CLI
+codex plugin marketplace add cano721/ai-harness
+# 이후 /plugins 에서 ai-harness 설치
 ```
 
 ## 기능 — 하네스 라이프사이클
@@ -29,3 +34,5 @@ HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-
 ```
 
 요구사항: `jq`, bash (macOS/Linux). 한계: 교정 마크 감지는 현재 한국어 패턴 위주.
+
+구조: `commands/*.md`가 지시 원본(단일 출처), `skills/*/SKILL.md`(Codex용)는 이를 참조하는 래퍼. 수집 스크립트는 `scripts/` 공유. Codex 세션 로그는 hook 없이도 backfill이 소화한다.

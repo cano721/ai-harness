@@ -1,7 +1,7 @@
 {
   "name": "ai-harness",
   "description": "AI 하네스 라이프사이클: /harness-init 셋업, SessionEnd hook 자동 수집, /metrics 사용량 리포트, /harvest 하네스 개선 PR.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "cano721"
   }

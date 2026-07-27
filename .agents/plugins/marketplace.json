@@ -1,0 +1,19 @@
+{
+  "name": "ai-harness",
+  "interface": {
+    "displayName": "ai-harness"
+  },
+  "plugins": [
+    {
+      "name": "ai-harness",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
