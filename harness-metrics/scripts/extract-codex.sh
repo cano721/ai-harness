@@ -8,7 +8,7 @@ source "$DIR/lib.sh"
 SID="$(basename "$T" .jsonl | sed 's/^rollout-//')"
 OUT="$HM_DATA_DIR/events/codex-${SID}.jsonl"
 TMP="$(mktemp)"
-if jq -c -n --arg sid "$SID" --arg path "$T" '
+if jq -c -n --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" '
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   [inputs] as $L
   | (first($L[] | select(.type=="session_meta")) // {}) as $meta
@@ -38,7 +38,7 @@ if jq -c -n --arg sid "$SID" --arg path "$T" '
     | counted("bash_cmd") | $base + . ),
   ( [ $R[] | select(.payload.type=="user_message")
       | (.payload.message // .payload.content // "" | tostring)
-      | [match("(NJ|JDA|OP)-[0-9]+";"g").string] | .[] ]
+      | [match($issue_re;"g").string] | .[] ]
     | counted("jira_issue") | $base + . )
 ' "$T" > "$TMP" 2>/dev/null; then
   mv "$TMP" "$OUT"

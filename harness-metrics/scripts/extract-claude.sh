@@ -8,7 +8,7 @@ source "$DIR/lib.sh"
 SID="$(basename "$T" .jsonl)"
 OUT="$HM_DATA_DIR/events/claude-${SID}.jsonl"
 TMP="$(mktemp)"
-if jq -c -n --arg sid "$SID" --arg path "$T" --arg reason "$REASON" \
+if jq -c -n --arg sid "$SID" --arg path "$T" --arg reason "$REASON" --arg issue_re "$HM_ISSUE_RE" \
      -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
   mv "$TMP" "$OUT"
 else

@@ -66,9 +66,9 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 ( [ $L[] | tool_uses | select(.name | startswith("mcp__")) | .name ]
   | counted("mcp_tool") | $base + . ),
 
-# ── jira_issue ──
+# ── jira_issue (패턴은 $issue_re — lib.sh HM_ISSUE_RE) ──
 ( [ ($userMsgs[] | utext), ($L[] | tool_uses | select(.name=="Bash") | .input.command // "")
-    | [match("(NJ|JDA|OP)-[0-9]+";"g").string] | .[] ]
+    | [match($issue_re;"g").string] | .[] ]
   | counted("jira_issue") | $base + . ),
 
 # ── 신호 카운트 ──

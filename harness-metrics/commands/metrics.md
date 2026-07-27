@@ -4,8 +4,8 @@
 
 인자: `$ARGUMENTS`
 - 기간: `7d` / `30d` / `90d` / `all` (기본 `30d`)
-- 프로젝트명 (예: `jobda-agent`) — 지정 시 해당 프로젝트만
-- 예: `/metrics 7d jobda-agent`, `/metrics all`
+- 프로젝트명 (예: `my-service`) — 지정 시 해당 프로젝트만
+- 예: `/metrics 7d my-service`, `/metrics all`
 
 ## 절차
 
