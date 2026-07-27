@@ -7,7 +7,7 @@
     {
       "name": "ai-harness",
       "source": "./",
-      "description": "에이전트 활동 자동 수집·집계 (/metrics, /harvest-learnings). SessionEnd hook 자동 등록."
+      "description": "AI 하네스 라이프사이클 (/harness-init, /metrics, /harvest). SessionEnd hook 자동 수집."
     }
   ]
 }

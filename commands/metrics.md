@@ -1,6 +1,6 @@
 # /metrics — 에이전트 사용량 요약 리포트
 
-`~/.claude/harness-metrics/` 데이터를 집계해 요약 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest-learnings`).
+`~/.claude/harness-metrics/` 데이터를 집계해 요약 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest`).
 
 인자: `$ARGUMENTS`
 - 기간: `7d` / `30d` / `90d` / `all` (기본 `30d`)
@@ -30,4 +30,4 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/stats.sh --days <N> [--project <P>]
 **Jira**: 언급 상위 3 이슈
 ```
 
-3. 마지막에 눈에 띄는 포인트 1~3개만 짚는다 (예: "docs X 30일째 0회", "error 급증"). 근거 수치 없이 해석하지 않는다. 개선까지 원하면 `/harvest-learnings` 안내.
+3. 마지막에 눈에 띄는 포인트 1~3개만 짚는다 (예: "docs X 30일째 0회", "error 급증"). 근거 수치 없이 해석하지 않는다. 개선까지 원하면 `/harvest` 안내.

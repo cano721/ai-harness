@@ -1,4 +1,4 @@
-# /harvest-learnings — 에이전트 활동 기록 기반 하네스 자동 개선
+# /harvest — 에이전트 활동 기록 기반 하네스 자동 개선
 
 에이전트 활동 메트릭을 분석해 프로젝트 하네스(.ai-harness, AGENTS.md, settings 등) 개선안을 도출하고 PR까지 만든다.
 
