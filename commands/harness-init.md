@@ -1,12 +1,13 @@
-# /harness-init — 프로젝트 AI 하네스 최초 셋업
+# /harness-init — 프로젝트 AI 하네스 셋업 / 수준 변경
 
-현재 프로젝트(cwd)를 분석해 `.ai-harness` 하네스 구조를 스캐폴딩한다. 이후 `/metrics`로 관찰, `/harvest`로 개선하는 사이클의 시작점.
+현재 프로젝트(cwd)를 분석해 `.ai-harness` 하네스 구조를 스캐폴딩한다. 이후 `/metrics`로 관찰, `/harvest`로 개선하는 사이클의 시작점. **기존 하네스가 있으면 수준 변경 모드로 동작한다.**
 
 인자: `$ARGUMENTS` — 아래 인터뷰 답을 미리 줄 수도 있음 (예: `minimal`, `tdd`, `guard`). 준 항목은 질문 생략.
 
-## 0. 전제 확인 — 하나라도 걸리면 중단
+## 0. 모드 판정
 
-- 이미 `.ai-harness/` 또는 `AGENTS.md`가 있으면 **중단하고 보고** (덮어쓰기 금지 — 기존 하네스 개선은 `/harvest` 소관)
+- `.ai-harness/` 또는 `AGENTS.md` 없음 → **신규 셋업** (1번부터 진행)
+- 있음 → **수준 변경 모드** (아래 6번으로)
 - git repo가 아니면 사용자에게 `git init` 여부 확인
 
 ## 1. 프로젝트 분석 (질문보다 먼저 — 질문에 실측 컨텍스트를 담기 위해)
@@ -32,6 +33,7 @@
 AGENTS.md                    # 진입점 (아래 구성)
 CLAUDE.md                    # 내용: "@AGENTS.md" 한 줄 (이미 있으면 @AGENTS.md 참조만 추가)
 .ai-harness/
+  harness.json               # 수준 매니페스트 (아래 참조) — 수준 변경 모드·/harvest가 읽음
   docs/
     code-conventions.md      # 실측된 네이밍·구조·스타일 규칙
     architecture.md          # 모듈 구조, 기술 스택, 빌드/배포 (실측)
@@ -62,8 +64,24 @@ CLAUDE.md                    # 내용: "@AGENTS.md" 한 줄 (이미 있으면 @A
 - settings.json allowlist는 read-only·빌드·테스트 명령만. deny에 force push
 - direct-edit-guard.sh는 소스 경로 수정 전 code-conventions.md(테스트면 testing.md 추가) Read 여부를 transcript에서 grep — 미Read 시 exit 2 + 안내. transcript 접근 불가 시 fail-open(exit 0)
 
+매니페스트 형식 (인터뷰 답 기록 — 수준 변경·/harvest의 정책 참조용):
+
+```json
+{ "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>" }
+```
+
 ## 5. 마무리
 
 1. 생성 파일 목록 + 각 파일이 실측에서 가져온 근거 요약 보고
 2. 커밋/PR은 사용자 확인 후 (프로젝트 git 컨벤션 따름)
 3. 안내: "이후 세션부터 활동이 자동 수집됩니다. 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작하세요."
+
+## 6. 수준 변경 모드 (기존 하네스 감지 시)
+
+1. **현재 수준 파악**: `.ai-harness/harness.json` Read. 없으면(구버전/수동 셋업) 파일 구조로 역추정 — 워크플로·페르소나 유무 = standard 이상, guard hook 유무 = full, test-engineer·testing.md 유무 = 테스트 정책 — 하고 역추정 결과를 사용자에게 확인받은 뒤 harness.json 생성
+2. **재인터뷰**: 2번과 동일한 질문을 현재 값 보여주며 진행 ("현재: standard / TDD / PR 필수")
+3. **diff만 적용**:
+   - 업그레이드(컴포넌트 추가): 자동 진행 — 신규 셋업과 동일한 작성 원칙, 기존 docs는 건드리지 않음
+   - **다운그레이드(삭제)**: 삭제 대상 파일 목록을 보여주고 **사용자 확인 후** 삭제 — `/harvest`가 채워온 커스텀 내용이 날아갈 수 있음. AGENTS.md에서 해당 섹션(워크플로 표, guard 룰 등)도 함께 제거
+   - 테스트 정책 변경: 워크플로 본문의 테스트 절차 재작성, test-engineer·testing.md 추가/제거(제거는 확인 후), AGENTS.md 위임 규칙 갱신
+4. harness.json 갱신 + 변경 요약 보고. 커밋/PR은 사용자 확인 후
