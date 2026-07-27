@@ -1,15 +1,13 @@
 # ai-harness
 
-Claude Code plugin marketplace — 에이전트 활동 기록 기반 하네스 자동 개선 도구.
+에이전트 활동 기록 기반 하네스 자동 개선 — Claude Code 플러그인.
 
 ```bash
 claude plugin marketplace add cano721/ai-harness
-claude plugin enable harness-metrics@ai-harness
+claude plugin enable ai-harness@ai-harness
 ```
 
-## Plugins
-
-### harness-metrics
+## 기능
 
 에이전트 활동(Claude Code / Codex CLI) 자동 수집·집계 → 사용량 리포트 → 하네스 자동 개선.
 
