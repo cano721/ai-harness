@@ -9,9 +9,9 @@ now=$(date +%s); done_n=0; skip_n=0; fail_n=0
 
 process() { # $1=transcript $2=event파일 $3=extractor
   local t="$1" ev="$2" ex="$3"
-  local mt; mt=$(stat -f %m "$t" 2>/dev/null) || return
+  local mt; mt=$(mtime "$t"); [[ -n "$mt" ]] || return
   (( now - mt < 600 )) && { ((skip_n++)); return; }
-  if [[ -f "$ev" ]] && (( $(stat -f %m "$ev") >= mt )); then ((skip_n++)); return; fi
+  if [[ -f "$ev" ]] && (( $(mtime "$ev") >= mt )); then ((skip_n++)); return; fi
   if "$DIR/$ex" "$t" 2>/dev/null; then ((done_n++)); else ((fail_n++)); fi
 }
 

@@ -25,4 +25,4 @@ claude plugin enable harness-metrics@ai-harness
 HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)
 ```
 
-요구사항: macOS, `jq`. 한계: 교정 마크 감지는 현재 한국어 패턴 위주.
+요구사항: `jq`, bash (macOS/Linux). 한계: 교정 마크 감지는 현재 한국어 패턴 위주.

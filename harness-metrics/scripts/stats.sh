@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 CUTOFF=""
-[[ -n "$DAYS" ]] && CUTOFF="$(date -u -v-"${DAYS}"d +%Y-%m-%dT%H:%M:%S)"
+[[ -n "$DAYS" ]] && CUTOFF="$(days_ago_iso "$DAYS")"
 shopt -s nullglob
 files=("$HM_DATA_DIR"/events/*.jsonl)
 [[ ${#files[@]} -eq 0 ]] && { echo "이벤트 없음 — backfill.sh 먼저 실행"; exit 1; }
