@@ -21,10 +21,15 @@ codex plugin add ai-harness@ai-harness
 ## 라이프사이클
 
 ```
-/harness-init (셋업·수준 변경) → 자동 수집 (hook) → /metrics (관찰) → /harvest (개선 PR) ─┐
-        ↑                                                                                │
-        └───────────────────────── 개선이 다시 하네스로 ←────────────────────────────────┘
+/harness-init ──최초 1회──→ [하네스: AGENTS.md·docs·workflows]
+                                 │                    ↑
+                     에이전트가 하네스 따라 작업        │ 개선 PR 병합
+                     (hook이 활동 자동 기록)           │
+                                 ↓                    │
+                            /metrics (관찰) ──→ /harvest (기록 근거로 개선안)
 ```
+
+쓸수록 하네스가 좋아지는 루프: 셋업(1회) → 평소 작업이 자동 기록됨 → 기록을 관찰 → 기록을 근거로 하네스를 고침 → 좋아진 하네스로 다시 작업.
 
 ### /harness-init
 
