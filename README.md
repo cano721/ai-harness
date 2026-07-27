@@ -20,13 +20,13 @@ codex plugin add ai-harness@ai-harness
 
 ## 라이프사이클
 
-```
-/harness-init ──최초 1회──→ [하네스: AGENTS.md·docs·workflows]
-                                 │              ↑
-                     에이전트가 하네스 따라 작업   │ 개선 PR 병합
-                     (hook이 활동 자동 기록)      │
-                                 ↓              │
-                            [활동 기록] ──→ /harvest (기록 근거로 개선안)
+```mermaid
+flowchart TD
+    I["/harness-init — 최초 1회"] --> H["하네스<br/>AGENTS.md · docs · workflows"]
+    H -->|"에이전트가 하네스 따라 작업<br/>(hook이 활동 자동 기록)"| R["활동 기록"]
+    R --> V["/harvest<br/>기록 근거로 개선안"]
+    V -->|"개선 PR 병합"| H
+    R -.->|"아무 때나 관찰"| M["/metrics — 관찰창"]
 ```
 
 쓸수록 하네스가 좋아지는 루프: 셋업(1회) → 평소 작업이 자동 기록됨 → 기록을 근거로 하네스를 고침 → 좋아진 하네스로 다시 작업.
