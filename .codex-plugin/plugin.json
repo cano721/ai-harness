@@ -1,6 +1,6 @@
 {
   "name": "ai-harness",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "AI 하네스 라이프사이클: harness-init 셋업, 활동 자동 수집, metrics 사용량 리포트, harvest 하네스 개선 PR.",
   "skills": "./skills/"
 }

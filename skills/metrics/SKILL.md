@@ -1,20 +1,27 @@
 ---
 name: metrics
-description: 에이전트 사용량 요약 리포트. 수집된 활동 이벤트를 집계해 프로젝트별 세션·토큰, 워크플로/커맨드 순위, 하네스 docs 읽힘, 페르소나 위임, 에러/가드 신호를 보여준다. 조회 전용.
+description: 에이전트 사용량 리포트. 전체 집계(기간·프로젝트별 세션·토큰, 워크플로 순위, docs 읽힘, 페르소나 위임, 에러/가드 신호) 또는 세션 1개 정밀 리포트(session 모드). 조회 전용.
 ---
 
-# /metrics — 에이전트 사용량 요약 리포트
+# /metrics — 에이전트 사용량 리포트
 
-`~/.ai-harness/` 데이터를 집계해 요약 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest`).
+`~/.ai-harness/` 데이터를 집계해 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest`).
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉토리의 두 단계 상위(플러그인 루트).
 
 인자: `$ARGUMENTS`
 - 기간: `7d` / `30d` / `90d` / `all` (기본 `30d`)
 - 프로젝트명 (예: `my-service`) — 지정 시 해당 프로젝트만
-- 예: `/metrics 7d my-service`, `/metrics all`
+- **`session [sid앞부분]`** — 세션 1개 정밀 모드 (아래 "session 모드"). sid 생략 시 현재 세션
+- 예: `/metrics 7d my-service`, `/metrics all`, `/metrics session`, `/metrics session a7e2fc6f`
 
-## 절차
+## session 모드 (첫 인자가 `session`일 때)
+
+1. `$ROOT/scripts/session.sh [sid|latest]` 실행 — sid 미지정이면 `latest`(이 스킬을 실행하는 세션의 transcript가 항상 최신 수정 파일이므로 latest = 현재 세션)
+2. 표를 그대로 붙이지 말고 요약: 한 줄 개요(턴·토큰·주 활동) → 눈에 띄는 포인트 2~3개 (토큰 비대 원인, docs/워크플로 경유 vs 직접 편집, error·guard_block·교정 마크 지점)
+3. 진행 중 세션이면 "현재까지" 기준임을 명시
+
+## 절차 (전체 집계 모드)
 
 1. 데이터 갱신 + 집계:
 ```bash
