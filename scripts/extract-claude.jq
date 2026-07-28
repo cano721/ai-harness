@@ -31,6 +31,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
     tok_in:  ([$asst[].message.usage | (.input_tokens//0)] | add // 0),
     tok_out: ([$asst[].message.usage | (.output_tokens//0)] | add // 0),
     cache_read: ([$asst[].message.usage | (.cache_read_input_tokens//0)] | add // 0),
+    cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
     model:   ([$asst[].message.model // empty] | last // null),
     reason:  (if $reason=="" then null else $reason end),
     cwd: $cwd, transcript: $path

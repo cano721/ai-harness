@@ -87,9 +87,8 @@ export HARNESS_METRICS_DIR="/custom/path"   # 기본: ~/.ai-harness
 .claude-plugin/   Claude Code 플러그인 매니페스트 + 마켓플레이스
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
-commands/*.md     지시 원본 (단일 출처)
-skills/*/SKILL.md Codex용 래퍼 — commands를 참조만 (수정은 commands 한 곳에서)
-hooks/            SessionEnd hook 정의
+skills/*/SKILL.md 지시 단일 출처 (Agent Skills 규격 — Claude·Codex 공용 로드)
+hooks/            SessionEnd hook 정의 (Claude 전용)
 scripts/          수집·집계 스크립트 (bash + jq, macOS/Linux)
 ```
 
