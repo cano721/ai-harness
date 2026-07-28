@@ -12,16 +12,18 @@ def result_text: .content | if type=="string" then . elif type=="array" then (ma
 
 def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 
-[inputs] as $L
+# -R 원시 입력 + fromjson? — 손상된 라인은 그 줄만 버리고 나머지 보존 (한 줄 깨짐 = 세션 전체 소실 방지)
+[inputs | fromjson? // empty] as $L
 | (first($L[] | select(.cwd? != null) | .cwd) // "") as $cwd
-| ($cwd | split("/") | last | sub("-wt-[0-9]+$";"")) as $proj
+| ($cwd | split("/") | last // "" | sub("-wt-[0-9]+$";"")) as $proj
 | {v:1, src:"claude", sid:$sid, project:$proj} as $base
+| ($L | length) as $n
 
 | ($L | map(select(.type=="user" and (utext|length)>0 and ((.message.content|type)=="string" or ([.|tool_results]|length)==0)))) as $userMsgs
 | ($L | map(select(.type=="assistant" and .message.usage != null))) as $asst
 
-# ── session 메타 ──
-| ($base + {
+# ── session 메타 (빈 transcript는 유령 세션 방지 위해 미기록) ──
+| (select($n > 0) | $base + {
     kind:"session",
     started: (first($L[] | .timestamp // empty) // null),
     ended:   ([$L[] | .timestamp // empty] | last // null),
@@ -46,6 +48,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 
 # ── doc_read: 하네스 문서 읽힘 ──
 ( [ $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty
+    | select(type=="string")
     | select(test("\\.ai-harness/|AGENTS\\.md$|CLAUDE\\.md$"))
     | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
       elif endswith("AGENTS.md") then "AGENTS.md"
@@ -59,6 +62,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 
 # ── bash_cmd: 명령 첫 토큰 ──
 ( [ $L[] | tool_uses | select(.name=="Bash") | .input.command // empty
+    | select(type=="string")
     | ltrimstr(" ") | split(" ")[0] | select(length>0) ]
   | counted("bash_cmd") | $base + . ),
 
@@ -67,7 +71,8 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   | counted("mcp_tool") | $base + . ),
 
 # ── jira_issue (패턴은 $issue_re — lib.sh HM_ISSUE_RE) ──
-( [ ($userMsgs[] | utext), ($L[] | tool_uses | select(.name=="Bash") | .input.command // "")
+( [ ($userMsgs[] | utext),
+    ($L[] | tool_uses | select(.name=="Bash") | .input.command // "" | select(type=="string"))
     | [match($issue_re;"g").string] | .[] ]
   | counted("jira_issue") | $base + . ),
 

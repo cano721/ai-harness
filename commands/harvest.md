@@ -26,7 +26,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/stats.sh --days 90 --project <프로젝트>   # �
 
 ### 3. 정성 분석 (correction_mark)
 
-stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 이벤트 파일(`~/.ai-harness/events/claude-<sid>.jsonl`)의 `transcript` 경로로 원본을 열어 **그 교정 전후 맥락만** 정독한다 (전체 정독 금지 — 토큰 낭비).
+stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 이벤트 파일의 `transcript` 경로로 원본을 열어 **그 교정 전후 맥락만** 정독한다 (전체 정독 금지 — 토큰 낭비). 이벤트 파일은 `~/.ai-harness/events/{claude,codex}-<sid>.jsonl`이며 stats에는 sid 앞 8자만 표시되므로 `events/*<sid8>*.jsonl` glob으로 찾는다.
 
 - 반복되는 교정 (같은 실수 2회 이상) → constraint/컨벤션 후보
 - 1회성 교정 → 무시

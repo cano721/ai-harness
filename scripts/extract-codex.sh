@@ -7,20 +7,22 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/lib.sh"
 SID="$(basename "$T" .jsonl | sed 's/^rollout-//')"
 OUT="$HM_DATA_DIR/events/codex-${SID}.jsonl"
-TMP="$(mktemp)"
-if jq -c -n --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" '
+# 임시파일을 대상과 같은 디렉토리에 — cross-device mv 방지
+TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
+# -R + fromjson?: 손상 라인은 그 줄만 스킵
+if jq -c -R -n --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" '
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
-  [inputs] as $L
+  [inputs | fromjson? // empty] as $L
   | (first($L[] | select(.type=="session_meta")) // {}) as $meta
   | ($meta.payload.cwd // "") as $cwd
-  | ($cwd | split("/") | last | sub("-wt-[0-9]+$";"")) as $proj
+  | ($cwd | split("/") | last // "" | sub("-wt-[0-9]+$";"")) as $proj
   | {v:1, src:"codex", sid:$sid, project:$proj} as $base
   | ($L | map(select(.type=="response_item"))) as $R
   | ([$R[] | select(.payload.type=="message" and .payload.role=="user")] | length) as $t1
   | ([$L[] | select(.type=="event_msg" and .payload.type=="user_message")] | length) as $t2
   | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
        | .payload.info.total_token_usage // empty] | last // {}) as $tok
-  | ($base + {
+  | (select(($L|length) > 0) | $base + {
       kind:"session",
       started: ($meta.payload.timestamp // ($L[0].timestamp // null)),
       ended:   ([$L[] | .timestamp // empty] | last // null),
@@ -33,7 +35,7 @@ if jq -c -n --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" '
     }),
   ( [ $R[] | select(.payload.type=="function_call")
       | (.payload.arguments // "{}") | (try fromjson catch {})
-      | (.cmd // ((.command // []) | if type=="array" then join(" ") else tostring end))
+      | (.cmd // ((.command // []) | if type=="array" then (map(tostring) | join(" ")) else tostring end))
       | select(type=="string" and length>0) | ltrimstr(" ") | split(" ")[0] ]
     | counted("bash_cmd") | $base + . ),
   ( [ $R[] | select(.payload.type=="user_message")

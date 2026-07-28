@@ -12,7 +12,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 CUTOFF=""
-[[ -n "$DAYS" ]] && CUTOFF="$(days_ago_iso "$DAYS")"
+if [[ -n "$DAYS" ]]; then
+  [[ "$DAYS" =~ ^[0-9]+$ ]] || { echo "잘못된 --days 값: $DAYS (숫자만)" >&2; exit 1; }
+  CUTOFF="$(days_ago_iso "$DAYS")"
+fi
 shopt -s nullglob
 files=("$HM_DATA_DIR"/events/*.jsonl)
 [[ ${#files[@]} -eq 0 ]] && { echo "이벤트 없음 — backfill.sh 먼저 실행"; exit 1; }
