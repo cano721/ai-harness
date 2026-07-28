@@ -1,6 +1,6 @@
 # /metrics — 에이전트 사용량 요약 리포트
 
-`~/.claude/harness-metrics/` 데이터를 집계해 요약 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest`).
+`~/.claude/ai-harness/` 데이터를 집계해 요약 리포트를 출력한다. 조회 전용 — 파일 수정·PR 없음 (개선 작업은 `/harvest`).
 
 인자: `$ARGUMENTS`
 - 기간: `7d` / `30d` / `90d` / `all` (기본 `30d`)

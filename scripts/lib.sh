@@ -1,5 +1,9 @@
 # 공용: 데이터 디렉토리·설정 결정. 스크립트는 플러그인에, 데이터는 홈에.
-HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.claude/harness-metrics}"
+HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.claude/ai-harness}"
+# 구 경로(~/.claude/harness-metrics) 자동 마이그레이션
+if [[ ! -e "$HM_DATA_DIR" && -d "$HOME/.claude/harness-metrics" ]]; then
+  mv "$HOME/.claude/harness-metrics" "$HM_DATA_DIR"
+fi
 mkdir -p "$HM_DATA_DIR/events"
 
 # 사용자 설정 (있으면 로드): HM_ISSUE_RE 등 override 가능
