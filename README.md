@@ -63,13 +63,13 @@ flowchart TD
 
 ## 데이터
 
-- 저장 위치: 로컬 `~/.claude/ai-harness/events/` 만. **transcript 원문은 어디에도 복사하지 않는다** — 이벤트는 카운트와 경로뿐이고, 원문이 필요한 분석은 로컬 원본을 참조한다.
+- 저장 위치: 로컬 `~/.ai-harness/events/` 만. **transcript 원문은 어디에도 복사하지 않는다** — 이벤트는 카운트와 경로뿐이고, 원문이 필요한 분석은 로컬 원본을 참조한다.
 - Codex 세션 로그(`~/.codex/sessions/`)도 동일하게 소화된다 — hook 불필요.
 - 크래시로 hook이 못 돈 세션은 다음 `/metrics`·`/harvest` 실행 시 backfill이 소급 처리한다.
 
 ## 설정 (선택)
 
-`~/.claude/ai-harness/config`:
+`~/.ai-harness/config`:
 
 ```bash
 HM_ISSUE_RE="(NJ|JDA)-[0-9]+"        # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)

@@ -1,8 +1,11 @@
 # 공용: 데이터 디렉토리·설정 결정. 스크립트는 플러그인에, 데이터는 홈에.
-HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.claude/ai-harness}"
-# 구 경로(~/.claude/harness-metrics) 자동 마이그레이션
-if [[ ! -e "$HM_DATA_DIR" && -d "$HOME/.claude/harness-metrics" ]]; then
-  mv "$HOME/.claude/harness-metrics" "$HM_DATA_DIR"
+# 도구 중립 경로 — Claude/Codex 어느 쪽 사용자든 자기 도구 폴더 밖(~/.ai-harness)에 쌓인다.
+HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
+# 구 경로 자동 마이그레이션 (구버전 순서대로)
+if [[ ! -e "$HM_DATA_DIR" ]]; then
+  for old in "$HOME/.claude/ai-harness" "$HOME/.claude/harness-metrics"; do
+    [[ -d "$old" ]] && { mv "$old" "$HM_DATA_DIR"; break; }
+  done
 fi
 mkdir -p "$HM_DATA_DIR/events"
 
