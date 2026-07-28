@@ -72,8 +72,13 @@ flowchart TD
 `~/.ai-harness/config`:
 
 ```bash
-HM_ISSUE_RE="(NJ|JDA)-[0-9]+"        # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)
-HARNESS_METRICS_DIR="/custom/path"   # 데이터 디렉토리 변경
+HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)
+```
+
+데이터 디렉토리 자체를 옮기려면 셸 프로파일(예: `~/.zshrc`)에 환경변수로:
+
+```bash
+export HARNESS_METRICS_DIR="/custom/path"   # 기본: ~/.ai-harness
 ```
 
 ## 저장소 구조
