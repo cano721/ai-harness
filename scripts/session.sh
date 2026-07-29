@@ -6,10 +6,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/lib.sh"
 TARGET="${1:-latest}"
 
+# head가 먼저 닫혀 ls가 SIGPIPE(141)로 죽어도 pipefail이 스크립트를 못 죽이게 || true
 if [[ "$TARGET" == "latest" ]]; then
-  T="$(ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -1)"
+  T="$(ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -1 || true)"
 else
-  T="$(ls -t "$HOME"/.claude/projects/*/*"$TARGET"*.jsonl 2>/dev/null | head -1)"
+  T="$(ls -t "$HOME"/.claude/projects/*/*"$TARGET"*.jsonl 2>/dev/null | head -1 || true)"
 fi
 [[ -n "${T:-}" && -f "$T" ]] || { echo "세션을 찾을 수 없음: $TARGET" >&2; exit 1; }
 
