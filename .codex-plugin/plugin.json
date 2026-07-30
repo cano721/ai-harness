@@ -1,6 +1,26 @@
 {
   "name": "ai-harness",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "AI 하네스 라이프사이클: harness-init 셋업, 활동 자동 수집, metrics 사용량 리포트, harvest 하네스 개선 PR.",
-  "skills": "./skills/"
+  "author": {
+    "name": "cano721",
+    "url": "https://github.com/cano721"
+  },
+  "homepage": "https://github.com/cano721/ai-harness",
+  "repository": "https://github.com/cano721/ai-harness",
+  "keywords": ["ai-harness", "metrics", "agent-workflow"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ai-harness",
+    "shortDescription": "에이전트 활동을 근거로 프로젝트 하네스를 개선합니다.",
+    "longDescription": "Claude Code와 Codex의 로컬 활동 기록을 수집하고, 사용량 관찰·프로젝트 하네스 셋업·근거 기반 개선 PR 워크플로를 제공합니다.",
+    "developerName": "cano721",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "이 프로젝트에 AI 하네스를 설정해줘.",
+      "최근 30일 에이전트 사용량을 요약해줘.",
+      "축적된 기록으로 하네스 개선안을 만들어줘."
+    ]
+  }
 }

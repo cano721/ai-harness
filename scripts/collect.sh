@@ -4,8 +4,14 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 input="$(cat)"
-tp="$(echo "$input" | jq -r '.transcript_path // empty')"
-reason="$(echo "$input" | jq -r '.reason // empty')"
+tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty')"
+reason="$(printf '%s' "$input" | jq -r '.reason // empty')"
 tp="${tp/#\~/$HOME}"
-[[ -f "$tp" ]] && "$DIR/extract-claude.sh" "$tp" "$reason" >/dev/null 2>&1
+[[ -f "$tp" ]] || exit 0
+
+# hooks/hooks.json은 Codex도 자동 발견한다. Codex transcript는 backfill이 처리하므로
+# 여기서 Claude extractor로 잘못 분류하지 않고 즉시 반환한다.
+[[ "$(basename "$tp")" == rollout-*.jsonl ]] && exit 0
+
+"$DIR/extract-claude.sh" "$tp" "$reason" >/dev/null 2>&1
 exit 0

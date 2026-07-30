@@ -2,6 +2,7 @@
 # 사용: stats.sh [--days N] [--project 이름]
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 DAYS=""; PROJECT=""
 while [[ $# -gt 0 ]]; do
@@ -19,4 +20,4 @@ fi
 shopt -s nullglob
 files=("$HM_DATA_DIR"/events/*.jsonl)
 [[ ${#files[@]} -eq 0 ]] && { echo "이벤트 없음 — backfill.sh 먼저 실행"; exit 1; }
-cat "${files[@]}" | jq -s -r --arg cutoff "$CUTOFF" --arg project "$PROJECT" -f "$DIR/stats.jq"
+jq -s -r --arg cutoff "$CUTOFF" --arg project "$PROJECT" -f "$DIR/stats.jq" "${files[@]}"

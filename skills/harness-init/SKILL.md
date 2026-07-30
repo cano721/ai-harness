@@ -38,7 +38,7 @@ description: 프로젝트 AI 하네스 최초 셋업/수준 변경. 프로젝트
 AGENTS.md                    # 진입점 (아래 구성)
 CLAUDE.md                    # 내용: "@AGENTS.md" 한 줄 (이미 있으면 @AGENTS.md 참조만 추가)
 .ai-harness/
-  harness.json               # 수준 매니페스트 (아래 참조) — 수준 변경 모드·/harvest가 읽음
+  harness.json               # 수준·안정적 project_id 매니페스트 (아래 참조) — 수준 변경 모드·/harvest가 읽음
   docs/
     code-conventions.md      # 실측된 네이밍·구조·스타일 규칙
     architecture.md          # 모듈 구조, 기술 스택, 빌드/배포 (실측)
@@ -72,7 +72,7 @@ CLAUDE.md                    # 내용: "@AGENTS.md" 한 줄 (이미 있으면 @A
 매니페스트 형식 (인터뷰 답 기록 — 수준 변경·/harvest의 정책 참조용):
 
 ```json
-{ "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>" }
+{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>" }
 ```
 
 ## 5. 마무리
@@ -83,7 +83,7 @@ CLAUDE.md                    # 내용: "@AGENTS.md" 한 줄 (이미 있으면 @A
 
 ## 6. 수준 변경 모드 (기존 하네스 감지 시)
 
-1. **현재 수준 파악**: `.ai-harness/harness.json` Read. 없으면(구버전/수동 셋업) 파일 구조로 역추정 — 워크플로·페르소나 유무 = standard 이상, guard hook 유무 = full, test-engineer·testing.md 유무 = 테스트 정책 — 하고 역추정 결과를 사용자에게 확인받은 뒤 harness.json 생성
+1. **현재 수준 파악**: `.ai-harness/harness.json` Read. 없으면(구버전/수동 셋업) 파일 구조로 역추정 — 워크플로·페르소나 유무 = standard 이상, guard hook 유무 = full, test-engineer·testing.md 유무 = 테스트 정책 — 하고 역추정 결과를 사용자에게 확인받은 뒤 harness.json 생성. 기존 manifest에 `project_id`가 없으면 `git remote get-url origin`의 저장소명을 기본값으로 보강하고, origin도 없을 때만 사용자 확인
 2. **재인터뷰**: 2번과 동일한 질문을 현재 값 보여주며 진행 ("현재: standard / TDD / PR 필수")
 3. **diff만 적용**:
    - 업그레이드(컴포넌트 추가): 자동 진행 — 신규 셋업과 동일한 작성 원칙, 기존 docs는 건드리지 않음

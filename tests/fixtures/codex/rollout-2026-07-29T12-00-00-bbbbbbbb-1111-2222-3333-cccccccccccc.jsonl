@@ -1,0 +1,9 @@
+{"type":"session_meta","timestamp":"2026-07-29T03:00:00Z","payload":{"id":"bbbbbbbb-1111-2222-3333-cccccccccccc","cwd":"/tmp/workspaces/jobda-agent/NJ-290","timestamp":"2026-07-29T03:00:00Z","model_provider":"openai"}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ignored</environment_context>"}]}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:02Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"아니 JDA-123과 JDA-123을 다시 확인해줘"}]}}
+{"type":"event_msg","timestamp":"2026-07-29T03:00:02Z","payload":{"type":"user_message","message":"아니 JDA-123과 JDA-123을 다시 확인해줘"}}
+{"type":"turn_context","timestamp":"2026-07-29T03:00:03Z","payload":{"model":"gpt-test-model"}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"  rg -n JDA-123 .\"}"}}
+{"type":"event_msg","timestamp":"2026-07-29T03:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":11,"output_tokens":25,"total_tokens":125}}}}
+broken-json
+{"type":"event_msg","timestamp":"2026-07-29T03:00:06Z","payload":{"type":"task_complete"}}

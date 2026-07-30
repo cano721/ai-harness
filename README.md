@@ -16,7 +16,7 @@ codex plugin marketplace add cano721/ai-harness
 codex plugin add ai-harness@ai-harness
 ```
 
-설치 즉시 세션 활동 수집이 시작된다 (Claude는 SessionEnd hook, Codex는 세션 로그를 질의 시점에 소화).
+설치 즉시 세션 활동 수집이 시작된다 (Claude는 SessionEnd hook, Codex는 세션 로그를 `/metrics`·`/harvest`·session 조회 시점에 소화).
 
 ## 라이프사이클
 
@@ -51,11 +51,13 @@ flowchart TD
 
 수집 항목: 세션 메타(토큰·모델·턴), 워크플로/커맨드 사용, 페르소나 위임, 하네스 docs 읽힘, 편집 파일, bash 명령, MCP 툴, 이슈 키 언급, 에러/가드 차단/권한 거부/컨텍스트 압축 횟수, 사용자 교정 마크(해당 발화의 앞 60자 스니펫 — 개선 분석의 정독 후보 표시용).
 
+각 session 이벤트는 `coverage`에 실제 관측 가능한 항목을 기록한다. 현재 Claude는 위 항목 전체, Codex는 bash 명령·이슈·교정 마크를 관측한다. 통계에서 **미지원은 0회와 구분**하며 `/harvest`의 삭제 근거로 쓰지 않는다.
+
 ### /metrics [7d|30d|90d|all] [프로젝트] · /metrics session [sid]
 
-사용량 리포트 (조회 전용):
-- **전체 집계**: 프로젝트별 세션·토큰, 워크플로 순위, docs 읽힘 횟수(프로젝트 지정 시 실제 docs 목록과 대조해 0회 문서 탐지), 페르소나 위임, 에러/가드 신호, 이슈 언급
-- **`session` 모드**: 세션 1개 정밀 리포트 — 이 세션이 토큰을 어디에 쓰고, 어떤 문서를 읽고, 어디서 막혔는지. sid 생략 시 현재 세션
+사용량 리포트 (프로젝트에는 조회 전용, 로컬 event cache는 갱신):
+- **전체 집계**: 프로젝트별 세션·토큰, source별 수집 범위, 워크플로 순위, docs 읽힘 횟수(관측 지원 세션만 대상으로 0회 판단), 페르소나 위임, 에러/가드 신호, 이슈 언급
+- **`session` 모드**: Claude/Codex 세션 1개 정밀 리포트 — 이 세션이 토큰을 어디에 쓰고, 어떤 문서를 읽고, 어디서 막혔는지. sid 생략 시 환경의 실제 session/thread ID를 우선
 
 ### /harvest <프로젝트> [--dry-run]
 
@@ -66,8 +68,10 @@ flowchart TD
 ## 데이터
 
 - 저장 위치: 로컬 `~/.ai-harness/events/` 만. 이벤트는 카운트·경로·메타데이터이며, 예외로 교정 마크만 발화 앞 60자 스니펫을 담는다. **transcript 전문은 어디에도 복사하지 않는다** — 원문이 필요한 분석은 로컬 원본을 참조한다.
-- Codex 세션 로그(`~/.codex/sessions/`)도 동일하게 소화된다 — hook 불필요.
-- 크래시로 hook이 못 돈 세션은 다음 `/metrics`·`/harvest` 실행 시 backfill이 소급 처리한다.
+- Codex 세션 로그(`$CODEX_HOME/sessions/`, `~/.codex/sessions/`)도 동일하게 소화된다. 공용 hook은 Codex transcript를 Claude로 오분류하지 않고 반환한다.
+- 진행 중 JSONL도 손상되지 않은 줄까지 안전하게 소화하며, 다음 질의에서 갱신분을 재추출한다.
+- 크래시로 hook이 못 돈 세션과 extractor/event version이 바뀐 과거 세션은 다음 `/metrics`·`/harvest` 실행 시 backfill이 소급 처리한다.
+- 프로젝트 ID는 `.ai-harness/harness.json`의 `project_id`를 우선하며, 없으면 git origin/common-dir로 정규화해 worktree를 같은 프로젝트로 묶는다.
 
 ## 설정 (선택)
 
@@ -98,4 +102,5 @@ scripts/          수집·집계 스크립트 (bash + jq, macOS/Linux)
 
 - `jq`, bash (macOS/Linux 검증됨)
 - 교정 마크 감지는 현재 한국어 패턴 위주
-- Codex 이벤트 추출은 Claude보다 얕음 (명령·이슈 수준)
+- Codex 이벤트 추출은 Claude보다 얕음 (명령·이슈·교정 마크). 미지원 항목은 통계에 관측 불가로 표시
+- 회귀 테스트: `bash tests/run.sh` (`shellcheck`이 있으면 `shellcheck scripts/*.sh tests/*.sh`도 권장)

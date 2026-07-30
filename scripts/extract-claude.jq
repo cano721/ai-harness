@@ -1,5 +1,5 @@
 # Claude Code transcript(.jsonl) → 압축 이벤트 스트림
-# 사용: jq -c -n --arg sid .. --arg path .. --arg reason .. -f extract-claude.jq <transcript>
+# 사용: jq -c -R -n --argjson event_version .. --arg sid .. --arg project .. -f extract-claude.jq transcript
 def utext:
   .message.content
   | if type=="string" then .
@@ -15,8 +15,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # -R 원시 입력 + fromjson? — 손상된 라인은 그 줄만 버리고 나머지 보존 (한 줄 깨짐 = 세션 전체 소실 방지)
 [inputs | fromjson? // empty] as $L
 | (first($L[] | select(.cwd? != null) | .cwd) // "") as $cwd
-| ($cwd | split("/") | last // "" | sub("-wt-[0-9]+$";"")) as $proj
-| {v:1, src:"claude", sid:$sid, project:$proj} as $base
+| {v:$event_version, src:"claude", sid:$sid, project:$project} as $base
 | ($L | length) as $n
 
 | ($L | map(select(.type=="user" and (utext|length)>0 and ((.message.content|type)=="string" or ([.|tool_results]|length)==0)))) as $userMsgs
@@ -32,9 +31,14 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
     tok_out: ([$asst[].message.usage | (.output_tokens//0)] | add // 0),
     cache_read: ([$asst[].message.usage | (.cache_read_input_tokens//0)] | add // 0),
     cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
-    model:   ([$asst[].message.model // empty] | last // null),
+    model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
-    cwd: $cwd, transcript: $path
+    cwd: $cwd, transcript: $path,
+    coverage: [
+      "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
+      "jira_issue", "error", "guard_block", "permission_deny", "compact",
+      "correction_mark"
+    ]
   }),
 
 # ── workflow: /커맨드 + Skill 호출 ──
