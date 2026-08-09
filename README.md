@@ -16,7 +16,7 @@ codex plugin marketplace add cano721/ai-harness
 codex plugin add ai-harness@ai-harness
 ```
 
-설치 즉시 세션 활동 수집이 시작된다 (Claude는 SessionEnd hook, Codex는 세션 로그를 `/metrics`·`/harvest`·session 조회 시점에 소화).
+설치 즉시 세션 활동 수집이 시작된다. SessionEnd hook으로 전달된 Claude/Codex transcript를 즉시 소화하고, 누락되거나 진행 중인 Codex 세션 로그는 `/metrics`·`/harvest`·session 조회 시점의 backfill이 보완한다. 프로젝트별 누적량이 기준을 넘으면 다음 세션 시작 때 `/harvest`를 안내한다.
 
 ## 라이프사이클
 
@@ -24,7 +24,8 @@ codex plugin add ai-harness@ai-harness
 flowchart TD
     I["/harness-init — 최초 1회"] --> H["하네스<br/>AGENTS.md · docs · workflows"]
     H -->|"에이전트가 하네스 따라 작업<br/>(hook이 활동 자동 기록)"| R["활동 기록"]
-    R --> V["/harvest<br/>기록 근거로 개선안"]
+    R -->|"누적량 기준 충족"| Q["ready batch<br/>다음 세션에 알림"]
+    Q --> V["/harvest<br/>기록 근거로 개선안"]
     V -->|"개선 PR 병합"| H
     R -.->|"아무 때나 관찰"| M["/metrics — 관찰창"]
 ```
@@ -53,6 +54,12 @@ flowchart TD
 
 각 session 이벤트는 `coverage`에 실제 관측 가능한 항목을 기록한다. 현재 Claude는 위 항목 전체, Codex는 bash 명령·이슈·교정 마크를 관측한다. 통계에서 **미지원은 0회와 구분**하며 `/harvest`의 삭제 근거로 쓰지 않는다.
 
+#### 누적량 기반 harvest 트리거
+
+SessionEnd hook은 LLM 분석을 실행하지 않고, 막 끝난 세션의 압축 이벤트를 프로젝트별 pending 큐에 멱등 적재한 뒤 누적량만 판정한다. 기본값은 **세션 10개 / 사용자 교정 2개 / 오류 5개 중 하나 충족**이다. 기준을 넘은 세션 집합은 하나의 ready batch로 고정되고, 다음 SessionStart hook이 한 번만 `/harvest <프로젝트>`를 안내한다.
+
+실제 분석·파일 수정·PR 생성은 `/harvest`에서 수행한다. 종료 훅을 짧고 실패 안전하게 유지하고, 사용자의 작업 도중 임의 변경이나 LLM 호출을 만들지 않기 위함이다. 분석 도중 새로 끝난 세션은 현재 batch에 섞지 않고 다음 batch로 보존한다. 정상 분석 완료 시에만 batch를 처리 완료로 옮기며, `--dry-run`이나 실패한 분석은 소비하지 않는다.
+
 ### /metrics [7d|30d|90d|all] [프로젝트] · /metrics session [sid]
 
 사용량 리포트 (프로젝트에는 조회 전용, 로컬 event cache는 갱신):
@@ -67,8 +74,9 @@ flowchart TD
 
 ## 데이터
 
-- 저장 위치: 로컬 `~/.ai-harness/events/` 만. 이벤트는 카운트·경로·메타데이터이며, 예외로 교정 마크만 발화 앞 60자 스니펫을 담는다. **transcript 전문은 어디에도 복사하지 않는다** — 원문이 필요한 분석은 로컬 원본을 참조한다.
-- Codex 세션 로그(`$CODEX_HOME/sessions/`, `~/.codex/sessions/`)도 동일하게 소화된다. 공용 hook은 Codex transcript를 Claude로 오분류하지 않고 반환한다.
+- 이벤트 저장 위치: 로컬 `~/.ai-harness/events/`. 이벤트는 카운트·경로·메타데이터이며, 예외로 교정 마크만 발화 앞 60자 스니펫을 담는다. **transcript 전문은 어디에도 복사하지 않는다** — 원문이 필요한 분석은 로컬 원본을 참조한다.
+- harvest 대기 상태: 로컬 `~/.ai-harness/harvest-queue/`. pending·ready·처리 완료 세션의 작은 참조/카운트만 두며 transcript를 복사하지 않는다.
+- Codex 세션 로그(`$CODEX_HOME/sessions/`, `~/.codex/sessions/`)도 동일하게 소화된다. 공용 hook은 `rollout-*.jsonl`을 Codex extractor로 분류해 Claude 이벤트와 섞지 않는다.
 - 진행 중 JSONL도 손상되지 않은 줄까지 안전하게 소화하며, 다음 질의에서 갱신분을 재추출한다.
 - 크래시로 hook이 못 돈 세션과 extractor/event version이 바뀐 과거 세션은 다음 `/metrics`·`/harvest` 실행 시 backfill이 소급 처리한다.
 - 프로젝트 ID는 `.ai-harness/harness.json`의 `project_id`를 우선하며, 없으면 git origin/common-dir로 정규화해 worktree를 같은 프로젝트로 묶는다.
@@ -79,6 +87,9 @@ flowchart TD
 
 ```bash
 HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)
+HM_HARVEST_SESSION_THRESHOLD=10  # 0이면 이 기준 비활성화
+HM_HARVEST_CORRECTION_THRESHOLD=2
+HM_HARVEST_ERROR_THRESHOLD=5
 ```
 
 데이터 디렉토리 자체를 옮기려면 셸 프로파일(예: `~/.zshrc`)에 환경변수로:
@@ -94,7 +105,7 @@ export HARNESS_METRICS_DIR="/custom/path"   # 기본: ~/.ai-harness
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
 skills/*/SKILL.md 지시 단일 출처 (Agent Skills 규격 — Claude·Codex 공용 로드)
-hooks/            SessionEnd hook 정의 (Claude 전용)
+hooks/            SessionEnd 수집·SessionStart ready 알림 hook 정의
 scripts/          수집·집계 스크립트 (bash + jq, macOS/Linux)
 ```
 

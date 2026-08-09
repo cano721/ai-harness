@@ -3,11 +3,14 @@
   "owner": {
     "name": "cano721"
   },
+  "metadata": {
+    "description": "에이전트 활동을 수집하고 누적량에 따라 프로젝트 AI 하네스 개선을 안내합니다."
+  },
   "plugins": [
     {
       "name": "ai-harness",
       "source": "./",
-      "description": "AI 하네스 라이프사이클 (/harness-init, /metrics, /harvest). SessionEnd hook 자동 수집."
+      "description": "AI 하네스 라이프사이클 (/harness-init, /metrics, /harvest). hook 자동 수집과 누적량 기반 개선 알림."
     }
   ]
 }

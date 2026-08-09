@@ -37,6 +37,10 @@ assert_file() {
   [[ -f "$1" ]] || fail "missing file: $1"
 }
 
+assert_not_file() {
+  [[ ! -f "$1" ]] || fail "unexpected file: $1"
+}
+
 CLAUDE_FIXTURE="$ROOT/tests/fixtures/claude/aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 CODEX_FIXTURE="$ROOT/tests/fixtures/codex/rollout-2026-07-29T12-00-00-bbbbbbbb-1111-2222-3333-cccccccccccc.jsonl"
 CODEX_FILE_SID="2026-07-29T12-00-00-bbbbbbbb-1111-2222-3333-cccccccccccc"
@@ -82,16 +86,17 @@ assert_eq "2" "$(jq -r 'select(.kind=="jira_issue" and .target=="JDA-123") | .n'
 assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CODEX_EVENT")" "Codex correction mark"
 pass "source extractors"
 
-# 공용 SessionEnd hook이 Codex transcript를 Claude 이벤트로 만들지 않음
+# 공용 SessionEnd hook이 Codex transcript를 올바른 extractor로 분류함
 HOOK_DATA="$TEST_TMP/hook-data"
 jq -n --arg tp "$CODEX_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
   | HARNESS_METRICS_DIR="$HOOK_DATA" "$ROOT/scripts/collect.sh"
-if [[ -d "$HOOK_DATA/events" ]] && find "$HOOK_DATA/events" -type f -name '*.jsonl' | grep -q .; then
-  fail "Codex hook created a ghost event"
-fi
+assert_not_file "$HOOK_DATA/events/claude-rollout-${CODEX_FILE_SID}.jsonl"
+assert_file "$HOOK_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
+assert_file "$HOOK_DATA/harvest-queue/p-jobda-agent/sessions/codex-${CODEX_SESSION_ID}.json"
 jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
   | HARNESS_METRICS_DIR="$HOOK_DATA" "$ROOT/scripts/collect.sh"
 assert_file "$HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+assert_file "$HOOK_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
 assert_eq "3" "$(jq -r '.hooks.SessionEnd[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "shared hook timeout"
 # shellcheck disable=SC2016  # hook JSON의 literal 변수 참조를 검사
 LITERAL_PLUGIN_ROOT='"${CLAUDE_PLUGIN_ROOT}'
@@ -105,6 +110,82 @@ jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
     /bin/sh -c "$HOOK_COMMAND"
 assert_file "$HOOK_COMMAND_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 pass "cross-platform SessionEnd hook"
+
+# 누적량 hook: 멱등 pending → ready snapshot → 다음 세션 1회 알림 → batch 단위 ack
+QUEUE_DATA="$TEST_TMP/queue-data"
+HARNESS_METRICS_DIR="$QUEUE_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+QUEUE_EVENT="$QUEUE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+QUEUE_READY="$(
+  HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" record "$QUEUE_EVENT"
+)"
+assert_eq "true" "$(printf '%s' "$QUEUE_READY" | jq -r '.ready')" "quantity threshold ready"
+assert_eq "true" "$(printf '%s' "$QUEUE_READY" | jq -r '.newly_ready')" "first ready transition"
+assert_eq "1" "$(printf '%s' "$QUEUE_READY" | jq -r '.counts.sessions')" "ready session count"
+
+# 같은 세션을 다시 수집해도 pending 수가 늘지 않는다.
+HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" record "$QUEUE_EVENT" >/dev/null
+QUEUE_STATUS="$(
+  HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" status --project service
+)"
+assert_eq "1" "$(printf '%s' "$QUEUE_STATUS" | jq -r '.counts.sessions')" "idempotent queue record"
+
+START_COMMAND="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
+assert_eq "3" "$(jq -r '.hooks.SessionStart[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "SessionStart hook timeout"
+START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd}')"
+READY_NOTICE="$(
+  printf '%s' "$START_INPUT" \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+      /bin/sh -c "$START_COMMAND"
+)"
+assert_contains "$READY_NOTICE" "/harvest service" "ready notification"
+SECOND_NOTICE="$(
+  printf '%s' "$START_INPUT" \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+      /bin/sh -c "$START_COMMAND"
+)"
+assert_eq "" "$SECOND_NOTICE" "ready notification only once per batch"
+assert_eq "$QUEUE_EVENT" "$(
+  HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" events --project service
+)" "ready batch event list"
+
+# ready 이후 들어온 세션은 첫 ack에 삭제되지 않고 다음 batch가 된다.
+QUEUE_EVENT_2="$QUEUE_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+jq -c '.sid = "cccccccc-1111-2222-3333-dddddddddddd"' "$QUEUE_EVENT" >"$QUEUE_EVENT_2"
+HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" record "$QUEUE_EVENT_2" >/dev/null
+NEXT_READY="$(
+  HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" ack --project service
+)"
+assert_eq "true" "$(printf '%s' "$NEXT_READY" | jq -r '.ready')" "post-ready session preserved"
+assert_eq "1" "$(printf '%s' "$NEXT_READY" | jq -r '.counts.sessions')" "next batch size"
+NEXT_NOTICE="$(
+  printf '%s' "$START_INPUT" \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+      /bin/sh -c "$START_COMMAND"
+)"
+assert_contains "$NEXT_NOTICE" "/harvest service" "next batch notification"
+HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" ack --project service >/dev/null
+HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" import --project service >/dev/null
+assert_not_file "$QUEUE_DATA/harvest-queue/p-service/ready.json"
+
+# 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 ready가 된다.
+SIGNAL_DATA="$TEST_TMP/signal-data"
+HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+SIGNAL_READY="$(
+  HARNESS_METRICS_DIR="$SIGNAL_DATA" \
+  HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=1 HM_HARVEST_ERROR_THRESHOLD=0 \
+    "$ROOT/scripts/harvest-queue.sh" record \
+      "$SIGNAL_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+)"
+assert_eq "corrections" "$(printf '%s' "$SIGNAL_READY" | jq -r '.reasons | join(",")')" "independent correction threshold"
+pass "quantity-based harvest hook queue"
 
 # latest는 전역 mtime이 아니라 실제 Codex thread ID 우선
 SESSION_CLAUDE="$TEST_TMP/session-claude/project"
@@ -161,8 +242,8 @@ assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
 # manifest versions and marketplace policy stay aligned
-assert_eq "0.8.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
-assert_eq "0.8.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
+assert_eq "0.9.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
+assert_eq "0.9.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
 

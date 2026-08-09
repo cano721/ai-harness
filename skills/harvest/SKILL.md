@@ -17,9 +17,13 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 
 ```bash
 $ROOT/scripts/backfill.sh
+$ROOT/scripts/harvest-queue.sh import --project <프로젝트>
+$ROOT/scripts/harvest-queue.sh status --project <프로젝트>
 $ROOT/scripts/stats.sh --days 30 --project <프로젝트>
 $ROOT/scripts/stats.sh --days 90 --project <프로젝트>   # 추세 비교용
 ```
+
+`status`가 `ready:true`이면 `$ROOT/scripts/harvest-queue.sh events --project <프로젝트>`로 이번 ready batch의 이벤트 파일을 얻는다. 정성 분석은 이 batch를 우선하고, 30/90일 통계는 반복성·추세 판단에 쓴다. 아직 기준 미달이어도 사용자가 `/harvest`를 명시 실행했다면 분석은 계속하되 기준 미달임을 결과에 표시한다.
 
 ### 2. 정량 신호 해석
 
@@ -44,11 +48,11 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 
 각 개선안: **근거**(수치 or 교정 사례, 세션 id 인용) / **대상 파일** / **변경 내용**.
 
-근거 없는 "좋아 보이는" 개선 금지. 개선안 0건이면 0건이라고 보고하고 종료.
+근거 없는 "좋아 보이는" 개선 금지. 개선안 0건이면 0건이라고 보고하고 5단계는 건너뛴 뒤, dry-run이 아닐 때 6단계에서 분석 완료를 표시한다.
 
 **가치 기준**: 문서 참조 정리·표현 보강 같은 cosmetic 개선은 PR 가치가 없다 — 보고서에 각주로만 남긴다. PR로 만들 개선안은 **에이전트의 실제 행동이 바뀌는 것**만: 반복 실수를 막는 새 constraint, 토큰/시간 낭비를 줄이는 구조 변경, 반복 삽질의 근본 해결. "이 변경이 없었으면 다음 달에 뭐가 잘못됐나?"에 답 못 하면 탈락.
 
-`--dry-run`이면 여기서 보고 후 종료.
+`--dry-run`이면 여기서 보고 후 종료. dry-run은 ready batch를 소비하지 않는다.
 
 ### 5. 적용 + PR
 
@@ -57,3 +61,15 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 3. 개선안 적용 — 프로젝트에 docs 전담 페르소나가 있으면 그 규칙 준수
 4. 커밋 → PR, 본문에 근거 수치 포함
 5. 병합은 사용자 — PR 링크 보고로 종료
+
+### 6. ready batch 처리 완료 표시
+
+시작할 때 `ready:true`였고 정상 완료했다면 아래를 마지막에 실행한다.
+
+```bash
+$ROOT/scripts/harvest-queue.sh ack --project <프로젝트>
+```
+
+- 개선안 0건이어도 분석을 정상 완료했으면 ack한다. 같은 데이터가 계속 재알림되는 것을 막기 위함이다.
+- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 ack하지 않는다.
+- ack는 ready가 만들어질 때 포함된 세션만 처리 완료로 옮긴다. 분석 도중 새로 들어온 세션은 다음 batch에 남는다.

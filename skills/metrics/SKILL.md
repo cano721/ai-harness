@@ -5,7 +5,7 @@ description: 에이전트 사용량 리포트. 전체 집계(기간·프로젝�
 
 # /metrics — 에이전트 사용량 리포트
 
-`~/.ai-harness/` 데이터를 집계해 리포트를 출력한다. 프로젝트 파일·PR에는 조회 전용이며, 로컬 event cache는 최신 transcript/extractor 기준으로 갱신한다 (개선 작업은 `/harvest`).
+`~/.ai-harness/` 데이터를 집계해 리포트를 출력한다. 프로젝트 파일·PR에는 조회 전용이며, 로컬 event cache와 harvest 대기 상태는 최신 transcript/extractor 기준으로 갱신한다 (개선 작업은 `/harvest`).
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉토리의 두 단계 상위(플러그인 루트).
 
@@ -29,6 +29,15 @@ $ROOT/scripts/backfill.sh
 $ROOT/scripts/stats.sh --days <N> [--project <P>]
 ```
 `all`이면 `--days` 생략. 추세 언급을 위해 직전 동일 기간과 비교하고 싶으면 `--days 2N` 결과와 차분.
+
+프로젝트가 지정됐으면 과거 event cache도 누적량 판정에 포함하고 준비 상태를 확인한다.
+
+```bash
+$ROOT/scripts/harvest-queue.sh import --project <P>
+$ROOT/scripts/harvest-queue.sh status --project <P>
+```
+
+`ready:true`이면 리포트 마지막에 ready 사유와 세션·교정·오류 수를 요약하고 `/harvest <P>`를 안내한다. metrics에서는 ack하지 않는다.
 
 프로젝트가 지정됐고 그 프로젝트 경로를 알면(cwd 등) **0회 문서 산출**: 해당 프로젝트 `.ai-harness/docs/**/*.md` 파일 목록과 stats의 doc_read 목록을 차집합. 단, stats의 `수집 범위`에서 `doc_read` 지원 세션만 분모로 사용하고, 지원 세션이 0개면 0회/죽은 문서 판정을 하지 않는다. 경로를 모르면 "최저 읽힘"까지만 언급.
 
