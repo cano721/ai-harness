@@ -1,7 +1,7 @@
 {
   "name": "ai-harness",
-  "version": "0.9.0",
-  "description": "AI 하네스 라이프사이클: harness-init 셋업, 활동 자동 수집·누적량 트리거, metrics 리포트, harvest 개선 PR.",
+  "version": "0.10.0",
+  "description": "AI 하네스 라이프사이클: 자동 수집·누적량 트리거·건강/보관 관리, metrics 리포트, harvest 개선 PR.",
   "author": {
     "name": "cano721",
     "url": "https://github.com/cano721"
@@ -20,7 +20,8 @@
     "defaultPrompt": [
       "이 프로젝트에 AI 하네스를 설정해줘.",
       "최근 30일 에이전트 사용량을 요약해줘.",
-      "축적된 기록으로 하네스 개선안을 만들어줘."
+      "축적된 기록으로 하네스 개선안을 만들어줘.",
+      "ai-harness 최신 버전을 확인해줘."
     ]
   }
 }

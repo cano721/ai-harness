@@ -2,6 +2,7 @@
 # shellcheck disable=SC2034  # source되는 공용 변수
 # 공용: 데이터 디렉토리·설정 결정. 스크립트는 플러그인에, 데이터는 홈에.
 # 도구 중립 경로 — Claude/Codex 어느 쪽 사용자든 자기 도구 폴더 밖(~/.ai-harness)에 쌓인다.
+umask 077
 HM_EVENT_VERSION=2
 HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
 HM_CLAUDE_PROJECTS_DIR="${HARNESS_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
@@ -12,6 +13,7 @@ if [[ ! -e "$HM_DATA_DIR" ]]; then
   done
 fi
 mkdir -p "$HM_DATA_DIR/events"
+chmod 700 "$HM_DATA_DIR" "$HM_DATA_DIR/events" 2>/dev/null || true
 
 # 사용자 설정 (있으면 로드): HM_ISSUE_RE 등 override 가능
 # shellcheck source=/dev/null
@@ -28,7 +30,16 @@ fi
 # 순서 주의: GNU 먼저 — BSD에서 `stat -c`는 깨끗이 실패하지만, GNU에서 `stat -f %m`은
 # exit 1이면서도 stdout에 파일시스템 정보를 뱉어 출력을 오염시킨다 (실측).
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
+filesize() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null; }
 days_ago_iso() { date -u -d "$1 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -v-"$1"d +%Y-%m-%dT%H:%M:%S; }
+iso_to_epoch() {
+  local value="${1:-}" normalized=""
+  [[ -n "$value" ]] || return 0
+  date -u -d "$value" +%s 2>/dev/null && return
+  normalized="${value%%.*}"
+  normalized="${normalized%Z}"
+  date -j -u -f '%Y-%m-%dT%H:%M:%S' "$normalized" +%s 2>/dev/null || true
+}
 
 # Codex는 실행 환경에 따라 CODEX_HOME과 ~/.codex 양쪽에 세션을 둘 수 있다.
 # 테스트/특수 환경은 HARNESS_CODEX_SESSIONS_DIR로 단일 루트를 명시한다.

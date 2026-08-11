@@ -19,11 +19,19 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 $ROOT/scripts/backfill.sh
 $ROOT/scripts/harvest-queue.sh import --project <프로젝트>
 $ROOT/scripts/harvest-queue.sh status --project <프로젝트>
+$ROOT/scripts/harvest-queue.sh history --project <프로젝트> | tail -n 20
 $ROOT/scripts/stats.sh --days 30 --project <프로젝트>
 $ROOT/scripts/stats.sh --days 90 --project <프로젝트>   # 추세 비교용
 ```
 
-`status`가 `ready:true`이면 `$ROOT/scripts/harvest-queue.sh events --project <프로젝트>`로 이번 ready batch의 이벤트 파일을 얻는다. 정성 분석은 이 batch를 우선하고, 30/90일 통계는 반복성·추세 판단에 쓴다. 아직 기준 미달이어도 사용자가 `/harvest`를 명시 실행했다면 분석은 계속하되 기준 미달임을 결과에 표시한다.
+`status`가 `has_analysis_batch:true`일 때만 아래를 실행한다.
+
+```bash
+$ROOT/scripts/stats.sh --project <프로젝트> --analysis-batch
+$ROOT/scripts/harvest-queue.sh events --project <프로젝트>
+```
+
+analysis batch는 개선 판정이 아니라 검토할 입력 묶음이다. batch 통계를 이번 입력의 정량 근거로, 30/90일 통계를 반복성·baseline 판단에 구분해 쓴다. 재개된 동일 세션의 queue 신호 수는 이전 검토 이후 차분이고, event 통계·transcript는 현재 누적 세션이라는 점을 구분한다. 최근 history의 `improved`·`no-change` 결론과 summary를 먼저 확인해 같은 근거·같은 개선을 반복 제안하지 않는다. 아직 기준 미달이어도 사용자가 `/harvest`를 명시 실행했다면 분석은 계속하되 기준 미달임을 결과에 표시한다.
 
 ### 2. 정량 신호 해석
 
@@ -41,6 +49,8 @@ stats의 `수집 범위`를 먼저 확인한다. Codex 등 해당 지표 미지�
 
 stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 이벤트 파일의 `transcript` 경로로 원본을 열어 **그 교정 전후 맥락만** 정독한다 (전체 정독 금지 — 토큰 낭비). 이벤트 파일은 `~/.ai-harness/events/{claude,codex}-<sid>.jsonl`이며 stats에는 sid 앞 8자만 표시되므로 `events/*<sid8>*.jsonl` glob으로 찾는다.
 
+`[reviewed]`로 표시된 교정 마크는 보관 정책으로 rollup된 과거 검토 완료 데이터다. transcript 경로와 원문이 의도적으로 제거됐으므로 다시 정독하거나 새 개선 근거로 사용하지 않고 baseline 횟수에만 포함한다.
+
 - 반복되는 교정 (같은 실수 2회 이상) → constraint/컨벤션 후보
 - 1회성 교정 → 무시
 
@@ -52,7 +62,7 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 
 **가치 기준**: 문서 참조 정리·표현 보강 같은 cosmetic 개선은 PR 가치가 없다 — 보고서에 각주로만 남긴다. PR로 만들 개선안은 **에이전트의 실제 행동이 바뀌는 것**만: 반복 실수를 막는 새 constraint, 토큰/시간 낭비를 줄이는 구조 변경, 반복 삽질의 근본 해결. "이 변경이 없었으면 다음 달에 뭐가 잘못됐나?"에 답 못 하면 탈락.
 
-`--dry-run`이면 여기서 보고 후 종료. dry-run은 ready batch를 소비하지 않는다.
+`--dry-run`이면 여기서 보고 후 종료. dry-run은 analysis batch를 소비하지 않는다.
 
 ### 5. 적용 + PR
 
@@ -62,14 +72,21 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 4. 커밋 → PR, 본문에 근거 수치 포함
 5. 병합은 사용자 — PR 링크 보고로 종료
 
-### 6. ready batch 처리 완료 표시
+### 6. analysis batch 검토 완료 표시
 
-시작할 때 `ready:true`였고 정상 완료했다면 아래를 마지막에 실행한다.
+시작할 때 `has_analysis_batch:true`였고 정상 완료했다면 실제 결론을 포함해 아래 둘 중 하나를 마지막에 실행한다.
 
 ```bash
-$ROOT/scripts/harvest-queue.sh ack --project <프로젝트>
+# 행동을 바꾸는 개선 PR을 만들었을 때
+$ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
+  --outcome improved --summary "<무엇을 왜 바꿨는지 1문장>" --artifact "<PR URL>"
+
+# 개선점 0건이거나 통계 참고만 남겼을 때
+$ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
+  --outcome no-change --summary "<적용하지 않은 핵심 이유 1문장>"
 ```
 
-- 개선안 0건이어도 분석을 정상 완료했으면 ack한다. 같은 데이터가 계속 재알림되는 것을 막기 위함이다.
-- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 ack하지 않는다.
-- ack는 ready가 만들어질 때 포함된 세션만 처리 완료로 옮긴다. 분석 도중 새로 들어온 세션은 다음 batch에 남는다.
+- 개선안 0건이어도 분석을 정상 완료했으면 `mark-reviewed`한다. 같은 데이터가 계속 재알림되는 것을 막기 위함이다.
+- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 처리 완료로 표시하지 않는다.
+- `mark-reviewed`는 analysis batch가 만들어질 때 포함된 세션만 옮긴다. 분석 도중 새로 들어온 세션은 다음 묶음에 남는다.
+- 검토 완료 시 `review-history.jsonl`에 batch 근거와 실제 결론·요약·PR 참조가 누적되고, 보관 기간이 지난 상세 이벤트는 통계용 rollup으로 자동 전환된다.

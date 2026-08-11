@@ -11,13 +11,15 @@ SID="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payl
 [[ -n "$SID" ]] || SID="$FILE_SID"
 CWD="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.cwd // empty) // empty' "$T" 2>/dev/null || true)"
 PROJECT="$(project_id_for_cwd "$CWD")"
+SOURCE_MTIME="$(mtime "$T")"; SOURCE_MTIME="${SOURCE_MTIME:-0}"
+SOURCE_SIZE="$(filesize "$T")"; SOURCE_SIZE="${SOURCE_SIZE:-0}"
 OUT="$HM_DATA_DIR/events/codex-${FILE_SID}.jsonl"
 # 임시파일을 대상과 같은 디렉토리에 — cross-device mv 방지
 TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 # -R + fromjson?: 손상 라인은 그 줄만 스킵
 if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
   --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" \
-  --arg project "$PROJECT" '
+  --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" '
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   def is_correction:
     startswith("아니") or startswith("아냐") or startswith("그게 아니라")
@@ -52,7 +54,7 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       cache_write: ($tok.cache_write_input_tokens // 0),
       model:   $model,
       provider: ($meta.payload.model_provider // null),
-      cwd: $cwd, transcript: $path,
+      cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
       coverage: ["bash_cmd", "jira_issue", "correction_mark"]
     }),
   ( [ $R[] | select(.payload.type=="function_call")

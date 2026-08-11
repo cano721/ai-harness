@@ -33,7 +33,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
     cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
     model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
-    cwd: $cwd, transcript: $path,
+    cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
       "jira_issue", "error", "guard_block", "permission_deny", "compact",

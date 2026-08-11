@@ -26,6 +26,7 @@ description: 에이전트 사용량 리포트. 전체 집계(기간·프로젝�
 1. 데이터 갱신 + 집계:
 ```bash
 $ROOT/scripts/backfill.sh
+$ROOT/scripts/health.sh status
 $ROOT/scripts/stats.sh --days <N> [--project <P>]
 ```
 `all`이면 `--days` 생략. 추세 언급을 위해 직전 동일 기간과 비교하고 싶으면 `--days 2N` 결과와 차분.
@@ -35,9 +36,14 @@ $ROOT/scripts/stats.sh --days <N> [--project <P>]
 ```bash
 $ROOT/scripts/harvest-queue.sh import --project <P>
 $ROOT/scripts/harvest-queue.sh status --project <P>
+$ROOT/scripts/harvest-queue.sh history --project <P>
 ```
 
-`ready:true`이면 리포트 마지막에 ready 사유와 세션·교정·오류 수를 요약하고 `/harvest <P>`를 안내한다. metrics에서는 ack하지 않는다.
+`has_analysis_batch:true`이면 리포트 마지막에 묶음 생성 사유와 세션·교정·오류·차단·권한 거부 수를 요약하고 `/harvest <P>`를 안내한다. metrics에서는 `mark-reviewed`하지 않는다.
+
+history가 있으면 `review.outcome`별 `improved`/`no-change` 횟수와 최근 summary·artifact를 짧게 보여준다. 이는 분석 묶음 수가 아니라 실제 개선 산출률이며, outcome이 없는 legacy `reviewed` 항목은 별도로 표시한다.
+
+`health.sh status`에서 최근 `last_result`가 failure인 구성요소가 있으면 해당 시각·오류와 함께 수집 건강 경고를 표시한다. 이벤트 상세가 보관 정책으로 정리된 기간은 `rollups/` 통계가 자동 포함되며, 교정 원문은 이미 검토 완료되어 `[reviewed]`로 비식별화됐음을 명시한다.
 
 프로젝트가 지정됐고 그 프로젝트 경로를 알면(cwd 등) **0회 문서 산출**: 해당 프로젝트 `.ai-harness/docs/**/*.md` 파일 목록과 stats의 doc_read 목록을 차집합. 단, stats의 `수집 범위`에서 `doc_read` 지원 세션만 분모로 사용하고, 지원 세션이 0개면 0회/죽은 문서 판정을 하지 않는다. 경로를 모르면 "최저 읽힘"까지만 언급.
 
