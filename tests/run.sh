@@ -227,6 +227,19 @@ assert_contains "$FEATURE_SKILL_CONTENT" "no blocking findings remain" "implemen
 assert_contains "$FEATURE_SKILL_CONTENT" "two focused repair attempts" "implementation escalation limit"
 pass "implementation planning gate"
 
+# 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
+FEATURE_GRAPH="$ROOT/skills/implement-feature/references/feature-delivery-graph.json"
+assert_file "$FEATURE_GRAPH"
+"$ROOT/scripts/validate-feature-graph.sh" "$FEATURE_GRAPH" >/dev/null
+assert_eq "false" "$(jq -r '.nodes.approval.write' "$FEATURE_GRAPH")" "approval node is read-only"
+assert_eq "true" "$(jq -r '.nodes.deliver.write' "$FEATURE_GRAPH")" "delivery node can write"
+assert_file "$ROOT/workflows/implement-feature.js"
+assert_contains "$FEATURE_SKILL_CONTENT" "Dynamic Workflow only when Claude Code is version" "Claude workflow version gate"
+if command -v node >/dev/null 2>&1; then
+  node --check "$ROOT/workflows/implement-feature.js"
+fi
+pass "feature delivery graph adapters"
+
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
@@ -594,8 +607,9 @@ assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
 # manifest versions and marketplace policy stay aligned
-assert_eq "0.10.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
-assert_eq "0.10.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
+assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
+assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
+assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
 

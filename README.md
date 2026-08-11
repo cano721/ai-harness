@@ -44,6 +44,10 @@ flowchart TD
 
 현재 대화에 같은 범위의 승인된 Brief가 있으면 다시 승인받지 않고 구현을 이어간다. explorer·test-engineer·developer·reviewer 역할이 프로젝트에 설정되어 있으면 범위가 독립적인 작업만 위임한다. 역할 도구가 없거나 작은 작업이면 같은 순서를 단일 세션에서 지키며 진행한다. 따라서 강제 멀티 에이전트나 특정 언어·빌드 도구를 전제하지 않는다.
 
+#### 그래프 실행 어댑터
+
+`skills/implement-feature/references/feature-delivery-graph.json`이 노드·전이·쓰기 권한·종료 조건의 공용 계약이다. Codex는 이 계약을 Skill과 역할 agent 위임으로 해석한다. Claude Code `2.1.154+`에서는 승인 뒤 `/ai-harness:implement-feature` Dynamic Workflow가 delivery → review → repair → re-review를 실행할 수 있다. 계획·사용자 승인은 workflow 밖의 Skill 대화에서 처리한다. Claude workflow를 쓸 수 없거나 중간 사용자 판단이 필요하면 같은 그래프를 현재 세션에서 실행한다.
+
 ### /harness-init
 
 프로젝트를 실측 분석(언어·빌드·테스트·git 컨벤션·모듈 구조)한 뒤 **수준 인터뷰**를 거쳐 하네스를 스캐폴딩한다:

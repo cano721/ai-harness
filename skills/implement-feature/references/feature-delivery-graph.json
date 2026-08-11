@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "feature-delivery",
+  "entry": "discover",
+  "terminals": ["done", "user_decision"],
+  "nodes": {
+    "discover": {"write": false, "output": "project_contract"},
+    "brief": {"write": false, "output": "implementation_brief"},
+    "approval": {"write": false, "output": "approved_brief"},
+    "deliver": {"write": true, "output": "slice_evidence"},
+    "review": {"write": false, "output": "findings"},
+    "repair": {"write": true, "output": "repair_evidence"},
+    "done": {"write": false, "output": "handoff"},
+    "user_decision": {"write": false, "output": "blocker_report"}
+  },
+  "transitions": [
+    {"from": "discover", "to": "brief"},
+    {"from": "brief", "to": "approval"},
+    {"from": "approval", "to": "brief", "when": "brief_changed_or_not_approved"},
+    {"from": "approval", "to": "deliver", "when": "user_explicitly_approved"},
+    {"from": "deliver", "to": "review"},
+    {"from": "review", "to": "done", "when": "no_blocking_findings"},
+    {"from": "review", "to": "repair", "when": "blocking_findings"},
+    {"from": "repair", "to": "review", "when": "required_checks_pass"},
+    {"from": "repair", "to": "user_decision", "when": "same_root_cause_after_two_attempts_or_product_decision"}
+  ],
+  "invariants": [
+    "No write-capable node is reachable before user_explicitly_approved.",
+    "A blocking finding cannot transition directly to done.",
+    "Every repair is followed by required checks and re-review.",
+    "The delivery node follows the project test policy: TDD, required, recommended, or no automated-test requirement."
+  ]
+}

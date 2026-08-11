@@ -5,7 +5,7 @@ description: Implement a new product feature through scoped discovery, small evi
 
 # Implement Feature
 
-Deliver the requested feature with a small, auditable change surface. The project’s `AGENTS.md`, harness docs, and existing conventions remain authoritative; this skill supplies the delivery loop when they do not already prescribe one.
+Deliver the requested feature with a small, auditable change surface. The project’s `AGENTS.md`, harness docs, and existing conventions remain authoritative; this skill supplies the delivery loop when they do not already prescribe one. Read [the graph contract](references/feature-delivery-graph.json) before delivery; it is the common state/transition contract for Codex and Claude.
 
 ## 1. Plan, then obtain explicit approval
 
@@ -43,6 +43,13 @@ Use the project’s configured personas when available (`.codex/agents/`, `.clau
 | Inspect the completed diff | reviewer | read-only |
 
 Never run concurrent writers against overlapping files. Do **not** block feature delivery solely because role agents or a subagent facility are absent: retain the same phase boundaries in one session and explicitly record the evidence. Use delegation only when its context cost is justified by the task’s scope or risk.
+
+### Runtime adapter
+
+- **Codex**: use this graph contract directly. Delegate bounded nodes to configured `.codex/agents/` or project personas when available; otherwise keep node boundaries in one session. Codex has no required external graph runner.
+- **Claude Code**: after the user approves the Brief, use the optional namespaced `/ai-harness:implement-feature` Dynamic Workflow only when Claude Code is version `2.1.154` or later and the workflow is available. Pass the approved brief as its input and let it run delivery → review → repair → re-review. It never obtains approval itself; if the workflow is unavailable or unsuitable, follow the same graph in the current session.
+
+The Claude adapter accepts `{ approved: true, brief: "<approved Implementation Brief>" }`. Do not run it before approval, and do not use it for work that needs user input between delivery stages.
 
 ## 4. Deliver slices using the project test policy
 
