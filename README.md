@@ -1,10 +1,66 @@
 # ai-harness
 
-에이전트 활동 기록 기반 하네스 자동 개선 — Claude Code · Codex CLI 듀얼 플러그인.
+Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-에이전트가 프로젝트에서 실제로 어떻게 일하는지(어떤 문서를 읽고, 어떤 워크플로를 쓰고, 어디서 반복 실수하는지)를 자동 수집하고, 그 데이터로 프로젝트 하네스(AGENTS.md, docs, workflows)를 근거 기반으로 개선한다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다.
 
-## 설치
+## 목차
+
+- [한눈에 보기](#overview)
+- [제공하는 Skills](#skills)
+- [빠른 시작](#quick-start)
+- [기능 개발 흐름](#feature-delivery)
+- [자가학습](#self-learning)
+- [수집 데이터와 보관](#data-retention)
+- [업데이트](#updates)
+- [설정](#configuration)
+- [저장소 구조 · 요구사항](#repository)
+
+<a id="overview"></a>
+
+## 한눈에 보기
+
+```mermaid
+flowchart LR
+    A["/harness-init\n프로젝트 규칙 생성"] --> B["평소 개발\n/implement-feature 등"]
+    B --> C["SessionEnd hook\n압축 이벤트 기록"]
+    C --> D["analysis batch\n분석할 만큼 축적"]
+    D --> E["/harvest\n근거 검토·개선안"]
+    E -->|"사용자 승인·PR 병합"| A
+    C -. "언제든 조회" .-> F["/metrics"]
+```
+
+| 하고 싶은 일 | 명령 | 결과 |
+|---|---|---|
+| 프로젝트에 규칙을 처음 만들기 | `/harness-init` | `AGENTS.md`, `.ai-harness`, 필요한 도구별 어댑터 생성 |
+| 기능을 안전하게 개발하기 | `/implement-feature` | 계획 승인 → 구현 → 검토·수정·재검토 |
+| 쌓인 사용 기록 보기 | `/metrics [7d\|30d\|90d\|all]` | 세션·토큰·워크플로·신호 리포트 |
+| 기록으로 하네스 개선하기 | `/harvest <프로젝트>` | 근거 기반 개선안과 PR 제안 |
+| 플러그인 최신화 | `/harness-update --check` / `--apply` | 확인만 또는 명시적 업데이트 |
+
+`/metrics`는 관찰용이며 `/harvest` 전에 실행할 필요가 없습니다. analysis batch는 **개선이 확정된 묶음이 아니라**, `/harvest`가 검토할 입력 단위입니다.
+
+<a id="skills"></a>
+
+## 제공하는 Skills
+
+모든 skill은 Claude Code와 Codex CLI에서 공용으로 제공합니다. `/harness-init`에서 선택한 도구에 맞는 진입점과 역할 agent 설정만 프로젝트에 생성합니다.
+
+| Skill | 언제 쓰나 | 하는 일 | 자동 실행 여부 |
+|---|---|---|---|
+| `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 수준을 바꿀 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경합니다. | 사용자 실행 |
+| `/implement-feature` | 신규 기능이나 의미 있는 변경을 시작할 때 | 승인 가능한 Implementation Brief를 먼저 만들고, 구현·검토·수정·재검토를 하나의 전달 흐름으로 관리합니다. | 사용자 실행 |
+| `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
+| `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
+| `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
+
+Skill과 별개로 `SessionEnd`·`SessionStart` hook은 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다.
+
+<a id="quick-start"></a>
+
+## 빠른 시작
+
+### 1. 플러그인 설치
 
 ```bash
 # Claude Code
@@ -16,101 +72,151 @@ codex plugin marketplace add cano721/ai-harness
 codex plugin add ai-harness@ai-harness
 ```
 
-설치 즉시 세션 활동 수집이 시작된다. SessionEnd hook으로 전달된 Claude/Codex transcript를 즉시 소화하고, 누락되거나 진행 중인 Codex 세션 로그는 `/metrics`·`/harvest`·session 조회 시점의 backfill이 보완한다. 프로젝트별 누적량이 기준을 넘으면 다음 세션 시작 때 `/harvest`를 안내한다. SessionStart는 새 ai-harness 릴리스도 확인하지만, 업데이트는 사용자가 명시적으로 실행할 때만 적용한다.
+둘 중 사용하는 도구만 설치해도 됩니다. 설치 뒤 새 세션을 시작하면 hook과 skill이 로드됩니다.
 
-## 라이프사이클
+### 2. 대상 프로젝트에서 초기화
+
+프로젝트 루트에서 `/harness-init`을 실행합니다. 실제 코드베이스를 먼저 살핀 뒤 아래만 선택하면 됩니다.
+
+- 규모: `minimal` 또는 `standard`
+- 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
+- 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
+- Git 통제: PR 필수 또는 직접 커밋 허용
+
+`standard`는 `minimal`의 상위 집합입니다. `AGENTS.md`와 문서에 더해 워크플로와 역할 agent 설정을 만듭니다. `full` 같은 별도 규모는 없고, 편집 가드는 독립적인 선택입니다.
+
+초기화 결과는 `.ai-harness/harness.json`에 저장됩니다. 이미 하네스가 있는 프로젝트에서 다시 실행하면 수준 변경 모드로 동작하며, 변경 diff만 적용합니다. 다운그레이드로 파일을 지우는 경우에는 대상 목록을 먼저 확인합니다.
+
+### 3. 평소처럼 개발
+
+일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. 신규 기능은 `/implement-feature`로 시작하면 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
+
+<a id="feature-delivery"></a>
+
+## 기능 개발 흐름: `/implement-feature`
+
+이 skill은 프로젝트의 기존 규칙을 우선합니다. 규칙이 없거나 약한 부분만 아래 전달 흐름으로 보완합니다.
 
 ```mermaid
-flowchart TD
-    I["/harness-init — 최초 1회"] --> H["하네스<br/>AGENTS.md · docs · workflows"]
-    H -->|"에이전트가 하네스 따라 작업<br/>(hook이 활동 자동 기록)"| R["활동 기록"]
-    R -->|"누적량 기준 충족"| Q["분석 대상 묶음<br/>(analysis batch)"]
-    Q --> V["/harvest<br/>기록 근거로 개선안"]
-    V -->|"개선 PR 병합"| H
-    R -.->|"아무 때나 관찰"| M["/metrics — 관찰창"]
+stateDiagram-v2
+    [*] --> discover
+    discover --> brief
+    brief --> approval
+    approval --> brief: 범위 변경 또는 미승인
+    approval --> deliver: 명시적 승인
+    deliver --> review
+    review --> done: blocking finding 없음
+    review --> repair: blocking finding 있음
+    repair --> review: 검증 통과
+    repair --> user_decision: 동일 원인 2회 반복·제품 판단 필요
 ```
 
-쓸수록 하네스가 좋아지는 루프: 셋업(1회) → 평소 작업이 자동 기록됨 → 기록을 근거로 하네스를 고침 → 좋아진 하네스로 다시 작업.
+1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다.
+2. **구현** — 승인 후 작업을 작고 검증 가능한 delivery slice로 나눕니다. TDD 강제 프로젝트에서는 Red → Green → Refactor를 지키고, 그 외에는 프로젝트 테스트 정책을 따릅니다.
+3. **검토 루프** — acceptance case와 diff를 검토합니다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재검토로 해소를 확인합니다. 같은 원인이 두 번 반복되거나 제품 결정이 필요하면 추측하지 않고 사용자에게 넘깁니다.
 
-`/metrics`는 루프 단계가 아니라 **관찰창** — 쌓인 기록을 사람이 보고 싶을 때 아무 때나 친다. `/harvest`는 필요한 통계를 스스로 갱신하므로 `/metrics` 선행이 필요 없다.
+같은 대화 안에 승인된 동일 범위의 Brief가 있으면 재승인 없이 구현을 이어갑니다. explorer, test-engineer, developer, reviewer 역할이 설정된 경우에만 독립적인 작업을 위임하며, 작은 작업은 단일 세션에서 동일한 순서를 지킵니다.
 
-### /implement-feature
+### Codex와 Claude 실행 방식
 
-신규 기능 개발용 공용 Skill이다. 프로젝트의 `AGENTS.md`·`.ai-harness` 워크플로가 우선이며, 규칙이 비어 있거나 약할 때 다음 일관된 전달 루프를 보완한다.
+공용 그래프 계약은 [`feature-delivery-graph.json`](skills/implement-feature/references/feature-delivery-graph.json)에 있습니다. 노드, 전이, 쓰기 허용 시점, 종료 조건을 한곳에서 정의합니다.
 
-1. 먼저 범위·비범위·검증 케이스·예상 변경 영역·검증 계획을 `Implementation Brief`로 보여 주고 사용자의 명시 승인을 받는다. 승인 전에는 탐색과 계획만 하며 파일을 수정하지 않는다.
-2. 승인 뒤 요구사항을 관찰 가능한 검증 케이스로 만들고, 1~3개 케이스의 작은 delivery slice로 나눈다. TDD 정책에서만 의도된 실패 Red → 최소 구현 Green → 테스트 의도를 바꾸지 않는 Refactor를 분리하며, 다른 정책은 프로젝트가 정한 테스트 순서와 가능한 검증을 따른다.
-3. 마지막에는 acceptance case 대비 diff 리뷰와 프로젝트가 요구하는 넓은 검증을 실행한다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재리뷰를 반복해 해소를 확인하고, 실행 결과를 완료 증거로 남긴다.
+| 도구 | 실행 방식 |
+|---|---|
+| Codex | skill과 역할 agent(또는 단일 세션의 단계 경계)가 그래프 계약을 해석합니다. 별도의 그래프 런타임은 필요하지 않습니다. |
+| Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 `/ai-harness:implement-feature` Dynamic Workflow가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. |
+| 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
 
-현재 대화에 같은 범위의 승인된 Brief가 있으면 다시 승인받지 않고 구현을 이어간다. explorer·test-engineer·developer·reviewer 역할이 프로젝트에 설정되어 있으면 범위가 독립적인 작업만 위임한다. 역할 도구가 없거나 작은 작업이면 같은 순서를 단일 세션에서 지키며 진행한다. 따라서 강제 멀티 에이전트나 특정 언어·빌드 도구를 전제하지 않는다.
+Claude Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 skill 대화 단계에서 먼저 받습니다.
 
-#### 그래프 실행 어댑터
+### 역할별 기본 모델
 
-`skills/implement-feature/references/feature-delivery-graph.json`이 노드·전이·쓰기 권한·종료 조건의 공용 계약이다. Codex는 이 계약을 Skill과 역할 agent 위임으로 해석한다. Claude Code `2.1.154+`에서는 승인 뒤 `/ai-harness:implement-feature` Dynamic Workflow가 delivery → review → repair → re-review를 실행할 수 있다. 계획·사용자 승인은 workflow 밖의 Skill 대화에서 처리한다. Claude workflow를 쓸 수 없거나 중간 사용자 판단이 필요하면 같은 그래프를 현재 세션에서 실행한다.
+모델 선택은 초기화 인터뷰에서 묻지 않습니다. 선택한 도구의 역할 agent 정의에 기본값을 기록합니다.
 
-### /harness-init
-
-프로젝트를 실측 분석(언어·빌드·테스트·git 컨벤션·모듈 구조)한 뒤 **수준 인터뷰**를 거쳐 하네스를 스캐폴딩한다:
-
-- **규모**: `minimal`(AGENTS.md+docs) / `standard`(+워크플로·페르소나). 선택한 도구의 진입점은 아래 통합 선택에 따라 추가되며, 편집 가드는 `full` 같은 별도 단계가 아니라 독립 옵션
-- **도구 통합**: Codex / Claude / 둘 다 / 통합 파일 없음. Codex는 `.agents/skills/`, Claude는 `.claude/` 어댑터를 필요한 경우에만 생성
-- **agent 모델 기본값**: 사용자가 고르는 항목이 아니다. 선택한 도구의 agent 정의에 역할별 모델·사고 수준을 직접 기록하고, 사용 불가 시에만 대체 후보를 제시
-- **테스트 정책**: TDD 강제 / 테스트 필수 / 권장 / 없음 — 실측과 모순되면 경고 (예: 테스트 0개인데 TDD 강제)
-- **git 통제**: PR 필수(병합은 사람) / 직접 커밋 허용
-
-선택은 `.ai-harness/harness.json`에 기록된다. docs 초안은 코드 실측으로만 채우고, Hard constraints는 빈 틀로 시작한다 — 검증된 지식은 `/harvest`가 시간을 들여 채운다.
-
-#### agent 모델 기본값
-
-모델은 인터뷰로 묻지 않고, 선택한 도구의 역할 agent 설정에 직접 생성한다. Codex는 `.codex/agents/*.toml`의 `model`·`model_reasoning_effort`, Claude는 `.claude/agents/*.md`의 `model` frontmatter를 사용한다.
-
-| 역할 | Codex | Claude | 용도 |
+| 역할 | Codex | Claude | 주 용도 |
 |---|---|---|---|
 | explorer | `gpt-5.6-terra` / low | Haiku | 독립적인 코드 탐색·문서 확인 |
 | test-engineer | `gpt-5.6-terra` / medium | Sonnet | 재현과 테스트 추가 |
 | developer | `gpt-5.6` / medium | Sonnet | 구현과 수정 |
 | reviewer | `gpt-5.6` / high | Opus | 보안·데이터·설계 검토 |
 
-보안, 데이터 마이그레이션, 복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다. agent 모델이 계정·조직 정책상 사용 불가하면 자동으로 다른 모델을 고르지 않고 오류와 대체 후보를 보여 준다. 서브에이전트는 각각 별도 컨텍스트·도구 작업을 소비하므로, 독립적이고 읽기 위주의 작업에만 위임한다.
+계정 또는 조직 정책상 모델을 쓸 수 없으면 임의로 다른 모델을 고르지 않고 대체 후보를 안내합니다. 보안, 데이터 마이그레이션, 복잡한 장애 분석은 가벼운 역할에 위임하지 않습니다.
 
-**기존 하네스에서 재실행하면 수준 변경 모드**: 현재 수준을 보여주고 재인터뷰 후 diff만 적용한다. 업그레이드는 자동, 다운그레이드(삭제)는 대상 목록 확인 후에만.
+<a id="self-learning"></a>
 
-### 자동 수집
+## 자가학습: 기록 → 분석 → 개선
 
-세션 transcript를 압축 이벤트(JSONL)로 적재한다. LLM 비용 0 — `jq`만 사용.
+### 자동으로 일어나는 일
 
-수집 항목: 세션 메타(토큰·모델·턴), 워크플로/커맨드 사용, 페르소나 위임, 하네스 docs 읽힘, 편집 파일, bash 명령, MCP 툴, 이슈 키 언급, 에러/가드 차단/권한 거부/컨텍스트 압축 횟수, 사용자 교정 마크(해당 발화의 앞 60자 스니펫 — 개선 분석의 정독 후보 표시용).
+| 시점 | hook | 하는 일 | 하지 않는 일 |
+|---|---|---|---|
+| 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | analysis batch와 새 릴리스 여부를 알림 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
-각 session 이벤트는 `coverage`에 실제 관측 가능한 항목을 기록한다. 현재 Claude는 위 항목 전체, Codex는 bash 명령·이슈·교정 마크를 관측한다. 통계에서 **미지원은 0회와 구분**하며 `/harvest`의 삭제 근거로 쓰지 않는다.
+두 hook은 3초 timeout이며 실패해도 작업 세션을 막지 않습니다. 누락·진행 중인 Codex 세션은 `/metrics`, `/harvest`, 세션 조회의 backfill이 보완합니다.
 
-#### 등록된 hook
+### 언제 `/harvest`를 안내하나
 
-| hook | 실행 명령 | 역할 |
+기본적으로 아래 중 하나면 pending 세션을 analysis batch로 묶고 다음 세션 시작에 `/harvest`를 안내합니다.
+
+- 세션 10개 누적
+- 서로 다른 2개 이상 세션에서 사용자 교정 2개
+- 서로 다른 2개 이상 세션에서 오류 5개, 가드 차단 3개, 권한 거부 3개 중 하나
+
+한 batch는 최대 50개 세션입니다. 단, 트리거 판정은 전체 pending을 기준으로 하며 신호가 있는 세션을 우선 포함합니다. 분석 중 새로 종료된 세션은 다음 batch에 보존됩니다. 첫 알림을 놓치면 기본 24시간마다 다시 알립니다.
+
+`/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
+
+- **개선 적용**: 에이전트의 실제 행동을 바꿀 제약·워크플로·문서 구조 변경만 PR로 제안합니다.
+- **통계 참고**: 근거는 있으나 아직 행동 변경으로 이어질 만큼 강하지 않은 경우입니다.
+- **개선점 없음**: cosmetic 정리나 단발성 노이즈는 적용하지 않습니다.
+
+정상 완료한 batch만 `mark-reviewed`로 소비합니다. `--dry-run`이나 실패한 분석은 pending을 지우지 않습니다.
+
+```bash
+# 개선 PR을 만든 경우
+scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
+  --outcome improved --summary "<개선 요약>" --artifact "<PR URL>"
+
+# 적용할 개선이 없는 경우
+scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
+  --outcome no-change --summary "<적용하지 않은 이유>"
+```
+
+<a id="data-retention"></a>
+
+## 수집 데이터와 보관
+
+수집은 `jq` 기반이며 LLM 비용이 들지 않습니다. transcript 전문을 복사하지 않습니다.
+
+- 수집 항목: 세션 메타(토큰·모델·턴), workflow/command 사용, 역할 위임, 하네스 문서 읽기, 편집 파일, bash 명령, MCP 도구, 이슈 키, 오류·가드·권한 거부·컨텍스트 압축 횟수
+- 사용자 교정 마크만 해당 발화 앞 60자 스니펫을 보관해 개선 분석의 정독 후보로 표시합니다.
+- Claude는 위 항목 전체를 관측합니다. Codex는 현재 bash 명령·이슈·교정 마크를 관측합니다. 미지원은 0회와 구분하므로, 관측하지 못한 데이터로 삭제 근거를 만들지 않습니다.
+
+| 데이터 | 기본 위치 | 보관 방식 |
 |---|---|---|
-| `SessionEnd` | `scripts/collect.sh` | transcript를 source별 압축 이벤트로 추출하고 프로젝트 pending 큐에 멱등 적재한다. 누적량만 판정하며 LLM이나 `/harvest`는 실행하지 않는다. |
-| `SessionStart` | `scripts/session-start.sh` | 현재 프로젝트의 analysis batch 알림과 ai-harness 새 버전 알림을 하나로 합친다. `/harvest` 분석이나 플러그인 업데이트를 자동 시작하지 않는다. |
+| 압축 이벤트 | `~/.ai-harness/events/` | 일반 180일, 교정·오류·차단·권한 거부가 있으면 365일 |
+| 통계 rollup | `~/.ai-harness/rollups/` | 상세 보관 기간 후 transcript 경로와 교정 문구를 제거해 전환 |
+| harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
+| 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
-두 hook 모두 timeout은 3초이며, 수집·알림 실패가 세션 시작이나 종료를 막지 않도록 실패 안전하게 동작한다.
+상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다.
 
-#### 누적량 기반 harvest 트리거
+<a id="updates"></a>
 
-SessionEnd hook은 LLM 분석을 실행하지 않고, 막 끝난 세션의 압축 이벤트를 프로젝트별 pending 큐에 멱등 적재한 뒤 누적량만 판정한다. 누락된 hook은 다음 backfill이 이벤트 복원과 큐 등록을 함께 수행한다. 이미 검토한 Claude/Codex 세션을 같은 ID로 재개한 경우에는 event revision 변화를 감지해 새 review unit으로 넣고, 교정·오류 같은 신호는 이전 검토 이후 증가분만 계산한다.
+## 업데이트
 
-기본 트리거는 **세션 10개**, 또는 **서로 다른 2개 이상 세션에서** 사용자 교정 2개 / 오류 5개 / 가드 차단 3개 / 권한 거부 3개 중 하나를 충족하는 경우다. 단일 세션 노이즈가 바로 분석을 만들지 않게 하면서 반복 신호는 놓치지 않는다. 한 analysis batch는 최대 50개 세션으로 제한하며, cap 뒤의 신호가 가려지지 않도록 전체 pending으로 트리거를 판정하고 신호가 있는 review unit을 batch에 우선 포함한다.
+SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다.
 
-analysis batch는 **개선이 필요하다는 판정 결과가 아니라 `/harvest`가 검토할 입력 묶음**이다. `/harvest`가 반복성·근거·행동 변화 가치를 분석한 뒤 개선 적용, 통계 참고만, 개선점 0건 중 하나로 판단한다. 종료 훅에서는 파일 수정·PR 생성이나 LLM 호출을 하지 않는다.
+```bash
+# 설치 상태와 최신 버전만 확인
+/harness-update --check
 
-분석 도중 새로 끝난 세션은 현재 analysis batch에 섞지 않고 다음 묶음용 pending으로 보존한다. record·import·batch 생성·`mark-reviewed`는 프로젝트별 공용 lock으로 직렬화해 hook이 겹쳐도 marker가 pending과 seen으로 갈라지지 않는다. 정상 분석 완료 시 `mark-reviewed`로 현재 묶음만 처리 완료 표시하며, `--dry-run`이나 실패한 분석은 소비하지 않는다. 첫 알림을 놓치면 기본 24시간 간격으로 다시 안내한다.
+# 사용자가 명시적으로 적용
+/harness-update --apply
+```
 
-큐 상태 JSON에서 `has_analysis_batch`는 현재 분석할 묶음이 있는지, `new_analysis_batch`는 이번 명령에서 새 묶음이 만들어졌는지를 뜻한다. 고정된 묶음은 `analysis-batch.json`에 저장되고 `/harvest`가 정상 완료되면 `mark-reviewed` 명령으로 검토 완료 처리한다.
-
-#### 플러그인 업데이트
-
-SessionStart는 공식 `release.json`을 기본 24시간 캐시로 확인한다. 새 버전이 있으면 세션 메시지로만 알려 주며, hook이 설치·재시작·프로젝트 파일 변경을 수행하지 않는다. 네트워크 실패 시에도 기존 성공 캐시를 보존하고 세션을 막지 않는다.
-
-배포자는 새 버전을 릴리스할 때 루트 `release.json`의 `version`과 릴리스 링크도 같은 변경에 포함한다. 이 파일이 기본 확인 원본이므로, 배포된 `main` 기준으로만 새 버전 알림이 발생한다.
-
-업데이트를 원하면 `/harness-update` 또는 “ai-harness 업데이트해줘”를 실행한다. 기본 확인만 하려면 `--check`, 실제 적용은 사용자가 명시한 `--apply`가 필요하다. 적용 시 현재 호스트 하나에만 다음 안전한 플러그인 명령을 사용한다.
+직접 적용해야 한다면 현재 사용하는 호스트에서 다음 명령을 실행할 수 있습니다.
 
 ```bash
 # Codex CLI
@@ -121,54 +227,17 @@ codex plugin add ai-harness@ai-harness
 claude plugin update ai-harness@ai-harness
 ```
 
-업데이트 뒤에는 새 대화/세션을 시작해 변경된 skill과 hook을 다시 로드한다.
+적용 뒤 새 대화 또는 세션을 시작해 변경된 skill과 hook을 다시 로드합니다.
 
-### /metrics [7d|30d|90d|all] [프로젝트] · /metrics session [sid]
-
-사용량 리포트 (프로젝트에는 조회 전용, 로컬 event cache는 갱신):
-- **전체 집계**: 프로젝트별 세션·토큰, source별 수집 범위, 워크플로 순위, docs 읽힘 횟수(관측 지원 세션만 대상으로 0회 판단), 페르소나 위임, 에러/가드 신호, 이슈 언급
-- **`session` 모드**: Claude/Codex 세션 1개 정밀 리포트 — 이 세션이 토큰을 어디에 쓰고, 어떤 문서를 읽고, 어디서 막혔는지. sid 생략 시 환경의 실제 session/thread ID를 우선
-
-### /harvest <프로젝트> [--dry-run]
-
-축적된 이벤트 + 사용자 교정 마크를 분석해 하네스 개선안을 도출하고 PR을 만든다.
-
-가치 기준: **에이전트의 실제 행동이 바뀌는 개선만** PR화한다 — 반복 실수를 막는 constraint, 토큰/시간 낭비를 줄이는 구조 변경, 반복 삽질의 근본 해결. 문서 정리 같은 cosmetic 개선은 보고서 각주로만 남긴다. "이 변경이 없었으면 다음 달에 뭐가 잘못됐나?"에 답 못 하면 탈락.
-
-정량 판단은 analysis batch 자체 통계와 30/90일 baseline을 분리해 비교한다. 검토 이력은 `review-history.jsonl`에 batch 근거와 `improved`/`no-change` 결론, 요약, PR 참조를 누적한다. 다음 `/harvest`는 최근 결론을 먼저 읽어 같은 근거의 제안을 반복하지 않는다.
-
-정상 완료 표시는 실제 결론과 함께 기록한다:
-
-```bash
-# 개선 PR 생성
-scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
-  --outcome improved --summary "<개선 요약>" --artifact "<PR URL>"
-
-# 개선점 없음
-scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
-  --outcome no-change --summary "<적용하지 않은 이유>"
-```
-
-## 데이터
-
-- 이벤트 저장 위치: 로컬 `~/.ai-harness/events/`. 이벤트는 카운트·경로·메타데이터이며, 예외로 교정 마크만 발화 앞 60자 스니펫을 담는다. **transcript 전문은 어디에도 복사하지 않는다** — 원문이 필요한 분석은 로컬 원본을 참조한다.
-- harvest 대기 상태: 로컬 `~/.ai-harness/harvest-queue/`. pending 세션·analysis batch·검토 완료 세션의 작은 참조/카운트만 두며 transcript를 복사하지 않는다. v0.9.0의 `ready.json`은 처음 읽을 때 `analysis-batch.json`으로 자동 이관한다.
-- 검토 이력: 프로젝트별 `review-history.jsonl`에 batch 생성·검토 시각, 트리거, 집계 수치, 세션 marker와 실제 결론·요약·산출물을 append-only로 남긴다.
-- 보관 정책: `mark-reviewed` 시 검토 완료 데이터를 점검한다. 일반 이벤트는 기본 180일, 교정·오류·차단·권한 거부가 있는 이벤트는 365일 보관한 뒤 transcript 경로와 교정 문구를 제거한 `~/.ai-harness/rollups/` 통계 이벤트로 전환하고 상세 이벤트를 삭제한다. 상세 삭제가 실패하거나 중간에 중단되면 원 marker를 유지해 다음 실행에서 재시도하며, 동일 세션이 실제로 갱신되면 rollup 이후에도 새 revision을 복원한다. `0`일로 설정하면 해당 정리를 비활성화한다.
-- 수집 건강 상태: `~/.ai-harness/health.json`에 SessionEnd·backfill·보관 처리의 최근 성공/실패와 누적 횟수를 기록한다. hook은 실패 안전하지만 실패 자체를 숨기지는 않는다.
-- 업데이트 확인 상태: `~/.ai-harness/update-check.json`에 설치/최신 버전, 마지막 조회 결과와 시각만 캐시한다. 활동 기록이나 프로젝트 데이터는 포함하지 않는다.
-- Codex 세션 로그(`$CODEX_HOME/sessions/`, `~/.codex/sessions/`)도 동일하게 소화된다. 공용 hook은 `rollout-*.jsonl`을 Codex extractor로 분류해 Claude 이벤트와 섞지 않는다.
-- 진행 중 JSONL도 손상되지 않은 줄까지 안전하게 소화하며, 다음 질의에서 갱신분을 재추출한다.
-- 크래시로 hook이 못 돈 세션과 extractor/event version이 바뀐 과거 세션은 다음 `/metrics`·`/harvest` 실행 시 backfill이 소급 처리한다.
-- 프로젝트 ID는 `.ai-harness/harness.json`의 `project_id`를 우선하며, 없으면 git origin/common-dir로 정규화해 worktree를 같은 프로젝트로 묶는다.
+<a id="configuration"></a>
 
 ## 설정 (선택)
 
-`~/.ai-harness/config`:
+`~/.ai-harness/config`에 아래 값을 둘 수 있습니다.
 
 ```bash
-HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 이슈 키 패턴 (기본: [A-Z]{2,}[0-9]*-[0-9]+)
-HM_HARVEST_SESSION_THRESHOLD=10  # 0이면 이 기준 비활성화
+HM_ISSUE_RE="(NJ|JDA)-[0-9]+"   # 기본: [A-Z]{2,}[0-9]*-[0-9]+
+HM_HARVEST_SESSION_THRESHOLD=10  # 0이면 세션 수 기준 비활성화
 HM_HARVEST_CORRECTION_THRESHOLD=2
 HM_HARVEST_CORRECTION_SESSION_THRESHOLD=2
 HM_HARVEST_ERROR_THRESHOLD=5
@@ -179,48 +248,36 @@ HM_HARVEST_PERMISSION_THRESHOLD=3
 HM_HARVEST_PERMISSION_SESSION_THRESHOLD=2
 HM_HARVEST_MAX_BATCH_SESSIONS=50
 HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
-HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 안 함
+HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
-HM_UPDATE_CHECK_HOURS=24          # 0이면 매 SessionStart마다 릴리스 확인
+HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 ```
 
-데이터 디렉토리 자체를 옮기려면 셸 프로파일(예: `~/.zshrc`)에 환경변수로:
+저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
 
 ```bash
-export HARNESS_METRICS_DIR="/custom/path"   # 기본: ~/.ai-harness
+export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 ```
 
-## 저장소 구조
+<a id="repository"></a>
 
-```
-.claude-plugin/   Claude Code 플러그인 매니페스트 + 마켓플레이스
-.codex-plugin/    Codex CLI 플러그인 매니페스트
-.agents/plugins/  Codex 마켓플레이스
-skills/*/SKILL.md 지시 단일 출처 (Agent Skills 규격 — Claude·Codex 공용 로드)
-hooks/            SessionEnd 수집·SessionStart analysis batch 알림 hook 정의
-scripts/          수집·집계·안전한 업데이트 확인 스크립트 (bash + jq, macOS/Linux)
-```
-
-주요 로컬 상태:
+## 저장소 구조 · 요구사항
 
 ```text
-~/.ai-harness/
-├── events/                         상세 압축 이벤트
-├── rollups/                        검토·보관 후 통계 이벤트
-├── health.json                     수집 파이프라인 건강 상태
-├── update-check.json               최신 릴리스 확인 캐시
-└── harvest-queue/p-<project>/
-    ├── sessions/                   아직 검토하지 않은 세션 marker
-    ├── analysis-batch.json         현재 /harvest 검토 대상 묶음
-    ├── seen/                       검토 완료 marker 또는 tombstone
-    ├── last-reviewed.json          가장 최근 검토 결과
-    └── review-history.jsonl        전체 batch 검토 이력
+.claude-plugin/   Claude Code 플러그인 매니페스트와 마켓플레이스
+.codex-plugin/    Codex CLI 플러그인 매니페스트
+.agents/plugins/  Codex 마켓플레이스
+skills/           Claude·Codex가 공용으로 읽는 skill 지시
+hooks/            SessionEnd 수집·SessionStart 알림 정의
+workflows/        Claude Dynamic Workflow 어댑터
+scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 ```
 
-## 요구사항 · 한계
+macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. 교정 마크 감지는 현재 한국어 패턴 중심입니다.
 
-- `jq`, bash, `curl` (macOS/Linux 검증됨; curl은 업데이트 확인에만 사용)
-- 교정 마크 감지는 현재 한국어 패턴 위주
-- Codex 이벤트 추출은 Claude보다 얕음 (명령·이슈·교정 마크). 미지원 항목은 통계에 관측 불가로 표시
-- 자동화 범위는 수집·묶음 생성·알림까지다. 실제 분석과 수정/PR은 사용자가 `/harvest`를 실행해 승인하고, 플러그인 업데이트는 `/harness-update --apply`를 명시한 경우에만 적용한다
-- 회귀 테스트: `bash tests/run.sh` (`shellcheck`이 있으면 `shellcheck scripts/*.sh tests/*.sh`도 권장)
+개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
+
+```bash
+bash tests/run.sh
+shellcheck scripts/*.sh tests/*.sh
+```
