@@ -9,6 +9,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [한눈에 보기](#overview)
 - [제공하는 Skills](#skills)
 - [빠른 시작](#quick-start)
+- [기존 프로젝트 하네스 업데이트](#project-sync)
 - [기능 개발 흐름](#feature-delivery)
 - [버그 수정 흐름](#bug-fix)
 - [자가학습](#self-learning)
@@ -34,6 +35,7 @@ flowchart LR
 | 하고 싶은 일 | 명령 | 결과 |
 |---|---|---|
 | 프로젝트에 규칙을 처음 만들기 | `/harness-init` | `AGENTS.md`, `.ai-harness`, 필요한 도구별 어댑터 생성 |
+| 기존 프로젝트 하네스 최신화 | `/harness-init --sync` | 생성물 상태와 최신 템플릿 차이 조회 |
 | 초기화된 프로젝트에서 기능을 안전하게 개발하기 | `/implement-feature` | 계획 승인 → 구현 → 검토·수정·재검토 |
 | 쌓인 사용 기록 보기 | `/metrics [7d\|30d\|90d\|all]` | 세션·토큰·워크플로·신호 리포트 |
 | 기록으로 하네스 개선하기 | `/harvest <프로젝트>` | 근거 기반 개선안과 PR 제안 |
@@ -49,7 +51,7 @@ flowchart LR
 
 | Skill | 언제 쓰나 | 하는 일 | 자동 실행 여부 |
 |---|---|---|---|
-| `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 수준을 바꿀 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경합니다. | 사용자 실행 |
+| `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 설정·생성물을 최신화할 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경·동기화합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
@@ -104,6 +106,31 @@ codex plugin add ai-harness@ai-harness
 ### 3. 평소처럼 개발
 
 일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. `standard` 초기화로 생성된 프로젝트에서는 신규 기능을 `/implement-feature`, 결함 수정을 `/fix-bug`로 시작해 각각의 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
+
+<a id="project-sync"></a>
+
+## 기존 프로젝트 하네스 업데이트
+
+플러그인 업데이트와 프로젝트 하네스 업데이트는 분리됩니다.
+
+```text
+/harness-update --apply          # 플러그인·hook·템플릿 업데이트
+프로젝트 루트에서
+/harness-init --sync             # 변경 계획만 확인 (파일 변경 없음)
+/harness-init --sync --apply     # 안전한 생성물 동기화
+```
+
+`harness-init`은 `harness.json`의 `managed_files`에 저장된 마지막 생성 해시와 현재 파일을 비교합니다.
+
+| 파일 상태 | `--sync --apply` 동작 |
+|---|---|
+| 새 파일 | graph, 로컬 Skill/command, agent 설정 같은 관리 생성물을 추가 |
+| `unchanged` | 이전 생성 뒤 수정되지 않은 관리 파일만 최신 템플릿으로 갱신 |
+| `modified` | 현재 파일과 제안 변경의 diff를 보여 주고 파일별 승인 뒤 갱신 |
+| `untracked` | 이전 버전에 해시 이력이 없는 기존 파일. 자동 덮어쓰기 없이 diff와 승인을 요구 |
+| 보호됨 | `AGENTS.md`, `.ai-harness/docs/`, 사람이 작성한 workflow 본문. 자동 갱신하지 않고 개선 제안만 표시 |
+
+처음 `managed_files`를 지원하는 버전으로 동기화하는 기존 프로젝트는, 기존 파일을 `untracked`로 안전하게 취급합니다. 따라서 기존 프로젝트 지식이나 사용자 수정이 자동으로 사라지지 않습니다. 설정 자체를 바꾸려면 `/harness-init --reconfigure`를 사용하고, 인자 없이 실행하면 동기화·설정 변경·둘 다 중 선택할 수 있습니다.
 
 <a id="feature-delivery"></a>
 

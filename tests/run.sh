@@ -266,6 +266,23 @@ if command -v node >/dev/null 2>&1; then
 fi
 pass "bug-fix graph adapters"
 
+# 프로젝트 하네스 동기화 상태: 생성 직후 해시는 안전한 갱신 후보, 이후 수정은 승인 대상이다.
+SYNC_ROOT="$TEST_TMP/sync-project"
+mkdir -p "$SYNC_ROOT/.ai-harness" "$SYNC_ROOT/.agents/skills/example"
+printf '%s\n' '{"project_id":"sync-project","harness_version":"0.13.0"}' >"$SYNC_ROOT/.ai-harness/harness.json"
+printf '%s\n' 'generated content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.14.0 \
+  --file .agents/skills/example/SKILL.md
+SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
+assert_eq "unchanged" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "managed generated file is unchanged"
+assert_eq "0.14.0" "$(jq -r '.harness_version' "$SYNC_ROOT/.ai-harness/harness.json")" "sync record updates harness version"
+printf '%s\n' 'user changed content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
+SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
+assert_eq "modified" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "user-modified managed file requires approval"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "--sync --apply" "harness init supports project sync apply"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "managed_files" "harness init records managed file hashes"
+pass "project harness sync state"
+
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
@@ -633,9 +650,9 @@ assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
 # manifest versions and marketplace policy stay aligned
-assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
-assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
-assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
+assert_eq "0.14.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
+assert_eq "0.14.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
+assert_eq "0.14.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
 

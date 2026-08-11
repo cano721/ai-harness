@@ -1,18 +1,20 @@
 ---
 name: harness-init
-description: 프로젝트 AI 하네스 최초 셋업/수준 변경. 프로젝트를 실측 분석하고 수준 인터뷰(규모/테스트 정책/git 통제) 후 AGENTS.md·.ai-harness docs·워크플로·페르소나를 스캐폴딩한다. 기존 하네스가 있으면 수준 변경 모드로 diff만 적용.
+description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 동기화. 프로젝트를 실측 분석해 AGENTS.md·.ai-harness docs·워크플로·페르소나를 스캐폴딩하고, 기존 하네스는 안전한 diff와 관리 파일 해시로 최신 템플릿에 동기화한다.
 ---
 
-# /harness-init — 프로젝트 AI 하네스 셋업 / 수준 변경
+# /harness-init — 프로젝트 AI 하네스 셋업 / 변경 / 동기화
 
-현재 프로젝트(cwd)를 분석해 `.ai-harness` 하네스 구조를 스캐폴딩한다. 이후 `/metrics`로 관찰, `/harvest`로 개선하는 사이클의 시작점. **기존 하네스가 있으면 수준 변경 모드로 동작한다.**
+현재 프로젝트(cwd)를 분석해 `.ai-harness` 하네스 구조를 스캐폴딩한다. 이후 `/metrics`로 관찰, `/harvest`로 개선하는 사이클의 시작점. **기존 하네스가 있으면 설정 변경 또는 생성물 동기화 모드로 동작한다.**
 
-인자: `$ARGUMENTS` — 아래 인터뷰 답을 미리 줄 수도 있음 (예: `standard`, `tdd`, `codex`, `guard`). 준 항목은 질문 생략.
+인자: `$ARGUMENTS` — 아래 인터뷰 답을 미리 줄 수도 있음 (예: `standard`, `tdd`, `codex`, `guard`). 기존 프로젝트에서는 `--sync`(동기화 계획), `--sync --apply`(안전한 생성물 적용), `--reconfigure`(수준 인터뷰)를 쓴다. 인자가 없으면 현재 설정을 보여 주고 동기화 / 설정 변경 / 둘 다 중 선택하게 한다.
+
+경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉터리의 두 단계 상위(플러그인 루트).
 
 ## 0. 모드 판정
 
 - `.ai-harness/`와 `AGENTS.md` **둘 다 없음** → **신규 셋업** (1번부터 진행)
-- **하나라도 있음** → **수준 변경 모드** (아래 6번으로) — AGENTS.md만 있는 프로젝트도 기존 하네스로 취급, 절대 덮어쓰지 않는다
+- **하나라도 있음** → **기존 하네스 모드** (아래 6번으로) — AGENTS.md만 있는 프로젝트도 기존 하네스로 취급, 절대 덮어쓰지 않는다
 - git repo가 아니면 사용자에게 `git init` 여부 확인
 
 ## 1. 프로젝트 분석 (질문보다 먼저 — 질문에 실측 컨텍스트를 담기 위해)
@@ -107,21 +109,31 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 매니페스트 형식 (인터뷰 답 기록 — 수준 변경·/harvest의 정책 참조용):
 
 ```json
-{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>" }
+{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } } }
 ```
 
 ## 5. 마무리
 
 1. 생성 파일 목록 + 각 파일이 실측에서 가져온 근거 요약 보고
 2. 커밋/PR은 사용자 확인 후 (프로젝트 git 컨벤션 따름)
-3. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
+3. 생성 직후 하네스가 관리하는 생성물(프로젝트 로컬 Skill/command, graph, agent 설정, settings)을 아래 명령으로 기록한다. `AGENTS.md`, `.ai-harness/docs/`, 사람이 작성한 workflow 본문은 관리 목록에 넣지 않는다.
 
-## 6. 수준 변경 모드 (기존 하네스 감지 시)
+```bash
+$ROOT/scripts/harness-sync-state.sh record --root . --version <플러그인 버전> \
+  --file <관리 생성물 상대 경로> [...]
+```
 
-1. **현재 수준 파악**: `.ai-harness/harness.json` Read. 없으면(구버전/수동 셋업) 파일 구조로 역추정 — 워크플로·페르소나 유무 = standard, guard hook 유무 = `edit_guard:true`, `.agents/skills`와 `.claude` 유무 = 도구 통합, test-engineer·testing.md 유무 = 테스트 정책 — 하고 역추정 결과를 사용자에게 확인받은 뒤 harness.json 생성. 기존 `level:"full"`은 `level:"standard", edit_guard:true`로 이관 제안한다. 기존 manifest에 `project_id`가 없으면 `git remote get-url origin`의 저장소명을 기본값으로 보강하고, origin도 없을 때만 사용자 확인
-2. **재인터뷰**: 2번과 동일한 질문을 현재 값 보여주며 진행 ("현재: standard / TDD / PR 필수 / Codex / guard 끔"). 기존 `execution_profile`·`role_profiles`는 호환용으로 읽되 새 manifest에는 쓰지 않으며, 선택한 도구의 agent 정의에 모델을 추가하는 diff를 제시한다.
-3. **diff만 적용**:
-   - 업그레이드(컴포넌트 추가): 자동 진행 — 신규 셋업과 동일한 작성 원칙, 기존 docs는 건드리지 않음
-   - **다운그레이드·통합 해제(삭제)**: 삭제 대상 파일 목록을 보여주고 **사용자 확인 후** 삭제 — `/harvest`가 채워온 커스텀 내용이 날아갈 수 있음. AGENTS.md에서 해당 섹션(워크플로 표, guard 룰 등)도 함께 제거
-   - 테스트 정책 변경: 워크플로 본문의 테스트 절차 재작성, test-engineer·testing.md 추가/제거(제거는 확인 후), AGENTS.md 위임 규칙 갱신
-4. harness.json 갱신 + 변경 요약 보고. 커밋/PR은 사용자 확인 후
+4. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
+
+## 6. 기존 하네스: 동기화와 설정 변경
+
+1. **현재 상태 파악**: `.ai-harness/harness.json`을 Read하고, 플러그인 루트 `release.json`의 버전과 비교한다. manifest가 없으면 파일 구조로 역추정한다 — 워크플로·페르소나 유무 = standard, guard hook 유무 = `edit_guard:true`, `.agents/skills`와 `.claude` 유무 = 도구 통합, test-engineer·testing.md 유무 = 테스트 정책. 기존 `level:"full"`은 `level:"standard", edit_guard:true`로 이관 제안한다.
+2. **모드 선택**: `--sync`이면 인터뷰 없이 동기화 계획을 만들고, `--sync --apply`이면 아래 안전 규칙으로 적용한다. `--reconfigure`이면 2번 수준 인터뷰를 진행한다. 인자가 없으면 현재 설정·버전을 보여 주고 동기화 / 설정 변경 / 둘 다 중 사용자 선택을 받는다.
+3. **동기화 계획**: `scripts/harness-sync-state.sh status --root .`로 관리 파일의 `unchanged` / `modified` / `missing` 상태를 조회한다. 과거 버전처럼 `managed_files` 이력이 없는 기존 파일은 **untracked**로 분류한다. 최신 템플릿과 대상 파일의 diff를 만들고 다음 네 그룹을 분리해 보여 준다.
+   - **추가 가능**: 새로 도입된 graph, 프로젝트 로컬 Skill/command, agent 설정처럼 대상 파일이 없는 관리 생성물
+   - **자동 갱신 가능**: 상태가 `unchanged`인 관리 생성물. 최신 템플릿으로 재생성하고 hash를 갱신한다.
+   - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.
+   - **보호됨**: `AGENTS.md`, `.ai-harness/docs/**`, 사람이 작성한 workflow 본문. 자동 갱신하지 않으며 개선 제안 diff만 제공한다.
+4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
+5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
+6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.
