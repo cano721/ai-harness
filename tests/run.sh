@@ -211,6 +211,22 @@ assert_eq "no-change" "$(jq -sr '.[1].review.outcome' "$QUEUE_DATA/harvest-queue
 HISTORY_OUTPUT="$(HARNESS_METRICS_DIR="$QUEUE_DATA" "$ROOT/scripts/harvest-queue.sh" history --project service)"
 assert_eq "2" "$(printf '%s\n' "$HISTORY_OUTPUT" | jq -s 'length')" "review history command"
 
+# implement-feature는 승인 전 계획만 허용하는 공용 전달 게이트를 제공한다.
+FEATURE_SKILL="$ROOT/skills/implement-feature/SKILL.md"
+assert_file "$FEATURE_SKILL"
+FEATURE_SKILL_CONTENT="$(<"$FEATURE_SKILL")"
+assert_contains "$FEATURE_SKILL_CONTENT" "## 1. Plan, then obtain explicit approval" "implementation plan gate"
+assert_contains "$FEATURE_SKILL_CONTENT" "Stop after presenting it" "implementation waits for approval"
+assert_contains "$FEATURE_SKILL_CONTENT" "Begin the implementation phase only after the user explicitly approves" "implementation approval before edits"
+assert_contains "$FEATURE_SKILL_CONTENT" "whose scope still matches" "implementation resumes an approved plan"
+assert_contains "$FEATURE_SKILL_CONTENT" "Identify the project test policy" "implementation detects test policy"
+assert_contains "$FEATURE_SKILL_CONTENT" "### Tests required, but not TDD" "implementation supports non-TDD required tests"
+assert_contains "$FEATURE_SKILL_CONTENT" "### Tests recommended or no automated-test requirement" "implementation supports optional tests"
+assert_contains "$FEATURE_SKILL_CONTENT" "## 5. Close the review → repair → re-review loop" "implementation review repair loop"
+assert_contains "$FEATURE_SKILL_CONTENT" "no blocking findings remain" "implementation closure criterion"
+assert_contains "$FEATURE_SKILL_CONTENT" "two focused repair attempts" "implementation escalation limit"
+pass "implementation planning gate"
+
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"

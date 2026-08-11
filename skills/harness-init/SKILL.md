@@ -46,7 +46,7 @@ AGENTS.md                    # 진입점 (아래 구성)
     testing.md               # 테스트 실행법, 프레임워크, 작성 규칙 (테스트 정책 '없음'이면 생략)
     domain.md                # 도메인 인덱스 (초기엔 표 틀만 — 도메인 문서는 필요해질 때 domain/{name}.md로 추가)
   workflows/                 # standard
-    implement-feature.md     # 기능 개발 절차 (테스트 정책 답에 맞춰 TDD 절차 포함/제외)
+    implement-feature.md     # 기능 개발 절차 (공용 /implement-feature의 작은 검증 단위·완료 증거 원칙을 프로젝트 정책에 맞춰 구체화)
     fix-bug.md
     review.md
   agents/                    # standard
@@ -82,7 +82,8 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - 페르소나 write scope는 좁게 (test-engineer는 테스트 디렉토리만 등)
 - settings.json allowlist는 read-only·빌드·테스트 명령만. deny에 force push
 - direct-edit-guard.sh는 소스 경로 수정 전 code-conventions.md(테스트면 testing.md 추가) Read 여부를 transcript에서 grep — 미Read 시 exit 2 + 안내. transcript 접근 불가 시 fail-open(exit 0)
-- Codex Skill은 워크플로 본문을 복사하지 않는다. `SKILL.md`에는 해당 `.ai-harness/workflows/*.md`와 필요한 docs를 읽고 따르라고만 적어 `.ai-harness/`를 단일 출처로 유지한다.
+- 플러그인의 공용 `/implement-feature` Skill은 범용 Red→Green→Refactor·완료 증거 기준을 제공한다. 프로젝트 Codex Skill은 이를 복제하지 않고, 해당 `.ai-harness/workflows/implement-feature.md`와 필요한 docs를 먼저 읽어 프로젝트별 정책을 우선하도록 하는 얇은 진입점으로 생성한다. `.ai-harness/`는 프로젝트 특화 규칙의 단일 출처다.
+- 생성할 `implement-feature.md`는 공용 Skill의 원칙을 프로젝트 정책에 맞춰 구체화한다: 먼저 구현 범위·비범위·검증 케이스·예상 변경 영역·검증 명령을 `Implementation Brief`로 사용자에게 보이고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 계획 게이트를 둔다. 현재 대화에 같은 범위의 승인된 Brief가 있으면 재승인은 요구하지 않는다. 승인 뒤 요구사항을 관찰 가능한 검증 케이스와 1~3개 케이스의 delivery slice로 나눈다. 테스트 정책이 TDD일 때만 Red 실패 확인 → 최소 Green → 테스트를 바꾸지 않는 Refactor를 요구하고, 그 외 정책은 프로젝트가 정한 테스트 순서·필수 여부와 가능한 빌드/lint/type 검증을 따른다. 완료 전에는 blocking finding이 0개가 될 때까지 **리뷰 → 원인별 수정 → targeted/전체 검증 → 재리뷰**를 반복하며, 같은 원인이 두 번의 집중 수정 뒤에도 남으면 사용자 판단으로 올린다. 역할 분리는 선택한 도구와 작업 위험이 뒷받침할 때만 사용하며, 역할 도구가 없다는 이유로 단일 세션 작업을 중단하지 않는다.
 - Claude 어댑터도 같은 원본을 `@.ai-harness/...`로 참조한다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 
