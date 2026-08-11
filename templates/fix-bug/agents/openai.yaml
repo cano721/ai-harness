@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix Bug"
+  short_description: "Reproduce, fix, and verify bugs by project policy."
+  default_prompt: "Use the generated $fix-bug entrypoint to investigate this bug, wait for approval, then fix and verify it: $ARGUMENTS"

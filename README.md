@@ -10,6 +10,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [제공하는 Skills](#skills)
 - [빠른 시작](#quick-start)
 - [기능 개발 흐름](#feature-delivery)
+- [버그 수정 흐름](#bug-fix)
 - [자가학습](#self-learning)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
@@ -33,7 +34,7 @@ flowchart LR
 | 하고 싶은 일 | 명령 | 결과 |
 |---|---|---|
 | 프로젝트에 규칙을 처음 만들기 | `/harness-init` | `AGENTS.md`, `.ai-harness`, 필요한 도구별 어댑터 생성 |
-| 기능을 안전하게 개발하기 | `/implement-feature` | 계획 승인 → 구현 → 검토·수정·재검토 |
+| 초기화된 프로젝트에서 기능을 안전하게 개발하기 | `/implement-feature` | 계획 승인 → 구현 → 검토·수정·재검토 |
 | 쌓인 사용 기록 보기 | `/metrics [7d\|30d\|90d\|all]` | 세션·토큰·워크플로·신호 리포트 |
 | 기록으로 하네스 개선하기 | `/harvest <프로젝트>` | 근거 기반 개선안과 PR 제안 |
 | 플러그인 최신화 | `/harness-update --check` / `--apply` | 확인만 또는 명시적 업데이트 |
@@ -44,17 +45,30 @@ flowchart LR
 
 ## 제공하는 Skills
 
-모든 skill은 Claude Code와 Codex CLI에서 공용으로 제공합니다. `/harness-init`에서 선택한 도구에 맞는 진입점과 역할 agent 설정만 프로젝트에 생성합니다.
+### 플러그인에 기본 제공
 
 | Skill | 언제 쓰나 | 하는 일 | 자동 실행 여부 |
 |---|---|---|---|
 | `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 수준을 바꿀 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경합니다. | 사용자 실행 |
-| `/implement-feature` | 신규 기능이나 의미 있는 변경을 시작할 때 | 승인 가능한 Implementation Brief를 먼저 만들고, 구현·검토·수정·재검토를 하나의 전달 흐름으로 관리합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다.
+이 네 Skill은 플러그인 설치만으로 사용할 수 있습니다. 기능 개발 Skill은 프로젝트 규칙 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+
+### `/harness-init`이 프로젝트에 생성하는 진입점
+
+`standard` 수준에서만 생성합니다. 선택하지 않은 도구의 파일은 만들지 않습니다. Codex는 프로젝트 로컬 Skill을, Claude는 같은 목적의 slash command 어댑터를 만듭니다.
+
+| 프로젝트 기능 | Codex (`Codex` 또는 `둘 다` 선택) | Claude (`Claude` 또는 `둘 다` 선택) | 역할 |
+|---|---|---|---|
+| 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
+| 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
+| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 프로젝트의 리뷰 기준과 완료 증거로 연결 |
+
+`AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
+
+Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다.
 
 <a id="quick-start"></a>
 
@@ -89,13 +103,13 @@ codex plugin add ai-harness@ai-harness
 
 ### 3. 평소처럼 개발
 
-일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. 신규 기능은 `/implement-feature`로 시작하면 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
+일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. `standard` 초기화로 생성된 프로젝트에서는 신규 기능을 `/implement-feature`, 결함 수정을 `/fix-bug`로 시작해 각각의 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
 
 <a id="feature-delivery"></a>
 
 ## 기능 개발 흐름: `/implement-feature`
 
-이 skill은 프로젝트의 기존 규칙을 우선합니다. 규칙이 없거나 약한 부분만 아래 전달 흐름으로 보완합니다.
+이것은 플러그인 기본 Skill이 아니라 `standard` 초기화가 만든 프로젝트 로컬 Skill/command입니다. 프로젝트의 기존 규칙을 우선하며, 아래 전달 흐름으로 기능 개발을 일관되게 수행합니다.
 
 ```mermaid
 stateDiagram-v2
@@ -119,7 +133,7 @@ stateDiagram-v2
 
 ### Codex와 Claude 실행 방식
 
-공용 그래프 계약은 [`feature-delivery-graph.json`](skills/implement-feature/references/feature-delivery-graph.json)에 있습니다. 노드, 전이, 쓰기 허용 시점, 종료 조건을 한곳에서 정의합니다.
+생성에 쓰는 [기능 개발 템플릿의 그래프 계약](templates/implement-feature/references/feature-delivery-graph.json)은 노드, 전이, 쓰기 허용 시점, 종료 조건을 한곳에서 정의합니다.
 
 | 도구 | 실행 방식 |
 |---|---|
@@ -128,6 +142,37 @@ stateDiagram-v2
 | 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
 
 Claude Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 skill 대화 단계에서 먼저 받습니다.
+
+<a id="bug-fix"></a>
+
+## 버그 수정 흐름: `/fix-bug`
+
+`standard` 초기화가 만든 프로젝트 로컬 Skill/command입니다. 기능 개발과 달리 재현과 관측 증거가 선행 조건이며, 단순히 오류 메시지를 보고 추측으로 수정하지 않습니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> triage
+    triage --> reproduce
+    reproduce --> brief: 재현 또는 충분한 증거
+    reproduce --> user_decision: 재현 불가·관측 계획 없음
+    brief --> approval
+    approval --> brief: 범위 변경 또는 미승인
+    approval --> regression: 명시적 승인
+    regression --> fix
+    fix --> verify
+    verify --> review: 필수 검증 통과
+    verify --> repair: 필수 검증 실패
+    review --> done: blocking finding 없음
+    review --> repair: blocking finding 있음
+    repair --> verify
+```
+
+1. **관찰·재현** — 관찰된/기대 동작, 영향, 환경, 재현 결과를 분리해 기록합니다. 재현이 불가능하고 안전한 관측 계획도 없으면 필요한 로그·환경·기대 동작을 사용자에게 요청합니다.
+2. **수정 승인** — 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위, 롤백·호환성 위험을 담은 `Bug Fix Brief`를 보여 주고 승인을 받습니다. 승인 전에는 파일을 수정하지 않습니다.
+3. **회귀 검증과 수정** — 테스트 정책에 맞게 회귀 테스트 또는 동등한 검증 증거를 먼저 마련한 뒤 최소 수정합니다.
+4. **검토 루프** — targeted/전체 검증 뒤 재현 증거·회귀·호환성·범위 이탈을 검토합니다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘깁니다.
+
+생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 승인 뒤 선택적으로 `/ai-harness:fix-bug` Dynamic Workflow를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 

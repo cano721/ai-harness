@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "scope": "project-template",
+  "name": "bug-fix",
+  "entry": "triage",
+  "terminals": ["done", "user_decision"],
+  "nodes": {
+    "triage": {"write": false, "output": "bug_facts"},
+    "reproduce": {"write": false, "output": "reproduction_evidence"},
+    "brief": {"write": false, "output": "bug_fix_brief"},
+    "approval": {"write": false, "output": "approved_bug_fix_brief"},
+    "regression": {"write": true, "output": "regression_evidence"},
+    "fix": {"write": true, "output": "fix_evidence"},
+    "verify": {"write": false, "output": "verification_evidence"},
+    "review": {"write": false, "output": "findings"},
+    "repair": {"write": true, "output": "repair_evidence"},
+    "done": {"write": false, "output": "handoff"},
+    "user_decision": {"write": false, "output": "blocker_report"}
+  },
+  "transitions": [
+    {"from": "triage", "to": "reproduce"},
+    {"from": "reproduce", "to": "brief", "when": "reproduced_or_evidence_sufficient"},
+    {"from": "reproduce", "to": "user_decision", "when": "cannot_reproduce_and_no_observation_plan"},
+    {"from": "brief", "to": "approval"},
+    {"from": "approval", "to": "brief", "when": "brief_changed_or_not_approved"},
+    {"from": "approval", "to": "regression", "when": "user_explicitly_approved"},
+    {"from": "regression", "to": "fix"},
+    {"from": "fix", "to": "verify"},
+    {"from": "verify", "to": "review", "when": "required_checks_pass"},
+    {"from": "verify", "to": "repair", "when": "required_checks_fail"},
+    {"from": "review", "to": "done", "when": "no_blocking_findings"},
+    {"from": "review", "to": "repair", "when": "blocking_findings"},
+    {"from": "repair", "to": "verify"},
+    {"from": "repair", "to": "user_decision", "when": "same_root_cause_after_two_attempts_or_product_or_environment_decision"}
+  ],
+  "invariants": [
+    "No write-capable node is reachable before user_explicitly_approved.",
+    "A bug fix is not complete without reproduction or explicit equivalent verification evidence.",
+    "A blocking finding cannot transition directly to done.",
+    "Every repair is followed by required checks and re-review."
+  ]
+}

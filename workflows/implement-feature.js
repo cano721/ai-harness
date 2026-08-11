@@ -9,7 +9,7 @@ const brief = typeof input.brief === 'string' ? input.brief.trim() : ''
 if (input.approved !== true || !brief) {
   return {
     status: 'approval_required',
-    message: 'Run this only after the /implement-feature Skill has presented an Implementation Brief and the user explicitly approved it. Pass { approved: true, brief: "..." }. No files were changed.',
+    message: 'Run this only after the project-local /implement-feature entrypoint has presented an Implementation Brief and the user explicitly approved it. Pass { approved: true, brief: "..." }. No files were changed.',
   }
 }
 

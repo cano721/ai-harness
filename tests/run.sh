@@ -211,9 +211,10 @@ assert_eq "no-change" "$(jq -sr '.[1].review.outcome' "$QUEUE_DATA/harvest-queue
 HISTORY_OUTPUT="$(HARNESS_METRICS_DIR="$QUEUE_DATA" "$ROOT/scripts/harvest-queue.sh" history --project service)"
 assert_eq "2" "$(printf '%s\n' "$HISTORY_OUTPUT" | jq -s 'length')" "review history command"
 
-# implement-feature는 승인 전 계획만 허용하는 공용 전달 게이트를 제공한다.
-FEATURE_SKILL="$ROOT/skills/implement-feature/SKILL.md"
+# implement-feature 템플릿은 standard 초기화가 만드는 프로젝트 로컬 전달 게이트의 원본이다.
+FEATURE_SKILL="$ROOT/templates/implement-feature/SKILL.md"
 assert_file "$FEATURE_SKILL"
+assert_not_file "$ROOT/skills/implement-feature/SKILL.md"
 FEATURE_SKILL_CONTENT="$(<"$FEATURE_SKILL")"
 assert_contains "$FEATURE_SKILL_CONTENT" "## 1. Plan, then obtain explicit approval" "implementation plan gate"
 assert_contains "$FEATURE_SKILL_CONTENT" "Stop after presenting it" "implementation waits for approval"
@@ -225,10 +226,13 @@ assert_contains "$FEATURE_SKILL_CONTENT" "### Tests recommended or no automated-
 assert_contains "$FEATURE_SKILL_CONTENT" "## 5. Close the review → repair → re-review loop" "implementation review repair loop"
 assert_contains "$FEATURE_SKILL_CONTENT" "no blocking findings remain" "implementation closure criterion"
 assert_contains "$FEATURE_SKILL_CONTENT" "two focused repair attempts" "implementation escalation limit"
-pass "implementation planning gate"
+HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
+assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
+pass "project implementation planning gate"
 
 # 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
-FEATURE_GRAPH="$ROOT/skills/implement-feature/references/feature-delivery-graph.json"
+FEATURE_GRAPH="$ROOT/templates/implement-feature/references/feature-delivery-graph.json"
 assert_file "$FEATURE_GRAPH"
 "$ROOT/scripts/validate-feature-graph.sh" "$FEATURE_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$FEATURE_GRAPH")" "approval node is read-only"
@@ -239,6 +243,28 @@ if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/workflows/implement-feature.js"
 fi
 pass "feature delivery graph adapters"
+
+# fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
+BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
+BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+assert_file "$BUG_FIX_SKILL"
+assert_not_file "$ROOT/skills/fix-bug/SKILL.md"
+BUG_FIX_SKILL_CONTENT="$(<"$BUG_FIX_SKILL")"
+assert_contains "$BUG_FIX_SKILL_CONTENT" "## 1. Triage and reproduce without editing" "bug fix investigates before edits"
+assert_contains "$BUG_FIX_SKILL_CONTENT" "If the issue cannot be reproduced" "bug fix rejects speculative changes"
+assert_contains "$BUG_FIX_SKILL_CONTENT" 'Present a `Bug Fix Brief` before any edit' "bug fix approval gate"
+assert_contains "$BUG_FIX_SKILL_CONTENT" "After two focused attempts" "bug fix escalation limit"
+assert_file "$BUG_FIX_GRAPH"
+"$ROOT/scripts/validate-bug-fix-graph.sh" "$BUG_FIX_GRAPH" >/dev/null
+assert_eq "false" "$(jq -r '.nodes.approval.write' "$BUG_FIX_GRAPH")" "bug-fix approval node is read-only"
+assert_eq "true" "$(jq -r '.nodes.regression.write' "$BUG_FIX_GRAPH")" "bug-fix regression node can write"
+assert_file "$ROOT/workflows/fix-bug.js"
+assert_contains "$HARNESS_INIT_CONTENT" "templates/fix-bug/" "harness init uses the local bug-fix template"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "harness init copies the local bug-fix graph"
+if command -v node >/dev/null 2>&1; then
+  node --check "$ROOT/workflows/fix-bug.js"
+fi
+pass "bug-fix graph adapters"
 
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
@@ -607,9 +633,9 @@ assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
 # manifest versions and marketplace policy stay aligned
-assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
-assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
-assert_eq "0.11.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
+assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
+assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
+assert_eq "0.13.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
 

@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "scope": "project-template",
   "name": "feature-delivery",
   "entry": "discover",
   "terminals": ["done", "user_decision"],
