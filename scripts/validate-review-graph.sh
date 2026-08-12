@@ -11,8 +11,8 @@ jq -e '
   and ($g.invariants | index("A blocking finding cannot transition directly to done."))
 ' "$graph_path" >/dev/null || { printf 'invalid review graph\n' >&2; exit 1; }
 for edge in 'scope inspect' 'inspect classify' 'repair verify' 'verify re_review'; do
-  set -- $edge
-  jq -e --arg from "$1" --arg to "$2" '.transitions[] | select(.from == $from and .to == $to)' "$graph_path" >/dev/null
+  read -r from to <<<"$edge"
+  jq -e --arg from "$from" --arg to "$to" '.transitions[] | select(.from == $from and .to == $to)' "$graph_path" >/dev/null
 done
 jq -e '.transitions[] | select(.from == "classify" and .to == "done" and .when == "no_blocking_findings")' "$graph_path" >/dev/null
 jq -e '.transitions[] | select(.from == "re_review" and .to == "repair" and .when == "blocking_findings")' "$graph_path" >/dev/null
