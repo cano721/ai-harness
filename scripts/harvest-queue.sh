@@ -94,7 +94,11 @@ acquire_queue_lock() {
       printf '%s\n' "$lock_dir"
       return 0
     fi
-    owner="$(test -f "$lock_dir/pid" && sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)"
+    if [[ -f "$lock_dir/pid" ]]; then
+      owner="$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)"
+    else
+      owner=""
+    fi
     if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
       # mkdir 직후 pid 파일을 쓰기 전인 정상 소유자를 stale lock으로 오인하지 않는다.
       unowned_attempts=$((unowned_attempts + 1))

@@ -37,7 +37,7 @@ has_transition approval regression user_explicitly_approved
 has_transition regression fix
 has_transition fix verify
 has_transition verify review required_checks_pass
-has_transition review done no_blocking_findings
+has_transition review "done" no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair verify
 has_transition repair user_decision same_root_cause_after_two_attempts_or_product_or_environment_decision

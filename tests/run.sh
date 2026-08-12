@@ -443,6 +443,7 @@ HARNESS_METRICS_DIR="$ATOMIC_DATA" "$ROOT/scripts/health.sh" failure harvest_que
   ATOMIC_ROOT="$ATOMIC_DATA/race"
   export ATOMIC_ROOT
   # shellcheck disable=SC2329  # 하위 harvest-queue 프로세스가 export된 wrapper를 호출
+  # shellcheck disable=SC2317  # export된 함수라 현재 셸에서는 직접 호출하지 않는다
   mv() {
     if [[ "${RACE_BLOCK:-0}" == 1 && "${1:-}" == *'/sessions/.pending.'* && "${2:-}" == *'/sessions/'* ]]; then
       mkdir "$ATOMIC_ROOT-record-ready"
@@ -546,6 +547,7 @@ cp "$RETENTION_MARKER" "$RETENTION_MARKER_BEFORE"
   PRUNE_FAIL_EVENT="$RETENTION_EVENT"
   export PRUNE_FAIL_EVENT
   # shellcheck disable=SC2329  # 하위 prune 프로세스가 export된 wrapper를 호출
+  # shellcheck disable=SC2317  # export된 함수라 현재 셸에서는 직접 호출하지 않는다
   find() {
     if [[ "${1:-}" == "$PRUNE_FAIL_EVENT" ]]; then return 1; fi
     command /usr/bin/find "$@"

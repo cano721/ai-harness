@@ -26,7 +26,11 @@ acquire_lock() {
       printf '%s\n' "$$" >"$LOCK_DIR/pid"
       return 0
     fi
-    owner="$(test -f "$LOCK_DIR/pid" && sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [[ -f "$LOCK_DIR/pid" ]]; then
+      owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    else
+      owner=""
+    fi
     if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
       unowned_attempts=$((unowned_attempts + 1))
       if (( unowned_attempts >= 5 )); then

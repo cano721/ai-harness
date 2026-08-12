@@ -37,7 +37,7 @@ has_transition() {
 has_transition discover brief
 has_transition brief approval
 has_transition approval deliver user_explicitly_approved
-has_transition review done no_blocking_findings
+has_transition review "done" no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair review required_checks_pass
 has_transition repair user_decision same_root_cause_after_two_attempts_or_product_decision
