@@ -12,6 +12,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [기존 프로젝트 하네스 업데이트](#project-sync)
 - [기능 개발 흐름](#feature-delivery)
 - [버그 수정 흐름](#bug-fix)
+- [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
@@ -66,7 +67,7 @@ flowchart LR
 |---|---|---|---|
 | 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
 | 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
-| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 프로젝트의 리뷰 기준과 완료 증거로 연결 |
+| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
 
@@ -120,7 +121,7 @@ codex plugin add ai-harness@ai-harness
 /harness-init --sync --apply     # 안전한 생성물 동기화
 ```
 
-`harness-init`은 `harness.json`의 `managed_files`에 저장된 마지막 생성 해시와 현재 파일을 비교합니다.
+`harness-init`은 [`managed-files.json`](templates/managed-files.json)을 단일 출처로 사용해 현재 수준·도구 통합에 필요한 관리 생성물을 결정하고, `harness.json`의 `managed_files`에 저장된 마지막 생성 해시와 현재 파일을 비교합니다.
 
 | 파일 상태 | `--sync --apply` 동작 |
 |---|---|
@@ -200,6 +201,28 @@ stateDiagram-v2
 4. **검토 루프** — targeted/전체 검증 뒤 재현 증거·회귀·호환성·범위 이탈을 검토합니다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘깁니다.
 
 생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 승인 뒤 선택적으로 `/ai-harness:fix-bug` Dynamic Workflow를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
+
+<a id="review"></a>
+
+## 변경 검토 흐름: `/review`
+
+`standard` 초기화가 만든 프로젝트 로컬 Skill/command입니다. 변경 범위와 수용 기준을 먼저 고정한 뒤, 동작·회귀·필수 검증·보안/데이터·호환성·범위 이탈 순으로 검토합니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> scope
+    scope --> inspect
+    inspect --> classify
+    classify --> done: blocking finding 없음
+    classify --> repair: 수리 권한이 있는 blocking finding
+    classify --> user_decision: 사용자 판단 필요
+    repair --> verify
+    verify --> re_review
+    re_review --> done: blocking finding 없음
+    re_review --> repair: blocking finding 남음
+```
+
+초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 같은 원인이 두 번 남거나 제품 판단이 필요하면 사용자에게 넘깁니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다.
 
 ### 역할별 기본 모델
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <status|record> --root <project-root> [--version <version>] [--file <relative-path>]...\n' "$0" >&2
+  printf 'usage: %s <status|record|plan> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--file <relative-path>]...\n' "$0" >&2
   exit 2
 }
 
@@ -17,11 +17,13 @@ shift
 
 root=""
 version=""
+catalog=""
 files=()
 while (($#)); do
   case "$1" in
     --root) root="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
+    --catalog) catalog="${2:-}"; shift 2 ;;
     --file) files+=("${2:-}"); shift 2 ;;
     *) usage ;;
   esac
@@ -55,6 +57,45 @@ case "$command_name" in
           jq -cn --arg path "$path" --arg state "$state" --arg template_version "$template_version" \
             --arg current_sha "$current_sha" '{path:$path,state:$state,template_version:$template_version,current_sha256:$current_sha}'
         done | jq -s '.'
+    ;;
+  plan)
+    ((${#files[@]} == 0)) || usage
+    [[ -n "$catalog" && -f "$catalog" ]] || {
+      printf 'catalog not found: %s\n' "$catalog" >&2
+      exit 2
+    }
+    level="$(jq -r '.level // ""' "$manifest")"
+    integrations="$(jq -c '.integrations // []' "$manifest")"
+    while IFS= read -r artifact; do
+      path="$(jq -r '.path' <<<"$artifact")"
+      artifact_level="$(jq -r '.level // ""' <<<"$artifact")"
+      integration="$(jq -r '.integration // ""' <<<"$artifact")"
+      [[ "$artifact_level" == "$level" ]] || continue
+      if [[ -n "$integration" ]] && ! jq -e --arg integration "$integration" 'index($integration)' <<<"$integrations" >/dev/null; then
+        continue
+      fi
+      target="$root/$path"
+      baseline="$(jq -r --arg path "$path" '.managed_files[$path].content_sha256 // ""' "$manifest")"
+      state="missing"
+      action="add"
+      if [[ -f "$target" ]]; then
+        current_sha="$(sha256_file "$target")"
+        if [[ -z "$baseline" ]]; then
+          state="untracked"
+          action="approval_required"
+        elif [[ "$current_sha" == "$baseline" ]]; then
+          state="unchanged"
+          action="refresh"
+        else
+          state="modified"
+          action="approval_required"
+        fi
+      fi
+      jq -cn --arg path "$path" --arg state "$state" --arg action "$action" \
+        --arg source "$(jq -r '.source' <<<"$artifact")" --arg mode "$(jq -r '.mode' <<<"$artifact")" \
+        '{path:$path,state:$state,action:$action,source:$source,mode:$mode}'
+    done < <(jq -c '.artifacts[]' "$catalog") \
+      | jq -s '{items: ., counts: (group_by(.action) | map({key: .[0].action, value: length}) | from_entries)}'
     ;;
   record)
     [[ -n "$version" && ${#files[@]} -gt 0 ]] || usage

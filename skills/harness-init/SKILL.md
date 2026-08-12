@@ -52,7 +52,8 @@ AGENTS.md                    # 진입점 (아래 구성)
     feature-delivery-graph.json # implement-feature의 프로젝트 로컬 노드·전이 계약
     fix-bug.md               # 버그 수정 절차 (재현·원인·회귀 검증 기준)
     bug-fix-graph.json       # fix-bug의 프로젝트 로컬 노드·전이 계약
-    review.md
+    review.md                # 변경 검토·finding 종료 절차
+    review-graph.json        # review의 프로젝트 로컬 노드·전이 계약
   agents/                    # standard
     explorer.md              # 탐색 전담 (read-only)
     developer.md             # 구현 전담 (write scope: 소스+빌드 설정)
@@ -66,7 +67,8 @@ AGENTS.md                    # 진입점 (아래 구성)
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
     fix-bug/
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
-    review/SKILL.md
+    review/
+      SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -93,6 +95,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - 템플릿에서 생성할 `implement-feature.md`는 프로젝트 정책에 맞춰 구체화한다: 먼저 구현 범위·비범위·검증 케이스·예상 변경 영역·검증 명령을 `Implementation Brief`로 사용자에게 보이고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 계획 게이트를 둔다. 현재 대화에 같은 범위의 승인된 Brief가 있으면 재승인은 요구하지 않는다. 승인 뒤 요구사항을 관찰 가능한 검증 케이스와 1~3개 케이스의 delivery slice로 나눈다. 테스트 정책이 TDD일 때만 Red 실패 확인 → 최소 Green → 테스트를 바꾸지 않는 Refactor를 요구하고, 그 외 정책은 프로젝트가 정한 테스트 순서·필수 여부와 가능한 빌드/lint/type 검증을 따른다. 완료 전에는 blocking finding이 0개가 될 때까지 **리뷰 → 원인별 수정 → targeted/전체 검증 → 재리뷰**를 반복하며, 같은 원인이 두 번의 집중 수정 뒤에도 남으면 사용자 판단으로 올린다. 역할 분리는 선택한 도구와 작업 위험이 뒷받침할 때만 사용하며, 역할 도구가 없다는 이유로 단일 세션 작업을 중단하지 않는다.
 - `/fix-bug`도 플러그인 전역 Skill이 아니라 `standard` 초기화에서 생성하는 **프로젝트 로컬 버그 수정 진입점**이다. `templates/fix-bug/`를 기반으로 Codex는 `.agents/skills/fix-bug/SKILL.md`, Claude는 `.claude/commands/fix-bug.md`를 생성한다. 템플릿의 그래프는 `.ai-harness/workflows/bug-fix-graph.json`에도 복사한다. 승인 전에는 관찰·재현·원인 가설만 허용하고, 재현 불가이며 안전한 관측 계획도 없으면 수정하지 않고 사용자에게 필요한 환경·로그·기대 동작을 요청한다.
 - 템플릿에서 생성할 `fix-bug.md`는 관찰된/기대 동작, 영향, 재현 증거, 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위를 담은 `Bug Fix Brief`를 먼저 제시하고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 게이트를 둔다. 승인 뒤 프로젝트 테스트 정책에 따라 회귀 테스트 또는 동등한 검증 증거를 만들고, targeted/전체 검증과 **리뷰 → 원인별 수정 → 재검토**를 수행한다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
+- `/review`도 `standard` 초기화에서 생성하는 프로젝트 로컬 진입점이다. `templates/review/`를 기반으로 Codex는 `.agents/skills/review/SKILL.md`, Claude는 `.claude/commands/review.md`를 생성하고 graph를 `.ai-harness/workflows/review-graph.json`에 복사한다. 초기 검토는 read-only이며, blocking finding이 있으면 대상 workflow로 수리한 뒤 필수 검증과 재검토를 거치기 전에는 완료하지 않는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 플러그인 내부의 `/ai-harness:implement-feature` 또는 `/ai-harness:fix-bug` Dynamic Workflow를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 
@@ -129,7 +132,12 @@ $ROOT/scripts/harness-sync-state.sh record --root . --version <플러그인 버�
 
 1. **현재 상태 파악**: `.ai-harness/harness.json`을 Read하고, 플러그인 루트 `release.json`의 버전과 비교한다. manifest가 없으면 파일 구조로 역추정한다 — 워크플로·페르소나 유무 = standard, guard hook 유무 = `edit_guard:true`, `.agents/skills`와 `.claude` 유무 = 도구 통합, test-engineer·testing.md 유무 = 테스트 정책. 기존 `level:"full"`은 `level:"standard", edit_guard:true`로 이관 제안한다.
 2. **모드 선택**: `--sync`이면 인터뷰 없이 동기화 계획을 만들고, `--sync --apply`이면 아래 안전 규칙으로 적용한다. `--reconfigure`이면 2번 수준 인터뷰를 진행한다. 인자가 없으면 현재 설정·버전을 보여 주고 동기화 / 설정 변경 / 둘 다 중 사용자 선택을 받는다.
-3. **동기화 계획**: `scripts/harness-sync-state.sh status --root .`로 관리 파일의 `unchanged` / `modified` / `missing` 상태를 조회한다. 과거 버전처럼 `managed_files` 이력이 없는 기존 파일은 **untracked**로 분류한다. 최신 템플릿과 대상 파일의 diff를 만들고 다음 네 그룹을 분리해 보여 준다.
+3. **동기화 계획**: 관리 대상은 `templates/managed-files.json`이 단일 출처다. 아래 명령으로 현재 level·integration에 맞는 대상과 `add` / `refresh` / `approval_required` 결정을 JSON으로 만들고, 사람이 읽을 수 있는 표와 최신 템플릿 diff를 함께 제시한다. 과거 버전처럼 `managed_files` 이력이 없는 기존 파일은 **untracked**로 분류한다.
+
+```bash
+$ROOT/scripts/harness-sync-state.sh plan --root . \
+  --catalog "$ROOT/templates/managed-files.json"
+```
    - **추가 가능**: 새로 도입된 graph, 프로젝트 로컬 Skill/command, agent 설정처럼 대상 파일이 없는 관리 생성물
    - **자동 갱신 가능**: 상태가 `unchanged`인 관리 생성물. 최신 템플릿으로 재생성하고 hash를 갱신한다.
    - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.

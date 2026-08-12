@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Change"
+  short_description: "Review changes and close blocking findings."
+  default_prompt: "Use the generated $review entrypoint to review this change and verify all blocking findings are closed: $ARGUMENTS"
