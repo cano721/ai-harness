@@ -3,7 +3,9 @@
 # 공용: 데이터 디렉토리·설정 결정. 스크립트는 플러그인에, 데이터는 홈에.
 # 도구 중립 경로 — Claude/Codex 어느 쪽 사용자든 자기 도구 폴더 밖(~/.ai-harness)에 쌓인다.
 umask 077
-HM_EVENT_VERSION=2
+# v3 adds detailed Codex activity extraction; stale v2 Codex events must be
+# re-extracted during backfill so their coverage metadata is refreshed.
+HM_EVENT_VERSION=3
 HM_DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
 HM_CLAUDE_PROJECTS_DIR="${HARNESS_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 # 구 경로 자동 마이그레이션 (구버전 순서대로)

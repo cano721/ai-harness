@@ -73,7 +73,7 @@ CLAUDE_EVENT="$EXTRACT_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.j
 CODEX_EVENT="$EXTRACT_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
 assert_file "$CLAUDE_EVENT"
 assert_file "$CODEX_EVENT"
-assert_eq "2" "$(jq -r 'select(.kind=="session") | .v' "$CLAUDE_EVENT")" "Claude event version"
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .v' "$CLAUDE_EVENT")" "Claude event version"
 assert_eq "service" "$(jq -r 'select(.kind=="session") | .project' "$CLAUDE_EVENT")" "Claude project normalization"
 assert_eq "claude-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CLAUDE_EVENT")" "synthetic model exclusion"
 assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT")" "Claude cache write"
@@ -660,7 +660,7 @@ HARNESS_METRICS_DIR="$BACKFILL_DATA" \
 HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
 HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
   "$ROOT/scripts/backfill.sh" >/dev/null
-assert_eq "2" "$(jq -r 'select(.kind=="session") | .v' "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl")" "stale event invalidation"
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .v' "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl")" "stale event invalidation"
 pass "backfill freshness and version invalidation"
 
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
