@@ -21,6 +21,25 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
   --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" \
   --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" '
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
+  def tool_calls($r): $r[] | select(.payload.type=="function_call" or .payload.type=="custom_tool_call");
+  # Codex CLI records native function calls as JSON arguments, while the
+  # desktop/runtime bridge records its JavaScript source in `input`.
+  def tool_input:
+    if .payload.type=="function_call" then (.payload.arguments // "")
+    else (.payload.input // "") end;
+  def command_input:
+    if .payload.type=="function_call" then
+      ((.payload.arguments // "{}") | (try fromjson catch {})
+       | (.cmd // .command // "")
+       | if type=="array" then map(tostring) | join(" ") else tostring end)
+    elif .payload.name=="exec" then
+      (tool_input | [match("\\\"cmd\\\"\\s*:\\s*\\\"(?<cmd>(?:\\\\\\\\.|[^\\\"])*)\\\""; "g").captures[].string] | join("\n"))
+    else "" end;
+  def harness_doc:
+    if test("\\.ai-harness/") then capture("(?<p>\\.ai-harness/[A-Za-z0-9_./-]+)").p
+    elif test("AGENTS\\.md") then "AGENTS.md"
+    elif test("CLAUDE\\.md") then "CLAUDE.md"
+    else empty end;
   def is_correction:
     startswith("아니") or startswith("아냐") or startswith("그게 아니라")
     or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸");
@@ -55,19 +74,61 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       model:   $model,
       provider: ($meta.payload.model_provider // null),
       cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
-      coverage: ["bash_cmd", "jira_issue", "correction_mark"]
+      coverage: [
+        "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
+        "jira_issue", "error", "guard_block", "permission_deny", "compact",
+        "correction_mark"
+      ]
     }),
-  ( [ $R[] | select(.payload.type=="function_call")
-      | (.payload.arguments // "{}") | (try fromjson catch {})
-      | (.cmd // ((.command // []) | if type=="array" then (map(tostring) | join(" ")) else tostring end))
+  # Workflow commands are explicit in user prompts for both slash commands
+  # and the Codex `$skill` invocation syntax.
+  ( [ ( $texts[] | select(test("^/[a-z]")) | capture("^/(?<c>[a-z0-9:_-]+)").c ),
+      ( $texts[] | select(contains("$")) | split("$")[1] | split(" ")[0] )
+    ] | counted("workflow") | $base + . ),
+  # Agent delegation is exposed by the desktop bridge as tools.spawn_agent.
+  ( [ tool_calls($R)
+      | if .payload.type=="function_call" and .payload.name=="spawn_agent" then
+          ((.payload.arguments // "{}") | (try fromjson catch {}) | .task_name // "general-purpose")
+        elif .payload.type=="custom_tool_call" and .payload.name=="exec" then
+          (tool_input | [match("tools\\.spawn_agent\\s*\\(\\s*\\{[^}]*\\\"task_name\\\"\\s*:\\s*\\\"(?<p>[^\\\"]+)\\\""; "g").captures[].string] | .[])
+        else empty end
+    ] | counted("persona") | $base + . ),
+  # Read and patch calls retain their paths inside bridge input. Only harness
+  # documents are reported, matching the Claude adapter privacy boundary.
+  ( [ tool_calls($R) | tool_input | harness_doc ] | counted("doc_read") | $base + . ),
+  ( [ tool_calls($R)
+      | if .payload.type=="function_call" and (.payload.name=="apply_patch" or .payload.name=="edit_file") then
+          ((.payload.arguments // "{}") | (try fromjson catch {}) | .file_path // "apply_patch")
+        elif .payload.type=="custom_tool_call" and .payload.name=="exec" then
+          (tool_input | [match("\\*\\*\\* (?:Update|Add|Delete) File: (?<p>[A-Za-z0-9_./-]+)"; "g").captures[].string] | .[])
+        else empty end
+    ] | counted("file_edit") | $base + . ),
+  ( [ tool_calls($R) | .payload.name // empty
+      | select(startswith("mcp__")),
+      tool_calls($R) | tool_input | [match("tools\\.(?<m>mcp__[A-Za-z0-9_]+)"; "g").captures[].string] | .[]
+    ] | counted("mcp_tool") | $base + . ),
+  ( [ tool_calls($R) | command_input
       | select(type=="string" and length>0)
-      | capture("^\\s*(?<cmd>\\S+)").cmd ]
+      | split("\n")[] | capture("^\\s*(?<cmd>\\S+)").cmd ]
     | counted("bash_cmd") | $base + . ),
   ( [ $texts[] | [match($issue_re;"g").string] | .[] ]
     | counted("jira_issue") | $base + . ),
+  # Codex bridges mark failed calls in their tool output. Guard and permission
+  # signals use the same conservative phrases as the Claude adapter.
+  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
+     | tostring | select(test("isError|is_error"; "i"))] | length
+    | select(.>0) | $base + {kind:"error", n:.} ),
+  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
+     | tostring | select(test("Direct edit guard"))] | length
+    | select(.>0) | $base + {kind:"guard_block", n:.} ),
+  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
+     | tostring | select(test("doesn.t want to proceed|user rejected"; "i"))] | length
+    | select(.>0) | $base + {kind:"permission_deny", n:.} ),
+  ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
+    | select(.>0) | $base + {kind:"compact", n:.} ),
   ( $texts[] | select(is_correction)
     | $base + {kind:"correction_mark", target:.[0:60], n:1} )
-' "$T" > "$TMP" 2>/dev/null; then
+' "$T" > "$TMP"; then
   mv "$TMP" "$OUT"
 else
   rm -f "$TMP"

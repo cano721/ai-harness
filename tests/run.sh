@@ -82,6 +82,14 @@ assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_E
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
 assert_eq "openai" "$(jq -r 'select(.kind=="session") | .provider' "$CODEX_EVENT")" "Codex provider"
 assert_eq "11" "$(jq -r 'select(.kind=="session") | .cache_write' "$CODEX_EVENT")" "Codex cache write"
+assert_eq "reviewer" "$(jq -r 'select(.kind=="persona") | .target' "$CODEX_EVENT")" "Codex bridge persona"
+assert_eq ".ai-harness/docs/testing.md" "$(jq -r 'select(.kind=="doc_read") | .target' "$CODEX_EVENT")" "Codex bridge doc read"
+assert_eq "src/app.ts" "$(jq -r 'select(.kind=="file_edit") | .target' "$CODEX_EVENT")" "Codex bridge file edit"
+assert_eq "mcp__jira__get_issue" "$(jq -r 'select(.kind=="mcp_tool") | .target' "$CODEX_EVENT")" "Codex bridge MCP tool"
+assert_eq "ai-harness:metrics" "$(jq -r 'select(.kind=="workflow") | .target' "$CODEX_EVENT")" "Codex skill workflow"
+assert_eq "1" "$(jq -r 'select(.kind=="error") | .n' "$CODEX_EVENT")" "Codex tool error"
+assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CODEX_EVENT")" "Codex permission denial"
+assert_eq "1" "$(jq -r 'select(.kind=="compact") | .n' "$CODEX_EVENT")" "Codex compaction"
 assert_eq "2" "$(jq -r 'select(.kind=="jira_issue" and .target=="JDA-123") | .n' "$CODEX_EVENT")" "Codex issue count without duplicate stream"
 assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CODEX_EVENT")" "Codex correction mark"
 pass "source extractors"
@@ -655,10 +663,10 @@ HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
 assert_eq "2" "$(jq -r 'select(.kind=="session") | .v' "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl")" "stale event invalidation"
 pass "backfill freshness and version invalidation"
 
-# mixed-source stats는 미지원을 0회로 취급하지 않음
+# Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "관측 범위: 1/2세션; 나머지는 수집 미지원" "mixed coverage note"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 

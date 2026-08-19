@@ -4,6 +4,10 @@
 {"type":"event_msg","timestamp":"2026-07-29T03:00:02Z","payload":{"type":"user_message","message":"아니 JDA-123과 JDA-123을 다시 확인해줘"}}
 {"type":"turn_context","timestamp":"2026-07-29T03:00:03Z","payload":{"model":"gpt-test-model"}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"  rg -n JDA-123 .\"}"}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$ai-harness:metrics 확인해줘"}]}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"custom_tool_call","name":"exec","input":"await tools.spawn_agent({\"task_name\":\"reviewer\",\"message\":\"review\"}); await tools.mcp__jira__get_issue({}); await tools.exec_command({\"cmd\":\"sed -n '1p' .ai-harness/docs/testing.md\"}); await tools.apply_patch(\"*** Begin Patch\\n*** Update File: src/app.ts\\n*** End Patch\");"}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"custom_tool_call_output","call_id":"call-failed","output":[{"type":"input_text","text":"{\"is_error\":true,\"message\":\"user rejected request\"}"}]}}
+{"type":"summary","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"compaction_summary"}}
 {"type":"event_msg","timestamp":"2026-07-29T03:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":11,"output_tokens":25,"total_tokens":125}}}}
 broken-json
 {"type":"event_msg","timestamp":"2026-07-29T03:00:06Z","payload":{"type":"task_complete"}}

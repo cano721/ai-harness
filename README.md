@@ -286,7 +286,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 - 수집 항목: 세션 메타(토큰·모델·턴), workflow/command 사용, 역할 위임, 하네스 문서 읽기, 편집 파일, bash 명령, MCP 도구, 이슈 키, 오류·가드·권한 거부·컨텍스트 압축 횟수
 - 사용자 교정 마크만 해당 발화 앞 60자 스니펫을 보관해 개선 분석의 정독 후보로 표시합니다.
-- Claude는 위 항목 전체를 관측합니다. Codex는 현재 bash 명령·이슈·교정 마크를 관측합니다. 미지원은 0회와 구분하므로, 관측하지 못한 데이터로 삭제 근거를 만들지 않습니다.
+- Claude와 Codex 모두 위 항목을 관측합니다. Codex는 native function call과 desktop/runtime bridge의 custom tool call을 해석하며, bridge가 경로를 노출하지 않는 편집은 파일별 핫스팟 대신 집계에서 제외될 수 있습니다. 미지원은 0회와 구분하므로, 관측하지 못한 데이터로 삭제 근거를 만들지 않습니다.
 
 | 데이터 | 기본 위치 | 보관 방식 |
 |---|---|---|
