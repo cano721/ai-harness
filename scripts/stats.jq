@@ -25,8 +25,9 @@ def metric_table($rows; $supported; $total):
 | ($all | map(select(.kind=="session"
     and ($project=="" or .project==$project)
     and ($cutoff=="" or ((.ended // .started // "") >= $cutoff))))) as $S
-| ($S | map(.sid)) as $sids
-| ($all | map(select(.kind!="session" and (.sid as $s | $sids | index($s))))) as $E
+# 배열 index 스캔(세션수×이벤트수)이 아니라 객체 lookup으로 소속 세션을 판정한다.
+| ($S | map({(.sid): true}) | add // {}) as $sidset
+| ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
 | ($S | length) as $total
 | (coverage_count($S; "correction_mark")) as $correction_supported
 

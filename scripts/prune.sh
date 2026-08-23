@@ -23,8 +23,7 @@ retention_days() {
 
 NORMAL_DAYS="$(retention_days "${HM_EVENT_RETENTION_DAYS:-180}" 180)"
 SIGNAL_DAYS="$(retention_days "${HM_SIGNAL_EVENT_RETENTION_DAYS:-365}" 365)"
-PROJECT_KEY="p-$(printf '%s' "$PROJECT" | jq -sRr '@uri')"
-QUEUE_DIR="$HM_DATA_DIR/harvest-queue/$PROJECT_KEY"
+QUEUE_DIR="$HM_DATA_DIR/harvest-queue/$(hm_project_key "$PROJECT")"
 ROLLUP_DIR="$HM_DATA_DIR/rollups"
 NOW_EPOCH="$(date +%s)"
 CHECKED=0; PRUNED=0; KEPT=0

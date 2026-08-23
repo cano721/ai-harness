@@ -20,41 +20,11 @@ EOF
 }
 
 acquire_lock() {
-  local attempt=0 unowned_attempts=0 owner=""
-  while (( attempt < 20 )); do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      printf '%s\n' "$$" >"$LOCK_DIR/pid"
-      return 0
-    fi
-    if [[ -f "$LOCK_DIR/pid" ]]; then
-      owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
-    else
-      owner=""
-    fi
-    if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
-      unowned_attempts=$((unowned_attempts + 1))
-      if (( unowned_attempts >= 5 )); then
-        find "$LOCK_DIR" -depth -delete 2>/dev/null || true
-        unowned_attempts=0
-      else
-        sleep 0.02
-        attempt=$((attempt + 1))
-      fi
-      continue
-    fi
-    unowned_attempts=0
-    if ! kill -0 "$owner" 2>/dev/null; then
-      find "$LOCK_DIR" -depth -delete 2>/dev/null || true
-      continue
-    fi
-    sleep 0.02
-    attempt=$((attempt + 1))
-  done
-  return 1
+  hm_acquire_lock "$LOCK_DIR" 20
 }
 
 release_lock() {
-  find "$LOCK_DIR" -depth -delete 2>/dev/null || true
+  hm_release_lock "$LOCK_DIR"
 }
 
 record_health() {

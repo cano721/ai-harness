@@ -76,54 +76,19 @@ EOF
   exit 2
 }
 
-project_key() {
-  # 항상 prefix를 붙여 '.', '..' 같은 프로젝트 인자가 queue root 밖을 가리키지 못하게 한다.
-  printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"
-}
-
 queue_dir() {
-  printf '%s/%s\n' "$QUEUE_ROOT" "$(project_key "$1")"
+  printf '%s/%s\n' "$QUEUE_ROOT" "$(hm_project_key "$1")"
 }
 
 acquire_queue_lock() {
-  local qdir="$1" lock_dir="$1/.queue-lock" attempt=0 unowned_attempts=0 owner=""
+  local qdir="$1" lock_dir="$1/.queue-lock"
   mkdir -p "$qdir"
-  while (( attempt < 50 )); do
-    if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s\n' "$$" >"$lock_dir/pid"
-      printf '%s\n' "$lock_dir"
-      return 0
-    fi
-    if [[ -f "$lock_dir/pid" ]]; then
-      owner="$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)"
-    else
-      owner=""
-    fi
-    if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
-      # mkdir 직후 pid 파일을 쓰기 전인 정상 소유자를 stale lock으로 오인하지 않는다.
-      unowned_attempts=$((unowned_attempts + 1))
-      if (( unowned_attempts >= 5 )); then
-        find "$lock_dir" -depth -delete 2>/dev/null || true
-        unowned_attempts=0
-      else
-        sleep 0.02
-        attempt=$((attempt + 1))
-      fi
-      continue
-    fi
-    unowned_attempts=0
-    if ! kill -0 "$owner" 2>/dev/null; then
-      find "$lock_dir" -depth -delete 2>/dev/null || true
-      continue
-    fi
-    sleep 0.02
-    attempt=$((attempt + 1))
-  done
-  return 1
+  hm_acquire_lock "$lock_dir" 50 || return 1
+  printf '%s\n' "$lock_dir"
 }
 
 release_queue_lock() {
-  find "$1" -depth -delete 2>/dev/null || true
+  hm_release_lock "$1"
 }
 
 migrate_legacy_state() {

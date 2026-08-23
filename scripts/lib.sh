@@ -43,6 +43,51 @@ iso_to_epoch() {
   date -j -u -f '%Y-%m-%dT%H:%M:%S' "$normalized" +%s 2>/dev/null || true
 }
 
+# 프로젝트 이름 → 파일시스템 안전 키. prefix가 '.', '..' 같은 인자의 경로 탈출을 막는다.
+hm_project_key() {
+  printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"
+}
+
+# mkdir 원자성 기반 디렉토리 lock. 소유 pid가 죽었으면 stale로 회수한다.
+hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
+  local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner=""
+  while (( attempt < max_attempts )); do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      printf '%s\n' "$$" >"$lock_dir/pid"
+      return 0
+    fi
+    if [[ -f "$lock_dir/pid" ]]; then
+      owner="$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)"
+    else
+      owner=""
+    fi
+    if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
+      # mkdir 직후 pid 파일을 쓰기 전인 정상 소유자를 stale lock으로 오인하지 않는다.
+      unowned_attempts=$((unowned_attempts + 1))
+      if (( unowned_attempts >= 5 )); then
+        find "$lock_dir" -depth -delete 2>/dev/null || true
+        unowned_attempts=0
+      else
+        sleep 0.02
+        attempt=$((attempt + 1))
+      fi
+      continue
+    fi
+    unowned_attempts=0
+    if ! kill -0 "$owner" 2>/dev/null; then
+      find "$lock_dir" -depth -delete 2>/dev/null || true
+      continue
+    fi
+    sleep 0.02
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+hm_release_lock() {
+  find "$1" -depth -delete 2>/dev/null || true
+}
+
 # Codex는 실행 환경에 따라 CODEX_HOME과 ~/.codex 양쪽에 세션을 둘 수 있다.
 # 테스트/특수 환경은 HARNESS_CODEX_SESSIONS_DIR로 단일 루트를 명시한다.
 codex_session_roots() {

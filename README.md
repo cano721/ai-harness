@@ -233,7 +233,7 @@ stateDiagram-v2
     re_review --> repair: blocking finding 남음
 ```
 
-초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 같은 원인이 두 번 남거나 제품 판단이 필요하면 사용자에게 넘깁니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다.
+초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 같은 원인이 두 번 남거나 제품 판단이 필요하면 사용자에게 넘깁니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 검토 → 수리 → 재검토 루프에 선택적으로 `/ai-harness:review` Dynamic Workflow를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 
@@ -377,6 +377,8 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionEnd 수집·SessionStart 알림 정의
 workflows/        Claude Dynamic Workflow 어댑터
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
+templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
+tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 ```
 
 macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. 교정 마크 감지는 현재 한국어 패턴 중심입니다.

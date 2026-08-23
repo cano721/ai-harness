@@ -14,7 +14,7 @@ for ghost in "$HM_DATA_DIR"/events/claude-rollout-*.jsonl; do
   if jq -e 'select(.kind=="session" and .src=="claude" and (.sid|startswith("rollout-")))' \
     "$ghost" >/dev/null 2>&1; then
     find "$ghost" -delete
-    ((cleanup_n++))
+    cleanup_n=$((cleanup_n + 1))
   fi
 done
 
@@ -24,7 +24,7 @@ enqueue_event() {
   if [[ -f "$ev" ]] \
     && jq -e 'select(.kind=="session")' "$ev" >/dev/null 2>&1 \
     && queue_result="$("$DIR/harvest-queue.sh" record "$ev" 2>/dev/null)"; then
-    ((queue_n++))
+    queue_n=$((queue_n + 1))
     action="$(printf '%s' "$queue_result" | jq -r '.record_action // empty' 2>/dev/null || true)"
     rollup="$HM_DATA_DIR/rollups/$(basename "$ev")"
     # mtime만 바뀐 동일 transcript를 확인하려 상세 이벤트를 잠시 복원했더라도,
@@ -40,7 +40,7 @@ enqueue_event() {
       find "$ev" -maxdepth 0 -type f -delete
     fi
   else
-    ((queue_fail_n++))
+    queue_fail_n=$((queue_fail_n + 1))
   fi
 }
 
@@ -59,12 +59,12 @@ process() { # $1=transcript $2=event파일 $3=extractor
     source_size="$(jq -sr 'map(select(.kind=="session") | .source_size // 0) | first // 0' "$rollup" 2>/dev/null || printf '0')"
     current_size="$(filesize "$t")"; current_size="${current_size:-0}"
     if (( source_mtime > 0 )) && [[ "$mt" == "$source_mtime" && "$current_size" == "$source_size" ]]; then
-      ((skip_n++))
+      skip_n=$((skip_n + 1))
       return
     elif (( source_mtime == 0 )); then
       rollup_mt="$(mtime "$rollup")"
       if [[ -n "$rollup_mt" ]] && (( rollup_mt >= mt )); then
-        ((skip_n++))
+        skip_n=$((skip_n + 1))
         return
       fi
     fi
@@ -84,17 +84,17 @@ process() { # $1=transcript $2=event파일 $3=extractor
     ev_v="$(jq -sr 'map(select(.kind=="session")) | first | .v // 0' "$ev" 2>/dev/null || printf '0')"
     if [[ "$ev_v" == "$HM_EVENT_VERSION" && -n "$ev_mt" ]] \
       && (( ev_mt >= mt && ev_mt >= newest_dep )); then
-      ((skip_n++))
+      skip_n=$((skip_n + 1))
       enqueue_event "$ev"
       return
     fi
   fi
 
   if "$DIR/$ex" "$t" 2>/dev/null; then
-    ((done_n++))
+    done_n=$((done_n + 1))
     enqueue_event "$ev"
   else
-    ((fail_n++))
+    fail_n=$((fail_n + 1))
   fi
 }
 
