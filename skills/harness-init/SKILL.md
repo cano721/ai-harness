@@ -147,6 +147,7 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
    - **자동 갱신 가능**: 상태가 `unchanged`인 관리 생성물. 최신 템플릿으로 재생성하고 hash를 갱신한다.
    - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.
    - **보호됨**: `AGENTS.md`, `.ai-harness/docs/**`, 사람이 작성한 workflow 본문. 자동 갱신하지 않으며 개선 제안 diff만 제공한다.
-4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
+   - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
+4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
 6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.

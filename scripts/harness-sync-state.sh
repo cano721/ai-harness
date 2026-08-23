@@ -66,36 +66,59 @@ case "$command_name" in
     }
     level="$(jq -r '.level // ""' "$manifest")"
     integrations="$(jq -c '.integrations // []' "$manifest")"
-    while IFS= read -r artifact; do
-      path="$(jq -r '.path' <<<"$artifact")"
-      artifact_level="$(jq -r '.level // ""' <<<"$artifact")"
-      integration="$(jq -r '.integration // ""' <<<"$artifact")"
-      [[ "$artifact_level" == "$level" ]] || continue
-      if [[ -n "$integration" ]] && ! jq -e --arg integration "$integration" 'index($integration)' <<<"$integrations" >/dev/null; then
-        continue
-      fi
-      target="$root/$path"
-      baseline="$(jq -r --arg path "$path" '.managed_files[$path].content_sha256 // ""' "$manifest")"
-      state="missing"
-      action="add"
-      if [[ -f "$target" ]]; then
-        current_sha="$(sha256_file "$target")"
-        if [[ -z "$baseline" ]]; then
-          state="untracked"
-          action="approval_required"
-        elif [[ "$current_sha" == "$baseline" ]]; then
-          state="unchanged"
-          action="refresh"
-        else
-          state="modified"
-          action="approval_required"
+    plan_items="$(
+      while IFS= read -r artifact; do
+        path="$(jq -r '.path' <<<"$artifact")"
+        artifact_level="$(jq -r '.level // ""' <<<"$artifact")"
+        integration="$(jq -r '.integration // ""' <<<"$artifact")"
+        [[ "$artifact_level" == "$level" ]] || continue
+        if [[ -n "$integration" ]] && ! jq -e --arg integration "$integration" 'index($integration)' <<<"$integrations" >/dev/null; then
+          continue
         fi
-      fi
-      jq -cn --arg path "$path" --arg state "$state" --arg action "$action" \
-        --arg source "$(jq -r '.source' <<<"$artifact")" --arg mode "$(jq -r '.mode' <<<"$artifact")" \
-        '{path:$path,state:$state,action:$action,source:$source,mode:$mode}'
-    done < <(jq -c '.artifacts[]' "$catalog") \
-      | jq -s '{items: ., counts: (group_by(.action) | map({key: .[0].action, value: length}) | from_entries)}'
+        target="$root/$path"
+        baseline="$(jq -r --arg path "$path" '.managed_files[$path].content_sha256 // ""' "$manifest")"
+        state="missing"
+        action="add"
+        if [[ -f "$target" ]]; then
+          current_sha="$(sha256_file "$target")"
+          if [[ -z "$baseline" ]]; then
+            state="untracked"
+            action="approval_required"
+          elif [[ "$current_sha" == "$baseline" ]]; then
+            state="unchanged"
+            action="refresh"
+          else
+            state="modified"
+            action="approval_required"
+          fi
+        fi
+        jq -cn --arg path "$path" --arg state "$state" --arg action "$action" \
+          --arg source "$(jq -r '.source' <<<"$artifact")" --arg mode "$(jq -r '.mode' <<<"$artifact")" \
+          --arg workflow "$(jq -r '.workflow // ""' <<<"$artifact")" \
+          '{path:$path,state:$state,action:$action,source:$source,mode:$mode}
+            + (if $workflow == "" then {} else {workflow: $workflow} end)'
+      done < <(jq -c '.artifacts[]' "$catalog") | jq -s '.'
+    )"
+    # 새 진입점(add)이 생기면 보호 파일 쪽 후속 조치를 제안한다: 참조되는
+    # 워크플로 본문 부재, AGENTS.md 커맨드 표 미등재. 제안일 뿐 자동 편집 근거가 아니다.
+    suggestions="$(
+      jq -r '[.[] | select(.action == "add") | .workflow // empty] | unique | .[]' <<<"$plan_items" \
+        | while IFS= read -r workflow_name; do
+            body_path=".ai-harness/workflows/$workflow_name.md"
+            if [[ ! -f "$root/$body_path" ]]; then
+              jq -cn --arg workflow "$workflow_name" --arg target "$body_path" \
+                '{type:"workflow_body_missing",workflow:$workflow,target:$target,detail:"new entry point references a workflow body that does not exist yet; generate it from project policy (not tracked as managed)"}'
+            fi
+            if [[ -f "$root/AGENTS.md" ]] && ! grep -qF -- "/$workflow_name" "$root/AGENTS.md"; then
+              jq -cn --arg workflow "$workflow_name" \
+                '{type:"agents_md_reference",workflow:$workflow,target:"AGENTS.md",detail:"AGENTS.md does not reference the new entry point; propose a command-table row and edit only after user approval"}'
+            fi
+          done | jq -s '.'
+    )"
+    jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" \
+      '{items: $items,
+        counts: ($items | group_by(.action) | map({key: .[0].action, value: length}) | from_entries),
+        suggestions: $suggestions}'
     ;;
   record)
     [[ -n "$version" && ${#files[@]} -gt 0 ]] || usage

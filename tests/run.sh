@@ -282,13 +282,23 @@ SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")
 assert_eq "modified" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "user-modified managed file requires approval"
 mkdir -p "$SYNC_ROOT/.agents/skills/implement-feature"
 printf '%s\n' 'legacy project entrypoint' >"$SYNC_ROOT/.agents/skills/implement-feature/SKILL.md"
+mkdir -p "$SYNC_ROOT/.ai-harness/workflows"
+printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review.md"
+# shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
+printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
 assert_eq "8" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/understand-change/SKILL.md") | .action')" "missing understand-change entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"
+assert_eq "understand-change" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/understand-change/SKILL.md") | .workflow')" "plan items carry the owning workflow"
+assert_eq ".ai-harness/workflows/understand-change.md" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.type=="workflow_body_missing" and .workflow=="understand-change") | .target')" "missing workflow body is suggested for a new entry point"
+assert_eq "AGENTS.md" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.type=="agents_md_reference" and .workflow=="understand-change") | .target')" "unreferenced entry point yields an AGENTS.md suggestion"
+assert_eq "" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.type=="workflow_body_missing" and .workflow=="review") | .target')" "existing workflow body suppresses the body suggestion"
+assert_eq "" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.type=="agents_md_reference" and .workflow=="implement-feature") | .target')" "referenced entry point suppresses the AGENTS.md suggestion"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "--sync --apply" "harness init supports project sync apply"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "managed_files" "harness init records managed file hashes"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "agents_md_reference" "harness init handles protected-file suggestions"
 pass "project harness sync state"
 
 # understand-change 템플릿은 코드 변경을 설명하되, 근거 없는 추론·무단 micro-world 구현은 하지 않는다.
