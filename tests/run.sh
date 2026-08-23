@@ -284,6 +284,7 @@ mkdir -p "$SYNC_ROOT/.agents/skills/implement-feature"
 printf '%s\n' 'legacy project entrypoint' >"$SYNC_ROOT/.agents/skills/implement-feature/SKILL.md"
 mkdir -p "$SYNC_ROOT/.ai-harness/workflows"
 printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review.md"
+# shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
 assert_eq "8" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
