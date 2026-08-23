@@ -686,9 +686,15 @@ assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
 # manifest versions and marketplace policy stay aligned
-assert_eq "0.15.0" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version"
-assert_eq "0.15.0" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin version"
-assert_eq "0.15.0" "$(jq -r '.version' "$ROOT/release.json")" "release version"
+CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
+[[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
+  || fail "Claude plugin version is not semver: $CLAUDE_PLUGIN_VERSION"
+assert_eq "$CLAUDE_PLUGIN_VERSION" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin version matches Claude"
+assert_eq "$CLAUDE_PLUGIN_VERSION" "$(jq -r '.version' "$ROOT/release.json")" "release version matches plugins"
+assert_eq "MIT" "$(jq -r '.license' "$ROOT/.claude-plugin/plugin.json")" "Claude plugin license"
+assert_eq "MIT" "$(jq -r '.license' "$ROOT/.codex-plugin/plugin.json")" "Codex plugin license"
+assert_file "$ROOT/LICENSE"
+assert_contains "$(<"$ROOT/LICENSE")" "MIT License" "LICENSE is MIT"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
 

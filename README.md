@@ -389,3 +389,7 @@ macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에
 bash tests/run.sh
 shellcheck scripts/*.sh tests/*.sh
 ```
+
+## 라이선스
+
+[MIT](LICENSE)
