@@ -54,6 +54,8 @@ AGENTS.md                    # 진입점 (아래 구성)
     bug-fix-graph.json       # fix-bug의 프로젝트 로컬 노드·전이 계약
     review.md                # 변경 검토·finding 종료 절차
     review-graph.json        # review의 프로젝트 로컬 노드·전이 계약
+    understand-change.md     # 사람이 변경을 이해하고 다음 결정을 내리기 위한 절차
+    understanding-change-graph.json # 설명 깊이·검증·micro-world 판단 계약
   agents/                    # standard
     explorer.md              # 탐색 전담 (read-only)
     developer.md             # 구현 전담 (write scope: 소스+빌드 설정)
@@ -69,6 +71,8 @@ AGENTS.md                    # 진입점 (아래 구성)
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
     review/
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
+    understand-change/
+      SKILL.md                # 변경 설명·검증·이해 확인을 위한 프로젝트 로컬 진입점
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -96,6 +100,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - `/fix-bug`도 플러그인 전역 Skill이 아니라 `standard` 초기화에서 생성하는 **프로젝트 로컬 버그 수정 진입점**이다. `templates/fix-bug/`를 기반으로 Codex는 `.agents/skills/fix-bug/SKILL.md`, Claude는 `.claude/commands/fix-bug.md`를 생성한다. 템플릿의 그래프는 `.ai-harness/workflows/bug-fix-graph.json`에도 복사한다. 승인 전에는 관찰·재현·원인 가설만 허용하고, 재현 불가이며 안전한 관측 계획도 없으면 수정하지 않고 사용자에게 필요한 환경·로그·기대 동작을 요청한다.
 - 템플릿에서 생성할 `fix-bug.md`는 관찰된/기대 동작, 영향, 재현 증거, 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위를 담은 `Bug Fix Brief`를 먼저 제시하고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 게이트를 둔다. 승인 뒤 프로젝트 테스트 정책에 따라 회귀 테스트 또는 동등한 검증 증거를 만들고, targeted/전체 검증과 **리뷰 → 원인별 수정 → 재검토**를 수행한다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 - `/review`도 `standard` 초기화에서 생성하는 프로젝트 로컬 진입점이다. `templates/review/`를 기반으로 Codex는 `.agents/skills/review/SKILL.md`, Claude는 `.claude/commands/review.md`를 생성하고 graph를 `.ai-harness/workflows/review-graph.json`에 복사한다. 초기 검토는 read-only이며, blocking finding이 있으면 대상 workflow로 수리한 뒤 필수 검증과 재검토를 거치기 전에는 완료하지 않는다.
+- `/understand-change`는 `standard` 초기화에서 생성하는 프로젝트 로컬 설명 진입점이다. `templates/understand-change/`를 기반으로 Codex는 `.agents/skills/understand-change/SKILL.md`, Claude는 `.claude/commands/understand-change.md`를 생성하고 graph를 `.ai-harness/workflows/understanding-change-graph.json`에 복사한다. `understand-change.md`에는 프로젝트 문서·테스트·명령을 바탕으로 small / standard / deep 설명의 깊이를 정한다. 설명은 변경 전 배경, 직관, 실행 흐름, 위험, 직접 검증을 포함하며, standard·deep에서는 이해 확인 문제를 추가한다. deep 변경에서만 상태를 조작하거나 단계별 실행을 관찰하는 micro-world의 최소 형태를 제안하며, 사용자의 별도 승인 없이는 구현하지 않는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 플러그인 내부의 `/ai-harness:implement-feature` 또는 `/ai-harness:fix-bug` Dynamic Workflow를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 

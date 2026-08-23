@@ -1,0 +1,4 @@
+interface:
+  display_name: "Understand Change"
+  short_description: "Explain a code change and test understanding."
+  default_prompt: "Use $understand-change to explain this change, its risks, and how I can verify it: $ARGUMENTS"
