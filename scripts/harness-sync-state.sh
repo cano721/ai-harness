@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <status|record|plan> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--file <relative-path>]...\n' "$0" >&2
+  printf 'usage: %s <status|record|plan|forget> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--file <relative-path>]...\n' "$0" >&2
   exit 2
 }
 
@@ -115,10 +115,49 @@ case "$command_name" in
             fi
           done | jq -s '.'
     )"
-    jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" \
+    # 템플릿에서 빠진 생성물은 카탈로그를 순회하는 items에 절대 나타나지 않는다.
+    # manifest에만 남은 항목을 따로 짚어 주지 않으면 낡은 사본이 프로젝트에 방치된다.
+    retired="$(
+      jq -r --slurpfile catalog "$catalog" '
+        [$catalog[0].artifacts[].path] as $known
+        | (.managed_files // {})
+        | keys[] as $path
+        | select($known | index($path) | not)
+        | select($path != "" and ($path | startswith("/") | not) and ($path | contains("..") | not))
+        | $path
+      ' "$manifest" \
+        | while IFS= read -r path; do
+            present="false"
+            if [[ -f "$root/$path" ]]; then
+              present="true"
+            fi
+            jq -cn --arg path "$path" --argjson present "$present" \
+              '{path:$path,present:$present,detail:"tracked in the manifest but no longer declared by the template catalog; confirm removal of the file and its manifest entry with the user"}'
+          done | jq -s '.'
+    )"
+    jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" --argjson retired "$retired" \
       '{items: $items,
         counts: ($items | group_by(.action) | map({key: .[0].action, value: length}) | from_entries),
-        suggestions: $suggestions}'
+        suggestions: $suggestions,
+        retired: $retired}'
+    ;;
+  forget)
+    ((${#files[@]} > 0)) || usage
+    temp_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
+    trap 'rm -f "$temp_manifest"' EXIT
+    cp "$manifest" "$temp_manifest"
+    for path in "${files[@]}"; do
+      case "$path" in
+        ""|/*|*'..'*) printf 'invalid managed path: %s\n' "$path" >&2; exit 2 ;;
+      esac
+      next_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
+      jq --arg path "$path" '
+        .managed_files = ((.managed_files // {}) | del(.[$path]))
+      ' "$temp_manifest" >"$next_manifest"
+      mv "$next_manifest" "$temp_manifest"
+    done
+    mv "$temp_manifest" "$manifest"
+    trap - EXIT
     ;;
   record)
     [[ -n "$version" && ${#files[@]} -gt 0 ]] || usage

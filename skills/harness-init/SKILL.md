@@ -54,8 +54,7 @@ AGENTS.md                    # 진입점 (아래 구성)
     bug-fix-graph.json       # fix-bug의 프로젝트 로컬 노드·전이 계약
     review.md                # 변경 검토·finding 종료 절차
     review-graph.json        # review의 프로젝트 로컬 노드·전이 계약
-    understand-change.md     # 사람이 변경을 이해하고 다음 결정을 내리기 위한 절차
-    understanding-change-graph.json # 설명 깊이·검증·micro-world 판단 계약
+    understand-change.md     # 플러그인 `/understand-change`가 읽는 프로젝트별 설명 정책 (선택, 사람 소유)
   agents/                    # standard
     explorer.md              # 탐색 전담 (read-only)
     developer.md             # 구현 전담 (write scope: 소스+빌드 설정)
@@ -71,8 +70,6 @@ AGENTS.md                    # 진입점 (아래 구성)
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
     review/
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
-    understand-change/
-      SKILL.md                # 변경 설명·검증·이해 확인을 위한 프로젝트 로컬 진입점
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -100,7 +97,8 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - `/fix-bug`도 플러그인 전역 Skill이 아니라 `standard` 초기화에서 생성하는 **프로젝트 로컬 버그 수정 진입점**이다. `templates/fix-bug/`를 기반으로 Codex는 `.agents/skills/fix-bug/SKILL.md`, Claude는 `.claude/commands/fix-bug.md`를 생성한다. 템플릿의 그래프는 `.ai-harness/workflows/bug-fix-graph.json`에도 복사한다. 승인 전에는 관찰·재현·원인 가설만 허용하고, 재현 불가이며 안전한 관측 계획도 없으면 수정하지 않고 사용자에게 필요한 환경·로그·기대 동작을 요청한다.
 - 템플릿에서 생성할 `fix-bug.md`는 관찰된/기대 동작, 영향, 재현 증거, 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위를 담은 `Bug Fix Brief`를 먼저 제시하고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 게이트를 둔다. 승인 뒤 프로젝트 테스트 정책에 따라 회귀 테스트 또는 동등한 검증 증거를 만들고, targeted/전체 검증과 **리뷰 → 원인별 수정 → 재검토**를 수행한다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 - `/review`도 `standard` 초기화에서 생성하는 프로젝트 로컬 진입점이다. `templates/review/`를 기반으로 Codex는 `.agents/skills/review/SKILL.md`, Claude는 `.claude/commands/review.md`를 생성하고 graph를 `.ai-harness/workflows/review-graph.json`에 복사한다. 초기 검토는 read-only이며, blocking finding이 있으면 대상 workflow로 수리한 뒤 필수 검증과 재검토를 거치기 전에는 완료하지 않는다.
-- `/understand-change`는 `standard` 초기화에서 생성하는 프로젝트 로컬 설명 진입점이다. `templates/understand-change/`를 기반으로 Codex는 `.agents/skills/understand-change/SKILL.md`, Claude는 `.claude/commands/understand-change.md`를 생성하고 graph를 `.ai-harness/workflows/understanding-change-graph.json`에 복사한다. `understand-change.md`에는 프로젝트 문서·테스트·명령을 바탕으로 small / standard / deep 설명의 깊이를 정한다. 설명은 변경 전 배경, 직관, 실행 흐름, 위험, 직접 검증을 포함하며, standard·deep에서는 이해 확인 문제를 추가한다. deep 변경에서만 상태를 조작하거나 단계별 실행을 관찰하는 micro-world의 최소 형태를 제안하며, 사용자의 별도 승인 없이는 구현하지 않는다.
+- `/understand-change`는 위 셋과 달리 **플러그인 전역 Skill**(`skills/understand-change/`)이며 프로젝트에 진입점을 생성하지 않는다. 코드를 수정하지 않는 설명 전용 흐름이라 테스트·Git 정책 같은 프로젝트 계약을 담지 않고, 프로젝트별 조정은 런타임에 `.ai-harness/workflows/understand-change.md`를 읽어 해결한다. 따라서 관리 생성물·동기화 대상이 아니다. 초기화에서는 그 `understand-change.md`만 사람 소유 보호 파일로 만들어 프로젝트 문서·검증 명령·공유 위치와 small / standard / deep 설명 깊이 기준을 연결한다(없어도 스킬은 내장 기본값으로 동작한다). 설명은 변경 전 배경, 직관, 실행 흐름, 위험, 직접 검증을 포함하며, standard·deep에서는 이해 확인 문제를 추가한다. deep 변경에서만 상태를 조작하거나 단계별 실행을 관찰하는 micro-world의 최소 형태를 제안하며, 사용자의 별도 승인 없이는 구현하지 않는다.
+- AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 플러그인 내부의 `/ai-harness:implement-feature`, `/ai-harness:fix-bug`, `/ai-harness:review` Dynamic Workflow를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 
@@ -148,6 +146,7 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
    - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.
    - **보호됨**: `AGENTS.md`, `.ai-harness/docs/**`, 사람이 작성한 workflow 본문. 자동 갱신하지 않으며 개선 제안 diff만 제공한다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
-4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
+   - **정리 대상(`retired`)**: manifest에는 남아 있지만 템플릿 카탈로그가 더 이상 선언하지 않는 생성물이다(예: 0.16.0에서 프로젝트에 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다.
+4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** 해당 파일을 삭제한 다음 `harness-sync-state.sh forget --file <path>`로 manifest 항목을 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
 6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.
