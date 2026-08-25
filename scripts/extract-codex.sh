@@ -35,11 +35,12 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
     elif .payload.name=="exec" then
       (tool_input | [match("\\\"cmd\\\"\\s*:\\s*\\\"(?<cmd>(?:\\\\\\\\.|[^\\\"])*)\\\""; "g").captures[].string] | join("\n"))
     else "" end;
+  # 한 exec 명령이 여러 문서를 읽을 수 있으므로(sed A && sed B) 전체 매치를 모두 낸다.
   def harness_doc:
-    if test("\\.ai-harness/") then capture("(?<p>\\.ai-harness/[A-Za-z0-9_./-]+)").p
-    elif test("AGENTS\\.md") then "AGENTS.md"
-    elif test("CLAUDE\\.md") then "CLAUDE.md"
-    else empty end;
+    ( [match("\\.ai-harness/[A-Za-z0-9_./-]+"; "g").string]
+      + (if test("AGENTS\\.md") then ["AGENTS.md"] else [] end)
+      + (if test("CLAUDE\\.md") then ["CLAUDE.md"] else [] end) )
+    | unique | .[];
   def is_correction:
     startswith("아니") or startswith("아냐") or startswith("그게 아니라")
     or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸");
@@ -119,10 +120,11 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      | tostring | select(test("isError|is_error"; "i"))] | length
     | select(.>0) | $base + {kind:"error", n:.} ),
   ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("Direct edit guard"))] | length
+     | tostring | select(test("\\[Direct edit guard\\]"))] | length
     | select(.>0) | $base + {kind:"guard_block", n:.} ),
   ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("doesn.t want to proceed|user rejected"; "i"))] | length
+     | tostring | select(test("doesn.t want to proceed|user rejected"; "i"))
+     | select(test("wants to clarify these questions") | not)] | length
     | select(.>0) | $base + {kind:"permission_deny", n:.} ),
   ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
     | select(.>0) | $base + {kind:"compact", n:.} ),
