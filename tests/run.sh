@@ -299,28 +299,29 @@ assert_eq "" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.type=
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "--sync --apply" "harness init supports project sync apply"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "managed_files" "harness init records managed file hashes"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "agents_md_reference" "harness init handles protected-file suggestions"
-# 템플릿에서 빠진 생성물(예: 플러그인으로 옮긴 understand-change)은 manifest에만 남아 낡은 사본을 방치한다.
+# 카탈로그가 내린 생성물(플러그인으로 옮긴 understand-change)은 파일이든 manifest든 남아 있으면 정리 대상이다.
+STALE_ENTRY=".agents/skills/understand-change/SKILL.md"
 mkdir -p "$SYNC_ROOT/.agents/skills/understand-change"
-printf '%s\n' 'stale 0.16.0 project copy' >"$SYNC_ROOT/.agents/skills/understand-change/SKILL.md"
-"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 \
-  --file .agents/skills/understand-change/SKILL.md
+printf '%s\n' 'stale 0.16.0 project copy' >"$SYNC_ROOT/$STALE_ENTRY"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 --file "$STALE_ENTRY"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "true" "$(printf '%s' "$SYNC_PLAN" | jq -r '.retired[] | select(.path==".agents/skills/understand-change/SKILL.md") | .present')" "dropped template artifact is reported as retired"
-assert_eq "0" "$(printf '%s' "$SYNC_PLAN" | jq -r '[.items[] | select(.path==".agents/skills/understand-change/SKILL.md")] | length')" "retired artifact never reappears as a plan item"
-"$ROOT/scripts/harness-sync-state.sh" forget --root "$SYNC_ROOT" \
-  --file .agents/skills/understand-change/SKILL.md
-assert_eq "null" "$(jq -r '.managed_files[".agents/skills/understand-change/SKILL.md"] // "null"' "$SYNC_ROOT/.ai-harness/harness.json")" "forget drops the manifest entry"
-assert_file "$SYNC_ROOT/.agents/skills/understand-change/SKILL.md"
-assert_eq "0" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")" | jq -r '[.retired[] | select(.path==".agents/skills/understand-change/SKILL.md")] | length')" "forgotten artifact leaves the retired list"
-# 파일이 이미 없어도 manifest에 남아 있으면 정리 대상이다 (present=false로 구분해 보고).
-mkdir -p "$SYNC_ROOT/.agents/skills/absent"
-printf '%s\n' 'about to be deleted' >"$SYNC_ROOT/.agents/skills/absent/SKILL.md"
-"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 \
-  --file .agents/skills/absent/SKILL.md
-rm -f "$SYNC_ROOT/.agents/skills/absent/SKILL.md"
+assert_eq "true" "$(printf '%s' "$SYNC_PLAN" | jq -r --arg p "$STALE_ENTRY" '.retired[] | select(.path==$p) | .present')" "retired artifact still on disk is reported"
+assert_eq "true" "$(printf '%s' "$SYNC_PLAN" | jq -r --arg p "$STALE_ENTRY" '.retired[] | select(.path==$p) | .tracked')" "retired artifact still in the manifest is reported"
+assert_eq "0" "$(printf '%s' "$SYNC_PLAN" | jq -r --arg p "$STALE_ENTRY" '[.items[] | select(.path==$p)] | length')" "retired artifact never reappears as a plan item"
+# init이 관리하지만 카탈로그가 선언한 적 없는 생성물(.codex/agents/*.toml)을 삭제 후보로 올리면 안 된다.
+mkdir -p "$SYNC_ROOT/.codex/agents"
+printf '%s\n' 'name = "developer"' >"$SYNC_ROOT/.codex/agents/developer.toml"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 --file .codex/agents/developer.toml
+assert_eq "0" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")" | jq -r '[.retired[] | select(.path==".codex/agents/developer.toml")] | length')" "uncatalogued managed file is never proposed for removal"
+# forget은 manifest만 정리한다: 파일이 남아 있으면 아직 정리 대상이어야 한다.
+"$ROOT/scripts/harness-sync-state.sh" forget --root "$SYNC_ROOT" --file "$STALE_ENTRY"
+assert_eq "null" "$(jq -r --arg p "$STALE_ENTRY" '.managed_files[$p] // "null"' "$SYNC_ROOT/.ai-harness/harness.json")" "forget drops the manifest entry"
+assert_file "$SYNC_ROOT/$STALE_ENTRY"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "false" "$(printf '%s' "$SYNC_PLAN" | jq -r '.retired[] | select(.path==".agents/skills/absent/SKILL.md") | .present')" "already deleted artifact is still retired"
-assert_eq "2" "$(printf '%s' "$SYNC_PLAN" | jq -r '.retired | length')" "retired enumeration continues past a missing file"
+assert_eq "false" "$(printf '%s' "$SYNC_PLAN" | jq -r --arg p "$STALE_ENTRY" '.retired[] | select(.path==$p) | .tracked')" "forget clears only the manifest side"
+assert_eq "true" "$(printf '%s' "$SYNC_PLAN" | jq -r --arg p "$STALE_ENTRY" '.retired[] | select(.path==$p) | .present')" "a forgotten file left on disk is still retired"
+rm -f "$SYNC_ROOT/$STALE_ENTRY"
+assert_eq "0" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")" | jq -r '.retired | length')" "cleanup of both sides empties the retired list"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "retired" "harness init handles retired artifacts"
 pass "project harness sync state"
 

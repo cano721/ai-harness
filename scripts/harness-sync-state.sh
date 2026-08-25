@@ -115,24 +115,24 @@ case "$command_name" in
             fi
           done | jq -s '.'
     )"
-    # 템플릿에서 빠진 생성물은 카탈로그를 순회하는 items에 절대 나타나지 않는다.
-    # manifest에만 남은 항목을 따로 짚어 주지 않으면 낡은 사본이 프로젝트에 방치된다.
+    # 템플릿에서 내린 생성물은 카탈로그를 순회하는 items에 나타나지 않아 낡은 사본이 방치된다.
+    # 카탈로그에 없다는 사실만으로는 판단할 수 없다 — .codex/agents/*.toml처럼 init이 관리하지만
+    # 카탈로그가 선언한 적 없는 생성물이 있어 살아 있는 파일을 삭제 후보로 올리게 된다.
+    # 그래서 내려간 경로는 카탈로그의 `retired`에 명시된 것만 인정한다.
     retired="$(
-      jq -r --slurpfile catalog "$catalog" '
-        [$catalog[0].artifacts[].path] as $known
-        | (.managed_files // {})
-        | keys[] as $path
-        | select($known | index($path) | not)
-        | select($path != "" and ($path | startswith("/") | not) and ($path | contains("..") | not))
-        | $path
-      ' "$manifest" \
+      jq -r '.retired // [] | .[] | .path
+        | select(. != "" and (startswith("/") | not) and (contains("..") | not))' "$catalog" \
         | while IFS= read -r path; do
             present="false"
             if [[ -f "$root/$path" ]]; then
               present="true"
             fi
-            jq -cn --arg path "$path" --argjson present "$present" \
-              '{path:$path,present:$present,detail:"tracked in the manifest but no longer declared by the template catalog; confirm removal of the file and its manifest entry with the user"}'
+            tracked="$(jq --arg path "$path" '(.managed_files // {}) | has($path)' "$manifest")"
+            [[ "$present" == "true" || "$tracked" == "true" ]] || continue
+            jq -cn --arg path "$path" --argjson present "$present" --argjson tracked "$tracked" \
+              --arg reason "$(jq -r --arg path "$path" '.retired[] | select(.path == $path) | .reason // ""' "$catalog")" \
+              '{path:$path,present:$present,tracked:$tracked,reason:$reason,
+                detail:"retired by the template catalog; confirm removal of the file with the user, then drop the manifest entry with `forget`"}'
           done | jq -s '.'
     )"
     jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" --argjson retired "$retired" \
