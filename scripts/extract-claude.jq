@@ -84,9 +84,13 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # ── 신호 카운트 ──
 ( [$L[] | tool_results | select(.is_error==true)] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
-( [$L[] | tool_results | result_text | select(test("Direct edit guard"))] | length
+# 훅 stderr 접두어 "[Direct edit guard]"만 — AGENTS.md 본문의 같은 문구(Read/cat 출력)는 차단이 아님
+( [$L[] | tool_results | result_text | select(test("\\[Direct edit guard\\]"))] | length
   | select(.>0) | $base + {kind:"guard_block", n:.} ),
-( [$L[] | tool_results | result_text | select(test("doesn.t want to proceed|user rejected"))] | length
+# AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 거부 문구가 오지만 권한 거부가 아님
+( [$L[] | tool_results | result_text
+    | select(test("doesn.t want to proceed|user rejected"))
+    | select(test("wants to clarify these questions") | not)] | length
   | select(.>0) | $base + {kind:"permission_deny", n:.} ),
 ( [$L[] | select(.type=="summary" or .isCompactSummary==true)] | length
   | select(.>0) | $base + {kind:"compact", n:.} ),
