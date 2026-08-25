@@ -121,7 +121,7 @@ case "$command_name" in
     # 그래서 내려간 경로는 카탈로그의 `retired`에 명시된 것만 인정한다.
     retired="$(
       jq -r '.retired // [] | .[] | .path
-        | select(. != "" and (startswith("/") | not) and (contains("..") | not))' "$catalog" \
+        | select(type == "string" and . != "" and (startswith("/") | not) and (contains("..") | not))' "$catalog" \
         | while IFS= read -r path; do
             present="false"
             if [[ -f "$root/$path" ]]; then
