@@ -447,6 +447,17 @@ BACKOFF_SECONDS=$(( $(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json
 assert_eq "1200" "$BACKOFF_SECONDS" "backoff doubles on the second consecutive failure"
 pass "failed release checks back off without spending the success TTL"
 
+# 손상된 캐시가 조회 자체를 죽이면 알림이 조용히 사라진다.
+CORRUPT_DATA="$TEST_TMP/update-corrupt"
+mkdir -p "$CORRUPT_DATA"
+jq -cn '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"",notes_url:"",last_result:"success",last_error:"",checked_at:"2026-01-01T00:00:00Z",checked_at_epoch:1,failure_count:"oops",next_retry_epoch:"nope"}' \
+  >"$CORRUPT_DATA/update-check.json"
+CORRUPT_STATUS="$(HARNESS_METRICS_DIR="$CORRUPT_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/check-update.sh" status)"
+assert_eq "9.9.9" "$(printf '%s' "$CORRUPT_STATUS" | jq -r '.latest_version')" "corrupt counters do not break the status report"
+assert_eq "0" "$(printf '%s' "$CORRUPT_STATUS" | jq -r '.failure_count')" "corrupt failure_count falls back to zero"
+assert_eq "0" "$(printf '%s' "$CORRUPT_STATUS" | jq -r '.next_retry_epoch')" "corrupt next_retry_epoch falls back to zero"
+pass "malformed update cache degrades without failing the check"
+
 # 알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작한다.
 RELEASE_VERSION="$(jq -r '.version' "$ROOT/release.json")"
 assert_eq "$RELEASE_VERSION" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "claude plugin version matches release.json"

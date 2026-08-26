@@ -54,6 +54,10 @@ is_nonnegative_integer "$cached_epoch" || cached_epoch=0
 is_nonnegative_integer "$cached_failure_count" || cached_failure_count=0
 is_nonnegative_integer "$cached_next_retry_epoch" || cached_next_retry_epoch=0
 
+# 상태 파일은 사용자가 손댈 수 있다. 출력에는 검증을 통과한 값만 쓰고, write_state가 갱신한다.
+state_failure_count="$cached_failure_count"
+state_next_retry_epoch="$cached_next_retry_epoch"
+
 # 성공한 조회만 checked_at(성공 TTL)을 갱신한다. 실패는 성공 캐시를 그대로 두고
 # 별도의 짧은 백오프만 적립해, 일시적인 네트워크 오류가 하루치 알림을 삼키지 않게 한다.
 write_state() {
@@ -72,7 +76,7 @@ write_state() {
     cap=$((retry_max_minutes * 60))
     backoff=$((retry_minutes * 60))
     local doubled=1
-    while ((doubled < failure_count && backoff < cap)); do
+    while ((backoff > 0 && doubled < failure_count && backoff < cap)); do
       backoff=$((backoff * 2))
       doubled=$((doubled + 1))
     done
@@ -99,6 +103,8 @@ write_state() {
       last_attempt_at:$last_attempt_at, last_attempt_epoch:$last_attempt_epoch,
       failure_count:$failure_count, next_retry_epoch:$next_retry_epoch}' >"$temp_file"
   mv "$temp_file" "$state_file"
+  state_failure_count="$failure_count"
+  state_next_retry_epoch="$next_retry_epoch"
 }
 
 version_is_newer() {
@@ -193,8 +199,8 @@ jq -cn \
   --arg last_result "$cached_result" \
   --arg last_error "$(jq -r '.last_error // empty' "$state_file" 2>/dev/null || true)" \
   --argjson update_available "$update_available" \
-  --argjson failure_count "$(jq -r '.failure_count // 0' "$state_file" 2>/dev/null || printf '0')" \
-  --argjson next_retry_epoch "$(jq -r '.next_retry_epoch // 0' "$state_file" 2>/dev/null || printf '0')" \
+  --argjson failure_count "$state_failure_count" \
+  --argjson next_retry_epoch "$state_next_retry_epoch" \
   '{installed_version:$installed_version, latest_version:$latest_version,
     update_available:$update_available, release_url:$release_url, notes_url:$notes_url,
     last_result:$last_result, last_error:$last_error,
