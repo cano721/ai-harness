@@ -420,6 +420,43 @@ assert_eq "failure" "$(printf '%s' "$FAILED_UPDATE_STATUS" | jq -r '.last_result
 assert_eq "9.9.9" "$(printf '%s' "$FAILED_UPDATE_STATUS" | jq -r '.latest_version')" "failed refresh keeps prior release cache"
 pass "cached update notification and explicit update flow"
 
+# 조회 실패는 성공 TTL을 소비하지 않고, 별도의 짧은 백오프로만 재시도한다.
+BACKOFF_DATA="$TEST_TMP/update-backoff"
+mkdir -p "$BACKOFF_DATA"
+BACKOFF_NOW="$(date +%s)"
+BACKOFF_SUCCESS_EPOCH=$((BACKOFF_NOW - 90000))
+jq -cn --argjson checked_at_epoch "$BACKOFF_SUCCESS_EPOCH" \
+  '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"https://example.test/releases/tag/v9.9.9",notes_url:"https://example.test/releases/tag/v9.9.9",last_result:"success",last_error:"",checked_at:"2026-01-01T00:00:00Z",checked_at_epoch:$checked_at_epoch}' \
+  >"$BACKOFF_DATA/update-check.json"
+BACKOFF_FIRST="$(HARNESS_METRICS_DIR="$BACKOFF_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status)"
+assert_eq "failure" "$(printf '%s' "$BACKOFF_FIRST" | jq -r '.last_result')" "stale cache still refreshes after TTL"
+assert_eq "1" "$(printf '%s' "$BACKOFF_FIRST" | jq -r '.failure_count')" "first failure counted"
+assert_eq "$BACKOFF_SUCCESS_EPOCH" "$(jq -r '.checked_at_epoch' "$BACKOFF_DATA/update-check.json")" "failed refresh does not consume the success TTL"
+assert_eq "2026-01-01T00:00:00Z" "$(jq -r '.checked_at' "$BACKOFF_DATA/update-check.json")" "failed refresh keeps the last success timestamp"
+BACKOFF_RETRY_AT="$(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json")"
+[[ "$BACKOFF_RETRY_AT" -gt "$BACKOFF_NOW" ]] || fail "failure schedules a retry in the future (next_retry_epoch=$BACKOFF_RETRY_AT)"
+BACKOFF_SECOND="$(HARNESS_METRICS_DIR="$BACKOFF_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status)"
+assert_eq "1" "$(printf '%s' "$BACKOFF_SECOND" | jq -r '.failure_count')" "retry is suppressed while the backoff window is open"
+assert_eq "$BACKOFF_RETRY_AT" "$(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json")" "suppressed retry leaves the backoff window unchanged"
+BACKOFF_OPEN_TMP="$BACKOFF_DATA/.update-check-open.json"
+jq -c '.next_retry_epoch = 0' "$BACKOFF_DATA/update-check.json" >"$BACKOFF_OPEN_TMP"
+mv "$BACKOFF_OPEN_TMP" "$BACKOFF_DATA/update-check.json"
+BACKOFF_THIRD="$(HARNESS_METRICS_DIR="$BACKOFF_DATA" HM_UPDATE_RELEASE_URL="not-a-url" HM_UPDATE_RETRY_MINUTES=10 HM_UPDATE_RETRY_MAX_MINUTES=60 "$ROOT/scripts/check-update.sh" status)"
+assert_eq "2" "$(printf '%s' "$BACKOFF_THIRD" | jq -r '.failure_count')" "consecutive failures accumulate once the window closes"
+BACKOFF_SECONDS=$(( $(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json") - $(jq -r '.last_attempt_epoch' "$BACKOFF_DATA/update-check.json") ))
+assert_eq "1200" "$BACKOFF_SECONDS" "backoff doubles on the second consecutive failure"
+pass "failed release checks back off without spending the success TTL"
+
+# 알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작한다.
+RELEASE_VERSION="$(jq -r '.version' "$ROOT/release.json")"
+assert_eq "$RELEASE_VERSION" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "claude plugin version matches release.json"
+assert_eq "$RELEASE_VERSION" "$(jq -r '.version' "$ROOT/.codex-plugin/plugin.json")" "codex plugin version matches release.json"
+for RELEASE_FIELD in release_url notes_url; do
+  RELEASE_LINK="$(jq -r --arg field "$RELEASE_FIELD" '.[$field] // ""' "$ROOT/release.json")"
+  assert_contains "$RELEASE_LINK" "/releases/tag/v$RELEASE_VERSION" "$RELEASE_FIELD points at the released version"
+done
+pass "release metadata identifies the shipped version"
+
 # 반복 신호는 기본적으로 서로 다른 세션에서 관측돼야 하며, 권한 거부도 독립 트리거가 된다.
 DIVERSITY_DATA="$TEST_TMP/diversity-data"
 HARNESS_METRICS_DIR="$DIVERSITY_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
