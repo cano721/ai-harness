@@ -458,6 +458,26 @@ assert_eq "0" "$(printf '%s' "$CORRUPT_STATUS" | jq -r '.failure_count')" "corru
 assert_eq "0" "$(printf '%s' "$CORRUPT_STATUS" | jq -r '.next_retry_epoch')" "corrupt next_retry_epoch falls back to zero"
 pass "malformed update cache degrades without failing the check"
 
+# 0-패딩 값은 산술 확장에서 8진수로 읽혀 write_state를 mv 이전에 중단시킨다.
+OCTAL_DATA="$TEST_TMP/update-octal"
+mkdir -p "$OCTAL_DATA"
+OCTAL_STATUS="$(HARNESS_METRICS_DIR="$OCTAL_DATA" HM_UPDATE_RELEASE_URL="not-a-url" \
+  HM_UPDATE_CHECK_HOURS=08 HM_UPDATE_RETRY_MINUTES=09 "$ROOT/scripts/check-update.sh" status 2>&1)"
+assert_eq "0" "$(printf '%s' "$OCTAL_STATUS" | grep -c 'value too great for base' || true)" \
+  "zero-padded settings never reach arithmetic expansion"
+assert_eq "1" "$(printf '%s' "$OCTAL_STATUS" | tail -n 1 | jq -r '.failure_count')" "zero-padded settings fall back to defaults"
+assert_file "$OCTAL_DATA/update-check.json"
+OCTAL_BACKOFF=$(( $(jq -r '.next_retry_epoch' "$OCTAL_DATA/update-check.json") - $(jq -r '.last_attempt_epoch' "$OCTAL_DATA/update-check.json") ))
+assert_eq "900" "$OCTAL_BACKOFF" "rejected retry interval falls back to the 15 minute default"
+OCTAL_COUNTER="$TEST_TMP/update-octal-counter"
+mkdir -p "$OCTAL_COUNTER"
+jq -cn --argjson checked_at_epoch "$((BACKOFF_NOW - 90000))" \
+  '{v:1,latest_version:"9.9.9",last_result:"failure",last_error:"",checked_at:"2026-01-01T00:00:00Z",checked_at_epoch:$checked_at_epoch,failure_count:"09",next_retry_epoch:0}' \
+  >"$OCTAL_COUNTER/update-check.json"
+HARNESS_METRICS_DIR="$OCTAL_COUNTER" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status >/dev/null 2>&1
+assert_eq "1" "$(jq -r '.failure_count' "$OCTAL_COUNTER/update-check.json")" "zero-padded stored counter is rewritten instead of wedging the cache"
+pass "zero-padded numbers fall back instead of wedging the state file"
+
 # 알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작한다.
 RELEASE_VERSION="$(jq -r '.version' "$ROOT/release.json")"
 assert_eq "$RELEASE_VERSION" "$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")" "claude plugin version matches release.json"

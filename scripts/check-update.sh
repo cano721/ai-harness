@@ -21,7 +21,8 @@ release_source="${HM_UPDATE_RELEASE_URL:-https://raw.githubusercontent.com/cano7
 check_hours="${HM_UPDATE_CHECK_HOURS:-24}"
 state_file="$HM_DATA_DIR/update-check.json"
 
-is_nonnegative_integer() { [[ "$1" =~ ^[0-9]+$ ]]; }
+# 0-패딩 값("08")은 산술 확장이 8진수로 읽어 실패하므로 여기서 거부하고 기본값으로 되돌린다.
+is_nonnegative_integer() { [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]; }
 is_nonnegative_integer "$check_hours" || check_hours=24
 
 # 조회 실패는 성공 TTL과 분리된 짧은 백오프로 재시도한다. 0이면 백오프 없이 매번 재시도.
