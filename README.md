@@ -314,7 +314,9 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 ## 업데이트
 
-SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다.
+SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다. 조회 실패는 24시간 TTL을 소비하지 않고 기본 15분에서 시작해 6시간까지 배가되는 별도 백오프로만 재시도하므로, 일시적인 오류가 하루치 알림을 삼키지 않습니다.
+
+`/harness-update`는 버전 번호만 비교하지 않습니다. 새 버전이 있으면 `release.json`의 `notes_url`이 가리키는 해당 버전의 릴리스 노트를 읽어, 달라진 동작·새 진입점·**이동하거나 제거된 진입점**과 필요한 후속 조치를 요약합니다. 적용(`--apply`) 후에도 같은 요약을 다시 제시합니다.
 
 ```bash
 # 설치 상태와 최신 버전만 확인
@@ -336,6 +338,15 @@ claude plugin update ai-harness@ai-harness
 ```
 
 적용 뒤 새 대화 또는 세션을 시작해 변경된 skill과 hook을 다시 로드합니다.
+
+### 릴리스 절차 (메인테이너)
+
+알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작합니다. 버전을 올릴 때 아래를 함께 갱신합니다.
+
+1. `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `release.json`의 `version`을 같은 값으로 맞춥니다.
+2. `release.json`의 `release_url`·`notes_url`을 그 버전의 태그 URL(`.../releases/tag/v<version>`)로 갱신합니다. 목록 페이지를 가리키면 사용자가 어떤 변경인지 특정할 수 없습니다.
+3. 해당 태그로 **릴리스 노트를 발행합니다.** 노트가 없으면 `/harness-update`는 링크만 제시하고 변경점을 요약하지 못합니다.
+4. `bash tests/run.sh`로 메타데이터 일관성 검사를 포함한 테스트를 통과시킵니다.
 
 <a id="configuration"></a>
 
@@ -359,6 +370,8 @@ HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
+HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
+HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
