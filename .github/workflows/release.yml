@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the shipped version
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' release.json)"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            printf 'tag %s does not match release.json version %s\n' "$GITHUB_REF_NAME" "$version" >&2
+            exit 1
+          fi
+          for field in release_url notes_url; do
+            url="$(jq -r --arg field "$field" '.[$field] // ""' release.json)"
+            if [[ "$url" != *"/releases/tag/v$version" ]]; then
+              printf 'release.json %s must point at /releases/tag/v%s (got: %s)\n' "$field" "$version" "$url" >&2
+              exit 1
+            fi
+          done
+
+      - name: Release notes are published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # notes_url이 가리키는 릴리스가 실제로 존재해야 /harness-update가 변경점을 요약할 수 있다.
+          # gh release create는 태그를 먼저 밀 수 있으므로 잠깐 기다렸다 판정한다.
+          for _ in $(seq 1 12); do
+            body="$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body' 2>/dev/null || true)"
+            if [[ -n "${body//[[:space:]]/}" ]]; then
+              printf 'release notes present for %s (%d characters)\n' "$GITHUB_REF_NAME" "${#body}"
+              exit 0
+            fi
+            sleep 10
+          done
+          printf 'no published release notes for %s — notes_url would 404 and /harness-update could not summarize the change\n' "$GITHUB_REF_NAME" >&2
+          exit 1
