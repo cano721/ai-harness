@@ -352,6 +352,8 @@ claude plugin update ai-harness@ai-harness
 3. 해당 태그로 **릴리스 노트를 발행합니다.** 노트가 없으면 `/harness-update`는 링크만 제시하고 변경점을 요약하지 못합니다.
 4. `bash tests/run.sh`로 메타데이터 일관성 검사를 포함한 테스트를 통과시킵니다.
 
+태그를 밀거나 릴리스를 발행하면 `release` 워크플로가 태그명과 `release.json`의 버전·태그 URL 일치를 확인하고, 그 태그에 실제로 릴리스 노트가 발행됐는지 검사합니다. 노트 없이 태그만 올라가면 실패합니다 — `notes_url`이 404가 되고 `/harness-update`가 변경점을 요약하지 못하기 때문입니다.
+
 <a id="configuration"></a>
 
 ## 설정 (선택)
