@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/collect.sh\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }

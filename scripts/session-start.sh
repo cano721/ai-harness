@@ -10,6 +10,10 @@ update_result="$(printf '%s' "$input" | "$ROOT/scripts/check-update.sh" notify 2
 update_message="$(jq -r '.systemMessage // empty' <<<"$update_result" 2>/dev/null || true)"
 [[ -n "$update_message" ]] && messages+=("$update_message")
 
+skew_result="$("$ROOT/scripts/check-update.sh" skew 2>/dev/null || true)"
+skew_message="$(jq -r '.systemMessage // empty' <<<"$skew_result" 2>/dev/null || true)"
+[[ -n "$skew_message" ]] && messages+=("$skew_message")
+
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"
 [[ -n "$queue_message" ]] && messages+=("$queue_message")
