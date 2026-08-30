@@ -515,6 +515,15 @@ for RELEASE_FIELD in release_url notes_url; do
 done
 pass "release metadata identifies the shipped version"
 
+# 릴리스 노트의 단일 출처. 절이 없으면 발행할 노트도, 오프라인 설명도 없다.
+CHANGELOG_SECTION="$("$ROOT/scripts/changelog-section.sh" "$RELEASE_VERSION" 2>/dev/null || true)"
+[[ -n "${CHANGELOG_SECTION//[[:space:]]/}" ]] || fail "CHANGELOG.md has no section for v$RELEASE_VERSION"
+assert_eq "1" "$(grep -c "^## v$RELEASE_VERSION " "$ROOT/CHANGELOG.md" || true)" "the shipped version appears once in the changelog"
+if "$ROOT/scripts/changelog-section.sh" "99.9.9" >/dev/null 2>&1; then
+  fail "changelog extraction should fail for a version it does not carry"
+fi
+pass "changelog carries the shipped version"
+
 # 반복 신호는 기본적으로 서로 다른 세션에서 관측돼야 하며, 권한 거부도 독립 트리거가 된다.
 DIVERSITY_DATA="$TEST_TMP/diversity-data"
 HARNESS_METRICS_DIR="$DIVERSITY_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
