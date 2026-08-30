@@ -347,10 +347,17 @@ claude plugin update ai-harness@ai-harness
 
 알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작합니다. 버전을 올릴 때 아래를 함께 갱신합니다.
 
-1. `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `release.json`의 `version`을 같은 값으로 맞춥니다.
-2. `release.json`의 `release_url`·`notes_url`을 그 버전의 태그 URL(`.../releases/tag/v<version>`)로 갱신합니다. 목록 페이지를 가리키면 사용자가 어떤 변경인지 특정할 수 없습니다.
-3. 해당 태그로 **릴리스 노트를 발행합니다.** 노트가 없으면 `/harness-update`는 링크만 제시하고 변경점을 요약하지 못합니다.
-4. `bash tests/run.sh`로 메타데이터 일관성 검사를 포함한 테스트를 통과시킵니다.
+1. `CHANGELOG.md` 맨 위에 `## v<version> (YYYY-MM-DD)` 절을 추가하고 사용자 영향 기준으로 변경점을 씁니다. 이 파일이 릴리스 노트의 단일 출처이며, 플러그인과 함께 배포되므로 네트워크 없이도 변경점을 읽을 수 있습니다.
+2. `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `release.json`의 `version`을 같은 값으로 맞춥니다.
+3. `release.json`의 `release_url`·`notes_url`을 그 버전의 태그 URL(`.../releases/tag/v<version>`)로 갱신합니다. 목록 페이지를 가리키면 사용자가 어떤 변경인지 특정할 수 없습니다.
+4. 해당 태그로 **릴리스 노트를 발행합니다.** CHANGELOG 절을 그대로 씁니다.
+
+   ```bash
+   scripts/changelog-section.sh <version> > /tmp/notes.md
+   gh release create v<version> --target main --title "v<version>" --notes-file /tmp/notes.md
+   ```
+
+5. `bash tests/run.sh`로 메타데이터 일관성 검사를 포함한 테스트를 통과시킵니다.
 
 태그를 밀거나 릴리스를 발행하면 `release` 워크플로가 태그명과 `release.json`의 버전·태그 URL 일치를 확인하고, 그 태그에 실제로 릴리스 노트가 발행됐는지 검사합니다. 노트 없이 태그만 올라가면 실패합니다 — `notes_url`이 404가 되고 `/harness-update`가 변경점을 요약하지 못하기 때문입니다.
 
