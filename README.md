@@ -259,7 +259,7 @@ stateDiagram-v2
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
 | 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | analysis batch와 새 릴리스 여부를 알림 | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음) | `/harvest` 실행, 플러그인 설치·업데이트 |
 
 두 hook은 3초 timeout이며 실패해도 작업 세션을 막지 않습니다. 누락·진행 중인 Codex 세션은 `/metrics`, `/harvest`, 세션 조회의 backfill이 보완합니다.
 
@@ -314,7 +314,11 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 ## 업데이트
 
+릴리스 조회는 **SessionEnd**에서 이루어집니다. SessionStart hook은 3초 예산을 여러 확인과 나눠 쓰기 때문에, 알림은 이미 받아 둔 캐시만 읽고 네트워크를 건드리지 않습니다. 조회는 수집이 끝난 뒤 마지막에 돌아 느린 네트워크가 이벤트 수집을 지연시키지 않습니다. 새로 설치한 직후에는 캐시가 없으므로 첫 알림이 한 세션 뒤로 밀립니다.
+
 SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다. 조회 실패는 24시간 TTL을 소비하지 않고 기본 15분에서 시작해 6시간까지 배가되는 별도 백오프로만 재시도하므로, 일시적인 오류가 하루치 알림을 삼키지 않습니다.
+
+업데이트를 적용해도 **현재 세션은 재시작 전까지 이전 플러그인을 로드한 채 돕니다.** 설치된 버전과 이 세션이 로드한 버전이 다르면 SessionStart가 그 사실을 알려 줍니다.
 
 `/harness-update`는 버전 번호만 비교하지 않습니다. 새 버전이 있으면 `release.json`의 `notes_url`이 가리키는 해당 버전의 릴리스 노트를 읽어, 달라진 동작·새 진입점·**이동하거나 제거된 진입점**과 필요한 후속 조치를 요약합니다. 적용(`--apply`) 후에도 같은 요약을 다시 제시합니다.
 
@@ -372,6 +376,8 @@ HM_SIGNAL_EVENT_RETENTION_DAYS=365
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
+HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
+HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.

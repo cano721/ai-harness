@@ -8,9 +8,9 @@ source "$ROOT/scripts/lib.sh"
 
 COMMAND="${1:-status}"
 case "$COMMAND" in
-  status|notify) ;;
+  status|notify|refresh|skew) ;;
   *)
-    printf 'usage: %s [status|notify]\n' "${0##*/}" >&2
+    printf 'usage: %s [status|notify|refresh|skew]\n' "${0##*/}" >&2
     exit 2
     ;;
 esac
@@ -31,6 +31,12 @@ retry_max_minutes="${HM_UPDATE_RETRY_MAX_MINUTES:-360}"
 is_nonnegative_integer "$retry_minutes" || retry_minutes=15
 is_nonnegative_integer "$retry_max_minutes" || retry_max_minutes=360
 ((retry_max_minutes < retry_minutes)) && retry_max_minutes="$retry_minutes"
+
+# 조회가 SessionStart의 3초 예산 밖으로 나갔으므로 타임아웃에 여유를 준다.
+connect_timeout="${HM_UPDATE_CONNECT_TIMEOUT:-2}"
+max_time="${HM_UPDATE_MAX_TIME:-5}"
+is_nonnegative_integer "$connect_timeout" || connect_timeout=2
+is_nonnegative_integer "$max_time" || max_time=5
 
 now_epoch="$(date +%s)"
 cached_epoch=0
@@ -131,8 +137,35 @@ version_is_newer() {
   [[ -n "$current_pre" && -z "$candidate_pre" ]]
 }
 
+# 설치된 버전과 이 세션이 로드한 버전이 다르면, 재시작 전까지 옛 코드가 돈다.
+# 업데이트를 적용하고도 그 사실을 모른 채 이전 동작을 겪는 경우를 막는다.
+if [[ "$COMMAND" == "skew" ]]; then
+  loaded_version="$installed_version"
+  plugin_state="${HM_PLUGIN_STATE_FILE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json}"
+  if [[ -n "$loaded_version" && -f "$plugin_state" ]]; then
+    newest_installed=""
+    while read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      if [[ -z "$newest_installed" ]] || version_is_newer "$newest_installed" "$candidate"; then
+        newest_installed="$candidate"
+      fi
+    done < <(jq -r 'to_entries[]? | select(.key | startswith("ai-harness@")) | .value[]?.version // empty' \
+      "$plugin_state" 2>/dev/null || true)
+    if [[ -n "$newest_installed" ]] && version_is_newer "$loaded_version" "$newest_installed"; then
+      jq -cn --arg loaded "$loaded_version" --arg installed "$newest_installed" \
+        '{systemMessage: ("ai-harness 설치 버전은 " + $installed + "이지만 이 세션은 " + $loaded
+          + "을 로드했습니다. 새 세션을 시작하면 적용됩니다.")}'
+    fi
+  fi
+  exit 0
+fi
+
+# notify는 SessionStart hook에서 돌며 3초 예산을 공유하므로 네트워크를 건드리지 않는다.
+# 갱신은 SessionEnd의 refresh와 사용자가 직접 부르는 status가 담당한다.
 should_refresh=false
-if [[ "${HM_UPDATE_CHECK_ENABLED:-1}" == "0" ]]; then
+if [[ "$COMMAND" == "notify" ]]; then
+  should_refresh=false
+elif [[ "${HM_UPDATE_CHECK_ENABLED:-1}" == "0" ]]; then
   should_refresh=false
 elif [[ -z "$cached_latest" || "$cached_epoch" -le 0 ]]; then
   should_refresh=true
@@ -155,7 +188,8 @@ if [[ "$should_refresh" == true ]]; then
     cached_result="failure"
   else
     response_file="$(mktemp "$HM_DATA_DIR/.update-release.XXXXXX")"
-    if curl --fail --silent --show-error --location --connect-timeout 1 --max-time 2 \
+    if curl --fail --silent --show-error --location \
+      --connect-timeout "$connect_timeout" --max-time "$max_time" \
       "$release_source" >"$response_file" 2>/dev/null; then
       latest="$(jq -r '.version // .tag_name // empty' "$response_file" 2>/dev/null || true)"
       latest="${latest#v}"
@@ -182,6 +216,10 @@ fi
 update_available=false
 if [[ -n "$installed_version" && -n "$cached_latest" ]] && version_is_newer "$installed_version" "$cached_latest"; then
   update_available=true
+fi
+
+if [[ "$COMMAND" == "refresh" ]]; then
+  exit 0
 fi
 
 if [[ "$COMMAND" == "notify" ]]; then

@@ -38,4 +38,8 @@ if [[ -f "$event_file" ]] \
 else
   "$DIR/health.sh" failure session_end queue_record_failed >/dev/null 2>&1 || true
 fi
+
+# 릴리스 조회는 SessionStart의 3초 예산 밖이라 여기서 돈다. 수집이 끝난 뒤 마지막에 두어,
+# 느린 네트워크가 이벤트 수집을 지연시키거나 hook timeout으로 날리지 않게 한다.
+"$DIR/check-update.sh" refresh >/dev/null 2>&1 || true
 exit 0

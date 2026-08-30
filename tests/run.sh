@@ -100,15 +100,17 @@ pass "source extractors"
 # 공용 SessionEnd hook이 Codex transcript를 올바른 extractor로 분류함
 HOOK_DATA="$TEST_TMP/hook-data"
 jq -n --arg tp "$CODEX_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
-  | HARNESS_METRICS_DIR="$HOOK_DATA" "$ROOT/scripts/collect.sh"
+  | HARNESS_METRICS_DIR="$HOOK_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/collect.sh"
 assert_not_file "$HOOK_DATA/events/claude-rollout-${CODEX_FILE_SID}.jsonl"
 assert_file "$HOOK_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
 assert_file "$HOOK_DATA/harvest-queue/p-jobda-agent/sessions/codex-${CODEX_SESSION_ID}.json"
 jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
-  | HARNESS_METRICS_DIR="$HOOK_DATA" "$ROOT/scripts/collect.sh"
+  | HARNESS_METRICS_DIR="$HOOK_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/collect.sh"
 assert_file "$HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 assert_file "$HOOK_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
-assert_eq "3" "$(jq -r '.hooks.SessionEnd[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "shared hook timeout"
+# SessionEnd는 수집 뒤 릴리스 조회까지 맡으므로 SessionStart보다 예산이 넓다.
+assert_eq "10" "$(jq -r '.hooks.SessionEnd[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "shared hook timeout"
+assert_eq "3" "$(jq -r '.hooks.SessionStart[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "SessionStart stays inside its short budget"
 # shellcheck disable=SC2016  # hook JSON의 literal 변수 참조를 검사
 LITERAL_PLUGIN_ROOT='"${CLAUDE_PLUGIN_ROOT}'
 HOOK_COMMAND="$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
@@ -477,6 +479,31 @@ jq -cn --argjson checked_at_epoch "$((BACKOFF_NOW - 90000))" \
 HARNESS_METRICS_DIR="$OCTAL_COUNTER" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status >/dev/null 2>&1
 assert_eq "1" "$(jq -r '.failure_count' "$OCTAL_COUNTER/update-check.json")" "zero-padded stored counter is rewritten instead of wedging the cache"
 pass "zero-padded numbers fall back instead of wedging the state file"
+
+# SessionStart는 3초 예산을 공유한다. 알림은 캐시만 읽고, 조회는 SessionEnd가 맡는다.
+FETCH_DATA="$TEST_TMP/update-fetch-split"
+mkdir -p "$FETCH_DATA"
+HARNESS_METRICS_DIR="$FETCH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" notify >/dev/null 2>&1
+assert_not_file "$FETCH_DATA/update-check.json"
+HARNESS_METRICS_DIR="$FETCH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" refresh >/dev/null 2>&1
+assert_file "$FETCH_DATA/update-check.json"
+assert_eq "failure" "$(jq -r '.last_result' "$FETCH_DATA/update-check.json")" "refresh performs the lookup notify skips"
+FETCH_NOTICE="$(HARNESS_METRICS_DIR="$FETCH_DATA" "$ROOT/scripts/check-update.sh" notify)"
+assert_eq "" "$FETCH_NOTICE" "cache-only notify stays silent without a cached newer version"
+pass "release lookup moves off the SessionStart budget"
+
+# 업데이트를 적용해도 현재 세션은 재시작 전까지 옛 플러그인을 로드한 채 돈다.
+SKEW_STATE="$TEST_TMP/installed_plugins.json"
+LOADED_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
+jq -cn --arg version "$LOADED_VERSION" \
+  '{"ai-harness@ai-harness":[{scope:"user",version:$version}]}' >"$SKEW_STATE"
+assert_eq "" "$(HM_PLUGIN_STATE_FILE="$SKEW_STATE" "$ROOT/scripts/check-update.sh" skew)" "matching versions report no skew"
+jq -cn '{"ai-harness@ai-harness":[{scope:"user",version:"0.1.0"},{scope:"user",version:"99.0.0"}]}' >"$SKEW_STATE"
+SKEW_NOTICE="$(HM_PLUGIN_STATE_FILE="$SKEW_STATE" "$ROOT/scripts/check-update.sh" skew | jq -r '.systemMessage')"
+assert_contains "$SKEW_NOTICE" "99.0.0" "skew notice names the installed version"
+assert_contains "$SKEW_NOTICE" "$LOADED_VERSION" "skew notice names the loaded version"
+assert_eq "" "$(HM_PLUGIN_STATE_FILE="$TEST_TMP/no-such-plugins.json" "$ROOT/scripts/check-update.sh" skew)" "missing plugin state degrades quietly"
+pass "version skew between installed and loaded plugin is surfaced"
 
 # 알림과 변경점 요약은 릴리스 메타데이터가 정확할 때만 동작한다.
 RELEASE_VERSION="$(jq -r '.version' "$ROOT/release.json")"
