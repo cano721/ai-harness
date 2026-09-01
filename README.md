@@ -70,7 +70,7 @@ flowchart LR
 | `/feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. |
 | `/no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. |
 
-`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 원 저작자의 라이선스를 따릅니다.
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
 앞의 다섯 하네스 Skill은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 

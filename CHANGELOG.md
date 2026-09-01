@@ -11,7 +11,7 @@
 
 - **프론트엔드 판단 Skill 5종** — React/TypeScript 저장소에서 판단이 필요한 자리를 커버합니다. `/frontend-fundamentals`(코드 품질 4축 리뷰), `/declarative-code`(추상화를 올릴지 판단 + 컴포넌트 API 설계), `/frontend-testing`(테스트를 쓸지·어느 층위인지 결정), `/feature-sliced-design`(FSD v2.1 구조), `/no-unnecessary-effects`(`useEffect` 결정 트리). 모두 읽기 전용 지침이고, 프로젝트에 `AGENTS.md`나 `.ai-harness/` 정책이 있으면 그쪽을 우선합니다.
 
-  `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본이며 원 저작자의 라이선스를 따릅니다. 상류 변경은 원본에서 다시 가져옵니다.
+  `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로 둘 다 MIT 라이선스입니다. 저작권·라이선스 전문은 `THIRD-PARTY-LICENSES.md`에 있습니다. 상류 변경은 원본에서 다시 가져옵니다.
 
 ## v0.18.0 (2026-08-30)
 

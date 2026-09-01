@@ -188,4 +188,4 @@ When writing a valid effect:
 
 ---
 
-출처: [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 `no-unnecessary-effects` 스킬 사본. 원 저작자의 라이선스를 따르며, 상류 변경은 원본에서 다시 가져온다.
+출처: [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 `no-unnecessary-effects` 스킬 사본. MIT 라이선스 (Copyright (c) 2026 Dan Neciu) — 전문은 저장소 루트 [`THIRD-PARTY-LICENSES.md`](../../THIRD-PARTY-LICENSES.md) 참조. 상류 변경은 원본에서 다시 가져온다.
