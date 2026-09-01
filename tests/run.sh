@@ -346,7 +346,7 @@ assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("understand"))] | lengt
 
 # 코드를 바꾸는 진입점은 프로젝트 규칙 없이 노출하지 않는다. 워크플로 스크립트도 프로젝트에 설치된다.
 assert_not_file "$ROOT/workflows/implement-feature.js"
-assert_eq "0" "$(ls -1 "$ROOT/workflows" 2>/dev/null | wc -l | tr -d ' ')" "no plugin-global dynamic workflows remain"
+assert_eq "0" "$(find "$ROOT/workflows" -type f 2>/dev/null | wc -l | tr -d ' ')" "no plugin-global dynamic workflows remain"
 for WORKFLOW_NAME in implement-feature fix-bug review; do
   WORKFLOW_ENTRY="$(jq -c --arg path ".claude/workflows/$WORKFLOW_NAME.js" '.artifacts[] | select(.path == $path)' "$ROOT/templates/managed-files.json")"
   [[ -n "$WORKFLOW_ENTRY" ]] || fail "$WORKFLOW_NAME workflow is not a managed project artifact"
