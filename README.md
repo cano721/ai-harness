@@ -58,7 +58,21 @@ flowchart LR
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 
-이 다섯 Skill은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+### 프론트엔드 코드 판단 Skill
+
+하네스 라이프사이클과 별개로, React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니다. 모두 읽기 전용 지침이며 프로젝트 정책(`AGENTS.md`, `.ai-harness/`)이 있으면 그쪽이 우선합니다.
+
+| Skill | 언제 쓰나 |
+|---|---|
+| `/frontend-fundamentals` | 코드 품질을 리뷰할 때. Toss Frontend Fundamentals의 가독성·예측 가능성·응집도·결합도 4축으로 분석하고 트레이드오프까지 씁니다. |
+| `/declarative-code` | 추상화를 올릴지(공용 컴포넌트 승격·훅 추출·래퍼 도입) 판단하거나 컴포넌트 props/이벤트 API를 설계할 때, 그리고 추상화가 새서 디버깅할 때. |
+| `/frontend-testing` | 이 변경에 테스트를 쓸지, 쓴다면 어느 층위·레이어인지, 깨진 테스트를 고칠지 지울지 정할 때. |
+| `/feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. |
+| `/no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. |
+
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 원 저작자의 라이선스를 따릅니다.
+
+앞의 다섯 하네스 Skill은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
