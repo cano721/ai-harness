@@ -200,7 +200,8 @@ assert_contains "$BATCH_STATS" "| service | 1 |" "analysis batch scoped stats"
 NEXT_BATCH="$(
   HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
     "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service \
-      --outcome improved --summary "반복 교정 constraint 추가" --artifact "https://example.test/pr/1"
+      --outcome improved --summary "반복 교정 constraint 추가" --artifact "https://example.test/pr/1" \
+      --expected "동일 유형 correction_mark 재발 0"
 )"
 assert_eq "true" "$(printf '%s' "$NEXT_BATCH" | jq -r '.has_analysis_batch')" "post-batch session preserved"
 assert_eq "1" "$(printf '%s' "$NEXT_BATCH" | jq -r '.counts.sessions')" "next batch size"
@@ -220,7 +221,9 @@ assert_eq "false" "$(jq -r '.has_analysis_batch' "$QUEUE_DATA/harvest-queue/p-se
 assert_eq "2" "$(wc -l < "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "review history append"
 assert_eq "improved" "$(jq -sr '.[0].review.outcome' "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl")" "review outcome persisted"
 assert_eq "https://example.test/pr/1" "$(jq -sr '.[0].review.artifact' "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl")" "review artifact persisted"
+assert_eq "동일 유형 correction_mark 재발 0" "$(jq -sr '.[0].review.expected' "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl")" "review expected persisted"
 assert_eq "no-change" "$(jq -sr '.[1].review.outcome' "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl")" "no-change outcome persisted"
+assert_eq "null" "$(jq -sr '.[1].review.expected' "$QUEUE_DATA/harvest-queue/p-service/review-history.jsonl")" "expected null without flag"
 HISTORY_OUTPUT="$(HARNESS_METRICS_DIR="$QUEUE_DATA" "$ROOT/scripts/harvest-queue.sh" history --project service)"
 assert_eq "2" "$(printf '%s\n' "$HISTORY_OUTPUT" | jq -s 'length')" "review history command"
 

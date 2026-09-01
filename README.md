@@ -295,12 +295,15 @@ stateDiagram-v2
 - **통계 참고**: 근거는 있으나 아직 행동 변경으로 이어질 만큼 강하지 않은 경우입니다.
 - **개선점 없음**: cosmetic 정리나 단발성 노이즈는 적용하지 않습니다.
 
+비용 절제 장치가 두 가지 있습니다. **정독 게이트**는 가장 비싼 스텝(transcript 정독) 전에 압축 신호만으로 정독 가치를 판단해, 노이즈 batch는 정량 분석과 보고만으로 싸게 종료합니다. **결과 검증 루프**는 개선 PR마다 기대효과(`--expected`)를 기록해 두고, 다음 `/harvest`가 같은 패턴의 재발 여부로 그 개선을 채점합니다 — 재발이 확인되면 강화안 또는 revert를 제안해 효과 없는 규칙이 하네스에 쌓이는 것을 막습니다.
+
 정상 완료한 batch만 `mark-reviewed`로 소비합니다. `--dry-run`이나 실패한 분석은 pending을 지우지 않습니다.
 
 ```bash
 # 개선 PR을 만든 경우
 scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
-  --outcome improved --summary "<개선 요약>" --artifact "<PR URL>"
+  --outcome improved --summary "<개선 요약>" --artifact "<PR URL>" \
+  --expected "<다음 harvest가 효과를 판정할 기준>"
 
 # 적용할 개선이 없는 경우
 scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
