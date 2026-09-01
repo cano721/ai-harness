@@ -1,19 +1,112 @@
 {
   "version": 1,
   "artifacts": [
-    {"path": ".ai-harness/workflows/feature-delivery-graph.json", "level": "standard", "workflow": "implement-feature", "source": "templates/implement-feature/references/feature-delivery-graph.json", "mode": "copy"},
-    {"path": ".ai-harness/workflows/bug-fix-graph.json", "level": "standard", "workflow": "fix-bug", "source": "templates/fix-bug/references/bug-fix-graph.json", "mode": "copy"},
-    {"path": ".ai-harness/workflows/review-graph.json", "level": "standard", "workflow": "review", "source": "templates/review/references/review-graph.json", "mode": "copy"},
-    {"path": ".agents/skills/implement-feature/SKILL.md", "level": "standard", "integration": "codex", "workflow": "implement-feature", "source": "templates/implement-feature/SKILL.md", "mode": "render"},
-    {"path": ".agents/skills/fix-bug/SKILL.md", "level": "standard", "integration": "codex", "workflow": "fix-bug", "source": "templates/fix-bug/SKILL.md", "mode": "render"},
-    {"path": ".agents/skills/review/SKILL.md", "level": "standard", "integration": "codex", "workflow": "review", "source": "templates/review/SKILL.md", "mode": "render"},
-    {"path": ".claude/commands/implement-feature.md", "level": "standard", "integration": "claude", "workflow": "implement-feature", "source": "templates/implement-feature/SKILL.md", "mode": "render"},
-    {"path": ".claude/commands/fix-bug.md", "level": "standard", "integration": "claude", "workflow": "fix-bug", "source": "templates/fix-bug/SKILL.md", "mode": "render"},
-    {"path": ".claude/commands/review.md", "level": "standard", "integration": "claude", "workflow": "review", "source": "templates/review/SKILL.md", "mode": "render"}
+    {
+      "path": ".ai-harness/workflows/feature-delivery-graph.json",
+      "level": "standard",
+      "workflow": "implement-feature",
+      "source": "templates/implement-feature/references/feature-delivery-graph.json",
+      "mode": "copy"
+    },
+    {
+      "path": ".ai-harness/workflows/bug-fix-graph.json",
+      "level": "standard",
+      "workflow": "fix-bug",
+      "source": "templates/fix-bug/references/bug-fix-graph.json",
+      "mode": "copy"
+    },
+    {
+      "path": ".ai-harness/workflows/review-graph.json",
+      "level": "standard",
+      "workflow": "review",
+      "source": "templates/review/references/review-graph.json",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/implement-feature/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "implement-feature",
+      "source": "templates/implement-feature/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".agents/skills/fix-bug/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "fix-bug",
+      "source": "templates/fix-bug/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".agents/skills/review/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "review",
+      "source": "templates/review/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".claude/commands/implement-feature.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "implement-feature",
+      "source": "templates/implement-feature/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".claude/commands/fix-bug.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "fix-bug",
+      "source": "templates/fix-bug/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".claude/commands/review.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "review",
+      "source": "templates/review/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".claude/workflows/implement-feature.js",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "implement-feature",
+      "source": "templates/implement-feature/references/implement-feature-workflow.js",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/workflows/fix-bug.js",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "fix-bug",
+      "source": "templates/fix-bug/references/fix-bug-workflow.js",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/workflows/review.js",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "review",
+      "source": "templates/review/references/review-workflow.js",
+      "mode": "copy"
+    }
   ],
   "retired": [
-    {"path": ".agents/skills/understand-change/SKILL.md", "reason": "understand-change는 플러그인 전역 Skill로 이동했다. 프로젝트 사본은 최신 스킬을 가린다."},
-    {"path": ".claude/commands/understand-change.md", "reason": "understand-change는 플러그인 전역 Skill로 이동했다. 프로젝트 사본은 최신 스킬을 가린다."},
-    {"path": ".ai-harness/workflows/understanding-change-graph.json", "reason": "그래프 계약이 플러그인 스킬과 함께 배포된다. 프로젝트 사본은 갱신되지 않는다."}
+    {
+      "path": ".agents/skills/understand-change/SKILL.md",
+      "reason": "understand-change는 플러그인 전역 Skill로 이동했다. 프로젝트 사본은 최신 스킬을 가린다."
+    },
+    {
+      "path": ".claude/commands/understand-change.md",
+      "reason": "understand-change는 플러그인 전역 Skill로 이동했다. 프로젝트 사본은 최신 스킬을 가린다."
+    },
+    {
+      "path": ".ai-harness/workflows/understanding-change-graph.json",
+      "reason": "그래프 계약이 플러그인 스킬과 함께 배포된다. 프로젝트 사본은 갱신되지 않는다."
+    }
   ]
 }
