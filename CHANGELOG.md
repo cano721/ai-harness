@@ -5,6 +5,14 @@
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **프론트엔드 판단 Skill 5종** — React/TypeScript 저장소에서 판단이 필요한 자리를 커버합니다. `frontend-fundamentals`(코드 품질 4축 리뷰), `declarative-code`(추상화를 올릴지 판단 + 컴포넌트 API 설계), `frontend-testing`(테스트를 쓸지·어느 층위인지 결정), `no-unnecessary-effects`(`useEffect` 결정 트리), 그리고 FSD 프로젝트용 `feature-sliced-design`(FSD v2.1 구조). 전역 플러그인 Skill이 아니라 `/harness-init`이 **프론트엔드로 감지된 프로젝트에서만** 프로젝트 로컬 Skill로 생성합니다(백엔드 저장소엔 노출 안 됨). `feature-sliced-design`은 FSD를 감지했거나 사용자가 opt-in할 때만 추가합니다. 프로젝트 고유 사실(디자인 시스템·선언 사다리·FSD 여부)은 `.ai-harness/docs/frontend.md`에 실측으로 채우고 Skill이 이를 우선합니다. stack(`frontend`/`fsd`) 게이트로 동기화 대상을 거릅니다.
+
+  `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로 둘 다 MIT 라이선스입니다. 저작권·라이선스 전문은 `THIRD-PARTY-LICENSES.md`에 있습니다. 상류 변경은 원본에서 다시 가져옵니다.
+
 ## v0.19.0 (2026-09-01)
 
 기능 개발·버그 수정·검토 Dynamic Workflow가 플러그인이 아니라 프로젝트에 설치됩니다. **기존 하네스 프로젝트는 `/harness-init --sync`가 필요합니다.**

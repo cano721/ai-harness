@@ -66,13 +66,18 @@ case "$command_name" in
     }
     level="$(jq -r '.level // ""' "$manifest")"
     integrations="$(jq -c '.integrations // []' "$manifest")"
+    stacks="$(jq -c '.stacks // []' "$manifest")"
     plan_items="$(
       while IFS= read -r artifact; do
         path="$(jq -r '.path' <<<"$artifact")"
         artifact_level="$(jq -r '.level // ""' <<<"$artifact")"
         integration="$(jq -r '.integration // ""' <<<"$artifact")"
+        stack="$(jq -r '.stack // ""' <<<"$artifact")"
         [[ "$artifact_level" == "$level" ]] || continue
         if [[ -n "$integration" ]] && ! jq -e --arg integration "$integration" 'index($integration)' <<<"$integrations" >/dev/null; then
+          continue
+        fi
+        if [[ -n "$stack" ]] && ! jq -e --arg stack "$stack" 'index($stack)' <<<"$stacks" >/dev/null; then
           continue
         fi
         target="$root/$path"

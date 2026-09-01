@@ -21,6 +21,8 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 
 빌드 파일로 감지: 언어/프레임워크(`build.gradle*`, `pom.xml`, `package.json`, `pyproject.toml`, `go.mod` 등), 테스트 프레임워크·**기존 테스트 규모**(테스트 파일 수, 커버리지 게이트 유무), 빌드/실행 명령, git 컨벤션(최근 커밋 메시지·브랜치명 패턴 `git log --oneline -30`, `git branch -a`), 패키지/모듈 구조(주요 디렉토리와 의존 방향).
 
+**프론트엔드 스택 감지**: `package.json`의 dependencies에 `react`·`vue`·`svelte`·`@angular/core` 등이 있으면 프론트엔드 프로젝트다. 이때 프론트 판단 Skill(아래 stack 게이트)의 생성 후보가 된다 — 백엔드 전용 저장소에는 만들지 않는다. FSD(Feature-Sliced Design) 여부도 함께 본다: `src/` 아래 `shared`·`entities`·`features`·`pages` 레이어 디렉터리가 있거나 `steiger.config.*`가 있으면 FSD 사용으로 판단하고, 애매하면 §2에서 사용자에게 묻는다.
+
 분석 결과는 문서 초안의 **실측 근거**가 된다 — 추측으로 채우지 않는다. 규모가 크면 탐색 서브에이전트(Explore 등)에 위임.
 
 ## 2. 수준 인터뷰 (AskUserQuestion — 엄격도는 사용자가 정한다)
@@ -33,8 +35,9 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 3. **git 통제 수준**: `PR 필수`(에이전트는 PR까지만, 병합은 사람) / `직접 커밋 허용`
 4. **도구 통합**: `Codex` / `Claude` / `둘 다` / `통합 파일 없음`. standard의 Codex Skill은 `Codex` 또는 `둘 다`일 때만 `.agents/skills/`에 생성한다. Claude용 `.claude/`와 `CLAUDE.md`는 `Claude` 또는 `둘 다`일 때만 생성한다.
 5. **편집 가드**: 켜기 / 끄기. 가드는 규모와 독립적인 선택 옵션이며, 소스 수정 전에 관련 하네스 문서를 읽었는지 확인한다. transcript를 읽을 수 없으면 fail-open한다.
+6. **프론트 판단 Skill** (§1에서 프론트엔드 스택을 감지했을 때만 묻는다): `생성` / `생성 안 함`. 생성하면 `frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`를 프로젝트 로컬 Skill로 만든다(모두 읽기 전용 판단 지침). **FSD Skill(`feature-sliced-design`)은 별도 하위 선택**이며 §1에서 FSD를 감지했거나 사용자가 FSD를 쓴다고 답할 때만 추가한다 — FSD를 안 쓰는 프로젝트에 방법론 전체를 심으면 오도한다. 프론트엔드가 아니면 이 항목 자체를 건너뛴다.
 
-답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구. 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다.
+답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구, **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도) 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다.
 
 ## 3. 생성 구조 (인터뷰 답 기준으로 가감)
 
@@ -47,6 +50,7 @@ AGENTS.md                    # 진입점 (아래 구성)
     architecture.md          # 모듈 구조, 기술 스택, 빌드/배포 (실측)
     testing.md               # 테스트 실행법, 프레임워크, 작성 규칙 (테스트 정책 '없음'이면 생략)
     domain.md                # 도메인 인덱스 (초기엔 표 틀만 — 도메인 문서는 필요해질 때 domain/{name}.md로 추가)
+    frontend.md              # 프론트 판단 Skill을 생성할 때만. 디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부 등 프로젝트 고유 사실 (실측). 프론트 Skill이 런타임에 읽는 프로젝트 컨텍스트
   workflows/                 # standard
     implement-feature.md     # 기능 개발 절차 (작은 검증 단위·완료 증거 원칙을 프로젝트 정책에 맞춰 구체화)
     feature-delivery-graph.json # implement-feature의 프로젝트 로컬 노드·전이 계약
@@ -70,6 +74,18 @@ AGENTS.md                    # 진입점 (아래 구성)
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
     review/
       SKILL.md                # .ai-harness 워크플로·그래프를 읽는 프로젝트 로컬 진입점
+    frontend-fundamentals/   # stack:frontend일 때만. 아래 4종은 templates/에서 복사한 자립 지침
+      SKILL.md
+      references/            # 통째로 함께 복사
+    declarative-code/
+      SKILL.md
+    frontend-testing/
+      SKILL.md
+    no-unnecessary-effects/
+      SKILL.md
+    feature-sliced-design/   # stack:fsd일 때만 (FSD opt-in)
+      SKILL.md
+      references/
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -80,6 +96,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 .claude/
   agents/                    # explorer/developer/test-engineer/reviewer 위임본 + model frontmatter
   commands/                  # Claude 슬래시 커맨드 진입점
+  skills/                    # Claude 또는 둘 다 + stack:frontend일 때만. .agents/skills와 동일 프론트 판단 Skill 사본
   workflows/                 # Claude Dynamic Workflow 스크립트 (진입점이 scriptPath로 호출)
   settings.json              # 감지된 빌드/테스트 명령 allowlist (+ guard 시 PreToolUse hook)
 ```
@@ -100,7 +117,8 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - 템플릿에서 생성할 `fix-bug.md`는 관찰된/기대 동작, 영향, 재현 증거, 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위를 담은 `Bug Fix Brief`를 먼저 제시하고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 게이트를 둔다. 승인 뒤 프로젝트 테스트 정책에 따라 회귀 테스트 또는 동등한 검증 증거를 만들고, targeted/전체 검증과 **리뷰 → 원인별 수정 → 재검토**를 수행한다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 - `/review`도 `standard` 초기화에서 생성하는 프로젝트 로컬 진입점이다. `templates/review/`를 기반으로 Codex는 `.agents/skills/review/SKILL.md`, Claude는 `.claude/commands/review.md`를 생성하고 graph를 `.ai-harness/workflows/review-graph.json`에 복사한다. 초기 검토는 read-only이며, blocking finding이 있으면 대상 workflow로 수리한 뒤 필수 검증과 재검토를 거치기 전에는 완료하지 않는다.
 - `/understand-change`는 위 셋과 달리 **플러그인 전역 Skill**(`skills/understand-change/`)이며 프로젝트에 진입점을 생성하지 않는다. 코드를 수정하지 않는 설명 전용 흐름이라 테스트·Git 정책 같은 프로젝트 계약을 담지 않고, 프로젝트별 조정은 런타임에 `.ai-harness/workflows/understand-change.md`를 읽어 해결한다. 따라서 관리 생성물·동기화 대상이 아니다. 초기화에서는 그 `understand-change.md`만 사람 소유 보호 파일로 만들어 프로젝트 문서·검증 명령·공유 위치와 small / standard / deep 설명 깊이 기준을 연결한다(없어도 스킬은 내장 기본값으로 동작한다). 설명은 변경 전 배경, 직관, 실행 흐름, 위험, 직접 검증을 포함하며, standard·deep에서는 이해 확인 문제를 추가한다. deep 변경에서만 상태를 조작하거나 단계별 실행을 관찰하는 micro-world의 최소 형태를 제안하며, 사용자의 별도 승인 없이는 구현하지 않는다.
-- AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다.
+- **프론트 판단 Skill**(`frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`, FSD면 `feature-sliced-design` 추가)은 `implement-feature` 부류와 달리 워크플로 어댑터가 아니라 `templates/<name>/`의 **자립 지침을 프로젝트로 복사**한 것이다. 코드를 직접 바꾸지 않는 읽기 전용 판단이지만 프론트엔드 전용이라 플러그인 전역 Skill로 두지 않는다 — 백엔드 저장소에 노출되면 노이즈이므로, 프론트엔드로 감지된 프로젝트에서만 stack 게이트(`frontend`/`fsd`)로 생성한다. Codex는 `.agents/skills/<name>/`, Claude는 `.claude/skills/<name>/`에 SKILL.md와 `references/`를 통째로 복사한다. 각 Skill이 참조하는 프로젝트 고유 사실(디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부)은 `templates`를 일반화하며 빠졌으므로 `.ai-harness/docs/frontend.md`에 실측으로 채운다(보호 파일 — 자동 갱신하지 않는다). Skill 본문은 이 문서가 있으면 우선하도록 이미 적혀 있다. `feature-sliced-design`·`no-unnecessary-effects`는 각각 MIT 라이선스 상류의 사본이며(`THIRD-PARTY-LICENSES.md`), 복사본에도 각 SKILL.md 하단의 저작권 문구가 남는다.
+- AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다. 프론트 판단 Skill을 생성했으면 프로젝트 로컬 Skill로 표에 함께 싣는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 프로젝트의 `.claude/workflows/<name>.js`를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 워크플로는 이름으로 등록되지 않으므로 **프로젝트 루트 기준 절대 경로**를 `scriptPath`로 넘겨 호출하고, 승인된 Brief를 `{ approved: true, brief: "..." }`로 전달한다. 상대 경로는 셸 작업 디렉터리 기준으로 해석되어 실패할 수 있다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 
@@ -117,7 +135,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 매니페스트 형식 (인터뷰 답 기록 — 수준 변경·/harvest의 정책 참조용):
 
 ```json
-{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } } }
+{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "stacks": [], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } } }
 ```
 
 ## 5. 마무리
@@ -135,9 +153,9 @@ $ROOT/scripts/harness-sync-state.sh record --root . --version <플러그인 버�
 
 ## 6. 기존 하네스: 동기화와 설정 변경
 
-1. **현재 상태 파악**: `.ai-harness/harness.json`을 Read하고, 플러그인 루트 `release.json`의 버전과 비교한다. manifest가 없으면 파일 구조로 역추정한다 — 워크플로·페르소나 유무 = standard, guard hook 유무 = `edit_guard:true`, `.agents/skills`와 `.claude` 유무 = 도구 통합, test-engineer·testing.md 유무 = 테스트 정책. 기존 `level:"full"`은 `level:"standard", edit_guard:true`로 이관 제안한다.
+1. **현재 상태 파악**: `.ai-harness/harness.json`을 Read하고, 플러그인 루트 `release.json`의 버전과 비교한다. manifest가 없으면 파일 구조로 역추정한다 — 워크플로·페르소나 유무 = standard, guard hook 유무 = `edit_guard:true`, `.agents/skills`와 `.claude` 유무 = 도구 통합, test-engineer·testing.md 유무 = 테스트 정책. `stacks`가 manifest에 없으면 파일로 역추정한다 — `*/skills/frontend-fundamentals` 등 프론트 판단 Skill이 있으면 `frontend`, `*/skills/feature-sliced-design`이 있으면 `fsd`도 포함으로 본다. 기존 `level:"full"`은 `level:"standard", edit_guard:true`로 이관 제안한다.
 2. **모드 선택**: `--sync`이면 인터뷰 없이 동기화 계획을 만들고, `--sync --apply`이면 아래 안전 규칙으로 적용한다. `--reconfigure`이면 2번 수준 인터뷰를 진행한다. 인자가 없으면 현재 설정·버전을 보여 주고 동기화 / 설정 변경 / 둘 다 중 사용자 선택을 받는다.
-3. **동기화 계획**: 관리 대상은 `templates/managed-files.json`이 단일 출처다. 아래 명령으로 현재 level·integration에 맞는 대상과 `add` / `refresh` / `approval_required` 결정을 JSON으로 만들고, 사람이 읽을 수 있는 표와 최신 템플릿 diff를 함께 제시한다. 과거 버전처럼 `managed_files` 이력이 없는 기존 파일은 **untracked**로 분류한다.
+3. **동기화 계획**: 관리 대상은 `templates/managed-files.json`이 단일 출처다. 아래 명령으로 현재 level·integration·stack에 맞는 대상과 `add` / `refresh` / `approval_required` 결정을 JSON으로 만들고, 사람이 읽을 수 있는 표와 최신 템플릿 diff를 함께 제시한다. plan은 artifact의 `stack`이 manifest `stacks`에 없으면 건너뛴다 — 백엔드 프로젝트에는 프론트 Skill이 계획에 오르지 않고, 나중에 프론트 스택이 생겨 `--reconfigure`로 `stacks`에 추가하면 그때 add 대상이 된다. 과거 버전처럼 `managed_files` 이력이 없는 기존 파일은 **untracked**로 분류한다.
 
 ```bash
 $ROOT/scripts/harness-sync-state.sh plan --root . \

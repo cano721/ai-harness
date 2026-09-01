@@ -330,6 +330,41 @@ assert_eq "0" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --roo
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "retired" "harness init handles retired artifacts"
 pass "project harness sync state"
 
+# 프론트 판단 Skill: templates로 옮겨 전역 노출을 끊고, stack 게이트로 프론트 프로젝트에서만 생성한다.
+for fs in declarative-code frontend-testing no-unnecessary-effects frontend-fundamentals feature-sliced-design; do
+  assert_file "$ROOT/templates/$fs/SKILL.md"
+  assert_not_file "$ROOT/skills/$fs/SKILL.md"
+done
+assert_file "$ROOT/templates/frontend-fundamentals/references/readability.md"
+assert_file "$ROOT/templates/feature-sliced-design/references/layer-structure.md"
+# 상류 사본은 MIT 저작권 문구를 사본 안에 보존한다 (MIT 준수).
+assert_file "$ROOT/THIRD-PARTY-LICENSES.md"
+assert_contains "$(<"$ROOT/templates/no-unnecessary-effects/SKILL.md")" "Copyright (c) 2026 Dan Neciu" "nue copy keeps upstream copyright notice"
+assert_contains "$(<"$ROOT/templates/feature-sliced-design/SKILL.md")" "MIT" "fsd copy names its license"
+
+# frontend 스택이면 프론트 Skill이 계획에 오르고, feature-sliced-design은 fsd opt-in일 때만 오른다.
+FE_ROOT="$TEST_TMP/frontend-project"
+mkdir -p "$FE_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"frontend-project","level":"standard","integrations":["codex"],"stacks":["frontend"],"harness_version":"0.18.0"}' >"$FE_ROOT/.ai-harness/harness.json"
+FE_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$FE_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$FE_PLAN" | jq -r '.items[] | select(.path==".agents/skills/frontend-fundamentals/SKILL.md") | .action')" "frontend stack selects frontend skill"
+assert_eq "add" "$(printf '%s' "$FE_PLAN" | jq -r '.items[] | select(.path==".agents/skills/frontend-fundamentals/references/readability.md") | .action')" "frontend skill references are managed too"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path==".agents/skills/feature-sliced-design/SKILL.md")] | length')" "fsd skill excluded without fsd stack"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | startswith(".claude/skills/"))] | length')" "claude frontend skills excluded for codex-only integration"
+
+# fsd opt-in이면 FSD Skill과 references까지 계획에 오른다 (claude 통합).
+FSD_ROOT="$TEST_TMP/fsd-project"
+mkdir -p "$FSD_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"fsd-project","level":"standard","integrations":["claude"],"stacks":["frontend","fsd"],"harness_version":"0.18.0"}' >"$FSD_ROOT/.ai-harness/harness.json"
+FSD_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$FSD_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$FSD_PLAN" | jq -r '.items[] | select(.path==".claude/skills/feature-sliced-design/SKILL.md") | .action')" "fsd stack selects fsd skill for claude"
+assert_eq "add" "$(printf '%s' "$FSD_PLAN" | jq -r '.items[] | select(.path==".claude/skills/feature-sliced-design/references/layer-structure.md") | .action')" "fsd references are managed too"
+assert_eq "0" "$(printf '%s' "$FSD_PLAN" | jq -r '[.items[] | select(.path | startswith(".agents/skills/"))] | length')" "codex frontend skills excluded for claude-only integration"
+
+assert_contains "$HARNESS_INIT_CONTENT" "stack" "harness init documents the stack gate"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/frontend.md" "harness init generates the frontend context doc"
+pass "frontend judgment skills stack gating"
+
 # understand-change는 플러그인 전역 Skill이다: 프로젝트에 사본을 깔지 않고 런타임에 프로젝트 정책을 읽는다.
 UNDERSTAND_SKILL="$ROOT/skills/understand-change/SKILL.md"
 UNDERSTAND_GRAPH="$ROOT/skills/understand-change/references/understanding-change-graph.json"

@@ -93,6 +93,312 @@
       "workflow": "review",
       "source": "templates/review/references/review-workflow.js",
       "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/declarative-code/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "declarative-code",
+      "source": "templates/declarative-code/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/declarative-code/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "declarative-code",
+      "source": "templates/declarative-code/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-testing/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-testing",
+      "source": "templates/frontend-testing/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-testing/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-testing",
+      "source": "templates/frontend-testing/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/no-unnecessary-effects/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "no-unnecessary-effects",
+      "source": "templates/no-unnecessary-effects/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/no-unnecessary-effects/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "no-unnecessary-effects",
+      "source": "templates/no-unnecessary-effects/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/references/cohesion.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/cohesion.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/references/community-consensus.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/community-consensus.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/references/coupling.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/coupling.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/references/predictability.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/predictability.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-fundamentals/references/readability.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/readability.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/references/cohesion.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/cohesion.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/references/community-consensus.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/community-consensus.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/references/coupling.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/coupling.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/references/predictability.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/predictability.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-fundamentals/references/readability.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend",
+      "skill": "frontend-fundamentals",
+      "source": "templates/frontend-fundamentals/references/readability.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/asset-handling.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/asset-handling.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/cross-import-patterns.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/cross-import-patterns.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/excessive-entities.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/excessive-entities.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/framework-integration.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/framework-integration.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/layer-structure.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/layer-structure.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/migration-guide.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/migration-guide.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/feature-sliced-design/references/practical-examples.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/practical-examples.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/asset-handling.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/asset-handling.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/cross-import-patterns.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/cross-import-patterns.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/excessive-entities.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/excessive-entities.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/framework-integration.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/framework-integration.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/layer-structure.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/layer-structure.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/migration-guide.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/migration-guide.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/feature-sliced-design/references/practical-examples.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "fsd",
+      "skill": "feature-sliced-design",
+      "source": "templates/feature-sliced-design/references/practical-examples.md",
+      "mode": "copy"
     }
   ],
   "retired": [
