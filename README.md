@@ -80,9 +80,9 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 | 프로젝트 기능 | Codex (`Codex` 또는 `둘 다` 선택) | Claude (`Claude` 또는 `둘 다` 선택) | 역할 |
 |---|---|---|---|
-| 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
-| 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
-| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
+| 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md`<br>`.claude/workflows/implement-feature.js` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
+| 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md`<br>`.claude/workflows/fix-bug.js` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
+| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md`<br>`.claude/workflows/review.js` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
 
@@ -183,10 +183,12 @@ stateDiagram-v2
 | 도구 | 실행 방식 |
 |---|---|
 | Codex | skill과 역할 agent(또는 단일 세션의 단계 경계)가 그래프 계약을 해석합니다. 별도의 그래프 런타임은 필요하지 않습니다. |
-| Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 `/ai-harness:implement-feature` Dynamic Workflow가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. |
+| Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 프로젝트의 `.claude/workflows/implement-feature.js`가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. 완료 판정이 코드에 있어, blocking finding이 남으면 done을 반환하지 못합니다. |
 | 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
 
-Claude Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 skill 대화 단계에서 먼저 받습니다.
+Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 command 대화 단계에서 먼저 받고, 승인된 Brief를 인자로 넘겨야만 실행됩니다.
+
+이 워크플로 스크립트는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.claude/workflows/`에 생성하며, 프로젝트 진입점이 절대 경로를 `scriptPath`로 넘겨 호출합니다. 하네스가 없는 저장소에는 존재하지 않으므로, 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
 ## 변경 이해 흐름: `/understand-change`
 
@@ -227,7 +229,7 @@ stateDiagram-v2
 3. **회귀 검증과 수정** — 테스트 정책에 맞게 회귀 테스트 또는 동등한 검증 증거를 먼저 마련한 뒤 최소 수정합니다.
 4. **검토 루프** — targeted/전체 검증 뒤 재현 증거·회귀·호환성·범위 이탈을 검토합니다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘깁니다.
 
-생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 승인 뒤 선택적으로 `/ai-harness:fix-bug` Dynamic Workflow를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
+생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 승인 뒤 선택적으로 프로젝트의 `.claude/workflows/fix-bug.js`를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
 
 <a id="review"></a>
 
@@ -249,7 +251,7 @@ stateDiagram-v2
     re_review --> repair: blocking finding 남음
 ```
 
-초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 같은 원인이 두 번 남거나 제품 판단이 필요하면 사용자에게 넘깁니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 검토 → 수리 → 재검토 루프에 선택적으로 `/ai-harness:review` Dynamic Workflow를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
+초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 같은 원인이 두 번 남거나 제품 판단이 필요하면 사용자에게 넘깁니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 검토 → 수리 → 재검토 루프에 선택적으로 프로젝트의 `.claude/workflows/review.js`를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 
@@ -419,7 +421,6 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionEnd 수집·SessionStart 알림 정의
-workflows/        Claude Dynamic Workflow 어댑터
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)

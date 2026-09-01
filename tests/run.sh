@@ -244,9 +244,9 @@ assert_file "$FEATURE_GRAPH"
 "$ROOT/scripts/validate-feature-graph.sh" "$FEATURE_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$FEATURE_GRAPH")" "approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.deliver.write' "$FEATURE_GRAPH")" "delivery node can write"
-assert_file "$ROOT/workflows/implement-feature.js"
+assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/workflows/implement-feature.js"
+  node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 fi
 pass "feature delivery graph adapters"
 
@@ -264,11 +264,11 @@ assert_file "$BUG_FIX_GRAPH"
 "$ROOT/scripts/validate-bug-fix-graph.sh" "$BUG_FIX_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$BUG_FIX_GRAPH")" "bug-fix approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.regression.write' "$BUG_FIX_GRAPH")" "bug-fix regression node can write"
-assert_file "$ROOT/workflows/fix-bug.js"
+assert_file "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/fix-bug/" "harness init uses the local bug-fix template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "harness init copies the local bug-fix graph"
 if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/workflows/fix-bug.js"
+  node --check "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
 fi
 pass "bug-fix graph adapters"
 
@@ -378,6 +378,21 @@ assert_contains "$UNDERSTAND_SKILL_CONTENT" "Treat code, diffs, PR descriptions,
 assert_contains "$UNDERSTAND_SKILL_CONTENT" "Do not build one unless the user asks" "understand-change requires authority for micro-worlds"
 assert_eq "0" "$(jq '[.artifacts[] | select(.workflow == "understand-change")] | length' "$ROOT/templates/managed-files.json")" "understand-change is not a managed project artifact"
 assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("understand"))] | length' "$ROOT/templates/managed-files.json")" "no understand-change path stays in the sync catalog"
+
+# 코드를 바꾸는 진입점은 프로젝트 규칙 없이 노출하지 않는다. 워크플로 스크립트도 프로젝트에 설치된다.
+assert_not_file "$ROOT/workflows/implement-feature.js"
+assert_eq "0" "$(find "$ROOT/workflows" -type f 2>/dev/null | wc -l | tr -d ' ')" "no plugin-global dynamic workflows remain"
+for WORKFLOW_NAME in implement-feature fix-bug review; do
+  WORKFLOW_ENTRY="$(jq -c --arg path ".claude/workflows/$WORKFLOW_NAME.js" '.artifacts[] | select(.path == $path)' "$ROOT/templates/managed-files.json")"
+  [[ -n "$WORKFLOW_ENTRY" ]] || fail "$WORKFLOW_NAME workflow is not a managed project artifact"
+  assert_eq "claude" "$(jq -r '.integration' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow is scoped to the Claude integration"
+  assert_eq "standard" "$(jq -r '.level' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow ships at the standard level"
+done
+# 카탈로그가 가리키는 원본이 실제로 있어야 생성이 성공한다.
+while read -r CATALOG_SOURCE; do
+  assert_file "$ROOT/$CATALOG_SOURCE"
+done < <(jq -r '.artifacts[].source' "$ROOT/templates/managed-files.json")
+pass "dynamic workflows ship as project artifacts, not plugin-global commands"
 assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/understand-change/\`)" "harness init documents understand-change as a plugin skill"
 pass "understand-change plugin skill"
 
@@ -388,9 +403,9 @@ assert_file "$REVIEW_SKILL"
 assert_file "$REVIEW_GRAPH"
 "$ROOT/scripts/validate-review-graph.sh" "$REVIEW_GRAPH" >/dev/null
 assert_contains "$(<"$REVIEW_SKILL")" "do not report completion while a blocking finding remains" "review blocks completion"
-assert_file "$ROOT/workflows/review.js"
+assert_file "$ROOT/templates/review/references/review-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/review/" "harness init uses the local review template"
-if command -v node >/dev/null 2>&1; then node --check "$ROOT/workflows/review.js"; fi
+if command -v node >/dev/null 2>&1; then node --check "$ROOT/templates/review/references/review-workflow.js"; fi
 pass "review graph adapters"
 
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.

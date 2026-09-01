@@ -13,6 +13,26 @@
 
   `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로 둘 다 MIT 라이선스입니다. 저작권·라이선스 전문은 `THIRD-PARTY-LICENSES.md`에 있습니다. 상류 변경은 원본에서 다시 가져옵니다.
 
+## v0.19.0 (2026-09-01)
+
+기능 개발·버그 수정·검토 Dynamic Workflow가 플러그인이 아니라 프로젝트에 설치됩니다. **기존 하네스 프로젝트는 `/harness-init --sync`가 필요합니다.**
+
+### 달라진 점
+
+- **`/ai-harness:implement-feature`, `/ai-harness:fix-bug`, `/ai-harness:review`가 사라집니다.** 이 셋은 플러그인 전역 커맨드라 하네스가 없는 프로젝트에서도 목록에 떴지만, 직접 호출하면 `approval_required`만 반환하는 막다른 길이었습니다. 하네스가 있는 프로젝트에서는 진입점(`/implement-feature` 등)과 이름이 겹쳐 어느 쪽을 불러야 하는지 알기 어려웠습니다.
+- **대신 `/harness-init`이 `.claude/workflows/`에 스크립트를 생성합니다.** Claude 통합을 선택한 `standard` 프로젝트에만 생깁니다. 프로젝트 진입점이 승인된 Brief와 함께 절대 경로를 `scriptPath`로 넘겨 호출합니다.
+- **강제력은 그대로입니다.** 스키마로 검증되는 리뷰 루프, blocking finding이 남으면 완료를 반환하지 못하는 판정, `interrupted`·`review_incomplete`·`user_decision_required` 미완료 상태가 모두 유지됩니다. 실행 위치만 바뀌었습니다.
+
+### 업데이트 후 해야 할 일
+
+기존 하네스 프로젝트에서 `/harness-init --sync`를 실행하면 아래 3개가 **추가 가능** 항목으로 잡힙니다. `--sync --apply`로 적용하세요.
+
+- `.claude/workflows/implement-feature.js`
+- `.claude/workflows/fix-bug.js`
+- `.claude/workflows/review.js`
+
+Codex만 쓰는 프로젝트에는 해당하지 않습니다. Dynamic Workflow는 Claude Code 2.1.154 이상 전용이며, 사용할 수 없어도 기능 개발·버그 수정·검토 흐름은 현재 세션에서 그대로 유지됩니다.
+
 ## v0.18.0 (2026-08-30)
 
 업데이트 알림이 더 안정적으로 도착하고, 업데이트를 적용한 뒤 무엇이 남았는지 알려 줍니다. 별도의 조치는 필요 없습니다.
