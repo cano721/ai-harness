@@ -1,6 +1,6 @@
 {
   "name": "ai-harness",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "license": "MIT",
   "description": "AI 하네스 라이프사이클: 자동 수집·누적량 트리거·건강/보관 관리, metrics 리포트, harvest 개선 PR.",
   "author": {
