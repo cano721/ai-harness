@@ -492,4 +492,4 @@ Do **not** preload all references.
 
 ---
 
-출처: [feature-sliced/skills](https://github.com/feature-sliced/skills)의 `feature-sliced-design` 스킬 사본. MIT 라이선스 (Copyright (c) feature-sliced/skills authors) — 전문은 저장소 루트 [`THIRD-PARTY-LICENSES.md`](../../THIRD-PARTY-LICENSES.md) 참조. 상류 변경은 원본에서 다시 가져온다.
+출처: [feature-sliced/skills](https://github.com/feature-sliced/skills)의 `feature-sliced-design` 스킬 사본. MIT 라이선스, Copyright (c) feature-sliced/skills authors. (MIT 전문은 ai-harness 플러그인 저장소 루트의 `THIRD-PARTY-LICENSES.md`에 있다.) 상류 변경은 원본에서 다시 가져온다.
