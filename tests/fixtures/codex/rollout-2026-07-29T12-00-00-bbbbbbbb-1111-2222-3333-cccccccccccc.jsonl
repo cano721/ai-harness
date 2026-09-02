@@ -9,6 +9,9 @@
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"custom_tool_call_output","call_id":"call-failed","output":[{"type":"input_text","text":"{\"is_error\":true,\"message\":\"user rejected request\"}"}]}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"custom_tool_call_output","call_id":"call-agents","output":[{"type":"input_text","text":"## Direct edit guard\n위 룰은 PreToolUse 훅이 자동 검증한다."}]}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"function_call_output","call_id":"call-guard","output":"[Direct edit guard] src/app.ts 수정 전에 다음 docs를 먼저 Read 하세요:"}}
+{"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "function_call_output", "call_id": "call-gitlog", "output": "Chunk ID: 0a1b2c\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 40\nOutput:\n8d05049 docs: require the [Direct edit guard] prefix in guard hook output (#18)"}}
+{"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "function_call_output", "call_id": "call-shell-failed", "output": "Chunk ID: 3d4e5f\nWall time: 0.2000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nbash: shellcheck: command not found"}}
+{"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "custom_tool_call_output", "call_id": "call-source-read", "output": [{"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n  {applySetup.isError && (<span>error</span>)}\n  select(.is_error==true)"}]}}
 {"type":"summary","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"compaction_summary"}}
 {"type":"event_msg","timestamp":"2026-07-29T03:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":11,"output_tokens":25,"total_tokens":125}}}}
 broken-json

@@ -84,8 +84,10 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # ── 신호 카운트 ──
 ( [$L[] | tool_results | select(.is_error==true)] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
-# 훅 stderr 접두어 "[Direct edit guard]"만 — AGENTS.md 본문의 같은 문구(Read/cat 출력)는 차단이 아님
-( [$L[] | tool_results | result_text | select(test("\\[Direct edit guard\\]"))] | length
+# 훅 차단은 is_error 결과로만 온다. 같은 문구가 git log·PR 본문·AGENTS.md Read 출력(is_error 아님)에
+# 섞여도 차단이 아니다 — 이 저장소의 커밋 메시지 자체가 "[Direct edit guard]"를 담고 있다.
+( [$L[] | tool_results | select(.is_error==true) | result_text
+    | select(test("\\[Direct edit guard\\]"))] | length
   | select(.>0) | $base + {kind:"guard_block", n:.} ),
 # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 거부 문구가 오지만 권한 거부가 아님
 ( [$L[] | tool_results | result_text
