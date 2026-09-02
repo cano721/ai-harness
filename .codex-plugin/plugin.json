@@ -1,6 +1,6 @@
 {
   "name": "ai-harness",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "license": "MIT",
   "description": "AI 하네스 라이프사이클: 자동 수집·누적량 트리거·건강/보관 관리, metrics 리포트, harvest 개선 PR.",
   "author": {
@@ -9,7 +9,11 @@
   },
   "homepage": "https://github.com/cano721/ai-harness",
   "repository": "https://github.com/cano721/ai-harness",
-  "keywords": ["ai-harness", "metrics", "agent-workflow"],
+  "keywords": [
+    "ai-harness",
+    "metrics",
+    "agent-workflow"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "ai-harness",
@@ -17,7 +21,10 @@
     "longDescription": "Claude Code와 Codex의 로컬 활동 기록을 수집하고, 누적량 기반 개선 알림·사용량 관찰·프로젝트 하네스 셋업·근거 기반 개선 PR 워크플로를 제공합니다.",
     "developerName": "cano721",
     "category": "Productivity",
-    "capabilities": ["Read", "Write"],
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
     "defaultPrompt": [
       "이 프로젝트에 AI 하네스를 설정해줘.",
       "이 변경이 뭘 바꾸고 어떻게 검증하는지 설명해줘.",
