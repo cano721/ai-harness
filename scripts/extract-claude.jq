@@ -20,6 +20,8 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 
 | ($L | map(select(.type=="user" and (utext|length)>0 and ((.message.content|type)=="string" or ([.|tool_results]|length)==0)))) as $userMsgs
 | ($L | map(select(.type=="assistant" and .message.usage != null))) as $asst
+# tool_result → 호출한 툴 이름 (tool_use_id 기준). 신호를 "어느 툴의 결과인가"로 가릴 때 쓴다.
+| ($L | [.[] | tool_uses | select(.id != null) | {key:.id, value:.name}] | from_entries) as $toolNames
 
 # ── session 메타 (빈 transcript는 유령 세션 방지 위해 미기록) ──
 | (select($n > 0) | $base + {
@@ -84,14 +86,17 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # ── 신호 카운트 ──
 ( [$L[] | tool_results | select(.is_error==true)] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
-# 훅 차단은 is_error 결과로만 온다. 같은 문구가 git log·PR 본문·AGENTS.md Read 출력(is_error 아님)에
-# 섞여도 차단이 아니다 — 이 저장소의 커밋 메시지 자체가 "[Direct edit guard]"를 담고 있다.
-( [$L[] | tool_results | select(.is_error==true) | result_text
-    | select(test("\\[Direct edit guard\\]"))] | length
+# 훅 차단은 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 is_error 결과로만 온다 — 가드 훅이 그 툴에만 걸린다.
+# 같은 문구가 Bash 결과(git log 커밋 메시지, 실패한 cat AGENTS.md)나 Read 출력에 섞여도 차단이 아니다.
+# 전 transcript 실측: is_error+문구 4건이 전부 "Exit code 1"로 시작하는 Bash 출력이었다.
+( [$L[] | tool_results | select(.is_error==true)
+    | select(($toolNames[.tool_use_id // ""] // "") | IN("Edit","Write","MultiEdit","NotebookEdit"))
+    | result_text | select(test("\\[Direct edit guard\\]"))] | length
   | select(.>0) | $base + {kind:"guard_block", n:.} ),
+# 권한 거부는 is_error 결과이고 거부 문구로 시작한다. 추출기 소스·PR 본문·커밋 메시지 속 같은 문구는 거부가 아니다.
 # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 거부 문구가 오지만 권한 거부가 아님
-( [$L[] | tool_results | result_text
-    | select(test("doesn.t want to proceed|user rejected"))
+( [$L[] | tool_results | select(.is_error==true) | result_text
+    | select(test("^(The user doesn.t want to proceed|user rejected)"))
     | select(test("wants to clarify these questions") | not)] | length
   | select(.>0) | $base + {kind:"permission_deny", n:.} ),
 ( [$L[] | select(.type=="summary" or .isCompactSummary==true)] | length
