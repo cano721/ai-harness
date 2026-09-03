@@ -5,6 +5,22 @@
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
 
+## v0.21.1 (2026-09-02)
+
+`guard_block`·`error` 신호가 문구 매칭으로 부풀던 문제를 고칩니다. 첫 `/harvest`(ai-harness 프로젝트)가 이 가짜 신호로 만들어진 분석 batch를 정독한 결과입니다.
+
+### 고친 점
+
+- **Claude `guard_block`은 `is_error` 결과에서만 셉니다.** 지금까지는 tool_result 본문 어디든 `[Direct edit guard]`가 있으면 차단으로 집계돼, `git log` 출력의 커밋 메시지(#18)·PR 본문·AGENTS.md Read가 모두 차단으로 잡혔습니다. ai-harness 30일 통계의 guard_block 18건(4세션)은 전부 이 경우였고 실제 차단은 0건이었습니다.
+- **Claude `guard_block`은 편집 툴(Edit/Write/MultiEdit/NotebookEdit) 결과로 한정합니다.** 가드 훅은 그 툴에만 걸리므로, `Exit code 1`로 끝난 Bash 출력에 `git log`·`cat AGENTS.md` 문구가 섞인 경우(`is_error`이지만 차단 아님)를 제외합니다. 이 머신 전체 transcript에서 `is_error`+문구 4건이 모두 이 경우였습니다.
+- **Claude `permission_deny`는 `is_error` 결과가 거부 문구로 시작할 때만 셉니다.** 추출기 소스(`extract-claude.jq`) Read, PR 본문, 커밋 메시지에 들어 있는 `doesn't want to proceed`·`user rejected` 문구가 거부로 잡히던 문제를 고칩니다. ai-harness 두 번째 `/harvest` batch의 permission_deny 4건(3세션)이 전부 이 경우였습니다.
+- **Codex `guard_block`은 출력 줄 시작의 접두어만 셉니다.** 줄 중간에 섞인 같은 문구는 무시합니다.
+- **Codex `error`는 실패한 호출만 셉니다.** 출력 본문의 `isError`/`is_error` 단어를 세던 것을, 브리지 JSON 봉투(`{"is_error":true,...}`로 시작) 또는 Codex CLI 셸 푸터의 `Process exited with code N`(N≠0)으로 바꿨습니다. React 소스의 `isError &&`나 `cat`한 스크립트 본문이 오류로 잡혀 분석 batch를 `errors` 사유로 열던 문제(batch 오류 35건 중 실제 0건)가 사라지고, 반대로 지금까지 0으로 보이던 실제 셸 실패가 Claude와 같은 기준으로 집계됩니다.
+
+### 업데이트 후 해야 할 일
+
+없습니다. 다음 `/metrics`·`/harvest`의 `backfill.sh`가 이벤트를 재추출하면서 기존 세션의 수치도 다시 계산됩니다.
+
 ## v0.21.0 (2026-09-02)
 
 `/harvest`가 자기 개선의 효과를 스스로 채점하고, 노이즈 분석을 싸게 끝냅니다. Prime Agent의 continual-harness refinement 설계에서 규율만 이식했습니다.
