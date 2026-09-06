@@ -65,6 +65,86 @@ assert_eq "service" "$(project_id_for_cwd "$PROJECT_WORKTREE")" "worktree projec
 assert_eq "jobda-agent" "$(project_id_for_cwd "/tmp/workspaces/jobda-agent/NJ-290")" "missing worktree fallback"
 pass "stable project IDs"
 
+# workspace 모드: 여러 독립 git 저장소가 한 폴더에 있으면 라우팅 층만 만든다.
+WS_ROOT="$TEST_TMP/ws"
+mkdir -p "$WS_ROOT"
+make_repo() {
+  local dir="$1" origin="${2:-}"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" config user.email test@example.com
+  git -C "$dir" config user.name test
+  git -C "$dir" commit -q --allow-empty -m init
+  [[ -z "$origin" ]] || git -C "$dir" remote add origin "$origin"
+}
+make_repo "$WS_ROOT/api" git@github.com:acme/acme-api.git
+make_repo "$WS_ROOT/web"
+make_repo "$WS_ROOT/api-clone" git@github.com:acme/acme-api.git
+make_repo "$WS_ROOT/group/batch" git@github.com:acme/acme-batch.git
+mkdir -p "$WS_ROOT/api/.ai-harness" "$WS_ROOT/api/node_modules/dep"
+git -C "$WS_ROOT/api/node_modules/dep" init -q
+jq -n '{project_id:"acme-api", level:"standard", test_policy:"tdd", git_policy:"pr-only", edit_guard:true}' > "$WS_ROOT/api/.ai-harness/harness.json"
+git -C "$PROJECT_REPO" worktree add -q -b ws-linked "$WS_ROOT/service-wt-1"
+WS_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+assert_eq "false" "$(jq -r '.root_is_git' <<<"$WS_SCAN")" "workspace root is not a git repo"
+assert_eq "true" "$(jq -r '.candidate' <<<"$WS_SCAN")" "two independent repos make a workspace candidate"
+assert_eq "api group/batch web" "$(jq -r '[.members[].path] | sort | join(" ")' <<<"$WS_SCAN")" "members deduplicate clones, skip .git files and node_modules"
+assert_eq "api-clone" "$(jq -r '.members[] | select(.path=="api") | .also_paths | join(",")' <<<"$WS_SCAN")" "clone of the same repo is folded into one member"
+assert_eq "acme-api true tdd" "$(jq -r '.members[] | select(.path=="api") | "\(.project_id) \(.harness) \(.test_policy)"' <<<"$WS_SCAN")" "member with harness reports its manifest policy"
+assert_eq "web false" "$(jq -r '.members[] | select(.path=="web") | "\(.project_id) \(.harness)"' <<<"$WS_SCAN")" "member without harness is marked, not initialized"
+assert_eq "api web" "$(jq -r '[.members[].path] | sort | join(" ")' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT" --depth 1)")" "depth 1 stops before group folders"
+assert_eq "false" "$(jq -r '.candidate' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$PROJECT_REPO")")" "a single git repo is never a workspace candidate"
+WT_ONLY="$TEST_TMP/wt-only"
+mkdir -p "$WT_ONLY"
+git -C "$PROJECT_REPO" worktree add -q -b wt-only-a "$WT_ONLY/service-wt-2"
+git -C "$PROJECT_REPO" worktree add -q -b wt-only-b "$WT_ONLY/service-wt-3"
+assert_eq "false 0" "$(jq -r '"\(.candidate) \(.members|length)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$WT_ONLY")")" "worktree-only folder is not proposed as a workspace"
+assert_eq "[]" "$(workspace_members_for_cwd "$WS_ROOT")" "no manifest means no members"
+"$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" --workspace-id acme --integrations claude --version 0.22.0 >/dev/null
+WS_MANIFEST="$WS_ROOT/.ai-harness/workspace.json"
+assert_file "$WS_MANIFEST"
+assert_eq "workspace acme claude 0.22.0" "$(jq -r '"\(.kind) \(.workspace_id) \(.integrations|join(",")) \(.harness_version)"' "$WS_MANIFEST")" "workspace manifest records identity"
+assert_eq "null" "$(jq -r '.managed_files' "$WS_MANIFEST")" "workspace manifest has no managed files"
+assert_eq "acme" "$(project_id_for_cwd "$WS_ROOT")" "workspace root resolves to workspace_id instead of the folder heuristic"
+assert_eq "acme-api" "$(project_id_for_cwd "$WS_ROOT/api")" "member cwd still resolves to its own project"
+assert_eq "$WS_ROOT/api acme-api" "$(workspace_members_for_cwd "$WS_ROOT" | jq -r '.[] | select(.project_id=="acme-api") | "\(.path) \(.project_id)"')" "members resolve to absolute paths"
+if "$ROOT/scripts/workspace-scan.sh" write --root "$PROJECT_REPO" --workspace-id nope >/dev/null 2>&1; then
+  fail "write must refuse a git repo root"
+fi
+if "$ROOT/scripts/workspace-scan.sh" write --root "$WT_ONLY" --workspace-id nope >/dev/null 2>&1; then
+  fail "write must refuse to create a manifest without two independent repos"
+fi
+# origin도 manifest도 없는 무관한 두 저장소는 폴더명이 같아도 하나로 접히지 않는다.
+SAME_LEAF="$TEST_TMP/same-leaf"
+make_repo "$SAME_LEAF/teamA/backend"
+make_repo "$SAME_LEAF/teamB/backend"
+SAME_LEAF_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$SAME_LEAF")"
+assert_eq "true 2" "$(jq -r '"\(.candidate) \(.members|length)"' <<<"$SAME_LEAF_SCAN")" "folder-name fallback ids never fold unrelated repos"
+assert_eq "path path" "$(jq -r '[.members[].id_source] | join(" ")' <<<"$SAME_LEAF_SCAN")" "fallback ids are labeled as path-derived"
+assert_eq "manifest origin" "$(jq -r '[(.members[] | select(.path=="api") | .id_source), (.members[] | select(.path=="group/batch") | .id_source)] | join(" ")' <<<"$WS_SCAN")" "manifest and origin ids are labeled by source"
+# 멤버 안에 중첩된 .git은 그 멤버의 일부다. 단일 저장소가 workspace로 오판되면 안 된다.
+NESTED="$TEST_TMP/nested"
+make_repo "$NESTED/outer" git@github.com:acme/outer.git
+make_repo "$NESTED/outer/vendor/lib" git@github.com:vendor/lib.git
+assert_eq "false 1 outer" "$(jq -r '"\(.candidate) \(.members|length) \(.members[0].path)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$NESTED" --depth 3)")" "a .git nested inside a member is not a separate member"
+rm -rf "$WS_ROOT/web"
+mkdir -p "$WS_ROOT/group/batch/.ai-harness"
+jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"
+WS_RESCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+assert_eq "web" "$(jq -r '.diff.removed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member that disappeared"
+assert_eq "group/batch" "$(jq -r '.diff.changed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member whose harness changed"
+assert_eq "web" "$(jq -r '.members[] | select(.path=="web") | .path' "$WS_MANIFEST")" "scan alone never rewrites the manifest"
+"$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" >/dev/null
+assert_eq "acme claude $(jq -r '.version' "$ROOT/release.json")" "$(jq -r '"\(.workspace_id) \(.integrations|join(",")) \(.harness_version)"' "$WS_MANIFEST")" "rewrite keeps identity and stamps the current plugin version"
+assert_eq "api group/batch" "$(jq -r '[.members[].path] | sort | join(" ")' "$WS_MANIFEST")" "rewrite applies the rescanned members"
+HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
+assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh scan" "harness init detects workspaces with the scan script"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workspace.json" "harness init documents the workspace manifest"
+assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh write" "harness init records the manifest with the script"
+assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks members without a harness"
+assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
+pass "workspace mode scan, manifest, and routing"
+
 # Claude/Codex extractor metadata and coverage
 EXTRACT_DATA="$TEST_TMP/extract-data"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"

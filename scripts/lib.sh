@@ -111,6 +111,15 @@ project_id_for_cwd() {
   local leaf="" parent=""
   [[ -n "$cwd" ]] || return 0
 
+  # workspace 루트(여러 저장소를 담는 폴더)는 git 저장소가 아니므로 git 판정보다 먼저 본다.
+  if [[ -f "$cwd/.ai-harness/workspace.json" ]]; then
+    project_id="$(jq -r '.workspace_id // empty' "$cwd/.ai-harness/workspace.json" 2>/dev/null || true)"
+    if [[ -n "$project_id" ]]; then
+      printf '%s\n' "$project_id"
+      return
+    fi
+  fi
+
   if [[ -d "$cwd" ]]; then
     root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
     if [[ -n "$root" ]]; then
@@ -166,4 +175,18 @@ project_id_for_cwd() {
     leaf="$parent"
   fi
   printf '%s\n' "$leaf"
+}
+
+# workspace 멤버를 절대경로로 돌려준다. workspace가 아니면 빈 배열.
+# 계측이 편집 경로를 멤버 project_id로 귀속할 때 prefix 매칭에 쓴다.
+workspace_members_for_cwd() {
+  local cwd="${1:-}" manifest=""
+  cwd="${cwd%/}"
+  manifest="$cwd/.ai-harness/workspace.json"
+  if [[ -z "$cwd" || ! -f "$manifest" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  jq -c --arg root "$cwd" '[.members[]? | {path: ($root + "/" + .path), project_id}]' "$manifest" 2>/dev/null \
+    || printf '[]\n'
 }
