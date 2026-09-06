@@ -50,23 +50,36 @@ while IFS= read -r gitdir; do
   repo="${gitdir%/.git}"
   rel="${repo#"$root"/}"
   project_id="$(project_id_for_cwd "$repo")"
+  # id_source: 폴더명 폴백(path)은 실제 identity가 아니므로 clone 접기 대상에서 제외한다.
+  # 그렇지 않으면 origin도 manifest도 없는 무관한 두 저장소가 폴더명이 같다는 이유로 하나로 접힌다.
+  id_source="path"
   member_manifest="$repo/.ai-harness/harness.json"
-  if [[ -f "$member_manifest" ]] && entry="$(jq -c --arg path "$rel" --arg pid "$project_id" '{
-        path: $path, project_id: (.project_id // $pid), harness: true,
+  if [[ -f "$member_manifest" ]] && [[ -n "$(jq -r '.project_id // empty' "$member_manifest" 2>/dev/null)" ]]; then
+    id_source="manifest"
+  elif [[ -n "$(git -C "$repo" remote get-url origin 2>/dev/null || true)" ]]; then
+    id_source="origin"
+  fi
+  if [[ -f "$member_manifest" ]] && entry="$(jq -c --arg path "$rel" --arg pid "$project_id" --arg src "$id_source" '{
+        path: $path, project_id: (.project_id // $pid), id_source: $src, harness: true,
         level: (.level // null), test_policy: (.test_policy // null),
         git_policy: (.git_policy // null), edit_guard: (.edit_guard // false)
       }' "$member_manifest" 2>/dev/null)"; then
     :
   else
-    entry="$(jq -cn --arg path "$rel" --arg pid "$project_id" '{path: $path, project_id: $pid, harness: false}')"
+    entry="$(jq -cn --arg path "$rel" --arg pid "$project_id" --arg src "$id_source" \
+      '{path: $path, project_id: $pid, id_source: $src, harness: false}')"
   fi
   members="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$members")"
 done < <(find "$root" -mindepth 2 -maxdepth "$((depth + 1))" \
   \( -name node_modules -prune -false \) -o \( -name .git -type d -prune -print \) 2>/dev/null | sort)
 
-# 같은 저장소의 clone은 project_id가 같다. 하네스가 있는 쪽, 그다음 짧은 경로를 멤버로 삼고
-# 나머지는 also_paths로 접는다.
-members="$(jq -c 'group_by(.project_id)
+# 1) 다른 멤버 안에 중첩된 .git(실수로 커밋된 vendor clone 등)은 그 멤버의 일부이지 별도 멤버가 아니다.
+# 2) 같은 저장소의 clone은 project_id가 같다. 하네스가 있는 쪽, 그다음 짧은 경로를 멤버로 삼고
+#    나머지는 also_paths로 접는다. 폴더명 폴백(id_source=path)은 identity가 아니므로 접지 않는다.
+members="$(jq -c '
+  . as $all
+  | map(select(.path as $p | ($all | any(.path as $q | $q != $p and ($p | startswith($q + "/"))) | not)))
+  | group_by(if .id_source == "path" then "path:" + .path else "id:" + .project_id end)
   | map(sort_by([(.harness | not), (.path | length), .path])
         | .[0] + (if length > 1 then {also_paths: (.[1:] | map(.path))} else {} end))
   | sort_by(.path)' <<<"$members")"
@@ -101,6 +114,11 @@ case "$command_name" in
   write)
     if [[ "$root_is_git" == true ]]; then
       printf 'refusing to write a workspace manifest inside a git repository: %s\n' "$root" >&2
+      exit 2
+    fi
+    # 첫 기록은 후보일 때만. 기존 manifest의 재기록(동기화)은 멤버가 줄어도 허용한다.
+    if [[ "$existing" == null && "$(jq -r '.candidate' <<<"$scan")" != true ]]; then
+      printf 'refusing to create a workspace manifest: fewer than two independent repositories under %s\n' "$root" >&2
       exit 2
     fi
     if [[ -z "$version" ]]; then

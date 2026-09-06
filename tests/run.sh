@@ -111,6 +111,22 @@ assert_eq "$WS_ROOT/api acme-api" "$(workspace_members_for_cwd "$WS_ROOT" | jq -
 if "$ROOT/scripts/workspace-scan.sh" write --root "$PROJECT_REPO" --workspace-id nope >/dev/null 2>&1; then
   fail "write must refuse a git repo root"
 fi
+if "$ROOT/scripts/workspace-scan.sh" write --root "$WT_ONLY" --workspace-id nope >/dev/null 2>&1; then
+  fail "write must refuse to create a manifest without two independent repos"
+fi
+# origin도 manifest도 없는 무관한 두 저장소는 폴더명이 같아도 하나로 접히지 않는다.
+SAME_LEAF="$TEST_TMP/same-leaf"
+make_repo "$SAME_LEAF/teamA/backend"
+make_repo "$SAME_LEAF/teamB/backend"
+SAME_LEAF_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$SAME_LEAF")"
+assert_eq "true 2" "$(jq -r '"\(.candidate) \(.members|length)"' <<<"$SAME_LEAF_SCAN")" "folder-name fallback ids never fold unrelated repos"
+assert_eq "path path" "$(jq -r '[.members[].id_source] | join(" ")' <<<"$SAME_LEAF_SCAN")" "fallback ids are labeled as path-derived"
+assert_eq "manifest origin" "$(jq -r '[(.members[] | select(.path=="api") | .id_source), (.members[] | select(.path=="group/batch") | .id_source)] | join(" ")' <<<"$WS_SCAN")" "manifest and origin ids are labeled by source"
+# 멤버 안에 중첩된 .git은 그 멤버의 일부다. 단일 저장소가 workspace로 오판되면 안 된다.
+NESTED="$TEST_TMP/nested"
+make_repo "$NESTED/outer" git@github.com:acme/outer.git
+make_repo "$NESTED/outer/vendor/lib" git@github.com:vendor/lib.git
+assert_eq "false 1 outer" "$(jq -r '"\(.candidate) \(.members|length) \(.members[0].path)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$NESTED" --depth 3)")" "a .git nested inside a member is not a separate member"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"

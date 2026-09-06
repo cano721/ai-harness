@@ -186,7 +186,7 @@ $ROOT/scripts/workspace-scan.sh scan --root . --depth 3  # 그룹 폴더가 더 
 ```
 
 - `.git` **디렉터리**만 멤버 후보다. 서브모듈·worktree는 `.git`이 파일이라 제외되고 `node_modules` 아래는 내려가지 않는다.
-- 멤버 `project_id`는 멤버 `harness.json`의 값을 우선하고, 없으면 origin 저장소명 → 폴더명 순으로 정한다(`project_id_for_cwd`와 같은 규칙). 같은 `project_id`가 여럿이면 한 저장소의 clone이므로 멤버 하나로 접고 나머지 경로를 `also_paths`에 둔다. 접은 뒤 멤버가 1개면 `candidate:false`다 — 같은 저장소의 worktree 폴더만 모인 곳은 workspace가 아니다.
+- 멤버 `project_id`는 멤버 `harness.json`의 값을 우선하고, 없으면 origin 저장소명 → 폴더명 순으로 정한다(`project_id_for_cwd`와 같은 규칙). 출처는 `id_source`(`manifest` / `origin` / `path`)로 붙는다. `manifest`·`origin` 출처의 `project_id`가 여럿이면 한 저장소의 clone이므로 멤버 하나로 접고 나머지 경로를 `also_paths`에 둔다. `path` 출처(폴더명 폴백)는 identity가 아니라서 접지 않는다 — 무관한 `teamA/backend`·`teamB/backend`는 둘 다 멤버다. 다른 멤버 안에 중첩된 `.git`(커밋된 vendor clone 등)은 그 멤버의 일부로 보고 멤버로 잡지 않는다. 접은 뒤 멤버가 1개면 `candidate:false`다 — 같은 저장소의 worktree 폴더만 모인 곳은 workspace가 아니다.
 - 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
 
 ### 7-2. 확인
@@ -202,7 +202,7 @@ CLAUDE.md                  # "@AGENTS.md" — Claude 또는 둘 다를 선택했
   workspace.json           # 매니페스트. harness.json과 파일명이 달라 단일 프로젝트와 섞이지 않는다
 ```
 
-매니페스트는 손으로 쓰지 않고 스크립트로 기록한다. 생략한 값은 기존 manifest에서 유지되고 `harness_version`은 현재 플러그인 버전으로 찍힌다.
+매니페스트는 손으로 쓰지 않고 스크립트로 기록한다. 생략한 값은 기존 manifest에서 유지되고 `harness_version`은 현재 플러그인 버전으로 찍힌다. 첫 기록은 `candidate:true`일 때만 되고 git 저장소 안에서는 거부된다. 기존 manifest의 재기록(7-6)은 멤버가 줄어도 허용된다.
 
 ```bash
 $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
