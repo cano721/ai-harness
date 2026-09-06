@@ -1,6 +1,6 @@
 ---
 name: harness-init
-description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 동기화. 프로젝트를 실측 분석해 AGENTS.md·.ai-harness docs·워크플로·페르소나를 스캐폴딩하고, 기존 하네스는 안전한 diff와 관리 파일 해시로 최신 템플릿에 동기화한다.
+description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 동기화. 프로젝트를 실측 분석해 AGENTS.md·.ai-harness docs·워크플로·페르소나를 스캐폴딩하고, 기존 하네스는 안전한 diff와 관리 파일 해시로 최신 템플릿에 동기화한다. 여러 독립 저장소를 담는 상위 폴더에서는 workspace 모드로 라우팅 진입점만 만든다.
 ---
 
 # /harness-init — 프로젝트 AI 하네스 셋업 / 변경 / 동기화
@@ -13,9 +13,10 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 
 ## 0. 모드 판정
 
+- cwd에 `.ai-harness/workspace.json` 있음 → **기존 workspace** (아래 7-6으로)
+- cwd가 **git repo가 아님** → 먼저 `$ROOT/scripts/workspace-scan.sh scan --root .`을 돌린다. `candidate:true`(하위에 독립 git 저장소 2개 이상)면 **workspace 모드** (아래 7번으로). `candidate:false`면 사용자에게 `git init` 여부 확인 후 단일 프로젝트 흐름
 - `.ai-harness/`와 `AGENTS.md` **둘 다 없음** → **신규 셋업** (1번부터 진행)
 - **하나라도 있음** → **기존 하네스 모드** (아래 6번으로) — AGENTS.md만 있는 프로젝트도 기존 하네스로 취급, 절대 덮어쓰지 않는다
-- git repo가 아니면 사용자에게 `git init` 여부 확인
 
 ## 1. 프로젝트 분석 (질문보다 먼저 — 질문에 실측 컨텍스트를 담기 위해)
 
@@ -170,3 +171,68 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
 4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** `present:true`인 파일을 삭제하고, `tracked:true`인 항목은 `harness-sync-state.sh forget --file <path>`로 manifest에서 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 해당하는 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
 6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.
+
+## 7. Workspace 모드 — 여러 독립 저장소가 한 폴더에 있을 때
+
+cwd가 git 저장소가 아니고 하위에 독립 git 저장소가 둘 이상이면 workspace다. 이 모드는 **라우팅 층만** 만든다 — 워크플로·페르소나·hook·settings는 만들지 않고, 멤버 저장소의 하네스는 한 바이트도 바꾸지 않는다. 모노레포(git 루트 하나)는 workspace가 아니라 단일 프로젝트다.
+
+Claude Code는 cwd의 `.claude/`만 로드하므로 workspace 세션에서는 멤버의 슬래시 커맨드·페르소나·편집 가드가 **동작하지 않는다**. 이는 플러그인이 해결할 수 없는 로더 한계다. 그래서 workspace 세션은 여러 저장소를 훑어보거나 교차 변경을 조율하는 용도이고, 한 저장소 안에서 깊게 구현할 때는 그 저장소에서 세션을 여는 것이 맞다 — 이 안내를 workspace AGENTS.md 첫 줄에 쓴다.
+
+### 7-1. 감지
+
+```bash
+$ROOT/scripts/workspace-scan.sh scan --root .            # 기본 depth 2
+$ROOT/scripts/workspace-scan.sh scan --root . --depth 3  # 그룹 폴더가 더 깊을 때만
+```
+
+- `.git` **디렉터리**만 멤버 후보다. 서브모듈·worktree는 `.git`이 파일이라 제외되고 `node_modules` 아래는 내려가지 않는다.
+- 멤버 `project_id`는 멤버 `harness.json`의 값을 우선하고, 없으면 origin 저장소명 → 폴더명 순으로 정한다(`project_id_for_cwd`와 같은 규칙). 같은 `project_id`가 여럿이면 한 저장소의 clone이므로 멤버 하나로 접고 나머지 경로를 `also_paths`에 둔다. 접은 뒤 멤버가 1개면 `candidate:false`다 — 같은 저장소의 worktree 폴더만 모인 곳은 workspace가 아니다.
+- 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
+
+### 7-2. 확인
+
+멤버 표(경로·project_id·하네스 유무·테스트 정책·git 정책·also_paths)를 보이고 AskUserQuestion으로 `workspace로 셋업` / `취소`를 받는다. workspace 수준 인터뷰는 **도구 통합**(Claude / Codex / 둘 다) 하나만 묻는다. 규모·테스트 정책·편집 가드는 멤버 각자의 것이므로 여기서 묻지 않는다.
+
+### 7-3. 생성물
+
+```
+AGENTS.md                  # 라우팅 전용 진입점 (보호 파일)
+CLAUDE.md                  # "@AGENTS.md" — Claude 또는 둘 다를 선택했을 때만
+.ai-harness/
+  workspace.json           # 매니페스트. harness.json과 파일명이 달라 단일 프로젝트와 섞이지 않는다
+```
+
+매니페스트는 손으로 쓰지 않고 스크립트로 기록한다. 생략한 값은 기존 manifest에서 유지되고 `harness_version`은 현재 플러그인 버전으로 찍힌다.
+
+```bash
+$ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
+```
+
+`managed_files`는 없다. AGENTS.md·CLAUDE.md는 보호 파일이고 그 외 관리 생성물이 없으므로 `harness-sync-state.sh`를 거치지 않는다. 계측은 workspace 세션을 `workspace_id`로 귀속한다(`project_id_for_cwd`가 `workspace.json`을 git 판정보다 먼저 본다). 멤버별 편집 귀속은 후속 버전에서 다룬다.
+
+### 7-4. AGENTS.md 구성
+
+- **첫 줄 안내**: 위 로더 한계와 쓰임새(훑어보기·교차 조율용, 깊은 구현은 멤버 저장소에서).
+- **Preflight**: ① 작업 대상 파일 경로의 첫 세그먼트로 멤버를 정한다. ② 그 멤버의 `AGENTS.md`를 Read한다. ③ 멤버 워크플로는 슬래시 커맨드로 부를 수 없으므로 `<member>/.ai-harness/workflows/<name>.md`를 **직접 Read하고 절차를 따른다**. ④ 멤버 페르소나(`<member>/.claude/agents/*.md`)는 위임 시 `general-purpose` 프롬프트에 지침을 인라인한다 — 역할 격리가 약해진다는 점을 함께 적는다.
+- **멤버 표**: 경로 · project_id · 하네스 유무 · 테스트 정책 · git 정책. `harness:false` 멤버는 "해당 저장소에서 `/harness-init` 권장"으로 표기한다.
+- **교차 작업 규칙**: 멤버 둘 이상을 건드릴 때 멤버별 별도 브랜치·PR, 컨벤션은 각 멤버 것만 적용(섞지 않음), 공유 계약(API 스키마·이벤트 포맷) 변경은 제공자 → 소비자 순서, 완료 보고는 멤버별 검증 결과를 분리.
+- **Hard constraints**: 틀만 비워 둔다. 단일 하네스와 같이 `/harvest`가 채운다.
+- **Quick Commands**: 멤버별 빌드·테스트 명령을 `(cd <member> && ...)` 형태로. 멤버 AGENTS.md의 실측 명령을 복사하고 없으면 비운다.
+
+### 7-5. 멤버 init 후속 단계 (opt-in)
+
+생성물을 쓴 뒤 `harness:false` 멤버가 있으면 AskUserQuestion(multiSelect)으로 **지금 init할 멤버**를 고르게 한다. 기본값은 전부 해제다 — 다른 팀 저장소에 합의 없이 하네스를 심는 일을 막는다. 고르지 않은 멤버는 표기만 남긴다.
+
+1. 선택된 멤버를 **한 번에 하나씩** 처리한다. 1~5번 절차를 그대로 쓰되 모든 경로를 멤버 루트 기준으로 둔다 — 분석은 `git -C <member>`·`<member>/package.json`처럼 경로를 명시하고, 기록은 `harness-sync-state.sh record --root <member>`로 한다.
+2. 인터뷰는 첫 멤버에서 2번의 전체 항목을 묻고, 두 번째 멤버부터는 앞 멤버의 답을 기본값으로 보여 **"같음 / 다르게 답함"** 하나만 묻는다. 실측이 기본값과 모순되면(앞 멤버는 TDD인데 이 멤버는 테스트 0개 등) 2번의 경고 규칙대로 지적한다.
+3. 멤버 하나가 끝나면 생성 파일 목록과 실측 근거를 보고하고 커밋 여부를 확인한 뒤 다음 멤버로 간다. 저장소마다 브랜치·PR이 따로이므로 한 멤버를 끝내기 전에 다음 멤버 파일을 만들지 않는다.
+4. 선택이 3개를 넘으면 앞의 3개만 처리하고 나머지는 "각 저장소에서 `/harness-init`"으로 안내한다. 상위 세션 컨텍스트 보호가 목적이다. 실측 분석은 Explore 서브에이전트에 위임할 수 있지만 인터뷰는 서브에이전트가 사용자에게 질문할 수 없어 메인 세션에서 한다.
+5. 모두 끝나면 `workspace-scan.sh write --root .`로 매니페스트를 다시 기록하고(멤버가 `harness:true`와 실측 정책으로 바뀐다), AGENTS.md 멤버 표는 diff를 보여 **승인 후에만** 편집한다.
+
+### 7-6. 기존 workspace: 동기화
+
+`scan`은 기존 `workspace.json`이 있으면 `diff`를 함께 낸다 — `added`(새 멤버 폴더), `removed`(사라진 멤버), `changed`(멤버의 하네스 유무·정책이 바뀜).
+
+- `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
+- `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
+- 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.
