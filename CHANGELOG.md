@@ -11,8 +11,8 @@
 
 ### 버그 수정
 
-- **역할 agent `model` 누락** — 모델 매핑 표는 있었지만 생성 단계가 이를 지키지 않아 `.claude/agents/*.md`에 `model` 없이 생성되는 경우가 있었습니다. Claude Code는 `model`이 없으면 부모 세션 모델을 상속하므로, reviewer가 sonnet으로 내려가거나 developer가 opus로 올라가 등급 설계가 무력화됐습니다. 이제 `model` 없는 역할 agent는 생성 실패로 취급하고, 마무리 단계에서 `.claude/agents/*.md`와 `.codex/agents/*.toml`의 `model` 누락을 직접 검사합니다.
-- **`docs-updater` 기본 모델 누락** — 모델 매핑 표에 `docs-updater` 행이 없어 생성 시 참조할 기본값이 없었습니다. `sonnet`으로 추가했습니다. 표에 없는 역할을 새로 만들면 기본 모델도 표에 함께 추가하도록 규칙을 명시했습니다.
+- **역할 agent `model` 누락** — 모델 매핑 표는 있었지만 생성 단계가 이를 지키지 않아 `.claude/agents/*.md`에 `model` 없이 생성되는 경우가 있었습니다. Claude Code는 `model`이 없으면 부모 세션 모델을 상속하므로, reviewer가 sonnet으로 내려가거나 developer가 opus로 올라가 등급 설계가 무력화됐습니다. 이제 `model` 없는 역할 agent는 생성 실패로 취급하고, **보고보다 먼저** 실행하는 마무리 self-check가 `.claude/agents/*.md`와 `.codex/agents/*.toml`의 `model` 누락을 직접 검사합니다. 선택하지 않은 도구 디렉터리에서 오탐이 나지 않도록 `nullglob`을 켜고, Codex 쪽은 `model_reasoning_effort`와 구분되게 `^model[[:space:]]*=`로 검사합니다.
+- **`docs-updater`가 문서에 없는 채로 생성되던 문제** — `docs-updater`는 실제로 생성되는 역할 페르소나인데 생성 구조 목록에도, 모델 매핑 표에도 없었습니다. 참조할 기본값이 없어 `model`도 함께 빠졌습니다. 생성 구조(`.claude/agents/`, `.codex/agents/`)와 매핑 표(`sonnet`)에 모두 추가했습니다. 표에 없는 역할을 새로 만들면 기본 모델도 표에 함께 추가하도록 규칙을 명시했습니다.
 
 ### 동작 변경
 
