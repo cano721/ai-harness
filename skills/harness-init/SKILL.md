@@ -65,6 +65,7 @@ AGENTS.md                    # 진입점 (아래 구성)
     developer.md             # 구현 전담 (write scope: 소스+빌드 설정)
     test-engineer.md         # 테스트 전담 (write scope: 테스트 디렉토리만. 테스트 정책 '없음'이면 생략)
     reviewer.md              # 리뷰 전담 (read-only)
+    docs-updater.md          # docs 영향 분석·갱신 전담 (Mode A read-only / Mode B write scope: .ai-harness/docs/)
   hooks/
     direct-edit-guard.sh     # 편집 가드를 켰을 때만
 .agents/
@@ -93,9 +94,10 @@ AGENTS.md                    # 진입점 (아래 구성)
     test-engineer.toml
     developer.toml
     reviewer.toml
+    docs-updater.toml
 CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내용: "@AGENTS.md"
 .claude/
-  agents/                    # explorer/developer/test-engineer/reviewer 위임본 + model frontmatter
+  agents/                    # explorer/developer/test-engineer/reviewer/docs-updater 위임본. 각 파일 frontmatter에 §4 표의 `model` 필수
   commands/                  # Claude 슬래시 커맨드 진입점
   skills/                    # Claude 또는 둘 다 + stack:frontend일 때만. .agents/skills와 동일 프론트 판단 Skill 사본
   workflows/                 # Claude Dynamic Workflow 스크립트 (진입점이 scriptPath로 호출)
@@ -121,7 +123,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - **프론트 판단 Skill**(`frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`, FSD면 `feature-sliced-design` 추가)은 `implement-feature` 부류와 달리 워크플로 어댑터가 아니라 `templates/<name>/`의 **자립 지침을 프로젝트로 복사**한 것이다. 코드를 직접 바꾸지 않는 읽기 전용 판단이지만 프론트엔드 전용이라 플러그인 전역 Skill로 두지 않는다 — 백엔드 저장소에 노출되면 노이즈이므로, 프론트엔드로 감지된 프로젝트에서만 stack 게이트(`frontend`/`fsd`)로 생성한다. Codex는 `.agents/skills/<name>/`, Claude는 `.claude/skills/<name>/`에 SKILL.md와 `references/`를 통째로 복사한다. 각 Skill이 참조하는 프로젝트 고유 사실(디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부)은 `templates`를 일반화하며 빠졌으므로 `.ai-harness/docs/frontend.md`에 실측으로 채운다(보호 파일 — 자동 갱신하지 않는다). Skill 본문은 이 문서가 있으면 우선하도록 이미 적혀 있다. `feature-sliced-design`·`no-unnecessary-effects`는 각각 MIT 라이선스 상류의 사본이며(`THIRD-PARTY-LICENSES.md`), 복사본에도 각 SKILL.md 하단의 저작권 문구가 남는다.
 - AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다. 프론트 판단 Skill을 생성했으면 프로젝트 로컬 Skill로 표에 함께 싣는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 프로젝트의 `.claude/workflows/<name>.js`를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 워크플로는 이름으로 등록되지 않으므로 **프로젝트 루트 기준 절대 경로**를 `scriptPath`로 넘겨 호출하고, 승인된 Brief를 `{ approved: true, brief: "..." }`로 전달한다. 상대 경로는 셸 작업 디렉터리 기준으로 해석되어 실패할 수 있다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
-- 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
+- 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. **`model` 없는 역할 agent는 생성 실패로 취급한다** — Claude Code는 frontmatter에 `model`이 없으면 부모 세션 모델을 상속하므로, reviewer가 sonnet으로 내려가거나 developer가 opus로 올라가 등급 설계가 무력화되고 비용도 부모 모델 기준으로 붙는다. 표에 없는 역할을 새로 만들면 그 역할의 기본 모델도 표에 함께 추가한다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
 
 | 역할 | Codex agent 설정 | Claude agent 설정 | 위임 기준 |
 |---|---|---|---|
@@ -129,6 +131,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 | test-engineer | `gpt-5.6-terra`, `medium` | `sonnet` | 재현·테스트 추가. 원인 분석이 복잡하면 developer로 승격 |
 | developer | `gpt-5.6`, `medium` | `sonnet` | 구현·수정의 기본 담당 |
 | reviewer | `gpt-5.6`, `high`, read-only | `opus` | 보안·데이터·설계·마이그레이션 검토에 우선 사용 |
+| docs-updater | `gpt-5.6-terra`, `medium` | `sonnet` | 코드 변경 뒤 docs 영향 분석·갱신 |
 
 - 위임은 모델 등급과 무관하게 부모 컨텍스트·도구 호출 비용이 든다. 독립적이고 범위가 좁은 작업에만 쓰며, 단순 작업은 현재 세션에서 직접 처리한다.
 - Codex 통합은 `.codex/agents/*.toml`에 `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, 필요 시 `sandbox_mode`를 쓴다. Claude 통합은 `.claude/agents/*.md` frontmatter의 `model`에 위 별칭을 쓴다. 선택한 도구에서 기본 모델이 사용 불가하면 설정을 억지로 대체하지 말고, 감지된 오류와 대체 후보를 사용자에게 보여 준다.
@@ -141,16 +144,26 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 
 ## 5. 마무리
 
-1. 생성 파일 목록 + 각 파일이 실측에서 가져온 근거 요약 보고
-2. 커밋/PR은 사용자 확인 후 (프로젝트 git 컨벤션 따름)
-3. 생성 직후 하네스가 관리하는 생성물(프로젝트 로컬 Skill/command, graph, agent 설정, settings)을 아래 명령으로 기록한다. `AGENTS.md`, `.ai-harness/docs/`, 사람이 작성한 workflow 본문은 관리 목록에 넣지 않는다.
+1. **생성물 자기 검증 (보고보다 먼저)** — 아래를 실행해 역할 agent의 `model` 누락을 잡는다. 출력이 있으면 §4 표 기본값으로 채운 뒤 다시 실행하고, 출력이 빈 상태가 되기 전에는 2번으로 넘어가지 않는다.
+
+```bash
+shopt -s nullglob
+for f in .claude/agents/*.md;  do grep -q '^model:' "$f"            || echo "model 누락: $f"; done
+for f in .codex/agents/*.toml; do grep -q '^model[[:space:]]*=' "$f" || echo "model 누락: $f"; done
+```
+
+   선택하지 않은 도구의 디렉터리는 애초에 없으므로 `nullglob`으로 루프를 건너뛴다(가드가 없으면 매치 없는 글롭이 리터럴로 바인딩돼 오탐이 난다). Codex 쪽은 `model_reasoning_effort`가 `^model`에 걸리므로 `=`까지 anchor한다.
+
+2. 생성 파일 목록 + 각 파일이 실측에서 가져온 근거 요약 보고 (1번 검증을 통과한 뒤에만)
+3. 커밋/PR은 사용자 확인 후 (프로젝트 git 컨벤션 따름)
+4. 생성 직후 하네스가 관리하는 생성물(프로젝트 로컬 Skill/command, graph, agent 설정, settings)을 아래 명령으로 기록한다. `AGENTS.md`, `.ai-harness/docs/`, 사람이 작성한 workflow 본문은 관리 목록에 넣지 않는다.
 
 ```bash
 $ROOT/scripts/harness-sync-state.sh record --root . --version <플러그인 버전> \
   --file <관리 생성물 상대 경로> [...]
 ```
 
-4. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
+5. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
 
 ## 6. 기존 하네스: 동기화와 설정 변경
 
@@ -167,6 +180,7 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
    - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.
    - **보호됨**: `AGENTS.md`, `.ai-harness/docs/**`, 사람이 작성한 workflow 본문. 자동 갱신하지 않으며 개선 제안 diff만 제공한다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
+   - **역할 agent `model` 드리프트** (위 분류와 별개인 **수동 점검** — 역할 agent는 `managed-files.json` 대상이 아니어서 `plan` 출력에 나오지 않는다): §5의 1번 self-check 스니펫을 그대로 실행해 `model` 없는 역할 agent를 찾고, §4 표 기본값으로 채우는 한 줄 추가를 계획 표 맨 아래에 **별도 행으로** 싣는다. 이전 버전이 누락한 채 생성한 경우가 있고, 누락된 agent는 부모 세션 모델을 그대로 상속한다. 본문은 바뀌지 않으므로 diff는 한 줄이지만, 적용은 다른 항목과 같이 사용자 승인 뒤에 한다. 해시 기록 대상이 아니므로 `record`도 하지 않는다.
    - **정리 대상(`retired`)**: 카탈로그의 `retired` 목록이 **명시적으로 내린** 생성물 중 이 프로젝트에 흔적이 남은 것이다(예: 0.16.0에서 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). `present`는 파일이 디스크에 남았는지, `tracked`는 manifest가 아직 기록 중인지를 뜻하며 **둘은 따로 정리해야 한다**. 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다. 카탈로그에 없다는 사실만으로 추론하지 않는다: `.codex/agents/*.toml`처럼 init이 관리하지만 카탈로그가 선언한 적 없는 생성물이 있어, 추론하면 살아 있는 파일을 삭제 후보로 올린다.
 4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** `present:true`인 파일을 삭제하고, `tracked:true`인 항목은 `harness-sync-state.sh forget --file <path>`로 manifest에서 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 해당하는 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
