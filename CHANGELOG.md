@@ -5,6 +5,23 @@
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
 
+## v0.22.1 (2026-09-11)
+
+`/harness-init`이 역할 페르소나를 만들 때 `model` frontmatter를 빠뜨리는 문제를 고칩니다.
+
+### 버그 수정
+
+- **역할 agent `model` 누락** — 모델 매핑 표는 있었지만 생성 단계가 이를 지키지 않아 `.claude/agents/*.md`에 `model` 없이 생성되는 경우가 있었습니다. Claude Code는 `model`이 없으면 부모 세션 모델을 상속하므로, reviewer가 sonnet으로 내려가거나 developer가 opus로 올라가 등급 설계가 무력화됐습니다. 이제 `model` 없는 역할 agent는 생성 실패로 취급하고, 마무리 단계에서 `.claude/agents/*.md`와 `.codex/agents/*.toml`의 `model` 누락을 직접 검사합니다.
+- **`docs-updater` 기본 모델 누락** — 모델 매핑 표에 `docs-updater` 행이 없어 생성 시 참조할 기본값이 없었습니다. `sonnet`으로 추가했습니다. 표에 없는 역할을 새로 만들면 기본 모델도 표에 함께 추가하도록 규칙을 명시했습니다.
+
+### 동작 변경
+
+- `/harness-init --sync` 계획에 **역할 agent `model` 드리프트** 항목이 추가됩니다. 이전 버전이 `model` 없이 생성한 페르소나를 찾아 표 기본값 한 줄 추가를 제안하며, 적용은 다른 항목과 같이 사용자 승인 뒤에 합니다.
+
+### 업데이트 후 해야 할 일
+
+- 0.22.0 이하에서 초기화한 프로젝트는 `/harness-init --sync`로 `model` 누락을 확인하세요. 페르소나는 관리 생성물이 아니라 manifest 해시 충돌은 없으며, `.claude/agents/*.md` frontmatter에 `model:` 한 줄을 직접 추가해도 됩니다.
+
 ## v0.22.0 (2026-09-07)
 
 여러 독립 저장소를 한 폴더에 두고 작업하는 경우를 `/harness-init`이 인식합니다. 이 릴리스는 라우팅 층까지이며, 세션 계측을 저장소별로 나누는 작업은 다음 버전에서 이어집니다.
