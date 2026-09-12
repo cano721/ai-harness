@@ -41,6 +41,11 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       + (if test("AGENTS\\.md") then ["AGENTS.md"] else [] end)
       + (if test("CLAUDE\\.md") then ["CLAUDE.md"] else [] end) )
     | unique | .[];
+  def tool_outputs($r):
+    $r[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output");
+  def output_text:
+    .payload.output
+    | if type=="string" then . elif type=="array" then (map(.text? // "") | join("\n")) else tostring end;
   def is_correction:
     startswith("아니") or startswith("아냐") or startswith("그게 아니라")
     or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸");
@@ -114,17 +119,23 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
     | counted("bash_cmd") | $base + . ),
   ( [ $texts[] | [match($issue_re;"g").string] | .[] ]
     | counted("jira_issue") | $base + . ),
-  # Codex bridges mark failed calls in their tool output. Guard and permission
-  # signals use the same conservative phrases as the Claude adapter.
-  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("isError|is_error"; "i"))] | length
+  # 실패한 호출만: 브리지 JSON 봉투({"is_error":true,...})로 시작하거나 Codex CLI 셸 푸터의
+  # 0이 아닌 종료 코드. 출력 본문 속 isError/is_error 단어(소스 코드, cat한 스크립트)는 오류가 아니다.
+  ( [ tool_outputs($R) | output_text
+      | select(test("^\\s*\\{\\s*\"(is_error|isError)\"\\s*:\\s*true")
+               or test("(^|\\n)Process exited with code [1-9]")) ] | length
     | select(.>0) | $base + {kind:"error", n:.} ),
-  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("\\[Direct edit guard\\]"))] | length
+  # 훅 차단 메시지는 줄 시작이 "[Direct edit guard]"다. git log·PR 본문처럼 줄 중간에 섞인 문구는 차단이 아니다.
+  ( [ tool_outputs($R) | output_text
+      | select(test("(^|\\n)\\[Direct edit guard\\]")) ] | length
     | select(.>0) | $base + {kind:"guard_block", n:.} ),
-  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("doesn.t want to proceed|user rejected"; "i"))
-     | select(test("wants to clarify these questions") | not)] | length
+  # 권한 거부도 실패한 호출에서만 센다: 브리지 JSON 봉투가 is_error인 출력에 거부 문구가 있을 때.
+  # 추출기 소스·PR 본문·커밋 메시지에 인용된 같은 문구는 거부가 아니다.
+  # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 문구가 오지만 권한 거부가 아니다.
+  ( [ tool_outputs($R) | output_text
+      | select(test("^\\s*\\{\\s*\"(is_error|isError)\"\\s*:\\s*true"))
+      | select(test("doesn.t want to proceed|user rejected"; "i"))
+      | select(test("wants to clarify these questions") | not) ] | length
     | select(.>0) | $base + {kind:"permission_deny", n:.} ),
   ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
     | select(.>0) | $base + {kind:"compact", n:.} ),
