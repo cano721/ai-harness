@@ -129,9 +129,13 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
   ( [ tool_outputs($R) | output_text
       | select(test("(^|\\n)\\[Direct edit guard\\]")) ] | length
     | select(.>0) | $base + {kind:"guard_block", n:.} ),
-  ( [$R[] | select(.payload.type=="function_call_output" or .payload.type=="custom_tool_call_output")
-     | tostring | select(test("doesn.t want to proceed|user rejected"; "i"))
-     | select(test("wants to clarify these questions") | not)] | length
+  # 권한 거부도 실패한 호출에서만 센다: 브리지 JSON 봉투가 is_error인 출력에 거부 문구가 있을 때.
+  # 추출기 소스·PR 본문·커밋 메시지에 인용된 같은 문구는 거부가 아니다.
+  # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 문구가 오지만 권한 거부가 아니다.
+  ( [ tool_outputs($R) | output_text
+      | select(test("^\\s*\\{\\s*\"(is_error|isError)\"\\s*:\\s*true"))
+      | select(test("doesn.t want to proceed|user rejected"; "i"))
+      | select(test("wants to clarify these questions") | not) ] | length
     | select(.>0) | $base + {kind:"permission_deny", n:.} ),
   ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
     | select(.>0) | $base + {kind:"compact", n:.} ),
