@@ -5,6 +5,20 @@
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
 
+## v0.22.3 (2026-09-13)
+
+`guard_block`·`permission_deny` 판정을 실측 형태에 맞춰 좁히고, 툴을 알 수 없는 결과에 폴백을 둡니다. 로컬 transcript 전수 대조에서 이 변경 전후 수치는 동일합니다(guard_block 51, permission_deny 3) — 지금 잡히는 신호는 그대로 두고, 놓칠 수 있는 경로만 막습니다.
+
+### 버그 수정
+
+- **툴을 알 수 없는 결과에서도 훅 차단을 센다.** `guard_block`은 0.22.2에서 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 `is_error` 결과로 한정했는데, `tool_use_id`가 없는 구형 transcript나 압축으로 `tool_use`가 사라진 결과는 툴을 알 수 없어 진짜 차단까지 빠질 수 있었습니다. 이제 툴을 못 알아내는 결과는 **줄 시작 접두어**만으로 판정합니다. `git log` 출력처럼 줄 중간에 문구가 섞인 경우는 여전히 제외됩니다.
+- **차단 메시지의 실제 래퍼를 인식한다.** Claude Code는 훅 stderr를 `PreToolUse:<툴> hook error: [<훅 경로>]: ` 로 감싸 tool_result에 넣습니다. 실측 차단 51건이 전부 이 형태였고, 접두어 판정이 이 래퍼를 허용합니다.
+- **`permission_deny`의 사장 분기를 제거한다.** 로컬 transcript의 `is_error` tool_result 576건 중 실제 거부는 `The user doesn't want to proceed with this tool use.` 한 형태뿐이었고, 소문자 `user rejected`로 시작하는 결과는 한 건도 없었습니다. 관측되지 않는 분기를 지우고 fixture를 실제 메시지로 교체했습니다. Codex 어댑터는 브리지 봉투(`is_error`) 안에서 문구를 찾는 방식 그대로입니다 — 로컬 corpus에 실제 Codex 거부 사례가 없어 봉투의 정확한 문구를 확정하지 못했습니다.
+
+### 업데이트 후 해야 할 일
+
+없습니다. 다음 `/metrics`·`/harvest`의 `backfill.sh`가 이벤트를 재추출합니다.
+
 ## v0.22.2 (2026-09-12)
 
 `guard_block`·`error`·`permission_deny` 신호가 문구 매칭으로 부풀던 문제를 고칩니다. 첫 `/harvest`(ai-harness 프로젝트)가 이 가짜 신호로 열린 분석 batch를 정독한 결과입니다.

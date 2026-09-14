@@ -89,14 +89,20 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # 훅 차단은 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 is_error 결과로만 온다 — 가드 훅이 그 툴에만 걸린다.
 # 같은 문구가 Bash 결과(git log 커밋 메시지, 실패한 cat AGENTS.md)나 Read 출력에 섞여도 차단이 아니다.
 # 전 transcript 실측: is_error+문구 4건이 전부 "Exit code 1"로 시작하는 Bash 출력이었다.
+# tool_use_id가 없거나($toolNames에 없는 id) 툴을 알 수 없는 결과 — 구형 transcript, tool_use가 압축으로
+# 사라진 경우 — 는 줄 시작 접두어만으로 판정해 진짜 차단을 놓치지 않는다. 실측 차단 51건은 전부
+# "PreToolUse:<툴> hook error: [<훅 경로>]: [Direct edit guard] ..." 형태이고, 오탐은 전부 줄 중간 문구였다.
 ( [$L[] | tool_results | select(.is_error==true)
-    | select(($toolNames[.tool_use_id // ""] // "") | IN("Edit","Write","MultiEdit","NotebookEdit"))
-    | result_text | select(test("\\[Direct edit guard\\]"))] | length
+    | (($toolNames[.tool_use_id // ""] // "")) as $tool
+    | select($tool == "" or ($tool | IN("Edit","Write","MultiEdit","NotebookEdit")))
+    | result_text
+    | select(test("(^|\\n)(PreToolUse:[A-Za-z]+ hook error: .*)?\\[Direct edit guard\\]"))] | length
   | select(.>0) | $base + {kind:"guard_block", n:.} ),
 # 권한 거부는 is_error 결과이고 거부 문구로 시작한다. 추출기 소스·PR 본문·커밋 메시지 속 같은 문구는 거부가 아니다.
+# 실측: 거부 메시지는 "The user doesn't want to proceed with this tool use." 한 형태뿐이라 그것만 센다.
 # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 거부 문구가 오지만 권한 거부가 아님
 ( [$L[] | tool_results | select(.is_error==true) | result_text
-    | select(test("^(The user doesn.t want to proceed|user rejected)"))
+    | select(test("^The user doesn.t want to proceed"))
     | select(test("wants to clarify these questions") | not)] | length
   | select(.>0) | $base + {kind:"permission_deny", n:.} ),
 ( [$L[] | select(.type=="summary" or .isCompactSummary==true)] | length
