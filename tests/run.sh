@@ -213,6 +213,9 @@ mkdir -p "$NOISE/.ai-harness/docs"
 cat >"$NOISE/build.gradle" <<'GRADLE'
 // tasks.register("ghostTest", Test) { }
 /* task legacyCheckTask(type: Test) { } */
+jacoco {
+    excludes = ['com/example/**/config/**', 'com/example/**/dto/**']
+}
 tasks.register("realTest", Test) { }
 tasks.register("detektMain") { }
 GRADLE
@@ -228,6 +231,7 @@ DOC
 NOISE_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NOISE")"
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="ghostTest" or .value=="legacyCheckTask") | .value] | join(",")' <<<"$NOISE_SCAN")" "a commented-out task declaration is not a fact"
 assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "quality gates like detekt count as verification tasks"
+assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "a glob like com/**/config/** inside a string does not open a block comment and swallow the rest of the file"
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 rm -rf "$WS_ROOT/web"

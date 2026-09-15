@@ -70,19 +70,28 @@ while IFS= read -r f; do
       # 주석 처리된 선언은 존재하지 않는 태스크다. CI에서 잠시 꺼둔 태스크가 흔해서
       # 그대로 두면 "문서에 없는 태스크"로 오탐이 난다. 파싱 전에 //와 /* */를 지운다.
       stripped="$TMP/stripped.gradle"
+      # 주석 처리된 선언은 존재하지 않는 태스크다. CI에서 잠시 꺼둔 태스크가 흔해서
+      # 그대로 두면 "문서에 없는 태스크"로 오탐이 난다. 파싱 전에 //와 /* */를 지운다.
+      # 문자열 안의 /*는 주석이 아니다 — Jacoco 제외 글롭('com/**/config/**')이 대표적이라
+      # 따옴표 상태를 추적하지 않으면 파일 뒷부분을 통째로 삼킨다.
       awk '{
-        out=""; i=1; n=length($0)
-        while (i<=n) {
-          two=substr($0,i,2)
-          if (!inblk && two=="/*") { inblk=1; i+=2; continue }
-          if (inblk && two=="*/") { inblk=0; i+=2; continue }
-          if (!inblk && two=="//") { break }
-          if (!inblk) { out=out substr($0,i,1) }
-          i++
+        out = ""; i = 1; n = length($0); q = ""
+        while (i <= n) {
+          c = substr($0, i, 1); two = substr($0, i, 2)
+          if (inblk) { if (two == "*/") { inblk = 0; i += 2 } else { i++ }; continue }
+          if (q != "") {
+            out = out c
+            if (c == "\\" && i < n) { out = out substr($0, i + 1, 1); i += 2; continue }
+            if (c == q) { q = "" }
+            i++; continue
+          }
+          if (c == "\047" || c == "\"") { q = c; out = out c; i++; continue }
+          if (two == "/*") { inblk = 1; i += 2; continue }
+          if (two == "//") { break }
+          out = out c; i++
         }
         print out
       }' "$f" >"$stripped" 2>/dev/null || cp "$f" "$stripped"
-      # tasks.register("x") / tasks.register<Test>("x") / tasks.named("x") / task x(...)
       while IFS= read -r t; do
         [[ -n "$t" ]] && gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
       done < <(grep -oE 'tasks\.(register|named)(<[A-Za-z.]+>)?\(("|'"'"')[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
