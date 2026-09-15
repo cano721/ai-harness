@@ -207,6 +207,29 @@ TS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TSREPO")"
 assert_eq "true" "$(jq -r '.timestamps.docs_older_than_build' <<<"$TS_SCAN")" "a build committed after the docs is flagged even when the UTC offsets differ"
 assert_eq "true" "$(jq -r '.timestamps.build_last_commit != null and .timestamps.docs_last_commit != null' <<<"$TS_SCAN")" "commit timestamps are reported"
 pass "drift timestamp signal"
+# 주석 처리된 선언과 워크스페이스 호출 문법은 오탐을 만들면 안 된다.
+NOISE="$TEST_TMP/drift-noise"
+mkdir -p "$NOISE/.ai-harness/docs"
+cat >"$NOISE/build.gradle" <<'GRADLE'
+// tasks.register("ghostTest", Test) { }
+/* task legacyCheckTask(type: Test) { } */
+tasks.register("realTest", Test) { }
+tasks.register("detektMain") { }
+GRADLE
+cat >"$NOISE/package.json" <<'JSON'
+{"scripts":{"test":"vitest","build":"tsc"}}
+JSON
+cat >"$NOISE/.ai-harness/docs/testing.md" <<'DOC'
+- `pnpm --filter api test`
+- `yarn workspace web run build`
+- `./gradlew realTest`
+- `./gradlew detektMain`
+DOC
+NOISE_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NOISE")"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="ghostTest" or .value=="legacyCheckTask") | .value] | join(",")' <<<"$NOISE_SCAN")" "a commented-out task declaration is not a fact"
+assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "quality gates like detekt count as verification tasks"
+assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
+pass "drift false-positive suppression"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"

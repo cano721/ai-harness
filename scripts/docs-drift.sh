@@ -58,7 +58,7 @@ add_fact() { printf '%s\t%s\t%s\n' "$1" "$2" "$(rel "$3")" >>"$TMP/facts.tsv"; }
 # 문서에 적힐 값어치가 있는 Gradle 태스크만 본다. bootJar·classes·createProperties 같은 내부 태스크는
 # 아무도 문서에 적지 않고, 적을 이유도 없다. 실제 피해는 "검증 명령이 문서에 없어 게이트를 비켜간 테스트"였다.
 gradle_relevant() {
-  printf '%s' "$1" | grep -qiE 'test|check|verify|lint|coverage|e2e|integration|regression|migrat|format'
+  printf '%s' "$1" | grep -qiE 'test|check|verify|lint|coverage|e2e|integration|regression|migrat|format|detekt|spotbugs|sonar|pitest|audit'
 }
 
 while IFS= read -r f; do
@@ -67,19 +67,34 @@ while IFS= read -r f; do
   case "$base" in
     build.gradle|build.gradle.kts)
       add_stack gradle
+      # 주석 처리된 선언은 존재하지 않는 태스크다. CI에서 잠시 꺼둔 태스크가 흔해서
+      # 그대로 두면 "문서에 없는 태스크"로 오탐이 난다. 파싱 전에 //와 /* */를 지운다.
+      stripped="$TMP/stripped.gradle"
+      awk '{
+        out=""; i=1; n=length($0)
+        while (i<=n) {
+          two=substr($0,i,2)
+          if (!inblk && two=="/*") { inblk=1; i+=2; continue }
+          if (inblk && two=="*/") { inblk=0; i+=2; continue }
+          if (!inblk && two=="//") { break }
+          if (!inblk) { out=out substr($0,i,1) }
+          i++
+        }
+        print out
+      }' "$f" >"$stripped" 2>/dev/null || cp "$f" "$stripped"
       # tasks.register("x") / tasks.register<Test>("x") / tasks.named("x") / task x(...)
       while IFS= read -r t; do
         [[ -n "$t" ]] && gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
-      done < <(grep -oE 'tasks\.(register|named)(<[A-Za-z.]+>)?\(("|'"'"')[A-Za-z0-9_-]+' "$f" 2>/dev/null \
+      done < <(grep -oE 'tasks\.(register|named)(<[A-Za-z.]+>)?\(("|'"'"')[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
                  | sed -E 's/.*["'"'"']//' | sort -u)
       while IFS= read -r t; do
         [[ -n "$t" ]] && gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
-      done < <(grep -oE '^[[:space:]]*task[[:space:]]+[A-Za-z0-9_-]+' "$f" 2>/dev/null \
+      done < <(grep -oE '^[[:space:]]*task[[:space:]]+[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
                  | awk '{print $2}' | sort -u)
       # JUnit 태그 필터 — 어떤 테스트가 기본 실행에서 빠지는지 가르는 사실이다.
       while IFS= read -r t; do
         [[ -n "$t" ]] && add_fact junit_tag "$t" "$f"
-      done < <(grep -oE '(include|exclude)Tags[[:space:]]*\(?[[:space:]]*("|'"'"')[A-Za-z0-9_-]+' "$f" 2>/dev/null \
+      done < <(grep -oE '(include|exclude)Tags[[:space:]]*\(?[[:space:]]*("|'"'"')[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
                  | sed -E 's/.*["'"'"']//' | sort -u)
       ;;
     package.json)
@@ -116,10 +131,22 @@ while IFS= read -r d; do
     [[ -n "$t" ]] && printf 'gradle_task\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
   done < <(grep -oE '(\./)?gradlew[a-z.]*[[:space:]]+(-[^[:space:]]+[[:space:]]+)*:?[A-Za-z0-9_:-]+' "$d" 2>/dev/null \
              | awk '{print $NF}' | sed -E 's/^.*://' | grep -vE '^-' | sort -u)
+  # pnpm --filter api test / yarn workspace web run build 처럼 스크립트명 앞에 다른 토큰이 온다.
+  # 플래그와 워크스페이스 지정을 건너뛰고 첫 실제 토큰만 스크립트명으로 본다.
   while IFS= read -r t; do
     [[ -n "$t" ]] && printf 'npm_script\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
-  done < <(grep -oE '(npm|pnpm|yarn)[[:space:]]+(run[[:space:]]+)?[A-Za-z0-9_:-]+' "$d" 2>/dev/null \
-             | awk '{print $NF}' | sort -u)
+  done < <(grep -oE '(npm|pnpm|yarn)([[:space:]]+[^[:space:]`|&;"'"'"']+){1,4}' "$d" 2>/dev/null \
+             | awk '{
+                 i = 2
+                 while (i <= NF) {
+                   t = $i
+                   if (t ~ /^-/) { if (t == "--filter" || t == "-F") { i++ } ; i++ ; continue }
+                   if (t == "run" || t == "exec" || t == "dlx") { i++ ; continue }
+                   if (t == "workspace" || t == "workspaces") { i += 2 ; continue }
+                   print t
+                   break
+                 }
+               }' | sort -u)
   while IFS= read -r t; do
     [[ -n "$t" ]] && printf 'maven_profile\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
   done < <(grep -oE '\-P[A-Za-z0-9_.-]+' "$d" 2>/dev/null | sed -E 's/^-P//' | sort -u)

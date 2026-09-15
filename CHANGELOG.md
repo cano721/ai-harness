@@ -18,6 +18,10 @@
 
 `build.gradle`에 `integrationTest`가 추가되고 `test`에 `excludeTags 'integration'`이 붙었는데 `testing.md`의 태스크 표가 초기화 시점 그대로였던 사례가 있었습니다. 문서만 읽은 에이전트는 통합 슬라이스의 존재를 모르고, 워크플로 종료 조건이 `test`/`build`뿐이라 **어떤 게이트에도 걸리지 않는 테스트**가 생겼습니다. 빌드가 깨지지 않으니 신호도 없었습니다.
 
+### 오탐 억제
+
+Gradle 내장 태스크(`build`·`clean`·`assemble` …)와 npm 하위 명령(`install`·`run` …)은 제외하고, **주석 처리된 태스크 선언**(`// tasks.register(...)`, `/* ... */`)은 파싱 전에 지웁니다. 문서 쪽은 `pnpm --filter api test`·`yarn workspace web run build` 같은 워크스페이스 호출에서 플래그와 워크스페이스 이름을 건너뛰고 실제 스크립트명만 읽습니다.
+
 ### 한계
 
 문서를 이해하려 들지 않습니다. 토큰이 맞는지만 보므로 서술이 낡았는지는 판정하지 못합니다. Gradle 태스크는 이름 패턴으로 검증 계열만 추리므로(`bootJar`·`classes` 같은 내부 태스크 제외) 그 밖의 이름을 쓰는 검증 태스크는 놓칩니다.
