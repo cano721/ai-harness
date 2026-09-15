@@ -127,6 +127,113 @@ NESTED="$TEST_TMP/nested"
 make_repo "$NESTED/outer" git@github.com:acme/outer.git
 make_repo "$NESTED/outer/vendor/lib" git@github.com:vendor/lib.git
 assert_eq "false 1 outer" "$(jq -r '"\(.candidate) \(.members|length) \(.members[0].path)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$NESTED" --depth 3)")" "a .git nested inside a member is not a separate member"
+pass "workspace mode detection"
+
+# 코드↔docs drift: 빌드 파일의 검증 태스크와 문서에 적힌 명령 호출을 대조한다.
+DRIFT="$TEST_TMP/drift"
+mkdir -p "$DRIFT/.ai-harness/docs" "$DRIFT/api"
+cat >"$DRIFT/build.gradle" <<'GRADLE'
+tasks.register("integrationTest", Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.named("test") {
+    useJUnitPlatform { excludeTags 'regression' }
+}
+task regressionTest(type: Test) { }
+task createProperties { }
+GRADLE
+cat >"$DRIFT/api/build.gradle" <<'GRADLE'
+task createProperties { }
+tasks.register("integrationTest", Test) { }
+GRADLE
+cat >"$DRIFT/.ai-harness/docs/testing.md" <<'DOC'
+| 태스크 | 용도 |
+|---|---|
+| `./gradlew test` | 단위 |
+| `./gradlew testCoverage` | 커버리지 |
+| `./gradlew regressionTest` | 회귀 (regression 태그) |
+DOC
+cat >"$DRIFT/AGENTS.md" <<'DOC'
+# AGENTS
+
+Quick: `./gradlew build`
+DOC
+DRIFT_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$DRIFT")"
+assert_eq "gradle" "$(jq -r '.stacks | join(",")' <<<"$DRIFT_SCAN")" "drift scan detects the gradle stack"
+assert_eq "true" "$(jq -r '.drift' <<<"$DRIFT_SCAN")" "drift is reported when docs and build disagree"
+assert_eq "integrationTest" "$(jq -r '[.missing_in_docs[] | select(.kind=="gradle_task") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a verification task absent from every doc is reported"
+assert_eq "api/build.gradle, build.gradle" "$(jq -r '.missing_in_docs[] | select(.value=="integrationTest") | .where' <<<"$DRIFT_SCAN")" "the same task in two modules folds into one row with both sources"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="createProperties")] | join(",")' <<<"$DRIFT_SCAN")" "internal tasks nobody documents are not facts"
+assert_eq "testCoverage" "$(jq -r '[.stale_in_docs[] | select(.kind=="gradle_task") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a task documented but absent from the build is reported, and gradle builtins are not"
+assert_eq "integration,regression" "$(jq -r '[.facts[] | select(.kind=="junit_tag") | .value] | sort | join(",")' <<<"$DRIFT_SCAN")" "include and exclude tag filters are both facts"
+assert_eq "integration" "$(jq -r '[.missing_in_docs[] | select(.kind=="junit_tag") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a tag the docs never mention is reported, one they do mention is not"
+
+# 문서가 빌드와 맞으면 아무것도 보고하지 않는다.
+CLEAN="$TEST_TMP/drift-clean"
+mkdir -p "$CLEAN/.ai-harness/docs"
+printf 'tasks.register("integrationTest", Test) { }\n' >"$CLEAN/build.gradle"
+cat >"$CLEAN/.ai-harness/docs/testing.md" <<'DOC'
+Run `./gradlew integrationTest` before the PR.
+DOC
+CLEAN_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$CLEAN")"
+assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$CLEAN_SCAN")" "a project whose docs match the build reports no drift"
+
+# npm 하위 명령은 스크립트 이름이 아니다.
+NPMP="$TEST_TMP/drift-npm"
+mkdir -p "$NPMP/.ai-harness/docs"
+printf '{"scripts":{"test":"vitest","lint":"eslint ."}}\n' >"$NPMP/package.json"
+cat >"$NPMP/.ai-harness/docs/testing.md" <<'DOC'
+Install with `npm install`, then `npm test`.
+DOC
+NPM_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NPMP")"
+assert_eq "lint" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$NPM_SCAN")" "an undocumented npm script is reported"
+assert_eq "0" "$(jq -r '.stale_in_docs | length' <<<"$NPM_SCAN")" "npm subcommands like install are not mistaken for scripts"
+pass "code-to-docs drift report"
+# 타임스탬프는 커밋터 오프셋이 섞여도 맞아야 한다 — 표시는 ISO, 비교는 epoch.
+TSREPO="$TEST_TMP/drift-ts"
+mkdir -p "$TSREPO/.ai-harness/docs"
+git -C "$TSREPO" init -q .
+git -C "$TSREPO" config user.email t@example.com
+git -C "$TSREPO" config user.name tester
+cat >"$TSREPO/.ai-harness/docs/testing.md" <<'DOC'
+Run `./gradlew integrationTest`.
+DOC
+git -C "$TSREPO" add -A
+GIT_COMMITTER_DATE="2026-09-01T10:00:00+09:00" git -C "$TSREPO" commit -q -m docs --date="2026-09-01T10:00:00+09:00"
+printf 'tasks.register("integrationTest", Test) { }\n' >"$TSREPO/build.gradle"
+git -C "$TSREPO" add -A
+GIT_COMMITTER_DATE="2026-09-05T01:00:00+00:00" git -C "$TSREPO" commit -q -m build --date="2026-09-05T01:00:00+00:00"
+TS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TSREPO")"
+assert_eq "true" "$(jq -r '.timestamps.docs_older_than_build' <<<"$TS_SCAN")" "a build committed after the docs is flagged even when the UTC offsets differ"
+assert_eq "true" "$(jq -r '.timestamps.build_last_commit != null and .timestamps.docs_last_commit != null' <<<"$TS_SCAN")" "commit timestamps are reported"
+pass "drift timestamp signal"
+# 주석 처리된 선언과 워크스페이스 호출 문법은 오탐을 만들면 안 된다.
+NOISE="$TEST_TMP/drift-noise"
+mkdir -p "$NOISE/.ai-harness/docs"
+cat >"$NOISE/build.gradle" <<'GRADLE'
+// tasks.register("ghostTest", Test) { }
+/* task legacyCheckTask(type: Test) { } */
+jacoco {
+    excludes = ['com/example/**/config/**', 'com/example/**/dto/**']
+}
+tasks.register("realTest", Test) { }
+tasks.register("detektMain") { }
+GRADLE
+cat >"$NOISE/package.json" <<'JSON'
+{"scripts":{"test":"vitest","build":"tsc"}}
+JSON
+cat >"$NOISE/.ai-harness/docs/testing.md" <<'DOC'
+- `pnpm --filter api test`
+- `yarn workspace web run build`
+- `./gradlew realTest`
+- `./gradlew detektMain`
+DOC
+NOISE_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NOISE")"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="ghostTest" or .value=="legacyCheckTask") | .value] | join(",")' <<<"$NOISE_SCAN")" "a commented-out task declaration is not a fact"
+assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "quality gates like detekt count as verification tasks"
+assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "a glob like com/**/config/** inside a string does not open a block comment and swallow the rest of the file"
+assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
+pass "drift false-positive suppression"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"
