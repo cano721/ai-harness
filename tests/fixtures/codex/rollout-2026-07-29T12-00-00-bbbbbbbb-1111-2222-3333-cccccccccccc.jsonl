@@ -14,6 +14,7 @@
 {"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "custom_tool_call_output", "call_id": "call-source-read", "output": [{"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n  {applySetup.isError && (<span>error</span>)}\n  select(.is_error==true)"}]}}
 {"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "function_call_output", "call_id": "call-deny-quote", "output": "Chunk ID: 6f7a8b\nWall time: 0.0300 seconds\nProcess exited with code 0\nOriginal token count: 30\nOutput:\n  | select(test(\"doesn.t want to proceed|user rejected\"))"}}
 {"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "custom_tool_call_output", "call_id": "call-clarify", "output": [{"type": "input_text", "text": "{\"is_error\":true,\"message\":\"The user doesn't want to proceed with this tool use. The user wants to clarify these questions.\"}"}]}}
+{"type": "response_item", "timestamp": "2026-07-29T03:00:04Z", "payload": {"type": "function_call_output", "call_id": "call-silent-fail", "output": "Chunk ID: 9a8b7c\nWall time: 0.0100 seconds\nProcess exited with code 1\nOriginal token count: 4\nOutput:\n"}}
 {"type":"summary","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"compaction_summary"}}
 {"type":"event_msg","timestamp":"2026-07-29T03:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"cache_write_input_tokens":11,"output_tokens":25,"total_tokens":125}}}}
 broken-json

@@ -121,9 +121,13 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
     | counted("jira_issue") | $base + . ),
   # 실패한 호출만: 브리지 JSON 봉투({"is_error":true,...})로 시작하거나 Codex CLI 셸 푸터의
   # 0이 아닌 종료 코드. 출력 본문 속 isError/is_error 단어(소스 코드, cat한 스크립트)는 오류가 아니다.
+  # 셸 실패는 출력 본문이 있을 때만 센다 — `grep -q`·`test`처럼 종료코드를 판정문으로 쓴 호출은
+  # 진단할 내용이 없다. 실측: nonzero exit 1714건 중 347건(20%)이 본문 없음.
   ( [ tool_outputs($R) | output_text
       | select(test("^\\s*\\{\\s*\"(is_error|isError)\"\\s*:\\s*true")
-               or test("(^|\\n)Process exited with code [1-9]")) ] | length
+               or (test("(^|\\n)Process exited with code [1-9]")
+                   and ((split("Output:") | if length > 1 then (.[1:] | join("Output:")) else "" end)
+                        | gsub("\\s";"")) != "")) ] | length
     | select(.>0) | $base + {kind:"error", n:.} ),
   # 훅 차단 메시지는 줄 시작이 "[Direct edit guard]"다. git log·PR 본문처럼 줄 중간에 섞인 문구는 차단이 아니다.
   ( [ tool_outputs($R) | output_text
