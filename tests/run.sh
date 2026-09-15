@@ -189,6 +189,24 @@ NPM_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NPMP")"
 assert_eq "lint" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$NPM_SCAN")" "an undocumented npm script is reported"
 assert_eq "0" "$(jq -r '.stale_in_docs | length' <<<"$NPM_SCAN")" "npm subcommands like install are not mistaken for scripts"
 pass "code-to-docs drift report"
+# 타임스탬프는 커밋터 오프셋이 섞여도 맞아야 한다 — 표시는 ISO, 비교는 epoch.
+TSREPO="$TEST_TMP/drift-ts"
+mkdir -p "$TSREPO/.ai-harness/docs"
+git -C "$TSREPO" init -q .
+git -C "$TSREPO" config user.email t@example.com
+git -C "$TSREPO" config user.name tester
+cat >"$TSREPO/.ai-harness/docs/testing.md" <<'DOC'
+Run `./gradlew integrationTest`.
+DOC
+git -C "$TSREPO" add -A
+GIT_COMMITTER_DATE="2026-09-01T10:00:00+09:00" git -C "$TSREPO" commit -q -m docs --date="2026-09-01T10:00:00+09:00"
+printf 'tasks.register("integrationTest", Test) { }\n' >"$TSREPO/build.gradle"
+git -C "$TSREPO" add -A
+GIT_COMMITTER_DATE="2026-09-05T01:00:00+00:00" git -C "$TSREPO" commit -q -m build --date="2026-09-05T01:00:00+00:00"
+TS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TSREPO")"
+assert_eq "true" "$(jq -r '.timestamps.docs_older_than_build' <<<"$TS_SCAN")" "a build committed after the docs is flagged even when the UTC offsets differ"
+assert_eq "true" "$(jq -r '.timestamps.build_last_commit != null and .timestamps.docs_last_commit != null' <<<"$TS_SCAN")" "commit timestamps are reported"
+pass "drift timestamp signal"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"

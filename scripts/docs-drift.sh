@@ -161,24 +161,30 @@ while IFS=$'\t' read -r kind value doc; do
 done < <(sort -u "$TMP/uses.tsv")
 
 # ── 타임스탬프 약한 신호 ───────────────────────────────────────────────────
-git_last() {
-  local out
-  out="$(git -C "$root" log -1 --format=%cI -- "$@" 2>/dev/null || true)"
-  printf '%s' "$out"
+# 빌드 파일이 문서보다 최근에 커밋됐으면 "검토 필요". 정확도는 낮지만 비용이 거의 없다.
+# 표시는 ISO, 비교는 epoch로 한다 — %cI는 커밋터 로컬 오프셋이라 문자열 비교가 어긋난다.
+last_commit_for() {
+  local list="$1" fmt="$2"
+  [[ -s "$list" ]] || return 0
+  local paths=() p=""
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && paths+=("${p#"$root"/}")
+  done <"$list"
+  ((${#paths[@]})) || return 0
+  git -C "$root" log -1 --format="$fmt" -- "${paths[@]}" 2>/dev/null || true
 }
-build_ts=""; docs_ts=""
+build_ts=""
+docs_ts=""
+build_epoch=""
+docs_epoch=""
 if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
-  if [[ -s "$TMP/build.txt" ]]; then
-    # shellcheck disable=SC2046  # 경로 목록을 인자로 펼쳐야 한다
-    build_ts="$(cd "$root" && git log -1 --format=%cI -- $(sed "s|^$root/||" "$TMP/build.txt" | tr '\n' ' ') 2>/dev/null || true)"
-  fi
-  if [[ -s "$TMP/docs.txt" ]]; then
-    # shellcheck disable=SC2046
-    docs_ts="$(cd "$root" && git log -1 --format=%cI -- $(sed "s|^$root/||" "$TMP/docs.txt" | tr '\n' ' ') 2>/dev/null || true)"
-  fi
+  build_ts="$(last_commit_for "$TMP/build.txt" %cI)"
+  docs_ts="$(last_commit_for "$TMP/docs.txt" %cI)"
+  build_epoch="$(last_commit_for "$TMP/build.txt" %ct)"
+  docs_epoch="$(last_commit_for "$TMP/docs.txt" %ct)"
 fi
 docs_older=false
-if [[ -n "$build_ts" && -n "$docs_ts" && "$build_ts" > "$docs_ts" ]]; then
+if [[ -n "$build_epoch" && -n "$docs_epoch" && "$build_epoch" -gt "$docs_epoch" ]]; then
   docs_older=true
 fi
 
