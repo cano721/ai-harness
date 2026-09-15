@@ -84,7 +84,10 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   | counted("jira_issue") | $base + . ),
 
 # ── 신호 카운트 ──
-( [$L[] | tool_results | select(.is_error==true)] | length
+# 출력이 없는 실패는 세지 않는다 — `grep -q`·`test`처럼 종료코드를 판정문으로 쓴 호출이라
+# 진단할 내용이 없다. 실측: Bash is_error 483건 중 16건(3%)이 본문 없음.
+( [$L[] | tool_results | select(.is_error==true)
+    | select((result_text | sub("^Exit code [0-9]+";"") | gsub("\\s";"")) != "")] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
 # 훅 차단은 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 is_error 결과로만 온다 — 가드 훅이 그 툴에만 걸린다.
 # 같은 문구가 Bash 결과(git log 커밋 메시지, 실패한 cat AGENTS.md)나 Read 출력에 섞여도 차단이 아니다.
