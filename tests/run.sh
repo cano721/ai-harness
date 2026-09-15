@@ -267,6 +267,8 @@ assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT
 assert_eq "6" "$(jq -r 'select(.kind=="error") | .n' "$CLAUDE_EVENT")" "Claude tool error counts is_error results but not output-less failures"
 assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Claude guard block counts edit-tool results and falls back to line-leading prefix when the tool is unknown"
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
+assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CLAUDE_EVENT")" "Claude correction mark keeps the high-precision prefix net"
+assert_eq "스웨거 링크 이상해. 다시 봐줘" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CLAUDE_EVENT")" "a complaint in mid-sentence is a candidate, a plain instruction is not"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
 assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
@@ -1065,7 +1067,7 @@ pass "backfill freshness and version invalidation"
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_mark, doc_read" "full Codex coverage declaration"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
