@@ -127,6 +127,68 @@ NESTED="$TEST_TMP/nested"
 make_repo "$NESTED/outer" git@github.com:acme/outer.git
 make_repo "$NESTED/outer/vendor/lib" git@github.com:vendor/lib.git
 assert_eq "false 1 outer" "$(jq -r '"\(.candidate) \(.members|length) \(.members[0].path)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$NESTED" --depth 3)")" "a .git nested inside a member is not a separate member"
+pass "workspace mode detection"
+
+# 코드↔docs drift: 빌드 파일의 검증 태스크와 문서에 적힌 명령 호출을 대조한다.
+DRIFT="$TEST_TMP/drift"
+mkdir -p "$DRIFT/.ai-harness/docs" "$DRIFT/api"
+cat >"$DRIFT/build.gradle" <<'GRADLE'
+tasks.register("integrationTest", Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.named("test") {
+    useJUnitPlatform { excludeTags 'regression' }
+}
+task regressionTest(type: Test) { }
+task createProperties { }
+GRADLE
+cat >"$DRIFT/api/build.gradle" <<'GRADLE'
+task createProperties { }
+tasks.register("integrationTest", Test) { }
+GRADLE
+cat >"$DRIFT/.ai-harness/docs/testing.md" <<'DOC'
+| 태스크 | 용도 |
+|---|---|
+| `./gradlew test` | 단위 |
+| `./gradlew testCoverage` | 커버리지 |
+| `./gradlew regressionTest` | 회귀 (regression 태그) |
+DOC
+cat >"$DRIFT/AGENTS.md" <<'DOC'
+# AGENTS
+
+Quick: `./gradlew build`
+DOC
+DRIFT_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$DRIFT")"
+assert_eq "gradle" "$(jq -r '.stacks | join(",")' <<<"$DRIFT_SCAN")" "drift scan detects the gradle stack"
+assert_eq "true" "$(jq -r '.drift' <<<"$DRIFT_SCAN")" "drift is reported when docs and build disagree"
+assert_eq "integrationTest" "$(jq -r '[.missing_in_docs[] | select(.kind=="gradle_task") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a verification task absent from every doc is reported"
+assert_eq "api/build.gradle, build.gradle" "$(jq -r '.missing_in_docs[] | select(.value=="integrationTest") | .where' <<<"$DRIFT_SCAN")" "the same task in two modules folds into one row with both sources"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="createProperties")] | join(",")' <<<"$DRIFT_SCAN")" "internal tasks nobody documents are not facts"
+assert_eq "testCoverage" "$(jq -r '[.stale_in_docs[] | select(.kind=="gradle_task") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a task documented but absent from the build is reported, and gradle builtins are not"
+assert_eq "integration,regression" "$(jq -r '[.facts[] | select(.kind=="junit_tag") | .value] | sort | join(",")' <<<"$DRIFT_SCAN")" "include and exclude tag filters are both facts"
+assert_eq "integration" "$(jq -r '[.missing_in_docs[] | select(.kind=="junit_tag") | .value] | join(",")' <<<"$DRIFT_SCAN")" "a tag the docs never mention is reported, one they do mention is not"
+
+# 문서가 빌드와 맞으면 아무것도 보고하지 않는다.
+CLEAN="$TEST_TMP/drift-clean"
+mkdir -p "$CLEAN/.ai-harness/docs"
+printf 'tasks.register("integrationTest", Test) { }\n' >"$CLEAN/build.gradle"
+cat >"$CLEAN/.ai-harness/docs/testing.md" <<'DOC'
+Run `./gradlew integrationTest` before the PR.
+DOC
+CLEAN_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$CLEAN")"
+assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$CLEAN_SCAN")" "a project whose docs match the build reports no drift"
+
+# npm 하위 명령은 스크립트 이름이 아니다.
+NPMP="$TEST_TMP/drift-npm"
+mkdir -p "$NPMP/.ai-harness/docs"
+printf '{"scripts":{"test":"vitest","lint":"eslint ."}}\n' >"$NPMP/package.json"
+cat >"$NPMP/.ai-harness/docs/testing.md" <<'DOC'
+Install with `npm install`, then `npm test`.
+DOC
+NPM_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$NPMP")"
+assert_eq "lint" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$NPM_SCAN")" "an undocumented npm script is reported"
+assert_eq "0" "$(jq -r '.stale_in_docs | length' <<<"$NPM_SCAN")" "npm subcommands like install are not mistaken for scripts"
+pass "code-to-docs drift report"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"

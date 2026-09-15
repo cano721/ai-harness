@@ -179,6 +179,13 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
    - **자동 갱신 가능**: 상태가 `unchanged`인 관리 생성물. 최신 템플릿으로 재생성하고 hash를 갱신한다.
    - **승인 필요**: `modified` 또는 `untracked`인 관리 생성물. 3-way 성격의 현재 파일/마지막 생성 해시/제안 템플릿 diff를 보여 주고, 파일별 사용자 승인을 받은 뒤에만 갱신한다.
    - **보호됨**: `AGENTS.md`, `.ai-harness/docs/**`, 사람이 작성한 workflow 본문. 자동 갱신하지 않으며 개선 제안 diff만 제공한다.
+   - **코드↔docs drift** (보호 파일에 대한 **읽기 전용 리포트** — 자동 수정하지 않는다): 관리 생성물 동기화는 템플릿 대비 구조만 보므로, 빌드 파일이 바뀌고 문서가 그대로인 상태는 이 경로로만 드러난다. 아래를 실행해 `missing_in_docs`(빌드에 있는데 어느 문서에도 안 적힌 검증 태스크·스크립트·프로파일·태그)와 `stale_in_docs`(문서가 부르는데 빌드에 없는 것)를 **"보호 파일 후속 조치" 표에 행으로 싣는다**. `timestamps.docs_older_than_build`가 true면 정확도 낮은 약한 신호로 함께 적되 그것만으로 행을 만들지는 않는다. 수정은 사용자 승인 또는 문서 담당 페르소나에게 넘긴다 — 문서는 보호 파일이라 `--apply`에서도 건드리지 않는다.
+
+```bash
+$ROOT/scripts/docs-drift.sh scan --root .
+```
+
+     기계로 확인 가능한 토큰만 본다: Gradle 검증 태스크(이름에 test/check/verify/lint/coverage/e2e/integration/regression/migrat/format 포함)와 JUnit `includeTags`/`excludeTags`, npm `scripts` 키, Maven 프로파일 `<id>`, pytest `markers`. 문서 쪽은 임의 단어가 아니라 **실제 호출 형태**(`./gradlew <task>`, `npm run <script>`, `-P<profile>`, `-m <marker>`)만 사용으로 인정하고, 태그만 서술 언급도 인정한다. `drift: false`면 이 행을 만들지 않는다. 문서를 이해하려 들지 않으므로 서술이 낡았는지는 판정하지 못한다 — 토큰이 맞는지만 본다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
    - **역할 agent `model` 드리프트** (위 분류와 별개인 **수동 점검** — 역할 agent는 `managed-files.json` 대상이 아니어서 `plan` 출력에 나오지 않는다): §5의 1번 self-check 스니펫을 그대로 실행해 `model` 없는 역할 agent를 찾고, §4 표 기본값으로 채우는 한 줄 추가를 계획 표 맨 아래에 **별도 행으로** 싣는다. 이전 버전이 누락한 채 생성한 경우가 있고, 누락된 agent는 부모 세션 모델을 그대로 상속한다. 본문은 바뀌지 않으므로 diff는 한 줄이지만, 적용은 다른 항목과 같이 사용자 승인 뒤에 한다. 해시 기록 대상이 아니므로 `record`도 하지 않는다.
    - **정리 대상(`retired`)**: 카탈로그의 `retired` 목록이 **명시적으로 내린** 생성물 중 이 프로젝트에 흔적이 남은 것이다(예: 0.16.0에서 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). `present`는 파일이 디스크에 남았는지, `tracked`는 manifest가 아직 기록 중인지를 뜻하며 **둘은 따로 정리해야 한다**. 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다. 카탈로그에 없다는 사실만으로 추론하지 않는다: `.codex/agents/*.toml`처럼 init이 관리하지만 카탈로그가 선언한 적 없는 생성물이 있어, 추론하면 살아 있는 파일을 삭제 후보로 올린다.
