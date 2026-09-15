@@ -59,6 +59,8 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
      "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
   def correction_candidate_max_len: 200;
+  # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
+  def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L
   | (first($L[] | select(.type=="session_meta")) // {}) as $meta
   | ($meta.payload.cwd // "") as $cwd
@@ -154,7 +156,7 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
   ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
     | select(.>0) | $base + {kind:"compact", n:.} ),
   ( $texts[] | select(is_correction)
-    | $base + {kind:"correction_mark", target:.[0:60], n:1} ),
+    | $base + {kind:"correction_mark", target:excerpt, n:1} ),
   # 교정일 수 있는 턴. 판정은 /harvest가 격리 컨텍스트에서 한다 — 여기서는 지점만 남긴다.
   ( $texts[]
     | select(is_correction | not)
@@ -163,7 +165,7 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
     | select(startswith("$") | not)
     | . as $t
     | select(any(correction_hints[]; . as $h | $t | contains($h)))
-    | $base + {kind:"correction_candidate", target:.[0:60], n:1} )
+    | $base + {kind:"correction_candidate", target:excerpt, n:1} )
 ' "$T" > "$TMP"; then
   mv "$TMP" "$OUT"
 else

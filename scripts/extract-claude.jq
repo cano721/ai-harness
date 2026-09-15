@@ -27,6 +27,9 @@ def correction_hints:
    "that's wrong", "thats wrong", "you missed", "didn't work"];
 # 긴 턴은 새 지시일 확률이 높다.
 def correction_candidate_max_len: 200;
+# 발췌는 /metrics가 마크다운 불릿으로 렌더하므로 한 줄로 접는다. 붙여넣기가 섞인 턴은
+# 개행이 그대로 들어와 리스트를 깨뜨린다 — 실측 후보 79건 중 23건(29%)이 개행 포함이었다.
+def excerpt: gsub("\\s+"; " ") | .[0:60];
 
 # -R 원시 입력 + fromjson? — 손상된 라인은 그 줄만 버리고 나머지 보존 (한 줄 깨짐 = 세션 전체 소실 방지)
 [inputs | fromjson? // empty] as $L
@@ -131,7 +134,7 @@ def correction_candidate_max_len: 200;
 # 주의: Apple jq(oniguruma)가 한글 alternation 정규식에서 깨져 startswith 사용
 ( $userMsgs[] | utext
   | select(is_correction)
-  | $base + {kind:"correction_mark", target: .[0:60], n:1} ),
+  | $base + {kind:"correction_mark", target: excerpt, n:1} ),
 
 # ── correction_candidate: 교정일 수 있는 턴 (판정은 /harvest가 격리 컨텍스트에서) ──
 # 접두어 매칭은 "아니…"로 시작하는 교정만 잡는다. 실제 불만은 문장 중간에 온다
@@ -144,4 +147,4 @@ def correction_candidate_max_len: 200;
   | select(startswith("/") | not)
   | . as $t
   | select(any(correction_hints[]; . as $h | $t | contains($h)))
-  | $base + {kind:"correction_candidate", target: .[0:60], n:1} )
+  | $base + {kind:"correction_candidate", target: excerpt, n:1} )

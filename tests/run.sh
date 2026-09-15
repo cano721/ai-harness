@@ -285,6 +285,7 @@ assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CODEX_EVENT")" 
 assert_eq "1" "$(jq -r 'select(.kind=="compact") | .n' "$CODEX_EVENT")" "Codex compaction"
 assert_eq "2" "$(jq -r 'select(.kind=="jira_issue" and .target=="JDA-123") | .n' "$CODEX_EVENT")" "Codex issue count without duplicate stream"
 assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CODEX_EVENT")" "Codex correction mark"
+assert_eq "배포했는데 여전히 안 나와" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CODEX_EVENT")" "Codex candidate matches mid-sentence and folds the excerpt onto one line"
 pass "source extractors"
 
 # 공용 SessionEnd hook이 Codex transcript를 올바른 extractor로 분류함
