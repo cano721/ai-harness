@@ -12,6 +12,25 @@ def result_text: .content | if type=="string" then . elif type=="array" then (ma
 
 def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 
+# 교정 신호 정의는 Codex 어댑터(scripts/extract-codex.sh)와 같은 목록을 쓴다 — 한쪽만 고치면
+# 플랫폼 간 수치 비교가 깨진다.
+def is_correction:
+  startswith("아니") or startswith("아냐") or startswith("그게 아니라")
+  or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸");
+# 후보 그물. 접두어가 아니라 문장 어디에 있어도 잡는다.
+def correction_hints:
+  ["안 되", "안되", "안돼", "안 돼", "이상해", "이상하", "틀려", "틀린",
+   "여전히", "제대로", "아직도", "잘못", "왜 안", "왜 아직", "다시 해", "다시해",
+   "안 나와", "안나와", "안 뜨", "안뜨", "못 찾", "못찾", "실패했", "빠졌", "빼먹",
+   "맞아?", "맞나?", "한 거 맞", "한거 맞",
+   "doesn't work", "does not work", "not working", "still fails", "still failing",
+   "that's wrong", "thats wrong", "you missed", "didn't work"];
+# 긴 턴은 새 지시일 확률이 높다.
+def correction_candidate_max_len: 200;
+# 발췌는 /metrics가 마크다운 불릿으로 렌더하므로 한 줄로 접는다. 붙여넣기가 섞인 턴은
+# 개행이 그대로 들어와 리스트를 깨뜨린다 — 실측 후보 79건 중 23건(29%)이 개행 포함이었다.
+def excerpt: gsub("\\s+"; " ") | .[0:60];
+
 # -R 원시 입력 + fromjson? — 손상된 라인은 그 줄만 버리고 나머지 보존 (한 줄 깨짐 = 세션 전체 소실 방지)
 [inputs | fromjson? // empty] as $L
 | (first($L[] | select(.cwd? != null) | .cwd) // "") as $cwd
@@ -39,7 +58,7 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
       "jira_issue", "error", "guard_block", "permission_deny", "compact",
-      "correction_mark"
+      "correction_mark", "correction_candidate"
     ]
   }),
 
@@ -114,6 +133,18 @@ def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
 # ── correction_mark: 사용자 교정 턴 (LLM 정독 지점 마킹) ──
 # 주의: Apple jq(oniguruma)가 한글 alternation 정규식에서 깨져 startswith 사용
 ( $userMsgs[] | utext
-  | select(startswith("아니") or startswith("아냐") or startswith("그게 아니라")
-           or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸"))
-  | $base + {kind:"correction_mark", target: .[0:60], n:1} )
+  | select(is_correction)
+  | $base + {kind:"correction_mark", target: excerpt, n:1} ),
+
+# ── correction_candidate: 교정일 수 있는 턴 (판정은 /harvest가 격리 컨텍스트에서) ──
+# 접두어 매칭은 "아니…"로 시작하는 교정만 잡는다. 실제 불만은 문장 중간에 온다
+# ("스웨거 링크 이상해", "둘다 여전히 접근 안되잖아"). 넓게 줍고 판정은 미룬다 —
+# 이 이벤트는 그 자체로 교정이 아니라 **읽어볼 지점**이다.
+# 긴 턴은 새 지시일 확률이 높아 길이로 자른다. 슬래시 커맨드·붙여넣기는 제외된다.
+( $userMsgs[] | utext
+  | select(is_correction | not)
+  | select(length <= correction_candidate_max_len)
+  | select(startswith("/") | not)
+  | . as $t
+  | select(any(correction_hints[]; . as $h | $t | contains($h)))
+  | $base + {kind:"correction_candidate", target: excerpt, n:1} )

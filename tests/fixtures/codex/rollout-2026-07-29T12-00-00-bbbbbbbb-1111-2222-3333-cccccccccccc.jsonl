@@ -2,6 +2,7 @@
 {"type":"response_item","timestamp":"2026-07-29T03:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ignored</environment_context>"}]}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:02Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"아니 JDA-123과 JDA-123을 다시 확인해줘"}]}}
 {"type":"event_msg","timestamp":"2026-07-29T03:00:02Z","payload":{"type":"user_message","message":"아니 JDA-123과 JDA-123을 다시 확인해줘"}}
+{"type":"response_item","timestamp":"2026-07-29T03:00:03Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"\ubc30\ud3ec\ud588\ub294\ub370\n\uc5ec\uc804\ud788 \uc548 \ub098\uc640"}]}}
 {"type":"turn_context","timestamp":"2026-07-29T03:00:03Z","payload":{"model":"gpt-test-model"}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"  rg -n JDA-123 .\"}"}}
 {"type":"response_item","timestamp":"2026-07-29T03:00:04Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$ai-harness:metrics 확인해줘"}]}}

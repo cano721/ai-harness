@@ -93,4 +93,15 @@ def metric_table($rows; $supported; $total):
              else "" end)
         end)
   end)
++ "\n## 교정 후보 (판정 전 — 격리 서브에이전트가 확정)\n\n"
++ (
+    (coverage_count($S; "correction_candidate")) as $cand_supported
+    | if $cand_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+      else (($E | map(select(.kind=="correction_candidate"))) as $c
+        | if ($c|length)==0 then
+            "_(관측 가능 \($cand_supported)세션에서 없음)_"
+          else ($c | .[0:30] | map("- [\(.sid[0:8])] \(.target)") | join("\n"))
+            + "\n\n_후보는 그 자체로 교정이 아니다. 확정 전에는 개선 근거로 쓰지 않는다._"
+          end)
+      end)
 + "\n"
