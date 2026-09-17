@@ -379,8 +379,11 @@ gh pr create --base main --head develop --title "release v<version>"
 
 # 머지 뒤 main에서 — 태그와 릴리스 노트를 함께 발행합니다
 scripts/changelog-section.sh <version> > /tmp/notes.md
-gh release create v<version> --target main --title "v<version>" --notes-file /tmp/notes.md
+gh release create v<version> --target main --title "v<version>" \
+  --notes-file /tmp/notes.md --generate-notes --latest
 ```
+
+`--generate-notes`가 직전 태그 이후 머지된 PR 목록을 본문 아래에 붙입니다. CHANGELOG 절이 사용자 영향 설명이고, 그 아래 PR 링크로 어떤 이슈가 닫혔는지 따라갈 수 있습니다. 같은 이름의 마일스톤(`v<version>`)도 함께 닫습니다.
 
 태그를 밀거나 릴리스를 발행하면 `release` 워크플로가 태그명과 `release.json`의 버전·태그 URL 일치를 확인하고, 그 태그에 실제로 릴리스 노트가 발행됐는지 검사합니다. 노트 없이 태그만 올라가면 실패합니다 — `notes_url`이 404가 되고 `/harness-update`가 변경점을 요약하지 못하기 때문입니다.
 
