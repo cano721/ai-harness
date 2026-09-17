@@ -4,6 +4,19 @@
 
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
+작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+
+
+## v0.25.0 (2026-09-17)
+
+### 새 기능
+
+- **`scripts/release-prep.sh`** — 릴리스할 때 `## Unreleased` 절을 버전 절로 확정하고 버전 메타데이터 네 곳(plugin.json ×2, release.json, CHANGELOG)을 한 번에 맞춥니다. `--check`는 쓰지 않고 정합성만 봅니다. (#45)
+
+### 동작 변경
+
+- **작업은 `develop`, 릴리스는 `main`입니다** — 설치(`plugin marketplace add`)와 업데이트 확인이 모두 `main`을 읽으므로, `main`에는 릴리스된 상태만 둡니다. 기능·수정 PR은 버전을 올리지 않고 `## Unreleased`에만 항목을 남깁니다. 브랜치 이름·PR base·버전 자릿수 기준은 `CONTRIBUTING.md`에 있습니다. 사용하는 쪽 동작은 바뀌지 않습니다. (#45)
+- **릴리스 노트가 닫은 이슈와 PR을 함께 담습니다** — CHANGELOG 항목에 이슈 번호를 적고, 발행 시 `--generate-notes`로 그 버전에 머지된 PR 목록을 본문 아래에 붙입니다. 릴리스마다 같은 이름의 마일스톤(`v<version>`)을 두어 계획과 배포를 각각 볼 수 있습니다. (#45)
 
 ## v0.24.0 (2026-09-15)
 
