@@ -58,6 +58,14 @@ chore/bump-ci-shellcheck
 
 절의 소제목은 `### 새 기능` / `### 버그 수정` / `### 동작 변경` / `### 업데이트 후 해야 할 일`을 쓴다. 사용자가 읽고 판단할 수 있게 쓰고, 내부 리팩터링만 있는 PR은 항목을 남기지 않아도 된다.
 
+항목 끝에 닫는 이슈 번호를 단다. 릴리스 노트를 읽는 사람이 "이 버전이 무엇을 해결했나"를 배경까지 따라갈 수 있어야 한다. PR 번호는 적지 않는다 — 아래 `--generate-notes`가 PR 목록을 자동으로 붙인다.
+
+```markdown
+- **출력 없는 실패를 `error`에서 제외** — `grep -q`처럼 종료코드를 판정문으로 쓴 호출이 batch 트리거를 밀어올리고 있었습니다. (#38)
+```
+
+PR 본문에는 `Closes #38`을 쓴다. 이슈가 자동으로 닫히고, 릴리스 노트의 PR 링크에서 추적된다.
+
 ## 릴리스
 
 `develop`의 `## Unreleased`가 릴리스할 만큼 쌓였을 때 한다.
@@ -75,7 +83,18 @@ gh pr create --base main --head develop --title "release v<version>"
 ```bash
 git switch main && git pull
 scripts/changelog-section.sh <version> > /tmp/notes.md
-gh release create v<version> --target main --title "v<version>" --notes-file /tmp/notes.md
+gh release create v<version> --target main --title "v<version>" \
+  --notes-file /tmp/notes.md --generate-notes --latest
+```
+
+`--generate-notes`는 직전 태그 이후 머지된 PR 목록(`What's Changed`)을 CHANGELOG 본문 **아래에 덧붙인다**. 본문은 사람이 쓴 사용자 영향 설명이고, 그 아래가 기계가 모은 추적 링크다.
+
+마일스톤도 함께 닫는다.
+
+```bash
+gh api "repos/cano721/ai-harness/milestones?state=all&per_page=100" \
+  --jq '.[] | select(.title=="v<version>") | .number'
+gh api -X PATCH repos/cano721/ai-harness/milestones/<번호> -f state=closed --silent
 ```
 
 릴리스 후 `main`을 `develop`에 되돌려 머지해 두 브랜치를 맞춘다.
@@ -87,6 +106,16 @@ git switch develop && git merge --ff-only main && git push
 ### 급한 수정 (hotfix)
 
 이미 릴리스된 버전에 치명적 문제가 있으면 `main`에서 브랜치를 따고 `main`으로 PR한 뒤, PATCH 릴리스를 발행하고 `develop`에 되돌려 머지한다. 그 외에는 전부 `develop`을 거친다.
+
+## 마일스톤
+
+마일스톤 이름은 릴리스 이름과 같다 (`v0.25.0`). 릴리스가 "무엇이 나갔나"의 사후 기록이라면, 마일스톤은 "무엇을 넣을 건가"의 사전 계획이다. 둘은 GitHub에서 자동으로 연결되지 않으므로 사람이 붙인다.
+
+- 이슈를 잡을 때 다음 릴리스 마일스톤에 단다. 아직 정하지 않았으면 비워 둔다
+- PR에도 같은 마일스톤을 단다 — 닫은 이슈가 없는 변경(리팩터링, 문서)도 그 릴리스에 들어갔다는 사실이 남는다
+- 릴리스를 발행할 때 그 마일스톤을 닫고, 다음 버전 마일스톤을 연다
+
+진척은 https://github.com/cano721/ai-harness/milestones 에서 보고, 나간 것은 https://github.com/cano721/ai-harness/releases 에서 본다.
 
 ## 검증
 

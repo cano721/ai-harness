@@ -118,4 +118,9 @@ jq --arg v "$version" --arg url "$tag_url" \
   '.version = $v | .release_url = $url | .notes_url = $url' "$release_manifest" >"$tmp" && mv "$tmp" "$release_manifest"
 
 printf 'prepared v%s (%s)\n' "$version" "$release_date"
-printf 'next: commit, open a PR from develop into main, then tag v%s and publish the notes\n' "$version"
+printf 'next:\n' >&2
+printf '  1. commit and open a PR from develop into main\n' >&2
+printf '  2. after the merge, publish the release from main:\n' >&2
+printf '     scripts/changelog-section.sh %s > /tmp/notes.md\n' "$version" >&2
+printf '     gh release create v%s --target main --title v%s --notes-file /tmp/notes.md --generate-notes --latest\n' "$version" "$version" >&2
+printf '  3. close the v%s milestone and open the next one\n' "$version" >&2
