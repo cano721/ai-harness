@@ -4,6 +4,13 @@
 
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
+작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+
+
+## Unreleased
+
+<!-- develop에 머지되는 PR은 사용자 영향 기준으로 이 절에 항목을 남기고 버전 파일은 건드리지 않는다.
+     릴리스할 때 scripts/release-prep.sh <version>이 이 절을 버전 절로 확정한다. -->
 
 ## v0.24.0 (2026-09-15)
 
