@@ -759,6 +759,56 @@ for RELEASE_FIELD in release_url notes_url; do
 done
 pass "release metadata identifies the shipped version"
 
+# 릴리스 준비: 버전 파일을 건드리는 건 이 스크립트 하나뿐이라 기능 PR끼리 버전에서 충돌하지 않는다.
+"$ROOT/scripts/release-prep.sh" --check --root "$ROOT" >/dev/null || fail "release metadata is inconsistent on this branch"
+REL="$TEST_TMP/release"
+mkdir -p "$REL/.claude-plugin" "$REL/.codex-plugin"
+printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$REL/.claude-plugin/plugin.json"
+printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$REL/.codex-plugin/plugin.json"
+cat >"$REL/release.json" <<'JSON'
+{
+  "version": "1.2.3",
+  "channel": "stable",
+  "release_url": "https://github.com/cano721/ai-harness/releases/tag/v1.2.3",
+  "notes_url": "https://github.com/cano721/ai-harness/releases/tag/v1.2.3"
+}
+JSON
+cat >"$REL/CHANGELOG.md" <<'DOC'
+# Changelog
+
+## Unreleased
+
+<!-- 안내 주석은 릴리스 노트에 남기지 않는다. -->
+
+### 버그 수정
+
+- 무언가 고쳤다.
+
+## v1.2.3 (2026-01-01)
+
+- 이전 릴리스.
+DOC
+if "$ROOT/scripts/release-prep.sh" --check --root "$REL" >/dev/null 2>&1; then
+  :
+else
+  fail "a branch carrying an Unreleased section should still pass the consistency check"
+fi
+"$ROOT/scripts/release-prep.sh" 1.3.0 --date 2026-02-02 --root "$REL" >/dev/null
+assert_eq "1.3.0 1.3.0 1.3.0" "$(jq -r '.version' "$REL/.claude-plugin/plugin.json" "$REL/.codex-plugin/plugin.json" "$REL/release.json" | paste -sd " " -)" "one command moves every manifest to the new version"
+assert_eq "https://github.com/cano721/ai-harness/releases/tag/v1.3.0" "$(jq -r '.notes_url' "$REL/release.json")" "the release urls follow the new tag"
+assert_eq "1" "$(grep -c '^## v1.3.0 (2026-02-02)$' "$REL/CHANGELOG.md")" "the Unreleased section becomes the version section"
+assert_eq "0" "$(grep -c '^## Unreleased' "$REL/CHANGELOG.md")" "no Unreleased section survives the release"
+assert_eq "0" "$(grep -c '<!--' "$REL/CHANGELOG.md")" "the guidance comment does not reach the release notes"
+assert_eq "1" "$(grep -c '무언가 고쳤다' "$REL/CHANGELOG.md")" "the entries written during development are kept"
+"$ROOT/scripts/release-prep.sh" --check --root "$REL" >/dev/null || fail "the prepared release should be consistent"
+if "$ROOT/scripts/release-prep.sh" 1.4.0 --root "$REL" >/dev/null 2>&1; then
+  fail "releasing again with an empty Unreleased section should be refused"
+fi
+if "$ROOT/scripts/release-prep.sh" 1.3.0 --root "$REL" >/dev/null 2>&1; then
+  fail "reusing a version already in the changelog should be refused"
+fi
+pass "release preparation moves version metadata in one step"
+
 # 릴리스 노트의 단일 출처. 절이 없으면 발행할 노트도, 오프라인 설명도 없다.
 CHANGELOG_SECTION="$("$ROOT/scripts/changelog-section.sh" "$RELEASE_VERSION" 2>/dev/null || true)"
 [[ -n "${CHANGELOG_SECTION//[[:space:]]/}" ]] || fail "CHANGELOG.md has no section for v$RELEASE_VERSION"
