@@ -375,7 +375,8 @@ claude plugin update ai-harness@ai-harness
 scripts/release-prep.sh <version>    # Unreleased 절 확정 + plugin.json ×2 + release.json 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>"
-gh pr create --base main --head develop --title "release v<version>"
+gh pr create --base main --head develop --title "chore: release v<version>"
+gh pr merge <n> --merge              # 릴리스 PR만 merge commit (기능 PR은 squash)
 
 # 머지 뒤 main에서 — 태그와 릴리스 노트를 함께 발행합니다
 scripts/changelog-section.sh <version> > /tmp/notes.md
