@@ -29,7 +29,8 @@ chore/bump-ci-shellcheck
 ### PR
 
 - base는 `develop`이다. `gh pr create --base develop` — 기본값이 `main`이므로 생략하면 릴리스 브랜치로 열린다
-- 머지는 **squash**, 머지 후 브랜치 삭제 (`gh pr merge <n> --squash --delete-branch`)
+- 작업 브랜치 → `develop` 머지는 **squash**, 머지 후 브랜치 삭제 (`gh pr merge <n> --squash --delete-branch`)
+- `develop` → `main` 릴리스 머지만 **merge commit** (`gh pr merge <n> --merge`). 이유는 [릴리스](#릴리스)에 있다
 - 여러 PR이 동시에 열려 있으면 머지된 순서대로 나머지를 `develop`에 리베이스한다
 
 ## 버전
@@ -74,9 +75,16 @@ PR 본문에는 `Closes #38`을 쓴다. 이슈가 자동으로 닫히고, 릴리
 git switch develop && git pull
 scripts/release-prep.sh <version>          # Unreleased 절 확정 + 네 곳 동기화
 bash tests/run.sh
-git commit -am "chore: release v<version>"
-gh pr create --base main --head develop --title "release v<version>"
+git commit -am "chore: release v<version>" && git push
+gh pr create --base main --head develop --title "chore: release v<version>" --milestone "v<version>"
+gh pr merge <n> --merge                    # squash 아님 — 아래 이유
 ```
+
+### 릴리스 PR만 merge commit인 이유
+
+squash로 넣으면 `main`에 새 커밋 하나가 생기고 `develop`의 커밋들은 `main`의 조상이 되지 않는다. 그러면 두 브랜치가 **영구히 분기**해서 릴리스 뒤 동기화(`git merge --ff-only main`)가 실패하고, 다음 릴리스 PR마다 이미 나간 변경이 diff에 다시 올라온다.
+
+merge commit이면 `develop`의 tip이 `main`의 조상이 되므로 아래 동기화가 fast-forward로 끝난다. 기능 PR은 이 문제가 없으므로 계속 squash한다 — 작업 브랜치는 머지 후 버리기 때문이다.
 
 머지 뒤 태그와 릴리스 노트를 발행한다. 노트 없이 태그만 올리면 `release` 워크플로가 실패한다 — `notes_url`이 404가 되고 `/harness-update`가 변경점을 설명하지 못하기 때문이다.
 
@@ -89,15 +97,16 @@ gh release create v<version> --target main --title "v<version>" \
 
 `--generate-notes`는 직전 태그 이후 머지된 PR 목록(`What's Changed`)을 CHANGELOG 본문 **아래에 덧붙인다**. 본문은 사람이 쓴 사용자 영향 설명이고, 그 아래가 기계가 모은 추적 링크다.
 
-마일스톤도 함께 닫는다.
+마일스톤도 닫고 다음 버전을 연다.
 
 ```bash
 gh api "repos/cano721/ai-harness/milestones?state=all&per_page=100" \
   --jq '.[] | select(.title=="v<version>") | .number'
 gh api -X PATCH repos/cano721/ai-harness/milestones/<번호> -f state=closed --silent
+gh api -X POST repos/cano721/ai-harness/milestones -f title=v<다음 버전> --silent
 ```
 
-릴리스 후 `main`을 `develop`에 되돌려 머지해 두 브랜치를 맞춘다.
+마지막으로 `main`을 `develop`에 되돌려 두 브랜치를 맞춘다. 위 merge commit 규칙 덕분에 fast-forward로 끝나야 한다 — 여기서 ff가 거부되면 릴리스를 squash로 머지했다는 뜻이다.
 
 ```bash
 git switch develop && git merge --ff-only main && git push
