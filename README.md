@@ -57,6 +57,7 @@ flowchart LR
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
+| `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
 
@@ -70,9 +71,9 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. | 프론트 감지 |
 | `feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. | **FSD 감지/opt-in일 때만** |
 
-`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -201,6 +202,18 @@ Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승�
 3. **복잡한 변경의 학습 도구** — 상태 전이, 마이그레이션, 비동기 흐름처럼 직접 조작하며 이해하는 편이 빠를 때만 micro-world의 최소 형태를 제안합니다. 자동으로 만들지는 않습니다.
 
 [그래프 계약](skills/understand-change/references/understanding-change-graph.json)은 스킬과 함께 플러그인에 들어 있어 프로젝트로 복사하지 않습니다. 프로젝트별 조정이 필요하면 초기화가 만드는 `.ai-harness/workflows/understand-change.md`에 문서, 검증 명령, 공유 위치, 설명 깊이 기준을 적어 두면 스킬이 실행 시점에 읽어 그쪽을 우선합니다. 그 파일은 사람이 소유하며 하네스 동기화가 덮어쓰지 않습니다. 팀에 공유할 때는 결과, 달라진 mental model, 검증 근거, 남은 결정만 짧게 handoff합니다.
+
+## 전달 흐름: `/explain-for`
+
+플러그인이 직접 제공하는 전역 Skill입니다. 같은 내용을 **누구에게** 전달하느냐에 맞춰 프레이밍·용어·깊이·분량만 바꾸고, 사실은 바꾸지 않습니다. 코드를 수정하지 않으므로 하네스가 없는 저장소에서도 바로 쓸 수 있습니다.
+
+1. **청자 고정** — 역할(무엇을 결정하는 사람인가)과 숙련도(이미 무엇을 아는가) 2축으로 잡습니다. 두 축은 독립입니다. 요청에 청자가 없으면 기본 페르소나로 추측하지 않고, 전달처(PR 리뷰어·스탠드업·고객 메일)에서 추론한 뒤 가정을 한 줄로 밝히거나 한 번 질문합니다.
+2. **근거 확인** — 설명 대상 코드·테스트·설정·에러의 실제 원인을 읽고 씁니다. 확인하지 않은 동작을 비유로 단정하지 않습니다.
+3. **조정** — 청자가 멀어질수록 `references/audiences.md`의 단순화 다이얼을 순서대로 당깁니다. 사라진 정밀도가 상대의 행동을 바꿀 수 있으면 무엇을 생략했는지 한 줄 덧붙입니다.
+
+`/understand-change`와 역할이 다릅니다. `/understand-change`는 **무엇이 왜 바뀌었고 어떻게 검증하나**를 답하고, `/explain-for`는 **그걸 저 사람에게 어떻게 말하나**를 답합니다. 팀 공유는 `/understand-change`로 모델을 세운 뒤 `/explain-for`로 다시 쓰는 순서가 자연스럽습니다.
+
+프로젝트 고유 조정(팀 역할 이름, 공유 위치, 사내 용어)은 `.ai-harness/workflows/explain-for.md`에 적어 두면 스킬이 실행 시점에 읽어 우선합니다. 초기화가 만들지는 않는 선택 파일입니다.
 
 <a id="bug-fix"></a>
 

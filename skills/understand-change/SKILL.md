@@ -37,6 +37,6 @@ For **standard** and **deep** changes, finish with three to five medium-difficul
 
 For a deep change, propose a micro-world only when a person would learn materially faster by manipulating a state, stepping through execution, comparing before/after behavior, or observing a migration. Describe its smallest useful form, the question it answers, and the acceptance check. Do not build one unless the user asks or the active project workflow authorizes it.
 
-When the explanation is to be shared, end with a compact handoff suitable for a PR or team document: outcome, changed mental model, verification evidence, remaining decision, and link/path to any artifact.
+When the explanation is to be shared, end with a compact handoff suitable for a PR or team document: outcome, changed mental model, verification evidence, remaining decision, and link/path to any artifact. When that handoff targets a specific audience — a manager, a product manager, a non-technical stakeholder — hand the result to `explain-for` rather than re-pitching it here.
 
 Do not edit source code, create an external page, commit, push, or change project policy merely to explain a change. Only create an explanation artifact when separately requested.
