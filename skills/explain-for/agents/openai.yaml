@@ -1,0 +1,4 @@
+interface:
+  display_name: "Explain For"
+  short_description: "Re-pitch an explanation for a named audience."
+  default_prompt: "Use $explain-for to explain this for a specific audience: $ARGUMENTS"
