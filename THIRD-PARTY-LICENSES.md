@@ -1,7 +1,7 @@
 # Third-Party Licenses
 
-이 저장소는 아래 외부 프로젝트의 Skill을 사본으로 포함합니다. 각 원 저작자의
-라이선스를 따르며, 상류 변경은 원본에서 다시 가져옵니다.
+이 저장소는 아래 외부 프로젝트의 Skill을 사본 또는 파생물로 포함합니다. 각 원
+저작자의 라이선스를 따르며, 사본은 상류 변경을 원본에서 다시 가져옵니다.
 
 ---
 
@@ -45,6 +45,38 @@ SOFTWARE.
 MIT License
 
 Copyright (c) 2026 Dan Neciu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## skills/explain-for
+
+- 출처: [dreambigou/eli5](https://github.com/dreambigou/eli5)
+- 라이선스: MIT
+- 사본이 아니라 **파생물**입니다. 청자별 조정이라는 착상과 카탈로그 구조를 가져왔고, 하네스 스코프에 맞게 다시 썼습니다: 업무 외 청자 축(가족·친구) 제외, 직무·숙련도 2축으로 재구성, 기본 청자 "Age 5" 제거(맥락 추론 후 불명확하면 질문), 근거 확인·데이터 취급·비수정 가드 추가.
+
+```
+MIT License
+
+Copyright (c) 2026
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
