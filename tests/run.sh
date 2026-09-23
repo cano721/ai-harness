@@ -360,6 +360,24 @@ SECOND_NOTICE="$(
       /bin/sh -c "$START_COMMAND"
 )"
 assert_eq "" "$SECOND_NOTICE" "analysis notification only once per batch"
+
+# 자동 업데이트 안내는 Claude 세션의 첫 SessionStart에만 한 번 뜬다.
+HINT_DATA="$TEST_TMP/hint-data"
+CLAUDE_START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd, transcript_path:"/tmp/claude-session.jsonl"}')"
+CODEX_START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd, transcript_path:"/tmp/rollout-2026-09-23T00-00-00-abc.jsonl"}')"
+run_start_hook() {
+  printf '%s' "$1" \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$HINT_DATA" HM_UPDATE_CHECK_ENABLED=0 \
+      /bin/sh -c "$START_COMMAND"
+}
+CODEX_HINT="$(run_start_hook "$CODEX_START_INPUT")"
+assert_eq "" "$CODEX_HINT" "no auto-update hint for Codex sessions"
+assert_not_file "$HINT_DATA/auto-update-hint-shown"
+FIRST_HINT="$(run_start_hook "$CLAUDE_START_INPUT")"
+assert_contains "$(jq -r '.systemMessage' <<<"$FIRST_HINT")" "Enable auto-update" "auto-update hint on first Claude session"
+assert_file "$HINT_DATA/auto-update-hint-shown"
+assert_eq "" "$(run_start_hook "$CLAUDE_START_INPUT")" "auto-update hint shown only once"
+pass "SessionStart auto-update hint"
 assert_eq "$QUEUE_EVENT" "$(
   HARNESS_METRICS_DIR="$QUEUE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
     "$ROOT/scripts/harvest-queue.sh" events --project service

@@ -109,6 +109,8 @@ codex plugin add ai-harness@ai-harness
 
 둘 중 사용하는 도구만 설치해도 됩니다. 설치 뒤 새 세션을 시작하면 hook과 skill이 로드됩니다.
 
+**Claude Code 자동 업데이트 켜기 (권장)** — 서드파티 마켓플레이스는 자동 업데이트가 기본으로 꺼져 있습니다. `/plugin` → Marketplaces → ai-harness → Enable auto-update 를 켜면 Claude Code가 시작할 때 새 버전을 받습니다. 설치 후 첫 세션에서도 한 번 안내합니다.
+
 ### 2. 대상 프로젝트에서 초기화
 
 프로젝트 루트에서 `/harness-init`을 실행합니다. 실제 코드베이스를 먼저 살핀 뒤 아래만 선택하면 됩니다.
@@ -376,6 +378,8 @@ claude plugin update ai-harness@ai-harness
 ```
 
 적용 뒤 새 대화 또는 세션을 시작해 변경된 skill과 hook을 다시 로드합니다.
+
+Claude Code에서 마켓플레이스 자동 업데이트를 켜 두면(`/plugin` → Marketplaces → ai-harness → Enable auto-update) 위 과정 없이 시작할 때 새 버전을 받습니다. 이때도 받은 버전은 재시작 뒤에 로드되며, SessionStart의 버전 스큐 알림이 이를 알려 줍니다.
 
 ### 릴리스 절차 (메인테이너)
 
