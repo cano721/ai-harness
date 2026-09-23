@@ -1,6 +1,6 @@
 ---
 name: explain-for
-description: Explain a concept, code, change, or error to a named audience — a role, an experience level, or a non-technical reader — by adjusting framing, vocabulary, depth, and length while keeping the facts fixed. Use when the request names who the explanation is for ("explain this to a manager", "for a junior", "for a non-technical stakeholder", "ELI5", "쉽게 설명해줘"), or asks to re-pitch an existing explanation at a stated level. Do not use for an explanation request that names no audience; explain it directly instead.
+description: Explain a concept, code, change, or error for a named audience — a work role, an experience level, a child, or family and friends — adjusting framing, vocabulary, depth, and length while keeping the facts fixed. Use when the request names who it is for ("to my manager", "for a junior", "to my mom"), asks for a simpler explanation ("ELI5", "쉽게 설명해줘"), or explicitly invokes /explain-for — an explicit invocation with no audience explains at a five-year-old level. Do not auto-trigger on a plain explanation request that names no audience and asks for no simplification.
 ---
 
 # Explain For
@@ -20,7 +20,9 @@ Take the audience from the request and map it onto two axes in `references/audie
 
 The two are independent: a senior manager is high proficiency in their own domain and needs no simplification, only different framing.
 
-If the request names no audience, do not fall back to a default persona. Infer it from the stated destination — a PR reviewer, a standup, a customer email, an onboarding doc — and state the assumed audience in one line before the explanation. If it stays unclear, ask one question and stop. The one exception: an explicit "ELI5" or "아주 쉽게" means maximum simplification for a non-technical adult reader, with no question needed.
+For a personal reader — a partner, a parent, a kid, a friend — also read the **Relationship** table: it sets the tone and where analogies come from.
+
+If the request names no audience, infer it from a stated destination — a PR reviewer, a standup, a customer email, an onboarding doc — since a destination names who reads it. With no audience and no destination, default to a five-year-old (classic ELI5): follow **ELI5 mode** in `references/audiences.md`, state the assumed audience in one line before the explanation, and do not ask a question. An explicit "ELI5", "아주 쉽게", "다섯 살한테 설명하듯", or "어린아이도 알아듣게" means the same mode.
 
 ## 2. Ground the explanation in the real material
 
@@ -39,6 +41,7 @@ Calibration rules:
 - **Technical peers** get proper terminology — substituting an analogy for a term they already own reads as condescension. Spend the space on trade-offs, edge cases, and why alternatives were rejected.
 - **Learners** get one idea per sentence, concrete before abstract, and every term defined at first use.
 - **Non-technical readers** get zero jargon and no implementation. Anchor in what they already operate.
+- **Children** get short sentences, analogies from toys, animals, games, and school, and the tone of a favorite teacher — enthusiastic, never baby talk. Purpose before mechanism: say what the thing is *for* before how it works.
 - Match length to the audience, not to how much you know.
 
 Simplify ruthlessly when the audience needs it — the core idea at 80% precision beats a complete explanation that loses the reader. When the lost precision could change what the reader does, add one line naming what was left out.
