@@ -26,6 +26,8 @@ Two independent axes. Read the role row for *what the explanation is about*, the
 | Junior / onboarding | Standard terms, defined at first use | Step-by-step causality, name the files | Where a new model is needed |
 | Adjacent professional | Their field's terms, not yours | Bridge from something they operate | Usually |
 | Beginner | No jargon at all | One idea per sentence, concrete first | Always, and check it holds |
+| Child (~10, 5th grade) | Everyday words; a needed term gets a kid-friendly definition | Step-by-step cause and effect | Always — school, sports, video games |
+| Child (~5) | Simplest words, sentences under ~15 words | One idea at a time, nothing abstract | Always — toys, animals, candy, playground |
 
 ## Simplification dials
 
@@ -39,4 +41,14 @@ Pull these in order when the audience is further from the material. Stop at the 
 
 ## ELI5 mode
 
-An explicit "ELI5" / "다섯 살한테 설명하듯" request means: Beginner proficiency, no role, maximum simplification. Playful and concrete, never baby talk, and never so loose that the core claim becomes false. If the reader could act on the explanation, keep one line of real precision at the end.
+The default when no audience and no destination is named, and what an explicit "ELI5" / "아주 쉽게" / "다섯 살한테 설명하듯" / "어린아이도 알아듣게" request means: **Child (~5)** proficiency, no role, maximum simplification. When the request says "초등학생" or "5th grader", use **Child (~10)** instead.
+
+- **Words** — no jargon. If a technical term is unavoidable, define it in the same sentence with a word the child already knows.
+- **Analogy** — at least one, from the child's world: toys, animals, picture books, snacks, the playground (age ~10: school projects, sports, games). Check it holds for the core claim.
+- **Shape** — what it is for → the analogy → one or two concrete steps → why it is cool or useful. Short, usually a few paragraphs at most.
+- **Tone** — warm and enthusiastic, like a favorite teacher. Delightful, never condescending, never baby talk.
+- **Truth** — never so loose that the core claim becomes false. If the adult asking could act on the explanation, add one line of real precision at the end, marked as for the grown-up.
+
+Example — "ELI5 what a database index is":
+
+> Imagine a huuuge book with thousands of pages. If I asked you to find the page about dinosaurs, you could flip through every page… or you could look at the list at the front that says "dinosaurs: page 212"! A database index is that list. It helps the computer find things super fast without looking at everything.
