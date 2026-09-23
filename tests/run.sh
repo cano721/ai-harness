@@ -608,7 +608,7 @@ assert_contains "$EXPLAIN_SKILL_CONTENT" "Do not edit source code" "explain-for 
 assert_contains "$EXPLAIN_SKILL_CONTENT" "/understand-change" "explain-for states the boundary with understand-change"
 # description은 청자 지정·단순화 요청에만 걸려야 한다. 넓으면 일반 설명 요청을 가로챈다.
 EXPLAIN_DESCRIPTION="$(awk '/^description:/{print; exit}' "$EXPLAIN_SKILL")"
-assert_contains "$EXPLAIN_DESCRIPTION" "Do not use for a plain explanation request that names no audience and asks for no simplification" "explain-for description excludes plain explanation requests"
+assert_contains "$EXPLAIN_DESCRIPTION" "Do not auto-trigger on a plain explanation request that names no audience and asks for no simplification" "explain-for description excludes plain explanation requests"
 # 개인 청자(가족·친구)는 upstream eli5처럼 톤·비유만 정하는 별도 표로 둔다.
 assert_contains "$(<"$EXPLAIN_AUDIENCES")" "## Relationship — personal readers" "audience catalog covers personal readers"
 assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("explain-for"))] | length' "$ROOT/templates/managed-files.json")" "explain-for is not a managed project artifact"

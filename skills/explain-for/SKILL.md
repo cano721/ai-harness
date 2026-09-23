@@ -1,6 +1,6 @@
 ---
 name: explain-for
-description: Explain a concept, code, change, or error to a named audience — a role, an experience level, a child, or a non-technical reader — by adjusting framing, vocabulary, depth, and length while keeping the facts fixed. Use when the request names who the explanation is for ("explain this to a manager", "for a junior", "for a 5th grader", "for a non-technical stakeholder", "explain this to my mom", "to a friend"), asks for a simpler explanation ("ELI5", "dumb it down", "쉽게 설명해줘", "애들도 알아듣게"), or asks to re-pitch an existing explanation at a stated level. When invoked directly with no audience, explain it so a five-year-old could follow. Do not use for a plain explanation request that names no audience and asks for no simplification; explain it directly instead.
+description: Explain a concept, code, change, or error for a named audience — a work role, an experience level, a child, or family and friends — adjusting framing, vocabulary, depth, and length while keeping the facts fixed. Use when the request names who it is for ("to my manager", "for a junior", "to my mom"), asks for a simpler explanation ("ELI5", "쉽게 설명해줘"), or explicitly invokes /explain-for — an explicit invocation with no audience explains at a five-year-old level. Do not auto-trigger on a plain explanation request that names no audience and asks for no simplification.
 ---
 
 # Explain For
@@ -22,7 +22,7 @@ The two are independent: a senior manager is high proficiency in their own domai
 
 For a personal reader — a partner, a parent, a kid, a friend — also read the **Relationship** table: it sets the tone and where analogies come from.
 
-If the request names no audience, infer it from a stated destination — a PR reviewer, a standup, a customer email, an onboarding doc — since a destination names who reads it. With no audience and no destination, default to a five-year-old (classic ELI5): follow **ELI5 mode** in `references/audiences.md`, state the assumed audience in one line before the explanation, and do not ask a question. An explicit "ELI5", "아주 쉽게", or "어린아이도 알아듣게" means the same mode.
+If the request names no audience, infer it from a stated destination — a PR reviewer, a standup, a customer email, an onboarding doc — since a destination names who reads it. With no audience and no destination, default to a five-year-old (classic ELI5): follow **ELI5 mode** in `references/audiences.md`, state the assumed audience in one line before the explanation, and do not ask a question. An explicit "ELI5", "아주 쉽게", "다섯 살한테 설명하듯", or "어린아이도 알아듣게" means the same mode.
 
 ## 2. Ground the explanation in the real material
 
