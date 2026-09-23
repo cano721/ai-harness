@@ -17,6 +17,17 @@ Two independent axes. Read the role row for *what the explanation is about*, the
 | Support / CS | Answering users | Symptom → cause → what to tell the user, workaround | Root-cause detail |
 | Non-technical reader | Nothing here | What it does for a person, in their own daily terms | All implementation |
 
+## Relationship — personal readers
+
+For someone outside work — family or a friend — role is **Non-technical reader** and proficiency is **Beginner** unless the request says otherwise (a parent who is an engineer is a peer). The relationship sets tone and where analogies come from.
+
+| Reader | Tone | Draw analogies from |
+|---|---|---|
+| Partner (wife / husband) | Warm, conversational, patient — like explaining over dinner | Household tasks, shared routines and experiences |
+| Parents | Respectful and clear, never condescending | Technology and devices they already use, running a home |
+| Kids | Playful and encouraging, short — use a **Child** proficiency level | Games, cartoons, school, animals |
+| Friend | Casual, a little humor is fine | Pop culture, shared interests, "you know how…" |
+
 ## Proficiency — what they already hold
 
 | Level | Vocabulary | Scaffolding | Analogy |

@@ -609,8 +609,8 @@ assert_contains "$EXPLAIN_SKILL_CONTENT" "/understand-change" "explain-for state
 # description은 청자 지정·단순화 요청에만 걸려야 한다. 넓으면 일반 설명 요청을 가로챈다.
 EXPLAIN_DESCRIPTION="$(awk '/^description:/{print; exit}' "$EXPLAIN_SKILL")"
 assert_contains "$EXPLAIN_DESCRIPTION" "Do not use for a plain explanation request that names no audience and asks for no simplification" "explain-for description excludes plain explanation requests"
-# 업무 외 청자 축(가족·친구)은 하네스 스코프 밖이라 들어오지 않는다.
-assert_eq "0" "$(grep -ci 'wife\|husband\|girlfriend\|boyfriend' "$EXPLAIN_AUDIENCES" | tr -d ' ')" "audience catalog stays within work roles"
+# 개인 청자(가족·친구)는 upstream eli5처럼 톤·비유만 정하는 별도 표로 둔다.
+assert_contains "$(<"$EXPLAIN_AUDIENCES")" "## Relationship — personal readers" "audience catalog covers personal readers"
 assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("explain-for"))] | length' "$ROOT/templates/managed-files.json")" "explain-for is not a managed project artifact"
 assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/explain-for/\`)" "harness init documents explain-for as a plugin skill"
 assert_contains "$(<"$ROOT/THIRD-PARTY-LICENSES.md")" "skills/explain-for" "explain-for credits its upstream license"
