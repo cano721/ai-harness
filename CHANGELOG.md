@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.28.0 (2026-09-23)
 ### 새 기능
 
 - **Claude Code 자동 업데이트를 켜는 법을 안내합니다** — 서드파티 마켓플레이스는 auto-update가 기본으로 꺼져 있어 새 버전마다 `/harness-update --apply`를 직접 실행해야 했습니다. 설치 후 첫 세션에 한 번, 그리고 `/harness-update --apply` 성공 직후 `/plugin` → Marketplaces → ai-harness → Enable auto-update 를 안내합니다. 설정은 사용자가 직접 켜며 플러그인이 바꾸지 않습니다. 기존 사용자도 이 버전으로 올린 뒤 첫 세션에 한 번 보게 됩니다.
