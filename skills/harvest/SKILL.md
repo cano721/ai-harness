@@ -110,6 +110,12 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 4. 커밋 → PR, 본문에 근거 수치와 기대효과 포함
 5. 병합은 사용자 — PR 링크 보고로 종료
 
+**workspace(대상이 `.ai-harness/workspace.json`인 경우)**: workspace 루트는 git 저장소가 아니라 브랜치·커밋·PR이 성립하지 않는다.
+
+- 개선안이 workspace AGENTS.md 대상이면 사용자 확인 후 로컬에 적용하고, 8단계 `--artifact`에 `local:<path>`(예: `local:AGENTS.md#Preflight`)를 쓴다. 변경 전 원본은 scratchpad에 백업한다.
+- 다른 workspace에도 통할 범용 개선(Preflight 단계, 교차 작업 규칙 등)이면 로컬 적용과 별개로 ai-harness 저장소에 `harness-init` workspace 템플릿(7-4) 개선 이슈를 올리도록 사용자에게 제안한다. 로컬에만 두면 다른 머신·사용자의 workspace로 퍼지지 않는다.
+- 멤버 하네스 대상 개선은 workspace 세션에서 고치지 않는다. 그 멤버 저장소에서 `/harvest <member>`를 돌리도록 안내한다.
+
 ### 8. analysis batch 검토 완료 표시
 
 시작할 때 `has_analysis_batch:true`였고 정상 완료했다면 실제 결론을 포함해 아래 둘 중 하나를 마지막에 실행한다.
