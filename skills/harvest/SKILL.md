@@ -126,6 +126,11 @@ $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome improved --summary "<무엇을 왜 바꿨는지 1문장>" --artifact "<PR URL>" \
   --expected "<다음 harvest가 효과를 판정할 기준 1문장>"
 
+# workspace(git 아님)에서 개선을 로컬 적용했을 때 — PR 대신 local 아티팩트
+$ROOT/scripts/harvest-queue.sh mark-reviewed --project <workspace_id> \
+  --outcome improved --summary "<무엇을 왜 바꿨는지 1문장>" --artifact "local:<path>" \
+  --expected "<다음 harvest가 효과를 판정할 기준 1문장>"
+
 # 개선점 0건이거나 통계 참고만 남겼을 때
 $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome no-change --summary "<적용하지 않은 핵심 이유 1문장>"
@@ -134,6 +139,6 @@ $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 `--expected`는 6단계 개선안의 기대효과를 그대로 옮긴다(개선안 여러 건이면 핵심 1건 기준). 이 값이 2단계 검증의 입력이 된다 — 생략하면 이번 개선은 다음 harvest가 검증하지 못한다.
 
 - 개선안 0건이어도 분석을 정상 완료했으면 `mark-reviewed`한다. 같은 데이터가 계속 재알림되는 것을 막기 위함이다.
-- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 처리 완료로 표시하지 않는다.
+- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 처리 완료로 표시하지 않는다. workspace의 로컬 적용은 PR을 시도하지 않는 정상 경로이므로 실패가 아니다 — `local:<path>`로 `improved` 표시한다.
 - `mark-reviewed`는 analysis batch가 만들어질 때 포함된 세션만 옮긴다. 분석 도중 새로 들어온 세션은 다음 묶음에 남는다.
-- 검토 완료 시 `review-history.jsonl`에 batch 근거와 실제 결론·요약·PR 참조가 누적되고, 보관 기간이 지난 상세 이벤트는 통계용 rollup으로 자동 전환된다.
+- 검토 완료 시 `review-history.jsonl`에 batch 근거와 실제 결론·요약·아티팩트 참조(PR URL 또는 `local:<path>`)가 누적되고, 보관 기간이 지난 상세 이벤트는 통계용 rollup으로 자동 전환된다.
