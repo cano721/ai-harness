@@ -110,6 +110,12 @@ stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 �
 4. 커밋 → PR, 본문에 근거 수치와 기대효과 포함
 5. 병합은 사용자 — PR 링크 보고로 종료
 
+**workspace(대상이 `.ai-harness/workspace.json`인 경우)**: workspace 루트는 git 저장소가 아니라 브랜치·커밋·PR이 성립하지 않는다.
+
+- 개선안이 workspace AGENTS.md 대상이면 사용자 확인 후 로컬에 적용하고, 8단계 `--artifact`에 `local:<path>`(예: `local:AGENTS.md#Preflight`)를 쓴다. 변경 전 원본은 scratchpad에 백업한다.
+- 다른 workspace에도 통할 범용 개선(Preflight 단계, 교차 작업 규칙 등)이면 로컬 적용과 별개로 ai-harness 저장소에 `harness-init` workspace 템플릿(7-4) 개선 이슈를 올리도록 사용자에게 제안한다. 로컬에만 두면 다른 머신·사용자의 workspace로 퍼지지 않는다.
+- 멤버 하네스 대상 개선은 workspace 세션에서 고치지 않는다. 그 멤버 저장소에서 `/harvest <member>`를 돌리도록 안내한다.
+
 ### 8. analysis batch 검토 완료 표시
 
 시작할 때 `has_analysis_batch:true`였고 정상 완료했다면 실제 결론을 포함해 아래 둘 중 하나를 마지막에 실행한다.
@@ -120,6 +126,11 @@ $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome improved --summary "<무엇을 왜 바꿨는지 1문장>" --artifact "<PR URL>" \
   --expected "<다음 harvest가 효과를 판정할 기준 1문장>"
 
+# workspace(git 아님)에서 개선을 로컬 적용했을 때 — PR 대신 local 아티팩트
+$ROOT/scripts/harvest-queue.sh mark-reviewed --project <workspace_id> \
+  --outcome improved --summary "<무엇을 왜 바꿨는지 1문장>" --artifact "local:<path>" \
+  --expected "<다음 harvest가 효과를 판정할 기준 1문장>"
+
 # 개선점 0건이거나 통계 참고만 남겼을 때
 $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome no-change --summary "<적용하지 않은 핵심 이유 1문장>"
@@ -128,6 +139,6 @@ $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 `--expected`는 6단계 개선안의 기대효과를 그대로 옮긴다(개선안 여러 건이면 핵심 1건 기준). 이 값이 2단계 검증의 입력이 된다 — 생략하면 이번 개선은 다음 harvest가 검증하지 못한다.
 
 - 개선안 0건이어도 분석을 정상 완료했으면 `mark-reviewed`한다. 같은 데이터가 계속 재알림되는 것을 막기 위함이다.
-- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 처리 완료로 표시하지 않는다.
+- `--dry-run`, 분석 실패·중단, PR 생성 실패 때는 처리 완료로 표시하지 않는다. workspace의 로컬 적용은 PR을 시도하지 않는 정상 경로이므로 실패가 아니다 — `local:<path>`로 `improved` 표시한다.
 - `mark-reviewed`는 analysis batch가 만들어질 때 포함된 세션만 옮긴다. 분석 도중 새로 들어온 세션은 다음 묶음에 남는다.
-- 검토 완료 시 `review-history.jsonl`에 batch 근거와 실제 결론·요약·PR 참조가 누적되고, 보관 기간이 지난 상세 이벤트는 통계용 rollup으로 자동 전환된다.
+- 검토 완료 시 `review-history.jsonl`에 batch 근거와 실제 결론·요약·아티팩트 참조(PR URL 또는 `local:<path>`)가 누적되고, 보관 기간이 지난 상세 이벤트는 통계용 rollup으로 자동 전환된다.

@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## v0.29.0 (2026-09-25)
+### 새 기능
+
+- **workspace AGENTS.md가 멤버 체크아웃 최신 여부를 먼저 확인하게 합니다** — workspace 상위 폴더의 멤버 저장소는 각자 따로 pull 되어 자주 stale인데, 에이전트가 그 로컬 코드를 현재 상태로 읽고 버전·설계를 오판하는 교정이 반복됐습니다. `/harness-init` workspace 모드의 Preflight에 ⑤ `fetch` 후 `origin/<base>`와 비교하는 단계를 넣고, 기존 workspace는 `--sync`에서 같은 단계를 diff로 제안합니다. (#60)
+- **`/harvest`가 git이 아닌 workspace의 개선 결과를 기록하는 방법을 안내합니다** — workspace 루트에는 PR을 만들 수 없어 개선이 로컬에만 남고 흔적이 없었습니다. 로컬 적용 시 `--artifact local:<path>`로 기록하고, 범용 개선은 템플릿 개선 이슈로 올리도록 제안합니다. (#60)
+
 ## v0.28.0 (2026-09-23)
 ### 새 기능
 
