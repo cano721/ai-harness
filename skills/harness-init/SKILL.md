@@ -235,7 +235,7 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 ### 7-4. AGENTS.md 구성
 
 - **첫 줄 안내**: 위 로더 한계와 쓰임새(훑어보기·교차 조율용, 깊은 구현은 멤버 저장소에서).
-- **Preflight**: ① 작업 대상 파일 경로의 첫 세그먼트로 멤버를 정한다. ② 그 멤버의 `AGENTS.md`를 Read한다. ③ 멤버 워크플로는 슬래시 커맨드로 부를 수 없으므로 `<member>/.ai-harness/workflows/<name>.md`를 **직접 Read하고 절차를 따른다**. ④ 멤버 페르소나(`<member>/.claude/agents/*.md`)는 위임 시 `general-purpose` 프롬프트에 지침을 인라인한다 — 역할 격리가 약해진다는 점을 함께 적는다.
+- **Preflight**: ① 작업 대상 파일 경로의 첫 세그먼트로 멤버를 정한다. ② 그 멤버의 `AGENTS.md`를 Read한다. ③ 멤버 워크플로는 슬래시 커맨드로 부를 수 없으므로 `<member>/.ai-harness/workflows/<name>.md`를 **직접 Read하고 절차를 따른다**. ④ 멤버 페르소나(`<member>/.claude/agents/*.md`)는 위임 시 `general-purpose` 프롬프트에 지침을 인라인한다 — 역할 격리가 약해진다는 점을 함께 적는다. ⑤ 멤버 코드로 "현재 상태"(버전·설계·존재 여부)를 판정하기 전 `git -C <member> fetch origin` 후 `git -C <member> rev-list --count HEAD..origin/<base>`로 비교하고, 뒤처져 있으면 기본으로 `git -C <member> show origin/<base>:<path>`로 읽는다(워킹트리를 건드리지 않는다). 체크아웃 자체를 최신화(`pull --ff-only`)하는 건 `git -C <member> status --porcelain`이 비어 있고 로컬 브랜치가 origin과 diverge하지 않았을 때만 한다 — 사용자가 작업 중인 체크아웃일 수 있다. `<base>`는 멤버 AGENTS.md의 기준 브랜치 규칙을 따르고, AGENTS.md가 없으면 `git -C <member> symbolic-ref --short refs/remotes/origin/HEAD`의 기본 브랜치를 쓴다. 멤버 체크아웃은 각자 따로 pull 되어 자주 stale이고, workspace 세션은 여러 멤버를 한꺼번에 훑으므로 삭제된 브랜치·옛 코드를 현재로 오판하기 쉽다.
 - **멤버 표**: 경로 · project_id · 하네스 유무 · 테스트 정책 · git 정책. `harness:false` 멤버는 "해당 저장소에서 `/harness-init` 권장"으로 표기한다.
 - **교차 작업 규칙**: 멤버 둘 이상을 건드릴 때 멤버별 별도 브랜치·PR, 컨벤션은 각 멤버 것만 적용(섞지 않음), 공유 계약(API 스키마·이벤트 포맷) 변경은 제공자 → 소비자 순서, 완료 보고는 멤버별 검증 결과를 분리.
 - **Hard constraints**: 틀만 비워 둔다. 단일 하네스와 같이 `/harvest`가 채운다.
@@ -257,4 +257,5 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 
 - `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
 - `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
+- 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음) 같은 방식으로 diff를 제안하고 승인 후 추가한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
 - 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.

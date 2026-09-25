@@ -250,6 +250,10 @@ assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workspace.json" "harness in
 assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh write" "harness init records the manifest with the script"
 assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks members without a harness"
 assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
+assert_contains "$HARNESS_INIT_CONTENT" "rev-list --count HEAD..origin/<base>" "workspace preflight checks member checkout freshness"
+assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑤" "workspace sync proposes the freshness step for existing AGENTS.md"
+HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
+assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
 pass "workspace mode scan, manifest, and routing"
 
 # Claude/Codex extractor metadata and coverage
