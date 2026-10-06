@@ -7,11 +7,10 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.30.0 (2026-10-06)
 ### 새 기능
 
-- **`/diagram`으로 아키텍처·워크플로·시퀀스·데이터 흐름·상태 전이 다이어그램을 그립니다** — 지금까지는 다이어그램 스킬을 따로 찾아 각 에이전트에 설치해야 했습니다. [Archify](https://github.com/tt-a1i/archify) v3.0.1 릴리스 패키지를 `vendor/archify/`에 해시로 고정해 함께 배포하므로, 플러그인만 설치하면 Claude Code·Codex 양쪽에서 타입 검증된 인터랙티브 HTML 다이어그램을 만듭니다. 엔진의 자체 업데이트 확인은 끄고, 갱신은 ai-harness 릴리스로만 합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. (#63)
+- **`/diagram`으로 아키텍처·워크플로·시퀀스·데이터 흐름·상태 전이 다이어그램을 그립니다** — 지금까지는 다이어그램 스킬을 따로 찾아 각 에이전트에 설치해야 했습니다. [Archify](https://github.com/tt-a1i/archify) v3.0.1 릴리스 패키지를 `vendor/archify/`에 해시로 고정해 함께 배포하므로, 플러그인만 설치하면 Claude Code·Codex 양쪽에서 타입 검증된 인터랙티브 HTML 다이어그램을 만듭니다. 엔진의 자체 업데이트 확인은 끄고, 갱신은 ai-harness 릴리스로만 합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. Codex 기본 샌드박스에서는 Chrome이 뜨지 못해 이 단계에서 권한 승인을 한 번 요청합니다. (#63)
 
 ## v0.29.0 (2026-09-25)
 ### 새 기능
