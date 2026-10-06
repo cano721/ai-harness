@@ -17,7 +17,7 @@ Resolve `ENGINE` as the absolute path of `../../vendor/archify` relative to the 
 
 - Run every engine command as `ARCHIFY_UPDATE_CHECK_DISABLED=1 node "$ENGINE/bin/archify.mjs" <command> ...`. ai-harness owns engine updates (`scripts/vendor-archify.sh`), so the engine must not check for updates. Skip the engine's **Update awareness** section and never run `scripts/check-update.mjs`.
 - Requires Node.js 18+. Check `node --version` once before the first candidate. Without it, stop and say so; offer the Mermaid fallback below.
-- `finalize` ends with a real-browser gate that needs Chrome or Chromium (or a path in `ARCHIFY_CHROME`). Without a browser that gate fails after the HTML is written: report the HTML path and that the browser gate did not run. Never call that result passed.
+- `finalize` ends with a real-browser gate that needs Chrome or Chromium (or a path in `ARCHIFY_CHROME`). Without a browser that gate is skipped after the HTML is written. Inside an agent sandbox (for example Codex `workspace-write`) Chrome can fail to launch, reported as a closed DevTools pipe; rerun the same `finalize` once with the agent's permission escalation for that command when available. Otherwise report the HTML path and that the browser gate did not run. Never call that result passed.
 - Do not install, update, or edit anything under `vendor/`. Fetch remote brand marks only when the user explicitly asks for one.
 
 ## Procedure
