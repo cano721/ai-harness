@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **스키마 조건 없는 information_schema 전체 스캔을 실행 전에 막습니다** — 에이전트가 "이 컬럼을 참조하는 뷰·트리거가 있나"를 확인하려고 `information_schema.VIEWS`·`ROUTINES`·`TRIGGERS`의 정의 본문을 스키마 필터 없이 `LIKE`로 찾는 쿼리를 만들고, 공유 개발 DB에서 10분 넘게 돌며 DB가 내려간 일이 있었습니다. 도구 타임아웃 뒤에도 서버 쪽 쿼리는 계속 돌았습니다. 새 `PreToolUse`(Bash) hook이 DB 클라이언트·드라이버 명령에서 구문·`UNION` 분기마다 `*_schema =`/`IN (...)` 조건이 없는 정의 테이블(모든 엔진)과 메타 테이블(MySQL 계열) 조회를 막고, 범위를 좁히라는 이유를 에이전트에게 돌려줍니다. 스키마를 한정한 조회는 그대로 통과하고, `HM_DB_SCAN_GUARD=0`으로 끌 수 있습니다. Claude Code에만 적용됩니다.
+
 ## v0.30.0 (2026-10-06)
 ### 새 기능
 

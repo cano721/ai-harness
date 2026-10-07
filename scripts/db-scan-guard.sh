@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# PreToolUse(Bash) 가드: 스키마 조건 없는 information_schema 정의·메타 테이블 조회를 실행 전에 막는다.
+#
+# 왜: MySQL/MariaDB의 information_schema는 스키마를 한정하지 않으면 서버의 모든 스키마를 훑는다.
+# 특히 VIEWS/ROUTINES/TRIGGERS의 정의 본문을 LIKE로 찾는 쿼리는 객체마다 정의를 열어야 해서,
+# 스키마가 많은 공유 개발 DB에서 수 분 이상 돌며 서버를 멈춰 세울 수 있다. 에이전트는 "이 컬럼을
+# 참조하는 뷰·트리거가 있나"를 확인할 때 이런 쿼리를 스스로 만들고, 도구 타임아웃이 나도 서버 쪽
+# 쿼리는 계속 돈다.
+#
+# 판정:
+#  - 명령이 DB 클라이언트(mysql·psql 등)나 드라이버를 쓰고, information_schema를 언급할 때만 검사한다.
+#  - 구문(;)과 UNION 분기마다, 아래 테이블을 읽는데 `*_schema =`·`<=>`·`IN (` 조건이 없으면 차단한다.
+#      정의 테이블 VIEWS/ROUTINES/TRIGGERS/EVENTS/PARAMETERS     — 모든 엔진
+#      메타 테이블 TABLES/COLUMNS/STATISTICS/제약 계열/PARTITIONS — MySQL 계열만
+#    PostgreSQL의 information_schema는 접속한 DB 하나로 범위가 정해져 메타 테이블 조회가 가볍다.
+#  - `USE information_schema`나 DB 인자로 information_schema에 붙은 경우 테이블 이름만 쓴 조회도 본다.
+#
+# 끄기: HM_DB_SCAN_GUARD=0 (환경변수 또는 ~/.ai-harness/config). jq가 없거나 입력을 읽지 못하면 통과한다 — 가드가 작업을 막지 않도록.
+set -euo pipefail
+trap 'exit 0' ERR
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+input="$(cat)"
+cmd="$(jq -r '.tool_input.command // "" | if type == "array" then join(" ") else tostring end' <<<"$input" 2>/dev/null || true)"
+[[ -n "$cmd" ]] || exit 0
+
+# 대부분의 Bash 호출은 여기서 끝난다.
+shopt -s nocasematch
+[[ "$cmd" == *information_schema* ]] || exit 0
+shopt -u nocasematch
+
+# 환경변수가 없으면 다른 HM_* 설정과 같은 config에서 읽는다. lib.sh는 디렉터리 생성 같은 부수효과가 있어 쓰지 않는다.
+if [[ -z "${HM_DB_SCAN_GUARD:-}" ]]; then
+  config="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/config"
+  # shellcheck source=/dev/null
+  [[ -f "$config" ]] && source "$config"
+fi
+[[ "${HM_DB_SCAN_GUARD:-1}" == "0" ]] && exit 0
+
+hit="$(jq -rn --arg s "$cmd" '
+  def has($re): $s | test($re; "i");
+  ("(^|[\\s;&|(`])(mysql|mariadb|mysqlsh|mycli|psql|pgcli|usql)(\\s|$)"
+   + "|pymysql|mysql\\.connector|MySQLdb|aiomysql|mysql2|sqlalchemy|create_engine|jdbc:"
+   + "|(mysql|mariadb|postgres(ql)?)://|psycopg|asyncpg|pg8000") as $client
+  | ("(^|[\\s;&|(`])(psql|pgcli)(\\s|$)|postgres(ql)?://|jdbc:postgresql|psycopg|asyncpg|pg8000") as $pg
+  | ("(^|[\\s;&|(`])(mysql|mariadb|mysqlsh|mycli)(\\s|$)|pymysql|mysql\\.connector|MySQLdb|aiomysql|mysql2|(mysql|mariadb)://|jdbc:(mysql|mariadb)") as $my
+  | if has($client) | not then empty else
+      (has($pg) and (has($my) | not)) as $is_pg
+      | (["views", "routines", "triggers", "events", "parameters"]
+         + (if $is_pg then [] else
+              ["tables", "columns", "statistics", "key_column_usage", "referential_constraints",
+               "table_constraints", "check_constraints", "partitions",
+               "view_table_usage", "view_routine_usage"] end)
+         | join("|")) as $names
+      | ("`?information_schema`?\\s*\\.\\s*`?(?<t>" + $names + ")`?\\b") as $qualified
+      | ("\\b(from|join)\\s+`?(?<t>" + $names + ")`?\\b") as $bare
+      # information_schema가 테이블 한정자가 아닌 자리(USE·DB 인자)에 나오면 비한정 이름도 대상이다.
+      | has("\\binformation_schema`?(?!`?\\s*\\.)") as $in_ctx
+      | [ $s | splits(";|\\bunion\\b"; "i")
+          | select(test("\\b\\w*_schema`?\\s*(=|<=>|in\\s*\\()"; "i") | not)
+          | (capture($qualified; "i") // (if $in_ctx then capture($bare; "i") else empty end))
+          | .t | ascii_upcase ]
+      | first // empty
+    end
+' 2>/dev/null || true)"
+
+[[ -n "$hit" ]] || exit 0
+
+reason="[DB scan guard] information_schema.${hit}를 스키마 조건 없이 조회하면 서버의 모든 스키마를 훑습니다. 정의 본문 LIKE 검색은 공유 DB를 수 분간 묶을 수 있습니다. 각 구문과 UNION 분기마다 table_schema = 'app'처럼 *_schema = 또는 IN (...) 조건을 넣어 범위를 좁혀 주세요. 모든 스키마를 꼭 봐야 하면 사용자에게 직접 실행을 요청하세요."
+jq -cn --arg reason "$reason" \
+  '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$reason}}'
