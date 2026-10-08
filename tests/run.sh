@@ -1313,6 +1313,73 @@ find "$DUE_DATA/.backfill-due.lock" -depth -delete
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" "backfill-due.sh" "SessionStart schedules backfill"
 pass "scheduled background backfill"
 
+# 자동 harvest: opt-in, 재귀 차단, batch당 1회, 하네스 없는 곳 skip, 일일 상한, 결과 기록
+AUTO_DATA="$TEST_TMP/auto-data"
+AUTO_REPO="$TEST_TMP/auto-repo"
+AUTO_PLAIN="$TEST_TMP/auto-plain"
+make_repo "$AUTO_REPO"
+make_repo "$AUTO_PLAIN"
+mkdir -p "$AUTO_REPO/.ai-harness"
+jq -n '{project_id:"auto-svc"}' >"$AUTO_REPO/.ai-harness/harness.json"
+AUTO_STUB="$TEST_TMP/auto-stub.sh"
+cat >"$AUTO_STUB" <<'STUB'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "${HM_HARVEST_RUNNING:-}" "$(pwd -P)" >>"$AUTO_STUB_OUT"
+case "${AUTO_STUB_MODE:-}" in
+  improve)
+    # mark-reviewed가 남기는 review-history 레코드 형태
+    mkdir -p "$HARNESS_METRICS_DIR/harvest-queue/p-$1"
+    jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{reviewed_at:$at,review:{outcome:"improved",artifact:"https://example.com/pr/1"}}' \
+      >>"$HARNESS_METRICS_DIR/harvest-queue/p-$1/review-history.jsonl"
+    ;;
+  fail) exit 3 ;;
+esac
+STUB
+chmod +x "$AUTO_STUB"
+auto_status() { jq -cn --arg p "$1" --arg b "$2" --arg r "${3:-errors}" '{project:$p,batch_id:$b,has_analysis_batch:true,reasons:($r | split(","))}'; }
+auto_trigger() { # $1=status $2=cwd, 추가 env는 호출자가 앞에 붙인다
+  HARNESS_METRICS_DIR="$AUTO_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
+    AUTO_STUB_OUT="$TEST_TMP/auto-stub.out" \
+    "$ROOT/scripts/harvest-auto.sh" trigger "$1" "$2" claude
+}
+auto_runs() { jq -sr "$1" "$AUTO_DATA/harvest-auto/runs.jsonl"; }
+
+auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+HM_HARVEST_AUTO=1 HM_HARVEST_RUNNING=1 auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+HM_HARVEST_AUTO=1 auto_trigger '{"project":"auto-svc","has_analysis_batch":false}' "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
+assert_eq 'no_harness_repo' "$(auto_runs '[.[] | select(.project=="plain") | .reason] | join(",")')" "no-harness batch skipped once"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b0 sessions)" "$AUTO_REPO"
+assert_eq "sessions_only" "$(auto_runs 'last | .reason')" "sessions-only batch is left to the notice"
+assert_not_file "$TEST_TMP/auto-stub.out"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
+assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs once"
+assert_eq "auto-svc|1|$(cd "$AUTO_REPO" && pwd -P)" "$(sed -n 1p "$TEST_TMP/auto-stub.out")" "worker gets project, recursion guard, repo cwd"
+assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
+
+HM_HARVEST_AUTO=1 AUTO_STUB_MODE=improve auto_trigger "$(auto_status auto-svc b2)" "$AUTO_REPO"
+assert_eq 'improved|https://example.com/pr/1' "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.artifact)"')" "review outcome recorded"
+assert_eq "success" "$(jq -r '.components.harvest_auto.last_result' "$AUTO_DATA/health.json")" "auto health success"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b3)" "$AUTO_REPO"
+assert_eq "daily_max" "$(auto_runs 'last | .reason')" "daily cap skips without consuming batch"
+assert_eq "b2" "$(jq -r '.batch_id' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "capped batch stays retryable"
+
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=5 AUTO_STUB_MODE=fail auto_trigger "$(auto_status auto-svc b3)" "$AUTO_REPO"
+assert_eq "failed|3" "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.exit_code)"')" "failed run recorded"
+assert_eq "exit_3" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/health.json")" "auto health failure"
+assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
+pass "opt-in background harvest trigger"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \

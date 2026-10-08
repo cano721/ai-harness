@@ -11,6 +11,13 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 
 인자: `$ARGUMENTS` — 대상 프로젝트명. `--dry-run` 포함 시 개선안 보고만 하고 파일 수정/PR 안 함.
 
+`--auto` 포함 시 SessionEnd hook(`scripts/harvest-auto.sh`, opt-in `HM_HARVEST_AUTO=1`)이 띄운 무인 실행이다. 질문에 답할 사람이 없으므로 아래를 지킨다.
+
+- 사용자에게 묻지 않는다. 확인이 필요한 분기(이슈 생성 필요, workspace 로컬 적용, 멤버 하네스 대상)를 만나면 적용하지 않고 보고로 끝내며 `mark-reviewed`도 하지 않는다 — batch가 남아 사람이 `/harvest`로 이어받는다.
+- 사용자 체크아웃을 건드리지 않는다. 7단계는 `git worktree add` 로 만든 임시 경로에서 하고, PR 생성 뒤 그 worktree를 제거한다. 현재 브랜치 전환·stash·작업 트리 수정 금지.
+- PR은 `--draft`로 만들고 본문 첫 줄에 `자동 harvest(--auto) 결과`를 밝힌다. 병합 판단은 사람 몫이다.
+- 마지막 출력은 결과 한 줄(`improved <PR URL>` / `no-change <이유>` / `left_for_user <이유>`).
+
 ## 절차
 
 ### 1. 데이터 갱신 + 통계

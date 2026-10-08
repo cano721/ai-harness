@@ -12,6 +12,7 @@
 ### 새 기능
 
 - **터미널을 그냥 닫은 세션도 하루 한 번 자동으로 수집합니다** — 터미널·탭을 닫으면 `SessionEnd`가 실행되지 않아, 실측에서 최근 14일 Claude 세션의 43%가 `/harvest`나 `/metrics`를 직접 돌릴 때까지 기록되지 않았고 analysis batch 판정도 그만큼 늦어졌습니다. 이제 `SessionStart`가 마지막 backfill이 24시간(`HM_BACKFILL_INTERVAL_HOURS`) 넘었으면 backfill을 세션과 분리된 저우선순위 프로세스로 실행합니다. 세션 시작 시간은 늘지 않습니다.
+- **analysis batch가 생기면 `/harvest`를 자동으로 돌릴 수 있습니다 (opt-in)** — 지금까지는 batch가 쌓여도 알림만 뜨고 사람이 `/harvest`를 쳐야 해서, 실제로는 수십 개 batch가 몇 주씩 검토되지 않은 채 남았습니다. `~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 `SessionEnd`가 세션과 분리된 headless 세션으로 `/harvest --auto`를 실행해 별도 worktree에서 draft PR까지 만듭니다. 세션 수만 넘은(다른 신호 없는) batch는 실측상 거의 노이즈라 자동 실행에서 빼고 알림으로 남깁니다. batch당 1회·하루 2회·동시 1개·실행당 $5로 제한하고, 실행마다 결과·비용·PR을 `~/.ai-harness/harvest-auto/runs.jsonl`에 남깁니다. 기본값은 꺼져 있습니다.
 
 ### 버그 수정
 

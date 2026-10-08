@@ -33,8 +33,13 @@ else
 fi
 if [[ -f "$event_file" ]] \
   && jq -e 'select(.kind=="session")' "$event_file" >/dev/null 2>&1 \
-  && "$DIR/harvest-queue.sh" record "$event_file" >/dev/null 2>&1; then
+  && queue_status="$("$DIR/harvest-queue.sh" record "$event_file" 2>/dev/null)"; then
   "$DIR/health.sh" success session_end >/dev/null 2>&1 || true
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
+  [[ -n "$cwd" ]] || cwd="$(jq -r 'select(.kind=="session") | .cwd // empty' "$event_file" 2>/dev/null | head -n 1)"
+  agent="claude"
+  [[ "$(basename "$tp")" == rollout-*.jsonl ]] && agent="codex"
+  "$DIR/harvest-auto.sh" trigger "$queue_status" "$cwd" "$agent" >/dev/null 2>&1 || true
 else
   "$DIR/health.sh" failure session_end queue_record_failed >/dev/null 2>&1 || true
 fi
