@@ -1226,7 +1226,7 @@ pass "coverage-aware metrics"
 REPO_URL_DATA="$TEST_TMP/repo-url-data"
 REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
 mkdir -p "${REPO_URL_ROLLOUT%/*}"
-jq -c 'if .type=="session_meta" then .payload.cwd="/gone/workspaces/x/feature-NJ-612"
+jq -cR 'fromjson? | if .type=="session_meta" then .payload.cwd="/gone/workspaces/x/feature-NJ-612"
   | .payload.git={repository_url:"https://github.com/acme/jobda-agent.git"} else . end' \
   "$CODEX_FIXTURE" >"$REPO_URL_ROLLOUT"
 HARNESS_METRICS_DIR="$REPO_URL_DATA" "$ROOT/scripts/extract-codex.sh" "$REPO_URL_ROLLOUT"
