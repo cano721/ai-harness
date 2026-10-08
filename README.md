@@ -342,7 +342,7 @@ MySQL/MariaDB의 information_schema는 스키마를 한정하지 않으면 서�
   - 정의 테이블 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS` — 모든 엔진
   - 메타 테이블 `TABLES`·`COLUMNS`·`STATISTICS`·제약 계열·`PARTITIONS`·`VIEW_*_USAGE` — MySQL 계열만. PostgreSQL의 information_schema는 접속한 DB 하나로 범위가 정해져 가볍습니다.
 
-스키마를 한정한 조회(`where table_schema = 'app' and view_definition like '%orders%'`), `SCHEMATA` 조회, 코드 검색(`grep information_schema.views`)은 그대로 통과합니다. 명령 문자열에 보이는 쿼리만 검사하므로 스크립트 파일 안에 숨은 쿼리는 보지 않습니다. 판정은 bash와 jq만 쓰고, 일반 명령에는 수 ms만 더해집니다. jq가 없거나 입력을 읽지 못하면 통과합니다.
+스키마를 한정한 조회(`where table_schema = 'app' and view_definition like '%orders%'`), `SCHEMATA` 조회, 코드 검색(`grep information_schema.views`)은 그대로 통과합니다. 명령 문자열에 보이는 쿼리만 검사하므로 스크립트 파일 안에 숨은 쿼리는 보지 않습니다. jq가 없거나 입력을 읽지 못하면 통과합니다.
 
 끄려면 `HM_DB_SCAN_GUARD=0`을 [설정](#configuration)하거나 Claude Code를 실행하는 환경변수로 줍니다. 차단 메시지는 끄는 방법을 에이전트에게 알려주지 않습니다 — 에이전트가 가드를 스스로 끄지 않게 하려는 것입니다.
 

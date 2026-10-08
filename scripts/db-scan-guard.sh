@@ -1,21 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash) 가드: 스키마 조건 없는 information_schema 정의·메타 테이블 조회를 실행 전에 막는다.
-#
-# 왜: MySQL/MariaDB의 information_schema는 스키마를 한정하지 않으면 서버의 모든 스키마를 훑는다.
-# 특히 VIEWS/ROUTINES/TRIGGERS의 정의 본문을 LIKE로 찾는 쿼리는 객체마다 정의를 열어야 해서,
-# 스키마가 많은 공유 개발 DB에서 수 분 이상 돌며 서버를 멈춰 세울 수 있다. 에이전트는 "이 컬럼을
-# 참조하는 뷰·트리거가 있나"를 확인할 때 이런 쿼리를 스스로 만들고, 도구 타임아웃이 나도 서버 쪽
-# 쿼리는 계속 돈다.
-#
-# 판정:
-#  - 명령이 DB 클라이언트(mysql·psql 등)나 드라이버를 쓰고, information_schema를 언급할 때만 검사한다.
-#  - 구문(;)과 UNION 분기마다, 아래 테이블을 읽는데 `*_schema =`·`<=>`·`IN (` 조건이 없으면 차단한다.
-#      정의 테이블 VIEWS/ROUTINES/TRIGGERS/EVENTS/PARAMETERS     — 모든 엔진
-#      메타 테이블 TABLES/COLUMNS/STATISTICS/제약 계열/PARTITIONS — MySQL 계열만
-#    PostgreSQL의 information_schema는 접속한 DB 하나로 범위가 정해져 메타 테이블 조회가 가볍다.
-#  - `USE information_schema`나 DB 인자로 information_schema에 붙은 경우 테이블 이름만 쓴 조회도 본다.
-#
-# 끄기: HM_DB_SCAN_GUARD=0 (환경변수 또는 ~/.ai-harness/config). jq가 없거나 입력을 읽지 못하면 통과한다 — 가드가 작업을 막지 않도록.
+# 판정 기준은 README "DB 스캔 가드". 끄기: HM_DB_SCAN_GUARD=0. jq가 없거나 입력을 읽지 못하면 통과한다.
 set -euo pipefail
 trap 'exit 0' ERR
 
