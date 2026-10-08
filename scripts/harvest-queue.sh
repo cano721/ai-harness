@@ -192,19 +192,26 @@ event_summary() {
   ' "$event_file" 2>/dev/null || true
 }
 
+# 옛 프로젝트 ID 큐의 batch에서 세션이 빠져 남은 게 없으면 batch를 해산한다.
+# 그 이름으로는 더 이상 알림이 가지 않아 아무도 검토하지 않는 batch로 남기 때문이다.
+dissolve_empty_batch() { # $1=other_qdir
+  local batch_file="$1/analysis-batch.json" marker=""
+  [[ -f "$batch_file" ]] || return 0
+  while IFS= read -r marker; do
+    [[ -n "$marker" && -f "$1/sessions/$marker" ]] && return 0
+  done < <(jq -r '.markers[]?' "$batch_file" 2>/dev/null)
+  find "$batch_file" "$1/notified-analysis-batch" -maxdepth 0 -type f -delete 2>/dev/null || true
+}
+
 # 프로젝트 ID 규칙이 바뀌어 재추출된 세션은 다른 큐에 남은 상태를 가져온다.
 # 검토 완료(seen)는 그대로 옮겨 재검토를 막고, 대기(pending)는 옮겨 중복 집계를 막는다.
-# 이전 큐의 analysis batch에 묶인 세션은 그 batch 검토가 끝날 때까지 두고 1을 돌려준다.
+# 옛 큐의 batch에 묶여 있던 세션도 옮긴다 — 옛 이름의 batch는 알림이 가지 않는 고아가 된다.
 adopt_moved_session() {
   local qdir="$1" marker="$2" project="$3" other="" other_qdir="" dest="" tmp=""
   shopt -s nullglob
   for other in "$QUEUE_ROOT"/*/seen/"$marker" "$QUEUE_ROOT"/*/sessions/"$marker"; do
     other_qdir="${other%/*/*}"
     [[ "$other_qdir" != "$qdir" ]] || continue
-    if [[ "$other" == */sessions/* ]] && in_other_batch "$other_qdir" "$marker"; then
-      shopt -u nullglob
-      return 1
-    fi
     if [[ "$other" == */seen/* ]]; then
       dest="$qdir/seen/$marker"
     else
@@ -214,18 +221,13 @@ adopt_moved_session() {
     if jq -c --arg project "$project" '.project = $project' "$other" >"$tmp" 2>/dev/null; then
       mv "$tmp" "$dest"
       find "$other" -maxdepth 0 -type f -delete
+      [[ "$other" == */seen/* ]] || dissolve_empty_batch "$other_qdir"
     else
       find "$tmp" -maxdepth 0 -type f -delete
     fi
     break
   done
   shopt -u nullglob
-  return 0
-}
-
-in_other_batch() { # $1=other_qdir $2=marker
-  [[ -f "$1/analysis-batch.json" ]] \
-    && jq -e --arg m "$2" '(.markers // []) | index($m)' "$1/analysis-batch.json" >/dev/null 2>&1
 }
 
 # 이전 버전의 프로젝트 ID 변경으로 다른 큐에 남은 대기 복사본은 그 큐의 batch 판정을 부풀린다.
@@ -235,8 +237,8 @@ drop_stale_pending_copies() {
   for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
     other_qdir="${other%/*/*}"
     [[ "$other_qdir" != "$qdir" ]] || continue
-    in_other_batch "$other_qdir" "$marker" && continue
     find "$other" -maxdepth 0 -type f -delete
+    dissolve_empty_batch "$other_qdir"
   done
   shopt -u nullglob
 }
@@ -256,7 +258,7 @@ record_summary() {
   seen_file="$qdir/seen/$marker"
   pending_file="$qdir/sessions/$marker"
   if [[ ! -f "$seen_file" && ! -f "$pending_file" ]]; then
-    adopt_moved_session "$qdir" "$marker" "$project" || { RECORD_ACTION="held-by-batch"; return 0; }
+    adopt_moved_session "$qdir" "$marker" "$project"
   else
     drop_stale_pending_copies "$qdir" "$marker"
   fi
