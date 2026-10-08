@@ -35,9 +35,12 @@ append_run() { # $1=json
   printf '%s\n' "$1" >>"$RUNS_FILE"
 }
 
+# batch_id는 세션 마커를 이어 붙인 값이라 길다. 실행 기록에는 짧은 키만 남긴다.
+batch_key() { printf '%s' "$1" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12; }
+
 log_skip() { # $1=project $2=batch_id $3=reason
-  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$1" --arg batch_id "$2" --arg reason "$3" \
-    '{at:$at,event:"skipped",project:$project,batch_id:$batch_id,reason:$reason}')"
+  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$1" --arg batch "$(batch_key "$2")" --arg reason "$3" \
+    '{at:$at,event:"skipped",project:$project,batch:$batch,reason:$reason}')"
 }
 
 started_today() {
@@ -125,7 +128,8 @@ agent_command() { # $1=project $2=repo_root $3=agent → 실행할 argv를 AGENT
       AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto"
         --permission-mode acceptEdits
         --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
-        "Bash(git *)" "Bash(gh pr *)" "Bash(gh repo view *)" "Bash(jq *)" "Bash($scripts_glob)"
+        "Bash(git *)" "Bash(gh pr *)" "Bash(gh repo view *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
+        "Bash($scripts_glob)"
         --max-budget-usd "$BUDGET_USD"
         --output-format json)
       ;;
@@ -162,9 +166,9 @@ command_run() {
   start_epoch="$(date +%s)"
   log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(hm_project_key "$project").log"
   agent_command "$project" "$repo_root" "$agent"
-  append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch_id "$batch_id" \
+  append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" \
-    '{at:$at,event:"started",project:$project,batch_id:$batch_id,agent:$agent,repo:$repo,log:$log}')"
+    '{at:$at,event:"started",project:$project,batch:$batch,agent:$agent,repo:$repo,log:$log}')"
 
   (cd "$repo_root" && HM_HARVEST_RUNNING=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
 
@@ -180,11 +184,11 @@ command_run() {
   else
     result="$(printf '%s' "$review" | jq -r '.review.outcome // "reviewed"')"
   fi
-  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch_id "$batch_id" \
+  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg result "$result" --argjson exit_code "$exit_code" \
     --argjson duration_s "$(( $(date +%s) - start_epoch ))" --argjson cost_usd "${cost:-null}" \
     --argjson review "$review" --arg log "$log_file" \
-    '{at:$at,event:"finished",project:$project,batch_id:$batch_id,result:$result,exit_code:$exit_code,
+    '{at:$at,event:"finished",project:$project,batch:$batch,result:$result,exit_code:$exit_code,
       duration_s:$duration_s,cost_usd:$cost_usd,artifact:($review.review.artifact // null),log:$log}')"
   if (( exit_code == 0 )); then
     "$DIR/health.sh" success harvest_auto >/dev/null 2>&1 || true
