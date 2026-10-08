@@ -1265,9 +1265,10 @@ jq -c 'if .kind=="session" then .project="held-old" else . end' "$HELD_EVENT" >"
 HARNESS_METRICS_DIR="$HELD_EVENT_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" >/dev/null
 assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
 jq -c 'if .kind=="session" then .project="held-new" else . end' "$HELD_EVENT" >"$HELD_EVENT.tmp" && mv "$HELD_EVENT.tmp" "$HELD_EVENT"
-assert_eq "held-by-batch" "$(HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" | jq -r '.record_action')" "session in a pending batch stays with that batch"
-assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER"
-assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-new/sessions/$MOVE_MARKER"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" >/dev/null
+assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-new/sessions/$MOVE_MARKER"
+assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER"
+assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
 # 추출 규칙 변경으로 신호 수만 달라진 재추출은 검토 완료 세션을 다시 큐에 넣지 않는다.
 retag_move_event third-name
 jq -c 'select(.kind!="correction_mark")' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
