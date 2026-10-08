@@ -52,6 +52,6 @@ hit="$(jq -rn --arg s "$cmd" '
 
 [[ -n "$hit" ]] || exit 0
 
-reason="[DB scan guard] information_schema.${hit}를 스키마 조건 없이 조회하면 서버의 모든 스키마를 훑습니다. 정의 본문 LIKE 검색은 공유 DB를 수 분간 묶을 수 있습니다. 각 구문과 UNION 분기마다 table_schema = 'app'처럼 *_schema = 또는 IN (...) 조건을 넣어 범위를 좁혀 주세요. 모든 스키마를 꼭 봐야 하면 사용자에게 직접 실행을 요청하세요."
+reason="[DB scan guard] information_schema.${hit}를 스키마 조건 없이 조회하면 모든 스키마를 훑습니다. 각 구문과 UNION 분기에 table_schema = 'app' 같은 *_schema 조건을 넣으세요. 전체 조회가 꼭 필요하면 사용자에게 직접 실행을 요청하세요."
 jq -cn --arg reason "$reason" \
   '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$reason}}'

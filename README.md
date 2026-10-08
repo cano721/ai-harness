@@ -91,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. 이와 별도로 Claude Code의 Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 돌며, 공유 DB를 멈춰 세울 수 있는 information_schema 전체 스캔 하나만 막습니다.
+Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -333,18 +333,13 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 ## DB 스캔 가드
 
-MySQL/MariaDB의 information_schema는 스키마를 한정하지 않으면 서버의 모든 스키마를 훑습니다. 특히 "이 컬럼을 참조하는 뷰·트리거가 있나"를 확인하려고 `VIEWS`·`ROUTINES`·`TRIGGERS`의 정의 본문을 `LIKE`로 찾는 쿼리는 객체마다 정의를 열어야 해서, 스키마가 많은 공유 개발 DB를 수 분 이상 묶을 수 있습니다. 에이전트가 영향 범위를 확인하다 이런 쿼리를 스스로 만들기 쉽고, 도구 타임아웃이 나도 서버 쪽 쿼리는 계속 돕니다.
+스키마 조건 없는 information_schema 조회는 서버의 모든 스키마를 훑어 공유 DB를 멈춰 세울 수 있습니다. Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/db-scan-guard.sh`)이 이런 조회를 막습니다.
 
-`PreToolUse` hook(`scripts/db-scan-guard.sh`)이 Claude Code의 Bash 실행 전에 명령을 보고, 아래 조건을 모두 만족할 때만 실행을 막고 이유를 에이전트에게 돌려줍니다.
+- 대상: DB 클라이언트(`mysql`·`psql` 등)나 드라이버(`pymysql`·`psycopg` 등)를 쓰는 명령
+- 차단: 구문(`;`)이나 `UNION` 분기에 `*_schema =`·`IN (...)` 조건 없이 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽을 때. MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함
+- 한계: 명령 문자열에 보이는 쿼리만 검사
 
-- 명령이 DB 클라이언트(`mysql`·`mariadb`·`psql` 등)나 드라이버(`pymysql`·`psycopg`·`sqlalchemy` 등, 접속 URI 포함)를 쓴다
-- 구문(`;`)이나 `UNION` 분기 하나가 아래 테이블을 읽는데 `table_schema = ...`처럼 `*_schema =`·`<=>`·`IN (...)` 조건이 없다
-  - 정의 테이블 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS` — 모든 엔진
-  - 메타 테이블 `TABLES`·`COLUMNS`·`STATISTICS`·제약 계열·`PARTITIONS`·`VIEW_*_USAGE` — MySQL 계열만. PostgreSQL의 information_schema는 접속한 DB 하나로 범위가 정해져 가볍습니다.
-
-스키마를 한정한 조회(`where table_schema = 'app' and view_definition like '%orders%'`), `SCHEMATA` 조회, 코드 검색(`grep information_schema.views`)은 그대로 통과합니다. 명령 문자열에 보이는 쿼리만 검사하므로 스크립트 파일 안에 숨은 쿼리는 보지 않습니다. jq가 없거나 입력을 읽지 못하면 통과합니다.
-
-끄려면 `HM_DB_SCAN_GUARD=0`을 [설정](#configuration)하거나 Claude Code를 실행하는 환경변수로 줍니다. 차단 메시지는 끄는 방법을 에이전트에게 알려주지 않습니다 — 에이전트가 가드를 스스로 끄지 않게 하려는 것입니다.
+끄려면 `HM_DB_SCAN_GUARD=0`을 [설정](#configuration)합니다.
 
 <a id="data-retention"></a>
 
