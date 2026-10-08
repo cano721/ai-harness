@@ -293,9 +293,9 @@ stateDiagram-v2
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
 | 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음) | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음). 마지막 backfill이 24시간 넘었으면 backfill을 백그라운드로 띄움 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
-두 hook은 3초 timeout이며 실패해도 작업 세션을 막지 않습니다. 누락·진행 중인 Codex 세션은 `/metrics`, `/harvest`, 세션 조회의 backfill이 보완합니다.
+SessionStart는 3초, SessionEnd는 10초 timeout이며 실패해도 작업 세션을 막지 않습니다. 터미널·탭을 그냥 닫은 세션은 `SessionEnd`가 실행되지 않으므로, `SessionStart`가 하루 한 번 backfill을 세션과 분리된 저우선순위(`nice`) 프로세스로 돌려 회수합니다. `/metrics`, `/harvest`, 세션 조회도 같은 backfill을 실행합니다.
 
 ### 언제 `/harvest`를 안내하나
 
@@ -429,6 +429,7 @@ HM_HARVEST_MAX_BATCH_SESSIONS=50
 HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
+HM_BACKFILL_INTERVAL_HOURS=24    # SessionStart 백그라운드 backfill 주기. 0이면 비활성화
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한

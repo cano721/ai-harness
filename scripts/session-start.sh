@@ -24,6 +24,8 @@ if [[ -n "$transcript" && "$(basename "$transcript")" != rollout-*.jsonl && ! -e
   fi
 fi
 
+"$ROOT/scripts/backfill-due.sh" >/dev/null 2>&1 || true
+
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"
 [[ -n "$queue_message" ]] && messages+=("$queue_message")
