@@ -1281,6 +1281,14 @@ jq -c '.project="stale-name"' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_
   >"$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
 move_record >/dev/null
 assert_not_file "$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
+# 내 큐에는 대기, 옛 큐에는 검토 완료로 갈라진 같은 세션은 검토 완료로 합친다.
+mkdir -p "$MOVE_DATA/harvest-queue/p-split-old/seen"
+cp "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" "$MOVE_DATA/harvest-queue/p-split-old/seen/$MOVE_MARKER"
+mv "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+move_record >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-split-old/seen/$MOVE_MARKER"
 pass "project ID changes keep queue state"
 
 # 정기 backfill: SessionEnd 없이 닫힌 세션을 SessionStart가 주기적으로 회수한다.
@@ -1381,6 +1389,32 @@ assert_eq "failed|3" "$(auto_runs '[.[] | select(.event=="finished")] | last | "
 assert_eq "exit_3" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/health.json")" "auto health failure"
 assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
 pass "opt-in background harvest trigger"
+
+# 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
+INTERNAL_DATA="$TEST_TMP/internal-data"
+INTERNAL_TRANSCRIPT="$TEST_TMP/internal/cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+mkdir -p "${INTERNAL_TRANSCRIPT%/*}"
+INTERNAL_FIRST=0
+while IFS= read -r line; do
+  if (( INTERNAL_FIRST == 0 )) && jq -e 'select(.type=="user" and (.message.content|type)=="string")' <<<"$line" >/dev/null 2>&1; then
+    jq -c '.message.content = "<command-name>/ai-harness:harvest</command-name>\n<command-args>service --auto</command-args>"' <<<"$line"
+    INTERNAL_FIRST=1
+  else
+    printf '%s\n' "$line"
+  fi
+done <"$CLAUDE_FIXTURE" >"$INTERNAL_TRANSCRIPT"
+INTERNAL_EVENT="$INTERNAL_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$INTERNAL_TRANSCRIPT" "other"
+assert_eq "true" "$(jq -r 'select(.kind=="session") | .internal' "$INTERNAL_EVENT")" "auto harvest session is marked internal"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+assert_eq "false" "$(jq -r 'select(.kind=="session") | .internal' "$INTERNAL_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl")" "normal session is not internal"
+INTERNAL_MARKER="claude-cccccccc-1111-2222-3333-dddddddddddd.json"
+mkdir -p "$INTERNAL_DATA/harvest-queue/p-service/sessions"
+jq -cn '{project:"service",src:"claude",sid:"cccccccc-1111-2222-3333-dddddddddddd"}' \
+  >"$INTERNAL_DATA/harvest-queue/p-service/sessions/$INTERNAL_MARKER"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/harvest-queue.sh" record "$INTERNAL_EVENT" >/dev/null
+assert_not_file "$INTERNAL_DATA/harvest-queue/p-service/sessions/$INTERNAL_MARKER"
+pass "internal auto-harvest sessions stay out of the queue"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"

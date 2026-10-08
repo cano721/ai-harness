@@ -60,6 +60,8 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
      "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
   def correction_candidate_max_len: 200;
+  # Claude 어댑터와 같은 내부 세션 판정 — 자동 harvest(--auto)가 띄운 headless 세션.
+  def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
   # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
   def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L
@@ -92,6 +94,7 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       cache_write: ($tok.cache_write_input_tokens // 0),
       model:   $model,
       provider: ($meta.payload.model_provider // null),
+      internal: (($texts | first // "") | is_internal_prompt),
       cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",

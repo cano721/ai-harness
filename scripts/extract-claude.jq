@@ -27,6 +27,9 @@ def correction_hints:
    "that's wrong", "thats wrong", "you missed", "didn't work"];
 # 긴 턴은 새 지시일 확률이 높다.
 def correction_candidate_max_len: 200;
+# 자동 harvest(--auto)가 띄운 headless 세션. 프로젝트 작업이 아니므로 큐 신호에서 뺀다.
+# Codex 어댑터(scripts/extract-codex.sh)와 같은 판정을 쓴다.
+def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
 # 발췌는 /metrics가 마크다운 불릿으로 렌더하므로 한 줄로 접는다. 붙여넣기가 섞인 턴은
 # 개행이 그대로 들어와 리스트를 깨뜨린다 — 실측 후보 79건 중 23건(29%)이 개행 포함이었다.
 def excerpt: gsub("\\s+"; " ") | .[0:60];
@@ -54,6 +57,7 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
     cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
     model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
+    internal: (($userMsgs | first | utext? // "") | is_internal_prompt),
     cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",

@@ -147,7 +147,8 @@ event_summary() {
     def total($kind):
       ([.[] | select(.kind == $kind) | (.n // 1)] | add // 0);
     (map(select(.kind == "session")) | first) as $session
-    | if $session == null or ($session.project // "") == "" or ($session.sid // "") == "" then
+    | if $session == null or ($session.project // "") == "" or ($session.sid // "") == ""
+      or ($session.internal // false) then
         empty
       else
         (total("correction_mark")) as $corrections
@@ -230,6 +231,27 @@ adopt_moved_session() {
   shopt -u nullglob
 }
 
+# 이전 ID 변경으로 내 큐에는 대기, 옛 큐에는 검토 완료로 갈라진 세션은 같은 세션이면 검토 완료로 합친다.
+adopt_reviewed_elsewhere() { # $1=qdir $2=marker $3=summary
+  local qdir="$1" marker="$2" summary="$3" other="" tmp=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/seen/"$marker"; do
+    [[ "${other%/*/*}" != "$qdir" ]] || continue
+    if [[ "$(jq -r --argjson cur "$summary" '
+        (.event_revision // "{}" | fromjson? // {}) as $o | ($cur.event_revision // "{}" | fromjson? // {}) as $n
+        | ($o.ended != null and $o.ended == $n.ended and ($o.turns // -1) == ($n.turns // -2))
+      ' "$other" 2>/dev/null)" == "true" ]]; then
+      tmp="$(mktemp "$qdir/seen/.adopt.XXXXXX")"
+      jq -c --argjson cur "$summary" '. + {project:$cur.project, event_revision:$cur.event_revision, totals:$cur.totals}' \
+        "$other" >"$tmp" && mv "$tmp" "$qdir/seen/$marker"
+      find "$qdir/sessions/$marker" "$other" -maxdepth 0 -type f -delete
+      dissolve_empty_batch "$qdir"
+      break
+    fi
+  done
+  shopt -u nullglob
+}
+
 # 이전 버전의 프로젝트 ID 변경으로 다른 큐에 남은 대기 복사본은 그 큐의 batch 판정을 부풀린다.
 drop_stale_pending_copies() {
   local qdir="$1" marker="$2" other="" other_qdir=""
@@ -261,6 +283,7 @@ record_summary() {
     adopt_moved_session "$qdir" "$marker" "$project"
   else
     drop_stale_pending_copies "$qdir" "$marker"
+    [[ -f "$pending_file" ]] && adopt_reviewed_elsewhere "$qdir" "$marker" "$summary"
   fi
 
   # 같은 세션을 재개할 수 있으므로 sid만으로 영구 제외하지 않는다. 마지막 검토 revision과
@@ -549,11 +572,29 @@ parse_review_options() {
   esac
 }
 
+# 내부 세션(자동 harvest)으로 재판정된 세션이 이전 버전에서 큐에 들어갔다면 꺼낸다.
+purge_internal_session() { # $1=event_file
+  local marker="" other=""
+  marker="$(jq -sr 'map(select(.kind=="session" and (.internal // false)))
+    | first | if . == null then empty else "\(.src)-\(.sid)" end' "$1" 2>/dev/null || true)"
+  [[ -n "$marker" ]] || return 0
+  marker="$(printf '%s' "$marker" | jq -sRr '@uri').json"
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    find "$other" -maxdepth 0 -type f -delete
+    dissolve_empty_batch "${other%/*/*}"
+  done
+  shopt -u nullglob
+}
+
 command_record() {
   [[ -n "${1:-}" ]] || usage
   local summary project qdir lock_dir status
   summary="$(event_summary "$1")"
-  [[ -n "$summary" ]] || exit 0
+  if [[ -z "$summary" ]]; then
+    purge_internal_session "$1"
+    exit 0
+  fi
   project="$(printf '%s' "$summary" | jq -r '.project')"
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
