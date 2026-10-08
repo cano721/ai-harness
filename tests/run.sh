@@ -1214,6 +1214,60 @@ assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_can
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
+# PreToolUse(Bash) 가드는 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
+assert_eq "Bash" "$(jq -r '.hooks.PreToolUse[0].matcher' "$ROOT/hooks/hooks.json")" "db scan guard matches Bash"
+assert_eq "3" "$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "db scan guard stays inside a short budget"
+GUARD_COMMAND="$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
+assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"
+GUARD_DATA="$TEST_TMP/guard-data"
+mkdir -p "$GUARD_DATA"
+run_db_guard() {
+  jq -cn --arg c "$1" '{tool_name:"Bash", tool_input:{command:$c}}' \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$GUARD_DATA" /bin/sh -c "$GUARD_COMMAND"
+}
+GUARD_CASES=0
+while IFS=$'\t' read -r expect command; do
+  [[ -n "$expect" ]] || continue
+  GUARD_OUT="$(run_db_guard "$command")"
+  if [[ -n "$GUARD_OUT" ]]; then got=deny; else got=allow; fi
+  assert_eq "$expect" "$got" "db scan guard: $command"
+  GUARD_CASES=$((GUARD_CASES + 1))
+done <<'CASES'
+deny	mysql -h 127.0.0.1 -u dev -e "select table_schema, table_name from information_schema.views where view_definition like '%orders%' union all select routine_schema, routine_name from information_schema.routines where routine_definition like '%orders%' union all select trigger_schema, trigger_name from information_schema.triggers where event_object_table = 'orders' or action_statement like '%orders%'"
+deny	mysql -h 127.0.0.1 -u dev -e "select count(*) from information_schema.columns where column_name = 'use_yn' and table_name = 'orders'"
+deny	mysql -u dev -e "select table_name from information_schema.views where table_schema = 'app' union all select routine_name from information_schema.routines where routine_definition like '%x%'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema = 'app'; select trigger_name from information_schema.triggers"
+deny	mysql -u dev -e "select routine_name from `information_schema`.`ROUTINES` where routine_definition like '%x%'"
+deny	mysql -u dev information_schema -e "select trigger_name from triggers where action_statement like '%x%'"
+deny	mysql -u dev -e "use information_schema; select table_name from views where view_definition like '%x%'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema != 'mysql'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema not in ('mysql', 'sys')"
+deny	mariadb -u dev -e "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME = 'orders'"
+deny	python3 -c "import pymysql; c = pymysql.connect(host='127.0.0.1', user='dev').cursor(); c.execute('select * from information_schema.triggers')"
+deny	psql -h localhost -d app -c "select table_name from information_schema.views where view_definition like '%orders%'"
+allow	mysql -u dev -e "select table_name from information_schema.views where table_schema = 'app' and view_definition like '%orders%'"
+allow	mysql -u dev -e "select routine_name from information_schema.routines where routine_schema = 'app' and routine_definition like '%x%' union all select trigger_name from information_schema.triggers where trigger_schema='app' and action_statement like '%x%'"
+allow	mysql -u dev -e "select table_name from information_schema.referential_constraints where constraint_schema = 'app'; select table_name from information_schema.tables where table_schema in ('app', 'app_batch')"
+allow	mysql -u dev -e "select column_name from information_schema.columns where table_schema = database() and table_name = 'orders'"
+allow	mysql -u dev -e "select schema_name from information_schema.schemata"
+allow	mysql -u dev -e "select count(*) from orders where status = 'tables'"
+allow	psql -h localhost -d app -c "select table_name from information_schema.columns where column_name = 'id'"
+allow	grep -rn "information_schema.views" src/
+allow	git log --oneline --grep "information_schema.triggers"
+CASES
+assert_eq "21" "$GUARD_CASES" "db scan guard case count"
+assert_eq "" "$(run_db_guard "ls -la && git status")" "db scan guard ignores ordinary commands"
+DENY_REASON="$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+assert_contains "$DENY_REASON" "[DB scan guard] information_schema.TRIGGERS" "db scan guard names the table"
+assert_eq "deny" "$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"" | jq -r '.hookSpecificOutput.permissionDecision')" "db scan guard denies through PreToolUse decision"
+assert_eq "" "$(jq -cn '{tool_input:{command:"mysql -e \"select * from information_schema.triggers\""}}' \
+  | HM_DB_SCAN_GUARD=0 CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$GUARD_DATA" /bin/sh -c "$GUARD_COMMAND")" "db scan guard opt-out by env"
+printf 'HM_DB_SCAN_GUARD=0\n' >"$GUARD_DATA/config"
+assert_eq "" "$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"")" "db scan guard opt-out by config"
+rm -f "$GUARD_DATA/config"
+assert_eq "" "$(printf 'not json' | CLAUDE_PLUGIN_ROOT="$ROOT" /bin/sh -c "$GUARD_COMMAND")" "db scan guard fails open on bad input"
+pass "db scan guard"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \

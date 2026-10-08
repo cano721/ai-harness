@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **스키마 조건 없는 information_schema 조회를 Bash 실행 전에 막습니다** — 모든 스키마를 훑어 공유 DB를 멈출 수 있습니다. `*_schema =`/`IN (...)` 조건을 넣으면 통과하고, `HM_DB_SCAN_GUARD=0`으로 끕니다.
+
 ## v0.30.0 (2026-10-06)
 ### 새 기능
 

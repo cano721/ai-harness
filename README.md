@@ -14,6 +14,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [버그 수정 흐름](#bug-fix)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
+- [DB 스캔 가드](#db-scan-guard)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
 - [설정](#configuration)
@@ -90,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다.
+Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -328,6 +329,18 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome no-change --summary "<적용하지 않은 이유>"
 ```
 
+<a id="db-scan-guard"></a>
+
+## DB 스캔 가드
+
+스키마 조건 없는 information_schema 조회는 서버의 모든 스키마를 훑어 공유 DB를 멈춰 세울 수 있습니다. Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/db-scan-guard.sh`)이 이런 조회를 막습니다.
+
+- 대상: DB 클라이언트(`mysql`·`psql` 등)나 드라이버(`pymysql`·`psycopg` 등)를 쓰는 명령
+- 차단: 구문(`;`)이나 `UNION` 분기에 `*_schema =`·`IN (...)` 조건 없이 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽을 때. MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함
+- 한계: 명령 문자열에 보이는 쿼리만 검사
+
+끄려면 `HM_DB_SCAN_GUARD=0`을 [설정](#configuration)합니다.
+
 <a id="data-retention"></a>
 
 ## 수집 데이터와 보관
@@ -434,6 +447,7 @@ HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이�
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
+HM_DB_SCAN_GUARD=1               # 0이면 DB 스캔 가드 비활성화
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
@@ -451,7 +465,7 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
-hooks/            SessionEnd 수집·SessionStart 알림 정의
+hooks/            SessionEnd 수집·SessionStart 알림·PreToolUse DB 스캔 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
