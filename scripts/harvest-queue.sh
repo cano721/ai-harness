@@ -192,6 +192,55 @@ event_summary() {
   ' "$event_file" 2>/dev/null || true
 }
 
+# 프로젝트 ID 규칙이 바뀌어 재추출된 세션은 다른 큐에 남은 상태를 가져온다.
+# 검토 완료(seen)는 그대로 옮겨 재검토를 막고, 대기(pending)는 옮겨 중복 집계를 막는다.
+# 이전 큐의 analysis batch에 묶인 세션은 그 batch 검토가 끝날 때까지 두고 1을 돌려준다.
+adopt_moved_session() {
+  local qdir="$1" marker="$2" project="$3" other="" other_qdir="" dest="" tmp=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/seen/"$marker" "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    other_qdir="${other%/*/*}"
+    [[ "$other_qdir" != "$qdir" ]] || continue
+    if [[ "$other" == */sessions/* ]] && in_other_batch "$other_qdir" "$marker"; then
+      shopt -u nullglob
+      return 1
+    fi
+    if [[ "$other" == */seen/* ]]; then
+      dest="$qdir/seen/$marker"
+    else
+      dest="$qdir/sessions/$marker"
+    fi
+    tmp="$(mktemp "${dest%/*}/.adopt.XXXXXX")"
+    if jq -c --arg project "$project" '.project = $project' "$other" >"$tmp" 2>/dev/null; then
+      mv "$tmp" "$dest"
+      find "$other" -maxdepth 0 -type f -delete
+    else
+      find "$tmp" -maxdepth 0 -type f -delete
+    fi
+    break
+  done
+  shopt -u nullglob
+  return 0
+}
+
+in_other_batch() { # $1=other_qdir $2=marker
+  [[ -f "$1/analysis-batch.json" ]] \
+    && jq -e --arg m "$2" '(.markers // []) | index($m)' "$1/analysis-batch.json" >/dev/null 2>&1
+}
+
+# 이전 버전의 프로젝트 ID 변경으로 다른 큐에 남은 대기 복사본은 그 큐의 batch 판정을 부풀린다.
+drop_stale_pending_copies() {
+  local qdir="$1" marker="$2" other="" other_qdir=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    other_qdir="${other%/*/*}"
+    [[ "$other_qdir" != "$qdir" ]] || continue
+    in_other_batch "$other_qdir" "$marker" && continue
+    find "$other" -maxdepth 0 -type f -delete
+  done
+  shopt -u nullglob
+}
+
 record_summary() {
   local summary="$1" only_project="${2:-}"
   local project="" src="" sid="" marker="" qdir="" tmp="" seen_file="" pending_file="" old=""
@@ -206,6 +255,11 @@ record_summary() {
   mkdir -p "$qdir/sessions" "$qdir/seen"
   seen_file="$qdir/seen/$marker"
   pending_file="$qdir/sessions/$marker"
+  if [[ ! -f "$seen_file" && ! -f "$pending_file" ]]; then
+    adopt_moved_session "$qdir" "$marker" "$project" || { RECORD_ACTION="held-by-batch"; return 0; }
+  else
+    drop_stale_pending_copies "$qdir" "$marker"
+  fi
 
   # 같은 세션을 재개할 수 있으므로 sid만으로 영구 제외하지 않는다. 마지막 검토 revision과
   # 같으면 멱등 no-op, 달라졌으면 누적 신호의 차분만 새 review unit으로 만든다.
@@ -234,6 +288,26 @@ record_summary() {
       return 0
     fi
     if [[ -n "$new_revision" && "$new_revision" == "$old_revision" ]]; then
+      RECORD_ACTION="unchanged"
+      return 0
+    fi
+    # 종료 시각·턴 수가 같으면 세션이 재개된 게 아니라 추출 규칙이 바뀌어 재추출된 것이다.
+    # 신호 수 차이(오탐 수정 등)로 검토 완료 세션을 다시 큐에 넣지 않고 기록만 갱신한다.
+    if [[ -n "$old_revision" && -n "$new_revision" ]] && [[ "$(jq -nr --arg old "$old_revision" --arg new "$new_revision" '
+      ($old | fromjson? // {}) as $o | ($new | fromjson? // {}) as $n
+      | ($o.ended != null and $o.ended == $n.ended and ($o.turns // -1) == ($n.turns // -2))
+    ' 2>/dev/null)" == "true" ]]; then
+      tmp="$(mktemp "$qdir/seen/.reextract.XXXXXX")"
+      jq -cn --argjson old "$old" --argjson current "$summary" '
+        $old + {
+          project:$current.project,
+          event_revision:$current.event_revision,
+          totals:$current.totals,
+          source_mtime:($current.source_mtime // 0),
+          source_size:($current.source_size // 0)
+        }
+      ' >"$tmp"
+      mv "$tmp" "$seen_file"
       RECORD_ACTION="unchanged"
       return 0
     fi

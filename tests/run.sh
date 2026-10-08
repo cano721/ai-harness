@@ -63,6 +63,14 @@ source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_WORKTREE")" "worktree project id"
 assert_eq "jobda-agent" "$(project_id_for_cwd "/tmp/workspaces/jobda-agent/NJ-290")" "missing worktree fallback"
+assert_eq "jobda-agent" "$(project_id_for_cwd "/gone/workspaces/jobda-agent/feature-NJ-612")" "branch-type worktree name uses the repo dir"
+assert_eq "jobda-talent-pool" "$(project_id_for_cwd "/gone/workspaces/jobda-talent-pool/NJ-1866-embedding")" "issue-key worktree name uses the repo dir"
+assert_eq "NJ-2299" "$(project_id_for_cwd "/gone/repositories/worktrees/NJ-2299")" "worktree container is not a project name"
+assert_eq "jobda-agent" "$(project_id_for_cwd "/gone/workspaces/x/feature-NJ-612" "https://github.com/acme/jobda-agent.git")" "recorded repo URL beats path heuristics"
+NFD_NAME="$(printf '\xe1\x84\x8c\xe1\x85\xa1\xe1\x86\xb8\xe1\x84\x83\xe1\x85\xa1')"
+NFC_NAME="$(printf '\xec\x9e\xa1\xeb\x8b\xa4')"
+assert_eq "$NFC_NAME" "$(project_id_for_cwd "/gone/$NFD_NAME")" "NFD path name normalizes to NFC"
+assert_eq "$NFC_NAME" "$(project_id_for_cwd "/gone/$NFC_NAME")" "NFC path name is unchanged"
 pass "stable project IDs"
 
 # workspace 모드: 여러 독립 git 저장소가 한 폴더에 있으면 라우팅 층만 만든다.
@@ -1213,6 +1221,64 @@ assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
 assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
+
+# Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
+REPO_URL_DATA="$TEST_TMP/repo-url-data"
+REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
+mkdir -p "${REPO_URL_ROLLOUT%/*}"
+jq -cR 'fromjson? | if .type=="session_meta" then .payload.cwd="/gone/workspaces/x/feature-NJ-612"
+  | .payload.git={repository_url:"https://github.com/acme/jobda-agent.git"} else . end' \
+  "$CODEX_FIXTURE" >"$REPO_URL_ROLLOUT"
+HARNESS_METRICS_DIR="$REPO_URL_DATA" "$ROOT/scripts/extract-codex.sh" "$REPO_URL_ROLLOUT"
+assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_URL_DATA"/events/codex-*dddddddd*.jsonl)" "Codex extractor uses recorded repo URL"
+
+# 프로젝트 ID가 바뀐 재추출 세션은 이전 큐의 검토 상태를 이어받는다.
+MOVE_DATA="$TEST_TMP/move-data"
+HARNESS_METRICS_DIR="$MOVE_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+MOVE_EVENT="$MOVE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+MOVE_MARKER="claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
+retag_move_event() {
+  jq -c --arg p "$1" 'if .kind=="session" then .project=$p else . end' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
+  mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+}
+move_record() { HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=0 "$ROOT/scripts/harvest-queue.sh" record "$MOVE_EVENT"; }
+retag_move_event old-name
+move_record >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-old-name/sessions/$MOVE_MARKER"
+retag_move_event new-name
+assert_eq "unchanged-pending" "$(move_record | jq -r '.record_action')" "moved pending session is adopted, not duplicated"
+assert_not_file "$MOVE_DATA/harvest-queue/p-old-name/sessions/$MOVE_MARKER"
+assert_eq "new-name" "$(jq -r '.project' "$MOVE_DATA/harvest-queue/p-new-name/sessions/$MOVE_MARKER")" "adopted record carries the new project"
+HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" status --project new-name >/dev/null
+HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project new-name --outcome no-change --summary test >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-new-name/seen/$MOVE_MARKER"
+retag_move_event third-name
+assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "reviewed session is not re-queued under a new project"
+assert_file "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+HELD_EVENT_DATA="$TEST_TMP/held-data"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+HELD_EVENT="$HELD_EVENT_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+jq -c 'if .kind=="session" then .project="held-old" else . end' "$HELD_EVENT" >"$HELD_EVENT.tmp" && mv "$HELD_EVENT.tmp" "$HELD_EVENT"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" >/dev/null
+assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
+jq -c 'if .kind=="session" then .project="held-new" else . end' "$HELD_EVENT" >"$HELD_EVENT.tmp" && mv "$HELD_EVENT.tmp" "$HELD_EVENT"
+assert_eq "held-by-batch" "$(HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" | jq -r '.record_action')" "session in a pending batch stays with that batch"
+assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER"
+assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-new/sessions/$MOVE_MARKER"
+# 추출 규칙 변경으로 신호 수만 달라진 재추출은 검토 완료 세션을 다시 큐에 넣지 않는다.
+retag_move_event third-name
+jq -c 'select(.kind!="correction_mark")' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
+mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "re-extraction with changed signal counts stays reviewed"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+assert_eq "0" "$(jq -r '.totals.corrections' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER")" "reviewed marker takes the re-extracted totals"
+mkdir -p "$MOVE_DATA/harvest-queue/p-stale-name/sessions"
+jq -c '.project="stale-name"' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" \
+  >"$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
+move_record >/dev/null
+assert_not_file "$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
+pass "project ID changes keep queue state"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
