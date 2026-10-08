@@ -345,7 +345,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 | harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
 | 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
-상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다.
+상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다. 이미 삭제된 worktree는 Codex가 기록한 저장소 URL, 그다음 경로 규칙(`<repo>/feature-NJ-1`, `<repo>/NJ-1-설명` → `<repo>`)으로 판정하고, 한글 등 비ASCII 이름은 NFC로 맞춥니다. 규칙이 바뀌어 재추출된 세션은 이전 프로젝트 큐의 검토 상태를 그대로 가져갑니다.
 
 <a id="updates"></a>
 
