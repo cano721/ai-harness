@@ -1241,7 +1241,7 @@ retag_move_event() {
   jq -c --arg p "$1" 'if .kind=="session" then .project=$p else . end' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
   mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
 }
-move_record() { HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD="${1:-0}" "$ROOT/scripts/harvest-queue.sh" record "$MOVE_EVENT"; }
+move_record() { HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=0 "$ROOT/scripts/harvest-queue.sh" record "$MOVE_EVENT"; }
 retag_move_event old-name
 move_record >/dev/null
 assert_file "$MOVE_DATA/harvest-queue/p-old-name/sessions/$MOVE_MARKER"
