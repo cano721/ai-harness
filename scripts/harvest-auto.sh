@@ -66,6 +66,14 @@ command_trigger() {
       '{batch_id:$batch_id,at:$at,result:$result}' >"$marker"
   }
 
+  # 세션 수만 넘은 batch는 실측상 거의 노이즈였다. 교정·오류 등 신호가 있는 batch만 자동으로 돈다.
+  if [[ "${HM_HARVEST_AUTO_SESSIONS_ONLY:-0}" != "1" ]] \
+    && [[ "$(printf '%s' "$status" | jq -c '.reasons // []')" == '["sessions"]' ]]; then
+    mark_attempted skipped
+    log_skip "$project" "$batch_id" sessions_only
+    return 0
+  fi
+
   # 하네스가 없는 디렉토리나 workspace(git 아님, 로컬 적용에 사용자 확인 필요)는 사람 몫으로 남긴다.
   repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
   if [[ -z "$repo_root" || ! -f "$repo_root/.ai-harness/harness.json" ]]; then

@@ -1337,7 +1337,7 @@ case "${AUTO_STUB_MODE:-}" in
 esac
 STUB
 chmod +x "$AUTO_STUB"
-auto_status() { jq -cn --arg p "$1" --arg b "$2" '{project:$p,batch_id:$b,has_analysis_batch:true}'; }
+auto_status() { jq -cn --arg p "$1" --arg b "$2" --arg r "${3:-errors}" '{project:$p,batch_id:$b,has_analysis_batch:true,reasons:($r | split(","))}'; }
 auto_trigger() { # $1=status $2=cwd, 추가 env는 호출자가 앞에 붙인다
   HARNESS_METRICS_DIR="$AUTO_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
     AUTO_STUB_OUT="$TEST_TMP/auto-stub.out" \
@@ -1356,8 +1356,12 @@ HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
 HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
 assert_eq 'no_harness_repo' "$(auto_runs '[.[] | select(.project=="plain") | .reason] | join(",")')" "no-harness batch skipped once"
 
-HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
-HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b0 sessions)" "$AUTO_REPO"
+assert_eq "sessions_only" "$(auto_runs 'last | .reason')" "sessions-only batch is left to the notice"
+assert_not_file "$TEST_TMP/auto-stub.out"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
 assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs once"
 assert_eq "auto-svc|1|$(cd "$AUTO_REPO" && pwd -P)" "$(sed -n 1p "$TEST_TMP/auto-stub.out")" "worker gets project, recursion guard, repo cwd"
 assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
