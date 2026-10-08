@@ -15,6 +15,8 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 
 - 사용자에게 묻지 않는다. 확인이 필요한 분기(이슈 생성 필요, workspace 로컬 적용, 멤버 하네스 대상)를 만나면 적용하지 않고 보고로 끝내며 `mark-reviewed`도 하지 않는다 — batch가 남아 사람이 `/harvest`로 이어받는다.
 - 사용자 체크아웃을 건드리지 않는다. 7단계는 `git worktree add` 로 만든 임시 경로에서 하고, PR 생성 뒤 그 worktree를 제거한다. 현재 브랜치 전환·stash·작업 트리 수정 금지.
+- 변경을 적용하기 전에 `gh repo view`로 원격이 GitHub인지 확인한다. GitHub가 아니면(Bitbucket 등) PR을 만들 수 없으므로 개선안 보고로 끝내고 `mark-reviewed`하지 않는다.
+- 허용된 명령만 쓸 수 있다: `git`, `gh pr`, `gh repo view`, `jq`, `head`, `tail`, 플러그인 `scripts/*`. 스크립트는 `$ROOT`를 실제 절대경로로 풀어 한 줄에 하나씩 호출한다 — `ROOT=...;` 변수 할당이나 다른 명령과의 조합은 권한 규칙에 매칭되지 않아 거부된다.
 - PR은 `--draft`로 만들고 본문 첫 줄에 `자동 harvest(--auto) 결과`를 밝힌다. 병합 판단은 사람 몫이다.
 - 마지막 출력은 결과 한 줄(`improved <PR URL>` / `no-change <이유>` / `left_for_user <이유>`).
 

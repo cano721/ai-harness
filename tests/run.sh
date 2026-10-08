@@ -1366,6 +1366,7 @@ HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AU
 assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs once"
 assert_eq "auto-svc|1|$(cd "$AUTO_REPO" && pwd -P)" "$(sed -n 1p "$TEST_TMP/auto-stub.out")" "worker gets project, recursion guard, repo cwd"
 assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
+assert_eq "12" "$(auto_runs '[.[] | select(.event=="started")] | last | .batch | length')" "run log keeps a short batch key"
 
 HM_HARVEST_AUTO=1 AUTO_STUB_MODE=improve auto_trigger "$(auto_status auto-svc b2)" "$AUTO_REPO"
 assert_eq 'improved|https://example.com/pr/1' "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.artifact)"')" "review outcome recorded"
