@@ -58,6 +58,8 @@ git -C "$PROJECT_REPO" remote add origin git@github.com:acme/service.git
 git -C "$PROJECT_REPO" worktree add -q -b test-worktree "$PROJECT_WORKTREE"
 HARNESS_METRICS_DIR="$TEST_TMP/lib-data"
 export HARNESS_METRICS_DIR
+# SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
+export HM_BACKFILL_INTERVAL_HOURS=0
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
@@ -1279,6 +1281,37 @@ jq -c '.project="stale-name"' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_
 move_record >/dev/null
 assert_not_file "$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
 pass "project ID changes keep queue state"
+
+# 정기 backfill: SessionEnd 없이 닫힌 세션을 SessionStart가 주기적으로 회수한다.
+DUE_DATA="$TEST_TMP/due-data"
+DUE_CLAUDE="$TEST_TMP/due-claude/-tmp-service"
+mkdir -p "$DUE_CLAUDE" "$TEST_TMP/due-codex"
+cp "$CLAUDE_FIXTURE" "$DUE_CLAUDE/"
+run_due() {
+  HARNESS_METRICS_DIR="$DUE_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/due-claude" \
+    HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/due-codex" HM_BACKFILL_FOREGROUND=1 \
+    HM_BACKFILL_INTERVAL_HOURS="$1" "$ROOT/scripts/backfill-due.sh"
+}
+run_due 0
+assert_not_file "$DUE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+run_due 24
+assert_file "$DUE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+assert_eq "1" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "first due backfill runs"
+run_due 24
+assert_eq "1" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "backfill not repeated inside interval"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$DUE_DATA/health.json" >"$DUE_DATA/health.tmp"
+mv "$DUE_DATA/health.tmp" "$DUE_DATA/health.json"
+run_due 24
+assert_eq "2" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "backfill reruns after interval"
+mkdir -p "$DUE_DATA/.backfill-due.lock"
+printf '%s\n' "$$" >"$DUE_DATA/.backfill-due.lock/pid"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$DUE_DATA/health.json" >"$DUE_DATA/health.tmp"
+mv "$DUE_DATA/health.tmp" "$DUE_DATA/health.json"
+run_due 24
+assert_eq "2" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "running backfill is not duplicated"
+find "$DUE_DATA/.backfill-due.lock" -depth -delete
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" "backfill-due.sh" "SessionStart schedules backfill"
+pass "scheduled background backfill"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
