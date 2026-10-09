@@ -307,6 +307,18 @@ SessionStart는 3초, SessionEnd는 10초 timeout이며 실패해도 작업 세�
 
 한 batch는 최대 50개 세션입니다. 단, 트리거 판정은 전체 pending을 기준으로 하며 신호가 있는 세션을 우선 포함합니다. 분석 중 새로 종료된 세션은 다음 batch에 보존됩니다. 첫 알림을 놓치면 기본 24시간마다 다시 알립니다.
 
+<a id="llm-digest"></a>
+
+### LLM 세션 정리 (opt-in)
+
+교정 접두어("아니", "그게 아니라")·도구 오류 같은 정규식 신호는 의미상 교정이나 "프로젝트 사실을 몰라 틀림"을 놓칩니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
+
+- **대상**: 최근 14일(`HM_DIGEST_LOOKBACK_DAYS`), 3턴 이상, 끝난 지 30분 지난 세션을 최신순으로 하루 20개(`HM_DIGEST_DAILY_MAX`). 재개된 세션만 다시 정리합니다
+- **입력**: 사용자 발화 전체(턴당 600자), 응답·도구 오류는 짧게 잘라 최대 4만 자. 실측 세션당 약 $0.003~0.01
+- **신호**: medium 이상 finding 수가 큐의 `insights`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
+- **사용**: `/harvest`가 `digest.sh show`로 batch 세션의 findings를 받아, 2개 이상 세션에서 반복되는 것만 개선 근거로 씁니다
+- 정리 세션은 `HM_INTERNAL_SESSION=1`·`--no-session-persistence`로 실행돼 수집·알림 대상이 아닙니다. 기록은 `~/.ai-harness/digests/`
+
 <a id="auto-harvest"></a>
 
 ### 자동 harvest (opt-in)
@@ -440,6 +452,10 @@ HM_HARVEST_PERMISSION_SESSION_THRESHOLD=2
 HM_HARVEST_MAX_BATCH_SESSIONS=50
 HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
 HM_HARVEST_AUTO=0                # 1이면 batch 생성 시 /harvest를 백그라운드 실행
+HM_DIGEST=0                      # 1이면 일일 backfill 뒤 최근 세션을 LLM으로 정리
+HM_DIGEST_DAILY_MAX=20
+HM_HARVEST_INSIGHT_THRESHOLD=3
+HM_HARVEST_INSIGHT_SESSION_THRESHOLD=2
 HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
 HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)

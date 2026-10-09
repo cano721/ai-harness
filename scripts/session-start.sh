@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 input="$(cat)"
+[[ "${HM_INTERNAL_SESSION:-}" == "1" ]] && exit 0
 messages=()
 
 update_result="$(printf '%s' "$input" | "$ROOT/scripts/check-update.sh" notify 2>/dev/null || true)"

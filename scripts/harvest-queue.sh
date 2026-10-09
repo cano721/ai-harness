@@ -35,6 +35,8 @@ GUARD_THRESHOLD="$(threshold "${HM_HARVEST_GUARD_THRESHOLD:-3}" 3)"
 GUARD_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_GUARD_SESSION_THRESHOLD:-2}" 2)"
 PERMISSION_THRESHOLD="$(threshold "${HM_HARVEST_PERMISSION_THRESHOLD:-3}" 3)"
 PERMISSION_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_PERMISSION_SESSION_THRESHOLD:-2}" 2)"
+INSIGHT_THRESHOLD="$(threshold "${HM_HARVEST_INSIGHT_THRESHOLD:-3}" 3)"
+INSIGHT_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_INSIGHT_SESSION_THRESHOLD:-2}" 2)"
 MAX_BATCH_SESSIONS="$(positive_threshold "${HM_HARVEST_MAX_BATCH_SESSIONS:-50}" 50)"
 REMIND_HOURS="$(threshold "${HM_HARVEST_REMIND_HOURS:-24}" 24)"
 THRESHOLDS="$(jq -cn \
@@ -47,6 +49,8 @@ THRESHOLDS="$(jq -cn \
   --argjson guard_sessions "$GUARD_SESSION_THRESHOLD" \
   --argjson permission_denials "$PERMISSION_THRESHOLD" \
   --argjson permission_sessions "$PERMISSION_SESSION_THRESHOLD" \
+  --argjson insights "$INSIGHT_THRESHOLD" \
+  --argjson insight_sessions "$INSIGHT_SESSION_THRESHOLD" \
   --argjson max_batch_sessions "$MAX_BATCH_SESSIONS" \
   '{
     sessions:$sessions,
@@ -58,6 +62,8 @@ THRESHOLDS="$(jq -cn \
     guard_sessions:$guard_sessions,
     permission_denials:$permission_denials,
     permission_sessions:$permission_sessions,
+    insights:$insights,
+    insight_sessions:$insight_sessions,
     max_batch_sessions:$max_batch_sessions
   }')"
 
@@ -142,8 +148,12 @@ migrate_legacy_state() {
 }
 
 event_summary() {
-  local event_file="$1"
-  jq -sc --arg event_file "$event_file" '
+  local event_file="$1" digest_file="" digest="null" base=""
+  # LLM 정리(scripts/digest.sh) 결과가 있으면 insights 신호로 함께 센다.
+  base="${event_file##*/}"
+  digest_file="$HM_DATA_DIR/digests/${base%.jsonl}.json"
+  [[ -f "$digest_file" ]] && digest="$(jq -c '.' "$digest_file" 2>/dev/null || printf 'null')"
+  jq -sc --arg event_file "$event_file" --argjson digest "${digest:-null}" '
     def total($kind):
       ([.[] | select(.kind == $kind) | (.n // 1)] | add // 0);
     (map(select(.kind == "session")) | first) as $session
@@ -155,6 +165,7 @@ event_summary() {
         | (total("error")) as $errors
         | (total("guard_block")) as $guard_blocks
         | (total("permission_deny")) as $permission_denials
+        | ([($digest // {}).findings[]? | select(.confidence != "low")] | length) as $insights
         | {
           v: 1,
           project: $session.project,
@@ -169,11 +180,13 @@ event_summary() {
           errors: $errors,
           guard_blocks: $guard_blocks,
           permission_denials: $permission_denials,
+          insights: $insights,
           totals: {
             corrections: $corrections,
             errors: $errors,
             guard_blocks: $guard_blocks,
-            permission_denials: $permission_denials
+            permission_denials: $permission_denials,
+            insights: $insights
           },
           event_revision: ({
             event_v: ($session.v // 0),
@@ -186,7 +199,8 @@ event_summary() {
             corrections: $corrections,
             errors: $errors,
             guard_blocks: $guard_blocks,
-            permission_denials: $permission_denials
+            permission_denials: $permission_denials,
+            insights: $insights
           } | tojson)
         }
       end
@@ -293,10 +307,13 @@ record_summary() {
     old_revision="$(printf '%s' "$old" | jq -r '.event_revision // empty')"
     new_revision="$(printf '%s' "$summary" | jq -r '.event_revision // empty')"
     if [[ -z "$old_revision" ]] && [[ "$(jq -nr --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0), errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0), permission_denials:($x.permission_denials // 0)
-      });
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
       (($old.ended // null) == ($current.ended // null) and counters($old) == counters($current))
     ')" == "true" ]]; then
       tmp="$(mktemp "$qdir/seen/.revision-upgrade.XXXXXX")"
@@ -338,12 +355,13 @@ record_summary() {
     fi
     RECORD_ACTION="resumed"
     summary="$(jq -cn --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0),
-        errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0),
-        permission_denials:($x.permission_denials // 0)
-      });
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
       def delta($new; $previous): if ($new - $previous) > 0 then ($new - $previous) else 0 end;
       (counters($current)) as $new
       | (counters($old)) as $previous
@@ -352,6 +370,7 @@ record_summary() {
           errors:delta($new.errors; $previous.errors),
           guard_blocks:delta($new.guard_blocks; $previous.guard_blocks),
           permission_denials:delta($new.permission_denials; $previous.permission_denials),
+          insights:delta($new.insights; $previous.insights),
           totals:$new,
           baseline_totals:$previous,
           resumed:true,
@@ -368,13 +387,14 @@ record_summary() {
     fi
     RECORD_ACTION="updated-pending"
     summary="$(jq -cn --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0),
-        errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0),
-        permission_denials:($x.permission_denials // 0)
-      });
-      def zero: {corrections:0,errors:0,guard_blocks:0,permission_denials:0};
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
+      def zero: {corrections:0,errors:0,guard_blocks:0,permission_denials:0,insights:0};
       def delta($new; $previous): if ($new - $previous) > 0 then ($new - $previous) else 0 end;
       (counters($current)) as $new
       | ($old.baseline_totals // zero) as $baseline
@@ -383,6 +403,7 @@ record_summary() {
           errors:delta($new.errors; $baseline.errors),
           guard_blocks:delta($new.guard_blocks; $baseline.guard_blocks),
           permission_denials:delta($new.permission_denials; $baseline.permission_denials),
+          insights:delta($new.insights; ($baseline.insights // 0)),
           totals:$new,
           baseline_totals:$baseline,
           resumed:($old.resumed // false),
@@ -433,7 +454,9 @@ pending_snapshot() {
         guard_blocks:0,
         guard_sessions:0,
         permission_denials:0,
-        permission_sessions:0
+        permission_sessions:0,
+        insights:0,
+        insight_sessions:0
       },
       trigger_counts:{
         sessions:0,
@@ -444,7 +467,9 @@ pending_snapshot() {
         guard_blocks:0,
         guard_sessions:0,
         permission_denials:0,
-        permission_sessions:0
+        permission_sessions:0,
+        insights:0,
+        insight_sessions:0
       },
       pending_total_sessions:0,
       markers:[],
@@ -463,12 +488,14 @@ pending_snapshot() {
       guard_blocks:([$items[].guard_blocks] | add // 0),
       guard_sessions:([$items[] | select(.guard_blocks > 0)] | length),
       permission_denials:([$items[].permission_denials] | add // 0),
-      permission_sessions:([$items[] | select(.permission_denials > 0)] | length)
+      permission_sessions:([$items[] | select(.permission_denials > 0)] | length),
+      insights:([$items[].insights // 0] | add // 0),
+      insight_sessions:([$items[] | select((.insights // 0) > 0)] | length)
     };
     . as $all
     # batch cap 바깥의 신호가 영구히 가려지지 않도록 신호가 있는 review unit을 우선한다.
     | ($all | sort_by(
-        (if ((.corrections + .errors + .guard_blocks + .permission_denials) > 0) then 0 else 1 end),
+        (if ((.corrections + .errors + .guard_blocks + .permission_denials + (.insights // 0)) > 0) then 0 else 1 end),
         (.queued_at // ""),
         (.ended // ""),
         .marker
@@ -514,7 +541,11 @@ evaluate_analysis_batch() {
     if .thresholds.permission_denials > 0
       and .trigger_counts.permission_denials >= .thresholds.permission_denials
       and (.thresholds.permission_sessions == 0 or .trigger_counts.permission_sessions >= .thresholds.permission_sessions)
-      then "permission_denials" else empty end
+      then "permission_denials" else empty end,
+    if .thresholds.insights > 0
+      and (.trigger_counts.insights // 0) >= .thresholds.insights
+      and (.thresholds.insight_sessions == 0 or (.trigger_counts.insight_sessions // 0) >= .thresholds.insight_sessions)
+      then "insights" else empty end
   ]')"
 
   if [[ "$(printf '%s' "$reasons" | jq 'length')" == "0" ]]; then
@@ -800,6 +831,7 @@ command_notify() {
     + "세션 \(.counts.sessions) · 교정 \(.counts.corrections) · 오류 \(.counts.errors)"
     + (if (.counts.guard_blocks // 0) > 0 then " · 차단 \(.counts.guard_blocks)" else "" end)
     + (if (.counts.permission_denials // 0) > 0 then " · 권한 거부 \(.counts.permission_denials)" else "" end)
+    + (if (.counts.insights // 0) > 0 then " · LLM 정리 \(.counts.insights)" else "" end)
     + ". "
     + "/harvest \(.project)를 실행하세요."
   ')"

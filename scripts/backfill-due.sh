@@ -24,6 +24,8 @@ if [[ "${1:-}" == "--worker" ]]; then
   hm_acquire_lock "$LOCK_DIR" 1 || exit 0
   trap 'hm_release_lock "$LOCK_DIR"' EXIT
   nice -n 10 "$DIR/backfill.sh" >/dev/null 2>&1 || true
+  # opt-in LLM 정리는 새로 회수된 세션까지 반영된 뒤에 돈다.
+  [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
   exit 0
 fi
 
