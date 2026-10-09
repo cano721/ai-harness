@@ -1215,6 +1215,17 @@ HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
 HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
   "$ROOT/scripts/backfill.sh" >/dev/null
 assert_eq "3" "$(jq -r 'select(.kind=="session") | .v' "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl")" "stale event invalidation"
+BACKFILL_AGAIN="$(HARNESS_METRICS_DIR="$BACKFILL_DATA" \
+HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
+HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
+  "$ROOT/scripts/backfill.sh")"
+assert_contains "$BACKFILL_AGAIN" "큐 0," "unchanged events are not re-recorded"
+find "$BACKFILL_DATA/.enqueued" -type f -exec touch -t 200001010000 {} +
+BACKFILL_STALE="$(HARNESS_METRICS_DIR="$BACKFILL_DATA" \
+HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
+HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
+  "$ROOT/scripts/backfill.sh")"
+assert_contains "$BACKFILL_STALE" "큐 유지 0," "stale stamps are re-recorded"
 pass "backfill freshness and version invalidation"
 
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
