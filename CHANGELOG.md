@@ -11,11 +11,13 @@
 
 ### 새 기능
 
+- **자동 harvest가 Bitbucket 저장소에도 draft PR을 엽니다** — 하네스 저장소 대부분이 Bitbucket이라 자동 실행이 보고에서 멈췄습니다. `scripts/open-pr.sh`가 원격을 보고 GitHub는 `gh`, Bitbucket Cloud는 REST API(`ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 draft PR을 만들고, 자동 실행에는 범용 `curl`·`gh` 대신 이 스크립트만 허용합니다.
 - **터미널을 그냥 닫은 세션도 하루 한 번 자동으로 수집합니다** — 터미널·탭을 닫으면 `SessionEnd`가 실행되지 않아, 실측에서 최근 14일 Claude 세션의 43%가 `/harvest`나 `/metrics`를 직접 돌릴 때까지 기록되지 않았고 analysis batch 판정도 그만큼 늦어졌습니다. 이제 `SessionStart`가 마지막 backfill이 24시간(`HM_BACKFILL_INTERVAL_HOURS`) 넘었으면 backfill을 세션과 분리된 저우선순위 프로세스로 실행합니다. 세션 시작 시간은 늘지 않습니다.
 - **analysis batch가 생기면 `/harvest`를 자동으로 돌릴 수 있습니다 (opt-in)** — 지금까지는 batch가 쌓여도 알림만 뜨고 사람이 `/harvest`를 쳐야 해서, 실제로는 수십 개 batch가 몇 주씩 검토되지 않은 채 남았습니다. `~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 `SessionEnd`가 세션과 분리된 headless 세션으로 `/harvest --auto`를 실행해 별도 worktree에서 draft PR까지 만듭니다. 세션 수만 넘은(다른 신호 없는) batch는 실측상 거의 노이즈라 자동 실행에서 빼고 알림으로 남깁니다. batch당 1회·하루 2회·동시 1개·실행당 $5로 제한하고, 실행마다 결과·비용·PR을 `~/.ai-harness/harvest-auto/runs.jsonl`에 남깁니다. GitHub가 아닌 원격(Bitbucket 등)에서는 PR을 만들 수 없으므로 개선안 보고로 끝내고 batch를 사람에게 넘깁니다. 기본값은 꺼져 있습니다.
 
 ### 버그 수정
 
+- **자동 harvest가 개선을 적용하는 단계에서 막히던 문제 수정** — headless 실행은 cwd 밖 파일을 편집할 수 없는데, 스킬은 직접 만든 별도 worktree에서 편집하라고 지시하고 있었습니다. 이제 worker가 origin 기본 브랜치로 작업 전용 worktree를 만들어 그 안에서 에이전트를 실행하고, 끝나면 지웁니다.
 - **변경 없는 증분 backfill이 4분 20초 → 1분으로** — 이벤트가 그대로여도 매번 1771개 전부를 큐에 다시 기록하고 있었습니다. 이벤트별 기록 스탬프를 두고, 이벤트와 큐 로직(`harvest-queue.sh`·`lib.sh`)이 모두 그대로면 건너뜁니다.
 - **자동 harvest 세션이 그 프로젝트의 작업 세션으로 집계되던 문제 수정** — `/harvest --auto` headless 세션이 대상 저장소 세션으로 기록돼, 그 세션의 오류·권한 거부가 다음 batch 신호로 다시 들어갔습니다. 추출 단계에서 내부 세션으로 표시해 큐·통계에서 빼고, 이미 큐에 들어간 것은 다음 backfill에서 꺼냅니다. 옛 프로젝트 큐에는 검토 완료, 새 큐에는 대기로 갈라져 있던 같은 세션도 검토 완료로 합칩니다.
 - **추출 규칙이 바뀌어 재추출만 된 세션을 '재개된 세션'으로 다시 큐에 넣던 문제 수정** — 종료 시각·턴 수가 같은데 오탐 수정 등으로 신호 수만 달라지면 검토 완료 세션이 diff 0짜리 대기 세션으로 되살아나 세션 수 기준 batch를 부풀렸습니다. 이제 이런 경우는 검토 기록만 갱신합니다.

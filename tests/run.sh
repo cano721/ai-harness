@@ -1383,7 +1383,12 @@ assert_not_file "$TEST_TMP/auto-stub.out"
 HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
 HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
 assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs once"
-assert_eq "auto-svc|1|$(cd "$AUTO_REPO" && pwd -P)" "$(sed -n 1p "$TEST_TMP/auto-stub.out")" "worker gets project, recursion guard, repo cwd"
+AUTO_RUN_LINE="$(sed -n 1p "$TEST_TMP/auto-stub.out")"
+assert_eq "auto-svc|1" "${AUTO_RUN_LINE%|*}" "worker gets project and recursion guard"
+AUTO_WORK_DIR="${AUTO_RUN_LINE##*|}"
+assert_contains "$AUTO_WORK_DIR" "/harvest-auto/worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+[[ ! -d "$AUTO_WORK_DIR" ]] || fail "work tree is removed after the run: $AUTO_WORK_DIR"
+assert_eq "1" "$(git -C "$AUTO_REPO" worktree list | wc -l | tr -d ' ')" "no leftover worktree registration"
 assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
 assert_eq "12" "$(auto_runs '[.[] | select(.event=="started")] | last | .batch | length')" "run log keeps a short batch key"
 
@@ -1426,6 +1431,27 @@ jq -cn '{project:"service",src:"claude",sid:"cccccccc-1111-2222-3333-ddddddddddd
 HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/harvest-queue.sh" record "$INTERNAL_EVENT" >/dev/null
 assert_not_file "$INTERNAL_DATA/harvest-queue/p-service/sessions/$INTERNAL_MARKER"
 pass "internal auto-harvest sessions stay out of the queue"
+
+# open-pr.sh: 원격을 보고 GitHub/Bitbucket draft PR 요청을 만든다.
+PR_REPO="$TEST_TMP/pr-repo"
+make_repo "$PR_REPO" "git@bitbucket.org:acme/jobda-agent.git"
+git -C "$PR_REPO" checkout -q -b feature/NJ-1-harvest
+printf 'body\n' >"$TEST_TMP/pr-body.md"
+PR_BB="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base develop)"
+assert_eq "bitbucket|acme/jobda-agent|true|feature/NJ-1-harvest|develop|body" \
+  "$(jq -r '[.provider,.slug,.draft,.source.branch.name,.destination.branch.name,(.description|rtrimstr("\n"))] | map(tostring) | join("|")' <<<"$PR_BB")" "Bitbucket draft PR request"
+git -C "$PR_REPO" remote set-url origin https://github.com/acme/woorinal.git
+PR_GH="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base main)"
+assert_eq "github|acme/woorinal|true" "$(jq -r '[.provider,.slug,.draft] | map(tostring) | join("|")' <<<"$PR_GH")" "GitHub draft PR request"
+git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
+if (cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" 2>/dev/null); then
+  fail "unsupported host must fail"
+fi
+git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
+PR_NOAUTH_RC=0
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
+assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
+pass "draft PR opener for GitHub and Bitbucket"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
