@@ -109,8 +109,8 @@ command_trigger() {
   fi
 }
 
-agent_command() { # $1=project $2=repo_root $3=agent → 실행할 argv를 AGENT_CMD에 채운다
-  local project="$1" repo_root="$2" agent="$3" scripts_glob=""
+agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_CMD에 채운다
+  local project="$1" work_dir="$2" agent="$3" scripts_glob=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
     # 테스트·사용자 정의 실행기: "<cmd> <project>"
     read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
@@ -120,7 +120,7 @@ agent_command() { # $1=project $2=repo_root $3=agent → 실행할 argv를 AGENT
   scripts_glob="$ROOT/scripts/*"
   case "$agent" in
     codex)
-      AGENT_CMD=(codex exec -C "$repo_root" --full-auto
+      AGENT_CMD=(codex exec -C "$work_dir" --full-auto
         -c sandbox_workspace_write.network_access=true
         "ai-harness harvest skill을 인자 \"$project --auto\"로 실행하라.")
       ;;
@@ -128,12 +128,30 @@ agent_command() { # $1=project $2=repo_root $3=agent → 실행할 argv를 AGENT
       AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto"
         --permission-mode acceptEdits
         --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
-        "Bash(git *)" "Bash(gh pr *)" "Bash(gh repo view *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
+        "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
         "Bash($scripts_glob)"
         --max-budget-usd "$BUDGET_USD"
         --output-format json)
       ;;
   esac
+}
+
+# origin 기본 브랜치 최신 커밋에서 detached worktree를 만든다. origin이 없으면 HEAD.
+make_work_tree() { # $1=repo_root $2=project → 경로 출력
+  local repo_root="$1" dir="" base=""
+  dir="$AUTO_DIR/worktrees/$(hm_project_key "$2")-$(date +%s)"
+  mkdir -p "${dir%/*}"
+  if git -C "$repo_root" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
+    base="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    if [[ -z "$base" ]]; then
+      base="$(git -C "$repo_root" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -n 1)"
+      [[ -n "$base" ]] && base="origin/$base"
+    fi
+  fi
+  git -C "$repo_root" rev-parse --verify --quiet "${base:-HEAD}^{commit}" >/dev/null || base=""
+  git -C "$repo_root" worktree add -q --detach "$dir" "${base:-HEAD}" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$dir"
 }
 
 last_review_after() { # $1=project $2=started_at → 이번 실행이 남긴 review-history 레코드
@@ -157,7 +175,7 @@ prune_logs() {
 
 command_run() {
   local project="$1" batch_id="$2" repo_root="$3" agent="$4"
-  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result=""
+  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir=""
   mkdir -p "$LOG_DIR"
   hm_acquire_lock "$RUN_LOCK" 1 || { log_skip "$project" "$batch_id" busy; find "$(attempt_marker "$project")" -delete 2>/dev/null; return 0; }
   trap 'hm_release_lock "$RUN_LOCK"' EXIT
@@ -165,12 +183,23 @@ command_run() {
   started_at="$(now_iso)"
   start_epoch="$(date +%s)"
   log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(hm_project_key "$project").log"
-  agent_command "$project" "$repo_root" "$agent"
   append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" \
     '{at:$at,event:"started",project:$project,batch:$batch,agent:$agent,repo:$repo,log:$log}')"
 
-  (cd "$repo_root" && HM_HARVEST_RUNNING=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+  # headless 편집은 cwd 안에서만 허용되므로, 작업용 worktree를 만들어 그 안에서 에이전트를 띄운다.
+  # 사용자 체크아웃은 구조적으로 건드릴 수 없다.
+  work_dir="$(make_work_tree "$repo_root" "$project")" || work_dir=""
+  if [[ -z "$work_dir" ]]; then
+    printf 'worktree 생성 실패: %s\n' "$repo_root" >"$log_file"
+    exit_code=70
+  else
+    agent_command "$project" "$work_dir" "$agent"
+    (cd "$work_dir" && HM_HARVEST_RUNNING=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+    git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
+      || find "$work_dir" -depth -delete 2>/dev/null || true
+    git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+  fi
 
   review="$(last_review_after "$project" "$started_at")"
   if [[ "$agent" == "claude" ]]; then
