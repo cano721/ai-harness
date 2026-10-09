@@ -6,6 +6,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 input="$(cat)"
+# 하네스 자신이 띄운 내부 headless 세션(LLM 정리·자동 harvest)은 수집하지 않는다.
+[[ "${HM_INTERNAL_SESSION:-}" == "1" ]] && exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty')"
 reason="$(printf '%s' "$input" | jq -r '.reason // empty')"
 tp="${tp/#\~/$HOME}"

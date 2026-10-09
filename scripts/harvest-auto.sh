@@ -195,7 +195,7 @@ command_run() {
     exit_code=70
   else
     agent_command "$project" "$work_dir" "$agent"
-    (cd "$work_dir" && HM_HARVEST_RUNNING=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+    (cd "$work_dir" && HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
     git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
       || find "$work_dir" -depth -delete 2>/dev/null || true
     git -C "$repo_root" worktree prune >/dev/null 2>&1 || true

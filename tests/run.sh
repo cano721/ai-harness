@@ -1453,6 +1453,47 @@ PR_NOAUTH_RC=0
 assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
 pass "draft PR opener for GitHub and Bitbucket"
 
+# LLM 정리: 정규식이 놓친 마찰을 findings로 남기고 insights 신호로 센다.
+DIGEST_DATA="$TEST_TMP/digest-data"
+HARNESS_METRICS_DIR="$DIGEST_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+DIGEST_EVENT="$DIGEST_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+assert_file "$DIGEST_EVENT"
+DIGEST_STUB="$TEST_TMP/digest-stub.sh"
+cat >"$DIGEST_STUB" <<'STUB'
+#!/usr/bin/env bash
+cat >"$DIGEST_STUB_INPUT"
+printf '%s\n' '{"findings":[
+ {"category":"missing_context","summary":"배포 대상을 몰랐다","evidence":"배포했는데","harness_fix":"docs에 배포 절차","confidence":"high"},
+ {"category":"correction","summary":"브랜치 기준 교정","evidence":"develop 기준","harness_fix":"AGENTS.md 규칙","confidence":"medium"},
+ {"category":"other","summary":"애매함","evidence":"x","harness_fix":"y","confidence":"low"}],"cost_usd":0.002}'
+STUB
+chmod +x "$DIGEST_STUB"
+run_digest() {
+  HARNESS_METRICS_DIR="$DIGEST_DATA" HM_DIGEST_CMD="$DIGEST_STUB" DIGEST_STUB_INPUT="$TEST_TMP/digest-input.txt" \
+    HM_DIGEST_LOOKBACK_DAYS=36500 HM_DIGEST_MIN_TURNS=1 "$ROOT/scripts/digest.sh" "$@"
+}
+assert_contains "$(run_digest run)" "정리 1" "due session is digested"
+DIGEST_FILE="$DIGEST_DATA/digests/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
+assert_eq "3" "$(jq '.findings | length' "$DIGEST_FILE")" "findings stored"
+assert_contains "$(<"$TEST_TMP/digest-input.txt")" "[U] " "model input carries user turns"
+assert_eq "2" "$(jq -r '.insights' "$DIGEST_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json")" "low-confidence findings are not counted"
+assert_contains "$(run_digest run)" "정리 0" "unchanged session is not digested twice"
+HARNESS_METRICS_DIR="$DIGEST_DATA" HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=0 \
+  HM_HARVEST_ERROR_THRESHOLD=0 HM_HARVEST_GUARD_THRESHOLD=0 HM_HARVEST_PERMISSION_THRESHOLD=0 \
+  HM_HARVEST_INSIGHT_THRESHOLD=2 HM_HARVEST_INSIGHT_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" status --project service >"$TEST_TMP/digest-status.json"
+assert_eq '["insights"]' "$(jq -c '.reasons' "$TEST_TMP/digest-status.json")" "insights alone can form a batch"
+DIGEST_SHOW="$(run_digest show --project service)"
+assert_eq "2" "$(jq '.findings | length' <<<"$DIGEST_SHOW")" "show lists medium/high findings of the batch"
+HARNESS_METRICS_DIR="$DIGEST_DATA" HM_DIGEST_DAILY_MAX=1 HM_DIGEST_CMD="$DIGEST_STUB" DIGEST_STUB_INPUT=/dev/null \
+  "$ROOT/scripts/digest.sh" run | grep -q "상한" || fail "daily cap stops further digests"
+INTERNAL_HOOK_DATA="$TEST_TMP/internal-hook-data"
+jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
+  | HARNESS_METRICS_DIR="$INTERNAL_HOOK_DATA" HM_INTERNAL_SESSION=1 "$ROOT/scripts/collect.sh"
+assert_not_file "$INTERNAL_HOOK_DATA/health.json"
+assert_not_file "$INTERNAL_HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+pass "LLM session digest feeds insights"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
