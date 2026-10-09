@@ -6,7 +6,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
-done_n=0; skip_n=0; fail_n=0; cleanup_n=0; queue_n=0; queue_fail_n=0
+done_n=0; skip_n=0; fail_n=0; cleanup_n=0; queue_n=0; queue_skip_n=0; queue_fail_n=0
 shopt -s nullglob
 
 # v0.7.x에서 Codex SessionEnd hook이 Claude extractor를 호출해 만든 파생 유령 이벤트 정리.
@@ -18,13 +18,35 @@ for ghost in "$HM_DATA_DIR"/events/claude-rollout-*.jsonl; do
   fi
 done
 
+# 큐 기록 스탬프: 이벤트도 큐 로직도 그대로면 record를 다시 부르지 않는다.
+# 실측: 변경 없는 증분 backfill 4분 20초의 대부분이 이벤트 1771개 전부의 재기록이었다.
+STAMP_DIR="$HM_DATA_DIR/.enqueued"
+mkdir -p "$STAMP_DIR"
+queue_dep_mt=0
+for dep in "$DIR/harvest-queue.sh" "$DIR/lib.sh"; do
+  dep_mt="$(mtime "$dep")"
+  [[ -n "$dep_mt" ]] && (( dep_mt > queue_dep_mt )) && queue_dep_mt="$dep_mt"
+done
+
+enqueue_is_fresh() { # $1=event
+  local stamp="$STAMP_DIR/${1##*/}" stamp_mt="" ev_mt=""
+  [[ -f "$stamp" ]] || return 1
+  stamp_mt="$(mtime "$stamp")"; ev_mt="$(mtime "$1")"
+  [[ -n "$stamp_mt" && -n "$ev_mt" ]] && (( stamp_mt >= ev_mt && stamp_mt >= queue_dep_mt ))
+}
+
 enqueue_event() {
   local ev="$1" queue_result="" action="" rollup="" rollup_tmp=""
   local source_mtime=0 source_size=0
+  if enqueue_is_fresh "$ev"; then
+    queue_skip_n=$((queue_skip_n + 1))
+    return
+  fi
   if [[ -f "$ev" ]] \
     && jq -e 'select(.kind=="session")' "$ev" >/dev/null 2>&1 \
     && queue_result="$("$DIR/harvest-queue.sh" record "$ev" 2>/dev/null)"; then
     queue_n=$((queue_n + 1))
+    : >"$STAMP_DIR/${ev##*/}"
     action="$(printf '%s' "$queue_result" | jq -r '.record_action // empty' 2>/dev/null || true)"
     rollup="$HM_DATA_DIR/rollups/$(basename "$ev")"
     # mtime만 바뀐 동일 transcript를 확인하려 상세 이벤트를 잠시 복원했더라도,
@@ -111,9 +133,14 @@ while IFS= read -r codex_root; do
   done < <(find "$codex_root" -name 'rollout-*.jsonl' -type f 2>/dev/null)
 done < <(codex_session_roots)
 
+# 이벤트가 정리(prune·rollup)된 스탬프는 더 쓸 일이 없다.
+for stamp in "$STAMP_DIR"/*; do
+  [[ -f "$HM_DATA_DIR/events/${stamp##*/}" ]] || find "$stamp" -maxdepth 0 -type f -delete
+done
+
 if (( fail_n > 0 || queue_fail_n > 0 )); then
   "$DIR/health.sh" failure backfill "extract_${fail_n}_queue_${queue_fail_n}" >/dev/null 2>&1 || true
 else
   "$DIR/health.sh" success backfill >/dev/null 2>&1 || true
 fi
-echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n"
+echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 유지 $queue_skip_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n"

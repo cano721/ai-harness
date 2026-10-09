@@ -22,7 +22,9 @@ def metric_table($rows; $supported; $total):
   end;
 
 . as $all
+# 자동 harvest가 띄운 내부 세션은 프로젝트 작업이 아니므로 신호·사용량 통계에서 뺀다.
 | ($all | map(select(.kind=="session"
+    and ((.internal // false) | not)
     and ($project=="" or .project==$project)
     and ($cutoff=="" or ((.ended // .started // "") >= $cutoff))))) as $S
 # 배열 index 스캔(세션수×이벤트수)이 아니라 객체 lookup으로 소속 세션을 판정한다.

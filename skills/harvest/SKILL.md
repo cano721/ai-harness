@@ -11,6 +11,15 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 
 인자: `$ARGUMENTS` — 대상 프로젝트명. `--dry-run` 포함 시 개선안 보고만 하고 파일 수정/PR 안 함.
 
+`--auto` 포함 시 SessionEnd hook(`scripts/harvest-auto.sh`, opt-in `HM_HARVEST_AUTO=1`)이 띄운 무인 실행이다. 질문에 답할 사람이 없으므로 아래를 지킨다.
+
+- 사용자에게 묻지 않는다. 확인이 필요한 분기(이슈 생성 필요, workspace 로컬 적용, 멤버 하네스 대상)를 만나면 적용하지 않고 보고로 끝내며 `mark-reviewed`도 하지 않는다 — batch가 남아 사람이 `/harvest`로 이어받는다.
+- 현재 디렉토리는 worker가 만든 **작업 전용 worktree**(origin 기본 브랜치 최신 커밋, detached)다. 사용자 체크아웃이 아니므로 여기서 프로젝트 브랜치 규칙대로 새 브랜치를 만들어 작업한다. 이 디렉토리 밖 파일은 편집할 수 없다. 종료 후 worker가 worktree를 지운다.
+- PR은 `$ROOT/scripts/open-pr.sh --title "<제목>" --body-file <본문 파일>`로 연다. 원격을 보고 GitHub는 `gh`, Bitbucket은 REST API로 **draft** PR을 만든다. 본문 첫 줄에 `자동 harvest(--auto) 결과`를 밝힌다. 병합 판단은 사람 몫이다.
+- `open-pr.sh`가 실패하면(지원하지 않는 원격, 인증 정보 없음 등) 방금 push한 원격 브랜치를 `git push origin --delete <branch>`로 지우고, 개선안 보고로 끝내며 `mark-reviewed`하지 않는다.
+- 허용된 명령만 쓸 수 있다: `git`, `jq`, `head`, `tail`, 플러그인 `scripts/*`. 스크립트는 `$ROOT`를 실제 절대경로로 풀어 한 줄에 하나씩 호출한다 — `ROOT=...;` 변수 할당이나 다른 명령과의 조합은 권한 규칙에 매칭되지 않아 거부된다.
+- 마지막 출력은 결과 한 줄(`improved <PR URL>` / `no-change <이유>` / `left_for_user <이유>`).
+
 ## 절차
 
 ### 1. 데이터 갱신 + 통계
@@ -29,6 +38,7 @@ $ROOT/scripts/stats.sh --days 90 --project <프로젝트>   # 추세 비교용
 ```bash
 $ROOT/scripts/stats.sh --project <프로젝트> --analysis-batch
 $ROOT/scripts/harvest-queue.sh events --project <프로젝트>
+$ROOT/scripts/digest.sh show --project <프로젝트>   # LLM 정리 findings (HM_DIGEST=1일 때만 있음)
 ```
 
 analysis batch는 개선 판정이 아니라 검토할 입력 묶음이다. batch 통계를 이번 입력의 정량 근거로, 30/90일 통계를 반복성·baseline 판단에 구분해 쓴다. 재개된 동일 세션의 queue 신호 수는 이전 검토 이후 차분이고, event 통계·transcript는 현재 누적 세션이라는 점을 구분한다. 최근 history의 `improved`·`no-change` 결론과 summary를 먼저 확인해 같은 근거·같은 개선을 반복 제안하지 않는다. 아직 기준 미달이어도 사용자가 `/harvest`를 명시 실행했다면 분석은 계속하되 기준 미달임을 결과에 표시한다.
@@ -70,6 +80,12 @@ transcript 정독(5단계)은 가장 비싼 스텝이다. 진입 전에 batch tr
 - **신호 판정** → focus를 들고 5단계 진행
 
 게이트는 transcript 정독 여부만 정한다. 정량 해석·이전 개선 검증·보고는 게이트 결과와 무관하게 항상 수행한다.
+
+**LLM 정리 findings** (`digest.sh show` 출력이 있을 때): 저비용 모델이 세션 전체를 읽고 정규식이 놓친 마찰(의미상 교정, 반복 실패, 빠진 프로젝트 지식, 잘못된 접근, 낭비, 반복 지시 절차)을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남긴 것이다. 1차 판정이므로 그대로 믿지 않는다.
+
+- **같은 category·같은 대상이 2개 이상 세션**에서 나오면 개선 근거로 쓴다. 근거에는 sid와 evidence 인용을 붙인다.
+- 1개 세션에만 있는 finding은 정독 focus 후보일 뿐 단독 근거가 아니다. 필요하면 그 세션 transcript에서 evidence 전후만 확인한다.
+- `harness_fix`는 제안일 뿐이다. 6단계 가치 기준·라우팅을 그대로 적용한다.
 
 ### 5. 정성 분석 (correction_mark)
 

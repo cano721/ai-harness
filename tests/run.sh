@@ -58,11 +58,21 @@ git -C "$PROJECT_REPO" remote add origin git@github.com:acme/service.git
 git -C "$PROJECT_REPO" worktree add -q -b test-worktree "$PROJECT_WORKTREE"
 HARNESS_METRICS_DIR="$TEST_TMP/lib-data"
 export HARNESS_METRICS_DIR
+# SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
+export HM_BACKFILL_INTERVAL_HOURS=0
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_WORKTREE")" "worktree project id"
 assert_eq "jobda-agent" "$(project_id_for_cwd "/tmp/workspaces/jobda-agent/NJ-290")" "missing worktree fallback"
+assert_eq "jobda-agent" "$(project_id_for_cwd "/gone/workspaces/jobda-agent/feature-NJ-612")" "branch-type worktree name uses the repo dir"
+assert_eq "jobda-talent-pool" "$(project_id_for_cwd "/gone/workspaces/jobda-talent-pool/NJ-1866-embedding")" "issue-key worktree name uses the repo dir"
+assert_eq "NJ-2299" "$(project_id_for_cwd "/gone/repositories/worktrees/NJ-2299")" "worktree container is not a project name"
+assert_eq "jobda-agent" "$(project_id_for_cwd "/gone/workspaces/x/feature-NJ-612" "https://github.com/acme/jobda-agent.git")" "recorded repo URL beats path heuristics"
+NFD_NAME="$(printf '\xe1\x84\x8c\xe1\x85\xa1\xe1\x86\xb8\xe1\x84\x83\xe1\x85\xa1')"
+NFC_NAME="$(printf '\xec\x9e\xa1\xeb\x8b\xa4')"
+assert_eq "$NFC_NAME" "$(project_id_for_cwd "/gone/$NFD_NAME")" "NFD path name normalizes to NFC"
+assert_eq "$NFC_NAME" "$(project_id_for_cwd "/gone/$NFC_NAME")" "NFC path name is unchanged"
 pass "stable project IDs"
 
 # workspace 모드: 여러 독립 git 저장소가 한 폴더에 있으면 라우팅 층만 만든다.
@@ -1205,6 +1215,17 @@ HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
 HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
   "$ROOT/scripts/backfill.sh" >/dev/null
 assert_eq "3" "$(jq -r 'select(.kind=="session") | .v' "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl")" "stale event invalidation"
+BACKFILL_AGAIN="$(HARNESS_METRICS_DIR="$BACKFILL_DATA" \
+HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
+HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
+  "$ROOT/scripts/backfill.sh")"
+assert_contains "$BACKFILL_AGAIN" "큐 0," "unchanged events are not re-recorded"
+find "$BACKFILL_DATA/.enqueued" -type f -exec touch -t 200001010000 {} +
+BACKFILL_STALE="$(HARNESS_METRICS_DIR="$BACKFILL_DATA" \
+HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
+HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
+  "$ROOT/scripts/backfill.sh")"
+assert_contains "$BACKFILL_STALE" "큐 유지 0," "stale stamps are re-recorded"
 pass "backfill freshness and version invalidation"
 
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
@@ -1213,6 +1234,265 @@ assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
 assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
+
+# Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
+REPO_URL_DATA="$TEST_TMP/repo-url-data"
+REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
+mkdir -p "${REPO_URL_ROLLOUT%/*}"
+jq -cR 'fromjson? | if .type=="session_meta" then .payload.cwd="/gone/workspaces/x/feature-NJ-612"
+  | .payload.git={repository_url:"https://github.com/acme/jobda-agent.git"} else . end' \
+  "$CODEX_FIXTURE" >"$REPO_URL_ROLLOUT"
+HARNESS_METRICS_DIR="$REPO_URL_DATA" "$ROOT/scripts/extract-codex.sh" "$REPO_URL_ROLLOUT"
+assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_URL_DATA"/events/codex-*dddddddd*.jsonl)" "Codex extractor uses recorded repo URL"
+
+# 프로젝트 ID가 바뀐 재추출 세션은 이전 큐의 검토 상태를 이어받는다.
+MOVE_DATA="$TEST_TMP/move-data"
+HARNESS_METRICS_DIR="$MOVE_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+MOVE_EVENT="$MOVE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+MOVE_MARKER="claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
+retag_move_event() {
+  jq -c --arg p "$1" 'if .kind=="session" then .project=$p else . end' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
+  mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+}
+move_record() { HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=0 "$ROOT/scripts/harvest-queue.sh" record "$MOVE_EVENT"; }
+retag_move_event old-name
+move_record >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-old-name/sessions/$MOVE_MARKER"
+retag_move_event new-name
+assert_eq "unchanged-pending" "$(move_record | jq -r '.record_action')" "moved pending session is adopted, not duplicated"
+assert_not_file "$MOVE_DATA/harvest-queue/p-old-name/sessions/$MOVE_MARKER"
+assert_eq "new-name" "$(jq -r '.project' "$MOVE_DATA/harvest-queue/p-new-name/sessions/$MOVE_MARKER")" "adopted record carries the new project"
+HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" status --project new-name >/dev/null
+HARNESS_METRICS_DIR="$MOVE_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project new-name --outcome no-change --summary test >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-new-name/seen/$MOVE_MARKER"
+retag_move_event third-name
+assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "reviewed session is not re-queued under a new project"
+assert_file "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+HELD_EVENT_DATA="$TEST_TMP/held-data"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+HELD_EVENT="$HELD_EVENT_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+jq -c 'if .kind=="session" then .project="held-old" else . end' "$HELD_EVENT" >"$HELD_EVENT.tmp" && mv "$HELD_EVENT.tmp" "$HELD_EVENT"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" HM_HARVEST_SESSION_THRESHOLD=1 "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" >/dev/null
+assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
+jq -c 'if .kind=="session" then .project="held-new" else . end' "$HELD_EVENT" >"$HELD_EVENT.tmp" && mv "$HELD_EVENT.tmp" "$HELD_EVENT"
+HARNESS_METRICS_DIR="$HELD_EVENT_DATA" "$ROOT/scripts/harvest-queue.sh" record "$HELD_EVENT" >/dev/null
+assert_file "$HELD_EVENT_DATA/harvest-queue/p-held-new/sessions/$MOVE_MARKER"
+assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER"
+assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
+# 추출 규칙 변경으로 신호 수만 달라진 재추출은 검토 완료 세션을 다시 큐에 넣지 않는다.
+retag_move_event third-name
+jq -c 'select(.kind!="correction_mark")' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
+mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "re-extraction with changed signal counts stays reviewed"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+assert_eq "0" "$(jq -r '.totals.corrections' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER")" "reviewed marker takes the re-extracted totals"
+mkdir -p "$MOVE_DATA/harvest-queue/p-stale-name/sessions"
+jq -c '.project="stale-name"' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" \
+  >"$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
+move_record >/dev/null
+assert_not_file "$MOVE_DATA/harvest-queue/p-stale-name/sessions/$MOVE_MARKER"
+# 내 큐에는 대기, 옛 큐에는 검토 완료로 갈라진 같은 세션은 검토 완료로 합친다.
+mkdir -p "$MOVE_DATA/harvest-queue/p-split-old/seen"
+cp "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" "$MOVE_DATA/harvest-queue/p-split-old/seen/$MOVE_MARKER"
+mv "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER" "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+move_record >/dev/null
+assert_file "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
+assert_not_file "$MOVE_DATA/harvest-queue/p-split-old/seen/$MOVE_MARKER"
+pass "project ID changes keep queue state"
+
+# 정기 backfill: SessionEnd 없이 닫힌 세션을 SessionStart가 주기적으로 회수한다.
+DUE_DATA="$TEST_TMP/due-data"
+DUE_CLAUDE="$TEST_TMP/due-claude/-tmp-service"
+mkdir -p "$DUE_CLAUDE" "$TEST_TMP/due-codex"
+cp "$CLAUDE_FIXTURE" "$DUE_CLAUDE/"
+run_due() {
+  HARNESS_METRICS_DIR="$DUE_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/due-claude" \
+    HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/due-codex" HM_BACKFILL_FOREGROUND=1 \
+    HM_BACKFILL_INTERVAL_HOURS="$1" "$ROOT/scripts/backfill-due.sh"
+}
+run_due 0
+assert_not_file "$DUE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+run_due 24
+assert_file "$DUE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+assert_eq "1" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "first due backfill runs"
+run_due 24
+assert_eq "1" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "backfill not repeated inside interval"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$DUE_DATA/health.json" >"$DUE_DATA/health.tmp"
+mv "$DUE_DATA/health.tmp" "$DUE_DATA/health.json"
+run_due 24
+assert_eq "2" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "backfill reruns after interval"
+mkdir -p "$DUE_DATA/.backfill-due.lock"
+printf '%s\n' "$$" >"$DUE_DATA/.backfill-due.lock/pid"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$DUE_DATA/health.json" >"$DUE_DATA/health.tmp"
+mv "$DUE_DATA/health.tmp" "$DUE_DATA/health.json"
+run_due 24
+assert_eq "2" "$(jq -r '.components.backfill.success_count' "$DUE_DATA/health.json")" "running backfill is not duplicated"
+find "$DUE_DATA/.backfill-due.lock" -depth -delete
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" "backfill-due.sh" "SessionStart schedules backfill"
+pass "scheduled background backfill"
+
+# 자동 harvest: opt-in, 재귀 차단, batch당 1회, 하네스 없는 곳 skip, 일일 상한, 결과 기록
+AUTO_DATA="$TEST_TMP/auto-data"
+AUTO_REPO="$TEST_TMP/auto-repo"
+AUTO_PLAIN="$TEST_TMP/auto-plain"
+make_repo "$AUTO_REPO"
+make_repo "$AUTO_PLAIN"
+mkdir -p "$AUTO_REPO/.ai-harness"
+jq -n '{project_id:"auto-svc"}' >"$AUTO_REPO/.ai-harness/harness.json"
+AUTO_STUB="$TEST_TMP/auto-stub.sh"
+cat >"$AUTO_STUB" <<'STUB'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "${HM_HARVEST_RUNNING:-}" "$(pwd -P)" >>"$AUTO_STUB_OUT"
+case "${AUTO_STUB_MODE:-}" in
+  improve)
+    # mark-reviewed가 남기는 review-history 레코드 형태
+    mkdir -p "$HARNESS_METRICS_DIR/harvest-queue/p-$1"
+    jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{reviewed_at:$at,review:{outcome:"improved",artifact:"https://example.com/pr/1"}}' \
+      >>"$HARNESS_METRICS_DIR/harvest-queue/p-$1/review-history.jsonl"
+    ;;
+  fail) exit 3 ;;
+esac
+STUB
+chmod +x "$AUTO_STUB"
+auto_status() { jq -cn --arg p "$1" --arg b "$2" --arg r "${3:-errors}" '{project:$p,batch_id:$b,has_analysis_batch:true,reasons:($r | split(","))}'; }
+auto_trigger() { # $1=status $2=cwd, 추가 env는 호출자가 앞에 붙인다
+  HARNESS_METRICS_DIR="$AUTO_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
+    AUTO_STUB_OUT="$TEST_TMP/auto-stub.out" \
+    "$ROOT/scripts/harvest-auto.sh" trigger "$1" "$2" claude
+}
+auto_runs() { jq -sr "$1" "$AUTO_DATA/harvest-auto/runs.jsonl"; }
+
+auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+HM_HARVEST_AUTO=1 HM_HARVEST_RUNNING=1 auto_trigger "$(auto_status auto-svc b1)" "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+HM_HARVEST_AUTO=1 auto_trigger '{"project":"auto-svc","has_analysis_batch":false}' "$AUTO_REPO"
+assert_not_file "$AUTO_DATA/harvest-auto/runs.jsonl"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status plain b1)" "$AUTO_PLAIN"
+assert_eq 'no_harness_repo' "$(auto_runs '[.[] | select(.project=="plain") | .reason] | join(",")')" "no-harness batch skipped once"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b0 sessions)" "$AUTO_REPO"
+assert_eq "sessions_only" "$(auto_runs 'last | .reason')" "sessions-only batch is left to the notice"
+assert_not_file "$TEST_TMP/auto-stub.out"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b1 sessions,errors)" "$AUTO_REPO"
+assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs once"
+AUTO_RUN_LINE="$(sed -n 1p "$TEST_TMP/auto-stub.out")"
+assert_eq "auto-svc|1" "${AUTO_RUN_LINE%|*}" "worker gets project and recursion guard"
+AUTO_WORK_DIR="${AUTO_RUN_LINE##*|}"
+assert_contains "$AUTO_WORK_DIR" "/harvest-auto/worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+[[ ! -d "$AUTO_WORK_DIR" ]] || fail "work tree is removed after the run: $AUTO_WORK_DIR"
+assert_eq "1" "$(git -C "$AUTO_REPO" worktree list | wc -l | tr -d ' ')" "no leftover worktree registration"
+assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
+assert_eq "12" "$(auto_runs '[.[] | select(.event=="started")] | last | .batch | length')" "run log keeps a short batch key"
+
+HM_HARVEST_AUTO=1 AUTO_STUB_MODE=improve auto_trigger "$(auto_status auto-svc b2)" "$AUTO_REPO"
+assert_eq 'improved|https://example.com/pr/1' "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.artifact)"')" "review outcome recorded"
+assert_eq "success" "$(jq -r '.components.harvest_auto.last_result' "$AUTO_DATA/health.json")" "auto health success"
+
+HM_HARVEST_AUTO=1 auto_trigger "$(auto_status auto-svc b3)" "$AUTO_REPO"
+assert_eq "daily_max" "$(auto_runs 'last | .reason')" "daily cap skips without consuming batch"
+assert_eq "b2" "$(jq -r '.batch_id' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "capped batch stays retryable"
+
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=5 AUTO_STUB_MODE=fail auto_trigger "$(auto_status auto-svc b3)" "$AUTO_REPO"
+assert_eq "failed|3" "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.exit_code)"')" "failed run recorded"
+assert_eq "exit_3" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/health.json")" "auto health failure"
+assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
+pass "opt-in background harvest trigger"
+
+# 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
+INTERNAL_DATA="$TEST_TMP/internal-data"
+INTERNAL_TRANSCRIPT="$TEST_TMP/internal/cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+mkdir -p "${INTERNAL_TRANSCRIPT%/*}"
+INTERNAL_FIRST=0
+while IFS= read -r line; do
+  if (( INTERNAL_FIRST == 0 )) && jq -e 'select(.type=="user" and (.message.content|type)=="string")' <<<"$line" >/dev/null 2>&1; then
+    jq -c '.message.content = "<command-name>/ai-harness:harvest</command-name>\n<command-args>service --auto</command-args>"' <<<"$line"
+    INTERNAL_FIRST=1
+  else
+    printf '%s\n' "$line"
+  fi
+done <"$CLAUDE_FIXTURE" >"$INTERNAL_TRANSCRIPT"
+INTERNAL_EVENT="$INTERNAL_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$INTERNAL_TRANSCRIPT" "other"
+assert_eq "true" "$(jq -r 'select(.kind=="session") | .internal' "$INTERNAL_EVENT")" "auto harvest session is marked internal"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+assert_eq "false" "$(jq -r 'select(.kind=="session") | .internal' "$INTERNAL_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl")" "normal session is not internal"
+INTERNAL_MARKER="claude-cccccccc-1111-2222-3333-dddddddddddd.json"
+mkdir -p "$INTERNAL_DATA/harvest-queue/p-service/sessions"
+jq -cn '{project:"service",src:"claude",sid:"cccccccc-1111-2222-3333-dddddddddddd"}' \
+  >"$INTERNAL_DATA/harvest-queue/p-service/sessions/$INTERNAL_MARKER"
+HARNESS_METRICS_DIR="$INTERNAL_DATA" "$ROOT/scripts/harvest-queue.sh" record "$INTERNAL_EVENT" >/dev/null
+assert_not_file "$INTERNAL_DATA/harvest-queue/p-service/sessions/$INTERNAL_MARKER"
+pass "internal auto-harvest sessions stay out of the queue"
+
+# open-pr.sh: 원격을 보고 GitHub/Bitbucket draft PR 요청을 만든다.
+PR_REPO="$TEST_TMP/pr-repo"
+make_repo "$PR_REPO" "git@bitbucket.org:acme/jobda-agent.git"
+git -C "$PR_REPO" checkout -q -b feature/NJ-1-harvest
+printf 'body\n' >"$TEST_TMP/pr-body.md"
+PR_BB="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base develop)"
+assert_eq "bitbucket|acme/jobda-agent|true|feature/NJ-1-harvest|develop|body" \
+  "$(jq -r '[.provider,.slug,.draft,.source.branch.name,.destination.branch.name,(.description|rtrimstr("\n"))] | map(tostring) | join("|")' <<<"$PR_BB")" "Bitbucket draft PR request"
+git -C "$PR_REPO" remote set-url origin https://github.com/acme/woorinal.git
+PR_GH="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base main)"
+assert_eq "github|acme/woorinal|true" "$(jq -r '[.provider,.slug,.draft] | map(tostring) | join("|")' <<<"$PR_GH")" "GitHub draft PR request"
+git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
+if (cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" 2>/dev/null); then
+  fail "unsupported host must fail"
+fi
+git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
+PR_NOAUTH_RC=0
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
+assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
+pass "draft PR opener for GitHub and Bitbucket"
+
+# LLM 정리: 정규식이 놓친 마찰을 findings로 남기고 insights 신호로 센다.
+DIGEST_DATA="$TEST_TMP/digest-data"
+HARNESS_METRICS_DIR="$DIGEST_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+DIGEST_EVENT="$DIGEST_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+assert_file "$DIGEST_EVENT"
+DIGEST_STUB="$TEST_TMP/digest-stub.sh"
+cat >"$DIGEST_STUB" <<'STUB'
+#!/usr/bin/env bash
+cat >"$DIGEST_STUB_INPUT"
+printf '%s\n' '{"findings":[
+ {"category":"missing_context","summary":"배포 대상을 몰랐다","evidence":"배포했는데","harness_fix":"docs에 배포 절차","confidence":"high"},
+ {"category":"correction","summary":"브랜치 기준 교정","evidence":"develop 기준","harness_fix":"AGENTS.md 규칙","confidence":"medium"},
+ {"category":"other","summary":"애매함","evidence":"x","harness_fix":"y","confidence":"low"}],"cost_usd":0.002}'
+STUB
+chmod +x "$DIGEST_STUB"
+run_digest() {
+  HARNESS_METRICS_DIR="$DIGEST_DATA" HM_DIGEST_CMD="$DIGEST_STUB" DIGEST_STUB_INPUT="$TEST_TMP/digest-input.txt" \
+    HM_DIGEST_LOOKBACK_DAYS=36500 HM_DIGEST_MIN_TURNS=1 "$ROOT/scripts/digest.sh" "$@"
+}
+assert_contains "$(run_digest run)" "정리 1" "due session is digested"
+DIGEST_FILE="$DIGEST_DATA/digests/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
+assert_eq "3" "$(jq '.findings | length' "$DIGEST_FILE")" "findings stored"
+assert_contains "$(<"$TEST_TMP/digest-input.txt")" "[U] " "model input carries user turns"
+assert_eq "2" "$(jq -r '.insights' "$DIGEST_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json")" "low-confidence findings are not counted"
+assert_contains "$(run_digest run)" "정리 0" "unchanged session is not digested twice"
+HARNESS_METRICS_DIR="$DIGEST_DATA" HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=0 \
+  HM_HARVEST_ERROR_THRESHOLD=0 HM_HARVEST_GUARD_THRESHOLD=0 HM_HARVEST_PERMISSION_THRESHOLD=0 \
+  HM_HARVEST_INSIGHT_THRESHOLD=2 HM_HARVEST_INSIGHT_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" status --project service >"$TEST_TMP/digest-status.json"
+assert_eq '["insights"]' "$(jq -c '.reasons' "$TEST_TMP/digest-status.json")" "insights alone can form a batch"
+DIGEST_SHOW="$(run_digest show --project service)"
+assert_eq "2" "$(jq '.findings | length' <<<"$DIGEST_SHOW")" "show lists medium/high findings of the batch"
+HARNESS_METRICS_DIR="$DIGEST_DATA" HM_DIGEST_DAILY_MAX=1 HM_DIGEST_CMD="$DIGEST_STUB" DIGEST_STUB_INPUT=/dev/null \
+  "$ROOT/scripts/digest.sh" run | grep -q "상한" || fail "daily cap stops further digests"
+INTERNAL_HOOK_DATA="$TEST_TMP/internal-hook-data"
+jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
+  | HARNESS_METRICS_DIR="$INTERNAL_HOOK_DATA" HM_INTERNAL_SESSION=1 "$ROOT/scripts/collect.sh"
+assert_not_file "$INTERNAL_HOOK_DATA/health.json"
+assert_not_file "$INTERNAL_HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+pass "LLM session digest feeds insights"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"

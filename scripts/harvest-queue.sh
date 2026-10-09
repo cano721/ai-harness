@@ -35,6 +35,8 @@ GUARD_THRESHOLD="$(threshold "${HM_HARVEST_GUARD_THRESHOLD:-3}" 3)"
 GUARD_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_GUARD_SESSION_THRESHOLD:-2}" 2)"
 PERMISSION_THRESHOLD="$(threshold "${HM_HARVEST_PERMISSION_THRESHOLD:-3}" 3)"
 PERMISSION_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_PERMISSION_SESSION_THRESHOLD:-2}" 2)"
+INSIGHT_THRESHOLD="$(threshold "${HM_HARVEST_INSIGHT_THRESHOLD:-3}" 3)"
+INSIGHT_SESSION_THRESHOLD="$(threshold "${HM_HARVEST_INSIGHT_SESSION_THRESHOLD:-2}" 2)"
 MAX_BATCH_SESSIONS="$(positive_threshold "${HM_HARVEST_MAX_BATCH_SESSIONS:-50}" 50)"
 REMIND_HOURS="$(threshold "${HM_HARVEST_REMIND_HOURS:-24}" 24)"
 THRESHOLDS="$(jq -cn \
@@ -47,6 +49,8 @@ THRESHOLDS="$(jq -cn \
   --argjson guard_sessions "$GUARD_SESSION_THRESHOLD" \
   --argjson permission_denials "$PERMISSION_THRESHOLD" \
   --argjson permission_sessions "$PERMISSION_SESSION_THRESHOLD" \
+  --argjson insights "$INSIGHT_THRESHOLD" \
+  --argjson insight_sessions "$INSIGHT_SESSION_THRESHOLD" \
   --argjson max_batch_sessions "$MAX_BATCH_SESSIONS" \
   '{
     sessions:$sessions,
@@ -58,6 +62,8 @@ THRESHOLDS="$(jq -cn \
     guard_sessions:$guard_sessions,
     permission_denials:$permission_denials,
     permission_sessions:$permission_sessions,
+    insights:$insights,
+    insight_sessions:$insight_sessions,
     max_batch_sessions:$max_batch_sessions
   }')"
 
@@ -142,18 +148,24 @@ migrate_legacy_state() {
 }
 
 event_summary() {
-  local event_file="$1"
-  jq -sc --arg event_file "$event_file" '
+  local event_file="$1" digest_file="" digest="null" base=""
+  # LLM 정리(scripts/digest.sh) 결과가 있으면 insights 신호로 함께 센다.
+  base="${event_file##*/}"
+  digest_file="$HM_DATA_DIR/digests/${base%.jsonl}.json"
+  [[ -f "$digest_file" ]] && digest="$(jq -c '.' "$digest_file" 2>/dev/null || printf 'null')"
+  jq -sc --arg event_file "$event_file" --argjson digest "${digest:-null}" '
     def total($kind):
       ([.[] | select(.kind == $kind) | (.n // 1)] | add // 0);
     (map(select(.kind == "session")) | first) as $session
-    | if $session == null or ($session.project // "") == "" or ($session.sid // "") == "" then
+    | if $session == null or ($session.project // "") == "" or ($session.sid // "") == ""
+      or ($session.internal // false) then
         empty
       else
         (total("correction_mark")) as $corrections
         | (total("error")) as $errors
         | (total("guard_block")) as $guard_blocks
         | (total("permission_deny")) as $permission_denials
+        | ([($digest // {}).findings[]? | select(.confidence != "low")] | length) as $insights
         | {
           v: 1,
           project: $session.project,
@@ -168,11 +180,13 @@ event_summary() {
           errors: $errors,
           guard_blocks: $guard_blocks,
           permission_denials: $permission_denials,
+          insights: $insights,
           totals: {
             corrections: $corrections,
             errors: $errors,
             guard_blocks: $guard_blocks,
-            permission_denials: $permission_denials
+            permission_denials: $permission_denials,
+            insights: $insights
           },
           event_revision: ({
             event_v: ($session.v // 0),
@@ -185,11 +199,84 @@ event_summary() {
             corrections: $corrections,
             errors: $errors,
             guard_blocks: $guard_blocks,
-            permission_denials: $permission_denials
+            permission_denials: $permission_denials,
+            insights: $insights
           } | tojson)
         }
       end
   ' "$event_file" 2>/dev/null || true
+}
+
+# 옛 프로젝트 ID 큐의 batch에서 세션이 빠져 남은 게 없으면 batch를 해산한다.
+# 그 이름으로는 더 이상 알림이 가지 않아 아무도 검토하지 않는 batch로 남기 때문이다.
+dissolve_empty_batch() { # $1=other_qdir
+  local batch_file="$1/analysis-batch.json" marker=""
+  [[ -f "$batch_file" ]] || return 0
+  while IFS= read -r marker; do
+    [[ -n "$marker" && -f "$1/sessions/$marker" ]] && return 0
+  done < <(jq -r '.markers[]?' "$batch_file" 2>/dev/null)
+  find "$batch_file" "$1/notified-analysis-batch" -maxdepth 0 -type f -delete 2>/dev/null || true
+}
+
+# 프로젝트 ID 규칙이 바뀌어 재추출된 세션은 다른 큐에 남은 상태를 가져온다.
+# 검토 완료(seen)는 그대로 옮겨 재검토를 막고, 대기(pending)는 옮겨 중복 집계를 막는다.
+# 옛 큐의 batch에 묶여 있던 세션도 옮긴다 — 옛 이름의 batch는 알림이 가지 않는 고아가 된다.
+adopt_moved_session() {
+  local qdir="$1" marker="$2" project="$3" other="" other_qdir="" dest="" tmp=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/seen/"$marker" "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    other_qdir="${other%/*/*}"
+    [[ "$other_qdir" != "$qdir" ]] || continue
+    if [[ "$other" == */seen/* ]]; then
+      dest="$qdir/seen/$marker"
+    else
+      dest="$qdir/sessions/$marker"
+    fi
+    tmp="$(mktemp "${dest%/*}/.adopt.XXXXXX")"
+    if jq -c --arg project "$project" '.project = $project' "$other" >"$tmp" 2>/dev/null; then
+      mv "$tmp" "$dest"
+      find "$other" -maxdepth 0 -type f -delete
+      [[ "$other" == */seen/* ]] || dissolve_empty_batch "$other_qdir"
+    else
+      find "$tmp" -maxdepth 0 -type f -delete
+    fi
+    break
+  done
+  shopt -u nullglob
+}
+
+# 이전 ID 변경으로 내 큐에는 대기, 옛 큐에는 검토 완료로 갈라진 세션은 같은 세션이면 검토 완료로 합친다.
+adopt_reviewed_elsewhere() { # $1=qdir $2=marker $3=summary
+  local qdir="$1" marker="$2" summary="$3" other="" tmp=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/seen/"$marker"; do
+    [[ "${other%/*/*}" != "$qdir" ]] || continue
+    if [[ "$(jq -r --argjson cur "$summary" '
+        (.event_revision // "{}" | fromjson? // {}) as $o | ($cur.event_revision // "{}" | fromjson? // {}) as $n
+        | ($o.ended != null and $o.ended == $n.ended and ($o.turns // -1) == ($n.turns // -2))
+      ' "$other" 2>/dev/null)" == "true" ]]; then
+      tmp="$(mktemp "$qdir/seen/.adopt.XXXXXX")"
+      jq -c --argjson cur "$summary" '. + {project:$cur.project, event_revision:$cur.event_revision, totals:$cur.totals}' \
+        "$other" >"$tmp" && mv "$tmp" "$qdir/seen/$marker"
+      find "$qdir/sessions/$marker" "$other" -maxdepth 0 -type f -delete
+      dissolve_empty_batch "$qdir"
+      break
+    fi
+  done
+  shopt -u nullglob
+}
+
+# 이전 버전의 프로젝트 ID 변경으로 다른 큐에 남은 대기 복사본은 그 큐의 batch 판정을 부풀린다.
+drop_stale_pending_copies() {
+  local qdir="$1" marker="$2" other="" other_qdir=""
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    other_qdir="${other%/*/*}"
+    [[ "$other_qdir" != "$qdir" ]] || continue
+    find "$other" -maxdepth 0 -type f -delete
+    dissolve_empty_batch "$other_qdir"
+  done
+  shopt -u nullglob
 }
 
 record_summary() {
@@ -206,6 +293,12 @@ record_summary() {
   mkdir -p "$qdir/sessions" "$qdir/seen"
   seen_file="$qdir/seen/$marker"
   pending_file="$qdir/sessions/$marker"
+  if [[ ! -f "$seen_file" && ! -f "$pending_file" ]]; then
+    adopt_moved_session "$qdir" "$marker" "$project"
+  else
+    drop_stale_pending_copies "$qdir" "$marker"
+    [[ -f "$pending_file" ]] && adopt_reviewed_elsewhere "$qdir" "$marker" "$summary"
+  fi
 
   # 같은 세션을 재개할 수 있으므로 sid만으로 영구 제외하지 않는다. 마지막 검토 revision과
   # 같으면 멱등 no-op, 달라졌으면 누적 신호의 차분만 새 review unit으로 만든다.
@@ -214,10 +307,13 @@ record_summary() {
     old_revision="$(printf '%s' "$old" | jq -r '.event_revision // empty')"
     new_revision="$(printf '%s' "$summary" | jq -r '.event_revision // empty')"
     if [[ -z "$old_revision" ]] && [[ "$(jq -nr --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0), errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0), permission_denials:($x.permission_denials // 0)
-      });
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
       (($old.ended // null) == ($current.ended // null) and counters($old) == counters($current))
     ')" == "true" ]]; then
       tmp="$(mktemp "$qdir/seen/.revision-upgrade.XXXXXX")"
@@ -237,14 +333,35 @@ record_summary() {
       RECORD_ACTION="unchanged"
       return 0
     fi
+    # 종료 시각·턴 수가 같으면 세션이 재개된 게 아니라 추출 규칙이 바뀌어 재추출된 것이다.
+    # 신호 수 차이(오탐 수정 등)로 검토 완료 세션을 다시 큐에 넣지 않고 기록만 갱신한다.
+    if [[ -n "$old_revision" && -n "$new_revision" ]] && [[ "$(jq -nr --arg old "$old_revision" --arg new "$new_revision" '
+      ($old | fromjson? // {}) as $o | ($new | fromjson? // {}) as $n
+      | ($o.ended != null and $o.ended == $n.ended and ($o.turns // -1) == ($n.turns // -2))
+    ' 2>/dev/null)" == "true" ]]; then
+      tmp="$(mktemp "$qdir/seen/.reextract.XXXXXX")"
+      jq -cn --argjson old "$old" --argjson current "$summary" '
+        $old + {
+          project:$current.project,
+          event_revision:$current.event_revision,
+          totals:$current.totals,
+          source_mtime:($current.source_mtime // 0),
+          source_size:($current.source_size // 0)
+        }
+      ' >"$tmp"
+      mv "$tmp" "$seen_file"
+      RECORD_ACTION="unchanged"
+      return 0
+    fi
     RECORD_ACTION="resumed"
     summary="$(jq -cn --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0),
-        errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0),
-        permission_denials:($x.permission_denials // 0)
-      });
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
       def delta($new; $previous): if ($new - $previous) > 0 then ($new - $previous) else 0 end;
       (counters($current)) as $new
       | (counters($old)) as $previous
@@ -253,6 +370,7 @@ record_summary() {
           errors:delta($new.errors; $previous.errors),
           guard_blocks:delta($new.guard_blocks; $previous.guard_blocks),
           permission_denials:delta($new.permission_denials; $previous.permission_denials),
+          insights:delta($new.insights; $previous.insights),
           totals:$new,
           baseline_totals:$previous,
           resumed:true,
@@ -269,13 +387,14 @@ record_summary() {
     fi
     RECORD_ACTION="updated-pending"
     summary="$(jq -cn --argjson current "$summary" --argjson old "$old" '
-      def counters($x): ($x.totals // {
-        corrections:($x.corrections // 0),
-        errors:($x.errors // 0),
-        guard_blocks:($x.guard_blocks // 0),
-        permission_denials:($x.permission_denials // 0)
-      });
-      def zero: {corrections:0,errors:0,guard_blocks:0,permission_denials:0};
+      def counters($x): ($x.totals // {}) as $t | {
+        corrections:($t.corrections // $x.corrections // 0),
+        errors:($t.errors // $x.errors // 0),
+        guard_blocks:($t.guard_blocks // $x.guard_blocks // 0),
+        permission_denials:($t.permission_denials // $x.permission_denials // 0),
+        insights:($t.insights // $x.insights // 0)
+      };
+      def zero: {corrections:0,errors:0,guard_blocks:0,permission_denials:0,insights:0};
       def delta($new; $previous): if ($new - $previous) > 0 then ($new - $previous) else 0 end;
       (counters($current)) as $new
       | ($old.baseline_totals // zero) as $baseline
@@ -284,6 +403,7 @@ record_summary() {
           errors:delta($new.errors; $baseline.errors),
           guard_blocks:delta($new.guard_blocks; $baseline.guard_blocks),
           permission_denials:delta($new.permission_denials; $baseline.permission_denials),
+          insights:delta($new.insights; ($baseline.insights // 0)),
           totals:$new,
           baseline_totals:$baseline,
           resumed:($old.resumed // false),
@@ -334,7 +454,9 @@ pending_snapshot() {
         guard_blocks:0,
         guard_sessions:0,
         permission_denials:0,
-        permission_sessions:0
+        permission_sessions:0,
+        insights:0,
+        insight_sessions:0
       },
       trigger_counts:{
         sessions:0,
@@ -345,7 +467,9 @@ pending_snapshot() {
         guard_blocks:0,
         guard_sessions:0,
         permission_denials:0,
-        permission_sessions:0
+        permission_sessions:0,
+        insights:0,
+        insight_sessions:0
       },
       pending_total_sessions:0,
       markers:[],
@@ -364,12 +488,14 @@ pending_snapshot() {
       guard_blocks:([$items[].guard_blocks] | add // 0),
       guard_sessions:([$items[] | select(.guard_blocks > 0)] | length),
       permission_denials:([$items[].permission_denials] | add // 0),
-      permission_sessions:([$items[] | select(.permission_denials > 0)] | length)
+      permission_sessions:([$items[] | select(.permission_denials > 0)] | length),
+      insights:([$items[].insights // 0] | add // 0),
+      insight_sessions:([$items[] | select((.insights // 0) > 0)] | length)
     };
     . as $all
     # batch cap 바깥의 신호가 영구히 가려지지 않도록 신호가 있는 review unit을 우선한다.
     | ($all | sort_by(
-        (if ((.corrections + .errors + .guard_blocks + .permission_denials) > 0) then 0 else 1 end),
+        (if ((.corrections + .errors + .guard_blocks + .permission_denials + (.insights // 0)) > 0) then 0 else 1 end),
         (.queued_at // ""),
         (.ended // ""),
         .marker
@@ -415,7 +541,11 @@ evaluate_analysis_batch() {
     if .thresholds.permission_denials > 0
       and .trigger_counts.permission_denials >= .thresholds.permission_denials
       and (.thresholds.permission_sessions == 0 or .trigger_counts.permission_sessions >= .thresholds.permission_sessions)
-      then "permission_denials" else empty end
+      then "permission_denials" else empty end,
+    if .thresholds.insights > 0
+      and (.trigger_counts.insights // 0) >= .thresholds.insights
+      and (.thresholds.insight_sessions == 0 or (.trigger_counts.insight_sessions // 0) >= .thresholds.insight_sessions)
+      then "insights" else empty end
   ]')"
 
   if [[ "$(printf '%s' "$reasons" | jq 'length')" == "0" ]]; then
@@ -473,11 +603,29 @@ parse_review_options() {
   esac
 }
 
+# 내부 세션(자동 harvest)으로 재판정된 세션이 이전 버전에서 큐에 들어갔다면 꺼낸다.
+purge_internal_session() { # $1=event_file
+  local marker="" other=""
+  marker="$(jq -sr 'map(select(.kind=="session" and (.internal // false)))
+    | first | if . == null then empty else "\(.src)-\(.sid)" end' "$1" 2>/dev/null || true)"
+  [[ -n "$marker" ]] || return 0
+  marker="$(printf '%s' "$marker" | jq -sRr '@uri').json"
+  shopt -s nullglob
+  for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    find "$other" -maxdepth 0 -type f -delete
+    dissolve_empty_batch "${other%/*/*}"
+  done
+  shopt -u nullglob
+}
+
 command_record() {
   [[ -n "${1:-}" ]] || usage
   local summary project qdir lock_dir status
   summary="$(event_summary "$1")"
-  [[ -n "$summary" ]] || exit 0
+  if [[ -z "$summary" ]]; then
+    purge_internal_session "$1"
+    exit 0
+  fi
   project="$(printf '%s' "$summary" | jq -r '.project')"
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
@@ -683,6 +831,7 @@ command_notify() {
     + "세션 \(.counts.sessions) · 교정 \(.counts.corrections) · 오류 \(.counts.errors)"
     + (if (.counts.guard_blocks // 0) > 0 then " · 차단 \(.counts.guard_blocks)" else "" end)
     + (if (.counts.permission_denials // 0) > 0 then " · 권한 거부 \(.counts.permission_denials)" else "" end)
+    + (if (.counts.insights // 0) > 0 then " · LLM 정리 \(.counts.insights)" else "" end)
     + ". "
     + "/harvest \(.project)를 실행하세요."
   ')"

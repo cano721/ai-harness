@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 input="$(cat)"
+[[ "${HM_INTERNAL_SESSION:-}" == "1" ]] && exit 0
 messages=()
 
 update_result="$(printf '%s' "$input" | "$ROOT/scripts/check-update.sh" notify 2>/dev/null || true)"
@@ -23,6 +24,8 @@ if [[ -n "$transcript" && "$(basename "$transcript")" != rollout-*.jsonl && ! -e
     messages+=("ai-harness 새 버전을 자동으로 받으려면 /plugin → Marketplaces → ai-harness → Enable auto-update 를 켜세요. (이 안내는 한 번만 표시됩니다)")
   fi
 fi
+
+"$ROOT/scripts/backfill-due.sh" >/dev/null 2>&1 || true
 
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"

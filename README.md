@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다. 예외는 사용자가 켠 [자동 harvest](#auto-harvest)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
 
 ## 목차
 
@@ -90,7 +90,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다.
+Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)).
 
 <a id="quick-start"></a>
 
@@ -292,10 +292,10 @@ stateDiagram-v2
 
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
-| 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음) | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 (`HM_HARVEST_AUTO=1`이면 백그라운드 `/harvest --auto`만 띄움) |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음). 마지막 backfill이 24시간 넘었으면 backfill을 백그라운드로 띄움 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
-두 hook은 3초 timeout이며 실패해도 작업 세션을 막지 않습니다. 누락·진행 중인 Codex 세션은 `/metrics`, `/harvest`, 세션 조회의 backfill이 보완합니다.
+SessionStart는 3초, SessionEnd는 10초 timeout이며 실패해도 작업 세션을 막지 않습니다. 터미널·탭을 그냥 닫은 세션은 `SessionEnd`가 실행되지 않으므로, `SessionStart`가 하루 한 번 backfill을 세션과 분리된 저우선순위(`nice`) 프로세스로 돌려 회수합니다. `/metrics`, `/harvest`, 세션 조회도 같은 backfill을 실행합니다.
 
 ### 언제 `/harvest`를 안내하나
 
@@ -306,6 +306,30 @@ stateDiagram-v2
 - 서로 다른 2개 이상 세션에서 오류 5개, 가드 차단 3개, 권한 거부 3개 중 하나
 
 한 batch는 최대 50개 세션입니다. 단, 트리거 판정은 전체 pending을 기준으로 하며 신호가 있는 세션을 우선 포함합니다. 분석 중 새로 종료된 세션은 다음 batch에 보존됩니다. 첫 알림을 놓치면 기본 24시간마다 다시 알립니다.
+
+<a id="llm-digest"></a>
+
+### LLM 세션 정리 (opt-in)
+
+교정 접두어("아니", "그게 아니라")·도구 오류 같은 정규식 신호는 의미상 교정이나 "프로젝트 사실을 몰라 틀림"을 놓칩니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
+
+- **대상**: 최근 14일(`HM_DIGEST_LOOKBACK_DAYS`), 3턴 이상, 끝난 지 30분 지난 세션을 최신순으로 하루 20개(`HM_DIGEST_DAILY_MAX`). 재개된 세션만 다시 정리합니다
+- **입력**: 사용자 발화 전체(턴당 600자), 응답·도구 오류는 짧게 잘라 최대 4만 자. 실측 세션당 약 $0.003~0.01
+- **신호**: medium 이상 finding 수가 큐의 `insights`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
+- **사용**: `/harvest`가 `digest.sh show`로 batch 세션의 findings를 받아, 2개 이상 세션에서 반복되는 것만 개선 근거로 씁니다
+- 정리 세션은 `HM_INTERNAL_SESSION=1`·`--no-session-persistence`로 실행돼 수집·알림 대상이 아닙니다. 기록은 `~/.ai-harness/digests/`
+
+<a id="auto-harvest"></a>
+
+### 자동 harvest (opt-in)
+
+`~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 `SessionEnd`가 analysis batch를 확인한 뒤 `/harvest <프로젝트> --auto`를 세션과 분리된 headless 프로세스(`claude -p`, Codex 세션이면 `codex exec`)로 실행합니다.
+
+- **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
+- **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
+- **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
+- **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`로 표시되어 그 세션의 `SessionEnd`가 다시 harvest를 띄우지 않습니다
+- **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
 
@@ -345,7 +369,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 | harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
 | 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
-상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다.
+상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다. 이미 삭제된 worktree는 Codex가 기록한 저장소 URL, 그다음 경로 규칙(`<repo>/feature-NJ-1`, `<repo>/NJ-1-설명` → `<repo>`)으로 판정하고, 한글 등 비ASCII 이름은 NFC로 맞춥니다. 규칙이 바뀌어 재추출된 세션은 이전 프로젝트 큐의 검토 상태를 그대로 가져갑니다.
 
 <a id="updates"></a>
 
@@ -427,8 +451,17 @@ HM_HARVEST_PERMISSION_THRESHOLD=3
 HM_HARVEST_PERMISSION_SESSION_THRESHOLD=2
 HM_HARVEST_MAX_BATCH_SESSIONS=50
 HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
+HM_HARVEST_AUTO=0                # 1이면 batch 생성 시 /harvest를 백그라운드 실행
+HM_DIGEST=0                      # 1이면 일일 backfill 뒤 최근 세션을 LLM으로 정리
+HM_DIGEST_DAILY_MAX=20
+HM_HARVEST_INSIGHT_THRESHOLD=3
+HM_HARVEST_INSIGHT_SESSION_THRESHOLD=2
+HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
+HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
+HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
+HM_BACKFILL_INTERVAL_HOURS=24    # SessionStart 백그라운드 backfill 주기. 0이면 비활성화
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한

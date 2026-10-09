@@ -104,11 +104,35 @@ codex_session_roots() {
   fi
 }
 
+# macOS 파일명은 NFD로 올 수 있어 같은 한글 이름이 NFC와 다른 프로젝트 키로 갈라진다.
+hm_nfc() {
+  local value="$1" LC_ALL=C
+  if [[ "$value" == *[$'\x80'-$'\xff']* ]] && command -v perl >/dev/null 2>&1; then
+    perl -CSA -MUnicode::Normalize -e 'print NFC($ARGV[0])' "$value" 2>/dev/null && return
+  fi
+  printf '%s' "$value"
+}
+
+repo_name_from_url() {
+  local url="${1%/}" name=""
+  name="${url##*/}"
+  name="${name##*:}"
+  printf '%s' "${name%.git}"
+}
+
 # worktree·하위 디렉토리에서도 같은 저장소는 하나의 프로젝트로 집계한다.
-# 우선순위: harness 명시 ID → origin 저장소명 → git common-dir → 경로 휴리스틱.
+# 우선순위: harness 명시 ID → origin 저장소명 → git common-dir → 기록된 저장소 URL → 경로 휴리스틱.
+# $2(선택): transcript가 기록한 저장소 URL. 삭제된 worktree처럼 cwd를 더 볼 수 없을 때 쓴다.
 project_id_for_cwd() {
-  local cwd="${1:-}" root="" manifest="" project_id="" remote_url="" common_dir=""
-  local leaf="" parent=""
+  local project_id=""
+  project_id="$(project_id_for_cwd_raw "$@")"
+  [[ -n "$project_id" ]] || return 0
+  printf '%s\n' "$(hm_nfc "$project_id")"
+}
+
+project_id_for_cwd_raw() {
+  local cwd="${1:-}" recorded_url="${2:-}" root="" manifest="" project_id="" remote_url="" common_dir=""
+  local leaf="" parent="" key_re='[A-Z]{2,}[0-9]*-[0-9]+'
   [[ -n "$cwd" ]] || return 0
 
   # workspace 루트(여러 저장소를 담는 폴더)는 git 저장소가 아니므로 git 판정보다 먼저 본다.
@@ -134,10 +158,7 @@ project_id_for_cwd() {
 
       remote_url="$(git -C "$cwd" remote get-url origin 2>/dev/null || true)"
       if [[ -n "$remote_url" ]]; then
-        remote_url="${remote_url%/}"
-        project_id="${remote_url##*/}"
-        project_id="${project_id##*:}"
-        project_id="${project_id%.git}"
+        project_id="$(repo_name_from_url "$remote_url")"
         if [[ -n "$project_id" ]]; then
           printf '%s\n' "$project_id"
           return
@@ -162,16 +183,30 @@ project_id_for_cwd() {
     fi
   fi
 
+  if [[ -n "$recorded_url" ]]; then
+    project_id="$(repo_name_from_url "$recorded_url")"
+    if [[ -n "$project_id" ]]; then
+      printf '%s\n' "$project_id"
+      return
+    fi
+  fi
+
   leaf="${cwd%/}"
   leaf="${leaf##*/}"
   parent="${cwd%/}"
   parent="${parent%/*}"
   parent="${parent##*/}"
+  # 이슈별 worktree 컨테이너 이름은 저장소명이 아니다.
+  [[ "$parent" =~ ^(worktrees|workspaces|tmp)$ ]] && parent=""
   if [[ "$leaf" =~ ^(.+)-wt-[0-9]+$ ]]; then
     leaf="${BASH_REMATCH[1]}"
-  elif [[ "$leaf" =~ ^(.+)-[A-Z]{2,}[0-9]*-[0-9]+$ ]]; then
+  elif [[ "$leaf" =~ ^(feature|feat|fix|bugfix|hotfix|chore|refactor|release|docs|test)-${key_re}(-.*)?$ && -n "$parent" ]]; then
+    # <repo>/feature-NJ-612: 브랜치 유형 접두어는 저장소명이 아니다.
+    leaf="$parent"
+  elif [[ "$leaf" =~ ^(.+)-${key_re}$ ]]; then
     leaf="${BASH_REMATCH[1]}"
-  elif [[ "$leaf" =~ ^[A-Z]{2,}[0-9]*-[0-9]+$ && -n "$parent" ]]; then
+  elif [[ "$leaf" =~ ^${key_re}(-.+)?$ && -n "$parent" ]]; then
+    # <repo>/NJ-290, <repo>/NJ-1866-embedding
     leaf="$parent"
   fi
   printf '%s\n' "$leaf"

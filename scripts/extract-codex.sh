@@ -10,7 +10,8 @@ FILE_SID="$(basename "$T" .jsonl | sed 's/^rollout-//')"
 SID="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.id // empty) // empty' "$T" 2>/dev/null || true)"
 [[ -n "$SID" ]] || SID="$FILE_SID"
 CWD="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.cwd // empty) // empty' "$T" 2>/dev/null || true)"
-PROJECT="$(project_id_for_cwd "$CWD")"
+REPO_URL="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.git.repository_url // empty) // empty' "$T" 2>/dev/null || true)"
+PROJECT="$(project_id_for_cwd "$CWD" "$REPO_URL")"
 SOURCE_MTIME="$(mtime "$T")"; SOURCE_MTIME="${SOURCE_MTIME:-0}"
 SOURCE_SIZE="$(filesize "$T")"; SOURCE_SIZE="${SOURCE_SIZE:-0}"
 OUT="$HM_DATA_DIR/events/codex-${FILE_SID}.jsonl"
@@ -59,6 +60,8 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
      "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
   def correction_candidate_max_len: 200;
+  # Claude 어댑터와 같은 내부 세션 판정 — 자동 harvest(--auto)가 띄운 headless 세션.
+  def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
   # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
   def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L
@@ -91,6 +94,7 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       cache_write: ($tok.cache_write_input_tokens // 0),
       model:   $model,
       provider: ($meta.payload.model_provider // null),
+      internal: (($texts | first // "") | is_internal_prompt),
       cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
