@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.34.2 (2026-10-10)
 ### 버그 수정
 
 - **자동 harvest가 이벤트·transcript를 읽지 못하고 건수만으로 판단하던 문제 수정** — 데이터 디렉토리(`~/.ai-harness`)와 transcript(`~/.claude/projects`, Codex 세션)가 작업 worktree 밖이라 읽기가 권한 거부됐습니다(실측: jobda·jobda-agent·jobda-scheduler). 이 디렉토리들을 `--add-dir`로 열어 줍니다.
