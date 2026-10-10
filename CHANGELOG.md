@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.33.1 (2026-10-10)
 ### 버그 수정
 
 - **launchd에서 띄운 자동 harvest가 플러그인 스크립트를 실행하지 못하던 문제 수정** — shim이 Codex 쪽 설치본을 고르면 권한 허용 목록은 그 경로로 만들어지는데, `claude`는 자기 캐시의 플러그인을 로드해 경로가 달라 전부 거부됐습니다. 이제 자동 실행이 자신을 띄운 설치본을 `--plugin-dir`로 명시해 로드합니다.
