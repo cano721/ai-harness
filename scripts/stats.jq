@@ -81,6 +81,24 @@ def metric_table($rows; $supported; $total):
    | map("| \(.k) | \(if .supported==0 then "미지원" else (.n|tostring) end) | \(.supported)/\($total) |")
    | join("\n"))
 
++ "\n\n## 반복 오류 (발췌, 세션 수 순)\n\n"
++ (
+    (coverage_count($S; "error_sample")) as $err_supported
+    | if $err_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+      else
+        # 줄 번호·포트·해시처럼 매번 달라지는 숫자를 지워 같은 실패끼리 묶는다.
+        ($E | map(select(.kind=="error_sample"))
+          | map(. + {key:(.target | gsub("[0-9a-f]{7,}"; "#") | gsub("[0-9]+"; "#"))})
+          | group_by(.key)
+          | map({sessions:(map(.sid) | unique | length), n:(map(.n) | add), sample:.[0].target})
+          | sort_by(-.sessions, -.n) | .[0:15]) as $rows
+        | if ($rows|length)==0 then "_(관측 가능 \($err_supported)세션에서 없음)_"
+          else "| 세션 | 횟수 | 발췌 |\n|---|---|---|\n"
+            + ($rows | map("| \(.sessions) | \(.n) | \(.sample | gsub("\\|"; "\\|")) |") | join("\n"))
+            + (if $err_supported<$total then "\n\n_관측 범위: \($err_supported)/\($total)세션_" else "" end)
+          end
+      end
+  )
 + "\n\n## 교정 마크 (LLM 정독 후보)\n\n"
 + (
     if $correction_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"

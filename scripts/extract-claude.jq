@@ -27,6 +27,17 @@ def correction_hints:
    "that's wrong", "thats wrong", "you missed", "didn't work"];
 # 긴 턴은 새 지시일 확률이 높다.
 def correction_candidate_max_len: 200;
+# 오류 발췌: 같은 실패가 여러 세션에 반복되는지 /harvest가 판단할 수 있게 본문 앞부분을 남긴다.
+# 토큰·비밀번호·긴 키 문자열은 가린다. Codex 어댑터(scripts/extract-codex.sh)와 같은 규칙이다.
+def redact:
+  gsub("(?i)bearer\\s+[^\\s\"',;]+"; "Bearer ***")
+  | gsub("(?<k>(?i)(token|password|passwd|secret|api[_-]?key|authorization))(?<sep>[\"']?\\s*[=:]\\s*[\"']?)[^\\s\"',;]+"; "\(.k)\(.sep)***")
+  | gsub("[A-Za-z0-9+=_-]{32,}"; "***");
+# 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
+def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
+def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+"; " ") | ltrimstr(" ") | redact | .[0:160];
+# 권한 거부·가드 차단은 각자 신호(permission_deny, guard_block)로 세므로 발췌에서 뺀다.
+def error_samples($k): group_by(.) | map({kind:$k, target:.[0], n:length}) | sort_by(-.n) | .[0:10] | .[];
 # 자동 harvest(--auto)가 띄운 headless 세션. 프로젝트 작업이 아니므로 큐 신호에서 뺀다.
 # Codex 어댑터(scripts/extract-codex.sh)와 같은 판정을 쓴다.
 def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
@@ -62,7 +73,7 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
       "jira_issue", "error", "guard_block", "permission_deny", "compact",
-      "correction_mark", "correction_candidate"
+      "correction_mark", "correction_candidate", "error_sample"
     ]
   }),
 
@@ -112,6 +123,11 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
 ( [$L[] | tool_results | select(.is_error==true)
     | select((result_text | sub("^Exit code [0-9]+";"") | gsub("\\s";"")) != "")] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
+( [$L[] | tool_results | select(.is_error==true)
+    | select((result_text | sub("^Exit code [0-9]+";"") | gsub("\\s";"")) != "")
+    | select(result_text | test("^The user doesn.t want to proceed|\\[Direct edit guard\\]") | not)
+    | (($toolNames[.tool_use_id // ""] // "?")) + ": " + (result_text | error_excerpt)]
+  | error_samples("error_sample") | $base + . ),
 # 훅 차단은 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 is_error 결과로만 온다 — 가드 훅이 그 툴에만 걸린다.
 # 같은 문구가 Bash 결과(git log 커밋 메시지, 실패한 cat AGENTS.md)나 Read 출력에 섞여도 차단이 아니다.
 # 전 transcript 실측: is_error+문구 4건이 전부 "Exit code 1"로 시작하는 Bash 출력이었다.
