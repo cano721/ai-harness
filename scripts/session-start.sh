@@ -27,6 +27,16 @@ fi
 
 "$ROOT/scripts/backfill-due.sh" >/dev/null 2>&1 || true
 
+# macOS에서 정기 backfill(launchd)을 아직 등록하지 않았으면 한 번만 안내한다. 설치는 사용자가 직접 한다.
+schedule_hint="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/schedule-hint-shown"
+schedule_plist="${HM_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/com.ai-harness.backfill.plist"
+if [[ "$(uname -s)" == "Darwin" && -n "$transcript" && "$(basename "$transcript")" != rollout-*.jsonl \
+  && ! -e "$schedule_plist" && ! -e "$schedule_hint" ]]; then
+  if mkdir -p "${schedule_hint%/*}" 2>/dev/null && : >"$schedule_hint" 2>/dev/null; then
+    messages+=("ai-harness: 긴 세션 중에도 기록 수집·자동 개선이 주기대로 돌게 하려면 한 번 실행하세요: \"$ROOT/scripts/schedule.sh\" install (이 안내는 한 번만 표시됩니다)")
+  fi
+fi
+
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"
 [[ -n "$queue_message" ]] && messages+=("$queue_message")

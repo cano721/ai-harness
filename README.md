@@ -26,7 +26,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 ```mermaid
 flowchart LR
     A["/harness-init\n프로젝트 규칙 생성"] --> B["평소 개발\n/implement-feature 등"]
-    B --> C["SessionEnd hook\n압축 이벤트 기록"]
+    B --> C["정기 backfill\n(launchd·SessionStart)\n압축 이벤트 기록"]
     C --> D["analysis batch\n분석할 만큼 축적"]
     D --> E["/harvest\n근거 검토·개선안"]
     E -->|"사용자 승인·PR 병합"| A
@@ -90,7 +90,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)).
+Skill과 별개로 `SessionStart` hook과 정기 backfill(macOS는 `scripts/schedule.sh install`로 launchd 등록)이 자동 실행됩니다. 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)).
 
 <a id="quick-start"></a>
 
@@ -292,10 +292,18 @@ stateDiagram-v2
 
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
-| 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 (`HM_HARVEST_AUTO=1`이면 백그라운드 `/harvest --auto`만 띄움) |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음). 마지막 backfill이 24시간 넘었으면 backfill을 백그라운드로 띄움 | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 매시간 (macOS, 설치 시) | launchd → `~/.ai-harness/bin/run-due.sh` → `scripts/backfill-due.sh` | 마지막 backfill이 6시간(`HM_BACKFILL_INTERVAL_HOURS`) 넘었으면 저우선순위로 backfill → LLM 정리(opt-in) → 자동 harvest sweep(opt-in) → 릴리스 정보 갱신 | 세션을 막는 작업 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음). 같은 `backfill-due.sh`를 백그라운드로 호출 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
-SessionStart는 3초, SessionEnd는 10초 timeout이며 실패해도 작업 세션을 막지 않습니다. 터미널·탭을 그냥 닫은 세션은 `SessionEnd`가 실행되지 않으므로, `SessionStart`가 하루 한 번 backfill을 세션과 분리된 저우선순위(`nice`) 프로세스로 돌려 회수합니다. `/metrics`, `/harvest`, 세션 조회도 같은 backfill을 실행합니다.
+수집은 세션 종료 hook에 기대지 않습니다. 터미널·탭을 그냥 닫으면 종료 hook이 실행되지 않아 실측 43%를 놓쳤기 때문입니다. 대신 transcript 전체를 주기적으로 훑는 backfill이 유일한 수집 경로이고, 시간 기준 launchd와 세션 기준 SessionStart가 같은 주기 판정·lock을 공유해 한 번만 돌립니다. 며칠 이어지는 세션 하나만 켜 둬도 launchd가 주기대로 돌립니다(실측 6시간 넘는 세션 17%, 세션 시작 간 공백 최대 53시간).
+
+macOS에서 한 번 등록합니다. 플러그인을 업데이트해도 shim이 최신 설치본을 찾으므로 다시 할 필요가 없습니다.
+
+```bash
+<플러그인 경로>/scripts/schedule.sh install    # status / run / uninstall
+```
+
+다른 OS는 SessionStart 경로만으로 같은 주기가 적용되고, 필요하면 cron에 `HM_BACKFILL_FOREGROUND=1 <플러그인>/scripts/backfill-due.sh`를 매시간 등록합니다. `scripts/collect.sh`는 세션 1개를 즉시 수집하는 수동 진입점으로 남아 있습니다.
 
 ### 언제 `/harvest`를 안내하나
 
@@ -323,12 +331,12 @@ SessionStart는 3초, SessionEnd는 10초 timeout이며 실패해도 작업 세�
 
 ### 자동 harvest (opt-in)
 
-`~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 `SessionEnd`가 analysis batch를 확인한 뒤 `/harvest <프로젝트> --auto`를 세션과 분리된 headless 프로세스(`claude -p`, Codex 세션이면 `codex exec`)로 실행합니다.
+`~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 정기 backfill이 끝날 때마다 analysis batch가 있는 프로젝트를 오래된 순으로 확인해(sweep, 한 번에 하나) `/harvest <프로젝트> --auto`를 세션과 분리된 headless 프로세스(`claude -p`, Codex 세션이면 `codex exec`)로 실행합니다.
 
 - **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
-- **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`로 표시되어 그 세션의 `SessionEnd`가 다시 harvest를 띄우지 않습니다
+- **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
@@ -375,7 +383,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 ## 업데이트
 
-릴리스 조회는 **SessionEnd**에서 이루어집니다. SessionStart hook은 3초 예산을 여러 확인과 나눠 쓰기 때문에, 알림은 이미 받아 둔 캐시만 읽고 네트워크를 건드리지 않습니다. 조회는 수집이 끝난 뒤 마지막에 돌아 느린 네트워크가 이벤트 수집을 지연시키지 않습니다. 새로 설치한 직후에는 캐시가 없으므로 첫 알림이 한 세션 뒤로 밀립니다.
+릴리스 조회는 **백그라운드 backfill-due**에서 이루어집니다. SessionStart hook은 3초 예산을 여러 확인과 나눠 쓰기 때문에, 알림은 이미 받아 둔 캐시만 읽고 네트워크를 건드리지 않습니다. 조회는 수집이 끝난 뒤 마지막에 돌아 느린 네트워크가 이벤트 수집을 지연시키지 않습니다. 새로 설치한 직후에는 캐시가 없으므로 첫 알림이 첫 backfill 뒤로 밀립니다.
 
 SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다. 조회 실패는 24시간 TTL을 소비하지 않고 기본 15분에서 시작해 6시간까지 배가되는 별도 백오프로만 재시도하므로, 일시적인 오류가 하루치 알림을 삼키지 않습니다.
 
@@ -461,7 +469,7 @@ HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
-HM_BACKFILL_INTERVAL_HOURS=24    # SessionStart 백그라운드 backfill 주기. 0이면 비활성화
+HM_BACKFILL_INTERVAL_HOURS=6     # 정기 backfill 주기(launchd·SessionStart 공통). 0이면 비활성화
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
@@ -484,7 +492,7 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
-hooks/            SessionEnd 수집·SessionStart 알림 정의
+hooks/            SessionStart 알림·정기 backfill 호출 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)

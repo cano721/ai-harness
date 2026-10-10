@@ -313,27 +313,27 @@ jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
   | HARNESS_METRICS_DIR="$HOOK_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/collect.sh"
 assert_file "$HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 assert_file "$HOOK_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
-# SessionEnd는 수집 뒤 릴리스 조회까지 맡으므로 SessionStart보다 예산이 넓다.
-assert_eq "10" "$(jq -r '.hooks.SessionEnd[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "shared hook timeout"
+# 수집은 backfill-due.sh(launchd·SessionStart)가 맡는다. 탭을 닫으면 실행되지 않는 SessionEnd hook은 두지 않는다.
+assert_eq "null" "$(jq -c '.hooks.SessionEnd' "$ROOT/hooks/hooks.json")" "no SessionEnd hook"
 assert_eq "3" "$(jq -r '.hooks.SessionStart[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "SessionStart stays inside its short budget"
 # shellcheck disable=SC2016  # hook JSON의 literal 변수 참조를 검사
 LITERAL_PLUGIN_ROOT='"${CLAUDE_PLUGIN_ROOT}'
-HOOK_COMMAND="$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
+HOOK_COMMAND="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
 assert_contains "$HOOK_COMMAND" "$LITERAL_PLUGIN_ROOT" "quoted plugin root"
+# collect.sh는 수동 수집 진입점으로 남는다. 공백 경로에서도 동작해야 한다.
 HOOK_ROOT_WITH_SPACE="$TEST_TMP/plugin root"
 HOOK_COMMAND_DATA="$TEST_TMP/hook-command-data"
 ln -s "$ROOT" "$HOOK_ROOT_WITH_SPACE"
 jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
-  | CLAUDE_PLUGIN_ROOT="$HOOK_ROOT_WITH_SPACE" HARNESS_METRICS_DIR="$HOOK_COMMAND_DATA" \
-    /bin/sh -c "$HOOK_COMMAND"
+  | HARNESS_METRICS_DIR="$HOOK_COMMAND_DATA" HM_UPDATE_CHECK_ENABLED=0 "$HOOK_ROOT_WITH_SPACE/scripts/collect.sh"
 assert_file "$HOOK_COMMAND_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
-assert_eq "success" "$(jq -r '.components.session_end.last_result' "$HOOK_COMMAND_DATA/health.json")" "SessionEnd health success"
+assert_eq "success" "$(jq -r '.components.session_end.last_result' "$HOOK_COMMAND_DATA/health.json")" "collect health success"
 MISSING_HOOK_DATA="$TEST_TMP/missing-hook-data"
 jq -n '{transcript_path:"/missing/session.jsonl",reason:"other"}' \
   | HARNESS_METRICS_DIR="$MISSING_HOOK_DATA" "$ROOT/scripts/collect.sh"
-assert_eq "failure" "$(jq -r '.components.session_end.last_result' "$MISSING_HOOK_DATA/health.json")" "SessionEnd health failure"
-assert_eq "transcript_missing" "$(jq -r '.components.session_end.last_error' "$MISSING_HOOK_DATA/health.json")" "SessionEnd health error"
-pass "cross-platform SessionEnd hook"
+assert_eq "failure" "$(jq -r '.components.session_end.last_result' "$MISSING_HOOK_DATA/health.json")" "collect health failure"
+assert_eq "transcript_missing" "$(jq -r '.components.session_end.last_error' "$MISSING_HOOK_DATA/health.json")" "collect health error"
+pass "collection entry points"
 
 # 누적량 hook: 멱등 pending → analysis batch → 다음 세션 1회 알림 → 묶음 단위 검토 완료
 QUEUE_DATA="$TEST_TMP/queue-data"
@@ -382,7 +382,7 @@ CODEX_START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd, transcript_pat
 run_start_hook() {
   printf '%s' "$1" \
     | CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$HINT_DATA" HM_UPDATE_CHECK_ENABLED=0 \
-      /bin/sh -c "$START_COMMAND"
+      HM_LAUNCH_AGENTS_DIR="$TEST_TMP/hint-agents" /bin/sh -c "$START_COMMAND"
 }
 CODEX_HINT="$(run_start_hook "$CODEX_START_INPUT")"
 assert_eq "" "$CODEX_HINT" "no auto-update hint for Codex sessions"
@@ -390,6 +390,10 @@ assert_not_file "$HINT_DATA/auto-update-hint-shown"
 FIRST_HINT="$(run_start_hook "$CLAUDE_START_INPUT")"
 assert_contains "$(jq -r '.systemMessage' <<<"$FIRST_HINT")" "Enable auto-update" "auto-update hint on first Claude session"
 assert_file "$HINT_DATA/auto-update-hint-shown"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  assert_contains "$(jq -r '.systemMessage' <<<"$FIRST_HINT")" "schedule.sh\" install" "launchd hint on first macOS Claude session"
+  assert_file "$HINT_DATA/schedule-hint-shown"
+fi
 assert_eq "" "$(run_start_hook "$CLAUDE_START_INPUT")" "auto-update hint shown only once"
 pass "SessionStart auto-update hint"
 assert_eq "$QUEUE_EVENT" "$(
@@ -826,7 +830,7 @@ HARNESS_METRICS_DIR="$OCTAL_COUNTER" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/sc
 assert_eq "1" "$(jq -r '.failure_count' "$OCTAL_COUNTER/update-check.json")" "zero-padded stored counter is rewritten instead of wedging the cache"
 pass "zero-padded numbers fall back instead of wedging the state file"
 
-# SessionStart는 3초 예산을 공유한다. 알림은 캐시만 읽고, 조회는 SessionEnd가 맡는다.
+# SessionStart는 3초 예산을 공유한다. 알림은 캐시만 읽고, 조회는 백그라운드 backfill-due가 맡는다.
 FETCH_DATA="$TEST_TMP/update-fetch-split"
 mkdir -p "$FETCH_DATA"
 HARNESS_METRICS_DIR="$FETCH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" notify >/dev/null 2>&1
@@ -1302,7 +1306,7 @@ assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
 assert_not_file "$MOVE_DATA/harvest-queue/p-split-old/seen/$MOVE_MARKER"
 pass "project ID changes keep queue state"
 
-# 정기 backfill: SessionEnd 없이 닫힌 세션을 SessionStart가 주기적으로 회수한다.
+# 정기 backfill: launchd·SessionStart가 주기적으로 세션을 회수한다.
 DUE_DATA="$TEST_TMP/due-data"
 DUE_CLAUDE="$TEST_TMP/due-claude/-tmp-service"
 mkdir -p "$DUE_CLAUDE" "$TEST_TMP/due-codex"
@@ -1493,6 +1497,69 @@ jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
 assert_not_file "$INTERNAL_HOOK_DATA/health.json"
 assert_not_file "$INTERNAL_HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 pass "LLM session digest feeds insights"
+
+# sweep: 세션 종료 hook 없이 batch가 있는 프로젝트를 찾아 자동 실행한다.
+SWEEP_DATA="$TEST_TMP/sweep-data"
+mkdir -p "$SWEEP_DATA/events" "$SWEEP_DATA/harvest-queue/p-auto-svc" "$SWEEP_DATA/harvest-queue/p-plain"
+make_sweep_batch() { # $1=project $2=cwd $3=created_at
+  local ev="$SWEEP_DATA/events/claude-sweep-$1.jsonl"
+  jq -cn --arg p "$1" --arg cwd "$2" '{kind:"session",src:"claude",sid:("sweep-"+$p),project:$p,cwd:$cwd}' >"$ev"
+  jq -cn --arg p "$1" --arg ev "$ev" --arg at "$3" \
+    '{project:$p,batch_id:("b-"+$p),created_at:$at,reasons:["errors"],event_files:[$ev]}' \
+    >"$SWEEP_DATA/harvest-queue/p-$1/analysis-batch.json"
+}
+make_sweep_batch plain "$AUTO_PLAIN" "2026-01-01T00:00:00Z"
+make_sweep_batch auto-svc "$AUTO_REPO" "2026-01-02T00:00:00Z"
+: >"$TEST_TMP/sweep-stub.out"
+run_sweep() {
+  HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
+    AUTO_STUB_OUT="$TEST_TMP/sweep-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+run_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "sweep launches the harness project's batch"
+assert_eq "auto-svc" "$(cut -d'|' -f1 "$TEST_TMP/sweep-stub.out")" "sweep picks the repo with a harness"
+assert_eq "no_harness_repo" "$(jq -sr '[.[] | select(.project=="plain")] | first | .reason' "$SWEEP_DATA/harvest-auto/runs.jsonl")" "sweep skips repos without a harness"
+run_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "same batch is not swept twice"
+HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=0 "$ROOT/scripts/harvest-auto.sh" sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "sweep is off unless opted in"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "harvest-auto.sh\" sweep" "backfill-due runs the sweep"
+pass "auto harvest sweep after backfill"
+
+# launchd: shim은 가장 새 플러그인 설치본을 찾고, plist는 매시간 shim을 부른다.
+SCHED_DATA="$TEST_TMP/sched-data"
+SCHED_AGENTS="$TEST_TMP/sched-agents"
+SCHED_HOME="$TEST_TMP/sched-home"
+for version in 0.9.0 0.31.0 0.30.0; do
+  mkdir -p "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts"
+  printf '#!/bin/bash\necho "due %s"\n' "$version" >"$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/backfill-due.sh"
+  chmod +x "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/backfill-due.sh"
+done
+run_schedule() {
+  HARNESS_METRICS_DIR="$SCHED_DATA" HM_LAUNCH_AGENTS_DIR="$SCHED_AGENTS" HM_SCHEDULE_NO_LAUNCHCTL=1 \
+    "$ROOT/scripts/schedule.sh" "$@"
+}
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  run_schedule install >/dev/null
+  SCHED_PLIST="$SCHED_AGENTS/com.ai-harness.backfill.plist"
+  assert_file "$SCHED_PLIST"
+  if command -v plutil >/dev/null 2>&1; then plutil -lint "$SCHED_PLIST" >/dev/null || fail "plist lint"; fi
+  assert_contains "$(<"$SCHED_PLIST")" "<key>StartInterval</key><integer>3600</integer>" "hourly check"
+  assert_contains "$(<"$SCHED_PLIST")" "<key>AbandonProcessGroup</key><true/>" "detached harvest worker survives the job"
+  assert_contains "$(<"$SCHED_PLIST")" "$SCHED_DATA/bin/run-due.sh" "plist points at the stable shim"
+  assert_eq "due 0.31.0" "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" /bin/bash "$SCHED_DATA/bin/run-due.sh" | tail -n 1)" "shim runs the newest installed plugin"
+  find "$SCHED_HOME/.claude" -depth -delete
+  assert_contains "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" HM_BACKFILL_INTERVAL_HOURS=0 /bin/bash "$SCHED_DATA/bin/run-due.sh")" " run $ROOT" "shim falls back to the recorded plugin root"
+  assert_eq "true" "$(run_schedule status | jq -r '.installed')" "status reports install"
+  run_schedule uninstall >/dev/null
+  assert_not_file "$SCHED_PLIST"
+  assert_not_file "$SCHED_DATA/bin/run-due.sh"
+else
+  SCHED_RC=0
+  run_schedule install >/dev/null 2>&1 || SCHED_RC=$?
+  assert_eq "3" "$SCHED_RC" "launchd install is macOS-only"
+fi
+pass "launchd schedule"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
