@@ -209,8 +209,8 @@ resolve_agent() {
   esac
 }
 
-agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_CMD에 채운다
-  local project="$1" work_dir="$2" agent="$3" scripts_glob=""
+agent_command() { # $1=project $2=work_dir $3=agent $4=base → 실행할 argv를 AGENT_CMD에 채운다
+  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scripts_glob=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
     # 테스트·사용자 정의 실행기: "<cmd> <project>"
     read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
@@ -225,13 +225,20 @@ agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_
       AGENT_CMD=(codex exec -C "$work_dir" --approve-for-me --skip-git-repo-check
         --add-dir "$HM_DATA_DIR"
         -c sandbox_workspace_write.network_access=true
-        "ai-harness harvest skill을 인자 \"$project --auto\"로 실행하라. 커밋·push가 막히면 개선안 보고로 끝내라.")
+        "ai-harness harvest skill을 인자 \"$project --auto --base $base\"로 실행하라. 커밋·push가 막히면 개선안 보고로 끝내라.")
       ;;
     *)
       # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. launchd shim이 Codex 쪽
       # 설치본을 골라도 claude는 기본으로 자기 캐시의 플러그인을 로드하므로, 이 설치본을 명시해 맞춘다.
-      AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto"
+      # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
+      # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
+      local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR") codex_root=""
+      while IFS= read -r codex_root; do
+        [[ -d "$codex_root" ]] && read_dirs+=(--add-dir "$codex_root")
+      done < <(codex_session_roots)
+      AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
         --plugin-dir "$ROOT"
+        "${read_dirs[@]}"
         --permission-mode acceptEdits
         --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
         "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
@@ -242,21 +249,30 @@ agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_
   esac
 }
 
-# origin 기본 브랜치 최신 커밋에서 detached worktree를 만든다. origin이 없으면 HEAD.
-make_work_tree() { # $1=repo_root $2=project → 경로 출력
-  local repo_root="$1" dir="" base=""
+# 하네스를 고칠 기준 브랜치. origin/HEAD가 하네스 없는 초기 브랜치(master)이고 실제 개발은 develop인
+# 저장소가 많아서(실측 jobda-*), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
+# 순서: harness.json의 base_branch → develop → origin/HEAD → main → master. origin이 없으면 HEAD.
+resolve_base() { # $1=repo_root → "origin/<branch>" 또는 "HEAD"
+  local repo_root="$1" candidate="" head="" configured=""
+  git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || { printf 'HEAD\n'; return; }
+  git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
+  configured="$(jq -r '.base_branch // empty' "$repo_root/.ai-harness/harness.json" 2>/dev/null)"
+  head="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  for candidate in ${configured:+"origin/$configured"} origin/develop ${head:+"$head"} origin/main origin/master; do
+    if git -C "$repo_root" cat-file -e "$candidate:.ai-harness/harness.json" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' "${head:-HEAD}"
+}
+
+# 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
+make_work_tree() { # $1=repo_root $2=project $3=base → 경로 출력
+  local repo_root="$1" dir=""
   dir="$AUTO_DIR/worktrees/$(hm_project_key "$2")-$(date +%s)"
   mkdir -p "${dir%/*}"
-  if git -C "$repo_root" remote get-url origin >/dev/null 2>&1; then
-    git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
-    base="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    if [[ -z "$base" ]]; then
-      base="$(git -C "$repo_root" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -n 1)"
-      [[ -n "$base" ]] && base="origin/$base"
-    fi
-  fi
-  git -C "$repo_root" rev-parse --verify --quiet "${base:-HEAD}^{commit}" >/dev/null || base=""
-  git -C "$repo_root" worktree add -q --detach "$dir" "${base:-HEAD}" >/dev/null 2>&1 || return 1
+  git -C "$repo_root" worktree add -q --detach "$dir" "$3" >/dev/null 2>&1 || return 1
   printf '%s\n' "$dir"
 }
 
@@ -281,7 +297,7 @@ prune_logs() {
 
 command_run() {
   local project="$1" batch_id="$2" repo_root="$3" agent="$4"
-  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir=""
+  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir="" base_ref=""
   mkdir -p "$LOG_DIR"
   hm_acquire_lock "$RUN_LOCK" 1 || { log_skip "$project" "$batch_id" busy; find "$(attempt_marker "$project")" -delete 2>/dev/null; return 0; }
   trap 'hm_release_lock "$RUN_LOCK"' EXIT
@@ -295,12 +311,13 @@ command_run() {
 
   # headless 편집은 cwd 안에서만 허용되므로, 작업용 worktree를 만들어 그 안에서 에이전트를 띄운다.
   # 사용자 체크아웃은 구조적으로 건드릴 수 없다.
-  work_dir="$(make_work_tree "$repo_root" "$project")" || work_dir=""
+  base_ref="$(resolve_base "$repo_root")"
+  work_dir="$(make_work_tree "$repo_root" "$project" "$base_ref")" || work_dir=""
   if [[ -z "$work_dir" ]]; then
     printf 'worktree 생성 실패: %s\n' "$repo_root" >"$log_file"
     exit_code=70
   else
-    agent_command "$project" "$work_dir" "$agent"
+    agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}"
     (cd "$work_dir" && HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
     git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
       || find "$work_dir" -depth -delete 2>/dev/null || true
