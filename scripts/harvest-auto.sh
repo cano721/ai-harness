@@ -109,6 +109,7 @@ command_trigger() {
 
   agent="$(resolve_agent)"
   mark_attempted launched
+  LAUNCHED_NOW=1
   mkdir -p "$LOG_DIR"
   if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
     "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent"
@@ -151,13 +152,29 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
     done < <(grep -l -F "\"project\":$(jq -cn --arg p "$project" '$p')" "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null \
       | xargs ls -t 2>/dev/null | head -n 200)
   fi
+  # 그래도 없으면 기록에 나온 workspace 루트의 멤버 목록(.ai-harness/workspace.json)에서 찾는다.
+  # Orca worktree에서만 작업한 저장소는 원본 체크아웃 경로가 세션 기록에 한 번도 나오지 않는다.
+  if [[ -n "$project" ]]; then
+    local ws="" member=""
+    while IFS= read -r ws; do
+      [[ -f "$ws/.ai-harness/workspace.json" ]] || continue
+      member="$(jq -r --arg p "$project" '.members[]? | select(.project_id == $p) | .path' "$ws/.ai-harness/workspace.json" 2>/dev/null | head -n 1)"
+      [[ -n "$member" ]] || continue
+      member="$ws/$member"
+      if [[ -f "$member/.ai-harness/harness.json" ]] && [[ "$(project_id_for_cwd "$member")" == "$project" ]]; then
+        printf '%s\t%s\n' "$member" "claude"
+        return
+      fi
+    done < <(grep -ho '"cwd":"[^"]*"' "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null | sort -u \
+      | jq -Rr '("{" + . + "}" | fromjson? | .cwd) // empty' 2>/dev/null)
+  fi
   [[ -n "$first" ]] && printf '%s\n' "$first"
 }
 
 # 세션 종료 hook에 기대지 않고, backfill이 끝난 뒤 batch가 있는 프로젝트를 모두 확인한다.
 # 터미널·탭을 닫아 끝난 세션만 있는 프로젝트도 여기서 자동 실행된다. 실행은 한 번에 하나다.
 command_sweep() {
-  local batch="" status="" origin="" cwd="" src="" project="" marker=""
+  local batch="" status="" origin="" cwd="" src="" project=""
   [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
   shopt -s nullglob
   local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
@@ -170,15 +187,15 @@ command_sweep() {
     origin="$(batch_origin "$batch")"
     [[ -n "$origin" ]] || continue
     IFS=$'\t' read -r cwd src <<<"$origin"
+    # 이번 호출에서 실제로 띄웠을 때만 멈춘다. 지난 sweep에서 띄운 batch가 남아 있다고 멈추면
+    # 그 뒤 프로젝트들은 차례가 오지 않는다.
+    LAUNCHED_NOW=0
     command_trigger "$status" "$cwd" "$src"
-    marker="$(attempt_marker "$project")"
-    if [[ "$(jq -r '.result // empty' "$marker" 2>/dev/null)" == "launched" \
-      && "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$(jq -r '.batch_id // .created_at // empty' <<<"$status")" ]]; then
-      break
-    fi
+    if (( LAUNCHED_NOW == 1 )); then break; fi
   done < <(for batch in "${batches[@]}"; do
       printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
     done | sort | cut -f2-)
+  return 0
 }
 
 # 무인 실행 에이전트. 세션을 만든 도구가 아니라 실행 능력으로 고른다.
