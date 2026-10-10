@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.32.0 (2026-10-10)
 ### 새 기능
 
 - **macOS에서 launchd로 수집·정리·자동 개선을 시간 기준으로 돌립니다** — 지금까지는 새 세션을 열 때만 backfill이 돌아, 며칠 이어지는 세션 하나만 켜 두면 그 사이 기록이 처리되지 않았습니다(실측: 6시간 넘는 세션 17%, 세션 시작 간 공백 최대 53시간). `scripts/schedule.sh install`로 한 번 등록하면 매시간 확인해 주기가 지났을 때 backfill → LLM 정리 → 자동 harvest → 릴리스 정보 갱신을 돕니다. 플러그인을 업데이트해도 shim이 최신 설치본을 찾습니다. 아직 등록하지 않은 macOS에서는 첫 세션에 한 번 안내합니다.
