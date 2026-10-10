@@ -75,7 +75,7 @@ write_plist() {
   <array><string>/bin/bash</string><string>$(xml_escape "$SHIM")</string></array>
   <key>StartInterval</key><integer>3600</integer>
   <key>RunAtLoad</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <!-- ProcessType=Background는 macOS가 CPU·IO를 크게 묶어 첫 전체 재추출이 1시간을 넘겼다. Nice·LowPriorityIO로 충분하다. -->
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
   <!-- 자동 harvest worker는 분리 실행되므로 이 작업이 끝나도 살려 둔다. -->

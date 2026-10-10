@@ -7,6 +7,13 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **플러그인을 업데이트할 때마다 전 세션을 다시 추출하던 문제 수정** — 추출기의 수정 시각으로 재추출을 판단해서, 내용이 같아도 새로 설치되면 2천여 세션을 모두 다시 처리했습니다(launchd에서 1시간 이상). 이제 추출기·큐 스크립트의 내용 해시가 바뀐 때만 다시 처리합니다. 이 기준은 이번 업데이트 뒤 첫 backfill에서 기록되므로 그때 한 번은 전체 재처리가 일어납니다.
+- **launchd 작업이 macOS 백그라운드 제한으로 크게 느려지던 문제 수정** — `ProcessType=Background`를 빼고 `Nice`·저우선순위 IO만 둡니다. `schedule.sh install`을 한 번 다시 실행해야 적용됩니다.
+
 ## v0.32.0 (2026-10-10)
 ### 새 기능
 
