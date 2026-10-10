@@ -1230,6 +1230,21 @@ HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
 HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" \
   "$ROOT/scripts/backfill.sh")"
 assert_contains "$BACKFILL_STALE" "큐 유지 0," "stale stamps are re-recorded"
+# 플러그인 재설치: 내용이 같은 스크립트가 새 수정 시각으로 깔려도 전체 재추출·재기록하지 않는다.
+REINSTALL_ROOT="$TEST_TMP/reinstall-plugin"
+mkdir -p "$REINSTALL_ROOT"
+cp -R "$ROOT/scripts" "$REINSTALL_ROOT/"
+run_reinstall_backfill() {
+  HARNESS_METRICS_DIR="$BACKFILL_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/backfill-claude" \
+    HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/backfill-codex" "$REINSTALL_ROOT/scripts/backfill.sh"
+}
+run_reinstall_backfill >/dev/null
+sleep 1
+find "$REINSTALL_ROOT/scripts" -type f -exec touch {} +
+assert_contains "$(run_reinstall_backfill)" "처리 0," "same-content reinstall does not re-extract"
+sleep 1
+printf '\n# changed\n' >>"$REINSTALL_ROOT/scripts/extract-claude.jq"
+assert_contains "$(run_reinstall_backfill)" "처리 1," "changed extractor content re-extracts"
 pass "backfill freshness and version invalidation"
 
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.

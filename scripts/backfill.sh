@@ -22,11 +22,32 @@ done
 # 실측: 변경 없는 증분 backfill 4분 20초의 대부분이 이벤트 1771개 전부의 재기록이었다.
 STAMP_DIR="$HM_DATA_DIR/.enqueued"
 mkdir -p "$STAMP_DIR"
-queue_dep_mt=0
-for dep in "$DIR/harvest-queue.sh" "$DIR/lib.sh"; do
-  dep_mt="$(mtime "$dep")"
-  [[ -n "$dep_mt" ]] && (( dep_mt > queue_dep_mt )) && queue_dep_mt="$dep_mt"
-done
+
+# 의존 스크립트가 "언제부터 지금 내용인가"를 내용 해시로 판단한다. 수정 시각을 쓰면 플러그인을
+# 업데이트할 때마다(내용이 같아도 새로 설치되면) 전 세션을 다시 추출·기록한다 — 실측 2천여 세션에 1시간 이상.
+DEP_STATE_DIR="$HM_DATA_DIR/.dep-state"
+mkdir -p "$DEP_STATE_DIR"
+dep_since() { # $1=그룹 이름, 나머지=파일 → 현재 내용이 처음 관측된 epoch
+  local name="$1" hash="" state="" since="" newest=0 file="" file_mt=""
+  shift
+  hash="$(cat "$@" 2>/dev/null | { shasum 2>/dev/null || sha1sum; } | cut -c1-40)"
+  state="$DEP_STATE_DIR/$name"
+  if [[ -f "$state" && "$(sed -n '1p' "$state")" == "$hash" ]]; then
+    since="$(sed -n '2p' "$state")"
+    [[ "$since" =~ ^[0-9]+$ ]] && { printf '%s\n' "$since"; return; }
+  fi
+  # 처음이거나 내용이 바뀌었다. 기록이 없을 때는 기존과 같이 파일 수정 시각을 기준으로 한다.
+  for file in "$@"; do
+    file_mt="$(mtime "$file")"
+    [[ -n "$file_mt" ]] && (( file_mt > newest )) && newest="$file_mt"
+  done
+  [[ -f "$state" ]] && newest="$(date +%s)"
+  printf '%s\n%s\n' "$hash" "$newest" >"$state"
+  printf '%s\n' "$newest"
+}
+queue_dep_mt="$(dep_since queue "$DIR/harvest-queue.sh" "$DIR/lib.sh")"
+claude_dep_mt="$(dep_since extract-claude "$DIR/extract-claude.sh" "$DIR/extract-claude.jq" "$DIR/lib.sh")"
+codex_dep_mt="$(dep_since extract-codex "$DIR/extract-codex.sh" "$DIR/lib.sh")"
 
 enqueue_is_fresh() { # $1=event
   local stamp="$STAMP_DIR/${1##*/}" stamp_mt="" ev_mt=""
@@ -68,7 +89,7 @@ enqueue_event() {
 
 process() { # $1=transcript $2=event파일 $3=extractor
   local t="$1" ev="$2" ex="$3"
-  local mt="" ev_mt="" ev_v="0" dep="" dep_mt="" newest_dep=0 rollup="" rollup_mt=""
+  local mt="" ev_mt="" ev_v="0" newest_dep=0 rollup="" rollup_mt=""
   local source_mtime=0 source_size=0 current_size=0
   mt="$(mtime "$t")"
   [[ -n "$mt" ]] || return
@@ -92,13 +113,10 @@ process() { # $1=transcript $2=event파일 $3=extractor
     fi
   fi
 
-  for dep in "$DIR/$ex" "$DIR/lib.sh"; do
-    dep_mt="$(mtime "$dep")"
-    [[ -n "$dep_mt" ]] && (( dep_mt > newest_dep )) && newest_dep="$dep_mt"
-  done
   if [[ "$ex" == "extract-claude.sh" ]]; then
-    dep_mt="$(mtime "$DIR/extract-claude.jq")"
-    [[ -n "$dep_mt" ]] && (( dep_mt > newest_dep )) && newest_dep="$dep_mt"
+    newest_dep="$claude_dep_mt"
+  else
+    newest_dep="$codex_dep_mt"
   fi
 
   if [[ -f "$ev" ]]; then
