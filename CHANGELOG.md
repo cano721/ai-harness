@@ -7,6 +7,13 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **자동 harvest가 이벤트·transcript를 읽지 못하고 건수만으로 판단하던 문제 수정** — 데이터 디렉토리(`~/.ai-harness`)와 transcript(`~/.claude/projects`, Codex 세션)가 작업 worktree 밖이라 읽기가 권한 거부됐습니다(실측: jobda·jobda-agent·jobda-scheduler). 이 디렉토리들을 `--add-dir`로 열어 줍니다.
+- **자동 harvest가 하네스 없는 기본 브랜치에서 작업하던 문제 수정** — 작업 worktree를 `origin/HEAD`에서 만들었는데, jobda-* 저장소는 `origin/HEAD`가 하네스 없는 초기 master이고 실제 개발은 `develop`이었습니다. 이제 `harness.json`의 `base_branch` → develop → origin/HEAD → main → master 중 하네스 파일이 실제로 들어 있는 첫 브랜치를 쓰고, 에이전트에게 `--base`로 알려 PR도 그 브랜치를 향합니다.
+
 ## v0.34.1 (2026-10-10)
 ### 버그 수정
 

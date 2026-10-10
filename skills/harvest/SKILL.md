@@ -14,7 +14,7 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 `--auto` 포함 시 정기 backfill 뒤 sweep(`scripts/harvest-auto.sh`, opt-in `HM_HARVEST_AUTO=1`)이 띄운 무인 실행이다. 질문에 답할 사람이 없으므로 아래를 지킨다.
 
 - 사용자에게 묻지 않는다. 확인이 필요한 분기(이슈 생성 필요, workspace 로컬 적용, 멤버 하네스 대상)를 만나면 적용하지 않고 보고로 끝내며 `mark-reviewed`도 하지 않는다 — batch가 남아 사람이 `/harvest`로 이어받는다.
-- 현재 디렉토리는 worker가 만든 **작업 전용 worktree**(origin 기본 브랜치 최신 커밋, detached)다. 사용자 체크아웃이 아니므로 여기서 프로젝트 브랜치 규칙대로 새 브랜치를 만들어 작업한다. 이 디렉토리 밖 파일은 편집할 수 없다. 종료 후 worker가 worktree를 지운다.
+- 현재 디렉토리는 worker가 만든 **작업 전용 worktree**(`--base <branch>`로 받은 기준 브랜치 최신 커밋, detached)다. 기준 브랜치는 하네스가 실제로 들어 있는 브랜치(`harness.json`의 `base_branch` → develop → origin/HEAD → main → master)이고, 새 브랜치도 여기서 따며 PR도 `open-pr.sh --base <branch>`로 이 브랜치를 향한다. 사용자 체크아웃이 아니므로 여기서 프로젝트 브랜치 규칙대로 새 브랜치를 만들어 작업한다. 이 디렉토리 밖 파일은 편집할 수 없다. 종료 후 worker가 worktree를 지운다.
 - PR은 `$ROOT/scripts/open-pr.sh --title "<제목>" --body-file <본문 파일>`로 연다. 원격을 보고 GitHub는 `gh`, Bitbucket은 REST API로 **draft** PR을 만든다. 본문 첫 줄에 `자동 harvest(--auto) 결과`를 밝힌다. 병합 판단은 사람 몫이다.
 - 변경을 적용하기 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면(IP 허용 목록, 인증 없음, 미지원 원격) 브랜치를 만들거나 push하지 말고 개선안 보고로 끝내며 `mark-reviewed`하지 않는다.
 - `open-pr.sh`가 실패하면(지원하지 않는 원격, 인증 정보 없음 등) 방금 push한 원격 브랜치를 `git push origin --delete <branch>`로 지우고, 개선안 보고로 끝내며 `mark-reviewed`하지 않는다.
