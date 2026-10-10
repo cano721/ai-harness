@@ -1373,6 +1373,7 @@ case "${AUTO_STUB_MODE:-}" in
       >>"$HARNESS_METRICS_DIR/harvest-queue/p-$1/review-history.jsonl"
     ;;
   fail) exit 3 ;;
+  cost) echo "Ignoring 19 permissions.allow entries: workspace not trusted" >&2; echo '{"type":"result","total_cost_usd":0.12}' ;;
 esac
 STUB
 chmod +x "$AUTO_STUB"
@@ -1430,6 +1431,24 @@ AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/script
 assert_contains "$AUTO_ARGS" '--plugin-dir "$ROOT"' "agent loads the same plugin copy it is allowed to run"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '"Bash($scripts_glob)"' "agent may run that copy's scripts"
+# 에이전트 선택: 세션 도구가 아니라 실행 능력으로. 설정이 우선, 기본은 claude가 있으면 claude.
+AGENT_BIN="$TEST_TMP/agent-bin"
+mkdir -p "$AGENT_BIN"
+printf '#!/bin/sh\n' >"$AGENT_BIN/claude"; chmod +x "$AGENT_BIN/claude"
+resolve_agent_with() { # $1=PATH $2=설정
+  PATH="$1" HM_HARVEST_AUTO_AGENT="$2" HARNESS_METRICS_DIR="$TEST_TMP/agent-data" "$ROOT/scripts/harvest-auto.sh" agent
+}
+SYS_PATH="$(dirname "$(command -v jq)"):/usr/bin:/bin"
+assert_eq "claude" "$(resolve_agent_with "$AGENT_BIN:$SYS_PATH" auto)" "claude is preferred when installed"
+assert_eq "codex" "$(resolve_agent_with "$SYS_PATH" auto)" "codex is the fallback without claude"
+assert_eq "codex" "$(resolve_agent_with "$AGENT_BIN:$SYS_PATH" codex)" "explicit agent setting wins"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'agent="$(resolve_agent)"' "trigger ignores the session tool when picking the agent"
+# shellcheck disable=SC2016
+assert_contains "$(sed -n '/    codex)$/,/;;/p' "$ROOT/scripts/harvest-auto.sh")" '--approve-for-me' "codex runs with a current sandbox flag"
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_AGENT=claude AUTO_STUB_MODE=cost \
+  auto_trigger "$(auto_status auto-svc b-cost)" "$AUTO_REPO"
+assert_eq "0.12" "$(auto_runs '[.[] | select(.event=="finished")] | last | .cost_usd')" "cost is read past stderr notices"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.

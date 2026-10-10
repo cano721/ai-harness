@@ -334,6 +334,7 @@ macOS에서 한 번 등록합니다. 플러그인을 업데이트해도 shim이 
 `~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 정기 backfill이 끝날 때마다 analysis batch가 있는 프로젝트를 오래된 순으로 확인해(sweep, 한 번에 하나) `/harvest <프로젝트> --auto`를 세션과 분리된 headless 프로세스(`claude -p`, Codex 세션이면 `codex exec`)로 실행합니다.
 
 - **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
+- **에이전트**: 세션을 만든 도구와 무관하게 `claude`가 있으면 Claude Code로 실행합니다(`HM_HARVEST_AUTO_AGENT=auto|claude|codex`). Codex 샌드박스는 쓰기 허용 경로에서도 `.git`을 읽기 전용으로 두어 커밋·push를 할 수 없으므로, Codex로 돌면 분석·보고까지만 하고 batch를 사람에게 넘깁니다
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
@@ -466,6 +467,7 @@ HM_HARVEST_INSIGHT_THRESHOLD=3
 HM_HARVEST_INSIGHT_SESSION_THRESHOLD=2
 HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
 HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
+HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
