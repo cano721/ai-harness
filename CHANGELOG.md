@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## v0.34.1 (2026-10-10)
+### 버그 수정
+
+- **한 프로젝트가 자동 실행된 뒤 다른 프로젝트들의 차례가 오지 않던 문제 수정** — sweep은 한 번에 하나만 띄우는데, "이번에 띄웠는지"가 아니라 "시도 기록이 launched인지"로 멈춰서, 지난 sweep에서 띄운 batch가 남아 있으면(사람에게 넘긴 경우 등) 매번 거기서 멈췄습니다.
+- **Orca worktree에서만 작업한 저장소의 batch가 계속 "하네스 없음"으로 넘어가던 문제 수정** — 세션 기록에 원본 체크아웃 경로가 한 번도 나오지 않아 자동 harvest가 저장소를 찾지 못했습니다(jobda-cms, jobda-scheduler). 이제 기록에 나온 workspace 루트의 `.ai-harness/workspace.json` 멤버 목록에서 프로젝트 ID가 일치하는 저장소를 찾습니다.
+
 ## v0.34.0 (2026-10-10)
 ### 새 기능
 
