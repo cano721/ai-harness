@@ -1423,6 +1423,13 @@ HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=5 AUTO_STUB_MODE=fail auto_trigger "
 assert_eq "failed|3" "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.exit_code)"')" "failed run recorded"
 assert_eq "exit_3" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/health.json")" "auto health failure"
 assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
+# 실제 claude 실행 인자: 허용 목록의 스크립트 경로와 로드되는 플러그인이 같은 설치본이어야 한다.
+# shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
+AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/scripts/harvest-auto.sh")"
+# shellcheck disable=SC2016
+assert_contains "$AUTO_ARGS" '--plugin-dir "$ROOT"' "agent loads the same plugin copy it is allowed to run"
+# shellcheck disable=SC2016
+assert_contains "$AUTO_ARGS" '"Bash($scripts_glob)"' "agent may run that copy's scripts"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
@@ -1470,6 +1477,13 @@ git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
 PR_NOAUTH_RC=0
 (cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
 assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
+PR_CHECK_RC=0
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
+assert_eq "4" "$PR_CHECK_RC" "pre-push check fails without credentials"
+git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
+PR_CHECK_RC=0
+(cd "$PR_REPO" && "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
+assert_eq "3" "$PR_CHECK_RC" "pre-push check rejects unsupported hosts"
 pass "draft PR opener for GitHub and Bitbucket"
 
 # LLM 정리: 정규식이 놓친 마찰을 findings로 남기고 insights 신호로 센다.
@@ -1539,6 +1553,22 @@ assert_eq "1" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "same batch is 
 HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=0 "$ROOT/scripts/harvest-auto.sh" sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "sweep is off unless opted in"
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "harvest-auto.sh\" sweep" "backfill-due runs the sweep"
+# 지워진 worktree 경로뿐인 batch도 같은 프로젝트의 살아 있는 하네스 저장소를 찾아 실행한다.
+mkdir -p "$SWEEP_DATA/harvest-queue/p-auto-svc"
+jq -cn '{kind:"session",src:"codex",sid:"live",project:"auto-svc"}' \
+  | jq -c --arg cwd "$AUTO_REPO" '.cwd=$cwd' >"$SWEEP_DATA/events/codex-live.jsonl"
+jq -cn --arg ev "$SWEEP_DATA/events/claude-gone.jsonl" \
+  '{project:"auto-svc",batch_id:"b-gone",created_at:"2026-01-03T00:00:00Z",reasons:["errors"],event_files:[$ev]}' \
+  >"$SWEEP_DATA/harvest-queue/p-auto-svc/analysis-batch.json"
+jq -cn '{kind:"session",src:"claude",sid:"gone",project:"auto-svc",cwd:"/gone/workspaces/auto-svc/NJ-1"}' >"$SWEEP_DATA/events/claude-gone.jsonl"
+run_sweep
+assert_eq "2" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "batch with only deleted worktrees still runs in the live repo"
+# 이전 버전이 "skipped"로 남긴 batch는 한 번 재판단하고, 하네스가 없으면 조용히 넘어간다.
+jq -cn '{batch_id:"b-plain",result:"skipped"}' >"$SWEEP_DATA/harvest-queue/p-plain/auto-attempted-batch"
+PLAIN_SKIPS_BEFORE="$(jq -s '[.[] | select(.project=="plain")] | length' "$SWEEP_DATA/harvest-auto/runs.jsonl")"
+run_sweep
+run_sweep
+assert_eq "$((PLAIN_SKIPS_BEFORE + 1))" "$(jq -s '[.[] | select(.project=="plain")] | length' "$SWEEP_DATA/harvest-auto/runs.jsonl")" "legacy skip is re-evaluated once, then quiet"
 pass "auto harvest sweep after backfill"
 
 # launchd: shim은 가장 새 플러그인 설치본을 찾고, plist는 매시간 shim을 부른다.
