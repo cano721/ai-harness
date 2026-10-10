@@ -1431,6 +1431,10 @@ AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/script
 assert_contains "$AUTO_ARGS" '--plugin-dir "$ROOT"' "agent loads the same plugin copy it is allowed to run"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '"Bash($scripts_glob)"' "agent may run that copy's scripts"
+# shellcheck disable=SC2016
+assert_contains "$AUTO_ARGS" '"${read_dirs[@]}"' "agent can read events and transcripts outside the work tree"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" '--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR"' "data and transcript dirs are added"
 # 에이전트 선택: 세션 도구가 아니라 실행 능력으로. 설정이 우선, 기본은 claude가 있으면 claude.
 AGENT_BIN="$TEST_TMP/agent-bin"
 mkdir -p "$AGENT_BIN"
@@ -1449,6 +1453,28 @@ assert_contains "$(sed -n '/    codex)$/,/;;/p' "$ROOT/scripts/harvest-auto.sh")
 HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_AGENT=claude AUTO_STUB_MODE=cost \
   auto_trigger "$(auto_status auto-svc b-cost)" "$AUTO_REPO"
 assert_eq "0.12" "$(auto_runs '[.[] | select(.event=="finished")] | last | .cost_usd')" "cost is read past stderr notices"
+# 기준 브랜치: origin/HEAD(master)에는 하네스가 없고 develop에만 있으면 develop에서 작업한다.
+BASE_ORIGIN="$TEST_TMP/base-origin.git"
+BASE_REPO="$TEST_TMP/base-repo"
+git init -q --bare "$BASE_ORIGIN"
+make_repo "$BASE_REPO" "$BASE_ORIGIN"
+git -C "$BASE_REPO" branch -M master
+git -C "$BASE_REPO" push -q origin master
+git -C "$BASE_REPO" checkout -q -b develop
+mkdir -p "$BASE_REPO/.ai-harness"
+jq -n '{project_id:"base-svc"}' >"$BASE_REPO/.ai-harness/harness.json"
+git -C "$BASE_REPO" add .ai-harness && git -C "$BASE_REPO" commit -q -m harness
+git -C "$BASE_REPO" push -q origin develop
+git -C "$BASE_REPO" remote set-head origin master
+BASE_STUB="$TEST_TMP/base-stub.sh"
+printf '#!/bin/bash\n[[ -f .ai-harness/harness.json ]] && echo has-harness >>"%s" || echo no-harness >>"%s"\n' \
+  "$TEST_TMP/base-stub.out" "$TEST_TMP/base-stub.out" >"$BASE_STUB"
+chmod +x "$BASE_STUB"
+HARNESS_METRICS_DIR="$TEST_TMP/base-data" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$BASE_STUB" \
+  "$ROOT/scripts/harvest-auto.sh" trigger "$(auto_status base-svc b1)" "$BASE_REPO"
+assert_eq "has-harness" "$(cat "$TEST_TMP/base-stub.out")" "work tree starts from the branch that carries the harness"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" '--auto --base $base' "agent is told the PR base"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
