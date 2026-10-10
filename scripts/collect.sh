@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SessionEnd hook 진입점. stdin: {session_id, transcript_path, cwd, reason}
-# 실패해도 세션 종료를 막지 않는다 (항상 exit 0)
+# 세션 1개 수집 진입점. stdin: {session_id, transcript_path, cwd, reason}
+# 플러그인 hook에서는 더 이상 부르지 않는다 — 수집은 backfill-due.sh(launchd·SessionStart)가 맡는다.
+# 수동 수집이나 사용자 정의 hook에서 쓸 수 있게 남겨 둔다. 항상 exit 0.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh

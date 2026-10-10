@@ -56,7 +56,7 @@ Claude Code에서 적용했다면 다음부터 수동 업데이트가 필요 없
 
 ## 안전 경계
 
-- SessionStart hook은 업데이트 여부만 알리고 설치를 실행하지 않는다. 알림은 캐시만 읽으며 네트워크 조회는 SessionEnd(`check-update.sh refresh`)와 사용자가 직접 부르는 `status`가 담당한다.
+- SessionStart hook은 업데이트 여부만 알리고 설치를 실행하지 않는다. 알림은 캐시만 읽으며 네트워크 조회는 정기 backfill 뒤(`check-update.sh refresh`)와 사용자가 직접 부르는 `status`가 담당한다.
 - 설치 버전과 현재 세션이 로드한 버전이 다르면 SessionStart가 재시작을 안내한다. 적용 직후 이 세션에서 새 동작을 기대하지 않는다.
 - 최신 버전 정보는 로컬 `~/.ai-harness/update-check.json`에 기본 24시간 캐시된다. `HM_UPDATE_CHECK_HOURS`로 주기를 조절할 수 있고, `0`이면 매 시작마다 확인한다.
 - 릴리스 메타데이터는 HTTPS로만 조회하며, 네트워크 실패 시 기존 성공 캐시를 계속 사용한다.

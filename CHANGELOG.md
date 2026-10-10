@@ -7,6 +7,19 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## v0.32.0 (2026-10-10)
+### 새 기능
+
+- **macOS에서 launchd로 수집·정리·자동 개선을 시간 기준으로 돌립니다** — 지금까지는 새 세션을 열 때만 backfill이 돌아, 며칠 이어지는 세션 하나만 켜 두면 그 사이 기록이 처리되지 않았습니다(실측: 6시간 넘는 세션 17%, 세션 시작 간 공백 최대 53시간). `scripts/schedule.sh install`로 한 번 등록하면 매시간 확인해 주기가 지났을 때 backfill → LLM 정리 → 자동 harvest → 릴리스 정보 갱신을 돕니다. 플러그인을 업데이트해도 shim이 최신 설치본을 찾습니다. 아직 등록하지 않은 macOS에서는 첫 세션에 한 번 안내합니다.
+
+### 동작 변경
+
+- **세션 종료(SessionEnd) hook을 없앴습니다** — 터미널·탭을 닫으면 실행되지 않아 실측 43%를 놓쳤고, 자동 harvest 트리거가 여기에만 있어 탭을 닫아 끝내는 프로젝트는 batch가 생겨도 자동 실행되지 않았습니다. 이제 정기 backfill이 유일한 수집 경로이고, 끝날 때마다 batch가 있는 모든 프로젝트를 확인(sweep)해 자동 harvest를 띄웁니다. backfill 기본 주기는 24시간에서 6시간으로 줄었습니다(변경 없는 증분 약 1분). `scripts/collect.sh`는 수동 수집 진입점으로 남습니다.
+
+### 업데이트 후 해야 할 일
+
+- macOS라면 한 번 실행하세요: `<플러그인 경로>/scripts/schedule.sh install` (해제는 `uninstall`, 상태는 `status`).
+
 ## v0.31.0 (2026-10-09)
 ### 새 기능
 
