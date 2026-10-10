@@ -63,7 +63,16 @@ command_trigger() {
   [[ -n "$project" && -n "$batch_id" ]] || return 0
 
   marker="$(attempt_marker "$project")"
-  [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" != "$batch_id" ]] || return 0
+  local prev_result=""
+  if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
+    prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
+    # 하네스 저장소를 못 찾아 넘긴 batch만 다시 본다(이전 버전의 구분 없는 "skipped"는 한 번 재판단).
+    # 실행했거나 정책상 건너뛴 batch는 끝.
+    case "$prev_result" in
+      no_harness|skipped) ;;
+      *) return 0 ;;
+    esac
+  fi
   mark_attempted() {
     mkdir -p "${marker%/*}"
     jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --arg result "$1" \
@@ -73,7 +82,8 @@ command_trigger() {
   # 세션 수만 넘은 batch는 실측상 거의 노이즈였다. 교정·오류 등 신호가 있는 batch만 자동으로 돈다.
   if [[ "${HM_HARVEST_AUTO_SESSIONS_ONLY:-0}" != "1" ]] \
     && [[ "$(printf '%s' "$status" | jq -c '.reasons // []')" == '["sessions"]' ]]; then
-    mark_attempted skipped
+    [[ "$prev_result" == "skipped" ]] && { mark_attempted sessions_only; return 0; }
+    mark_attempted sessions_only
     log_skip "$project" "$batch_id" sessions_only
     return 0
   fi
@@ -81,7 +91,8 @@ command_trigger() {
   # 하네스가 없는 디렉토리나 workspace(git 아님, 로컬 적용에 사용자 확인 필요)는 사람 몫으로 남긴다.
   repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
   if [[ -z "$repo_root" || ! -f "$repo_root/.ai-harness/harness.json" ]]; then
-    mark_attempted skipped
+    [[ "$prev_result" == "no_harness" ]] && return 0
+    mark_attempted no_harness
     log_skip "$project" "$batch_id" no_harness_repo
     return 0
   fi
@@ -125,6 +136,22 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
       return
     fi
   done < <(jq -r '.event_files[]?' "$1" 2>/dev/null)
+  # batch 세션의 작업 경로가 지워진 worktree뿐이면, 같은 프로젝트의 다른 세션 기록에서
+  # 지금 살아 있고 프로젝트 ID가 일치하는 하네스 저장소를 찾는다(최근 기록부터 200개).
+  local project=""
+  project="$(jq -r '.project // empty' "$1" 2>/dev/null)"
+  if [[ -n "$project" ]]; then
+    while IFS= read -r ev; do
+      IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+      [[ -n "$cwd" && -d "$cwd" ]] || continue
+      root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+      [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]] || continue
+      [[ "$(project_id_for_cwd "$root")" == "$project" ]] || continue
+      printf '%s\t%s\n' "$root" "$src"
+      return
+    done < <(grep -l -F "\"project\":$(jq -cn --arg p "$project" '$p')" "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null \
+      | xargs ls -t 2>/dev/null | head -n 200)
+  fi
   [[ -n "$first" ]] && printf '%s\n' "$first"
 }
 
@@ -171,7 +198,10 @@ agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_
         "ai-harness harvest skill을 인자 \"$project --auto\"로 실행하라.")
       ;;
     *)
+      # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. launchd shim이 Codex 쪽
+      # 설치본을 골라도 claude는 기본으로 자기 캐시의 플러그인을 로드하므로, 이 설치본을 명시해 맞춘다.
       AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto"
+        --plugin-dir "$ROOT"
         --permission-mode acceptEdits
         --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
         "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
