@@ -24,6 +24,7 @@ usage:
   harvest-auto.sh sweep                                              # backfill 뒤 batch가 있는 모든 프로젝트 확인
   harvest-auto.sh trigger <record-status-json> <cwd> [claude|codex]
   harvest-auto.sh run <project> <batch_id> <repo_root> <agent>       # trigger가 띄우는 detached worker
+  harvest-auto.sh agent                                              # 자동 실행에 쓸 에이전트(claude|codex)
   harvest-auto.sh runs [--limit N]                                   # 최근 자동 실행 기록
 EOF
   exit 2
@@ -106,9 +107,7 @@ command_trigger() {
     return 0
   fi
 
-  if [[ -z "$agent" ]]; then
-    agent="claude"
-  fi
+  agent="$(resolve_agent)"
   mark_attempted launched
   mkdir -p "$LOG_DIR"
   if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
@@ -182,6 +181,17 @@ command_sweep() {
     done | sort | cut -f2-)
 }
 
+# 무인 실행 에이전트. 세션을 만든 도구가 아니라 실행 능력으로 고른다.
+# Codex 샌드박스는 쓰기 허용 경로 안에서도 .git을 읽기 전용으로 두어 커밋·push를 할 수 없고,
+# launchd 환경에는 Bitbucket 토큰이 없다(claude는 settings.json env를 스스로 읽는다).
+resolve_agent() {
+  case "${HM_HARVEST_AUTO_AGENT:-auto}" in
+    claude) printf 'claude\n' ;;
+    codex) printf 'codex\n' ;;
+    *) if command -v claude >/dev/null 2>&1; then printf 'claude\n'; else printf 'codex\n'; fi ;;
+  esac
+}
+
 agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_CMD에 채운다
   local project="$1" work_dir="$2" agent="$3" scripts_glob=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
@@ -193,9 +203,12 @@ agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_
   scripts_glob="$ROOT/scripts/*"
   case "$agent" in
     codex)
-      AGENT_CMD=(codex exec -C "$work_dir" --full-auto
+      # --approve-for-me는 workspace-write 샌드박스다. 큐 기록(~/.ai-harness)은 쓸 수 있게 열지만,
+      # .git은 샌드박스가 읽기 전용으로 두므로 커밋·push는 실패하고 분석·보고까지만 한다.
+      AGENT_CMD=(codex exec -C "$work_dir" --approve-for-me --skip-git-repo-check
+        --add-dir "$HM_DATA_DIR"
         -c sandbox_workspace_write.network_access=true
-        "ai-harness harvest skill을 인자 \"$project --auto\"로 실행하라.")
+        "ai-harness harvest skill을 인자 \"$project --auto\"로 실행하라. 커밋·push가 막히면 개선안 보고로 끝내라.")
       ;;
     *)
       # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. launchd shim이 Codex 쪽
@@ -279,7 +292,8 @@ command_run() {
 
   review="$(last_review_after "$project" "$started_at")"
   if [[ "$agent" == "claude" ]]; then
-    cost="$(jq -s '[.[] | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
+    # stderr 안내 줄(예: 신뢰되지 않은 작업 공간)이 앞에 섞일 수 있어 JSON 줄만 읽는다.
+    cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
   fi
   if (( exit_code != 0 )); then
     result="failed"
@@ -315,6 +329,7 @@ shift || true
 case "$command" in
   trigger) [[ $# -ge 2 ]] || usage; command_trigger "$@" ;;
   sweep) command_sweep ;;
+  agent) resolve_agent ;;
   run) [[ $# -eq 4 ]] || usage; command_run "$@" ;;
   runs) command_runs "$@" ;;
   *) usage ;;

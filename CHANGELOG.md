@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## v0.33.2 (2026-10-10)
+### 버그 수정
+
+- **Codex 세션이 만든 batch의 자동 harvest가 바로 실패하던 문제 수정** — 현재 Codex CLI에 없는 `--full-auto` 옵션으로 실행해 인자 오류로 끝났습니다. 또 Codex 샌드박스는 `.git`을 읽기 전용으로 두어 커밋·push를 할 수 없습니다. 이제 세션 도구와 무관하게 `claude`가 있으면 Claude Code로 실행하고(`HM_HARVEST_AUTO_AGENT`로 변경 가능), Codex로 돌 때는 현재 옵션(`--approve-for-me`, 큐 기록 경로 허용)으로 분석·보고까지만 합니다.
+- **자동 harvest 비용이 기록되지 않던 문제 수정** — Claude가 stderr로 내는 안내(신뢰되지 않은 작업 공간 등)가 결과 JSON 앞에 섞여 파싱에 실패했습니다. 이제 JSON 줄만 읽습니다.
+
 ## v0.33.1 (2026-10-10)
 ### 버그 수정
 
