@@ -1560,7 +1560,7 @@ make_sweep_batch plain "$AUTO_PLAIN" "2026-01-01T00:00:00Z"
 make_sweep_batch auto-svc "$AUTO_REPO" "2026-01-02T00:00:00Z"
 : >"$TEST_TMP/sweep-stub.out"
 run_sweep() {
-  HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
+  HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
     AUTO_STUB_OUT="$TEST_TMP/sweep-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
 }
 run_sweep
@@ -1582,6 +1582,21 @@ jq -cn --arg ev "$SWEEP_DATA/events/claude-gone.jsonl" \
 jq -cn '{kind:"session",src:"claude",sid:"gone",project:"auto-svc",cwd:"/gone/workspaces/auto-svc/NJ-1"}' >"$SWEEP_DATA/events/claude-gone.jsonl"
 run_sweep
 assert_eq "2" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "batch with only deleted worktrees still runs in the live repo"
+# Orca worktree에서만 작업해 원본 경로가 기록에 없으면, 기록에 나온 workspace의 멤버 목록에서 찾는다.
+SWEEP_WS="$TEST_TMP/sweep-ws"
+make_repo "$SWEEP_WS/ws-svc"
+mkdir -p "$SWEEP_WS/ws-svc/.ai-harness" "$SWEEP_WS/.ai-harness" "$SWEEP_DATA/harvest-queue/p-ws-svc"
+jq -n '{project_id:"ws-svc"}' >"$SWEEP_WS/ws-svc/.ai-harness/harness.json"
+jq -n '{workspace_id:"ws",members:[{path:"ws-svc",project_id:"ws-svc"}]}' >"$SWEEP_WS/.ai-harness/workspace.json"
+jq -cn --arg cwd "$SWEEP_WS" '{kind:"session",src:"claude",sid:"ws-root",project:"ws",cwd:$cwd}' >"$SWEEP_DATA/events/claude-ws-root.jsonl"
+jq -cn '{kind:"session",src:"claude",sid:"ws-gone",project:"ws-svc",cwd:"/gone/orca/workspaces/ws-svc/NJ-9"}' >"$SWEEP_DATA/events/claude-ws-gone.jsonl"
+jq -cn --arg ev "$SWEEP_DATA/events/claude-ws-gone.jsonl" \
+  '{project:"ws-svc",batch_id:"b-ws",created_at:"2026-01-04T00:00:00Z",reasons:["errors"],event_files:[$ev]}' \
+  >"$SWEEP_DATA/harvest-queue/p-ws-svc/analysis-batch.json"
+SWEEP_BEFORE="$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')"
+run_sweep
+assert_eq "$((SWEEP_BEFORE + 1))" "$(wc -l <"$TEST_TMP/sweep-stub.out" | tr -d ' ')" "repo found through workspace members"
+assert_eq "ws-svc" "$(tail -n 1 "$TEST_TMP/sweep-stub.out" | cut -d'|' -f1)" "workspace member project runs (an earlier launched batch does not stop the sweep)"
 # 이전 버전이 "skipped"로 남긴 batch는 한 번 재판단하고, 하네스가 없으면 조용히 넘어간다.
 jq -cn '{batch_id:"b-plain",result:"skipped"}' >"$SWEEP_DATA/harvest-queue/p-plain/auto-attempted-batch"
 PLAIN_SKIPS_BEFORE="$(jq -s '[.[] | select(.project=="plain")] | length' "$SWEEP_DATA/harvest-auto/runs.jsonl")"
