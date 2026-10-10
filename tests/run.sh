@@ -1625,6 +1625,35 @@ else
 fi
 pass "launchd schedule"
 
+# 오류 발췌: 반복 실패를 판단할 본문을 남기되 비밀값은 가린다.
+ERRX_DATA="$TEST_TMP/errx-data"
+ERRX_T="$TEST_TMP/errx/eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+mkdir -p "${ERRX_T%/*}"
+errx_line() { # $1=tool_use id $2=tool $3=결과 본문
+  jq -cn --arg id "$1" --arg tool "$2" '{type:"assistant",timestamp:"2026-07-29T01:00:00Z",cwd:"/tmp/service",message:{model:"m",usage:{input_tokens:1,output_tokens:1},content:[{type:"tool_use",id:$id,name:$tool,input:{}}]}}'
+  jq -cn --arg id "$1" --arg body "$3" '{type:"user",timestamp:"2026-07-29T01:00:01Z",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:true,content:$body}]}}'
+}
+{
+  jq -cn '{type:"user",timestamp:"2026-07-29T00:59:00Z",cwd:"/tmp/service",message:{content:"빌드해줘"}}'
+  errx_line t1 Bash $'Exit code 1\n> build\nError: Cannot find module ./gen/api at /tmp/x.js:12'
+  errx_line t2 Bash $'Exit code 1\nError: Cannot find module ./gen/api at /tmp/x.js:31'
+  errx_line t3 Bash 'curl failed: Authorization: Bearer sk-live-abc123 token=xyz password: "p@ss" key AKIAABCDEFGHIJKLMNOPQRSTUVWXYZ012345'
+  errx_line t4 Edit '[Direct edit guard] src/a.ts 수정 전에 docs를 먼저 Read 하세요.'
+  errx_line t5 Bash "The user doesn't want to proceed with this tool use."
+} >"$ERRX_T"
+HARNESS_METRICS_DIR="$ERRX_DATA" "$ROOT/scripts/extract-claude.sh" "$ERRX_T" "user_exit"
+ERRX_EVENT="$ERRX_DATA/events/claude-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+ERRX_SAMPLES="$(jq -r 'select(.kind=="error_sample") | "\(.n) \(.target)"' "$ERRX_EVENT")"
+assert_contains "$ERRX_SAMPLES" "1 Bash: Error: Cannot find module ./gen/api at /tmp/x.js:12" "error line is preferred over leading output"
+assert_contains "$ERRX_SAMPLES" "Authorization: ***" "authorization header redacted"
+assert_contains "$ERRX_SAMPLES" "token=***" "token value redacted"
+assert_contains "$ERRX_SAMPLES" 'password: "***' "password redacted"
+[[ "$ERRX_SAMPLES" != *"sk-live-abc123"* && "$ERRX_SAMPLES" != *"AKIAABCDEFGHIJ"* ]] || fail "secrets leaked into error samples"
+[[ "$ERRX_SAMPLES" != *"Direct edit guard"* && "$ERRX_SAMPLES" != *"want to proceed"* ]] || fail "guard and denial stay in their own signals"
+ERRX_STATS="$(HARNESS_METRICS_DIR="$ERRX_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$ERRX_STATS" "| 1 | 2 | Bash: Error: Cannot find module ./gen/api at /tmp/x.js:12 |" "stats groups the same error across line numbers"
+pass "error excerpts for repeated failures"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
