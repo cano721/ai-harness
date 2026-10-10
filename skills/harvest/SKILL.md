@@ -11,7 +11,7 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 
 인자: `$ARGUMENTS` — 대상 프로젝트명. `--dry-run` 포함 시 개선안 보고만 하고 파일 수정/PR 안 함.
 
-`--auto` 포함 시 SessionEnd hook(`scripts/harvest-auto.sh`, opt-in `HM_HARVEST_AUTO=1`)이 띄운 무인 실행이다. 질문에 답할 사람이 없으므로 아래를 지킨다.
+`--auto` 포함 시 정기 backfill 뒤 sweep(`scripts/harvest-auto.sh`, opt-in `HM_HARVEST_AUTO=1`)이 띄운 무인 실행이다. 질문에 답할 사람이 없으므로 아래를 지킨다.
 
 - 사용자에게 묻지 않는다. 확인이 필요한 분기(이슈 생성 필요, workspace 로컬 적용, 멤버 하네스 대상)를 만나면 적용하지 않고 보고로 끝내며 `mark-reviewed`도 하지 않는다 — batch가 남아 사람이 `/harvest`로 이어받는다.
 - 현재 디렉토리는 worker가 만든 **작업 전용 worktree**(origin 기본 브랜치 최신 커밋, detached)다. 사용자 체크아웃이 아니므로 여기서 프로젝트 브랜치 규칙대로 새 브랜치를 만들어 작업한다. 이 디렉토리 밖 파일은 편집할 수 없다. 종료 후 worker가 worktree를 지운다.

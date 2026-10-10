@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# SessionStart에서 호출. 마지막 backfill이 HM_BACKFILL_INTERVAL_HOURS(기본 24)보다 오래됐으면
-# backfill을 세션과 분리된 저우선순위 프로세스로 띄운다.
-# 터미널·탭을 그냥 닫은 세션은 SessionEnd가 실행되지 않아 이 경로로만 수집된다.
+# 수집·정리·자동 harvest의 단일 진입점. launchd(scripts/schedule.sh, 매시간 확인)와 SessionStart가 부른다.
+# 마지막 backfill이 HM_BACKFILL_INTERVAL_HOURS(기본 6)보다 오래됐으면 저우선순위로
+# backfill → (opt-in) LLM 정리 → 자동 harvest sweep → 릴리스 정보 갱신을 한 번에 돈다.
+# 두 호출 경로가 겹쳐도 주기 판정과 lock을 공유하므로 한 번만 돈다.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 
-INTERVAL_HOURS="${HM_BACKFILL_INTERVAL_HOURS:-24}"
-[[ "$INTERVAL_HOURS" =~ ^[0-9]+$ ]] || INTERVAL_HOURS=24
+INTERVAL_HOURS="${HM_BACKFILL_INTERVAL_HOURS:-6}"
+[[ "$INTERVAL_HOURS" =~ ^[0-9]+$ ]] || INTERVAL_HOURS=6
 (( INTERVAL_HOURS > 0 )) || exit 0
 LOCK_DIR="$HM_DATA_DIR/.backfill-due.lock"
 
@@ -26,6 +27,8 @@ if [[ "${1:-}" == "--worker" ]]; then
   nice -n 10 "$DIR/backfill.sh" >/dev/null 2>&1 || true
   # opt-in LLM 정리는 새로 회수된 세션까지 반영된 뒤에 돈다.
   [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
+  "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
+  "$DIR/check-update.sh" refresh >/dev/null 2>&1 || true
   exit 0
 fi
 

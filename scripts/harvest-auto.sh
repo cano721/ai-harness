@@ -21,7 +21,8 @@ LOG_KEEP=50
 usage() {
   cat >&2 <<'EOF'
 usage:
-  harvest-auto.sh trigger <record-status-json> <cwd> [claude|codex]   # SessionEnd(collect.sh)에서 호출
+  harvest-auto.sh sweep                                              # backfill 뒤 batch가 있는 모든 프로젝트 확인
+  harvest-auto.sh trigger <record-status-json> <cwd> [claude|codex]
   harvest-auto.sh run <project> <batch_id> <repo_root> <agent>       # trigger가 띄우는 detached worker
   harvest-auto.sh runs [--limit N]                                   # 최근 자동 실행 기록
 EOF
@@ -54,7 +55,7 @@ attempt_marker() { printf '%s/%s/auto-attempted-batch\n' "$HM_DATA_DIR/harvest-q
 command_trigger() {
   local status="$1" cwd="$2" agent="${3:-}" project="" batch_id="" repo_root="" marker=""
   [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
-  # 자동 harvest 세션 자신의 SessionEnd가 다시 harvest를 띄우지 않게 한다.
+  # 자동 harvest 세션 안에서 다시 harvest를 띄우지 않게 한다.
   [[ -z "${HM_HARVEST_RUNNING:-}" ]] || return 0
   [[ "$(printf '%s' "$status" | jq -r '.has_analysis_batch // false' 2>/dev/null)" == "true" ]] || return 0
   project="$(printf '%s' "$status" | jq -r '.project // empty')"
@@ -84,7 +85,7 @@ command_trigger() {
     log_skip "$project" "$batch_id" no_harness_repo
     return 0
   fi
-  # 상한·동시 실행 제한은 batch를 소모하지 않고 다음 SessionEnd에서 다시 시도한다.
+  # 상한·동시 실행 제한은 batch를 소모하지 않고 다음 sweep에서 다시 시도한다.
   if (( $(started_today) >= DAILY_MAX )); then
     log_skip "$project" "$batch_id" daily_max
     return 0
@@ -102,11 +103,56 @@ command_trigger() {
   if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
     "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent"
   else
-    # SessionEnd hook timeout 안에 끝나도록 worker를 세션과 분리한다.
+    # 호출자(sweep·backfill-due)가 기다리지 않도록 worker를 분리한다.
     nohup "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" \
       </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
   fi
+}
+
+# batch의 세션 기록에서 하네스가 있는 저장소 cwd와 도구(src)를 고른다. 없으면 첫 cwd.
+batch_origin() { # $1=batch_file → "cwd<TAB>src"
+  local ev="" cwd="" src="" first="" root=""
+  while IFS= read -r ev; do
+    [[ -f "$ev" ]] || ev="$HM_DATA_DIR/rollups/${ev##*/}"
+    [[ -f "$ev" ]] || continue
+    IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    [[ -n "$cwd" ]] || continue
+    [[ -n "$first" ]] || first="$cwd"$'\t'"$src"
+    root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]]; then
+      printf '%s\t%s\n' "$cwd" "$src"
+      return
+    fi
+  done < <(jq -r '.event_files[]?' "$1" 2>/dev/null)
+  [[ -n "$first" ]] && printf '%s\n' "$first"
+}
+
+# 세션 종료 hook에 기대지 않고, backfill이 끝난 뒤 batch가 있는 프로젝트를 모두 확인한다.
+# 터미널·탭을 닫아 끝난 세션만 있는 프로젝트도 여기서 자동 실행된다. 실행은 한 번에 하나다.
+command_sweep() {
+  local batch="" status="" origin="" cwd="" src="" project="" marker=""
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
+  shopt -s nullglob
+  local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
+  shopt -u nullglob
+  (( ${#batches[@]} > 0 )) || return 0
+  while IFS= read -r batch; do
+    status="$(jq -c '. + {has_analysis_batch:true}' "$batch" 2>/dev/null)" || continue
+    project="$(jq -r '.project // empty' <<<"$status")"
+    [[ -n "$project" ]] || continue
+    origin="$(batch_origin "$batch")"
+    [[ -n "$origin" ]] || continue
+    IFS=$'\t' read -r cwd src <<<"$origin"
+    command_trigger "$status" "$cwd" "$src"
+    marker="$(attempt_marker "$project")"
+    if [[ "$(jq -r '.result // empty' "$marker" 2>/dev/null)" == "launched" \
+      && "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$(jq -r '.batch_id // .created_at // empty' <<<"$status")" ]]; then
+      break
+    fi
+  done < <(for batch in "${batches[@]}"; do
+      printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
+    done | sort | cut -f2-)
 }
 
 agent_command() { # $1=project $2=work_dir $3=agent → 실행할 argv를 AGENT_CMD에 채운다
@@ -238,6 +284,7 @@ command="${1:-}"
 shift || true
 case "$command" in
   trigger) [[ $# -ge 2 ]] || usage; command_trigger "$@" ;;
+  sweep) command_sweep ;;
   run) [[ $# -eq 4 ]] || usage; command_run "$@" ;;
   runs) command_runs "$@" ;;
   *) usage ;;
