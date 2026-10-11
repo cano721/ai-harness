@@ -1374,6 +1374,7 @@ case "${AUTO_STUB_MODE:-}" in
     ;;
   fail) exit 3 ;;
   cost) echo "Ignoring 19 permissions.allow entries: workspace not trusted" >&2; echo '{"type":"result","total_cost_usd":0.12}' ;;
+  limit) echo '{"type":"result","is_error":true,"api_error_status":429,"api_error":"usage_limit_reached","total_cost_usd":0}'; exit 1 ;;
 esac
 STUB
 chmod +x "$AUTO_STUB"
@@ -1475,6 +1476,11 @@ HARNESS_METRICS_DIR="$TEST_TMP/base-data" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FORE
 assert_eq "has-harness" "$(cat "$TEST_TMP/base-stub.out")" "work tree starts from the branch that carries the harness"
 # shellcheck disable=SC2016
 assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" '--auto --base $base' "agent is told the PR base"
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_AGENT=claude AUTO_STUB_MODE=limit \
+  auto_trigger "$(auto_status auto-svc b-limit)" "$AUTO_REPO"
+assert_eq "failed|usage_limit" "$(auto_runs '[.[] | select(.event=="finished")] | last | "\(.result)|\(.reason)"')" "usage limit is recorded as the failure reason"
+assert_not_file "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch"
+assert_eq "usage_limit" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/health.json")" "health names the usage limit"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
