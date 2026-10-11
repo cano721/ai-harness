@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **사용량 한도·API 오류로 실패한 자동 harvest가 그 batch를 다시 시도하지 않던 문제 수정** — 실패해도 "실행함"으로 기록돼 batch가 버려졌습니다(실측: Claude 세션 한도 429로 jobda-scheduler 실행이 0.5초 만에 실패). 이제 실패하면 시도 기록을 지워 다음 sweep이 다시 시도하고(하루 상한은 그대로), 실행 기록과 health에 `usage_limit` 등 실패 사유를 남깁니다.
+
 ## v0.34.2 (2026-10-10)
 ### 버그 수정
 

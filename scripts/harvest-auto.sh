@@ -329,8 +329,17 @@ command_run() {
     # stderr 안내 줄(예: 신뢰되지 않은 작업 공간)이 앞에 섞일 수 있어 JSON 줄만 읽는다.
     cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
   fi
+  local fail_reason=""
+  fail_reason="$(jq -Rrn '[inputs | fromjson? | objects | select(.type=="result")] | last
+    | if . == null then empty
+      elif .api_error == "usage_limit_reached" or .api_error_status == 429 then "usage_limit"
+      elif .is_error == true then (.api_error // "agent_error")
+      else empty end' "$log_file" 2>/dev/null || true)"
   if (( exit_code != 0 )); then
     result="failed"
+    # 사용량 한도·API 오류 같은 일시 실패로 batch 시도를 소모하지 않는다. 다음 sweep이 다시 시도한다
+    # (하루 상한·동시 실행 제한은 그대로 적용된다).
+    find "$(attempt_marker "$project")" -maxdepth 0 -type f -delete 2>/dev/null || true
   elif [[ "$review" == "null" ]]; then
     # 사용자 확인이 필요한 분기 등으로 batch를 남긴 채 끝났다. 수동 /harvest 대상.
     result="left_for_user"
@@ -340,13 +349,14 @@ command_run() {
   append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg result "$result" --argjson exit_code "$exit_code" \
     --argjson duration_s "$(( $(date +%s) - start_epoch ))" --argjson cost_usd "${cost:-null}" \
-    --argjson review "$review" --arg log "$log_file" \
+    --argjson review "$review" --arg log "$log_file" --arg reason "$fail_reason" \
     '{at:$at,event:"finished",project:$project,batch:$batch,result:$result,exit_code:$exit_code,
-      duration_s:$duration_s,cost_usd:$cost_usd,artifact:($review.review.artifact // null),log:$log}')"
+      duration_s:$duration_s,cost_usd:$cost_usd,artifact:($review.review.artifact // null),log:$log}
+      + (if $reason == "" then {} else {reason:$reason} end)')"
   if (( exit_code == 0 )); then
     "$DIR/health.sh" success harvest_auto >/dev/null 2>&1 || true
   else
-    "$DIR/health.sh" failure harvest_auto "exit_$exit_code" >/dev/null 2>&1 || true
+    "$DIR/health.sh" failure harvest_auto "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   fi
   prune_logs
 }
