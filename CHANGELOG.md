@@ -7,6 +7,13 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **macOS에서 프로젝트 ID가 harness.json·origin·workspace 대신 폴더 이름으로 정해지던 문제 수정** — macOS 기본 jq(1.6 Apple 빌드)는 `first(inputs | fromjson? | …)`에서 멈추지 않아, transcript의 작업 경로를 여러 줄로 읽었습니다. 그 경로로는 아무 파일도 찾지 못해 항상 마지막 폴더 이름으로 떨어졌고, 저장소 이름과 같을 때는 우연히 맞아 드러나지 않았습니다. workspace 루트 세션은 `jobda-workspace`가 아니라 폴더 이름으로 집계됐습니다(실측 Claude 243·Codex 432세션). 줄 단위로 읽고 첫 줄만 씁니다. 업데이트 후 첫 backfill에서 전 세션이 재추출되고, 큐 상태는 새 이름으로 옮겨집니다.
+- **원본 transcript가 지워진 세션이 옛 프로젝트 이름에 남던 문제 수정** — Claude가 오래된 기록을 정리하면 그 세션은 다시 추출되지 않아 이름 규칙이 바뀌어도 그대로였습니다. 규칙(`lib.sh`)이 바뀐 뒤 한 번, 남은 작업 경로로 다시 판정해 이름을 고치고 큐에 다시 기록합니다.
+
 ## v0.34.3 (2026-10-11)
 ### 버그 수정
 

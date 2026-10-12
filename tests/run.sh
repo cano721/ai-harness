@@ -1701,6 +1701,35 @@ ERRX_STATS="$(HARNESS_METRICS_DIR="$ERRX_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$ERRX_STATS" "| 1 | 2 | Bash: Error: Cannot find module ./gen/api at /tmp/x.js:12 |" "stats groups the same error across line numbers"
 pass "error excerpts for repeated failures"
 
+# 원본 transcript가 지워진 세션도 규칙이 바뀌면 남은 작업 경로로 프로젝트 이름을 다시 판정한다.
+RELABEL_DATA="$TEST_TMP/relabel-data"
+RELABEL_WS="$TEST_TMP/relabel-ws"
+mkdir -p "$RELABEL_DATA/events" "$RELABEL_WS/.ai-harness" "$RELABEL_DATA/harvest-queue/p-old-ws/sessions"
+jq -n '{workspace_id:"new-ws",members:[]}' >"$RELABEL_WS/.ai-harness/workspace.json"
+jq -cn --arg cwd "$RELABEL_WS" '{v:3,kind:"session",src:"claude",sid:"orphan-1",project:"old-ws",cwd:$cwd,
+  transcript:"/gone/orphan-1.jsonl",ended:"2026-08-01T00:00:00Z",turns:3}' >"$RELABEL_DATA/events/claude-orphan-1.jsonl"
+jq -cn '{v:3,kind:"error",src:"claude",sid:"orphan-1",project:"old-ws",n:2}' >>"$RELABEL_DATA/events/claude-orphan-1.jsonl"
+HARNESS_METRICS_DIR="$RELABEL_DATA" "$ROOT/scripts/harvest-queue.sh" record "$RELABEL_DATA/events/claude-orphan-1.jsonl" >/dev/null
+assert_file "$RELABEL_DATA/harvest-queue/p-old-ws/sessions/claude-orphan-1.json"
+RELABEL_OUT="$(HARNESS_METRICS_DIR="$RELABEL_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/relabel-none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/relabel-none" "$ROOT/scripts/backfill.sh")"
+assert_contains "$RELABEL_OUT" "이름 재판정 1" "orphan event relabelled"
+assert_eq "new-ws|new-ws" "$(jq -sr '(map(.project) | unique | join("|")) + "|" + (map(select(.kind=="session"))[0].project)' "$RELABEL_DATA/events/claude-orphan-1.jsonl")" "every event line carries the new project"
+assert_file "$RELABEL_DATA/harvest-queue/p-new-ws/sessions/claude-orphan-1.json"
+assert_not_file "$RELABEL_DATA/harvest-queue/p-old-ws/sessions/claude-orphan-1.json"
+assert_contains "$(HARNESS_METRICS_DIR="$RELABEL_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/relabel-none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/relabel-none" "$ROOT/scripts/backfill.sh")" "이름 재판정 0" "relabel runs once per rule change"
+# 여러 줄에 cwd가 있는 transcript도 첫 cwd 하나로 판정한다(macOS jq 1.6의 first(inputs) 버그 회피).
+MULTI_T="$TEST_TMP/multi-cwd/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
+mkdir -p "${MULTI_T%/*}"
+for _ in 1 2 3; do
+  jq -cn --arg cwd "$RELABEL_WS" '{type:"user",timestamp:"2026-08-01T00:00:00Z",cwd:$cwd,message:{content:"작업"}}'
+done >"$MULTI_T"
+HARNESS_METRICS_DIR="$TEST_TMP/multi-data" "$ROOT/scripts/extract-claude.sh" "$MULTI_T" "user_exit"
+assert_eq "new-ws" "$(jq -r 'select(.kind=="session") | .project' "$TEST_TMP/multi-data/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "multi-line cwd transcript resolves through the workspace manifest"
+if grep -rnE "^[^#]*jq[^#]*first\(inputs" "$ROOT/scripts" >/dev/null; then fail "first(inputs …) returns every match on macOS jq 1.6 — read lines and head -n 1"; fi
+pass "orphan events follow project ID rule changes"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
