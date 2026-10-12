@@ -21,6 +21,20 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 - 허용된 명령만 쓸 수 있다: `git`, `jq`, `head`, `tail`, 플러그인 `scripts/*`. 스크립트는 `$ROOT`를 실제 절대경로로 풀어 한 줄에 하나씩 호출한다 — `ROOT=...;` 변수 할당이나 다른 명령과의 조합은 권한 규칙에 매칭되지 않아 거부된다.
 - 마지막 출력은 결과 한 줄(`improved <PR URL>` / `no-change <이유>` / `left_for_user <이유>`).
 
+`--auto --scope workspace|global`이면 팀 저장소가 아닌 **개인 소유 지침**을 고치는 무인 실행이다. 편집 도구가 없고, 바꾸는 방법은 `$ROOT/scripts/auto-apply.sh` 하나뿐이다. 이 스크립트는 표시된 블록(`<!-- ai-harness:auto:start -->`) 안에서만 규칙을 넣고 빼며, 이전 상태를 남기고, 다음 세션 시작에 사용자에게 알린다.
+
+- **workspace** (`<workspace_id> --scope workspace`, cwd = workspace 루트): 1~6단계는 같다. 근거 기준도 같다(같은 패턴 2개 이상 세션). 대상은 workspace 루트 `AGENTS.md`의 블록뿐이다 — 멤버 저장소 하네스는 고치지 않는다(그 저장소 batch가 따로 PR로 처리한다).
+  ```bash
+  $ROOT/scripts/auto-apply.sh apply --scope workspace --workspace "<cwd>" --project <workspace_id> \
+    --rule-id <소문자-하이픈-id> --text "<규칙 한 줄>" --evidence "<수치·세션 id>" --expected "<재발 판정 기준>"
+  $ROOT/scripts/harvest-queue.sh mark-reviewed --project <workspace_id> --outcome improved \
+    --summary "..." --artifact "local:AGENTS.md#rule:<id>" --expected "<같은 기준>"
+  ```
+- **global** (`_global --scope global`, cwd = 데이터 디렉토리): batch가 없다. `$ROOT/scripts/stats.sh --days 30`(전체)의 `반복 오류`와 `$ROOT/scripts/digest.sh show`가 아닌 전체 digest(`~/.ai-harness/digests/*.json`)에서 **2개 이상 프로젝트, 5개 이상 세션**에 걸친 같은 패턴만 후보로 삼는다. 셸·도구 사용 습관처럼 저장소와 무관한 실수가 대상이다. 특정 저장소의 규칙·도메인 지식은 전역에 넣지 않는다. 전역 `CLAUDE.md`(`~/.claude/CLAUDE.md`)를 Read로 읽어 이미 있는 규칙(블록 밖 포함)과 겹치면 넣지 않는다. 적용은 `apply --scope global …`(Claude·Codex 전역 지침 둘 다에 들어간다), `mark-reviewed`는 하지 않는다.
+- **이전 자동 적용 검증 (두 범위 공통, 2단계 대신)**: `$ROOT/scripts/auto-apply.sh list --active`의 각 규칙 `expected`를 이번 통계와 대조한다. 같은 패턴이 적용 이후에도 다시 나오면(적용 시각 이후 세션 기준) 효과가 없는 것이다 — 더 구체적인 문구로 같은 `--rule-id`에 다시 apply하거나(강화), 두 번째 재발이면 `revert --rule-id <id> --reason "<재발 근거>"`로 뺀다. 판정할 세션이 아직 적으면 보류한다.
+- 한 실행에서 적용은 최대 2건이다. 규칙은 400자 이내 한 줄, 행동을 바꾸는 지시여야 한다(설명문 금지).
+- 마지막 출력은 결과 한 줄(`improved <rule-id…>` / `no-change <이유>` / `left_for_user <이유>`).
+
 ## 절차
 
 ### 1. 데이터 갱신 + 통계
