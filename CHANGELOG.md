@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.35.1 (2026-10-12)
 ### 보안
 
 - **무인 자동 harvest의 권한을 좁혔습니다** — 이벤트·transcript를 읽으려고 연 데이터 디렉토리를 에이전트가 쓸 수도 있었습니다. 그 안의 `config`는 모든 스크립트가 셸로 읽고 launchd shim도 그 아래에 있어, transcript 속 지시가 샌드박스 밖 코드 실행으로 이어질 수 있었습니다. 이제 데이터·transcript 디렉토리는 쓰기를 금지하고, git은 필요한 하위 명령만 허용합니다(`git -C`·`reset`·`clean`·강제 push·`worktree` 등 금지). `config`는 셸로 실행하지 않고 `HM_`·`HARNESS_` 변수의 `KEY=VALUE`만 읽습니다.
