@@ -1,5 +1,6 @@
 # Claude Code transcript(.jsonl) → 압축 이벤트 스트림
 # 사용: jq -c -R -n --argjson event_version .. --arg sid .. --arg project .. -f extract-claude.jq transcript
+include "redact";
 def utext:
   .message.content
   | if type=="string" then .
@@ -28,11 +29,7 @@ def correction_hints:
 # 긴 턴은 새 지시일 확률이 높다.
 def correction_candidate_max_len: 200;
 # 오류 발췌: 같은 실패가 여러 세션에 반복되는지 /harvest가 판단할 수 있게 본문 앞부분을 남긴다.
-# 토큰·비밀번호·긴 키 문자열은 가린다. Codex 어댑터(scripts/extract-codex.sh)와 같은 규칙이다.
-def redact:
-  gsub("(?i)bearer\\s+[^\\s\"',;]+"; "Bearer ***")
-  | gsub("(?<k>(?i)(token|password|passwd|secret|api[_-]?key|authorization))(?<sep>[\"']?\\s*[=:]\\s*[\"']?)[^\\s\"',;]+"; "\(.k)\(.sep)***")
-  | gsub("[A-Za-z0-9+=_-]{32,}"; "***");
+# 비밀값은 scripts/redact.jq로 가린다(Codex 어댑터·LLM 정리와 공용).
 # 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
 def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
 def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+"; " ") | ltrimstr(" ") | redact | .[0:160];
@@ -40,7 +37,8 @@ def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+";
 def error_samples($k): group_by(.) | map({kind:$k, target:.[0], n:length}) | sort_by(-.n) | .[0:10] | .[];
 # 자동 harvest(--auto)가 띄운 headless 세션. 프로젝트 작업이 아니므로 큐 신호에서 뺀다.
 # Codex 어댑터(scripts/extract-codex.sh)와 같은 판정을 쓴다.
-def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
+# 사람이 "ai-harness harvest --auto 고쳐줘"라고 쓴 세션까지 빼지 않도록 실제 호출 형태에만 맞춘다.
+def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>") and test("<command-args>[^<]*--auto");
 # 발췌는 /metrics가 마크다운 불릿으로 렌더하므로 한 줄로 접는다. 붙여넣기가 섞인 턴은
 # 개행이 그대로 들어와 리스트를 깨뜨린다 — 실측 후보 79건 중 23건(29%)이 개행 포함이었다.
 def excerpt: gsub("\\s+"; " ") | .[0:60];

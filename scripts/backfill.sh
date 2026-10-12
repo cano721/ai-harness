@@ -46,8 +46,8 @@ dep_since() { # $1=그룹 이름, 나머지=파일 → 현재 내용이 처음 �
   printf '%s\n' "$newest"
 }
 queue_dep_mt="$(dep_since queue "$DIR/harvest-queue.sh" "$DIR/lib.sh")"
-claude_dep_mt="$(dep_since extract-claude "$DIR/extract-claude.sh" "$DIR/extract-claude.jq" "$DIR/lib.sh")"
-codex_dep_mt="$(dep_since extract-codex "$DIR/extract-codex.sh" "$DIR/lib.sh")"
+claude_dep_mt="$(dep_since extract-claude "$DIR/extract-claude.sh" "$DIR/extract-claude.jq" "$DIR/redact.jq" "$DIR/lib.sh")"
+codex_dep_mt="$(dep_since extract-codex "$DIR/extract-codex.sh" "$DIR/redact.jq" "$DIR/lib.sh")"
 
 enqueue_is_fresh() { # $1=event
   local stamp="$STAMP_DIR/${1##*/}" stamp_mt="" ev_mt=""
@@ -163,6 +163,10 @@ if [[ "$(sed -n '1p' "$relabel_state" 2>/dev/null)" != "$relabel_since" ]]; then
       | [(.transcript // ""), (.project // ""), (.cwd // "")] | @tsv' "$ev" 2>/dev/null | head -n 1)
     [[ -n "$cwd" && -n "$old_project" ]] || continue
     [[ -n "$transcript" && -f "$transcript" ]] && continue
+    # 경로가 사라졌거나 git·workspace로 판정되지 않으면 폴더 이름 휴리스틱뿐이라, 추출 당시 git으로 얻은
+    # 올바른 이름을 덮어쓸 수 있다. 확실히 판정되는 경우만 고친다.
+    [[ -d "$cwd" ]] || continue
+    [[ -f "$cwd/.ai-harness/workspace.json" ]] || git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || continue
     new_project="$(project_id_for_cwd "$cwd")"
     [[ -n "$new_project" && "$new_project" != "$old_project" ]] || continue
     tmp="$(mktemp "${ev%/*}/.relabel.XXXXXX")"

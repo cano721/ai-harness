@@ -7,6 +7,24 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 보안
+
+- **무인 자동 harvest의 권한을 좁혔습니다** — 이벤트·transcript를 읽으려고 연 데이터 디렉토리를 에이전트가 쓸 수도 있었습니다. 그 안의 `config`는 모든 스크립트가 셸로 읽고 launchd shim도 그 아래에 있어, transcript 속 지시가 샌드박스 밖 코드 실행으로 이어질 수 있었습니다. 이제 데이터·transcript 디렉토리는 쓰기를 금지하고, git은 필요한 하위 명령만 허용합니다(`git -C`·`reset`·`clean`·강제 push·`worktree` 등 금지). `config`는 셸로 실행하지 않고 `HM_`·`HARNESS_` 변수의 `KEY=VALUE`만 읽습니다.
+- **자동 적용 규칙 문구로 관리 블록 밖에 줄을 넣을 수 있던 문제 수정** — awk가 백슬래시 이스케이프를 해석해 `\n`으로 블록을 벗어날 수 있었습니다. 규칙 문구는 백슬래시·제어문자·URL·명령 실행·지침 무력화 표현을 거부하고, awk에는 환경변수로 넘깁니다.
+- **비밀값 가림 강화** — `Authorization: Basic`, `--password 값`, URL 속 `user:pw@`, `AWS_SECRET_ACCESS_KEY=` 같은 형태가 오류 발췌에 남았습니다. 공용 `scripts/redact.jq`로 모으고, LLM 정리 입력과 결과에도 같은 규칙을 적용합니다. Bitbucket 토큰은 프로세스 인자 대신 stdin으로 넘깁니다.
+
+### 버그 수정
+
+- **같은 batch가 계속 실패하면 3회 뒤 포기합니다** — 결정적으로 실패하는 batch가 매번 하루 상한을 먹어 다른 프로젝트가 실행되지 못할 수 있었습니다. 사용량 한도 실패는 횟수에 넣지 않습니다(`HM_HARVEST_AUTO_MAX_FAILS`). LLM 정리도 실패를 기록하고 24시간 안에 같은 세션을 다시 고르지 않습니다.
+- **무인 실행이 응답 없는 명령에 lock을 쥔 채 멈추지 않게** — 자동 harvest(45분)·LLM 정리(5분)에 시간 제한을 두고, git은 자격증명 입력을 기다리지 않으며, Bitbucket 호출은 30초로 제한합니다.
+- 자동 harvest가 사용자 저장소 전체에 `git worktree prune`을 돌려 잠시 분리된 다른 worktree 등록까지 지울 수 있던 문제, 지침 파일이 심볼릭 링크면 일반 파일로 바뀌던 문제, 닫는 표시가 지워진 규칙이 블록 뒤 내용까지 지우던 문제, 이름 재판정이 사라진 worktree 경로의 폴더 이름으로 올바른 이름을 덮어쓰던 문제, "ai-harness harvest --auto"를 언급한 일반 세션이 내부 세션으로 빠지던 문제, 긴 한글 프로젝트명으로 작업 폴더 이름이 길이 한도를 넘던 문제, 다른 프로젝트 큐를 그 큐의 lock 없이 고치던 문제를 고쳤습니다.
+
+### 업데이트 후 해야 할 일
+
+- launchd를 쓰면 `scripts/schedule.sh install`을 한 번 다시 실행하세요(UTF-8 로캘 반영).
+
 ## v0.35.0 (2026-10-12)
 ### 새 기능
 
