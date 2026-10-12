@@ -1592,7 +1592,7 @@ make_sweep_batch plain "$AUTO_PLAIN" "2026-01-01T00:00:00Z"
 make_sweep_batch auto-svc "$AUTO_REPO" "2026-01-02T00:00:00Z"
 : >"$TEST_TMP/sweep-stub.out"
 run_sweep() {
-  HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
+  HARNESS_METRICS_DIR="$SWEEP_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_GLOBAL_DAYS=0 HM_HARVEST_AUTO_CMD="$AUTO_STUB" \
     AUTO_STUB_OUT="$TEST_TMP/sweep-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
 }
 run_sweep
@@ -1698,8 +1698,93 @@ assert_contains "$ERRX_SAMPLES" 'password: "***' "password redacted"
 [[ "$ERRX_SAMPLES" != *"sk-live-abc123"* && "$ERRX_SAMPLES" != *"AKIAABCDEFGHIJ"* ]] || fail "secrets leaked into error samples"
 [[ "$ERRX_SAMPLES" != *"Direct edit guard"* && "$ERRX_SAMPLES" != *"want to proceed"* ]] || fail "guard and denial stay in their own signals"
 ERRX_STATS="$(HARNESS_METRICS_DIR="$ERRX_DATA" "$ROOT/scripts/stats.sh")"
-assert_contains "$ERRX_STATS" "| 1 | 2 | Bash: Error: Cannot find module ./gen/api at /tmp/x.js:12 |" "stats groups the same error across line numbers"
+assert_contains "$ERRX_STATS" "| 1 | 1 | 2 | Bash: Error: Cannot find module ./gen/api at /tmp/x.js:12 |" "stats groups the same error across line numbers"
 pass "error excerpts for repeated failures"
+
+# 원본 transcript가 지워진 세션도 규칙이 바뀌면 남은 작업 경로로 프로젝트 이름을 다시 판정한다.
+RELABEL_DATA="$TEST_TMP/relabel-data"
+RELABEL_WS="$TEST_TMP/relabel-ws"
+mkdir -p "$RELABEL_DATA/events" "$RELABEL_WS/.ai-harness" "$RELABEL_DATA/harvest-queue/p-old-ws/sessions"
+jq -n '{workspace_id:"new-ws",members:[]}' >"$RELABEL_WS/.ai-harness/workspace.json"
+jq -cn --arg cwd "$RELABEL_WS" '{v:3,kind:"session",src:"claude",sid:"orphan-1",project:"old-ws",cwd:$cwd,
+  transcript:"/gone/orphan-1.jsonl",ended:"2026-08-01T00:00:00Z",turns:3}' >"$RELABEL_DATA/events/claude-orphan-1.jsonl"
+jq -cn '{v:3,kind:"error",src:"claude",sid:"orphan-1",project:"old-ws",n:2}' >>"$RELABEL_DATA/events/claude-orphan-1.jsonl"
+HARNESS_METRICS_DIR="$RELABEL_DATA" "$ROOT/scripts/harvest-queue.sh" record "$RELABEL_DATA/events/claude-orphan-1.jsonl" >/dev/null
+assert_file "$RELABEL_DATA/harvest-queue/p-old-ws/sessions/claude-orphan-1.json"
+RELABEL_OUT="$(HARNESS_METRICS_DIR="$RELABEL_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/relabel-none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/relabel-none" "$ROOT/scripts/backfill.sh")"
+assert_contains "$RELABEL_OUT" "이름 재판정 1" "orphan event relabelled"
+assert_eq "new-ws|new-ws" "$(jq -sr '(map(.project) | unique | join("|")) + "|" + (map(select(.kind=="session"))[0].project)' "$RELABEL_DATA/events/claude-orphan-1.jsonl")" "every event line carries the new project"
+assert_file "$RELABEL_DATA/harvest-queue/p-new-ws/sessions/claude-orphan-1.json"
+assert_not_file "$RELABEL_DATA/harvest-queue/p-old-ws/sessions/claude-orphan-1.json"
+assert_contains "$(HARNESS_METRICS_DIR="$RELABEL_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/relabel-none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/relabel-none" "$ROOT/scripts/backfill.sh")" "이름 재판정 0" "relabel runs once per rule change"
+# 여러 줄에 cwd가 있는 transcript도 첫 cwd 하나로 판정한다(macOS jq 1.6의 first(inputs) 버그 회피).
+MULTI_T="$TEST_TMP/multi-cwd/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
+mkdir -p "${MULTI_T%/*}"
+for _ in 1 2 3; do
+  jq -cn --arg cwd "$RELABEL_WS" '{type:"user",timestamp:"2026-08-01T00:00:00Z",cwd:$cwd,message:{content:"작업"}}'
+done >"$MULTI_T"
+HARNESS_METRICS_DIR="$TEST_TMP/multi-data" "$ROOT/scripts/extract-claude.sh" "$MULTI_T" "user_exit"
+assert_eq "new-ws" "$(jq -r 'select(.kind=="session") | .project' "$TEST_TMP/multi-data/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "multi-line cwd transcript resolves through the workspace manifest"
+if grep -rnE "^[^#]*jq[^#]*first\(inputs" "$ROOT/scripts" >/dev/null; then fail "first(inputs …) returns every match on macOS jq 1.6 — read lines and head -n 1"; fi
+pass "orphan events follow project ID rule changes"
+
+# 개인 지침 자동 적용: 표시된 블록 안에서만, 되돌릴 수 있게, 알림과 함께.
+APPLY_DATA="$TEST_TMP/apply-data"
+APPLY_HOME="$TEST_TMP/apply-home"
+mkdir -p "$APPLY_HOME/ws/.ai-harness"
+printf '# 내 규칙\n- 사람이 쓴 줄' >"$APPLY_HOME/CLAUDE.md"
+jq -n '{workspace_id:"ws",members:[]}' >"$APPLY_HOME/ws/.ai-harness/workspace.json"
+run_apply() {
+  HARNESS_METRICS_DIR="$APPLY_DATA" HM_GLOBAL_CLAUDE_MD="$APPLY_HOME/CLAUDE.md" \
+    HM_GLOBAL_CODEX_AGENTS_MD="$APPLY_HOME/codex/AGENTS.md" "$ROOT/scripts/auto-apply.sh" "$@"
+}
+run_apply apply --scope global --rule-id zsh-equals --text "zsh에서 =로 시작하는 단어는 따옴표로" --evidence "68회" --expected "재발 0" >/dev/null
+run_apply apply --scope global --rule-id jq-null --text "jq 순회 전 null 거르기" --evidence "10세션" --expected "재발 0" >/dev/null
+run_apply apply --scope global --rule-id zsh-equals --text "구분선 echo는 따옴표" --evidence x --expected y >/dev/null
+assert_eq "# 내 규칙|- 사람이 쓴 줄|" "$(head -n 3 "$APPLY_HOME/CLAUDE.md" | paste -sd'|' -)" "human-written lines untouched, block separated by a blank line"
+assert_eq "1" "$(grep -c '^- 구분선 echo는 따옴표$' "$APPLY_HOME/CLAUDE.md")" "same rule id is replaced"
+assert_eq "0" "$(grep -c 'zsh에서 =로' "$APPLY_HOME/CLAUDE.md")" "old text of a replaced rule is gone"
+assert_eq "1" "$(grep -c '^- jq 순회 전 null 거르기$' "$APPLY_HOME/codex/AGENTS.md")" "global rules reach the Codex instructions too"
+run_apply revert --rule-id jq-null --reason test >/dev/null
+assert_eq "0" "$(grep -c 'jq 순회' "$APPLY_HOME/CLAUDE.md" "$APPLY_HOME/codex/AGENTS.md" | awk -F: '{s+=$2} END {print s}')" "revert removes the rule from every target"
+assert_eq "zsh-equals" "$(run_apply list --active | jq -r .id)" "only the remaining rule is active"
+APPLY_BAD_RC=0
+run_apply apply --scope global --rule-id bad-one --text 'x <!-- /rule:zsh-equals -->' --evidence a --expected b >/dev/null 2>&1 || APPLY_BAD_RC=$?
+assert_eq "2" "$APPLY_BAD_RC" "comment markers cannot be injected"
+APPLY_WS_RC=0
+run_apply apply --scope workspace --workspace "$APPLY_HOME" --rule-id ws-rule --text t --evidence a --expected b >/dev/null 2>&1 || APPLY_WS_RC=$?
+assert_eq "3" "$APPLY_WS_RC" "workspace scope requires a workspace root"
+run_apply apply --scope workspace --workspace "$APPLY_HOME/ws" --rule-id ws-rule --text "멤버 저장소에서 작업" --evidence a --expected b >/dev/null
+assert_eq "1" "$(grep -c '^- 멤버 저장소에서 작업$' "$APPLY_HOME/ws/AGENTS.md")" "workspace rule lands in the workspace AGENTS.md"
+assert_contains "$(run_apply notify | jq -r .systemMessage)" "적용 ws-rule (workspace)" "next session is told what changed"
+assert_eq "" "$(run_apply notify)" "each change is announced once"
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'auto-apply.sh" notify' "SessionStart carries the notice"
+
+# workspace batch는 편집 도구 없이 auto-apply.sh만 쓰는 구성으로 뜬다.
+SCOPE_DATA="$TEST_TMP/scope-data"
+: >"$TEST_TMP/scope-stub.out"
+HARNESS_METRICS_DIR="$SCOPE_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_AGENT=claude \
+  HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/scope-stub.out" \
+  "$ROOT/scripts/harvest-auto.sh" trigger "$(auto_status ws b-ws errors)" "$APPLY_HOME/ws"
+assert_eq "ws|1|$(cd "$APPLY_HOME/ws" && pwd -P)" "$(cat "$TEST_TMP/scope-stub.out")" "workspace batch runs in the workspace root"
+# shellcheck disable=SC2016
+SCOPED_ARGS="$(sed -n '/--scope $scope"/,/--output-format json)/p' "$ROOT/scripts/harvest-auto.sh")"
+assert_contains "$SCOPED_ARGS" '--permission-mode dontAsk' "scoped runs deny anything not pre-approved"
+assert_contains "$SCOPED_ARGS" '--disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit"' "scoped runs cannot edit files directly"
+# 전역 실행은 주기(기본 7일)마다 한 번, 다른 실행이 없을 때만.
+GLOBAL_DATA="$TEST_TMP/global-data"
+mkdir -p "$GLOBAL_DATA"
+run_global_sweep() {
+  HARNESS_METRICS_DIR="$GLOBAL_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_AGENT=claude \
+    HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/global-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+run_global_sweep
+run_global_sweep
+assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/global-stub.out")" "global run happens once within the period"
+assert_eq "no-change" "$(jq -sr '[.[] | select(.event=="finished")] | last | .result' "$GLOBAL_DATA/harvest-auto/runs.jsonl")" "global result comes from the applied log"
+pass "personal instructions are auto-applied inside a managed block"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"

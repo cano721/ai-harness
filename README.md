@@ -315,6 +315,21 @@ macOS에서 한 번 등록합니다. 플러그인을 업데이트해도 shim이 
 
 한 batch는 최대 50개 세션입니다. 단, 트리거 판정은 전체 pending을 기준으로 하며 신호가 있는 세션을 우선 포함합니다. 분석 중 새로 종료된 세션은 다음 batch에 보존됩니다. 첫 알림을 놓치면 기본 24시간마다 다시 알립니다.
 
+<a id="auto-apply"></a>
+
+### workspace·전역 지침 자동 적용
+
+팀이 공유하는 저장소는 draft PR로 사람이 머지하지만, workspace 루트 `AGENTS.md`와 전역 지침(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`)은 개인 소유라 자동 harvest가 직접 적용합니다(`HM_HARVEST_AUTO=1`일 때).
+
+- **workspace**: workspace 루트에서 한 세션들의 batch를 같은 기준(2개 이상 세션에서 반복)으로 분석해 workspace `AGENTS.md`에 적용합니다. 끄려면 `HM_HARVEST_AUTO_WORKSPACE=0`
+- **전역**: 7일(`HM_HARVEST_GLOBAL_DAYS`, 0이면 끔)마다 한 번 전체를 가로질러, **2개 이상 프로젝트·5개 이상 세션**에서 반복된 저장소 무관 실수(셸·도구 사용 습관)만 전역 지침에 넣습니다
+- **안전장치**
+  - 편집 도구 없이 `scripts/auto-apply.sh`로만 바꿉니다. 이 스크립트는 `<!-- ai-harness:auto:start -->` 블록 안의 규칙만 넣고 빼며, 블록 밖(직접 쓴 내용)은 건드리지 않습니다. 한 줄·400자·주석 금지로 입력을 제한합니다
+  - 적용마다 이전 파일을 `~/.ai-harness/applied/`에 남기고, `auto-apply.sh revert --rule-id <id>`로 규칙 단위로 되돌립니다. `auto-apply.sh list --active`로 현재 규칙을 봅니다
+  - 규칙마다 기대효과를 기록하고, 다음 실행이 적용 이후 재발 여부로 효과를 판정해 강화하거나 스스로 되돌립니다
+  - 다음 세션 시작에 무엇을 적용·되돌렸는지 한 번 알립니다
+  - 한 실행에 최대 2건, Claude Code로만 실행합니다
+
 <a id="llm-digest"></a>
 
 ### LLM 세션 정리 (opt-in)
@@ -468,6 +483,8 @@ HM_HARVEST_INSIGHT_SESSION_THRESHOLD=2
 HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
 HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
 HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
+HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
+HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365

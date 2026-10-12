@@ -7,6 +7,21 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## v0.35.0 (2026-10-12)
+### 새 기능
+
+- **workspace와 전역 지침은 자동 harvest가 직접 적용합니다** — 팀 저장소는 draft PR로 사람이 머지하지만, workspace 루트 `AGENTS.md`와 전역 `CLAUDE.md`·Codex `AGENTS.md`는 개인 소유라 사람 검토 없이 적용하고, 대신 안전장치를 둡니다: 편집 도구 없이 `scripts/auto-apply.sh`로만 표시된 블록 안을 고치고(직접 쓴 내용은 그대로), 적용마다 이전 상태를 남겨 규칙 단위로 되돌릴 수 있으며, 기대효과를 다음 실행이 재발 여부로 판정해 강화하거나 되돌리고, 다음 세션 시작에 무엇을 바꿨는지 알립니다. 전역 지침은 7일마다 2개 이상 프로젝트·5개 이상 세션에 걸친 반복만 다룹니다. 통계 `반복 오류` 표에 프로젝트 수 열이 생겼습니다.
+
+### 버그 수정
+
+- **macOS에서 프로젝트 ID가 harness.json·origin·workspace 대신 폴더 이름으로 정해지던 문제 수정** — macOS 기본 jq(1.6 Apple 빌드)는 `first(inputs | fromjson? | …)`에서 멈추지 않아, transcript의 작업 경로를 여러 줄로 읽었습니다. 그 경로로는 아무 파일도 찾지 못해 항상 마지막 폴더 이름으로 떨어졌고, 저장소 이름과 같을 때는 우연히 맞아 드러나지 않았습니다. workspace 루트 세션은 `jobda-workspace`가 아니라 폴더 이름으로 집계됐습니다(실측 Claude 243·Codex 432세션). 줄 단위로 읽고 첫 줄만 씁니다. 업데이트 후 첫 backfill에서 전 세션이 재추출되고, 큐 상태는 새 이름으로 옮겨집니다.
+- **원본 transcript가 지워진 세션이 옛 프로젝트 이름에 남던 문제 수정** — Claude가 오래된 기록을 정리하면 그 세션은 다시 추출되지 않아 이름 규칙이 바뀌어도 그대로였습니다. 규칙(`lib.sh`)이 바뀐 뒤 한 번, 남은 작업 경로로 다시 판정해 이름을 고치고 큐에 다시 기록합니다.
+
+### 업데이트 후 해야 할 일
+
+- 첫 정기 backfill에서 추출기 변경으로 전 세션이 한 번 재추출되고(약 20분, 저우선순위), workspace 루트 세션이 폴더 이름 대신 workspace ID로 다시 묶입니다.
+- `HM_HARVEST_AUTO=1`이면 workspace `AGENTS.md`와 전역 지침에 자동 적용이 시작됩니다. 끄려면 `HM_HARVEST_AUTO_WORKSPACE=0`, `HM_HARVEST_GLOBAL_DAYS=0`.
+
 ## v0.34.3 (2026-10-11)
 ### 버그 수정
 

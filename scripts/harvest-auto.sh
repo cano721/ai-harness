@@ -89,9 +89,19 @@ command_trigger() {
     return 0
   fi
 
-  # 하네스가 없는 디렉토리나 workspace(git 아님, 로컬 적용에 사용자 확인 필요)는 사람 몫으로 남긴다.
-  repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -z "$repo_root" || ! -f "$repo_root/.ai-harness/harness.json" ]]; then
+  # 실행 범위: 팀 저장소(project)는 draft PR, 개인 소유인 workspace 루트와 전역 지침은 auto-apply.sh로
+  # 표시된 블록 안에서만 직접 적용한다(되돌리기·효과 검증 포함).
+  local scope="project"
+  if [[ "$project" == "_global" ]]; then
+    scope="global"
+    repo_root="$HM_DATA_DIR"
+  elif [[ -f "$cwd/.ai-harness/workspace.json" && "${HM_HARVEST_AUTO_WORKSPACE:-1}" == "1" ]]; then
+    scope="workspace"
+    repo_root="$cwd"
+  else
+    repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+  fi
+  if [[ "$scope" == "project" ]] && [[ -z "$repo_root" || ! -f "$repo_root/.ai-harness/harness.json" ]]; then
     [[ "$prev_result" == "no_harness" ]] && return 0
     mark_attempted no_harness
     log_skip "$project" "$batch_id" no_harness_repo
@@ -108,14 +118,19 @@ command_trigger() {
   fi
 
   agent="$(resolve_agent)"
+  # workspace·전역 적용은 auto-apply.sh만 허용하는 권한 구성이 필요해 claude로만 돈다.
+  if [[ "$scope" != "project" && "$agent" != "claude" ]]; then
+    log_skip "$project" "$batch_id" needs_claude
+    return 0
+  fi
   mark_attempted launched
   LAUNCHED_NOW=1
   mkdir -p "$LOG_DIR"
   if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
-    "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent"
+    "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" "$scope"
   else
     # 호출자(sweep·backfill-due)가 기다리지 않도록 worker를 분리한다.
-    nohup "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" \
+    nohup "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" "$scope" \
       </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
   fi
@@ -176,10 +191,11 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
 command_sweep() {
   local batch="" status="" origin="" cwd="" src="" project=""
   [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
+  LAUNCHED_NOW=0
   shopt -s nullglob
   local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
   shopt -u nullglob
-  (( ${#batches[@]} > 0 )) || return 0
+  (( ${#batches[@]} > 0 )) || { maybe_global_run; return 0; }
   while IFS= read -r batch; do
     status="$(jq -c '. + {has_analysis_batch:true}' "$batch" 2>/dev/null)" || continue
     project="$(jq -r '.project // empty' <<<"$status")"
@@ -195,7 +211,23 @@ command_sweep() {
   done < <(for batch in "${batches[@]}"; do
       printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
     done | sort | cut -f2-)
+  (( LAUNCHED_NOW == 1 )) || maybe_global_run
   return 0
+}
+
+# 여러 프로젝트에 걸친 반복(전역 지침 후보)은 프로젝트 batch로 잡히지 않는다. 주기(기본 7일)마다 한 번
+# 전체를 가로질러 분석하고, 근거가 기준을 넘으면 전역 CLAUDE.md·Codex AGENTS.md 블록에 적용한다.
+maybe_global_run() {
+  local days="${HM_HARVEST_GLOBAL_DAYS:-7}" last="" last_epoch=0 status=""
+  [[ "$days" =~ ^[0-9]+$ ]] || days=7
+  (( days > 0 )) || return 0
+  last="$(jq -sr '[.[] | select(.project=="_global" and .event=="started") | .at] | last // empty' "$RUNS_FILE" 2>/dev/null || true)"
+  if [[ -n "$last" ]]; then
+    last_epoch="$(iso_to_epoch "$last")"
+    [[ "$last_epoch" =~ ^[0-9]+$ ]] && (( $(date +%s) - last_epoch < days * 86400 )) && return 0
+  fi
+  status="$(jq -cn --arg b "global-$(date -u +%Y%m%d)" '{project:"_global",batch_id:$b,has_analysis_batch:true,reasons:["global"]}')"
+  command_trigger "$status" "$HM_DATA_DIR" claude
 }
 
 # 무인 실행 에이전트. 세션을 만든 도구가 아니라 실행 능력으로 고른다.
@@ -209,8 +241,8 @@ resolve_agent() {
   esac
 }
 
-agent_command() { # $1=project $2=work_dir $3=agent $4=base → 실행할 argv를 AGENT_CMD에 채운다
-  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scripts_glob=""
+agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행할 argv를 AGENT_CMD에 채운다
+  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_glob=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
     # 테스트·사용자 정의 실행기: "<cmd> <project>"
     read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
@@ -236,15 +268,28 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base → 실행할 argv�
       while IFS= read -r codex_root; do
         [[ -d "$codex_root" ]] && read_dirs+=(--add-dir "$codex_root")
       done < <(codex_session_roots)
-      AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
-        --plugin-dir "$ROOT"
-        "${read_dirs[@]}"
-        --permission-mode acceptEdits
-        --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
-        "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
-        "Bash($scripts_glob)"
-        --max-budget-usd "$BUDGET_USD"
-        --output-format json)
+      if [[ "$scope" == "project" ]]; then
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
+          --plugin-dir "$ROOT"
+          "${read_dirs[@]}"
+          --permission-mode acceptEdits
+          --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
+          "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
+          "Bash($scripts_glob)"
+          --max-budget-usd "$BUDGET_USD"
+          --output-format json)
+      else
+        # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
+          --plugin-dir "$ROOT"
+          "${read_dirs[@]}"
+          --permission-mode dontAsk
+          --allowedTools "Read" "Grep" "Glob" "Agent"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit"
+          --max-budget-usd "$BUDGET_USD"
+          --output-format json)
+      fi
       ;;
   esac
 }
@@ -296,7 +341,7 @@ prune_logs() {
 }
 
 command_run() {
-  local project="$1" batch_id="$2" repo_root="$3" agent="$4"
+  local project="$1" batch_id="$2" repo_root="$3" agent="$4" scope="${5:-project}"
   local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir="" base_ref=""
   mkdir -p "$LOG_DIR"
   hm_acquire_lock "$RUN_LOCK" 1 || { log_skip "$project" "$batch_id" busy; find "$(attempt_marker "$project")" -delete 2>/dev/null; return 0; }
@@ -311,17 +356,24 @@ command_run() {
 
   # headless 편집은 cwd 안에서만 허용되므로, 작업용 worktree를 만들어 그 안에서 에이전트를 띄운다.
   # 사용자 체크아웃은 구조적으로 건드릴 수 없다.
-  base_ref="$(resolve_base "$repo_root")"
-  work_dir="$(make_work_tree "$repo_root" "$project" "$base_ref")" || work_dir=""
+  if [[ "$scope" == "project" ]]; then
+    base_ref="$(resolve_base "$repo_root")"
+    work_dir="$(make_work_tree "$repo_root" "$project" "$base_ref")" || work_dir=""
+  else
+    # workspace 루트·데이터 디렉토리에서 바로 돈다. 편집 도구가 없어 auto-apply.sh로만 바꿀 수 있다.
+    work_dir="$repo_root"
+  fi
   if [[ -z "$work_dir" ]]; then
     printf 'worktree 생성 실패: %s\n' "$repo_root" >"$log_file"
     exit_code=70
   else
-    agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}"
+    agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
     (cd "$work_dir" && HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
-    git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
-      || find "$work_dir" -depth -delete 2>/dev/null || true
-    git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+    if [[ "$scope" == "project" ]]; then
+      git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
+        || find "$work_dir" -depth -delete 2>/dev/null || true
+      git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+    fi
   fi
 
   review="$(last_review_after "$project" "$started_at")"
@@ -340,6 +392,13 @@ command_run() {
     # 사용량 한도·API 오류 같은 일시 실패로 batch 시도를 소모하지 않는다. 다음 sweep이 다시 시도한다
     # (하루 상한·동시 실행 제한은 그대로 적용된다).
     find "$(attempt_marker "$project")" -maxdepth 0 -type f -delete 2>/dev/null || true
+  elif [[ "$scope" == "global" ]]; then
+    if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
+      && jq -e --arg since "$started_at" 'select(.at >= $since)' "$HM_DATA_DIR/applied/applied.jsonl" >/dev/null 2>&1; then
+      result="improved"
+    else
+      result="no-change"
+    fi
   elif [[ "$review" == "null" ]]; then
     # 사용자 확인이 필요한 분기 등으로 batch를 남긴 채 끝났다. 수동 /harvest 대상.
     result="left_for_user"
@@ -374,7 +433,7 @@ case "$command" in
   trigger) [[ $# -ge 2 ]] || usage; command_trigger "$@" ;;
   sweep) command_sweep ;;
   agent) resolve_agent ;;
-  run) [[ $# -eq 4 ]] || usage; command_run "$@" ;;
+  run) [[ $# -eq 4 || $# -eq 5 ]] || usage; command_run "$@" ;;
   runs) command_runs "$@" ;;
   *) usage ;;
 esac

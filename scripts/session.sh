@@ -39,14 +39,16 @@ select_by_id() {
   [[ -n "$T" ]]
 }
 
+# macOS 기본 jq(1.6 Apple 빌드)는 `first(inputs | fromjson? | …)`에서 멈추지 않아 여러 줄을 돌려준다.
+# 줄 단위로 읽고 셸에서 첫 줄만 쓴다.
 transcript_cwd() {
   local transcript="$1"
   if [[ "$(basename "$transcript")" == rollout-*.jsonl ]]; then
-    jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.cwd // empty) // empty' \
-      "$transcript" 2>/dev/null
+    jq -Rr 'fromjson? | select(.type=="session_meta") | .payload.cwd // empty' \
+      "$transcript" 2>/dev/null | head -n 1
   else
-    jq -Rrn 'first(inputs | fromjson? | select(.cwd? != null) | .cwd) // empty' \
-      "$transcript" 2>/dev/null
+    jq -Rr 'fromjson? | select(.cwd? != null) | .cwd' \
+      "$transcript" 2>/dev/null | head -n 1
   fi
 }
 
