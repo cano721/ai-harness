@@ -151,6 +151,33 @@ while IFS= read -r codex_root; do
   done < <(find "$codex_root" -name 'rollout-*.jsonl' -type f 2>/dev/null)
 done < <(codex_session_roots)
 
+# 원본 transcript가 지워진(Claude는 오래된 기록을 자동 정리한다) 세션은 위에서 다시 추출되지 않아,
+# 프로젝트 ID 규칙이 바뀌어도 옛 이름으로 남는다(실측: 같은 workspace 681세션이 옛 이름).
+# 규칙(lib.sh)이 바뀐 뒤 한 번, 남은 작업 경로로 다시 판정해 이름만 고치고 큐에 다시 기록한다.
+relabel_n=0
+relabel_since="$(dep_since relabel "$DIR/lib.sh")"
+relabel_state="$DEP_STATE_DIR/relabel-done"
+if [[ "$(sed -n '1p' "$relabel_state" 2>/dev/null)" != "$relabel_since" ]]; then
+  for ev in "$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl; do
+    IFS=$'\t' read -r transcript old_project cwd < <(jq -r 'select(.kind=="session")
+      | [(.transcript // ""), (.project // ""), (.cwd // "")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    [[ -n "$cwd" && -n "$old_project" ]] || continue
+    [[ -n "$transcript" && -f "$transcript" ]] && continue
+    new_project="$(project_id_for_cwd "$cwd")"
+    [[ -n "$new_project" && "$new_project" != "$old_project" ]] || continue
+    tmp="$(mktemp "${ev%/*}/.relabel.XXXXXX")"
+    if jq -c --arg p "$new_project" 'if has("project") then .project = $p else . end' "$ev" >"$tmp"; then
+      touch -r "$ev" "$tmp"
+      mv "$tmp" "$ev"
+      relabel_n=$((relabel_n + 1))
+      [[ "$ev" == "$HM_DATA_DIR"/events/* ]] && { find "$STAMP_DIR/${ev##*/}" -maxdepth 0 -type f -delete 2>/dev/null || true; enqueue_event "$ev"; }
+    else
+      find "$tmp" -maxdepth 0 -type f -delete
+    fi
+  done
+  printf '%s\n' "$relabel_since" >"$relabel_state"
+fi
+
 # 이벤트가 정리(prune·rollup)된 스탬프는 더 쓸 일이 없다.
 for stamp in "$STAMP_DIR"/*; do
   [[ -f "$HM_DATA_DIR/events/${stamp##*/}" ]] || find "$stamp" -maxdepth 0 -type f -delete
@@ -161,4 +188,4 @@ if (( fail_n > 0 || queue_fail_n > 0 )); then
 else
   "$DIR/health.sh" success backfill >/dev/null 2>&1 || true
 fi
-echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 유지 $queue_skip_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n"
+echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 유지 $queue_skip_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n, 이름 재판정 $relabel_n"
