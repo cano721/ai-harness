@@ -12,6 +12,7 @@ AUTO_DIR="$HM_DATA_DIR/harvest-auto"
 RUNS_FILE="$AUTO_DIR/runs.jsonl"
 LOG_DIR="$AUTO_DIR/logs"
 RUN_LOCK="$AUTO_DIR/running.lock"
+MAX_FAILS="${HM_HARVEST_AUTO_MAX_FAILS:-3}"; [[ "$MAX_FAILS" =~ ^[1-9][0-9]*$ ]] || MAX_FAILS=3
 DAILY_MAX="${HM_HARVEST_AUTO_DAILY_MAX:-2}"
 [[ "$DAILY_MAX" =~ ^[0-9]+$ ]] || DAILY_MAX=2
 BUDGET_USD="${HM_HARVEST_AUTO_BUDGET_USD:-5}"
@@ -51,6 +52,14 @@ started_today() {
     '[.[] | select(.event=="started" and (.at | startswith($day)))] | length' "$RUNS_FILE" 2>/dev/null || printf '0\n'
 }
 
+# 파일·폴더 이름용 짧은 키. 한글 프로젝트명은 퍼센트 인코딩으로 글자당 9바이트가 되어 255바이트 한도를 넘을 수 있다.
+short_key() { # $1=project
+  local key=""
+  key="$(hm_project_key "$1")"
+  (( ${#key} <= 60 )) || key="${key:0:40}-$(printf '%s' "$key" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+  printf '%s\n' "$key"
+}
+
 attempt_marker() { printf '%s/%s/auto-attempted-batch\n' "$HM_DATA_DIR/harvest-queue" "$(hm_project_key "$1")"; }
 
 command_trigger() {
@@ -64,6 +73,17 @@ command_trigger() {
   [[ -n "$project" && -n "$batch_id" ]] || return 0
 
   marker="$(attempt_marker "$project")"
+  mark_attempted() {
+    # 같은 batch를 다시 띄울 때도 누적 실패 횟수를 이어받는다(재시도 제한의 근거).
+    local fails=0
+    if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
+      fails="$(jq -r '.fails // 0' "$marker" 2>/dev/null || echo 0)"
+      [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+    fi
+    mkdir -p "${marker%/*}"
+    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --arg result "$1" --argjson fails "$fails" \
+      '{batch_id:$batch_id,at:$at,result:$result,fails:$fails}' >"$marker"
+  }
   local prev_result=""
   if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
     prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
@@ -71,14 +91,18 @@ command_trigger() {
     # 실행했거나 정책상 건너뛴 batch는 끝.
     case "$prev_result" in
       no_harness|skipped) ;;
+      # 일시 실패는 다시 시도하되, 같은 batch가 연속 MAX_FAILS번 실패하면 포기한다 —
+      # 결정적으로 실패하는 batch가 매번 하루 상한을 먹어 다른 프로젝트를 굶기지 않게.
+      failed)
+        if (( $(jq -r '.fails // 1' "$marker" 2>/dev/null || echo 1) >= MAX_FAILS )); then
+          mark_attempted gave_up
+          log_skip "$project" "$batch_id" gave_up
+          return 0
+        fi
+        ;;
       *) return 0 ;;
     esac
   fi
-  mark_attempted() {
-    mkdir -p "${marker%/*}"
-    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --arg result "$1" \
-      '{batch_id:$batch_id,at:$at,result:$result}' >"$marker"
-  }
 
   # 세션 수만 넘은 batch는 실측상 거의 노이즈였다. 교정·오류 등 신호가 있는 batch만 자동으로 돈다.
   if [[ "${HM_HARVEST_AUTO_SESSIONS_ONLY:-0}" != "1" ]] \
@@ -165,7 +189,7 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
       printf '%s\t%s\n' "$root" "$src"
       return
     done < <(grep -l -F "\"project\":$(jq -cn --arg p "$project" '$p')" "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null \
-      | xargs ls -t 2>/dev/null | head -n 200)
+      | while IFS= read -r f; do printf '%s\t%s\n' "$(mtime "$f")" "$f"; done | sort -rn | cut -f2- | head -n 200)
   fi
   # 그래도 없으면 기록에 나온 workspace 루트의 멤버 목록(.ai-harness/workspace.json)에서 찾는다.
   # Orca worktree에서만 작업한 저장소는 원본 체크아웃 경로가 세션 기록에 한 번도 나오지 않는다.
@@ -265,8 +289,16 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
       # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
       local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR") codex_root=""
+      # 읽기 위해 연 디렉토리는 쓰지 못하게 한다. 데이터 디렉토리의 config·shim은 이후 실행이 source·실행하므로
+      # 여기를 고칠 수 있으면 transcript 속 지시가 샌드박스 밖 코드 실행으로 이어진다.
+      local deny_args=(--disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)"
+        "Edit(/$HM_CLAUDE_PROJECTS_DIR/**)" "Write(/$HM_CLAUDE_PROJECTS_DIR/**)"
+        "Bash(git -C *)" "Bash(git reset*)" "Bash(git clean*)" "Bash(git push --force*)" "Bash(git push -f*)"
+        "Bash(git worktree*)" "Bash(git branch -D*)" "Bash(git checkout -- *)")
       while IFS= read -r codex_root; do
-        [[ -d "$codex_root" ]] && read_dirs+=(--add-dir "$codex_root")
+        [[ -d "$codex_root" ]] || continue
+        read_dirs+=(--add-dir "$codex_root")
+        deny_args+=("Edit(/$codex_root/**)" "Write(/$codex_root/**)")
       done < <(codex_session_roots)
       if [[ "$scope" == "project" ]]; then
         AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
@@ -274,8 +306,11 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "${read_dirs[@]}"
           --permission-mode acceptEdits
           --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
-          "Bash(git *)" "Bash(jq *)" "Bash(head *)" "Bash(tail *)"
-          "Bash($scripts_glob)"
+          "Bash(git status*)" "Bash(git diff*)" "Bash(git log*)" "Bash(git show*)" "Bash(git add *)"
+          "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git fetch*)"
+          "Bash(git push origin *)" "Bash(git push -u origin *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "${deny_args[@]}"
           --max-budget-usd "$BUDGET_USD"
           --output-format json)
       else
@@ -286,7 +321,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           --permission-mode dontAsk
           --allowedTools "Read" "Grep" "Glob" "Agent"
           "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
-          --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit"
+          --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash(git *)"
           --max-budget-usd "$BUDGET_USD"
           --output-format json)
       fi
@@ -315,7 +350,7 @@ resolve_base() { # $1=repo_root → "origin/<branch>" 또는 "HEAD"
 # 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
 make_work_tree() { # $1=repo_root $2=project $3=base → 경로 출력
   local repo_root="$1" dir=""
-  dir="$AUTO_DIR/worktrees/$(hm_project_key "$2")-$(date +%s)"
+  dir="$AUTO_DIR/worktrees/$(short_key "$2")-$(date +%s)"
   mkdir -p "${dir%/*}"
   git -C "$repo_root" worktree add -q --detach "$dir" "$3" >/dev/null 2>&1 || return 1
   printf '%s\n' "$dir"
@@ -349,7 +384,7 @@ command_run() {
 
   started_at="$(now_iso)"
   start_epoch="$(date +%s)"
-  log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(hm_project_key "$project").log"
+  log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(short_key "$project").log"
   append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" \
     '{at:$at,event:"started",project:$project,batch:$batch,agent:$agent,repo:$repo,log:$log}')"
@@ -368,11 +403,13 @@ command_run() {
     exit_code=70
   else
     agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
-    (cd "$work_dir" && HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+    # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
+    (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
+      env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
     if [[ "$scope" == "project" ]]; then
+      # 이번 worktree만 정리한다. 저장소 전체 prune은 잠시 분리된 사용자 worktree 메타까지 지울 수 있다.
       git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
         || find "$work_dir" -depth -delete 2>/dev/null || true
-      git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
     fi
   fi
 
@@ -389,9 +426,15 @@ command_run() {
       else empty end' "$log_file" 2>/dev/null || true)"
   if (( exit_code != 0 )); then
     result="failed"
-    # 사용량 한도·API 오류 같은 일시 실패로 batch 시도를 소모하지 않는다. 다음 sweep이 다시 시도한다
-    # (하루 상한·동시 실행 제한은 그대로 적용된다).
-    find "$(attempt_marker "$project")" -maxdepth 0 -type f -delete 2>/dev/null || true
+    # 사용량 한도·API 오류 같은 일시 실패로 batch를 버리지 않고 다음 sweep이 다시 시도한다.
+    # 사용량 한도가 아닌 실패는 횟수를 세어 MAX_FAILS에서 포기한다(트리거가 판단).
+    local marker_file="" fails=0
+    marker_file="$(attempt_marker "$project")"
+    fails="$(jq -r '.fails // 0' "$marker_file" 2>/dev/null || echo 0)"
+    [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+    [[ "$fail_reason" == "usage_limit" ]] || fails=$((fails + 1))
+    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --argjson fails "$fails" \
+      '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails}' >"$marker_file" 2>/dev/null || true
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
       && jq -e --arg since "$started_at" 'select(.at >= $since)' "$HM_DATA_DIR/applied/applied.jsonl" >/dev/null 2>&1; then

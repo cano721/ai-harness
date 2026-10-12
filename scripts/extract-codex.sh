@@ -19,9 +19,10 @@ OUT="$HM_DATA_DIR/events/codex-${FILE_SID}.jsonl"
 # 임시파일을 대상과 같은 디렉토리에 — cross-device mv 방지
 TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 # -R + fromjson?: 손상 라인은 그 줄만 스킵
-if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
+if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" \
   --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" '
+  include "redact";
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   def tool_calls($r): $r[] | select(.payload.type=="function_call" or .payload.type=="custom_tool_call");
   # Codex CLI records native function calls as JSON arguments, while the
@@ -61,17 +62,13 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
      "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
   def correction_candidate_max_len: 200;
-  # 오류 발췌 — Claude 어댑터(scripts/extract-claude.jq)와 같은 규칙이다.
-  def redact:
-    gsub("(?i)bearer\\s+[^\\s\"'"'"',;]+"; "Bearer ***")
-    | gsub("(?<k>(?i)(token|password|passwd|secret|api[_-]?key|authorization))(?<sep>[\"'"'"']?\\s*[=:]\\s*[\"'"'"']?)[^\\s\"'"'"',;]+"; "\(.k)\(.sep)***")
-    | gsub("[A-Za-z0-9+=_-]{32,}"; "***");
+  # 오류 발췌 — Claude 어댑터와 같은 규칙. 비밀값은 scripts/redact.jq로 가린다.
   # 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
   def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
   def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+"; " ") | ltrimstr(" ") | redact | .[0:160];
   def error_samples($k): group_by(.) | map({kind:$k, target:.[0], n:length}) | sort_by(-.n) | .[0:10] | .[];
   # Claude 어댑터와 같은 내부 세션 판정 — 자동 harvest(--auto)가 띄운 headless 세션.
-  def is_internal_prompt: test("ai-harness[: ]harvest") and test("--auto");
+  def is_internal_prompt: test("^ai-harness harvest skill을 인자 \".*--auto");
   # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
   def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L

@@ -91,6 +91,8 @@ build_input() { # $1=src $2=transcript
           | if ($t | length) > 0 then "[A] " + ($t | gsub("\\s+"; " ") | .[0:300]) else empty end
         else empty end' "$2" 2>/dev/null)"
   fi
+  # 외부 모델로 보내기 전에 비밀값을 가린다(오류 발췌와 같은 규칙).
+  text="$(printf '%s' "$text" | jq -Rr -L "$DIR" 'include "redact"; redact' 2>/dev/null || printf '%s' "$text")"
   # 길면 앞부분 일부와 뒷부분을 남긴다 — 교정은 대개 작업이 진행된 뒤에 나온다.
   if (( ${#text} > INPUT_MAX_CHARS )); then
     text="${text:0:8000}"$'\n[...중략...]\n'"${text: -$((INPUT_MAX_CHARS - 8000))}"
@@ -104,7 +106,7 @@ run_model() { # stdin=입력 → structured_output JSON
     return
   fi
   # 우리 hook이 이 내부 세션을 수집·알림하지 않게 표시하고, transcript도 남기지 않는다.
-  (cd "$DIGEST_DIR" && HM_INTERNAL_SESSION=1 claude -p "아래 세션 기록에서 findings를 뽑아라." \
+  (cd "$DIGEST_DIR" && hm_run_with_timeout 300 env HM_INTERNAL_SESSION=1 claude -p "아래 세션 기록에서 findings를 뽑아라." \
     --model "$MODEL" --no-session-persistence --tools "" \
     --system-prompt "$SYSTEM_PROMPT" --json-schema "$SCHEMA" \
     --max-budget-usd "$BUDGET_USD" --output-format json) \
@@ -120,14 +122,19 @@ command_one() { # $1=event_file
   [[ -f "$transcript" ]] || return 1
   input="$(build_input "$src" "$transcript")"
   [[ -n "$input" ]] || return 1
-  out="$(printf '%s' "$input" | run_model)" || return 1
-  [[ -n "$out" ]] && jq -e '.findings | type == "array"' <<<"$out" >/dev/null 2>&1 || return 1
+  out="$(printf '%s' "$input" | run_model)" || out=""
+  if [[ -z "$out" ]] || ! jq -e '.findings | type == "array"' <<<"$out" >/dev/null 2>&1; then
+    # 실패도 기록한다 — 하루 상한에 포함되고, 같은 세션을 24시간 안에 다시 고르지 않는다.
+    jq -cn --arg at "$(now_iso)" --arg event "${ev##*/}" '{at:$at,event:$event,failed:true}' >>"$RUNS_FILE"
+    return 1
+  fi
   dest="$(digest_path "$ev")"
   tmp="$(mktemp "$DIGEST_DIR/.digest.XXXXXX")"
-  jq -cn --argjson s "$session" --argjson out "$out" --arg model "$MODEL" --arg at "$(now_iso)" '{
+  jq -cn -L "$DIR" --argjson s "$session" --argjson out "$out" --arg model "$MODEL" --arg at "$(now_iso)" 'include "redact"; {
     v:1, src:$s.src, sid:$s.sid, project:$s.project, ended:$s.ended, turns:$s.turns,
     model:$model, created_at:$at, cost_usd:$out.cost_usd,
-    findings:($out.findings | map(.summary |= .[0:200] | .evidence |= .[0:240] | .harness_fix |= .[0:200]))
+    findings:($out.findings | map(.summary |= (redact | .[0:200]) | .evidence |= (redact | .[0:240])
+      | .harness_fix |= (redact | .[0:200])))
   }' >"$tmp" && mv "$tmp" "$dest"
   jq -cn --arg at "$(now_iso)" --arg event "${ev##*/}" --argjson out "$out" \
     '{at:$at,event:$event,findings:($out.findings|length),cost_usd:$out.cost_usd}' >>"$RUNS_FILE"
@@ -142,8 +149,11 @@ done_today() {
 
 # 정리 대상: 내부 세션 아님, 턴 수 충분, 끝난 지 30분 이상, 최근 N일, digest 없음 또는 세션이 재개됨.
 due_events() {
-  local cutoff="" settle="" ev=""
+  local cutoff="" settle="" ev="" recent_failures="[]"
   cutoff="$(days_ago_iso "$LOOKBACK_DAYS")"
+  # 최근 24시간 안에 실패한 세션은 건너뛴다 — 같은 세션이 매번 상한을 먹지 않게.
+  [[ -f "$RUNS_FILE" ]] && recent_failures="$(jq -sc --arg since "$(days_ago_iso 1)" \
+    '[.[] | select(.failed == true and .at >= $since) | .event] | unique' "$RUNS_FILE" 2>/dev/null || printf '[]')"
   settle="$(date -u -v-30M +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%S)"
   shopt -s nullglob
   for ev in "$HM_DATA_DIR"/events/*.jsonl; do
@@ -159,6 +169,7 @@ due_events() {
         if [[ -f "$dest" ]] && [[ "$(jq -r '.ended // empty' "$dest" 2>/dev/null)" == "$ended" ]]; then
           continue
         fi
+        jq -e --arg e "${ev##*/}" 'index($e) != null' <<<"$recent_failures" >/dev/null 2>&1 && continue
         printf '%s\n' "$ev"
       done
   shopt -u nullglob
