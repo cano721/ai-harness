@@ -27,6 +27,12 @@ while (( $# > 0 )); do
 done
 (( check == 1 )) || [[ -n "$title" && -f "$body_file" ]] || usage
 
+# 자격증명은 프로세스 인자(ps에 보임) 대신 stdin 설정으로 넘기고, 응답 없는 네트워크에 묶이지 않게 30초로 제한한다.
+bb_curl() {
+  printf 'user = "%s:%s"\n' "$ATLASSIAN_USER" "$BITBUCKET_API_TOKEN" \
+    | curl -sS --max-time 30 -K - -w '\n%{http_code}' "$@"
+}
+
 remote="$(git remote get-url origin 2>/dev/null || true)"
 [[ -n "$remote" ]] || { echo "origin 원격이 없습니다" >&2; exit 3; }
 [[ -n "$head" ]] || head="$(git rev-parse --abbrev-ref HEAD)"
@@ -56,8 +62,7 @@ if (( check == 1 )); then
         echo "Bitbucket PR에는 ATLASSIAN_USER와 BITBUCKET_API_TOKEN이 필요합니다" >&2
         exit 4
       fi
-      response="$(curl -sS -w '\n%{http_code}' -u "$ATLASSIAN_USER:$BITBUCKET_API_TOKEN" \
-        "https://api.bitbucket.org/2.0/repositories/$slug/pullrequests?pagelen=1")"
+      response="$(bb_curl "https://api.bitbucket.org/2.0/repositories/$slug/pullrequests?pagelen=1")"
       status="${response##*$'\n'}"
       if [[ "$status" != 2* ]]; then
         echo "Bitbucket 저장소 접근 불가 (HTTP $status): $(printf '%s' "${response%$'\n'*}" | head -c 200)" >&2
@@ -92,9 +97,8 @@ case "$host" in
       echo "Bitbucket PR에는 ATLASSIAN_USER와 BITBUCKET_API_TOKEN이 필요합니다" >&2
       exit 4
     fi
-    response="$(curl -sS -w '\n%{http_code}' -X POST \
-      -u "$ATLASSIAN_USER:$BITBUCKET_API_TOKEN" -H 'Content-Type: application/json' \
-      --data "$payload" "https://api.bitbucket.org/2.0/repositories/$slug/pullrequests")"
+    response="$(bb_curl -X POST -H 'Content-Type: application/json' --data "$payload" \
+      "https://api.bitbucket.org/2.0/repositories/$slug/pullrequests")"
     status="${response##*$'\n'}"
     body="${response%$'\n'*}"
     if [[ "$status" != 2* ]]; then

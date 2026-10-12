@@ -209,6 +209,13 @@ event_summary() {
 
 # 옛 프로젝트 ID 큐의 batch에서 세션이 빠져 남은 게 없으면 batch를 해산한다.
 # 그 이름으로는 더 이상 알림이 가지 않아 아무도 검토하지 않는 batch로 남기 때문이다.
+# 다른 프로젝트 큐를 고칠 때는 그 큐의 lock을 짧게 시도한다. 못 잡으면(그 큐에서 검토·기록이 진행 중)
+# 이번엔 건너뛰고 다음 기록에서 다시 수렴한다. 짧게만 시도하므로 서로 기다리는 교착은 생기지 않는다.
+try_other_queue_lock() { # $1=other_qdir → lock 경로
+  hm_acquire_lock "$1/.queue-lock" 10 || return 1
+  printf '%s\n' "$1/.queue-lock"
+}
+
 dissolve_empty_batch() { # $1=other_qdir
   local batch_file="$1/analysis-batch.json" marker=""
   [[ -f "$batch_file" ]] || return 0
@@ -222,24 +229,26 @@ dissolve_empty_batch() { # $1=other_qdir
 # 검토 완료(seen)는 그대로 옮겨 재검토를 막고, 대기(pending)는 옮겨 중복 집계를 막는다.
 # 옛 큐의 batch에 묶여 있던 세션도 옮긴다 — 옛 이름의 batch는 알림이 가지 않는 고아가 된다.
 adopt_moved_session() {
-  local qdir="$1" marker="$2" project="$3" other="" other_qdir="" dest="" tmp=""
+  local qdir="$1" marker="$2" project="$3" other="" other_qdir="" dest="" tmp="" other_lock=""
   shopt -s nullglob
   for other in "$QUEUE_ROOT"/*/seen/"$marker" "$QUEUE_ROOT"/*/sessions/"$marker"; do
     other_qdir="${other%/*/*}"
     [[ "$other_qdir" != "$qdir" ]] || continue
+    other_lock="$(try_other_queue_lock "$other_qdir")" || break
     if [[ "$other" == */seen/* ]]; then
       dest="$qdir/seen/$marker"
     else
       dest="$qdir/sessions/$marker"
     fi
     tmp="$(mktemp "${dest%/*}/.adopt.XXXXXX")"
-    if jq -c --arg project "$project" '.project = $project' "$other" >"$tmp" 2>/dev/null; then
+    if [[ -f "$other" ]] && jq -c --arg project "$project" '.project = $project' "$other" >"$tmp" 2>/dev/null; then
       mv "$tmp" "$dest"
       find "$other" -maxdepth 0 -type f -delete
       [[ "$other" == */seen/* ]] || dissolve_empty_batch "$other_qdir"
     else
       find "$tmp" -maxdepth 0 -type f -delete
     fi
+    hm_release_lock "$other_lock"
     break
   done
   shopt -u nullglob
@@ -247,10 +256,11 @@ adopt_moved_session() {
 
 # 이전 ID 변경으로 내 큐에는 대기, 옛 큐에는 검토 완료로 갈라진 세션은 같은 세션이면 검토 완료로 합친다.
 adopt_reviewed_elsewhere() { # $1=qdir $2=marker $3=summary
-  local qdir="$1" marker="$2" summary="$3" other="" tmp=""
+  local qdir="$1" marker="$2" summary="$3" other="" tmp="" other_lock=""
   shopt -s nullglob
   for other in "$QUEUE_ROOT"/*/seen/"$marker"; do
     [[ "${other%/*/*}" != "$qdir" ]] || continue
+    other_lock="$(try_other_queue_lock "${other%/*/*}")" || continue
     if [[ "$(jq -r --argjson cur "$summary" '
         (.event_revision // "{}" | fromjson? // {}) as $o | ($cur.event_revision // "{}" | fromjson? // {}) as $n
         | ($o.ended != null and $o.ended == $n.ended and ($o.turns // -1) == ($n.turns // -2))
@@ -260,21 +270,25 @@ adopt_reviewed_elsewhere() { # $1=qdir $2=marker $3=summary
         "$other" >"$tmp" && mv "$tmp" "$qdir/seen/$marker"
       find "$qdir/sessions/$marker" "$other" -maxdepth 0 -type f -delete
       dissolve_empty_batch "$qdir"
+      hm_release_lock "$other_lock"
       break
     fi
+    hm_release_lock "$other_lock"
   done
   shopt -u nullglob
 }
 
 # 이전 버전의 프로젝트 ID 변경으로 다른 큐에 남은 대기 복사본은 그 큐의 batch 판정을 부풀린다.
 drop_stale_pending_copies() {
-  local qdir="$1" marker="$2" other="" other_qdir=""
+  local qdir="$1" marker="$2" other="" other_qdir="" other_lock=""
   shopt -s nullglob
   for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
     other_qdir="${other%/*/*}"
     [[ "$other_qdir" != "$qdir" ]] || continue
+    other_lock="$(try_other_queue_lock "$other_qdir")" || continue
     find "$other" -maxdepth 0 -type f -delete
     dissolve_empty_batch "$other_qdir"
+    hm_release_lock "$other_lock"
   done
   shopt -u nullglob
 }
@@ -605,15 +619,17 @@ parse_review_options() {
 
 # 내부 세션(자동 harvest)으로 재판정된 세션이 이전 버전에서 큐에 들어갔다면 꺼낸다.
 purge_internal_session() { # $1=event_file
-  local marker="" other=""
+  local marker="" other="" other_lock=""
   marker="$(jq -sr 'map(select(.kind=="session" and (.internal // false)))
     | first | if . == null then empty else "\(.src)-\(.sid)" end' "$1" 2>/dev/null || true)"
   [[ -n "$marker" ]] || return 0
   marker="$(printf '%s' "$marker" | jq -sRr '@uri').json"
   shopt -s nullglob
   for other in "$QUEUE_ROOT"/*/sessions/"$marker"; do
+    other_lock="$(try_other_queue_lock "${other%/*/*}")" || continue
     find "$other" -maxdepth 0 -type f -delete
     dissolve_empty_batch "${other%/*/*}"
+    hm_release_lock "$other_lock"
   done
   shopt -u nullglob
 }

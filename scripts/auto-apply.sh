@@ -66,19 +66,26 @@ ensure_block() { # $1=file
 # 블록 안에서 같은 id 규칙을 지우고(있으면), 필요하면 새 규칙을 블록 끝에 넣는다.
 rewrite_block() { # $1=file $2=rule_id $3=text(빈 문자열이면 삭제만)
   local file="$1" id="$2" text="$3" tmp=""
-  tmp="$(mktemp "${file%/*}/.ai-harness-apply.XXXXXX")"
-  awk -v start="$START" -v end="$END" -v ropen="<!-- rule:$id -->" -v rclose="<!-- /rule:$id -->" -v text="$text" '
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ai-harness-apply.XXXXXX")"
+  # awk -v는 백슬래시 이스케이프를 해석해 \n 등으로 블록 밖에 줄을 만들 수 있다 — 값은 ENVIRON으로 넘긴다.
+  AH_START="$START" AH_END="$END" AH_OPEN="<!-- rule:$id -->" AH_CLOSE="<!-- /rule:$id -->" AH_TEXT="$text" awk '
+    BEGIN { start = ENVIRON["AH_START"]; end = ENVIRON["AH_END"]; ropen = ENVIRON["AH_OPEN"]
+            rclose = ENVIRON["AH_CLOSE"]; text = ENVIRON["AH_TEXT"] }
     $0 == start { inblock = 1; print; next }
     inblock && $0 == ropen { skip = 1; next }
     inblock && skip && $0 == rclose { skip = 0; next }
-    skip { next }
+    # 닫는 마커가 지워졌어도 블록 끝에서 멈춘다 — 블록 뒤의 사람이 쓴 내용을 버리지 않는다.
+    skip && $0 != end { next }
     inblock && $0 == end {
+      skip = 0
       if (text != "") { print ropen; print "- " text; print rclose }
       inblock = 0; print; next
     }
     { print }
   ' "$file" >"$tmp"
-  mv "$tmp" "$file"
+  # 내용만 덮어써 심볼릭 링크(dotfiles 저장소 등)·권한·확장 속성을 보존한다.
+  cat "$tmp" >"$file"
+  rm -f "$tmp"
 }
 
 append_log() { mkdir -p "$APPLIED_DIR"; printf '%s\n' "$1" >>"$LOG"; }
@@ -100,8 +107,15 @@ command_apply() {
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]{2,60}$ ]] || { echo "rule-id는 소문자·숫자·하이픈 3~61자" >&2; exit 2; }
   [[ -n "$text" && -n "$evidence" && -n "$expected" ]] || usage
   # 한 줄 규칙만 받는다. 블록 구조를 깨거나 다른 규칙을 흉내 내는 입력을 막는다.
-  if [[ "$text" == *$'\n'* || "$text" == *"<!--"* || "$text" == *"-->"* ]] || (( ${#text} > 400 )); then
-    echo "규칙은 400자 이내 한 줄이고 HTML 주석을 포함할 수 없습니다" >&2
+  if [[ "$text" == *"<!--"* || "$text" == *"-->"* || "$text" == *\\* ]] || (( ${#text} > 400 )) \
+    || printf '%s' "$text" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    echo "규칙은 400자 이내 한 줄이고 HTML 주석·백슬래시·제어문자를 포함할 수 없습니다" >&2
+    exit 2
+  fi
+  # 규칙은 이후 모든 세션의 지침이 된다. transcript에서 온 문장이 명령 실행·외부 호출·지침 무력화를
+  # 지시하지 못하게 막는다.
+  if printf '%s' "$text" | grep -qiE '(https?://|`|\bcurl\b|\bwget\b|\b(ba|z)?sh -c\b|\beval\b|ignore (all |the )?(previous|above)|disregard|이전 지침|위 지침|무시하)'; then
+    echo "규칙에 URL·코드 블록·명령 실행·지침 무력화 표현을 넣을 수 없습니다" >&2
     exit 2
   fi
   # 대상 검증은 반복 밖에서 한다 — 프로세스 치환 안의 실패는 호출자에게 전달되지 않는다.
@@ -143,7 +157,7 @@ command_revert() {
   local targets=""
   targets="$(targets_for "$scope" "$workspace")" || exit $?
   while IFS= read -r file; do
-    [[ -f "$file" ]] && rewrite_block "$file" "$id" ""
+    if [[ -f "$file" ]]; then rewrite_block "$file" "$id" ""; fi
   done <<<"$targets"
   append_log "$(jq -cn --arg at "$(now_iso)" --arg id "$id" --arg scope "$scope" --arg reason "$reason" \
     '{at:$at,event:"reverted",id:$id,scope:$scope,reason:(if $reason=="" then null else $reason end),notified:false}')"
@@ -169,6 +183,11 @@ command_notify() {
   jq -c '.notified = true' "$LOG" >"$tmp" && mv "$tmp" "$LOG"
   jq -cn --arg m "ai-harness 자동 개선 — $pending. 되돌리기: \"$DIR/auto-apply.sh\" revert --rule-id <id>" '{systemMessage:$m}'
 }
+
+# apply·revert·notify는 같은 로그와 파일을 읽고 고친다. 백그라운드 실행과 세션 시작이 겹치지 않게 직렬화한다.
+mkdir -p "$APPLIED_DIR"
+hm_acquire_lock "$APPLIED_DIR/.lock" 100 || { echo "auto-apply lock 대기 시간 초과" >&2; exit 4; }
+trap 'hm_release_lock "$APPLIED_DIR/.lock"' EXIT
 
 command="${1:-}"
 shift || true

@@ -85,6 +85,8 @@ write_plist() {
     <key>PATH</key><string>$(xml_escape "$PATH")</string>
     <key>HOME</key><string>$(xml_escape "$HOME")</string>
     <key>HM_BACKFILL_FOREGROUND</key><string>1</string>
+    <!-- 한글 경로·문자열 길이 계산이 바이트 단위로 깨지지 않게 UTF-8 로캘을 준다. -->
+    <key>LANG</key><string>en_US.UTF-8</string>
 $data_env
   </dict>
   <key>StandardOutPath</key><string>$(xml_escape "$LOG_FILE")</string>

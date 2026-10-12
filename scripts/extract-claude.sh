@@ -23,7 +23,7 @@ TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      --arg sid "$SID" --arg path "$T" --arg reason "$REASON" --arg issue_re "$HM_ISSUE_RE" \
      --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" \
-     -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
+     -L "$DIR" -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
   mv "$TMP" "$OUT"
 else
   rm -f "$TMP"
