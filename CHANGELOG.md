@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.36.0 (2026-10-13)
 ### 새 기능
 
 - **자동 규칙의 효과를 수치로 판정합니다** — 규칙마다 줄여야 할 오류·교정 문구의 정규식(`--signal`)을 함께 저장하고, `scripts/auto-apply.sh effect`가 적용 전(직전 30일)과 적용 뒤 시작한 세션의 100세션당 발생률을 비교해 `improved`/`unclear`/`no_effect`/`pending`(적용 후 30세션 미만)을 냅니다. 지침은 세션 시작 때 읽히므로 적용 전에 시작한 세션은 '적용 후'로 세지 않습니다. 자동 harvest는 이 판정으로 규칙을 유지·강화·되돌립니다.
