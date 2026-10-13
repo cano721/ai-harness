@@ -298,6 +298,24 @@ mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 } >"$USAGE_DUP_FIXTURE"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
 assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
+BASH_DOC_FIXTURE="$TEST_TMP/bash-doc/ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl"
+mkdir -p "${BASH_DOC_FIXTURE%/*}"
+bash_doc_line() { # $1=tool name, $2=input json
+  printf '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"model":"claude-test-model","content":[{"type":"tool_use","id":"t","name":"%s","input":%s}]}}\n' "$1" "$2"
+}
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  bash_doc_line Read '{"file_path":"/tmp/service/.ai-harness/workflows/implement-feature.md"}'
+  bash_doc_line Bash '{"command":"cat .ai-harness/workflows/implement-feature.md"}'
+  bash_doc_line Bash '{"command":"sed -n '"'"'1,80p'"'"' /repo/member/.ai-harness/docs/testing.md && cat member/AGENTS.md"}'
+  bash_doc_line Bash '{"command":"cd member && head -50 \".ai-harness/workflows/fix-bug.md\" | nl"}'
+  bash_doc_line Bash '{"command":"grep -rn approval .ai-harness/workflows/"}'
+  bash_doc_line Bash '{"command":"printf x > .ai-harness/docs/domain.md"}'
+} >"$BASH_DOC_FIXTURE"
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$BASH_DOC_FIXTURE" "user_exit"
+assert_eq ".ai-harness/docs/testing.md=1 .ai-harness/workflows/fix-bug.md=1 .ai-harness/workflows/implement-feature.md=2 AGENTS.md=1" \
+  "$(jq -r 'select(.kind=="doc_read") | "\(.target)=\(.n)"' "$EXTRACT_DATA/events/claude-ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl" | sort | paste -sd " " -)" \
+  "Claude doc_read counts harness docs read through Bash read commands, not searches or writes"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
 assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"

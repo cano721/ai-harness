@@ -89,12 +89,18 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
   | counted("persona") | $base + . ),
 
 # ── doc_read: 하네스 문서 읽힘 ──
-( [ $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty
-    | select(type=="string")
-    | select(test("\\.ai-harness/|AGENTS\\.md$|CLAUDE\\.md$"))
-    | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
-      elif endswith("AGENTS.md") then "AGENTS.md"
-      else "CLAUDE.md" end ]
+# 워크플로 본문은 Read보다 Bash(cat/sed/head)로 더 자주 읽힌다 — 실측 워크플로를 읽은 세션의 절반이 Bash로만 읽었다.
+# 읽기 명령으로 시작하는 구간의 경로만 센다. grep(검색)·리다이렉트(쓰기)는 읽음이 아니다.
+( [ ( $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty | select(type=="string") ),
+    ( $L[] | tool_uses | select(.name=="Bash") | .input.command // empty | select(type=="string")
+      | splits("&&|\\|\\||[;|\\n]") | sub("^\\s+"; "")
+      | select(test("^(cat|sed|head|tail|nl|awk|less|more|bat)\\s"))
+      | match("[^\\s'\"]*(\\.ai-harness/[A-Za-z0-9_./-]+|AGENTS\\.md|CLAUDE\\.md)"; "g").string )
+  ]
+  | map(select(test("\\.ai-harness/|AGENTS\\.md$|CLAUDE\\.md$"))
+      | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
+        elif endswith("AGENTS.md") then "AGENTS.md"
+        else "CLAUDE.md" end)
   | counted("doc_read") | $base + . ),
 
 # ── file_edit: 편집 핫스팟 ──
