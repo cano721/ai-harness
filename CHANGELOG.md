@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.37.0 (2026-10-13)
 ### 새 기능
 
 - **어디서 연 세션이든 하네스 저장소 코드를 바꾸기 전에 그 저장소의 워크플로를 읽게 합니다** — 저장소의 편집 가드는 그 저장소 설정에 있어 상위 폴더(workspace) 세션에서는 로드되지 않았습니다(실측 차단 0%). 플러그인 `PreToolUse` hook(`scripts/member-edit-guard.sh`)이 편집 파일에서 `.ai-harness/harness.json`이 있는 저장소를 찾아, 세션이 그 저장소 밖에서 열렸고 워크플로를 Read나 Bash로 읽은 기록이 없으면 차단합니다. worktree는 별도 저장소로 보고, 서브에이전트는 부모 세션의 읽기도 인정하며, 하네스 문서 편집·기록 없음·오류는 통과합니다. 실측 22MB transcript에서 0.5초 이내. (#107)
