@@ -95,7 +95,10 @@ mkdir -p "$WS_ROOT/api/.ai-harness" "$WS_ROOT/api/node_modules/dep"
 git -C "$WS_ROOT/api/node_modules/dep" init -q
 jq -n '{project_id:"acme-api", level:"standard", test_policy:"tdd", git_policy:"pr-only", edit_guard:true}' > "$WS_ROOT/api/.ai-harness/harness.json"
 git -C "$PROJECT_REPO" worktree add -q -b ws-linked "$WS_ROOT/service-wt-1"
-WS_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+mkdir -p "$WS_ROOT/api/.claude/agents" "$TEST_TMP/user-agents"
+touch "$WS_ROOT/api/.claude/agents/developer.md" "$WS_ROOT/api/.claude/agents/reviewer.md" "$TEST_TMP/user-agents/developer.md"
+WS_SCAN="$(HM_USER_AGENTS_DIR="$TEST_TMP/user-agents" "$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+assert_eq "api:developer" "$(jq -r '.persona_shadows[] | "\(.member):\(.personas | join(","))"' <<<"$WS_SCAN")" "member personas shadowed by same-named user personas are reported"
 assert_eq "false" "$(jq -r '.root_is_git' <<<"$WS_SCAN")" "workspace root is not a git repo"
 assert_eq "true" "$(jq -r '.candidate' <<<"$WS_SCAN")" "two independent repos make a workspace candidate"
 assert_eq "api group/batch web" "$(jq -r '[.members[].path] | sort | join(" ")' <<<"$WS_SCAN")" "members deduplicate clones, skip .git files and node_modules"
@@ -1959,6 +1962,56 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
   fail "project runs must not get blanket git access"
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
+
+# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드를 바꾸려면 그 저장소 워크플로를 먼저 읽어야 한다.
+assert_contains "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
+assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[0].matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
+assert_eq "3" "$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
+GW="$TEST_TMP/guard-ws"
+mkdir -p "$GW/jobda/.ai-harness/workflows" "$GW/jobda/src/main" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows" "$GW/worktrees/NJ-1/jobda/src/main" "$GW/plain/src/main" "$GW/t/sess"
+git -C "$GW/jobda" init -q
+printf '{"project_id":"jobda"}\n' >"$GW/jobda/.ai-harness/harness.json"
+printf '{"project_id":"jobda"}\n' >"$GW/worktrees/NJ-1/jobda/.ai-harness/harness.json"
+touch "$GW/jobda/.ai-harness/workflows/implement-feature.md" "$GW/jobda/.ai-harness/workflows/fix-bug.md" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"
+guard_line() { # $1=tool name, $2=input json
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"%s","input":%s}]}}\n' "$1" "$2"
+}
+: >"$GW/t/none.jsonl"
+guard_line Read "{\"file_path\":\"$GW/jobda/.ai-harness/workflows/implement-feature.md\"}" >"$GW/t/read.jsonl"
+guard_line Bash '{"command":"cat jobda/.ai-harness/workflows/fix-bug.md"}' >"$GW/t/bash.jsonl"
+guard_line Bash '{"command":"cd jobda && sed -n 1,80p .ai-harness/workflows/fix-bug.md"}' >"$GW/t/cd.jsonl"
+guard_line Read "{\"file_path\":\"$GW/plain/README.md\"}" >"$GW/t/other.jsonl"
+guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"}' >"$GW/t/wt.jsonl"
+cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
+mkdir -p "$GW/t/sess/subagents"
+: >"$GW/t/sess/subagents/agent-a1.jsonl"
+cp "$GW/t/none.jsonl" "$GW/t/bare.jsonl"
+mkdir -p "$GW/t/bare/subagents"
+: >"$GW/t/bare/subagents/agent-a1.jsonl"
+member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; stderr to $GW/err
+  local agent="${4:-}"
+  jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
+    '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
+    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >/dev/null && echo 0 || echo $?
+}
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code without reading its workflow is blocked"
+assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
+assert_contains "$(<"$GW/err")" "jobda/.ai-harness/workflows/implement-feature.md" "block message names the member workflows"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bash.jsonl")" "reading the member workflow through Bash unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member then reading its workflow unblocks"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/other.jsonl")" "reading unrelated files does not unblock"
+assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the member is left to the member's own guard"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.ai-harness/docs/domain.md" "$GW/t/none.jsonl")" "harness documents are not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/plain/src/main/App.java" "$GW/t/none.jsonl")" "code outside any harness is not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "missing transcript fails open"
+assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/read.jsonl")" "a worktree is its own member: reading the main checkout's workflow is not enough"
+assert_eq "0" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent passes when its parent session read the workflow"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bare.jsonl" a1)" "a subagent is blocked when neither it nor its parent read the workflow"
+assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}' | "$ROOT/scripts/member-edit-guard.sh" >/dev/null 2>&1 && echo 0 || echo $?)" "non-edit tools pass"
+assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
+pass "member edit guard"
 
 # 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
 assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"
