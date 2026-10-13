@@ -95,7 +95,10 @@ mkdir -p "$WS_ROOT/api/.ai-harness" "$WS_ROOT/api/node_modules/dep"
 git -C "$WS_ROOT/api/node_modules/dep" init -q
 jq -n '{project_id:"acme-api", level:"standard", test_policy:"tdd", git_policy:"pr-only", edit_guard:true}' > "$WS_ROOT/api/.ai-harness/harness.json"
 git -C "$PROJECT_REPO" worktree add -q -b ws-linked "$WS_ROOT/service-wt-1"
-WS_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+mkdir -p "$WS_ROOT/api/.claude/agents" "$TEST_TMP/user-agents"
+touch "$WS_ROOT/api/.claude/agents/developer.md" "$WS_ROOT/api/.claude/agents/reviewer.md" "$TEST_TMP/user-agents/developer.md"
+WS_SCAN="$(HM_USER_AGENTS_DIR="$TEST_TMP/user-agents" "$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
+assert_eq "api:developer" "$(jq -r '.persona_shadows[] | "\(.member):\(.personas | join(","))"' <<<"$WS_SCAN")" "member personas shadowed by same-named user personas are reported"
 assert_eq "false" "$(jq -r '.root_is_git' <<<"$WS_SCAN")" "workspace root is not a git repo"
 assert_eq "true" "$(jq -r '.candidate' <<<"$WS_SCAN")" "two independent repos make a workspace candidate"
 assert_eq "api group/batch web" "$(jq -r '[.members[].path] | sort | join(" ")' <<<"$WS_SCAN")" "members deduplicate clones, skip .git files and node_modules"
@@ -244,6 +247,76 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "a glob like com/**/config/** inside a string does not open a block comment and swallow the rest of the file"
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
+
+# Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
+CONTRACT="$TEST_TMP/contract-bad"
+mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
+cp "$ROOT/templates/implement-feature/references/feature-delivery-graph.json" "$CONTRACT/.ai-harness/workflows/"
+cp "$ROOT/templates/fix-bug/references/bug-fix-graph.json" "$CONTRACT/.ai-harness/workflows/"
+cp "$ROOT/templates/implement-feature/SKILL.md" "$CONTRACT/.claude/commands/implement-feature.md"
+touch "$CONTRACT/api/src/main/java/App.java" "$CONTRACT/api/src/test/java/AppTest.java"
+cat >"$CONTRACT/.ai-harness/workflows/implement-feature.md" <<'DOC'
+# Implement Feature
+
+- 위반 시 즉시 변경을 폐기하고 적절한 서브 에이전트에게 재위임.
+- 계획은 `/plan` 스킬로, 협업은 `/team`으로.
+- Claude Code: **Task 도구**로 호출.
+- Codex CLI: `codex exec`을 페르소나 본문 + 입력으로 분리 호출.
+
+### Step 7. Ralph 반복
+
+**안전 한도**: 최대 5회. 초과 시 멈추고 사용자에게 보고.
+
+### Step 8. 커밋 + PR 생성
+
+PR을 만든다.
+DOC
+cat >"$CONTRACT/.ai-harness/workflows/fix-bug.md" <<'DOC'
+# Fix Bug
+
+3. developer 페르소나로 수정 + 회귀 테스트 추가
+DOC
+cat >"$CONTRACT/.ai-harness/agents/developer.md" <<'DOC'
+# developer
+
+Write scope: `src/main/**`, `build.gradle`
+- 금지: `src/test/**` 편집
+DOC
+cat >"$CONTRACT/.ai-harness/agents/test-engineer.md" <<'DOC'
+# test-engineer
+
+Write scope: `api/src/test/**`
+DOC
+# shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
+printf '{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.ai-harness/hooks/direct-edit-guard.sh"}]}]}}\n' >"$CONTRACT/.claude/settings.json"
+CONTRACT_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT")"
+contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
+assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
+assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
+assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
+assert_eq ".ai-harness/workflows/implement-feature.md:10 5 2" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
+assert_eq "src/main/**" "$(jq -r '[.findings[] | select(.check=="write_scope_unmatched") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "a write scope that matches no file is reported, a measured module path is not"
+assert_eq ".ai-harness/workflows/fix-bug.md" "$(jq -r '.findings[] | select(.check=="regression_role") | .file' <<<"$CONTRACT_SCAN")" "fix-bug giving regression tests to a developer barred from tests"
+
+CONTRACT_OK="$TEST_TMP/contract-ok"
+mkdir -p "$CONTRACT_OK/.ai-harness/workflows" "$CONTRACT_OK/.ai-harness/agents" "$CONTRACT_OK/src/main"
+cp "$ROOT/templates/implement-feature/references/feature-delivery-graph.json" "$CONTRACT_OK/.ai-harness/workflows/"
+touch "$CONTRACT_OK/src/main/App.java"
+cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
+# Implement Feature
+
+- Claude: Agent 도구의 `subagent_type`으로 위임. 위반은 diff를 보존하고 재위임.
+- 역할 범위 위반을 발견하면 변경을 폐기하지 않는다 — diff를 보존하고 재위임한다.
+- Do not discard the diff on a scope violation.
+- Codex: `codex exec -C <repo> -s workspace-write -o out.md`
+- 같은 원인이 최대 2회 수정 뒤에도 남으면 사용자 판단.
+DOC
+# shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
+printf '# developer\n\nWrite scope: `src/main/**`\n' >"$CONTRACT_OK/.ai-harness/agents/developer.md"
+CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
+assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
+pass "workflow contract scan"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"
@@ -262,6 +335,9 @@ assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks memb
 assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-list --count HEAD..origin/<base>" "workspace preflight checks member checkout freshness"
 assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑤" "workspace sync proposes the freshness step for existing AGENTS.md"
+assert_contains "$HARNESS_INIT_CONTENT" "/cd <member>" "workspace routing moves implementation into the member with /cd or a member session"
+assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel\`)로 멤버를 정한다" "workspace preflight resolves the member by git root, not the first path segment"
+assert_contains "$HARNESS_INIT_CONTENT" "같은 이름의 사용자 전역 페르소나" "workspace preflight warns that delegation can hit a same-named user persona"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
 pass "workspace mode scan, manifest, and routing"
@@ -283,6 +359,41 @@ assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Cl
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
 assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CLAUDE_EVENT")" "Claude correction mark keeps the high-precision prefix net"
 assert_eq "스웨거 링크 이상해. 다시 봐줘" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CLAUDE_EVENT")" "a complaint in mid-sentence is a candidate, a plain instruction is not"
+USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
+mkdir -p "${USAGE_DUP_FIXTURE%/*}"
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  for block in '{"type":"text","text":"x"}' '{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"a"}}' '{"type":"tool_use","id":"t2","name":"Grep","input":{"pattern":"b"}}'; do
+    printf '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"id":"msg_1","model":"claude-test-model","usage":{"input_tokens":5,"output_tokens":100,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10},"content":[%s]}}\n' "$block"
+  done
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:02Z","message":{"id":"msg_2","model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":7,"cache_read_input_tokens":20,"cache_creation_input_tokens":2},"content":[{"type":"text","text":"y"}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:03Z","message":{"model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"y"}]}}'
+} >"$USAGE_DUP_FIXTURE"
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
+assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
+BASH_DOC_FIXTURE="$TEST_TMP/bash-doc/ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl"
+mkdir -p "${BASH_DOC_FIXTURE%/*}"
+bash_doc_line() { # $1=tool name, $2=input json
+  printf '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"model":"claude-test-model","content":[{"type":"tool_use","id":"t","name":"%s","input":%s}]}}\n' "$1" "$2"
+}
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  bash_doc_line Read '{"file_path":"/tmp/service/.ai-harness/workflows/implement-feature.md"}'
+  bash_doc_line Bash '{"command":"cat .ai-harness/workflows/implement-feature.md"}'
+  bash_doc_line Bash '{"command":"sed -n '"'"'1,80p'"'"' /repo/member/.ai-harness/docs/testing.md && cat member/AGENTS.md"}'
+  bash_doc_line Bash '{"command":"cd member && head -50 \".ai-harness/workflows/fix-bug.md\" | nl"}'
+  bash_doc_line Bash '{"command":"grep -rn approval .ai-harness/workflows/"}'
+  bash_doc_line Bash '{"command":"printf x > .ai-harness/docs/domain.md"}'
+  bash_doc_line Bash '{"command":"cat > .ai-harness/docs/new.md <<'"'"'EOF'"'"'\nbody\nEOF"}'
+  bash_doc_line Bash '{"command":"cat notes.txt > .ai-harness/docs/b.md"}'
+  bash_doc_line Bash '{"command":"sed -i '"'"'s/a/b/'"'"' .ai-harness/workflows/fix-bug.md"}'
+  bash_doc_line Bash '{"command":"cat .ai-harness/docs/한글문서.md"}'
+  bash_doc_line Bash '{"command":"cat src/FooCLAUDE.md"}'
+} >"$BASH_DOC_FIXTURE"
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$BASH_DOC_FIXTURE" "user_exit"
+assert_eq ".ai-harness/docs/testing.md=1 .ai-harness/docs/한글문서.md=1 .ai-harness/workflows/fix-bug.md=1 .ai-harness/workflows/implement-feature.md=2 AGENTS.md=1" \
+  "$(jq -r 'select(.kind=="doc_read") | "\(.target)=\(.n)"' "$EXTRACT_DATA/events/claude-ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl" | sort | paste -sd " " -)" \
+  "Claude doc_read counts harness docs read through Bash read commands, not searches, redirects, heredocs or sed -i"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
 assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
@@ -492,6 +603,12 @@ assert_eq "false" "$(jq -r '.nodes.approval.write' "$BUG_FIX_GRAPH")" "bug-fix a
 assert_eq "true" "$(jq -r '.nodes.regression.write' "$BUG_FIX_GRAPH")" "bug-fix regression node can write"
 assert_file "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/fix-bug/" "harness init uses the local bug-fix template"
+assert_contains "$HARNESS_INIT_CONTENT" "회귀 테스트는 test-engineer, production 수정은 developer" "fix-bug assigns the regression test to the test role"
+assert_contains "$HARNESS_INIT_CONTENT" "역할 범위 위반을 발견하면 변경을 폐기하지 않는다" "role violations preserve the diff instead of discarding it"
+assert_contains "$HARNESS_INIT_CONTENT" "-s <read-only|workspace-write>" "Codex exec fallback names the sandbox for write steps"
+assert_contains "$HARNESS_INIT_CONTENT" "존재하지 않는 도구를 적지 않는다" "workflow bodies must not reference nonexistent tools"
+assert_contains "$HARNESS_INIT_CONTENT" "<module>/src/main/**" "persona write scopes follow the measured module layout"
+assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel)/.ai-harness/hooks/direct-edit-guard.sh" "guard hook path does not depend on CLAUDE_PROJECT_DIR"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "harness init copies the local bug-fix graph"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
@@ -1852,6 +1969,59 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
   fail "project runs must not get blanket git access"
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
+
+# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드를 바꾸려면 그 저장소 워크플로를 먼저 읽어야 한다.
+assert_contains "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
+assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[0].matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
+assert_eq "3" "$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
+GW="$TEST_TMP/guard-ws"
+mkdir -p "$GW/jobda/.ai-harness/workflows" "$GW/jobda/src/main" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows" "$GW/worktrees/NJ-1/jobda/src/main" "$GW/plain/src/main" "$GW/t/sess"
+git -C "$GW/jobda" init -q
+printf '{"project_id":"jobda"}\n' >"$GW/jobda/.ai-harness/harness.json"
+printf '{"project_id":"jobda"}\n' >"$GW/worktrees/NJ-1/jobda/.ai-harness/harness.json"
+touch "$GW/jobda/.ai-harness/workflows/implement-feature.md" "$GW/jobda/.ai-harness/workflows/fix-bug.md" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"
+guard_line() { # $1=tool name, $2=input json
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"%s","input":%s}]}}\n' "$1" "$2"
+}
+: >"$GW/t/none.jsonl"
+guard_line Read "{\"file_path\":\"$GW/jobda/.ai-harness/workflows/implement-feature.md\"}" >"$GW/t/read.jsonl"
+guard_line Bash '{"command":"cat jobda/.ai-harness/workflows/fix-bug.md"}' >"$GW/t/bash.jsonl"
+guard_line Bash '{"command":"cd jobda && sed -n 1,80p .ai-harness/workflows/fix-bug.md"}' >"$GW/t/cd.jsonl"
+guard_line Read "{\"file_path\":\"$GW/plain/README.md\"}" >"$GW/t/other.jsonl"
+guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"}' >"$GW/t/wt.jsonl"
+cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
+mkdir -p "$GW/t/sess/subagents"
+: >"$GW/t/sess/subagents/agent-a1.jsonl"
+cp "$GW/t/none.jsonl" "$GW/t/bare.jsonl"
+mkdir -p "$GW/t/bare/subagents"
+: >"$GW/t/bare/subagents/agent-a1.jsonl"
+member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; stderr to $GW/err
+  local agent="${4:-}"
+  jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
+    '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
+    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >/dev/null && echo 0 || echo $?
+}
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code without reading its workflow is blocked"
+assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
+assert_contains "$(<"$GW/err")" "jobda/.ai-harness/workflows/implement-feature.md" "block message names the member workflows"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bash.jsonl")" "reading the member workflow through Bash unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member then reading its workflow unblocks"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/other.jsonl")" "reading unrelated files does not unblock"
+assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the member is left to the member's own guard"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.ai-harness/docs/domain.md" "$GW/t/none.jsonl")" "harness documents are not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/plain/src/main/App.java" "$GW/t/none.jsonl")" "code outside any harness is not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "missing transcript fails open"
+assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/read.jsonl")" "a worktree is its own member: reading the main checkout's workflow is not enough"
+assert_eq "0" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow unblocks"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent passes when its parent session read the workflow"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bare.jsonl" a1)" "a subagent is blocked when neither it nor its parent read the workflow"
+assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}' | "$ROOT/scripts/member-edit-guard.sh" >/dev/null 2>&1 && echo 0 || echo $?)" "non-edit tools pass"
+ln -s "$GW/jobda" "$GW/jobda-link"
+assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"
+assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
+assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
+pass "member edit guard"
 
 # 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
 assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"
