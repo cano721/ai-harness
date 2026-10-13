@@ -16,14 +16,19 @@ START='<!-- ai-harness:auto:start -->'
 END='<!-- ai-harness:auto:end -->'
 CLAUDE_GLOBAL="${HM_GLOBAL_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}"
 CODEX_GLOBAL="${HM_GLOBAL_CODEX_AGENTS_MD:-$HOME/.codex/AGENTS.md}"
+# 자동 규칙 총량 상한. 지침 파일이 길어질수록 에이전트 성공률은 떨어지고 비용은 늘어난다는 보고가 있어
+# (AGENTS.md류 연구, 2026), 상한에 닿으면 새 규칙 대신 기존 규칙 병합·정리를 요구한다.
+RULES_MAX="${HM_AUTO_RULES_MAX:-12}"; [[ "$RULES_MAX" =~ ^[1-9][0-9]*$ ]] || RULES_MAX=12
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   auto-apply.sh apply --scope global|workspace --rule-id <id> --text <규칙 한 줄> \
-      --evidence <근거> --expected <다음 harvest가 효과를 판정할 기준> [--workspace <루트>] [--project <id>]
+      --evidence <근거> --expected <다음 harvest가 효과를 판정할 기준> [--signal <정규식>] \
+      [--workspace <루트>] [--project <id>]
   auto-apply.sh revert --rule-id <id> [--reason <이유>]
   auto-apply.sh list [--active]
+  auto-apply.sh effect [--rule-id <id>]    # --signal이 있는 규칙의 적용 전후 100세션당 발생률
   auto-apply.sh notify                     # SessionStart: 아직 알리지 않은 적용·되돌림을 한 번 알린다
 EOF
   exit 2
@@ -91,7 +96,7 @@ rewrite_block() { # $1=file $2=rule_id $3=text(빈 문자열이면 삭제만)
 append_log() { mkdir -p "$APPLIED_DIR"; printf '%s\n' "$1" >>"$LOG"; }
 
 command_apply() {
-  local scope="" id="" text="" evidence="" expected="" workspace="" project="" file="" snap=""
+  local scope="" id="" text="" evidence="" expected="" workspace="" project="" file="" snap="" signal=""
   while (( $# > 0 )); do
     case "$1" in
       --scope) scope="${2:-}"; shift 2 ;;
@@ -101,6 +106,7 @@ command_apply() {
       --expected) expected="${2:-}"; shift 2 ;;
       --workspace) workspace="${2:-}"; shift 2 ;;
       --project) project="${2:-}"; shift 2 ;;
+      --signal) signal="${2:-}"; shift 2 ;;
       *) usage ;;
     esac
   done
@@ -114,9 +120,31 @@ command_apply() {
   fi
   # 규칙은 이후 모든 세션의 지침이 된다. transcript에서 온 문장이 명령 실행·외부 호출·지침 무력화를
   # 지시하지 못하게 막는다.
+  # 보이지 않는 문자(제로폭·양방향 제어·BOM)는 사람이 읽는 내용과 모델이 읽는 내용을 다르게 만든다.
+  # bash 3.2(macOS 기본)는 $'\u…'를 모르므로 UTF-8 바이트로 찾는다: U+200B–200F, U+202A–202E, U+2060, U+2066–2069, U+FEFF.
+  if printf '%s' "$text" | LC_ALL=C grep -qE $'\xe2\x80[\x8b-\x8f\xaa-\xae]|\xe2\x81[\xa0\xa6-\xa9]|\xef\xbb\xbf'; then
+    echo "규칙에 보이지 않는 유니코드 문자를 넣을 수 없습니다" >&2
+    exit 2
+  fi
+  # 비밀값처럼 보이는 문자열(오류 발췌 가림 규칙에 걸리는 것)은 지침에 남기지 않는다.
+  if [[ "$(printf '%s' "$text" | jq -Rr -L "$DIR" 'include "redact"; redact' 2>/dev/null)" != "$text" ]]; then
+    echo "규칙에 비밀값처럼 보이는 문자열을 넣을 수 없습니다" >&2
+    exit 2
+  fi
+  if [[ -n "$signal" ]] && ! jq -n --arg re "$signal" '"" | test($re)' >/dev/null 2>&1; then
+    echo "--signal 정규식이 올바르지 않습니다" >&2
+    exit 2
+  fi
   if printf '%s' "$text" | grep -qiE '(https?://|`|\bcurl\b|\bwget\b|\b(ba|z)?sh -c\b|\beval\b|ignore (all |the )?(previous|above)|disregard|이전 지침|위 지침|무시하)'; then
     echo "규칙에 URL·코드 블록·명령 실행·지침 무력화 표현을 넣을 수 없습니다" >&2
     exit 2
+  fi
+  local active_count=0
+  active_count="$(command_list --active | jq -s --arg scope "$scope" --arg ws "$workspace" --arg id "$id" \
+    '[.[] | select(.scope == $scope and (.workspace // "") == $ws and .id != $id)] | length' 2>/dev/null || echo 0)"
+  if (( active_count >= RULES_MAX )); then
+    echo "자동 규칙 상한(${RULES_MAX}개)에 닿았습니다 — 비슷한 규칙을 같은 id로 병합하거나 효과 없는 규칙을 revert한 뒤 추가하세요" >&2
+    exit 5
   fi
   # 대상 검증은 반복 밖에서 한다 — 프로세스 치환 안의 실패는 호출자에게 전달되지 않는다.
   local targets=""
@@ -130,7 +158,8 @@ command_apply() {
   done <<<"$targets"
   append_log "$(jq -cn --arg at "$(now_iso)" --arg id "$id" --arg scope "$scope" --arg text "$text" \
     --arg evidence "$evidence" --arg expected "$expected" --arg workspace "$workspace" --arg project "$project" \
-    --arg snapshot "$snap" '{at:$at,event:"applied",id:$id,scope:$scope,text:$text,evidence:$evidence,
+    --arg snapshot "$snap" --arg signal "$signal" '{at:$at,event:"applied",id:$id,scope:$scope,text:$text,evidence:$evidence,
+      signal:(if $signal=="" then null else $signal end),
       expected:$expected,workspace:(if $workspace=="" then null else $workspace end),
       project:(if $project=="" then null else $project end),snapshot:$snapshot,notified:false}')"
   echo "applied $id ($scope)"
@@ -169,7 +198,45 @@ command_list() {
   [[ -f "$LOG" ]] || return 0
   jq -sc --arg active "${1:-}" '
     group_by(.id) | map(last) | map(select($active != "--active" or .event == "applied"))
-    | .[] | {id, state:(if .event=="applied" then "active" else "reverted" end), scope, at, text, expected}' "$LOG"
+    | .[] | {id, state:(if .event=="applied" then "active" else "reverted" end), scope, at, text, expected,
+             signal:(.signal // null), workspace:(.workspace // null), project:(.project // null)}' "$LOG"
+}
+
+# 규칙별 효과를 수치로: --signal 정규식에 맞는 오류 발췌·교정 신호가 있는 세션의 비율을
+# 적용 전(직전 30일)과 적용 후(적용 뒤 시작한 세션)로 나눠 100세션당 값으로 낸다. 적용 후 세션이
+# HM_EFFECT_MIN_SESSIONS(30)개 미만이면 표본이 작아 pending. 절반 이하로 줄면 improved, 그대로거나 늘면 no_effect. workspace 규칙은 그 프로젝트 세션만 센다.
+command_effect() {
+  local only="" rules=""
+  [[ "${1:-}" == "--rule-id" ]] && only="${2:-}"
+  rules="$(command_list --active | jq -sc --arg only "$only" '[.[] | select(.signal != null and ($only == "" or .id == $only))]')"
+  [[ "$rules" != "[]" ]] || return 0
+  shopt -s nullglob
+  local files=("$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl)
+  shopt -u nullglob
+  (( ${#files[@]} > 0 )) || return 0
+  grep -h -E '"kind":"(session|error_sample|correction_mark|correction_candidate)"' "${files[@]}" 2>/dev/null \
+    | jq -sc --argjson rules "$rules" --argjson min "${HM_EFFECT_MIN_SESSIONS:-30}" '
+      (map(select(.kind == "session" and ((.internal // false) | not)))
+        # 지침 파일은 세션 시작 때 읽히므로, 적용 전에 시작한 세션은 새 규칙을 본 적이 없다 — 시작 시각으로 나눈다.
+        | map({key:(.src + ":" + .sid), value:{at:(.started // .ended // ""), project}}) | from_entries) as $sessions
+      | (map(select(.kind != "session")) | group_by(.src + ":" + .sid)
+        | map({key:(.[0].src + ":" + .[0].sid), value:(map(.target // "") | join("\n"))}) | from_entries) as $signals
+      | $rules[] as $r
+      | ($r.at) as $at
+      | ($at | sub("Z$"; "") | strptime("%Y-%m-%dT%H:%M:%S") | mktime - 30 * 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")) as $since
+      | [$sessions | to_entries[]
+          | select($r.scope == "global" or .value.project == $r.project)
+          | {k:.key, at:.value.at, hit:(($signals[.key] // "") | test($r.signal))}] as $scoped
+      | def rate($xs): {sessions:($xs | length), hits:([$xs[] | select(.hit)] | length),
+          per100:(if ($xs | length) == 0 then null else (([$xs[] | select(.hit)] | length) * 100 / ($xs | length) * 10 | round / 10) end)};
+        rate([$scoped[] | select(.at >= $since and .at < $at)]) as $before
+        | rate([$scoped[] | select(.at >= $at)]) as $after
+        | ($after.sessions >= $min) as $judgeable
+        | {id:$r.id, signal:$r.signal, applied_at:$at, before:$before, after:$after, judgeable:$judgeable,
+           verdict:(if ($judgeable | not) or $before.per100 == null then "pending"
+                    elif $after.per100 <= $before.per100 * 0.5 then "improved"
+                    elif $after.per100 >= $before.per100 then "no_effect"
+                    else "unclear" end)}'
 }
 
 command_notify() {
@@ -195,6 +262,7 @@ case "$command" in
   apply) command_apply "$@" ;;
   revert) command_revert "$@" ;;
   list) command_list "${1:-}" ;;
+  effect) command_effect "$@" ;;
   notify) command_notify ;;
   *) usage ;;
 esac
