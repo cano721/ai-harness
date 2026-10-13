@@ -244,6 +244,74 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | sort | join(",")' <<<"$NOISE_SCAN")" "a glob like com/**/config/** inside a string does not open a block comment and swallow the rest of the file"
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
+
+# Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
+CONTRACT="$TEST_TMP/contract-bad"
+mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
+cp "$ROOT/templates/implement-feature/references/feature-delivery-graph.json" "$CONTRACT/.ai-harness/workflows/"
+cp "$ROOT/templates/fix-bug/references/bug-fix-graph.json" "$CONTRACT/.ai-harness/workflows/"
+cp "$ROOT/templates/implement-feature/SKILL.md" "$CONTRACT/.claude/commands/implement-feature.md"
+touch "$CONTRACT/api/src/main/java/App.java" "$CONTRACT/api/src/test/java/AppTest.java"
+cat >"$CONTRACT/.ai-harness/workflows/implement-feature.md" <<'DOC'
+# Implement Feature
+
+- 위반 시 즉시 변경을 폐기하고 적절한 서브 에이전트에게 재위임.
+- 계획은 `/plan` 스킬로, 협업은 `/team`으로.
+- Claude Code: **Task 도구**로 호출.
+- Codex CLI: `codex exec`을 페르소나 본문 + 입력으로 분리 호출.
+
+### Step 7. Ralph 반복
+
+**안전 한도**: 최대 5회. 초과 시 멈추고 사용자에게 보고.
+
+### Step 8. 커밋 + PR 생성
+
+PR을 만든다.
+DOC
+cat >"$CONTRACT/.ai-harness/workflows/fix-bug.md" <<'DOC'
+# Fix Bug
+
+3. developer 페르소나로 수정 + 회귀 테스트 추가
+DOC
+cat >"$CONTRACT/.ai-harness/agents/developer.md" <<'DOC'
+# developer
+
+Write scope: `src/main/**`, `build.gradle`
+- 금지: `src/test/**` 편집
+DOC
+cat >"$CONTRACT/.ai-harness/agents/test-engineer.md" <<'DOC'
+# test-engineer
+
+Write scope: `api/src/test/**`
+DOC
+# shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
+printf '{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.ai-harness/hooks/direct-edit-guard.sh"}]}]}}\n' >"$CONTRACT/.claude/settings.json"
+CONTRACT_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT")"
+contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
+assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
+assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
+assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
+assert_eq ".ai-harness/workflows/implement-feature.md:10 5 2" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
+assert_eq "src/main/**" "$(jq -r '[.findings[] | select(.check=="write_scope_unmatched") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "a write scope that matches no file is reported, a measured module path is not"
+assert_eq ".ai-harness/workflows/fix-bug.md" "$(jq -r '.findings[] | select(.check=="regression_role") | .file' <<<"$CONTRACT_SCAN")" "fix-bug giving regression tests to a developer barred from tests"
+
+CONTRACT_OK="$TEST_TMP/contract-ok"
+mkdir -p "$CONTRACT_OK/.ai-harness/workflows" "$CONTRACT_OK/.ai-harness/agents" "$CONTRACT_OK/src/main"
+cp "$ROOT/templates/implement-feature/references/feature-delivery-graph.json" "$CONTRACT_OK/.ai-harness/workflows/"
+touch "$CONTRACT_OK/src/main/App.java"
+cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
+# Implement Feature
+
+- Claude: Agent 도구의 `subagent_type`으로 위임. 위반은 diff를 보존하고 재위임.
+- Codex: `codex exec -C <repo> -s workspace-write -o out.md`
+- 같은 원인이 최대 2회 수정 뒤에도 남으면 사용자 판단.
+DOC
+# shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
+printf '# developer\n\nWrite scope: `src/main/**`\n' >"$CONTRACT_OK/.ai-harness/agents/developer.md"
+CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
+assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
+pass "workflow contract scan"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
 jq -n '{project_id:"acme-batch", level:"minimal", test_policy:"none", git_policy:"direct"}' > "$WS_ROOT/group/batch/.ai-harness/harness.json"

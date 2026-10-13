@@ -194,6 +194,13 @@ $ROOT/scripts/docs-drift.sh scan --root .
 ```
 
      기계로 확인 가능한 토큰만 본다: Gradle 검증 태스크(이름에 test/check/verify/lint/coverage/e2e/integration/regression/migrat/format 포함)와 JUnit `includeTags`/`excludeTags`, npm `scripts` 키, Maven 프로파일 `<id>`, pytest `markers`. 문서 쪽은 임의 단어가 아니라 **실제 호출 형태**(`./gradlew <task>`, `npm run <script>`, `-P<profile>`, `-m <marker>`)만 사용으로 인정하고, 태그만 서술 언급도 인정한다. `drift: false`면 이 행을 만들지 않는다. 문서를 이해하려 들지 않으므로 서술이 낡았는지는 판정하지 못한다 — 토큰이 맞는지만 본다.
+   - **워크플로 계약 drift** (보호 파일에 대한 **읽기 전용 리포트**): 워크플로 본문·페르소나·settings는 초기화 때 생성된 뒤 갱신되지 않아, 관리 생성물 해시가 모두 일치해도 그래프·어댑터와 의미가 어긋날 수 있다. 아래를 실행해 `findings`를 **"보호 파일 후속 조치" 표에 행으로 싣는다**(파일:줄 · 검사 · 토큰 · 제안). `contract_drift: false`면 행을 만들지 않는다. 수정은 사용자 승인 후에만 하고, `--apply`에서도 자동으로 고치지 않는다.
+
+```bash
+$ROOT/scripts/workflow-contract.sh scan --root .
+```
+
+     검사: `nonexistent_tool`(`/plan`·`/team`·`Task 도구` 등 없는 도구), `repair_limit`(본문의 `최대 N회`가 그래프 수리 한도와 다름), `discard_on_violation`(위반 시 변경 폐기), `codex_exec_unbounded`(`-C`·`-s` 없는 `codex exec`), `pr_step_forbidden_by_adapter`(어댑터가 금지한 PR 생성을 본문이 단계로 둠), `regression_role`(fix-bug가 테스트 편집이 금지된 developer에 회귀 테스트를 맡김), `write_scope_unmatched`(어떤 파일과도 맞지 않는 페르소나 쓰기 범위), `guard_project_dir`(`CLAUDE_PROJECT_DIR` 기준 hook 경로). 기준은 §4 작성 원칙이며, 토큰만 보고 서술의 옳고 그름은 판정하지 않는다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
    - **역할 agent `model` 드리프트** (위 분류와 별개인 **수동 점검** — 역할 agent는 `managed-files.json` 대상이 아니어서 `plan` 출력에 나오지 않는다): §5의 1번 self-check 스니펫을 그대로 실행해 `model` 없는 역할 agent를 찾고, §4 표 기본값으로 채우는 한 줄 추가를 계획 표 맨 아래에 **별도 행으로** 싣는다. 이전 버전이 누락한 채 생성한 경우가 있고, 누락된 agent는 부모 세션 모델을 그대로 상속한다. 본문은 바뀌지 않으므로 diff는 한 줄이지만, 적용은 다른 항목과 같이 사용자 승인 뒤에 한다. 해시 기록 대상이 아니므로 `record`도 하지 않는다.
    - **정리 대상(`retired`)**: 카탈로그의 `retired` 목록이 **명시적으로 내린** 생성물 중 이 프로젝트에 흔적이 남은 것이다(예: 0.16.0에서 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). `present`는 파일이 디스크에 남았는지, `tracked`는 manifest가 아직 기록 중인지를 뜻하며 **둘은 따로 정리해야 한다**. 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다. 카탈로그에 없다는 사실만으로 추론하지 않는다: `.codex/agents/*.toml`처럼 init이 관리하지만 카탈로그가 선언한 적 없는 생성물이 있어, 추론하면 살아 있는 파일을 삭제 후보로 올린다.
