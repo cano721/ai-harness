@@ -87,7 +87,9 @@ for body in ${bodies[@]+"${bodies[@]}"}; do
   while IFS=$'\t' read -r n text; do
     [[ -n "$n" ]] || continue
     finding discard_on_violation high "$file" "$n" "폐기" "" "역할 범위 위반 시 변경을 폐기하라고 한다 — 중단·diff 보존·범위 확인 후 재위임"
-  done < <(lines_matching '폐기.*(위반|재위임)|(위반|재위임).*폐기|[Dd]iscard.*(change|diff)' "$body")
+  # "폐기하지 않는다"처럼 harness-init이 쓰라고 지시하는 부정 문장은 위반이 아니다.
+  done < <(lines_matching '폐기.*(위반|재위임)|(위반|재위임).*폐기|[Dd]iscard.*(change|diff)' "$body" \
+    | grep -v -E '폐기하지 않|폐기 금지|폐기하지 말|[Dd]o not discard|[Nn]ever discard|[Dd]on.t discard' || true)
 
   # 범위 없는 codex exec: 기본 sandbox가 읽기 전용이라 쓰기 단계를 수행할 수 없다.
   while IFS=$'\t' read -r n text; do

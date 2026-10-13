@@ -39,6 +39,9 @@ harness_root() { # 경로에서 위로 올라가 .ai-harness/harness.json이 있
 member="$(harness_root "$(dirname "$file")")" || exit 0
 session_member="$(harness_root "$cwd")" || session_member=""
 [[ "$member" == "$session_member" ]] && exit 0
+# 심볼릭 링크·`..`가 섞인 경로도 같은 저장소면 통과한다(문자열만 비교하면 다른 저장소로 오판한다).
+physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+[[ -n "$session_member" && "$(physical_dir "$member")" == "$(physical_dir "$session_member")" ]] && exit 0
 
 transcripts=()
 [[ -n "$transcript" && -f "$transcript" ]] && transcripts+=("$transcript")
