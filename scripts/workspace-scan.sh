@@ -89,8 +89,21 @@ if [[ -f "$manifest_path" ]]; then
   existing="$(jq -c '.' "$manifest_path" 2>/dev/null || printf 'null')"
 fi
 
+# workspace 세션의 subagent_type 위임은 멤버 페르소나가 아니라 같은 이름의 사용자 전역 페르소나로 갈 수 있다.
+user_agents="${HM_USER_AGENTS_DIR:-$HOME/.claude/agents}"
+shadows='[]'
+while IFS= read -r path; do
+  [[ -n "$path" && -d "$root/$path/.claude/agents" ]] || continue
+  names='[]'
+  for f in "$root/$path/.claude/agents"/*.md; do
+    [[ -f "$f" && -f "$user_agents/${f##*/}" ]] || continue
+    names="$(jq -c --arg n "$(basename "$f" .md)" '. + [$n]' <<<"$names")"
+  done
+  [[ "$names" == '[]' ]] || shadows="$(jq -c --arg m "$path" --argjson p "$names" '. + [{member:$m, personas:$p}]' <<<"$shadows")"
+done < <(jq -r '.[] | select(.harness) | .path' <<<"$members")
+
 scan="$(jq -cn --arg root "$root" --argjson depth "$depth" --argjson root_is_git "$root_is_git" \
-  --argjson members "$members" --argjson existing "$existing" '
+  --argjson members "$members" --argjson existing "$existing" --argjson shadows "$shadows" '
   def key: {harness, level, test_policy, git_policy, edit_guard, project_id};
   ($existing.members // []) as $old
   | ($members | map(.path)) as $now_paths
@@ -99,6 +112,7 @@ scan="$(jq -cn --arg root "$root" --argjson depth "$depth" --argjson root_is_git
       root: $root, depth: $depth, root_is_git: $root_is_git,
       candidate: (($root_is_git | not) and ($members | length) >= 2),
       members: $members,
+      persona_shadows: $shadows,
       manifest: $existing,
       diff: {
         added: ($now_paths - $old_paths),

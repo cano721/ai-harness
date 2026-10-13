@@ -11,6 +11,8 @@
 
 ### 새 기능
 
+- **어디서 연 세션이든 하네스 저장소 코드를 바꾸기 전에 그 저장소의 워크플로를 읽게 합니다** — 저장소의 편집 가드는 그 저장소 설정에 있어 상위 폴더(workspace) 세션에서는 로드되지 않았습니다(실측 차단 0%). 플러그인 `PreToolUse` hook(`scripts/member-edit-guard.sh`)이 편집 파일에서 `.ai-harness/harness.json`이 있는 저장소를 찾아, 세션이 그 저장소 밖에서 열렸고 워크플로를 Read나 Bash로 읽은 기록이 없으면 차단합니다. worktree는 별도 저장소로 보고, 서브에이전트는 부모 세션의 읽기도 인정하며, 하네스 문서 편집·기록 없음·오류는 통과합니다. 실측 22MB transcript에서 0.5초 이내. (#107)
+- **workspace 동기화가 전역 페르소나 가림을 경고합니다** — workspace 세션의 `subagent_type: developer` 위임은 멤버 페르소나가 아니라 같은 이름의 `~/.claude/agents/developer.md`로 가서 멤버 쓰기 범위가 적용되지 않았습니다. `workspace-scan.sh scan`이 `persona_shadows`를 내고 `/harness-init`이 경고로 보입니다. (#107)
 - **워크플로 계약 검사(`scripts/workflow-contract.sh scan`)** — 워크플로 본문·페르소나·settings는 초기화 뒤 갱신되지 않아, 관리 생성물 해시가 모두 일치해도 그래프·어댑터와 의미가 어긋났습니다(실측 standard 저장소 3곳에서 17~24건: 없는 도구 `/plan`·`/team`·`Task 도구`, 그래프 2회와 다른 반복 한도 5회·3회, 위반 시 변경 폐기, 범위 없는 `codex exec`, developer에 회귀 테스트 배정 등). `/harness-init --sync`가 결과를 "보호 파일 후속 조치" 표에 싣습니다. 읽기 전용이며 자동 수정하지 않습니다. (#105)
 
 ### 버그 수정

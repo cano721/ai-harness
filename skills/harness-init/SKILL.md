@@ -220,7 +220,7 @@ Claude Code는 시작 디렉토리의 `.claude/`를 로드하므로 workspace �
 | `/cd <member>` (2.1.246+) | 로드 | 로드 | 대화 유지. `CLAUDE_PROJECT_DIR`은 시작 디렉토리로 남는다 |
 | `/add-dir <member>` (cwd 하위, 2.1.257+) | 로드 | **미로드** | 편집 가드가 없으므로 구현에는 쓰지 않는다 |
 
-그래서 workspace 세션은 여러 저장소를 훑어보거나 교차 변경을 조율하는 용도이고, 한 저장소 안의 구현은 멤버 세션 또는 `/cd <member>`로 한다 — 이 안내를 workspace AGENTS.md 첫 줄에 쓴다.
+플러그인 hook(`scripts/member-edit-guard.sh`)은 시작 디렉토리와 무관하게 로드되므로, workspace 세션이 하네스 멤버의 코드를 편집하려 하면 그 멤버의 워크플로를 읽기 전까지 차단한다(멤버 안에서 연 세션은 멤버의 편집 가드가 맡는다). 그래서 workspace 세션은 여러 저장소를 훑어보거나 교차 변경을 조율하는 용도이고, 한 저장소 안의 구현은 멤버 세션 또는 `/cd <member>`로 한다 — 이 안내를 workspace AGENTS.md 첫 줄에 쓴다.
 
 ### 7-1. 감지
 
@@ -235,7 +235,9 @@ $ROOT/scripts/workspace-scan.sh scan --root . --depth 3  # 그룹 폴더가 더 
 
 ### 7-2. 확인
 
-멤버 표(경로·project_id·하네스 유무·테스트 정책·git 정책·also_paths)를 보이고 AskUserQuestion으로 `workspace로 셋업` / `취소`를 받는다. workspace 수준 인터뷰는 **도구 통합**(Claude / Codex / 둘 다) 하나만 묻는다. 규모·테스트 정책·편집 가드는 멤버 각자의 것이므로 여기서 묻지 않는다.
+멤버 표(경로·project_id·하네스 유무·테스트 정책·git 정책·also_paths)를 보이고, `persona_shadows`가 비어 있지 않으면 **멤버 페르소나와 같은 이름의 사용자 전역 페르소나(`~/.claude/agents/`)** 목록을 경고로 함께 보인다 — workspace 세션의 `subagent_type` 위임은 멤버 쓰기 범위가 아니라 전역 페르소나로 간다. 해소는 사용자 선택이다(전역 이름 변경, 또는 멤버 코드 위임은 멤버 세션·`/cd`에서만).
+
+그다음 AskUserQuestion으로 `workspace로 셋업` / `취소`를 받는다. workspace 수준 인터뷰는 **도구 통합**(Claude / Codex / 둘 다) 하나만 묻는다. 규모·테스트 정책·편집 가드는 멤버 각자의 것이므로 여기서 묻지 않는다.
 
 ### 7-3. 생성물
 
@@ -280,4 +282,5 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 - `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
 - `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
 - 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있거나 낡았으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음, 첫 줄·①③④가 "cwd의 `.claude/`만 로드하므로 해결 불가"·"경로 첫 세그먼트" 기준) 같은 방식으로 diff를 제안하고 승인 후 반영한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
+- `persona_shadows`는 7-2와 같이 경고로 보인다.
 - 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.
