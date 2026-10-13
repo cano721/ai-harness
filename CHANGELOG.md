@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **드문 오류의 규칙 효과를 1~2건 차이로 판정하던 문제 수정** — 적용 후 세션 수만 보고 판정해, 원래 100세션당 1.9건인 오류가 적용 후 32세션에서 1건 나온 것만으로 `no_effect`가 됐습니다(기대 건수 0.6건). 이제 적용 전 발생률로 예상되는 적용 후 건수가 5건(`HM_EFFECT_MIN_EXPECTED`) 이상일 때만 판정하고, 결과에 `expected_after_hits`를 보여 줍니다.
+
 ## v0.36.0 (2026-10-13)
 ### 새 기능
 

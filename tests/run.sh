@@ -1918,6 +1918,7 @@ jq -cn --arg st "$RQ_BEFORE_AT" '{kind:"session",src:"claude",sid:"straddle",pro
 RQ_EFFECT="$(run_rq effect --rule-id rule-one)"
 assert_eq "11|6|30|3|improved" "$(jq -r '"\(.before.sessions)|\(.before.hits)|\(.after.sessions)|\(.after.hits)|\(.verdict)"' <<<"$RQ_EFFECT")" "effect compares rates by session start and judges improvement"
 assert_eq "pending" "$(HM_EFFECT_MIN_SESSIONS=100 run_rq effect --rule-id rule-one | jq -r .verdict)" "small samples stay pending"
+assert_eq "pending" "$(HM_EFFECT_MIN_EXPECTED=50 run_rq effect --rule-id rule-one | jq -r .verdict)" "rare signals stay pending until enough events are expected"
 pass "rule quality gates and measured effect"
 
 # manifest versions and marketplace policy stay aligned
