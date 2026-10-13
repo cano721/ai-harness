@@ -204,7 +204,8 @@ command_list() {
 
 # 규칙별 효과를 수치로: --signal 정규식에 맞는 오류 발췌·교정 신호가 있는 세션의 비율을
 # 적용 전(직전 30일)과 적용 후(적용 뒤 시작한 세션)로 나눠 100세션당 값으로 낸다. 적용 후 세션이
-# HM_EFFECT_MIN_SESSIONS(30)개 미만이면 표본이 작아 pending. 절반 이하로 줄면 improved, 그대로거나 늘면 no_effect. workspace 규칙은 그 프로젝트 세션만 센다.
+# HM_EFFECT_MIN_SESSIONS(30)개 미만이거나, 적용 전 발생률로 예상되는 적용 후 건수가 HM_EFFECT_MIN_EXPECTED(5) 미만이면
+# 표본이 작아 pending. 절반 이하로 줄면 improved, 그대로거나 늘면 no_effect. workspace 규칙은 그 프로젝트 세션만 센다.
 command_effect() {
   local only="" rules=""
   [[ "${1:-}" == "--rule-id" ]] && only="${2:-}"
@@ -215,7 +216,8 @@ command_effect() {
   shopt -u nullglob
   (( ${#files[@]} > 0 )) || return 0
   grep -h -E '"kind":"(session|error_sample|correction_mark|correction_candidate)"' "${files[@]}" 2>/dev/null \
-    | jq -sc --argjson rules "$rules" --argjson min "${HM_EFFECT_MIN_SESSIONS:-30}" '
+    | jq -sc --argjson rules "$rules" --argjson min "${HM_EFFECT_MIN_SESSIONS:-30}" \
+      --argjson min_expected "${HM_EFFECT_MIN_EXPECTED:-5}" '
       (map(select(.kind == "session" and ((.internal // false) | not)))
         # 지침 파일은 세션 시작 때 읽히므로, 적용 전에 시작한 세션은 새 규칙을 본 적이 없다 — 시작 시각으로 나눈다.
         | map({key:(.src + ":" + .sid), value:{at:(.started // .ended // ""), project}}) | from_entries) as $sessions
@@ -231,8 +233,12 @@ command_effect() {
           per100:(if ($xs | length) == 0 then null else (([$xs[] | select(.hit)] | length) * 100 / ($xs | length) * 10 | round / 10) end)};
         rate([$scoped[] | select(.at >= $since and .at < $at)]) as $before
         | rate([$scoped[] | select(.at >= $at)]) as $after
-        | ($after.sessions >= $min) as $judgeable
-        | {id:$r.id, signal:$r.signal, applied_at:$at, before:$before, after:$after, judgeable:$judgeable,
+        # 세션 수만으로는 부족하다 — 드문 오류는 적용 후 기대 건수가 1건 미만이라 1건 차이도 노이즈다.
+        # 적용 전 발생률로 예상되는 적용 후 건수가 $min_expected 이상일 때만 판정한다.
+        | (if $before.per100 == null then 0 else $before.per100 * $after.sessions / 100 end) as $expected
+        | ($after.sessions >= $min and $expected >= $min_expected) as $judgeable
+        | {id:$r.id, signal:$r.signal, applied_at:$at, before:$before, after:$after,
+           expected_after_hits:($expected * 10 | round / 10), judgeable:$judgeable,
            verdict:(if ($judgeable | not) or $before.per100 == null then "pending"
                     elif $after.per100 <= $before.per100 * 0.5 then "improved"
                     elif $after.per100 >= $before.per100 then "no_effect"
