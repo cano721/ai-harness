@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# 수집·정리·자동 harvest의 단일 진입점. launchd(scripts/schedule.sh, 매시간 확인)와 SessionStart가 부른다.
+# 수집·정리·자동 harvest의 단일 진입점. 에이전트 hook(SessionStart, 응답마다 Stop → tick.sh)이 부른다 —
+# OS 스케줄러에 기대지 않아 macOS·Linux·Windows(WSL)와 Claude Code·Codex에서 똑같이 돈다.
 # 마지막 backfill이 HM_BACKFILL_INTERVAL_HOURS(기본 6)보다 오래됐으면 저우선순위로
-# backfill → (opt-in) LLM 정리 → 자동 harvest sweep → 릴리스 정보 갱신을 한 번에 돈다.
-# 두 호출 경로가 겹쳐도 주기 판정과 lock을 공유하므로 한 번만 돈다.
+# backfill → (LLM 단계: 정리 → 자동 harvest sweep) → 릴리스 정보 갱신을 한 번에 돈다.
+# LLM 단계는 사용자가 쉬는 동안만 돈다(최근 활동이 없을 때까지 대기, 사용량 한도 직후엔 휴지).
+# 여러 호출이 겹쳐도 주기 판정과 lock을 공유하므로 한 번만 돈다.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
@@ -21,13 +23,54 @@ if [[ -n "$last_attempt" ]]; then
   fi
 fi
 
+IDLE_MINUTES="${HM_IDLE_MINUTES:-20}"; [[ "$IDLE_MINUTES" =~ ^[0-9]+$ ]] || IDLE_MINUTES=20
+IDLE_WAIT_HOURS="${HM_IDLE_WAIT_HOURS:-4}"; [[ "$IDLE_WAIT_HOURS" =~ ^[0-9]+$ ]] || IDLE_WAIT_HOURS=4
+BACKOFF_HOURS="${HM_LLM_BACKOFF_HOURS:-5}"; [[ "$BACKOFF_HOURS" =~ ^[0-9]+$ ]] || BACKOFF_HOURS=5
+
+# 최근 IDLE_MINUTES분 안에 Claude·Codex 대화 기록이 갱신됐으면 작업 중이다.
+recently_active() {
+  (( IDLE_MINUTES > 0 )) || return 1
+  local root=""
+  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$IDLE_MINUTES" -print -quit 2>/dev/null)" ]]; then
+    return 0
+  fi
+  while IFS= read -r root; do
+    [[ -d "$root" ]] || continue
+    [[ -n "$(find "$root" -name 'rollout-*.jsonl' -mmin "-$IDLE_MINUTES" -print -quit 2>/dev/null)" ]] && return 0
+  done < <(codex_session_roots)
+  return 1
+}
+
+# 사용량 한도에 막힌 직후에는 LLM 단계를 쉰다 — 사용자의 작업 한도를 같이 쓰기 때문이다.
+in_usage_backoff() {
+  (( BACKOFF_HOURS > 0 )) || return 1
+  local runs="$HM_DATA_DIR/harvest-auto/runs.jsonl" since=""
+  [[ -f "$runs" ]] || return 1
+  since="$(date -u -v-"${BACKOFF_HOURS}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$BACKOFF_HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)"
+  jq -e --arg since "$since" 'select(.event=="finished" and .reason=="usage_limit" and .at >= $since)' "$runs" >/dev/null 2>&1
+}
+
+# LLM 단계를 돌려도 되는지: 휴지 중이 아니고, 사용자가 쉬고 있을 때까지(최대 IDLE_WAIT_HOURS) 기다린다.
+llm_steps_ready() {
+  local deadline=0
+  in_usage_backoff && return 1
+  deadline=$(( $(date +%s) + IDLE_WAIT_HOURS * 3600 ))
+  while recently_active; do
+    (( $(date +%s) < deadline )) || return 1
+    sleep "${HM_IDLE_POLL_SECONDS:-300}"
+  done
+  return 0
+}
+
 if [[ "${1:-}" == "--worker" ]]; then
   hm_acquire_lock "$LOCK_DIR" 1 || exit 0
   trap 'hm_release_lock "$LOCK_DIR"' EXIT
   nice -n 10 "$DIR/backfill.sh" >/dev/null 2>&1 || true
-  # opt-in LLM 정리는 새로 회수된 세션까지 반영된 뒤에 돈다.
-  [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
-  "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
+  # LLM 단계는 새로 회수된 세션까지 반영된 뒤, 사용자가 쉬는 동안에만 돈다.
+  if [[ "${HM_DIGEST:-0}" == "1" || "${HM_HARVEST_AUTO:-0}" == "1" ]] && llm_steps_ready; then
+    [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
+    "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
+  fi
   "$DIR/check-update.sh" refresh >/dev/null 2>&1 || true
   exit 0
 fi

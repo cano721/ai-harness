@@ -7,6 +7,17 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 동작 변경
+
+- **정기 실행이 OS 스케줄러 없이 에이전트 hook으로 돕니다** — launchd는 macOS 전용이고 OS마다 따로 설치해야 했습니다. 이제 Claude Code·Codex 공통 `Stop` hook(응답마다)과 `SessionStart`가 주기만 확인하고(수 ms), 지났으면 작업을 세션과 분리해 띄웁니다. 긴 세션 중에도 주기대로 돌고, macOS·Linux·WSL에서 똑같이 동작합니다. `scripts/schedule.sh`(launchd)는 선택 사항으로 남고, 설치 안내는 더 띄우지 않습니다.
+- **LLM 단계(LLM 정리·자동 harvest)는 사용자가 쉬는 동안만 돕니다** — 수집은 바로 하고, LLM 단계는 최근 20분간 대화 기록 활동이 없을 때까지 최대 4시간 기다립니다. 자동 harvest가 사용량 한도로 실패하면 5시간 동안 쉽니다. 실측에서 작업 중 사용량 한도에 막힌 실행이 있었습니다.
+
+### 업데이트 후 해야 할 일
+
+- launchd를 등록했다면 `scripts/schedule.sh uninstall`로 해제해도 됩니다(남겨 둬도 주기·lock을 공유해 중복 실행되지 않습니다).
+
 ## v0.35.1 (2026-10-12)
 ### 보안
 

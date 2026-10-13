@@ -390,10 +390,6 @@ assert_not_file "$HINT_DATA/auto-update-hint-shown"
 FIRST_HINT="$(run_start_hook "$CLAUDE_START_INPUT")"
 assert_contains "$(jq -r '.systemMessage' <<<"$FIRST_HINT")" "Enable auto-update" "auto-update hint on first Claude session"
 assert_file "$HINT_DATA/auto-update-hint-shown"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  assert_contains "$(jq -r '.systemMessage' <<<"$FIRST_HINT")" "schedule.sh\" install" "launchd hint on first macOS Claude session"
-  assert_file "$HINT_DATA/schedule-hint-shown"
-fi
 assert_eq "" "$(run_start_hook "$CLAUDE_START_INPUT")" "auto-update hint shown only once"
 pass "SessionStart auto-update hint"
 assert_eq "$QUEUE_EVENT" "$(
@@ -1856,6 +1852,37 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
   fail "project runs must not get blanket git access"
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
+
+# 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
+assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"
+assert_eq "3" "$(jq -r '.hooks.Stop[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "tick stays inside a short budget"
+TICK_DATA="$TEST_TMP/tick-data"
+mkdir -p "$TICK_DATA"
+printf '{}' | HARNESS_METRICS_DIR="$TICK_DATA" HM_INTERNAL_SESSION=1 HM_BACKFILL_INTERVAL_HOURS=6 "$ROOT/scripts/tick.sh"
+assert_not_file "$TICK_DATA/health.json"
+TICK_CLAUDE="$TEST_TMP/tick-claude/-tmp-x"
+mkdir -p "$TICK_CLAUDE" "$TEST_TMP/tick-codex"
+printf '{}\n' >"$TICK_CLAUDE/active.jsonl"
+run_tick_worker() {
+  HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
+    HM_BACKFILL_INTERVAL_HOURS=6 HM_BACKFILL_FOREGROUND=1 HM_HARVEST_AUTO=1 HM_HARVEST_GLOBAL_DAYS=0 \
+    env "$@" "$ROOT/scripts/backfill-due.sh"
+}
+run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
+assert_eq "success" "$(jq -r '.components.backfill.last_result' "$TICK_DATA/health.json")" "collection runs even while the user is active"
+assert_not_file "$TICK_DATA/harvest-auto/runs.jsonl"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
+mkdir -p "$TICK_DATA/harvest-auto"
+jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"x",result:"failed",reason:"usage_limit"}' >"$TICK_DATA/harvest-auto/runs.jsonl"
+touch -t 200001010000 "$TICK_CLAUDE/active.jsonl"
+run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
+assert_eq "1" "$(wc -l <"$TICK_DATA/harvest-auto/runs.jsonl" | tr -d ' ')" "LLM steps rest right after a usage limit"
+jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
+: >"$TICK_DATA/harvest-auto/runs.jsonl"
+run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7 HM_HARVEST_AUTO_FOREGROUND=1 \
+  HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/tick-stub.out"
+assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "when the user is idle and no backoff applies, LLM steps run"
+pass "hook-driven schedule with idle and usage gates"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
