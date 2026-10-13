@@ -286,6 +286,18 @@ assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Cl
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
 assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CLAUDE_EVENT")" "Claude correction mark keeps the high-precision prefix net"
 assert_eq "스웨거 링크 이상해. 다시 봐줘" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CLAUDE_EVENT")" "a complaint in mid-sentence is a candidate, a plain instruction is not"
+USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
+mkdir -p "${USAGE_DUP_FIXTURE%/*}"
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  for block in '{"type":"text","text":"x"}' '{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"a"}}' '{"type":"tool_use","id":"t2","name":"Grep","input":{"pattern":"b"}}'; do
+    printf '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"id":"msg_1","model":"claude-test-model","usage":{"input_tokens":5,"output_tokens":100,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10},"content":[%s]}}\n' "$block"
+  done
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:02Z","message":{"id":"msg_2","model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":7,"cache_read_input_tokens":20,"cache_creation_input_tokens":2},"content":[{"type":"text","text":"y"}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:03Z","message":{"model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"y"}]}}'
+} >"$USAGE_DUP_FIXTURE"
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
+assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
 assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"

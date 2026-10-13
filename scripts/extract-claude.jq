@@ -51,6 +51,9 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
 
 | ($L | map(select(.type=="user" and (utext|length)>0 and ((.message.content|type)=="string" or ([.|tool_results]|length)==0)))) as $userMsgs
 | ($L | map(select(.type=="assistant" and .message.usage != null))) as $asst
+# 응답 하나가 content block마다 한 줄씩 기록되며 같은 message.id·usage를 반복한다 — 줄 단위 합산은 약 2배로 센다.
+| (($asst | map(select(.message.id == null)) | map(.message.usage))
+   + ($asst | map(select(.message.id != null)) | group_by(.message.id) | map(last.message.usage))) as $usage
 # tool_result → 호출한 툴 이름 (tool_use_id 기준). 신호를 "어느 툴의 결과인가"로 가릴 때 쓴다.
 | ($L | [.[] | tool_uses | select(.id != null) | {key:.id, value:.name}] | from_entries) as $toolNames
 
@@ -60,10 +63,10 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
     started: (first($L[] | .timestamp // empty) // null),
     ended:   ([$L[] | .timestamp // empty] | last // null),
     turns:   ($userMsgs|length),
-    tok_in:  ([$asst[].message.usage | (.input_tokens//0)] | add // 0),
-    tok_out: ([$asst[].message.usage | (.output_tokens//0)] | add // 0),
-    cache_read: ([$asst[].message.usage | (.cache_read_input_tokens//0)] | add // 0),
-    cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
+    tok_in:  ([$usage[] | (.input_tokens//0)] | add // 0),
+    tok_out: ([$usage[] | (.output_tokens//0)] | add // 0),
+    cache_read: ([$usage[] | (.cache_read_input_tokens//0)] | add // 0),
+    cache_write: ([$usage[] | (.cache_creation_input_tokens//0)] | add // 0),
     model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
     internal: (($userMsgs | first | utext? // "") | is_internal_prompt),
