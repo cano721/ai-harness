@@ -1884,6 +1884,42 @@ run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7
 assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "when the user is idle and no backoff applies, LLM steps run"
 pass "hook-driven schedule with idle and usage gates"
 
+# 규칙 품질: 보이지 않는 문자·비밀값 거부, 총량 상한, 효과 수치 판정(세션 시작 시각 기준).
+RQ_DIR="$TEST_TMP/rule-quality"
+mkdir -p "$RQ_DIR/events"
+run_rq() {
+  HARNESS_METRICS_DIR="$RQ_DIR" HM_GLOBAL_CLAUDE_MD="$RQ_DIR/C.md" HM_GLOBAL_CODEX_AGENTS_MD="$RQ_DIR/X.md" \
+    HM_AUTO_RULES_MAX=2 "$ROOT/scripts/auto-apply.sh" "$@"
+}
+RQ_RC=0; run_rq apply --scope global --rule-id zw-rule --text "$(printf '정상\342\200\213문구')" --evidence a --expected b >/dev/null 2>&1 || RQ_RC=$?
+assert_eq "2" "$RQ_RC" "invisible unicode is rejected"
+RQ_RC=0; run_rq apply --scope global --rule-id secret-rule --text '토큰은 api_key=sk1234abcd 로 넣는다' --evidence a --expected b >/dev/null 2>&1 || RQ_RC=$?
+assert_eq "2" "$RQ_RC" "secret-looking text is rejected"
+RQ_RC=0; run_rq apply --scope global --rule-id bad-signal --text t --evidence a --expected b --signal '(' >/dev/null 2>&1 || RQ_RC=$?
+assert_eq "2" "$RQ_RC" "invalid signal regex is rejected"
+run_rq apply --scope global --rule-id rule-one --text "첫 규칙" --evidence a --expected b --signal "boom" >/dev/null
+run_rq apply --scope global --rule-id rule-two --text "둘째 규칙" --evidence a --expected b >/dev/null
+RQ_RC=0; run_rq apply --scope global --rule-id rule-three --text "셋째" --evidence a --expected b >/dev/null 2>&1 || RQ_RC=$?
+assert_eq "5" "$RQ_RC" "rule cap blocks a new rule"
+run_rq apply --scope global --rule-id rule-two --text "둘째 규칙 강화" --evidence a --expected b >/dev/null
+# 효과: 적용 전 10세션 중 6개, 적용 후 시작한 30세션 중 3개에서 신호 → 20→10... 절반 이하면 improved
+RQ_AT="$(run_rq list --active | jq -r 'select(.id=="rule-one") | .at')"
+make_rq_session() { # $1=sid $2=started $3=hit(1/0)
+  jq -cn --arg sid "$1" --arg st "$2" '{kind:"session",src:"claude",sid:$sid,project:"p",started:$st,ended:$st}'
+  if [[ "$3" == "1" ]]; then jq -cn --arg sid "$1" '{kind:"error_sample",src:"claude",sid:$sid,project:"p",target:"Bash: boom happened",n:1}'; fi
+}
+for i in $(seq 1 10); do make_rq_session "b$i" "2026-01-01T00:00:0${i: -1}Z" $(( i <= 6 ? 1 : 0 )); done >"$RQ_DIR/events/before.jsonl"
+for i in $(seq 1 30); do make_rq_session "a$i" "2999-01-01T00:00:00Z" $(( i <= 3 ? 1 : 0 )); done >"$RQ_DIR/events/after.jsonl"
+# 적용 전 창은 적용 시각 직전 30일이라, 테스트에선 before 세션을 그 창 안으로 옮긴다.
+RQ_BEFORE_AT="$(jq -rn --arg at "$RQ_AT" '$at | sub("Z$"; "") | strptime("%Y-%m-%dT%H:%M:%S") | mktime - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")')"
+sed -i.bak "s/2026-01-01T00:00:0[0-9]Z/$RQ_BEFORE_AT/" "$RQ_DIR/events/before.jsonl"
+# 적용 전에 시작해 적용 후에 끝난 세션은 '적용 후'가 아니다.
+jq -cn --arg st "$RQ_BEFORE_AT" '{kind:"session",src:"claude",sid:"straddle",project:"p",started:$st,ended:"2999-01-01T00:00:00Z"}' >>"$RQ_DIR/events/before.jsonl"
+RQ_EFFECT="$(run_rq effect --rule-id rule-one)"
+assert_eq "11|6|30|3|improved" "$(jq -r '"\(.before.sessions)|\(.before.hits)|\(.after.sessions)|\(.after.hits)|\(.verdict)"' <<<"$RQ_EFFECT")" "effect compares rates by session start and judges improvement"
+assert_eq "pending" "$(HM_EFFECT_MIN_SESSIONS=100 run_rq effect --rule-id rule-one | jq -r .verdict)" "small samples stay pending"
+pass "rule quality gates and measured effect"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
