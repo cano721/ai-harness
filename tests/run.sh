@@ -306,6 +306,8 @@ cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
 # Implement Feature
 
 - Claude: Agent 도구의 `subagent_type`으로 위임. 위반은 diff를 보존하고 재위임.
+- 역할 범위 위반을 발견하면 변경을 폐기하지 않는다 — diff를 보존하고 재위임한다.
+- Do not discard the diff on a scope violation.
 - Codex: `codex exec -C <repo> -s workspace-write -o out.md`
 - 같은 원인이 최대 2회 수정 뒤에도 남으면 사용자 판단.
 DOC
@@ -382,11 +384,16 @@ bash_doc_line() { # $1=tool name, $2=input json
   bash_doc_line Bash '{"command":"cd member && head -50 \".ai-harness/workflows/fix-bug.md\" | nl"}'
   bash_doc_line Bash '{"command":"grep -rn approval .ai-harness/workflows/"}'
   bash_doc_line Bash '{"command":"printf x > .ai-harness/docs/domain.md"}'
+  bash_doc_line Bash '{"command":"cat > .ai-harness/docs/new.md <<'"'"'EOF'"'"'\nbody\nEOF"}'
+  bash_doc_line Bash '{"command":"cat notes.txt > .ai-harness/docs/b.md"}'
+  bash_doc_line Bash '{"command":"sed -i '"'"'s/a/b/'"'"' .ai-harness/workflows/fix-bug.md"}'
+  bash_doc_line Bash '{"command":"cat .ai-harness/docs/한글문서.md"}'
+  bash_doc_line Bash '{"command":"cat src/FooCLAUDE.md"}'
 } >"$BASH_DOC_FIXTURE"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$BASH_DOC_FIXTURE" "user_exit"
-assert_eq ".ai-harness/docs/testing.md=1 .ai-harness/workflows/fix-bug.md=1 .ai-harness/workflows/implement-feature.md=2 AGENTS.md=1" \
+assert_eq ".ai-harness/docs/testing.md=1 .ai-harness/docs/한글문서.md=1 .ai-harness/workflows/fix-bug.md=1 .ai-harness/workflows/implement-feature.md=2 AGENTS.md=1" \
   "$(jq -r 'select(.kind=="doc_read") | "\(.target)=\(.n)"' "$EXTRACT_DATA/events/claude-ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl" | sort | paste -sd " " -)" \
-  "Claude doc_read counts harness docs read through Bash read commands, not searches or writes"
+  "Claude doc_read counts harness docs read through Bash read commands, not searches, redirects, heredocs or sed -i"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
 assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
@@ -2010,6 +2017,9 @@ assert_eq "0" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent passes when its parent session read the workflow"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bare.jsonl" a1)" "a subagent is blocked when neither it nor its parent read the workflow"
 assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}' | "$ROOT/scripts/member-edit-guard.sh" >/dev/null 2>&1 && echo 0 || echo $?)" "non-edit tools pass"
+ln -s "$GW/jobda" "$GW/jobda-link"
+assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"
+assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
 pass "member edit guard"
 
