@@ -3,6 +3,7 @@
 - 상태: 제안 (2026-10-13)
 - 범위: `templates/{implement-feature,fix-bug,review}`, `skills/harness-init`, `scripts/` 계측, `hooks/`
 - 근거: 실사용 workspace 1곳(독립 저장소 24개, 하네스 standard 3곳)의 30일 기록과 Claude·Codex 독립 검토 2건
+- 이슈: #102 (epic), #103~#110
 
 ## 1. 문제
 
