@@ -22,7 +22,9 @@ def metric_table($rows; $supported; $total):
   end;
 
 . as $all
+# 자동 harvest가 띄운 내부 세션은 프로젝트 작업이 아니므로 신호·사용량 통계에서 뺀다.
 | ($all | map(select(.kind=="session"
+    and ((.internal // false) | not)
     and ($project=="" or .project==$project)
     and ($cutoff=="" or ((.ended // .started // "") >= $cutoff))))) as $S
 # 배열 index 스캔(세션수×이벤트수)이 아니라 객체 lookup으로 소속 세션을 판정한다.
@@ -79,6 +81,26 @@ def metric_table($rows; $supported; $total):
    | map("| \(.k) | \(if .supported==0 then "미지원" else (.n|tostring) end) | \(.supported)/\($total) |")
    | join("\n"))
 
++ "\n\n## 반복 오류 (발췌, 세션 수 순)\n\n"
++ (
+    (coverage_count($S; "error_sample")) as $err_supported
+    | if $err_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+      else
+        # 줄 번호·포트·해시처럼 매번 달라지는 숫자를 지워 같은 실패끼리 묶는다.
+        ($S | map({(.sid): .project}) | add // {}) as $proj
+        | ($E | map(select(.kind=="error_sample"))
+          | map(. + {key:(.target | gsub("[0-9a-f]{7,}"; "#") | gsub("[0-9]+"; "#"))})
+          | group_by(.key)
+          | map({sessions:(map(.sid) | unique | length), projects:(map($proj[.sid] // "?") | unique | length),
+                 n:(map(.n) | add), sample:.[0].target})
+          | sort_by(-.sessions, -.n) | .[0:15]) as $rows
+        | if ($rows|length)==0 then "_(관측 가능 \($err_supported)세션에서 없음)_"
+          else "| 세션 | 프로젝트 | 횟수 | 발췌 |\n|---|---|---|---|\n"
+            + ($rows | map("| \(.sessions) | \(.projects) | \(.n) | \(.sample | gsub("\\|"; "\\|")) |") | join("\n"))
+            + (if $err_supported<$total then "\n\n_관측 범위: \($err_supported)/\($total)세션_" else "" end)
+          end
+      end
+  )
 + "\n\n## 교정 마크 (LLM 정독 후보)\n\n"
 + (
     if $correction_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"

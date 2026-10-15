@@ -6,7 +6,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
-done_n=0; skip_n=0; fail_n=0; cleanup_n=0; queue_n=0; queue_fail_n=0
+done_n=0; skip_n=0; fail_n=0; cleanup_n=0; queue_n=0; queue_skip_n=0; queue_fail_n=0
 shopt -s nullglob
 
 # v0.7.x에서 Codex SessionEnd hook이 Claude extractor를 호출해 만든 파생 유령 이벤트 정리.
@@ -18,13 +18,56 @@ for ghost in "$HM_DATA_DIR"/events/claude-rollout-*.jsonl; do
   fi
 done
 
+# 큐 기록 스탬프: 이벤트도 큐 로직도 그대로면 record를 다시 부르지 않는다.
+# 실측: 변경 없는 증분 backfill 4분 20초의 대부분이 이벤트 1771개 전부의 재기록이었다.
+STAMP_DIR="$HM_DATA_DIR/.enqueued"
+mkdir -p "$STAMP_DIR"
+
+# 의존 스크립트가 "언제부터 지금 내용인가"를 내용 해시로 판단한다. 수정 시각을 쓰면 플러그인을
+# 업데이트할 때마다(내용이 같아도 새로 설치되면) 전 세션을 다시 추출·기록한다 — 실측 2천여 세션에 1시간 이상.
+DEP_STATE_DIR="$HM_DATA_DIR/.dep-state"
+mkdir -p "$DEP_STATE_DIR"
+dep_since() { # $1=그룹 이름, 나머지=파일 → 현재 내용이 처음 관측된 epoch
+  local name="$1" hash="" state="" since="" newest=0 file="" file_mt=""
+  shift
+  hash="$(cat "$@" 2>/dev/null | { shasum 2>/dev/null || sha1sum; } | cut -c1-40)"
+  state="$DEP_STATE_DIR/$name"
+  if [[ -f "$state" && "$(sed -n '1p' "$state")" == "$hash" ]]; then
+    since="$(sed -n '2p' "$state")"
+    [[ "$since" =~ ^[0-9]+$ ]] && { printf '%s\n' "$since"; return; }
+  fi
+  # 처음이거나 내용이 바뀌었다. 기록이 없을 때는 기존과 같이 파일 수정 시각을 기준으로 한다.
+  for file in "$@"; do
+    file_mt="$(mtime "$file")"
+    [[ -n "$file_mt" ]] && (( file_mt > newest )) && newest="$file_mt"
+  done
+  [[ -f "$state" ]] && newest="$(date +%s)"
+  printf '%s\n%s\n' "$hash" "$newest" >"$state"
+  printf '%s\n' "$newest"
+}
+queue_dep_mt="$(dep_since queue "$DIR/harvest-queue.sh" "$DIR/lib.sh")"
+claude_dep_mt="$(dep_since extract-claude "$DIR/extract-claude.sh" "$DIR/extract-claude.jq" "$DIR/redact.jq" "$DIR/lib.sh")"
+codex_dep_mt="$(dep_since extract-codex "$DIR/extract-codex.sh" "$DIR/redact.jq" "$DIR/lib.sh")"
+
+enqueue_is_fresh() { # $1=event
+  local stamp="$STAMP_DIR/${1##*/}" stamp_mt="" ev_mt=""
+  [[ -f "$stamp" ]] || return 1
+  stamp_mt="$(mtime "$stamp")"; ev_mt="$(mtime "$1")"
+  [[ -n "$stamp_mt" && -n "$ev_mt" ]] && (( stamp_mt >= ev_mt && stamp_mt >= queue_dep_mt ))
+}
+
 enqueue_event() {
   local ev="$1" queue_result="" action="" rollup="" rollup_tmp=""
   local source_mtime=0 source_size=0
+  if enqueue_is_fresh "$ev"; then
+    queue_skip_n=$((queue_skip_n + 1))
+    return
+  fi
   if [[ -f "$ev" ]] \
     && jq -e 'select(.kind=="session")' "$ev" >/dev/null 2>&1 \
     && queue_result="$("$DIR/harvest-queue.sh" record "$ev" 2>/dev/null)"; then
     queue_n=$((queue_n + 1))
+    : >"$STAMP_DIR/${ev##*/}"
     action="$(printf '%s' "$queue_result" | jq -r '.record_action // empty' 2>/dev/null || true)"
     rollup="$HM_DATA_DIR/rollups/$(basename "$ev")"
     # mtime만 바뀐 동일 transcript를 확인하려 상세 이벤트를 잠시 복원했더라도,
@@ -46,7 +89,7 @@ enqueue_event() {
 
 process() { # $1=transcript $2=event파일 $3=extractor
   local t="$1" ev="$2" ex="$3"
-  local mt="" ev_mt="" ev_v="0" dep="" dep_mt="" newest_dep=0 rollup="" rollup_mt=""
+  local mt="" ev_mt="" ev_v="0" newest_dep=0 rollup="" rollup_mt=""
   local source_mtime=0 source_size=0 current_size=0
   mt="$(mtime "$t")"
   [[ -n "$mt" ]] || return
@@ -70,13 +113,10 @@ process() { # $1=transcript $2=event파일 $3=extractor
     fi
   fi
 
-  for dep in "$DIR/$ex" "$DIR/lib.sh"; do
-    dep_mt="$(mtime "$dep")"
-    [[ -n "$dep_mt" ]] && (( dep_mt > newest_dep )) && newest_dep="$dep_mt"
-  done
   if [[ "$ex" == "extract-claude.sh" ]]; then
-    dep_mt="$(mtime "$DIR/extract-claude.jq")"
-    [[ -n "$dep_mt" ]] && (( dep_mt > newest_dep )) && newest_dep="$dep_mt"
+    newest_dep="$claude_dep_mt"
+  else
+    newest_dep="$codex_dep_mt"
   fi
 
   if [[ -f "$ev" ]]; then
@@ -111,9 +151,45 @@ while IFS= read -r codex_root; do
   done < <(find "$codex_root" -name 'rollout-*.jsonl' -type f 2>/dev/null)
 done < <(codex_session_roots)
 
+# 원본 transcript가 지워진(Claude는 오래된 기록을 자동 정리한다) 세션은 위에서 다시 추출되지 않아,
+# 프로젝트 ID 규칙이 바뀌어도 옛 이름으로 남는다(실측: 같은 workspace 681세션이 옛 이름).
+# 규칙(lib.sh)이 바뀐 뒤 한 번, 남은 작업 경로로 다시 판정해 이름만 고치고 큐에 다시 기록한다.
+relabel_n=0
+relabel_since="$(dep_since relabel "$DIR/lib.sh")"
+relabel_state="$DEP_STATE_DIR/relabel-done"
+if [[ "$(sed -n '1p' "$relabel_state" 2>/dev/null)" != "$relabel_since" ]]; then
+  for ev in "$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl; do
+    IFS=$'\t' read -r transcript old_project cwd < <(jq -r 'select(.kind=="session")
+      | [(.transcript // ""), (.project // ""), (.cwd // "")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    [[ -n "$cwd" && -n "$old_project" ]] || continue
+    [[ -n "$transcript" && -f "$transcript" ]] && continue
+    # 경로가 사라졌거나 git·workspace로 판정되지 않으면 폴더 이름 휴리스틱뿐이라, 추출 당시 git으로 얻은
+    # 올바른 이름을 덮어쓸 수 있다. 확실히 판정되는 경우만 고친다.
+    [[ -d "$cwd" ]] || continue
+    [[ -f "$cwd/.ai-harness/workspace.json" ]] || git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || continue
+    new_project="$(project_id_for_cwd "$cwd")"
+    [[ -n "$new_project" && "$new_project" != "$old_project" ]] || continue
+    tmp="$(mktemp "${ev%/*}/.relabel.XXXXXX")"
+    if jq -c --arg p "$new_project" 'if has("project") then .project = $p else . end' "$ev" >"$tmp"; then
+      touch -r "$ev" "$tmp"
+      mv "$tmp" "$ev"
+      relabel_n=$((relabel_n + 1))
+      [[ "$ev" == "$HM_DATA_DIR"/events/* ]] && { find "$STAMP_DIR/${ev##*/}" -maxdepth 0 -type f -delete 2>/dev/null || true; enqueue_event "$ev"; }
+    else
+      find "$tmp" -maxdepth 0 -type f -delete
+    fi
+  done
+  printf '%s\n' "$relabel_since" >"$relabel_state"
+fi
+
+# 이벤트가 정리(prune·rollup)된 스탬프는 더 쓸 일이 없다.
+for stamp in "$STAMP_DIR"/*; do
+  [[ -f "$HM_DATA_DIR/events/${stamp##*/}" ]] || find "$stamp" -maxdepth 0 -type f -delete
+done
+
 if (( fail_n > 0 || queue_fail_n > 0 )); then
   "$DIR/health.sh" failure backfill "extract_${fail_n}_queue_${queue_fail_n}" >/dev/null 2>&1 || true
 else
   "$DIR/health.sh" success backfill >/dev/null 2>&1 || true
 fi
-echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n"
+echo "백필 완료: 처리 $done_n, 스킵 $skip_n, 실패 $fail_n, 큐 $queue_n, 큐 유지 $queue_skip_n, 큐 실패 $queue_fail_n, 유령 정리 $cleanup_n, 이름 재판정 $relabel_n"

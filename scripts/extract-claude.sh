@@ -8,7 +8,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/lib.sh"
 SID="$(basename "$T" .jsonl)"
 OUT="$HM_DATA_DIR/events/claude-${SID}.jsonl"
-CWD="$(jq -Rrn 'first(inputs | fromjson? | select(.cwd? != null) | .cwd) // empty' "$T" 2>/dev/null || true)"
+# macOS 기본 jq(1.6)는 first(inputs | fromjson? | …)에서 멈추지 않아 여러 줄을 돌려준다 — 줄 단위로 읽고 첫 줄만.
+CWD="$(jq -Rr 'fromjson? | select(.cwd? != null) | .cwd' "$T" 2>/dev/null | head -n 1 || true)"
 PROJECT="$(project_id_for_cwd "$CWD")"
 SOURCE_MTIME="$(mtime "$T")"; SOURCE_MTIME="${SOURCE_MTIME:-0}"
 SOURCE_SIZE="$(filesize "$T")"; SOURCE_SIZE="${SOURCE_SIZE:-0}"
@@ -22,7 +23,7 @@ TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      --arg sid "$SID" --arg path "$T" --arg reason "$REASON" --arg issue_re "$HM_ISSUE_RE" \
      --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" \
-     -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
+     -L "$DIR" -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
   mv "$TMP" "$OUT"
 else
   rm -f "$TMP"

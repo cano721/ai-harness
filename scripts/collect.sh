@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# SessionEnd hook 진입점. stdin: {session_id, transcript_path, cwd, reason}
-# 실패해도 세션 종료를 막지 않는다 (항상 exit 0)
+# 세션 1개 수집 진입점. stdin: {session_id, transcript_path, cwd, reason}
+# 플러그인 hook에서는 더 이상 부르지 않는다 — 수집은 backfill-due.sh(launchd·SessionStart)가 맡는다.
+# 수동 수집이나 사용자 정의 hook에서 쓸 수 있게 남겨 둔다. 항상 exit 0.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 input="$(cat)"
+# 하네스 자신이 띄운 내부 headless 세션(LLM 정리·자동 harvest)은 수집하지 않는다.
+[[ "${HM_INTERNAL_SESSION:-}" == "1" ]] && exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty')"
 reason="$(printf '%s' "$input" | jq -r '.reason // empty')"
 tp="${tp/#\~/$HOME}"
@@ -33,8 +36,13 @@ else
 fi
 if [[ -f "$event_file" ]] \
   && jq -e 'select(.kind=="session")' "$event_file" >/dev/null 2>&1 \
-  && "$DIR/harvest-queue.sh" record "$event_file" >/dev/null 2>&1; then
+  && queue_status="$("$DIR/harvest-queue.sh" record "$event_file" 2>/dev/null)"; then
   "$DIR/health.sh" success session_end >/dev/null 2>&1 || true
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
+  [[ -n "$cwd" ]] || cwd="$(jq -r 'select(.kind=="session") | .cwd // empty' "$event_file" 2>/dev/null | head -n 1)"
+  agent="claude"
+  [[ "$(basename "$tp")" == rollout-*.jsonl ]] && agent="codex"
+  "$DIR/harvest-auto.sh" trigger "$queue_status" "$cwd" "$agent" >/dev/null 2>&1 || true
 else
   "$DIR/health.sh" failure session_end queue_record_failed >/dev/null 2>&1 || true
 fi

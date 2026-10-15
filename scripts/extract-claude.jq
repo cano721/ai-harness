@@ -1,5 +1,6 @@
 # Claude Code transcript(.jsonl) → 압축 이벤트 스트림
 # 사용: jq -c -R -n --argjson event_version .. --arg sid .. --arg project .. -f extract-claude.jq transcript
+include "redact";
 def utext:
   .message.content
   | if type=="string" then .
@@ -27,6 +28,17 @@ def correction_hints:
    "that's wrong", "thats wrong", "you missed", "didn't work"];
 # 긴 턴은 새 지시일 확률이 높다.
 def correction_candidate_max_len: 200;
+# 오류 발췌: 같은 실패가 여러 세션에 반복되는지 /harvest가 판단할 수 있게 본문 앞부분을 남긴다.
+# 비밀값은 scripts/redact.jq로 가린다(Codex 어댑터·LLM 정리와 공용).
+# 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
+def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
+def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+"; " ") | ltrimstr(" ") | redact | .[0:160];
+# 권한 거부·가드 차단은 각자 신호(permission_deny, guard_block)로 세므로 발췌에서 뺀다.
+def error_samples($k): group_by(.) | map({kind:$k, target:.[0], n:length}) | sort_by(-.n) | .[0:10] | .[];
+# 자동 harvest(--auto)가 띄운 headless 세션. 프로젝트 작업이 아니므로 큐 신호에서 뺀다.
+# Codex 어댑터(scripts/extract-codex.sh)와 같은 판정을 쓴다.
+# 사람이 "ai-harness harvest --auto 고쳐줘"라고 쓴 세션까지 빼지 않도록 실제 호출 형태에만 맞춘다.
+def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>") and test("<command-args>[^<]*--auto");
 # 발췌는 /metrics가 마크다운 불릿으로 렌더하므로 한 줄로 접는다. 붙여넣기가 섞인 턴은
 # 개행이 그대로 들어와 리스트를 깨뜨린다 — 실측 후보 79건 중 23건(29%)이 개행 포함이었다.
 def excerpt: gsub("\\s+"; " ") | .[0:60];
@@ -39,6 +51,9 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
 
 | ($L | map(select(.type=="user" and (utext|length)>0 and ((.message.content|type)=="string" or ([.|tool_results]|length)==0)))) as $userMsgs
 | ($L | map(select(.type=="assistant" and .message.usage != null))) as $asst
+# 응답 하나가 content block마다 한 줄씩 기록되며 같은 message.id·usage를 반복한다 — 줄 단위 합산은 약 2배로 센다.
+| (($asst | map(select(.message.id == null)) | map(.message.usage))
+   + ($asst | map(select(.message.id != null)) | group_by(.message.id) | map(last.message.usage))) as $usage
 # tool_result → 호출한 툴 이름 (tool_use_id 기준). 신호를 "어느 툴의 결과인가"로 가릴 때 쓴다.
 | ($L | [.[] | tool_uses | select(.id != null) | {key:.id, value:.name}] | from_entries) as $toolNames
 
@@ -48,17 +63,18 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
     started: (first($L[] | .timestamp // empty) // null),
     ended:   ([$L[] | .timestamp // empty] | last // null),
     turns:   ($userMsgs|length),
-    tok_in:  ([$asst[].message.usage | (.input_tokens//0)] | add // 0),
-    tok_out: ([$asst[].message.usage | (.output_tokens//0)] | add // 0),
-    cache_read: ([$asst[].message.usage | (.cache_read_input_tokens//0)] | add // 0),
-    cache_write: ([$asst[].message.usage | (.cache_creation_input_tokens//0)] | add // 0),
+    tok_in:  ([$usage[] | (.input_tokens//0)] | add // 0),
+    tok_out: ([$usage[] | (.output_tokens//0)] | add // 0),
+    cache_read: ([$usage[] | (.cache_read_input_tokens//0)] | add // 0),
+    cache_write: ([$usage[] | (.cache_creation_input_tokens//0)] | add // 0),
     model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
+    internal: (($userMsgs | first | utext? // "") | is_internal_prompt),
     cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
       "jira_issue", "error", "guard_block", "permission_deny", "compact",
-      "correction_mark", "correction_candidate"
+      "correction_mark", "correction_candidate", "error_sample"
     ]
   }),
 
@@ -73,12 +89,21 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
   | counted("persona") | $base + . ),
 
 # ── doc_read: 하네스 문서 읽힘 ──
-( [ $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty
-    | select(type=="string")
-    | select(test("\\.ai-harness/|AGENTS\\.md$|CLAUDE\\.md$"))
-    | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
-      elif endswith("AGENTS.md") then "AGENTS.md"
-      else "CLAUDE.md" end ]
+# 워크플로 본문은 Read보다 Bash(cat/sed/head)로 더 자주 읽힌다 — 실측 워크플로를 읽은 세션의 절반이 Bash로만 읽었다.
+# 읽기 명령으로 시작하는 구간의 경로만 센다. grep(검색)·리다이렉트·heredoc·sed -i(쓰기)는 읽음이 아니다 —
+# `cat > doc.md <<EOF`나 `sed -i … workflow.md`를 읽음으로 세면 워크플로 경유가 부풀려진다.
+( [ ( $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty | select(type=="string") ),
+    ( $L[] | tool_uses | select(.name=="Bash") | .input.command // empty | select(type=="string")
+      | splits("&&|\\|\\||[;|\\n]") | sub("^\\s+"; "")
+      | select(test("^(cat|sed|head|tail|nl|awk|less|more|bat)\\s"))
+      | select(test("^sed\\s+(-[A-Za-z]*i|--in-place)") | not)
+      | gsub("(>>?|<<-?)\\s*['\"]?[^\\s'\"]+['\"]?"; " ")
+      | match("[^\\s'\"<>]*(\\.ai-harness/[^\\s'\"<>|;&]+|AGENTS\\.md|CLAUDE\\.md)"; "g").string )
+  ]
+  | map(select(test("\\.ai-harness/|(^|/)AGENTS\\.md$|(^|/)CLAUDE\\.md$"))
+      | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
+        elif endswith("AGENTS.md") then "AGENTS.md"
+        else "CLAUDE.md" end)
   | counted("doc_read") | $base + . ),
 
 # ── file_edit: 편집 핫스팟 ──
@@ -108,6 +133,11 @@ def excerpt: gsub("\\s+"; " ") | .[0:60];
 ( [$L[] | tool_results | select(.is_error==true)
     | select((result_text | sub("^Exit code [0-9]+";"") | gsub("\\s";"")) != "")] | length
   | select(.>0) | $base + {kind:"error", n:.} ),
+( [$L[] | tool_results | select(.is_error==true)
+    | select((result_text | sub("^Exit code [0-9]+";"") | gsub("\\s";"")) != "")
+    | select(result_text | test("^The user doesn.t want to proceed|\\[Direct edit guard\\]") | not)
+    | (($toolNames[.tool_use_id // ""] // "?")) + ": " + (result_text | error_excerpt)]
+  | error_samples("error_sample") | $base + . ),
 # 훅 차단은 편집 툴(Edit/Write/MultiEdit/NotebookEdit)의 is_error 결과로만 온다 — 가드 훅이 그 툴에만 걸린다.
 # 같은 문구가 Bash 결과(git log 커밋 메시지, 실패한 cat AGENTS.md)나 Read 출력에 섞여도 차단이 아니다.
 # 전 transcript 실측: is_error+문구 4건이 전부 "Exit code 1"로 시작하는 Bash 출력이었다.

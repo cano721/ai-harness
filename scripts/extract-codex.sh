@@ -7,19 +7,22 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 FILE_SID="$(basename "$T" .jsonl | sed 's/^rollout-//')"
-SID="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.id // empty) // empty' "$T" 2>/dev/null || true)"
+# macOS 기본 jq(1.6)는 first(inputs | fromjson? | …)에서 멈추지 않아 여러 줄을 돌려준다 — 줄 단위로 읽고 첫 줄만.
+SID="$(jq -Rr 'fromjson? | select(.type=="session_meta") | .payload.id // empty' "$T" 2>/dev/null | head -n 1 || true)"
 [[ -n "$SID" ]] || SID="$FILE_SID"
-CWD="$(jq -Rrn 'first(inputs | fromjson? | select(.type=="session_meta") | .payload.cwd // empty) // empty' "$T" 2>/dev/null || true)"
-PROJECT="$(project_id_for_cwd "$CWD")"
+CWD="$(jq -Rr 'fromjson? | select(.type=="session_meta") | .payload.cwd // empty' "$T" 2>/dev/null | head -n 1 || true)"
+REPO_URL="$(jq -Rr 'fromjson? | select(.type=="session_meta") | .payload.git.repository_url // empty' "$T" 2>/dev/null | head -n 1 || true)"
+PROJECT="$(project_id_for_cwd "$CWD" "$REPO_URL")"
 SOURCE_MTIME="$(mtime "$T")"; SOURCE_MTIME="${SOURCE_MTIME:-0}"
 SOURCE_SIZE="$(filesize "$T")"; SOURCE_SIZE="${SOURCE_SIZE:-0}"
 OUT="$HM_DATA_DIR/events/codex-${FILE_SID}.jsonl"
 # 임시파일을 대상과 같은 디렉토리에 — cross-device mv 방지
 TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 # -R + fromjson?: 손상 라인은 그 줄만 스킵
-if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
+if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   --arg sid "$SID" --arg path "$T" --arg issue_re "$HM_ISSUE_RE" \
   --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" '
+  include "redact";
   def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
   def tool_calls($r): $r[] | select(.payload.type=="function_call" or .payload.type=="custom_tool_call");
   # Codex CLI records native function calls as JSON arguments, while the
@@ -59,6 +62,13 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
      "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
   def correction_candidate_max_len: 200;
+  # 오류 발췌 — Claude 어댑터와 같은 규칙. 비밀값은 scripts/redact.jq로 가린다.
+  # 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
+  def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
+  def error_excerpt: sub("^Exit code [0-9]+\\s*"; "") | error_focus | gsub("\\s+"; " ") | ltrimstr(" ") | redact | .[0:160];
+  def error_samples($k): group_by(.) | map({kind:$k, target:.[0], n:length}) | sort_by(-.n) | .[0:10] | .[];
+  # Claude 어댑터와 같은 내부 세션 판정 — 자동 harvest(--auto)가 띄운 headless 세션.
+  def is_internal_prompt: test("^ai-harness harvest skill을 인자 \".*--auto");
   # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
   def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L
@@ -91,11 +101,12 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
       cache_write: ($tok.cache_write_input_tokens // 0),
       model:   $model,
       provider: ($meta.payload.model_provider // null),
+      internal: (($texts | first // "") | is_internal_prompt),
       cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
         "jira_issue", "error", "guard_block", "permission_deny", "compact",
-        "correction_mark", "correction_candidate"
+        "correction_mark", "correction_candidate", "error_sample"
       ]
     }),
   # Workflow commands are explicit in user prompts for both slash commands
@@ -141,6 +152,20 @@ if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
                    and ((split("Output:") | if length > 1 then (.[1:] | join("Output:")) else "" end)
                         | gsub("\\s";"")) != "")) ] | length
     | select(.>0) | $base + {kind:"error", n:.} ),
+  # 실패 출력의 본문(Output: 뒤, 브리지 봉투는 전체)에서 발췌한다. 호출 이름은 call_id로 찾는다.
+  ( ([ $R[] | select(.payload.type=="function_call" or .payload.type=="custom_tool_call")
+       | {key:(.payload.call_id // ""), value:(.payload.name // "?")} ] | from_entries) as $callNames
+    | [ tool_outputs($R)
+        | ($callNames[.payload.call_id // ""] // "?") as $tool
+        | output_text
+        | select(test("^\\s*\\{\\s*\"(is_error|isError)\"\\s*:\\s*true")
+                 or (test("(^|\\n)Process exited with code [1-9]")
+                     and ((split("Output:") | if length > 1 then (.[1:] | join("Output:")) else "" end)
+                          | gsub("\\s";"")) != ""))
+        | select(test("doesn.t want to proceed|user rejected|\\[Direct edit guard\\]") | not)
+        | (if test("Output:") then (split("Output:") | .[1:] | join("Output:")) else . end) as $body
+        | $tool + ": " + ($body | error_excerpt) ]
+    | error_samples("error_sample") | $base + . ),
   # 훅 차단 메시지는 줄 시작이 "[Direct edit guard]"다. git log·PR 본문처럼 줄 중간에 섞인 문구는 차단이 아니다.
   ( [ tool_outputs($R) | output_text
       | select(test("(^|\\n)\\[Direct edit guard\\]")) ] | length

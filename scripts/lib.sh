@@ -18,8 +18,25 @@ mkdir -p "$HM_DATA_DIR/events"
 chmod 700 "$HM_DATA_DIR" "$HM_DATA_DIR/events" 2>/dev/null || true
 
 # 사용자 설정 (있으면 로드): HM_ISSUE_RE 등 override 가능
-# shellcheck source=/dev/null
-[[ -f "$HM_DATA_DIR/config" ]] && source "$HM_DATA_DIR/config"
+# 셸로 source하지 않고 HM_·HARNESS_ 변수의 KEY=VALUE만 읽는다. 이 파일이 바뀌어도(예: 자동 실행 중인
+# 에이전트) 이후 모든 스크립트에서 임의 코드가 돌지 않게. 값은 따옴표로 감싸거나, 공백 전까지(줄 끝 # 주석 허용).
+hm_load_config() {
+  local file="$1" line="" key="" value="" re_quoted='^"([^"]*)"' re_single="^'([^']*)'"
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?((HM|HARNESS)_[A-Z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[4]}"
+    if [[ "$value" =~ $re_quoted || "$value" =~ $re_single ]]; then
+      value="${BASH_REMATCH[1]}"
+    else
+      value="${value%%[[:space:]]*}"
+    fi
+    printf -v "$key" '%s' "$value"
+    export "${key?}"
+  done <"$file"
+}
+hm_load_config "$HM_DATA_DIR/config"
 
 # 이슈 트래커 키 패턴 (Jira 등). 필요 시 config에서 좁혀서 override (예: "(NJ|JDA|OP)-[0-9]+")
 # 기본: 대문자 2자 이상 프리픽스 — 1자 허용 시 본문 속 정규식 텍스트([A-Z0-9]+ 등)를 오인함
@@ -43,6 +60,24 @@ iso_to_epoch() {
   date -j -u -f '%Y-%m-%dT%H:%M:%S' "$normalized" +%s 2>/dev/null || true
 }
 
+# 무인 실행(launchd·백그라운드)에서 git이 자격증명·passphrase 입력을 기다리며 lock을 쥔 채 멈추지 않게 한다.
+export GIT_TERMINAL_PROMPT=0
+[[ -n "${GIT_SSH_COMMAND:-}" ]] || export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20"
+
+# 명령을 최대 $1초만 실행한다(macOS에는 timeout이 없다). 시간이 지나면 TERM, 10초 뒤 KILL. 종료 코드를 돌려준다.
+hm_run_with_timeout() {
+  local secs="$1" pid=0 watchdog=0 rc=0
+  shift
+  "$@" &
+  pid=$!
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 10; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
+
 # 프로젝트 이름 → 파일시스템 안전 키. prefix가 '.', '..' 같은 인자의 경로 탈출을 막는다.
 hm_project_key() {
   printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"
@@ -50,7 +85,7 @@ hm_project_key() {
 
 # mkdir 원자성 기반 디렉토리 lock. 소유 pid가 죽었으면 stale로 회수한다.
 hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
-  local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner=""
+  local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner="" lock_mt=""
   while (( attempt < max_attempts )); do
     if mkdir "$lock_dir" 2>/dev/null; then
       printf '%s\n' "$$" >"$lock_dir/pid"
@@ -62,9 +97,11 @@ hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
       owner=""
     fi
     if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
-      # mkdir 직후 pid 파일을 쓰기 전인 정상 소유자를 stale lock으로 오인하지 않는다.
+      # mkdir 직후 pid 파일을 쓰기 전인 정상 소유자를 stale lock으로 오인하지 않는다. 저우선순위(nice)
+      # 실행에서는 pid 기록이 늦을 수 있어, pid 없는 lock은 5초 넘게 지났을 때만 버려진 것으로 본다.
       unowned_attempts=$((unowned_attempts + 1))
-      if (( unowned_attempts >= 5 )); then
+      lock_mt="$(mtime "$lock_dir" 2>/dev/null || echo 0)"
+      if (( unowned_attempts >= 5 )) && [[ "$lock_mt" =~ ^[0-9]+$ ]] && (( $(date +%s) - lock_mt > 5 )); then
         find "$lock_dir" -depth -delete 2>/dev/null || true
         unowned_attempts=0
       else
@@ -104,11 +141,35 @@ codex_session_roots() {
   fi
 }
 
+# macOS 파일명은 NFD로 올 수 있어 같은 한글 이름이 NFC와 다른 프로젝트 키로 갈라진다.
+hm_nfc() {
+  local value="$1" LC_ALL=C
+  if [[ "$value" == *[$'\x80'-$'\xff']* ]] && command -v perl >/dev/null 2>&1; then
+    perl -CSA -MUnicode::Normalize -e 'print NFC($ARGV[0])' "$value" 2>/dev/null && return
+  fi
+  printf '%s' "$value"
+}
+
+repo_name_from_url() {
+  local url="${1%/}" name=""
+  name="${url##*/}"
+  name="${name##*:}"
+  printf '%s' "${name%.git}"
+}
+
 # worktree·하위 디렉토리에서도 같은 저장소는 하나의 프로젝트로 집계한다.
-# 우선순위: harness 명시 ID → origin 저장소명 → git common-dir → 경로 휴리스틱.
+# 우선순위: harness 명시 ID → origin 저장소명 → git common-dir → 기록된 저장소 URL → 경로 휴리스틱.
+# $2(선택): transcript가 기록한 저장소 URL. 삭제된 worktree처럼 cwd를 더 볼 수 없을 때 쓴다.
 project_id_for_cwd() {
-  local cwd="${1:-}" root="" manifest="" project_id="" remote_url="" common_dir=""
-  local leaf="" parent=""
+  local project_id=""
+  project_id="$(project_id_for_cwd_raw "$@")"
+  [[ -n "$project_id" ]] || return 0
+  printf '%s\n' "$(hm_nfc "$project_id")"
+}
+
+project_id_for_cwd_raw() {
+  local cwd="${1:-}" recorded_url="${2:-}" root="" manifest="" project_id="" remote_url="" common_dir=""
+  local leaf="" parent="" key_re='[A-Z]{2,}[0-9]*-[0-9]+'
   [[ -n "$cwd" ]] || return 0
 
   # workspace 루트(여러 저장소를 담는 폴더)는 git 저장소가 아니므로 git 판정보다 먼저 본다.
@@ -134,10 +195,7 @@ project_id_for_cwd() {
 
       remote_url="$(git -C "$cwd" remote get-url origin 2>/dev/null || true)"
       if [[ -n "$remote_url" ]]; then
-        remote_url="${remote_url%/}"
-        project_id="${remote_url##*/}"
-        project_id="${project_id##*:}"
-        project_id="${project_id%.git}"
+        project_id="$(repo_name_from_url "$remote_url")"
         if [[ -n "$project_id" ]]; then
           printf '%s\n' "$project_id"
           return
@@ -162,16 +220,30 @@ project_id_for_cwd() {
     fi
   fi
 
+  if [[ -n "$recorded_url" ]]; then
+    project_id="$(repo_name_from_url "$recorded_url")"
+    if [[ -n "$project_id" ]]; then
+      printf '%s\n' "$project_id"
+      return
+    fi
+  fi
+
   leaf="${cwd%/}"
   leaf="${leaf##*/}"
   parent="${cwd%/}"
   parent="${parent%/*}"
   parent="${parent##*/}"
+  # 이슈별 worktree 컨테이너 이름은 저장소명이 아니다.
+  [[ "$parent" =~ ^(worktrees|workspaces|tmp)$ ]] && parent=""
   if [[ "$leaf" =~ ^(.+)-wt-[0-9]+$ ]]; then
     leaf="${BASH_REMATCH[1]}"
-  elif [[ "$leaf" =~ ^(.+)-[A-Z]{2,}[0-9]*-[0-9]+$ ]]; then
+  elif [[ "$leaf" =~ ^(feature|feat|fix|bugfix|hotfix|chore|refactor|release|docs|test)-${key_re}(-.*)?$ && -n "$parent" ]]; then
+    # <repo>/feature-NJ-612: 브랜치 유형 접두어는 저장소명이 아니다.
+    leaf="$parent"
+  elif [[ "$leaf" =~ ^(.+)-${key_re}$ ]]; then
     leaf="${BASH_REMATCH[1]}"
-  elif [[ "$leaf" =~ ^[A-Z]{2,}[0-9]*-[0-9]+$ && -n "$parent" ]]; then
+  elif [[ "$leaf" =~ ^${key_re}(-.+)?$ && -n "$parent" ]]; then
+    # <repo>/NJ-290, <repo>/NJ-1866-embedding
     leaf="$parent"
   fi
   printf '%s\n' "$leaf"

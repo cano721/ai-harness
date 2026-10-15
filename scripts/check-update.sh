@@ -161,7 +161,7 @@ if [[ "$COMMAND" == "skew" ]]; then
 fi
 
 # notify는 SessionStart hook에서 돌며 3초 예산을 공유하므로 네트워크를 건드리지 않는다.
-# 갱신은 SessionEnd의 refresh와 사용자가 직접 부르는 status가 담당한다.
+# 갱신은 정기 backfill 뒤 refresh와 사용자가 직접 부르는 status가 담당한다.
 should_refresh=false
 if [[ "$COMMAND" == "notify" ]]; then
   should_refresh=false

@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다. 예외는 사용자가 켠 [자동 harvest](#auto-harvest)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
 
 ## 목차
 
@@ -27,7 +27,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 ```mermaid
 flowchart LR
     A["/harness-init\n프로젝트 규칙 생성"] --> B["평소 개발\n/implement-feature 등"]
-    B --> C["SessionEnd hook\n압축 이벤트 기록"]
+    B --> C["정기 backfill\n(SessionStart·응답마다 hook)\n압축 이벤트 기록"]
     C --> D["analysis batch\n분석할 만큼 축적"]
     D --> E["/harvest\n근거 검토·개선안"]
     E -->|"사용자 승인·PR 병합"| A
@@ -91,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionEnd`·`SessionStart` hook은 플러그인 설치 뒤 자동 실행됩니다. 이 hook은 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
+Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)). Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -126,7 +126,7 @@ codex plugin add ai-harness@ai-harness
 
 초기화 결과는 `.ai-harness/harness.json`에 저장됩니다. 이미 하네스가 있는 프로젝트에서 다시 실행하면 수준 변경 모드로 동작하며, 변경 diff만 적용합니다. 다운그레이드로 파일을 지우는 경우에는 대상 목록을 먼저 확인합니다.
 
-**여러 저장소가 한 폴더에 있을 때** — 독립 git 저장소 여럿을 담는 상위 폴더에서 `/harness-init`을 실행하면 workspace 모드로 동작합니다. 하위 저장소를 감지해 라우팅 전용 `AGENTS.md`와 `.ai-harness/workspace.json`만 만들고, 각 저장소의 하네스는 건드리지 않습니다. 하네스가 없는 저장소는 표기만 하며, 원하면 고른 저장소만 이어서 초기화할 수 있습니다. 상위 폴더 세션에서는 Claude Code가 cwd의 `.claude/`만 로드하므로 하위 저장소의 슬래시 커맨드·페르소나·편집 가드가 동작하지 않습니다. 여러 저장소를 훑어보거나 교차 변경을 조율할 때 쓰고, 한 저장소 안의 구현은 그 저장소에서 세션을 여세요. 모노레포(git 루트 하나)는 단일 프로젝트로 그냥 초기화하면 됩니다.
+**여러 저장소가 한 폴더에 있을 때** — 독립 git 저장소 여럿을 담는 상위 폴더에서 `/harness-init`을 실행하면 workspace 모드로 동작합니다. 하위 저장소를 감지해 라우팅 전용 `AGENTS.md`와 `.ai-harness/workspace.json`만 만들고, 각 저장소의 하네스는 건드리지 않습니다. 하네스가 없는 저장소는 표기만 하며, 원하면 고른 저장소만 이어서 초기화할 수 있습니다. 상위 폴더 세션은 시작 디렉토리의 `.claude/`를 로드하므로 그대로는 하위 저장소의 슬래시 커맨드·페르소나·편집 가드를 쓰지 못합니다. 여러 저장소를 훑어보거나 교차 변경을 조율할 때 쓰고, 한 저장소 안의 구현은 그 저장소에서 세션을 열거나 `/cd <저장소>`(Claude Code 2.1.246+, 저장소 설정·hook까지 로드)로 옮기세요. `/add-dir <저장소>`는 커맨드·페르소나만 로드하고 편집 가드는 로드하지 않습니다. 대신 플러그인의 편집 가드가 어디서 연 세션이든 하네스 저장소의 코드를 바꾸기 전에 그 저장소의 워크플로를 읽게 합니다. 모노레포(git 루트 하나)는 단일 프로젝트로 그냥 초기화하면 됩니다.
 
 ### 3. 평소처럼 개발
 
@@ -293,10 +293,15 @@ stateDiagram-v2
 
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
-| 세션 종료 | `SessionEnd` → `scripts/collect.sh` | transcript에서 압축 이벤트를 추출해 프로젝트별 pending 큐에 멱등 적재하고, 누적량을 판정 | LLM 분석, 파일 수정, PR 생성 |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐를 알림 (네트워크 조회 없음) | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 응답이 끝날 때마다 | `Stop` → `scripts/tick.sh` → `scripts/backfill-due.sh` | 마지막 backfill이 6시간(`HM_BACKFILL_INTERVAL_HOURS`) 넘었는지만 확인(수 ms). 넘었으면 세션과 분리된 저우선순위 작업으로 backfill → (사용자가 쉬는 동안) LLM 정리·자동 harvest sweep → 릴리스 정보 갱신 | 세션을 막는 작업 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐·자동 적용 내역을 알림 (네트워크 조회 없음). 같은 `backfill-due.sh` 확인 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
-두 hook은 3초 timeout이며 실패해도 작업 세션을 막지 않습니다. 누락·진행 중인 Codex 세션은 `/metrics`, `/harvest`, 세션 조회의 backfill이 보완합니다.
+수집은 세션 종료 hook에도, OS 스케줄러에도 기대지 않습니다. 종료 hook은 터미널·탭을 그냥 닫으면 실행되지 않아 실측 43%를 놓쳤고, launchd·cron·작업 스케줄러는 OS마다 따로 설치해야 합니다. 대신 Claude Code·Codex 공통 hook(세션 시작과 응답마다)이 주기를 확인하고, transcript 전체를 훑는 backfill이 유일한 수집 경로입니다. 며칠 이어지는 세션 하나만 켜 둬도 응답마다 확인하므로 주기대로 돕니다. 세션이 전혀 없으면 새로 쌓일 기록도 없습니다.
+
+- **LLM 단계는 쉬는 동안만**: 수집은 바로 하고, LLM 정리·자동 harvest는 최근 `HM_IDLE_MINUTES`(20)분간 Claude·Codex 기록이 갱신되지 않을 때까지 최대 `HM_IDLE_WAIT_HOURS`(4)시간 기다렸다가 돕니다. 작업과 사용량 한도가 겹치지 않게 하기 위해서입니다
+- **사용량 한도 휴지**: 자동 harvest가 사용량 한도로 실패한 뒤 `HM_LLM_BACKOFF_HOURS`(5)시간은 LLM 단계를 쉽니다
+
+`scripts/collect.sh`는 세션 1개를 즉시 수집하는 수동 진입점으로 남아 있습니다. 세션을 거의 열지 않는데도 정해진 시각에 돌리고 싶다면 OS 스케줄러에 `HM_BACKFILL_FOREGROUND=1 <플러그인>/scripts/backfill-due.sh`를 등록할 수 있고, macOS는 `scripts/schedule.sh install`(선택 사항)이 이를 대신합니다.
 
 ### 언제 `/harvest`를 안내하나
 
@@ -307,6 +312,46 @@ stateDiagram-v2
 - 서로 다른 2개 이상 세션에서 오류 5개, 가드 차단 3개, 권한 거부 3개 중 하나
 
 한 batch는 최대 50개 세션입니다. 단, 트리거 판정은 전체 pending을 기준으로 하며 신호가 있는 세션을 우선 포함합니다. 분석 중 새로 종료된 세션은 다음 batch에 보존됩니다. 첫 알림을 놓치면 기본 24시간마다 다시 알립니다.
+
+<a id="auto-apply"></a>
+
+### workspace·전역 지침 자동 적용
+
+팀이 공유하는 저장소는 draft PR로 사람이 머지하지만, workspace 루트 `AGENTS.md`와 전역 지침(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`)은 개인 소유라 자동 harvest가 직접 적용합니다(`HM_HARVEST_AUTO=1`일 때).
+
+- **workspace**: workspace 루트에서 한 세션들의 batch를 같은 기준(2개 이상 세션에서 반복)으로 분석해 workspace `AGENTS.md`에 적용합니다. 끄려면 `HM_HARVEST_AUTO_WORKSPACE=0`
+- **전역**: 7일(`HM_HARVEST_GLOBAL_DAYS`, 0이면 끔)마다 한 번 전체를 가로질러, **2개 이상 프로젝트·5개 이상 세션**에서 반복된 저장소 무관 실수(셸·도구 사용 습관)만 전역 지침에 넣습니다
+- **안전장치**
+  - 편집 도구 없이 `scripts/auto-apply.sh`로만 바꿉니다. 이 스크립트는 `<!-- ai-harness:auto:start -->` 블록 안의 규칙만 넣고 빼며, 블록 밖(직접 쓴 내용)은 건드리지 않습니다. 한 줄·400자·주석 금지로 입력을 제한합니다
+  - 적용마다 이전 파일을 `~/.ai-harness/applied/`에 남기고, `auto-apply.sh revert --rule-id <id>`로 규칙 단위로 되돌립니다. `auto-apply.sh list --active`로 현재 규칙을 봅니다
+  - 규칙마다 기대효과를 기록하고, 다음 실행이 적용 이후 재발 여부로 효과를 판정해 강화하거나 스스로 되돌립니다
+  - 다음 세션 시작에 무엇을 적용·되돌렸는지 한 번 알립니다
+  - 한 실행에 최대 2건, Claude Code로만 실행합니다
+
+<a id="llm-digest"></a>
+
+### LLM 세션 정리 (opt-in)
+
+교정 접두어("아니", "그게 아니라")·도구 오류 같은 정규식 신호는 의미상 교정이나 "프로젝트 사실을 몰라 틀림"을 놓칩니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
+
+- **대상**: 최근 14일(`HM_DIGEST_LOOKBACK_DAYS`), 3턴 이상, 끝난 지 30분 지난 세션을 최신순으로 하루 20개(`HM_DIGEST_DAILY_MAX`). 재개된 세션만 다시 정리합니다
+- **입력**: 사용자 발화 전체(턴당 600자), 응답·도구 오류는 짧게 잘라 최대 4만 자. 실측 세션당 약 $0.003~0.01
+- **신호**: medium 이상 finding 수가 큐의 `insights`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
+- **사용**: `/harvest`가 `digest.sh show`로 batch 세션의 findings를 받아, 2개 이상 세션에서 반복되는 것만 개선 근거로 씁니다
+- 정리 세션은 `HM_INTERNAL_SESSION=1`·`--no-session-persistence`로 실행돼 수집·알림 대상이 아닙니다. 기록은 `~/.ai-harness/digests/`
+
+<a id="auto-harvest"></a>
+
+### 자동 harvest (opt-in)
+
+`~/.ai-harness/config`에 `HM_HARVEST_AUTO=1`을 두면 정기 backfill이 끝날 때마다 analysis batch가 있는 프로젝트를 오래된 순으로 확인해(sweep, 한 번에 하나) `/harvest <프로젝트> --auto`를 세션과 분리된 headless 프로세스(`claude -p`, Codex 세션이면 `codex exec`)로 실행합니다.
+
+- **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
+- **에이전트**: 세션을 만든 도구와 무관하게 `claude`가 있으면 Claude Code로 실행합니다(`HM_HARVEST_AUTO_AGENT=auto|claude|codex`). Codex 샌드박스는 쓰기 허용 경로에서도 `.git`을 읽기 전용으로 두어 커밋·push를 할 수 없으므로, Codex로 돌면 분석·보고까지만 하고 batch를 사람에게 넘깁니다
+- **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
+- **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
+- **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
+- **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
 
@@ -358,13 +403,13 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 | harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
 | 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
-상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다.
+상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다. 이미 삭제된 worktree는 Codex가 기록한 저장소 URL, 그다음 경로 규칙(`<repo>/feature-NJ-1`, `<repo>/NJ-1-설명` → `<repo>`)으로 판정하고, 한글 등 비ASCII 이름은 NFC로 맞춥니다. 규칙이 바뀌어 재추출된 세션은 이전 프로젝트 큐의 검토 상태를 그대로 가져갑니다.
 
 <a id="updates"></a>
 
 ## 업데이트
 
-릴리스 조회는 **SessionEnd**에서 이루어집니다. SessionStart hook은 3초 예산을 여러 확인과 나눠 쓰기 때문에, 알림은 이미 받아 둔 캐시만 읽고 네트워크를 건드리지 않습니다. 조회는 수집이 끝난 뒤 마지막에 돌아 느린 네트워크가 이벤트 수집을 지연시키지 않습니다. 새로 설치한 직후에는 캐시가 없으므로 첫 알림이 한 세션 뒤로 밀립니다.
+릴리스 조회는 **백그라운드 backfill-due**에서 이루어집니다. SessionStart hook은 3초 예산을 여러 확인과 나눠 쓰기 때문에, 알림은 이미 받아 둔 캐시만 읽고 네트워크를 건드리지 않습니다. 조회는 수집이 끝난 뒤 마지막에 돌아 느린 네트워크가 이벤트 수집을 지연시키지 않습니다. 새로 설치한 직후에는 캐시가 없으므로 첫 알림이 첫 backfill 뒤로 밀립니다.
 
 SessionStart는 공식 `release.json`을 기본 24시간 TTL 캐시로 확인하고 새 버전만 알려 줍니다. 네트워크 실패는 기존 성공 캐시를 보존하며 세션을 막지 않습니다. 조회 실패는 24시간 TTL을 소비하지 않고 기본 15분에서 시작해 6시간까지 배가되는 별도 백오프로만 재시도하므로, 일시적인 오류가 하루치 알림을 삼키지 않습니다.
 
@@ -440,8 +485,24 @@ HM_HARVEST_PERMISSION_THRESHOLD=3
 HM_HARVEST_PERMISSION_SESSION_THRESHOLD=2
 HM_HARVEST_MAX_BATCH_SESSIONS=50
 HM_HARVEST_REMIND_HOURS=24       # 0이면 batch당 한 번만 알림
+HM_HARVEST_AUTO=0                # 1이면 batch 생성 시 /harvest를 백그라운드 실행
+HM_MEMBER_GUARD=1                # 0이면 다른 하네스 저장소 코드 편집 전 워크플로 읽기 확인을 끈다
+HM_DIGEST=0                      # 1이면 일일 backfill 뒤 최근 세션을 LLM으로 정리
+HM_DIGEST_DAILY_MAX=20
+HM_HARVEST_INSIGHT_THRESHOLD=3
+HM_HARVEST_INSIGHT_SESSION_THRESHOLD=2
+HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
+HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
+HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
+HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
+HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
+HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
+HM_BACKFILL_INTERVAL_HOURS=6     # 정기 backfill 주기. 0이면 비활성화
+HM_IDLE_MINUTES=20               # 이 시간 동안 활동이 없어야 LLM 단계 실행. 0이면 기다리지 않음
+HM_IDLE_WAIT_HOURS=4             # 쉬는 시간을 기다리는 최대 시간
+HM_LLM_BACKOFF_HOURS=5           # 사용량 한도 실패 뒤 LLM 단계 휴지
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인
 HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이면 백오프 없음
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
@@ -465,7 +526,7 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
-hooks/            SessionEnd 수집·SessionStart 알림·PreToolUse DB 스캔 가드 정의
+hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)

@@ -1,0 +1,482 @@
+#!/usr/bin/env bash
+# analysis batch가 생기면 /harvest를 백그라운드 headless 세션으로 실행한다 (opt-in: HM_HARVEST_AUTO=1).
+# 결과물은 draft PR까지만 만든다. 병합은 사람이 한다.
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+source "$DIR/lib.sh"
+
+AUTO_DIR="$HM_DATA_DIR/harvest-auto"
+RUNS_FILE="$AUTO_DIR/runs.jsonl"
+LOG_DIR="$AUTO_DIR/logs"
+RUN_LOCK="$AUTO_DIR/running.lock"
+MAX_FAILS="${HM_HARVEST_AUTO_MAX_FAILS:-3}"; [[ "$MAX_FAILS" =~ ^[1-9][0-9]*$ ]] || MAX_FAILS=3
+DAILY_MAX="${HM_HARVEST_AUTO_DAILY_MAX:-2}"
+[[ "$DAILY_MAX" =~ ^[0-9]+$ ]] || DAILY_MAX=2
+BUDGET_USD="${HM_HARVEST_AUTO_BUDGET_USD:-5}"
+[[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=5
+LOG_KEEP=50
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  harvest-auto.sh sweep                                              # backfill 뒤 batch가 있는 모든 프로젝트 확인
+  harvest-auto.sh trigger <record-status-json> <cwd> [claude|codex]
+  harvest-auto.sh run <project> <batch_id> <repo_root> <agent>       # trigger가 띄우는 detached worker
+  harvest-auto.sh agent                                              # 자동 실행에 쓸 에이전트(claude|codex)
+  harvest-auto.sh runs [--limit N]                                   # 최근 자동 실행 기록
+EOF
+  exit 2
+}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+append_run() { # $1=json
+  mkdir -p "$AUTO_DIR"
+  printf '%s\n' "$1" >>"$RUNS_FILE"
+}
+
+# batch_id는 세션 마커를 이어 붙인 값이라 길다. 실행 기록에는 짧은 키만 남긴다.
+batch_key() { printf '%s' "$1" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12; }
+
+log_skip() { # $1=project $2=batch_id $3=reason
+  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$1" --arg batch "$(batch_key "$2")" --arg reason "$3" \
+    '{at:$at,event:"skipped",project:$project,batch:$batch,reason:$reason}')"
+}
+
+started_today() {
+  [[ -f "$RUNS_FILE" ]] || { printf '0\n'; return; }
+  jq -s --arg day "$(date -u +%Y-%m-%d)" \
+    '[.[] | select(.event=="started" and (.at | startswith($day)))] | length' "$RUNS_FILE" 2>/dev/null || printf '0\n'
+}
+
+# 파일·폴더 이름용 짧은 키. 한글 프로젝트명은 퍼센트 인코딩으로 글자당 9바이트가 되어 255바이트 한도를 넘을 수 있다.
+short_key() { # $1=project
+  local key=""
+  key="$(hm_project_key "$1")"
+  (( ${#key} <= 60 )) || key="${key:0:40}-$(printf '%s' "$key" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+  printf '%s\n' "$key"
+}
+
+attempt_marker() { printf '%s/%s/auto-attempted-batch\n' "$HM_DATA_DIR/harvest-queue" "$(hm_project_key "$1")"; }
+
+command_trigger() {
+  local status="$1" cwd="$2" agent="${3:-}" project="" batch_id="" repo_root="" marker=""
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
+  # 자동 harvest 세션 안에서 다시 harvest를 띄우지 않게 한다.
+  [[ -z "${HM_HARVEST_RUNNING:-}" ]] || return 0
+  [[ "$(printf '%s' "$status" | jq -r '.has_analysis_batch // false' 2>/dev/null)" == "true" ]] || return 0
+  project="$(printf '%s' "$status" | jq -r '.project // empty')"
+  batch_id="$(printf '%s' "$status" | jq -r '.batch_id // .created_at // empty')"
+  [[ -n "$project" && -n "$batch_id" ]] || return 0
+
+  marker="$(attempt_marker "$project")"
+  mark_attempted() {
+    # 같은 batch를 다시 띄울 때도 누적 실패 횟수를 이어받는다(재시도 제한의 근거).
+    local fails=0
+    if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
+      fails="$(jq -r '.fails // 0' "$marker" 2>/dev/null || echo 0)"
+      [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+    fi
+    mkdir -p "${marker%/*}"
+    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --arg result "$1" --argjson fails "$fails" \
+      '{batch_id:$batch_id,at:$at,result:$result,fails:$fails}' >"$marker"
+  }
+  local prev_result=""
+  if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
+    prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
+    # 하네스 저장소를 못 찾아 넘긴 batch만 다시 본다(이전 버전의 구분 없는 "skipped"는 한 번 재판단).
+    # 실행했거나 정책상 건너뛴 batch는 끝.
+    case "$prev_result" in
+      no_harness|skipped) ;;
+      # 일시 실패는 다시 시도하되, 같은 batch가 연속 MAX_FAILS번 실패하면 포기한다 —
+      # 결정적으로 실패하는 batch가 매번 하루 상한을 먹어 다른 프로젝트를 굶기지 않게.
+      failed)
+        if (( $(jq -r '.fails // 1' "$marker" 2>/dev/null || echo 1) >= MAX_FAILS )); then
+          mark_attempted gave_up
+          log_skip "$project" "$batch_id" gave_up
+          return 0
+        fi
+        ;;
+      *) return 0 ;;
+    esac
+  fi
+
+  # 세션 수만 넘은 batch는 실측상 거의 노이즈였다. 교정·오류 등 신호가 있는 batch만 자동으로 돈다.
+  if [[ "${HM_HARVEST_AUTO_SESSIONS_ONLY:-0}" != "1" ]] \
+    && [[ "$(printf '%s' "$status" | jq -c '.reasons // []')" == '["sessions"]' ]]; then
+    [[ "$prev_result" == "skipped" ]] && { mark_attempted sessions_only; return 0; }
+    mark_attempted sessions_only
+    log_skip "$project" "$batch_id" sessions_only
+    return 0
+  fi
+
+  # 실행 범위: 팀 저장소(project)는 draft PR, 개인 소유인 workspace 루트와 전역 지침은 auto-apply.sh로
+  # 표시된 블록 안에서만 직접 적용한다(되돌리기·효과 검증 포함).
+  local scope="project"
+  if [[ "$project" == "_global" ]]; then
+    scope="global"
+    repo_root="$HM_DATA_DIR"
+  elif [[ -f "$cwd/.ai-harness/workspace.json" && "${HM_HARVEST_AUTO_WORKSPACE:-1}" == "1" ]]; then
+    scope="workspace"
+    repo_root="$cwd"
+  else
+    repo_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+  fi
+  if [[ "$scope" == "project" ]] && [[ -z "$repo_root" || ! -f "$repo_root/.ai-harness/harness.json" ]]; then
+    [[ "$prev_result" == "no_harness" ]] && return 0
+    mark_attempted no_harness
+    log_skip "$project" "$batch_id" no_harness_repo
+    return 0
+  fi
+  # 상한·동시 실행 제한은 batch를 소모하지 않고 다음 sweep에서 다시 시도한다.
+  if (( $(started_today) >= DAILY_MAX )); then
+    log_skip "$project" "$batch_id" daily_max
+    return 0
+  fi
+  if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
+    log_skip "$project" "$batch_id" busy
+    return 0
+  fi
+
+  agent="$(resolve_agent)"
+  # workspace·전역 적용은 auto-apply.sh만 허용하는 권한 구성이 필요해 claude로만 돈다.
+  if [[ "$scope" != "project" && "$agent" != "claude" ]]; then
+    log_skip "$project" "$batch_id" needs_claude
+    return 0
+  fi
+  mark_attempted launched
+  LAUNCHED_NOW=1
+  mkdir -p "$LOG_DIR"
+  if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
+    "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" "$scope"
+  else
+    # 호출자(sweep·backfill-due)가 기다리지 않도록 worker를 분리한다.
+    nohup "$DIR/harvest-auto.sh" run "$project" "$batch_id" "$repo_root" "$agent" "$scope" \
+      </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+}
+
+# batch의 세션 기록에서 하네스가 있는 저장소 cwd와 도구(src)를 고른다. 없으면 첫 cwd.
+batch_origin() { # $1=batch_file → "cwd<TAB>src"
+  local ev="" cwd="" src="" first="" root=""
+  while IFS= read -r ev; do
+    [[ -f "$ev" ]] || ev="$HM_DATA_DIR/rollups/${ev##*/}"
+    [[ -f "$ev" ]] || continue
+    IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    [[ -n "$cwd" ]] || continue
+    [[ -n "$first" ]] || first="$cwd"$'\t'"$src"
+    root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]]; then
+      printf '%s\t%s\n' "$cwd" "$src"
+      return
+    fi
+  done < <(jq -r '.event_files[]?' "$1" 2>/dev/null)
+  # batch 세션의 작업 경로가 지워진 worktree뿐이면, 같은 프로젝트의 다른 세션 기록에서
+  # 지금 살아 있고 프로젝트 ID가 일치하는 하네스 저장소를 찾는다(최근 기록부터 200개).
+  local project=""
+  project="$(jq -r '.project // empty' "$1" 2>/dev/null)"
+  if [[ -n "$project" ]]; then
+    while IFS= read -r ev; do
+      IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+      [[ -n "$cwd" && -d "$cwd" ]] || continue
+      root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+      [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]] || continue
+      [[ "$(project_id_for_cwd "$root")" == "$project" ]] || continue
+      printf '%s\t%s\n' "$root" "$src"
+      return
+    done < <(grep -l -F "\"project\":$(jq -cn --arg p "$project" '$p')" "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null \
+      | while IFS= read -r f; do printf '%s\t%s\n' "$(mtime "$f")" "$f"; done | sort -rn | cut -f2- | head -n 200)
+  fi
+  # 그래도 없으면 기록에 나온 workspace 루트의 멤버 목록(.ai-harness/workspace.json)에서 찾는다.
+  # Orca worktree에서만 작업한 저장소는 원본 체크아웃 경로가 세션 기록에 한 번도 나오지 않는다.
+  if [[ -n "$project" ]]; then
+    local ws="" member=""
+    while IFS= read -r ws; do
+      [[ -f "$ws/.ai-harness/workspace.json" ]] || continue
+      member="$(jq -r --arg p "$project" '.members[]? | select(.project_id == $p) | .path' "$ws/.ai-harness/workspace.json" 2>/dev/null | head -n 1)"
+      [[ -n "$member" ]] || continue
+      member="$ws/$member"
+      if [[ -f "$member/.ai-harness/harness.json" ]] && [[ "$(project_id_for_cwd "$member")" == "$project" ]]; then
+        printf '%s\t%s\n' "$member" "claude"
+        return
+      fi
+    done < <(grep -ho '"cwd":"[^"]*"' "$HM_DATA_DIR"/events/*.jsonl 2>/dev/null | sort -u \
+      | jq -Rr '("{" + . + "}" | fromjson? | .cwd) // empty' 2>/dev/null)
+  fi
+  [[ -n "$first" ]] && printf '%s\n' "$first"
+}
+
+# 세션 종료 hook에 기대지 않고, backfill이 끝난 뒤 batch가 있는 프로젝트를 모두 확인한다.
+# 터미널·탭을 닫아 끝난 세션만 있는 프로젝트도 여기서 자동 실행된다. 실행은 한 번에 하나다.
+command_sweep() {
+  local batch="" status="" origin="" cwd="" src="" project=""
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
+  LAUNCHED_NOW=0
+  shopt -s nullglob
+  local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
+  shopt -u nullglob
+  (( ${#batches[@]} > 0 )) || { maybe_global_run; return 0; }
+  while IFS= read -r batch; do
+    status="$(jq -c '. + {has_analysis_batch:true}' "$batch" 2>/dev/null)" || continue
+    project="$(jq -r '.project // empty' <<<"$status")"
+    [[ -n "$project" ]] || continue
+    origin="$(batch_origin "$batch")"
+    [[ -n "$origin" ]] || continue
+    IFS=$'\t' read -r cwd src <<<"$origin"
+    # 이번 호출에서 실제로 띄웠을 때만 멈춘다. 지난 sweep에서 띄운 batch가 남아 있다고 멈추면
+    # 그 뒤 프로젝트들은 차례가 오지 않는다.
+    LAUNCHED_NOW=0
+    command_trigger "$status" "$cwd" "$src"
+    if (( LAUNCHED_NOW == 1 )); then break; fi
+  done < <(for batch in "${batches[@]}"; do
+      printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
+    done | sort | cut -f2-)
+  (( LAUNCHED_NOW == 1 )) || maybe_global_run
+  return 0
+}
+
+# 여러 프로젝트에 걸친 반복(전역 지침 후보)은 프로젝트 batch로 잡히지 않는다. 주기(기본 7일)마다 한 번
+# 전체를 가로질러 분석하고, 근거가 기준을 넘으면 전역 CLAUDE.md·Codex AGENTS.md 블록에 적용한다.
+maybe_global_run() {
+  local days="${HM_HARVEST_GLOBAL_DAYS:-7}" last="" last_epoch=0 status=""
+  [[ "$days" =~ ^[0-9]+$ ]] || days=7
+  (( days > 0 )) || return 0
+  last="$(jq -sr '[.[] | select(.project=="_global" and .event=="started") | .at] | last // empty' "$RUNS_FILE" 2>/dev/null || true)"
+  if [[ -n "$last" ]]; then
+    last_epoch="$(iso_to_epoch "$last")"
+    [[ "$last_epoch" =~ ^[0-9]+$ ]] && (( $(date +%s) - last_epoch < days * 86400 )) && return 0
+  fi
+  status="$(jq -cn --arg b "global-$(date -u +%Y%m%d)" '{project:"_global",batch_id:$b,has_analysis_batch:true,reasons:["global"]}')"
+  command_trigger "$status" "$HM_DATA_DIR" claude
+}
+
+# 무인 실행 에이전트. 세션을 만든 도구가 아니라 실행 능력으로 고른다.
+# Codex 샌드박스는 쓰기 허용 경로 안에서도 .git을 읽기 전용으로 두어 커밋·push를 할 수 없고,
+# launchd 환경에는 Bitbucket 토큰이 없다(claude는 settings.json env를 스스로 읽는다).
+resolve_agent() {
+  case "${HM_HARVEST_AUTO_AGENT:-auto}" in
+    claude) printf 'claude\n' ;;
+    codex) printf 'codex\n' ;;
+    *) if command -v claude >/dev/null 2>&1; then printf 'claude\n'; else printf 'codex\n'; fi ;;
+  esac
+}
+
+agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행할 argv를 AGENT_CMD에 채운다
+  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_glob=""
+  if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
+    # 테스트·사용자 정의 실행기: "<cmd> <project>"
+    read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
+    AGENT_CMD+=("$project")
+    return
+  fi
+  scripts_glob="$ROOT/scripts/*"
+  case "$agent" in
+    codex)
+      # --approve-for-me는 workspace-write 샌드박스다. 큐 기록(~/.ai-harness)은 쓸 수 있게 열지만,
+      # .git은 샌드박스가 읽기 전용으로 두므로 커밋·push는 실패하고 분석·보고까지만 한다.
+      AGENT_CMD=(codex exec -C "$work_dir" --approve-for-me --skip-git-repo-check
+        --add-dir "$HM_DATA_DIR"
+        -c sandbox_workspace_write.network_access=true
+        "ai-harness harvest skill을 인자 \"$project --auto --base $base\"로 실행하라. 커밋·push가 막히면 개선안 보고로 끝내라.")
+      ;;
+    *)
+      # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. launchd shim이 Codex 쪽
+      # 설치본을 골라도 claude는 기본으로 자기 캐시의 플러그인을 로드하므로, 이 설치본을 명시해 맞춘다.
+      # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
+      # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
+      local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR") codex_root=""
+      # 읽기 위해 연 디렉토리는 쓰지 못하게 한다. 데이터 디렉토리의 config·shim은 이후 실행이 source·실행하므로
+      # 여기를 고칠 수 있으면 transcript 속 지시가 샌드박스 밖 코드 실행으로 이어진다.
+      local deny_args=(--disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)"
+        "Edit(/$HM_CLAUDE_PROJECTS_DIR/**)" "Write(/$HM_CLAUDE_PROJECTS_DIR/**)"
+        "Bash(git -C *)" "Bash(git reset*)" "Bash(git clean*)" "Bash(git push --force*)" "Bash(git push -f*)"
+        "Bash(git worktree*)" "Bash(git branch -D*)" "Bash(git checkout -- *)")
+      while IFS= read -r codex_root; do
+        [[ -d "$codex_root" ]] || continue
+        read_dirs+=(--add-dir "$codex_root")
+        deny_args+=("Edit(/$codex_root/**)" "Write(/$codex_root/**)")
+      done < <(codex_session_roots)
+      if [[ "$scope" == "project" ]]; then
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
+          --plugin-dir "$ROOT"
+          "${read_dirs[@]}"
+          --permission-mode acceptEdits
+          --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
+          "Bash(git status*)" "Bash(git diff*)" "Bash(git log*)" "Bash(git show*)" "Bash(git add *)"
+          "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git fetch*)"
+          "Bash(git push origin *)" "Bash(git push -u origin *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "${deny_args[@]}"
+          --max-budget-usd "$BUDGET_USD"
+          --output-format json)
+      else
+        # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
+          --plugin-dir "$ROOT"
+          "${read_dirs[@]}"
+          --permission-mode dontAsk
+          --allowedTools "Read" "Grep" "Glob" "Agent"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash(git *)"
+          --max-budget-usd "$BUDGET_USD"
+          --output-format json)
+      fi
+      ;;
+  esac
+}
+
+# 하네스를 고칠 기준 브랜치. origin/HEAD가 하네스 없는 초기 브랜치(master)이고 실제 개발은 develop인
+# 저장소가 많아서(실측 jobda-*), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
+# 순서: harness.json의 base_branch → develop → origin/HEAD → main → master. origin이 없으면 HEAD.
+resolve_base() { # $1=repo_root → "origin/<branch>" 또는 "HEAD"
+  local repo_root="$1" candidate="" head="" configured=""
+  git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || { printf 'HEAD\n'; return; }
+  git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
+  configured="$(jq -r '.base_branch // empty' "$repo_root/.ai-harness/harness.json" 2>/dev/null)"
+  head="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  for candidate in ${configured:+"origin/$configured"} origin/develop ${head:+"$head"} origin/main origin/master; do
+    if git -C "$repo_root" cat-file -e "$candidate:.ai-harness/harness.json" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' "${head:-HEAD}"
+}
+
+# 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
+make_work_tree() { # $1=repo_root $2=project $3=base → 경로 출력
+  local repo_root="$1" dir=""
+  dir="$AUTO_DIR/worktrees/$(short_key "$2")-$(date +%s)"
+  mkdir -p "${dir%/*}"
+  git -C "$repo_root" worktree add -q --detach "$dir" "$3" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$dir"
+}
+
+last_review_after() { # $1=project $2=started_at → 이번 실행이 남긴 review-history 레코드
+  local history_file
+  history_file="$HM_DATA_DIR/harvest-queue/$(hm_project_key "$1")/review-history.jsonl"
+  [[ -f "$history_file" ]] || { printf 'null\n'; return; }
+  jq -sc --arg since "$2" '[.[] | select((.reviewed_at // "") >= $since)] | last // null' "$history_file" 2>/dev/null \
+    || printf 'null\n'
+}
+
+prune_logs() {
+  local logs=() i
+  shopt -s nullglob
+  logs=("$LOG_DIR"/*.log)
+  shopt -u nullglob
+  (( ${#logs[@]} > LOG_KEEP )) || return 0
+  for (( i = 0; i < ${#logs[@]} - LOG_KEEP; i++ )); do
+    find "${logs[$i]}" -maxdepth 0 -type f -delete
+  done
+}
+
+command_run() {
+  local project="$1" batch_id="$2" repo_root="$3" agent="$4" scope="${5:-project}"
+  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir="" base_ref=""
+  mkdir -p "$LOG_DIR"
+  hm_acquire_lock "$RUN_LOCK" 1 || { log_skip "$project" "$batch_id" busy; find "$(attempt_marker "$project")" -delete 2>/dev/null; return 0; }
+  trap 'hm_release_lock "$RUN_LOCK"' EXIT
+
+  started_at="$(now_iso)"
+  start_epoch="$(date +%s)"
+  log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(short_key "$project").log"
+  append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
+    --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" \
+    '{at:$at,event:"started",project:$project,batch:$batch,agent:$agent,repo:$repo,log:$log}')"
+
+  # headless 편집은 cwd 안에서만 허용되므로, 작업용 worktree를 만들어 그 안에서 에이전트를 띄운다.
+  # 사용자 체크아웃은 구조적으로 건드릴 수 없다.
+  if [[ "$scope" == "project" ]]; then
+    base_ref="$(resolve_base "$repo_root")"
+    work_dir="$(make_work_tree "$repo_root" "$project" "$base_ref")" || work_dir=""
+  else
+    # workspace 루트·데이터 디렉토리에서 바로 돈다. 편집 도구가 없어 auto-apply.sh로만 바꿀 수 있다.
+    work_dir="$repo_root"
+  fi
+  if [[ -z "$work_dir" ]]; then
+    printf 'worktree 생성 실패: %s\n' "$repo_root" >"$log_file"
+    exit_code=70
+  else
+    agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
+    # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
+    (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
+      env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+    if [[ "$scope" == "project" ]]; then
+      # 이번 worktree만 정리한다. 저장소 전체 prune은 잠시 분리된 사용자 worktree 메타까지 지울 수 있다.
+      git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
+        || find "$work_dir" -depth -delete 2>/dev/null || true
+    fi
+  fi
+
+  review="$(last_review_after "$project" "$started_at")"
+  if [[ "$agent" == "claude" ]]; then
+    # stderr 안내 줄(예: 신뢰되지 않은 작업 공간)이 앞에 섞일 수 있어 JSON 줄만 읽는다.
+    cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
+  fi
+  local fail_reason=""
+  fail_reason="$(jq -Rrn '[inputs | fromjson? | objects | select(.type=="result")] | last
+    | if . == null then empty
+      elif .api_error == "usage_limit_reached" or .api_error_status == 429 then "usage_limit"
+      elif .is_error == true then (.api_error // "agent_error")
+      else empty end' "$log_file" 2>/dev/null || true)"
+  if (( exit_code != 0 )); then
+    result="failed"
+    # 사용량 한도·API 오류 같은 일시 실패로 batch를 버리지 않고 다음 sweep이 다시 시도한다.
+    # 사용량 한도가 아닌 실패는 횟수를 세어 MAX_FAILS에서 포기한다(트리거가 판단).
+    local marker_file="" fails=0
+    marker_file="$(attempt_marker "$project")"
+    fails="$(jq -r '.fails // 0' "$marker_file" 2>/dev/null || echo 0)"
+    [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+    [[ "$fail_reason" == "usage_limit" ]] || fails=$((fails + 1))
+    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --argjson fails "$fails" \
+      '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails}' >"$marker_file" 2>/dev/null || true
+  elif [[ "$scope" == "global" ]]; then
+    if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
+      && jq -e --arg since "$started_at" 'select(.at >= $since)' "$HM_DATA_DIR/applied/applied.jsonl" >/dev/null 2>&1; then
+      result="improved"
+    else
+      result="no-change"
+    fi
+  elif [[ "$review" == "null" ]]; then
+    # 사용자 확인이 필요한 분기 등으로 batch를 남긴 채 끝났다. 수동 /harvest 대상.
+    result="left_for_user"
+  else
+    result="$(printf '%s' "$review" | jq -r '.review.outcome // "reviewed"')"
+  fi
+  append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
+    --arg result "$result" --argjson exit_code "$exit_code" \
+    --argjson duration_s "$(( $(date +%s) - start_epoch ))" --argjson cost_usd "${cost:-null}" \
+    --argjson review "$review" --arg log "$log_file" --arg reason "$fail_reason" \
+    '{at:$at,event:"finished",project:$project,batch:$batch,result:$result,exit_code:$exit_code,
+      duration_s:$duration_s,cost_usd:$cost_usd,artifact:($review.review.artifact // null),log:$log}
+      + (if $reason == "" then {} else {reason:$reason} end)')"
+  if (( exit_code == 0 )); then
+    "$DIR/health.sh" success harvest_auto >/dev/null 2>&1 || true
+  else
+    "$DIR/health.sh" failure harvest_auto "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
+  fi
+  prune_logs
+}
+
+command_runs() {
+  local limit=20
+  [[ "${1:-}" == "--limit" && "${2:-}" =~ ^[0-9]+$ ]] && limit="$2"
+  [[ -f "$RUNS_FILE" ]] || return 0
+  tail -n "$limit" "$RUNS_FILE"
+}
+
+command="${1:-}"
+shift || true
+case "$command" in
+  trigger) [[ $# -ge 2 ]] || usage; command_trigger "$@" ;;
+  sweep) command_sweep ;;
+  agent) resolve_agent ;;
+  run) [[ $# -eq 4 || $# -eq 5 ]] || usage; command_run "$@" ;;
+  runs) command_runs "$@" ;;
+  *) usage ;;
+esac
