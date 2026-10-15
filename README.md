@@ -91,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)). Bash 실행 전에는 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
+Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -376,15 +376,13 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 <a id="db-scan-guard"></a>
 
-## DB 스캔 가드
+## DB 스캔 가드 (opt-in)
 
-스키마 조건 없는 information_schema 조회는 서버의 모든 스키마를 훑어 공유 DB를 멈춰 세울 수 있습니다. Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/db-scan-guard.sh`)이 이런 조회를 막습니다.
+스키마 조건 없는 information_schema 조회는 서버의 모든 스키마를 훑어 공유 DB를 멈춰 세울 수 있습니다. `HM_DB_SCAN_GUARD=1`을 [설정](#configuration)하면 Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/db-scan-guard.sh`)이 이런 조회를 막습니다. 기본은 꺼져 있습니다.
 
-- 대상: DB 클라이언트(`mysql`·`psql` 등)나 드라이버(`pymysql`·`psycopg` 등)를 쓰는 명령
-- 차단: 구문(`;`)이나 `UNION` 분기에 `*_schema =`·`IN (...)` 조건 없이 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽을 때. MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함
-- 한계: 명령 문자열에 보이는 쿼리만 검사
-
-끄려면 `HM_DB_SCAN_GUARD=0`을 [설정](#configuration)합니다.
+- 대상: 명령 위치(맨 앞이나 `;`·`&&`·`|` 뒤, 변수 대입·`sudo`·`env` 등은 건너뜀)에 DB 클라이언트(`mysql`·`psql` 등)가 오거나, 인터프리터(`python`·`node` 등)가 드라이버(`pymysql`·`psycopg` 등)를 쓰는 파이프라인. `git commit -m`·`grep`·`echo`·heredoc 문서 작성은 대상이 아닙니다
+- 차단: 구문(`;`)이나 `UNION` 분기가 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽는데(MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함), 문자열 리터럴·주석을 지운 WHERE 최상위에 `*_schema =`·`IN (...)` 조건이 없거나 `OR`가 있을 때
+- 한계: 명령 문자열에 보이는 쿼리만 검사합니다. 스크립트 파일, `bash -c`·`docker exec`·`ssh` 안의 명령은 보지 않습니다
 
 <a id="data-retention"></a>
 
@@ -508,7 +506,7 @@ HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이�
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
-HM_DB_SCAN_GUARD=1               # 0이면 DB 스캔 가드 비활성화
+HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
