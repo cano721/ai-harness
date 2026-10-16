@@ -205,27 +205,36 @@ command_list() {
 
 # 사람이 블록 밖에 같은 규칙을 직접 적으면 자동 규칙은 중복이다(지침이 길어질수록 성공률이 떨어진다).
 # 공백·대소문자·목록 기호를 무시한 문구 일치만 본다 — 의미가 비슷한 규칙의 판정은 harvest가 한다.
+# revert는 scope의 대상 파일 전부에서 규칙을 지우므로, 규칙이 든 파일 **모두**에 중복이 있을 때만 보고한다.
 command_duplicates() {
-  local rules="" rule="" id="" scope="" workspace="" text="" targets="" file=""
+  local rules="" rule="" id="" scope="" workspace="" text="" targets="" file="" hits="" carriers=0 matched=0 found=""
   rules="$(command_list --active)"
   [[ -n "$rules" ]] || return 0
   while IFS= read -r rule; do
     id="$(jq -r '.id' <<<"$rule")"; scope="$(jq -r '.scope' <<<"$rule")"
     workspace="$(jq -r '.workspace // empty' <<<"$rule")"; text="$(jq -r '.text' <<<"$rule")"
-    targets="$(targets_for "$scope" "$workspace" 2>/dev/null)" || continue
+    if ! targets="$(targets_for "$scope" "$workspace" 2>/dev/null)"; then
+      echo "대상 파일을 찾을 수 없는 규칙: $id" >&2
+      continue
+    fi
+    carriers=0; matched=0; hits=""
     while IFS= read -r file; do
-      [[ -f "$file" ]] || continue
-      AH_START="$START" AH_END="$END" AH_TEXT="$text" awk '
+      if [[ ! -f "$file" ]] || ! grep -qxF "<!-- rule:$id -->" "$file"; then continue; fi
+      carriers=$((carriers + 1))
+      found="$(AH_START="$START" AH_END="$END" AH_TEXT="$text" awk '
         function norm(v) { v = tolower(v); gsub(/[[:space:]]+/, " ", v); sub(/^ /, "", v); sub(/ $/, "", v)
                            sub(/^([-*+]|[0-9]+[.)]) /, "", v); return v }
         BEGIN { start = ENVIRON["AH_START"]; end = ENVIRON["AH_END"]; want = norm(ENVIRON["AH_TEXT"]) }
         $0 == start { inblock = 1; next }
         $0 == end { inblock = 0; next }
-        !inblock && want != "" && norm($0) == want { print NR }
-      ' "$file" | while IFS= read -r line; do
-        jq -cn --arg id "$id" --arg file "$file" --arg line "$line" '{id:$id, file:$file, line:($line|tonumber)}'
-      done
+        !inblock && want != "" && norm($0) == want { print NR; exit }
+      ' "$file")"
+      [[ -n "$found" ]] || continue
+      matched=$((matched + 1))
+      hits+="$(jq -cn --arg file "$file" --arg line "$found" '{file:$file, line:($line|tonumber)}')"$'\n'
     done <<<"$targets"
+    (( carriers > 0 && matched == carriers )) || continue
+    printf '%s' "$hits" | jq -sc --arg id "$id" '{id:$id, files:.}'
   done <<<"$rules"
 }
 

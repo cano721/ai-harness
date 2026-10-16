@@ -2203,9 +2203,13 @@ run_dup apply --scope global --rule-id quote-equals --text "zsh에서 =로 시�
 run_dup apply --scope global --rule-id jq-null --text "jq 순회 전 null을 거른다" --evidence x --expected y >/dev/null
 assert_eq "" "$(run_dup duplicates)" "rules only inside the block are not duplicates"
 printf '%s\n' '# 내 규칙' '*   ZSH에서 =로 시작하는   단어는 따옴표로 감싼다' "$(tail -n +2 "$DUP_HOME/CLAUDE.md")" >"$DUP_HOME/CLAUDE.md.new" && mv "$DUP_HOME/CLAUDE.md.new" "$DUP_HOME/CLAUDE.md"
+# global 규칙은 Claude·Codex 두 지침에 들어 있다 — 한쪽에만 중복이면 revert가 다른 쪽의 유일한 사본까지 지운다.
+assert_eq "" "$(run_dup duplicates)" "a duplicate in only one target file is not reported"
+printf '%s\n' '- zsh에서 =로 시작하는 단어는 따옴표로 감싼다' "$(<"$DUP_HOME/codex/AGENTS.md")" >"$DUP_HOME/codex/AGENTS.md.new" && mv "$DUP_HOME/codex/AGENTS.md.new" "$DUP_HOME/codex/AGENTS.md"
 DUPS="$(run_dup duplicates)"
-assert_eq "quote-equals" "$(jq -r '.id' <<<"$DUPS")" "rule restated outside the block is a duplicate"
-assert_eq "2" "$(jq -r '.line' <<<"$DUPS")" "duplicate reports the human-written line"
+assert_eq "quote-equals" "$(jq -r '.id' <<<"$DUPS")" "rule restated outside the block in every target is a duplicate"
+assert_eq "2" "$(jq -r '.files[] | select(.file | endswith("CLAUDE.md")) | .line' <<<"$DUPS")" "duplicate reports the human-written line"
+assert_eq "2" "$(jq -r '.files | length' <<<"$DUPS")" "duplicate lists every target file"
 assert_eq "1" "$(jq -s 'length' <<<"$DUPS")" "rules not restated are not reported"
 assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "auto-apply.sh duplicates" "harvest prunes duplicated auto rules"
 pass "duplicate auto rules are removal candidates"

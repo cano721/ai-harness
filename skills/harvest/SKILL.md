@@ -39,7 +39,7 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
   - `unclear`: 유지하되 다음 실행에서 다시 본다
   - `no_effect`(그대로거나 증가): 더 구체적인 문구로 같은 `--rule-id`에 다시 apply(강화). 이미 한 번 강화한 규칙이 다시 `no_effect`면 `revert --rule-id <id> --reason "<수치>"`로 뺀다
   - `--signal`이 없는 옛 규칙은 `list --active`의 `expected`와 이번 통계를 대조해 같은 방식으로 판단한다
-- **중복 정리 (두 범위 공통, 새 규칙보다 먼저)**: `$ROOT/scripts/auto-apply.sh duplicates`가 블록 밖(사람이 쓴 줄)에 같은 문구가 생긴 활성 규칙을 낸다. 사람 쪽이 원본이므로 자동 규칙을 `revert --rule-id <id> --reason "duplicate: <file>:<line>"`으로 뺀다. 문구는 다르지만 같은 행동을 지시하는 규칙(블록 밖 포함)을 Read로 확인했으면 같은 방식으로 뺀다.
+- **중복 정리 (두 범위 공통, 새 규칙보다 먼저)**: `$ROOT/scripts/auto-apply.sh duplicates`가 블록 밖(사람이 쓴 줄)에 같은 문구가 생긴 활성 규칙을 낸다 — 규칙이 든 대상 파일 **전부**에 중복이 있을 때만 나온다(revert는 scope의 모든 대상에서 지운다). 사람 쪽이 원본이므로 자동 규칙을 `revert --rule-id <id> --reason "duplicate: <file>:<line>"`으로 뺀다. 문구는 다르지만 같은 행동을 지시하는 규칙(블록 밖 포함)을 Read로 확인했으면 같은 방식으로 뺀다.
 - 새 규칙에는 반드시 `--signal`을 준다 — 그 규칙이 줄여야 할 반복 오류 발췌·교정 문구에 맞는 정규식이다. 수치로 효과를 판정할 수 없는 규칙은 넣지 않는다.
 - 자동 규칙은 범위마다 최대 `HM_AUTO_RULES_MAX`(12)개다. 상한이면 `apply`가 거부되므로, 비슷한 규칙을 같은 id로 병합하거나 `no_effect` 규칙을 먼저 정리한다.
 - 한 실행에서 적용은 최대 2건이다. 규칙은 400자 이내 한 줄, 행동을 바꾸는 지시여야 한다(설명문 금지).
@@ -96,7 +96,7 @@ history의 `improved` 레코드 중 `review.expected`가 있는 것을 이번 ba
 
 | 신호 | 확인 방법 | 제안 |
 |---|---|---|
-| 존재하지 않는 경로·명령·도구·에이전트를 가리키는 규칙·문서 | 그 경로를 `git ls-files`/빌드 파일로 확인, `$ROOT/scripts/docs-drift.sh scan --root <repo>`의 `stale_in_docs`, `$ROOT/scripts/workflow-contract.sh scan --root <repo>`의 finding | 해당 줄 삭제 또는 실제 값으로 교체 |
+| 존재하지 않는 경로·명령·도구·에이전트를 가리키는 규칙·문서 | 그 경로를 Read·`git show HEAD:<path>`·빌드 파일로 확인, `$ROOT/scripts/docs-drift.sh scan --root <repo>`의 `stale_in_docs`, `$ROOT/scripts/workflow-contract.sh scan --root <repo>`의 finding | 해당 줄 삭제 또는 실제 값으로 교체 |
 | 코드와 모순되는 서술("아직 X가 없다", 낡은 수치·목록) | 실측으로 반증된 것만 | 삭제(목록·수치는 "코드를 source of truth로" 문구로 대체) |
 | 규칙이 교정을 **유발**한 사례 — 에이전트가 규칙대로 했는데 사용자가 뒤집음, 2개 이상 세션 | 5단계 정독에서 교정 직전 응답이 그 규칙을 인용·적용했는지 | 규칙 삭제 또는 범위 축소 |
 | 같은 지시가 여러 파일에 반복 | AGENTS.md·docs·페르소나·워크플로 본문을 Read해 대조 | 원본 한 곳만 남기고 나머지는 참조로 |
