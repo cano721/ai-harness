@@ -784,6 +784,12 @@ assert_file "$ROOT/templates/feature-sliced-design/references/layer-structure.md
 assert_file "$ROOT/THIRD-PARTY-LICENSES.md"
 assert_contains "$(<"$ROOT/templates/no-unnecessary-effects/SKILL.md")" "Copyright (c) 2026 Dan Neciu" "nue copy keeps upstream copyright notice"
 assert_contains "$(<"$ROOT/templates/feature-sliced-design/SKILL.md")" "MIT" "fsd copy names its license"
+# 팀 맞춤본에서 역반영한 일반 규칙: mock되지 않은 HTTP는 실패로, 정리 훅은 렌더 정리 뒤에, 시각 회귀는 CI를 막는지 확인.
+FT_CONTENT="$(<"$ROOT/templates/frontend-testing/SKILL.md")"
+assert_contains "$FT_CONTENT" "HTTP는 mock한 것만 나간다" "frontend-testing fails unmocked HTTP"
+assert_contains "$FT_CONTENT" "정리 훅은 파일 최상위" "frontend-testing orders cleanup hooks after render cleanup"
+assert_contains "$FT_CONTENT" "CI를 막는 설정인지" "frontend-testing checks the visual regression gate"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "다음 담당" "role personas end reports with a handoff line"
 
 # frontend 스택이면 프론트 Skill이 계획에 오르고, feature-sliced-design은 fsd opt-in일 때만 오른다.
 FE_ROOT="$TEST_TMP/frontend-project"
