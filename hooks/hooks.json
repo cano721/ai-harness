@@ -32,6 +32,16 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/db-scan-guard.sh\"",
+            "timeout": 3
+          }
+        ]
       }
     ]
   }

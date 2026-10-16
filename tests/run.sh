@@ -2080,9 +2080,9 @@ fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
 
 # 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드를 바꾸려면 그 저장소 워크플로를 먼저 읽어야 한다.
-assert_contains "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
-assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[0].matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
-assert_eq "3" "$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
+assert_contains "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
+assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
+assert_eq "3" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
 GW="$TEST_TMP/guard-ws"
 mkdir -p "$GW/jobda/.ai-harness/workflows" "$GW/jobda/src/main" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows" "$GW/worktrees/NJ-1/jobda/src/main" "$GW/plain/src/main" "$GW/t/sess"
 git -C "$GW/jobda" init -q
@@ -2199,6 +2199,75 @@ assert_eq "11|6|30|3|improved" "$(jq -r '"\(.before.sessions)|\(.before.hits)|\(
 assert_eq "pending" "$(HM_EFFECT_MIN_SESSIONS=100 run_rq effect --rule-id rule-one | jq -r .verdict)" "small samples stay pending"
 assert_eq "pending" "$(HM_EFFECT_MIN_EXPECTED=50 run_rq effect --rule-id rule-one | jq -r .verdict)" "rare signals stay pending until enough events are expected"
 pass "rule quality gates and measured effect"
+
+# PreToolUse(Bash) DB 스캔 가드(opt-in)는 명령 위치의 DB 클라이언트·드라이버 쿼리 중 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
+DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash")' "$ROOT/hooks/hooks.json")"
+assert_eq "2" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
+assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$DB_GUARD_HOOK")" "db scan guard stays inside a short budget"
+GUARD_COMMAND="$(jq -r '.hooks[0].command' <<<"$DB_GUARD_HOOK")"
+assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"
+assert_contains "$GUARD_COMMAND" "scripts/db-scan-guard.sh" "Bash PreToolUse hook runs the db scan guard"
+GUARD_DATA="$TEST_TMP/guard-data"
+mkdir -p "$GUARD_DATA"
+run_db_guard() {
+  jq -cn --arg c "$1" '{tool_name:"Bash", tool_input:{command:$c}}' \
+    | HM_DB_SCAN_GUARD="${2-1}" CLAUDE_PLUGIN_ROOT="$ROOT" HARNESS_METRICS_DIR="$GUARD_DATA" /bin/sh -c "$GUARD_COMMAND"
+}
+db_guard_verdict() { if [[ -n "$(run_db_guard "$1")" ]]; then echo deny; else echo allow; fi; }
+GUARD_CASES=0
+while IFS=$'\t' read -r expect command; do
+  [[ -n "$expect" ]] || continue
+  assert_eq "$expect" "$(db_guard_verdict "$command")" "db scan guard: $command"
+  GUARD_CASES=$((GUARD_CASES + 1))
+done <<'CASES'
+deny	mysql -h 127.0.0.1 -u dev -e "select table_schema, table_name from information_schema.views where view_definition like '%orders%' union all select routine_schema, routine_name from information_schema.routines where routine_definition like '%orders%' union all select trigger_schema, trigger_name from information_schema.triggers where event_object_table = 'orders' or action_statement like '%orders%'"
+deny	mysql -h 127.0.0.1 -u dev -e "select count(*) from information_schema.columns where column_name = 'use_yn' and table_name = 'orders'"
+deny	mysql -u dev -e "select table_name from information_schema.views where table_schema = 'app' union all select routine_name from information_schema.routines where routine_definition like '%x%'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema = 'app'; select trigger_name from information_schema.triggers"
+deny	mysql -u dev -e "select routine_name from `information_schema`.`ROUTINES` where routine_definition like '%x%'"
+deny	mysql -u dev information_schema -e "select trigger_name from triggers where action_statement like '%x%'"
+deny	mysql -u dev -e "use information_schema; select table_name from views where view_definition like '%x%'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema != 'mysql'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_schema not in ('mysql', 'sys')"
+deny	mariadb -u dev -e "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME = 'orders'"
+deny	python3 -c "import pymysql; c = pymysql.connect(host='127.0.0.1', user='dev').cursor(); c.execute('select * from information_schema.triggers')"
+deny	psql -h localhost -d app -c "select table_name from information_schema.views where view_definition like '%orders%'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where 1=1 or table_schema = 'app'"
+deny	mysql -u dev -e "select table_name from information_schema.tables where table_name = 'x' -- and table_schema = 'app'"
+deny	mysql -u dev -e "select table_name from information_schema.views where view_definition like '%table_schema = 1%'"
+deny	mysql -u dev -e "select table_name from information_schema.views where /* table_schema = 'app' and */ view_definition like '%x%'"
+deny	echo "select * from information_schema.views" | mysql -u dev
+deny	MYSQL_PWD=x /usr/local/bin/mysql -u dev --execute="select * from information_schema.routines"
+deny	sudo -u postgres psql -c "select table_name from information_schema.views"
+allow	mysql -u dev -e "select table_name from information_schema.views where table_schema = 'app' and view_definition like '%orders%'"
+allow	mysql -u dev -e "select routine_name from information_schema.routines where routine_schema = 'app' and routine_definition like '%x%' union all select trigger_name from information_schema.triggers where trigger_schema='app' and action_statement like '%x%'"
+allow	mysql -u dev -e "select table_name from information_schema.referential_constraints where constraint_schema = 'app'; select table_name from information_schema.tables where table_schema in ('app', 'app_batch')"
+allow	mysql -u dev -e "select column_name from information_schema.columns where table_schema = database() and table_name = 'orders'"
+allow	mysql -u dev -e "select table_name from information_schema.views where table_schema = 'app' and (view_definition like '%a%' or view_definition like '%b%')"
+allow	mysql -u dev -e "select schema_name from information_schema.schemata"
+allow	psql -h localhost -d app -c "select table_name from information_schema.columns where column_name = 'id'"
+allow	git commit -m "docs: mysql information_schema.views note"
+allow	grep -rn "mysql -e 'select * from information_schema.views'" docs/
+allow	echo "mysql -u dev -e select * from information_schema.triggers"
+allow	git log --oneline --grep "information_schema.triggers"
+allow	cd /tmp && mysql -u dev -e "select 1" && echo 'information_schema.views'
+CASES
+assert_eq "31" "$GUARD_CASES" "db scan guard case count"
+assert_eq "deny" "$(db_guard_verdict $'mysql -u dev <<\'SQL\'\nselect table_name from information_schema.views;\nSQL')" "db scan guard reads heredoc SQL fed to a client"
+assert_eq "allow" "$(db_guard_verdict $'cat > notes.md <<\'EOF\'\nmysql -e "select * from information_schema.views"\nEOF')" "db scan guard ignores heredoc documents"
+assert_eq "allow" "$(db_guard_verdict $'git commit -m "$(cat <<\'EOF\'\ndocs: guard\n\nmysql -e "select * from information_schema.views"\nEOF\n)"')" "db scan guard ignores commit message heredocs"
+assert_eq "" "$(run_db_guard "ls -la && git status")" "db scan guard ignores ordinary commands"
+DENY_OUT="$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"")"
+assert_contains "$(jq -r '.hookSpecificOutput.permissionDecisionReason' <<<"$DENY_OUT")" "[DB scan guard] information_schema.TRIGGERS" "db scan guard names the table"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$DENY_OUT")" "db scan guard denies through PreToolUse decision"
+# 기본은 꺼져 있고, 켜는 값은 config에서도 읽되 config를 셸로 실행하지 않는다.
+assert_eq "" "$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"" "")" "db scan guard is off by default"
+printf 'HM_DB_SCAN_GUARD=1\ntouch "%s/pwned"\n' "$GUARD_DATA" >"$GUARD_DATA/config"
+assert_contains "$(run_db_guard "mysql -u dev -e \"select * from information_schema.triggers\"" "")" "deny" "db scan guard opt-in by config"
+[[ ! -e "$GUARD_DATA/pwned" ]] || fail "db scan guard executed config as shell"
+rm -f "$GUARD_DATA/config"
+assert_eq "" "$(printf 'not json' | HM_DB_SCAN_GUARD=1 CLAUDE_PLUGIN_ROOT="$ROOT" /bin/sh -c "$GUARD_COMMAND")" "db scan guard fails open on bad input"
+pass "db scan guard"
 
 # 제거: 사람이 블록 밖에 같은 규칙을 직접 쓰면 자동 규칙은 중복이다. 문구 비교는 공백·대소문자·목록 기호를 무시한다.
 DUP_HOME="$TEST_TMP/dup-home"
