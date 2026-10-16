@@ -712,6 +712,9 @@ jq '.stacks = [] | .roles = {developer: {source: "existing", integrations: ["cla
 ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
 assert_eq "stack_removed" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".agents/skills/frontend-testing/SKILL.md") | .reason')" "dropped stack orphans its artifacts"
 assert_eq "role_adopted" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role handed to an existing agent orphans the generated persona"
+jq '.roles.developer |= del(.integrations)' "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" \
+  && mv "$ORPHAN_ROOT/manifest.tmp" "$ORPHAN_ROOT/.ai-harness/harness.json"
+assert_eq "role_adopted" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role without integrations defaults to claude like the contract check"
 assert_eq "0" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '[.orphaned[] | select(.path==".claude/agents/reviewer.md")] | length')" "unmapped role keeps its generated persona"
 assert_eq "true" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .present')" "orphan reports whether the file is still on disk"
 jq '.integrations = ["codex"]' "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" \
@@ -728,7 +731,7 @@ mkdir -p "$ASSET_ROOT/.claude/agents" "$ASSET_ROOT/.claude/skills/orchestrator" 
 git -C "$ASSET_ROOT" init -q
 printf '%s\n' '.claude/' >"$ASSET_ROOT/.gitignore"
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
-printf '%s\n' '# Team rules' 'Route edits through `orchestrator`.' >"$ASSET_ROOT/.claude/CLAUDE.md"
+printf '%s\n' '# Team rules' 'Route edits through `orchestrator`.' 'Dev server runs on `localhost:8080`.' >"$ASSET_ROOT/.claude/CLAUDE.md"
 printf '%s\n' '# Conventions' >"$ASSET_ROOT/TEAM_CONVENTIONS.md"
 printf '%s\n' '---' 'name: sunwoong' 'description: >' '  Builds screens fast.' 'model: opus' 'skills:' '  - frontend-testing' '---' 'body' >"$ASSET_ROOT/.claude/agents/sunwoong.md"
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
@@ -749,6 +752,7 @@ assert_eq "false" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="o
 assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="orchestrator") | .routes_agents')" "skill naming local agents is a router candidate"
 assert_eq "oh-my-claudecode:code-reviewer" "$(printf '%s' "$ASSETS" | jq -r '.external_refs[0].ref')" "plugin-namespaced agent reference is reported"
 assert_eq ".claude/skills/orchestrator/SKILL.md" "$(printf '%s' "$ASSETS" | jq -r '.external_refs[0].file')" "external reference carries its file"
+assert_eq "1" "$(printf '%s' "$ASSETS" | jq -r '.external_refs | length')" "host:port tokens are not plugin references"
 assert_eq "deploy" "$(printf '%s' "$ASSETS" | jq -r '.commands[0]')" "existing commands are listed"
 assert_eq "PostToolUse" "$(printf '%s' "$ASSETS" | jq -r '.settings.hook_events[0]')" "existing settings hooks are listed"
 assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.claude_dir_ignored')" "gitignored .claude is reported"

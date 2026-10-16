@@ -156,6 +156,7 @@ for f in "$root"/CLAUDE.md "$root"/.claude/CLAUDE.md "$root"/.claude/agents/*.md
   { grep -noE '`[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*`' "$f" 2>/dev/null || true; } \
     | while IFS=: read -r line ref_a ref_b; do
         ref="${ref_a#\`}:${ref_b%\`}"
+        [[ "${ref_b%\`}" =~ ^[0-9]+$ ]] && continue  # host:port 등 숫자는 플러그인 참조가 아니다
         jq -cn --arg ref "$ref" --arg file "$rel" --arg line "$line" --argjson plugins "$enabled_plugins" \
           '{ref:$ref, file:$file, line:($line|tonumber), declared:($plugins | index($ref | split(":")[0]) != null)}'
       done >>"$TMP/refs.jsonl"

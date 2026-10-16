@@ -177,7 +177,7 @@ case "$command_name" in
                 orphan_reason="$(jq -r --arg slot "$slot" --arg integration "$role_integration" '
                   if ((.integrations // []) | index($integration) | not) then "integration_removed"
                   elif ((.roles // {})[$slot] // {} | (.source // "") == "existing"
-                        and ((.integrations // []) | index($integration) != null)) then "role_adopted"
+                        and ((.integrations // ["claude"]) | index($integration) != null)) then "role_adopted"
                   else "" end' "$manifest")"
               fi
             fi
