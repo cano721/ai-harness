@@ -160,6 +160,27 @@ for s in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
   done < <(jq -r '.hooks // {} | .[][]?.hooks[]?.command // empty' "$s" 2>/dev/null || true)
 done
 
+# ── 역할 매핑(harness.json roles)이 가리키는 기존 에이전트·라우터 ─────────────
+# 역할을 기존 에이전트에 넘기면 하네스 페르소나를 만들지 않으므로, 대상이 사라지면 위임이 조용히 끊긴다.
+manifest="$root/.ai-harness/harness.json"
+if [[ -f "$manifest" ]] && jq -e '(.roles // {}) | length > 0' "$manifest" >/dev/null 2>&1; then
+  while IFS=$'\t' read -r slot integration agent; do
+    case "$integration" in
+      claude) agent_file=".claude/agents/$agent.md" ;;
+      codex) agent_file=".codex/agents/$agent.toml" ;;
+      *) continue ;;
+    esac
+    [[ -f "$root/$agent_file" ]] && continue
+    finding role_agent_missing high ".ai-harness/harness.json" "" "$agent" "$agent_file" "역할 $slot 이(가) 매핑된 기존 에이전트 파일이 없다 — 매핑을 고치거나 roles에서 빼 하네스 페르소나를 생성한다"
+  done < <(jq -r '.roles | to_entries[] | select((.value.source // "") == "existing")
+      | .key as $slot | (.value.integrations // ["claude"])[] as $i | (.value.agents // [])[] | [$slot, $i, .] | @tsv' "$manifest")
+  while IFS=$'\t' read -r slot router; do
+    case "$router" in (""|/*|*'..'*) continue ;; esac
+    [[ -f "$root/$router" ]] && continue
+    finding role_router_missing high ".ai-harness/harness.json" "" "$router" "" "역할 $slot 의 담당을 정하는 라우터 파일이 없다"
+  done < <(jq -r '.roles | to_entries[] | select((.value.router // "") != "") | [.key, .value.router] | @tsv' "$manifest")
+fi
+
 jq -s \
   --arg root "$root" \
   --arg graph_limit "$graph_limit" \

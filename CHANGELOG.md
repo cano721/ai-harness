@@ -7,6 +7,14 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **init이 기존 에이전트 자산을 분석해 하네스 역할에 융화합니다** — 팀이 이미 `.claude/agents`·라우터 스킬을 운영하는 저장소에 init하면 developer·test-engineer를 그 옆에 하나 더 세워 위임 대상이 모호해졌습니다. `scripts/existing-assets.sh scan`이 기존 지침(CLAUDE.md 위치·import 여부)·에이전트·스킬(템플릿 이름 충돌, 라우터 후보)·settings hook·선언되지 않은 `plugin:agent` 참조·`.claude/` gitignore 여부를 모으고, `/harness-init`이 역할 슬롯을 기존 에이전트·라우터에 매핑(`harness.json`의 `roles`)해 매핑된 슬롯은 생성하지 않습니다. 기존 자산의 낡은 서술·중복·외부 참조는 점검표로 보입니다. (#121)
+- **생성물을 영구 제외하고, 설정 밖으로 밀려난 생성물을 제거 후보로 보입니다** — 지운 생성물을 `forget`해도 다음 `--sync`가 add로 되살렸습니다. `harness-sync-state.sh exclude|include`가 `harness.json`의 `excluded`를 관리하고 plan은 `excluded`로만 표시합니다. plan의 `orphaned`는 integration·stack·level을 빼거나 역할을 기존 에이전트에 넘긴 뒤 남은 관리 생성물을 사유와 함께 냅니다. (#121)
+- **워크플로 계약 검사가 역할 매핑을 확인합니다** — `roles`가 가리키는 기존 에이전트·라우터 파일이 사라지면 `role_agent_missing`·`role_router_missing`. (#121)
+
 ## v0.37.0 (2026-10-13)
 ### 새 기능
 
