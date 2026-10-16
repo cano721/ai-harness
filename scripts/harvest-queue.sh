@@ -76,7 +76,7 @@ usage:
   harvest-queue.sh events --project <project>
   harvest-queue.sh history --project <project>
   harvest-queue.sh mark-reviewed --project <project> [--outcome reviewed|improved|no-change]
-      [--summary <text>] [--artifact <PR-or-reference>] [--expected <text>]
+      [--summary <text>] [--artifact <PR-or-reference>] [--expected <text>] [--change add|remove|mixed]
   harvest-queue.sh notify                 # SessionStart hook; stdin JSON의 cwd 사용
 EOF
   exit 2
@@ -597,7 +597,7 @@ parse_project() {
   printf '%s\n' "$2"
 }
 
-REVIEW_PROJECT=""; REVIEW_OUTCOME="reviewed"; REVIEW_SUMMARY=""; REVIEW_ARTIFACT=""; REVIEW_EXPECTED=""
+REVIEW_PROJECT=""; REVIEW_OUTCOME="reviewed"; REVIEW_SUMMARY=""; REVIEW_ARTIFACT=""; REVIEW_EXPECTED=""; REVIEW_CHANGE=""
 RECORD_ACTION="new"
 parse_review_options() {
   while (( $# > 0 )); do
@@ -607,6 +607,7 @@ parse_review_options() {
       --summary) [[ -n "${2:-}" ]] || usage; REVIEW_SUMMARY="$2"; shift 2 ;;
       --artifact) [[ -n "${2:-}" ]] || usage; REVIEW_ARTIFACT="$2"; shift 2 ;;
       --expected) [[ -n "${2:-}" ]] || usage; REVIEW_EXPECTED="$2"; shift 2 ;;
+      --change) [[ -n "${2:-}" ]] || usage; REVIEW_CHANGE="$2"; shift 2 ;;
       *) usage ;;
     esac
   done
@@ -614,6 +615,10 @@ parse_review_options() {
   case "$REVIEW_OUTCOME" in
     reviewed|improved|no-change) ;;
     *) echo "잘못된 --outcome: $REVIEW_OUTCOME" >&2; exit 2 ;;
+  esac
+  case "$REVIEW_CHANGE" in
+    ""|add|remove|mixed) ;;
+    *) echo "잘못된 --change: $REVIEW_CHANGE" >&2; exit 2 ;;
   esac
 }
 
@@ -716,7 +721,7 @@ command_history() {
 }
 
 command_mark_reviewed() {
-  local project="$1" outcome="${2:-reviewed}" summary="${3:-}" artifact="${4:-}" expected="${5:-}"
+  local project="$1" outcome="${2:-reviewed}" summary="${3:-}" artifact="${4:-}" expected="${5:-}" change="${6:-}"
   local qdir="" batch_file="" marker="" reviewed_tmp="" lock_dir="" batch_id="" reviewed_at=""
   qdir="$(queue_dir "$project")"
   batch_file="$qdir/analysis-batch.json"
@@ -746,7 +751,7 @@ command_mark_reviewed() {
   reviewed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   reviewed_tmp="$(mktemp "$qdir/.last-reviewed.XXXXXX")"
   jq -c --arg reviewed_at "$reviewed_at" --arg outcome "$outcome" \
-    --arg summary "$summary" --arg artifact "$artifact" --arg expected "$expected" '
+    --arg summary "$summary" --arg artifact "$artifact" --arg expected "$expected" --arg change "$change" '
       . + {
         reviewed_at:$reviewed_at,
         has_analysis_batch:false,
@@ -755,7 +760,8 @@ command_mark_reviewed() {
           outcome:$outcome,
           summary:(if $summary == "" then null else $summary[0:500] end),
           artifact:(if $artifact == "" then null else $artifact[0:2048] end),
-          expected:(if $expected == "" then null else $expected[0:500] end)
+          expected:(if $expected == "" then null else $expected[0:500] end),
+          change:(if $change == "" then null else $change end)
         }
       }
     ' \
@@ -765,7 +771,7 @@ command_mark_reviewed() {
     || ! jq -e --arg batch_id "$batch_id" 'select(.batch_id == $batch_id)' \
       "$qdir/review-history.jsonl" >/dev/null 2>&1; then
     jq -c --arg reviewed_at "$reviewed_at" --arg outcome "$outcome" \
-      --arg summary "$summary" --arg artifact "$artifact" --arg expected "$expected" '{
+      --arg summary "$summary" --arg artifact "$artifact" --arg expected "$expected" --arg change "$change" '{
       v:1,
       project:.project,
       batch_id:.batch_id,
@@ -779,7 +785,8 @@ command_mark_reviewed() {
         outcome:$outcome,
         summary:(if $summary == "" then null else $summary[0:500] end),
         artifact:(if $artifact == "" then null else $artifact[0:2048] end),
-        expected:(if $expected == "" then null else $expected[0:500] end)
+        expected:(if $expected == "" then null else $expected[0:500] end),
+        change:(if $change == "" then null else $change end)
       }
     }' "$batch_file" >>"$qdir/review-history.jsonl"
   fi
@@ -866,7 +873,7 @@ case "$command" in
   history) project="$(parse_project "${1:-}" "${2:-}")"; command_history "$project" ;;
   mark-reviewed)
     parse_review_options "$@"
-    command_mark_reviewed "$REVIEW_PROJECT" "$REVIEW_OUTCOME" "$REVIEW_SUMMARY" "$REVIEW_ARTIFACT" "$REVIEW_EXPECTED"
+    command_mark_reviewed "$REVIEW_PROJECT" "$REVIEW_OUTCOME" "$REVIEW_SUMMARY" "$REVIEW_ARTIFACT" "$REVIEW_EXPECTED" "$REVIEW_CHANGE"
     ;;
   ack)
     project="$(parse_project "${1:-}" "${2:-}")"

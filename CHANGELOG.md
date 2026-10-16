@@ -14,6 +14,8 @@
 - **init이 기존 에이전트 자산을 분석해 하네스 역할에 융화합니다** — 팀이 이미 `.claude/agents`·라우터 스킬을 운영하는 저장소에 init하면 developer·test-engineer를 그 옆에 하나 더 세워 위임 대상이 모호해졌습니다. `scripts/existing-assets.sh scan`이 기존 지침(CLAUDE.md 위치·import 여부)·에이전트·스킬(템플릿 이름 충돌, 라우터 후보)·settings hook·선언되지 않은 `plugin:agent` 참조·`.claude/` gitignore 여부를 모으고, `/harness-init`이 역할 슬롯을 기존 에이전트·라우터에 매핑(`harness.json`의 `roles`)해 매핑된 슬롯은 생성하지 않습니다. 기존 자산의 낡은 서술·중복·외부 참조는 점검표로 보입니다. (#121)
 - **생성물을 영구 제외하고, 설정 밖으로 밀려난 생성물을 제거 후보로 보입니다** — 지운 생성물을 `forget`해도 다음 `--sync`가 add로 되살렸습니다. `harness-sync-state.sh exclude|include`가 `harness.json`의 `excluded`를 관리하고 plan은 `excluded`로만 표시합니다. plan의 `orphaned`는 integration·stack·level을 빼거나 역할을 기존 에이전트에 넘긴 뒤 남은 관리 생성물을 사유와 함께 냅니다. (#121)
 - **워크플로 계약 검사가 역할 매핑을 확인합니다** — `roles`가 가리키는 기존 에이전트·라우터 파일이 사라지면 `role_agent_missing`·`role_router_missing`. (#121)
+- **harvest가 추가뿐 아니라 제거를 개선안으로 냅니다** — 하네스가 추가만 하며 낡은 규칙·코드와 모순되는 서술·안 쓰는 자산이 쌓였습니다(항상 로드되는 지침이 길수록 준수율이 떨어집니다). 제거 후보 신호(없는 경로·명령 참조, docs-drift·계약 finding, 교정을 유발한 규칙, 중복 지시, 사용 0회)와 가치 기준을 두고, "재발 없음"은 제거 근거에서 뺐습니다. `--auto`는 줄 단위 제거까지 draft PR로 내고 파일·관리 생성물 삭제는 사람에게 넘깁니다. `mark-reviewed --change add|remove|mixed`로 기록해 다음 harvest가 제거를 복원 여부로 검증합니다. (#122)
+- **개인 지침 자동 규칙의 중복을 찾아 뺍니다** — 사람이 블록 밖에 같은 규칙을 직접 쓰면 `scripts/auto-apply.sh duplicates`가 해당 줄과 함께 알리고, 자동 harvest가 그 자동 규칙을 되돌립니다. 되돌리기는 scope의 모든 지침 파일에서 지우므로, 규칙이 든 파일 전부(global이면 Claude·Codex 둘 다)에 같은 문구가 있을 때만 알립니다. (#122)
 
 ## v0.37.0 (2026-10-13)
 ### 새 기능
