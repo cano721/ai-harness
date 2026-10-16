@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <status|record|plan|forget> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--file <relative-path>]...\n' "$0" >&2
+  printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--file <relative-path>]...\n' "$0" >&2
   exit 2
 }
 
@@ -18,12 +18,14 @@ shift
 root=""
 version=""
 catalog=""
+reason=""
 files=()
 while (($#)); do
   case "$1" in
     --root) root="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
     --catalog) catalog="${2:-}"; shift 2 ;;
+    --reason) reason="${2:-}"; shift 2 ;;
     --file) files+=("${2:-}"); shift 2 ;;
     *) usage ;;
   esac
@@ -81,6 +83,14 @@ case "$command_name" in
           continue
         fi
         target="$root/$path"
+        if jq -e --arg path "$path" '(.excluded // {}) | has($path)' "$manifest" >/dev/null; then
+          # 사람이 뺀 생성물은 다시 제안하지 않는다. 되돌리기는 include로만.
+          jq -cn --arg path "$path" --arg reason "$(jq -r --arg path "$path" '.excluded[$path].reason // ""' "$manifest")" \
+            --arg workflow "$(jq -r '.workflow // ""' <<<"$artifact")" \
+            '{path:$path,state:"excluded",action:"excluded",reason:$reason}
+              + (if $workflow == "" then {} else {workflow: $workflow} end)'
+          continue
+        fi
         baseline="$(jq -r --arg path "$path" '.managed_files[$path].content_sha256 // ""' "$manifest")"
         state="missing"
         action="add"
@@ -107,7 +117,7 @@ case "$command_name" in
     # 새 진입점(add)이 생기면 보호 파일 쪽 후속 조치를 제안한다: 참조되는
     # 워크플로 본문 부재, AGENTS.md 커맨드 표 미등재. 제안일 뿐 자동 편집 근거가 아니다.
     suggestions="$(
-      jq -r '[.[] | select(.action == "add") | .workflow // empty] | unique | .[]' <<<"$plan_items" \
+      jq -r '([.[] | select(.action == "excluded") | .workflow // empty] | unique) as $opted_out | [.[] | select(.action == "add") | .workflow // empty | select(. as $w | $opted_out | index($w) | not)] | unique | .[]' <<<"$plan_items" \
         | while IFS= read -r workflow_name; do
             body_path=".ai-harness/workflows/$workflow_name.md"
             if [[ ! -f "$root/$body_path" ]]; then
@@ -140,11 +150,80 @@ case "$command_name" in
                 detail:"retired by the template catalog; confirm removal of the file with the user, then drop the manifest entry with `forget`"}'
           done | jq -s '.'
     )"
+    # 설정이 바뀌어(level·integration·stack 제거, 역할을 기존 에이전트에 넘김) 더는 생성 대상이 아닌
+    # 관리 생성물. 카탈로그나 역할 agent 경로로 출처를 확인할 수 있는 것만 올린다 — retired와 같은 이유로
+    # "카탈로그에 없음"만으로는 추론하지 않는다.
+    orphaned="$(
+      jq -r '(.managed_files // {}) | keys[]' "$manifest" \
+        | while IFS= read -r path; do
+            case "$path" in (""|/*|*'..'*) continue ;; esac
+            jq -e --arg path "$path" '(.retired // []) | any(.path == $path)' "$catalog" >/dev/null && continue
+            orphan_reason=""
+            artifact="$(jq -c --arg path "$path" 'first(.artifacts[] | select(.path == $path)) // empty' "$catalog")"
+            if [[ -n "$artifact" ]]; then
+              orphan_reason="$(jq -r --arg level "$level" --argjson integrations "$integrations" --argjson stacks "$stacks" '
+                (.integration // "") as $integration | (.stack // "") as $stack
+                | if (.level // "") != $level then "level_changed"
+                  elif $integration != "" and ($integrations | index($integration) | not) then "integration_removed"
+                  elif $stack != "" and ($stacks | index($stack) | not) then "stack_removed"
+                  else "" end' <<<"$artifact")"
+            else
+              role_integration=""
+              case "$path" in
+                (.claude/agents/*.md) role_integration="claude"; slot="${path#.claude/agents/}"; slot="${slot%.md}" ;;
+                (.codex/agents/*.toml) role_integration="codex"; slot="${path#.codex/agents/}"; slot="${slot%.toml}" ;;
+              esac
+              if [[ -n "$role_integration" ]]; then
+                orphan_reason="$(jq -r --arg slot "$slot" --arg integration "$role_integration" '
+                  if ((.integrations // []) | index($integration) | not) then "integration_removed"
+                  elif ((.roles // {})[$slot] // {} | (.source // "") == "existing"
+                        and ((.integrations // ["claude"]) | index($integration) != null)) then "role_adopted"
+                  else "" end' "$manifest")"
+              fi
+            fi
+            [[ -n "$orphan_reason" ]] || continue
+            present="false"
+            [[ -f "$root/$path" ]] && present="true"
+            jq -cn --arg path "$path" --arg reason "$orphan_reason" --argjson present "$present" \
+              '{path:$path,reason:$reason,present:$present,
+                detail:"no longer generated for the current configuration; confirm removal with the user, delete the file, then `forget` (or `exclude` to keep it out of future plans)"}'
+          done | jq -s '.'
+    )"
     jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" --argjson retired "$retired" \
+      --argjson orphaned "$orphaned" \
       '{items: $items,
         counts: ($items | group_by(.action) | map({key: .[0].action, value: length}) | from_entries),
         suggestions: $suggestions,
-        retired: $retired}'
+        retired: $retired,
+        orphaned: $orphaned}'
+    ;;
+  exclude|include)
+    ((${#files[@]} > 0)) || usage
+    temp_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
+    trap 'rm -f "$temp_manifest"' EXIT
+    cp "$manifest" "$temp_manifest"
+    today="$(date +%Y-%m-%d)"
+    for path in "${files[@]}"; do
+      case "$path" in
+        ""|/*|*'..'*) printf 'invalid managed path: %s\n' "$path" >&2; exit 2 ;;
+      esac
+      next_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
+      if [[ "$command_name" == "exclude" ]]; then
+        # 파일은 지우지 않는다(삭제는 사용자 확인 뒤 호출자가). 해시 기록은 함께 내린다.
+        jq --arg path "$path" --arg reason "$reason" --arg today "$today" '
+          .managed_files = ((.managed_files // {}) | del(.[$path]))
+          | .excluded = ((.excluded // {}) + {($path): {reason: $reason, since: $today}})
+        ' "$temp_manifest" >"$next_manifest"
+      else
+        jq --arg path "$path" '
+          .excluded = ((.excluded // {}) | del(.[$path]))
+          | if .excluded == {} then del(.excluded) else . end
+        ' "$temp_manifest" >"$next_manifest"
+      fi
+      mv "$next_manifest" "$temp_manifest"
+    done
+    mv "$temp_manifest" "$manifest"
+    trap - EXIT
     ;;
   forget)
     ((${#files[@]} > 0)) || usage

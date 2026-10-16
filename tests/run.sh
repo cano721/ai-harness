@@ -673,6 +673,106 @@ assert_eq "0" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --roo
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "retired" "harness init handles retired artifacts"
 pass "project harness sync state"
 
+# 영구 제외: 사람이 지운 생성물은 다음 plan이 add로 되살리지 않는다. include로만 되돌린다.
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 --file .agents/skills/example/SKILL.md
+"$ROOT/scripts/harness-sync-state.sh" exclude --root "$SYNC_ROOT" --file .agents/skills/fix-bug/SKILL.md --reason "team uses its own bug flow"
+assert_eq "team uses its own bug flow" "$(jq -r '.excluded[".agents/skills/fix-bug/SKILL.md"].reason' "$SYNC_ROOT/.ai-harness/harness.json")" "exclude records the reason"
+SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "excluded" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "excluded artifact is never re-added"
+assert_eq "" "$(printf '%s' "$SYNC_PLAN" | jq -r '.suggestions[] | select(.workflow=="fix-bug") | .type')" "excluded entry point yields no follow-up suggestions"
+assert_eq "1" "$(printf '%s' "$SYNC_PLAN" | jq -r '.counts.excluded')" "plan counts excluded artifacts"
+mkdir -p "$SYNC_ROOT/.agents/skills/review"
+printf '%s\n' 'team review skill' >"$SYNC_ROOT/.agents/skills/review/SKILL.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.16.0 --file .agents/skills/review/SKILL.md
+"$ROOT/scripts/harness-sync-state.sh" exclude --root "$SYNC_ROOT" --file .agents/skills/review/SKILL.md --reason existing
+assert_eq "null" "$(jq -r '.managed_files[".agents/skills/review/SKILL.md"] // "null"' "$SYNC_ROOT/.ai-harness/harness.json")" "exclude also drops the managed hash"
+assert_file "$SYNC_ROOT/.agents/skills/review/SKILL.md"
+"$ROOT/scripts/harness-sync-state.sh" include --root "$SYNC_ROOT" --file .agents/skills/fix-bug/SKILL.md
+assert_eq "add" "$(printf '%s' "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "include returns the artifact to the plan"
+if "$ROOT/scripts/harness-sync-state.sh" exclude --root "$SYNC_ROOT" --file ../outside >/dev/null 2>&1; then
+  fail "exclude rejects paths outside the project"
+fi
+pass "project harness sync exclusions"
+
+# 고아 생성물: 설정에서 integration·stack을 빼거나 역할을 기존 에이전트에 넘기면 남은 관리 생성물이 제거 후보가 된다.
+ORPHAN_ROOT="$TEST_TMP/orphan-project"
+mkdir -p "$ORPHAN_ROOT/.ai-harness" "$ORPHAN_ROOT/.claude/commands" "$ORPHAN_ROOT/.claude/agents" "$ORPHAN_ROOT/.agents/skills/frontend-testing"
+printf '%s\n' '{"project_id":"orphan-project","level":"standard","integrations":["codex","claude"],"stacks":["frontend"]}' >"$ORPHAN_ROOT/.ai-harness/harness.json"
+printf '%s\n' 'claude review' >"$ORPHAN_ROOT/.claude/commands/review.md"
+printf '%s\n' 'frontend testing' >"$ORPHAN_ROOT/.agents/skills/frontend-testing/SKILL.md"
+printf '%s\n' '---' 'name: developer' 'model: sonnet' '---' >"$ORPHAN_ROOT/.claude/agents/developer.md"
+printf '%s\n' '---' 'name: reviewer' 'model: opus' '---' >"$ORPHAN_ROOT/.claude/agents/reviewer.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$ORPHAN_ROOT" --version 0.37.0 \
+  --file .claude/commands/review.md --file .agents/skills/frontend-testing/SKILL.md \
+  --file .claude/agents/developer.md --file .claude/agents/reviewer.md
+ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "0" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned | length')" "artifacts inside the current config are not orphaned"
+jq '.stacks = [] | .roles = {developer: {source: "existing", integrations: ["claude"], agents: ["sunwoong"]}}' \
+  "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" && mv "$ORPHAN_ROOT/manifest.tmp" "$ORPHAN_ROOT/.ai-harness/harness.json"
+ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "stack_removed" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".agents/skills/frontend-testing/SKILL.md") | .reason')" "dropped stack orphans its artifacts"
+assert_eq "role_adopted" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role handed to an existing agent orphans the generated persona"
+jq '.roles.developer |= del(.integrations)' "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" \
+  && mv "$ORPHAN_ROOT/manifest.tmp" "$ORPHAN_ROOT/.ai-harness/harness.json"
+assert_eq "role_adopted" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role without integrations defaults to claude like the contract check"
+assert_eq "0" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '[.orphaned[] | select(.path==".claude/agents/reviewer.md")] | length')" "unmapped role keeps its generated persona"
+assert_eq "true" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .present')" "orphan reports whether the file is still on disk"
+jq '.integrations = ["codex"]' "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" \
+  && mv "$ORPHAN_ROOT/manifest.tmp" "$ORPHAN_ROOT/.ai-harness/harness.json"
+ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "integration_removed" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/commands/review.md") | .reason')" "dropped integration orphans its artifacts"
+assert_eq "integration_removed" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".claude/agents/reviewer.md") | .reason')" "dropped integration orphans its role personas"
+assert_eq "0" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '[.items[] | select(.path==".claude/commands/review.md")] | length')" "orphaned artifact is not a plan item"
+pass "project harness sync orphans"
+
+# 기존 에이전트 자산 인벤토리: init이 덮어쓰거나 옆에 중복을 세우지 않도록 사실만 모은다.
+ASSET_ROOT="$TEST_TMP/asset-project"
+mkdir -p "$ASSET_ROOT/.claude/agents" "$ASSET_ROOT/.claude/skills/orchestrator" "$ASSET_ROOT/.claude/skills/frontend-testing" "$ASSET_ROOT/.claude/commands"
+git -C "$ASSET_ROOT" init -q
+printf '%s\n' '.claude/' >"$ASSET_ROOT/.gitignore"
+# shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
+printf '%s\n' '# Team rules' 'Route edits through `orchestrator`.' 'Dev server runs on `localhost:8080`.' >"$ASSET_ROOT/.claude/CLAUDE.md"
+printf '%s\n' '# Conventions' >"$ASSET_ROOT/TEAM_CONVENTIONS.md"
+printf '%s\n' '---' 'name: sunwoong' 'description: >' '  Builds screens fast.' 'model: opus' 'skills:' '  - frontend-testing' '---' 'body' >"$ASSET_ROOT/.claude/agents/sunwoong.md"
+# shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
+printf '%s\n' '---' 'name: orchestrator' 'description: Routes work to sunwoong.' '---' '| review | `sunwoong` | own code goes to `oh-my-claudecode:code-reviewer` |' >"$ASSET_ROOT/.claude/skills/orchestrator/SKILL.md"
+printf '%s\n' '---' 'name: frontend-testing' '---' >"$ASSET_ROOT/.claude/skills/frontend-testing/SKILL.md"
+printf '%s\n' '# deploy' >"$ASSET_ROOT/.claude/commands/deploy.md"
+printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"fmt"}]}]},"permissions":{"allow":["Bash(ls)"]}}' >"$ASSET_ROOT/.claude/settings.json"
+ASSETS="$("$ROOT/scripts/existing-assets.sh" scan --root "$ASSET_ROOT" --templates "$ROOT/templates")"
+assert_eq ".claude/CLAUDE.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="claude_md") | .path')" "nested CLAUDE.md is found"
+assert_eq "../AGENTS.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="claude_md") | .agents_import')" "import path is relative to the CLAUDE.md location"
+assert_eq "false" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="claude_md") | .imports_agents')" "missing AGENTS.md import is reported"
+assert_eq "TEAM_CONVENTIONS.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="convention_doc") | .path')" "root convention docs are listed"
+assert_eq "opus" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .model')" "agent model is read from frontmatter"
+assert_eq "Builds screens fast." "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .description')" "folded description is read"
+assert_eq "frontend-testing" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .skills[0]')" "agent skill list is read"
+assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="frontend-testing") | .template_collision')" "skill sharing a template name is flagged"
+assert_eq "false" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="orchestrator") | .template_collision')" "team-only skill is not a collision"
+assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="orchestrator") | .routes_agents')" "skill naming local agents is a router candidate"
+assert_eq "oh-my-claudecode:code-reviewer" "$(printf '%s' "$ASSETS" | jq -r '.external_refs[0].ref')" "plugin-namespaced agent reference is reported"
+assert_eq ".claude/skills/orchestrator/SKILL.md" "$(printf '%s' "$ASSETS" | jq -r '.external_refs[0].file')" "external reference carries its file"
+assert_eq "1" "$(printf '%s' "$ASSETS" | jq -r '.external_refs | length')" "host:port tokens are not plugin references"
+assert_eq "deploy" "$(printf '%s' "$ASSETS" | jq -r '.commands[0]')" "existing commands are listed"
+assert_eq "PostToolUse" "$(printf '%s' "$ASSETS" | jq -r '.settings.hook_events[0]')" "existing settings hooks are listed"
+assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.claude_dir_ignored')" "gitignored .claude is reported"
+EMPTY_ASSETS="$("$ROOT/scripts/existing-assets.sh" scan --root "$TEST_TMP/orphan-project/.ai-harness" --templates "$ROOT/templates")"
+assert_eq "0" "$(printf '%s' "$EMPTY_ASSETS" | jq -r '.agents | length')" "project without assets yields empty lists"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "existing-assets.sh scan" "harness init inventories existing assets"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "role_adopted" "harness init removes personas replaced by existing agents"
+pass "existing agent asset inventory"
+
+# 역할 매핑 계약: roles가 가리키는 기존 에이전트·라우터가 사라지면 위임이 조용히 깨진다.
+ROLE_ROOT="$TEST_TMP/role-contract"
+mkdir -p "$ROLE_ROOT/.ai-harness" "$ROLE_ROOT/.claude/agents"
+printf '%s\n' '{"project_id":"role-contract","level":"standard","integrations":["claude"],"roles":{"developer":{"source":"existing","integrations":["claude"],"agents":["sunwoong","ghost"],"router":".claude/skills/orchestrator/SKILL.md"}}}' >"$ROLE_ROOT/.ai-harness/harness.json"
+printf '%s\n' '---' 'name: sunwoong' '---' >"$ROLE_ROOT/.claude/agents/sunwoong.md"
+ROLE_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$ROLE_ROOT")"
+assert_eq "ghost" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.check=="role_agent_missing")][0].token')" "missing mapped agent is a contract finding"
+assert_eq ".claude/skills/orchestrator/SKILL.md" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.check=="role_router_missing")][0].token')" "missing router is a contract finding"
+assert_eq "0" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.token=="sunwoong")] | length')" "existing mapped agent passes"
+pass "role mapping contract"
+
 # 프론트 판단 Skill: templates로 옮겨 전역 노출을 끊고, stack 게이트로 프론트 프로젝트에서만 생성한다.
 for fs in declarative-code frontend-testing no-unnecessary-effects frontend-fundamentals feature-sliced-design; do
   assert_file "$ROOT/templates/$fs/SKILL.md"
@@ -684,6 +784,15 @@ assert_file "$ROOT/templates/feature-sliced-design/references/layer-structure.md
 assert_file "$ROOT/THIRD-PARTY-LICENSES.md"
 assert_contains "$(<"$ROOT/templates/no-unnecessary-effects/SKILL.md")" "Copyright (c) 2026 Dan Neciu" "nue copy keeps upstream copyright notice"
 assert_contains "$(<"$ROOT/templates/feature-sliced-design/SKILL.md")" "MIT" "fsd copy names its license"
+# 팀 맞춤본에서 역반영한 일반 규칙: mock되지 않은 HTTP는 실패로, 정리 훅은 렌더 정리 뒤에, 시각 회귀는 CI를 막는지 확인.
+FT_CONTENT="$(<"$ROOT/templates/frontend-testing/SKILL.md")"
+assert_contains "$FT_CONTENT" "HTTP는 mock한 것만 나간다" "frontend-testing fails unmocked HTTP"
+assert_contains "$FT_CONTENT" "화면 정리(\`cleanup\`) 뒤에" "frontend-testing orders cleanup hooks after render cleanup"
+assert_contains "$FT_CONTENT" "sequence.hooks: \"stack\"" "frontend-testing names the Vitest default hook order as a precondition"
+assert_contains "$FT_CONTENT" "CI를 막는 설정인지" "frontend-testing checks the visual regression gate"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "다음 담당" "role personas end reports with a handoff line"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "두 번째 왕복에서 끊고" "handoff ping-pong is cut and raised to the user"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "라우터가 정한 넘김 형식을 우선" "an adopted router keeps its own handoff format"
 
 # frontend 스택이면 프론트 Skill이 계획에 오르고, feature-sliced-design은 fsd opt-in일 때만 오른다.
 FE_ROOT="$TEST_TMP/frontend-project"
@@ -2159,6 +2268,42 @@ assert_contains "$(run_db_guard "mysql -u dev -e \"select * from information_sch
 rm -f "$GUARD_DATA/config"
 assert_eq "" "$(printf 'not json' | HM_DB_SCAN_GUARD=1 CLAUDE_PLUGIN_ROOT="$ROOT" /bin/sh -c "$GUARD_COMMAND")" "db scan guard fails open on bad input"
 pass "db scan guard"
+
+# 제거: 사람이 블록 밖에 같은 규칙을 직접 쓰면 자동 규칙은 중복이다. 문구 비교는 공백·대소문자·목록 기호를 무시한다.
+DUP_HOME="$TEST_TMP/dup-home"
+mkdir -p "$DUP_HOME"
+printf '# 내 규칙\n' >"$DUP_HOME/CLAUDE.md"
+run_dup() {
+  HARNESS_METRICS_DIR="$TEST_TMP/dup-data" HM_GLOBAL_CLAUDE_MD="$DUP_HOME/CLAUDE.md" \
+    HM_GLOBAL_CODEX_AGENTS_MD="$DUP_HOME/codex/AGENTS.md" "$ROOT/scripts/auto-apply.sh" "$@"
+}
+run_dup apply --scope global --rule-id quote-equals --text "zsh에서 =로 시작하는 단어는 따옴표로 감싼다" --evidence x --expected y >/dev/null
+run_dup apply --scope global --rule-id jq-null --text "jq 순회 전 null을 거른다" --evidence x --expected y >/dev/null
+assert_eq "" "$(run_dup duplicates)" "rules only inside the block are not duplicates"
+printf '%s\n' '# 내 규칙' '*   ZSH에서 =로 시작하는   단어는 따옴표로 감싼다' "$(tail -n +2 "$DUP_HOME/CLAUDE.md")" >"$DUP_HOME/CLAUDE.md.new" && mv "$DUP_HOME/CLAUDE.md.new" "$DUP_HOME/CLAUDE.md"
+# global 규칙은 Claude·Codex 두 지침에 들어 있다 — 한쪽에만 중복이면 revert가 다른 쪽의 유일한 사본까지 지운다.
+assert_eq "" "$(run_dup duplicates)" "a duplicate in only one target file is not reported"
+printf '%s\n' '- zsh에서 =로 시작하는 단어는 따옴표로 감싼다' "$(<"$DUP_HOME/codex/AGENTS.md")" >"$DUP_HOME/codex/AGENTS.md.new" && mv "$DUP_HOME/codex/AGENTS.md.new" "$DUP_HOME/codex/AGENTS.md"
+DUPS="$(run_dup duplicates)"
+assert_eq "quote-equals" "$(jq -r '.id' <<<"$DUPS")" "rule restated outside the block in every target is a duplicate"
+assert_eq "2" "$(jq -r '.files[] | select(.file | endswith("CLAUDE.md")) | .line' <<<"$DUPS")" "duplicate reports the human-written line"
+assert_eq "2" "$(jq -r '.files | length' <<<"$DUPS")" "duplicate lists every target file"
+assert_eq "1" "$(jq -s 'length' <<<"$DUPS")" "rules not restated are not reported"
+assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "auto-apply.sh duplicates" "harvest prunes duplicated auto rules"
+pass "duplicate auto rules are removal candidates"
+
+# 제거 개선은 history에 change로 남아 다음 harvest가 '빠진 규칙이 필요했는가'로 검증한다.
+CHG_DATA="$TEST_TMP/change-data"
+mkdir -p "$CHG_DATA/harvest-queue/p-chg/sessions"
+jq -n '{v:1,project:"chg",batch_id:"b1",created_at:"2026-01-01T00:00:00Z",counts:{},reasons:[],markers:[]}' >"$CHG_DATA/harvest-queue/p-chg/analysis-batch.json"
+HARNESS_METRICS_DIR="$CHG_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project chg --outcome improved \
+  --summary "낡은 규칙 제거" --artifact "https://example.test/pr/1" --expected "같은 오류 재발 없음" --change remove >/dev/null
+assert_eq "remove" "$(jq -r '.review.change' "$CHG_DATA/harvest-queue/p-chg/review-history.jsonl")" "review history records the change kind"
+CHG_RC=0
+HARNESS_METRICS_DIR="$CHG_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project chg --change shrink >/dev/null 2>&1 || CHG_RC=$?
+assert_eq "2" "$CHG_RC" "unknown change kind is rejected"
+assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "--change remove" "harvest records removals"
+pass "harvest records removal changes"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
