@@ -354,6 +354,7 @@ stateDiagram-v2
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
+- **제거도 개선입니다**: 없는 경로·명령을 가리키거나 코드와 모순되는 줄, 교정을 유발한 규칙, 여러 파일에 반복된 지시, 사용 0회 자산을 제거 후보로 봅니다("최근 재발 없음"은 제거 근거가 아닙니다). 무인 실행은 줄 단위 제거까지만 draft PR로 내고, 파일·관리 생성물 삭제는 사람에게 넘깁니다. 개인 지침 블록의 자동 규칙은 블록 밖에 같은 문구가 생기면(`auto-apply.sh duplicates`) 되돌립니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.

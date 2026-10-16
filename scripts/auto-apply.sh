@@ -30,6 +30,7 @@ usage:
   auto-apply.sh list [--active]
   auto-apply.sh effect [--rule-id <id>]    # --signal이 있는 규칙의 적용 전후 100세션당 발생률
   auto-apply.sh notify                     # SessionStart: 아직 알리지 않은 적용·되돌림을 한 번 알린다
+  auto-apply.sh duplicates                 # 블록 밖(사람이 쓴 줄)에 같은 문구가 생긴 활성 규칙 — 제거 후보
 EOF
   exit 2
 }
@@ -202,6 +203,32 @@ command_list() {
              signal:(.signal // null), workspace:(.workspace // null), project:(.project // null)}' "$LOG"
 }
 
+# 사람이 블록 밖에 같은 규칙을 직접 적으면 자동 규칙은 중복이다(지침이 길어질수록 성공률이 떨어진다).
+# 공백·대소문자·목록 기호를 무시한 문구 일치만 본다 — 의미가 비슷한 규칙의 판정은 harvest가 한다.
+command_duplicates() {
+  local rules="" rule="" id="" scope="" workspace="" text="" targets="" file=""
+  rules="$(command_list --active)"
+  [[ -n "$rules" ]] || return 0
+  while IFS= read -r rule; do
+    id="$(jq -r '.id' <<<"$rule")"; scope="$(jq -r '.scope' <<<"$rule")"
+    workspace="$(jq -r '.workspace // empty' <<<"$rule")"; text="$(jq -r '.text' <<<"$rule")"
+    targets="$(targets_for "$scope" "$workspace" 2>/dev/null)" || continue
+    while IFS= read -r file; do
+      [[ -f "$file" ]] || continue
+      AH_START="$START" AH_END="$END" AH_TEXT="$text" awk '
+        function norm(v) { v = tolower(v); gsub(/[[:space:]]+/, " ", v); sub(/^ /, "", v); sub(/ $/, "", v)
+                           sub(/^([-*+]|[0-9]+[.)]) /, "", v); return v }
+        BEGIN { start = ENVIRON["AH_START"]; end = ENVIRON["AH_END"]; want = norm(ENVIRON["AH_TEXT"]) }
+        $0 == start { inblock = 1; next }
+        $0 == end { inblock = 0; next }
+        !inblock && want != "" && norm($0) == want { print NR }
+      ' "$file" | while IFS= read -r line; do
+        jq -cn --arg id "$id" --arg file "$file" --arg line "$line" '{id:$id, file:$file, line:($line|tonumber)}'
+      done
+    done <<<"$targets"
+  done <<<"$rules"
+}
+
 # 규칙별 효과를 수치로: --signal 정규식에 맞는 오류 발췌·교정 신호가 있는 세션의 비율을
 # 적용 전(직전 30일)과 적용 후(적용 뒤 시작한 세션)로 나눠 100세션당 값으로 낸다. 적용 후 세션이
 # HM_EFFECT_MIN_SESSIONS(30)개 미만이거나, 적용 전 발생률로 예상되는 적용 후 건수가 HM_EFFECT_MIN_EXPECTED(5) 미만이면
@@ -270,5 +297,6 @@ case "$command" in
   list) command_list "${1:-}" ;;
   effect) command_effect "$@" ;;
   notify) command_notify ;;
+  duplicates) command_duplicates ;;
   *) usage ;;
 esac

@@ -2191,6 +2191,38 @@ assert_eq "pending" "$(HM_EFFECT_MIN_SESSIONS=100 run_rq effect --rule-id rule-o
 assert_eq "pending" "$(HM_EFFECT_MIN_EXPECTED=50 run_rq effect --rule-id rule-one | jq -r .verdict)" "rare signals stay pending until enough events are expected"
 pass "rule quality gates and measured effect"
 
+# 제거: 사람이 블록 밖에 같은 규칙을 직접 쓰면 자동 규칙은 중복이다. 문구 비교는 공백·대소문자·목록 기호를 무시한다.
+DUP_HOME="$TEST_TMP/dup-home"
+mkdir -p "$DUP_HOME"
+printf '# 내 규칙\n' >"$DUP_HOME/CLAUDE.md"
+run_dup() {
+  HARNESS_METRICS_DIR="$TEST_TMP/dup-data" HM_GLOBAL_CLAUDE_MD="$DUP_HOME/CLAUDE.md" \
+    HM_GLOBAL_CODEX_AGENTS_MD="$DUP_HOME/codex/AGENTS.md" "$ROOT/scripts/auto-apply.sh" "$@"
+}
+run_dup apply --scope global --rule-id quote-equals --text "zsh에서 =로 시작하는 단어는 따옴표로 감싼다" --evidence x --expected y >/dev/null
+run_dup apply --scope global --rule-id jq-null --text "jq 순회 전 null을 거른다" --evidence x --expected y >/dev/null
+assert_eq "" "$(run_dup duplicates)" "rules only inside the block are not duplicates"
+printf '%s\n' '# 내 규칙' '*   ZSH에서 =로 시작하는   단어는 따옴표로 감싼다' "$(cat "$DUP_HOME/CLAUDE.md" | tail -n +2)" >"$DUP_HOME/CLAUDE.md.new" && mv "$DUP_HOME/CLAUDE.md.new" "$DUP_HOME/CLAUDE.md"
+DUPS="$(run_dup duplicates)"
+assert_eq "quote-equals" "$(jq -r '.id' <<<"$DUPS")" "rule restated outside the block is a duplicate"
+assert_eq "2" "$(jq -r '.line' <<<"$DUPS")" "duplicate reports the human-written line"
+assert_eq "1" "$(jq -s 'length' <<<"$DUPS")" "rules not restated are not reported"
+assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "auto-apply.sh duplicates" "harvest prunes duplicated auto rules"
+pass "duplicate auto rules are removal candidates"
+
+# 제거 개선은 history에 change로 남아 다음 harvest가 '빠진 규칙이 필요했는가'로 검증한다.
+CHG_DATA="$TEST_TMP/change-data"
+mkdir -p "$CHG_DATA/harvest-queue/p-chg/sessions"
+jq -n '{v:1,project:"chg",batch_id:"b1",created_at:"2026-01-01T00:00:00Z",counts:{},reasons:[],markers:[]}' >"$CHG_DATA/harvest-queue/p-chg/analysis-batch.json"
+HARNESS_METRICS_DIR="$CHG_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project chg --outcome improved \
+  --summary "낡은 규칙 제거" --artifact "https://example.test/pr/1" --expected "같은 오류 재발 없음" --change remove >/dev/null
+assert_eq "remove" "$(jq -r '.review.change' "$CHG_DATA/harvest-queue/p-chg/review-history.jsonl")" "review history records the change kind"
+CHG_RC=0
+HARNESS_METRICS_DIR="$CHG_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project chg --change shrink >/dev/null 2>&1 || CHG_RC=$?
+assert_eq "2" "$CHG_RC" "unknown change kind is rejected"
+assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "--change remove" "harvest records removals"
+pass "harvest records removal changes"
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
