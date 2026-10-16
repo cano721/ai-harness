@@ -2202,7 +2202,7 @@ run_dup() {
 run_dup apply --scope global --rule-id quote-equals --text "zsh에서 =로 시작하는 단어는 따옴표로 감싼다" --evidence x --expected y >/dev/null
 run_dup apply --scope global --rule-id jq-null --text "jq 순회 전 null을 거른다" --evidence x --expected y >/dev/null
 assert_eq "" "$(run_dup duplicates)" "rules only inside the block are not duplicates"
-printf '%s\n' '# 내 규칙' '*   ZSH에서 =로 시작하는   단어는 따옴표로 감싼다' "$(cat "$DUP_HOME/CLAUDE.md" | tail -n +2)" >"$DUP_HOME/CLAUDE.md.new" && mv "$DUP_HOME/CLAUDE.md.new" "$DUP_HOME/CLAUDE.md"
+printf '%s\n' '# 내 규칙' '*   ZSH에서 =로 시작하는   단어는 따옴표로 감싼다' "$(tail -n +2 "$DUP_HOME/CLAUDE.md")" >"$DUP_HOME/CLAUDE.md.new" && mv "$DUP_HOME/CLAUDE.md.new" "$DUP_HOME/CLAUDE.md"
 DUPS="$(run_dup duplicates)"
 assert_eq "quote-equals" "$(jq -r '.id' <<<"$DUPS")" "rule restated outside the block is a duplicate"
 assert_eq "2" "$(jq -r '.line' <<<"$DUPS")" "duplicate reports the human-written line"
