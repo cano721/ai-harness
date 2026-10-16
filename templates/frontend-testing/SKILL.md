@@ -220,11 +220,17 @@ API가 통째로 갈린다: `render`는 `vitest-browser-react`에서, `screen` �
    실패로 보고한다. 테스트 중에 나간 요청은 그 테스트가, 정리 훅에서 나간 요청은
    다음 테스트나 파일 끝이 보고하게 한다. spy의 catch-all은 직접 던지지 말고 원래
    `request`로 넘긴다 — spy 안에서 던지면 누수로 기록되지 않는다
-7. **정리 훅은 파일 최상위 `afterEach`에 둔다.** mock 해제·세션 정리 같은 훅이
-   `describe` 안에 있으면 바깥(setup)의 Testing Library `cleanup`보다 먼저 돈다 —
-   화면이 붙은 채 mock이 풀려, 남은 화면이 진짜 클라이언트로 요청을 보낸다
-   (Vitest는 `sequence.hooks: "list"`로 순서를 고정한다). 요청을 내는 정리는
-   `afterAll`에도 두지 않는다 — setup의 마지막 누수 판정보다 늦게 돌아 보고되지 않는다
+7. **mock 해제·세션 정리는 화면 정리(`cleanup`) 뒤에 돌게 둔다.** 먼저 돌면 화면이
+   붙은 채 mock이 풀려, 남은 화면이 진짜 클라이언트로 요청을 보낸다. 순서는 러너
+   설정에 달려 있으니 먼저 확인한다:
+   - Testing Library의 자동 `cleanup`은 setup에서 import될 때 등록되는 최상위
+     `afterEach`다. `describe` 안의 `afterEach`는 바깥 훅보다 **항상 먼저** 돈다 —
+     정리 훅을 `describe` 안에 두지 않는다
+   - Vitest 기본 `sequence.hooks: "stack"`은 같은 층의 `afterEach`를 **등록 역순**으로
+     돌린다. 파일 최상위에 둬도 setup의 `cleanup`보다 먼저 돈다 → `"list"`(등록 순)로
+     바꾼 뒤에야 파일 최상위 배치가 `cleanup` 뒤를 보장한다. Jest는 선언 순이다
+   - 요청을 내는 정리는 `afterAll`에도 두지 않는다 — setup의 마지막 누수 판정보다
+     늦게 돌아 보고되지 않는다
 
 코드 품질 점검은 `frontend-fundamentals`, `useEffect` 판단은
 `no-unnecessary-effects` 스킬이 따로 있다. 여기서 중복하지 않는다.

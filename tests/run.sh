@@ -787,9 +787,12 @@ assert_contains "$(<"$ROOT/templates/feature-sliced-design/SKILL.md")" "MIT" "fs
 # 팀 맞춤본에서 역반영한 일반 규칙: mock되지 않은 HTTP는 실패로, 정리 훅은 렌더 정리 뒤에, 시각 회귀는 CI를 막는지 확인.
 FT_CONTENT="$(<"$ROOT/templates/frontend-testing/SKILL.md")"
 assert_contains "$FT_CONTENT" "HTTP는 mock한 것만 나간다" "frontend-testing fails unmocked HTTP"
-assert_contains "$FT_CONTENT" "정리 훅은 파일 최상위" "frontend-testing orders cleanup hooks after render cleanup"
+assert_contains "$FT_CONTENT" "화면 정리(\`cleanup\`) 뒤에" "frontend-testing orders cleanup hooks after render cleanup"
+assert_contains "$FT_CONTENT" "sequence.hooks: \"stack\"" "frontend-testing names the Vitest default hook order as a precondition"
 assert_contains "$FT_CONTENT" "CI를 막는 설정인지" "frontend-testing checks the visual regression gate"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "다음 담당" "role personas end reports with a handoff line"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "두 번째 왕복에서 끊고" "handoff ping-pong is cut and raised to the user"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "라우터가 정한 넘김 형식을 우선" "an adopted router keeps its own handoff format"
 
 # frontend 스택이면 프론트 Skill이 계획에 오르고, feature-sliced-design은 fsd opt-in일 때만 오른다.
 FE_ROOT="$TEST_TMP/frontend-project"
