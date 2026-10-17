@@ -21,6 +21,13 @@ def metric_table($rows; $supported; $total):
        else "" end)
   end;
 
+# 1턴짜리 잡세션이 분모를 몇 배로 부풀리므로 비율은 활성 세션만 센다.
+def active_min_turns: 5;
+# 하네스가 생성하는 워크플로 진입점. 프로젝트가 따로 둔 워크플로는 읽힌 `.ai-harness/workflows/<이름>.md`에서 얻는다.
+def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
+def has_coverage($k): ((.coverage // []) | index($k)) != null;
+def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b))" end;
+
 . as $all
 # 자동 harvest가 띄운 내부 세션은 프로젝트 작업이 아니므로 신호·사용량 통계에서 뺀다.
 | ($all | map(select(.kind=="session"
@@ -32,6 +39,25 @@ def metric_table($rows; $supported; $total):
 | ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
 | ($S | length) as $total
 | (coverage_count($S; "correction_mark")) as $correction_supported
+| ($S | map({(.sid): .project}) | add // {}) as $sidProject
+| ($S | map(select((.turns // 0) >= active_min_turns))) as $A
+# 워크플로 본문은 슬래시 커맨드 없이 Read·cat으로도 진입한다(workspace 멤버 세션 대부분).
+| ($E | map(select(.kind=="doc_read" and (.target | startswith(".ai-harness/workflows/"))))) as $wfReads
+| ((harness_workflows + ($wfReads | map(.target | ltrimstr(".ai-harness/workflows/")
+      | select(endswith(".md") and (contains("/") | not)) | rtrimstr(".md"))))
+   | map({(.): true}) | add) as $wfNames
+| (($wfReads + ($E | map(select(.kind=="workflow"
+      and $wfNames[.target | ltrimstr("ai-harness:")] == true))))
+   | map({(.sid): true}) | add // {}) as $wfPassed
+# 하네스가 없는 프로젝트의 세션은 경유할 워크플로가 없으므로 분모에서 뺀다.
+# `~/.ai-harness/` 데이터(config·events)도 같은 접두어로 정규화되므로 docs·workflows만 하네스 근거로 본다.
+| ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid]): true})
+   | add // {}) as $harnessProjects
+| ($A | map(select($harnessProjects[.project] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
+| ($A | map(select(has_coverage("correction_mark")))) as $CA
+| ($CA | map({(.sid): true}) | add // {}) as $caSet
+| ([$E[] | select(.kind=="correction_mark" and $caSet[.sid] == true) | .n] | add // 0) as $marks
+| ([$CA[] | .turns] | add // 0) as $caTurns
 
 | "# Harness Metrics"
 + "\n\n기간: \(if $cutoff=="" then "전체" else $cutoff + " 이후" end)"
@@ -56,6 +82,18 @@ def metric_table($rows; $supported; $total):
    | if length==0 then "| _(없음)_ | 0 | - |"
      else map("| \(.src) | \(.n) | \(if .coverage=="" then "legacy event" else .coverage end) |") | join("\n")
      end)
+
++ "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다.\n\n| 지표 | 값 |\n|---|---|\n"
++ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |\n"
++ "| 교정 마크 / 활성 세션 | \(if ($CA|length)==0 then "-" else "\($marks*100/($CA|length) | round | ./100) (\($marks)/\($CA|length))" end) |\n"
++ "| 교정 마크 / 100턴 | \(if $caTurns==0 then "-" else "\($marks*1000/$caTurns | round | ./10) (\($marks)/\($caTurns))" end) |"
++ (if ($WA|length)==0 then ""
+   else "\n\n| 프로젝트 | 워크플로 경유 |\n|---|---|\n"
+     + ($WA | group_by(.project)
+        | map({p:.[0].project, n:length, k:(map(select($wfPassed[.sid] == true)) | length)})
+        | sort_by(-.n)
+        | map("| \(.p) | \(ratio_pct(.k; .n)) |") | join("\n"))
+   end)
 
 + "\n\n## 워크플로/커맨드\n\n| 대상 | 횟수 |\n|---|---|\n"
 + metric_table(($E | rank("workflow"; 15)); coverage_count($S; "workflow"); $total)
