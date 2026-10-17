@@ -196,28 +196,37 @@ stateDiagram-v2
 | Codex | skill과 역할 agent(또는 단일 세션의 단계 경계)가 그래프 계약을 해석합니다. 별도의 그래프 런타임은 필요하지 않습니다. |
 | Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 프로젝트의 `.claude/workflows/implement-feature.js`가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. 완료 판정이 코드에 있어, blocking finding이 남으면 done을 반환하지 못합니다. |
 | 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
-| 강제 실행 (Codex·Claude 공통) | 사람이 터미널에서 `bash .ai-harness/workflows/implement-feature-driver.sh --check "<필수 검증 명령>" --request "<기능>"`을 실행합니다. 아래 [강제 실행](#feature-driver)을 보세요. |
+| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다. 아래 [그래프 러너](#feature-driver)를 보세요. |
 
 Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 command 대화 단계에서 먼저 받고, 승인된 Brief를 인자로 넘겨야만 실행됩니다.
 
 <a id="feature-driver"></a>
 
-### 강제 실행: `implement-feature-driver.sh`
+### 그래프 러너: `implement-feature-driver.sh`
 
-위 세 방식은 모델이 그래프를 따른다는 전제 위에 있습니다. Dynamic Workflow도 승인은 모델이 넘기는 `approved: true`로, 검증은 작업 에이전트의 보고로 판단합니다. 드라이버는 전이를 모델 밖의 스크립트가 정하고, 노드마다 별도 세션을 띄웁니다.
+위 방식은 모델이 그래프를 따른다는 전제 위에 있습니다. 승인 여부는 모델이 대화를 읽고 판단하고(`.js`에는 모델이 `approved: true`를 넘깁니다), 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다.
 
-| 불변식 | 드라이버가 막는 방법 |
+```text
+대화                                   러너 (.ai-harness/workflows/implement-feature-driver.sh)
+/implement-feature 요청  ──────────▶  start   discover → brief  (읽기 전용 세션)
+Brief·검증 명령을 보여 줌  ◀──────────           approval에서 체크포인트 후 멈춤 (exit 10)
+"X는 빼줘"               ──────────▶  revise  approval → brief → approval
+"승인"                   ──────────▶  resume  트랜스크립트에서 사용자 메시지 확인
+                                               deliver → review ⇄ repair → done / user_decision
+```
+
+| 그래프 개념 | 러너가 하는 일 |
 |---|---|
-| 승인 전 파일 변경 금지 | discover·brief·review 세션은 Codex `-s read-only` 샌드박스, Claude는 `--tools Read,Grep,Glob --strict-mcp-config`로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 `invariant_violation`으로 멈춥니다 |
-| 사람의 명시 승인 | Brief를 터미널(`/dev/tty`)에 보이고 사람이 `y`를 입력해야 deliver로 갑니다. 에이전트의 Bash 도구처럼 터미널이 없으면 Brief만 남기고 `approval_required`로 멈춥니다. 사람이 승인한 Brief 파일은 `--approved-brief`로 넘깁니다 |
-| 수정 뒤 검증 | `--check` 명령을 드라이버가 저장소 루트에서 직접 실행하고 종료 코드로 판정합니다. 실패는 blocking finding으로 repair에 넘어갑니다 |
-| blocking finding이 남으면 done 불가 | review 결과를 JSON 스키마로 받습니다. 형식이 깨지면 done이 아니라 `incomplete`입니다 |
-| 같은 원인 반복 → 사람 | 수정 `--max-repair`회(기본 2) 뒤에도 남으면 `user_decision`으로 멈춥니다 |
-| 커밋·푸시 금지 | 실행 중 HEAD가 움직이면 `invariant_violation`입니다 |
+| 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
+| 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
+| human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
+| 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
+| 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
+| 종료 | review의 blocking finding이 0개일 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 실행 중 HEAD가 움직이면 멈춥니다 |
 
-종료 코드: `0` done · `10` 승인 필요·거절 · `20` 사람 판단 · `30` 미완료 · `40` 불변식 위반. 단계별 프롬프트·출력·검증 로그와 `result.json`은 저장소 밖 상태 디렉터리(`--state-dir`, 기본 임시 디렉터리)에 남습니다.
+종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
 
-한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로만 멈춥니다. Claude의 쓰기 단계는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다.
+한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다.
 
 이 워크플로 스크립트는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.claude/workflows/`에 생성하며, 프로젝트 진입점이 절대 경로를 `scriptPath`로 넘겨 호출합니다. 하네스가 없는 저장소에는 존재하지 않으므로, 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
