@@ -587,6 +587,56 @@ if command -v node >/dev/null 2>&1; then
 fi
 pass "feature delivery graph adapters"
 
+# 드라이버는 그래프를 모델 밖에서 강제한다: 읽기 전용 노드의 쓰기, 무단 커밋, 깨진 리뷰는 done이 될 수 없다.
+DRIVER="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
+assert_file "$DRIVER"
+assert_contains "$(<"$FEATURE_SKILL")" "implement-feature-driver.sh" "feature skill points to the enforced driver"
+assert_eq "1" "$(jq '[.artifacts[] | select(.path == ".ai-harness/workflows/implement-feature-driver.sh" and .level == "standard" and (has("integration") | not))] | length' "$ROOT/templates/managed-files.json")" "driver ships to every standard project regardless of integration"
+DRIVER_TMP="$TEST_TMP/driver"
+mkdir -p "$DRIVER_TMP"
+printf '# Approved brief\n' >"$DRIVER_TMP/brief.md"
+run_driver() { # scenario args... → DRIVER_RC, DRIVER_STATE, FAKE_LOG
+  local scenario="$1" repo
+  shift
+  repo="$DRIVER_TMP/repo-$scenario"
+  DRIVER_STATE="$DRIVER_TMP/state-$scenario"
+  FAKE_LOG="$DRIVER_TMP/$scenario.log"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  : >"$FAKE_LOG"
+  DRIVER_RC=0
+  FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$scenario" PATH="$ROOT/tests/fixtures/driver:$PATH" \
+    bash "$DRIVER" --runtime codex --repo "$repo" --state-dir "$DRIVER_STATE" "$@" >/dev/null 2>&1 </dev/null || DRIVER_RC=$?
+}
+DRIVER_RC=0
+bash "$DRIVER" --request x >/dev/null 2>&1 || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "driver refuses to run without a required check"
+run_driver ok --check true --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "0:done" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "approved brief with passing checks and clean review is done"
+assert_eq "deliver workspace-write schema=;review read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "only delivery writes; review is read-only with a schema"
+run_driver brief_writes --check true --request "add feature"
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "a write during the brief node stops the run"
+assert_eq "brief read-only schema=;" "$(tr '\n' ';' <"$FAKE_LOG")" "brief runs read-only and nothing is delivered after a violation"
+if ! (exec 3<>/dev/tty) 2>/dev/null; then
+  run_driver no_tty --check true --request "add feature"
+  assert_eq "10:approval_required" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "without a terminal the driver stops at approval"
+  assert_eq "brief read-only schema=;" "$(tr '\n' ';' <"$FAKE_LOG")" "no write node runs without human approval"
+fi
+run_driver fixcheck --check "grep -q fixed feature.txt" --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "0:done:1" "$DRIVER_RC:$(jq -r '"\(.status):\(.repair_attempts)"' "$DRIVER_STATE/result.json")" "a failing driver-run check becomes a repair before review"
+assert_contains "$(<"$DRIVER_STATE/repair-1.prompt")" "required check failed: grep -q fixed feature.txt" "repair receives the failed check as a blocking finding"
+run_driver review_blocks --check true --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(jq -r '"\(.status):\(.repair_attempts)"' "$DRIVER_STATE/result.json")" "persistent blocking findings stop at user_decision after two repairs"
+assert_eq "3" "$(grep -c '^review read-only' "$FAKE_LOG")" "every repair is followed by a re-review"
+run_driver bad_review --check true --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "30:incomplete" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "a review that breaks the schema is never done"
+run_driver commit --check true --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "an unauthorized commit stops the run"
+run_driver noop --check true --approved-brief "$DRIVER_TMP/brief.md"
+assert_eq "30:incomplete" "$DRIVER_RC:$(jq -r .status "$DRIVER_STATE/result.json")" "delivery without a change is not done"
+pass "feature delivery driver enforces the graph outside the model"
+
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
 BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
@@ -635,7 +685,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "6" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "7" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# implement-feature-driver 테스트용 가짜 codex. 프롬프트의 노드 이름과 FAKE_SCENARIO로 동작을 고른다.
+set -euo pipefail
+[[ "${1:-}" == exec ]] || exit 64
+shift
+dir="" sandbox="" out="" schema=""
+while (($#)); do
+  case "$1" in
+    -C) dir="$2"; shift 2 ;;
+    -s) sandbox="$2"; shift 2 ;;
+    -o) out="$2"; shift 2 ;;
+    --output-schema) schema="$2"; shift 2 ;;
+    -) shift ;;
+    *) shift ;;
+  esac
+done
+prompt="$(cat)"
+case "$prompt" in
+  *"discover and brief nodes"*) node=brief ;;
+  *"deliver node"*) node=deliver ;;
+  *"review node"*) node=review ;;
+  *"repair node"*) node=repair ;;
+  *) node=unknown ;;
+esac
+printf '%s %s schema=%s\n' "$node" "$sandbox" "${schema:+yes}" >>"$FAKE_LOG"
+cd "$dir"
+scenario="${FAKE_SCENARIO:-ok}"
+case "$node:$scenario" in
+  brief:brief_writes) echo sneaky >sneaky.txt; printf '# Brief\n' >"$out" ;;
+  brief:*) printf '# Brief\n- add feature.txt\n' >"$out" ;;
+  deliver:noop) printf 'nothing\n' >"$out" ;;
+  deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
+  deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
+  repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
+  review:bad_review) printf 'looks good to me\n' >"$out" ;;
+  review:review_blocks) printf '{"summary":"x","blocking_findings":["missing case"],"non_blocking_findings":[]}\n' >"$out" ;;
+  review:*) printf '{"summary":"ok","blocking_findings":[],"non_blocking_findings":[]}\n' >"$out" ;;
+  *) exit 1 ;;
+esac
