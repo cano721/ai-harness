@@ -587,6 +587,19 @@ assert_contains "$FEATURE_SKILL_CONTENT" "Do not edit before explicit approval" 
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
+# 커밋·push·PR과 승인 대기는 어댑터 문구가 아니라 manifest의 git_policy·approval이 정한다.
+for adapter in implement-feature fix-bug review; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" '`git_policy`' "$adapter adapter follows git_policy"
+  assert_contains "$ADAPTER_CONTENT" '`.ai-harness/harness.json`' "$adapter adapter reads the policy from the manifest"
+  [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
+  assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
+done
+assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
+assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
+assert_contains "$HARNESS_INIT_CONTENT" '"approval": "human"' "manifest records the approval mode"
+assert_contains "$HARNESS_INIT_CONTENT" '`approval`이 없으면 `human`으로 본다' "a manifest without approval keeps the human gate"
+assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
 
 # 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
@@ -595,6 +608,14 @@ assert_file "$FEATURE_GRAPH"
 "$ROOT/scripts/validate-feature-graph.sh" "$FEATURE_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$FEATURE_GRAPH")" "approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.deliver.write' "$FEATURE_GRAPH")" "delivery node can write"
+for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json" "$ROOT/templates/review/references/review-graph.json"; do
+  assert_eq "10" "$(jq -r '.limits.max_repair_attempts' "$graph")" "$(basename "$graph") keeps its repair limit in limits"
+  [[ "$(jq -r '[.transitions[].when // empty] | join(" ")' "$graph")" != *_two_* ]] || fail "$(basename "$graph") spells a repair count in an edge name"
+done
+assert_eq "true:true" "$(jq -r '"\(.nodes.publish.write):\(.nodes.publish.network)"' "$FEATURE_GRAPH")" "publish writes and needs the network"
+INVALID_GRAPH="$TEST_TMP/no-publish-graph.json"
+jq 'del(.transitions[] | select(.from == "publish"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose publish node cannot finish is invalid"; fi
 assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
