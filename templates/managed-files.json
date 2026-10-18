@@ -9,6 +9,13 @@
       "mode": "copy"
     },
     {
+      "path": ".ai-harness/workflows/implement-feature-driver.sh",
+      "level": "standard",
+      "workflow": "implement-feature",
+      "source": "templates/implement-feature/references/implement-feature-driver.sh",
+      "mode": "copy"
+    },
+    {
       "path": ".ai-harness/workflows/bug-fix-graph.json",
       "level": "standard",
       "workflow": "fix-bug",
