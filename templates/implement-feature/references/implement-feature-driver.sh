@@ -286,7 +286,6 @@ publish() {
 
 You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
 - Use the git conventions, base branch, and PR tool that AGENTS.md and the project workflow name (for example /bitbucket or gh). Reviewers, labels, and similar settings come from the project's default rules.
-- If the current branch is the base branch, first create a work branch named by the project's convention.
 - Commit any remaining change. The driver's unpushed checkpoint commits (wip(implement-feature): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
 - pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body.
 - direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
@@ -488,6 +487,18 @@ case "$CMD" in
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
+    # 체크포인트는 git add -A로 커밋한다. 실행 전 변경이 섞이거나 기준 브랜치에 커밋이 쌓이지 않게 시작 조건을 막는다.
+    case "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" in
+      pr-only|direct)
+        [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
+          || { printf 'git_policy lets the runner commit; commit or stash the existing changes first so they do not mix into the run\n' >&2; exit 2; }
+        ;;
+    esac
+    if [[ "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" == pr-only ]]; then
+      base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+      [[ -z "$base" || "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" != "${base#origin/}" ]] \
+        || { printf 'git_policy pr-only: start on a work branch or worktree, not the base branch %s\n' "${base#origin/}" >&2; exit 2; }
+    fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$RUNS_DIR/latest"
     jq -n --arg id "$RUN_ID" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \

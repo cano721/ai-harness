@@ -588,6 +588,7 @@ HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
 # 커밋·push·PR과 승인 대기는 어댑터 문구가 아니라 manifest의 git_policy·approval이 정한다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 for adapter in implement-feature fix-bug review; do
   ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
   assert_contains "$ADAPTER_CONTENT" '`git_policy`' "$adapter adapter follows git_policy"
@@ -595,9 +596,11 @@ for adapter in implement-feature fix-bug review; do
   [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
   assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
 done
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
 assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
 assert_contains "$HARNESS_INIT_CONTENT" '"approval": "human"' "manifest records the approval mode"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 assert_contains "$HARNESS_INIT_CONTENT" '`approval`이 없으면 `human`으로 본다' "a manifest without approval keeps the human gate"
 assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
@@ -766,6 +769,17 @@ assert_eq "1" "$(run_state '.checkpoints | length')" "the runner commits a local
 assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(implement-feature): deliver" "checkpoint commit is on the branch"
 assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-auto_pr.git" rev-parse feat/add-feature)" "the work branch is pushed"
 
+new_driver_repo dirty_start
+with_policy pr-only auto
+echo wip >"$DRIVER_REPO/notes.txt"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "a runner that may commit refuses to start on a dirty tree"
+rm "$DRIVER_REPO/notes.txt"
+git -C "$DRIVER_REPO" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$(git -C "$DRIVER_REPO" rev-parse --abbrev-ref HEAD)"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "pr-only refuses to start on the base branch"
+assert_contains "$DRIVER_OUT" "not the base branch" "the runner says why"
+
 new_driver_repo auto_questions
 with_policy pr-only auto
 driver start --runtime codex --request "add feature"
@@ -793,6 +807,32 @@ driver start --runtime codex --request "add feature"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a publish the runner cannot verify goes to a person"
 assert_contains "$(run_state '.findings | join(";")')" "HEAD is not pushed to its upstream" "publish is judged by git state, not the session report"
 assert_contains "$(run_state '.findings | join(";")')" "pr_url is empty" "pr-only without a PR is not done"
+
+# 사용자가 손대 갱신되지 않은 0.38 그래프(publish·auto 엣지 없음, 횟수가 박힌 엣지 이름)에서도 러너는 그 그래프대로 간다.
+legacy_graph() {
+  mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+  jq '.limits.max_repair_attempts = 2 | del(.nodes.publish)
+      | .transitions |= (map(select(.from != "publish" and .when != "auto_approved_by_policy"))
+        | map(if .to == "publish" then .to = "done" else . end
+              | if .from == "repair" and .to == "user_decision" then .when = "same_root_cause_after_two_attempts_or_product_decision" else . end))' \
+    "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+  git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m legacy-graph
+}
+new_driver_repo legacy_ok
+with_policy pr-only auto
+legacy_graph
+driver start --runtime codex --request "add feature"
+assert_eq "10" "$DRIVER_RC" "a legacy graph without the auto edge waits for a person"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:null" "$DRIVER_RC:$(run_state .status):$(run_state .publish)" "a legacy graph reaches done without a publish node"
+new_driver_repo review_blocks_legacy
+FAKE_SCENARIO=review_blocks
+legacy_graph
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "the escalation edge and repair limit come from the project graph"
 pass "feature delivery graph runner enforces the graph outside the model"
 
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.

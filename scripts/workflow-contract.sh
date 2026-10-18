@@ -116,8 +116,9 @@ for body in ${bodies[@]+"${bodies[@]}"}; do
     if grep -q 'git_policy' "$a"; then
       case "$git_policy" in
         pr-only|direct) ;;
-        *) forbid="git_policy가 '${git_policy:-미설정}'이라 어댑터($(rel "$a"))가 에이전트의 PR 생성을 허용하지 않는다 — PR 단계를 사용자 승인 조건으로 두거나 git_policy를 pr-only로 바꾼다"; break ;;
+        *) forbid="git_policy가 '${git_policy:-미설정}'이라 어댑터($(rel "$a"))가 에이전트의 PR 생성을 허용하지 않는다 — PR 단계를 사용자 승인 조건으로 두거나 git_policy를 pr-only로 바꾼다" ;;
       esac
+      break
     elif grep -q 'create a PR' "$a"; then
       forbid="어댑터($(rel "$a"))가 git_policy를 모르는 이전 버전이라 별도 승인 없는 PR 생성을 금지한다 — /harness-init --sync로 어댑터를 갱신한다"
       break
