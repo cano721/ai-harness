@@ -14,6 +14,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [버그 수정 흐름](#bug-fix)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
+- [DB 스캔 가드](#db-scan-guard)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
 - [설정](#configuration)
@@ -90,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)).
+Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -120,6 +121,8 @@ codex plugin add ai-harness@ai-harness
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
 - Git 통제: PR 필수 또는 직접 커밋 허용
+
+**이미 팀 에이전트가 있는 저장소** — `.claude/agents`·라우터 스킬·`CLAUDE.md`가 있으면 초기화가 먼저 `scripts/existing-assets.sh scan`으로 인벤토리를 만들고, 하네스 역할(developer·reviewer 등)을 기존 에이전트에 맡길지 슬롯별로 묻습니다. 맡긴 슬롯은 하네스 페르소나를 만들지 않고 워크플로가 기존 에이전트(또는 라우터가 정한 담당)를 부릅니다. 같은 이름 스킬은 기존 것을 유지하며, 기존 자산의 낡은 서술·중복·선언되지 않은 플러그인 참조는 점검표로만 보입니다.
 
 `standard`는 `minimal`의 상위 집합입니다. `AGENTS.md`와 문서에 더해 워크플로와 역할 agent 설정을 만듭니다. `full` 같은 별도 규모는 없고, 편집 가드는 독립적인 선택입니다.
 
@@ -153,6 +156,8 @@ codex plugin add ai-harness@ai-harness
 | `modified` | 현재 파일과 제안 변경의 diff를 보여 주고 파일별 승인 뒤 갱신 |
 | `untracked` | 이전 버전에 해시 이력이 없는 기존 파일. 자동 덮어쓰기 없이 diff와 승인을 요구 |
 | 보호됨 | `AGENTS.md`, `.ai-harness/docs/`, 사람이 작성한 workflow 본문. 자동 갱신하지 않고 개선 제안만 표시 |
+| `excluded` | 사용자가 뺀 생성물(`harness-sync-state.sh exclude`). 다시 추가하지 않음. 되돌리기는 `include` |
+| `orphaned` | 설정에서 integration·stack을 빼거나 역할을 기존 에이전트에 넘겨 더는 생성하지 않는 파일. 확인 뒤 삭제 |
 
 처음 `managed_files`를 지원하는 버전으로 동기화하는 기존 프로젝트는, 기존 파일을 `untracked`로 안전하게 취급합니다. 따라서 기존 프로젝트 지식이나 사용자 수정이 자동으로 사라지지 않습니다. 설정 자체를 바꾸려면 `/harness-init --reconfigure`를 사용하고, 인자 없이 실행하면 동기화·설정 변경·둘 다 중 선택할 수 있습니다.
 
@@ -191,8 +196,37 @@ stateDiagram-v2
 | Codex | skill과 역할 agent(또는 단일 세션의 단계 경계)가 그래프 계약을 해석합니다. 별도의 그래프 런타임은 필요하지 않습니다. |
 | Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 프로젝트의 `.claude/workflows/implement-feature.js`가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. 완료 판정이 코드에 있어, blocking finding이 남으면 done을 반환하지 못합니다. |
 | 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
+| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다. 아래 [그래프 러너](#feature-driver)를 보세요. |
 
 Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 command 대화 단계에서 먼저 받고, 승인된 Brief를 인자로 넘겨야만 실행됩니다.
+
+<a id="feature-driver"></a>
+
+### 그래프 러너: `implement-feature-driver.sh`
+
+위 방식은 모델이 그래프를 따른다는 전제 위에 있습니다. 승인 여부는 모델이 대화를 읽고 판단하고(`.js`에는 모델이 `approved: true`를 넘깁니다), 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다.
+
+```text
+대화                                   러너 (.ai-harness/workflows/implement-feature-driver.sh)
+/implement-feature 요청  ──────────▶  start   discover → brief  (읽기 전용 세션)
+Brief·검증 명령을 보여 줌  ◀──────────           approval에서 체크포인트 후 멈춤 (exit 10)
+"X는 빼줘"               ──────────▶  revise  approval → brief → approval
+"승인"                   ──────────▶  resume  트랜스크립트에서 사용자 메시지 확인
+                                               deliver → review ⇄ repair → done / user_decision
+```
+
+| 그래프 개념 | 러너가 하는 일 |
+|---|---|
+| 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
+| 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
+| human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
+| 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
+| 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
+| 종료 | review의 blocking finding이 0개일 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 실행 중 HEAD가 움직이면 멈춥니다 |
+
+종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
+
+한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다.
 
 이 워크플로 스크립트는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.claude/workflows/`에 생성하며, 프로젝트 진입점이 절대 경로를 `scriptPath`로 넘겨 호출합니다. 하네스가 없는 저장소에는 존재하지 않으므로, 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
@@ -350,6 +384,7 @@ stateDiagram-v2
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
+- **제거도 개선입니다**: 없는 경로·명령을 가리키거나 코드와 모순되는 줄, 교정을 유발한 규칙, 여러 파일에 반복된 지시, 사용 0회 자산을 제거 후보로 봅니다("최근 재발 없음"은 제거 근거가 아닙니다). 무인 실행은 줄 단위 제거까지만 draft PR로 내고, 파일·관리 생성물 삭제는 사람에게 넘깁니다. 개인 지침 블록의 자동 규칙은 블록 밖에 같은 문구가 생기면(`auto-apply.sh duplicates`) 되돌립니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
@@ -372,6 +407,16 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome no-change --summary "<적용하지 않은 이유>"
 ```
+
+<a id="db-scan-guard"></a>
+
+## DB 스캔 가드 (opt-in)
+
+스키마 조건 없는 information_schema 조회는 서버의 모든 스키마를 훑어 공유 DB를 멈춰 세울 수 있습니다. `HM_DB_SCAN_GUARD=1`을 [설정](#configuration)하면 Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/db-scan-guard.sh`)이 이런 조회를 막습니다. 기본은 꺼져 있습니다.
+
+- 대상: 명령 위치(맨 앞이나 `;`·`&&`·`|` 뒤, 변수 대입·`sudo`·`env` 등은 건너뜀)에 DB 클라이언트(`mysql`·`psql` 등)가 오거나, 인터프리터(`python`·`node` 등)가 드라이버(`pymysql`·`psycopg` 등)를 쓰는 파이프라인. `git commit -m`·`grep`·`echo`·heredoc 문서 작성은 대상이 아닙니다
+- 차단: 구문(`;`)이나 `UNION` 분기가 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽는데(MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함), 문자열 리터럴·주석을 지운 WHERE 최상위에 `*_schema =`·`IN (...)` 조건이 없거나 `OR`가 있을 때
+- 한계: 명령 문자열에 보이는 쿼리만 검사합니다. 스크립트 파일, `bash -c`·`docker exec`·`ssh` 안의 명령은 보지 않습니다
 
 <a id="data-retention"></a>
 
@@ -495,6 +540,7 @@ HM_UPDATE_RETRY_MINUTES=15       # 조회 실패 후 첫 재시도 간격. 0이�
 HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
+HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
@@ -512,7 +558,7 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .codex-plugin/    Codex CLI 플러그인 매니페스트
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
-hooks/            SessionStart 알림·정기 backfill 호출 정의
+hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)

@@ -26,6 +26,25 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 
 분석 결과는 문서 초안의 **실측 근거**가 된다 — 추측으로 채우지 않는다. 규모가 크면 탐색 서브에이전트(Explore 등)에 위임.
 
+## 1-1. 기존 에이전트 자산 융화 (하네스 파일을 쓰기 전에)
+
+팀이 이미 운영하는 에이전트 자산(`CLAUDE.md`·`.claude/agents`·`.claude/skills`·라우터 스킬·settings hook)이 있으면 하네스는 그 **옆에 하나 더 세우지 않는다.** 같은 역할의 페르소나가 둘이면 위임 대상이 모호해지고, 기존 라우팅("코드를 고치는 손은 이 셋 중 하나")과 하네스 워크플로가 서로 다른 지휘 체계가 된다. 하네스가 공급하는 것은 **절차(그래프·Brief 승인·검증 루프)·문서·가드**이고, 일하는 손은 가능한 한 기존 에이전트다.
+
+```bash
+$ROOT/scripts/existing-assets.sh scan --root . --templates "$ROOT/templates"
+```
+
+출력은 사실만 담는다: `instructions`(CLAUDE.md 위치와 `agents_import`·`imports_agents`, 루트 컨벤션 문서), `agents`(이름·모델·description·`skills`), `skills`(`template_collision`·`identical_to_template`·`routes_agents` = 로컬 에이전트를 부르는 라우터 후보), `commands`, `settings`(기존 hook 이벤트·`enabled_plugins`), `external_refs`(`plugin:agent` 참조와 `declared` 여부), `claude_dir_ignored`. 모든 목록이 비어 있으면 이 절을 건너뛴다.
+
+1. **역할 매핑 초안**: 하네스 역할 슬롯(explorer·developer·test-engineer·reviewer·docs-updater)마다 description·본문으로 책임이 겹치는 기존 에이전트를 찾는다. 담당을 나누는 라우터 스킬(`routes_agents:true`)이 있으면 그 스킬이 정한 대로 구현 슬롯(developer·test-engineer)을 라우터에 맡기는 안이 기본이다. 매핑은 §2 인터뷰 7번에서 사용자가 확정한다 — 추측으로 정하지 않는다.
+2. **매핑된 슬롯은 생성하지 않는다**: 확정된 슬롯은 `.claude/agents/<slot>.md`(해당 integration)를 만들지 않고, 워크플로 본문의 위임 대상·AGENTS.md 페르소나 표를 기존 이름(또는 "라우터 `<path>`가 정한 담당")으로 쓴다. 기존 에이전트가 없는 integration(대개 Codex)은 하네스 페르소나를 그대로 만든다. 확정 결과를 manifest `roles`에 기록한다(아래 형식). 이미 생성된 페르소나가 매핑으로 대체되면 sync plan이 `orphaned`(`role_adopted`)로 제거 후보에 올린다.
+3. **가드와 맞물리게**: 편집 가드는 편집하는 세션의 transcript에서 docs Read를 찾는다. 매핑된 기존 에이전트 본문에 Preflight 한 줄("작업 전 `AGENTS.md` Preflight와 `.ai-harness/docs/code-conventions.md`(테스트면 `testing.md`)를 Read한다")이 없으면 첫 편집에서 막힌다. 기존 에이전트는 사람 소유 파일이므로 **diff를 보이고 승인받은 뒤에만** 그 한 줄을 넣는다. 승인이 없으면 가드 충돌 가능성을 최종 보고에 적는다.
+4. **지침 파일**: 기존 CLAUDE.md는 내용을 보존하고 맨 위에 `@<agents_import>` 한 줄만 넣는다 — `.claude/CLAUDE.md`면 `@../AGENTS.md`다(import는 파일 위치 기준). 루트 CLAUDE.md를 새로 만들지 않는다(두 지침이 이중 로드된다). 컨벤션 문서는 docs에서 링크·요약으로 연결하고 복사하지 않는다.
+5. **같은 이름 스킬**(`template_collision:true`): 기존 것을 유지하고 `harness-sync-state.sh exclude --reason existing`으로 기록해 다음 sync가 덮어쓰기나 add로 제안하지 않게 한다. `identical_to_template:true`면 템플릿 그대로이므로 사용자에게 관리 생성물로 넘길지(그러면 exclude하지 않고 `record`) 묻는다. 맞춤본이 템플릿과 다르면 차이 요약을 보고한다.
+6. **settings**: 기존 `.claude/settings.json`의 hook·권한은 보존하고 하네스 키만 병합한다. 같은 이벤트에 hook이 이미 있으면 배열에 추가한다.
+7. **`.claude/` gitignore**(`claude_dir_ignored:true`): 강제 추가(`git add -f`)하지 않는다. 팀이 `.claude/`를 커밋하지 않기로 했을 수 있으므로, `.gitignore`에 하네스 경로만 예외(`!.claude/agents/` 등)로 둘지 / `.claude` 생성물을 빼고 진행할지 사용자에게 묻는다.
+8. **기존 자산 점검표** (보고 전용 — 사람 소유 파일이라 자동으로 고치지 않는다): `external_refs` 중 `declared:false`(저장소가 선언하지 않은 플러그인 — 설치 안 한 팀원에게서 그 경로가 끊긴다), 매핑된 에이전트 frontmatter `skills:`와 본문이 부르는 스킬의 불일치, 코드와 모순되는 서술(존재하지 않는 경로·"아직 X가 없다"류 — 실측으로 확인한 것만), 여러 파일에 반복된 같은 규칙(원본 한 곳 + 참조로 합치는 안)을 **파일:줄 · 문제 · 제안(수정/삭제/병합)** 표로 보인다. 사용자가 고른 항목만 적용한다.
+
 ## 2. 수준 인터뷰 (AskUserQuestion — 엄격도는 사용자가 정한다)
 
 하네스 엄격도는 프로젝트 성격에 따라 크게 다르다 (예: 프로덕션 백엔드는 TDD 강제 + 커버리지 게이트가 맞지만, 사이드 프로젝트에 그 수준은 과함). **기본값을 가정하지 말고 물어본다.** 단, 1단계 실측을 질문 설명에 반영한다 (예: "현재 테스트 파일 0개" / "jacoco 게이트 이미 있음").
@@ -37,8 +56,9 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 4. **도구 통합**: `Codex` / `Claude` / `둘 다` / `통합 파일 없음`. standard의 Codex Skill은 `Codex` 또는 `둘 다`일 때만 `.agents/skills/`에 생성한다. Claude용 `.claude/`와 `CLAUDE.md`는 `Claude` 또는 `둘 다`일 때만 생성한다.
 5. **편집 가드**: 켜기 / 끄기. 가드는 규모와 독립적인 선택 옵션이며, 소스 수정 전에 관련 하네스 문서를 읽었는지 확인한다. transcript를 읽을 수 없으면 fail-open한다.
 6. **프론트 판단 Skill** (§1에서 프론트엔드 스택을 감지했을 때만 묻는다): `생성` / `생성 안 함`. 생성하면 `frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`를 프로젝트 로컬 Skill로 만든다(모두 읽기 전용 판단 지침). **FSD Skill(`feature-sliced-design`)은 별도 하위 선택**이며 §1에서 FSD를 감지했거나 사용자가 FSD를 쓴다고 답할 때만 추가한다 — FSD를 안 쓰는 프로젝트에 방법론 전체를 심으면 오도한다. 프론트엔드가 아니면 이 항목 자체를 건너뛴다.
+7. **역할 매핑** (§1-1에서 기존 에이전트를 찾았을 때만 묻는다): 슬롯별로 §1-1 초안을 보이고 `기존 <name>(또는 라우터)에 맡김` / `하네스 페르소나 생성`을 받는다. 매핑한 슬롯은 생성하지 않는다.
 
-답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구, **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도) 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다.
+답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구, **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도) 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다. 7번에서 기존 에이전트에 넘긴 슬롯은 아래 구조에서 그 integration의 페르소나 파일을 빼고, 기존 에이전트의 모델은 바꾸지 않는다.
 
 ## 3. 생성 구조 (인터뷰 답 기준으로 가감)
 
@@ -115,12 +135,13 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - guard의 기준 경로는 `${CLAUDE_PROJECT_DIR}`가 아니라 hook 입력의 `cwd`에서 구한 git root(`git -C "$cwd" rev-parse --show-toplevel`)다. settings.json의 hook 명령도 `"$(git rev-parse --show-toplevel)/.ai-harness/hooks/direct-edit-guard.sh"`로 쓴다. 상위 폴더에서 시작해 `/cd <저장소>`로 들어온 세션은 저장소 settings·hook을 로드하지만 `CLAUDE_PROJECT_DIR`은 시작 디렉토리를 가리켜, 변수 기준 경로는 스크립트를 찾지 못하거나 다른 저장소의 docs를 기준으로 판정한다
 - **차단 메시지 첫 줄은 반드시 `[Direct edit guard] ` 접두어로 시작한다** (대괄호 포함). `scripts/extract-claude.jq`·`scripts/extract-codex.sh`가 이 접두어로만 `guard_block` 신호를 집계하기 때문이다. 접두어가 없으면 실제 차단이 계측에서 조용히 사라져 `/metrics`·`/harvest`가 "차단 0건"으로 오판한다. 반대로 AGENTS.md 본문의 `Direct edit guard` 섹션 제목처럼 대괄호 없는 문구는 Read 출력에 섞여도 집계되지 않아야 하므로, 안내 본문에 대괄호 형태를 중복해 쓰지 않는다. 집계는 Claude에서는 `is_error` tool_result, Codex에서는 출력 **줄 시작**의 접두어만 세므로, 훅은 stderr + exit 2로 차단하고 접두어를 첫 줄 첫 글자에 둔다. Claude Code는 훅 stderr를 `PreToolUse:<툴> hook error: [<훅 경로>]: ` 로 감싸 tool_result에 넣으므로, 추출기는 줄 시작의 그 래퍼까지만 허용한다 — 훅이 접두어 앞에 자기 문구를 더 붙이면 집계에서 빠진다.
 - `/implement-feature`는 플러그인 전역 Skill이 아니라 `standard` 초기화에서 생성하는 **프로젝트 로컬 기능 개발 진입점**이다. `templates/implement-feature/`를 기반으로 Codex는 `.agents/skills/implement-feature/SKILL.md`, Claude는 `.claude/commands/implement-feature.md`를 생성한다. 템플릿의 그래프는 `.ai-harness/workflows/feature-delivery-graph.json`에도 복사하고, 두 진입점은 이 프로젝트 로컬 파일과 `.ai-harness/workflows/implement-feature.md`, 필요한 docs를 먼저 읽어 프로젝트별 정책을 우선하도록 한다. `.ai-harness/`는 프로젝트 특화 규칙의 단일 출처다.
-- `templates/implement-feature/references/feature-delivery-graph.json`은 생성 원본이며, 프로젝트에 복사된 `.ai-harness/workflows/feature-delivery-graph.json`이 Codex·Claude 공통 노드/전이 계약의 단일 출처다. Codex는 생성된 프로젝트 Skill과 `.codex/agents/` 위임으로 이를 해석한다. Claude를 선택했을 때는 `claude --version`을 확인하고 **2.1.154 이상**에서만 프로젝트의 `.claude/workflows/implement-feature.js`를 승인 후 구현·리뷰 루프에 선택적으로 사용한다고 안내한다. Dynamic Workflow가 없거나 실행 중 사용자 판단이 필요하면 생성된 프로젝트 command의 현재 세션 흐름으로 폴백한다.
+- `templates/implement-feature/references/feature-delivery-graph.json`은 생성 원본이며, 프로젝트에 복사된 `.ai-harness/workflows/feature-delivery-graph.json`이 Codex·Claude 공통 노드/전이 계약의 단일 출처다. Codex는 생성된 프로젝트 Skill과 `.codex/agents/` 위임으로 이를 해석한다. Claude를 선택했을 때는 `claude --version`을 확인하고 **2.1.154 이상**에서만 프로젝트의 `.claude/workflows/implement-feature.js`를 승인 후 구현·리뷰 루프에 선택적으로 사용한다고 안내한다. Dynamic Workflow가 없거나 실행 중 사용자 판단이 필요하면 생성된 프로젝트 command의 현재 세션 흐름으로 폴백한다. 같은 디렉터리의 `implement-feature-driver.sh`(관리 생성물)는 이 그래프를 모델 밖에서 실행하는 러너다. 진입점은 러너가 있으면 `start` → (사용자 피드백 시 `revise`) → 사용자가 대화에 직접 `승인` 입력 → `resume` 순으로 쓴다. 러너는 그래프의 `transitions`에 선언된 전이만 따르고, `write:false` 노드는 읽기 전용 세션과 작업 트리 지문 비교로, `actor:"human"` 노드는 실행 중단(체크포인트 후 exit 10)으로 다루며, 승인은 트랜스크립트의 사용자 메시지 또는 터미널 `approve`만 인정한다. 그래프를 바꾸면 러너 동작도 바뀐다.
 - 템플릿에서 생성할 `implement-feature.md`는 프로젝트 정책에 맞춰 구체화한다: 먼저 구현 범위·비범위·검증 케이스·예상 변경 영역·검증 명령을 `Implementation Brief`로 사용자에게 보이고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 계획 게이트를 둔다. 현재 대화에 같은 범위의 승인된 Brief가 있으면 재승인은 요구하지 않는다. 승인 뒤 요구사항을 관찰 가능한 검증 케이스와 1~3개 케이스의 delivery slice로 나눈다. 테스트 정책이 TDD일 때만 Red 실패 확인 → 최소 Green → 테스트를 바꾸지 않는 Refactor를 요구하고, 그 외 정책은 프로젝트가 정한 테스트 순서·필수 여부와 가능한 빌드/lint/type 검증을 따른다. 완료 전에는 blocking finding이 0개가 될 때까지 **리뷰 → 원인별 수정 → targeted/전체 검증 → 재리뷰**를 반복하며, 같은 원인이 두 번의 집중 수정 뒤에도 남으면 사용자 판단으로 올린다. 역할 분리는 선택한 도구와 작업 위험이 뒷받침할 때만 사용하며, 역할 도구가 없다는 이유로 단일 세션 작업을 중단하지 않는다.
 - 워크플로 본문의 **도구 매핑**은 아래로 고정하고, 존재하지 않는 도구를 적지 않는다(`/plan`·`/team` 같은 커맨드, 옛 이름 `Task 도구` 금지 — 그래프 json이 계약의 단일 출처이고 본문은 그것을 실행하는 방법만 적는다).
-  - **Claude**: 위임은 Agent 도구의 `subagent_type`. 계획은 대화 안의 Brief로 보이고 승인받는다. Dynamic Workflow는 위 버전 조건에서만 선택적으로.
+  - **Claude**: 위임은 Agent 도구의 `subagent_type`. manifest `roles`가 슬롯을 기존 에이전트·라우터에 넘겼으면 그 이름(또는 "라우터 `<path>`가 정한 담당")을 쓴다. 계획은 대화 안의 Brief로 보이고 승인받는다. Dynamic Workflow는 위 버전 조건에서만 선택적으로.
   - **Codex**: `.codex/agents/*.toml` 네이티브 서브에이전트를 우선한다. 없으면 `codex exec -C <저장소 루트> -s <read-only|workspace-write> -o <결과 파일>`로 역할 프롬프트를 넘긴다 — 기본 sandbox가 읽기 전용이므로 쓰기 단계에는 `workspace-write`를 명시하고, 결과는 파일로 받아 부모가 검증한다. 둘 다 없으면 현재 세션에서 페르소나 지침을 전환해 진행한다.
   - 반복 한도·종료 조건·PR 여부는 본문에 따로 숫자를 쓰지 않고 그래프와 git 정책을 따른다. 그래프에 없는 필수 단계(docs 갱신·PR 등)를 본문이 추가로 강제하지 않는다.
+- **역할 agent 보고 규율**: 생성하는 역할 agent 본문은 보고를 고정된 절로 끝낸다 — 한 것(검증 명령과 결과), **안 한 것과 이유·버린 대안**, 미검증(무엇을 몇 개 봤는지, 못 본 것은 못 봤다고), 그리고 마지막 줄 `다음 담당: <역할>: <할 일 — 파일:줄> | 없음`. 부모 세션은 `다음 담당`이 `없음`이고 검증·리뷰 게이트가 통과해야 그 slice를 닫는다. 두 역할이 서로 넘기기만 하면 두 번째 왕복에서 끊고 사용자에게 올리며(그래프의 수리 반복 한도와 별개인 넘김 루프 한도다), 위임 중 생긴 사용자 질문은 모아서 한 번에 묻는다. §1-1에서 기존 라우터에 매핑한 프로젝트는 라우터가 정한 넘김 형식을 우선한다.
 - **역할 범위 위반을 발견하면 변경을 폐기하지 않는다** — 작업을 멈추고, diff를 보존하고, 어느 파일이 어느 역할 범위인지 확인한 뒤 올바른 역할에 재위임한다. 확인 없는 폐기는 사용자 작업과 다른 역할의 산출물을 함께 지운다.
 - `/fix-bug`도 플러그인 전역 Skill이 아니라 `standard` 초기화에서 생성하는 **프로젝트 로컬 버그 수정 진입점**이다. `templates/fix-bug/`를 기반으로 Codex는 `.agents/skills/fix-bug/SKILL.md`, Claude는 `.claude/commands/fix-bug.md`를 생성한다. 템플릿의 그래프는 `.ai-harness/workflows/bug-fix-graph.json`에도 복사한다. 승인 전에는 관찰·재현·원인 가설만 허용하고, 재현 불가이며 안전한 관측 계획도 없으면 수정하지 않고 사용자에게 필요한 환경·로그·기대 동작을 요청한다.
 - 템플릿에서 생성할 `fix-bug.md`는 관찰된/기대 동작, 영향, 재현 증거, 원인 가설과 반증 가능성, 회귀 검증, 최소 변경 범위를 담은 `Bug Fix Brief`를 먼저 제시하고 **명시 승인을 받을 때까지 파일을 수정하지 않는** 게이트를 둔다. 승인 뒤 프로젝트 테스트 정책에 따라 회귀 테스트 또는 동등한 검증 증거를 만들고(**회귀 테스트는 test-engineer, production 수정은 developer** — developer 범위는 테스트 경로를 포함하지 않으므로 회귀 테스트를 developer에 맡기지 않는다. test-engineer를 만들지 않은 정책이면 developer 범위에 테스트 경로를 넣는다), targeted/전체 검증과 **리뷰 → 원인별 수정 → 재검토**를 수행한다. 같은 원인이 두 번의 집중 수정 뒤에도 남거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
@@ -147,8 +168,13 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 매니페스트 형식 (인터뷰 답 기록 — 수준 변경·/harvest의 정책 참조용):
 
 ```json
-{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "stacks": [], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } } }
+{ "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "integrations": ["codex"], "stacks": [], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } },
+  "roles": { "<slot>": { "source": "existing", "integrations": ["claude"], "agents": ["<기존 에이전트 이름>"], "router": "<라우터 스킬 경로, 있을 때만>" } },
+  "excluded": { "<relative path>": { "reason": "existing | <사용자가 뺀 이유>", "since": "YYYY-MM-DD" } } }
 ```
+
+- `roles`에 없는 슬롯은 하네스 페르소나를 생성한 것으로 본다. `roles`·`excluded`는 손으로 쓰지 않는다 — `excluded`는 `harness-sync-state.sh exclude|include`로, `roles`는 인터뷰 확정 결과를 jq로 기록한다.
+- `excluded`에 있는 경로는 plan에서 `action:"excluded"`로만 보이고 add·refresh 대상이 되지 않는다. 되돌리기는 `include`.
 
 ## 5. 마무리
 
@@ -200,11 +226,13 @@ $ROOT/scripts/docs-drift.sh scan --root .
 $ROOT/scripts/workflow-contract.sh scan --root .
 ```
 
-     검사: `nonexistent_tool`(`/plan`·`/team`·`Task 도구` 등 없는 도구), `repair_limit`(본문의 `최대 N회`가 그래프 수리 한도와 다름), `discard_on_violation`(위반 시 변경 폐기), `codex_exec_unbounded`(`-C`·`-s` 없는 `codex exec`), `pr_step_forbidden_by_adapter`(어댑터가 금지한 PR 생성을 본문이 단계로 둠), `regression_role`(fix-bug가 테스트 편집이 금지된 developer에 회귀 테스트를 맡김), `write_scope_unmatched`(어떤 파일과도 맞지 않는 페르소나 쓰기 범위), `guard_project_dir`(`CLAUDE_PROJECT_DIR` 기준 hook 경로). 기준은 §4 작성 원칙이며, 토큰만 보고 서술의 옳고 그름은 판정하지 않는다.
+     검사: `nonexistent_tool`(`/plan`·`/team`·`Task 도구` 등 없는 도구), `repair_limit`(본문의 `최대 N회`가 그래프 수리 한도와 다름), `discard_on_violation`(위반 시 변경 폐기), `codex_exec_unbounded`(`-C`·`-s` 없는 `codex exec`), `pr_step_forbidden_by_adapter`(어댑터가 금지한 PR 생성을 본문이 단계로 둠), `regression_role`(fix-bug가 테스트 편집이 금지된 developer에 회귀 테스트를 맡김), `write_scope_unmatched`(어떤 파일과도 맞지 않는 페르소나 쓰기 범위), `guard_project_dir`(`CLAUDE_PROJECT_DIR` 기준 hook 경로), `role_agent_missing`·`role_router_missing`(manifest `roles`가 가리키는 기존 에이전트·라우터 파일이 사라짐 — 위임이 조용히 끊긴다). 기준은 §4 작성 원칙이며, 토큰만 보고 서술의 옳고 그름은 판정하지 않는다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
+   - **기존 자산 재점검**: §1-1의 `existing-assets.sh scan`을 다시 돌려 init 이후 팀이 새로 넣은 에이전트·라우터·같은 이름 스킬을 찾는다. 새로 생긴 기존 에이전트가 하네스 페르소나와 역할이 겹치면 §1-1의 매핑 절차를 그대로 제안한다(사용자 확정 후 `roles` 갱신 → 대체된 페르소나는 다음 항목의 `orphaned`로 정리).
+   - **고아 생성물(`orphaned`)**: 현재 설정으로는 더 이상 생성하지 않는 관리 생성물이다. `reason`은 `level_changed`·`integration_removed`·`stack_removed`·`role_adopted`(역할을 기존 에이전트에 넘김). 계획 표에 **제거 후보로 반드시 함께 제시한다** — `--reconfigure`로 integration·stack을 뺐거나 역할을 넘긴 뒤 남은 사본은 기존 에이전트와 나란히 다시 위임 대상이 된다.
    - **역할 agent `model` 드리프트** (위 분류와 별개인 **수동 점검** — 역할 agent는 `managed-files.json` 대상이 아니어서 `plan` 출력에 나오지 않는다): §5의 1번 self-check 스니펫을 그대로 실행해 `model` 없는 역할 agent를 찾고, §4 표 기본값으로 채우는 한 줄 추가를 계획 표 맨 아래에 **별도 행으로** 싣는다. 이전 버전이 누락한 채 생성한 경우가 있고, 누락된 agent는 부모 세션 모델을 그대로 상속한다. 본문은 바뀌지 않으므로 diff는 한 줄이지만, 적용은 다른 항목과 같이 사용자 승인 뒤에 한다. 해시 기록 대상이 아니므로 `record`도 하지 않는다.
    - **정리 대상(`retired`)**: 카탈로그의 `retired` 목록이 **명시적으로 내린** 생성물 중 이 프로젝트에 흔적이 남은 것이다(예: 0.16.0에서 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). `present`는 파일이 디스크에 남았는지, `tracked`는 manifest가 아직 기록 중인지를 뜻하며 **둘은 따로 정리해야 한다**. 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다. 카탈로그에 없다는 사실만으로 추론하지 않는다: `.codex/agents/*.toml`처럼 init이 관리하지만 카탈로그가 선언한 적 없는 생성물이 있어, 추론하면 살아 있는 파일을 삭제 후보로 올린다.
-4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** `present:true`인 파일을 삭제하고, `tracked:true`인 항목은 `harness-sync-state.sh forget --file <path>`로 manifest에서 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 해당하는 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
+4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** `present:true`인 파일을 삭제하고, `tracked:true`인 항목은 `harness-sync-state.sh forget --file <path>`로 manifest에서 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 해당하는 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. `orphaned` 항목도 같은 2단계(확인 뒤 파일 삭제 + `forget`)로 정리한다. **사용자가 특정 생성물을 빼 달라고 하면**(팀 자체 흐름이 있어 `/fix-bug`가 필요 없음 등) 파일 목록을 확인받고 파일을 지운 뒤 `harness-sync-state.sh exclude --file <path> --reason "<이유>"`로 기록한다 — `forget`만 하면 다음 sync가 같은 파일을 add로 되살린다. 한 워크플로의 진입점을 모두 뺐으면 AGENTS.md 워크플로 표의 해당 행 삭제를 diff로 제안한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
 6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.
 
