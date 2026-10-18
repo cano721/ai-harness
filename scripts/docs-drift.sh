@@ -28,6 +28,9 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/docs-drift.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/facts.tsv"   # kind \t value \t source
 : >"$TMP/uses.tsv"    # kind \t value \t doc
+: >"$TMP/declared.txt"   # 선언된 Gradle 태스크 전부 (관련성 필터 없음) — stale 판정 기준
+: >"$TMP/declared-prefix.txt" # "jacocoVerification${suffix}"처럼 이름이 보간되는 선언의 고정 앞부분
+: >"$TMP/extra-uses.tsv" # 한 gradlew 호출의 둘째 이후 태스크 — missing 해소에만 쓴다
 : >"$TMP/build.txt"
 : >"$TMP/docs.txt"
 
@@ -58,7 +61,7 @@ add_fact() { printf '%s\t%s\t%s\n' "$1" "$2" "$(rel "$3")" >>"$TMP/facts.tsv"; }
 # 문서에 적힐 값어치가 있는 Gradle 태스크만 본다. bootJar·classes·createProperties 같은 내부 태스크는
 # 아무도 문서에 적지 않고, 적을 이유도 없다. 실제 피해는 "검증 명령이 문서에 없어 게이트를 비켜간 테스트"였다.
 gradle_relevant() {
-  printf '%s' "$1" | grep -qiE 'test|check|verify|lint|coverage|e2e|integration|regression|migrat|format|detekt|spotbugs|sonar|pitest|audit'
+  printf '%s' "$1" | grep -qiE 'test|check|verif|lint|coverage|e2e|integration|regression|migrat|format|detekt|spotbugs|sonar|pitest|audit'
 }
 
 while IFS= read -r f; do
@@ -92,12 +95,25 @@ while IFS= read -r f; do
         }
         print out
       }' "$f" >"$stripped" 2>/dev/null || cp "$f" "$stripped"
+      # <Test> 타입 태스크는 이름과 무관하게 테스트 실행이다 — 문서에 없으면 게이트를 비켜간다.
+      # 이름이 보간되면("jacocoVerification${x}") 실제 태스크명을 알 수 없다 — 사실로 올리지 않고
+      # 앞부분만 기록해 문서의 완성된 이름이 stale로 오르지 않게 한다.
+      while IFS= read -r m; do
+        [[ -n "$m" ]] || continue
+        if [[ "$m" == *'$' ]]; then
+          printf '%s' "$m" | sed -E 's/.*["'"'"']//; s/\$$//' >>"$TMP/declared-prefix.txt"
+          printf '\n' >>"$TMP/declared-prefix.txt"
+          continue
+        fi
+        t="$(printf '%s' "$m" | sed -E 's/.*["'"'"']//; s/["'"'"']$//')"
+        printf '%s\n' "$t" >>"$TMP/declared.txt"
+        if gradle_relevant "$t" || [[ "$m" == *"<Test>"* ]]; then add_fact gradle_task "$t" "$f"; fi
+      done < <(grep -oE 'tasks\.(register|named)(<[A-Za-z.]+>)?\(("|'"'"')[A-Za-z0-9_-]+("|'"'"'|\$)' "$stripped" 2>/dev/null \
+                 | sed -E 's/["'"'"']$//' | sort -u)
       while IFS= read -r t; do
-        [[ -n "$t" ]] && gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
-      done < <(grep -oE 'tasks\.(register|named)(<[A-Za-z.]+>)?\(("|'"'"')[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
-                 | sed -E 's/.*["'"'"']//' | sort -u)
-      while IFS= read -r t; do
-        [[ -n "$t" ]] && gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
+        [[ -n "$t" ]] || continue
+        printf '%s\n' "$t" >>"$TMP/declared.txt"
+        gradle_relevant "$t" && add_fact gradle_task "$t" "$f"
       done < <(grep -oE '^[[:space:]]*task[[:space:]]+[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
                  | awk '{print $2}' | sort -u)
       # JUnit 태그 필터 — 어떤 테스트가 기본 실행에서 빠지는지 가르는 사실이다.
@@ -136,10 +152,18 @@ done <"$TMP/build.txt"
 # 임의 단어가 아니라 실제 호출 형태만 본다 — 문서에 흔한 단어가 사실로 둔갑하지 않게.
 while IFS= read -r d; do
   [[ -n "$d" ]] || continue
-  while IFS= read -r t; do
-    [[ -n "$t" ]] && printf 'gradle_task\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
-  done < <(grep -oE '(\./)?gradlew[a-z.]*[[:space:]]+(-[^[:space:]]+[[:space:]]+)*:?[A-Za-z0-9_:-]+' "$d" 2>/dev/null \
-             | awk '{print $NF}' | sed -E 's/^.*://' | grep -vE '^-' | sort -u)
+  # `./gradlew test integrationTest`처럼 한 호출에 태스크가 여럿 온다. 첫 태스크만 사용·stale 양쪽에 쓰고,
+  # 둘째부터는 missing 해소에만 쓴다 — 산문("run ./gradlew build to verify")의 뒷단어가 stale로 둔갑하지 않게.
+  while IFS=$'\t' read -r pos t; do
+    [[ -n "$t" ]] || continue
+    if [[ "$pos" == 1 ]]; then
+      printf 'gradle_task\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
+    else
+      printf 'gradle_task\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/extra-uses.tsv"
+    fi
+  done < <(grep -oE '(\./)?gradlew[a-z.]*([[:space:]]+(-[^[:space:]]+|:?[A-Za-z0-9_:-]+))+' "$d" 2>/dev/null \
+             | awk '{ n = 0; for (i = 2; i <= NF; i++) { if ($i ~ /^-/) continue; t = $i; sub(/^.*:/, "", t); if (t == "") continue; print ++n "\t" t } }' \
+             | sort -u)
   # pnpm --filter api test / yarn workspace web run build 처럼 스크립트명 앞에 다른 토큰이 온다.
   # 플래그와 워크스페이스 지정을 건너뛰고 첫 실제 토큰만 스크립트명으로 본다.
   while IFS= read -r t; do
@@ -181,7 +205,7 @@ GRADLE_BUILTIN='^(build|test|clean|check|assemble|jar|war|bootRun|bootJar|publis
 : >"$TMP/stale.tsv"
 while IFS=$'\t' read -r kind value source; do
   [[ -n "$kind" ]] || continue
-  if ! awk -F'\t' -v k="$kind" -v v="$value" '$1==k && $2==v {found=1} END{exit !found}' "$TMP/uses.tsv"; then
+  if ! awk -F'\t' -v k="$kind" -v v="$value" '$1==k && $2==v {found=1} END{exit !found}' "$TMP/uses.tsv" "$TMP/extra-uses.tsv"; then
     printf '%s\t%s\t%s\n' "$kind" "$value" "$source" >>"$TMP/missing.tsv"
   fi
 done < <(sort -u "$TMP/facts.tsv")
@@ -191,6 +215,15 @@ while IFS=$'\t' read -r kind value doc; do
   [[ "$kind" == "gradle_task" ]] && printf '%s' "$value" | grep -qE "$GRADLE_BUILTIN" && continue
   # 문서가 언급한 스택의 사실이 하나도 없으면 비교 자체가 무의미하다 (그 스택을 안 쓰는 프로젝트).
   awk -F'\t' -v k="$kind" '$1==k {found=1} END{exit !found}' "$TMP/facts.tsv" || continue
+  # 태스크는 관련성 필터와 무관하게 선언돼 있으면 존재한다 — 필터는 missing 쪽 소음을 줄이는 용도다.
+  if [[ "$kind" == "gradle_task" ]]; then
+    grep -qxF -- "$value" "$TMP/declared.txt" && continue
+    while IFS= read -r pre; do
+      [[ -n "$pre" && "$value" == "$pre"* ]] && continue 2
+    done <"$TMP/declared-prefix.txt"
+    printf '%s\t%s\t%s\n' "$kind" "$value" "$doc" >>"$TMP/stale.tsv"
+    continue
+  fi
   if ! awk -F'\t' -v k="$kind" -v v="$value" '$1==k && $2==v {found=1} END{exit !found}' "$TMP/facts.tsv"; then
     printf '%s\t%s\t%s\n' "$kind" "$value" "$doc" >>"$TMP/stale.tsv"
   fi
