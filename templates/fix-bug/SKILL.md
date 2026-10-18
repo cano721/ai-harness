@@ -14,4 +14,12 @@ This is a project adapter, not the source of project policy. Read these files in
 
 The project workflow and graph are authoritative. They define evidence and reproduction requirements, the bug-fix brief and approval gate, regression policy, validation commands, review/repair loop, and escalation conditions.
 
-Collect evidence without editing, then present the workflow-required bug-fix brief. Do not edit before explicit approval. After approval, follow the graph transitions and use configured project agents only for bounded responsibilities. Do not commit, push, create a PR, merge, or change project policy unless separately authorized.
+Collect evidence without editing, then present the workflow-required bug-fix brief. Do not edit before explicit approval, or before the policy approval below when `approval` is `auto`. After approval, follow the graph transitions and use configured project agents only for bounded responsibilities.
+
+## Project policy
+
+Read `approval` and `git_policy` from `.ai-harness/harness.json`. They decide where this workflow waits for a person and which git actions it takes on its own.
+
+- `approval`: `human` (default, also when the field is missing) — present the brief and do not edit before explicit approval. `auto` — present the brief, record it in the PR body (the runner also keeps it in its run directory), and continue without waiting, unless the brief has open questions or a product or environment decision; then wait for the person.
+- `git_policy`: `pr-only` — once the graph reaches publish, commit, push the work branch with a normal push, and open a PR with the PR tool the project workflow names (for example /bitbucket or gh); take reviewers and labels from the project's default rules instead of asking. `direct` — commit and push the current branch with a normal push; open a PR only when the project workflow requires one. Missing or any other value — do not commit, push, or create a PR unless separately authorized.
+- Under every policy: never merge, force-push, push to the base branch under `pr-only`, or change project policy without separate authorization. Escalations the graph routes to `user_decision`, such as the repair limit in `limits.max_repair_attempts` or a product or environment decision, always go to the person.

@@ -11,6 +11,7 @@
     "deliver": {"write": true, "actor": "agent", "output": "slice_evidence"},
     "review": {"write": false, "actor": "agent", "output": "findings"},
     "repair": {"write": true, "actor": "agent", "output": "repair_evidence"},
+    "publish": {"write": true, "actor": "agent", "network": true, "output": "pull_request"},
     "done": {"write": false, "actor": "terminal", "output": "handoff"},
     "user_decision": {"write": false, "actor": "human", "output": "blocker_report"}
   },
@@ -19,18 +20,22 @@
     {"from": "brief", "to": "approval"},
     {"from": "approval", "to": "brief", "when": "brief_changed_or_not_approved"},
     {"from": "approval", "to": "deliver", "when": "user_explicitly_approved"},
+    {"from": "approval", "to": "deliver", "when": "auto_approved_by_policy"},
     {"from": "deliver", "to": "review"},
-    {"from": "review", "to": "done", "when": "no_blocking_findings"},
+    {"from": "review", "to": "publish", "when": "no_blocking_findings"},
     {"from": "review", "to": "repair", "when": "blocking_findings"},
     {"from": "repair", "to": "review", "when": "required_checks_pass"},
     {"from": "repair", "to": "repair", "when": "required_checks_fail"},
-    {"from": "repair", "to": "user_decision", "when": "same_root_cause_after_two_attempts_or_product_decision"}
+    {"from": "repair", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"},
+    {"from": "publish", "to": "done", "when": "published_or_not_required"},
+    {"from": "publish", "to": "user_decision", "when": "publish_failed"}
   ],
-  "limits": {"max_repair_attempts": 2},
+  "limits": {"max_repair_attempts": 10},
   "invariants": [
-    "No write-capable node is reachable before user_explicitly_approved.",
+    "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when .ai-harness/harness.json sets approval to auto and the brief has no open questions.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
+    "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",
     "The delivery node follows the project test policy: TDD, required, recommended, or no automated-test requirement."
   ]
 }

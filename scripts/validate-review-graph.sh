@@ -9,6 +9,7 @@ jq -e '
   and (["scope","inspect","classify","repair","verify","re_review","done","user_decision"] | all(.[]; . as $n | $g.nodes | has($n)))
   and $g.nodes.scope.write == false and $g.nodes.inspect.write == false and $g.nodes.repair.write == true
   and ($g.invariants | index("A blocking finding cannot transition directly to done."))
+  and (($g.limits.max_repair_attempts | type) == "number" and $g.limits.max_repair_attempts >= 1)
 ' "$graph_path" >/dev/null || { printf 'invalid review graph\n' >&2; exit 1; }
 for edge in 'scope inspect' 'inspect classify' 'repair verify' 'verify re_review'; do
   read -r from to <<<"$edge"
