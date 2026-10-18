@@ -14,7 +14,7 @@ jq -e '
   and .entry == "triage"
   and (.terminals | index("done"))
   and (.terminals | index("user_decision"))
-  and (["triage", "reproduce", "brief", "approval", "regression", "fix", "verify", "review", "repair", "done", "user_decision"] | all(.[]; . as $node | $graph.nodes | has($node)))
+  and (["triage", "reproduce", "brief", "approval", "regression", "fix", "verify", "review", "repair", "publish", "done", "user_decision"] | all(.[]; . as $node | $graph.nodes | has($node)))
 ' "$graph_path" >/dev/null || {
   printf 'invalid bug-fix graph nodes\n' >&2
   exit 1
@@ -34,20 +34,24 @@ has_transition reproduce brief reproduced_or_evidence_sufficient
 has_transition reproduce user_decision cannot_reproduce_and_no_observation_plan
 has_transition brief approval
 has_transition approval regression user_explicitly_approved
+has_transition approval regression auto_approved_by_policy
 has_transition regression fix
 has_transition fix verify
 has_transition verify review required_checks_pass
-has_transition review "done" no_blocking_findings
+has_transition review publish no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair verify
-has_transition repair user_decision same_root_cause_after_two_attempts_or_product_or_environment_decision
+has_transition repair user_decision repair_limit_reached_or_product_or_environment_decision
+has_transition publish "done" published_or_not_required
+has_transition publish user_decision publish_failed
 
 jq -e '
   (.nodes.approval.write == false)
   and (.nodes.regression.write == true)
   and (.nodes.fix.write == true)
   and (.nodes.repair.write == true)
-  and (.invariants | index("No write-capable node is reachable before user_explicitly_approved."))
+  and (.invariants | any(startswith("No write-capable node is reachable before the current brief is approved")))
+  and ((.limits.max_repair_attempts | type) == "number" and .limits.max_repair_attempts >= 1)
 ' "$graph_path" >/dev/null || {
   printf 'invalid bug-fix graph safety invariants\n' >&2
   exit 1
