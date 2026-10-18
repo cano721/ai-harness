@@ -607,7 +607,9 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   FAKE_LOG="$DRIVER_TMP/$1.log"
   mkdir -p "$DRIVER_REPO"
   git -C "$DRIVER_REPO" init -q
-  git -C "$DRIVER_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$DRIVER_REPO" config user.email t@t
+  git -C "$DRIVER_REPO" config user.name t
+  git -C "$DRIVER_REPO" commit -q --allow-empty -m init
   DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)"
   : >"$FAKE_LOG"
 }
@@ -699,7 +701,7 @@ assert_eq "0:true" "$DRIVER_RC:$(run_state '.checks | index("test -f feature.txt
 new_driver_repo graph_driven
 mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
 jq 'del(.transitions[] | select(.from == "review" and .to == "done"))' "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
-git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" -c user.email=t@t -c user.name=t commit -q -m graph
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
 driver start --runtime codex --request "add feature"
 say_in_claude "승인"
 driver resume
