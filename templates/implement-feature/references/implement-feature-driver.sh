@@ -6,8 +6,10 @@
 #   - 상태: 노드마다 state.json에 체크포인트를 남겨 resume이 멈춘 노드부터 이어 간다.
 #   - 승인: 사용자가 대화에 직접 입력한 "승인"(Claude·Codex 트랜스크립트의 사용자 메시지) 또는 터미널의 approve.
 #     모델이 쓰는 도구 출력·자기 메시지는 사용자 메시지가 아니므로 승인이 되지 않는다.
+#     .ai-harness/harness.json의 approval이 auto이고 Brief에 열린 질문이 없으면 그래프의 auto_approved_by_policy 엣지로 통과한다.
 #   - 검증: Brief에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
-#   - 커밋·푸시는 하지 않는다. 실행 중 HEAD가 움직이면 멈춘다.
+#   - git: harness.json의 git_policy가 pr-only·direct면 deliver·repair 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
+#     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
 # shellcheck disable=SC2016  # state_set·jq 인자의 $x는 셸이 아니라 jq 변수다
 set -euo pipefail
 
@@ -25,6 +27,8 @@ usage: implement-feature-driver.sh <command> [options]
   status                                                현재 노드·이력·다음 행동을 보인다
 
   공통: [--run <id>] (기본: 이 저장소의 최근 실행) [--repo <dir>] [--runtime codex|claude]
+
+  정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖)를 start 때 읽는다.
 
 exit: 0 done · 10 승인 대기 · 20 사람 판단 필요 · 30 미완료 · 40 불변식 위반 · 2 사용법
 EOF
@@ -60,7 +64,9 @@ REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not 
 GRAPH="$REPO/.ai-harness/workflows/feature-delivery-graph.json"
 [[ -f "$GRAPH" ]] || GRAPH="$SCRIPT_DIR/feature-delivery-graph.json"
 jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>&1 || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
-MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 2' "$GRAPH")"
+MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
+# 수리 한도·제품 판단으로 사람에게 넘기는 엣지. 이름은 그래프가 정한다.
+ESCALATE="$(jq -r 'first(.transitions[] | select(.from == "repair" and .to == "user_decision") | .when) // empty' "$GRAPH")"
 
 # 실행 상태는 저장소 밖에 둔다. 저장소 안에 쓰면 읽기 전용 노드의 지문 비교가 무의미해진다.
 RUNS_DIR="${HM_FEATURE_RUNS_DIR:-$HOME/.ai-harness/runs}/$(basename "$REPO")-$(printf '%s' "$REPO" | git hash-object --stdin | cut -c1-8)"
@@ -105,7 +111,31 @@ fingerprint() {
 guard_head() {
   local head
   head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf 'none')"
-  [[ "$head" == "$(state .start_head)" ]] || finish invariant_violation 40 "HEAD moved during $1; commits are not authorized"
+  [[ "$head" == "$(state '.head // .start_head')" ]] || finish invariant_violation 40 "HEAD moved during $1; only the driver's checkpoints and the publish node may commit"
+}
+
+has_edge() { # from outcome
+  jq -e --arg f "$1" --arg o "$2" 'any(.transitions[]; .from == $f and (.when // "") == $o)' "$GRAPH" >/dev/null
+}
+
+# 작업 트리 전체(미추적 포함, .gitignore 제외)를 트리 객체로. 리뷰한 내용과 publish가 커밋한 내용을 비교한다.
+worktree_tree() {
+  local idx="$RUN/tree.index"
+  rm -f "$idx"
+  GIT_INDEX_FILE="$idx" git -C "$REPO" read-tree HEAD 2>/dev/null || true
+  GIT_INDEX_FILE="$idx" git -C "$REPO" add -A
+  GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree
+  rm -f "$idx"
+}
+
+# git_policy가 커밋을 허용하면 쓰기 노드 뒤 로컬 커밋을 남긴다. worktree가 사라져도 사이클 단위로 남는다. push는 하지 않는다.
+checkpoint() { # node
+  [[ "$(state '.policy.commits // false')" == true ]] || return 0
+  [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] || return 0
+  { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "wip(implement-feature): $1 · run $RUN_ID"; } >"$RUN/checkpoint.log" 2>&1 \
+    || finish incomplete 30 "checkpoint commit after $1 failed; see $RUN/checkpoint.log. Fix the cause and run resume"
+  state_set '.head = $h | .checkpoints += [$h]' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  log "checkpoint commit after $1: $(git -C "$REPO" rev-parse --short HEAD)"
 }
 
 go() { # from outcome → 그래프에 선언된 전이만 따른다
@@ -129,6 +159,8 @@ run_agent() {
     codex)
       local args=(exec -C "$REPO" -s "$([[ "$writable" == true ]] && echo workspace-write || echo read-only)" -o "$out")
       [[ -n "$schema" ]] && args+=(--output-schema "$schema")
+      # push·PR 노드는 네트워크가 필요하다. workspace-write sandbox는 기본으로 네트워크를 막는다.
+      [[ "$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")" == true ]] && args+=(-c sandbox_workspace_write.network_access=true)
       codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
       ;;
     claude)
@@ -190,6 +222,10 @@ print_brief() {
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
   state '.checks[] | "- " + .'
   jq -r 'if (.open_questions | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
+  if [[ "${1:-}" == auto ]]; then
+    printf '\n== 정책 승인 (approval: auto) ==\nBrief는 %s에 남고 PR 본문에 들어간다.\n' "$RUN/brief.md"
+    return
+  fi
   cat <<EOF
 
 == 다음 ==
@@ -232,10 +268,66 @@ record_approval() { # evidence-json
   log "approved by $(jq -r .source <<<"$1")"
 }
 
+# publish: git_policy가 허용할 때만 세션을 띄워 커밋·일반 push·PR을 맡기고, 결과를 이 스크립트가 git으로 확인한다.
+publish() {
+  local policy problems="[]" out pr_url
+  policy="$(state '.policy.git // ""')"
+  case "$policy" in
+    pr-only|direct) ;;
+    *)
+      state_set '.publish = {skipped: $m}' --arg m "git_policy '${policy:-unset}' does not allow the agent to commit; changes are left uncommitted"
+      go publish published_or_not_required
+      return
+      ;;
+  esac
+  [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
+    || finish invariant_violation 40 "write node 'publish' reached without approval of the current brief"
+  run_agent publish publish "$CONTEXT
+
+You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
+- Use the git conventions, base branch, and PR tool that AGENTS.md and the project workflow name (for example /bitbucket or gh). Reviewers, labels, and similar settings come from the project's default rules.
+- Commit any remaining change. The driver's unpushed checkpoint commits (wip(implement-feature): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
+- pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body.
+- direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
+- Never merge, never force-push, never push to the base branch under pr-only, and do not change file contents: the committed tree must equal the reviewed one.
+Return only JSON matching the schema; pr_url is empty when no PR was opened.
+
+Checks the driver ran: $(state '.checks | join(" ; ")')
+
+Approved brief:
+$(jq -r '.brief' "$RUN/brief.json")" "$PUBLISH_SCHEMA"
+  out="$RUN/publish.out"
+  jq -e '(.pr_url | type) == "string" and (.branch | type) == "string"' "$out" >/dev/null 2>&1 \
+    || problems="$(jq -c '. + ["publish output does not match the schema"]' <<<"$problems")"
+  pr_url="$(jq -r '.pr_url // ""' "$out" 2>/dev/null || true)"
+  # 세션의 보고가 아니라 git 상태로 판정한다.
+  [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
+    || problems="$(jq -c '. + ["uncommitted changes remain after publish"]' <<<"$problems")"
+  [[ "$(worktree_tree)" == "$(state '.reviewed_tree // ""')" ]] \
+    || problems="$(jq -c '. + ["the committed tree differs from the reviewed tree"]' <<<"$problems")"
+  if [[ "$(state .start_head)" != none ]] && ! git -C "$REPO" merge-base --is-ancestor "$(state .start_head)" HEAD 2>/dev/null; then
+    problems="$(jq -c '. + ["history before the run was rewritten"]' <<<"$problems")"
+  fi
+  [[ "$(git -C "$REPO" rev-parse '@{upstream}' 2>/dev/null || true)" == "$(git -C "$REPO" rev-parse HEAD)" ]] \
+    || problems="$(jq -c '. + ["HEAD is not pushed to its upstream"]' <<<"$problems")"
+  [[ "$policy" != pr-only || -n "$pr_url" ]] \
+    || problems="$(jq -c '. + ["git_policy pr-only requires a pull request, but pr_url is empty"]' <<<"$problems")"
+  state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p}' \
+    --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg u "$pr_url" \
+    --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
+  if [[ "$problems" == "[]" ]]; then
+    go publish published_or_not_required
+  else
+    state_set '.findings = $p' --argjson p "$problems"
+    go publish publish_failed
+  fi
+}
+
 CONTEXT="Read AGENTS.md, .ai-harness/workflows/implement-feature.md, .ai-harness/workflows/feature-delivery-graph.json and the project docs they select before anything else."
 
 BRIEF_SCHEMA="$RUN/brief-schema.json"
 REVIEW_SCHEMA="$RUN/review-schema.json"
+PUBLISH_SCHEMA="$RUN/publish-schema.json"
 
 execute() {
   local node brief blocking
@@ -243,7 +335,7 @@ execute() {
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
       case "$node" in
-        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain" ;;
+        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
            finish "$node" 20 "a person must decide; see $RUN/unresolved.json" ;;
       esac
@@ -277,6 +369,7 @@ $(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%
         jq -e '(.brief | type) == "string" and (.checks | type) == "array" and (.open_questions | type) == "array"' "$brief" >/dev/null 2>&1 \
           || finish incomplete 30 "brief output does not match the schema ($brief)"
         cp "$brief" "$RUN/brief.json"
+        jq -r '.brief' "$brief" >"$RUN/brief.md"
         # 승인 대상은 Brief 본문과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
@@ -286,6 +379,19 @@ $(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%
         go brief ""
         ;;
       approval)
+        if [[ "$(state '.approval.brief_hash // ""')" != "$(state .brief_hash)" && "$(state '.policy.approval // "human"')" == auto ]]; then
+          # auto는 사람 대신 정책이 승인한다. 열린 질문이 있거나 그래프가 auto 엣지를 지웠으면 사람을 기다린다.
+          if [[ "$(jq '.open_questions | length' "$RUN/brief.json")" -gt 0 ]]; then
+            log "approval is auto, but the brief has open questions; waiting for a person"
+          elif ! has_edge approval auto_approved_by_policy; then
+            log "approval is auto, but the graph declares no auto_approved_by_policy edge; waiting for a person"
+          else
+            print_brief auto >&2
+            record_approval "$(jq -n --arg t "$(now_utc)" --arg b "$RUN/brief.md" '{source:"auto-policy", at:$t, brief:$b}')"
+            go approval auto_approved_by_policy
+            continue
+          fi
+        fi
         if [[ "$(state '.approval.brief_hash // ""')" != "$(state .brief_hash)" ]]; then
           local evidence
           evidence="$(transcript_approval "$(state .presented_at | cut -c1-19)" | head -n 1)"
@@ -312,6 +418,7 @@ Return a concise summary of changed areas and the commands you ran.
 Approved Implementation Brief:
 $(jq -r '.brief' "$RUN/brief.json")"
         [[ "$(fingerprint)" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
+        checkpoint deliver
         go deliver ""
         ;;
       review)
@@ -321,7 +428,7 @@ $(jq -r '.brief' "$RUN/brief.json")"
         else
           run_node review "review-$(state .attempts)" "$CONTEXT
 
-You are the review node. Do not edit any file. Review the current diff (git diff HEAD and untracked files) against the approved brief. The driver already ran the required checks and they passed.
+You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief. The driver already ran the required checks and they passed.
 A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
 Return only JSON matching the schema.
@@ -334,29 +441,38 @@ $(jq -r '.brief' "$RUN/brief.json")" "$REVIEW_SCHEMA"
             || finish incomplete 30 "review output does not match the schema; the feature is not done ($review_out)"
           state_set '.findings = $r[0].blocking_findings | .needs_user_decision = $r[0].needs_user_decision' --slurpfile r "$review_out"
         fi
-        if [[ "$(state '.findings | length')" -eq 0 ]]; then go review no_blocking_findings; else go review blocking_findings; fi
+        if [[ "$(state '.findings | length')" -eq 0 ]]; then
+          state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
+          go review no_blocking_findings
+        else
+          go review blocking_findings
+        fi
         ;;
       repair)
         if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
-          go repair same_root_cause_after_two_attempts_or_product_decision
+          go repair "$ESCALATE"
           continue
         fi
         state_set '.attempts += 1'
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
-You are the repair node. Fix only these blocking findings for the approved feature. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files.
+You are the repair node. Fix only these blocking findings for the approved feature. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself.
 
 Blocking findings:
 $(state '.findings')
 
 Approved Implementation Brief:
 $(jq -r '.brief' "$RUN/brief.json")"
+        checkpoint "repair-$(state .attempts)"
         if run_checks "repair-$(state .attempts)"; then
           go repair required_checks_pass
         else
           state_set '.findings = $f' --argjson f "$(check_findings "repair-$(state .attempts)")"
           go repair required_checks_fail
         fi
+        ;;
+      publish)
+        publish
         ;;
       *) finish invariant_violation 40 "the driver has no handler for graph node '$node'" ;;
     esac
@@ -371,13 +487,28 @@ case "$CMD" in
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
+    # 체크포인트는 git add -A로 커밋한다. 실행 전 변경이 섞이거나 기준 브랜치에 커밋이 쌓이지 않게 시작 조건을 막는다.
+    case "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" in
+      pr-only|direct)
+        [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
+          || { printf 'git_policy lets the runner commit; commit or stash the existing changes first so they do not mix into the run\n' >&2; exit 2; }
+        ;;
+    esac
+    if [[ "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" == pr-only ]]; then
+      base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+      [[ -z "$base" || "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" != "${base#origin/}" ]] \
+        || { printf 'git_policy pr-only: start on a work branch or worktree, not the base branch %s\n' "${base#origin/}" >&2; exit 2; }
+    fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$RUNS_DIR/latest"
     jq -n --arg id "$RUN_ID" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
+      --arg git "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" \
+      --arg appr "$(jq -r '.approval // "human"' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf human)" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
-      '{run_id:$id, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, started_at:$t,
-        status:"running", attempts:0, cli_checks:$cli, checks:[], findings:[], history:[]}' >"$STATE"
+      '{run_id:$id, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
+        policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:($git == "pr-only" or $git == "direct")},
+        status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
@@ -394,10 +525,14 @@ cat >"$REVIEW_SCHEMA" <<'EOF'
  "properties":{"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}},
   "non_blocking_findings":{"type":"array","items":{"type":"string"}},"needs_user_decision":{"type":"boolean"}}}
 EOF
+cat >"$PUBLISH_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
+ "properties":{"summary":{"type":"string"},"branch":{"type":"string"},"pr_url":{"type":"string"}}}
+EOF
 
 case "$CMD" in
   status)
-    jq -r '"run \(.run_id) · node \(.node) · status \(.status) · repair \(.attempts)\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    jq -r '"run \(.run_id) · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state .node)" == approval && -f "$RUN/brief.json" ]] && print_brief
     exit 0
     ;;
