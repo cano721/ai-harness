@@ -6,7 +6,8 @@
 #   - 상태: 노드마다 state.json에 체크포인트를 남겨 resume이 멈춘 노드부터 이어 간다.
 #   - 승인: 사용자가 대화에 직접 입력한 "승인"(Claude·Codex 트랜스크립트의 사용자 메시지) 또는 터미널의 approve.
 #     모델이 쓰는 도구 출력·자기 메시지는 사용자 메시지가 아니므로 승인이 되지 않는다.
-#     .ai-harness/harness.json의 approval이 auto이고 Brief에 열린 질문이 없으면 그래프의 auto_approved_by_policy 엣지로 통과한다.
+#     .ai-harness/harness.json의 approval이 auto면 Brief가 열린 질문 대신 decisions(추천안과 근거)를 내고, 사람만 정할 수 있는 것
+#     (needs_human)이 비어 있을 때 그래프의 auto_approved_by_policy 엣지로 통과한다. decisions는 brief.md와 PR 본문에 남는다.
 #   - 검증: Brief에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
 #   - git: harness.json의 git_policy가 pr-only·direct면 deliver·repair 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
 #     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
@@ -218,12 +219,13 @@ check_findings() {
 
 print_brief() {
   printf '== Implementation Brief · run %s ==\n\n' "$RUN_ID"
-  jq -r '.brief' "$RUN/brief.json"
+  cat "$RUN/brief.md"
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
   state '.checks[] | "- " + .'
-  jq -r 'if (.open_questions | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
+  jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
+  jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
-    printf '\n== 정책 승인 (approval: auto) ==\nBrief는 %s에 남고 PR 본문에 들어간다.\n' "$RUN/brief.md"
+    printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s에 남고 PR 본문에 들어간다. 사람은 병합 전에 PR에서 결정을 뒤집을 수 있다.\n' "$RUN/brief.md"
     return
   fi
   cat <<EOF
@@ -289,13 +291,14 @@ You are the publish node. The approved change below passed the checks the driver
 - Commit any remaining change. The driver's unpushed checkpoint commits (wip(implement-feature): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
 - pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body.
 - direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
+- If the brief has a \"결정 사항\" section, the agent made those choices without asking a person. Copy it unchanged into a PR body section titled \"결정 사항\" so a person can overturn them before merging; when no PR is opened, put it in the body of the last commit message instead.
 - Never merge, never force-push, never push to the base branch under pr-only, and do not change file contents: the committed tree must equal the reviewed one.
 Return only JSON matching the schema; pr_url is empty when no PR was opened.
 
 Checks the driver ran: $(state '.checks | join(" ; ")')
 
 Approved brief:
-$(jq -r '.brief' "$RUN/brief.json")" "$PUBLISH_SCHEMA"
+$(<"$RUN/brief.md")" "$PUBLISH_SCHEMA"
   out="$RUN/publish.out"
   jq -e '(.pr_url | type) == "string" and (.branch | type) == "string"' "$out" >/dev/null 2>&1 \
     || problems="$(jq -c '. + ["publish output does not match the schema"]' <<<"$problems")"
@@ -357,32 +360,43 @@ $(state .request)"
 You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
 Put the exact shell commands that must pass before the feature is done in checks. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check.
-Put anything the person must decide in open_questions.
+$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOF'
+approval is auto: no person reads this brief before delivery, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one, write the brief to follow it, and record it in decisions as {question, choice, rationale}.
+Put in needs_human only what a person alone can decide: a product judgment that changes the scope of the request; a hard-to-reverse choice such as deleting data, a migration, creating or dropping an index, or a deployment; a write to an external system. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
+EOF
+else printf 'Put anything the person must decide in open_questions.\n'; fi)
 
 Request:
 $(state .request)
 
 Project contract from the discover node:
 $(cat "$RUN/discover.out")
-$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(jq -r '.brief' "$RUN/brief.json")" "$(state .feedback)"; fi)" "$BRIEF_SCHEMA"
+$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)" "$BRIEF_SCHEMA"
         brief="$RUN/brief-$(state '.history | length').out"
-        jq -e '(.brief | type) == "string" and (.checks | type) == "array" and (.open_questions | type) == "array"' "$brief" >/dev/null 2>&1 \
-          || finish incomplete 30 "brief output does not match the schema ($brief)"
+        # human은 open_questions, auto는 decisions·needs_human을 낸다. auto에서 예전 형식이 오면 승인 노드가 사람을 기다린다.
+        jq -e '(.brief | type) == "string" and (.checks | type) == "array"
+          and ((.open_questions | type) == "array"
+            or ((.needs_human | type) == "array" and (.decisions | type) == "array"
+              and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))' \
+          "$brief" >/dev/null 2>&1 || finish incomplete 30 "brief output does not match the schema ($brief)"
         cp "$brief" "$RUN/brief.json"
-        jq -r '.brief' "$brief" >"$RUN/brief.md"
-        # 승인 대상은 Brief 본문과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
+        jq -r '.brief + if (.decisions // [] | length) > 0
+          then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
+        # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
-        state_set '.brief_hash = $h' --arg h "$({ jq -r '.brief' "$RUN/brief.json"; state '.checks[]'; } | git hash-object --stdin)"
+        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
         [[ "$(state '.checks | length')" -gt 0 ]] \
           || finish incomplete 30 "the brief has no verification command; revise with a check or start again with --check"
         go brief ""
         ;;
       approval)
         if [[ "$(state '.approval.brief_hash // ""')" != "$(state .brief_hash)" && "$(state '.policy.approval // "human"')" == auto ]]; then
-          # auto는 사람 대신 정책이 승인한다. 열린 질문이 있거나 그래프가 auto 엣지를 지웠으면 사람을 기다린다.
-          if [[ "$(jq '.open_questions | length' "$RUN/brief.json")" -gt 0 ]]; then
-            log "approval is auto, but the brief has open questions; waiting for a person"
+          # auto는 사람 대신 정책이 승인한다. 사람만 정할 것이 있거나, 결정을 남기지 않은 예전 형식이거나, 그래프가 auto 엣지를 지웠으면 사람을 기다린다.
+          if [[ "$(jq '.needs_human // [] | length' "$RUN/brief.json")" -gt 0 ]]; then
+            log "approval is auto, but the brief lists decisions only a person can make; waiting for a person"
+          elif ! jq -e '(.decisions | type) == "array" and (.open_questions // [] | length) == 0' "$RUN/brief.json" >/dev/null; then
+            log "approval is auto, but the brief left open questions instead of recording decisions; waiting for a person"
           elif ! has_edge approval auto_approved_by_policy; then
             log "approval is auto, but the graph declares no auto_approved_by_policy edge; waiting for a person"
           else
@@ -416,7 +430,7 @@ Do not commit, push, create a PR, or change scope. After you finish, the driver 
 Return a concise summary of changed areas and the commands you ran.
 
 Approved Implementation Brief:
-$(jq -r '.brief' "$RUN/brief.json")"
+$(<"$RUN/brief.md")"
         [[ "$(fingerprint)" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
         checkpoint deliver
         go deliver ""
@@ -434,7 +448,7 @@ Set needs_user_decision to true only when a blocking finding needs a product or 
 Return only JSON matching the schema.
 
 Approved Implementation Brief:
-$(jq -r '.brief' "$RUN/brief.json")" "$REVIEW_SCHEMA"
+$(<"$RUN/brief.md")" "$REVIEW_SCHEMA"
           local review_out
           review_out="$RUN/review-$(state .attempts).out"
           jq -e '(.blocking_findings | type) == "array" and (.needs_user_decision | type) == "boolean"' "$review_out" >/dev/null 2>&1 \
@@ -462,7 +476,7 @@ Blocking findings:
 $(state '.findings')
 
 Approved Implementation Brief:
-$(jq -r '.brief' "$RUN/brief.json")"
+$(<"$RUN/brief.md")"
         checkpoint "repair-$(state .attempts)"
         if run_checks "repair-$(state .attempts)"; then
           go repair required_checks_pass
@@ -516,10 +530,20 @@ case "$CMD" in
   *) usage ;;
 esac
 
-cat >"$BRIEF_SCHEMA" <<'EOF'
+if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
+  cat >"$BRIEF_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["brief","checks","decisions","needs_human"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},
+  "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["question","choice","rationale"],
+   "properties":{"question":{"type":"string"},"choice":{"type":"string"},"rationale":{"type":"string"}}}},
+  "needs_human":{"type":"array","items":{"type":"string"}}}}
+EOF
+else
+  cat >"$BRIEF_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["brief","checks","open_questions"],
  "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"open_questions":{"type":"array","items":{"type":"string"}}}}
 EOF
+fi
 cat >"$REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","blocking_findings","non_blocking_findings","needs_user_decision"],
  "properties":{"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}},

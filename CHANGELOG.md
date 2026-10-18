@@ -7,6 +7,16 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 동작 변경
+
+- **`approval: auto`에서 Brief의 판단 갈림을 에이전트가 정하고 진행합니다** — auto여도 Brief에 열린 질문이 하나라도 있으면 사람을 기다려 "이슈를 맡기면 PR까지"가 질문 하나에 막혔습니다. 이제 auto의 brief 노드는 열린 질문 대신 `decisions`(질문·선택·근거)를 내고, 추천안을 따라 Brief를 씁니다. 결정은 러너 실행 디렉터리의 `brief.md` "결정 사항"에 남아 deliver·review가 따르고, publish가 PR 본문 "결정 사항"(PR이 없으면 커밋 메시지)에 옮겨 사람이 병합 전에 뒤집을 수 있습니다. 범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기는 `needs_human`으로 따로 내고, 하나라도 있으면 지금처럼 승인 노드에서 멈춥니다(exit 10). auto인데 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. `approval: human`은 그대로입니다.
+
+### 업데이트 후 해야 할 일
+
+- `/harness-init --sync --apply`로 러너(`implement-feature-driver.sh`)·어댑터·그래프를 갱신합니다. 갱신 전 러너는 auto여도 열린 질문에서 멈춥니다. 그래프 엣지 이름은 바뀌지 않아 손댄 그래프도 그대로 동작합니다.
+
 ## v0.39.0 (2026-10-18)
 ### 새 기능
 

@@ -121,7 +121,7 @@ codex plugin add ai-harness@ai-harness
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
 - Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람) 또는 직접 커밋 허용(`direct`)
-- 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. 열린 질문·수리 한도 초과·제품 판단은 auto에서도 사람에게 갑니다
+- 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
 
 **이미 팀 에이전트가 있는 저장소** — `.claude/agents`·라우터 스킬·`CLAUDE.md`가 있으면 초기화가 먼저 `scripts/existing-assets.sh scan`으로 인벤토리를 만들고, 하네스 역할(developer·reviewer 등)을 기존 에이전트에 맡길지 슬롯별로 묻습니다. 맡긴 슬롯은 하네스 페르소나를 만들지 않고 워크플로가 기존 에이전트(또는 라우터가 정한 담당)를 부릅니다. 같은 이름 스킬은 기존 것을 유지하며, 기존 자산의 낡은 서술·중복·선언되지 않은 플러그인 참조는 점검표로만 보입니다.
 
@@ -184,7 +184,7 @@ stateDiagram-v2
     publish --> user_decision: push·PR 실패
 ```
 
-1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. `harness.json`의 `approval`이 `auto`면 Brief를 PR 본문에 남기고 열린 질문이 없을 때 바로 진행합니다.
+1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. `harness.json`의 `approval`이 `auto`면 판단이 갈리는 점을 추천안으로 정해 근거와 함께 Brief·PR 본문의 "결정 사항"에 남기고, 사람만 정할 수 있는 것이 없으면 바로 진행합니다.
 2. **구현** — 승인 후 작업을 작고 검증 가능한 delivery slice로 나눕니다. TDD 강제 프로젝트에서는 Red → Green → Refactor를 지키고, 그 외에는 프로젝트 테스트 정책을 따릅니다.
 3. **검토 루프** — acceptance case와 diff를 검토합니다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재검토로 해소를 확인합니다. 그래프의 수리 한도(`limits.max_repair_attempts`, 기본 10)에 이르거나 제품 결정이 필요하면 추측하지 않고 사용자에게 넘깁니다.
 4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. 병합과 force push는 어느 정책에서도 하지 않습니다. 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
@@ -219,14 +219,14 @@ Brief·검증 명령을 보여 줌  ◀──────────           
                                                deliver → review ⇄ repair → publish → done / user_decision
 ```
 
-`approval: auto`면 approval에서 멈추지 않고(열린 질문이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
+`approval: auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
 
 | 그래프 개념 | 러너가 하는 일 |
 |---|---|
 | 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
-| 정책 승인 | `harness.json`의 `approval`이 `auto`이고 Brief에 열린 질문이 없으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
+| 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
 | git | `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(implement-feature): …`)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
