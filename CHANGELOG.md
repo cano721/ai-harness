@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.39.0 (2026-10-18)
 ### 새 기능
 
 - **승인 게이트 모드 `approval: "human" | "auto"`** — 위임 세션·상위 오케스트레이터는 사람이 대화에 직접 친 승인을 만들 수 없어 Brief 다음에서 항상 멈췄습니다. `.ai-harness/harness.json`에 `approval:"auto"`를 두면 Brief를 산출물(러너 실행 디렉터리·PR 본문)로 남기고 그래프의 새 `auto_approved_by_policy` 엣지로 통과합니다. Brief에 열린 질문이 있거나, 그래프가 `user_decision`으로 보내는 수리 한도 초과·제품 판단이면 auto에서도 사람을 기다립니다. 기본값은 `human`(필드가 없을 때 포함)이라 기존 프로젝트는 그대로입니다. `/harness-init` 인터뷰 8번·`--reconfigure`로 고릅니다. (#131)
