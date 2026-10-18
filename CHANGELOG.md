@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.38.0 (2026-10-18)
 ### 새 기능
 
 - **`/implement-feature` 그래프를 모델 밖에서 실행하는 러너** — 지금까지 승인은 모델이 대화를 읽고 판단하거나 `.js`에 `approved: true`를 넘기는 것이었고, 검증은 작업 에이전트의 보고, Codex는 스킬이 그래프를 따른다는 전제에 기댔습니다. `.ai-harness/workflows/implement-feature-driver.sh`(standard 관리 생성물)는 `feature-delivery-graph.json`을 읽어 선언된 전이만 따르고, 노드마다 별도 세션을 띄워 읽기 전용 노드는 샌드박스·도구 제한·작업 트리 지문으로 지키며, 승인 노드에서 체크포인트를 남기고 멈춥니다. 승인은 사용자가 대화에 직접 입력한 `승인`(Claude·Codex 트랜스크립트)이나 터미널 `approve`만 인정하고, 완료는 Brief와 함께 승인된 검증 명령을 러너가 직접 실행해 판정합니다. 그래프에 `actor`, `limits.max_repair_attempts`, `repair → repair`(검증 실패) 전이가 추가됐습니다. 다음 `/harness-init --sync`에서 갱신 대상으로 오릅니다.
