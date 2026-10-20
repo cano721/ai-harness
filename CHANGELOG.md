@@ -7,6 +7,13 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **저장소 하네스가 플러그인보다 뒤처지면 세션 시작 때 알림** — 플러그인은 auto-update로 최신이 돼도 저장소의 생성물·`harness_version`은 `/harness-init --sync`를 돌려야 따라와, 알리는 경로 없이 몇 달씩 뒤처졌습니다(실측: 플러그인 0.39.0, 저장소 0.19.0~0.22.3). 이제 현재 저장소(또는 workspace 매니페스트)가 뒤처지면 sync 명령과 자동 sync 켜는 법을 저장소·플러그인 버전 조합당 한 번 안내합니다. (#137)
+- **자동 sync (opt-in `HM_SYNC_AUTO=1`)** — 정기 sweep이 기준 브랜치의 `harness_version`이 뒤처진 하네스 저장소에서 `/harness-init --sync --apply --auto`를 자동 harvest와 같은 무인 경로로 돌려 draft PR을 엽니다. `add`·수정 안 된 관리 생성물 `refresh`만 적용하고 승인 필요·보호 파일·삭제는 PR 본문 "사람 확인 필요" 표로 넘깁니다. 적용할 것이 없으면 에이전트를 띄우지 않습니다. 저장소·버전당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`(기본 2). (#137)
+
 ## v0.39.0 (2026-10-18)
 ### 새 기능
 

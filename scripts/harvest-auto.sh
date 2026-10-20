@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # analysis batch가 생기면 /harvest를 백그라운드 headless 세션으로 실행한다 (opt-in: HM_HARVEST_AUTO=1).
 # 결과물은 draft PR까지만 만든다. 병합은 사람이 한다.
+# 같은 무인 실행 경로로, 하네스 생성물이 플러그인보다 뒤처진 저장소의 /harness-init --sync도 돌린다(opt-in: HM_SYNC_AUTO=1).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,13 +19,16 @@ DAILY_MAX="${HM_HARVEST_AUTO_DAILY_MAX:-2}"
 BUDGET_USD="${HM_HARVEST_AUTO_BUDGET_USD:-5}"
 [[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=5
 LOG_KEEP=50
+SYNC_DIR="$HM_DATA_DIR/sync-auto"
+SYNC_DAILY_MAX="${HM_SYNC_AUTO_DAILY_MAX:-2}"
+[[ "$SYNC_DAILY_MAX" =~ ^[0-9]+$ ]] || SYNC_DAILY_MAX=2
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   harvest-auto.sh sweep                                              # backfill 뒤 batch가 있는 모든 프로젝트 확인
   harvest-auto.sh trigger <record-status-json> <cwd> [claude|codex]
-  harvest-auto.sh run <project> <batch_id> <repo_root> <agent>       # trigger가 띄우는 detached worker
+  harvest-auto.sh run <project> <batch_id> <repo_root> <agent> [scope]  # trigger가 띄우는 detached worker
   harvest-auto.sh agent                                              # 자동 실행에 쓸 에이전트(claude|codex)
   harvest-auto.sh runs [--limit N]                                   # 최근 자동 실행 기록
 EOF
@@ -46,19 +50,17 @@ log_skip() { # $1=project $2=batch_id $3=reason
     '{at:$at,event:"skipped",project:$project,batch:$batch,reason:$reason}')"
 }
 
-started_today() {
+started_today() { # [$1=sync] — 자동 harvest와 자동 sync는 하루 상한을 따로 센다
+  local want="${1:-harvest}"
   [[ -f "$RUNS_FILE" ]] || { printf '0\n'; return; }
-  jq -s --arg day "$(date -u +%Y-%m-%d)" \
-    '[.[] | select(.event=="started" and (.at | startswith($day)))] | length' "$RUNS_FILE" 2>/dev/null || printf '0\n'
+  # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 비용이 없어 상한에서 뺀다.
+  jq -s --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
+    '[.[] | select(.at | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
+      | ([.[] | select(.event=="started")] | length) - ([.[] | select(.event=="finished" and .no_agent == true)] | length)' \
+    "$RUNS_FILE" 2>/dev/null || printf '0\n'
 }
 
-# 파일·폴더 이름용 짧은 키. 한글 프로젝트명은 퍼센트 인코딩으로 글자당 9바이트가 되어 255바이트 한도를 넘을 수 있다.
-short_key() { # $1=project
-  local key=""
-  key="$(hm_project_key "$1")"
-  (( ${#key} <= 60 )) || key="${key:0:40}-$(printf '%s' "$key" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
-  printf '%s\n' "$key"
-}
+short_key() { hm_short_key "$@"; }
 
 attempt_marker() { printf '%s/%s/auto-attempted-batch\n' "$HM_DATA_DIR/harvest-queue" "$(hm_project_key "$1")"; }
 
@@ -213,9 +215,16 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
 # 세션 종료 hook에 기대지 않고, backfill이 끝난 뒤 batch가 있는 프로젝트를 모두 확인한다.
 # 터미널·탭을 닫아 끝난 세션만 있는 프로젝트도 여기서 자동 실행된다. 실행은 한 번에 하나다.
 command_sweep() {
-  local batch="" status="" origin="" cwd="" src="" project=""
-  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" || "${HM_SYNC_AUTO:-0}" == "1" ]] || return 0
   LAUNCHED_NOW=0
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] && sweep_batches
+  # 실행은 한 번에 하나다. 개선(harvest)이 먼저고, 이번에 아무것도 띄우지 않았을 때만 sync를 본다.
+  (( LAUNCHED_NOW == 1 )) || maybe_sync_run
+  return 0
+}
+
+sweep_batches() {
+  local batch="" status="" origin="" cwd="" src="" project=""
   shopt -s nullglob
   local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
   shopt -u nullglob
@@ -252,6 +261,56 @@ maybe_global_run() {
   fi
   status="$(jq -cn --arg b "global-$(date -u +%Y%m%d)" '{project:"_global",batch_id:$b,has_analysis_batch:true,reasons:["global"]}')"
   command_trigger "$status" "$HM_DATA_DIR" claude
+}
+
+sync_marker() { printf '%s/%s.json\n' "$SYNC_DIR" "$(hm_short_key "$1")"; }
+
+# 기준 브랜치의 harness_version이 플러그인보다 낮은 하네스 저장소를 /harness-init --sync로 따라오게 한다.
+# 저장소·플러그인 버전 조합당 한 번이고, 일시 실패만 MAX_FAILS까지 다시 시도한다.
+maybe_sync_run() {
+  local row="" project="" repo="" plugin="" marker="" prev_plugin="" prev_result="" fails=0 agent=""
+  [[ "${HM_SYNC_AUTO:-0}" == "1" && -z "${HM_HARVEST_RUNNING:-}" ]] || return 0
+  while IFS= read -r row; do
+    project="$(jq -r '.project' <<<"$row")"
+    repo="$(jq -r '.repo' <<<"$row")"
+    plugin="$(jq -r '.plugin' <<<"$row")"
+    marker="$(sync_marker "$project")"
+    prev_plugin="$(jq -r '.plugin // empty' "$marker" 2>/dev/null)"
+    prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
+    fails=0
+    if [[ "$prev_plugin" == "$plugin" ]]; then
+      [[ "$prev_result" == "failed" ]] || continue
+      fails="$(jq -r '.fails // 0' "$marker" 2>/dev/null)"
+      [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+      (( fails < MAX_FAILS )) || continue
+    fi
+    if (( $(started_today sync) >= SYNC_DAILY_MAX )); then
+      log_skip "$project" "sync-$plugin" daily_max
+      return 0
+    fi
+    if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
+      log_skip "$project" "sync-$plugin" busy
+      return 0
+    fi
+    agent="$(resolve_agent)"
+    # Codex 샌드박스는 .git이 읽기 전용이라 브랜치·커밋·PR까지 갈 수 없다.
+    if [[ "$agent" != "claude" ]]; then
+      log_skip "$project" "sync-$plugin" needs_claude
+      return 0
+    fi
+    mkdir -p "$SYNC_DIR"
+    jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
+      '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"
+    LAUNCHED_NOW=1
+    mkdir -p "$LOG_DIR"
+    if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
+      "$DIR/harvest-auto.sh" run "$project" "sync-$plugin" "$repo" "$agent" sync
+    else
+      nohup "$DIR/harvest-auto.sh" run "$project" "sync-$plugin" "$repo" "$agent" sync </dev/null >/dev/null 2>&1 &
+      disown 2>/dev/null || true
+    fi
+    return 0
+  done < <("$DIR/sync-auto.sh" outdated --fetch 2>/dev/null)
 }
 
 # 무인 실행 에이전트. 세션을 만든 도구가 아니라 실행 능력으로 고른다.
@@ -294,14 +353,18 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       local deny_args=(--disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)"
         "Edit(/$HM_CLAUDE_PROJECTS_DIR/**)" "Write(/$HM_CLAUDE_PROJECTS_DIR/**)"
         "Bash(git -C *)" "Bash(git reset*)" "Bash(git clean*)" "Bash(git push --force*)" "Bash(git push -f*)"
+        "Bash(git push origin --force*)" "Bash(git push origin -f*)" "Bash(git push origin +*)"
+        "Bash(git push -u origin --force*)" "Bash(git push -u origin -f*)" "Bash(git push -u origin +*)"
         "Bash(git worktree*)" "Bash(git branch -D*)" "Bash(git checkout -- *)")
       while IFS= read -r codex_root; do
         [[ -d "$codex_root" ]] || continue
         read_dirs+=(--add-dir "$codex_root")
         deny_args+=("Edit(/$codex_root/**)" "Write(/$codex_root/**)")
       done < <(codex_session_roots)
-      if [[ "$scope" == "project" ]]; then
-        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --base $base"
+      if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
+        local prompt="/ai-harness:harvest $project --auto --base $base"
+        [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base"
+        AGENT_CMD=(claude -p "$prompt"
           --plugin-dir "$ROOT"
           "${read_dirs[@]}"
           --permission-mode acceptEdits
@@ -309,6 +372,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "Bash(git status*)" "Bash(git diff*)" "Bash(git log*)" "Bash(git show*)" "Bash(git add *)"
           "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git fetch*)"
           "Bash(git push origin *)" "Bash(git push -u origin *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
+          "Bash(git ls-remote*)"
           "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
           "${deny_args[@]}"
           --max-budget-usd "$BUDGET_USD"
@@ -327,24 +391,6 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       fi
       ;;
   esac
-}
-
-# 하네스를 고칠 기준 브랜치. origin/HEAD가 하네스 없는 초기 브랜치(master)이고 실제 개발은 develop인
-# 저장소가 많아서(실측 jobda-*), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
-# 순서: harness.json의 base_branch → develop → origin/HEAD → main → master. origin이 없으면 HEAD.
-resolve_base() { # $1=repo_root → "origin/<branch>" 또는 "HEAD"
-  local repo_root="$1" candidate="" head="" configured=""
-  git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || { printf 'HEAD\n'; return; }
-  git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
-  configured="$(jq -r '.base_branch // empty' "$repo_root/.ai-harness/harness.json" 2>/dev/null)"
-  head="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  for candidate in ${configured:+"origin/$configured"} origin/develop ${head:+"$head"} origin/main origin/master; do
-    if git -C "$repo_root" cat-file -e "$candidate:.ai-harness/harness.json" 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return
-    fi
-  done
-  printf '%s\n' "${head:-HEAD}"
 }
 
 # 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
@@ -377,22 +423,34 @@ prune_logs() {
 
 command_run() {
   local project="$1" batch_id="$2" repo_root="$3" agent="$4" scope="${5:-project}"
-  local started_at="" start_epoch=0 log_file="" exit_code=0 review="" cost="null" result="" work_dir="" base_ref=""
+  local started_at="" start_epoch=0 log_file="" exit_code=0 review="null" cost="null" result="" work_dir="" base_ref=""
+  local artifact="" component="harvest_auto" ran_agent=1
+  [[ "$scope" == "sync" ]] && component="sync_auto"
   mkdir -p "$LOG_DIR"
-  hm_acquire_lock "$RUN_LOCK" 1 || { log_skip "$project" "$batch_id" busy; find "$(attempt_marker "$project")" -delete 2>/dev/null; return 0; }
+  if ! hm_acquire_lock "$RUN_LOCK" 1; then
+    log_skip "$project" "$batch_id" busy
+    if [[ "$scope" == "sync" ]]; then
+      # 실패 횟수는 보존한다 — 지우면 MAX_FAILS가 초기화된다.
+      jq -c '.result = "failed"' "$(sync_marker "$project")" >"$(sync_marker "$project").tmp" 2>/dev/null \
+        && mv "$(sync_marker "$project").tmp" "$(sync_marker "$project")"
+    else
+      find "$(attempt_marker "$project")" -delete 2>/dev/null
+    fi
+    return 0
+  fi
   trap 'hm_release_lock "$RUN_LOCK"' EXIT
 
   started_at="$(now_iso)"
   start_epoch="$(date +%s)"
   log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(short_key "$project").log"
   append_run "$(jq -cn --arg at "$started_at" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
-    --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" \
-    '{at:$at,event:"started",project:$project,batch:$batch,agent:$agent,repo:$repo,log:$log}')"
+    --arg agent "$agent" --arg repo "$repo_root" --arg log "$log_file" --arg scope "$scope" \
+    '{at:$at,event:"started",project:$project,batch:$batch,scope:$scope,agent:$agent,repo:$repo,log:$log}')"
 
   # headless 편집은 cwd 안에서만 허용되므로, 작업용 worktree를 만들어 그 안에서 에이전트를 띄운다.
   # 사용자 체크아웃은 구조적으로 건드릴 수 없다.
-  if [[ "$scope" == "project" ]]; then
-    base_ref="$(resolve_base "$repo_root")"
+  if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
+    base_ref="$(hm_resolve_base "$repo_root")"
     work_dir="$(make_work_tree "$repo_root" "$project" "$base_ref")" || work_dir=""
   else
     # workspace 루트·데이터 디렉토리에서 바로 돈다. 편집 도구가 없어 auto-apply.sh로만 바꿀 수 있다.
@@ -402,19 +460,36 @@ command_run() {
     printf 'worktree 생성 실패: %s\n' "$repo_root" >"$log_file"
     exit_code=70
   else
-    agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
-    # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
-    (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
-      env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
-    if [[ "$scope" == "project" ]]; then
+    # 적용할 관리 생성물(add·refresh)이 없는 sync는 에이전트를 띄우지 않는다 — 버전만 다른 경우가 대부분이다.
+    # 무인 sync가 적용하는 것은 add·refresh뿐이라, 그 밖(승인 필요·제외)만 남은 저장소에 에이전트를 띄우지 않는다.
+    local pending=1
+    if [[ "$scope" == "sync" ]]; then
+      pending="$("$DIR/harness-sync-state.sh" plan --root "$work_dir" --catalog "$ROOT/templates/managed-files.json" 2>/dev/null \
+        | jq '(.counts.add // 0) + (.counts.refresh // 0)' 2>/dev/null)"
+      [[ "$pending" =~ ^[0-9]+$ ]] || pending=-1
+    fi
+    if (( pending == -1 )); then
+      printf 'sync 계획 실패: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
+      exit_code=71
+      ran_agent=0
+    elif (( pending == 0 )); then
+      printf '적용할 관리 생성물 없음: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
+      ran_agent=0
+    else
+      agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
+      # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
+      (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
+        env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+    fi
+    if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
       # 이번 worktree만 정리한다. 저장소 전체 prune은 잠시 분리된 사용자 worktree 메타까지 지울 수 있다.
       git -C "$repo_root" worktree remove --force "$work_dir" >/dev/null 2>&1 \
         || find "$work_dir" -depth -delete 2>/dev/null || true
     fi
   fi
 
-  review="$(last_review_after "$project" "$started_at")"
-  if [[ "$agent" == "claude" ]]; then
+  [[ "$scope" == "sync" ]] || review="$(last_review_after "$project" "$started_at")"
+  if [[ "$agent" == "claude" ]] && (( ran_agent == 1 )); then
     # stderr 안내 줄(예: 신뢰되지 않은 작업 공간)이 앞에 섞일 수 있어 JSON 줄만 읽는다.
     cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
   fi
@@ -424,17 +499,31 @@ command_run() {
       elif .api_error == "usage_limit_reached" or .api_error_status == 429 then "usage_limit"
       elif .is_error == true then (.api_error // "agent_error")
       else empty end' "$log_file" 2>/dev/null || true)"
+  local marker_file="" fails=0
   if (( exit_code != 0 )); then
     result="failed"
     # 사용량 한도·API 오류 같은 일시 실패로 batch를 버리지 않고 다음 sweep이 다시 시도한다.
     # 사용량 한도가 아닌 실패는 횟수를 세어 MAX_FAILS에서 포기한다(트리거가 판단).
-    local marker_file="" fails=0
-    marker_file="$(attempt_marker "$project")"
+    if [[ "$scope" == "sync" ]]; then marker_file="$(sync_marker "$project")"; else marker_file="$(attempt_marker "$project")"; fi
     fails="$(jq -r '.fails // 0' "$marker_file" 2>/dev/null || echo 0)"
     [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
     [[ "$fail_reason" == "usage_limit" ]] || fails=$((fails + 1))
-    jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --argjson fails "$fails" \
-      '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails}' >"$marker_file" 2>/dev/null || true
+    if [[ "$scope" != "sync" ]]; then
+      jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --argjson fails "$fails" \
+        '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails}' >"$marker_file" 2>/dev/null || true
+    fi
+  elif [[ "$scope" == "sync" ]]; then
+    if (( ran_agent == 0 )); then
+      result="no-change"
+    else
+      # harness-init --auto는 마지막 응답에 `AI_HARNESS_SYNC_RESULT outcome=<결과> artifact=<PR URL>` 한 줄을 남긴다.
+      local line=""
+      line="$(jq -Rrn '[inputs | fromjson? | objects | select(.type=="result") | .result // empty] | last // empty' "$log_file" 2>/dev/null \
+        | grep -o 'AI_HARNESS_SYNC_RESULT outcome=[a-z_-]*\( artifact=[^[:space:]]*\)\{0,1\}' | tail -n 1)"
+      result="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
+      artifact="$(sed -n 's/.* artifact=\([^[:space:]]*\).*/\1/p' <<<"$line")"
+      [[ -n "$result" ]] || result="left_for_user"
+    fi
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
       && jq -e --arg since "$started_at" 'select(.at >= $since)' "$HM_DATA_DIR/applied/applied.jsonl" >/dev/null 2>&1; then
@@ -448,17 +537,25 @@ command_run() {
   else
     result="$(printf '%s' "$review" | jq -r '.review.outcome // "reviewed"')"
   fi
+  if [[ "$scope" == "sync" ]]; then
+    mkdir -p "$SYNC_DIR"
+    jq -cn --arg plugin "${batch_id#sync-}" --arg at "$(now_iso)" --arg result "$result" --argjson fails "$fails" \
+      '{plugin:$plugin,at:$at,result:$result,fails:$fails}' >"$(sync_marker "$project")" 2>/dev/null || true
+  fi
   append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
-    --arg result "$result" --argjson exit_code "$exit_code" \
+    --arg scope "$scope" --arg result "$result" --argjson exit_code "$exit_code" \
     --argjson duration_s "$(( $(date +%s) - start_epoch ))" --argjson cost_usd "${cost:-null}" \
-    --argjson review "$review" --arg log "$log_file" --arg reason "$fail_reason" \
-    '{at:$at,event:"finished",project:$project,batch:$batch,result:$result,exit_code:$exit_code,
-      duration_s:$duration_s,cost_usd:$cost_usd,artifact:($review.review.artifact // null),log:$log}
+    --argjson review "$review" --arg artifact "$artifact" --arg log "$log_file" --arg reason "$fail_reason" \
+    --argjson no_agent "$([[ "$scope" == "sync" ]] && (( ran_agent == 0 && exit_code == 0 )) && echo true || echo false)" \
+    '{at:$at,event:"finished",project:$project,batch:$batch,scope:$scope,result:$result,exit_code:$exit_code,
+      duration_s:$duration_s,cost_usd:$cost_usd,
+      artifact:(if $artifact != "" then $artifact else ($review.review.artifact? // null) end),log:$log}
+      + (if $no_agent then {no_agent:true} else {} end)
       + (if $reason == "" then {} else {reason:$reason} end)')"
   if (( exit_code == 0 )); then
-    "$DIR/health.sh" success harvest_auto >/dev/null 2>&1 || true
+    "$DIR/health.sh" success "$component" >/dev/null 2>&1 || true
   else
-    "$DIR/health.sh" failure harvest_auto "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
+    "$DIR/health.sh" failure "$component" "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   fi
   prune_logs
 }
