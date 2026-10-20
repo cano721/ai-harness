@@ -24,8 +24,9 @@
     {"from": "verify", "to": "re_review", "when": "required_checks_pass"},
     {"from": "re_review", "to": "done", "when": "no_blocking_findings"},
     {"from": "re_review", "to": "repair", "when": "blocking_findings"},
-    {"from": "re_review", "to": "user_decision", "when": "same_root_cause_after_two_attempts_or_product_decision"}
+    {"from": "re_review", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"}
   ],
+  "limits": {"max_repair_attempts": 10},
   "invariants": [
     "Initial review nodes are read-only.",
     "A blocking finding cannot transition directly to done.",

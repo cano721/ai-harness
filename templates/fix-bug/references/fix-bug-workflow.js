@@ -5,11 +5,13 @@ export const meta = {
 
 const input = args && typeof args === 'object' ? args : { brief: String(args ?? '') }
 const brief = typeof input.brief === 'string' ? input.brief.trim() : ''
+// The repair limit belongs to the project graph (limits.max_repair_attempts); the entrypoint passes it in.
+const maxRepairs = Number.isInteger(input.max_repair_attempts) && input.max_repair_attempts > 0 ? input.max_repair_attempts : 10
 
 if (input.approved !== true || !brief) {
   return {
     status: 'approval_required',
-    message: 'Run this only after the project-local /fix-bug entrypoint has presented a Bug Fix Brief and the user explicitly approved it. Pass { approved: true, brief: "..." }. No files were changed.',
+    message: 'Run this only after the project-local /fix-bug entrypoint has presented a Bug Fix Brief and it was approved (explicitly by the user, or by policy when .ai-harness/harness.json sets approval to auto). Pass { approved: true, brief: "...", max_repair_attempts: <graph limits.max_repair_attempts> }. No files were changed.',
   }
 }
 
@@ -29,7 +31,7 @@ Fix the approved bug below in the current repository.
 Approved Bug Fix Brief:
 ${brief}
 
-Read AGENTS.md and the project bug-fix, testing, and convention documents first. Preserve or establish the approved reproduction evidence, then follow the project's test policy for the regression case and run targeted plus required broad verification. Do not broaden scope, commit, push, create a PR, or change a product decision without explicit authorization. Return the observed reproduction, suspected or confirmed cause, changed areas, and command/results evidence.
+Read AGENTS.md and the project bug-fix, testing, and convention documents first. Preserve or establish the approved reproduction evidence, then follow the project's test policy for the regression case and run targeted plus required broad verification. Do not broaden scope, commit, push, create a PR, or change a product decision; the entrypoint handles git as the project git_policy says. Return the observed reproduction, suspected or confirmed cause, changed areas, and command/results evidence.
 `, { label: 'fix-approved-bug' })
 
 if (fix === null) {
@@ -51,7 +53,7 @@ if (review === null) {
   return { status: 'review_incomplete', fix, message: 'The reviewer did not complete; do not treat the bug fix as done.' }
 }
 
-for (let attempt = 1; review.blocking_findings.length > 0 && attempt <= 2; attempt += 1) {
+for (let attempt = 1; review.blocking_findings.length > 0 && attempt <= maxRepairs; attempt += 1) {
   const repair = await agent(`
 Repair only these blocking findings for the approved bug fix. Follow AGENTS.md, preserve or improve regression evidence, and run affected targeted checks plus required broad verification. Do not commit, push, create a PR, or make unrelated changes.
 
@@ -77,7 +79,7 @@ if (review.blocking_findings.length > 0) {
     status: 'user_decision_required',
     fix,
     review,
-    message: 'Blocking findings remain after two focused repair attempts. Stop and ask the user for a product or environment decision.',
+    message: `Blocking findings remain after ${maxRepairs} repair attempts (the graph repair limit). Stop and ask the user for a product or environment decision.`,
   }
 }
 

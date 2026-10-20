@@ -9,8 +9,35 @@
 
 ## Unreleased
 
+### 버그 수정
+
+- **`docs-drift`가 문서와 맞는 Gradle 태스크를 drift로 보고하지 않습니다** — Kotlin DSL 멀티모듈 저장소에서 맞게 적힌 태스크 4건이 오탐으로 올라 "보호 파일 후속 조치" 표를 오염시켰습니다. 원인은 셋이었습니다: stale 판정이 관련성 필터를 거친 사실 목록과 비교해 `jacocoAggregatedReport`·`syntheticTalentExport`처럼 선언됐지만 이름에 검증 키워드가 없는 태스크를 "빌드에 없다"고 봤고, `verify`가 `Verification`과 맞지 않았고, `./gradlew test integrationTest`처럼 한 호출의 둘째 태스크를 사용으로 세지 않았습니다. 이제 stale은 선언된 태스크 전부와 비교하고, `<Test>` 타입 태스크는 이름과 무관하게 검증 태스크로 보며, 한 호출의 둘째 이후 태스크는 missing 해소에만 씁니다(산문의 뒷단어가 stale로 오르지 않게). `"jacocoVerification${suffix}"`처럼 이름이 보간되는 선언은 사실로 올리지 않고, 문서에 적힌 완성된 이름을 stale로 보지 않습니다.
+
+## v0.39.0 (2026-10-18)
 ### 새 기능
 
+- **승인 게이트 모드 `approval: "human" | "auto"`** — 위임 세션·상위 오케스트레이터는 사람이 대화에 직접 친 승인을 만들 수 없어 Brief 다음에서 항상 멈췄습니다. `.ai-harness/harness.json`에 `approval:"auto"`를 두면 Brief를 산출물(러너 실행 디렉터리·PR 본문)로 남기고 그래프의 새 `auto_approved_by_policy` 엣지로 통과합니다. Brief에 열린 질문이 있거나, 그래프가 `user_decision`으로 보내는 수리 한도 초과·제품 판단이면 auto에서도 사람을 기다립니다. 기본값은 `human`(필드가 없을 때 포함)이라 기존 프로젝트는 그대로입니다. `/harness-init` 인터뷰 8번·`--reconfigure`로 고릅니다. (#131)
+- **그래프 `publish` 노드: done 전에 커밋·push·PR** — 그래프가 `review → done`에서 끝나 PR은 매번 사람 몫이었습니다. feature-delivery·bug-fix 그래프에 `review → publish → done`이 생겼고, `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push, 그 밖이면 건너뜁니다. 러너는 publish 결과를 세션 보고가 아니라 git 상태(미커밋 없음·리뷰한 트리와 같음·실행 전 이력 보존·upstream push·pr-only면 PR URL)로 판정하고, 실패하면 `user_decision`으로 넘깁니다. (#131)
+- **러너의 사이클별 체크포인트 커밋** — `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 커밋(`wip(implement-feature): …`)을 남겨 worktree가 사라져도 진행이 남습니다. push는 publish만 합니다. (#131)
+
+### 동작 변경
+
+- **어댑터의 커밋·push·PR 문구가 manifest `git_policy`를 따릅니다** — `/implement-feature`·`/fix-bug`·`/review` 어댑터가 "별도 허가 없이 커밋·푸시·PR 생성을 하지 않는다"로 고정돼 `git_policy:"pr-only"`(PR까지는 에이전트)와 모순됐고 워크플로 본문의 PR 단계를 막았습니다. 이제 `pr-only`는 커밋·일반 push·PR 생성까지, `direct`는 커밋·일반 push까지 허용하고, 정책이 없거나 그 밖의 값이면 이전처럼 별도 허가가 필요합니다. 병합·force push는 어느 정책에서도 하지 않습니다. 어댑터는 manifest를 런타임에 읽으므로 정책을 바꿔도 다시 생성할 필요가 없습니다. (#131)
+- **수리 반복 한도 2 → 10, 그래프 `limits.max_repair_attempts`가 단일 출처** — 세 그래프 모두 `limits.max_repair_attempts: 10`을 갖고, 횟수가 박힌 전이 이름(`same_root_cause_after_two_attempts_…`)은 `repair_limit_reached_or_…`로 바뀌었습니다. 러너는 사람에게 넘기는 엣지 이름을 그래프에서 읽고, Claude `.js` 워크플로는 `max_repair_attempts` 인자를 받습니다(없으면 10). 역할 간 넘김 루프 한도(두 번째 왕복에서 사용자에게)는 수리 한도와 별개라 그대로입니다. (#131)
+- **워크플로 계약 검사가 새 정책을 기준으로 봅니다** — `repair_limit`은 그래프 `limits`를 먼저 읽고(없는 이전 그래프는 전이 이름), `pr_step_forbidden_by_adapter`는 본문의 PR 단계를 `git_policy`가 `pr-only`·`direct`면 허용하고 그 밖이면 짚으며, `git_policy`를 모르는 이전 어댑터는 `--sync` 갱신 대상으로 짚습니다. (#131)
+- **`/harness-init --sync --apply`가 add·refresh를 다시 묻지 않습니다** — `--apply`가 곧 승인이므로 질문은 승인 필요·삭제·보호 파일 편집 항목에만, 모아서 한 번에 합니다. (#131)
+
+### 업데이트 후 해야 할 일
+
+- `/harness-init --sync --apply`로 관리 생성물(세 그래프, 러너, 어댑터, `.claude/workflows/*.js`)을 갱신합니다. 손대지 않은 생성물은 묻지 않고 갱신됩니다. 손댄 그래프(`modified`)를 그대로 두면 이전 한도·엣지가 유지됩니다 — 러너는 `publish` 노드가 없는 그래프에서는 PR 없이 done으로 끝나고, auto 엣지가 없으면 `approval:"auto"`여도 사람 승인을 기다립니다(체크포인트 커밋은 그래프와 무관하게 `git_policy`를 따릅니다).
+- `git_policy:"pr-only"`인 프로젝트는 갱신 뒤 러너·어댑터가 커밋·push·PR까지 합니다. 원하지 않으면 `--reconfigure`로 git 통제 수준을 바꾸거나 manifest에서 `git_policy`를 지웁니다.
+- 사람 없이 PR까지 가려면 `--reconfigure`에서 승인 게이트를 `정책 승인`으로 고릅니다(manifest `approval:"auto"`).
+- `--sync`의 "보호 파일 후속 조치" 표를 확인합니다: 워크플로 본문에 `최대 2회` 같은 숫자가 있으면 `repair_limit`으로 오릅니다(본문은 "그래프 수리 한도"로 참조하게 고칩니다). 본문에 PR 도구·기준 브랜치·검토자 기본값이 없으면 publish 노드가 쓸 수 있게 추가합니다.
+
+## v0.38.0 (2026-10-18)
+### 새 기능
+
+- **`/implement-feature` 그래프를 모델 밖에서 실행하는 러너** — 지금까지 승인은 모델이 대화를 읽고 판단하거나 `.js`에 `approved: true`를 넘기는 것이었고, 검증은 작업 에이전트의 보고, Codex는 스킬이 그래프를 따른다는 전제에 기댔습니다. `.ai-harness/workflows/implement-feature-driver.sh`(standard 관리 생성물)는 `feature-delivery-graph.json`을 읽어 선언된 전이만 따르고, 노드마다 별도 세션을 띄워 읽기 전용 노드는 샌드박스·도구 제한·작업 트리 지문으로 지키며, 승인 노드에서 체크포인트를 남기고 멈춥니다. 승인은 사용자가 대화에 직접 입력한 `승인`(Claude·Codex 트랜스크립트)이나 터미널 `approve`만 인정하고, 완료는 Brief와 함께 승인된 검증 명령을 러너가 직접 실행해 판정합니다. 그래프에 `actor`, `limits.max_repair_attempts`, `repair → repair`(검증 실패) 전이가 추가됐습니다. 다음 `/harness-init --sync`에서 갱신 대상으로 오릅니다.
 - **스키마 조건 없는 information_schema 조회를 Bash 실행 전에 막는 가드(opt-in)** — 모든 스키마를 훑어 공유 DB를 멈출 수 있습니다. 기본은 꺼져 있고 `HM_DB_SCAN_GUARD=1`로 켭니다. DB 클라이언트가 명령 위치에 올 때만 검사하고, 문자열 리터럴·주석을 지운 뒤 `OR` 없는 `*_schema =`/`IN (...)` 조건이 있어야 통과합니다.
 - **init이 기존 에이전트 자산을 분석해 하네스 역할에 융화합니다** — 팀이 이미 `.claude/agents`·라우터 스킬을 운영하는 저장소에 init하면 developer·test-engineer를 그 옆에 하나 더 세워 위임 대상이 모호해졌습니다. `scripts/existing-assets.sh scan`이 기존 지침(CLAUDE.md 위치·import 여부)·에이전트·스킬(템플릿 이름 충돌, 라우터 후보)·settings hook·선언되지 않은 `plugin:agent` 참조·`.claude/` gitignore 여부를 모으고, `/harness-init`이 역할 슬롯을 기존 에이전트·라우터에 매핑(`harness.json`의 `roles`)해 매핑된 슬롯은 생성하지 않습니다. 기존 자산의 낡은 서술·중복·외부 참조는 점검표로 보입니다. (#121)
 - **생성물을 영구 제외하고, 설정 밖으로 밀려난 생성물을 제거 후보로 보입니다** — 지운 생성물을 `forget`해도 다음 `--sync`가 add로 되살렸습니다. `harness-sync-state.sh exclude|include`가 `harness.json`의 `excluded`를 관리하고 plan은 `excluded`로만 표시합니다. plan의 `orphaned`는 integration·stack·level을 빼거나 역할을 기존 에이전트에 넘긴 뒤 남은 관리 생성물을 사유와 함께 냅니다. (#121)

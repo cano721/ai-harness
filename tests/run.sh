@@ -248,6 +248,39 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 
+# 실제 저장소(Kotlin DSL 멀티모듈)에서 나온 오탐 4건 — 문서와 빌드가 맞는데 drift로 보고됐다.
+KTS="$TEST_TMP/drift-kts"
+mkdir -p "$KTS/.ai-harness/docs"
+cat >"$KTS/build.gradle.kts" <<'GRADLE'
+subprojects {
+    tasks.register<Test>("integrationTest") { }
+    tasks.register<Test>("syntheticTalentExport") { }
+    tasks.register<Test>("seedFixtures") { }
+}
+tasks.register("jacocoAggregatedReport") { }
+val jacocoAggregatedVerification = tasks.register("jacocoAggregatedVerification") { }
+tasks.register("printVersion") { }
+listOf("api").forEach { tasks.register<JacocoCoverageVerification>("jacocoVerification${it}") { } }
+GRADLE
+cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
+- 실측: `./gradlew test integrationTest --rerun-tasks`
+- 리포트: `./gradlew jacocoAggregatedReport`
+- 게이트: `./gradlew jacocoAggregatedVerification`
+- 시드: `SYNTHETIC_ANCHOR=x ./gradlew :talent-pool-api:syntheticTalentExport`
+- 버전: `./gradlew printVersion`
+- 모듈 게이트: `./gradlew jacocoVerificationApi`
+- run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
+DOC
+KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
+assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
+assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
+pass "drift kotlin dsl and multi-task calls"
+
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
 mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
@@ -294,7 +327,7 @@ contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
 assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
 assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
 assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
-assert_eq ".ai-harness/workflows/implement-feature.md:10 5 2" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
+assert_eq ".ai-harness/workflows/implement-feature.md:10 5 10" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
 assert_eq "src/main/**" "$(jq -r '[.findings[] | select(.check=="write_scope_unmatched") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "a write scope that matches no file is reported, a measured module path is not"
 assert_eq ".ai-harness/workflows/fix-bug.md" "$(jq -r '.findings[] | select(.check=="regression_role") | .file' <<<"$CONTRACT_SCAN")" "fix-bug giving regression tests to a developer barred from tests"
 
@@ -309,13 +342,27 @@ cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
 - 역할 범위 위반을 발견하면 변경을 폐기하지 않는다 — diff를 보존하고 재위임한다.
 - Do not discard the diff on a scope violation.
 - Codex: `codex exec -C <repo> -s workspace-write -o out.md`
-- 같은 원인이 최대 2회 수정 뒤에도 남으면 사용자 판단.
+- 같은 원인이 최대 10회 수정 뒤에도 남으면 사용자 판단.
 DOC
 # shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
 printf '# developer\n\nWrite scope: `src/main/**`\n' >"$CONTRACT_OK/.ai-harness/agents/developer.md"
 CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
+
+# PR 단계는 manifest git_policy가 허용하면 계약 위반이 아니다. git_policy를 모르는 이전 어댑터는 갱신 대상으로 짚는다.
+CONTRACT_PR="$TEST_TMP/contract-pr"
+mkdir -p "$CONTRACT_PR/.ai-harness/workflows" "$CONTRACT_PR/.claude/commands"
+jq -n '{level:"standard", git_policy:"pr-only"}' >"$CONTRACT_PR/.ai-harness/harness.json"
+cp "$ROOT/templates/implement-feature/SKILL.md" "$CONTRACT_PR/.claude/commands/implement-feature.md"
+printf '# Implement Feature\n\n### Step 8. 커밋 + PR 생성\n' >"$CONTRACT_PR/.ai-harness/workflows/implement-feature.md"
+assert_eq "0" "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_PR" | jq '.findings | length')" "a PR step is allowed when git_policy is pr-only"
+printf '%s\n' 'Do not commit, push, create a PR, merge, or change project policy unless separately authorized.' >"$CONTRACT_PR/.claude/commands/implement-feature.md"
+assert_contains "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_PR" | jq -r '.findings[] | select(.check=="pr_step_forbidden_by_adapter") | .message')" "--sync" "a legacy adapter that ignores git_policy is flagged for sync"
+jq 'del(.limits) | (.transitions[] | select(.to == "user_decision" and .from == "repair") | .when) = "same_root_cause_after_two_attempts_or_product_decision"' \
+  "$ROOT/templates/implement-feature/references/feature-delivery-graph.json" >"$CONTRACT_PR/.ai-harness/workflows/feature-delivery-graph.json"
+assert_eq "2" "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_PR" | jq -r '.graph_repair_limit')" "a graph without limits falls back to the limit in its edge name"
+assert_eq "10" "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK" | jq -r '.graph_repair_limit')" "the repair limit comes from the graph limits"
 pass "workflow contract scan"
 rm -rf "$WS_ROOT/web"
 mkdir -p "$WS_ROOT/group/batch/.ai-harness"
@@ -573,6 +620,22 @@ assert_contains "$FEATURE_SKILL_CONTENT" "Do not edit before explicit approval" 
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
+# 커밋·push·PR과 승인 대기는 어댑터 문구가 아니라 manifest의 git_policy·approval이 정한다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for adapter in implement-feature fix-bug review; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" '`git_policy`' "$adapter adapter follows git_policy"
+  assert_contains "$ADAPTER_CONTENT" '`.ai-harness/harness.json`' "$adapter adapter reads the policy from the manifest"
+  [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
+  assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
+done
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
+assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
+assert_contains "$HARNESS_INIT_CONTENT" '"approval": "human"' "manifest records the approval mode"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$HARNESS_INIT_CONTENT" '`approval`이 없으면 `human`으로 본다' "a manifest without approval keeps the human gate"
+assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
 
 # 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
@@ -581,11 +644,229 @@ assert_file "$FEATURE_GRAPH"
 "$ROOT/scripts/validate-feature-graph.sh" "$FEATURE_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$FEATURE_GRAPH")" "approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.deliver.write' "$FEATURE_GRAPH")" "delivery node can write"
+for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json" "$ROOT/templates/review/references/review-graph.json"; do
+  assert_eq "10" "$(jq -r '.limits.max_repair_attempts' "$graph")" "$(basename "$graph") keeps its repair limit in limits"
+  [[ "$(jq -r '[.transitions[].when // empty] | join(" ")' "$graph")" != *_two_* ]] || fail "$(basename "$graph") spells a repair count in an edge name"
+done
+assert_eq "true:true" "$(jq -r '"\(.nodes.publish.write):\(.nodes.publish.network)"' "$FEATURE_GRAPH")" "publish writes and needs the network"
+INVALID_GRAPH="$TEST_TMP/no-publish-graph.json"
+jq 'del(.transitions[] | select(.from == "publish"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose publish node cannot finish is invalid"; fi
 assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 fi
 pass "feature delivery graph adapters"
+
+# 드라이버는 그래프를 모델 밖에서 실행한다: 전이는 그래프가, 승인은 사용자가 직접 입력한 메시지가, 완료는 드라이버가 실행한 검증이 정한다.
+DRIVER="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
+assert_file "$DRIVER"
+assert_contains "$(<"$FEATURE_SKILL")" "implement-feature-driver.sh" "feature skill points to the graph runner"
+assert_eq "1" "$(jq '[.artifacts[] | select(.path == ".ai-harness/workflows/implement-feature-driver.sh" and .level == "standard" and (has("integration") | not))] | length' "$ROOT/templates/managed-files.json")" "driver ships to every standard project regardless of integration"
+assert_eq "human" "$(jq -r '.nodes.approval.actor' "$FEATURE_GRAPH")" "approval is a human node the runner interrupts at"
+DRIVER_TMP="$TEST_TMP/driver"
+mkdir -p "$DRIVER_TMP"
+driver() { # args... → DRIVER_RC, DRIVER_OUT
+  DRIVER_RC=0
+  DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+    FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK="${FAKE_CHECK:-true}" PATH="$ROOT/tests/fixtures/driver:$PATH" \
+    bash "$DRIVER" "$@" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+}
+new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
+  FAKE_SCENARIO="$1"
+  DRIVER_REPO="$DRIVER_TMP/repo-$1"
+  FAKE_LOG="$DRIVER_TMP/$1.log"
+  mkdir -p "$DRIVER_REPO"
+  git -C "$DRIVER_REPO" init -q
+  git -C "$DRIVER_REPO" config user.email t@t
+  git -C "$DRIVER_REPO" config user.name t
+  git -C "$DRIVER_REPO" commit -q --allow-empty -m init
+  DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)"
+  : >"$FAKE_LOG"
+}
+run_state() { jq -r "$1" "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"; }
+say_in_claude() { # text [cwd] — Claude 트랜스크립트에 사용자 메시지를 남긴다
+  mkdir -p "$DRIVER_TMP/claude/projects/p"
+  jq -nc --arg c "${2:-$DRIVER_REPO}" --arg m "$1" '{type:"user", cwd:$c, timestamp:"2999-01-01T00:00:00.000Z", message:{role:"user", content:$m}}' \
+    >>"$DRIVER_TMP/claude/projects/p/$FAKE_SCENARIO.jsonl"
+}
+start_and_approve() { # scenario [start args...]
+  new_driver_repo "$1"
+  shift
+  driver start --runtime codex --request "add feature" "$@"
+  [[ "$DRIVER_RC" == 10 ]] || return 0
+  say_in_claude "승인"
+  driver resume
+}
+
+DRIVER_RC=0
+bash "$DRIVER" >/dev/null 2>&1 || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "runner requires a command"
+
+new_driver_repo ok
+driver start --runtime codex --request "add feature"
+assert_eq "10:waiting_approval:approval" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "start interrupts at the human approval node"
+assert_contains "$DRIVER_OUT" "대화에 \"승인\"이라고 입력" "the brief tells the person how to approve"
+assert_eq "discover read-only schema=;brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "planning nodes run read-only and nothing writes before approval"
+driver resume
+assert_eq "10" "$DRIVER_RC" "resume without approval stays interrupted"
+# 사용자가 친 메시지가 아닌 것은 승인이 아니다: 도구 결과, 모델 메시지, 다른 저장소의 세션.
+mkdir -p "$DRIVER_TMP/claude/projects/p"
+jq -nc --arg c "$DRIVER_REPO" '{type:"user", cwd:$c, timestamp:"2999-01-01T00:00:00Z", message:{role:"user", content:[{type:"tool_result", content:"승인"}]}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+jq -nc --arg c "$DRIVER_REPO" '{type:"assistant", cwd:$c, timestamp:"2999-01-01T00:00:00Z", message:{role:"assistant", content:"승인"}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+say_in_claude "승인" "$DRIVER_TMP/elsewhere"
+say_in_claude "승인하지 말고 기다려" 
+driver resume
+assert_eq "10" "$DRIVER_RC" "tool output, model text, other repos, and non-approval words do not approve"
+driver revise --feedback "범위에서 X 빼줘"
+assert_eq "10" "$DRIVER_RC" "revise rebuilds the brief and waits again"
+assert_contains "$(<"$FAKE_LOG.revise")" "범위에서 X 빼줘" "revise passes the person's feedback to the brief node"
+assert_contains "$(run_state '[.history[].outcome] | join(",")')" "brief_changed_or_not_approved" "revise follows the declared approval -> brief edge"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a typed approval lets the run reach done"
+assert_eq "claude-transcript" "$(run_state .approval.source)" "approval evidence is recorded"
+assert_eq "deliver workspace-write schema=;review read-only schema=yes;" "$(tail -n 2 "$FAKE_LOG" | tr '\n' ';')" "only delivery writes; review is read-only with a schema"
+assert_contains "$(run_state .publish.skipped)" "does not allow the agent to commit" "without a permissive git_policy, publish is skipped"
+assert_eq "1" "$(git -C "$DRIVER_REPO" rev-list --count HEAD)" "without a permissive git_policy, the runner never commits"
+
+# Codex 대화에서 친 승인도 같은 규칙으로 인정한다.
+new_driver_repo codex_ok
+driver start --runtime codex --request "add feature"
+mkdir -p "$DRIVER_TMP/codex/sessions/2999"
+{
+  jq -nc --arg c "$DRIVER_REPO" '{type:"session_meta", payload:{cwd:$c}}'
+  jq -nc '{type:"event_msg", timestamp:"2999-01-01T00:00:00Z", payload:{type:"user_message", message:"approve"}}'
+} >"$DRIVER_TMP/codex/sessions/2999/rollout.jsonl"
+driver resume
+assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
+
+if ! (exec 3<>/dev/tty) 2>/dev/null; then
+  new_driver_repo no_tty
+  driver start --runtime codex --request "add feature"
+  driver approve
+  assert_eq "10" "$DRIVER_RC" "terminal approval needs a real terminal"
+fi
+
+start_and_approve brief_writes
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "a write during a read-only node stops the run"
+assert_eq "discover read-only schema=;" "$(tr '\n' ';' <"$FAKE_LOG")" "nothing runs after a violation"
+start_and_approve nocheck
+assert_eq "30:brief" "$DRIVER_RC:$(run_state .node)" "a brief without a verification command cannot be approved"
+FAKE_CHECK="grep -q fixed feature.txt" start_and_approve fixcheck
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing driver-run check goes to repair, then review"
+assert_eq "deliver;repair;review" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "check failure skips the reviewer and repairs first"
+start_and_approve review_blocks
+assert_eq "20:user_decision:$(jq -r '.limits.max_repair_attempts' "$FEATURE_GRAPH")" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "blocking findings stop at user_decision after the graph's repair limit"
+assert_eq "$(($(jq -r '.limits.max_repair_attempts' "$FEATURE_GRAPH") + 1))" "$(grep -c '^review read-only' "$FAKE_LOG")" "every repair is followed by a re-review"
+start_and_approve decision
+assert_eq "20:0" "$DRIVER_RC:$(run_state .attempts)" "a product decision goes to a person without repair attempts"
+start_and_approve bad_review
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a review that breaks the schema is never done"
+start_and_approve commit
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "an unauthorized commit stops the run"
+start_and_approve noop
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "delivery without a change is not done"
+start_and_approve extra_check --check "test -f feature.txt"
+assert_eq "0:true" "$DRIVER_RC:$(run_state '.checks | index("test -f feature.txt") != null')" "--check joins the approved verification"
+
+# 전이는 저장소 그래프가 정한다: review -> done 엣지를 지우면 done에 갈 수 없다.
+new_driver_repo graph_driven
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.transitions[] | select(.from == "review" and .to == "publish"))' "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "40" "$DRIVER_RC" "an edge missing from the project graph cannot be taken"
+assert_contains "$DRIVER_OUT" "graph declares no transition from 'review'" "the runner names the undeclared edge"
+
+# harness.json의 approval·git_policy가 사람 대기와 git 단계를 정한다.
+with_policy() { # git_policy approval → 저장소에 manifest를 커밋하고 bare remote를 붙인다
+  mkdir -p "$DRIVER_REPO/.ai-harness"
+  jq -n --arg g "$1" --arg a "$2" '{level:"standard", git_policy:$g} + (if $a == "" then {} else {approval:$a} end)' >"$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m manifest
+  git init -q --bare "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+  git -C "$DRIVER_REPO" remote add origin "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+}
+new_driver_repo auto_pr
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:auto-policy" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "approval auto passes the gate without a person and reaches done"
+assert_contains "$(run_state '[.history[].outcome] | join(",")')" "auto_approved_by_policy" "auto approval follows the declared graph edge"
+assert_file "$(run_state .approval.brief)"
+assert_eq "https://example.test/pr/7" "$(run_state .publish.pr_url)" "pr-only opens a PR in the publish node"
+assert_contains "$DRIVER_OUT" "PR: https://example.test/pr/7" "done reports the PR"
+assert_eq "publish workspace-write schema=yes net=yes" "$(tail -n 1 "$FAKE_LOG")" "publish writes with network access and a schema"
+assert_eq "1" "$(run_state '.checkpoints | length')" "the runner commits a local checkpoint after deliver"
+assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(implement-feature): deliver" "checkpoint commit is on the branch"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-auto_pr.git" rev-parse feat/add-feature)" "the work branch is pushed"
+
+new_driver_repo dirty_start
+with_policy pr-only auto
+echo wip >"$DRIVER_REPO/notes.txt"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "a runner that may commit refuses to start on a dirty tree"
+rm "$DRIVER_REPO/notes.txt"
+git -C "$DRIVER_REPO" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$(git -C "$DRIVER_REPO" rev-parse --abbrev-ref HEAD)"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "pr-only refuses to start on the base branch"
+assert_contains "$DRIVER_OUT" "not the base branch" "the runner says why"
+
+new_driver_repo auto_questions
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval still waits for a person when the brief has open questions"
+
+new_driver_repo auto_no_edge
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.transitions[] | select(.when == "auto_approved_by_policy"))' "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+assert_eq "10" "$DRIVER_RC" "a project graph without the auto edge keeps the human gate"
+
+new_driver_repo human_pr
+with_policy pr-only ""
+FAKE_CHECK="grep -q fixed feature.txt" driver start --runtime codex --request "add feature"
+assert_eq "10:human" "$DRIVER_RC:$(run_state .policy.approval)" "approval defaults to human when the manifest has no approval field"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state '.checkpoints | length')" "a human-approved pr-only run checkpoints deliver and each repair, then opens a PR"
+
+new_driver_repo publish_unpushed
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a publish the runner cannot verify goes to a person"
+assert_contains "$(run_state '.findings | join(";")')" "HEAD is not pushed to its upstream" "publish is judged by git state, not the session report"
+assert_contains "$(run_state '.findings | join(";")')" "pr_url is empty" "pr-only without a PR is not done"
+
+# 사용자가 손대 갱신되지 않은 0.38 그래프(publish·auto 엣지 없음, 횟수가 박힌 엣지 이름)에서도 러너는 그 그래프대로 간다.
+legacy_graph() {
+  mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+  jq '.limits.max_repair_attempts = 2 | del(.nodes.publish)
+      | .transitions |= (map(select(.from != "publish" and .when != "auto_approved_by_policy"))
+        | map(if .to == "publish" then .to = "done" else . end
+              | if .from == "repair" and .to == "user_decision" then .when = "same_root_cause_after_two_attempts_or_product_decision" else . end))' \
+    "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+  git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m legacy-graph
+}
+new_driver_repo legacy_ok
+with_policy pr-only auto
+legacy_graph
+driver start --runtime codex --request "add feature"
+assert_eq "10" "$DRIVER_RC" "a legacy graph without the auto edge waits for a person"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:null" "$DRIVER_RC:$(run_state .status):$(run_state .publish)" "a legacy graph reaches done without a publish node"
+new_driver_repo review_blocks_legacy
+FAKE_SCENARIO=review_blocks
+legacy_graph
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "the escalation edge and repair limit come from the project graph"
+pass "feature delivery graph runner enforces the graph outside the model"
 
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
@@ -635,7 +916,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "6" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "7" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"

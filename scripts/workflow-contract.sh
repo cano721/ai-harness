@@ -51,13 +51,21 @@ for f in "$root"/.ai-harness/agents/*.md "$root"/.claude/agents/*.md "$root"/.co
 done
 
 # ── 그래프의 수리 한도 ────────────────────────────────────────────────────────
+# 단일 출처는 limits.max_repair_attempts. 그 필드가 없던 그래프는 전이 이름(after_two_attempts)에서 읽는다.
 graph_limit=""
 graph="$root/.ai-harness/workflows/feature-delivery-graph.json"
 if [[ -f "$graph" ]]; then
   graph_limit="$(jq -r '
-    [.transitions[]?.when // empty | (capture("after_(?<n>[a-z0-9]+)_attempts") | .n)?] | first // empty
-    | ({"one":"1","two":"2","three":"3","four":"4","five":"5"}[.] // .)' "$graph" 2>/dev/null || true)"
+    (.limits.max_repair_attempts // empty | tostring),
+    ([.transitions[]?.when // empty | (capture("after_(?<n>[a-z0-9]+)_attempts") | .n)?] | first // empty
+      | ({"one":"1","two":"2","three":"3","four":"4","five":"5"}[.] // .))' "$graph" 2>/dev/null | head -n 1 || true)"
 fi
+
+# ── git 정책 ─────────────────────────────────────────────────────────────────
+# 에이전트의 커밋·push·PR은 manifest git_policy가 정한다. pr-only·direct만 허용, 그 밖(미설정 포함)은 별도 허가가 필요하다.
+manifest="$root/.ai-harness/harness.json"
+git_policy=""
+[[ -f "$manifest" ]] && git_policy="$(jq -r '.git_policy // ""' "$manifest" 2>/dev/null || true)"
 
 for body in ${bodies[@]+"${bodies[@]}"}; do
   file="$(rel "$body")"
@@ -79,7 +87,7 @@ for body in ${bodies[@]+"${bodies[@]}"}; do
       [[ -n "$n" ]] || continue
       count="$(sed -E 's/.*(최대|[Mm]ax(imum)?|[Uu]p to)[[:space:]]*([0-9]+)[[:space:]]*(회|번|times|attempts|rounds).*/\3/' <<<"$text")"
       [[ "$count" =~ ^[0-9]+$ && "$count" != "$graph_limit" ]] || continue
-      finding repair_limit high "$file" "$n" "$count" "$graph_limit" "본문의 반복 한도가 그래프(같은 원인 ${graph_limit}회 뒤 사용자 판단)와 다르다 — 숫자를 본문에 따로 두지 말고 그래프를 따른다"
+      finding repair_limit high "$file" "$n" "$count" "$graph_limit" "본문의 반복 한도가 그래프(limits.max_repair_attempts = ${graph_limit}회 뒤 사용자 판단)와 다르다 — 숫자를 본문에 따로 두지 말고 그래프 한도를 참조한다"
     done < <(lines_matching '(최대|[Mm]ax(imum)?|[Uu]p to)[[:space:]]*[0-9]+[[:space:]]*(회|번|times|attempts|rounds)' "$body")
   fi
 
@@ -100,15 +108,26 @@ for body in ${bodies[@]+"${bodies[@]}"}; do
     finding codex_exec_unbounded high "$file" "$n" "codex exec" "" "codex exec에 대상 저장소(-C)와 sandbox(-s)가 없다 — 기본 sandbox는 읽기 전용"
   done < <(lines_matching 'codex exec' "$body")
 
-  # 어댑터가 금지한 PR 단계를 본문이 필수로 둔다.
-  adapter=""
+  # 본문이 PR 생성을 단계로 두는데 어댑터가 막는다. git_policy를 읽는 어댑터는 정책이 pr-only·direct일 때 허용하고,
+  # git_policy를 모르는 이전 어댑터는 별도 허가 없는 PR 생성을 무조건 금지한다.
+  forbid=""
   for a in "$root/.claude/commands/$name.md" "$root/.agents/skills/$name/SKILL.md"; do
-    [[ -f "$a" ]] && grep -q 'create a PR' "$a" && { adapter="$(rel "$a")"; break; }
+    [[ -f "$a" ]] || continue
+    if grep -q 'git_policy' "$a"; then
+      case "$git_policy" in
+        pr-only|direct) ;;
+        *) forbid="git_policy가 '${git_policy:-미설정}'이라 어댑터($(rel "$a"))가 에이전트의 PR 생성을 허용하지 않는다 — PR 단계를 사용자 승인 조건으로 두거나 git_policy를 pr-only로 바꾼다" ;;
+      esac
+      break
+    elif grep -q 'create a PR' "$a"; then
+      forbid="어댑터($(rel "$a"))가 git_policy를 모르는 이전 버전이라 별도 승인 없는 PR 생성을 금지한다 — /harness-init --sync로 어댑터를 갱신한다"
+      break
+    fi
   done
-  if [[ -n "$adapter" ]]; then
+  if [[ -n "$forbid" ]]; then
     while IFS=$'\t' read -r n text; do
       [[ -n "$n" ]] || continue
-      finding pr_step_forbidden_by_adapter medium "$file" "$n" "PR" "" "본문이 PR 생성을 단계로 두는데 어댑터($adapter)는 별도 승인 없는 PR 생성을 금지한다 — git 정책과 사용자 승인 조건으로 둔다"
+      finding pr_step_forbidden_by_adapter medium "$file" "$n" "PR" "" "본문이 PR 생성을 단계로 두는데 $forbid"
     done < <(lines_matching '^#{2,4} .*(PR (생성|작성|올리)|Pull Request|[Cc]reate (a )?PR)' "$body")
   fi
 done
@@ -162,7 +181,6 @@ done
 
 # ── 역할 매핑(harness.json roles)이 가리키는 기존 에이전트·라우터 ─────────────
 # 역할을 기존 에이전트에 넘기면 하네스 페르소나를 만들지 않으므로, 대상이 사라지면 위임이 조용히 끊긴다.
-manifest="$root/.ai-harness/harness.json"
 if [[ -f "$manifest" ]] && jq -e '(.roles // {}) | length > 0' "$manifest" >/dev/null 2>&1; then
   while IFS=$'\t' read -r slot integration agent; do
     case "$integration" in
