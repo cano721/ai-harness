@@ -1757,6 +1757,45 @@ assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_can
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
+# 비율: 활성 세션(턴 ≥ 5) 기준 교정 비율, 하네스 프로젝트 활성 세션 기준 워크플로 경유 비율.
+RATIO_DATA="$TEST_TMP/ratio-data"
+mkdir -p "$RATIO_DATA/events"
+ratio_session() { # sid project turns [events-json...]
+  local sid="$1" project="$2" turns="$3"; shift 3
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" --argjson t "$turns" \
+      '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+        ended:"2026-10-10T01:00:00Z", turns:$t,
+        coverage:["workflow","doc_read","correction_mark"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$RATIO_DATA/events/claude-$sid.jsonl"
+}
+ratio_session s1 svc 6 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s2 svc 8 '{"kind":"workflow","target":"ai-harness:understand-change"}'
+ratio_session s3 svc 5 '{"kind":"workflow","target":"jira"}' '{"kind":"doc_read","target":"AGENTS.md"}' \
+  '{"kind":"correction_mark","target":"아니 그거 말고","n":2}'
+ratio_session s4 svc 2 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s5 other 10 '{"kind":"workflow","target":"review"}' '{"kind":"doc_read","target":".ai-harness/config"}'
+ratio_session s6 svc 5 '{"kind":"workflow","target":"refactor"}'
+ratio_session s7 svc 1 '{"kind":"doc_read","target":".ai-harness/workflows/refactor.md"}'
+# 다른 하네스 프로젝트에서 읽힌 워크플로 이름은 이 프로젝트의 경유 근거가 아니다.
+ratio_session s8 nos 6 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"workflow","target":"refactor"}'
+# project가 없는 옛 이벤트도 /metrics를 멈추지 않는다.
+jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:00Z", ended:"2026-10-10T01:00:00Z", turns:6,
+  coverage:["workflow","doc_read","correction_mark"]}, {v:1, src:"claude", sid:"s9", kind:"doc_read", target:".ai-harness/docs/x.md", n:1}' \
+  >"$RATIO_DATA/events/claude-s9.jsonl"
+RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$RATIO_STATS" "## 비율" "ratio section"
+assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
+case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
+assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
+pass "session ratio metrics"
+
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
 REPO_URL_DATA="$TEST_TMP/repo-url-data"
 REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
