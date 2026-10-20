@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **이슈 상태 전환 정책 `issue_policy: "in-progress-on-start"`** — 이슈를 맡겨 작업을 시작해도 트래커의 상태는 사람이 따로 옮겨야 했습니다. `.ai-harness/harness.json`에 이 값을 두면 `/implement-feature`·`/fix-bug`가 요청에 이슈 키·URL이 있을 때 브랜치·worktree 준비와 탐색 전에 그 이슈를 진행 중으로 옮깁니다(도구는 워크플로 본문이 적은 이슈 도구, 예: `/jira`). 상태 이름이 아니라 대상 상태 분류가 진행 중인 전환을 고르고, 이미 진행 중이면 그대로, 완료·종료면 다시 열지 않고 사람에게 묻습니다. 필드가 없으면 이전처럼 이슈 상태를 건드리지 않습니다. `/harness-init` 인터뷰 9번·`--reconfigure`로 고르고, 어댑터가 런타임에 읽으므로 기존 프로젝트는 `--sync`로 어댑터를 갱신한 뒤 켭니다.
+
 ## v0.39.0 (2026-10-18)
 ### 새 기능
 
