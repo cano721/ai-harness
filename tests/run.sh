@@ -248,6 +248,39 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 
+# 실제 저장소(Kotlin DSL 멀티모듈)에서 나온 오탐 4건 — 문서와 빌드가 맞는데 drift로 보고됐다.
+KTS="$TEST_TMP/drift-kts"
+mkdir -p "$KTS/.ai-harness/docs"
+cat >"$KTS/build.gradle.kts" <<'GRADLE'
+subprojects {
+    tasks.register<Test>("integrationTest") { }
+    tasks.register<Test>("syntheticTalentExport") { }
+    tasks.register<Test>("seedFixtures") { }
+}
+tasks.register("jacocoAggregatedReport") { }
+val jacocoAggregatedVerification = tasks.register("jacocoAggregatedVerification") { }
+tasks.register("printVersion") { }
+listOf("api").forEach { tasks.register<JacocoCoverageVerification>("jacocoVerification${it}") { } }
+GRADLE
+cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
+- 실측: `./gradlew test integrationTest --rerun-tasks`
+- 리포트: `./gradlew jacocoAggregatedReport`
+- 게이트: `./gradlew jacocoAggregatedVerification`
+- 시드: `SYNTHETIC_ANCHOR=x ./gradlew :talent-pool-api:syntheticTalentExport`
+- 버전: `./gradlew printVersion`
+- 모듈 게이트: `./gradlew jacocoVerificationApi`
+- run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
+DOC
+KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
+assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
+assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
+pass "drift kotlin dsl and multi-task calls"
+
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
 mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
@@ -596,6 +629,13 @@ for adapter in implement-feature fix-bug review; do
   [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
   assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
 done
+# 작업 시작 때 이슈 상태 전환은 manifest의 issue_policy가 정한다. review는 이슈 작업을 시작하지 않는다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for adapter in implement-feature fix-bug; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" '`issue_policy`: `in-progress-on-start`' "$adapter adapter follows issue_policy"
+  assert_contains "$ADAPTER_CONTENT" "Missing or any other value — leave issue status alone" "$adapter adapter leaves issues alone without issue_policy"
+done
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
 assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
@@ -675,6 +715,8 @@ driver start --runtime codex --request "add feature"
 assert_eq "10:waiting_approval:approval" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "start interrupts at the human approval node"
 assert_contains "$DRIVER_OUT" "대화에 \"승인\"이라고 입력" "the brief tells the person how to approve"
 assert_eq "discover read-only schema=;brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "planning nodes run read-only and nothing writes before approval"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "open_questions" "human approval asks the brief node for open questions"
+[[ "$(<"$FAKE_LOG.brief.prompt")" != *"needs_human"* ]] || fail "human approval does not ask the brief node to decide"
 driver resume
 assert_eq "10" "$DRIVER_RC" "resume without approval stays interrupted"
 # 사용자가 친 메시지가 아닌 것은 승인이 아니다: 도구 결과, 모델 메시지, 다른 저장소의 세션.
@@ -783,7 +825,35 @@ assert_contains "$DRIVER_OUT" "not the base branch" "the runner says why"
 new_driver_repo auto_questions
 with_policy pr-only auto
 driver start --runtime codex --request "add feature"
-assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval still waits for a person when the brief has open questions"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval waits for a person when the brief comes back in the legacy open_questions format"
+new_driver_repo auto_legacy
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval waits when the brief recorded no decisions, even without open questions"
+
+# auto에서 brief 노드는 판단이 갈리는 점을 추천안으로 정하고(decisions), 사람만 정할 수 있는 것만 needs_human에 남긴다.
+new_driver_repo auto_decisions
+with_policy direct auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:auto-policy" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "auto approval with decisions and no needs_human reaches done in one start"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "needs_human" "auto approval asks the brief node to decide and list what only a person can decide"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "migration" "the needs_human criteria name hard-to-reverse choices"
+assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "## 결정 사항" "brief.md keeps the decisions section"
+assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "which plan tier? → free tier only — smallest scope that meets the request" "brief.md records question, choice, and rationale"
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "free tier only" "deliver implements the brief with its decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "which plan tier? → free tier only" "publish receives the decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" '"결정 사항"' "publish is told to copy decisions into the PR body section"
+
+new_driver_repo auto_needs_human
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "10:approval:waiting_approval" "$DRIVER_RC:$(run_state .node):$(run_state .status)" "auto approval stops at the approval node when the brief needs a person"
+assert_contains "$DRIVER_OUT" "drop the legacy plans table?" "the person sees what only they can decide"
+assert_contains "$DRIVER_OUT" "which plan tier? → free tier only" "the person also sees the decisions the agent made"
+assert_eq "discover;brief" "$(cut -d' ' -f1 "$FAKE_LOG" | paste -sd ';' -)" "nothing writes while needs_human is open"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "a person's approval resolves needs_human and the run continues"
 
 new_driver_repo auto_no_edge
 with_policy pr-only auto
@@ -1723,6 +1793,45 @@ assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
 assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
+
+# 비율: 활성 세션(턴 ≥ 5) 기준 교정 비율, 하네스 프로젝트 활성 세션 기준 워크플로 경유 비율.
+RATIO_DATA="$TEST_TMP/ratio-data"
+mkdir -p "$RATIO_DATA/events"
+ratio_session() { # sid project turns [events-json...]
+  local sid="$1" project="$2" turns="$3"; shift 3
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" --argjson t "$turns" \
+      '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+        ended:"2026-10-10T01:00:00Z", turns:$t,
+        coverage:["workflow","doc_read","correction_mark"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$RATIO_DATA/events/claude-$sid.jsonl"
+}
+ratio_session s1 svc 6 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s2 svc 8 '{"kind":"workflow","target":"ai-harness:understand-change"}'
+ratio_session s3 svc 5 '{"kind":"workflow","target":"jira"}' '{"kind":"doc_read","target":"AGENTS.md"}' \
+  '{"kind":"correction_mark","target":"아니 그거 말고","n":2}'
+ratio_session s4 svc 2 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s5 other 10 '{"kind":"workflow","target":"review"}' '{"kind":"doc_read","target":".ai-harness/config"}'
+ratio_session s6 svc 5 '{"kind":"workflow","target":"refactor"}'
+ratio_session s7 svc 1 '{"kind":"doc_read","target":".ai-harness/workflows/refactor.md"}'
+# 다른 하네스 프로젝트에서 읽힌 워크플로 이름은 이 프로젝트의 경유 근거가 아니다.
+ratio_session s8 nos 6 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"workflow","target":"refactor"}'
+# project가 없는 옛 이벤트도 /metrics를 멈추지 않는다.
+jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:00Z", ended:"2026-10-10T01:00:00Z", turns:6,
+  coverage:["workflow","doc_read","correction_mark"]}, {v:1, src:"claude", sid:"s9", kind:"doc_read", target:".ai-harness/docs/x.md", n:1}' \
+  >"$RATIO_DATA/events/claude-s9.jsonl"
+RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$RATIO_STATS" "## 비율" "ratio section"
+assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
+case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
+assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
+pass "session ratio metrics"
 
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
 REPO_URL_DATA="$TEST_TMP/repo-url-data"
