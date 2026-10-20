@@ -225,7 +225,12 @@ print_brief() {
   jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
-    printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s에 남고 PR 본문에 들어간다. 사람은 병합 전에 PR에서 결정을 뒤집을 수 있다.\n' "$RUN/brief.md"
+    # direct는 PR 없이 push까지 가므로 "병합 전에 뒤집는다"가 성립하지 않는다.
+    if [[ "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" == direct ]]; then
+      printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s와 마지막 커밋 메시지에 남는다. git_policy direct라 PR 없이 push되므로, 결정을 뒤집으려면 이후 커밋으로 되돌린다.\n' "$RUN/brief.md"
+    else
+      printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s에 남고 PR 본문에 들어간다. 사람은 병합 전에 PR에서 결정을 뒤집을 수 있다.\n' "$RUN/brief.md"
+    fi
     return
   fi
   cat <<EOF
