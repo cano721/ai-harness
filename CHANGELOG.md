@@ -9,6 +9,15 @@
 
 ## Unreleased
 
+### 새 기능
+
+- **`/metrics`가 세션당 비율을 냅니다** — 합계·순위만 있어 KPI로 쓰는 워크플로 경유율·교정 빈도를 events를 직접 파싱해 계산해야 했습니다. `## 비율` 절이 활성 세션(턴 ≥ 5) 기준 교정 마크/세션·/100턴과, 하네스 프로젝트 활성 세션 중 워크플로를 경유한 비율(전체·프로젝트별)을 냅니다. 경유는 `.ai-harness/workflows/` 문서를 읽었거나 워크플로 커맨드(`implement-feature`·`fix-bug`·`review`·`understand-change`, 프로젝트가 둔 워크플로 이름 포함)를 호출한 세션입니다. (#51)
+- **이슈 상태 전환 정책 `issue_policy: "in-progress-on-start"`** — 이슈를 맡겨 작업을 시작해도 트래커의 상태는 사람이 따로 옮겨야 했습니다. `.ai-harness/harness.json`에 이 값을 두면 `/implement-feature`·`/fix-bug`가 요청에 이슈 키·URL이 있을 때 브랜치·worktree 준비와 탐색 전에 그 이슈를 진행 중으로 옮깁니다(도구는 워크플로 본문이 적은 이슈 도구, 예: `/jira`). 상태 이름이 아니라 대상 상태 분류가 진행 중인 전환을 고르고, 이미 진행 중이면 그대로, 완료·종료면 다시 열지 않고 사람에게 묻습니다. 필드가 없으면 이전처럼 이슈 상태를 건드리지 않습니다. `/harness-init` 인터뷰 9번·`--reconfigure`로 고르고, 어댑터가 런타임에 읽으므로 기존 프로젝트는 `--sync`로 어댑터를 갱신한 뒤 켭니다.
+
+### 버그 수정
+
+- **`docs-drift`가 문서와 맞는 Gradle 태스크를 drift로 보고하지 않습니다** — Kotlin DSL 멀티모듈 저장소에서 맞게 적힌 태스크 4건이 오탐으로 올라 "보호 파일 후속 조치" 표를 오염시켰습니다. 원인은 셋이었습니다: stale 판정이 관련성 필터를 거친 사실 목록과 비교해 `jacocoAggregatedReport`·`syntheticTalentExport`처럼 선언됐지만 이름에 검증 키워드가 없는 태스크를 "빌드에 없다"고 봤고, `verify`가 `Verification`과 맞지 않았고, `./gradlew test integrationTest`처럼 한 호출의 둘째 태스크를 사용으로 세지 않았습니다. 이제 stale은 선언된 태스크 전부와 비교하고, `<Test>` 타입 태스크는 이름과 무관하게 검증 태스크로 보며, 한 호출의 둘째 이후 태스크는 missing 해소에만 씁니다(산문의 뒷단어가 stale로 오르지 않게). `"jacocoVerification${suffix}"`처럼 이름이 보간되는 선언은 사실로 올리지 않고, 문서에 적힌 완성된 이름을 stale로 보지 않습니다.
+
 ### 동작 변경
 
 - **`approval: auto`에서 Brief의 판단 갈림을 에이전트가 정하고 진행합니다** — auto여도 Brief에 열린 질문이 하나라도 있으면 사람을 기다려 "이슈를 맡기면 PR까지"가 질문 하나에 막혔습니다. 이제 auto의 brief 노드는 열린 질문 대신 `decisions`(질문·선택·근거)를 내고, 추천안을 따라 Brief를 씁니다. 결정은 러너 실행 디렉터리의 `brief.md` "결정 사항"에 남아 deliver·review가 따르고, publish가 PR 본문 "결정 사항"(PR이 없으면 커밋 메시지)에 옮겨 사람이 병합 전에 뒤집을 수 있습니다. 범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기는 `needs_human`으로 따로 내고, 하나라도 있으면 지금처럼 승인 노드에서 멈춥니다(exit 10). auto인데 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. `approval: human`은 그대로입니다.
