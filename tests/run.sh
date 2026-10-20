@@ -270,10 +270,12 @@ cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
 - 버전: `./gradlew printVersion`
 - 모듈 게이트: `./gradlew jacocoVerificationApi`
 - run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
 DOC
 KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
-assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name"
-assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, and an undocumented Test-typed task is reported"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
 assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
 assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"

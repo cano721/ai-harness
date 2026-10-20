@@ -162,7 +162,19 @@ while IFS= read -r d; do
       printf 'gradle_task\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/extra-uses.tsv"
     fi
   done < <(grep -oE '(\./)?gradlew[a-z.]*([[:space:]]+(-[^[:space:]]+|:?[A-Za-z0-9_:-]+))+' "$d" 2>/dev/null \
-             | awk '{ n = 0; for (i = 2; i <= NF; i++) { if ($i ~ /^-/) continue; t = $i; sub(/^.*:/, "", t); if (t == "") continue; print ++n "\t" t } }' \
+             | awk '{
+                 # 값을 받는 플래그(--console plain)의 값은 태스크가 아니고, -x로 뺀 태스크는 실행이 아니다.
+                 n = 0; skip = 0
+                 for (i = 2; i <= NF; i++) {
+                   if (skip) { skip = 0; continue }
+                   if ($i ~ /^-/) {
+                     if ($i ~ /^(-x|--exclude-task|-p|--project-dir|-c|--settings-file|-I|--init-script|-g|--gradle-user-home|--project-cache-dir|--console|--warning-mode|--max-workers|--priority|--tests|-D|-P)$/) skip = 1
+                     continue
+                   }
+                   t = $i; sub(/^.*:/, "", t); if (t == "") continue
+                   print ++n "\t" t
+                 }
+               }' \
              | sort -u)
   # pnpm --filter api test / yarn workspace web run build 처럼 스크립트명 앞에 다른 토큰이 온다.
   # 플래그와 워크스페이스 지정을 건너뛰고 첫 실제 토큰만 스크립트명으로 본다.
