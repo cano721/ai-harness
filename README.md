@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)와 [자동 sync](#auto-sync)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
 
 ## 목차
 
@@ -91,7 +91,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄웁니다([자동 harvest](#auto-harvest)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
+Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄우고([자동 harvest](#auto-harvest)), `HM_SYNC_AUTO=1`을 켠 경우에만 뒤처진 저장소의 `/harness-init --sync`를 띄웁니다([자동 sync](#auto-sync)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -148,6 +148,8 @@ codex plugin add ai-harness@ai-harness
 /harness-init --sync             # 변경 계획만 확인 (파일 변경 없음)
 /harness-init --sync --apply     # 안전한 생성물 동기화
 ```
+
+저장소 하네스(`harness.json`의 `harness_version`)가 플러그인보다 뒤처져 있으면 세션 시작 때 한 번 알립니다(저장소·플러그인 버전 조합당 1회, workspace 루트는 `workspace.json` 기준). 사람이 돌리지 않아도 따라오게 하려면 [자동 sync](#auto-sync)를 켭니다.
 
 `harness-init`은 [`managed-files.json`](templates/managed-files.json)을 단일 출처로 사용해 현재 수준·도구 통합에 필요한 관리 생성물을 결정하고, `harness.json`의 `managed_files`에 저장된 마지막 생성 해시와 현재 파일을 비교합니다.
 
@@ -339,7 +341,7 @@ stateDiagram-v2
 | 시점 | hook | 하는 일 | 하지 않는 일 |
 |---|---|---|---|
 | 응답이 끝날 때마다 | `Stop` → `scripts/tick.sh` → `scripts/backfill-due.sh` | 마지막 backfill이 6시간(`HM_BACKFILL_INTERVAL_HOURS`) 넘었는지만 확인(수 ms). 넘었으면 세션과 분리된 저우선순위 작업으로 backfill → (사용자가 쉬는 동안) LLM 정리·자동 harvest sweep → 릴리스 정보 갱신 | 세션을 막는 작업 |
-| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐·자동 적용 내역을 알림 (네트워크 조회 없음). 같은 `backfill-due.sh` 확인 | `/harvest` 실행, 플러그인 설치·업데이트 |
+| 세션 시작 | `SessionStart` → `scripts/session-start.sh` | 캐시된 릴리스 정보로 analysis batch·새 버전·버전 스큐·저장소 하네스 버전 차이·자동 적용 내역을 알림 (네트워크 조회 없음). 같은 `backfill-due.sh` 확인 | `/harvest` 실행, 플러그인 설치·업데이트 |
 
 수집은 세션 종료 hook에도, OS 스케줄러에도 기대지 않습니다. 종료 hook은 터미널·탭을 그냥 닫으면 실행되지 않아 실측 43%를 놓쳤고, launchd·cron·작업 스케줄러는 OS마다 따로 설치해야 합니다. 대신 Claude Code·Codex 공통 hook(세션 시작과 응답마다)이 주기를 확인하고, transcript 전체를 훑는 backfill이 유일한 수집 경로입니다. 며칠 이어지는 세션 하나만 켜 둬도 응답마다 확인하므로 주기대로 돕니다. 세션이 전혀 없으면 새로 쌓일 기록도 없습니다.
 
@@ -419,6 +421,18 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
   --outcome no-change --summary "<적용하지 않은 이유>"
 ```
+
+<a id="auto-sync"></a>
+
+### 자동 sync (opt-in)
+
+플러그인은 마켓플레이스 auto-update로 최신이 되지만, 저장소에 깔린 생성물은 `/harness-init --sync`를 돌려야 따라옵니다. `~/.ai-harness/config`에 `HM_SYNC_AUTO=1`을 두면 정기 sweep이 기준 브랜치의 `harness_version`이 플러그인보다 낮은 하네스 저장소를 찾아 `/harness-init --sync --apply --auto`를 [자동 harvest](#auto-harvest)와 같은 무인 경로(작업 전용 worktree → headless `claude -p` → draft PR)로 실행합니다.
+
+- **대상**: 수집된 세션 기록의 작업 경로(workspace 루트면 멤버까지)에서 찾은 하네스 저장소. 같은 저장소의 worktree는 원본 하나로 접고, 버전은 사용자 체크아웃이 아니라 하네스가 들어 있는 기준 브랜치에서 읽습니다
+- **적용 범위**: `add`와 수정되지 않은(`unchanged`) 관리 생성물 `refresh`만. 승인 필요·보호 파일(AGENTS.md·docs·워크플로 본문)·삭제·계약 drift는 고치지 않고 PR 본문의 "사람 확인 필요" 표로 넘깁니다. workspace 루트(매니페스트·라우팅 AGENTS.md)는 대상이 아니며 알림만 합니다
+- **비용**: 적용할 관리 생성물이 없으면 에이전트를 띄우지 않고 `no-change`로 끝냅니다(LLM 비용 0). 저장소·플러그인 버전 조합당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`회(기본 2, 자동 harvest와 별도), 실행 lock·시간 제한·실행당 예산·실패 3회 포기·사용량 한도 휴지는 자동 harvest와 공유합니다. 한 번에 하나만 돌고 harvest가 먼저입니다
+- **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
+- **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
 <a id="db-scan-guard"></a>
 
@@ -539,6 +553,8 @@ HM_HARVEST_AUTO_DAILY_MAX=2      # 하루 자동 실행 상한
 HM_HARVEST_AUTO_SESSIONS_ONLY=0  # 1이면 세션 수만 넘은 batch도 자동 실행
 HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
 HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
+HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤처진 저장소에 /harness-init --sync를 백그라운드 실행(draft PR)
+HM_SYNC_AUTO_DAILY_MAX=2         # 하루 자동 sync 상한
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화

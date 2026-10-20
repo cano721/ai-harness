@@ -7,7 +7,7 @@ description: 프로젝트 AI 하네스 최초 셋업·설정 변경·생성물 �
 
 현재 프로젝트(cwd)를 분석해 `.ai-harness` 하네스 구조를 스캐폴딩한다. 이후 `/metrics`로 관찰, `/harvest`로 개선하는 사이클의 시작점. **기존 하네스가 있으면 설정 변경 또는 생성물 동기화 모드로 동작한다.**
 
-인자: `$ARGUMENTS` — 아래 인터뷰 답을 미리 줄 수도 있음 (예: `standard`, `tdd`, `codex`, `guard`, `auto`). 기존 프로젝트에서는 `--sync`(동기화 계획), `--sync --apply`(안전한 생성물 적용), `--reconfigure`(수준 인터뷰)를 쓴다. 인자가 없으면 현재 설정을 보여 주고 동기화 / 설정 변경 / 둘 다 중 선택하게 한다.
+인자: `$ARGUMENTS` — 아래 인터뷰 답을 미리 줄 수도 있음 (예: `standard`, `tdd`, `codex`, `guard`, `auto`). 기존 프로젝트에서는 `--sync`(동기화 계획), `--sync --apply`(안전한 생성물 적용), `--reconfigure`(수준 인터뷰)를 쓴다. `--sync --apply --auto --base <branch>`는 자동 sync가 띄우는 무인 실행이다(6번의 7). 인자가 없으면 현재 설정을 보여 주고 동기화 / 설정 변경 / 둘 다 중 선택하게 한다.
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉터리의 두 단계 상위(플러그인 루트).
 
@@ -240,6 +240,14 @@ $ROOT/scripts/workflow-contract.sh scan --root .
 4. **적용 규칙**: `--sync`만 있으면 절대 파일·manifest를 변경하지 않는다. `--sync --apply`에서도 추가 가능·자동 갱신 가능 항목만 적용하고, 승인 필요 항목은 명시 승인 범위만 적용한다. 추가 가능·자동 갱신 가능 항목은 `--apply`가 곧 승인이므로 **다시 묻지 않고** 적용한다 — 질문은 승인 필요·삭제·보호 파일 편집 항목에만 하고, 그런 항목이 여럿이면 한 번에 모아 묻는다. 그런 항목이 없으면 묻지 않고 적용 결과만 보고한다. 삭제·통합 해제는 항상 파일 목록과 별도 확인을 요구한다. 새 진입점(add) 적용 시 `suggestions`를 함께 처리한다: `workflow_body_missing`은 프로젝트 정책(테스트 정책·검증 명령·docs 매핑)에 맞춰 워크플로 본문을 생성하되 **관리 목록에는 기록하지 않는다** (이후 사람이 소유하는 보호 파일). `agents_md_reference`는 커맨드 표 한 줄 diff를 제안하고 **사용자 승인 후에만** AGENTS.md를 편집한다 — 승인이 없으면 미등재 상태와 그 영향(Preflight 라우팅에서 새 워크플로가 제외됨)을 최종 보고에 명시한다. `retired` 항목은 파일 목록을 보이고 **사용자 확인을 받은 뒤에만** `present:true`인 파일을 삭제하고, `tracked:true`인 항목은 `harness-sync-state.sh forget --file <path>`로 manifest에서 지운다 — `forget`은 manifest만 정리하며 파일을 삭제하지 않으므로 해당하는 두 단계를 모두 수행한다. 확인을 못 받으면 파일과 manifest 항목을 그대로 두고 낡은 사본이 남았다는 사실을 보고한다. `orphaned` 항목도 같은 2단계(확인 뒤 파일 삭제 + `forget`)로 정리한다. **사용자가 특정 생성물을 빼 달라고 하면**(팀 자체 흐름이 있어 `/fix-bug`가 필요 없음 등) 파일 목록을 확인받고 파일을 지운 뒤 `harness-sync-state.sh exclude --file <path> --reason "<이유>"`로 기록한다 — `forget`만 하면 다음 sync가 같은 파일을 add로 되살린다. 한 워크플로의 진입점을 모두 뺐으면 AGENTS.md 워크플로 표의 해당 행 삭제를 diff로 제안한다. 적용 뒤 실제로 쓴 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한다.
 5. **설정 변경**: 재인터뷰 결과에 따라 diff만 적용한다. 승인 게이트·git 통제 수준 변경은 manifest `approval`·`git_policy`와 AGENTS.md Git 룰 문구만, 이슈 상태 전환 변경은 manifest `issue_policy`와 워크플로 본문의 이슈 도구 사실만 바꾼다(어댑터·러너는 런타임에 읽으므로 재생성하지 않는다). 테스트 정책 변경은 workflow 본문의 테스트 절차, test-engineer·testing.md, AGENTS.md 위임 규칙을 갱신하되, 기존 사용자 수정은 3번의 승인 필요 규칙을 따른다.
 6. 변경 요약, 건너뛴 보호 파일, 다음 동기화에서 검토할 untracked 파일을 보고한다. 커밋/PR은 사용자 확인 후에만 한다.
+7. **무인 sync (`--auto`)**: 정기 sweep(`scripts/harvest-auto.sh`, opt-in `HM_SYNC_AUTO=1`)이 기준 브랜치의 `harness_version`이 플러그인보다 낮은 저장소에서 띄운다. 답할 사람이 없으므로 아래를 지키고, 질문(AskUserQuestion)은 하지 않는다.
+   - 현재 디렉토리는 worker가 `--base <branch>` 최신 커밋으로 만든 **작업 전용 worktree**(detached)다. 사용자 체크아웃이 아니다. 여기서 프로젝트 브랜치 규칙대로 새 브랜치(규칙이 없으면 `chore/harness-sync-<플러그인 버전>`)를 따고, PR은 `<branch>`를 향한다. 이 디렉토리 밖은 편집할 수 없다.
+   - 적용 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면 브랜치·push 없이 끝낸다(`outcome=left_for_user`).
+   - 이전 시도가 남긴 결과가 있는지 먼저 본다: `git ls-remote --heads origin '<브랜치 접두>*'`에 같은 플러그인 버전의 sync 브랜치가 있으면 새 브랜치·PR을 만들지 않고 그 브랜치 이름을 보고하며 `outcome=left_for_user`로 끝낸다 — 시간 제한·예산 초과로 끝난 시도를 다시 돌릴 때 중복 PR을 막는다. push는 새 브랜치에만 하고 기준 브랜치·force push는 하지 않는다.
+   - **적용 범위는 `add`·`refresh`(상태 `unchanged`)뿐이다.** 승인 필요(`modified`·`untracked`)·보호 파일(AGENTS.md·docs·워크플로 본문)·`suggestions`·`orphaned`·`retired`·역할 agent `model` 드리프트·`docs-drift`·`workflow-contract` 결과는 **고치지 않고** PR 본문의 "사람 확인 필요" 표(파일 · 분류 · 제안)로 넘긴다. 삭제·통합 해제도 하지 않는다.
+   - 적용한 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한 뒤 커밋·push하고, `$ROOT/scripts/open-pr.sh --title "<제목>" --body-file <본문> --base <branch>`로 **draft** PR을 연다. 본문 첫 줄에 `자동 sync(--auto) 결과 — 플러그인 <이전> → <현재>`를 밝힌다. `open-pr.sh`가 실패하면 방금 push한 원격 브랜치를 지우고 `outcome=left_for_user`로 끝낸다. 병합은 사람 몫이다.
+   - 적용할 항목이 하나도 없으면 브랜치를 만들지 않고 `outcome=no-change`로 끝낸다.
+   - 마지막 응답의 마지막 줄에 결과를 정확히 이 형식으로 남긴다 — worker가 이 줄로 실행 결과를 기록한다: `AI_HARNESS_SYNC_RESULT outcome=<improved|no-change|left_for_user> artifact=<PR URL, 없으면 생략>`
 
 ## 7. Workspace 모드 — 여러 독립 저장소가 한 폴더에 있을 때
 

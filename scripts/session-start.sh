@@ -27,6 +27,10 @@ fi
 
 "$ROOT/scripts/backfill-due.sh" >/dev/null 2>&1 || true
 
+sync_result="$(printf '%s' "$input" | "$ROOT/scripts/sync-auto.sh" notify 2>/dev/null || true)"
+sync_message="$(jq -r '.systemMessage // empty' <<<"$sync_result" 2>/dev/null || true)"
+[[ -n "$sync_message" ]] && messages+=("$sync_message")
+
 applied_result="$("$ROOT/scripts/auto-apply.sh" notify 2>/dev/null || true)"
 applied_message="$(jq -r '.systemMessage // empty' <<<"$applied_result" 2>/dev/null || true)"
 [[ -n "$applied_message" ]] && messages+=("$applied_message")
