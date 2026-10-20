@@ -248,6 +248,39 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 
+# 실제 저장소(Kotlin DSL 멀티모듈)에서 나온 오탐 4건 — 문서와 빌드가 맞는데 drift로 보고됐다.
+KTS="$TEST_TMP/drift-kts"
+mkdir -p "$KTS/.ai-harness/docs"
+cat >"$KTS/build.gradle.kts" <<'GRADLE'
+subprojects {
+    tasks.register<Test>("integrationTest") { }
+    tasks.register<Test>("syntheticTalentExport") { }
+    tasks.register<Test>("seedFixtures") { }
+}
+tasks.register("jacocoAggregatedReport") { }
+val jacocoAggregatedVerification = tasks.register("jacocoAggregatedVerification") { }
+tasks.register("printVersion") { }
+listOf("api").forEach { tasks.register<JacocoCoverageVerification>("jacocoVerification${it}") { } }
+GRADLE
+cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
+- 실측: `./gradlew test integrationTest --rerun-tasks`
+- 리포트: `./gradlew jacocoAggregatedReport`
+- 게이트: `./gradlew jacocoAggregatedVerification`
+- 시드: `SYNTHETIC_ANCHOR=x ./gradlew :talent-pool-api:syntheticTalentExport`
+- 버전: `./gradlew printVersion`
+- 모듈 게이트: `./gradlew jacocoVerificationApi`
+- run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
+DOC
+KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
+assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
+assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
+pass "drift kotlin dsl and multi-task calls"
+
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
 mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
@@ -1730,6 +1763,45 @@ assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
 assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
+
+# 비율: 활성 세션(턴 ≥ 5) 기준 교정 비율, 하네스 프로젝트 활성 세션 기준 워크플로 경유 비율.
+RATIO_DATA="$TEST_TMP/ratio-data"
+mkdir -p "$RATIO_DATA/events"
+ratio_session() { # sid project turns [events-json...]
+  local sid="$1" project="$2" turns="$3"; shift 3
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" --argjson t "$turns" \
+      '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+        ended:"2026-10-10T01:00:00Z", turns:$t,
+        coverage:["workflow","doc_read","correction_mark"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$RATIO_DATA/events/claude-$sid.jsonl"
+}
+ratio_session s1 svc 6 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s2 svc 8 '{"kind":"workflow","target":"ai-harness:understand-change"}'
+ratio_session s3 svc 5 '{"kind":"workflow","target":"jira"}' '{"kind":"doc_read","target":"AGENTS.md"}' \
+  '{"kind":"correction_mark","target":"아니 그거 말고","n":2}'
+ratio_session s4 svc 2 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s5 other 10 '{"kind":"workflow","target":"review"}' '{"kind":"doc_read","target":".ai-harness/config"}'
+ratio_session s6 svc 5 '{"kind":"workflow","target":"refactor"}'
+ratio_session s7 svc 1 '{"kind":"doc_read","target":".ai-harness/workflows/refactor.md"}'
+# 다른 하네스 프로젝트에서 읽힌 워크플로 이름은 이 프로젝트의 경유 근거가 아니다.
+ratio_session s8 nos 6 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"workflow","target":"refactor"}'
+# project가 없는 옛 이벤트도 /metrics를 멈추지 않는다.
+jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:00Z", ended:"2026-10-10T01:00:00Z", turns:6,
+  coverage:["workflow","doc_read","correction_mark"]}, {v:1, src:"claude", sid:"s9", kind:"doc_read", target:".ai-harness/docs/x.md", n:1}' \
+  >"$RATIO_DATA/events/claude-s9.jsonl"
+RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$RATIO_STATS" "## 비율" "ratio section"
+assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
+case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
+assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
+pass "session ratio metrics"
 
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
 REPO_URL_DATA="$TEST_TMP/repo-url-data"

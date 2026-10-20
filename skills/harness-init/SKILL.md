@@ -224,7 +224,7 @@ $ROOT/scripts/harness-sync-state.sh plan --root . \
 $ROOT/scripts/docs-drift.sh scan --root .
 ```
 
-     기계로 확인 가능한 토큰만 본다: Gradle 검증 태스크(이름에 test/check/verify/lint/coverage/e2e/integration/regression/migrat/format 포함)와 JUnit `includeTags`/`excludeTags`, npm `scripts` 키, Maven 프로파일 `<id>`, pytest `markers`. 문서 쪽은 임의 단어가 아니라 **실제 호출 형태**(`./gradlew <task>`, `npm run <script>`, `-P<profile>`, `-m <marker>`)만 사용으로 인정하고, 태그만 서술 언급도 인정한다. `drift: false`면 이 행을 만들지 않는다. 문서를 이해하려 들지 않으므로 서술이 낡았는지는 판정하지 못한다 — 토큰이 맞는지만 본다.
+     기계로 확인 가능한 토큰만 본다: Gradle 검증 태스크(이름에 test/check/verif/lint/coverage/e2e/integration/regression/migrat/format 포함, 또는 `<Test>` 타입 — stale 판정은 이름과 무관하게 선언된 태스크 전부와 비교)와 JUnit `includeTags`/`excludeTags`, npm `scripts` 키, Maven 프로파일 `<id>`, pytest `markers`. 문서 쪽은 임의 단어가 아니라 **실제 호출 형태**(`./gradlew <task> [<task>...]`, `npm run <script>`, `-P<profile>`, `-m <marker>`)만 사용으로 인정하고, 태그만 서술 언급도 인정한다. `drift: false`면 이 행을 만들지 않는다. 문서를 이해하려 들지 않으므로 서술이 낡았는지는 판정하지 못한다 — 토큰이 맞는지만 본다.
    - **워크플로 계약 drift** (보호 파일에 대한 **읽기 전용 리포트**): 워크플로 본문·페르소나·settings는 초기화 때 생성된 뒤 갱신되지 않아, 관리 생성물 해시가 모두 일치해도 그래프·어댑터와 의미가 어긋날 수 있다. 아래를 실행해 `findings`를 **"보호 파일 후속 조치" 표에 행으로 싣는다**(파일:줄 · 검사 · 토큰 · 제안). `contract_drift: false`면 행을 만들지 않는다. 수정은 사용자 승인 후에만 하고, `--apply`에서도 자동으로 고치지 않는다.
 
 ```bash
