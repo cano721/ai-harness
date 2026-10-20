@@ -78,9 +78,52 @@ hm_run_with_timeout() {
   return "$rc"
 }
 
+# 하네스를 고칠 기준 브랜치. origin/HEAD가 하네스 없는 초기 브랜치(master)이고 실제 개발은 develop인
+# 저장소가 많아서(실측 jobda-*), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
+# 순서: harness.json의 base_branch → develop → origin/HEAD → main → master. origin이 없으면 HEAD.
+hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 "HEAD"
+  local repo_root="$1" candidate="" head="" configured=""
+  git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || { printf 'HEAD\n'; return; }
+  # 응답 없는 원격이 무인 실행의 lock을 쥔 채 멈추지 않게 시간을 제한한다.
+  [[ "${2:-}" == "--no-fetch" ]] || hm_run_with_timeout "${HM_FETCH_TIMEOUT_SEC:-60}" git -C "$repo_root" fetch -q origin >/dev/null 2>&1 || true
+  configured="$(jq -r '.base_branch // empty' "$repo_root/.ai-harness/harness.json" 2>/dev/null)"
+  # 저장소가 정한 값이 무인 에이전트의 지시문(--base)까지 가므로 브랜치 이름 형태만 받는다.
+  [[ "$configured" =~ ^[A-Za-z0-9._/-]+$ && "$configured" != -* && "$configured" != *..* ]] || configured=""
+  head="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  for candidate in ${configured:+"origin/$configured"} origin/develop ${head:+"$head"} origin/main origin/master; do
+    if git -C "$repo_root" cat-file -e "$candidate:.ai-harness/harness.json" 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' "${head:-HEAD}"
+}
+
+# MAJOR.MINOR.PATCH 비교(접두 v·pre-release 꼬리 무시). $1이 $2보다 낮으면 참.
+hm_version_lt() {
+  local a="${1#v}" b="${2#v}" i
+  local -a pa pb
+  IFS=. read -r -a pa <<<"${a%%[-+]*}"
+  IFS=. read -r -a pb <<<"${b%%[-+]*}"
+  for i in 0 1 2; do
+    [[ "${pa[i]:-0}" =~ ^[0-9]+$ && "${pb[i]:-0}" =~ ^[0-9]+$ ]] || return 1
+    (( 10#${pa[i]:-0} < 10#${pb[i]:-0} )) && return 0
+    (( 10#${pa[i]:-0} > 10#${pb[i]:-0} )) && return 1
+  done
+  return 1
+}
+
 # 프로젝트 이름 → 파일시스템 안전 키. prefix가 '.', '..' 같은 인자의 경로 탈출을 막는다.
 hm_project_key() {
   printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"
+}
+
+# 파일·폴더 이름용 짧은 키. 한글 프로젝트명은 퍼센트 인코딩으로 글자당 9바이트가 되어 255바이트 한도를 넘을 수 있다.
+hm_short_key() { # $1=project
+  local key=""
+  key="$(hm_project_key "$1")"
+  (( ${#key} <= 60 )) || key="${key:0:40}-$(printf '%s' "$key" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+  printf '%s\n' "$key"
 }
 
 # mkdir 원자성 기반 디렉토리 lock. 소유 pid가 죽었으면 stale로 회수한다.

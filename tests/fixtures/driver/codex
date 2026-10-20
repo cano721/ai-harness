@@ -29,12 +29,26 @@ cd "$dir"
 scenario="${FAKE_SCENARIO:-ok}"
 check="${FAKE_CHECK:-true}"
 case "$prompt" in *"Revise it with this feedback"*) printf '%s\n' "$prompt" >"$FAKE_LOG.revise" ;; esac
+printf '%s\n' "$prompt" >"$FAKE_LOG.$node.prompt"
+# approval auto면 러너가 decisions·needs_human 스키마를 준다. 기본 응답은 받은 스키마를 따른다.
+auto=""
+[[ -n "$schema" ]] && jq -e '.properties.decisions' "$schema" >/dev/null 2>&1 && auto=yes
 case "$node:$scenario" in
   discover:brief_writes) echo sneaky >sneaky.txt; printf 'contract\n' >"$out" ;;
   discover:*) printf 'contract\n' >"$out" ;;
   brief:auto_questions) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:["which plan tier?"]}' >"$out" ;;
+  brief:auto_decisions) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c],
+    decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope that meets the request"}], needs_human:[]}' >"$out" ;;
+  brief:auto_needs_human) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c],
+    decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope"}], needs_human:["drop the legacy plans table?"]}' >"$out" ;;
+  brief:auto_legacy) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:[]}' >"$out" ;;
   brief:nocheck) jq -n '{brief:"# Brief", checks:[], open_questions:[]}' >"$out" ;;
-  brief:*) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[]}' >"$out" ;;
+  brief:*)
+    if [[ -n "$auto" ]]; then
+      jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], decisions:[], needs_human:[]}' >"$out"
+    else
+      jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[]}' >"$out"
+    fi ;;
   deliver:noop) printf 'nothing\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;

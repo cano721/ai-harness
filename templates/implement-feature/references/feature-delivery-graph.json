@@ -32,7 +32,7 @@
   ],
   "limits": {"max_repair_attempts": 10},
   "invariants": [
-    "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when .ai-harness/harness.json sets approval to auto and the brief has no open questions.",
+    "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when .ai-harness/harness.json sets approval to auto and the brief records its choices as decisions with nothing left in needs_human or open_questions.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
     "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",

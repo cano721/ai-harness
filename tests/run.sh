@@ -248,6 +248,39 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 
+# 실제 저장소(Kotlin DSL 멀티모듈)에서 나온 오탐 4건 — 문서와 빌드가 맞는데 drift로 보고됐다.
+KTS="$TEST_TMP/drift-kts"
+mkdir -p "$KTS/.ai-harness/docs"
+cat >"$KTS/build.gradle.kts" <<'GRADLE'
+subprojects {
+    tasks.register<Test>("integrationTest") { }
+    tasks.register<Test>("syntheticTalentExport") { }
+    tasks.register<Test>("seedFixtures") { }
+}
+tasks.register("jacocoAggregatedReport") { }
+val jacocoAggregatedVerification = tasks.register("jacocoAggregatedVerification") { }
+tasks.register("printVersion") { }
+listOf("api").forEach { tasks.register<JacocoCoverageVerification>("jacocoVerification${it}") { } }
+GRADLE
+cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
+- 실측: `./gradlew test integrationTest --rerun-tasks`
+- 리포트: `./gradlew jacocoAggregatedReport`
+- 게이트: `./gradlew jacocoAggregatedVerification`
+- 시드: `SYNTHETIC_ANCHOR=x ./gradlew :talent-pool-api:syntheticTalentExport`
+- 버전: `./gradlew printVersion`
+- 모듈 게이트: `./gradlew jacocoVerificationApi`
+- run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
+DOC
+KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
+assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
+assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
+pass "drift kotlin dsl and multi-task calls"
+
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
 mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"
@@ -596,6 +629,13 @@ for adapter in implement-feature fix-bug review; do
   [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
   assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
 done
+# 작업 시작 때 이슈 상태 전환은 manifest의 issue_policy가 정한다. review는 이슈 작업을 시작하지 않는다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for adapter in implement-feature fix-bug; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" '`issue_policy`: `in-progress-on-start`' "$adapter adapter follows issue_policy"
+  assert_contains "$ADAPTER_CONTENT" "Missing or any other value — leave issue status alone" "$adapter adapter leaves issues alone without issue_policy"
+done
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
 assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
@@ -675,6 +715,8 @@ driver start --runtime codex --request "add feature"
 assert_eq "10:waiting_approval:approval" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "start interrupts at the human approval node"
 assert_contains "$DRIVER_OUT" "대화에 \"승인\"이라고 입력" "the brief tells the person how to approve"
 assert_eq "discover read-only schema=;brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "planning nodes run read-only and nothing writes before approval"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "open_questions" "human approval asks the brief node for open questions"
+[[ "$(<"$FAKE_LOG.brief.prompt")" != *"needs_human"* ]] || fail "human approval does not ask the brief node to decide"
 driver resume
 assert_eq "10" "$DRIVER_RC" "resume without approval stays interrupted"
 # 사용자가 친 메시지가 아닌 것은 승인이 아니다: 도구 결과, 모델 메시지, 다른 저장소의 세션.
@@ -783,7 +825,35 @@ assert_contains "$DRIVER_OUT" "not the base branch" "the runner says why"
 new_driver_repo auto_questions
 with_policy pr-only auto
 driver start --runtime codex --request "add feature"
-assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval still waits for a person when the brief has open questions"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval waits for a person when the brief comes back in the legacy open_questions format"
+new_driver_repo auto_legacy
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "auto approval waits when the brief recorded no decisions, even without open questions"
+
+# auto에서 brief 노드는 판단이 갈리는 점을 추천안으로 정하고(decisions), 사람만 정할 수 있는 것만 needs_human에 남긴다.
+new_driver_repo auto_decisions
+with_policy direct auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:auto-policy" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "auto approval with decisions and no needs_human reaches done in one start"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "needs_human" "auto approval asks the brief node to decide and list what only a person can decide"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "migration" "the needs_human criteria name hard-to-reverse choices"
+assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "## 결정 사항" "brief.md keeps the decisions section"
+assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "which plan tier? → free tier only — smallest scope that meets the request" "brief.md records question, choice, and rationale"
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "free tier only" "deliver implements the brief with its decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "which plan tier? → free tier only" "publish receives the decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" '"결정 사항"' "publish is told to copy decisions into the PR body section"
+
+new_driver_repo auto_needs_human
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "10:approval:waiting_approval" "$DRIVER_RC:$(run_state .node):$(run_state .status)" "auto approval stops at the approval node when the brief needs a person"
+assert_contains "$DRIVER_OUT" "drop the legacy plans table?" "the person sees what only they can decide"
+assert_contains "$DRIVER_OUT" "which plan tier? → free tier only" "the person also sees the decisions the agent made"
+assert_eq "discover;brief" "$(cut -d' ' -f1 "$FAKE_LOG" | paste -sd ';' -)" "nothing writes while needs_human is open"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "a person's approval resolves needs_human and the run continues"
 
 new_driver_repo auto_no_edge
 with_policy pr-only auto
@@ -1724,6 +1794,45 @@ assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_can
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
+# 비율: 활성 세션(턴 ≥ 5) 기준 교정 비율, 하네스 프로젝트 활성 세션 기준 워크플로 경유 비율.
+RATIO_DATA="$TEST_TMP/ratio-data"
+mkdir -p "$RATIO_DATA/events"
+ratio_session() { # sid project turns [events-json...]
+  local sid="$1" project="$2" turns="$3"; shift 3
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" --argjson t "$turns" \
+      '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+        ended:"2026-10-10T01:00:00Z", turns:$t,
+        coverage:["workflow","doc_read","correction_mark"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$RATIO_DATA/events/claude-$sid.jsonl"
+}
+ratio_session s1 svc 6 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s2 svc 8 '{"kind":"workflow","target":"ai-harness:understand-change"}'
+ratio_session s3 svc 5 '{"kind":"workflow","target":"jira"}' '{"kind":"doc_read","target":"AGENTS.md"}' \
+  '{"kind":"correction_mark","target":"아니 그거 말고","n":2}'
+ratio_session s4 svc 2 '{"kind":"doc_read","target":".ai-harness/workflows/implement-feature.md"}'
+ratio_session s5 other 10 '{"kind":"workflow","target":"review"}' '{"kind":"doc_read","target":".ai-harness/config"}'
+ratio_session s6 svc 5 '{"kind":"workflow","target":"refactor"}'
+ratio_session s7 svc 1 '{"kind":"doc_read","target":".ai-harness/workflows/refactor.md"}'
+# 다른 하네스 프로젝트에서 읽힌 워크플로 이름은 이 프로젝트의 경유 근거가 아니다.
+ratio_session s8 nos 6 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"workflow","target":"refactor"}'
+# project가 없는 옛 이벤트도 /metrics를 멈추지 않는다.
+jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:00Z", ended:"2026-10-10T01:00:00Z", turns:6,
+  coverage:["workflow","doc_read","correction_mark"]}, {v:1, src:"claude", sid:"s9", kind:"doc_read", target:".ai-harness/docs/x.md", n:1}' \
+  >"$RATIO_DATA/events/claude-s9.jsonl"
+RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$RATIO_STATS" "## 비율" "ratio section"
+assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
+case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
+assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
+pass "session ratio metrics"
+
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
 REPO_URL_DATA="$TEST_TMP/repo-url-data"
 REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
@@ -2552,6 +2661,142 @@ HARNESS_METRICS_DIR="$CHG_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed -
 assert_eq "2" "$CHG_RC" "unknown change kind is rejected"
 assert_contains "$(<"$ROOT/skills/harvest/SKILL.md")" "--change remove" "harvest records removals"
 pass "harvest records removal changes"
+
+# 하네스 생성물 버전 차이: SessionStart 알림과 opt-in 자동 sync (#137)
+SYNC_DATA="$TEST_TMP/sync-data"
+SYNC_PLUGIN="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
+SYNC_ORIGIN="$TEST_TMP/sync-origin.git"
+SYNC_REPO="$TEST_TMP/sync-repo"
+SYNC_CUR="$TEST_TMP/sync-current"
+SYNC_MIN="$TEST_TMP/sync-minimal"
+SYNC_PLAIN="$TEST_TMP/sync-plain"
+git init -q --bare "$SYNC_ORIGIN"
+make_repo "$SYNC_REPO" "$SYNC_ORIGIN"
+git -C "$SYNC_REPO" branch -M master
+git -C "$SYNC_REPO" push -q origin master
+git -C "$SYNC_REPO" checkout -q -b develop
+mkdir -p "$SYNC_REPO/.ai-harness"
+jq -n '{project_id:"sync-svc",harness_version:"0.1.0",level:"standard",integrations:["claude"]}' >"$SYNC_REPO/.ai-harness/harness.json"
+git -C "$SYNC_REPO" add .ai-harness && git -C "$SYNC_REPO" commit -q -m harness
+git -C "$SYNC_REPO" push -q origin develop
+git -C "$SYNC_REPO" remote set-head origin master
+make_repo "$SYNC_CUR"
+mkdir -p "$SYNC_CUR/.ai-harness"
+jq -n --arg v "$SYNC_PLUGIN" '{project_id:"sync-cur",harness_version:$v}' >"$SYNC_CUR/.ai-harness/harness.json"
+git -C "$SYNC_CUR" add .ai-harness && git -C "$SYNC_CUR" commit -q -m harness
+make_repo "$SYNC_MIN"
+mkdir -p "$SYNC_MIN/.ai-harness"
+jq -n '{project_id:"sync-min",harness_version:"0.1.0",level:"minimal",integrations:["claude"]}' >"$SYNC_MIN/.ai-harness/harness.json"
+git -C "$SYNC_MIN" add .ai-harness && git -C "$SYNC_MIN" commit -q -m harness
+make_repo "$SYNC_PLAIN"
+sync_cmd() { HARNESS_METRICS_DIR="$SYNC_DATA" "$ROOT/scripts/sync-auto.sh" "$@"; }
+SYNC_REPO_REAL="$(cd "$SYNC_REPO" && pwd -P)"
+
+SYNC_OUT="$(sync_cmd outdated --root "$SYNC_REPO" --root "$SYNC_CUR" --root "$SYNC_PLAIN")"
+assert_eq "1" "$(jq -s 'length' <<<"$SYNC_OUT")" "only the repo behind the plugin is outdated"
+assert_eq "$SYNC_REPO_REAL|sync-svc|origin/develop|0.1.0|$SYNC_PLUGIN" \
+  "$(jq -r '"\(.repo)|\(.project)|\(.base)|\(.version)|\(.plugin)"' <<<"$SYNC_OUT")" "outdated row names repo, base and versions"
+# 버전은 harness가 실제로 들어 있는 기준 브랜치에서 읽는다 — 사용자 체크아웃이 어디에 있든.
+git -C "$SYNC_REPO" checkout -q master
+assert_eq "0.1.0" "$(sync_cmd outdated --root "$SYNC_REPO" | jq -r '.version')" "version comes from the base branch, not the checkout"
+git -C "$SYNC_REPO" checkout -q develop
+
+# 루트를 주지 않으면 수집된 세션 기록의 작업 경로에서 찾는다. 같은 저장소의 worktree는 하나로 접는다.
+git -C "$SYNC_REPO" worktree add -q -b sync-wt "$TEST_TMP/sync-repo-wt"
+mkdir -p "$SYNC_DATA/events" "$SYNC_REPO/sub"
+jq -cn --arg a "$SYNC_REPO/sub" --arg b "$TEST_TMP/sync-repo-wt" --arg c "$SYNC_PLAIN" --arg d "$TEST_TMP/gone" \
+  '{kind:"session",cwd:$a},{kind:"session",cwd:$b},{kind:"session",cwd:$c},{kind:"session",cwd:$d}' >"$SYNC_DATA/events/sync.jsonl"
+assert_eq "$SYNC_REPO_REAL" "$(sync_cmd outdated | jq -sr 'map(.repo) | join(",")')" "discovery dedupes worktrees to the main checkout"
+# 같은 저장소의 별도 clone(또는 NFC·NFD로 갈라진 한글 경로)은 프로젝트 ID로 접는다 — 같은 sync PR이 두 번 열리지 않게.
+git clone -q "$SYNC_ORIGIN" "$TEST_TMP/sync-repo-clone" 2>/dev/null
+git -C "$TEST_TMP/sync-repo-clone" checkout -q develop
+jq -cn --arg a "$TEST_TMP/sync-repo-clone" '{kind:"session",cwd:$a}' >>"$SYNC_DATA/events/sync.jsonl"
+assert_eq "1" "$(sync_cmd outdated | jq -s 'map(select(.project=="sync-svc")) | length')" "separate clones of one project yield one row"
+
+# 알림: 저장소·플러그인 버전 조합당 한 번. 자동 sync가 꺼져 있으면 수동 명령과 켜는 법을 안내한다.
+sync_notify() { printf '{"cwd":"%s"}' "$1" | sync_cmd notify; }
+SYNC_MSG="$(sync_notify "$SYNC_REPO/sub" | jq -r '.systemMessage // empty')"
+assert_contains "$SYNC_MSG" "0.1.0" "notice names the repo harness version"
+assert_contains "$SYNC_MSG" "/harness-init --sync" "notice names the sync command"
+assert_contains "$SYNC_MSG" "HM_SYNC_AUTO=1" "notice explains how to turn on auto sync"
+assert_eq "" "$(sync_notify "$SYNC_REPO")" "notice is shown once per repo and plugin version"
+assert_eq "" "$(sync_notify "$SYNC_CUR")" "no notice for a current harness"
+assert_eq "" "$(sync_notify "$SYNC_PLAIN")" "no notice without a harness"
+HM_SYNC_AUTO=1 sync_notify "$SYNC_MIN" >"$TEST_TMP/sync-notice-auto"
+assert_contains "$(jq -r '.systemMessage' "$TEST_TMP/sync-notice-auto")" "draft PR" "auto mode says a draft PR will follow"
+SYNC_WS="$TEST_TMP/sync-ws"
+mkdir -p "$SYNC_WS/.ai-harness"
+jq -n '{kind:"workspace",workspace_id:"ws",harness_version:"0.1.0",members:[]}' >"$SYNC_WS/.ai-harness/workspace.json"
+assert_contains "$(sync_notify "$SYNC_WS" | jq -r '.systemMessage')" "workspace" "workspace manifest behind the plugin is noticed"
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" "sync-auto.sh" "SessionStart runs the sync notice"
+
+# 자동 sync: opt-in, 작업 전용 worktree에서 headless sync, 결과·버전 마커 기록, 버전당 1회.
+SYNC_STUB="$TEST_TMP/sync-stub.sh"
+cat >"$SYNC_STUB" <<'STUB'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "${HM_HARVEST_RUNNING:-}" "$(pwd -P)" >>"$SYNC_STUB_OUT"
+echo '{"type":"result","total_cost_usd":0.2,"result":"done\nAI_HARNESS_SYNC_RESULT outcome=improved artifact=https://example.com/pr/9"}'
+STUB
+chmod +x "$SYNC_STUB"
+sync_sweep() {
+  HARNESS_METRICS_DIR="$SYNC_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+    HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/sync-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+sync_runs() { jq -sr "$1" "$SYNC_DATA/harvest-auto/runs.jsonl"; }
+sync_sweep
+assert_not_file "$SYNC_DATA/harvest-auto/runs.jsonl"
+HM_SYNC_AUTO=1 sync_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "auto sync launches one headless run"
+SYNC_RUN_LINE="$(sed -n 1p "$TEST_TMP/sync-stub.out")"
+assert_eq "sync-svc|1" "${SYNC_RUN_LINE%|*}" "sync run gets project and recursion guard"
+assert_contains "${SYNC_RUN_LINE##*|}" "/harvest-auto/worktrees/" "sync runs in a dedicated worktree"
+assert_eq "develop" "$(git -C "$SYNC_REPO" branch --show-current)" "user checkout is untouched"
+assert_eq "1" "$(git -C "$SYNC_REPO" worktree list | grep -vc sync-repo-wt | tr -d ' ')" "sync worktree is removed"
+assert_eq "sync|improved|https://example.com/pr/9|0.2" \
+  "$(sync_runs '[.[] | select(.event=="finished")] | last | "\(.scope)|\(.result)|\(.artifact)|\(.cost_usd)"')" "sync outcome and PR recorded"
+assert_eq "$SYNC_PLUGIN|improved" "$(jq -r '"\(.plugin)|\(.result)"' "$SYNC_DATA/sync-auto/p-sync-svc.json")" "sync marker keeps the plugin version"
+HM_SYNC_AUTO=1 sync_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "same plugin version is synced once"
+
+# 적용할 관리 생성물이 없으면 에이전트를 띄우지 않는다(LLM 비용 0).
+jq -cn --arg a "$SYNC_MIN" '{kind:"session",cwd:$a}' >>"$SYNC_DATA/events/sync.jsonl"
+HM_SYNC_AUTO=1 sync_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "no-op sync skips the agent"
+assert_eq "no-change" "$(jq -r '.result' "$SYNC_DATA/sync-auto/p-sync-min.json")" "no-op sync is recorded as no-change"
+
+# 자동 harvest와 별개인 하루 상한.
+jq '.result = "failed" | .fails = 1' "$SYNC_DATA/sync-auto/p-sync-svc.json" >"$TEST_TMP/sync-marker" \
+  && mv "$TEST_TMP/sync-marker" "$SYNC_DATA/sync-auto/p-sync-svc.json"
+HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=1 sync_sweep
+assert_eq "daily_max" "$(sync_runs 'last | .reason')" "sync daily cap"
+HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=5 sync_sweep
+assert_eq "2" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "failed sync is retried"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" '--sync --apply --auto --base $base' "agent is told to sync unattended"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "AI_HARNESS_SYNC_RESULT" "harness-init reports the unattended result"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "HM_SYNC_AUTO" "scheduled run includes auto sync"
+# 에이전트를 띄우지 않은 no-op sync는 하루 상한에서 빠진다(started 2건 중 1건이 no_agent).
+assert_eq "true" "$(sync_runs '[.[] | select(.event=="finished" and .result=="no-change")] | last | .no_agent')" "no-op sync is marked no_agent"
+# 실행 lock을 못 잡아도 실패 횟수는 보존된다.
+mkdir -p "$SYNC_DATA/harvest-auto/running.lock" && printf '%s\n' "$$" >"$SYNC_DATA/harvest-auto/running.lock/pid"
+jq -cn --arg p "$SYNC_PLUGIN" '{plugin:$p,result:"launched",fails:2}' >"$SYNC_DATA/sync-auto/p-sync-svc.json"
+HARNESS_METRICS_DIR="$SYNC_DATA" HM_HARVEST_AUTO_CMD="$SYNC_STUB" "$ROOT/scripts/harvest-auto.sh" run sync-svc "sync-$SYNC_PLUGIN" "$SYNC_REPO" claude sync
+assert_eq "failed|2" "$(jq -r '"\(.result)|\(.fails)"' "$SYNC_DATA/sync-auto/p-sync-svc.json")" "busy sync keeps the failure count"
+find "$SYNC_DATA/harvest-auto/running.lock" -depth -delete
+# 무인 에이전트는 origin 형태의 force push·+refspec도 금지된다.
+for SYNC_DENY in 'git push origin --force*' 'git push origin +*' 'git push -u origin -f*'; do
+  assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" "\"Bash($SYNC_DENY)\"" "unattended agent cannot $SYNC_DENY"
+done
+# 저장소가 정한 base_branch는 브랜치 이름 형태만 받는다(무인 에이전트 지시문까지 가는 값).
+jq '.base_branch = "--upload-pack=x"' "$SYNC_REPO/.ai-harness/harness.json" >"$TEST_TMP/sync-hj" && mv "$TEST_TMP/sync-hj" "$SYNC_REPO/.ai-harness/harness.json"
+assert_eq "origin/develop" "$(HARNESS_METRICS_DIR="$SYNC_DATA" bash -c 'source "$1/scripts/lib.sh"; hm_resolve_base "$2" --no-fetch' _ "$ROOT" "$SYNC_REPO")" "invalid base_branch is ignored"
+git -C "$SYNC_REPO" checkout -q -- .ai-harness/harness.json
+# 알림은 체크아웃이 아니라 기준 브랜치 ref를 본다 — 하네스 없는 브랜치에 있어도 같은 판정.
+git -C "$SYNC_REPO" checkout -q master
+SYNC_DATA2="$TEST_TMP/sync-data2"
+assert_contains "$(printf '{"cwd":"%s"}' "$SYNC_REPO" | HARNESS_METRICS_DIR="$SYNC_DATA2" "$ROOT/scripts/sync-auto.sh" notify | jq -r '.systemMessage')" "0.1.0" "notice reads the base branch, not the checkout"
+git -C "$SYNC_REPO" checkout -q develop
+pass "harness version notice and opt-in auto sync"
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
