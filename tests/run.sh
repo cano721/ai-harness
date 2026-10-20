@@ -248,6 +248,39 @@ assert_eq "detektMain,realTest" "$(jq -r '[.facts[] | select(.kind=="gradle_task
 assert_eq "false 0 0" "$(jq -r '"\(.drift) \(.missing_in_docs|length) \(.stale_in_docs|length)"' <<<"$NOISE_SCAN")" "workspace invocation syntax resolves to the script name, not the flag"
 pass "drift false-positive suppression"
 
+# 실제 저장소(Kotlin DSL 멀티모듈)에서 나온 오탐 4건 — 문서와 빌드가 맞는데 drift로 보고됐다.
+KTS="$TEST_TMP/drift-kts"
+mkdir -p "$KTS/.ai-harness/docs"
+cat >"$KTS/build.gradle.kts" <<'GRADLE'
+subprojects {
+    tasks.register<Test>("integrationTest") { }
+    tasks.register<Test>("syntheticTalentExport") { }
+    tasks.register<Test>("seedFixtures") { }
+}
+tasks.register("jacocoAggregatedReport") { }
+val jacocoAggregatedVerification = tasks.register("jacocoAggregatedVerification") { }
+tasks.register("printVersion") { }
+listOf("api").forEach { tasks.register<JacocoCoverageVerification>("jacocoVerification${it}") { } }
+GRADLE
+cat >"$KTS/.ai-harness/docs/testing.md" <<'DOC'
+- 실측: `./gradlew test integrationTest --rerun-tasks`
+- 리포트: `./gradlew jacocoAggregatedReport`
+- 게이트: `./gradlew jacocoAggregatedVerification`
+- 시드: `SYNTHETIC_ANCHOR=x ./gradlew :talent-pool-api:syntheticTalentExport`
+- 버전: `./gradlew printVersion`
+- 모듈 게이트: `./gradlew jacocoVerificationApi`
+- run ./gradlew build to verify
+- 콘솔 출력: `./gradlew --console plain integrationTest`
+- 빠른 빌드: `./gradlew build -x seedFixtures`
+DOC
+KTS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$KTS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a documented task the build declares is never stale, whatever its name, and a flag value (--console plain) is not a task"
+assert_eq "seedFixtures" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$KTS_SCAN")" "a later task in a multi-task gradlew call counts as documented, an excluded (-x) task does not, and an undocumented Test-typed task is reported"
+assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | index("jacocoAggregatedVerification") != null' <<<"$KTS_SCAN")" "a Verification task is a verification task"
+assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
+assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
+pass "drift kotlin dsl and multi-task calls"
+
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
 mkdir -p "$CONTRACT/.ai-harness/workflows" "$CONTRACT/.ai-harness/agents" "$CONTRACT/.claude/commands" "$CONTRACT/api/src/main/java" "$CONTRACT/api/src/test/java"

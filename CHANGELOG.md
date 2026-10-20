@@ -7,6 +7,12 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 버그 수정
+
+- **`docs-drift`가 문서와 맞는 Gradle 태스크를 drift로 보고하지 않습니다** — Kotlin DSL 멀티모듈 저장소에서 맞게 적힌 태스크 4건이 오탐으로 올라 "보호 파일 후속 조치" 표를 오염시켰습니다. 원인은 셋이었습니다: stale 판정이 관련성 필터를 거친 사실 목록과 비교해 `jacocoAggregatedReport`·`syntheticTalentExport`처럼 선언됐지만 이름에 검증 키워드가 없는 태스크를 "빌드에 없다"고 봤고, `verify`가 `Verification`과 맞지 않았고, `./gradlew test integrationTest`처럼 한 호출의 둘째 태스크를 사용으로 세지 않았습니다. 이제 stale은 선언된 태스크 전부와 비교하고, `<Test>` 타입 태스크는 이름과 무관하게 검증 태스크로 보며, 한 호출의 둘째 이후 태스크는 missing 해소에만 씁니다(산문의 뒷단어가 stale로 오르지 않게). `"jacocoVerification${suffix}"`처럼 이름이 보간되는 선언은 사실로 올리지 않고, 문서에 적힌 완성된 이름을 stale로 보지 않습니다.
+
 ## v0.39.0 (2026-10-18)
 ### 새 기능
 
