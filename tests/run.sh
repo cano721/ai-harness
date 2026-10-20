@@ -1499,13 +1499,20 @@ ratio_session s4 svc 2 '{"kind":"doc_read","target":".ai-harness/workflows/imple
 ratio_session s5 other 10 '{"kind":"workflow","target":"review"}' '{"kind":"doc_read","target":".ai-harness/config"}'
 ratio_session s6 svc 5 '{"kind":"workflow","target":"refactor"}'
 ratio_session s7 svc 1 '{"kind":"doc_read","target":".ai-harness/workflows/refactor.md"}'
+# 다른 하네스 프로젝트에서 읽힌 워크플로 이름은 이 프로젝트의 경유 근거가 아니다.
+ratio_session s8 nos 6 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"workflow","target":"refactor"}'
+# project가 없는 옛 이벤트도 /metrics를 멈추지 않는다.
+jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:00Z", ended:"2026-10-10T01:00:00Z", turns:6,
+  coverage:["workflow","doc_read","correction_mark"]}, {v:1, src:"claude", sid:"s9", kind:"doc_read", target:".ai-harness/docs/x.md", n:1}' \
+  >"$RATIO_DATA/events/claude-s9.jsonl"
 RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$RATIO_STATS" "## 비율" "ratio section"
-assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 75% (3/4) |" "workflow pass ratio over harness-project active sessions"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.4 (2/5) |" "corrections per active session"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 5.9 (2/34) |" "corrections per 100 turns"
+assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
+assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
 assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
-case "$RATIO_STATS" in *"| other | 0% ("*) fail "non-harness project excluded from workflow ratio" ;; esac
+case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
+assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
 pass "session ratio metrics"
 
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.

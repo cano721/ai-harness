@@ -39,21 +39,23 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
 | ($S | length) as $total
 | (coverage_count($S; "correction_mark")) as $correction_supported
-| ($S | map({(.sid): .project}) | add // {}) as $sidProject
+| ($S | map({(.sid): (.project // "?")}) | add // {}) as $sidProject
 | ($S | map(select((.turns // 0) >= active_min_turns))) as $A
 # 워크플로 본문은 슬래시 커맨드 없이 Read·cat으로도 진입한다(workspace 멤버 세션 대부분).
 | ($E | map(select(.kind=="doc_read" and (.target | startswith(".ai-harness/workflows/"))))) as $wfReads
-| ((harness_workflows + ($wfReads | map(.target | ltrimstr(".ai-harness/workflows/")
-      | select(endswith(".md") and (contains("/") | not)) | rtrimstr(".md"))))
-   | map({(.): true}) | add) as $wfNames
+# 프로젝트가 둔 워크플로 이름은 그 프로젝트 안에서만 인정한다 — 다른 저장소의 `refactor.md`가 여기의 `/refactor`를 경유로 만들지 않게.
+| ($wfReads | map((.target | ltrimstr(".ai-harness/workflows/")) as $f
+      | select(($f | endswith(".md")) and ($f | contains("/") | not))
+      | {(($sidProject[.sid] // "?") + "\t" + ($f | rtrimstr(".md"))): true}) | add // {}) as $projectWf
 | (($wfReads + ($E | map(select(.kind=="workflow"
-      and $wfNames[.target | ltrimstr("ai-harness:")] == true))))
+      and ((.target | ltrimstr("ai-harness:")) as $n
+        | (harness_workflows | index($n)) != null or $projectWf[($sidProject[.sid] // "?") + "\t" + $n] == true)))))
    | map({(.sid): true}) | add // {}) as $wfPassed
 # 하네스가 없는 프로젝트의 세션은 경유할 워크플로가 없으므로 분모에서 뺀다.
 # `~/.ai-harness/` 데이터(config·events)도 같은 접두어로 정규화되므로 docs·workflows만 하네스 근거로 본다.
-| ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid]): true})
+| ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid] // "?"): true})
    | add // {}) as $harnessProjects
-| ($A | map(select($harnessProjects[.project] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
+| ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
 | ($A | map(select(has_coverage("correction_mark")))) as $CA
 | ($CA | map({(.sid): true}) | add // {}) as $caSet
 | ([$E[] | select(.kind=="correction_mark" and $caSet[.sid] == true) | .n] | add // 0) as $marks
