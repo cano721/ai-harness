@@ -122,6 +122,7 @@ codex plugin add ai-harness@ai-harness
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
 - Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람) 또는 직접 커밋 허용(`direct`)
 - 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. 열린 질문·수리 한도 초과·제품 판단은 auto에서도 사람에게 갑니다
+- 이슈 상태 전환: 시작 시 진행 중(`issue_policy:"in-progress-on-start"` — 이슈 키·URL로 기능 개발·버그 수정을 시작하면 그 이슈를 먼저 진행 중으로 옮김) 또는 건드리지 않음(기본)
 
 **이미 팀 에이전트가 있는 저장소** — `.claude/agents`·라우터 스킬·`CLAUDE.md`가 있으면 초기화가 먼저 `scripts/existing-assets.sh scan`으로 인벤토리를 만들고, 하네스 역할(developer·reviewer 등)을 기존 에이전트에 맡길지 슬롯별로 묻습니다. 맡긴 슬롯은 하네스 페르소나를 만들지 않고 워크플로가 기존 에이전트(또는 라우터가 정한 담당)를 부릅니다. 같은 이름 스킬은 기존 것을 유지하며, 기존 자산의 낡은 서술·중복·선언되지 않은 플러그인 참조는 점검표로만 보입니다.
 

@@ -629,6 +629,13 @@ for adapter in implement-feature fix-bug review; do
   [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
   assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
 done
+# 작업 시작 때 이슈 상태 전환은 manifest의 issue_policy가 정한다. review는 이슈 작업을 시작하지 않는다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for adapter in implement-feature fix-bug; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" '`issue_policy`: `in-progress-on-start`' "$adapter adapter follows issue_policy"
+  assert_contains "$ADAPTER_CONTENT" "Missing or any other value — leave issue status alone" "$adapter adapter leaves issues alone without issue_policy"
+done
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
 assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
