@@ -7,6 +7,15 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+### 새 기능
+
+- **기능 러너가 도는 동안 진행이 보입니다** — `implement-feature-driver.sh`가 Claude 세션을 `--output-format json`으로 띄워 세션이 끝나기 전엔 출력이 0바이트였고, 노드 하나가 몇 분 도는 동안 무엇을 읽고 고치는지 알 수 없었습니다. 이제 Claude 세션은 stream-json으로 돌고 도구 호출마다 `deliver · Edit src/app.ts` 한 줄을 stderr(`[implement-feature]` 접두)와 실행 디렉터리의 `progress.log`(시각 접두)에 남깁니다. 노드 전환도 같이 남고, Bash는 명령 대신 description(없으면 실행어 이름)만, Write·Edit 본문과 Agent 프롬프트는 보이지 않습니다. 러너는 start·resume·revise·approve 때 `progress:` 경로를 알리고, `implement-feature-driver.sh watch`로 터미널에서 따라 봅니다. 백그라운드로 돌리는 에이전트는 이 파일을 모니터해 진행을 전합니다. Codex 세션 출력은 러너를 사람이 터미널에서 직접 돌릴 때만 화면에 함께 흐릅니다.
+
+### 동작 변경
+
+- **러너가 Claude 세션의 원본 스트림을 저장하지 않습니다** — stream-json에는 읽은 파일 내용·명령 인자가 그대로 담겨, 저장하면 실행 디렉터리에 코드·토큰이 쌓입니다. 진행 줄과 최종 `result` 이벤트만 남기고, 실행 디렉터리(`~/.ai-harness/runs/<repo>`)는 소유자만 읽도록 700으로 만듭니다.
+
 ## v0.41.0 (2026-10-21)
 ### 동작 변경
 
