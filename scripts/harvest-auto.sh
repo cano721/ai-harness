@@ -20,8 +20,8 @@ BUDGET_USD="${HM_HARVEST_AUTO_BUDGET_USD:-5}"
 [[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=5
 LOG_KEEP=50
 SYNC_DIR="$HM_DATA_DIR/sync-auto"
-SYNC_DAILY_MAX="${HM_SYNC_AUTO_DAILY_MAX:-2}"
-[[ "$SYNC_DAILY_MAX" =~ ^[0-9]+$ ]] || SYNC_DAILY_MAX=2
+SYNC_DAILY_MAX="${HM_SYNC_AUTO_DAILY_MAX:-6}"
+[[ "$SYNC_DAILY_MAX" =~ ^[0-9]+$ ]] || SYNC_DAILY_MAX=6
 
 usage() {
   cat >&2 <<'EOF'
@@ -558,6 +558,15 @@ command_run() {
     "$DIR/health.sh" failure "$component" "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   fi
   prune_logs
+
+  # 다음 sync 후보를 이어서 띄운다. 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
+  # 사용량 한도로 끝났으면 잇지 않는다 — 한도는 사용자의 작업과 공유한다.
+  if [[ "$fail_reason" != "usage_limit" ]]; then
+    hm_release_lock "$RUN_LOCK"
+    trap - EXIT
+    LAUNCHED_NOW=0
+    maybe_sync_run
+  fi
 }
 
 command_runs() {

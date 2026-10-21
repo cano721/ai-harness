@@ -2798,6 +2798,40 @@ assert_contains "$(printf '{"cwd":"%s"}' "$SYNC_REPO" | HARNESS_METRICS_DIR="$SY
 git -C "$SYNC_REPO" checkout -q develop
 pass "harness version notice and opt-in auto sync"
 
+# 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
+CHAIN_DATA="$TEST_TMP/chain-data"
+mkdir -p "$CHAIN_DATA/events"
+for CHAIN_N in 1 2 3; do
+  make_repo "$TEST_TMP/chain-$CHAIN_N"
+  mkdir -p "$TEST_TMP/chain-$CHAIN_N/.ai-harness"
+  jq -n --arg p "chain-$CHAIN_N" '{project_id:$p,harness_version:"0.1.0",level:"standard",integrations:["claude"]}' \
+    >"$TEST_TMP/chain-$CHAIN_N/.ai-harness/harness.json"
+  git -C "$TEST_TMP/chain-$CHAIN_N" add .ai-harness && git -C "$TEST_TMP/chain-$CHAIN_N" commit -q -m harness
+  jq -cn --arg a "$TEST_TMP/chain-$CHAIN_N" '{kind:"session",cwd:$a}' >>"$CHAIN_DATA/events/chain.jsonl"
+done
+chain_sweep() {
+  HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+    HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/chain-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
+assert_eq "2" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "one sweep chains sync runs up to the daily cap"
+assert_eq "daily_max" "$(jq -sr 'last | .reason' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "the chain stops at the daily cap"
+chain_sweep
+assert_eq "3" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "default daily cap leaves room for the rest"
+assert_contains "$(<"$ROOT/README.md")" "HM_SYNC_AUTO_DAILY_MAX=6" "README documents the new default cap"
+# 사용량 한도로 끝난 실행 뒤에는 잇지 않는다.
+CHAIN_LIMIT="$TEST_TMP/chain-limit.sh"
+# shellcheck disable=SC2016  # 스텁 본문의 $1은 스텁이 실행될 때 펼쳐진다
+printf '#!/usr/bin/env bash\necho "$1" >>"%s"\necho %s\nexit 1\n' "$TEST_TMP/chain-limit.out" \
+  "'{\"type\":\"result\",\"is_error\":true,\"api_error_status\":429,\"api_error\":\"usage_limit_reached\"}'" >"$CHAIN_LIMIT"
+chmod +x "$CHAIN_LIMIT"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$CHAIN_LIMIT" \
+  HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 "$ROOT/scripts/harvest-auto.sh" sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-limit.out" | tr -d ' ')" "a usage-limited run does not chain the next one"
+pass "auto sync chains runs within the daily cap"
+
+
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"
 [[ "$CLAUDE_PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]] \
