@@ -28,12 +28,18 @@ IDLE_WAIT_HOURS="${HM_IDLE_WAIT_HOURS:-4}"; [[ "$IDLE_WAIT_HOURS" =~ ^[0-9]+$ ]]
 BACKOFF_HOURS="${HM_LLM_BACKOFF_HOURS:-5}"; [[ "$BACKOFF_HOURS" =~ ^[0-9]+$ ]] || BACKOFF_HOURS=5
 
 recently_active() { hm_recently_active "$IDLE_MINUTES"; }
+run_in_flight() {
+  local lock="$HM_DATA_DIR/harvest-auto/running.lock"
+  [[ -d "$lock" ]] && kill -0 "$(sed -n '1p' "$lock/pid" 2>/dev/null || echo x)" 2>/dev/null
+}
 in_usage_backoff() { hm_in_usage_backoff "$BACKOFF_HOURS"; }
 
 # LLM 단계를 돌려도 되는지: 휴지 중이 아니고, 사용자가 쉬고 있을 때까지(최대 IDLE_WAIT_HOURS) 기다린다.
 llm_steps_ready() {
   local deadline=0
   in_usage_backoff && return 1
+  # 무인 실행이 이미 돌고 있으면 이번 회차는 넘긴다(그 실행이 끝나면 다음 sync를 스스로 잇는다).
+  run_in_flight && return 1
   deadline=$(( $(date +%s) + IDLE_WAIT_HOURS * 3600 ))
   while recently_active; do
     (( $(date +%s) < deadline )) || return 1

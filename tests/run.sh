@@ -2801,9 +2801,7 @@ pass "harness version notice and opt-in auto sync"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
 CHAIN_DATA="$TEST_TMP/chain-data"
-mkdir -p "$CHAIN_DATA/events" "$TEST_TMP/chain-claude/-tmp-ai-harness-harvest-auto-worktrees-p-x-1" "$TEST_TMP/chain-codex"
-# 무인 실행 자신의 transcript(작업 worktree 경로)는 사용자 활동이 아니다.
-: >"$TEST_TMP/chain-claude/-tmp-ai-harness-harvest-auto-worktrees-p-x-1/s.jsonl"
+mkdir -p "$CHAIN_DATA/events" "$TEST_TMP/chain-claude" "$TEST_TMP/chain-codex"
 for CHAIN_N in 1 2 3; do
   make_repo "$TEST_TMP/chain-$CHAIN_N"
   mkdir -p "$TEST_TMP/chain-$CHAIN_N/.ai-harness"
@@ -2855,10 +2853,27 @@ find "$CHAIN_DATA/sync-auto" -depth -delete && : >"$CHAIN_DATA/sync-auto"
 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
 assert_eq "0" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "unwritable marker launches nothing"
 find "$CHAIN_DATA/sync-auto" -delete
-# 깨진 실행 기록 한 줄이 오늘 집계를 0으로 만들어 상한을 풀지 않는다.
+# 깨진 실행 기록 한 줄이 오늘 집계를 0으로 만들어 상한을 풀지 않는다(오늘 started 1건 + 깨진 줄, 상한 1).
+rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto/runs.jsonl"
+mkdir -p "$CHAIN_DATA/harvest-auto"
+jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"started",project:"x",scope:"sync"}' >"$CHAIN_DATA/harvest-auto/runs.jsonl"
 printf '{broken\n' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
 HM_SYNC_AUTO_DAILY_MAX=1 chain_sweep
-assert_eq "0" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "a broken run-log line does not reset the daily cap"
+assert_eq "0|daily_max" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -Rrn '[inputs | fromjson?] | last | .reason' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a broken run-log line does not reset the daily cap"
+HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "a broken run-log line does not block launches under the cap"
+# 실행 기록을 읽을 수 없으면 상한을 닫고 사유를 구분해 남긴다.
+if [[ "$(id -u)" != 0 ]]; then
+  chmod 000 "$CHAIN_DATA/harvest-auto/runs.jsonl"
+  HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+  chmod 600 "$CHAIN_DATA/harvest-auto/runs.jsonl"
+  assert_eq "1|runs_unreadable" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -r '.components.harvest_auto.last_error' "$CHAIN_DATA/health.json")" "unreadable run log closes the cap with its own reason"
+fi
+# 무인 실행은 transcript를 남기지 않는다 — 사용자 활동 판정과 수집에 섞이지 않게.
+# shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
+assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
+# 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && return 1" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
 
 

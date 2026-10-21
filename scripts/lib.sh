@@ -100,12 +100,12 @@ hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 
 }
 
 # 최근 $1분 안에 Claude·Codex 대화 기록이 갱신됐으면 사용자가 작업 중이다.
-# 무인 실행 자신의 transcript(작업 worktree 경로 `…harvest-auto-worktrees…`)는 사용자 활동이 아니다.
+# 무인 실행(자동 harvest·sync·정리)은 --no-session-persistence로 transcript를 남기지 않아 여기에 섞이지 않는다.
 hm_recently_active() { # $1=minutes
   local mins="${1:-20}" root=""
   [[ "$mins" =~ ^[0-9]+$ ]] || mins=20
   (( mins > 0 )) || return 1
-  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$mins" ! -path '*harvest-auto-worktrees*' -print -quit 2>/dev/null)" ]]; then
+  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$mins" -print -quit 2>/dev/null)" ]]; then
     return 0
   fi
   while IFS= read -r root; do

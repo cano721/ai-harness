@@ -55,10 +55,26 @@ started_today() { # [$1=sync] — 자동 harvest와 자동 sync는 하루 상한
   [[ -f "$RUNS_FILE" ]] || { printf '0\n'; return; }
   # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 비용이 없어 상한에서 뺀다.
   # 깨진 줄 하나가 집계를 0으로 만들어 상한을 풀지 않게 줄 단위로 읽고, 읽기 자체가 실패하면 상한을 다 쓴 것으로 본다.
-  jq -Rn --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
+  # jq는 파일을 못 열어도 결과(0)를 출력한 뒤 실패하므로, 출력이 아니라 종료 코드로 판정한다.
+  local out=""
+  if [[ -r "$RUNS_FILE" ]] && out="$(jq -Rn --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
     '[inputs | fromjson? | objects | select((.at // "") | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
       | ([.[] | select(.event=="started")] | length) - ([.[] | select(.event=="finished" and .no_agent == true)] | length)' \
-    "$RUNS_FILE" 2>/dev/null || printf '999999\n'
+    "$RUNS_FILE" 2>/dev/null)" && [[ "$out" =~ ^-?[0-9]+$ ]]; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$RUNS_UNREADABLE"
+  fi
+}
+RUNS_UNREADABLE=999999
+# 실행 기록을 읽지 못해 상한을 닫은 것은 사람이 고쳐야 하므로 daily_max와 구분하고, 그 파일에는 못 쓸 수 있어 health에도 남긴다.
+cap_reason() {
+  if [[ "$1" == "$RUNS_UNREADABLE" ]]; then
+    "$DIR/health.sh" failure harvest_auto runs_unreadable >/dev/null 2>&1 || true
+    printf 'runs_unreadable\n'
+  else
+    printf 'daily_max\n'
+  fi
 }
 
 short_key() { hm_short_key "$@"; }
@@ -135,8 +151,10 @@ command_trigger() {
     return 0
   fi
   # 상한·동시 실행 제한은 batch를 소모하지 않고 다음 sweep에서 다시 시도한다.
-  if (( $(started_today) >= DAILY_MAX )); then
-    log_skip "$project" "$batch_id" daily_max
+  local used=""
+  used="$(started_today)"
+  if (( used >= DAILY_MAX )); then
+    log_skip "$project" "$batch_id" "$(cap_reason "$used")"
     return 0
   fi
   if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -285,8 +303,10 @@ maybe_sync_run() {
       [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
       (( fails < MAX_FAILS )) || continue
     fi
-    if (( $(started_today sync) >= SYNC_DAILY_MAX )); then
-      log_skip "$project" "sync-$plugin" daily_max
+    local used=""
+    used="$(started_today sync)"
+    if (( used >= SYNC_DAILY_MAX )); then
+      log_skip "$project" "sync-$plugin" "$(cap_reason "$used")"
       return 0
     fi
     if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -369,7 +389,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
         local prompt="/ai-harness:harvest $project --auto --base $base"
         [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base"
         AGENT_CMD=(claude -p "$prompt"
-          --plugin-dir "$ROOT"
+          --plugin-dir "$ROOT" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode acceptEdits
           --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
@@ -384,7 +404,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       else
         # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
         AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
-          --plugin-dir "$ROOT"
+          --plugin-dir "$ROOT" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode dontAsk
           --allowedTools "Read" "Grep" "Glob" "Agent"
