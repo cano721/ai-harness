@@ -750,6 +750,29 @@ mkdir -p "$DRIVER_TMP/codex/sessions/2999"
 driver resume
 assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
 
+# Claude 세션은 stream-json으로 돌려 도구 호출을 실시간 진행 줄로 보인다. 원본 스트림(파일 내용·명령 인자·모델 문장)은 디스크에 남기지 않는다.
+new_driver_repo claude_stream
+driver start --runtime claude --request "add feature"
+assert_eq "10" "$DRIVER_RC" "a claude run stops at approval like codex"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "claude results come from the stream's result event"
+RUN_DIR="$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")"
+assert_contains "$DRIVER_OUT" "deliver · Read src/app.ts" "tool calls show live on stderr with repo-relative paths"
+assert_contains "$(<"$RUN_DIR/progress.log")" "review-0 · Bash: call the api" "progress.log keeps one line per tool call; Bash shows its description"
+assert_contains "$(<"$RUN_DIR/progress.log")" "brief --next--> approval" "progress.log also keeps node transitions"
+[[ -z "$(grep -rl 'SECRET' "$RUN_DIR")" ]] || fail "tool inputs, tool results, and model text never reach the run directory: $(grep -rl 'SECRET' "$RUN_DIR")"
+assert_eq "drwx------" "$(ls -ld "$(dirname "$RUN_DIR")" | cut -c1-10)" "run directories are readable only by their owner"
+HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER" watch --repo "$DRIVER_REPO" >"$DRIVER_TMP/watch.out" 2>&1 &
+WATCH_PID=$!
+sleep 1
+kill "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" 2>/dev/null || true
+assert_contains "$(<"$DRIVER_TMP/watch.out")" "review-0 · Bash: call the api" "watch follows the latest run's progress"
+new_driver_repo claude_fail
+FAKE_CLAUDE_FAIL=1 driver start --runtime claude --request "add feature"
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a failed claude session is incomplete even though the progress filter succeeds"
+
 if ! (exec 3<>/dev/tty) 2>/dev/null; then
   new_driver_repo no_tty
   driver start --runtime codex --request "add feature"
