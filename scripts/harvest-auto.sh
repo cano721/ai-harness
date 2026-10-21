@@ -20,8 +20,8 @@ BUDGET_USD="${HM_HARVEST_AUTO_BUDGET_USD:-5}"
 [[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=5
 LOG_KEEP=50
 SYNC_DIR="$HM_DATA_DIR/sync-auto"
-SYNC_DAILY_MAX="${HM_SYNC_AUTO_DAILY_MAX:-2}"
-[[ "$SYNC_DAILY_MAX" =~ ^[0-9]+$ ]] || SYNC_DAILY_MAX=2
+SYNC_DAILY_MAX="${HM_SYNC_AUTO_DAILY_MAX:-6}"
+[[ "$SYNC_DAILY_MAX" =~ ^[0-9]+$ ]] || SYNC_DAILY_MAX=6
 
 usage() {
   cat >&2 <<'EOF'
@@ -54,10 +54,27 @@ started_today() { # [$1=sync] — 자동 harvest와 자동 sync는 하루 상한
   local want="${1:-harvest}"
   [[ -f "$RUNS_FILE" ]] || { printf '0\n'; return; }
   # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 비용이 없어 상한에서 뺀다.
-  jq -s --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
-    '[.[] | select(.at | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
+  # 깨진 줄 하나가 집계를 0으로 만들어 상한을 풀지 않게 줄 단위로 읽고, 읽기 자체가 실패하면 상한을 다 쓴 것으로 본다.
+  # jq는 파일을 못 열어도 결과(0)를 출력한 뒤 실패하므로, 출력이 아니라 종료 코드로 판정한다.
+  local out=""
+  if [[ -r "$RUNS_FILE" ]] && out="$(jq -Rn --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
+    '[inputs | fromjson? | objects | select((.at // "") | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
       | ([.[] | select(.event=="started")] | length) - ([.[] | select(.event=="finished" and .no_agent == true)] | length)' \
-    "$RUNS_FILE" 2>/dev/null || printf '0\n'
+    "$RUNS_FILE" 2>/dev/null)" && [[ "$out" =~ ^-?[0-9]+$ ]]; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$RUNS_UNREADABLE"
+  fi
+}
+RUNS_UNREADABLE=999999
+# 실행 기록을 읽지 못해 상한을 닫은 것은 사람이 고쳐야 하므로 daily_max와 구분하고, 그 파일에는 못 쓸 수 있어 health에도 남긴다.
+cap_reason() { # $1=집계 값 $2=health component
+  if [[ "$1" == "$RUNS_UNREADABLE" ]]; then
+    "$DIR/health.sh" failure "${2:-harvest_auto}" runs_unreadable >/dev/null 2>&1 || true
+    printf 'runs_unreadable\n'
+  else
+    printf 'daily_max\n'
+  fi
 }
 
 short_key() { hm_short_key "$@"; }
@@ -134,8 +151,10 @@ command_trigger() {
     return 0
   fi
   # 상한·동시 실행 제한은 batch를 소모하지 않고 다음 sweep에서 다시 시도한다.
-  if (( $(started_today) >= DAILY_MAX )); then
-    log_skip "$project" "$batch_id" daily_max
+  local used=""
+  used="$(started_today)"
+  if (( used >= DAILY_MAX )); then
+    log_skip "$project" "$batch_id" "$(cap_reason "$used" harvest_auto)"
     return 0
   fi
   if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -217,18 +236,19 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
 command_sweep() {
   [[ "${HM_HARVEST_AUTO:-0}" == "1" || "${HM_SYNC_AUTO:-0}" == "1" ]] || return 0
   LAUNCHED_NOW=0
-  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] && sweep_batches
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] && sweep_batches "${1:-}"
   # 실행은 한 번에 하나다. 개선(harvest)이 먼저고, 이번에 아무것도 띄우지 않았을 때만 sync를 본다.
   (( LAUNCHED_NOW == 1 )) || maybe_sync_run
   return 0
 }
 
-sweep_batches() {
+sweep_batches() { # [$1=--chain: 실행 뒤 연쇄. 주기 단위인 전역 분석은 정기 sweep에만 둔다]
+  local chain="${1:-}"
   local batch="" status="" origin="" cwd="" src="" project=""
   shopt -s nullglob
   local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
   shopt -u nullglob
-  (( ${#batches[@]} > 0 )) || { maybe_global_run; return 0; }
+  (( ${#batches[@]} > 0 )) || { [[ -n "$chain" ]] || maybe_global_run; return 0; }
   while IFS= read -r batch; do
     status="$(jq -c '. + {has_analysis_batch:true}' "$batch" 2>/dev/null)" || continue
     project="$(jq -r '.project // empty' <<<"$status")"
@@ -244,7 +264,7 @@ sweep_batches() {
   done < <(for batch in "${batches[@]}"; do
       printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
     done | sort | cut -f2-)
-  (( LAUNCHED_NOW == 1 )) || maybe_global_run
+  (( LAUNCHED_NOW == 1 )) || [[ -n "$chain" ]] || maybe_global_run
   return 0
 }
 
@@ -284,8 +304,10 @@ maybe_sync_run() {
       [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
       (( fails < MAX_FAILS )) || continue
     fi
-    if (( $(started_today sync) >= SYNC_DAILY_MAX )); then
-      log_skip "$project" "sync-$plugin" daily_max
+    local used=""
+    used="$(started_today sync)"
+    if (( used >= SYNC_DAILY_MAX )); then
+      log_skip "$project" "sync-$plugin" "$(cap_reason "$used" sync_auto)"
       return 0
     fi
     if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -298,9 +320,12 @@ maybe_sync_run() {
       log_skip "$project" "sync-$plugin" needs_claude
       return 0
     fi
-    mkdir -p "$SYNC_DIR"
-    jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
-      '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"
+    # 마커를 못 쓰면 버전당 1회를 지킬 수 없다 — 같은 저장소를 끝없이 다시 띄우지 않게 멈춘다.
+    if ! { mkdir -p "$SYNC_DIR" && jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
+        '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"; } 2>/dev/null; then
+      log_skip "$project" "sync-$plugin" marker_unwritable
+      return 0
+    fi
     LAUNCHED_NOW=1
     mkdir -p "$LOG_DIR"
     if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
@@ -365,7 +390,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
         local prompt="/ai-harness:harvest $project --auto --base $base"
         [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base"
         AGENT_CMD=(claude -p "$prompt"
-          --plugin-dir "$ROOT"
+          --plugin-dir "$ROOT" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode acceptEdits
           --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
@@ -380,7 +405,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       else
         # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
         AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
-          --plugin-dir "$ROOT"
+          --plugin-dir "$ROOT" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode dontAsk
           --allowedTools "Read" "Grep" "Glob" "Agent"
@@ -522,7 +547,8 @@ command_run() {
         | grep -o 'AI_HARNESS_SYNC_RESULT outcome=[a-z_-]*\( artifact=[^[:space:]]*\)\{0,1\}' | tail -n 1)"
       result="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
       artifact="$(sed -n 's/.* artifact=\([^[:space:]]*\).*/\1/p' <<<"$line")"
-      [[ -n "$result" ]] || result="left_for_user"
+      # 실패 횟수 없이 failed로 남으면 매 sweep 다시 띄우므로, 약속한 값이 아니면 사람에게 넘긴다.
+      case "$result" in improved|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
     fi
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
@@ -558,6 +584,18 @@ command_run() {
     "$DIR/health.sh" failure "$component" "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   fi
   prune_logs
+
+  # 다음 실행을 이어서 띄운다 — sweep과 같은 순서(harvest batch → sync)라 그 사이 생긴 harvest가 먼저다.
+  # 주기 단위인 전역 분석은 끼우지 않는다(정기 sweep에서만).
+  # 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
+  # 사용량 한도로 끝났거나, 한도 휴지 중이거나, 사용자가 다시 작업 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
+  if [[ "$fail_reason" != "usage_limit" ]]; then
+    trap - EXIT
+    hm_release_lock "$RUN_LOCK"
+    if ! hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && ! hm_recently_active "${HM_IDLE_MINUTES:-20}"; then
+      command_sweep --chain
+    fi
+  fi
 }
 
 command_runs() {
