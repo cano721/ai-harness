@@ -54,10 +54,11 @@ started_today() { # [$1=sync] — 자동 harvest와 자동 sync는 하루 상한
   local want="${1:-harvest}"
   [[ -f "$RUNS_FILE" ]] || { printf '0\n'; return; }
   # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 비용이 없어 상한에서 뺀다.
-  jq -s --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
-    '[.[] | select(.at | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
+  # 깨진 줄 하나가 집계를 0으로 만들어 상한을 풀지 않게 줄 단위로 읽고, 읽기 자체가 실패하면 상한을 다 쓴 것으로 본다.
+  jq -Rn --arg day "$(date -u +%Y-%m-%d)" --arg want "$want" \
+    '[inputs | fromjson? | objects | select((.at // "") | startswith($day)) | select((.scope == "sync") == ($want == "sync"))]
       | ([.[] | select(.event=="started")] | length) - ([.[] | select(.event=="finished" and .no_agent == true)] | length)' \
-    "$RUNS_FILE" 2>/dev/null || printf '0\n'
+    "$RUNS_FILE" 2>/dev/null || printf '999999\n'
 }
 
 short_key() { hm_short_key "$@"; }
@@ -298,9 +299,12 @@ maybe_sync_run() {
       log_skip "$project" "sync-$plugin" needs_claude
       return 0
     fi
-    mkdir -p "$SYNC_DIR"
-    jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
-      '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"
+    # 마커를 못 쓰면 버전당 1회를 지킬 수 없다 — 같은 저장소를 끝없이 다시 띄우지 않게 멈춘다.
+    if ! { mkdir -p "$SYNC_DIR" && jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
+        '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"; } 2>/dev/null; then
+      log_skip "$project" "sync-$plugin" marker_unwritable
+      return 0
+    fi
     LAUNCHED_NOW=1
     mkdir -p "$LOG_DIR"
     if [[ "${HM_HARVEST_AUTO_FOREGROUND:-0}" == "1" ]]; then
@@ -522,7 +526,8 @@ command_run() {
         | grep -o 'AI_HARNESS_SYNC_RESULT outcome=[a-z_-]*\( artifact=[^[:space:]]*\)\{0,1\}' | tail -n 1)"
       result="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
       artifact="$(sed -n 's/.* artifact=\([^[:space:]]*\).*/\1/p' <<<"$line")"
-      [[ -n "$result" ]] || result="left_for_user"
+      # 실패 횟수 없이 failed로 남으면 매 sweep 다시 띄우므로, 약속한 값이 아니면 사람에게 넘긴다.
+      case "$result" in improved|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
     fi
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
@@ -561,11 +566,14 @@ command_run() {
 
   # 다음 sync 후보를 이어서 띄운다. 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
   # 사용량 한도로 끝났으면 잇지 않는다 — 한도는 사용자의 작업과 공유한다.
+  # 사용자가 다시 작업 중이거나 한도 휴지 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
   if [[ "$fail_reason" != "usage_limit" ]]; then
-    hm_release_lock "$RUN_LOCK"
     trap - EXIT
+    hm_release_lock "$RUN_LOCK"
     LAUNCHED_NOW=0
-    maybe_sync_run
+    if ! hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && ! hm_recently_active "${HM_IDLE_MINUTES:-20}"; then
+      maybe_sync_run
+    fi
   fi
 }
 

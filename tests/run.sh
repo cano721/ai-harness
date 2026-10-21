@@ -2740,6 +2740,7 @@ STUB
 chmod +x "$SYNC_STUB"
 sync_sweep() {
   HARNESS_METRICS_DIR="$SYNC_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+    HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
     HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/sync-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
 }
 sync_runs() { jq -sr "$1" "$SYNC_DATA/harvest-auto/runs.jsonl"; }
@@ -2800,7 +2801,9 @@ pass "harness version notice and opt-in auto sync"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
 CHAIN_DATA="$TEST_TMP/chain-data"
-mkdir -p "$CHAIN_DATA/events"
+mkdir -p "$CHAIN_DATA/events" "$TEST_TMP/chain-claude/-tmp-ai-harness-harvest-auto-worktrees-p-x-1" "$TEST_TMP/chain-codex"
+# 무인 실행 자신의 transcript(작업 worktree 경로)는 사용자 활동이 아니다.
+: >"$TEST_TMP/chain-claude/-tmp-ai-harness-harvest-auto-worktrees-p-x-1/s.jsonl"
 for CHAIN_N in 1 2 3; do
   make_repo "$TEST_TMP/chain-$CHAIN_N"
   mkdir -p "$TEST_TMP/chain-$CHAIN_N/.ai-harness"
@@ -2810,7 +2813,8 @@ for CHAIN_N in 1 2 3; do
   jq -cn --arg a "$TEST_TMP/chain-$CHAIN_N" '{kind:"session",cwd:$a}' >>"$CHAIN_DATA/events/chain.jsonl"
 done
 chain_sweep() {
-  HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+  HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="${CHAIN_CMD:-$SYNC_STUB}" HM_HARVEST_AUTO_AGENT=claude \
+    HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
     HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/chain-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
 }
 HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
@@ -2819,6 +2823,7 @@ assert_eq "daily_max" "$(jq -sr 'last | .reason' "$CHAIN_DATA/harvest-auto/runs.
 chain_sweep
 assert_eq "3" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "default daily cap leaves room for the rest"
 assert_contains "$(<"$ROOT/README.md")" "HM_SYNC_AUTO_DAILY_MAX=6" "README documents the new default cap"
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'HM_SYNC_AUTO_DAILY_MAX:-6}' "code default cap is 6"
 # 사용량 한도로 끝난 실행 뒤에는 잇지 않는다.
 CHAIN_LIMIT="$TEST_TMP/chain-limit.sh"
 # shellcheck disable=SC2016  # 스텁 본문의 $1은 스텁이 실행될 때 펼쳐진다
@@ -2827,8 +2832,33 @@ printf '#!/usr/bin/env bash\necho "$1" >>"%s"\necho %s\nexit 1\n' "$TEST_TMP/cha
 chmod +x "$CHAIN_LIMIT"
 find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
 HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$CHAIN_LIMIT" \
-  HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 "$ROOT/scripts/harvest-auto.sh" sweep
+  HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" "$ROOT/scripts/harvest-auto.sh" sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/chain-limit.out" | tr -d ' ')" "a usage-limited run does not chain the next one"
+# 사용자가 다시 작업 중이면 잇지 않는다 — 다음 sweep(유휴 대기 포함)이 이어받는다.
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+: >"$TEST_TMP/chain-stub.out"
+mkdir -p "$TEST_TMP/chain-claude/-Users-me-work" && : >"$TEST_TMP/chain-claude/-Users-me-work/live.jsonl"
+HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "chain stops while the user is active"
+find "$TEST_TMP/chain-claude/-Users-me-work" -depth -delete
+# 결과 줄이 알려진 값이 아니면 left_for_user로 기록한다(실패 횟수 없는 failed로 무한 재시도하지 않게).
+CHAIN_ODD="$TEST_TMP/chain-odd.sh"
+printf '#!/usr/bin/env bash\necho %s\n' "'{\"type\":\"result\",\"result\":\"AI_HARNESS_SYNC_RESULT outcome=failed\"}'" >"$CHAIN_ODD"
+chmod +x "$CHAIN_ODD"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+CHAIN_CMD="$CHAIN_ODD" HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "left_for_user" "$(jq -r '.result' "$CHAIN_DATA/sync-auto/p-chain-1.json")" "unknown outcome is left for the user"
+# 마커를 쓸 수 없으면 띄우지 않는다 — 같은 저장소를 끝없이 다시 띄우지 않게.
+find "$CHAIN_DATA/sync-auto" -depth -delete && : >"$CHAIN_DATA/sync-auto"
+: >"$TEST_TMP/chain-stub.out"
+HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "0" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "unwritable marker launches nothing"
+find "$CHAIN_DATA/sync-auto" -delete
+# 깨진 실행 기록 한 줄이 오늘 집계를 0으로 만들어 상한을 풀지 않는다.
+printf '{broken\n' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+HM_SYNC_AUTO_DAILY_MAX=1 chain_sweep
+assert_eq "0" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "a broken run-log line does not reset the daily cap"
 pass "auto sync chains runs within the daily cap"
 
 

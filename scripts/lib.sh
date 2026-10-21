@@ -99,6 +99,32 @@ hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 
   printf '%s\n' "${head:-HEAD}"
 }
 
+# 최근 $1분 안에 Claude·Codex 대화 기록이 갱신됐으면 사용자가 작업 중이다.
+# 무인 실행 자신의 transcript(작업 worktree 경로 `…harvest-auto-worktrees…`)는 사용자 활동이 아니다.
+hm_recently_active() { # $1=minutes
+  local mins="${1:-20}" root=""
+  [[ "$mins" =~ ^[0-9]+$ ]] || mins=20
+  (( mins > 0 )) || return 1
+  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$mins" ! -path '*harvest-auto-worktrees*' -print -quit 2>/dev/null)" ]]; then
+    return 0
+  fi
+  while IFS= read -r root; do
+    [[ -d "$root" ]] || continue
+    [[ -n "$(find "$root" -name 'rollout-*.jsonl' -mmin "-$mins" -print -quit 2>/dev/null)" ]] && return 0
+  done < <(codex_session_roots)
+  return 1
+}
+
+# 사용량 한도에 막힌 직후($1시간)에는 LLM 단계를 쉰다 — 사용자의 작업 한도를 같이 쓰기 때문이다.
+hm_in_usage_backoff() { # $1=hours
+  local hours="${1:-5}" runs="$HM_DATA_DIR/harvest-auto/runs.jsonl" since=""
+  [[ "$hours" =~ ^[0-9]+$ ]] || hours=5
+  (( hours > 0 )) || return 1
+  [[ -f "$runs" ]] || return 1
+  since="$(date -u -v-"${hours}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$hours hours ago" +%Y-%m-%dT%H:%M:%SZ)"
+  jq -Rn -e --arg since "$since" '[inputs | fromjson? | select(.event=="finished" and .reason=="usage_limit" and .at >= $since)] | length > 0' "$runs" >/dev/null 2>&1
+}
+
 # MAJOR.MINOR.PATCH 비교(접두 v·pre-release 꼬리 무시). $1이 $2보다 낮으면 참.
 hm_version_lt() {
   local a="${1#v}" b="${2#v}" i

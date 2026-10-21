@@ -27,28 +27,8 @@ IDLE_MINUTES="${HM_IDLE_MINUTES:-20}"; [[ "$IDLE_MINUTES" =~ ^[0-9]+$ ]] || IDLE
 IDLE_WAIT_HOURS="${HM_IDLE_WAIT_HOURS:-4}"; [[ "$IDLE_WAIT_HOURS" =~ ^[0-9]+$ ]] || IDLE_WAIT_HOURS=4
 BACKOFF_HOURS="${HM_LLM_BACKOFF_HOURS:-5}"; [[ "$BACKOFF_HOURS" =~ ^[0-9]+$ ]] || BACKOFF_HOURS=5
 
-# 최근 IDLE_MINUTES분 안에 Claude·Codex 대화 기록이 갱신됐으면 작업 중이다.
-recently_active() {
-  (( IDLE_MINUTES > 0 )) || return 1
-  local root=""
-  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$IDLE_MINUTES" -print -quit 2>/dev/null)" ]]; then
-    return 0
-  fi
-  while IFS= read -r root; do
-    [[ -d "$root" ]] || continue
-    [[ -n "$(find "$root" -name 'rollout-*.jsonl' -mmin "-$IDLE_MINUTES" -print -quit 2>/dev/null)" ]] && return 0
-  done < <(codex_session_roots)
-  return 1
-}
-
-# 사용량 한도에 막힌 직후에는 LLM 단계를 쉰다 — 사용자의 작업 한도를 같이 쓰기 때문이다.
-in_usage_backoff() {
-  (( BACKOFF_HOURS > 0 )) || return 1
-  local runs="$HM_DATA_DIR/harvest-auto/runs.jsonl" since=""
-  [[ -f "$runs" ]] || return 1
-  since="$(date -u -v-"${BACKOFF_HOURS}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$BACKOFF_HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)"
-  jq -e --arg since "$since" 'select(.event=="finished" and .reason=="usage_limit" and .at >= $since)' "$runs" >/dev/null 2>&1
-}
+recently_active() { hm_recently_active "$IDLE_MINUTES"; }
+in_usage_backoff() { hm_in_usage_backoff "$BACKOFF_HOURS"; }
 
 # LLM 단계를 돌려도 되는지: 휴지 중이 아니고, 사용자가 쉬고 있을 때까지(최대 IDLE_WAIT_HOURS) 기다린다.
 llm_steps_ready() {

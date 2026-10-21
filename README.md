@@ -430,7 +430,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 - **대상**: 수집된 세션 기록의 작업 경로(workspace 루트면 멤버까지)에서 찾은 하네스 저장소. 같은 저장소의 worktree는 원본 하나로 접고, 버전은 사용자 체크아웃이 아니라 하네스가 들어 있는 기준 브랜치에서 읽습니다
 - **적용 범위**: `add`와 수정되지 않은(`unchanged`) 관리 생성물 `refresh`만. 승인 필요·보호 파일(AGENTS.md·docs·워크플로 본문)·삭제·계약 drift는 고치지 않고 PR 본문의 "사람 확인 필요" 표로 넘깁니다. workspace 루트(매니페스트·라우팅 AGENTS.md)는 대상이 아니며 알림만 합니다
-- **비용**: 적용할 관리 생성물이 없으면 에이전트를 띄우지 않고 `no-change`로 끝냅니다(LLM 비용 0). 저장소·플러그인 버전 조합당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`회(기본 6, 자동 harvest와 별도), 실행 lock·시간 제한·실행당 예산·실패 3회 포기·사용량 한도 휴지는 자동 harvest와 공유합니다. 동시에는 하나만 돌고 harvest가 먼저지만, 실행이 끝나면 같은 worker가 다음 후보를 이어서 띄워 상한까지 처리합니다(사용량 한도로 끝난 실행 뒤에는 멈춤)
+- **비용**: 적용할 관리 생성물이 없으면 에이전트를 띄우지 않고 `no-change`로 끝냅니다(LLM 비용 0). 저장소·플러그인 버전 조합당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`회(기본 6, 자동 harvest와 별도), 실행 lock·시간 제한·실행당 예산·실패 3회 포기·사용량 한도 휴지는 자동 harvest와 공유합니다. 동시에는 하나만 돌고 sweep에서는 harvest가 먼저입니다. 실행이 끝나면 같은 worker가 다음 sync 후보를 이어서 띄워 상한까지 처리합니다 — 사용량 한도로 끝났거나 한도 휴지 중이거나 사용자가 다시 작업 중(`HM_IDLE_MINUTES`)이면 멈추고 다음 sweep이 이어받습니다. 남은 harvest batch는 다음 sweep에서 봅니다
 - **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
