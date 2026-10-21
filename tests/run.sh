@@ -750,6 +750,32 @@ mkdir -p "$DRIVER_TMP/codex/sessions/2999"
 driver resume
 assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
 
+# Claude 세션은 stream-json으로 돌려 도구 호출을 실시간 진행 줄로 보인다. 원본 스트림(파일 내용·명령 인자·모델 문장)은 디스크에 남기지 않는다.
+new_driver_repo claude_stream
+driver start --runtime claude --request "add feature"
+assert_eq "10" "$DRIVER_RC" "a claude run stops at approval like codex"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "claude results come from the stream's result event"
+RUN_DIR="$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")"
+assert_contains "$DRIVER_OUT" "deliver · Read src/app.ts" "tool calls show live on stderr with repo-relative paths"
+assert_contains "$(<"$RUN_DIR/progress.log")" "review-0 · Bash: call the api" "progress.log keeps one line per tool call; Bash shows its description"
+assert_contains "$(<"$RUN_DIR/progress.log")" "brief --next--> approval" "progress.log also keeps node transitions"
+assert_contains "$(<"$RUN_DIR/progress.log")" "review-0 · Bash: curl" "Bash without a description shows the program name, skipping VAR= assignments"
+assert_contains "$(<"$RUN_DIR/progress.log")" "review-0 · Grep useAuth in src" "Grep shows its pattern and repo-relative path"
+assert_contains "$DRIVER_OUT" "progress: $RUN_DIR/progress.log" "resume also announces the progress file"
+! grep -rq 'SECRET' "$RUN_DIR" || fail "tool inputs, tool results, and model text never reach the run directory: $(grep -rl 'SECRET' "$RUN_DIR")"
+assert_eq "1" "$(find "$(dirname "$RUN_DIR")" -maxdepth 0 -perm 700 | wc -l | tr -d ' ')" "run directories are readable only by their owner"
+HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER" watch --repo "$DRIVER_REPO" >"$DRIVER_TMP/watch.out" 2>&1 &
+WATCH_PID=$!
+for _ in $(seq 50); do grep -q 'Bash: call the api' "$DRIVER_TMP/watch.out" 2>/dev/null && break; sleep 0.2; done
+kill "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" 2>/dev/null || true
+assert_contains "$(<"$DRIVER_TMP/watch.out")" "review-0 · Bash: call the api" "watch follows the latest run's progress"
+new_driver_repo claude_fail
+FAKE_CLAUDE_FAIL=1 driver start --runtime claude --request "add feature"
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a failed claude session is incomplete even though the progress filter succeeds"
+
 if ! (exec 3<>/dev/tty) 2>/dev/null; then
   new_driver_repo no_tty
   driver start --runtime codex --request "add feature"
@@ -2740,6 +2766,7 @@ STUB
 chmod +x "$SYNC_STUB"
 sync_sweep() {
   HARNESS_METRICS_DIR="$SYNC_DATA" HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+    HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
     HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/sync-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
 }
 sync_runs() { jq -sr "$1" "$SYNC_DATA/harvest-auto/runs.jsonl"; }
@@ -2797,6 +2824,119 @@ SYNC_DATA2="$TEST_TMP/sync-data2"
 assert_contains "$(printf '{"cwd":"%s"}' "$SYNC_REPO" | HARNESS_METRICS_DIR="$SYNC_DATA2" "$ROOT/scripts/sync-auto.sh" notify | jq -r '.systemMessage')" "0.1.0" "notice reads the base branch, not the checkout"
 git -C "$SYNC_REPO" checkout -q develop
 pass "harness version notice and opt-in auto sync"
+
+# 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
+CHAIN_DATA="$TEST_TMP/chain-data"
+mkdir -p "$CHAIN_DATA/events" "$TEST_TMP/chain-claude" "$TEST_TMP/chain-codex"
+for CHAIN_N in 1 2 3; do
+  make_repo "$TEST_TMP/chain-$CHAIN_N"
+  mkdir -p "$TEST_TMP/chain-$CHAIN_N/.ai-harness"
+  jq -n --arg p "chain-$CHAIN_N" '{project_id:$p,harness_version:"0.1.0",level:"standard",integrations:["claude"]}' \
+    >"$TEST_TMP/chain-$CHAIN_N/.ai-harness/harness.json"
+  git -C "$TEST_TMP/chain-$CHAIN_N" add .ai-harness && git -C "$TEST_TMP/chain-$CHAIN_N" commit -q -m harness
+  jq -cn --arg a "$TEST_TMP/chain-$CHAIN_N" '{kind:"session",cwd:$a}' >>"$CHAIN_DATA/events/chain.jsonl"
+done
+chain_sweep() {
+  HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="${CHAIN_CMD:-$SYNC_STUB}" HM_HARVEST_AUTO_AGENT=claude \
+    HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
+    HM_HARVEST_GLOBAL_DAYS=0 SYNC_STUB_OUT="$TEST_TMP/chain-stub.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
+assert_eq "2" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "one sweep chains sync runs up to the daily cap"
+assert_eq "daily_max" "$(jq -sr 'last | .reason' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "the chain stops at the daily cap"
+chain_sweep
+assert_eq "3" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "default daily cap leaves room for the rest"
+assert_contains "$(<"$ROOT/README.md")" "HM_SYNC_AUTO_DAILY_MAX=6" "README documents the new default cap"
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'HM_SYNC_AUTO_DAILY_MAX:-6}' "code default cap is 6"
+# 사용량 한도로 끝난 실행 뒤에는 잇지 않는다.
+CHAIN_LIMIT="$TEST_TMP/chain-limit.sh"
+# shellcheck disable=SC2016  # 스텁 본문의 $1은 스텁이 실행될 때 펼쳐진다
+printf '#!/usr/bin/env bash\necho "$1" >>"%s"\necho %s\nexit 1\n' "$TEST_TMP/chain-limit.out" \
+  "'{\"type\":\"result\",\"is_error\":true,\"api_error_status\":429,\"api_error\":\"usage_limit_reached\"}'" >"$CHAIN_LIMIT"
+chmod +x "$CHAIN_LIMIT"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$CHAIN_LIMIT" \
+  HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" "$ROOT/scripts/harvest-auto.sh" sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-limit.out" | tr -d ' ')" "a usage-limited run does not chain the next one"
+# 사용자가 다시 작업 중이면 잇지 않는다 — 다음 sweep(유휴 대기 포함)이 이어받는다.
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+: >"$TEST_TMP/chain-stub.out"
+mkdir -p "$TEST_TMP/chain-claude/-Users-me-work" && : >"$TEST_TMP/chain-claude/-Users-me-work/live.jsonl"
+HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "chain stops while the user is active"
+find "$TEST_TMP/chain-claude/-Users-me-work" -depth -delete
+# 결과 줄이 알려진 값이 아니면 left_for_user로 기록한다(실패 횟수 없는 failed로 무한 재시도하지 않게).
+CHAIN_ODD="$TEST_TMP/chain-odd.sh"
+printf '#!/usr/bin/env bash\necho %s\n' "'{\"type\":\"result\",\"result\":\"AI_HARNESS_SYNC_RESULT outcome=failed\"}'" >"$CHAIN_ODD"
+chmod +x "$CHAIN_ODD"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+CHAIN_CMD="$CHAIN_ODD" HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "left_for_user" "$(jq -r '.result' "$CHAIN_DATA/sync-auto/p-chain-1.json")" "unknown outcome is left for the user"
+# 마커를 쓸 수 없으면 띄우지 않는다 — 같은 저장소를 끝없이 다시 띄우지 않게.
+find "$CHAIN_DATA/sync-auto" -depth -delete && : >"$CHAIN_DATA/sync-auto"
+: >"$TEST_TMP/chain-stub.out"
+HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "0" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "unwritable marker launches nothing"
+find "$CHAIN_DATA/sync-auto" -delete
+# 깨진 실행 기록 한 줄이 오늘 집계를 0으로 만들어 상한을 풀지 않는다(오늘 started 1건 + 깨진 줄, 상한 1).
+rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto/runs.jsonl"
+mkdir -p "$CHAIN_DATA/harvest-auto"
+jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"started",project:"x",scope:"sync"}' >"$CHAIN_DATA/harvest-auto/runs.jsonl"
+printf '{broken\n' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+HM_SYNC_AUTO_DAILY_MAX=1 chain_sweep
+assert_eq "0|daily_max" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -Rrn '[inputs | fromjson?] | last | .reason' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a broken run-log line does not reset the daily cap"
+HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "a broken run-log line does not block launches under the cap"
+# 실행 기록을 읽을 수 없으면 상한을 닫고 사유를 구분해 남긴다.
+if [[ "$(id -u)" == 0 ]]; then
+  printf '# skip: unreadable run-log test needs a non-root user\n'
+else
+  chmod 000 "$CHAIN_DATA/harvest-auto/runs.jsonl"
+  HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+  chmod 600 "$CHAIN_DATA/harvest-auto/runs.jsonl"
+  assert_eq "1|runs_unreadable" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -r '.components.sync_auto.last_error' "$CHAIN_DATA/health.json")" "unreadable run log closes the cap with its own reason"
+fi
+# 연쇄는 sweep과 같은 순서를 따른다 — sync 도중 생긴 harvest batch가 남은 sync보다 먼저 돈다.
+rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto" "$CHAIN_DATA/harvest-queue"
+mkdir -p "$CHAIN_DATA/harvest-queue/p-chain-2"
+CHAIN_PRIO="$TEST_TMP/chain-prio.sh"
+cat >"$CHAIN_PRIO" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >>"$CHAIN_PRIO_OUT"
+# 첫 실행 중에 chain-2의 harvest batch가 생긴다.
+if [[ ! -f "$HARNESS_METRICS_DIR/harvest-queue/p-chain-2/analysis-batch.json" ]]; then
+  jq -cn --arg ev "$CHAIN_PRIO_EV" '{project:"chain-2",batch_id:"b-prio",created_at:"2026-01-01T00:00:00Z",reasons:["errors"],event_files:[$ev]}' \
+    >"$HARNESS_METRICS_DIR/harvest-queue/p-chain-2/analysis-batch.json"
+fi
+echo '{"type":"result","result":"AI_HARNESS_SYNC_RESULT outcome=no-change"}'
+STUB
+chmod +x "$CHAIN_PRIO"
+jq -cn --arg cwd "$TEST_TMP/chain-2" '{kind:"session",src:"claude",sid:"prio",project:"chain-2",cwd:$cwd}' >"$CHAIN_DATA/events/prio.jsonl"
+HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=2 HM_HARVEST_AUTO_DAILY_MAX=9 \
+  HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$CHAIN_PRIO" HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 \
+  HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
+  CHAIN_PRIO_OUT="$TEST_TMP/chain-prio.out" CHAIN_PRIO_EV="$CHAIN_DATA/events/prio.jsonl" "$ROOT/scripts/harvest-auto.sh" sweep
+assert_eq "sync,project,sync" "$(jq -sr '[.[] | select(.event=="started") | .scope] | join(",")' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a harvest batch that appears mid-chain runs before the remaining syncs"
+# 전역 분석은 정기 sweep에서만 주기(기본 7일)당 한 번 돈다 — 연쇄가 끼워 넣지 않는다.
+rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto" "$CHAIN_DATA/harvest-queue"
+chain_global() {
+  HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_DAILY_MAX=9 \
+    HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$SYNC_STUB" HM_HARVEST_AUTO_AGENT=claude \
+    HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
+    SYNC_STUB_OUT="$TEST_TMP/chain-global.out" "$ROOT/scripts/harvest-auto.sh" sweep
+}
+chain_global
+rm -rf "$CHAIN_DATA/sync-auto"
+chain_global
+assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global")] | length' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a chain does not add global runs beyond the periodic sweep"
+# 무인 실행은 transcript를 남기지 않는다 — 사용자 활동 판정과 수집에 섞이지 않게.
+# shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
+assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
+# 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && return 1" "scheduled LLM steps skip while an unattended run is in flight"
+pass "auto sync chains runs within the daily cap"
+
 
 # manifest versions and marketplace policy stay aligned
 CLAUDE_PLUGIN_VERSION="$(jq -r '.version' "$ROOT/.claude-plugin/plugin.json")"

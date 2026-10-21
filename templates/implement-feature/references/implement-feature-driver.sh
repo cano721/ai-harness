@@ -26,6 +26,7 @@ usage: implement-feature-driver.sh <command> [options]
   resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
   approve                                               터미널에서 사람이 Brief를 보고 승인한 뒤 이어 간다
   status                                                현재 노드·이력·다음 행동을 보인다
+  watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
   공통: [--run <id>] (기본: 이 저장소의 최근 실행) [--repo <dir>] [--runtime codex|claude]
 
@@ -71,9 +72,16 @@ ESCALATE="$(jq -r 'first(.transitions[] | select(.from == "repair" and .to == "u
 
 # 실행 상태는 저장소 밖에 둔다. 저장소 안에 쓰면 읽기 전용 노드의 지문 비교가 무의미해진다.
 RUNS_DIR="${HM_FEATURE_RUNS_DIR:-$HOME/.ai-harness/runs}/$(basename "$REPO")-$(printf '%s' "$REPO" | git hash-object --stdin | cut -c1-8)"
+# 프롬프트·세션 로그에 코드가 담긴다. 실행 디렉토리는 본인만 읽는다.
 mkdir -p "$RUNS_DIR"
+chmod 700 "$RUNS_DIR" 2>/dev/null || true
 
-log() { printf '[implement-feature] %s\n' "$*" >&2; }
+# 진행 줄은 stderr와 $RUN/progress.log에 함께 남긴다. watch와 백그라운드 실행의 모니터가 이 파일을 따라 읽는다.
+log() {
+  printf '[implement-feature] %s\n' "$*" >&2
+  [[ -n "${RUN:-}" && -d "$RUN" ]] && printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >>"$RUN/progress.log"
+  return 0
+}
 
 if [[ "$CMD" == start ]]; then
   [[ -n "$REQUEST" ]] || usage
@@ -149,6 +157,31 @@ go() { # from outcome → 그래프에 선언된 전이만 따른다
   log "$from --${outcome:-next}--> $to"
 }
 
+# claude stream-json 이벤트에서 도구 호출 한 줄과 최종 result만 남긴다. 원본은 파일 내용이 담긴 도구 입출력이라 디스크에 쓰지 않는다.
+# Bash는 명령 대신 description(없으면 앞의 VAR=값을 건너뛴 실행어 이름)만 보인다. 명령 인자·환경 대입에 토큰이 들어갈 수 있다.
+# Write·Edit 본문, Agent 프롬프트는 보이지 않는다. Grep·Glob은 검색어를 60자까지 보인다.
+stream_progress() { # label → stdout: result 이벤트 한 줄
+  local label="$1" kind line
+  jq --unbuffered -rR --arg repo "$REPO/" 'fromjson? |
+    if .type == "assistant" then
+      .message.content[]? | select(.type == "tool_use") | .input as $in
+      | "P\t" + .name + (
+          if .name == "Bash" then ": " + ($in.description // ($in.command // "" | [scan("\\S+")]
+            | map(select(test("^[A-Za-z_][A-Za-z0-9_]*=") | not)) | .[0] // "" | split("/") | last))
+          elif .name == "Grep" or .name == "Glob" then
+            " " + ($in.pattern // "" | tostring | .[:60]) + (($in.path // "" | tostring | ltrimstr($repo)) as $p | if $p == "" then "" else " in " + $p end)
+          else ($in.file_path // $in.path // $in.description // "" | tostring | ltrimstr($repo)) as $a
+            | if $a == "" then "" else " " + $a end
+          end | gsub("[\t\n]"; " ") | .[:160])
+    elif .type == "result" then "R\t" + tojson
+    else empty end' |
+  while IFS=$'\t' read -r kind line; do
+    case "$kind" in
+      P) log "$label · $line" ;;
+      R) printf '%s\n' "$line" ;;
+    esac
+  done
+}
 # run_agent <node> <label> <prompt> [schema] → $RUN/<label>.out. 쓰기 권한은 그래프의 nodes.<node>.write가 정한다.
 run_agent() {
   local node="$1" label="$2" prompt="$3" schema="${4:-}" rc=0 writable
@@ -162,19 +195,24 @@ run_agent() {
       [[ -n "$schema" ]] && args+=(--output-schema "$schema")
       # push·PR 노드는 네트워크가 필요하다. workspace-write sandbox는 기본으로 네트워크를 막는다.
       [[ "$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")" == true ]] && args+=(-c sandbox_workspace_write.network_access=true)
-      codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
+      # codex 출력은 원본(명령 출력·파일 내용)이다. 사람이 보는 터미널일 때만 함께 흘리고, 에이전트가 받는 stderr에는 넣지 않는다.
+      if [[ -t 2 ]]; then
+        codex "${args[@]}" - <"$RUN/$label.prompt" 2>&1 | tee "$RUN/$label.log" >&2 || rc=$?
+      else
+        codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
+      fi
       ;;
     claude)
       # --tools는 내장 도구만 제한한다. MCP 도구(IDE 파일 편집 등)는 --strict-mcp-config로 함께 끈다.
       # 쓰기 노드는 Agent로 프로젝트 페르소나에 위임할 수 있다.
-      local args=(-p --strict-mcp-config --output-format json)
+      local args=(-p --strict-mcp-config --output-format stream-json --verbose)
       if [[ "$writable" == true ]]; then
         args+=(--tools "Read,Grep,Glob,Edit,Write,Bash,Agent" --permission-mode acceptEdits --allowedTools "Bash")
       else
         args+=(--tools "Read,Grep,Glob" --permission-mode dontAsk)
       fi
       [[ -n "$schema" ]] && args+=(--json-schema "$(<"$schema")")
-      (cd "$REPO" && claude "${args[@]}" <"$RUN/$label.prompt") >"$RUN/$label.json" 2>"$RUN/$label.log" || rc=$?
+      (cd "$REPO" && claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
       if ((rc == 0)); then
         jq -r 'if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
           "$RUN/$label.json" >"$out" 2>/dev/null || rc=1
@@ -529,11 +567,20 @@ case "$CMD" in
         policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:($git == "pr-only" or $git == "direct")},
         status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
+  watch)
+    [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
+    touch "$RUN/progress.log"
+    exec tail -n 50 -f "$RUN/progress.log"
+    ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
     ;;
   *) usage ;;
 esac
+# 실행을 이어 가는 명령마다 진행 파일 경로를 알린다. 새 세션에서 resume만 부른 에이전트도 모니터할 경로를 얻는다.
+if [[ "$CMD" != status ]]; then
+  log "run $RUN_ID · progress: $RUN/progress.log · follow with: bash $(printf '%q' "$SCRIPT_DIR/$(basename "$0")") watch --repo $(printf '%q' "$REPO")"
+fi
 
 if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'

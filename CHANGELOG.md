@@ -8,14 +8,23 @@
 
 
 ## Unreleased
+### 새 기능
+
+- **기능 러너가 도는 동안 진행이 보입니다** — `implement-feature-driver.sh`가 Claude 세션을 `--output-format json`으로 띄워 세션이 끝나기 전엔 출력이 0바이트였고, 노드 하나가 몇 분 도는 동안 무엇을 읽고 고치는지 알 수 없었습니다. 이제 Claude 세션은 stream-json으로 돌고 도구 호출마다 `deliver · Edit src/app.ts` 한 줄을 stderr(`[implement-feature]` 접두)와 실행 디렉터리의 `progress.log`(시각 접두)에 남깁니다. 노드 전환도 같이 남고, Bash는 명령 대신 description(없으면 실행어 이름)만, Write·Edit 본문과 Agent 프롬프트는 보이지 않습니다. 러너는 start·resume·revise·approve 때 `progress:` 경로를 알리고, `implement-feature-driver.sh watch`로 터미널에서 따라 봅니다. 백그라운드로 돌리는 에이전트는 이 파일을 모니터해 진행을 전합니다. Codex 세션 출력은 러너를 사람이 터미널에서 직접 돌릴 때만 화면에 함께 흐릅니다.
 
 ### 동작 변경
 
+- **러너가 Claude 세션의 원본 스트림을 저장하지 않습니다** — stream-json에는 읽은 파일 내용·명령 인자가 그대로 담겨, 저장하면 실행 디렉터리에 코드·토큰이 쌓입니다. 진행 줄과 최종 `result` 이벤트만 남기고, 실행 디렉터리(`~/.ai-harness/runs/<repo>`)는 소유자만 읽도록 700으로 만듭니다.
 - **workspace 세션은 멤버 저장소 코드를 구현하지 않고 멤버 세션으로 인계합니다** — 편집 가드가 멤버 워크플로를 읽은 기록이 있으면 workspace 세션(서브에이전트 포함)의 멤버 코드 편집을 통과시켜, "워크플로 읽기"가 멤버의 편집 가드·페르소나·권한 없이 구현하는 열쇠가 됐습니다(실측: workspace 세션이 멤버 워크플로를 Read한 뒤 `general-purpose` 서브에이전트로 TDD 구현). 이제 `scripts/member-edit-guard.sh`는 세션이 멤버(또는 그 worktree) 밖에서 열렸으면 워크플로 읽기와 무관하게 차단하고, 멤버 디렉토리에서 새 세션을 열어 인계 프롬프트를 넘기거나 `/cd <member>`로 옮기라고 안내합니다. 하네스 문서·`.claude/` 등 설정 편집과 `HM_MEMBER_GUARD=0`은 그대로 통과합니다. workspace AGENTS.md Preflight ③④도 "옮길 수 없으면 워크플로를 직접 읽고 따른다"·"`general-purpose` 프롬프트에 인라인" 탈출구를 없애고 인계 절차(이슈 전환·브랜치/worktree 준비·인계 프롬프트까지만, 멤버 세션을 열 수 없으면 멈춤)로 바꿨습니다.
 
 ### 업데이트 후 해야 할 일
 
 - 기존 workspace는 `/harness-init --sync --apply`로 AGENTS.md 첫 줄·Preflight ③④ diff를 받아 승인합니다. 가드는 플러그인 업데이트만으로 바뀝니다.
+
+## v0.41.0 (2026-10-21)
+### 동작 변경
+
+- **자동 sync가 실행 하나가 끝나면 다음 저장소를 이어서 처리합니다** — sweep 1회에 1건만 띄우고 다음 sweep(6시간 뒤)을 기다려, 뒤처진 저장소 6개가 따라오는 데 며칠이 걸렸습니다. 동시 실행은 여전히 1개이고, 사용량 한도로 끝났거나 한도 휴지 중이거나 사용자가 다시 작업 중이면 멈춰 다음 sweep에 넘깁니다. 무인 실행(자동 harvest·sync)은 `--no-session-persistence`로 transcript를 남기지 않아 '사용자 작업 중' 판정에 섞이지 않고, 무인 실행이 도는 동안의 정기 실행은 LLM 단계를 건너뜁니다. 실행 기록을 읽지 못해 상한을 닫으면 `runs_unreadable`로 남깁니다. 하루 상한 `HM_SYNC_AUTO_DAILY_MAX` 기본값도 2 → 6 (자동 실행 31회 실측 평균 $0.71). (#141)
 
 ## v0.40.0 (2026-10-20)
 ### 새 기능
