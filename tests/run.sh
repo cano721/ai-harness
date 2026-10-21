@@ -2892,7 +2892,7 @@ HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO=1 HM_SYNC_AUTO_
   HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
   CHAIN_PRIO_OUT="$TEST_TMP/chain-prio.out" CHAIN_PRIO_EV="$CHAIN_DATA/events/prio.jsonl" "$ROOT/scripts/harvest-auto.sh" sweep
 assert_eq "sync,project,sync" "$(jq -sr '[.[] | select(.event=="started") | .scope] | join(",")' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a harvest batch that appears mid-chain runs before the remaining syncs"
-# 연쇄 안에서도 전역 분석은 주기(기본 7일)당 한 번만 끼어든다.
+# 전역 분석은 정기 sweep에서만 주기(기본 7일)당 한 번 돈다 — 연쇄가 끼워 넣지 않는다.
 rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto" "$CHAIN_DATA/harvest-queue"
 chain_global() {
   HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_DAILY_MAX=9 \
@@ -2903,7 +2903,7 @@ chain_global() {
 chain_global
 rm -rf "$CHAIN_DATA/sync-auto"
 chain_global
-assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global")] | length' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "the global run joins a chain at most once per window"
+assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global")] | length' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a chain does not add global runs beyond the periodic sweep"
 # 무인 실행은 transcript를 남기지 않는다 — 사용자 활동 판정과 수집에 섞이지 않게.
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"

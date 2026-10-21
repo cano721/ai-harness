@@ -236,18 +236,19 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
 command_sweep() {
   [[ "${HM_HARVEST_AUTO:-0}" == "1" || "${HM_SYNC_AUTO:-0}" == "1" ]] || return 0
   LAUNCHED_NOW=0
-  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] && sweep_batches
+  [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] && sweep_batches "${1:-}"
   # 실행은 한 번에 하나다. 개선(harvest)이 먼저고, 이번에 아무것도 띄우지 않았을 때만 sync를 본다.
   (( LAUNCHED_NOW == 1 )) || maybe_sync_run
   return 0
 }
 
-sweep_batches() {
+sweep_batches() { # [$1=--chain: 실행 뒤 연쇄. 주기 단위인 전역 분석은 정기 sweep에만 둔다]
+  local chain="${1:-}"
   local batch="" status="" origin="" cwd="" src="" project=""
   shopt -s nullglob
   local batches=("$HM_DATA_DIR"/harvest-queue/*/analysis-batch.json)
   shopt -u nullglob
-  (( ${#batches[@]} > 0 )) || { maybe_global_run; return 0; }
+  (( ${#batches[@]} > 0 )) || { [[ -n "$chain" ]] || maybe_global_run; return 0; }
   while IFS= read -r batch; do
     status="$(jq -c '. + {has_analysis_batch:true}' "$batch" 2>/dev/null)" || continue
     project="$(jq -r '.project // empty' <<<"$status")"
@@ -263,7 +264,7 @@ sweep_batches() {
   done < <(for batch in "${batches[@]}"; do
       printf '%s\t%s\n' "$(jq -r '.created_at // ""' "$batch" 2>/dev/null)" "$batch"
     done | sort | cut -f2-)
-  (( LAUNCHED_NOW == 1 )) || maybe_global_run
+  (( LAUNCHED_NOW == 1 )) || [[ -n "$chain" ]] || maybe_global_run
   return 0
 }
 
@@ -584,14 +585,15 @@ command_run() {
   fi
   prune_logs
 
-  # 다음 실행을 이어서 띄운다 — sweep과 같은 순서(harvest batch → 전역 → sync)라 그 사이 생긴 harvest가 먼저다.
+  # 다음 실행을 이어서 띄운다 — sweep과 같은 순서(harvest batch → sync)라 그 사이 생긴 harvest가 먼저다.
+  # 주기 단위인 전역 분석은 끼우지 않는다(정기 sweep에서만).
   # 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
   # 사용량 한도로 끝났거나, 한도 휴지 중이거나, 사용자가 다시 작업 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
   if [[ "$fail_reason" != "usage_limit" ]]; then
     trap - EXIT
     hm_release_lock "$RUN_LOCK"
     if ! hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && ! hm_recently_active "${HM_IDLE_MINUTES:-20}"; then
-      command_sweep
+      command_sweep --chain
     fi
   fi
 }
