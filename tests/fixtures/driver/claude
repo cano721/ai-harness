@@ -17,7 +17,11 @@ out="$(mktemp)"
 jq -nc --arg f "$PWD/src/app.ts" '{type:"system", subtype:"init"}, {type:"assistant", message:{content:[
   {type:"text", text:"MODEL-TEXT-SECRET"},
   {type:"tool_use", name:"Read", input:{file_path:$f}},
-  {type:"tool_use", name:"Bash", input:{command:"curl -H \"Authorization: Bearer CMD-SECRET\" https://x", description:"call the api"}}]}},
+  {type:"tool_use", name:"Bash", input:{command:"curl -H \"Authorization: Bearer CMD-SECRET\" https://x", description:"call the api"}},
+  {type:"tool_use", name:"Bash", input:{command:"TOKEN=ENV-SECRET /usr/bin/curl https://x"}},
+  {type:"tool_use", name:"Write", input:{file_path:($f + ".bak"), content:"WRITE-SECRET"}},
+  {type:"tool_use", name:"Agent", input:{description:"implement", prompt:"AGENT-PROMPT-SECRET"}},
+  {type:"tool_use", name:"Grep", input:{pattern:"useAuth", path:($f | sub("/app.ts$"; ""))}}]}},
   {type:"user", message:{content:[{type:"tool_result", content:"FILE-CONTENT-SECRET"}]}}'
 [[ "${FAKE_CLAUDE_FAIL:-}" == 1 ]] && exit 1
 codex exec -C "$PWD" -s "$sandbox" -o "$out" ${schema:+--output-schema "$schema"}
