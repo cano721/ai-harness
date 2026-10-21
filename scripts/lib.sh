@@ -100,7 +100,8 @@ hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 
 }
 
 # 최근 $1분 안에 Claude·Codex 대화 기록이 갱신됐으면 사용자가 작업 중이다.
-# 무인 실행(자동 harvest·sync·정리)은 --no-session-persistence로 transcript를 남기지 않아 여기에 섞이지 않는다.
+# Claude 무인 실행(자동 harvest·sync·정리)은 --no-session-persistence로 transcript를 남기지 않아 여기에 섞이지 않는다.
+# Codex 무인 실행(codex exec)은 rollout을 남겨 작업 중으로 보인다 — 연쇄·LLM 단계가 늦춰지는 안전한 쪽이다.
 hm_recently_active() { # $1=minutes
   local mins="${1:-20}" root=""
   [[ "$mins" =~ ^[0-9]+$ ]] || mins=20

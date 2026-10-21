@@ -2863,12 +2863,35 @@ assert_eq "0|daily_max" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -
 HM_SYNC_AUTO_DAILY_MAX=2 chain_sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "a broken run-log line does not block launches under the cap"
 # 실행 기록을 읽을 수 없으면 상한을 닫고 사유를 구분해 남긴다.
-if [[ "$(id -u)" != 0 ]]; then
+if [[ "$(id -u)" == 0 ]]; then
+  printf '# skip: unreadable run-log test needs a non-root user\n'
+else
   chmod 000 "$CHAIN_DATA/harvest-auto/runs.jsonl"
   HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
   chmod 600 "$CHAIN_DATA/harvest-auto/runs.jsonl"
-  assert_eq "1|runs_unreadable" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -r '.components.harvest_auto.last_error' "$CHAIN_DATA/health.json")" "unreadable run log closes the cap with its own reason"
+  assert_eq "1|runs_unreadable" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')|$(jq -r '.components.sync_auto.last_error' "$CHAIN_DATA/health.json")" "unreadable run log closes the cap with its own reason"
 fi
+# 연쇄는 sweep과 같은 순서를 따른다 — sync 도중 생긴 harvest batch가 남은 sync보다 먼저 돈다.
+rm -rf "$CHAIN_DATA/sync-auto" "$CHAIN_DATA/harvest-auto" "$CHAIN_DATA/harvest-queue"
+mkdir -p "$CHAIN_DATA/harvest-queue/p-chain-2"
+CHAIN_PRIO="$TEST_TMP/chain-prio.sh"
+cat >"$CHAIN_PRIO" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >>"$CHAIN_PRIO_OUT"
+# 첫 실행 중에 chain-2의 harvest batch가 생긴다.
+if [[ ! -f "$HARNESS_METRICS_DIR/harvest-queue/p-chain-2/analysis-batch.json" ]]; then
+  jq -cn --arg ev "$CHAIN_PRIO_EV" '{project:"chain-2",batch_id:"b-prio",created_at:"2026-01-01T00:00:00Z",reasons:["errors"],event_files:[$ev]}' \
+    >"$HARNESS_METRICS_DIR/harvest-queue/p-chain-2/analysis-batch.json"
+fi
+echo '{"type":"result","result":"AI_HARNESS_SYNC_RESULT outcome=no-change"}'
+STUB
+chmod +x "$CHAIN_PRIO"
+jq -cn --arg cwd "$TEST_TMP/chain-2" '{kind:"session",src:"claude",sid:"prio",project:"chain-2",cwd:$cwd}' >"$CHAIN_DATA/events/prio.jsonl"
+HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_HARVEST_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=2 HM_HARVEST_AUTO_DAILY_MAX=9 \
+  HM_HARVEST_AUTO_FOREGROUND=1 HM_HARVEST_AUTO_CMD="$CHAIN_PRIO" HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 \
+  HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" \
+  CHAIN_PRIO_OUT="$TEST_TMP/chain-prio.out" CHAIN_PRIO_EV="$CHAIN_DATA/events/prio.jsonl" "$ROOT/scripts/harvest-auto.sh" sweep
+assert_eq "sync,project,sync" "$(jq -sr '[.[] | select(.event=="started") | .scope] | join(",")' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a harvest batch that appears mid-chain runs before the remaining syncs"
 # 무인 실행은 transcript를 남기지 않는다 — 사용자 활동 판정과 수집에 섞이지 않게.
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"

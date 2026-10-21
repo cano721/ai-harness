@@ -38,13 +38,15 @@ in_usage_backoff() { hm_in_usage_backoff "$BACKOFF_HOURS"; }
 llm_steps_ready() {
   local deadline=0
   in_usage_backoff && return 1
-  # 무인 실행이 이미 돌고 있으면 이번 회차는 넘긴다(그 실행이 끝나면 다음 sync를 스스로 잇는다).
+  # 무인 실행이 이미 돌고 있으면 이번 회차는 넘긴다 — 그 실행이 끝나면 sweep과 같은 순서로 다음 실행을 스스로 잇는다.
   run_in_flight && return 1
   deadline=$(( $(date +%s) + IDLE_WAIT_HOURS * 3600 ))
   while recently_active; do
     (( $(date +%s) < deadline )) || return 1
     sleep "${HM_IDLE_POLL_SECONDS:-300}"
   done
+  # 기다리는 사이 시작된 무인 실행도 같다.
+  run_in_flight && return 1
   return 0
 }
 

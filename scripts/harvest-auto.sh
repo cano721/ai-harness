@@ -68,9 +68,9 @@ started_today() { # [$1=sync] — 자동 harvest와 자동 sync는 하루 상한
 }
 RUNS_UNREADABLE=999999
 # 실행 기록을 읽지 못해 상한을 닫은 것은 사람이 고쳐야 하므로 daily_max와 구분하고, 그 파일에는 못 쓸 수 있어 health에도 남긴다.
-cap_reason() {
+cap_reason() { # $1=집계 값 $2=health component
   if [[ "$1" == "$RUNS_UNREADABLE" ]]; then
-    "$DIR/health.sh" failure harvest_auto runs_unreadable >/dev/null 2>&1 || true
+    "$DIR/health.sh" failure "${2:-harvest_auto}" runs_unreadable >/dev/null 2>&1 || true
     printf 'runs_unreadable\n'
   else
     printf 'daily_max\n'
@@ -154,7 +154,7 @@ command_trigger() {
   local used=""
   used="$(started_today)"
   if (( used >= DAILY_MAX )); then
-    log_skip "$project" "$batch_id" "$(cap_reason "$used")"
+    log_skip "$project" "$batch_id" "$(cap_reason "$used" harvest_auto)"
     return 0
   fi
   if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -306,7 +306,7 @@ maybe_sync_run() {
     local used=""
     used="$(started_today sync)"
     if (( used >= SYNC_DAILY_MAX )); then
-      log_skip "$project" "sync-$plugin" "$(cap_reason "$used")"
+      log_skip "$project" "sync-$plugin" "$(cap_reason "$used" sync_auto)"
       return 0
     fi
     if [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; then
@@ -584,15 +584,14 @@ command_run() {
   fi
   prune_logs
 
-  # 다음 sync 후보를 이어서 띄운다. 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
-  # 사용량 한도로 끝났으면 잇지 않는다 — 한도는 사용자의 작업과 공유한다.
-  # 사용자가 다시 작업 중이거나 한도 휴지 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
+  # 다음 실행을 이어서 띄운다 — sweep과 같은 순서(harvest batch → 전역 → sync)라 그 사이 생긴 harvest가 먼저다.
+  # 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
+  # 사용량 한도로 끝났거나, 한도 휴지 중이거나, 사용자가 다시 작업 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
   if [[ "$fail_reason" != "usage_limit" ]]; then
     trap - EXIT
     hm_release_lock "$RUN_LOCK"
-    LAUNCHED_NOW=0
     if ! hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && ! hm_recently_active "${HM_IDLE_MINUTES:-20}"; then
-      maybe_sync_run
+      command_sweep
     fi
   fi
 }
