@@ -7,8 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
-
+## v0.41.0 (2026-10-21)
 ### 동작 변경
 
 - **자동 sync가 실행 하나가 끝나면 다음 저장소를 이어서 처리합니다** — sweep 1회에 1건만 띄우고 다음 sweep(6시간 뒤)을 기다려, 뒤처진 저장소 6개가 따라오는 데 며칠이 걸렸습니다. 동시 실행은 여전히 1개이고, 사용량 한도로 끝났거나 한도 휴지 중이거나 사용자가 다시 작업 중이면 멈춰 다음 sweep에 넘깁니다. 무인 실행(자동 harvest·sync)은 `--no-session-persistence`로 transcript를 남기지 않아 '사용자 작업 중' 판정에 섞이지 않고, 무인 실행이 도는 동안의 정기 실행은 LLM 단계를 건너뜁니다. 실행 기록을 읽지 못해 상한을 닫으면 `runs_unreadable`로 남깁니다. 하루 상한 `HM_SYNC_AUTO_DAILY_MAX` 기본값도 2 → 6 (자동 실행 31회 실측 평균 $0.71). (#141)
