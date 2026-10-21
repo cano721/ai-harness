@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse: 세션이 열린 곳과 다른 하네스 저장소(멤버)의 코드를 편집하기 전에 그 저장소의 워크플로를 읽었는지 본다.
-# 저장소의 편집 가드는 그 저장소 .claude/settings.json에 있어 상위 폴더(workspace) 세션에서는 로드되지 않는다.
+# PreToolUse: 세션이 열린 곳과 다른 하네스 저장소(멤버)의 코드 편집을 막고 멤버 세션으로 인계하게 한다.
+# 저장소의 편집 가드·페르소나·권한은 그 저장소 .claude/에 있어 상위 폴더(workspace) 세션에서는 로드되지 않는다.
+# 워크플로를 읽었는지와 무관하다 — 읽어도 그 저장소의 hook·페르소나는 여전히 빠진다. 서브에이전트도 같다.
 # 플러그인 hook은 cwd와 무관하게 로드되므로 여기서 그 빈자리를 막는다. 어떤 오류든 통과(fail-open)한다.
 set -uo pipefail
 trap 'exit 0' ERR
@@ -16,13 +17,11 @@ case "$tool" in Edit|Write|MultiEdit|NotebookEdit) ;; *) exit 0 ;; esac
 
 cwd="$(jq -r '.cwd // empty' <<<"$input")"
 file="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input")"
-transcript="$(jq -r '.transcript_path // empty' <<<"$input")"
-agent_id="$(jq -r '.agent_id // empty' <<<"$input")"
 [[ -n "$cwd" && -n "$file" ]] || exit 0
 cwd="${cwd%/}"
 [[ "$file" == /* ]] || file="$cwd/$file"
 
-# 하네스 문서·도구 설정은 대상이 아니다 — 워크플로를 고치려고 읽는 순서를 강요하지 않는다.
+# 하네스 문서·도구 설정은 대상이 아니다 — workspace 세션이 하네스를 고치거나 인계 문서를 남길 수 있다.
 case "$file" in
   */.ai-harness/*|*/.claude/*|*/.agents/*|*/.codex/*|*.md) exit 0 ;;
 esac
@@ -43,42 +42,15 @@ session_member="$(harness_root "$cwd")" || session_member=""
 physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
 [[ -n "$session_member" && "$(physical_dir "$member")" == "$(physical_dir "$session_member")" ]] && exit 0
 
-transcripts=()
-[[ -n "$transcript" && -f "$transcript" ]] && transcripts+=("$transcript")
-if [[ -n "$agent_id" && -n "$transcript" ]]; then
-  sub="${transcript%.jsonl}/subagents/agent-${agent_id}.jsonl"
-  [[ -f "$sub" ]] && transcripts+=("$sub")
-fi
-((${#transcripts[@]})) || exit 0
-
 rel=""
 case "$member" in "$cwd"/*) rel="${member#"$cwd"/}" ;; esac
-physical="$(cd "$member" 2>/dev/null && pwd -P)" || physical="$member"
-# shellcheck disable=SC2016  # 정규식 메타문자·백틱을 문자 그대로 쓴다
-ere() { printf '%s' "$1" | sed 's/[][\.*^$(){}+?|/]/\\&/g'; }
-
-read_workflow() {
-  local c
-  while IFS= read -r c; do
-    [[ "$c" == *"$member/.ai-harness/workflows/"* || "$c" == *"$physical/.ai-harness/workflows/"* ]] && return 0
-    [[ -n "$rel" ]] || continue
-    grep -q -E "(^|[[:space:]\"'=(])(\./)?$(ere "$rel")/\.ai-harness/workflows/" <<<"$c" && return 0
-    [[ "$c" == *.ai-harness/workflows/* ]] && grep -q -E "cd[[:space:]]+[\"']?(\./)?$(ere "$rel")[\"']?([[:space:]]|;|&&|$)" <<<"$c" && return 0
-  done < <(grep -h -F '.ai-harness/workflows/' "${transcripts[@]}" 2>/dev/null \
-             | jq -R -r 'fromjson? | .message.content[]? | select(type=="object" and .type=="tool_use")
-                         | (.input.file_path // .input.command // empty) | select(type=="string")' 2>/dev/null)
-  return 1
-}
-read_workflow && exit 0
-
 shown="${rel:-$member}"
-list=""
-for w in "$member"/.ai-harness/workflows/*.md; do
-  [[ -f "$w" ]] && list+="${list:+, }$shown/.ai-harness/workflows/${w##*/}"
-done
-# shellcheck disable=SC2016  # 정규식 메타문자·백틱을 문자 그대로 쓴다
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 쓴다
 {
-  printf '[Direct edit guard] %s 는 하네스가 있는 저장소입니다. 코드를 바꾸기 전에 이 저장소의 워크플로를 읽고 그 절차를 따르세요: %s\n' "$shown" "${list:-$shown/AGENTS.md}"
-  printf '구현은 그 저장소에서 연 세션이나 `/cd %s`에서 하는 것이 기본입니다 — 저장소의 편집 가드와 페르소나가 함께 로드됩니다.\n' "$shown"
+  printf '[Direct edit guard] %s 는 하네스가 있는 저장소입니다. 이 세션(서브에이전트 포함)은 그 저장소 밖에서 열려 저장소의 편집 가드·페르소나·권한이 빠져 있으므로 코드를 바꾸지 않습니다. 워크플로를 읽었어도 같습니다.\n' "$shown"
+  printf '구현은 멤버 세션으로 인계하세요 — 인계 프롬프트에 이슈·범위·base 브랜치·이미 정한 결정·진행 방식을 담습니다:\n'
+  printf '  (a) %s 에서 새 세션을 열고 인계 프롬프트를 넘긴다: `cd %s && claude "<인계>"` 또는 `codex -C %s "<인계>"`. 터미널 매니저(Orca 등)가 있으면 그것으로 새 탭에 띄운다.\n' "$shown" "$shown" "$shown"
+  printf '  (b) `/cd %s` 로 이 세션을 옮긴다.\n' "$shown"
+  printf '둘 다 할 수 없으면 구현하지 말고 사용자에게 `/cd`나 새 세션을 요청하고 멈추세요. Bash로 파일을 써서 우회하지 마세요.\n'
 } >&2
 exit 2

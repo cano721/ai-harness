@@ -257,11 +257,11 @@ Claude Code는 시작 디렉토리의 `.claude/`를 로드하므로 workspace �
 
 | 방법 | 멤버 커맨드·스킬·페르소나 | 멤버 settings의 hook·권한 | 비고 |
 |---|---|---|---|
-| 멤버 저장소에서 새 세션 (`claude` / `codex -C <member>`) | 로드 | 로드 | 구현의 기본 경로 |
-| `/cd <member>` (2.1.246+) | 로드 | 로드 | 대화 유지. `CLAUDE_PROJECT_DIR`은 시작 디렉토리로 남는다 |
+| 멤버 저장소에서 새 세션 (`claude` / `codex -C <member>`) | 로드 | 로드 | 구현 경로. workspace가 인계 프롬프트를 넘긴다 |
+| `/cd <member>` (2.1.246+) | 로드 | 로드 | 구현 경로. 대화 유지. `CLAUDE_PROJECT_DIR`은 시작 디렉토리로 남는다 |
 | `/add-dir <member>` (cwd 하위, 2.1.257+) | 로드 | **미로드** | 편집 가드가 없으므로 구현에는 쓰지 않는다 |
 
-플러그인 hook(`scripts/member-edit-guard.sh`)은 시작 디렉토리와 무관하게 로드되므로, workspace 세션이 하네스 멤버의 코드를 편집하려 하면 그 멤버의 워크플로를 읽기 전까지 차단한다(멤버 안에서 연 세션은 멤버의 편집 가드가 맡는다). 그래서 workspace 세션은 여러 저장소를 훑어보거나 교차 변경을 조율하는 용도이고, 한 저장소 안의 구현은 멤버 세션 또는 `/cd <member>`로 한다 — 이 안내를 workspace AGENTS.md 첫 줄에 쓴다.
+플러그인 hook(`scripts/member-edit-guard.sh`)은 시작 디렉토리와 무관하게 로드되므로, workspace 세션(서브에이전트 포함)이 하네스 멤버의 코드를 편집하려 하면 **멤버 워크플로를 읽었는지와 무관하게** 차단하고 멤버 세션으로 인계하라고 안내한다(하네스 문서·`.claude/` 등 설정은 통과, 멤버 안에서 연 세션은 멤버의 편집 가드가 맡는다). 워크플로를 읽어도 멤버의 hook·페르소나·권한은 workspace 세션에 로드되지 않기 때문이다. 그래서 workspace 세션은 여러 저장소를 훑어보거나 교차 변경을 조율하고 구현을 **인계**하는 용도이고, 한 저장소 안의 구현은 멤버 세션 또는 `/cd <member>`에서만 한다 — 이 안내를 workspace AGENTS.md 첫 줄에 쓴다.
 
 ### 7-1. 감지
 
@@ -299,8 +299,8 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 
 ### 7-4. AGENTS.md 구성
 
-- **첫 줄 안내**: 위 진입 방법 표와 쓰임새(훑어보기·교차 조율용, 구현은 멤버 세션 또는 `/cd <member>`).
-- **Preflight**: ① 작업 대상 파일에서 위로 올라가 `.ai-harness/harness.json`이 있는 git root(`git -C <dir> rev-parse --show-toplevel`)로 멤버를 정한다 — 경로 첫 세그먼트는 `worktrees/<이슈>/<member>` 같은 worktree 배치에서 틀린다. ② 그 멤버의 `AGENTS.md`를 Read한다. ③ 멤버 코드를 바꾸는 작업이면 멤버 세션 또는 `/cd <member>`로 옮겨 멤버 워크플로를 진입점으로 쓴다. 옮길 수 없으면 `<member>/.ai-harness/workflows/<name>.md`를 **직접 읽고 절차를 따른다**. ④ workspace 세션에서 `subagent_type: developer` 같은 위임은 멤버 페르소나가 아니라 **같은 이름의 사용자 전역 페르소나(`~/.claude/agents/`)로 갈 수 있다** — 멤버 쓰기 범위가 적용되지 않으므로, 멤버 코드를 바꾸는 위임은 ③의 방법으로 멤버에 들어간 뒤 한다. 들어갈 수 없으면 `general-purpose` 프롬프트에 멤버 페르소나 지침과 파일 범위를 인라인하고 결과를 직접 확인한다. ⑤ 멤버 코드로 "현재 상태"(버전·설계·존재 여부)를 판정하기 전 `git -C <member> fetch origin` 후 `git -C <member> rev-list --count HEAD..origin/<base>`로 비교하고, 뒤처져 있으면 기본으로 `git -C <member> show origin/<base>:<path>`로 읽는다(워킹트리를 건드리지 않는다). 체크아웃 자체를 최신화(`pull --ff-only`)하는 건 `git -C <member> status --porcelain`이 비어 있고 로컬 브랜치가 origin과 diverge하지 않았을 때만 한다 — 사용자가 작업 중인 체크아웃일 수 있다. `<base>`는 멤버 AGENTS.md의 기준 브랜치 규칙을 따르고, AGENTS.md가 없으면 `git -C <member> symbolic-ref --short refs/remotes/origin/HEAD`의 기본 브랜치를 쓴다. 멤버 체크아웃은 각자 따로 pull 되어 자주 stale이고, workspace 세션은 여러 멤버를 한꺼번에 훑으므로 삭제된 브랜치·옛 코드를 현재로 오판하기 쉽다.
+- **첫 줄 안내**: 위 진입 방법 표와 쓰임새(훑어보기·교차 조율·인계용. workspace 세션은 멤버 코드를 구현하지 않고, 구현은 멤버 세션 또는 `/cd <member>`에서만 한다).
+- **Preflight**: ① 작업 대상 파일에서 위로 올라가 `.ai-harness/harness.json`이 있는 git root(`git -C <dir> rev-parse --show-toplevel`)로 멤버를 정한다 — 경로 첫 세그먼트는 `worktrees/<이슈>/<member>` 같은 worktree 배치에서 틀린다. ② 그 멤버의 `AGENTS.md`를 Read한다. ③ 멤버 코드를 바꾸는 작업이면 **인계**한다. workspace 세션은 이슈 상태 전환·브랜치/worktree 준비·인계 프롬프트 작성까지만 하고, 인계 프롬프트에 이슈·범위·base 브랜치·이미 정한 결정·진행 방식(따를 멤버 워크플로 이름)을 담는다. 그다음 멤버 디렉토리(또는 그 worktree)에서 새 세션을 열어 프롬프트를 넘기거나(`cd <member> && claude "<인계>"` / `codex -C <member> "<인계>"`, 터미널 매니저(Orca 등)가 있으면 그것으로 새 탭에 띄운다) 사용자에게 `/cd <member>`를 요청하고, 구현은 거기서 한다. **멤버 워크플로를 읽었다고 workspace 세션 구현이 허용되지 않는다** — 읽어도 멤버의 hook·페르소나·권한은 로드되지 않는다. 멤버 세션을 열 방법이 없으면 구현하지 말고 사용자에게 `/cd`나 새 세션을 요청하고 멈춘다. ④ workspace 세션에서 `subagent_type: developer` 같은 위임은 멤버 페르소나가 아니라 **같은 이름의 사용자 전역 페르소나(`~/.claude/agents/`)로 갈 수 있다** — 멤버 쓰기 범위가 적용되지 않는다. 서브에이전트(`general-purpose` 포함)도 workspace 세션과 같은 판정이므로 멤버 코드를 바꾸는 위임은 하지 않고 ③대로 인계한다. 조사·읽기 위임은 그대로 할 수 있다. ⑤ 멤버 코드로 "현재 상태"(버전·설계·존재 여부)를 판정하기 전 `git -C <member> fetch origin` 후 `git -C <member> rev-list --count HEAD..origin/<base>`로 비교하고, 뒤처져 있으면 기본으로 `git -C <member> show origin/<base>:<path>`로 읽는다(워킹트리를 건드리지 않는다). 체크아웃 자체를 최신화(`pull --ff-only`)하는 건 `git -C <member> status --porcelain`이 비어 있고 로컬 브랜치가 origin과 diverge하지 않았을 때만 한다 — 사용자가 작업 중인 체크아웃일 수 있다. `<base>`는 멤버 AGENTS.md의 기준 브랜치 규칙을 따르고, AGENTS.md가 없으면 `git -C <member> symbolic-ref --short refs/remotes/origin/HEAD`의 기본 브랜치를 쓴다. 멤버 체크아웃은 각자 따로 pull 되어 자주 stale이고, workspace 세션은 여러 멤버를 한꺼번에 훑으므로 삭제된 브랜치·옛 코드를 현재로 오판하기 쉽다.
 - **멤버 표**: 경로 · project_id · 하네스 유무 · 테스트 정책 · git 정책. `harness:false` 멤버는 "해당 저장소에서 `/harness-init` 권장"으로 표기한다.
 - **교차 작업 규칙**: 멤버 둘 이상을 건드릴 때 멤버별 별도 브랜치·PR, 컨벤션은 각 멤버 것만 적용(섞지 않음), 공유 계약(API 스키마·이벤트 포맷) 변경은 제공자 → 소비자 순서, 완료 보고는 멤버별 검증 결과를 분리.
 - **Hard constraints**: 틀만 비워 둔다. 단일 하네스와 같이 `/harvest`가 채운다.
@@ -322,6 +322,6 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 
 - `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
 - `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
-- 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있거나 낡았으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음, 첫 줄·①③④가 "cwd의 `.claude/`만 로드하므로 해결 불가"·"경로 첫 세그먼트" 기준) 같은 방식으로 diff를 제안하고 승인 후 반영한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
+- 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있거나 낡았으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음, 첫 줄·①③④가 "cwd의 `.claude/`만 로드하므로 해결 불가"·"경로 첫 세그먼트" 기준, ③④에 "옮길 수 없으면 워크플로를 직접 읽고 따른다"·"`general-purpose` 프롬프트에 인라인" 탈출구가 남음) 같은 방식으로 diff를 제안하고 승인 후 반영한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
 - `persona_shadows`는 7-2와 같이 경고로 보인다.
 - 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.

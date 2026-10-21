@@ -2436,7 +2436,7 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
 
-# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드를 바꾸려면 그 저장소 워크플로를 먼저 읽어야 한다.
+# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드는 워크플로를 읽었어도 바꾸지 못하고 멤버 세션으로 인계한다.
 assert_contains "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
 assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
 assert_eq "3" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
@@ -2445,43 +2445,43 @@ mkdir -p "$GW/jobda/.ai-harness/workflows" "$GW/jobda/src/main" "$GW/worktrees/N
 git -C "$GW/jobda" init -q
 printf '{"project_id":"jobda"}\n' >"$GW/jobda/.ai-harness/harness.json"
 printf '{"project_id":"jobda"}\n' >"$GW/worktrees/NJ-1/jobda/.ai-harness/harness.json"
-touch "$GW/jobda/.ai-harness/workflows/implement-feature.md" "$GW/jobda/.ai-harness/workflows/fix-bug.md" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"
+touch "$GW/jobda/.ai-harness/workflows/implement-feature.md" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"
 guard_line() { # $1=tool name, $2=input json
   printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"%s","input":%s}]}}\n' "$1" "$2"
 }
 : >"$GW/t/none.jsonl"
 guard_line Read "{\"file_path\":\"$GW/jobda/.ai-harness/workflows/implement-feature.md\"}" >"$GW/t/read.jsonl"
-guard_line Bash '{"command":"cat jobda/.ai-harness/workflows/fix-bug.md"}' >"$GW/t/bash.jsonl"
-guard_line Bash '{"command":"cd jobda && sed -n 1,80p .ai-harness/workflows/fix-bug.md"}' >"$GW/t/cd.jsonl"
-guard_line Read "{\"file_path\":\"$GW/plain/README.md\"}" >"$GW/t/other.jsonl"
+guard_line Bash '{"command":"cd jobda && sed -n 1,80p .ai-harness/workflows/implement-feature.md"}' >"$GW/t/cd.jsonl"
 guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/implement-feature.md"}' >"$GW/t/wt.jsonl"
 cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
 mkdir -p "$GW/t/sess/subagents"
-: >"$GW/t/sess/subagents/agent-a1.jsonl"
-cp "$GW/t/none.jsonl" "$GW/t/bare.jsonl"
-mkdir -p "$GW/t/bare/subagents"
-: >"$GW/t/bare/subagents/agent-a1.jsonl"
+cp "$GW/t/read.jsonl" "$GW/t/sess/subagents/agent-a1.jsonl"
 member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; stderr to $GW/err
   local agent="${4:-}"
   jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
     '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
     | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >/dev/null && echo 0 || echo $?
 }
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code without reading its workflow is blocked"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code is blocked"
 assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
-assert_contains "$(<"$GW/err")" "jobda/.ai-harness/workflows/implement-feature.md" "block message names the member workflows"
-assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read unblocks"
-assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bash.jsonl")" "reading the member workflow through Bash unblocks"
-assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member then reading its workflow unblocks"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/other.jsonl")" "reading unrelated files does not unblock"
+assert_contains "$(<"$GW/err")" 'cd jobda && claude "<인계>"' "block message leads with handing off to a member session"
+assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
+[[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
+assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow does not unblock a workspace session"
+assert_contains "$(<"$GW/err")" "/cd worktrees/NJ-1/jobda" "block message hands off to the worktree, not the main checkout"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent of a workspace session is blocked even when it and its parent read the workflow"
+assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "the verdict does not depend on a readable transcript"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the member is left to the member's own guard"
+assert_eq "0" "$(member_guard "$GW/jobda/src" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened below the member root is inside the member"
+assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl" a1)" "a subagent of a member session passes"
+assert_eq "0" "$(member_guard "$GW/worktrees/NJ-1/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the worktree passes"
+assert_eq "2" "$(member_guard "$GW/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a worktree is its own member: a main-checkout session cannot edit it"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.ai-harness/docs/domain.md" "$GW/t/none.jsonl")" "harness documents are not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.claude/settings.json" "$GW/t/none.jsonl")" "tool settings are not guarded"
+assert_eq "0" "$(member_guard "$GW" "$GW/jobda/docs/handoff.md" "$GW/t/none.jsonl")" "markdown documents are not guarded"
 assert_eq "0" "$(member_guard "$GW" "$GW/plain/src/main/App.java" "$GW/t/none.jsonl")" "code outside any harness is not guarded"
-assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "missing transcript fails open"
-assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/read.jsonl")" "a worktree is its own member: reading the main checkout's workflow is not enough"
-assert_eq "0" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow unblocks"
-assert_eq "0" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent passes when its parent session read the workflow"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/bare.jsonl" a1)" "a subagent is blocked when neither it nor its parent read the workflow"
 assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}' | "$ROOT/scripts/member-edit-guard.sh" >/dev/null 2>&1 && echo 0 || echo $?)" "non-edit tools pass"
 ln -s "$GW/jobda" "$GW/jobda-link"
 assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"

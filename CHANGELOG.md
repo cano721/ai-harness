@@ -7,6 +7,16 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 동작 변경
+
+- **workspace 세션은 멤버 저장소 코드를 구현하지 않고 멤버 세션으로 인계합니다** — 편집 가드가 멤버 워크플로를 읽은 기록이 있으면 workspace 세션(서브에이전트 포함)의 멤버 코드 편집을 통과시켜, "워크플로 읽기"가 멤버의 편집 가드·페르소나·권한 없이 구현하는 열쇠가 됐습니다(실측: workspace 세션이 멤버 워크플로를 Read한 뒤 `general-purpose` 서브에이전트로 TDD 구현). 이제 `scripts/member-edit-guard.sh`는 세션이 멤버(또는 그 worktree) 밖에서 열렸으면 워크플로 읽기와 무관하게 차단하고, 멤버 디렉토리에서 새 세션을 열어 인계 프롬프트를 넘기거나 `/cd <member>`로 옮기라고 안내합니다. 하네스 문서·`.claude/` 등 설정 편집과 `HM_MEMBER_GUARD=0`은 그대로 통과합니다. workspace AGENTS.md Preflight ③④도 "옮길 수 없으면 워크플로를 직접 읽고 따른다"·"`general-purpose` 프롬프트에 인라인" 탈출구를 없애고 인계 절차(이슈 전환·브랜치/worktree 준비·인계 프롬프트까지만, 멤버 세션을 열 수 없으면 멈춤)로 바꿨습니다.
+
+### 업데이트 후 해야 할 일
+
+- 기존 workspace는 `/harness-init --sync --apply`로 AGENTS.md 첫 줄·Preflight ③④ diff를 받아 승인합니다. 가드는 플러그인 업데이트만으로 바뀝니다.
+
 ## v0.40.0 (2026-10-20)
 ### 새 기능
 
