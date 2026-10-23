@@ -22,6 +22,7 @@ case "$prompt" in
   *"You are the review node"*) node=review ;;
   *"You are the repair node"*) node=repair ;;
   *"You are the publish node"*) node=publish ;;
+  *"You are the remote_ci node"*) node=remote_ci ;;
   *) node=unknown ;;
 esac
 printf '%s %s schema=%s%s\n' "$node" "$sandbox" "${schema:+yes}" "${net:+ net=yes}" >>"$FAKE_LOG"
@@ -55,11 +56,25 @@ case "$node:$scenario" in
   repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
   publish:publish_unpushed) git add -A; git commit -qm "feat: add feature" || true; jq -n '{summary:"x", branch:"main", pr_url:""}' >"$out" ;;
   publish:*)
-    git checkout -q -b feat/add-feature
+    [[ "$(git rev-parse --abbrev-ref HEAD)" == feat/add-feature ]] || git checkout -q -b feat/add-feature
     git add -A
     git commit -qm "feat: add feature" || true
     git push -q -u origin HEAD 2>/dev/null
     jq -n '{summary:"opened", branch:"feat/add-feature", pr_url:"https://example.test/pr/7"}' >"$out" ;;
+  remote_ci:ci_fail_once)
+    if [[ -f "$FAKE_LOG.ci_failed" ]]; then
+      jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out"
+    else
+      touch "$FAKE_LOG.ci_failed"
+      jq -n --arg c "$(git rev-parse HEAD)" '{status:"failed", commit:$c, summary:"1 of 2 checks failed",
+        failures:["test (ubuntu): expected 12:00:00.123456 but was 12:00:00.123456789"]}' >"$out"
+    fi ;;
+  remote_ci:ci_always_fail) jq -n --arg c "$(git rev-parse HEAD)" '{status:"failed", commit:$c, summary:"1 of 2 checks failed", failures:["test (ubuntu): still red"]}' >"$out" ;;
+  remote_ci:ci_unverified) jq -n '{status:"unverified", commit:"", summary:"no CI tool or token for this host", failures:[]}' >"$out" ;;
+  remote_ci:ci_pending) jq -n --arg c "$(git rev-parse HEAD)" '{status:"pending", commit:$c, summary:"build still running", failures:[]}' >"$out" ;;
+  remote_ci:ci_stale) jq -n --arg c "$(git rev-parse HEAD~1)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
+  remote_ci:ci_none) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
+  remote_ci:*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
   review:bad_review) printf 'looks good to me\n' >"$out" ;;
   review:review_blocks) jq -n '{summary:"x", blocking_findings:["missing case"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   review:decision) jq -n '{summary:"x", blocking_findings:["pricing rule unclear"], non_blocking_findings:[], needs_user_decision:true}' >"$out" ;;

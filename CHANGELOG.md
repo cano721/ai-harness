@@ -7,6 +7,18 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 동작 변경
+
+- **workspace 세션은 인계한 멤버 세션의 완료를 기다립니다** — 인계를 감독 없는 터미널 실행으로만 띄워, 멤버 세션이 PR을 만들고 끝나도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 이제 workspace AGENTS.md Preflight ③과 편집 가드 안내는 터미널 매니저가 감독 디스패치를 지원하면 그것으로 넘기고 완료 신호를 기다리게 합니다(Orca: `orca orchestration worker-start` → `check --wait --types worker_done,escalation,question`, 타임아웃이면 다시 건다). 감독 방식이 없으면(일반 터미널·`codex`) 인계 프롬프트에 완료 파일(workspace `.ai-harness/handoffs/<인계 이름>.done.md` — 결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다립니다. 이 장치 없이 "끝나면 알려 주겠다"고 하지 않습니다. (#147)
+- **PR을 연 것만으로 완료가 아닙니다 — 원격 PR CI 결과까지 봅니다** — 위임 세션이 로컬 CI 동등 검증을 통과시키고 PR을 연 뒤 완료로 보고했지만 원격 CI는 실패했습니다(리눅스 CI의 시각 정밀도 차이라 맥 로컬에선 재현 안 됨). `feature-delivery-graph.json`·`bug-fix-graph.json`에 `publish` 뒤 `remote_ci` 노드를 더했습니다: push한 커밋의 원격 CI가 끝날 때까지 프로젝트 PR·CI 도구로 보고, 실패면 같은 수리 루프(`limits.max_repair_attempts`)로 고쳐 일반 push 후 다시 봅니다. 저장소에 원격 CI가 없으면 그렇다고 밝히고 끝나며, 볼 수단이 없으면 done이 아니라 "원격 CI 미확인"으로 사람에게 넘깁니다. 기능 러너(`implement-feature-driver.sh`)는 이 노드를 실행해 세션이 보고한 결과가 push한 커밋의 것인지 확인하고, CI가 아직 돌면 exit 30으로 멈춰 `resume`이 다시 봅니다. 미확인은 exit 20입니다. (#147)
+
+### 업데이트 후 해야 할 일
+
+- workspace에서 `/harness-init --sync --apply`로 AGENTS.md Preflight ③ diff(완료 신호 대기)를 받아 승인합니다.
+- 각 멤버 저장소에서 `/harness-init --sync --apply`로 `feature-delivery-graph.json`·`bug-fix-graph.json`·러너·`/implement-feature`·`/fix-bug` 진입점을 갱신합니다. 프로젝트 워크플로 본문(`implement-feature.md`)에 원격 CI 확인 수단(예: `gh pr checks <PR> --watch`, Bitbucket pipeline 상태 조회)이 없으면 적어 둡니다 — `remote_ci` 노드가 이 사실을 씁니다. 그래프를 갱신하지 않은 저장소는 이전처럼 publish에서 끝납니다.
+
 ## v0.42.0 (2026-10-21)
 ### 새 기능
 

@@ -11,6 +11,8 @@
 #   - 검증: Brief에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
 #   - git: harness.json의 git_policy가 pr-only·direct면 deliver·repair 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
 #     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
+#   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
+#     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
 # shellcheck disable=SC2016  # state_set·jq 인자의 $x는 셸이 아니라 jq 변수다
 set -euo pipefail
 
@@ -32,7 +34,7 @@ usage: implement-feature-driver.sh <command> [options]
 
   정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖)를 start 때 읽는다.
 
-exit: 0 done · 10 승인 대기 · 20 사람 판단 필요 · 30 미완료 · 40 불변식 위반 · 2 사용법
+exit: 0 done(push했으면 원격 CI 통과까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI 미확인 포함) · 30 미완료(원격 CI 진행 중이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
 }
@@ -185,16 +187,18 @@ stream_progress() { # label → stdout: result 이벤트 한 줄
 # run_agent <node> <label> <prompt> [schema] → $RUN/<label>.out. 쓰기 권한은 그래프의 nodes.<node>.write가 정한다.
 run_agent() {
   local node="$1" label="$2" prompt="$3" schema="${4:-}" rc=0 writable
-  local out="$RUN/$label.out"
+  local out="$RUN/$label.out" network
   writable="$(jq -r --arg n "$node" '.nodes[$n].write' "$GRAPH")"
+  network="$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")"
   printf '%s\n' "$prompt" >"$RUN/$label.prompt"
   log "$label ($([[ "$writable" == true ]] && echo write || echo read-only), $(state .runtime))"
   case "$(state .runtime)" in
     codex)
-      local args=(exec -C "$REPO" -s "$([[ "$writable" == true ]] && echo workspace-write || echo read-only)" -o "$out")
+      # read-only sandbox는 네트워크를 열 수 없다. 네트워크가 필요한 읽기 노드(remote_ci)는 workspace-write로 띄우고 run_node의 지문 비교로 쓰기를 막는다.
+      local args=(exec -C "$REPO" -s "$([[ "$writable" == true || "$network" == true ]] && echo workspace-write || echo read-only)" -o "$out")
       [[ -n "$schema" ]] && args+=(--output-schema "$schema")
-      # push·PR 노드는 네트워크가 필요하다. workspace-write sandbox는 기본으로 네트워크를 막는다.
-      [[ "$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")" == true ]] && args+=(-c sandbox_workspace_write.network_access=true)
+      # push·PR·원격 CI 노드는 네트워크가 필요하다. workspace-write sandbox는 기본으로 네트워크를 막는다.
+      [[ "$network" == true ]] && args+=(-c sandbox_workspace_write.network_access=true)
       # codex 출력은 원본(명령 출력·파일 내용)이다. 사람이 보는 터미널일 때만 함께 흘리고, 에이전트가 받는 stderr에는 넣지 않는다.
       if [[ -t 2 ]]; then
         codex "${args[@]}" - <"$RUN/$label.prompt" 2>&1 | tee "$RUN/$label.log" >&2 || rc=$?
@@ -208,6 +212,9 @@ run_agent() {
       local args=(-p --strict-mcp-config --output-format stream-json --verbose)
       if [[ "$writable" == true ]]; then
         args+=(--tools "Read,Grep,Glob,Edit,Write,Bash,Agent" --permission-mode acceptEdits --allowedTools "Bash")
+      elif [[ "$network" == true ]]; then
+        # 원격 CI 조회는 gh·curl 같은 명령이 필요하다. 작업 트리를 바꾸면 run_node의 지문 비교가 멈춘다.
+        args+=(--tools "Read,Grep,Glob,Bash" --permission-mode dontAsk --allowedTools "Bash")
       else
         args+=(--tools "Read,Grep,Glob" --permission-mode dontAsk)
       fi
@@ -332,7 +339,7 @@ publish() {
 You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
 - Use the git conventions, base branch, and PR tool that AGENTS.md and the project workflow name (for example /bitbucket or gh). Reviewers, labels, and similar settings come from the project's default rules.
 - Commit any remaining change. The driver's unpushed checkpoint commits (wip(implement-feature): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
-- pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body.
+- pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body. If a pull request for this branch is already open (a repair after remote CI failed), push to it and return its URL instead of opening another.
 - direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
 - If the brief has a \"결정 사항\" section, the agent made those choices without asking a person. Copy it unchanged into a PR body section titled \"결정 사항\" so a person can overturn them before merging; when no PR is opened, put it in the body of the last commit message instead.
 - Never merge, never force-push, never push to the base branch under pr-only, and do not change file contents: the committed tree must equal the reviewed one.
@@ -369,11 +376,59 @@ $(<"$RUN/brief.md")" "$PUBLISH_SCHEMA"
   fi
 }
 
+# remote_ci: push한 커밋의 원격 CI가 끝날 때까지 본다. 로컬과 원격 환경(OS·DB·시각 정밀도)이 달라 로컬 통과가 원격 통과를 보장하지 않는다.
+remote_ci() {
+  local head branch pr_url label out status commit
+  if [[ "$(state '.publish.skipped // ""')" != "" ]]; then
+    state_set '.remote_ci = {status: "not_required", summary: "nothing was pushed"}'
+    go remote_ci remote_ci_passed_or_not_required
+    return
+  fi
+  head="$(git -C "$REPO" rev-parse HEAD)"
+  branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
+  pr_url="$(state '.publish.pr_url // ""')"
+  label="remote-ci-$(state .attempts)"
+  run_node remote_ci "$label" "$CONTEXT
+
+You are the remote_ci node. Do not edit any file, commit, or push. The publish node pushed commit $head on branch $branch${pr_url:+ (pull request $pr_url)}. Find out whether the remote CI for exactly that commit passed, without asking anyone anything:
+- Use the PR or CI tool that AGENTS.md and the project workflow name (for example gh pr checks --watch, or the Bitbucket pipelines API through /bitbucket).
+- Wait until every check or pipeline for the commit reaches a final state, polling about once a minute. A freshly pushed commit can take a few minutes before its checks appear.
+- passed: every check finished successfully. failed: any check failed; put each failing check in failures with the decisive lines of its log, enough to repair it without rerunning CI. none: the repository defines no remote CI (no CI configuration in the repository and no checks reported after waiting). pending: checks are still running after about 60 minutes. unverified: you cannot read the CI result (no tool, no access); say why in summary.
+- A local run of the CI commands is not a remote result. Never report passed from it.
+Return only JSON matching the schema; commit is the SHA the result belongs to." "$REMOTE_CI_SCHEMA"
+  out="$RUN/$label.out"
+  jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string"
+    and (.summary | type) == "string" and (.failures | type) == "array"' "$out" >/dev/null 2>&1 \
+    || finish incomplete 30 "remote CI output does not match the schema ($out); run resume to check again"
+  status="$(jq -r .status "$out")"
+  commit="$(jq -r .commit "$out")"
+  # 세션의 보고가 push한 커밋의 것인지 확인한다. 이전 push의 결과는 이 커밋의 결과가 아니다.
+  if [[ "$status" == passed || "$status" == failed ]] && [[ ${#commit} -lt 7 || "$head" != "$commit"* ]]; then
+    jq --arg h "$head" '.status = "unverified" | .summary = "the CI result is for \(.commit), not the pushed commit \($h)"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+    status=unverified
+  fi
+  state_set '.remote_ci = ($r[0] + {head: $h, pr_url: $u, at: $t})' --slurpfile r "$out" --arg h "$head" --arg u "$pr_url" --arg t "$(now_utc)"
+  case "$status" in
+    passed|none) go remote_ci remote_ci_passed_or_not_required ;;
+    failed)
+      state_set '.findings = (.remote_ci | if (.failures | length) > 0 then .failures else [.summary] end | map("remote CI failed: " + .))
+        | .needs_user_decision = false'
+      go remote_ci remote_ci_failed
+      ;;
+    pending) finish incomplete 30 "remote CI for $head is still running${pr_url:+ ($pr_url)}; run resume to check again" ;;
+    *)
+      state_set '.findings = ["remote CI unverified: " + .remote_ci.summary]'
+      go remote_ci remote_ci_unverified
+      ;;
+  esac
+}
+
 CONTEXT="Read AGENTS.md, .ai-harness/workflows/implement-feature.md, .ai-harness/workflows/feature-delivery-graph.json and the project docs they select before anything else."
 
 BRIEF_SCHEMA="$RUN/brief-schema.json"
 REVIEW_SCHEMA="$RUN/review-schema.json"
 PUBLISH_SCHEMA="$RUN/publish-schema.json"
+REMOTE_CI_SCHEMA="$RUN/remote-ci-schema.json"
 
 execute() {
   local node brief blocking
@@ -381,9 +436,9 @@ execute() {
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
       case "$node" in
-        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')" ;;
+        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci and .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide; see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end'); see $RUN/unresolved.json" ;;
       esac
     fi
     case "$node" in
@@ -531,6 +586,9 @@ $(<"$RUN/brief.md")"
       publish)
         publish
         ;;
+      remote_ci)
+        remote_ci
+        ;;
       *) finish invariant_violation 40 "the driver has no handler for graph node '$node'" ;;
     esac
   done
@@ -604,6 +662,11 @@ EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
  "properties":{"summary":{"type":"string"},"branch":{"type":"string"},"pr_url":{"type":"string"}}}
+EOF
+cat >"$REMOTE_CI_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["status","commit","summary","failures"],
+ "properties":{"status":{"type":"string","enum":["passed","failed","none","pending","unverified"]},"commit":{"type":"string"},
+  "summary":{"type":"string"},"failures":{"type":"array","items":{"type":"string"}}}}
 EOF
 
 case "$CMD" in
