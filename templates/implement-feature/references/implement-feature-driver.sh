@@ -190,6 +190,8 @@ run_agent() {
   local out="$RUN/$label.out" network
   writable="$(jq -r --arg n "$node" '.nodes[$n].write' "$GRAPH")"
   network="$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")"
+  # 같은 label을 다시 쓰는 노드(publish 재실행·resume)가 이전 결과를 이번 결과로 읽지 않게 한다.
+  rm -f "$out"
   printf '%s\n' "$prompt" >"$RUN/$label.prompt"
   log "$label ($([[ "$writable" == true ]] && echo write || echo read-only), $(state .runtime))"
   case "$(state .runtime)" in
@@ -400,12 +402,23 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
   jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string"
     and (.summary | type) == "string" and (.failures | type) == "array"' "$out" >/dev/null 2>&1 \
     || finish incomplete 30 "remote CI output does not match the schema ($out); run resume to check again"
+  # 읽기 노드지만 네트워크·Bash가 있다. push한 브랜치가 원격에서 움직였으면(push·force push) 멈춘다.
+  [[ "$(git -C "$REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1)" == "$head" ]] \
+    || finish invariant_violation 40 "remote branch $branch moved during remote_ci; the node may only read CI"
   status="$(jq -r .status "$out")"
   commit="$(jq -r .commit "$out")"
-  # 세션의 보고가 push한 커밋의 것인지 확인한다. 이전 push의 결과는 이 커밋의 결과가 아니다.
-  if [[ "$status" == passed || "$status" == failed ]] && [[ ${#commit} -lt 7 || "$head" != "$commit"* ]]; then
-    jq --arg h "$head" '.status = "unverified" | .summary = "the CI result is for \(.commit), not the pushed commit \($h)"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+  unverified_because() { # reason
+    jq --arg r "$1" '.status = "unverified" | .summary = $r' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
     status=unverified
+  }
+  # 세션의 보고가 push한 커밋의 것인지 확인한다. 이전 push의 결과는 이 커밋의 결과가 아니다.
+  if [[ "$status" == passed || "$status" == failed || "$status" == none ]] && [[ ${#commit} -lt 7 || "$head" != "$commit"* ]]; then
+    unverified_because "the CI result is for ${commit:-no commit}, not the pushed commit $head"
+  fi
+  # "원격 CI 없음"은 저장소에 CI 설정이 없을 때만 믿는다. 설정이 있는데 체크가 안 보이면 아직 등록 전이거나 볼 수단이 없는 것이다.
+  if [[ "$status" == none && -n "$(git -C "$REPO" ls-files -- .github/workflows bitbucket-pipelines.yml .gitlab-ci.yml \
+    Jenkinsfile .circleci azure-pipelines.yml .buildkite .drone.yml .travis.yml 2>/dev/null)" ]]; then
+    unverified_because "the session reported no remote CI, but the repository has CI configuration"
   fi
   state_set '.remote_ci = ($r[0] + {head: $h, pr_url: $u, at: $t})' --slurpfile r "$out" --arg h "$head" --arg u "$pr_url" --arg t "$(now_utc)"
   case "$status" in
@@ -436,7 +449,8 @@ execute() {
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
       case "$node" in
-        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci and .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end')" ;;
+        done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
+          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
            finish "$node" 20 "a person must decide$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end'); see $RUN/unresolved.json" ;;
       esac

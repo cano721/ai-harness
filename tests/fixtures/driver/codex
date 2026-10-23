@@ -73,7 +73,9 @@ case "$node:$scenario" in
   remote_ci:ci_unverified) jq -n '{status:"unverified", commit:"", summary:"no CI tool or token for this host", failures:[]}' >"$out" ;;
   remote_ci:ci_pending) jq -n --arg c "$(git rev-parse HEAD)" '{status:"pending", commit:$c, summary:"build still running", failures:[]}' >"$out" ;;
   remote_ci:ci_stale) jq -n --arg c "$(git rev-parse HEAD~1)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
-  remote_ci:ci_none) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
+  remote_ci:ci_rewrites_remote) git push -qf origin HEAD~1:refs/heads/feat/add-feature 2>/dev/null
+    jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
+  remote_ci:ci_none*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
   remote_ci:*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
   review:bad_review) printf 'looks good to me\n' >"$out" ;;
   review:review_blocks) jq -n '{summary:"x", blocking_findings:["missing case"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;

@@ -17,7 +17,7 @@
 ### 업데이트 후 해야 할 일
 
 - workspace에서 `/harness-init --sync --apply`로 AGENTS.md Preflight ③ diff(완료 신호 대기)를 받아 승인합니다.
-- 각 멤버 저장소에서 `/harness-init --sync --apply`로 `feature-delivery-graph.json`·`bug-fix-graph.json`·러너·`/implement-feature`·`/fix-bug` 진입점을 갱신합니다. 프로젝트 워크플로 본문(`implement-feature.md`)에 원격 CI 확인 수단(예: `gh pr checks <PR> --watch`, Bitbucket pipeline 상태 조회)이 없으면 적어 둡니다 — `remote_ci` 노드가 이 사실을 씁니다. 그래프를 갱신하지 않은 저장소는 이전처럼 publish에서 끝납니다.
+- 각 멤버 저장소에서 `/harness-init --sync --apply`로 `feature-delivery-graph.json`·`bug-fix-graph.json`·러너·`/implement-feature`·`/fix-bug` 진입점을 갱신합니다. 프로젝트 워크플로 본문(`implement-feature.md`)에 원격 CI 확인 수단(예: `gh pr checks <PR> --watch`, Bitbucket pipeline 상태 조회)이 없으면 적어 둡니다 — `remote_ci` 노드가 이 사실을 씁니다. 그래프를 갱신하지 않은 저장소는 이전처럼 publish에서 끝나고, 러너 결과에 "remote CI: unverified"가 붙습니다.
 
 ## v0.42.0 (2026-10-21)
 ### 새 기능
