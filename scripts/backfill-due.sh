@@ -35,18 +35,32 @@ run_in_flight() {
 in_usage_backoff() { hm_in_usage_backoff "$BACKOFF_HOURS"; }
 
 # LLM 단계를 돌려도 되는지: 휴지 중이 아니고, 사용자가 쉬고 있을 때까지(최대 IDLE_WAIT_HOURS) 기다린다.
+# 넘긴 이유는 SKIP_REASON에 남긴다 — worker는 출력을 버리므로 이 기록이 없으면 왜 안 돌았는지 알 수 없다.
+SKIP_REASON=""
 llm_steps_ready() {
   local deadline=0
-  in_usage_backoff && return 1
+  in_usage_backoff && { SKIP_REASON=usage_backoff; return 1; }
   # 무인 실행이 이미 돌고 있으면 이번 회차는 넘긴다 — 그 실행이 끝나면 sweep과 같은 순서로 다음 실행을 스스로 잇는다.
-  run_in_flight && return 1
+  run_in_flight && { SKIP_REASON=run_in_flight; return 1; }
   deadline=$(( $(date +%s) + IDLE_WAIT_HOURS * 3600 ))
   while recently_active; do
-    (( $(date +%s) < deadline )) || return 1
+    (( $(date +%s) < deadline )) || { SKIP_REASON=never_idle; return 1; }
     sleep "${HM_IDLE_POLL_SECONDS:-300}"
   done
   # 기다리는 사이 시작된 무인 실행도 같다.
-  run_in_flight && return 1
+  run_in_flight && { SKIP_REASON=run_in_flight; return 1; }
+  return 0
+}
+
+# 회차마다 LLM 단계를 돌렸는지·넘긴 이유를 한 줄 남긴다(최근 200줄).
+schedule_log() { # $1=llm(ran|skipped|off) [$2=reason]
+  local file="$HM_DATA_DIR/logs/schedule.jsonl"
+  mkdir -p "${file%/*}" 2>/dev/null || return 0
+  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg llm "$1" --arg reason "${2:-}" \
+    '{at:$at,llm:$llm} + (if $reason == "" then {} else {reason:$reason} end)' >>"$file" 2>/dev/null || return 0
+  if (( $(wc -l <"$file") > 200 )); then
+    tail -n 200 "$file" >"$file.tmp" 2>/dev/null && mv "$file.tmp" "$file"
+  fi
   return 0
 }
 
@@ -55,9 +69,14 @@ if [[ "${1:-}" == "--worker" ]]; then
   trap 'hm_release_lock "$LOCK_DIR"' EXIT
   nice -n 10 "$DIR/backfill.sh" >/dev/null 2>&1 || true
   # LLM 단계는 새로 회수된 세션까지 반영된 뒤, 사용자가 쉬는 동안에만 돈다.
-  if [[ "${HM_DIGEST:-0}" == "1" || "${HM_HARVEST_AUTO:-0}" == "1" || "${HM_SYNC_AUTO:-0}" == "1" ]] && llm_steps_ready; then
+  if [[ "${HM_DIGEST:-0}" != "1" && "${HM_HARVEST_AUTO:-0}" != "1" && "${HM_SYNC_AUTO:-0}" != "1" ]]; then
+    schedule_log off
+  elif llm_steps_ready; then
+    schedule_log ran
     [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
     "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
+  else
+    schedule_log skipped "$SKIP_REASON"
   fi
   "$DIR/check-update.sh" refresh >/dev/null 2>&1 || true
   exit 0
