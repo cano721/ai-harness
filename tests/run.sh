@@ -2632,6 +2632,17 @@ run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/tick-stub.out"
 assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "a session file touched only by untimestamped lines counts as idle, so LLM steps run"
 assert_eq "ran" "$(jq -r .llm "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log records the run"
+assert_eq "true" "$(jq -r '.started_at <= .at' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log keeps when the round started"
+idle_check() { # → active|idle (HM_IDLE_MINUTES=20 기준, 위 tick 디렉터리)
+  HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
+    bash -c 'source "$1"; hm_recently_active 20 && echo active || echo idle' _ "$ROOT/scripts/lib.sh"
+}
+assert_eq "idle" "$(idle_check)" "untimestamped tail lines alone are idle"
+mkdir -p "$TEST_TMP/tick-codex/2999/01/01"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{timestamp:$t,type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "active" "$(idle_check)" "a fresh Codex rollout line counts as activity"
+jq -cn '{timestamp:"2000-01-01T00:00:00.000Z",type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "idle" "$(idle_check)" "a Codex rollout touched recently but last stamped long ago is idle"
 pass "hook-driven schedule with idle and usage gates"
 
 # 규칙 품질: 보이지 않는 문자·비밀값 거부, 총량 상한, 효과 수치 판정(세션 시작 시각 기준).

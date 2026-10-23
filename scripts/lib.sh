@@ -102,7 +102,8 @@ hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 
 # 최근 $1분 안에 Claude·Codex 대화 기록에 시각이 찍힌 줄이 남았으면 사용자가 작업 중이다.
 # 파일 수정 시각만 보면 안 된다: 열려 있는 Claude 세션은 사용자가 쉬어도 시각 없는 줄(last-prompt·cost-state)을
 # 덧붙여, 세션 탭이 여럿이면 하루 내내 작업 중으로 보여 LLM 단계가 대기 상한까지 기다리다 넘어간다.
-# 수정 시각으로 후보만 좁히고, 끝부분의 마지막 "timestamp"로 판정한다.
+# 수정 시각으로 후보만 좁히고, 끝부분의 마지막 "timestamp"로 판정한다. 끝 200줄이 전부 시각 없는 줄이면 유휴로 본다
+# (실측: 활성 세션 끝 200줄 중 시각 없는 줄 75개).
 # Claude 무인 실행(자동 harvest·sync·정리)은 --no-session-persistence로 transcript를 남기지 않아 여기에 섞이지 않는다.
 # Codex 무인 실행(codex exec)은 rollout을 남겨 작업 중으로 보인다 — 연쇄·LLM 단계가 늦춰지는 안전한 쪽이다.
 hm_recently_active() { # $1=minutes
