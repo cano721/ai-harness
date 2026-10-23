@@ -14,7 +14,7 @@ jq -e '
   and .entry == "triage"
   and (.terminals | index("done"))
   and (.terminals | index("user_decision"))
-  and (["triage", "reproduce", "brief", "approval", "regression", "fix", "verify", "review", "repair", "publish", "done", "user_decision"] | all(.[]; . as $node | $graph.nodes | has($node)))
+  and (["triage", "reproduce", "brief", "approval", "regression", "fix", "verify", "review", "repair", "publish", "remote_ci", "done", "user_decision"] | all(.[]; . as $node | $graph.nodes | has($node)))
 ' "$graph_path" >/dev/null || {
   printf 'invalid bug-fix graph nodes\n' >&2
   exit 1
@@ -42,14 +42,18 @@ has_transition review publish no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair verify
 has_transition repair user_decision repair_limit_reached_or_product_or_environment_decision
-has_transition publish "done" published_or_not_required
+has_transition publish remote_ci published_or_not_required
 has_transition publish user_decision publish_failed
+has_transition remote_ci "done" remote_ci_passed_or_not_required
+has_transition remote_ci repair remote_ci_failed
+has_transition remote_ci user_decision remote_ci_unverified
 
 jq -e '
   (.nodes.approval.write == false)
   and (.nodes.regression.write == true)
   and (.nodes.fix.write == true)
   and (.nodes.repair.write == true)
+  and (.nodes.remote_ci.write == false)
   and (.invariants | any(startswith("No write-capable node is reachable before the current brief is approved")))
   and ((.limits.max_repair_attempts | type) == "number" and .limits.max_repair_attempts >= 1)
 ' "$graph_path" >/dev/null || {

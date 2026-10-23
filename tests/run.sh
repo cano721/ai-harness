@@ -385,6 +385,10 @@ assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑤" "workspace sync proposes
 assert_contains "$HARNESS_INIT_CONTENT" "/cd <member>" "workspace routing moves implementation into the member with /cd or a member session"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel\`)로 멤버를 정한다" "workspace preflight resolves the member by git root, not the first path segment"
 assert_contains "$HARNESS_INIT_CONTENT" "같은 이름의 사용자 전역 페르소나" "workspace preflight warns that delegation can hit a same-named user persona"
+assert_contains "$HARNESS_INIT_CONTENT" 'check --wait --types worker_done,escalation,question' "workspace handoff waits for the supervised worker's completion signal"
+assert_contains "$HARNESS_INIT_CONTENT" '.ai-harness/handoffs/<인계 이름>.done.md' "workspace handoff without supervision waits for a completion file"
+assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝나면 알려 주겠다"고 하지 않는다' "the coordinator does not promise to report completion it cannot observe"
+assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
 pass "workspace mode scan, manifest, and routing"
@@ -659,6 +663,12 @@ assert_eq "true:true" "$(jq -r '"\(.nodes.publish.write):\(.nodes.publish.networ
 INVALID_GRAPH="$TEST_TMP/no-publish-graph.json"
 jq 'del(.transitions[] | select(.from == "publish"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
 if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose publish node cannot finish is invalid"; fi
+jq 'del(.transitions[] | select(.from == "remote_ci" and .to == "repair"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose remote CI failure cannot be repaired is invalid"; fi
+for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json"; do
+  assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
+  assert_eq "done repair user_decision" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, and unverified"
+done
 assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
@@ -832,10 +842,70 @@ assert_contains "$(run_state '[.history[].outcome] | join(",")')" "auto_approved
 assert_file "$(run_state .approval.brief)"
 assert_eq "https://example.test/pr/7" "$(run_state .publish.pr_url)" "pr-only opens a PR in the publish node"
 assert_contains "$DRIVER_OUT" "PR: https://example.test/pr/7" "done reports the PR"
-assert_eq "publish workspace-write schema=yes net=yes" "$(tail -n 1 "$FAKE_LOG")" "publish writes with network access and a schema"
+assert_eq "publish workspace-write schema=yes net=yes;remote_ci workspace-write schema=yes net=yes" "$(tail -n 2 "$FAKE_LOG" | paste -sd ';' -)" "publish writes with network access, then remote_ci reads CI with network access and a schema"
+assert_eq "passed:$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state '"\(.remote_ci.status):\(.remote_ci.head)"')" "done waits for remote CI of the pushed commit"
+assert_contains "$DRIVER_OUT" "remote CI: passed" "done reports the remote CI result"
+assert_contains "$(<"$FAKE_LOG.remote_ci.prompt")" "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "remote_ci is told the exact pushed commit"
+assert_contains "$(<"$FAKE_LOG.remote_ci.prompt")" "A local run of the CI commands is not a remote result" "a local CI-equivalent run does not stand in for remote CI"
 assert_eq "1" "$(run_state '.checkpoints | length')" "the runner commits a local checkpoint after deliver"
 assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(implement-feature): deliver" "checkpoint commit is on the branch"
 assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-auto_pr.git" rev-parse feat/add-feature)" "the work branch is pushed"
+
+# 원격 CI 실패는 같은 수리 루프로 고쳐 일반 push 후 다시 본다. 볼 수 없으면 done이 아니라 미확인으로 사람에게 간다.
+new_driver_repo ci_fail_once
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:passed:1" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci.status):$(run_state .attempts)" "a remote CI failure goes back through repair and is checked again"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "remote CI failed: test (ubuntu): expected 12:00:00.123456" "repair receives the failing remote check and its log lines"
+assert_contains "$(run_state '[.history[].outcome] | join(",")')" "remote_ci_failed" "the failure follows the declared remote_ci -> repair edge"
+assert_eq "2" "$(grep -c '^publish ' "$FAKE_LOG")" "the repaired commit is published again"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "push to it and return its URL instead of opening another" "a repeated publish reuses the open PR"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-ci_fail_once.git" rev-parse feat/add-feature)" "the repair is pushed with a normal push"
+new_driver_repo ci_always_fail
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 2' "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "remote CI that stays red stops at the graph repair limit"
+new_driver_repo ci_unverified
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "remote CI that cannot be observed is never done"
+assert_contains "$DRIVER_OUT" "remote CI unverified: no CI tool or token for this host; PR: https://example.test/pr/7" "the outcome says remote CI is unverified and names the PR"
+new_driver_repo ci_stale
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .remote_ci.status)" "a CI result for another commit does not count"
+new_driver_repo ci_pending
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "30:incomplete:remote_ci" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "remote CI still running leaves the run resumable at remote_ci"
+assert_contains "$DRIVER_OUT" "run resume to check again" "the runner says how to check again"
+new_driver_repo ci_none
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:none" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci.status)" "a repository without remote CI is done after the PR"
+new_driver_repo ci_none_but_configured
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.github/workflows" && echo "on: push" >"$DRIVER_REPO/.github/workflows/test.yml"
+git -C "$DRIVER_REPO" add .github && git -C "$DRIVER_REPO" commit -q -m ci
+driver start --runtime codex --request "add feature"
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .remote_ci.status)" "a 'no remote CI' report is not trusted when the repository has CI configuration"
+new_driver_repo ci_rewrites_remote
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "remote_ci may only read CI: a moved remote branch stops the run"
+# 갱신하지 않은 프로젝트 그래프(publish → done)는 그대로 따르되, 원격 CI를 보지 않았다고 밝힌다.
+new_driver_repo legacy_publish_graph
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.nodes.remote_ci) | .transitions |= (map(select(.from != "remote_ci")) | map(if .to == "remote_ci" then .to = "done" else . end))' \
+  "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:null" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci)" "a project graph without remote_ci still ends at publish"
+assert_contains "$DRIVER_OUT" "remote CI: unverified — the project graph has no remote_ci node" "that outcome says remote CI was not checked"
 
 new_driver_repo dirty_start
 with_policy pr-only auto
@@ -938,6 +1008,14 @@ assert_file "$BUG_FIX_SKILL"
 assert_not_file "$ROOT/skills/fix-bug/SKILL.md"
 BUG_FIX_SKILL_CONTENT="$(<"$BUG_FIX_SKILL")"
 assert_contains "$BUG_FIX_SKILL_CONTENT" "This is a project adapter" "bug-fix skill is a thin adapter"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for content in "$FEATURE_SKILL_CONTENT" "$BUG_FIX_SKILL_CONTENT"; do
+  assert_contains "$content" 'report "remote CI unverified" with the PR link instead of done' "adapters never report unobserved remote CI as done"
+  assert_contains "$content" "A local run of the CI-equivalent commands does not stand in for remote CI" "adapters do not let local CI-equivalent runs replace remote CI"
+  assert_contains "$content" '(`limits.max_repair_attempts`), push with a normal push, and check again' "adapters repair remote CI failures in the graph loop"
+done
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$HARNESS_INIT_CONTENT" '원격 CI 확인 수단(실측' "project workflows record how to read remote CI for the remote_ci node"
 assert_contains "$BUG_FIX_SKILL_CONTENT" ".ai-harness/workflows/fix-bug.md" "bug-fix skill references project workflow"
 assert_contains "$BUG_FIX_SKILL_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "bug-fix skill references project graph"
 assert_contains "$BUG_FIX_SKILL_CONTENT" "Do not edit before explicit approval" "bug-fix skill keeps approval gate"
@@ -2492,6 +2570,8 @@ assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.js
 assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
 assert_contains "$(<"$GW/err")" 'cd jobda && claude "<인계>"' "block message leads with handing off to a member session"
 assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
+assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message hands off through supervised dispatch so the coordinator learns of completion"
+assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
 [[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
