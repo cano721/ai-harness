@@ -53,11 +53,13 @@ llm_steps_ready() {
 }
 
 # 회차마다 LLM 단계를 돌렸는지·넘긴 이유를 한 줄 남긴다(최근 200줄).
+WORKER_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# never_idle은 대기 상한 뒤에 기록되므로 회차 시작 시각(started_at)을 함께 남긴다.
 schedule_log() { # $1=llm(ran|skipped|off) [$2=reason]
   local file="$HM_DATA_DIR/logs/schedule.jsonl"
   mkdir -p "${file%/*}" 2>/dev/null || return 0
-  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg llm "$1" --arg reason "${2:-}" \
-    '{at:$at,llm:$llm} + (if $reason == "" then {} else {reason:$reason} end)' >>"$file" 2>/dev/null || return 0
+  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg st "$WORKER_STARTED_AT" --arg llm "$1" --arg reason "${2:-}" \
+    '{at:$at,started_at:$st,llm:$llm} + (if $reason == "" then {} else {reason:$reason} end)' >>"$file" 2>/dev/null || return 0
   if (( $(wc -l <"$file") > 200 )); then
     tail -n 200 "$file" >"$file.tmp" 2>/dev/null && mv "$file.tmp" "$file"
   fi
