@@ -7,6 +7,15 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+### 버그 수정
+
+- **세션 탭을 열어 두면 자동 harvest·sync·정리가 돌지 않던 문제** — 사용자가 쉬는지를 대화 기록 파일의 수정 시각으로 판정했는데, 열려 있는 Claude 세션은 쉬는 동안에도 시각 없는 줄(`last-prompt`·`cost-state`)을 덧붙입니다. 세션 탭이 여럿이면 하루 내내 작업 중으로 보여 LLM 단계가 대기 상한(4시간)까지 기다리다 넘어갔고(실측: 1시간 넘게 쉰 구간이 있었는데 10-22 02시 이후 하루 넘게 한 번도 안 돎), 뒤처진 저장소 7곳의 자동 sync도 시작되지 않았습니다. 이제 수정 시각으로 후보만 좁히고 기록 끝부분의 마지막 `timestamp`로 판정합니다.
+
+### 새 기능
+
+- **정기 실행 기록 `~/.ai-harness/logs/schedule.jsonl`** — 정기 실행이 LLM 단계를 돌렸는지, 넘겼다면 이유(`never_idle`·`usage_backoff`·`run_in_flight`)를 회차마다 한 줄 남깁니다(최근 200줄). worker 출력을 버려 지금까지는 왜 안 돌았는지 알 방법이 없었습니다.
+
 ## v0.42.0 (2026-10-21)
 ### 새 기능
 

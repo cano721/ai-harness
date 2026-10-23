@@ -99,20 +99,28 @@ hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 
   printf '%s\n' "${head:-HEAD}"
 }
 
-# 최근 $1분 안에 Claude·Codex 대화 기록이 갱신됐으면 사용자가 작업 중이다.
+# 최근 $1분 안에 Claude·Codex 대화 기록에 시각이 찍힌 줄이 남았으면 사용자가 작업 중이다.
+# 파일 수정 시각만 보면 안 된다: 열려 있는 Claude 세션은 사용자가 쉬어도 시각 없는 줄(last-prompt·cost-state)을
+# 덧붙여, 세션 탭이 여럿이면 하루 내내 작업 중으로 보여 LLM 단계가 대기 상한까지 기다리다 넘어간다.
+# 수정 시각으로 후보만 좁히고, 끝부분의 마지막 "timestamp"로 판정한다. 끝 200줄이 전부 시각 없는 줄이면 유휴로 본다
+# (실측: 활성 세션 끝 200줄 중 시각 없는 줄 75개).
 # Claude 무인 실행(자동 harvest·sync·정리)은 --no-session-persistence로 transcript를 남기지 않아 여기에 섞이지 않는다.
 # Codex 무인 실행(codex exec)은 rollout을 남겨 작업 중으로 보인다 — 연쇄·LLM 단계가 늦춰지는 안전한 쪽이다.
 hm_recently_active() { # $1=minutes
-  local mins="${1:-20}" root=""
+  local mins="${1:-20}" since="" f="" last=""
   [[ "$mins" =~ ^[0-9]+$ ]] || mins=20
   (( mins > 0 )) || return 1
-  if [[ -n "$(find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$mins" -print -quit 2>/dev/null)" ]]; then
-    return 0
-  fi
-  while IFS= read -r root; do
-    [[ -d "$root" ]] || continue
-    [[ -n "$(find "$root" -name 'rollout-*.jsonl' -mmin "-$mins" -print -quit 2>/dev/null)" ]] && return 0
-  done < <(codex_session_roots)
+  since="$(date -u -v-"${mins}"M +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "$mins minutes ago" +%Y-%m-%dT%H:%M:%S)"
+  while IFS= read -r f; do
+    last="$(tail -n 200 "$f" 2>/dev/null | grep -o '"timestamp":"[0-9T:.-]*' | tail -n 1)"
+    last="${last#\"timestamp\":\"}"
+    [[ -n "$last" && "${last:0:19}" > "$since" ]] && return 0
+  done < <({
+      find "$HM_CLAUDE_PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -mmin "-$mins" 2>/dev/null
+      codex_session_roots | while IFS= read -r root; do
+        [[ -d "$root" ]] && find "$root" -name 'rollout-*.jsonl' -mmin "-$mins" 2>/dev/null
+      done
+    })
   return 1
 }
 
