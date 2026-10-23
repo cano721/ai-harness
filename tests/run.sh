@@ -2524,7 +2524,7 @@ printf '{}' | HARNESS_METRICS_DIR="$TICK_DATA" HM_INTERNAL_SESSION=1 HM_BACKFILL
 assert_not_file "$TICK_DATA/health.json"
 TICK_CLAUDE="$TEST_TMP/tick-claude/-tmp-x"
 mkdir -p "$TICK_CLAUDE" "$TEST_TMP/tick-codex"
-printf '{}\n' >"$TICK_CLAUDE/active.jsonl"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{type:"user",timestamp:$t}' >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker() {
   HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
     HM_BACKFILL_INTERVAL_HOURS=6 HM_BACKFILL_FOREGROUND=1 HM_HARVEST_AUTO=1 HM_HARVEST_GLOBAL_DAYS=0 \
@@ -2533,17 +2533,25 @@ run_tick_worker() {
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "success" "$(jq -r '.components.backfill.last_result' "$TICK_DATA/health.json")" "collection runs even while the user is active"
 assert_not_file "$TICK_DATA/harvest-auto/runs.jsonl"
+assert_eq "skipped:never_idle" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log says why LLM steps did not run"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 mkdir -p "$TICK_DATA/harvest-auto"
 jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"x",result:"failed",reason:"usage_limit"}' >"$TICK_DATA/harvest-auto/runs.jsonl"
-touch -t 200001010000 "$TICK_CLAUDE/active.jsonl"
+# 열린 세션은 쉬는 동안에도 시각 없는 줄(last-prompt·cost-state)을 덧붙인다. 파일 수정 시각이 아니라 마지막 기록 시각으로 판정한다.
+{
+  jq -cn '{type:"user",timestamp:"2000-01-01T00:00:00.000Z"}'
+  jq -cn '{type:"last-prompt",lastPrompt:"x"}'
+  jq -cn '{type:"cost-state",totalCostUSD:0}'
+} >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "1" "$(wc -l <"$TICK_DATA/harvest-auto/runs.jsonl" | tr -d ' ')" "LLM steps rest right after a usage limit"
+assert_eq "skipped:usage_backoff" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log names the usage backoff"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 : >"$TICK_DATA/harvest-auto/runs.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7 HM_HARVEST_AUTO_FOREGROUND=1 \
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/tick-stub.out"
-assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "when the user is idle and no backoff applies, LLM steps run"
+assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "a session file touched only by untimestamped lines counts as idle, so LLM steps run"
+assert_eq "ran" "$(jq -r .llm "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log records the run"
 pass "hook-driven schedule with idle and usage gates"
 
 # 규칙 품질: 보이지 않는 문자·비밀값 거부, 총량 상한, 효과 수치 판정(세션 시작 시각 기준).
@@ -2934,7 +2942,7 @@ assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global"
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
-assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && return 1" "scheduled LLM steps skip while an unattended run is in flight"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
 
 
