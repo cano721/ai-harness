@@ -7,7 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
+## v0.43.0 (2026-10-25)
 ### 새 기능
 
 - **정기 실행 기록 `~/.ai-harness/logs/schedule.jsonl`** — 정기 실행이 LLM 단계를 돌렸는지, 넘겼다면 이유(`never_idle`·`usage_backoff`·`run_in_flight`)를 회차마다 한 줄 남깁니다(최근 200줄). worker 출력을 버려 지금까지는 왜 안 돌았는지 알 방법이 없었습니다.
