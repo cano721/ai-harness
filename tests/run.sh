@@ -385,6 +385,10 @@ assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑤" "workspace sync proposes
 assert_contains "$HARNESS_INIT_CONTENT" "/cd <member>" "workspace routing moves implementation into the member with /cd or a member session"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel\`)로 멤버를 정한다" "workspace preflight resolves the member by git root, not the first path segment"
 assert_contains "$HARNESS_INIT_CONTENT" "같은 이름의 사용자 전역 페르소나" "workspace preflight warns that delegation can hit a same-named user persona"
+assert_contains "$HARNESS_INIT_CONTENT" 'check --wait --types worker_done,escalation,question' "workspace handoff waits for the supervised worker's completion signal"
+assert_contains "$HARNESS_INIT_CONTENT" '.ai-harness/handoffs/<인계 이름>.done.md' "workspace handoff without supervision waits for a completion file"
+assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝나면 알려 주겠다"고 하지 않는다' "the coordinator does not promise to report completion it cannot observe"
+assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
 pass "workspace mode scan, manifest, and routing"
@@ -659,6 +663,12 @@ assert_eq "true:true" "$(jq -r '"\(.nodes.publish.write):\(.nodes.publish.networ
 INVALID_GRAPH="$TEST_TMP/no-publish-graph.json"
 jq 'del(.transitions[] | select(.from == "publish"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
 if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose publish node cannot finish is invalid"; fi
+jq 'del(.transitions[] | select(.from == "remote_ci" and .to == "repair"))' "$FEATURE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose remote CI failure cannot be repaired is invalid"; fi
+for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json"; do
+  assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
+  assert_eq "done repair user_decision" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, and unverified"
+done
 assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
@@ -832,10 +842,70 @@ assert_contains "$(run_state '[.history[].outcome] | join(",")')" "auto_approved
 assert_file "$(run_state .approval.brief)"
 assert_eq "https://example.test/pr/7" "$(run_state .publish.pr_url)" "pr-only opens a PR in the publish node"
 assert_contains "$DRIVER_OUT" "PR: https://example.test/pr/7" "done reports the PR"
-assert_eq "publish workspace-write schema=yes net=yes" "$(tail -n 1 "$FAKE_LOG")" "publish writes with network access and a schema"
+assert_eq "publish workspace-write schema=yes net=yes;remote_ci workspace-write schema=yes net=yes" "$(tail -n 2 "$FAKE_LOG" | paste -sd ';' -)" "publish writes with network access, then remote_ci reads CI with network access and a schema"
+assert_eq "passed:$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state '"\(.remote_ci.status):\(.remote_ci.head)"')" "done waits for remote CI of the pushed commit"
+assert_contains "$DRIVER_OUT" "remote CI: passed" "done reports the remote CI result"
+assert_contains "$(<"$FAKE_LOG.remote_ci.prompt")" "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "remote_ci is told the exact pushed commit"
+assert_contains "$(<"$FAKE_LOG.remote_ci.prompt")" "A local run of the CI commands is not a remote result" "a local CI-equivalent run does not stand in for remote CI"
 assert_eq "1" "$(run_state '.checkpoints | length')" "the runner commits a local checkpoint after deliver"
 assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(implement-feature): deliver" "checkpoint commit is on the branch"
 assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-auto_pr.git" rev-parse feat/add-feature)" "the work branch is pushed"
+
+# 원격 CI 실패는 같은 수리 루프로 고쳐 일반 push 후 다시 본다. 볼 수 없으면 done이 아니라 미확인으로 사람에게 간다.
+new_driver_repo ci_fail_once
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:passed:1" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci.status):$(run_state .attempts)" "a remote CI failure goes back through repair and is checked again"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "remote CI failed: test (ubuntu): expected 12:00:00.123456" "repair receives the failing remote check and its log lines"
+assert_contains "$(run_state '[.history[].outcome] | join(",")')" "remote_ci_failed" "the failure follows the declared remote_ci -> repair edge"
+assert_eq "2" "$(grep -c '^publish ' "$FAKE_LOG")" "the repaired commit is published again"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "push to it and return its URL instead of opening another" "a repeated publish reuses the open PR"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(git -C "$DRIVER_TMP/remote-ci_fail_once.git" rev-parse feat/add-feature)" "the repair is pushed with a normal push"
+new_driver_repo ci_always_fail
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 2' "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "remote CI that stays red stops at the graph repair limit"
+new_driver_repo ci_unverified
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "remote CI that cannot be observed is never done"
+assert_contains "$DRIVER_OUT" "remote CI unverified: no CI tool or token for this host; PR: https://example.test/pr/7" "the outcome says remote CI is unverified and names the PR"
+new_driver_repo ci_stale
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .remote_ci.status)" "a CI result for another commit does not count"
+new_driver_repo ci_pending
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "30:incomplete:remote_ci" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "remote CI still running leaves the run resumable at remote_ci"
+assert_contains "$DRIVER_OUT" "run resume to check again" "the runner says how to check again"
+new_driver_repo ci_none
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:none" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci.status)" "a repository without remote CI is done after the PR"
+new_driver_repo ci_none_but_configured
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.github/workflows" && echo "on: push" >"$DRIVER_REPO/.github/workflows/test.yml"
+git -C "$DRIVER_REPO" add .github && git -C "$DRIVER_REPO" commit -q -m ci
+driver start --runtime codex --request "add feature"
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .remote_ci.status)" "a 'no remote CI' report is not trusted when the repository has CI configuration"
+new_driver_repo ci_rewrites_remote
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "remote_ci may only read CI: a moved remote branch stops the run"
+# 갱신하지 않은 프로젝트 그래프(publish → done)는 그대로 따르되, 원격 CI를 보지 않았다고 밝힌다.
+new_driver_repo legacy_publish_graph
+with_policy pr-only auto
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.nodes.remote_ci) | .transitions |= (map(select(.from != "remote_ci")) | map(if .to == "remote_ci" then .to = "done" else . end))' \
+  "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:null" "$DRIVER_RC:$(run_state .status):$(run_state .remote_ci)" "a project graph without remote_ci still ends at publish"
+assert_contains "$DRIVER_OUT" "remote CI: unverified — the project graph has no remote_ci node" "that outcome says remote CI was not checked"
 
 new_driver_repo dirty_start
 with_policy pr-only auto
@@ -938,6 +1008,14 @@ assert_file "$BUG_FIX_SKILL"
 assert_not_file "$ROOT/skills/fix-bug/SKILL.md"
 BUG_FIX_SKILL_CONTENT="$(<"$BUG_FIX_SKILL")"
 assert_contains "$BUG_FIX_SKILL_CONTENT" "This is a project adapter" "bug-fix skill is a thin adapter"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for content in "$FEATURE_SKILL_CONTENT" "$BUG_FIX_SKILL_CONTENT"; do
+  assert_contains "$content" 'report "remote CI unverified" with the PR link instead of done' "adapters never report unobserved remote CI as done"
+  assert_contains "$content" "A local run of the CI-equivalent commands does not stand in for remote CI" "adapters do not let local CI-equivalent runs replace remote CI"
+  assert_contains "$content" '(`limits.max_repair_attempts`), push with a normal push, and check again' "adapters repair remote CI failures in the graph loop"
+done
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$HARNESS_INIT_CONTENT" '원격 CI 확인 수단(실측' "project workflows record how to read remote CI for the remote_ci node"
 assert_contains "$BUG_FIX_SKILL_CONTENT" ".ai-harness/workflows/fix-bug.md" "bug-fix skill references project workflow"
 assert_contains "$BUG_FIX_SKILL_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "bug-fix skill references project graph"
 assert_contains "$BUG_FIX_SKILL_CONTENT" "Do not edit before explicit approval" "bug-fix skill keeps approval gate"
@@ -2492,6 +2570,8 @@ assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.js
 assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
 assert_contains "$(<"$GW/err")" 'cd jobda && claude "<인계>"' "block message leads with handing off to a member session"
 assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
+assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message hands off through supervised dispatch so the coordinator learns of completion"
+assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
 [[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
@@ -2524,7 +2604,7 @@ printf '{}' | HARNESS_METRICS_DIR="$TICK_DATA" HM_INTERNAL_SESSION=1 HM_BACKFILL
 assert_not_file "$TICK_DATA/health.json"
 TICK_CLAUDE="$TEST_TMP/tick-claude/-tmp-x"
 mkdir -p "$TICK_CLAUDE" "$TEST_TMP/tick-codex"
-printf '{}\n' >"$TICK_CLAUDE/active.jsonl"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{type:"user",timestamp:$t}' >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker() {
   HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
     HM_BACKFILL_INTERVAL_HOURS=6 HM_BACKFILL_FOREGROUND=1 HM_HARVEST_AUTO=1 HM_HARVEST_GLOBAL_DAYS=0 \
@@ -2533,17 +2613,36 @@ run_tick_worker() {
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "success" "$(jq -r '.components.backfill.last_result' "$TICK_DATA/health.json")" "collection runs even while the user is active"
 assert_not_file "$TICK_DATA/harvest-auto/runs.jsonl"
+assert_eq "skipped:never_idle" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log says why LLM steps did not run"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 mkdir -p "$TICK_DATA/harvest-auto"
 jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"x",result:"failed",reason:"usage_limit"}' >"$TICK_DATA/harvest-auto/runs.jsonl"
-touch -t 200001010000 "$TICK_CLAUDE/active.jsonl"
+# 열린 세션은 쉬는 동안에도 시각 없는 줄(last-prompt·cost-state)을 덧붙인다. 파일 수정 시각이 아니라 마지막 기록 시각으로 판정한다.
+{
+  jq -cn '{type:"user",timestamp:"2000-01-01T00:00:00.000Z"}'
+  jq -cn '{type:"last-prompt",lastPrompt:"x"}'
+  jq -cn '{type:"cost-state",totalCostUSD:0}'
+} >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "1" "$(wc -l <"$TICK_DATA/harvest-auto/runs.jsonl" | tr -d ' ')" "LLM steps rest right after a usage limit"
+assert_eq "skipped:usage_backoff" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log names the usage backoff"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 : >"$TICK_DATA/harvest-auto/runs.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7 HM_HARVEST_AUTO_FOREGROUND=1 \
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/tick-stub.out"
-assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "when the user is idle and no backoff applies, LLM steps run"
+assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "a session file touched only by untimestamped lines counts as idle, so LLM steps run"
+assert_eq "ran" "$(jq -r .llm "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log records the run"
+assert_eq "true" "$(jq -r '.started_at <= .at' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log keeps when the round started"
+idle_check() { # → active|idle (HM_IDLE_MINUTES=20 기준, 위 tick 디렉터리)
+  HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
+    bash -c 'source "$1"; hm_recently_active 20 && echo active || echo idle' _ "$ROOT/scripts/lib.sh"
+}
+assert_eq "idle" "$(idle_check)" "untimestamped tail lines alone are idle"
+mkdir -p "$TEST_TMP/tick-codex/2999/01/01"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{timestamp:$t,type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "active" "$(idle_check)" "a fresh Codex rollout line counts as activity"
+jq -cn '{timestamp:"2000-01-01T00:00:00.000Z",type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "idle" "$(idle_check)" "a Codex rollout touched recently but last stamped long ago is idle"
 pass "hook-driven schedule with idle and usage gates"
 
 # 규칙 품질: 보이지 않는 문자·비밀값 거부, 총량 상한, 효과 수치 판정(세션 시작 시각 기준).
@@ -2934,7 +3033,7 @@ assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global"
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
-assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && return 1" "scheduled LLM steps skip while an unattended run is in flight"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
 
 

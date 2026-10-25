@@ -219,7 +219,8 @@ Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승�
 Brief·검증 명령을 보여 줌  ◀──────────           approval에서 체크포인트 후 멈춤 (exit 10)
 "X는 빼줘"               ──────────▶  revise  approval → brief → approval
 "승인"                   ──────────▶  resume  트랜스크립트에서 사용자 메시지 확인
-                                               deliver → review ⇄ repair → publish → done / user_decision
+                                               deliver → review ⇄ repair → publish → remote_ci → done / user_decision
+                                               (remote_ci 실패 → repair → … → publish로 다시 push)
 ```
 
 `approval: auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
@@ -231,9 +232,10 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
 | 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
 | git | `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(implement-feature): …`)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
+| 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
-| 종료 | review의 blocking finding이 0개이고 publish가 확인될 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 러너의 체크포인트와 publish 밖에서 HEAD가 움직이면 멈춥니다 |
+| 종료 | review의 blocking finding이 0개이고 publish가 확인되고, push했으면 원격 CI가 통과(또는 원격 CI 없음)일 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 러너의 체크포인트와 publish 밖에서 HEAD가 움직이면 멈춥니다 |
 
 종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
 
@@ -345,7 +347,7 @@ stateDiagram-v2
 
 수집은 세션 종료 hook에도, OS 스케줄러에도 기대지 않습니다. 종료 hook은 터미널·탭을 그냥 닫으면 실행되지 않아 실측 43%를 놓쳤고, launchd·cron·작업 스케줄러는 OS마다 따로 설치해야 합니다. 대신 Claude Code·Codex 공통 hook(세션 시작과 응답마다)이 주기를 확인하고, transcript 전체를 훑는 backfill이 유일한 수집 경로입니다. 며칠 이어지는 세션 하나만 켜 둬도 응답마다 확인하므로 주기대로 돕니다. 세션이 전혀 없으면 새로 쌓일 기록도 없습니다.
 
-- **LLM 단계는 쉬는 동안만**: 수집은 바로 하고, LLM 정리·자동 harvest는 최근 `HM_IDLE_MINUTES`(20)분간 Claude·Codex 기록이 갱신되지 않을 때까지 최대 `HM_IDLE_WAIT_HOURS`(4)시간 기다렸다가 돕니다. 작업과 사용량 한도가 겹치지 않게 하기 위해서입니다
+- **LLM 단계는 쉬는 동안만**: 수집은 바로 하고, LLM 정리·자동 harvest는 최근 `HM_IDLE_MINUTES`(20)분간 Claude·Codex 기록에 시각이 찍힌 줄(대화·도구 호출)이 남지 않을 때까지 최대 `HM_IDLE_WAIT_HOURS`(4)시간 기다렸다가 돕니다. 열린 세션이 덧붙이는 시각 없는 줄(`last-prompt`·`cost-state`)은 활동으로 보지 않습니다. 작업과 사용량 한도가 겹치지 않게 하기 위해서입니다. 회차마다 돌았는지·넘긴 이유는 `~/.ai-harness/logs/schedule.jsonl`에 남습니다
 - **사용량 한도 휴지**: 자동 harvest가 사용량 한도로 실패한 뒤 `HM_LLM_BACKOFF_HOURS`(5)시간은 LLM 단계를 쉽니다
 
 `scripts/collect.sh`는 세션 1개를 즉시 수집하는 수동 진입점으로 남아 있습니다. 세션을 거의 열지 않는데도 정해진 시각에 돌리고 싶다면 OS 스케줄러에 `HM_BACKFILL_FOREGROUND=1 <플러그인>/scripts/backfill-due.sh`를 등록할 수 있고, macOS는 `scripts/schedule.sh install`(선택 사항)이 이를 대신합니다.
@@ -560,7 +562,7 @@ HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
 HM_BACKFILL_INTERVAL_HOURS=6     # 정기 backfill 주기. 0이면 비활성화
-HM_IDLE_MINUTES=20               # 이 시간 동안 활동이 없어야 LLM 단계 실행. 0이면 기다리지 않음
+HM_IDLE_MINUTES=20               # 이 시간 동안 기록에 시각 찍힌 줄이 없어야 LLM 단계 실행. 0이면 기다리지 않음
 HM_IDLE_WAIT_HOURS=4             # 쉬는 시간을 기다리는 최대 시간
 HM_LLM_BACKOFF_HOURS=5           # 사용량 한도 실패 뒤 LLM 단계 휴지
 HM_UPDATE_CHECK_HOURS=24         # 0이면 매 SessionStart마다 확인

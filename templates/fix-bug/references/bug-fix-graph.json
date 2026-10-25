@@ -15,6 +15,7 @@
     "review": {"write": false, "output": "findings"},
     "repair": {"write": true, "output": "repair_evidence"},
     "publish": {"write": true, "network": true, "output": "pull_request"},
+    "remote_ci": {"write": false, "network": true, "output": "remote_ci_result"},
     "done": {"write": false, "output": "handoff"},
     "user_decision": {"write": false, "output": "blocker_report"}
   },
@@ -34,8 +35,11 @@
     {"from": "review", "to": "repair", "when": "blocking_findings"},
     {"from": "repair", "to": "verify"},
     {"from": "repair", "to": "user_decision", "when": "repair_limit_reached_or_product_or_environment_decision"},
-    {"from": "publish", "to": "done", "when": "published_or_not_required"},
-    {"from": "publish", "to": "user_decision", "when": "publish_failed"}
+    {"from": "publish", "to": "remote_ci", "when": "published_or_not_required"},
+    {"from": "publish", "to": "user_decision", "when": "publish_failed"},
+    {"from": "remote_ci", "to": "done", "when": "remote_ci_passed_or_not_required"},
+    {"from": "remote_ci", "to": "repair", "when": "remote_ci_failed"},
+    {"from": "remote_ci", "to": "user_decision", "when": "remote_ci_unverified"}
   ],
   "limits": {"max_repair_attempts": 10},
   "invariants": [
@@ -43,6 +47,7 @@
     "A bug fix is not complete without reproduction or explicit equivalent verification evidence.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
-    "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch."
+    "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",
+    "Work that was pushed is not done until remote CI for the pushed commit has finished green or the repository has no remote CI; local runs of the CI commands do not stand in for it, a failure goes back through repair, and remote CI that cannot be observed ends as unverified, never as done."
   ]
 }
