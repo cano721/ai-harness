@@ -9,6 +9,10 @@
 
 ## Unreleased
 
+### 새 기능
+
+- **화면이 바뀌는 변경은 실제로 렌더링·조작해 검증합니다** — 코드 리뷰와 브라우저 테스트를 통과한 승인 대기 화면에서 `반려하기`가 펼침 표시 없는 `<summary>`라 일반 텍스트처럼 보였습니다. 테스트는 텍스트로 찾아 클릭했고, 검토 기록·스크린샷·해시 게이트도 이를 걸러내지 못했습니다. 새 UI 검토 계약(`ui-review` Skill·체크리스트·`ui-review-graph.json`)은 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 기본·접힌 상태·키보드·모바일·테마를 실제로 조작하는 UX 검토 → 수정·재검증 → 근거·한계 보고를 요구하고, 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 생겼습니다. Brief가 `화면 검증 시나리오`를 내면 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 화면을 검증하고, 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌며, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 기능 러너는 이 노드에 앱·브라우저 실행을 허용하고 캡처는 실행 디렉터리에만 쓰게 합니다. `/harness-init`은 프론트 패키지뿐 아니라 서버 렌더링 템플릿(Jinja·Thymeleaf·JSP·ERB 등)도 UI로 감지해 stack `ui`로 생성하며, 프로젝트 디자인 규칙이 계약보다, 계약이 외부 디자인 Skill보다 우선합니다. (#150)
+
 ### 동작 변경
 
 - **workspace 세션은 인계한 멤버 세션의 완료를 기다립니다** — 인계를 감독 없는 터미널 실행으로만 띄워, 멤버 세션이 PR을 만들고 끝나도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 이제 workspace AGENTS.md Preflight ③과 편집 가드 안내는 터미널 매니저가 감독 디스패치를 지원하면 그것으로 넘기고 완료 신호를 기다리게 합니다(Orca: `orca orchestration worker-start` → `check --wait --types worker_done,escalation,question`, 타임아웃이면 다시 건다). 감독 방식이 없으면(일반 터미널·`codex`) 인계 프롬프트에 완료 파일(workspace `.ai-harness/handoffs/<인계 이름>.done.md` — 결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다립니다. 이 장치 없이 "끝나면 알려 주겠다"고 하지 않습니다. (#147)
@@ -16,6 +20,7 @@
 
 ### 업데이트 후 해야 할 일
 
+- 화면이 있는 저장소에서 UI 검토 계약을 쓰려면 `/harness-init --sync`(또는 `--reconfigure`)에서 "UI 검토 계약 추가"를 고릅니다. 기존 프로젝트에는 자동으로 켜지지 않습니다. 켜면 `.ai-harness/docs/ui.md`에 앱 실행·로그인·지원 테마·기준 화면을 실측으로 채웁니다 — 비어 있으면 `ui_review`가 미검증을 보고합니다. 그래프만 갱신하고 계약을 켜지 않아도 `ui_review` 노드는 내장 지침으로 동작합니다.
 - workspace에서 `/harness-init --sync --apply`로 AGENTS.md Preflight ③ diff(완료 신호 대기)를 받아 승인합니다.
 - 각 멤버 저장소에서 `/harness-init --sync --apply`로 `feature-delivery-graph.json`·`bug-fix-graph.json`·러너·`/implement-feature`·`/fix-bug` 진입점을 갱신합니다. 프로젝트 워크플로 본문(`implement-feature.md`)에 원격 CI 확인 수단(예: `gh pr checks <PR> --watch`, Bitbucket pipeline 상태 조회)이 없으면 적어 둡니다 — `remote_ci` 노드가 이 사실을 씁니다. 그래프를 갱신하지 않은 저장소는 이전처럼 publish에서 끝나고, 러너 결과에 "remote CI: unverified"가 붙습니다.
 

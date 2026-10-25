@@ -17,4 +17,13 @@ for edge in 'scope inspect' 'inspect classify' 'repair verify' 'verify re_review
 done
 jq -e '.transitions[] | select(.from == "classify" and .to == "done" and .when == "no_blocking_findings")' "$graph_path" >/dev/null
 jq -e '.transitions[] | select(.from == "re_review" and .to == "repair" and .when == "blocking_findings")' "$graph_path" >/dev/null
+if jq -e '.nodes | has("ui_review")' "$graph_path" >/dev/null; then
+  for edge in 'classify ui_review no_blocking_findings_ui_affected' 're_review ui_review no_blocking_findings_ui_affected' \
+    'ui_review done ui_verified' 'ui_review repair ui_issues_and_repair_authorized' 'ui_review user_decision ui_issues_need_user_decision_or_ui_unverified'; do
+    read -r from to when <<<"$edge"
+    jq -e --arg from "$from" --arg to "$to" --arg when "$when" '.transitions[] | select(.from == $from and .to == $to and .when == $when)' "$graph_path" >/dev/null
+  done
+  jq -e '.nodes.ui_review.write == false and .nodes.ui_review.browser == true and (.invariants | any(test("ui_review")))' "$graph_path" >/dev/null \
+    || { printf 'invalid ui_review node\n' >&2; exit 1; }
+fi
 printf 'review graph is valid\n'

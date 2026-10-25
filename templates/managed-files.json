@@ -406,6 +406,50 @@
       "skill": "feature-sliced-design",
       "source": "templates/feature-sliced-design/references/practical-examples.md",
       "mode": "copy"
+    },
+    {
+      "path": ".ai-harness/workflows/ui-review-graph.json",
+      "level": "standard",
+      "stack": "ui",
+      "workflow": "ui-review",
+      "source": "templates/ui-review/references/ui-review-graph.json",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/ui-review/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/ui-review/references/checklist.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/checklist.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/ui-review/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/ui-review/references/checklist.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/checklist.md",
+      "mode": "copy"
     }
   ],
   "retired": [
