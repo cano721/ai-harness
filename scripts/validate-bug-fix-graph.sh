@@ -53,7 +53,8 @@ if jq -e '.nodes | has("ui_review")' "$graph_path" >/dev/null; then
   has_transition ui_review publish ui_verified
   has_transition ui_review repair ui_issues
   has_transition ui_review user_decision ui_unverified
-  jq -e '.nodes.ui_review.write == false and .nodes.ui_review.browser == true and (.invariants | any(test("ui_review")))' "$graph_path" >/dev/null || {
+  jq -e '.nodes.ui_review.write == false and .nodes.ui_review.browser == true and (.invariants | any(test("ui_review")))
+    and ([.transitions[] | select(.from == "ui_review" and .to != "repair" and .to != "user_decision")] | all(.when == "ui_verified"))' "$graph_path" >/dev/null || {
     printf 'invalid ui_review node\n' >&2
     exit 1
   }

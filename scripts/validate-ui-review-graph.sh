@@ -12,10 +12,11 @@ jq -e '
   and ($g.invariants | index("A blocking finding cannot transition directly to done."))
   and ($g.invariants | any(startswith("A UI that could not be rendered or operated ends as ui_unverified")))
   and (($g.limits.max_repair_attempts | type) == "number" and $g.limits.max_repair_attempts >= 1)
-  and ([$g.transitions[] | select(.from == "inspect" and .to == "done")] | all(.when == "ui_verified"))
+  and ([$g.transitions[] | select(.to == "done")] | all(.from == "inspect" and .when == "ui_verified"))
 ' "$graph_path" >/dev/null || { printf 'invalid ui-review graph\n' >&2; exit 1; }
 for edge in 'scope design_system' 'design_system inspect' 'inspect done ui_verified' 'inspect repair ui_issues_and_repair_authorized' \
-  'inspect user_decision ui_unverified' 'repair verify' 'verify inspect required_checks_pass'; do
+  'inspect user_decision ui_unverified' 'repair verify' 'repair user_decision repair_limit_reached_or_product_decision' \
+  'verify inspect required_checks_pass'; do
   read -r from to when <<<"$edge"
   jq -e --arg from "$from" --arg to "$to" --arg when "${when:-}" \
     '.transitions[] | select(.from == $from and .to == $to and ($when == "" or .when == $when))' "$graph_path" >/dev/null

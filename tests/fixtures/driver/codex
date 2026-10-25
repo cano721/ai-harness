@@ -56,6 +56,7 @@ case "$node:$scenario" in
     fi ;;
   deliver:noop) printf 'nothing\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
+  deliver:screen_backstop) mkdir -p templates; echo '<summary>반려하기</summary>' >templates/approve.html; printf 'delivered\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
   publish:publish_unpushed) git add -A; git commit -qm "feat: add feature" || true; jq -n '{summary:"x", branch:"main", pr_url:""}' >"$out" ;;
@@ -88,7 +89,7 @@ case "$node:$scenario" in
   ui_review:ui_writes) echo capture >capture.png; jq -n '{status:"verified", summary:"ok", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_issues_once)
     if [[ -f "$FAKE_LOG.ui_failed" ]]; then
-      jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
+      jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
     else
       touch "$FAKE_LOG.ui_failed"
       jq -n '{status:"issues", summary:"반려하기가 일반 텍스트처럼 보인다", scenarios:[], non_blocking_findings:[], unverified:[],
@@ -96,8 +97,10 @@ case "$node:$scenario" in
     fi ;;
   ui_review:ui_unverified) jq -n '{status:"unverified", summary:"앱 서버를 띄우지 못했다", scenarios:[], blocking_findings:[], non_blocking_findings:[],
     unverified:["모든 시나리오: 로그인 계정이 문서에 없다"]}' >"$out" ;;
+  ui_review:ui_hollow) jq -n '{status:"verified", summary:"looks fine", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
-    jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   *) exit 1 ;;
 esac

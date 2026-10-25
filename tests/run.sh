@@ -682,6 +682,9 @@ for pair in "feature:$FEATURE_GRAPH" "bug-fix:$ROOT/templates/fix-bug/references
   if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose UI issues cannot be repaired is invalid"; fi
   jq '.nodes.ui_review.write = true' "$graph" >"$INVALID_GRAPH"
   if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose ui_review can write is invalid"; fi
+  jq --arg to "$(jq -r 'first(.transitions[] | select(.from == "ui_review" and .when == "ui_verified") | .to)' "$graph")" \
+    '.transitions += [{"from": "ui_review", "to": $to, "when": "ui_unverified_but_ship"}]' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with a ui_review bypass to done or publish is invalid"; fi
 done
 jq '.transitions += [{"from": "inspect", "to": "done", "when": "no_blocking_findings"}]' "$UI_GRAPH" >"$INVALID_GRAPH"
 if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph that reaches done without ui_verified is invalid"; fi
@@ -858,8 +861,18 @@ assert_contains "$DRIVER_OUT" "implementation done, UI unverified" "the outcome 
 assert_eq "0" "$(run_state .attempts)" "an unverified UI goes to a person without repair attempts"
 start_and_approve ui_empty_issues
 assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "issues without findings count as unverified, not as done"
+start_and_approve ui_hollow
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified without a record of operating each scenario is not evidence"
+start_and_approve ui_partial
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified with unverified items left is not done"
 start_and_approve ui_writes
 assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "ui_review that writes into the repository stops the run"
+assert_contains "$DRIVER_OUT" "capture.png" "the violation names the file the node left in the repository"
+# Brief가 화면 변경을 놓쳐도 화면 파일이 바뀌면 검증한다.
+start_and_approve screen_backstop
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run whose brief missed the screen change still ends verified"
+assert_contains "$(run_state '.ui_scenarios[0]')" "templates/approve.html" "changed screen files become a UI scenario"
+assert_eq "review;ui_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the backstop routes through ui_review"
 # 갱신하지 않은 그래프(ui_review 없음)는 그대로 따르되 화면을 검증하지 않았다고 밝힌다.
 new_driver_repo ui_legacy_graph
 mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
@@ -869,8 +882,9 @@ git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m grap
 driver start --runtime codex --request "add feature"
 say_in_claude "승인"
 driver resume
-assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a project graph without ui_review still reaches done"
-assert_contains "$DRIVER_OUT" "UI: unverified — the project graph has no ui_review node" "that outcome says the screens were not verified"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a UI change on a graph without ui_review is never done"
+assert_contains "$DRIVER_OUT" "implementation done, UI unverified: the project graph has no ui_review node" "that outcome says the screens were not verified and how to fix it"
+assert_eq "null" "$(run_state .publish)" "nothing is published without UI verification"
 
 # 전이는 저장소 그래프가 정한다: review -> done 엣지를 지우면 done에 갈 수 없다.
 new_driver_repo graph_driven

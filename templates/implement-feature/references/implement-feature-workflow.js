@@ -73,7 +73,7 @@ ${JSON.stringify(previousFindings)}
 
 Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first. Start the app, open every scenario in a real browser, and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything. If a design-system example was added or changed, open and operate it too.
 A test that clicked an element by its text, a class or token in the markup, an attribute being set, a screenshot file existing, or a claim that something was fixed is not evidence.
-status: verified when every scenario was rendered and operated with no blocking UI issue; issues when there is at least one; unverified when the app or a browser could not be used or a required scenario, viewport, or theme was not checked.
+status: verified when every scenario was rendered and operated with no blocking UI issue and nothing left in unverified; issues when there is at least one; unverified when the app or a browser could not be used or a required scenario, viewport, or theme was not checked.
 `, { label: 'ui-review', schema: uiSchema })
 
 const reviewAndVerifyUi = async (previousFindings = []) => {
@@ -81,7 +81,7 @@ const reviewAndVerifyUi = async (previousFindings = []) => {
   if (review === null || review.blocking_findings.length > 0 || uiScenarios.length === 0) return review
   const ui = await uiReview(previousFindings)
   if (ui === null) return null
-  return { ...review, ui, blocking_findings: ui.status === 'issues' ? ui.blocking_findings : [] }
+  return { ...review, ui, blocking_findings: ui.status === 'issues' ? [...ui.blocking_findings, ...ui.unverified.map((u) => `not yet verified: ${u}`)] : [] }
 }
 
 let review = await reviewAndVerifyUi()
@@ -119,7 +119,7 @@ if (review.blocking_findings.length > 0) {
   }
 }
 
-if (review.ui && review.ui.status !== 'verified') {
+if (review.ui && (review.ui.status !== 'verified' || review.ui.unverified.length > 0)) {
   return {
     status: 'ui_unverified',
     delivery: deliver,
