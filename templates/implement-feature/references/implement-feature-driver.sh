@@ -130,8 +130,8 @@ guard_head() {
 # 화면을 그리는 파일(템플릿·스타일·컴포넌트)이 바뀌었는지. Brief가 화면 변경을 놓쳐도 화면 검증을 건너뛰지 않게 하는 결정적 백스톱이다.
 ui_files_changed() {
   { git -C "$REPO" diff --name-only "$(state .start_head)"; git -C "$REPO" ls-files --others --exclude-standard; } \
-    | grep -E '\.(html?|jinja2?|j2|jsp|erb|hbs|njk|twig|vue|svelte|tsx|jsx|css|scss|sass|less)$' \
-    | grep -vE '(^|/)(__tests__|tests?|spec)/|\.(test|spec|stories)\.' | sort -u || true
+    | grep -E '\.(html?|jinja2?|j2|jsp|erb|haml|hbs|mustache|njk|twig|ftl|ejs|pug|cshtml|razor|blade\.php|vue|svelte|astro|tsx|jsx|svg|css|scss|sass|less)$' \
+    | grep -vE '(^|/)(__tests__|tests?|spec)/|\.(test|spec)\.' | sort -u || true
 }
 
 has_edge() { # from outcome
@@ -256,7 +256,7 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
     before="$(fingerprint)"
     run_agent "$@"
     [[ "$(fingerprint)" == "$before" ]] \
-      || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -)"
+      || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -). Remove those changes before starting again"
   fi
   guard_head "$node"
 }
@@ -592,14 +592,19 @@ $(<"$RUN/brief.md")" "$REVIEW_SCHEMA"
         ui_files="$(ui_files_changed)"
         if [[ "$(state '.findings | length')" -eq 0 && "$(state '.ui_scenarios // [] | length')" -eq 0 && -n "$ui_files" ]]; then
           log "the brief listed no UI scenarios, but screen files changed; verifying them anyway"
-          state_set '.ui_scenarios = [$s]' --arg s "Screens rendered by the changed files ($(paste -sd ',' - <<<"$ui_files")): derive the user role, entry -> key action -> success check -> return, and the states from the approved brief"
+          state_set '.ui_scenarios = ($f | split("\n") | map(select(length > 0)
+            | "Screen rendered by \(.): open the page that uses it; derive the user role, entry -> key action -> success check -> return, and the states from the approved brief"))' --arg f "$ui_files"
         fi
         if [[ "$(state '.findings | length')" -gt 0 ]]; then
           go review blocking_findings
         elif [[ "$(state '.ui_scenarios // [] | length')" -gt 0 ]]; then
           # 화면 검증 노드가 없는 그래프(동기화 전)로는 화면을 검증할 수 없다. 구현은 끝났어도 done이 아니다.
-          has_edge review no_blocking_findings_ui_affected \
-            || finish user_decision 20 "implementation done, UI unverified: the project graph has no ui_review node, so the screens were not verified; nothing was published. Sync the harness (/harness-init --sync), then start a new run or verify the screens and publish by hand"
+          if ! has_edge review no_blocking_findings_ui_affected; then
+            local legacy="implementation done, UI unverified: the project graph has no ui_review node, so the screens were not verified; nothing was published. Sync the harness (/harness-init --sync), then start a new run or verify the screens and publish by hand"
+            jq -n --arg m "$legacy" '[$m]' >"$RUN/unresolved.json"
+            state_set '.node = "user_decision"'
+            finish user_decision 20 "$legacy"
+          fi
           go review no_blocking_findings_ui_affected
         else
           state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
@@ -611,7 +616,7 @@ $(<"$RUN/brief.md")" "$REVIEW_SCHEMA"
         ui_label="ui-review-$(state .attempts)"
         evidence="$RUN/$ui_label"
         # resume이 같은 시도를 다시 돌 때 이전 캡처가 이번 근거로 섞이지 않게 한다.
-        rm -rf "$evidence"
+        rm -rf "${RUN:?}/$ui_label"
         mkdir -p "$evidence"
         run_node ui_review "$ui_label" "$CONTEXT
 
@@ -620,7 +625,7 @@ The driver already ran the required checks and a code review found no blocking f
 Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
-Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated.
+Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence.
 status: verified when you rendered and operated every scenario, found no blocking UI issue, and have nothing in unverified; issues when there is at least one; unverified when you could not start the app, could not use a browser, or could not check any required scenario, viewport, or theme. A blocking UI issue means a user cannot find or misreads a key action, an action's name does not match its result, a required input or an error cannot be recovered from, a scenario cannot be finished with a keyboard or in a supported viewport or theme, a shared component exists for the role but a one-off was built, or a hard-to-reverse action has no confirmation.
 Return only JSON matching the schema.
 
@@ -637,7 +642,9 @@ $(<"$RUN/brief.md")" "$UI_REVIEW_SCHEMA"
         # verified는 발견 없음·미검증 없음·시나리오마다 조작 기록이 있을 때만 믿는다. 기록 없는 verified는 근거 없는 통과다.
         if [[ "$(state .ui_review.status)" == verified ]] \
           && jq -e --argjson n "$(state '.ui_scenarios | length')" \
-            '(.blocking_findings | length) == 0 and (.unverified | length) == 0 and (.scenarios | length) >= $n' "$ui_out" >/dev/null; then
+            '(.blocking_findings | length) == 0 and (.unverified | length) == 0 and (.scenarios | length) >= $n
+              and all(.scenarios[]; (.captures | length) > 0)' "$ui_out" >/dev/null \
+          && [[ -n "$(find "$evidence" -type f -print -quit)" ]]; then
           state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
           go ui_review ui_verified
         elif [[ "$(state .ui_review.status)" == issues && "$(jq '.blocking_findings | length' "$ui_out")" -gt 0 ]]; then

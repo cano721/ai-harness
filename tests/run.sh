@@ -685,6 +685,8 @@ for pair in "feature:$FEATURE_GRAPH" "bug-fix:$ROOT/templates/fix-bug/references
   jq --arg to "$(jq -r 'first(.transitions[] | select(.from == "ui_review" and .when == "ui_verified") | .to)' "$graph")" \
     '.transitions += [{"from": "ui_review", "to": $to, "when": "ui_unverified_but_ship"}]' "$graph" >"$INVALID_GRAPH"
   if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with a ui_review bypass to done or publish is invalid"; fi
+  jq '.transitions = [{"from": "ui_review", "to": "repair", "when": "ui_verified"}] + .transitions' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with two ui_review exits on the same outcome is invalid"; fi
 done
 jq '.transitions += [{"from": "inspect", "to": "done", "when": "no_blocking_findings"}]' "$UI_GRAPH" >"$INVALID_GRAPH"
 if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph that reaches done without ui_verified is invalid"; fi

@@ -89,6 +89,7 @@ case "$node:$scenario" in
   ui_review:ui_writes) echo capture >capture.png; jq -n '{status:"verified", summary:"ok", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_issues_once)
     if [[ -f "$FAKE_LOG.ui_failed" ]]; then
+      echo capture >"$adddir/default.png"
       jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
     else
       touch "$FAKE_LOG.ui_failed"

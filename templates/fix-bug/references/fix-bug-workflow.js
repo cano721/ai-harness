@@ -53,8 +53,12 @@ Do not edit files. Check reproduction or equivalent verification evidence, expec
 // Screens the change alters are verified by rendering and operating them, not by reading code (the graph's ui_review node).
 const uiSchema = {
   type: 'object',
-  required: ['status', 'summary', 'blocking_findings', 'unverified'],
+  required: ['status', 'summary', 'scenarios', 'blocking_findings', 'unverified'],
   properties: {
+    scenarios: {
+      type: 'array',
+      items: { type: 'object', required: ['scenario', 'captures'], properties: { scenario: { type: 'string' }, captures: { type: 'array', items: { type: 'string' } } } },
+    },
     status: { type: 'string', enum: ['verified', 'issues', 'unverified'] },
     summary: { type: 'string' },
     blocking_findings: { type: 'array', items: { type: 'string' } },
@@ -73,6 +77,7 @@ ${JSON.stringify(previousFindings)}
 
 Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first. Start the app, open every scenario in a real browser, and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything. If a design-system example was added or changed, open and operate it too.
 A test that clicked an element by its text, a class or token in the markup, an attribute being set, a screenshot file existing, or a claim that something was fixed is not evidence.
+Return one scenarios entry per scenario, viewport, and theme you operated, with the URL and its captures.
 status: verified when every scenario was rendered and operated with no blocking UI issue and nothing left in unverified; issues when there is at least one; unverified when the app or a browser could not be used or a required scenario, viewport, or theme was not checked.
 `, { label: 'ui-review', schema: uiSchema })
 
@@ -81,7 +86,7 @@ const reviewAndVerifyUi = async (previousFindings = []) => {
   if (review === null || review.blocking_findings.length > 0 || uiScenarios.length === 0) return review
   const ui = await uiReview(previousFindings)
   if (ui === null) return null
-  return { ...review, ui, blocking_findings: ui.status === 'issues' ? [...ui.blocking_findings, ...ui.unverified.map((u) => `not yet verified: ${u}`)] : [] }
+  return { ...review, ui, blocking_findings: ui.status === 'issues' && ui.blocking_findings.length > 0 ? [...ui.blocking_findings, ...ui.unverified.map((u) => `not yet verified: ${u}`)] : [] }
 }
 
 let review = await reviewAndVerifyUi()
@@ -119,7 +124,7 @@ if (review.blocking_findings.length > 0) {
   }
 }
 
-if (review.ui && (review.ui.status !== 'verified' || review.ui.unverified.length > 0)) {
+if (review.ui && (review.ui.status !== 'verified' || review.ui.unverified.length > 0 || review.ui.scenarios.length < uiScenarios.length)) {
   return {
     status: 'ui_unverified',
     fix,
