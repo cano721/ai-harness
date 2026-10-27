@@ -694,19 +694,19 @@ jq 'del(.transitions[] | select(.when == "ui_unverified"))' "$UI_GRAPH" >"$INVAL
 if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph without an unverified exit is invalid"; fi
 for adapter in implement-feature fix-bug review; do
   assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "ui_review" "$adapter adapter routes UI changes through ui_review"
-  assert_contains "$(<"$ROOT/templates/$adapter/references/$adapter-workflow.js")" "ui_unverified" "$adapter Dynamic Workflow never calls an unverified UI done"
+  assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "workflow-driver.sh" "$adapter adapter runs the graph through the shared runner"
 done
-assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
-if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
-fi
 pass "feature delivery graph adapters"
 
 # 드라이버는 그래프를 모델 밖에서 실행한다: 전이는 그래프가, 승인은 사용자가 직접 입력한 메시지가, 완료는 드라이버가 실행한 검증이 정한다.
-DRIVER="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
+DRIVER="$ROOT/templates/workflow-driver/workflow-driver.sh"
+DRIVER_SHIM="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
 assert_file "$DRIVER"
-assert_contains "$(<"$FEATURE_SKILL")" "implement-feature-driver.sh" "feature skill points to the graph runner"
-assert_eq "1" "$(jq '[.artifacts[] | select(.path == ".ai-harness/workflows/implement-feature-driver.sh" and .level == "standard" and (has("integration") | not))] | length' "$ROOT/templates/managed-files.json")" "driver ships to every standard project regardless of integration"
+assert_file "$DRIVER_SHIM"
+assert_contains "$(<"$FEATURE_SKILL")" "workflow-driver.sh start --workflow feature" "feature skill points to the graph runner"
+for runner in workflow-driver.sh implement-feature-driver.sh; do
+  assert_eq "1" "$(jq --arg p ".ai-harness/workflows/$runner" '[.artifacts[] | select(.path == $p and .level == "standard" and (has("integration") | not) and (has("workflow") | not or $p != ".ai-harness/workflows/workflow-driver.sh"))] | length' "$ROOT/templates/managed-files.json")" "$runner ships to every standard project regardless of integration"
+done
 assert_eq "human" "$(jq -r '.nodes.approval.actor' "$FEATURE_GRAPH")" "approval is a human node the runner interrupts at"
 DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
@@ -1074,6 +1074,166 @@ driver resume
 assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "the escalation edge and repair limit come from the project graph"
 pass "feature delivery graph runner enforces the graph outside the model"
 
+# 버그 수정·변경 검토도 같은 러너가 실행한다. (#154)
+BUG_FIX_GRAPH_TEMPLATE="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+REVIEW_GRAPH_TEMPLATE="$ROOT/templates/review/references/review-graph.json"
+run_dir() { dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"; }
+bug_run() { # scenario [start args...] → 승인 뒤 resume까지
+  new_driver_repo "$1"
+  shift
+  driver start --workflow bug-fix --runtime codex --request "total ignores tax" "$@"
+  [[ "$DRIVER_RC" == 10 ]] || return 0
+  say_in_claude "승인"
+  driver resume
+}
+new_driver_repo bug_ok
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+assert_eq "10:approval:bug-fix" "$DRIVER_RC:$(run_state .node):$(run_state .workflow)" "a bug fix stops at approval after triage, reproduce, and brief"
+assert_eq "triage read-only schema=;reproduce workspace-write schema=yes add-dir=yes;brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "nothing writes before approval; reproduce may run commands and keeps its notes in the run directory"
+assert_contains "$DRIVER_OUT" "Bug Fix Brief" "the person sees a Bug Fix Brief"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "expected 110, got 100" "the brief carries the reproduction evidence"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" ".ai-harness/workflows/fix-bug.md" "bug-fix nodes read the project bug-fix workflow"
+assert_contains "$(run_state .graph)" "bug-fix-graph.json" "the run follows the bug-fix graph"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an approved bug fix reaches done"
+assert_contains "$(run_state '[.history[].to] | join(",")')" "regression,fix,verify,review,publish,remote_ci,done" "the runner follows the bug-fix graph"
+assert_eq "regression workspace-write;fix workspace-write;review read-only" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1,2 | paste -sd ';' -)" "regression and fix write after approval; review stays read-only"
+bug_run repro_blocked
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a bug that can be neither reproduced nor observed goes to a person before approval"
+assert_contains "$(<"$(run_dir)/unresolved.json")" "a sample order export" "the person sees what is needed to reproduce"
+[[ "$(<"$FAKE_LOG")" != *regression* ]] || fail "nothing writes when the bug cannot be reproduced"
+bug_run repro_hollow
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "reproduced without evidence is not a reproduction"
+bug_run repro_writes
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "reproduce that writes into the repository stops the run"
+FAKE_CHECK="grep -q fixed feature.txt" bug_run bug_fixcheck
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing verify goes to repair, then verify and review again"
+assert_eq "fix;repair;review" "$(grep -E '^(fix|repair|review) ' "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the failed check is repaired before review"
+bug_run bug_noop
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a bug fix without a change is not done"
+bug_run bug_fix_noop
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a regression test alone does not count as a fix"
+bug_run ui_bug
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a bug fix that changes a screen goes through ui_review"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+new_driver_repo bug_pr
+with_policy pr-only auto
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state '.checkpoints | length')" "an auto-approved pr-only bug fix checkpoints regression and fix, then opens a PR"
+assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(fix-bug): regression" "bug-fix checkpoints name the workflow"
+new_driver_repo bug_legacy_verify
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.transitions[] | select(.from == "verify" and .when == "required_checks_fail"))' "$BUG_FIX_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/bug-fix-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+FAKE_CHECK=false driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+say_in_claude "승인"
+FAKE_CHECK=false driver resume
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a graph without the verify failure edge hands a failed check to a person"
+assert_contains "$DRIVER_OUT" "no verify -> repair edge" "that outcome says how to fix it"
+# 실행의 워크플로는 상태가 정한다. 다른 워크플로로 이어 가지 않는다.
+driver status --workflow review --run "$(run_state .run_id)"
+assert_eq "2" "$DRIVER_RC" "a run cannot be resumed as another workflow"
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --repo "$DRIVER_REPO" 2>&1)" || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "the old feature entry point does not resume a bug-fix run"
+new_driver_repo shim_ok
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO=shim_ok PATH="$ROOT/tests/fixtures/driver:$PATH" \
+  bash "$DRIVER_SHIM" start --runtime codex --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+assert_eq "10:feature" "$DRIVER_RC:$(run_state .workflow)" "the old entry point runs the feature workflow"
+DRIVER_RC=0
+HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --workflow review --repo "$DRIVER_REPO" >/dev/null 2>&1 || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "the old entry point refuses another workflow instead of running the feature one"
+# 이 구분 전의 feature 실행(latest-feature 없음)은 그 뒤 다른 워크플로를 시작해도 이어 갈 수 있다.
+rm -f "$(dirname "$(run_dir)")/latest-feature"
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --repo "$DRIVER_REPO" 2>&1)" || DRIVER_RC=$?
+assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
+assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
+
+# review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
+review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다
+  new_driver_repo "$1"
+  echo change >"$DRIVER_REPO/feature.txt"
+  driver start --workflow review --runtime codex --request "review my uncommitted change"
+}
+review_run rv_clean
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a review without blocking findings is done"
+assert_eq "scope read-only schema=yes;inspect read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "the initial review is read-only"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state .diff_base)" "the review measures the change from the base the scope node named"
+review_run rv_blocks
+assert_eq "10:waiting_approval:classify" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "blocking findings wait for the person before any repair"
+assert_contains "$DRIVER_OUT" "feature.txt: missing case" "the person sees the findings to repair"
+assert_contains "$DRIVER_OUT" "수리하지 않으면 여기서 끝난다" "the person can keep the review without a repair"
+driver resume
+assert_eq "10:1" "$DRIVER_RC:$(grep -c '^inspect ' "$FAKE_LOG")" "resume without approval keeps waiting and does not review again"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:1:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .attempts):$(run_state .approval.source)" "an approved repair goes through verify and re-review to done"
+assert_eq "repair;re_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "every repair is followed by checks and re-review"
+assert_eq "fixed:1" "$(<"$DRIVER_REPO/feature.txt"):$(git -C "$DRIVER_REPO" rev-list --count HEAD)" "the repair stays uncommitted in the working tree"
+assert_contains "$DRIVER_OUT" "left uncommitted" "the outcome says the repair is not committed"
+review_run rv_decision
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a finding that needs a product decision goes to a person"
+review_run scope_bad_base
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a review base that is not a commit stops the run"
+review_run scope_nocheck
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a repair needs a verification command"
+new_driver_repo rv_auto
+with_policy pr-only auto
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "0:done:auto-policy:0" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source):$(run_state '.checkpoints | length')" "approval auto authorizes the repair, and review never commits"
+new_driver_repo rv_always_blocks
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 2' "$REVIEW_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/review-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+say_in_claude "승인"
+driver resume
+assert_eq "10" "$DRIVER_RC" "a finding the person has not seen asks again before it is repaired"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "re-review stops at the graph's repair limit"
+FAKE_CHECK="test -f $DRIVER_TMP/rv_verify_fail.seen || { touch $DRIVER_TMP/rv_verify_fail.seen; false; }"
+review_run rv_verify_fail
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failed check after repair goes back to repair"
+FAKE_CHECK=false
+new_driver_repo rv_verify_limit
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 1' "$REVIEW_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/review-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "checks that keep failing reach the repair limit and go to a person"
+unset FAKE_CHECK
+review_run rv_new_finding
+say_in_claude "승인"
+driver resume
+assert_eq "10:re_review" "$DRIVER_RC:$(run_state .node)" "a new finding outside the approved repair scope asks again"
+assert_contains "$DRIVER_OUT" "auth flow must be redesigned" "the person sees the new finding before it is repaired"
+assert_eq "1" "$(grep -c '^repair ' "$FAKE_LOG")" "nothing repairs the new finding before the person agrees"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "after the second agreement the new finding is repaired and re-reviewed"
+review_run rv_ui
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a review of a screen change verifies the rendered screen"
+assert_contains "$(<"$FAKE_LOG")" "ui_review workspace-write schema=yes net=yes add-dir=yes" "review keeps captures in the run directory too"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+new_driver_repo rv_clean_screen
+mkdir -p "$DRIVER_REPO/templates"
+echo '<summary>반려하기</summary>' >"$DRIVER_REPO/templates/approve.html"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a changed screen file is verified even when the reviewer listed no scenario"
+pass "bug-fix and review graphs run through the same runner"
+
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
 BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
@@ -1096,7 +1256,6 @@ assert_file "$BUG_FIX_GRAPH"
 "$ROOT/scripts/validate-bug-fix-graph.sh" "$BUG_FIX_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$BUG_FIX_GRAPH")" "bug-fix approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.regression.write' "$BUG_FIX_GRAPH")" "bug-fix regression node can write"
-assert_file "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/fix-bug/" "harness init uses the local bug-fix template"
 assert_contains "$HARNESS_INIT_CONTENT" "회귀 테스트는 test-engineer, production 수정은 developer" "fix-bug assigns the regression test to the test role"
 assert_contains "$HARNESS_INIT_CONTENT" "역할 범위 위반을 발견하면 변경을 폐기하지 않는다" "role violations preserve the diff instead of discarding it"
@@ -1105,9 +1264,6 @@ assert_contains "$HARNESS_INIT_CONTENT" "존재하지 않는 도구를 적지 �
 assert_contains "$HARNESS_INIT_CONTENT" "<module>/src/main/**" "persona write scopes follow the measured module layout"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel)/.ai-harness/hooks/direct-edit-guard.sh" "guard hook path does not depend on CLAUDE_PROJECT_DIR"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "harness init copies the local bug-fix graph"
-if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
-fi
 pass "bug-fix graph adapters"
 
 # 프로젝트 하네스 동기화 상태: 생성 직후 해시는 안전한 갱신 후보, 이후 수정은 승인 대상이다.
@@ -1130,7 +1286,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "7" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "8" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"
@@ -1351,17 +1507,17 @@ assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("understand"))] | lengt
 # 코드를 바꾸는 진입점은 프로젝트 규칙 없이 노출하지 않는다. 워크플로 스크립트도 프로젝트에 설치된다.
 assert_not_file "$ROOT/workflows/implement-feature.js"
 assert_eq "0" "$(find "$ROOT/workflows" -type f 2>/dev/null | wc -l | tr -d ' ')" "no plugin-global dynamic workflows remain"
+# Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행했다. 더 만들지 않고, 남은 사본은 sync가 정리 대상으로 안내한다. (#154)
 for WORKFLOW_NAME in implement-feature fix-bug review; do
-  WORKFLOW_ENTRY="$(jq -c --arg path ".claude/workflows/$WORKFLOW_NAME.js" '.artifacts[] | select(.path == $path)' "$ROOT/templates/managed-files.json")"
-  [[ -n "$WORKFLOW_ENTRY" ]] || fail "$WORKFLOW_NAME workflow is not a managed project artifact"
-  assert_eq "claude" "$(jq -r '.integration' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow is scoped to the Claude integration"
-  assert_eq "standard" "$(jq -r '.level' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow ships at the standard level"
+  assert_eq "0" "$(jq --arg path ".claude/workflows/$WORKFLOW_NAME.js" '[.artifacts[] | select(.path == $path)] | length' "$ROOT/templates/managed-files.json")" "$WORKFLOW_NAME Dynamic Workflow is no longer generated"
+  assert_eq "1" "$(jq --arg path ".claude/workflows/$WORKFLOW_NAME.js" '[.retired[] | select(.path == $path)] | length' "$ROOT/templates/managed-files.json")" "$WORKFLOW_NAME Dynamic Workflow copies are retired"
 done
+assert_eq "0" "$(find "$ROOT/templates" -name '*-workflow.js' | wc -l | tr -d ' ')" "no Dynamic Workflow template remains"
 # 카탈로그가 가리키는 원본이 실제로 있어야 생성이 성공한다.
 while read -r CATALOG_SOURCE; do
   assert_file "$ROOT/$CATALOG_SOURCE"
 done < <(jq -r '.artifacts[].source' "$ROOT/templates/managed-files.json")
-pass "dynamic workflows ship as project artifacts, not plugin-global commands"
+pass "graph runners ship as project artifacts, not plugin-global commands"
 assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/understand-change/\`)" "harness init documents understand-change as a plugin skill"
 pass "understand-change plugin skill"
 
@@ -1442,9 +1598,7 @@ assert_file "$REVIEW_SKILL"
 assert_file "$REVIEW_GRAPH"
 "$ROOT/scripts/validate-review-graph.sh" "$REVIEW_GRAPH" >/dev/null
 assert_contains "$(<"$REVIEW_SKILL")" "do not report completion while a blocking finding remains" "review blocks completion"
-assert_file "$ROOT/templates/review/references/review-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/review/" "harness init uses the local review template"
-if command -v node >/dev/null 2>&1; then node --check "$ROOT/templates/review/references/review-workflow.js"; fi
 pass "review graph adapters"
 
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
