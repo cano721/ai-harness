@@ -7,6 +7,16 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+
+### 새 기능
+
+- **통합 테스트를 단건으로 못 돌리는 안내를 찾아냅니다** — `test`가 `integration` 태그를 빼고 `integrationTest`가 그 태그만 돌리는 저장소에서, 워크플로·페르소나·docs가 단건 실행을 `./gradlew test --tests`로만 안내해 통합 테스트를 고친 에이전트가 "No tests found"를 보거나 엉뚱한 통과로 완료를 보고할 수 있었습니다(외부 하네스 진단에서 잡다 백엔드 3개 저장소 공통으로 지적). `docs-drift.sh`가 Gradle 태스크별 태그 필터와 게이트 연결(`dependsOn`·`executionData`)을 읽어 `targeted_command_gaps`(문서:줄 · 빠진 태그 · 대신 쓸 태스크)로 보고하고, `/harness-init --sync`가 "보호 파일 후속 조치" 표에 싣습니다. 새로 생성하는 워크플로 본문은 단위·통합 단건 명령을 나눠 적습니다.
+
+### 업데이트 후 해야 할 일
+
+- Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).
+
 ## v0.43.0 (2026-10-25)
 ### 새 기능
 

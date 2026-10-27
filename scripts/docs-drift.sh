@@ -33,6 +33,9 @@ trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/extra-uses.tsv" # 한 gradlew 호출의 둘째 이후 태스크 — missing 해소에만 쓴다
 : >"$TMP/build.txt"
 : >"$TMP/docs.txt"
+: >"$TMP/tag-filters.tsv" # task \t include|exclude \t tag
+: >"$TMP/targeted.tsv"    # doc \t line \t task \t tag \t use_instead
+: >"$TMP/gate-lines.txt"  # dependsOn·executionData 줄 — 게이트에 물린 태스크 판정용
 
 rel() { printf '%s' "${1#"$root"/}"; }
 
@@ -121,6 +124,44 @@ while IFS= read -r f; do
         [[ -n "$t" ]] && add_fact junit_tag "$t" "$f"
       done < <(grep -oE '(include|exclude)Tags[[:space:]]*\(?[[:space:]]*("|'"'"')[A-Za-z0-9_-]+' "$stripped" 2>/dev/null \
                  | sed -E 's/.*["'"'"']//' | sort -u)
+      # 태스크별 태그 필터 (task \t include|exclude \t tag). `test`가 integration을 빼면
+      # `./gradlew test --tests <통합테스트>`는 아무것도 실행하지 않는다 — targeted 명령 검사의 근거다.
+      awk '
+        function ctx_name(s,   m) {
+          if (match(s, /^[[:space:]]*test[[:space:]]*\{/) || s ~ /tasks\.test[[:space:]]*\{/) return "test"
+          if (match(s, /tasks\.(named|register)(<[A-Za-z.]+>)?\([[:space:]]*["\047][A-Za-z0-9_-]+/)) {
+            m = substr(s, RSTART, RLENGTH); sub(/.*["\047]/, "", m); return m
+          }
+          if (match(s, /val[[:space:]]+[A-Za-z0-9_]+[[:space:]]+by[[:space:]]+tasks\.(registering|existing)/)) {
+            m = substr(s, RSTART, RLENGTH); sub(/^val[[:space:]]+/, "", m); sub(/[[:space:]].*/, "", m); return m
+          }
+          if (match(s, /^[[:space:]]*task[[:space:]]+[A-Za-z0-9_-]+/)) {
+            m = substr(s, RSTART, RLENGTH); sub(/^[[:space:]]*task[[:space:]]+/, "", m); return m
+          }
+          return ""
+        }
+        {
+          line = $0
+          name = ctx_name(line)
+          if (name != "" && index(line, "{")) { sp++; stack_name[sp] = name; stack_depth[sp] = depth + 1 }
+          cur = (sp > 0) ? stack_name[sp] : ""
+          rest = line
+          while (cur != "" && match(rest, /(include|exclude)Tags[^;)}]*/)) {
+            seg = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+            kind = (seg ~ /^include/) ? "include" : "exclude"
+            while (match(seg, /["\047][A-Za-z0-9_-]+["\047]/)) {
+              tag = substr(seg, RSTART + 1, RLENGTH - 2); seg = substr(seg, RSTART + RLENGTH)
+              print cur "\t" kind "\t" tag
+            }
+          }
+          n = length(line)
+          for (i = 1; i <= n; i++) {
+            c = substr(line, i, 1)
+            if (c == "{") depth++
+            else if (c == "}") { depth--; while (sp > 0 && depth < stack_depth[sp]) sp-- }
+          }
+        }' "$stripped" >>"$TMP/tag-filters.tsv" 2>/dev/null || true
+      grep -E 'dependsOn|executionData' "$stripped" >>"$TMP/gate-lines.txt" 2>/dev/null || true
       ;;
     package.json)
       if jq -e '.scripts' "$f" >/dev/null 2>&1; then
@@ -241,6 +282,26 @@ while IFS=$'\t' read -r kind value doc; do
   fi
 done < <(sort -u "$TMP/uses.tsv")
 
+# ── 태그로 빠진 테스트의 targeted 명령 ─────────────────────────────────────
+# `test`가 integration 태그를 빼고 `integrationTest`가 그 태그만 돌리는 구성에서, 문서가 targeted 실행을
+# `./gradlew test --tests`로만 안내하면 통합 테스트를 고친 에이전트는 "No tests found"나 엉뚱한 통과를 본다.
+# 토큰 대조라 서술은 이해하지 못한다 — 같은 문서에 담당 태스크의 targeted 호출이 하나라도 있으면 안내한 것으로 본다.
+# 담당 태스크가 dependsOn·executionData로 빌드 게이트에 물린 경우만 본다. regression·e2e처럼 게이트 밖 태그까지
+# 올리면 targeted 명령을 쓴 문서마다 행이 생겨 진짜 공백이 묻힌다.
+while IFS=$'\t' read -r task tag; do
+  [[ -n "$task" ]] || continue
+  owner="$(awk -F'\t' -v t="$task" -v g="$tag" '$1!=t && $2=="include" && $3==g {print $1; exit}' "$TMP/tag-filters.tsv")"
+  [[ -n "$owner" ]] || continue
+  grep -qE "(^|[^A-Za-z0-9_])${owner}([^A-Za-z0-9_]|$)" "$TMP/gate-lines.txt" || continue
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    hit="$(grep -nE "gradlew[a-z.]*([[:space:]]+[^[:space:]\`]+)*[[:space:]]+(:?[A-Za-z0-9_-]+:)*${task}([[:space:]]+[^[:space:]\`]+)*[[:space:]]+--tests" "$d" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+    [[ -n "$hit" ]] || continue
+    grep -qE "gradlew[a-z.]*([[:space:]]+[^[:space:]\`]+)*[[:space:]]+(:?[A-Za-z0-9_-]+:)*${owner}([[:space:]]+[^[:space:]\`]+)*[[:space:]]+--tests" "$d" 2>/dev/null && continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(rel "$d")" "$hit" "$task" "$tag" "$owner" >>"$TMP/targeted.tsv"
+  done <"$TMP/docs.txt"
+done < <(awk -F'\t' '$2=="exclude" {print $1 "\t" $3}' "$TMP/tag-filters.tsv" | sort -u)
+
 # ── 타임스탬프 약한 신호 ───────────────────────────────────────────────────
 # 빌드 파일이 문서보다 최근에 커밋됐으면 "검토 필요". 정확도는 낮지만 비용이 거의 없다.
 # 표시는 ISO, 비교는 epoch로 한다 — %cI는 커밋터 로컬 오프셋이라 문자열 비교가 어긋난다.
@@ -287,6 +348,8 @@ jq -n \
   --arg build_last_commit "$build_ts" \
   --arg docs_last_commit "$docs_ts" \
   --argjson docs_older "$docs_older" \
+  --argjson targeted "$(jq -R -s -c 'split("\n") | map(select(length>0) | split("\t")
+                         | {doc:.[0], line:(.[1]|tonumber), task:.[2], excluded_tag:.[3], use_instead:.[4]})' "$TMP/targeted.tsv")" \
   '{
      root: $root,
      stacks: ($stacks | if .=="" then [] else split(" ") end),
@@ -295,10 +358,11 @@ jq -n \
      facts: $facts,
      missing_in_docs: $missing_in_docs,
      stale_in_docs: $stale_in_docs,
+     targeted_command_gaps: $targeted,
      timestamps: {
        build_last_commit: (if $build_last_commit=="" then null else $build_last_commit end),
        docs_last_commit: (if $docs_last_commit=="" then null else $docs_last_commit end),
        docs_older_than_build: $docs_older
      },
-     drift: (($missing_in_docs|length) + ($stale_in_docs|length) > 0 or $docs_older)
+     drift: (($missing_in_docs|length) + ($stale_in_docs|length) + ($targeted|length) > 0 or $docs_older)
    }'

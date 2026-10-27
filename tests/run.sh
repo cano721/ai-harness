@@ -280,6 +280,51 @@ assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | 
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
 assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
 pass "drift kotlin dsl and multi-task calls"
+# test가 integration 태그를 빼면 `./gradlew test --tests`만 안내한 문서는 통합 테스트를 targeted로 못 돌린다.
+TAGGED="$TEST_TMP/drift-tagged"
+mkdir -p "$TAGGED/.ai-harness/workflows" "$TAGGED/.ai-harness/docs"
+cat >"$TAGGED/build.gradle" <<'GRADLE'
+test {
+    useJUnitPlatform {
+        excludeTags 'regression', 'integration'
+    }
+}
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.register('regressionTest', Test) {
+    useJUnitPlatform { includeTags 'regression' }
+}
+jacocoTestReport {
+    dependsOn test, tasks.named('integrationTest')
+}
+GRADLE
+cat >"$TAGGED/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- 단위/통합 테스트: `./gradlew test --tests {pattern}`
+- 전체: `./gradlew build`, 회귀: `./gradlew regressionTest`
+DOC
+cat >"$TAGGED/.ai-harness/docs/testing.md" <<'DOC'
+./gradlew test --tests "{ClassName}"
+./gradlew integrationTest --tests "{ClassName}"
+DOC
+TAGGED_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED")"
+assert_eq ".ai-harness/workflows/fix-bug.md:1 integration integrationTest" "$(jq -r '[.targeted_command_gaps[] | "\(.doc):\(.line) \(.excluded_tag) \(.use_instead)"] | join(",")' <<<"$TAGGED_SCAN")" "a doc that targets only the tag-excluding task is reported; one that also targets the owner, and an ungated tag, are not"
+assert_eq "true" "$(jq -r '.drift' <<<"$TAGGED_SCAN")" "a targeted command gap counts as drift"
+mkdir -p "$TAGGED-kts/.ai-harness/workflows"
+cat >"$TAGGED-kts/build.gradle.kts" <<'GRADLE'
+tasks.test {
+    useJUnitPlatform { excludeTags("integration", "e2e") }
+}
+val integrationTest by tasks.registering(Test::class) {
+    useJUnitPlatform { includeTags("integration") }
+}
+tasks.named<JacocoReport>("jacocoTestReport") {
+    executionData(tasks.test.get(), integrationTest.get())
+}
+GRADLE
+printf -- '- `./gradlew test --tests {pattern}`\n' >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md"
+assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
+pass "drift targeted command for tag-excluded tests"
 
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
