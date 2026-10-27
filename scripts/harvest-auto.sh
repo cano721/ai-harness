@@ -186,12 +186,14 @@ command_trigger() {
 }
 
 # batch의 세션 기록에서 하네스가 있는 저장소 cwd와 도구(src)를 고른다. 없으면 첫 cwd.
+# 반복 안의 한 줄 읽기는 `read < <(...)` 대신 here-string으로 한다. macOS /bin/bash 3.2는 단일 명령의 프로세스 치환 fd를
+# 닫지 않아, 이벤트 파일이 많으면 fd 한도(256)에 닿은 뒤 하위 셸이 CPU 100%로 멈춘다(실측: 연쇄 sweep이 며칠씩 돎).
 batch_origin() { # $1=batch_file → "cwd<TAB>src"
   local ev="" cwd="" src="" first="" root=""
   while IFS= read -r ev; do
     [[ -f "$ev" ]] || ev="$HM_DATA_DIR/rollups/${ev##*/}"
     [[ -f "$ev" ]] || continue
-    IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    IFS=$'\t' read -r cwd src <<<"$(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
     [[ -n "$cwd" ]] || continue
     [[ -n "$first" ]] || first="$cwd"$'\t'"$src"
     root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -206,7 +208,7 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
   project="$(jq -r '.project // empty' "$1" 2>/dev/null)"
   if [[ -n "$project" ]]; then
     while IFS= read -r ev; do
-      IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+      IFS=$'\t' read -r cwd src <<<"$(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
       [[ -n "$cwd" && -d "$cwd" ]] || continue
       root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
       [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]] || continue

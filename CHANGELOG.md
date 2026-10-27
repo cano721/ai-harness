@@ -11,6 +11,7 @@
 ### 버그 수정
 
 - **자동 sync·자동 harvest가 저장소 파일을 고치지 못하던 문제** — 무인 실행의 작업 worktree를 데이터 디렉터리(`~/.ai-harness/harvest-auto/worktrees`) 안에 만들었는데, v0.35.1부터 무인 에이전트는 데이터 디렉터리 쓰기가 막혀(config·shim 보호) worktree 안의 `.ai-harness/`·`.claude/` 등 어떤 파일도 쓸 수 없었습니다(실측: 자동 sync 3건 모두 쓰기 거부로 `left_for_user`, 프로젝트 harvest는 개선을 적용할 수 없는 상태). 이제 worktree를 `~/.cache/ai-harness/worktrees`(`XDG_CACHE_HOME` 또는 `HM_AUTO_WORKTREE_DIR`로 변경, 데이터 디렉터리 안을 가리키면 기본값)에 둡니다.
+- **무인 실행이 끝난 뒤 프로세스가 CPU 100%로 며칠씩 멈추던 문제** — macOS 기본 `/bin/bash` 3.2는 단일 명령의 `read … < <(…)`가 연 파일 디스크립터를 닫지 않습니다. 실행 뒤 연쇄 sweep이 batch 저장소를 찾으며 이벤트 파일마다 이 형태로 읽어, fd 한도(256)에 닿은 하위 셸이 무한히 돌았습니다(실측 2건: 3일·22시간, fd 3~256이 모두 파이프). 한 줄 읽기를 here-string으로 바꾸고, 같은 형태가 다시 들어오지 않게 테스트로 막습니다.
 
 ## v0.43.0 (2026-10-25)
 ### 새 기능
