@@ -13,6 +13,10 @@ AUTO_DIR="$HM_DATA_DIR/harvest-auto"
 RUNS_FILE="$AUTO_DIR/runs.jsonl"
 LOG_DIR="$AUTO_DIR/logs"
 RUN_LOCK="$AUTO_DIR/running.lock"
+# 무인 실행의 작업 worktree는 데이터 디렉토리 밖에 둔다. 에이전트는 데이터 디렉토리 쓰기가 막혀 있어(config·shim 보호),
+# 그 안에 두면 worktree의 어떤 파일도 고칠 수 없다(실측: sync가 .ai-harness·.claude 쓰기 거부로 전부 left_for_user).
+WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
+case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
 MAX_FAILS="${HM_HARVEST_AUTO_MAX_FAILS:-3}"; [[ "$MAX_FAILS" =~ ^[1-9][0-9]*$ ]] || MAX_FAILS=3
 DAILY_MAX="${HM_HARVEST_AUTO_DAILY_MAX:-2}"
 [[ "$DAILY_MAX" =~ ^[0-9]+$ ]] || DAILY_MAX=2
@@ -421,7 +425,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
 # 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
 make_work_tree() { # $1=repo_root $2=project $3=base → 경로 출력
   local repo_root="$1" dir=""
-  dir="$AUTO_DIR/worktrees/$(short_key "$2")-$(date +%s)"
+  dir="$WORK_TREES_DIR/$(short_key "$2")-$(date +%s)"
   mkdir -p "${dir%/*}"
   git -C "$repo_root" worktree add -q --detach "$dir" "$3" >/dev/null 2>&1 || return 1
   printf '%s\n' "$dir"

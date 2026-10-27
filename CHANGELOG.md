@@ -7,6 +7,11 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
+## Unreleased
+### 버그 수정
+
+- **자동 sync·자동 harvest가 저장소 파일을 고치지 못하던 문제** — 무인 실행의 작업 worktree를 데이터 디렉터리(`~/.ai-harness/harvest-auto/worktrees`) 안에 만들었는데, v0.35.1부터 무인 에이전트는 데이터 디렉터리 쓰기가 막혀(config·shim 보호) worktree 안의 `.ai-harness/`·`.claude/` 등 어떤 파일도 쓸 수 없었습니다(실측: 자동 sync 3건 모두 쓰기 거부로 `left_for_user`, 프로젝트 harvest는 개선을 적용할 수 없는 상태). 이제 worktree를 `~/.cache/ai-harness/worktrees`(`XDG_CACHE_HOME` 또는 `HM_AUTO_WORKTREE_DIR`로 변경, 데이터 디렉터리 안을 가리키면 기본값)에 둡니다.
+
 ## v0.43.0 (2026-10-25)
 ### 새 기능
 
