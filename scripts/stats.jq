@@ -38,7 +38,6 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($S | map({(.sid): true}) | add // {}) as $sidset
 | ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
 | ($S | length) as $total
-| (coverage_count($S; "correction_mark")) as $correction_supported
 | ($S | map({(.sid): (.project // "?")}) | add // {}) as $sidProject
 | ($S | map(select((.turns // 0) >= active_min_turns))) as $A
 # 워크플로 본문은 슬래시 커맨드 없이 Read·cat으로도 진입한다(workspace 멤버 세션 대부분).
@@ -56,10 +55,6 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid] // "?"): true})
    | add // {}) as $harnessProjects
 | ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
-| ($A | map(select(has_coverage("correction_mark")))) as $CA
-| ($CA | map({(.sid): true}) | add // {}) as $caSet
-| ([$E[] | select(.kind=="correction_mark" and $caSet[.sid] == true) | .n] | add // 0) as $marks
-| ([$CA[] | .turns] | add // 0) as $caTurns
 
 | "# Harness Metrics"
 + "\n\n기간: \(if $cutoff=="" then "전체" else $cutoff + " 이후" end)"
@@ -86,9 +81,7 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
      end)
 
 + "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다.\n\n| 지표 | 값 |\n|---|---|\n"
-+ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |\n"
-+ "| 교정 마크 / 활성 세션 | \(if ($CA|length)==0 then "-" else "\($marks*100/($CA|length) | round | ./100) (\($marks)/\($CA|length))" end) |\n"
-+ "| 교정 마크 / 100턴 | \(if $caTurns==0 then "-" else "\($marks*1000/$caTurns | round | ./10) (\($marks)/\($caTurns))" end) |"
++ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |"
 + (if ($WA|length)==0 then ""
    else "\n\n| 프로젝트 | 워크플로 경유 |\n|---|---|\n"
      + ($WA | group_by(.project)
@@ -141,29 +134,4 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
           end
       end
   )
-+ "\n\n## 교정 마크 (LLM 정독 후보)\n\n"
-+ (
-    if $correction_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
-    else (($E | map(select(.kind=="correction_mark"))) as $c
-      | if ($c|length)==0 then
-          "_(관측 가능 \($correction_supported)세션에서 없음"
-          + (if $correction_supported<$total then "; \($total-$correction_supported)세션 미지원" else "" end)
-          + ")_"
-        else ($c | .[0:20] | map("- [\(.sid[0:8])] \(.target)") | join("\n"))
-          + (if $correction_supported<$total
-             then "\n\n_관측 범위: \($correction_supported)/\($total)세션_"
-             else "" end)
-        end)
-  end)
-+ "\n## 교정 후보 (판정 전 — 격리 서브에이전트가 확정)\n\n"
-+ (
-    (coverage_count($S; "correction_candidate")) as $cand_supported
-    | if $cand_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
-      else (($E | map(select(.kind=="correction_candidate"))) as $c
-        | if ($c|length)==0 then
-            "_(관측 가능 \($cand_supported)세션에서 없음)_"
-          else ($c | .[0:30] | map("- [\(.sid[0:8])] \(.target)") | join("\n"))
-            + "\n\n_후보는 그 자체로 교정이 아니다. 확정 전에는 개선 근거로 쓰지 않는다._"
-          end)
-      end)
 + "\n"

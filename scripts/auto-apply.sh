@@ -248,11 +248,15 @@ command_effect() {
   rules="$(command_list --active | jq -sc --arg only "$only" '[.[] | select(.signal != null and ($only == "" or .id == $only))]')"
   [[ "$rules" != "[]" ]] || return 0
   shopt -s nullglob
-  local files=("$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl)
+  local files=("$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl) digests=("$HM_DATA_DIR"/digests/*.json)
   shopt -u nullglob
   (( ${#files[@]} > 0 )) || return 0
-  grep -h -E '"kind":"(session|error_sample|correction_mark|correction_candidate)"' "${files[@]}" 2>/dev/null \
-    | jq -sc --argjson rules "$rules" --argjson min "${HM_EFFECT_MIN_SESSIONS:-30}" \
+  # 신호는 오류 발췌와 LLM 정리(digest)의 판정 문구다. 옛 이벤트의 문구 규칙 교정(correction_mark)은
+  # 적용 전 구간에만 있어 비교를 기울이므로 쓰지 않는다.
+  { grep -h -E '"kind":"(session|error_sample)"' "${files[@]}" 2>/dev/null
+    (( ${#digests[@]} == 0 )) || jq -c 'select(.sid != null) | {kind:"insight", src, sid,
+      target:([.findings[]? | select(.confidence != "low") | "\(.summary) \(.evidence)"] | join("\n"))}' "${digests[@]}" 2>/dev/null
+  } | jq -sc --argjson rules "$rules" --argjson min "${HM_EFFECT_MIN_SESSIONS:-30}" \
       --argjson min_expected "${HM_EFFECT_MIN_EXPECTED:-5}" '
       (map(select(.kind == "session" and ((.internal // false) | not)))
         # 지침 파일은 세션 시작 때 읽히므로, 적용 전에 시작한 세션은 새 규칙을 본 적이 없다 — 시작 시각으로 나눈다.
