@@ -3132,6 +3132,53 @@ if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]
 fi
 pass "bash 3.2 file descriptor safety"
 
+# 재작업 비율: 머지 뒤 window일 안에 같은 이슈 키로 새 PR 작업이 시작되면 재작업이다. 원본 머지 전에 시작한 분할 PR은 세지 않는다.
+RW_REMOTE="$TEST_TMP/rework-remote.git"
+RW_REPO="$TEST_TMP/rework-repo"
+git init -q --bare "$RW_REMOTE"
+git init -q -b develop "$RW_REPO"
+rw_commit() { # file author epoch
+  printf '%s\n' "$1" >>"$RW_REPO/$1"
+  git -C "$RW_REPO" add "$1"
+  GIT_AUTHOR_NAME="$2" GIT_AUTHOR_EMAIL="$2@example.com" GIT_AUTHOR_DATE="@$3" \
+    GIT_COMMITTER_NAME="$2" GIT_COMMITTER_EMAIL="$2@example.com" GIT_COMMITTER_DATE="@$3" \
+    git -C "$RW_REPO" commit -q -m "$1"
+}
+rw_merge() { # branch pr epoch
+  GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.com GIT_AUTHOR_DATE="@$3" \
+    GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.com GIT_COMMITTER_DATE="@$3" \
+    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)"
+}
+DAY=86400
+T0=1790000000
+rw_commit base me "$T0"
+# PR #1 (NJ-1): 내 PR, 머지 T0+1d. PR #2: 같은 키를 머지 하루 뒤에 시작 → 재작업.
+git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY))
+# PR #3 (NJ-2)와 #4: #4는 #3 머지 전에 시작한 분할 PR → 재작업 아님.
+git -C "$RW_REPO" switch -q -c feature/NJ-2-b; rw_commit c me $((T0 + 3 * DAY)); git -C "$RW_REPO" switch -q develop
+git -C "$RW_REPO" switch -q -c feature/NJ-2; rw_commit d me $((T0 + 3 * DAY + 100)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-2 3 $((T0 + 4 * DAY))
+rw_merge feature/NJ-2-b 4 $((T0 + 5 * DAY))
+# PR #5 (NJ-3): 남의 PR → --author로 제외. PR #6 (NJ-4): 후속이 8일 뒤 → window 밖.
+git -C "$RW_REPO" switch -q -c feature/NJ-3; rw_commit e other $((T0 + 5 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-3 5 $((T0 + 6 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-4; rw_commit f me $((T0 + 6 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-4 6 $((T0 + 7 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-4-late; rw_commit g me $((T0 + 15 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-4-late 7 $((T0 + 16 * DAY))
+# PR #8 (NJ-0): 제외 키. PR #9 (NJ-5): 머지 직후라 window가 아직 안 끝남 → pending.
+git -C "$RW_REPO" switch -q -c feature/NJ-0; rw_commit h me $((T0 + 16 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-0 8 $((T0 + 17 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-5; rw_commit i me $((T0 + 17 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-5 9 $((T0 + 18 * DAY))
+git -C "$RW_REPO" remote add origin "$RW_REMOTE"
+git -C "$RW_REPO" push -q origin develop
+git -C "$RW_REPO" fetch -q origin
+RW="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --until "$(date -u -r $((T0 + 18 * DAY)) +%Y-%m-%d 2>/dev/null || date -u -d @$((T0 + 18 * DAY)) +%Y-%m-%d)" --now $((T0 + 19 * DAY)))"
+assert_eq "7" "$(jq -r '.merged_prs' <<<"$RW")" "rework counts my merged PRs except excluded keys and other authors"
+assert_eq "2" "$(jq -r '.pending_prs' <<<"$RW")" "PRs whose window is still open are pending"
+assert_eq "5" "$(jq -r '.settled_prs' <<<"$RW")" "pending PRs leave the denominator"
+assert_eq "1:2" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW")" "only a same-key PR started after the merge within the window is rework"
+assert_eq "20" "$(jq -r '.rework_ratio' <<<"$RW")" "rework ratio is rework over settled PRs"
+RW_WIDE="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)))"
+assert_eq "1:2,6:7" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW_WIDE")" "a wider window catches the late follow-up"
+pass "rework ratio from merge history"
+
 # 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
 PLACE_ROOT="$TEST_TMP/place-project"
 mkdir -p "$PLACE_ROOT/.ai-harness-stage" "$PLACE_ROOT/.claude"
