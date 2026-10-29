@@ -13,6 +13,10 @@
 
 - **통합 테스트를 단건으로 못 돌리는 안내를 찾아냅니다** — `test`가 `integration` 태그를 빼고 `integrationTest`가 그 태그만 돌리는 저장소에서, 워크플로·페르소나·docs가 단건 실행을 `./gradlew test --tests`로만 안내해 통합 테스트를 고친 에이전트가 "No tests found"를 보거나 엉뚱한 통과로 완료를 보고할 수 있었습니다(외부 하네스 진단에서 잡다 백엔드 3개 저장소 공통으로 지적). `docs-drift.sh`가 Gradle 태스크별 태그 필터와 게이트 연결(`dependsOn`·`executionData`)을 읽어 `targeted_command_gaps`(문서:줄 · 빠진 태그 · 대신 쓸 태스크)로 보고하고, `/harness-init --sync`가 "보호 파일 후속 조치" 표에 싣습니다. 새로 생성하는 워크플로 본문은 단위·통합 단건 명령을 나눠 적습니다.
 
+### 버그 수정
+
+- **JS 모노레포에서 drift 리포트가 있는 스크립트를 stale로 올리던 문제** — `package.json`을 한 단계 아래까지만 읽어 `apps/<pkg>`·`packages/<pkg>`의 스크립트를 못 봤고, `pnpm --filter x exec tsc`의 바이너리와 `yarn web test:ci` 같은 루트 별칭 경유 호출을 스크립트로 잘못 읽었습니다(실측: jobda-b2b-web stale 4건·jobda-web 1건 전부 오탐). 이제 워크스페이스 `package.json`까지 읽되 사실로는 검증 스크립트(test·lint·coverage·type 등)만 올리고, `exec`·`dlx` 뒤는 건너뛰며, 호출의 둘째 토큰도 문서화된 것으로 봅니다.
+
 ### 업데이트 후 해야 할 일
 
 - Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).

@@ -35,19 +35,25 @@ trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/docs.txt"
 : >"$TMP/tag-filters.tsv" # task \t include|exclude \t tag
 : >"$TMP/targeted.tsv"    # doc \t line \t task \t tag \t use_instead
+: >"$TMP/npm-declared.txt" # 워크스페이스 포함 선언된 npm 스크립트 전부 — stale 판정 기준
 : >"$TMP/gate-lines.txt"  # dependsOn·executionData 줄 — 게이트에 물린 태스크 판정용
 
 rel() { printf '%s' "${1#"$root"/}"; }
 
 # ── 빌드 파일 수집 (루트와 한 단계 아래 모듈까지) ────────────────────────────
+# package.json만 두 단계 아래(apps/<pkg>, packages/<pkg>)까지 본다. JS 워크스페이스는 그 깊이에 있어,
+# 못 보면 워크스페이스 스크립트가 문서에 있는데도 stale로 오른다.
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
   printf '%s\n' "$f" >>"$TMP/build.txt"
-done < <(find "$root" -maxdepth 2 \
+done < <({ find "$root" -maxdepth 2 \
   \( -name node_modules -o -name .git -o -name build -o -name target -o -name .gradle \) -prune -o \
-  -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'package.json' \
+  -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' \
              -o -name 'pom.xml' -o -name 'pyproject.toml' -o -name 'pytest.ini' -o -name 'setup.cfg' \) \
-  -print 2>/dev/null | sort)
+  -print 2>/dev/null
+  find "$root" -maxdepth 3 \
+  \( -name node_modules -o -name .git -o -name build -o -name dist -o -name target -o -name .gradle \) -prune -o \
+  -type f -name 'package.json' -print 2>/dev/null; } | sort)
 
 # ── 문서 수집 ──────────────────────────────────────────────────────────────
 for d in "$root/AGENTS.md" "$root/CLAUDE.md"; do
@@ -166,8 +172,13 @@ while IFS= read -r f; do
     package.json)
       if jq -e '.scripts' "$f" >/dev/null 2>&1; then
         add_stack npm
+        # 워크스페이스 패키지의 eject·postbuild 같은 스크립트까지 올리면 missing이 묻힌다 — 검증 스크립트만 사실로 본다.
         while IFS= read -r t; do
-          [[ -n "$t" ]] && add_fact npm_script "$t" "$f"
+          [[ -n "$t" ]] || continue
+          printf '%s\n' "$t" >>"$TMP/npm-declared.txt"
+          if [[ "$f" == "$root/package.json" ]] || gradle_relevant "$t" || [[ "$t" == *type* ]]; then
+            add_fact npm_script "$t" "$f"
+          fi
         done < <(jq -r '.scripts | keys[]' "$f" 2>/dev/null | sort -u)
       fi
       ;;
@@ -219,18 +230,28 @@ while IFS= read -r d; do
              | sort -u)
   # pnpm --filter api test / yarn workspace web run build 처럼 스크립트명 앞에 다른 토큰이 온다.
   # 플래그와 워크스페이스 지정을 건너뛰고 첫 실제 토큰만 스크립트명으로 본다.
-  while IFS= read -r t; do
-    [[ -n "$t" ]] && printf 'npm_script\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
+  # `yarn web test:ci`처럼 루트 별칭 스크립트(web → yarn workspace ...)를 거치면 둘째 토큰이 워크스페이스 스크립트다.
+  # gradle과 같이 둘째 토큰은 missing 해소에만 쓴다.
+  while IFS=$'\t' read -r pos t; do
+    [[ -n "$t" ]] || continue
+    if [[ "$pos" == 1 ]]; then
+      printf 'npm_script\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/uses.tsv"
+    else
+      printf 'npm_script\t%s\t%s\n' "$t" "$(rel "$d")" >>"$TMP/extra-uses.tsv"
+    fi
   done < <(grep -oE '(npm|pnpm|yarn)([[:space:]]+[^[:space:]`|&;"'"'"']+){1,4}' "$d" 2>/dev/null \
              | awk '{
-                 i = 2
+                 i = 2; n = 0
                  while (i <= NF) {
                    t = $i
                    if (t ~ /^-/) { if (t == "--filter" || t == "-F") { i++ } ; i++ ; continue }
-                   if (t == "run" || t == "exec" || t == "dlx") { i++ ; continue }
+                   if (t == "run") { i++ ; continue }
+                   # exec·dlx 뒤는 패키지 바이너리(tsc·vitest)다 — 스크립트가 아니다.
+                   if (t == "exec" || t == "dlx") break
                    if (t == "workspace" || t == "workspaces") { i += 2 ; continue }
-                   print t
-                   break
+                   print ++n "\t" t
+                   if (n == 2) break
+                   i++
                  }
                }' | sort -u)
   while IFS= read -r t; do
@@ -265,6 +286,7 @@ done < <(sort -u "$TMP/facts.tsv")
 while IFS=$'\t' read -r kind value doc; do
   [[ -n "$kind" ]] || continue
   [[ "$kind" == "npm_script" ]] && printf '%s' "$value" | grep -qE "$NPM_BUILTIN" && continue
+  [[ "$kind" == "npm_script" ]] && grep -qxF -- "$value" "$TMP/npm-declared.txt" && continue
   [[ "$kind" == "gradle_task" ]] && printf '%s' "$value" | grep -qE "$GRADLE_BUILTIN" && continue
   # 문서가 언급한 스택의 사실이 하나도 없으면 비교 자체가 무의미하다 (그 스택을 안 쓰는 프로젝트).
   awk -F'\t' -v k="$kind" '$1==k {found=1} END{exit !found}' "$TMP/facts.tsv" || continue

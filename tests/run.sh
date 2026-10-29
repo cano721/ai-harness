@@ -334,6 +334,20 @@ GRADLE
 printf -- '- `./gradlew test --tests {pattern}`\n' >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md"
 assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
 pass "drift targeted command for tag-excluded tests"
+# JS 워크스페이스(apps/<pkg>/package.json)는 두 단계 아래에 있다. exec 뒤 바이너리와 별칭 경유 호출도 오탐을 만들면 안 된다.
+WS="$TEST_TMP/drift-workspace"
+mkdir -p "$WS/apps/web" "$WS/.ai-harness/docs"
+printf '{"scripts":{"web":"yarn workspace web","lint":"eslint ."}}\n' >"$WS/package.json"
+printf '{"scripts":{"test:ci":"vitest run --coverage","storybook":"storybook dev","eject":"x","lint:error":"eslint --quiet ."}}\n' >"$WS/apps/web/package.json"
+cat >"$WS/.ai-harness/docs/testing.md" <<'DOC'
+- `yarn web test:ci`, `yarn lint`
+- `pnpm --filter web storybook`
+- `pnpm --filter web exec tsc --noEmit`
+DOC
+WS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$WS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a workspace script is not stale, and a binary after exec is not a script"
+assert_eq "lint:error" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a script reached through a root alias counts as documented; only verification scripts of a workspace become facts"
+pass "drift js workspaces"
 
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
