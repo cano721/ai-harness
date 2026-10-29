@@ -7,7 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
+## v0.45.0 (2026-10-29)
 ### 새 기능
 
 - **프론트 팀 역할 세트(`frontend-team`)** — 프론트엔드 저장소에서 `/harness-init`의 프론트 판단 Skill 하위 선택으로 `프론트 팀 구성`을 고르면, 범용 developer·reviewer·test-engineer 대신 `fe-architect`(구조·추상화·UX 디테일·모션·코드 리뷰)·`fe-implementer`(요구사항 충족·API 연동, 이슈 항목 하나 = 커밋 하나)를 만들고, 산출물이 생기는 자리로 담당을 가르는 `frontend-team` 라우터 스킬이 "다음 담당" 체인을 조율합니다. 디자인 규칙 문서와 스토리북 UI 패키지가 있으면 `fe-designer`와 다섯 축 채점 스킬 `design-audit`도 생성합니다. 페르소나 본문은 고정 템플릿이라 sync로 갱신되고, 경로·검증 명령·토큰 체계 같은 프로젝트 사실은 `.ai-harness/docs/frontend.md`의 `## 팀 역할`·`## 디자인 점검` 절에서 읽습니다. 실제 프론트 팀이 운영하던 역할 분담을 범용 원칙만 남겨 옮긴 것입니다.
