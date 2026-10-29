@@ -7,7 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
+## v0.43.2 (2026-10-29)
 ### 버그 수정
 
 - **자동 sync·자동 harvest가 `.claude/` 아래 파일을 쓰지 못하던 문제** — Claude Code는 `.claude/`를 보호 경로로 두어 `acceptEdits`나 명시 허용 규칙으로도 Write/Edit를 열어 주지 않고, 무인 실행에는 승인할 사람이 없어 항상 거부됩니다(실측: jobda 자동 sync가 그래프 3개만 갱신하고 `.claude/commands`·`.claude/workflows` 6개와 새 러너를 못 씀). 이제 내용을 저장소 안 임시 경로에 쓴 뒤 `scripts/place-claude-file.sh`가 옮깁니다. 대상은 commands·agents·workflows·skills뿐이고 settings·hook과 저장소 밖 원본은 거부합니다.
