@@ -19,6 +19,8 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
 - 변경을 적용하기 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면(IP 허용 목록, 인증 없음, 미지원 원격) 브랜치를 만들거나 push하지 말고 개선안 보고로 끝내며 `mark-reviewed`하지 않는다.
 - `open-pr.sh`가 실패하면(지원하지 않는 원격, 인증 정보 없음 등) 방금 push한 원격 브랜치를 `git push origin --delete <branch>`로 지우고, 개선안 보고로 끝내며 `mark-reviewed`하지 않는다.
 - 허용된 명령만 쓸 수 있다: `git`, `jq`, `head`, `tail`, 플러그인 `scripts/*`. 스크립트는 `$ROOT`를 실제 절대경로로 풀어 한 줄에 하나씩 호출한다 — `ROOT=...;` 변수 할당이나 다른 명령과의 조합은 권한 규칙에 매칭되지 않아 거부된다.
+- 페르소나(`.claude/agents/`)·커맨드 등 **`.claude/` 아래 파일은 Edit/Write로 고칠 수 없다** — Claude Code가 보호 경로로 막는다. 고친 전체 내용을 저장소 안의 임시 경로(`.ai-harness-stage/<이름>`)에 Write한 뒤 `$ROOT/scripts/place-claude-file.sh --root . --from .ai-harness-stage/<이름> --to .claude/<경로>`로 옮긴다. settings·hook은 이 경로로도 바꿀 수 없으니 개선안 보고로 남긴다.
+- PR 본문 파일도 `.ai-harness-stage/`에 쓴다 — 데이터 디렉토리(`~/.ai-harness`)는 쓰기가 막혀 있다. 이 경로는 커밋하지 않으며 worktree와 함께 지워진다.
 - **제거도 같은 draft PR로 낸다** — 단 **줄 단위 제거**(규칙 한 줄, 문서의 낡은 문장·표 행)만이다. 파일 삭제(문서·워크플로·페르소나 통째)와 관리 생성물(`harness.json`의 `managed_files`) 제거는 `left_for_user`로 남긴다 — 사람이 `/harness-init`의 `exclude`로 처리해야 다음 동기화가 되살리지 않는다.
 - 마지막 출력은 결과 한 줄(`improved <PR URL>` / `no-change <이유>` / `left_for_user <이유>`).
 

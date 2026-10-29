@@ -1048,6 +1048,10 @@ printf '%s\n' 'generated content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
 SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
 assert_eq "unchanged" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "managed generated file is unchanged"
 assert_eq "0.14.0" "$(jq -r '.harness_version' "$SYNC_ROOT/.ai-harness/harness.json")" "sync record updates harness version"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.15.0 --keep-version \
+  --file .agents/skills/example/SKILL.md
+assert_eq "0.14.0" "$(jq -r '.harness_version' "$SYNC_ROOT/.ai-harness/harness.json")" "partial sync record keeps harness version"
+assert_eq "0.15.0" "$(jq -r '.managed_files[".agents/skills/example/SKILL.md"].template_version' "$SYNC_ROOT/.ai-harness/harness.json")" "partial sync record still updates the file hash"
 printf '%s\n' 'user changed content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
 SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
 assert_eq "modified" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "user-modified managed file requires approval"
@@ -3061,5 +3065,35 @@ if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]
   assert_eq "ok" "$(cd "$TEST_TMP" && /bin/bash -c 'for i in $(seq 1 300); do IFS=$'"'"'\t'"'"' read -r a b <<<"$(printf "x\ty\n" | head -n 1)"; done; echo ok')" "here-string reads do not exhaust file descriptors on bash 3.2"
 fi
 pass "bash 3.2 file descriptor safety"
+
+# 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
+PLACE_ROOT="$TEST_TMP/place-project"
+mkdir -p "$PLACE_ROOT/.ai-harness-stage" "$PLACE_ROOT/.claude"
+printf '%s\n' 'rendered' >"$PLACE_ROOT/.ai-harness-stage/review.md"
+"$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/review.md" --to .claude/commands/review.md >/dev/null
+assert_eq "rendered" "$(<"$PLACE_ROOT/.claude/commands/review.md")" "staged file is placed under .claude/commands"
+assert_not_file "$PLACE_ROOT/.ai-harness-stage/review.md"
+TEMPLATE_JS="$(find "$ROOT/templates" -name '*.js' -path '*workflows*' | head -n 1)"
+[[ -n "$TEMPLATE_JS" ]] || TEMPLATE_JS="$(find "$ROOT/templates" -type f -name '*.md' | head -n 1)"
+"$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$TEMPLATE_JS" --to .claude/workflows/review.js >/dev/null
+cmp -s "$TEMPLATE_JS" "$PLACE_ROOT/.claude/workflows/review.js" || fail "plugin template is copied verbatim"
+assert_file "$TEMPLATE_JS"
+printf '%s\n' '{}' >"$PLACE_ROOT/.ai-harness-stage/settings.json"
+for bad in .claude/settings.json .claude/settings.local.json .claude/hooks/guard.sh .claude/commands/../settings.json AGENTS.md; do
+  if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/settings.json" --to "$bad" 2>/dev/null; then
+    fail "place-claude-file must refuse $bad"
+  fi
+done
+printf '%s\n' 'secret' >"$TEST_TMP/outside.txt"
+if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$TEST_TMP/outside.txt" --to .claude/agents/x.md 2>/dev/null; then
+  fail "place-claude-file must refuse sources outside the project and plugin templates"
+fi
+mkdir -p "$TEST_TMP/escape"
+ln -s "$TEST_TMP/escape" "$PLACE_ROOT/.claude/agents"
+if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/settings.json" --to .claude/agents/x.md 2>/dev/null; then
+  fail "place-claude-file must refuse a symlinked directory that leaves .claude"
+fi
+assert_not_file "$TEST_TMP/escape/x.md"
+pass "unattended .claude writes go through a restricted placer"
 
 printf '1..%d\n' "$TESTS"
