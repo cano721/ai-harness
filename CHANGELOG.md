@@ -12,6 +12,16 @@
 
 - **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **프론트 템플릿이 프로젝트의 커버리지 게이트와 충돌하던 문제** — `frontend-testing` 스킬과 `fe-implementer`·`fe-architect` 페르소나가 "커버리지 목표는 두지 않는다"고 단정해, 초기 셋팅으로 로직 계층 100% 게이트(`coverageGate.json`·vitest `thresholds`)를 깐 저장소에서 에이전트가 `test:ci`를 건너뛸 근거가 됐습니다(외부 하네스 진단에서 jobda-b2b-web 지적, jobda-web도 같은 게이트). 이제 커버리지 목표·대상은 프로젝트 초기 셋팅(`testing.md`)을 따르고, 대상 파일을 바꾸면 커버리지까지 재는 명령을 돌리게 합니다. 숫자를 채우려는 단언 없는 테스트는 여전히 쓰지 않습니다.
+
+### 업데이트 후 해야 할 일
+
+- 프론트 저장소에서 `/harness-init --sync --apply`로 `frontend-testing` 스킬과 프론트 팀 페르소나를 갱신합니다.
+
 ## v0.45.0 (2026-10-29)
 ### 새 기능
 
