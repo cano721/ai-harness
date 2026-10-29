@@ -36,7 +36,7 @@ $ROOT/scripts/existing-assets.sh scan --root . --templates "$ROOT/templates"
 
 출력은 사실만 담는다: `instructions`(CLAUDE.md 위치와 `agents_import`·`imports_agents`, 루트 컨벤션 문서), `agents`(이름·모델·description·`skills`), `skills`(`template_collision`·`identical_to_template`·`routes_agents` = 로컬 에이전트를 부르는 라우터 후보), `commands`, `settings`(기존 hook 이벤트·`enabled_plugins`), `external_refs`(`plugin:agent` 참조와 `declared` 여부), `claude_dir_ignored`. 모든 목록이 비어 있으면 이 절을 건너뛴다.
 
-1. **역할 매핑 초안**: 하네스 역할 슬롯(explorer·developer·test-engineer·reviewer·docs-updater)마다 description·본문으로 책임이 겹치는 기존 에이전트를 찾는다. 담당을 나누는 라우터 스킬(`routes_agents:true`)이 있으면 그 스킬이 정한 대로 구현 슬롯(developer·test-engineer)을 라우터에 맡기는 안이 기본이다. 매핑은 §2 인터뷰 7번에서 사용자가 확정한다 — 추측으로 정하지 않는다.
+1. **역할 매핑 초안**: 하네스 역할 슬롯(explorer·developer·test-engineer·reviewer·docs-updater)마다 description·본문으로 책임이 겹치는 기존 에이전트를 찾는다. 담당을 나누는 라우터 스킬(`routes_agents:true`)이 있으면 그 스킬이 정한 대로 구현 슬롯(developer·test-engineer)을 라우터에 맡기는 안이 기본이다. 매핑은 §2 인터뷰 7번에서 사용자가 확정한다 — 추측으로 정하지 않는다. 프론트엔드 프로젝트의 기존 팀 에이전트·라우터가 하네스 프론트 팀 역할 세트(§4)와 같은 일을 하면, 기존 자산을 유지하는 매핑 외에 **역할 세트로 교체**하는 안도 함께 보인다(아래 §2 6번의 `프론트 팀 구성`). 교체를 고르면 기존 파일은 사람 소유이므로 삭제 목록을 diff와 함께 보이고 승인받은 뒤에만 지우며, 기존 본문의 프로젝트 고유 사실(경로·검증 명령·토큰 체계·호칭)은 지우기 전에 `.ai-harness/docs/frontend.md`로 옮긴다.
 2. **매핑된 슬롯은 생성하지 않는다**: 확정된 슬롯은 `.claude/agents/<slot>.md`(해당 integration)를 만들지 않고, 워크플로 본문의 위임 대상·AGENTS.md 페르소나 표를 기존 이름(또는 "라우터 `<path>`가 정한 담당")으로 쓴다. 기존 에이전트가 없는 integration(대개 Codex)은 하네스 페르소나를 그대로 만든다. 확정 결과를 manifest `roles`에 기록한다(아래 형식). 이미 생성된 페르소나가 매핑으로 대체되면 sync plan이 `orphaned`(`role_adopted`)로 제거 후보에 올린다.
 3. **가드와 맞물리게**: 편집 가드는 편집하는 세션의 transcript에서 docs Read를 찾는다. 매핑된 기존 에이전트 본문에 Preflight 한 줄("작업 전 `AGENTS.md` Preflight와 `.ai-harness/docs/code-conventions.md`(테스트면 `testing.md`)를 Read한다")이 없으면 첫 편집에서 막힌다. 기존 에이전트는 사람 소유 파일이므로 **diff를 보이고 승인받은 뒤에만** 그 한 줄을 넣는다. 승인이 없으면 가드 충돌 가능성을 최종 보고에 적는다.
 4. **지침 파일**: 기존 CLAUDE.md는 내용을 보존하고 맨 위에 `@<agents_import>` 한 줄만 넣는다 — `.claude/CLAUDE.md`면 `@../AGENTS.md`다(import는 파일 위치 기준). 루트 CLAUDE.md를 새로 만들지 않는다(두 지침이 이중 로드된다). 컨벤션 문서는 docs에서 링크·요약으로 연결하고 복사하지 않는다.
@@ -55,12 +55,12 @@ $ROOT/scripts/existing-assets.sh scan --root . --templates "$ROOT/templates"
 3. **git 통제 수준**: `PR 필수`(manifest `git_policy:"pr-only"` — 에이전트가 커밋·일반 push·PR 생성까지, 병합·force push는 사람) / `직접 커밋 허용`(`git_policy:"direct"` — 커밋·일반 push까지, PR은 프로젝트 워크플로가 요구할 때만). 어느 쪽이든 병합·force push는 에이전트가 하지 않는다. 값이 없거나 그 밖이면 에이전트는 별도 허가 없이 커밋·push·PR을 하지 않는다(이전 동작)
 4. **도구 통합**: `Codex` / `Claude` / `둘 다` / `통합 파일 없음`. standard의 Codex Skill은 `Codex` 또는 `둘 다`일 때만 `.agents/skills/`에 생성한다. Claude용 `.claude/`와 `CLAUDE.md`는 `Claude` 또는 `둘 다`일 때만 생성한다.
 5. **편집 가드**: 켜기 / 끄기. 가드는 규모와 독립적인 선택 옵션이며, 소스 수정 전에 관련 하네스 문서를 읽었는지 확인한다. transcript를 읽을 수 없으면 fail-open한다.
-6. **프론트 판단 Skill** (§1에서 프론트엔드 스택을 감지했을 때만 묻는다): `생성` / `생성 안 함`. 생성하면 `frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`를 프로젝트 로컬 Skill로 만든다(모두 읽기 전용 판단 지침). **FSD Skill(`feature-sliced-design`)은 별도 하위 선택**이며 §1에서 FSD를 감지했거나 사용자가 FSD를 쓴다고 답할 때만 추가한다 — FSD를 안 쓰는 프로젝트에 방법론 전체를 심으면 오도한다. 프론트엔드가 아니면 이 항목 자체를 건너뛴다.
+6. **프론트 판단 Skill** (§1에서 프론트엔드 스택을 감지했을 때만 묻는다): `생성` / `생성 안 함`. 생성하면 `frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`를 프로젝트 로컬 Skill로 만든다(모두 읽기 전용 판단 지침). **FSD Skill(`feature-sliced-design`)은 별도 하위 선택**이며 §1에서 FSD를 감지했거나 사용자가 FSD를 쓴다고 답할 때만 추가한다 — FSD를 안 쓰는 프로젝트에 방법론 전체를 심으면 오도한다. **프론트 팀 구성**(`frontend-team`)도 하위 선택이다: 구현·리뷰를 범용 developer·reviewer·test-engineer 대신 `fe-architect`·`fe-implementer`(+ 디자인 규칙 문서와 UI 패키지가 있으면 `fe-designer`)가 맡고 `frontend-team` 라우터 스킬이 담당을 가른다. 설명에 §1 실측(앱·UI 패키지 구성, 디자인 규칙 문서·스토리북 유무)을 담는다. 프론트엔드가 아니면 이 항목 자체를 건너뛴다.
 7. **역할 매핑** (§1-1에서 기존 에이전트를 찾았을 때만 묻는다): 슬롯별로 §1-1 초안을 보이고 `기존 <name>(또는 라우터)에 맡김` / `하네스 페르소나 생성`을 받는다. 매핑한 슬롯은 생성하지 않는다.
 8. **승인 게이트** (standard일 때): `사람 승인`(manifest `approval:"human"`, 기본 — Brief를 보여 주고 사람이 승인할 때까지 파일을 수정하지 않는다) / `정책 승인`(`approval:"auto"` — Brief를 산출물(러너 실행 디렉터리·PR 본문)로 남기고 승인 노드를 통과한다. 위임 세션·상위 오케스트레이터가 사람 없이 PR까지 가는 운영용). auto에서는 Brief가 열린 질문 대신 추천안을 골라 근거와 함께 `결정 사항`으로 남기고(러너 실행 디렉터리 `brief.md`·PR 본문 — 사람은 병합 전에 뒤집을 수 있다), 사람만 정할 수 있는 것(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포 같은 되돌리기 어려운 선택, 외부 시스템 쓰기)이 있을 때만 승인에서 멈춘다. 그래프가 `user_decision`으로 보내는 수리 한도 초과·제품 판단, 병합·force push 같은 비가역 작업도 사람에게 간다. `PR 필수`와 함께 고르면 "이슈를 맡기면 PR까지, 병합만 사람" 흐름이 된다.
 9. **이슈 상태 전환** (standard일 때): `시작 시 진행 중`(manifest `issue_policy:"in-progress-on-start"` — 이슈 키·URL로 `implement-feature`·`fix-bug`를 시작하면 브랜치·worktree 준비와 탐색 전에 그 이슈를 진행 중으로 옮긴다. 상태 이름이 아니라 대상 상태 분류가 진행 중인 전환을 고르고, 이미 진행 중이면 그대로, 완료·종료면 다시 열지 않고 사람에게 묻는다) / `건드리지 않음`(필드 없음, 기본). §1에서 이슈 트래커를 쓰는 흔적(브랜치·커밋의 이슈 키, `/jira` 같은 이슈 도구)이 보일 때 설명에 반영한다.
 
-답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구(`pr-only`면 "에이전트는 커밋·일반 push·PR 생성까지, 병합·force push는 사람", `direct`면 "커밋·일반 push까지, force push 금지"), **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 승인 게이트(8번)·git 통제 수준(3번)·이슈 상태 전환(9번)은 manifest `approval`·`git_policy`·`issue_policy`에만 기록한다 — 어댑터·러너가 런타임에 manifest를 읽으므로 어댑터 본문을 정책별로 바꿔 렌더하지 않는다(정책을 바꿔도 관리 생성물 해시가 그대로다). 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도) 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다. 7번에서 기존 에이전트에 넘긴 슬롯은 아래 구조에서 그 integration의 페르소나 파일을 빼고, 기존 에이전트의 모델은 바꾸지 않는다.
+답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구(`pr-only`면 "에이전트는 커밋·일반 push·PR 생성까지, 병합·force push는 사람", `direct`면 "커밋·일반 push까지, force push 금지"), **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 승인 게이트(8번)·git 통제 수준(3번)·이슈 상태 전환(9번)은 manifest `approval`·`git_policy`·`issue_policy`에만 기록한다 — 어댑터·러너가 런타임에 manifest를 읽으므로 어댑터 본문을 정책별로 바꿔 렌더하지 않는다(정책을 바꿔도 관리 생성물 해시가 그대로다). 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도) 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 프론트 팀 구성을 고르면 `frontend-team`을(항상 `frontend`와 함께 — 역할 페르소나가 프론트 판단 Skill을 쓴다), 디자이너 역할까지 생성하면 `design-system`도 기록하고, `roles`에 developer·reviewer·test-engineer를 `source:"stack"`으로 넘긴다(§4 프론트 팀 역할 세트). 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다. 7번에서 기존 에이전트에 넘긴 슬롯은 아래 구조에서 그 integration의 페르소나 파일을 빼고, 기존 에이전트의 모델은 바꾸지 않는다.
 
 ## 3. 생성 구조 (인터뷰 답 기준으로 가감)
 
@@ -73,7 +73,7 @@ AGENTS.md                    # 진입점 (아래 구성)
     architecture.md          # 모듈 구조, 기술 스택, 빌드/배포 (실측)
     testing.md               # 테스트 실행법, 프레임워크, 작성 규칙 (테스트 정책 '없음'이면 생략)
     domain.md                # 도메인 인덱스 (초기엔 표 틀만 — 도메인 문서는 필요해질 때 domain/{name}.md로 추가)
-    frontend.md              # 프론트 판단 Skill을 생성할 때만. 디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부 등 프로젝트 고유 사실 (실측). 프론트 Skill이 런타임에 읽는 프로젝트 컨텍스트
+    frontend.md              # 프론트 판단 Skill을 생성할 때만. 디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부 등 프로젝트 고유 사실 (실측). 프론트 Skill이 런타임에 읽는 프로젝트 컨텍스트. 프론트 팀 구성이면 `## 팀 역할`(+design-system이면 `## 디자인 점검`) 절 포함
   workflows/                 # standard
     implement-feature.md     # 기능 개발 절차 (작은 검증 단위·완료 증거 원칙을 프로젝트 정책에 맞춰 구체화)
     feature-delivery-graph.json # implement-feature의 프로젝트 로컬 노드·전이 계약
@@ -110,6 +110,10 @@ AGENTS.md                    # 진입점 (아래 구성)
     feature-sliced-design/   # stack:fsd일 때만 (FSD opt-in)
       SKILL.md
       references/
+    frontend-team/           # stack:frontend-team일 때만. 프론트 역할 라우터
+      SKILL.md
+    design-audit/            # stack:design-system일 때만. 디자인 규칙 채점
+      SKILL.md
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -120,8 +124,9 @@ AGENTS.md                    # 진입점 (아래 구성)
 CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내용: "@AGENTS.md"
 .claude/
   agents/                    # explorer/developer/test-engineer/reviewer/docs-updater 위임본. 각 파일 frontmatter에 §4 표의 `model` 필수
+                             # stack:frontend-team이면 developer·reviewer·test-engineer 대신 fe-architect·fe-implementer(+design-system이면 fe-designer) — templates/frontend-team/personas 사본
   commands/                  # Claude 슬래시 커맨드 진입점
-  skills/                    # Claude 또는 둘 다 + stack:frontend일 때만. .agents/skills와 동일 프론트 판단 Skill 사본
+  skills/                    # Claude 또는 둘 다 + stack:frontend일 때만. .agents/skills와 동일 프론트 판단 Skill 사본 (+frontend-team·design-audit은 해당 stack일 때)
   workflows/                 # Claude Dynamic Workflow 스크립트 (진입점이 scriptPath로 호출)
   settings.json              # 감지된 빌드/테스트 명령 allowlist (+ guard 시 PreToolUse hook)
 ```
@@ -154,6 +159,12 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - `/explain-for`도 **플러그인 전역 Skill**(`skills/explain-for/`)이며 프로젝트에 진입점이나 보호 파일을 만들지 않는다. 설명을 청자(역할·숙련도)에 맞춰 다시 쓰는 읽기 전용 흐름이라 프로젝트 계약이 필요 없고, 팀 역할 이름·공유 위치·사내 용어 같은 조정이 필요한 프로젝트만 `.ai-harness/workflows/explain-for.md`를 직접 만들어 두면 스킬이 런타임에 읽는다. 초기화는 그 파일을 생성하지 않으며, 관리 생성물·동기화 대상도 아니다. `/understand-change`가 *무엇이 왜 바뀌었나*를 답하고, `/explain-for`는 그 결과를 *누구에게 어떻게 말하나*로 바꾼다.
 - `/diagram`도 **플러그인 전역 Skill**(`skills/diagram/`)이며 프로젝트에 진입점이나 보호 파일을 만들지 않는다. 플러그인에 고정된 Archify 엔진(`vendor/archify/`)으로 다이어그램을 그리고, 초기화가 만든 `.ai-harness/docs/architecture.md`는 어디를 볼지 정하는 지도로만 읽는다 — 근거는 커밋된 소스다. 관리 생성물·동기화 대상이 아니다.
 - **프론트 판단 Skill**(`frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`, FSD면 `feature-sliced-design` 추가)은 `implement-feature` 부류와 달리 워크플로 어댑터가 아니라 `templates/<name>/`의 **자립 지침을 프로젝트로 복사**한 것이다. 코드를 직접 바꾸지 않는 읽기 전용 판단이지만 프론트엔드 전용이라 플러그인 전역 Skill로 두지 않는다 — 백엔드 저장소에 노출되면 노이즈이므로, 프론트엔드로 감지된 프로젝트에서만 stack 게이트(`frontend`/`fsd`)로 생성한다. Codex는 `.agents/skills/<name>/`, Claude는 `.claude/skills/<name>/`에 SKILL.md와 `references/`를 통째로 복사한다. 각 Skill이 참조하는 프로젝트 고유 사실(디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부)은 `templates`를 일반화하며 빠졌으므로 `.ai-harness/docs/frontend.md`에 실측으로 채운다(보호 파일 — 자동 갱신하지 않는다). Skill 본문은 이 문서가 있으면 우선하도록 이미 적혀 있다. `feature-sliced-design`·`no-unnecessary-effects`는 각각 MIT 라이선스 상류의 사본이며(`THIRD-PARTY-LICENSES.md`), 복사본에도 각 SKILL.md 하단의 저작권 문구가 남는다.
+- **프론트 팀 역할 세트**(stack `frontend-team`, 디자이너까지면 `design-system`)는 범용 역할 슬롯 중 developer·reviewer·test-engineer를 프론트 역할 셋에 넘긴다: `fe-architect`(구조·추상화·UX 디테일·모션·코드 리뷰), `fe-implementer`(요구사항 충족과 API 연동, 이슈 항목 하나 = 커밋 하나), `fe-designer`(디자인 규칙 문서를 지키는 UI 패키지 산출물과 `design-audit` 채점 루프). 누가 무엇을 맡고 어디서 넘기는지는 `frontend-team` 라우터 스킬이 원본이고, 테스트는 그 코드를 만든 역할이 쓴다(TDD면 Red도). explorer·docs-updater는 범용 페르소나를 그대로 만든다.
+  - Claude 페르소나는 `templates/frontend-team/personas/<role>.md`를 `.claude/agents/`에 **그대로 복사**하는 관리 생성물이다(본문 고정 — 다음 sync가 갱신한다). 프로젝트 고유 사실은 본문에 쓰지 않고 `.ai-harness/docs/frontend.md`에 채운다. Codex를 선택했으면 같은 본문을 `developer_instructions`로 옮긴 `.codex/agents/<role>.toml`을 만든다(아래 모델 표, 범용 역할 toml과 같이 카탈로그 밖 생성물).
+  - `fe-designer`·`design-audit`는 디자인 규칙 문서(예: `DESIGN.md`)와 스토리북을 갖춘 UI 패키지가 둘 다 있을 때만 만든다. 없으면 `fe-designer` 칸을 `fe-implementer`가 맡는다고 라우터 스킬에 이미 적혀 있다.
+  - `roles`에는 `{"developer": {"source": "stack", "stack": "frontend-team", "integrations": [<선택한 도구>], "agents": ["fe-implementer", "fe-architect"], "router": "<integration의 skills 경로>/frontend-team/SKILL.md"}}`처럼 developer(`fe-implementer`·`fe-architect`, 디자이너가 있으면 `fe-designer`도)·reviewer(`fe-architect`)·test-engineer(developer와 같은 목록)를 기록한다. 이미 생성된 범용 페르소나는 sync plan이 `orphaned`(`role_adopted`)로 올린다.
+  - `frontend.md`에 두 절을 실측으로 쓴다. `## 팀 역할`: 앱 코드 경로와 UI 패키지 경로(라우터의 "빨간 불" 범위), 역할별 끝내기 전 검증 명령(포맷·린트·테스트·빌드, UI 패키지 타입 검사·스토리북 빌드), 로컬 앱·스토리북 실행 명령과 주소, 의존성 추가 방식, 모션 토큰 이름, 프로젝트가 쓰는 역할 호칭(있으면). `## 디자인 점검`(design-system일 때): 디자인 규칙 문서 경로, `design-audit` 다섯 축(A 골격·위계 / B 색·강조·상태 / C 컴포넌트 문법 / D 형제 정합 / E 톤·정직성)에 대응하는 문서 절, 페이지 분류와 분류별 형제 페이지 목록, 페이지·블록·컴포넌트의 소스·스토리 위치, 값의 근거 파일, 디자인 시스템 스캐폴드 도구.
+  - 역할 페르소나 본문은 범용 원칙만 담는다 — 팀 고유 규칙은 `frontend.md`·`code-conventions.md`에 두면 페르소나가 Preflight에서 읽는다. 기존 팀 에이전트를 이 세트로 교체할 때(§1-1) 옮길 내용이 범용 원칙이면 이 템플릿을 고치는 PR로 올리고, 프로젝트 사실이면 `frontend.md`로 옮긴다.
 - AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`와 `/explain-for`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다. 프론트 판단 Skill을 생성했으면 프로젝트 로컬 Skill로 표에 함께 싣는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. Claude Code가 **2.1.154 이상**이면 승인 후 프로젝트의 `.claude/workflows/<name>.js`를 선택적으로 사용할 수 있고, 그렇지 않으면 현재 세션 흐름으로 폴백한다. 워크플로는 이름으로 등록되지 않으므로 **프로젝트 루트 기준 절대 경로**를 `scriptPath`로 넘겨 호출하고, 승인된 Brief를 `{ approved: true, brief: "...", max_repair_attempts: <그래프 limits.max_repair_attempts> }`로 전달한다(review.js는 `{ scope, max_repair_attempts }`). 상대 경로는 셸 작업 디렉터리 기준으로 해석되어 실패할 수 있다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
 - 모델은 역할 agent 정의에 직접 지정한다. 이는 사용자 인터뷰 항목이 아니며, 기본 매핑은 아래와 같다. **`model` 없는 역할 agent는 생성 실패로 취급한다** — Claude Code는 frontmatter에 `model`이 없으면 부모 세션 모델을 상속하므로, reviewer가 sonnet으로 내려가거나 developer가 opus로 올라가 등급 설계가 무력화되고 비용도 부모 모델 기준으로 붙는다. 표에 없는 역할을 새로 만들면 그 역할의 기본 모델도 표에 함께 추가한다. 중요한 보안·데이터 마이그레이션·복잡한 장애 분석은 explorer/test-engineer에 맡기지 않고 developer 또는 reviewer로 승격한다.
@@ -165,6 +176,9 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 | developer | `gpt-5.6`, `medium` | `sonnet` | 구현·수정의 기본 담당 |
 | reviewer | `gpt-5.6`, `high`, read-only | `opus` | 보안·데이터·설계·마이그레이션 검토에 우선 사용 |
 | docs-updater | `gpt-5.6-terra`, `medium` | `sonnet` | 코드 변경 뒤 docs 영향 분석·갱신 |
+| fe-architect | `gpt-5.6`, `high` | `opus` | 프론트 구조·추상화·UX 디테일·코드 리뷰 (stack:frontend-team) |
+| fe-implementer | `gpt-5.6`, `medium` | `sonnet` | 프론트 요구사항 구현·API 연동 (stack:frontend-team) |
+| fe-designer | `gpt-5.6`, `high` | `opus` | 디자인 규칙 산출물·채점 루프 (stack:design-system) |
 
 - 위임은 모델 등급과 무관하게 부모 컨텍스트·도구 호출 비용이 든다. 독립적이고 범위가 좁은 작업에만 쓰며, 단순 작업은 현재 세션에서 직접 처리한다.
 - Codex 통합은 `.codex/agents/*.toml`에 `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, 필요 시 `sandbox_mode`를 쓴다. Claude 통합은 `.claude/agents/*.md` frontmatter의 `model`에 위 별칭을 쓴다. 선택한 도구에서 기본 모델이 사용 불가하면 설정을 억지로 대체하지 말고, 감지된 오류와 대체 후보를 사용자에게 보여 준다.
@@ -173,7 +187,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 
 ```json
 { "project_id": "<origin 저장소명 또는 사용자 확인 ID>", "level": "standard", "test_policy": "tdd", "git_policy": "pr-only", "approval": "human", "issue_policy": "in-progress-on-start", "integrations": ["codex"], "stacks": [], "edit_guard": false, "initialized": "YYYY-MM-DD", "harness_version": "<플러그인 버전>", "managed_files": { "<relative path>": { "content_sha256": "<생성 직후 해시>", "template_version": "<플러그인 버전>" } },
-  "roles": { "<slot>": { "source": "existing", "integrations": ["claude"], "agents": ["<기존 에이전트 이름>"], "router": "<라우터 스킬 경로, 있을 때만>" } },
+  "roles": { "<slot>": { "source": "existing | stack", "stack": "<source가 stack일 때 역할 세트 stack>", "integrations": ["claude"], "agents": ["<에이전트 이름>"], "router": "<라우터 스킬 경로, 있을 때만>" } },
   "excluded": { "<relative path>": { "reason": "existing | <사용자가 뺀 이유>", "since": "YYYY-MM-DD" } } }
 ```
 
@@ -233,7 +247,7 @@ $ROOT/scripts/workflow-contract.sh scan --root .
 
      검사: `nonexistent_tool`(`/plan`·`/team`·`Task 도구` 등 없는 도구), `repair_limit`(본문의 `최대 N회`가 그래프 `limits.max_repair_attempts`와 다름 — 그 필드가 없는 이전 그래프는 전이 이름의 횟수), `discard_on_violation`(위반 시 변경 폐기), `codex_exec_unbounded`(`-C`·`-s` 없는 `codex exec`), `pr_step_forbidden_by_adapter`(본문이 PR 생성을 단계로 두는데 manifest `git_policy`가 `pr-only`·`direct`가 아니거나, 어댑터가 `git_policy`를 모르는 이전 버전이라 PR을 금지함), `regression_role`(fix-bug가 테스트 편집이 금지된 developer에 회귀 테스트를 맡김), `write_scope_unmatched`(어떤 파일과도 맞지 않는 페르소나 쓰기 범위), `guard_project_dir`(`CLAUDE_PROJECT_DIR` 기준 hook 경로), `role_agent_missing`·`role_router_missing`(manifest `roles`가 가리키는 기존 에이전트·라우터 파일이 사라짐 — 위임이 조용히 끊긴다). 기준은 §4 작성 원칙이며, 토큰만 보고 서술의 옳고 그름은 판정하지 않는다.
    - **후속 제안(`suggestions`)**: plan 출력의 `suggestions` 배열을 계획 표와 함께 **반드시 별도 "보호 파일 후속 조치" 표로 제시한다** — 건너뛰면 새 진입점이 미등재 반쪽 상태로 남는다. `workflow_body_missing`은 새 진입점이 `@`로 참조하는 `.ai-harness/workflows/<name>.md` 본문 부재, `agents_md_reference`는 AGENTS.md 커맨드 표 미등재를 뜻한다.
-   - **기존 자산 재점검**: §1-1의 `existing-assets.sh scan`을 다시 돌려 init 이후 팀이 새로 넣은 에이전트·라우터·같은 이름 스킬을 찾는다. 새로 생긴 기존 에이전트가 하네스 페르소나와 역할이 겹치면 §1-1의 매핑 절차를 그대로 제안한다(사용자 확정 후 `roles` 갱신 → 대체된 페르소나는 다음 항목의 `orphaned`로 정리).
+   - **기존 자산 재점검**: §1-1의 `existing-assets.sh scan`을 다시 돌려 init 이후 팀이 새로 넣은 에이전트·라우터·같은 이름 스킬을 찾는다. 새로 생긴 기존 에이전트가 하네스 페르소나와 역할이 겹치면 §1-1의 매핑 절차를 그대로 제안한다(사용자 확정 후 `roles` 갱신 → 대체된 페르소나는 다음 항목의 `orphaned`로 정리). 프론트엔드 프로젝트에서 기존 팀 에이전트가 프론트 팀 역할 세트와 같은 일을 하고 있으면 §1-1의 교체안(`frontend-team` stack 추가 → 역할 세트 생성 → 프로젝트 사실을 `frontend.md`로 이관 → 승인 후 기존 파일 삭제)도 함께 보인다.
    - **고아 생성물(`orphaned`)**: 현재 설정으로는 더 이상 생성하지 않는 관리 생성물이다. `reason`은 `level_changed`·`integration_removed`·`stack_removed`·`role_adopted`(역할을 기존 에이전트에 넘김). 계획 표에 **제거 후보로 반드시 함께 제시한다** — `--reconfigure`로 integration·stack을 뺐거나 역할을 넘긴 뒤 남은 사본은 기존 에이전트와 나란히 다시 위임 대상이 된다.
    - **역할 agent `model` 드리프트** (위 분류와 별개인 **수동 점검** — 역할 agent는 `managed-files.json` 대상이 아니어서 `plan` 출력에 나오지 않는다): §5의 1번 self-check 스니펫을 그대로 실행해 `model` 없는 역할 agent를 찾고, §4 표 기본값으로 채우는 한 줄 추가를 계획 표 맨 아래에 **별도 행으로** 싣는다. 이전 버전이 누락한 채 생성한 경우가 있고, 누락된 agent는 부모 세션 모델을 그대로 상속한다. 본문은 바뀌지 않으므로 diff는 한 줄이지만, 적용은 다른 항목과 같이 사용자 승인 뒤에 한다. 해시 기록 대상이 아니므로 `record`도 하지 않는다.
    - **정리 대상(`retired`)**: 카탈로그의 `retired` 목록이 **명시적으로 내린** 생성물 중 이 프로젝트에 흔적이 남은 것이다(예: 0.16.0에서 깔렸다가 플러그인 전역 Skill로 옮겨진 `/understand-change` 사본). `present`는 파일이 디스크에 남았는지, `tracked`는 manifest가 아직 기록 중인지를 뜻하며 **둘은 따로 정리해야 한다**. 계획 표에 **반드시 함께 제시한다** — 방치하면 낡은 프로젝트 사본이 최신 플러그인 스킬을 가린다. 카탈로그에 없다는 사실만으로 추론하지 않는다: `.codex/agents/*.toml`처럼 init이 관리하지만 카탈로그가 선언한 적 없는 생성물이 있어, 추론하면 살아 있는 파일을 삭제 후보로 올린다.

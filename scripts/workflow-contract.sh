@@ -180,7 +180,8 @@ for s in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
 done
 
 # ── 역할 매핑(harness.json roles)이 가리키는 기존 에이전트·라우터 ─────────────
-# 역할을 기존 에이전트에 넘기면 하네스 페르소나를 만들지 않으므로, 대상이 사라지면 위임이 조용히 끊긴다.
+# 역할을 기존 에이전트(source existing)나 스택 역할 세트(source stack)에 넘기면 하네스 페르소나를 만들지 않으므로,
+# 대상이 사라지면 위임이 조용히 끊긴다.
 if [[ -f "$manifest" ]] && jq -e '(.roles // {}) | length > 0' "$manifest" >/dev/null 2>&1; then
   while IFS=$'\t' read -r slot integration agent; do
     case "$integration" in
@@ -190,7 +191,7 @@ if [[ -f "$manifest" ]] && jq -e '(.roles // {}) | length > 0' "$manifest" >/dev
     esac
     [[ -f "$root/$agent_file" ]] && continue
     finding role_agent_missing high ".ai-harness/harness.json" "" "$agent" "$agent_file" "역할 $slot 이(가) 매핑된 기존 에이전트 파일이 없다 — 매핑을 고치거나 roles에서 빼 하네스 페르소나를 생성한다"
-  done < <(jq -r '.roles | to_entries[] | select((.value.source // "") == "existing")
+  done < <(jq -r '.roles | to_entries[] | select((.value.source // "") | . == "existing" or . == "stack")
       | .key as $slot | (.value.integrations // ["claude"])[] as $i | (.value.agents // [])[] | [$slot, $i, .] | @tsv' "$manifest")
   while IFS=$'\t' read -r slot router; do
     case "$router" in (""|/*|*'..'*) continue ;; esac

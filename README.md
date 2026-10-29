@@ -72,6 +72,8 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `frontend-testing` | 이 변경에 테스트를 쓸지, 쓴다면 어느 층위·레이어인지, 깨진 테스트를 고칠지 지울지 정할 때. | 프론트 감지 |
 | `no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. | 프론트 감지 |
 | `feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. | **FSD 감지/opt-in일 때만** |
+| `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
+| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
 
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
