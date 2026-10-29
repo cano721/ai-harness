@@ -60,6 +60,7 @@ HARNESS_METRICS_DIR="$TEST_TMP/lib-data"
 export HARNESS_METRICS_DIR
 # SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
 export HM_BACKFILL_INTERVAL_HOURS=0
+export HM_AUTO_WORKTREE_DIR="$TEST_TMP/auto-worktrees"
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
@@ -2090,7 +2091,8 @@ assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs
 AUTO_RUN_LINE="$(sed -n 1p "$TEST_TMP/auto-stub.out")"
 assert_eq "auto-svc|1" "${AUTO_RUN_LINE%|*}" "worker gets project and recursion guard"
 AUTO_WORK_DIR="${AUTO_RUN_LINE##*|}"
-assert_contains "$AUTO_WORK_DIR" "/harvest-auto/worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+assert_contains "$AUTO_WORK_DIR" "/auto-worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+[[ "$AUTO_WORK_DIR" != "$AUTO_DATA"/* ]] || fail "the work tree must be outside the data directory the agent may not write: $AUTO_WORK_DIR"
 [[ ! -d "$AUTO_WORK_DIR" ]] || fail "work tree is removed after the run: $AUTO_WORK_DIR"
 assert_eq "1" "$(git -C "$AUTO_REPO" worktree list | wc -l | tr -d ' ')" "no leftover worktree registration"
 assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
@@ -2875,7 +2877,8 @@ HM_SYNC_AUTO=1 sync_sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "auto sync launches one headless run"
 SYNC_RUN_LINE="$(sed -n 1p "$TEST_TMP/sync-stub.out")"
 assert_eq "sync-svc|1" "${SYNC_RUN_LINE%|*}" "sync run gets project and recursion guard"
-assert_contains "${SYNC_RUN_LINE##*|}" "/harvest-auto/worktrees/" "sync runs in a dedicated worktree"
+assert_contains "${SYNC_RUN_LINE##*|}" "/auto-worktrees/" "sync runs in a dedicated worktree"
+[[ "${SYNC_RUN_LINE##*|}" != "$SYNC_DATA"/* ]] || fail "the sync work tree must be outside the data directory"
 assert_eq "develop" "$(git -C "$SYNC_REPO" branch --show-current)" "user checkout is untouched"
 assert_eq "1" "$(git -C "$SYNC_REPO" worktree list | grep -vc sync-repo-wt | tr -d ' ')" "sync worktree is removed"
 assert_eq "sync|improved|https://example.com/pr/9|0.2" \
@@ -3049,5 +3052,14 @@ assert_file "$ROOT/LICENSE"
 assert_contains "$(<"$ROOT/LICENSE")" "MIT License" "LICENSE is MIT"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
+
+# macOS /bin/bash 3.2는 단일 명령의 `read ... < <(...)`가 연 fd를 닫지 않는다. 반복 안에서 쓰면 fd 한도(256)에 닿아
+# 무인 실행 하위 셸이 CPU 100%로 며칠씩 멈췄다. 한 줄 읽기는 here-string으로 한다.
+FD_LEAK="$(grep -rnE '^[^#]*\bread\b[^|;#]*< <\(' "$ROOT/scripts" "$ROOT/templates" "$ROOT/hooks" 2>/dev/null || true)"
+[[ -z "$FD_LEAK" ]] || fail "single-command read from a process substitution leaks a file descriptor on bash 3.2: $FD_LEAK"
+if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]; then
+  assert_eq "ok" "$(cd "$TEST_TMP" && /bin/bash -c 'for i in $(seq 1 300); do IFS=$'"'"'\t'"'"' read -r a b <<<"$(printf "x\ty\n" | head -n 1)"; done; echo ok')" "here-string reads do not exhaust file descriptors on bash 3.2"
+fi
+pass "bash 3.2 file descriptor safety"
 
 printf '1..%d\n' "$TESTS"
