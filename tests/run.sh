@@ -400,6 +400,13 @@ assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝�
 assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
+assert_contains "$HARVEST_CONTENT" "### 6.5. 독립 검토" "harvest reviews proposals before applying them"
+assert_contains "$HARVEST_CONTENT" "\`ai-harness:harvest-reviewer\` 서브에이전트" "harvest hands proposals to the bundled reviewer agent"
+assert_contains "$HARVEST_CONTENT" "최대 2회" "harvest review loop is bounded"
+assert_contains "$HARVEST_CONTENT" "관례 키(예: \`NJ-00000\`)" "harvest reuses the repo's no-issue key instead of a new issue"
+REVIEWER_AGENT="$ROOT/agents/harvest-reviewer.md"
+assert_file "$REVIEWER_AGENT"
+assert_eq "tools: Read, Grep, Glob" "$(grep '^tools:' "$REVIEWER_AGENT")" "harvest reviewer is read-only"
 pass "workspace mode scan, manifest, and routing"
 
 # Claude/Codex extractor metadata and coverage
