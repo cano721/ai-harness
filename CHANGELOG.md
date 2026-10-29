@@ -10,6 +10,8 @@
 ## Unreleased
 ### 새 기능
 
+- **모니터링 기반 자동 버그 수정 `/autofix`** — 저장소 manifest에 `monitor`(Sentry·Datadog·저장소 안 어댑터)를 두고 `HM_AUTOFIX_AUTO=1`을 켜면, 정기 실행이 많이 난 운영 에러를 골라 작업 전용 worktree의 무인 에이전트에게 넘깁니다. 에이전트는 코드 버그인지 가리고 재현 테스트부터 만든 뒤 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 이어서 LLM 없이 검증합니다: PR 병합 → 병합 커밋이 `deploy_branch`에 들어간 때를 배포로 보고 → 유예 뒤 관찰 창(수정 전 빈도로 3건이 나왔을 시간 이상) 동안 같은 시그니처가 다시 나오지 않으면 `resolved`, 나오면 `regressed`로 지난 PR과 재발 근거를 넘겨 다시 고칩니다(시그니처당 PR 2개까지, 넘으면 사람에게). 자격증명은 저장소에 두지 않고, 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못합니다.
+
 - **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
 
 ### 동작 변경

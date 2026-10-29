@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)와 [자동 sync](#auto-sync)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
 
 ## 목차
 
@@ -14,6 +14,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [버그 수정 흐름](#bug-fix)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
+- [모니터링 기반 자동 수정](#autofix)
 - [DB 스캔 가드](#db-scan-guard)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
@@ -56,6 +57,7 @@ flowchart LR
 | `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 설정·생성물을 최신화할 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경·동기화합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
+| `/autofix` | 운영 에러(Sentry·Datadog·사용자 어댑터)를 근거로 버그를 고치고, 고친 뒤 정말 멈췄는지 확인할 때 | 저장소의 `monitor` 설정을 만들고, 에러 묶음을 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 병합·배포 뒤 같은 에러가 다시 나오는지 지켜봐 해결·재발을 판정합니다. | 사용자 실행, `HM_AUTOFIX_AUTO=1`이면 정기 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
@@ -438,6 +440,35 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
+<a id="autofix"></a>
+
+## 모니터링 기반 자동 수정 (opt-in)
+
+모니터링 도구에 쌓인 운영 에러를 골라 고치고, **고친 뒤 그 에러가 더 나오지 않는 것까지** 확인합니다. 저장소마다 `/autofix setup`으로 `.ai-harness/harness.json`에 `monitor` 설정을 두고(자격증명은 넣지 않습니다), `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 대상 저장소 목록 `HM_AUTOFIX_REPOS="<project_id>,…"`를 두면 정기 실행(`backfill-due.sh`, 사용자가 쉬는 동안)이 돕니다. 목록에 없는 저장소는 manifest에 `monitor`가 있어도 무인 실행하지 않습니다 — 클론만 한 저장소가 자기 설정으로 자격증명을 쓰거나 명령을 실행하게 두지 않기 위해서입니다.
+
+```json
+"monitor": { "provider": "sentry", "org": "acme", "project": "api", "environment": "production",
+             "min_events": 10, "window_hours": 24, "deploy_branch": "main", "grace_hours": 24, "quiet_hours": 72 }
+```
+
+| provider | 설정 | 자격증명 |
+|---|---|---|
+| `sentry` | `org`, `project`, 선택 `environment` | `SENTRY_AUTH_TOKEN` (자체 호스팅은 config의 `HM_SENTRY_URL`) |
+| `datadog` | `query`(예: `service:api env:prod status:error`), 선택 `site` | `DATADOG_API_KEY`·`DATADOG_APP_KEY` |
+| `command` | `command`: 저장소 안 어댑터 스크립트(`list`·`detail`·`count` 하위 명령) | 어댑터가 처리 |
+
+자격증명은 환경변수 → `~/.claude/settings.json`의 `env` → `~/.ai-harness/config`(`HM_SENTRY_TOKEN`·`HM_DATADOG_*`) 순으로 찾습니다. 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못하도록 Sentry는 `*.sentry.io`, Datadog은 공개 사이트만 받습니다.
+
+정기 실행 한 번은 이렇게 돕니다.
+
+1. **검증(LLM 없음)**: 열린 PR의 상태를 보고(`open-pr.sh --status`) 병합되면 `verifying`, 사람이 닫으면 `declined`. 병합 커밋이 `deploy_branch`에 들어간 것을 처음 관찰한 때를 배포 시각으로 잡고(설정이 없으면 병합 시각), `grace_hours` 유예 뒤부터 관찰합니다. 관찰 창은 `quiet_hours`와 "수정 전 빈도라면 3건이 나왔을 시간" 중 긴 쪽(최대 14일)입니다. 창 안에 같은 시그니처가 다시 나오면 `regressed`, 끝까지 없으면 `resolved`입니다.
+2. **수정(무인 에이전트 1건)**: 새 에러, 재발한 에러, 해결 뒤 다시 나타난 에러 중 가장 많이 난 것을 작업 전용 worktree의 headless `claude -p "/ai-harness:autofix --auto …"`에 넘깁니다. 에이전트는 코드 버그인지 분류하고, 재현 테스트를 먼저 만들고, 프로젝트 `fix-bug` 절차로 고쳐 **draft PR**을 엽니다. 재현하지 못하거나 코드 버그가 아니면 PR 없이 `skipped`로 남기고 유예(7일) 뒤 다시 봅니다. 재발 재시도에는 지난 PR과 재발 근거를 같이 넘깁니다.
+
+- **상한**: 하루 `HM_AUTOFIX_DAILY_MAX`(3)회, 시그니처당 PR `HM_AUTOFIX_MAX_ATTEMPTS`(2)개 — 상한까지 재발하면 `gave_up`으로 사람에게 넘깁니다. 실행당 `HM_AUTOFIX_BUDGET_USD`($10), `HM_AUTOFIX_TIMEOUT_MIN`(60분). 무인 실행 lock은 자동 harvest·sync와 공유합니다(동시에 하나)
+- **안전장치**: 에러 본문은 외부 입력이라 비밀값을 가려 넘기고, 에이전트에 데이터로만 읽으라고 지시합니다. Bash는 빌드·테스트 명령(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo 등, `HM_AUTOFIX_BASH_ALLOW`로 추가)과 `fix/` 브랜치 push 같은 좁은 git 명령만 허용하고 나머지는 묻지 않고 거부합니다. 모니터링 자격증명은 에이전트 환경에서 빼고, 자격증명 파일 읽기도 막습니다. 테스트 러너는 저장소 코드를 실행하므로 이 경계가 완전하지는 않습니다 — 신뢰하는 저장소만 `HM_AUTOFIX_REPOS`에 넣으세요. 병합은 언제나 사람이 합니다
+- **상태 보기**: `/autofix status`, `scripts/autofix-auto.sh status|runs`. 기록은 `~/.ai-harness/autofix/`(시그니처별 `state.json`, `runs.jsonl`, 실행 로그)
+- **수동**: `/autofix`로 후보를 골라 이 세션에서 고칠 수 있고, 그렇게 연 PR도 `autofix-auto.sh track`으로 같은 검증에 올립니다
+
 <a id="db-scan-guard"></a>
 
 ## DB 스캔 가드 (opt-in)
@@ -462,6 +493,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 | 압축 이벤트 | `~/.ai-harness/events/` | 일반 180일, 교정·오류·차단·권한 거부가 있으면 365일 |
 | 통계 rollup | `~/.ai-harness/rollups/` | 상세 보관 기간 후 transcript 경로와 교정 문구를 제거해 전환 |
 | harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
+| 자동 수정 상태 | `~/.ai-harness/autofix/` | 시그니처별 진행 상태(PR·배포·관찰·재발), 실행 기록, 최근 50개 실행 로그 |
 | 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
 상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다. 이미 삭제된 worktree는 Codex가 기록한 저장소 URL, 그다음 경로 규칙(`<repo>/feature-NJ-1`, `<repo>/NJ-1-설명` → `<repo>`)으로 판정하고, 한글 등 비ASCII 이름은 NFC로 맞춥니다. 규칙이 바뀌어 재추출된 세션은 이전 프로젝트 큐의 검토 상태를 그대로 가져갑니다.
@@ -560,6 +592,16 @@ HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤�
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
+HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
+HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
+HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")
+HM_AUTOFIX_DEPLOY_WAIT_DAYS=14   # 병합 커밋이 deploy_branch에 보이기를 기다리는 상한. 넘으면 gave_up
+HM_AUTOFIX_DAILY_MAX=3           # 하루 자동 수정 실행 상한
+HM_AUTOFIX_MAX_ATTEMPTS=2        # 시그니처당 PR 상한. 넘어서 재발하면 gave_up
+HM_AUTOFIX_SKIP_COOLDOWN_DAYS=7  # 코드 버그 아님·재현 불가로 넘긴 에러를 다시 볼 때까지
+HM_AUTOFIX_BUDGET_USD=10         # 자동 수정 1회 비용 상한
+HM_AUTOFIX_TIMEOUT_MIN=60
+HM_SENTRY_URL=                   # 자체 호스팅 Sentry 주소(저장소 설정의 base_url은 *.sentry.io만)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
 HM_BACKFILL_INTERVAL_HOURS=6     # 정기 backfill 주기. 0이면 비활성화

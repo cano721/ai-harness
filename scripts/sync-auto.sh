@@ -3,6 +3,7 @@
 # 최신이 되지만 각 저장소의 생성물·harness_version은 /harness-init --sync를 돌려야만 따라온다.
 #   outdated: 자동 sync(harvest-auto.sh sweep, opt-in HM_SYNC_AUTO=1)의 후보 목록
 #   notify:   SessionStart 알림. 같은 저장소·플러그인 버전 조합은 한 번만
+#   repos:    세션 기록에 나온 하네스 저장소 전부(버전 무관) — 자동 버그 수정(autofix-auto.sh)의 대상 목록
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +18,7 @@ usage() {
 usage:
   sync-auto.sh outdated [--fetch] [--root <dir>]...   # 뒤처진 하네스 저장소(JSON lines). --root 없으면 세션 기록에서 찾는다
   sync-auto.sh notify                                  # SessionStart hook 입력(stdin)의 cwd 기준 알림
+  sync-auto.sh repos [--root <dir>]...                 # 하네스 저장소(JSON lines: repo, project, base, manifest)
 EOF
   exit 2
 }
@@ -82,6 +84,31 @@ command_outdated() {
   done < <(if (( ${#roots[@]} > 0 )); then printf '%s\n' "${roots[@]}"; else discover_dirs; fi)
 }
 
+command_repos() {
+  local dir="" repo="" base="" manifest="" project="" seen=$'\n'
+  local -a roots=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --root) [[ -n "${2:-}" ]] || usage; roots+=("$2"); shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  while IFS= read -r dir; do
+    repo="$(main_checkout "$dir")"
+    [[ -n "$repo" && "$seen" != *$'\n'"$(hm_nfc "$repo")"$'\n'* ]] || continue
+    seen+="$(hm_nfc "$repo")"$'\n'
+    base="$(hm_resolve_base "$repo" --no-fetch)"
+    manifest="$(git -C "$repo" show "$base:.ai-harness/harness.json" 2>/dev/null | jq -c . 2>/dev/null)" || continue
+    [[ -n "$manifest" ]] || continue
+    project="$(jq -r '.project_id // empty' <<<"$manifest")"
+    [[ -n "$project" ]] || project="$(project_id_for_cwd "$repo")"
+    [[ "$seen" != *$'\n'"project:$project"$'\n'* ]] || continue
+    seen+="project:$project"$'\n'
+    jq -cn --arg repo "$repo" --arg project "$project" --arg base "$base" --argjson manifest "$manifest" \
+      '{repo:$repo,project:$project,base:$base,manifest:$manifest}'
+  done < <(if (( ${#roots[@]} > 0 )); then printf '%s\n' "${roots[@]}"; else discover_dirs; fi)
+}
+
 # SessionStart 3초 예산 안에서 돈다: 네트워크 없이 로컬에 있는 기준 브랜치 ref의 manifest를 본다 —
 # 자동 sync와 같은 기준이라, 오래된 기능 브랜치 체크아웃 때문에 틀린 안내를 하지 않는다.
 command_notify() {
@@ -126,5 +153,6 @@ shift || true
 case "$command" in
   outdated) command_outdated "$@" ;;
   notify) command_notify ;;
+  repos) command_repos "$@" ;;
   *) usage ;;
 esac

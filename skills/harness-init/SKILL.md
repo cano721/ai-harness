@@ -191,7 +191,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
   "excluded": { "<relative path>": { "reason": "existing | <사용자가 뺀 이유>", "since": "YYYY-MM-DD" } } }
 ```
 
-- `git_policy`: `pr-only` | `direct`. 그 밖의 값이나 미설정은 에이전트가 별도 허가 없이 커밋·push·PR을 하지 않는 것으로 읽는다. `approval`: `human`(기본, 미설정 포함) | `auto`. 둘 다 어댑터·러너가 런타임에 읽는다. `issue_policy`: `in-progress-on-start` | 미설정(이슈 상태를 건드리지 않음). 어댑터가 런타임에 읽는다.
+- `git_policy`: `pr-only` | `direct`. 그 밖의 값이나 미설정은 에이전트가 별도 허가 없이 커밋·push·PR을 하지 않는 것으로 읽는다. `approval`: `human`(기본, 미설정 포함) | `auto`. 둘 다 어댑터·러너가 런타임에 읽는다. `issue_policy`: `in-progress-on-start` | 미설정(이슈 상태를 건드리지 않음). 어댑터가 런타임에 읽는다. `monitor`: 모니터링 기반 자동 수정 설정(`/autofix setup`이 쓴다). init·sync는 이 필드를 만들거나 지우지 않고 그대로 둔다.
 - `roles`에 없는 슬롯은 하네스 페르소나를 생성한 것으로 본다. `roles`·`excluded`는 손으로 쓰지 않는다 — `excluded`는 `harness-sync-state.sh exclude|include`로, `roles`는 인터뷰 확정 결과를 jq로 기록한다.
 - `excluded`에 있는 경로는 plan에서 `action:"excluded"`로만 보이고 add·refresh 대상이 되지 않는다. 되돌리기는 `include`.
 
