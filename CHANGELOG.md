@@ -17,6 +17,37 @@
 
 - Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).
 
+## v0.45.0 (2026-10-29)
+### 새 기능
+
+- **프론트 팀 역할 세트(`frontend-team`)** — 프론트엔드 저장소에서 `/harness-init`의 프론트 판단 Skill 하위 선택으로 `프론트 팀 구성`을 고르면, 범용 developer·reviewer·test-engineer 대신 `fe-architect`(구조·추상화·UX 디테일·모션·코드 리뷰)·`fe-implementer`(요구사항 충족·API 연동, 이슈 항목 하나 = 커밋 하나)를 만들고, 산출물이 생기는 자리로 담당을 가르는 `frontend-team` 라우터 스킬이 "다음 담당" 체인을 조율합니다. 디자인 규칙 문서와 스토리북 UI 패키지가 있으면 `fe-designer`와 다섯 축 채점 스킬 `design-audit`도 생성합니다. 페르소나 본문은 고정 템플릿이라 sync로 갱신되고, 경로·검증 명령·토큰 체계 같은 프로젝트 사실은 `.ai-harness/docs/frontend.md`의 `## 팀 역할`·`## 디자인 점검` 절에서 읽습니다. 실제 프론트 팀이 운영하던 역할 분담을 범용 원칙만 남겨 옮긴 것입니다.
+- **역할 매핑 `source: "stack"`** — manifest `roles`가 슬롯을 기존 에이전트뿐 아니라 스택 역할 세트에도 넘길 수 있습니다. 넘긴 슬롯의 범용 페르소나는 sync plan이 `orphaned`(`role_adopted`)로 올리고, 세트 페르소나 파일이 사라지면 `workflow-contract`가 `role_agent_missing`으로 잡습니다.
+
+## v0.44.0 (2026-10-29)
+### 버그 수정
+
+- **LLM 세션 정리가 2026-10-12부터 빈 입력으로 돌던 문제** — 정리 호출을 시간 제한 래퍼(`hm_run_with_timeout`)로 감싸면서 모델을 백그라운드로 띄웠는데, 스크립트의 백그라운드 명령은 표준입력이 `/dev/null`로 바뀝니다. 모델은 세션 기록 없이 "findings를 뽑아라"만 받아 매번 빈 결과를 돌려줬습니다(실측: Claude 세션 정리 187건 중 166건이 세션당 $0.0003·findings 0건, 위임 완료를 모른다는 같은 지적 3회를 모두 놓침). 래퍼가 표준입력을 그대로 넘기고, 그때 만든 빈 정리는 다시 정리합니다.
+
+### 동작 변경
+
+- **사용자 교정을 문구 규칙 대신 LLM 정리로만 판정** — "아니…"로 시작하는 발화(`correction_mark`)와 "안 되"·"이상해" 같은 단어(`correction_candidate`)로 교정을 줍던 규칙을 없앴습니다. 표현이 조금만 달라도 놓쳤습니다("다 된거아니야? 왜 자꾸 모르지?"). 큐의 교정 수(`corrections`)는 LLM 정리의 `correction` finding(medium 이상)을 세고, `/metrics`의 교정 마크 비율·목록과 `/harvest`의 교정 후보 판정 단계는 빠집니다. 자동 개선의 효과 판정(`auto-apply.sh effect`)은 오류 발췌와 LLM 정리 문구로 합니다.
+
+### 업데이트 후 해야 할 일
+
+- 교정 신호를 계속 받으려면 `~/.ai-harness/config`에 `HM_DIGEST=1`을 둡니다. 꺼져 있으면 교정 신호가 없습니다.
+
+## v0.43.2 (2026-10-29)
+### 버그 수정
+
+- **자동 sync·자동 harvest가 `.claude/` 아래 파일을 쓰지 못하던 문제** — Claude Code는 `.claude/`를 보호 경로로 두어 `acceptEdits`나 명시 허용 규칙으로도 Write/Edit를 열어 주지 않고, 무인 실행에는 승인할 사람이 없어 항상 거부됩니다(실측: jobda 자동 sync가 그래프 3개만 갱신하고 `.claude/commands`·`.claude/workflows` 6개와 새 러너를 못 씀). 이제 내용을 저장소 안 임시 경로에 쓴 뒤 `scripts/place-claude-file.sh`가 옮깁니다. 대상은 commands·agents·workflows·skills뿐이고 settings·hook과 저장소 밖 원본은 거부합니다.
+- **일부만 적용한 자동 sync가 완료로 기록되던 문제** — 쓰지 못한 파일이 있어도 `harness_version`을 올려 다음 sync가 나머지를 다시 잡지 않았고 결과도 `improved`였습니다. 이제 쓴 파일만 `harness-sync-state.sh record --keep-version`으로 기록하고 결과를 `partial`로 남깁니다.
+
+## v0.43.1 (2026-10-29)
+### 버그 수정
+
+- **자동 sync·자동 harvest가 저장소 파일을 고치지 못하던 문제** — 무인 실행의 작업 worktree를 데이터 디렉터리(`~/.ai-harness/harvest-auto/worktrees`) 안에 만들었는데, v0.35.1부터 무인 에이전트는 데이터 디렉터리 쓰기가 막혀(config·shim 보호) worktree 안의 `.ai-harness/`·`.claude/` 등 어떤 파일도 쓸 수 없었습니다(실측: 자동 sync 3건 모두 쓰기 거부로 `left_for_user`, 프로젝트 harvest는 개선을 적용할 수 없는 상태). 이제 worktree를 `~/.cache/ai-harness/worktrees`(`XDG_CACHE_HOME` 또는 `HM_AUTO_WORKTREE_DIR`로 변경, 데이터 디렉터리 안을 가리키면 기본값)에 둡니다.
+- **무인 실행이 끝난 뒤 프로세스가 CPU 100%로 며칠씩 멈추던 문제** — macOS 기본 `/bin/bash` 3.2는 단일 명령의 `read … < <(…)`가 연 파일 디스크립터를 닫지 않습니다. 실행 뒤 연쇄 sweep이 batch 저장소를 찾으며 이벤트 파일마다 이 형태로 읽어, fd 한도(256)에 닿은 하위 셸이 무한히 돌았습니다(실측 2건: 3일·22시간, fd 3~256이 모두 파이프). 한 줄 읽기를 here-string으로 바꾸고, 같은 형태가 다시 들어오지 않게 테스트로 막습니다.
+
 ## v0.43.0 (2026-10-25)
 ### 새 기능
 

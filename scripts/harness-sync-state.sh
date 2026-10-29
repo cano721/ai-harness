@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--file <relative-path>]...\n' "$0" >&2
+  printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--keep-version] [--file <relative-path>]...\n' "$0" >&2
   exit 2
 }
 
@@ -19,6 +19,7 @@ root=""
 version=""
 catalog=""
 reason=""
+keep_version=false
 files=()
 while (($#)); do
   case "$1" in
@@ -27,6 +28,7 @@ while (($#)); do
     --catalog) catalog="${2:-}"; shift 2 ;;
     --reason) reason="${2:-}"; shift 2 ;;
     --file) files+=("${2:-}"); shift 2 ;;
+    --keep-version) keep_version=true; shift ;;
     *) usage ;;
   esac
 done
@@ -150,7 +152,7 @@ case "$command_name" in
                 detail:"retired by the template catalog; confirm removal of the file with the user, then drop the manifest entry with `forget`"}'
           done | jq -s '.'
     )"
-    # 설정이 바뀌어(level·integration·stack 제거, 역할을 기존 에이전트에 넘김) 더는 생성 대상이 아닌
+    # 설정이 바뀌어(level·integration·stack 제거, 역할을 기존 에이전트나 스택 역할 세트에 넘김) 더는 생성 대상이 아닌
     # 관리 생성물. 카탈로그나 역할 agent 경로로 출처를 확인할 수 있는 것만 올린다 — retired와 같은 이유로
     # "카탈로그에 없음"만으로는 추론하지 않는다.
     orphaned="$(
@@ -176,7 +178,7 @@ case "$command_name" in
               if [[ -n "$role_integration" ]]; then
                 orphan_reason="$(jq -r --arg slot "$slot" --arg integration "$role_integration" '
                   if ((.integrations // []) | index($integration) | not) then "integration_removed"
-                  elif ((.roles // {})[$slot] // {} | (.source // "") == "existing"
+                  elif ((.roles // {})[$slot] // {} | ((.source // "") | . == "existing" or . == "stack")
                         and ((.integrations // ["claude"]) | index($integration) != null)) then "role_adopted"
                   else "" end' "$manifest")"
               fi
@@ -260,8 +262,9 @@ case "$command_name" in
       }
       checksum="$(sha256_file "$target")"
       next_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
-      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" '
-        .harness_version = $version
+      # 일부만 적용한 무인 sync는 harness_version을 올리지 않는다 — 올리면 다음 sync가 나머지를 다시 잡지 않는다.
+      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" --argjson keep "$keep_version" '
+        .harness_version = (if $keep and has("harness_version") then .harness_version else $version end)
         | .managed_files = (.managed_files // {})
         | .managed_files[$path] = {
             content_sha256: $checksum,

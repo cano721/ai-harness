@@ -13,6 +13,10 @@ AUTO_DIR="$HM_DATA_DIR/harvest-auto"
 RUNS_FILE="$AUTO_DIR/runs.jsonl"
 LOG_DIR="$AUTO_DIR/logs"
 RUN_LOCK="$AUTO_DIR/running.lock"
+# 무인 실행의 작업 worktree는 데이터 디렉토리 밖에 둔다. 에이전트는 데이터 디렉토리 쓰기가 막혀 있어(config·shim 보호),
+# 그 안에 두면 worktree의 어떤 파일도 고칠 수 없다(실측: sync가 .ai-harness·.claude 쓰기 거부로 전부 left_for_user).
+WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
+case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
 MAX_FAILS="${HM_HARVEST_AUTO_MAX_FAILS:-3}"; [[ "$MAX_FAILS" =~ ^[1-9][0-9]*$ ]] || MAX_FAILS=3
 DAILY_MAX="${HM_HARVEST_AUTO_DAILY_MAX:-2}"
 [[ "$DAILY_MAX" =~ ^[0-9]+$ ]] || DAILY_MAX=2
@@ -182,12 +186,14 @@ command_trigger() {
 }
 
 # batch의 세션 기록에서 하네스가 있는 저장소 cwd와 도구(src)를 고른다. 없으면 첫 cwd.
+# 반복 안의 한 줄 읽기는 `read < <(...)` 대신 here-string으로 한다. macOS /bin/bash 3.2는 단일 명령의 프로세스 치환 fd를
+# 닫지 않아, 이벤트 파일이 많으면 fd 한도(256)에 닿은 뒤 하위 셸이 CPU 100%로 멈춘다(실측: 연쇄 sweep이 며칠씩 돎).
 batch_origin() { # $1=batch_file → "cwd<TAB>src"
   local ev="" cwd="" src="" first="" root=""
   while IFS= read -r ev; do
     [[ -f "$ev" ]] || ev="$HM_DATA_DIR/rollups/${ev##*/}"
     [[ -f "$ev" ]] || continue
-    IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    IFS=$'\t' read -r cwd src <<<"$(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
     [[ -n "$cwd" ]] || continue
     [[ -n "$first" ]] || first="$cwd"$'\t'"$src"
     root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -202,7 +208,7 @@ batch_origin() { # $1=batch_file → "cwd<TAB>src"
   project="$(jq -r '.project // empty' "$1" 2>/dev/null)"
   if [[ -n "$project" ]]; then
     while IFS= read -r ev; do
-      IFS=$'\t' read -r cwd src < <(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+      IFS=$'\t' read -r cwd src <<<"$(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
       [[ -n "$cwd" && -d "$cwd" ]] || continue
       root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
       [[ -n "$root" && -f "$root/.ai-harness/harness.json" ]] || continue
@@ -421,7 +427,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
 # 기준 브랜치 최신 커밋에서 detached worktree를 만든다.
 make_work_tree() { # $1=repo_root $2=project $3=base → 경로 출력
   local repo_root="$1" dir=""
-  dir="$AUTO_DIR/worktrees/$(short_key "$2")-$(date +%s)"
+  dir="$WORK_TREES_DIR/$(short_key "$2")-$(date +%s)"
   mkdir -p "${dir%/*}"
   git -C "$repo_root" worktree add -q --detach "$dir" "$3" >/dev/null 2>&1 || return 1
   printf '%s\n' "$dir"
@@ -548,7 +554,7 @@ command_run() {
       result="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
       artifact="$(sed -n 's/.* artifact=\([^[:space:]]*\).*/\1/p' <<<"$line")"
       # 실패 횟수 없이 failed로 남으면 매 sweep 다시 띄우므로, 약속한 값이 아니면 사람에게 넘긴다.
-      case "$result" in improved|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
+      case "$result" in improved|partial|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
     fi
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \

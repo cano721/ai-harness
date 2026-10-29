@@ -72,6 +72,8 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `frontend-testing` | 이 변경에 테스트를 쓸지, 쓴다면 어느 층위·레이어인지, 깨진 테스트를 고칠지 지울지 정할 때. | 프론트 감지 |
 | `no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. | 프론트 감지 |
 | `feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. | **FSD 감지/opt-in일 때만** |
+| `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
+| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
 
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
@@ -381,11 +383,11 @@ stateDiagram-v2
 
 ### LLM 세션 정리 (opt-in)
 
-교정 접두어("아니", "그게 아니라")·도구 오류 같은 정규식 신호는 의미상 교정이나 "프로젝트 사실을 몰라 틀림"을 놓칩니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
+사용자 교정은 문구 규칙으로 줍지 않고 이 LLM 정리로만 판정합니다 — 문구 규칙은 표현이 조금만 달라도 놓쳤습니다. 끄면 교정 신호가 없습니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
 
 - **대상**: 최근 14일(`HM_DIGEST_LOOKBACK_DAYS`), 3턴 이상, 끝난 지 30분 지난 세션을 최신순으로 하루 20개(`HM_DIGEST_DAILY_MAX`). 재개된 세션만 다시 정리합니다
 - **입력**: 사용자 발화 전체(턴당 600자), 응답·도구 오류는 짧게 잘라 최대 4만 자. 실측 세션당 약 $0.003~0.01
-- **신호**: medium 이상 finding 수가 큐의 `insights`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
+- **신호**: medium 이상 finding 수가 큐의 `insights`가, 그중 `correction`이 `corrections`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
 - **사용**: `/harvest`가 `digest.sh show`로 batch 세션의 findings를 받아, 2개 이상 세션에서 반복되는 것만 개선 근거로 씁니다
 - 정리 세션은 `HM_INTERNAL_SESSION=1`·`--no-session-persistence`로 실행돼 수집·알림 대상이 아닙니다. 기록은 `~/.ai-harness/digests/`
 
@@ -401,7 +403,7 @@ stateDiagram-v2
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
 - **제거도 개선입니다**: 없는 경로·명령을 가리키거나 코드와 모순되는 줄, 교정을 유발한 규칙, 여러 파일에 반복된 지시, 사용 0회 자산을 제거 후보로 봅니다("최근 재발 없음"은 제거 근거가 아닙니다). 무인 실행은 줄 단위 제거까지만 draft PR로 내고, 파일·관리 생성물 삭제는 사람에게 넘깁니다. 개인 지침 블록의 자동 규칙은 블록 밖에 같은 문구가 생기면(`auto-apply.sh duplicates`) 되돌립니다
-- **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
+- **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `started`/`finished`/`skipped`(사유), 결과(`improved`·`partial`(sync 일부 적용)·`no-change`·`left_for_user`·`failed`), 비용, PR URL을 남기고, 실행별 출력은 `logs/`(최근 50개)에 둡니다. `scripts/harvest-auto.sh runs`로 최근 기록을 봅니다
 
 `/harvest`는 batch와 30/90일 baseline을 분리해 비교한 뒤 아래 중 하나를 결론으로 남깁니다.
 
@@ -453,7 +455,6 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 수집은 `jq` 기반이며 LLM 비용이 들지 않습니다. transcript 전문을 복사하지 않습니다.
 
 - 수집 항목: 세션 메타(토큰·모델·턴), workflow/command 사용, 역할 위임, 하네스 문서 읽기, 편집 파일, bash 명령, MCP 도구, 이슈 키, 오류·가드·권한 거부·컨텍스트 압축 횟수
-- 사용자 교정 마크만 해당 발화 앞 60자 스니펫을 보관해 개선 분석의 정독 후보로 표시합니다.
 - Claude와 Codex 모두 위 항목을 관측합니다. Codex는 native function call과 desktop/runtime bridge의 custom tool call을 해석하며, bridge가 경로를 노출하지 않는 편집은 파일별 핫스팟 대신 집계에서 제외될 수 있습니다. 미지원은 0회와 구분하므로, 관측하지 못한 데이터로 삭제 근거를 만들지 않습니다.
 
 | 데이터 | 기본 위치 | 보관 방식 |
@@ -596,7 +597,7 @@ tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
-macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다. 교정 마크 감지는 현재 한국어 패턴 중심입니다.
+macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
 개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 
