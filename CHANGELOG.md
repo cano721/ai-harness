@@ -7,7 +7,7 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 
-## Unreleased
+## v0.46.0 (2026-10-29)
 ### 새 기능
 
 - **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
