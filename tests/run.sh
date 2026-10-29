@@ -1250,6 +1250,53 @@ assert_contains "$HARNESS_INIT_CONTENT" "stack" "harness init documents the stac
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/frontend.md" "harness init generates the frontend context doc"
 pass "frontend judgment skills stack gating"
 
+# 프론트 팀 역할 세트: frontend-team stack이면 라우터·fe-architect·fe-implementer, design-system이면 fe-designer·design-audit까지.
+for f in frontend-team/SKILL.md design-audit/SKILL.md frontend-team/personas/fe-architect.md frontend-team/personas/fe-implementer.md frontend-team/personas/fe-designer.md; do
+  assert_file "$ROOT/templates/$f"
+done
+for role in fe-architect fe-implementer fe-designer; do
+  PERSONA="$(<"$ROOT/templates/frontend-team/personas/$role.md")"
+  assert_contains "$PERSONA" "name: $role" "$role persona names itself"
+  grep -Eq '^model: (opus|sonnet|haiku)$' "$ROOT/templates/frontend-team/personas/$role.md" || fail "$role persona pins a model"
+  assert_contains "$PERSONA" "다음 담당: <역할>:" "$role report ends with the handoff line"
+  assert_contains "$PERSONA" ".ai-harness/docs/frontend.md" "$role reads project facts from frontend.md"
+  assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "| $role |" "$role has a default model row"
+  # frontmatter skills는 같은 stack 게이트에서 생성되는 템플릿만 가리킨다.
+  while IFS= read -r skill; do
+    assert_file "$ROOT/templates/$skill/SKILL.md"
+  done < <(awk '/^---$/{n++; next} n==1 && /^  - /{print $2}' "$ROOT/templates/frontend-team/personas/$role.md")
+done
+# 공개 템플릿에는 원본 팀의 실명·사내 패키지·디자인 시스템 이름이 남지 않는다.
+for f in "$ROOT"/templates/frontend-team/SKILL.md "$ROOT"/templates/frontend-team/personas/*.md "$ROOT"/templates/design-audit/SKILL.md; do
+  if grep -nE 'jobda|Astryx|astryx|ingyu|sunwoong|seonyoung|인규|선웅|선영|@jobda' "$f"; then
+    fail "internal name leaked into public template: $f"
+  fi
+done
+TEAM_ROOT="$TEST_TMP/frontend-team-project"
+mkdir -p "$TEAM_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"frontend-team-project","level":"standard","integrations":["claude"],"stacks":["frontend","frontend-team"],"harness_version":"0.44.0"}' >"$TEAM_ROOT/.ai-harness/harness.json"
+TEAM_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/frontend-team/SKILL.md") | .action')" "frontend-team stack selects the role router"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-architect.md") | .action')" "frontend-team stack selects fe-architect"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-implementer.md") | .action')" "frontend-team stack selects fe-implementer"
+assert_eq "0" "$(printf '%s' "$TEAM_PLAN" | jq -r '[.items[] | select(.path | test("fe-designer|design-audit"))] | length')" "designer role needs the design-system stack"
+jq '.stacks += ["design-system"]' "$TEAM_ROOT/.ai-harness/harness.json" >"$TEAM_ROOT/m" && mv "$TEAM_ROOT/m" "$TEAM_ROOT/.ai-harness/harness.json"
+TEAM_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-designer.md") | .action')" "design-system stack selects fe-designer"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/SKILL.md") | .action')" "design-system stack selects design-audit"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | test("frontend-team|fe-|design-audit"))] | length')" "plain frontend stack does not create the role set"
+# 역할을 스택 역할 세트에 넘기면 범용 페르소나가 role_adopted로 정리 후보에 오르고, 세트 페르소나가 사라지면 계약 위반이다.
+mkdir -p "$TEAM_ROOT/.claude/agents"
+printf '%s\n' 'developer' >"$TEAM_ROOT/.claude/agents/developer.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$TEAM_ROOT" --version 0.44.0 --file .claude/agents/developer.md >/dev/null
+jq '.roles = {developer: {source: "stack", stack: "frontend-team", integrations: ["claude"], agents: ["fe-implementer", "fe-architect"], router: ".claude/skills/frontend-team/SKILL.md"}}' \
+  "$TEAM_ROOT/.ai-harness/harness.json" >"$TEAM_ROOT/m" && mv "$TEAM_ROOT/m" "$TEAM_ROOT/.ai-harness/harness.json"
+assert_eq "role_adopted" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role handed to the stack role set orphans the generic persona"
+TEAM_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$TEAM_ROOT")"
+assert_eq "fe-architect,fe-implementer" "$(printf '%s' "$TEAM_SCAN" | jq -r '[.findings[] | select(.check=="role_agent_missing") | .token] | sort | join(",")')" "missing stack role persona is a contract finding"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" '"source": "stack"' "harness init records stack role mapping"
+pass "frontend team role set"
+
 # understand-change는 플러그인 전역 Skill이다: 프로젝트에 사본을 깔지 않고 런타임에 프로젝트 정책을 읽는다.
 UNDERSTAND_SKILL="$ROOT/skills/understand-change/SKILL.md"
 UNDERSTAND_GRAPH="$ROOT/skills/understand-change/references/understanding-change-graph.json"
