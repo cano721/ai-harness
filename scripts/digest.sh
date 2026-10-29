@@ -131,7 +131,7 @@ command_one() { # $1=event_file
   dest="$(digest_path "$ev")"
   tmp="$(mktemp "$DIGEST_DIR/.digest.XXXXXX")"
   jq -cn -L "$DIR" --argjson s "$session" --argjson out "$out" --arg model "$MODEL" --arg at "$(now_iso)" 'include "redact"; {
-    v:1, src:$s.src, sid:$s.sid, project:$s.project, ended:$s.ended, turns:$s.turns,
+    v:2, src:$s.src, sid:$s.sid, project:$s.project, ended:$s.ended, turns:$s.turns,
     model:$model, created_at:$at, cost_usd:$out.cost_usd,
     findings:($out.findings | map(.summary |= (redact | .[0:200]) | .evidence |= (redact | .[0:240])
       | .harness_fix |= (redact | .[0:200])))
@@ -166,7 +166,9 @@ due_events() {
     | while IFS=$'\t' read -r ev ended; do
         local dest
         dest="$(digest_path "$ev")"
-        if [[ -f "$dest" ]] && [[ "$(jq -r '.ended // empty' "$dest" 2>/dev/null)" == "$ended" ]]; then
+        # v1 중 findings가 빈 것은 입력 없이 만든 것일 수 있어(hm_run_with_timeout 표준입력 유실) 다시 정리한다.
+        if [[ -f "$dest" ]] && jq -e --arg ended "$ended" \
+            '.ended == $ended and ((.v // 1) >= 2 or (.findings | length) > 0)' "$dest" >/dev/null 2>&1; then
           continue
         fi
         jq -e --arg e "${ev##*/}" 'index($e) != null' <<<"$recent_failures" >/dev/null 2>&1 && continue

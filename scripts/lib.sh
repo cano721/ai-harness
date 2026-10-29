@@ -68,7 +68,9 @@ export GIT_TERMINAL_PROMPT=0
 hm_run_with_timeout() {
   local secs="$1" pid=0 watchdog=0 rc=0
   shift
-  "$@" &
+  # 스크립트(작업 제어 없음)의 백그라운드 명령은 표준입력이 /dev/null로 바뀐다. 명시적으로 이어 줘야
+  # 파이프로 받은 입력이 그대로 간다(실측: LLM 정리가 10-12부터 빈 입력을 받아 findings가 늘 0건).
+  "$@" <&0 &
   pid=$!
   ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 10; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watchdog=$!

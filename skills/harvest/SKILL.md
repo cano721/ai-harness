@@ -1,6 +1,6 @@
 ---
 name: harvest
-description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적된 이벤트와 사용자 교정 마크를 분석해 프로젝트 하네스(AGENTS.md, docs, workflows) 개선안을 도출하고 PR을 만든다. 규칙 추가뿐 아니라 낡거나 모순되거나 쓰이지 않는 규칙·문서·페르소나의 제거도 개선안으로 다룬다. cosmetic 개선은 걸러내고 에이전트 행동이 실제로 바뀌는 것만 적용. 지난 개선의 기대효과는 다음 실행이 재발 여부로 검증한다.
+description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적된 이벤트와 LLM 세션 정리(사용자 교정 포함)를 분석해 프로젝트 하네스(AGENTS.md, docs, workflows) 개선안을 도출하고 PR을 만든다. 규칙 추가뿐 아니라 낡거나 모순되거나 쓰이지 않는 규칙·문서·페르소나의 제거도 개선안으로 다룬다. cosmetic 개선은 걸러내고 에이전트 행동이 실제로 바뀌는 것만 적용. 지난 개선의 기대효과는 다음 실행이 재발 여부로 검증한다.
 ---
 
 # /harvest — 에이전트 활동 기록 기반 하네스 자동 개선
@@ -30,7 +30,7 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
   ```bash
   $ROOT/scripts/auto-apply.sh apply --scope workspace --workspace "<cwd>" --project <workspace_id> \
     --rule-id <소문자-하이픈-id> --text "<규칙 한 줄>" --evidence "<수치·세션 id>" --expected "<재발 판정 기준>" \
-    --signal "<이 규칙이 줄여야 할 오류 발췌·교정 문구에 맞는 정규식>"
+    --signal "<이 규칙이 줄여야 할 오류 발췌·LLM 정리 finding 문구에 맞는 정규식>"
   $ROOT/scripts/harvest-queue.sh mark-reviewed --project <workspace_id> --outcome improved \
     --summary "..." --artifact "local:AGENTS.md#rule:<id>" --expected "<같은 기준>"
   ```
@@ -42,7 +42,7 @@ description: 에이전트 활동 기록 기반 하네스 자동 개선. 축적�
   - `no_effect`(그대로거나 증가): 더 구체적인 문구로 같은 `--rule-id`에 다시 apply(강화). 이미 한 번 강화한 규칙이 다시 `no_effect`면 `revert --rule-id <id> --reason "<수치>"`로 뺀다
   - `--signal`이 없는 옛 규칙은 `list --active`의 `expected`와 이번 통계를 대조해 같은 방식으로 판단한다
 - **중복 정리 (두 범위 공통, 새 규칙보다 먼저)**: `$ROOT/scripts/auto-apply.sh duplicates`가 블록 밖(사람이 쓴 줄)에 같은 문구가 생긴 활성 규칙을 낸다 — 규칙이 든 대상 파일 **전부**에 중복이 있을 때만 나온다(revert는 scope의 모든 대상에서 지운다). 사람 쪽이 원본이므로 자동 규칙을 `revert --rule-id <id> --reason "duplicate: <file>:<line>[, …]"`으로 뺀다. 문구는 다르지만 같은 행동을 지시하는 규칙(블록 밖 포함)을 Read로 확인했으면 같은 방식으로 뺀다.
-- 새 규칙에는 반드시 `--signal`을 준다 — 그 규칙이 줄여야 할 반복 오류 발췌·교정 문구에 맞는 정규식이다. 수치로 효과를 판정할 수 없는 규칙은 넣지 않는다.
+- 새 규칙에는 반드시 `--signal`을 준다 — 그 규칙이 줄여야 할 반복 오류 발췌·LLM 정리 finding(summary·evidence) 문구에 맞는 정규식이다. 수치로 효과를 판정할 수 없는 규칙은 넣지 않는다.
 - 자동 규칙은 범위마다 최대 `HM_AUTO_RULES_MAX`(12)개다. 상한이면 `apply`가 거부되므로, 비슷한 규칙을 같은 id로 병합하거나 `no_effect` 규칙을 먼저 정리한다.
 - 한 실행에서 적용은 최대 2건이다. 규칙은 400자 이내 한 줄, 행동을 바꾸는 지시여야 한다(설명문 금지).
 - 마지막 출력은 결과 한 줄(`improved <rule-id…>` / `no-change <이유>` / `left_for_user <이유>`).
@@ -75,7 +75,7 @@ analysis batch는 개선 판정이 아니라 검토할 입력 묶음이다. batc
 history의 `improved` 레코드 중 `review.expected`가 있는 것을 이번 batch 신호·30일 통계와 대조한다. expected는 지난 harvest가 "이 개선이 효과 있다면 다음에 이렇게 보일 것"이라고 남긴 검증 기준이다.
 
 - **충족** (겨냥한 교정/오류 패턴 재발 없음) → 검증 통과. 보고서에 1줄
-- **재발** (같은 패턴의 correction_mark/error가 batch에 다시 등장) → 개선 실패. 6단계에서 강화안 또는 revert를 개선안 후보로 승격한다. `review.artifact`의 PR revert가 가장 싼 선택지 — 효과 없는 규칙을 하네스에 남겨 비대화시키지 않는다
+- **재발** (같은 패턴의 correction finding/error가 batch에 다시 등장) → 개선 실패. 6단계에서 강화안 또는 revert를 개선안 후보로 승격한다. `review.artifact`의 PR revert가 가장 싼 선택지 — 효과 없는 규칙을 하네스에 남겨 비대화시키지 않는다
 - **판정 불가** (해당 신호 미관측이거나 경과 세션이 적음) → 보류, 다음 harvest로 이월
 
 **제거 레코드**(`review.change`가 `remove`·`mixed`): expected는 "빠진 규칙·문서가 막던 실수가 다시 나타나지 않는다"는 기준이다. 같은 패턴이 재발하면 제거가 틀린 것이므로 6단계에서 **복원**(해당 PR revert 또는 더 정확한 문구로 재추가)을 개선안으로 올린다.
@@ -111,39 +111,31 @@ stats의 `수집 범위`를 먼저 확인한다. Codex 등 해당 지표 미지�
 
 ### 4. 정독 게이트
 
-transcript 정독(5단계)은 가장 비싼 스텝이다. 진입 전에 batch trigger_counts와 stats의 교정 마크·교정 후보 스니펫(앞 60자)만으로 **정독 가치 / 근거 / focus**를 판단한다. focus는 정독 시작점(어느 세션의 어떤 신호부터 볼지) 한 줄.
+transcript 정독(5단계)은 가장 비싼 스텝이다. 진입 전에 batch trigger_counts, stats의 반복 오류, `digest.sh show`의 LLM 정리 findings만으로 **정독 가치 / 근거 / focus**를 판단한다. focus는 정독 시작점(어느 세션의 어떤 finding부터 볼지) 한 줄.
 
-**교정 후보 확정** (stats에 `## 교정 후보` 항목이 있을 때만): 후보는 접두어에 안 걸리는 교정을 넓게 주운 것이라 그 자체로는 교정이 아니다. 확정은 **서브에이전트에 위임한다** — 이 세션이 transcript를 직접 열면 안 된다.
-
-- 위임 내용: 후보 스니펫 목록(sid 8자 + 60자 발췌)과 각 후보의 이벤트 파일 경로. 서브에이전트는 해당 `transcript` 경로에서 **그 턴과 직전 어시스턴트 응답만** 열어 "이 턴이 직전 응답에 대한 교정인가, 그렇다면 무엇을 고치라는 것인가"를 판정한다.
-- 반환 형식: 후보당 한 줄 — `confirmed|rejected`, sid, 한 줄 요약. 원문·전체 transcript는 반환하지 않는다.
-- 이 세션은 그 판정 줄만 받는다. 후보가 많으면 상위 20개까지만 위임한다.
-- 서브에이전트를 쓸 수 없는 환경이면 후보를 확정하지 않고 "미확정 N건"으로 보고한다 — 확정되지 않은 후보는 개선 근거로 쓰지 않는다 (fail-open).
+교정은 문구 규칙으로 줍지 않는다 — 표현이 조금만 달라도 놓쳤다("다 된거아니야? 왜 자꾸 모르지?" 같은 반복 지적이 세 번 모두 빠짐). 사용자 교정은 LLM 정리의 `correction` finding으로만 본다. LLM 정리가 꺼져 있으면(`HM_DIGEST` 미설정) 교정 신호가 없다는 사실을 보고에 적는다.
 
 - **노이즈 판정** (교정이 전부 1회성 오타 지시, 오류가 일시 환경 문제 등) → 5·6단계를 건너뛰고 판정 근거를 보고한 뒤, dry-run이 아니면 8단계에서 `no-change`로 종료한다. 단 2단계에서 재발이 확인됐으면 게이트와 무관하게 6단계를 진행한다
 - **신호 판정** → focus를 들고 5단계 진행
 
 게이트는 transcript 정독 여부만 정한다. 정량 해석·이전 개선 검증·보고는 게이트 결과와 무관하게 항상 수행한다.
 
-**LLM 정리 findings** (`digest.sh show` 출력이 있을 때): 저비용 모델이 세션 전체를 읽고 정규식이 놓친 마찰(의미상 교정, 반복 실패, 빠진 프로젝트 지식, 잘못된 접근, 낭비, 반복 지시 절차)을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남긴 것이다. 1차 판정이므로 그대로 믿지 않는다.
+**LLM 정리 findings** (`digest.sh show` 출력이 있을 때): 저비용 모델이 세션 전체를 읽고 남긴 마찰(사용자 교정, 반복 실패, 빠진 프로젝트 지식, 잘못된 접근, 낭비, 반복 지시 절차)을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남긴 것이다. 1차 판정이므로 그대로 믿지 않는다.
 
 - **같은 category·같은 대상이 2개 이상 세션**에서 나오면 개선 근거로 쓴다. 근거에는 sid와 evidence 인용을 붙인다.
 - 1개 세션에만 있는 finding은 정독 focus 후보일 뿐 단독 근거가 아니다. 필요하면 그 세션 transcript에서 evidence 전후만 확인한다.
 - `harness_fix`는 제안일 뿐이다. 6단계 가치 기준·라우팅을 그대로 적용한다.
 
-### 5. 정성 분석 (correction_mark)
+### 5. 정성 분석 (focus 정독)
 
-stats의 교정 마크에서 대상 프로젝트 항목을 고른 뒤, 해당 이벤트 파일의 `transcript` 경로로 원본을 열어 **그 교정 전후 맥락만** 정독한다 (전체 정독 금지 — 토큰 낭비). 이벤트 파일은 `~/.ai-harness/events/{claude,codex}-<sid>.jsonl`이며 stats에는 sid 앞 8자만 표시되므로 `events/*<sid8>*.jsonl` glob으로 찾는다.
+4단계 focus의 finding에서 시작한다. 해당 이벤트 파일(`~/.ai-harness/events/{claude,codex}-<sid>.jsonl`, sid 8자면 `events/*<sid8>*.jsonl` glob)의 `transcript` 경로로 원본을 열어 **evidence 전후 맥락만** 정독한다(전체 정독 금지 — 토큰 낭비).
 
-`[reviewed]`로 표시된 교정 마크는 보관 정책으로 rollup된 과거 검토 완료 데이터다. transcript 경로와 원문이 의도적으로 제거됐으므로 다시 정독하거나 새 개선 근거로 사용하지 않고 baseline 횟수에만 포함한다.
-
-- 반복되는 교정 (같은 실수 2회 이상) → constraint/컨벤션 후보
-- 1회성 교정 → 무시
-- 4단계에서 **확정된 교정 후보**는 `correction_mark`와 같은 무게로 센다. 확정 근거(한 줄 요약)를 개선안의 근거로 인용하되, 서브에이전트가 반환한 요약만 쓰고 원문을 다시 열지 않는다.
+- 같은 실수·지적이 2개 이상 세션에서 반복 → constraint/컨벤션/워크플로 후보
+- 1회성 → 무시
 
 ### 6. 개선안 확정
 
-각 개선안: **종류**(추가 / 제거 / 수정) / **근거**(수치 or 교정 사례, 세션 id 인용, 제거면 3-1의 확인 결과) / **대상 파일** / **변경 내용** / **기대효과**(다음 harvest가 무엇으로 효과를 판정할지 — 이벤트 신호로 확인 가능한 1문장. 예: "X 유형 correction_mark 재발 0").
+각 개선안: **종류**(추가 / 제거 / 수정) / **근거**(수치 or 교정 사례, 세션 id 인용, 제거면 3-1의 확인 결과) / **대상 파일** / **변경 내용** / **기대효과**(다음 harvest가 무엇으로 효과를 판정할지 — 이벤트 신호로 확인 가능한 1문장. 예: "X 유형 correction finding 재발 0").
 
 2단계에서 재발이 확인된 항목은 강화안 또는 revert PR로 여기 포함한다.
 
