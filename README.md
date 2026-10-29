@@ -381,11 +381,11 @@ stateDiagram-v2
 
 ### LLM 세션 정리 (opt-in)
 
-교정 접두어("아니", "그게 아니라")·도구 오류 같은 정규식 신호는 의미상 교정이나 "프로젝트 사실을 몰라 틀림"을 놓칩니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
+사용자 교정은 문구 규칙으로 줍지 않고 이 LLM 정리로만 판정합니다 — 문구 규칙은 표현이 조금만 달라도 놓쳤습니다. 끄면 교정 신호가 없습니다. `~/.ai-harness/config`에 `HM_DIGEST=1`을 두면 하루 한 번 도는 백그라운드 backfill 뒤에 `scripts/digest.sh`가 최근 세션을 저비용 모델(`HM_DIGEST_MODEL`, 기본 `haiku`)로 읽어 마찰을 `category / summary / evidence(원문 인용) / harness_fix / confidence`로 남깁니다.
 
 - **대상**: 최근 14일(`HM_DIGEST_LOOKBACK_DAYS`), 3턴 이상, 끝난 지 30분 지난 세션을 최신순으로 하루 20개(`HM_DIGEST_DAILY_MAX`). 재개된 세션만 다시 정리합니다
 - **입력**: 사용자 발화 전체(턴당 600자), 응답·도구 오류는 짧게 잘라 최대 4만 자. 실측 세션당 약 $0.003~0.01
-- **신호**: medium 이상 finding 수가 큐의 `insights`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
+- **신호**: medium 이상 finding 수가 큐의 `insights`가, 그중 `correction`이 `corrections`가 됩니다. 기본으로 여러 세션에 걸쳐 3건이면 batch를 만듭니다(`HM_HARVEST_INSIGHT_THRESHOLD`, `HM_HARVEST_INSIGHT_SESSION_THRESHOLD`)
 - **사용**: `/harvest`가 `digest.sh show`로 batch 세션의 findings를 받아, 2개 이상 세션에서 반복되는 것만 개선 근거로 씁니다
 - 정리 세션은 `HM_INTERNAL_SESSION=1`·`--no-session-persistence`로 실행돼 수집·알림 대상이 아닙니다. 기록은 `~/.ai-harness/digests/`
 
@@ -453,7 +453,6 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 수집은 `jq` 기반이며 LLM 비용이 들지 않습니다. transcript 전문을 복사하지 않습니다.
 
 - 수집 항목: 세션 메타(토큰·모델·턴), workflow/command 사용, 역할 위임, 하네스 문서 읽기, 편집 파일, bash 명령, MCP 도구, 이슈 키, 오류·가드·권한 거부·컨텍스트 압축 횟수
-- 사용자 교정 마크만 해당 발화 앞 60자 스니펫을 보관해 개선 분석의 정독 후보로 표시합니다.
 - Claude와 Codex 모두 위 항목을 관측합니다. Codex는 native function call과 desktop/runtime bridge의 custom tool call을 해석하며, bridge가 경로를 노출하지 않는 편집은 파일별 핫스팟 대신 집계에서 제외될 수 있습니다. 미지원은 0회와 구분하므로, 관측하지 못한 데이터로 삭제 근거를 만들지 않습니다.
 
 | 데이터 | 기본 위치 | 보관 방식 |
@@ -596,7 +595,7 @@ tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
-macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다. 교정 마크 감지는 현재 한국어 패턴 중심입니다.
+macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
 개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 

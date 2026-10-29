@@ -77,6 +77,7 @@ for marker_file in "$QUEUE_DIR/seen"/*.json; do
     rollup_tmp="$(mktemp "$ROLLUP_DIR/.rollup.XXXXXX")"
     jq -c '
       if .kind == "session" then del(.transcript,.cwd)
+      # 옛 버전이 남긴 문구 규칙 교정은 사용자 발화 원문이라 보관본에서 지운다.
       elif .kind == "correction_mark" then .target = "[reviewed]"
       else .
       end

@@ -23,6 +23,14 @@ pass() {
   printf 'ok %d - %s\n' "$TESTS" "$1"
 }
 
+# 교정은 LLM 정리(digest)의 correction finding으로만 센다. 이벤트 파일 옆 digests/에 n건을 둔다.
+seed_correction_digest() { # data_dir event_file n
+  mkdir -p "$1/digests"
+  local base="${2##*/}"
+  jq -cn --argjson n "$3" '{v:2, findings:[range($n) | {category:"correction", summary:"교정", evidence:"아니 그거 말고", harness_fix:"규칙", confidence:"high"}]}' \
+    >"$1/digests/${base%.jsonl}.json"
+}
+
 assert_eq() {
   local expected="$1" actual="$2" message="$3"
   [[ "$actual" == "$expected" ]] || fail "$message (expected=$expected actual=$actual)"
@@ -409,8 +417,7 @@ assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT
 assert_eq "6" "$(jq -r 'select(.kind=="error") | .n' "$CLAUDE_EVENT")" "Claude tool error counts is_error results but not output-less failures"
 assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Claude guard block counts edit-tool results and falls back to line-leading prefix when the tool is unknown"
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
-assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CLAUDE_EVENT")" "Claude correction mark keeps the high-precision prefix net"
-assert_eq "스웨거 링크 이상해. 다시 봐줘" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CLAUDE_EVENT")" "a complaint in mid-sentence is a candidate, a plain instruction is not"
+assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CLAUDE_EVENT")" "Claude adapter leaves corrections to the LLM digest"
 USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
 mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 {
@@ -461,8 +468,7 @@ assert_eq "3" "$(jq -r 'select(.kind=="error") | .n' "$CODEX_EVENT")" "Codex too
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CODEX_EVENT")" "Codex permission denial requires is_error envelope (ignores clarify and quoted source text)"
 assert_eq "1" "$(jq -r 'select(.kind=="compact") | .n' "$CODEX_EVENT")" "Codex compaction"
 assert_eq "2" "$(jq -r 'select(.kind=="jira_issue" and .target=="JDA-123") | .n' "$CODEX_EVENT")" "Codex issue count without duplicate stream"
-assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CODEX_EVENT")" "Codex correction mark"
-assert_eq "배포했는데 여전히 안 나와" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CODEX_EVENT")" "Codex candidate matches mid-sentence and folds the excerpt onto one line"
+assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CODEX_EVENT")" "Codex adapter leaves corrections to the LLM digest"
 pass "source extractors"
 
 # 공용 SessionEnd hook이 Codex transcript를 올바른 extractor로 분류함
@@ -1360,6 +1366,7 @@ pass "review graph adapters"
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+seed_correction_digest "$SIGNAL_DATA" "$SIGNAL_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl" 1
 SIGNAL_BATCH="$(
   HARNESS_METRICS_DIR="$SIGNAL_DATA" \
   HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=1 \
@@ -1605,9 +1612,7 @@ for sid in c d; do
   jq -cn --arg sid "$sid" \
     '{v:2,kind:"session",src:"claude",sid:$sid,project:"service",ended:"2026-01-01T00:00:00Z",coverage:["correction_mark"]}' \
     >"$CAP_DATA/events/$sid.jsonl"
-  jq -cn --arg sid "$sid" \
-    '{v:2,kind:"correction_mark",src:"claude",sid:$sid,project:"service",target:"fix",n:1}' \
-    >>"$CAP_DATA/events/$sid.jsonl"
+  seed_correction_digest "$CAP_DATA" "$CAP_DATA/events/$sid.jsonl" 1
 done
 for event_file in "$CAP_DATA/events"/*.jsonl; do
   HARNESS_METRICS_DIR="$CAP_DATA" HM_HARVEST_SESSION_THRESHOLD=0 \
@@ -1693,6 +1698,7 @@ pass "signal diversity and review locking"
 RESUME_DATA="$TEST_TMP/resume-data"
 HARNESS_METRICS_DIR="$RESUME_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 RESUME_EVENT="$RESUME_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+seed_correction_digest "$RESUME_DATA" "$RESUME_EVENT" 1
 HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" record "$RESUME_EVENT" >/dev/null
 HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
@@ -1711,10 +1717,10 @@ assert_eq "true" "$(jq -r 'has("event_revision")' "$RESUME_SEEN")" "legacy seen 
 RESUME_TMP="$RESUME_DATA/events/.resumed.jsonl"
 jq -c '
   if .kind=="session" then .ended="2027-01-01T00:00:00Z" | .turns=(.turns+1)
-  elif .kind=="correction_mark" then .n=2
   else . end
 ' "$RESUME_EVENT" >"$RESUME_TMP"
 mv "$RESUME_TMP" "$RESUME_EVENT"
+seed_correction_digest "$RESUME_DATA" "$RESUME_EVENT" 2
 RESUME_STATUS="$(
   HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
     "$ROOT/scripts/harvest-queue.sh" record "$RESUME_EVENT"
@@ -1746,6 +1752,8 @@ pass "resumed session revisions"
 RETENTION_DATA="$TEST_TMP/retention-data"
 HARNESS_METRICS_DIR="$RETENTION_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 RETENTION_EVENT="$RETENTION_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+# 옛 버전이 남긴 문구 규칙 교정(사용자 발화 원문)도 보관본에서 지워진다.
+jq -cn '{v:2,kind:"correction_mark",src:"claude",sid:"aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",project:"service",target:"아니 그거 말고",n:1}' >>"$RETENTION_EVENT"
 touch -t 202001010000 "$RETENTION_EVENT"
 HARNESS_METRICS_DIR="$RETENTION_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" record "$RETENTION_EVENT" >/dev/null
@@ -1899,7 +1907,7 @@ pass "backfill freshness and version invalidation"
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
@@ -1935,8 +1943,7 @@ jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:
 RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$RATIO_STATS" "## 비율" "ratio section"
 assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+case "$RATIO_STATS" in *"교정 마크"*) fail "stats no longer reports rule-based correction marks" ;; esac
 assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
 case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
@@ -1956,6 +1963,7 @@ assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_UR
 MOVE_DATA="$TEST_TMP/move-data"
 HARNESS_METRICS_DIR="$MOVE_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 MOVE_EVENT="$MOVE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+seed_correction_digest "$MOVE_DATA" "$MOVE_EVENT" 1
 MOVE_MARKER="claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
 retag_move_event() {
   jq -c --arg p "$1" 'if .kind=="session" then .project=$p else . end' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
@@ -1989,8 +1997,7 @@ assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER
 assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
 # 추출 규칙 변경으로 신호 수만 달라진 재추출은 검토 완료 세션을 다시 큐에 넣지 않는다.
 retag_move_event third-name
-jq -c 'select(.kind!="correction_mark")' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
-mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+rm -f "$MOVE_DATA/digests/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
 assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "re-extraction with changed signal counts stays reviewed"
 assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
 assert_eq "0" "$(jq -r '.totals.corrections' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER")" "reviewed marker takes the re-extracted totals"
@@ -2260,6 +2267,18 @@ assert_eq "3" "$(jq '.findings | length' "$DIGEST_FILE")" "findings stored"
 assert_contains "$(<"$TEST_TMP/digest-input.txt")" "[U] " "model input carries user turns"
 assert_eq "2" "$(jq -r '.insights' "$DIGEST_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json")" "low-confidence findings are not counted"
 assert_contains "$(run_digest run)" "정리 0" "unchanged session is not digested twice"
+# v1 시절 findings가 빈 정리는 입력 없이 만든 것일 수 있어 다시 정리한다. v2 빈 결과는 그대로 둔다.
+cp "$DIGEST_FILE" "$DIGEST_FILE.orig"
+jq -c '.v = 1 | .findings = []' "$DIGEST_FILE" >"$DIGEST_FILE.tmp" && mv "$DIGEST_FILE.tmp" "$DIGEST_FILE"
+assert_contains "$(run_digest run)" "정리 1" "empty v1 digest is redone"
+assert_eq "2" "$(jq -r '.v' "$DIGEST_FILE")" "redone digest is v2"
+jq -c '.findings = []' "$DIGEST_FILE" >"$DIGEST_FILE.tmp" && mv "$DIGEST_FILE.tmp" "$DIGEST_FILE"
+assert_contains "$(run_digest run)" "정리 0" "empty v2 digest is kept"
+mv "$DIGEST_FILE.orig" "$DIGEST_FILE"
+# 시간 제한 래퍼는 백그라운드로 띄우므로 스크립트에서는 표준입력이 /dev/null로 바뀐다 — 이어 줘야 한다.
+# (실측: LLM 정리가 2026-10-12부터 빈 입력을 받아 findings가 늘 0건)
+printf 'source "%s/scripts/lib.sh"\nprintf piped-input | hm_run_with_timeout 5 cat\n' "$ROOT" >"$TEST_TMP/timeout-stdin.sh"
+assert_eq "piped-input" "$(/bin/bash "$TEST_TMP/timeout-stdin.sh" </dev/null)" "hm_run_with_timeout passes piped stdin inside a script"
 HARNESS_METRICS_DIR="$DIGEST_DATA" HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=0 \
   HM_HARVEST_ERROR_THRESHOLD=0 HM_HARVEST_GUARD_THRESHOLD=0 HM_HARVEST_PERMISSION_THRESHOLD=0 \
   HM_HARVEST_INSIGHT_THRESHOLD=2 HM_HARVEST_INSIGHT_SESSION_THRESHOLD=1 \

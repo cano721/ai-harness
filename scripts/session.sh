@@ -126,6 +126,4 @@ jq -s -r '
   + table("jira_issue"; "이슈 언급")
   + (map(select(.kind=="error" or .kind=="guard_block" or .kind=="permission_deny" or .kind=="compact"))
      | if length==0 then "" else "\n## 신호\n\n" + (map("- \(.kind): \(.n)") | join("\n")) + "\n" end)
-  + (map(select(.kind=="correction_mark"))
-     | if length==0 then "" else "\n## 교정 마크\n\n" + (map("- \(.target)") | join("\n")) + "\n" end)
 ' "$EV"

@@ -161,7 +161,8 @@ event_summary() {
       or ($session.internal // false) then
         empty
       else
-        (total("correction_mark")) as $corrections
+        # 교정은 LLM 정리(digest)가 판정한 것만 센다 — 문구 규칙은 표현이 조금만 달라도 놓쳤다.
+        ([($digest // {}).findings[]? | select(.category == "correction" and .confidence != "low")] | length) as $corrections
         | (total("error")) as $errors
         | (total("guard_block")) as $guard_blocks
         | (total("permission_deny")) as $permission_denials
