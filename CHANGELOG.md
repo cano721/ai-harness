@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.47.0 (2026-10-29)
 ### 개선
 
 - **harvest 개선안 독립 검토(리뷰 루프)** — 개선안을 반영하기 전에 읽기 전용 검토 에이전트 `harvest-reviewer`가 쓴 쪽의 추론 없이 개선안·인용 근거·저장소 파일만 보고 판정합니다: 문구가 근거보다 넓은지, 근거가 주장을 뒷받침하는지, 기존 규칙·문서와 충돌하는지, 브랜치·제목이 저장소 규칙에 맞는지. `revise`면 고쳐서 새 검토자에게 다시 넘기고(최대 2회), 통과하지 못한 개선안은 뺍니다. 프로젝트는 커밋 전 `git diff`를, workspace·전역은 `auto-apply.sh apply` 전 규칙 문구를 검토하며, 결과는 PR 본문 `## 독립 검토` 절에 남습니다. 자동 harvest가 도달 불가 분기 1건 근거로 "테스트로 닿지 않는 방어 분기는 production에서 걷어낸다"를 draft PR에 그대로 올린 일이 계기입니다.
