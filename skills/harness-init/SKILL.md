@@ -245,9 +245,13 @@ $ROOT/scripts/workflow-contract.sh scan --root .
    - 적용 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면 브랜치·push 없이 끝낸다(`outcome=left_for_user`).
    - 이전 시도가 남긴 결과가 있는지 먼저 본다: `git ls-remote --heads origin '<브랜치 접두>*'`에 같은 플러그인 버전의 sync 브랜치가 있으면 새 브랜치·PR을 만들지 않고 그 브랜치 이름을 보고하며 `outcome=left_for_user`로 끝낸다 — 시간 제한·예산 초과로 끝난 시도를 다시 돌릴 때 중복 PR을 막는다. push는 새 브랜치에만 하고 기준 브랜치·force push는 하지 않는다.
    - **적용 범위는 `add`·`refresh`(상태 `unchanged`)뿐이다.** 승인 필요(`modified`·`untracked`)·보호 파일(AGENTS.md·docs·워크플로 본문)·`suggestions`·`orphaned`·`retired`·역할 agent `model` 드리프트·`docs-drift`·`workflow-contract` 결과는 **고치지 않고** PR 본문의 "사람 확인 필요" 표(파일 · 분류 · 제안)로 넘긴다. 삭제·통합 해제도 하지 않는다.
+   - 허용된 명령만 쓸 수 있다: `git`(일부), `jq`, `head`, `tail`, 플러그인 `scripts/*`. 스크립트는 `$ROOT`를 실제 절대경로로 풀어 한 줄에 하나씩 호출한다 — `ROOT=...;` 변수 할당이나 다른 명령과의 조합은 권한 규칙에 매칭되지 않아 거부된다.
+   - **`.claude/` 아래 파일은 Write/Edit로 쓸 수 없다** — Claude Code가 보호 경로로 막고, 무인 실행에는 승인할 사람이 없다. 템플릿을 그대로 쓰는 파일은 `$ROOT/scripts/place-claude-file.sh --root . --from "$ROOT/templates/<경로>" --to .claude/<경로>`로 복사하고, 렌더링이 필요한 파일은 저장소 안의 임시 경로(`.ai-harness-stage/<이름>`)에 Write한 뒤 같은 스크립트에 `--from .ai-harness-stage/<이름>`으로 넘긴다(옮긴 뒤 원본은 지워진다). `.claude/` 밖의 파일도 템플릿 그대로면 `cp` 대신 Read 후 Write로 쓴다 — 셸 복사는 허용 목록에 없다.
+   - PR 본문 파일도 `.ai-harness-stage/`에 쓴다 — 데이터 디렉토리(`~/.ai-harness`)는 쓰기가 막혀 있다. 이 경로는 커밋하지 않으며 worktree와 함께 지워진다.
+   - 적용 범위 중 하나라도 쓰지 못했으면 **일부 적용**이다. 쓴 파일만 `record --keep-version`으로 기록하고(`harness_version`을 올리지 않아야 다음 sync가 나머지를 다시 잡는다), PR 본문 "사람 확인 필요" 표에 못 쓴 파일과 이유를 싣고, `outcome=partial`로 끝낸다.
    - 적용한 관리 생성물만 `harness-sync-state.sh record`로 기록하고 `harness_version`을 갱신한 뒤 커밋·push하고, `$ROOT/scripts/open-pr.sh --title "<제목>" --body-file <본문> --base <branch>`로 **draft** PR을 연다. 본문 첫 줄에 `자동 sync(--auto) 결과 — 플러그인 <이전> → <현재>`를 밝힌다. `open-pr.sh`가 실패하면 방금 push한 원격 브랜치를 지우고 `outcome=left_for_user`로 끝낸다. 병합은 사람 몫이다.
    - 적용할 항목이 하나도 없으면 브랜치를 만들지 않고 `outcome=no-change`로 끝낸다.
-   - 마지막 응답의 마지막 줄에 결과를 정확히 이 형식으로 남긴다 — worker가 이 줄로 실행 결과를 기록한다: `AI_HARNESS_SYNC_RESULT outcome=<improved|no-change|left_for_user> artifact=<PR URL, 없으면 생략>`
+   - 마지막 응답의 마지막 줄에 결과를 정확히 이 형식으로 남긴다 — worker가 이 줄로 실행 결과를 기록한다: `AI_HARNESS_SYNC_RESULT outcome=<improved|partial|no-change|left_for_user> artifact=<PR URL, 없으면 생략>`
 
 ## 7. Workspace 모드 — 여러 독립 저장소가 한 폴더에 있을 때
 

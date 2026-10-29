@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--file <relative-path>]...\n' "$0" >&2
+  printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--keep-version] [--file <relative-path>]...\n' "$0" >&2
   exit 2
 }
 
@@ -19,6 +19,7 @@ root=""
 version=""
 catalog=""
 reason=""
+keep_version=false
 files=()
 while (($#)); do
   case "$1" in
@@ -27,6 +28,7 @@ while (($#)); do
     --catalog) catalog="${2:-}"; shift 2 ;;
     --reason) reason="${2:-}"; shift 2 ;;
     --file) files+=("${2:-}"); shift 2 ;;
+    --keep-version) keep_version=true; shift ;;
     *) usage ;;
   esac
 done
@@ -260,8 +262,9 @@ case "$command_name" in
       }
       checksum="$(sha256_file "$target")"
       next_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
-      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" '
-        .harness_version = $version
+      # 일부만 적용한 무인 sync는 harness_version을 올리지 않는다 — 올리면 다음 sync가 나머지를 다시 잡지 않는다.
+      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" --argjson keep "$keep_version" '
+        .harness_version = (if $keep and has("harness_version") then .harness_version else $version end)
         | .managed_files = (.managed_files // {})
         | .managed_files[$path] = {
             content_sha256: $checksum,
