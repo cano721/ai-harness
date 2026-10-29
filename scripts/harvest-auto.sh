@@ -554,7 +554,7 @@ command_run() {
       result="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
       artifact="$(sed -n 's/.* artifact=\([^[:space:]]*\).*/\1/p' <<<"$line")"
       # 실패 횟수 없이 failed로 남으면 매 sweep 다시 띄우므로, 약속한 값이 아니면 사람에게 넘긴다.
-      case "$result" in improved|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
+      case "$result" in improved|partial|no-change|left_for_user) ;; *) result="left_for_user" ;; esac
     fi
   elif [[ "$scope" == "global" ]]; then
     if [[ -f "$HM_DATA_DIR/applied/applied.jsonl" ]] \
