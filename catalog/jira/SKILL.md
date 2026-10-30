@@ -76,7 +76,8 @@ adf() { jq -cn --arg t "$1" '{type:"doc",version:1,content:[$t | split("\n\n")[]
    jr POST /rest/api/3/issue -d "$(jq -cn --argjson d "$(adf '설명')" \
      '{fields:{project:{key:"ABC"}, issuetype:{name:"Task"}, summary:"요약", description:$d}}')" | jq '{key, self}'
    ```
-   - 상위 항목은 `parent:{key:"ABC-1"}`. 스프린트·커스텀 필드 ID는 저장소마다 다르니 `jr GET /rest/api/3/field | jq '[.[] | select(.name|test("Sprint";"i")) | {id,name}]'`로 찾는다.
+   - 상위 항목은 `parent:{key:"ABC-1"}`. 스프린트 같은 커스텀 필드 ID는 사이트마다 다르고 이름도 언어 설정에 따라 바뀌므로(예: "스프린트") 이름이 아니라 타입으로 찾는다:
+     `jr GET /rest/api/3/field | jq '[.[] | select((.schema.custom // "") | test("gh-sprint|gh-epic-link")) | {id, name, type:.schema.custom}]'`
    - 프로젝트·팀 규칙(필수 에픽·버전 등)이 저장소 문서나 사용자 지침에 있으면 그것을 따른다.
 
 6. **필드 수정**
