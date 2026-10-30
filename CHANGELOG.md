@@ -6,21 +6,36 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-
 ## Unreleased
+
 ### 새 기능
 
-- **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
-
-## Unreleased
+- **통합 테스트를 단건으로 못 돌리는 안내를 찾아냅니다** — `test`가 `integration` 태그를 빼고 `integrationTest`가 그 태그만 돌리는 저장소에서, 워크플로·페르소나·docs가 단건 실행을 `./gradlew test --tests`로만 안내해 통합 테스트를 고친 에이전트가 "No tests found"를 보거나 엉뚱한 통과로 완료를 보고할 수 있었습니다(외부 하네스 진단에서 잡다 백엔드 3개 저장소 공통으로 지적). `docs-drift.sh`가 Gradle 태스크별 태그 필터와 게이트 연결(`dependsOn`·`executionData`)을 읽어 `targeted_command_gaps`(문서:줄 · 빠진 태그 · 대신 쓸 태스크)로 보고하고, `/harness-init --sync`가 "보호 파일 후속 조치" 표에 싣습니다. 새로 생성하는 워크플로 본문은 단위·통합 단건 명령을 나눠 적습니다.
 
 ### 버그 수정
 
 - **프론트 템플릿이 프로젝트의 커버리지 게이트와 충돌하던 문제** — `frontend-testing` 스킬과 `fe-implementer`·`fe-architect` 페르소나가 "커버리지 목표는 두지 않는다"고 단정해, 초기 셋팅으로 로직 계층 100% 게이트(`coverageGate.json`·vitest `thresholds`)를 깐 저장소에서 에이전트가 `test:ci`를 건너뛸 근거가 됐습니다(외부 하네스 진단에서 jobda-b2b-web 지적, jobda-web도 같은 게이트). 이제 커버리지 목표·대상은 프로젝트 초기 셋팅(`testing.md`)을 따르고, 대상 파일을 바꾸면 커버리지까지 재는 명령을 돌리게 합니다. 숫자를 채우려는 단언 없는 테스트는 여전히 쓰지 않습니다.
+- **JS 모노레포에서 drift 리포트가 있는 스크립트를 stale로 올리던 문제** — `package.json`을 한 단계 아래까지만 읽어 `apps/<pkg>`·`packages/<pkg>`의 스크립트를 못 봤고, `pnpm --filter x exec tsc`의 바이너리와 `yarn web test:ci` 같은 루트 별칭 경유 호출을 스크립트로 잘못 읽었습니다(실측: jobda-b2b-web stale 4건·jobda-web 1건 전부 오탐). 이제 워크스페이스 `package.json`까지 읽되 사실로는 검증 스크립트(test·lint·coverage·type 등)만 올리고, `exec`·`dlx` 뒤는 건너뛰며, 호출의 둘째 토큰도 문서화된 것으로 봅니다.
 
 ### 업데이트 후 해야 할 일
 
+- Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).
 - 프론트 저장소에서 `/harness-init --sync --apply`로 `frontend-testing` 스킬과 프론트 팀 페르소나를 갱신합니다.
+
+## v0.47.0 (2026-10-29)
+### 개선
+
+- **harvest 개선안 독립 검토(리뷰 루프)** — 개선안을 반영하기 전에 읽기 전용 검토 에이전트 `harvest-reviewer`가 쓴 쪽의 추론 없이 개선안·인용 근거·저장소 파일만 보고 판정합니다: 문구가 근거보다 넓은지, 근거가 주장을 뒷받침하는지, 기존 규칙·문서와 충돌하는지, 브랜치·제목이 저장소 규칙에 맞는지. `revise`면 고쳐서 새 검토자에게 다시 넘기고(최대 2회), 통과하지 못한 개선안은 뺍니다. 프로젝트는 커밋 전 `git diff`를, workspace·전역은 `auto-apply.sh apply` 전 규칙 문구를 검토하며, 결과는 PR 본문 `## 독립 검토` 절에 남습니다. 자동 harvest가 도달 불가 분기 1건 근거로 "테스트로 닿지 않는 방어 분기는 production에서 걷어낸다"를 draft PR에 그대로 올린 일이 계기입니다.
+- **이슈 없는 하네스 PR의 브랜치·제목** — 저장소 규칙이 이슈 키를 요구하면 harvest가 새 이슈를 만들거나 멈추지 않고 `git log`의 무이슈 관례 키(예: `NJ-00000`)로 브랜치(`feature/NJ-00000-<요약>`)·커밋·PR 제목을 만듭니다. 관례 키가 없을 때만 사람에게 넘깁니다.
+
+## v0.46.0 (2026-10-29)
+### 새 기능
+
+- **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
+
+### 동작 변경
+
+- **프론트 팀 역할의 Codex toml은 본문을 복사하지 않고 Claude 페르소나를 가리킨다** — 본문 사본은 sync가 md만 갱신해 Codex 쪽이 낡았습니다. `developer_instructions`는 `.claude/agents/<role>.md`를 읽으라는 지시만 담습니다.
 
 ## v0.45.0 (2026-10-29)
 ### 새 기능

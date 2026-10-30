@@ -289,6 +289,67 @@ assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | 
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
 assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
 pass "drift kotlin dsl and multi-task calls"
+# test가 integration 태그를 빼면 `./gradlew test --tests`만 안내한 문서는 통합 테스트를 targeted로 못 돌린다.
+TAGGED="$TEST_TMP/drift-tagged"
+mkdir -p "$TAGGED/.ai-harness/workflows" "$TAGGED/.ai-harness/docs"
+cat >"$TAGGED/build.gradle" <<'GRADLE'
+test {
+    useJUnitPlatform {
+        excludeTags 'regression', 'integration'
+    }
+}
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.register('regressionTest', Test) {
+    useJUnitPlatform { includeTags 'regression' }
+}
+jacocoTestReport {
+    dependsOn test, tasks.named('integrationTest')
+}
+GRADLE
+cat >"$TAGGED/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- 단위/통합 테스트: `./gradlew test --tests {pattern}`
+- 전체: `./gradlew build`, 회귀: `./gradlew regressionTest`
+DOC
+cat >"$TAGGED/.ai-harness/docs/testing.md" <<'DOC'
+./gradlew test --tests "{ClassName}"
+./gradlew integrationTest --tests "{ClassName}"
+DOC
+TAGGED_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED")"
+assert_eq ".ai-harness/workflows/fix-bug.md:1 integration integrationTest" "$(jq -r '[.targeted_command_gaps[] | "\(.doc):\(.line) \(.excluded_tag) \(.use_instead)"] | join(",")' <<<"$TAGGED_SCAN")" "a doc that targets only the tag-excluding task is reported; one that also targets the owner, and an ungated tag, are not"
+assert_eq "true" "$(jq -r '.drift' <<<"$TAGGED_SCAN")" "a targeted command gap counts as drift"
+mkdir -p "$TAGGED-kts/.ai-harness/workflows"
+cat >"$TAGGED-kts/build.gradle.kts" <<'GRADLE'
+tasks.test {
+    useJUnitPlatform { excludeTags("integration", "e2e") }
+}
+val integrationTest by tasks.registering(Test::class) {
+    useJUnitPlatform { includeTags("integration") }
+}
+tasks.named<JacocoReport>("jacocoTestReport") {
+    executionData(tasks.test.get(), integrationTest.get())
+}
+GRADLE
+cat >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- `./gradlew test --tests {pattern}`
+DOC
+assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
+pass "drift targeted command for tag-excluded tests"
+# JS 워크스페이스(apps/<pkg>/package.json)는 두 단계 아래에 있다. exec 뒤 바이너리와 별칭 경유 호출도 오탐을 만들면 안 된다.
+WS="$TEST_TMP/drift-workspace"
+mkdir -p "$WS/apps/web" "$WS/.ai-harness/docs"
+printf '{"scripts":{"web":"yarn workspace web","lint":"eslint ."}}\n' >"$WS/package.json"
+printf '{"scripts":{"test:ci":"vitest run --coverage","storybook":"storybook dev","eject":"x","lint:error":"eslint --quiet ."}}\n' >"$WS/apps/web/package.json"
+cat >"$WS/.ai-harness/docs/testing.md" <<'DOC'
+- `yarn web test:ci`, `yarn lint`
+- `pnpm --filter web storybook`
+- `pnpm --filter web exec tsc --noEmit`
+DOC
+WS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$WS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a workspace script is not stale, and a binary after exec is not a script"
+assert_eq "lint:error" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a script reached through a root alias counts as documented; only verification scripts of a workspace become facts"
+pass "drift js workspaces"
 
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
@@ -400,6 +461,13 @@ assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝�
 assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
+assert_contains "$HARVEST_CONTENT" "### 6.5. 독립 검토" "harvest reviews proposals before applying them"
+assert_contains "$HARVEST_CONTENT" "\`ai-harness:harvest-reviewer\` 서브에이전트" "harvest hands proposals to the bundled reviewer agent"
+assert_contains "$HARVEST_CONTENT" "최대 2회" "harvest review loop is bounded"
+assert_contains "$HARVEST_CONTENT" "관례 키(예: \`NJ-00000\`)" "harvest reuses the repo's no-issue key instead of a new issue"
+REVIEWER_AGENT="$ROOT/agents/harvest-reviewer.md"
+assert_file "$REVIEWER_AGENT"
+assert_eq "tools: Read, Grep, Glob" "$(grep '^tools:' "$REVIEWER_AGENT")" "harvest reviewer is read-only"
 pass "workspace mode scan, manifest, and routing"
 
 # Claude/Codex extractor metadata and coverage
