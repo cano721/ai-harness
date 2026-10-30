@@ -159,8 +159,9 @@ relabel_since="$(dep_since relabel "$DIR/lib.sh")"
 relabel_state="$DEP_STATE_DIR/relabel-done"
 if [[ "$(sed -n '1p' "$relabel_state" 2>/dev/null)" != "$relabel_since" ]]; then
   for ev in "$HM_DATA_DIR"/events/*.jsonl "$HM_DATA_DIR"/rollups/*.jsonl; do
-    IFS=$'\t' read -r transcript old_project cwd < <(jq -r 'select(.kind=="session")
-      | [(.transcript // ""), (.project // ""), (.cwd // "")] | @tsv' "$ev" 2>/dev/null | head -n 1)
+    # here-string: /bin/bash 3.2는 단일 명령의 `< <(...)` fd를 닫지 않아 파일이 많으면 fd 한도에 닿는다
+    IFS=$'\t' read -r transcript old_project cwd <<<"$(jq -r 'select(.kind=="session")
+      | [(.transcript // ""), (.project // ""), (.cwd // "")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
     [[ -n "$cwd" && -n "$old_project" ]] || continue
     [[ -n "$transcript" && -f "$transcript" ]] && continue
     # 경로가 사라졌거나 git·workspace로 판정되지 않으면 폴더 이름 휴리스틱뿐이라, 추출 당시 git으로 얻은

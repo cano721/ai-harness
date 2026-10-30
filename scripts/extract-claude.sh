@@ -17,12 +17,29 @@ SOURCE_SIZE="$(filesize "$T")"; SOURCE_SIZE="${SOURCE_SIZE:-0}"
 if [[ -z "$REASON" && -f "$OUT" ]]; then
   REASON="$(jq -sr 'map(select(.kind=="session") | .reason // empty) | first // empty' "$OUT" 2>/dev/null || true)"
 fi
+# 서브에이전트 transcript는 <sid>/subagents/agent-*.jsonl에 따로 기록된다 — 부모 세션 토큰에 합산한다.
+AGENT_USAGE='{"n":0,"tok_in":0,"tok_out":0,"cache_read":0,"cache_write":0}'
+shopt -s nullglob
+AGENT_FILES=("${T%.jsonl}"/subagents/*.jsonl)
+shopt -u nullglob
+if (( ${#AGENT_FILES[@]} > 0 )); then
+  AGENT_USAGE="$(jq -c -R -n '
+    [inputs | fromjson? // empty | select(.type=="assistant" and .message.usage != null)] as $a
+    | (($a | map(select(.message.id == null)) | map(.message.usage))
+       + ($a | map(select(.message.id != null)) | group_by(.message.id) | map(last.message.usage))) as $u
+    | {n:'"${#AGENT_FILES[@]}"',
+       tok_in:([$u[] | (.input_tokens//0)] | add // 0),
+       tok_out:([$u[] | (.output_tokens//0)] | add // 0),
+       cache_read:([$u[] | (.cache_read_input_tokens//0)] | add // 0),
+       cache_write:([$u[] | (.cache_creation_input_tokens//0)] | add // 0)}
+  ' "${AGENT_FILES[@]}" 2>/dev/null)" || AGENT_USAGE='{"n":0,"tok_in":0,"tok_out":0,"cache_read":0,"cache_write":0}'
+fi
 # 임시파일을 대상과 같은 디렉토리에 — cross-device mv(비원자적 copy+delete) 방지
 TMP="$(mktemp "$HM_DATA_DIR/events/.tmp.XXXXXX")"
 # -R: 원시 라인 입력 — 손상된 JSONL 라인이 있어도 그 줄만 스킵 (extract-claude.jq의 fromjson?)
 if jq -c -R -n --argjson event_version "$HM_EVENT_VERSION" \
      --arg sid "$SID" --arg path "$T" --arg reason "$REASON" --arg issue_re "$HM_ISSUE_RE" \
-     --arg project "$PROJECT" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" \
+     --arg project "$PROJECT" --argjson agent_usage "$AGENT_USAGE" --argjson source_mtime "$SOURCE_MTIME" --argjson source_size "$SOURCE_SIZE" \
      -L "$DIR" -f "$DIR/extract-claude.jq" "$T" > "$TMP" 2>/dev/null; then
   mv "$TMP" "$OUT"
 else

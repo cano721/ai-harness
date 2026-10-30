@@ -23,6 +23,14 @@ pass() {
   printf 'ok %d - %s\n' "$TESTS" "$1"
 }
 
+# 교정은 LLM 정리(digest)의 correction finding으로만 센다. 이벤트 파일 옆 digests/에 n건을 둔다.
+seed_correction_digest() { # data_dir event_file n
+  mkdir -p "$1/digests"
+  local base="${2##*/}"
+  jq -cn --argjson n "$3" '{v:2, findings:[range($n) | {category:"correction", summary:"교정", evidence:"아니 그거 말고", harness_fix:"규칙", confidence:"high"}]}' \
+    >"$1/digests/${base%.jsonl}.json"
+}
+
 assert_eq() {
   local expected="$1" actual="$2" message="$3"
   [[ "$actual" == "$expected" ]] || fail "$message (expected=$expected actual=$actual)"
@@ -60,6 +68,7 @@ HARNESS_METRICS_DIR="$TEST_TMP/lib-data"
 export HARNESS_METRICS_DIR
 # SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
 export HM_BACKFILL_INTERVAL_HOURS=0
+export HM_AUTO_WORKTREE_DIR="$TEST_TMP/auto-worktrees"
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
@@ -280,6 +289,67 @@ assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | 
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
 assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
 pass "drift kotlin dsl and multi-task calls"
+# test가 integration 태그를 빼면 `./gradlew test --tests`만 안내한 문서는 통합 테스트를 targeted로 못 돌린다.
+TAGGED="$TEST_TMP/drift-tagged"
+mkdir -p "$TAGGED/.ai-harness/workflows" "$TAGGED/.ai-harness/docs"
+cat >"$TAGGED/build.gradle" <<'GRADLE'
+test {
+    useJUnitPlatform {
+        excludeTags 'regression', 'integration'
+    }
+}
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.register('regressionTest', Test) {
+    useJUnitPlatform { includeTags 'regression' }
+}
+jacocoTestReport {
+    dependsOn test, tasks.named('integrationTest')
+}
+GRADLE
+cat >"$TAGGED/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- 단위/통합 테스트: `./gradlew test --tests {pattern}`
+- 전체: `./gradlew build`, 회귀: `./gradlew regressionTest`
+DOC
+cat >"$TAGGED/.ai-harness/docs/testing.md" <<'DOC'
+./gradlew test --tests "{ClassName}"
+./gradlew integrationTest --tests "{ClassName}"
+DOC
+TAGGED_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED")"
+assert_eq ".ai-harness/workflows/fix-bug.md:1 integration integrationTest" "$(jq -r '[.targeted_command_gaps[] | "\(.doc):\(.line) \(.excluded_tag) \(.use_instead)"] | join(",")' <<<"$TAGGED_SCAN")" "a doc that targets only the tag-excluding task is reported; one that also targets the owner, and an ungated tag, are not"
+assert_eq "true" "$(jq -r '.drift' <<<"$TAGGED_SCAN")" "a targeted command gap counts as drift"
+mkdir -p "$TAGGED-kts/.ai-harness/workflows"
+cat >"$TAGGED-kts/build.gradle.kts" <<'GRADLE'
+tasks.test {
+    useJUnitPlatform { excludeTags("integration", "e2e") }
+}
+val integrationTest by tasks.registering(Test::class) {
+    useJUnitPlatform { includeTags("integration") }
+}
+tasks.named<JacocoReport>("jacocoTestReport") {
+    executionData(tasks.test.get(), integrationTest.get())
+}
+GRADLE
+cat >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- `./gradlew test --tests {pattern}`
+DOC
+assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
+pass "drift targeted command for tag-excluded tests"
+# JS 워크스페이스(apps/<pkg>/package.json)는 두 단계 아래에 있다. exec 뒤 바이너리와 별칭 경유 호출도 오탐을 만들면 안 된다.
+WS="$TEST_TMP/drift-workspace"
+mkdir -p "$WS/apps/web" "$WS/.ai-harness/docs"
+printf '{"scripts":{"web":"yarn workspace web","lint":"eslint ."}}\n' >"$WS/package.json"
+printf '{"scripts":{"test:ci":"vitest run --coverage","storybook":"storybook dev","eject":"x","lint:error":"eslint --quiet ."}}\n' >"$WS/apps/web/package.json"
+cat >"$WS/.ai-harness/docs/testing.md" <<'DOC'
+- `yarn web test:ci`, `yarn lint`
+- `pnpm --filter web storybook`
+- `pnpm --filter web exec tsc --noEmit`
+DOC
+WS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$WS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a workspace script is not stale, and a binary after exec is not a script"
+assert_eq "lint:error" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a script reached through a root alias counts as documented; only verification scripts of a workspace become facts"
+pass "drift js workspaces"
 
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
@@ -391,6 +461,13 @@ assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝�
 assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
+assert_contains "$HARVEST_CONTENT" "### 6.5. 독립 검토" "harvest reviews proposals before applying them"
+assert_contains "$HARVEST_CONTENT" "\`ai-harness:harvest-reviewer\` 서브에이전트" "harvest hands proposals to the bundled reviewer agent"
+assert_contains "$HARVEST_CONTENT" "최대 2회" "harvest review loop is bounded"
+assert_contains "$HARVEST_CONTENT" "관례 키(예: \`NJ-00000\`)" "harvest reuses the repo's no-issue key instead of a new issue"
+REVIEWER_AGENT="$ROOT/agents/harvest-reviewer.md"
+assert_file "$REVIEWER_AGENT"
+assert_eq "tools: Read, Grep, Glob" "$(grep '^tools:' "$REVIEWER_AGENT")" "harvest reviewer is read-only"
 pass "workspace mode scan, manifest, and routing"
 
 # Claude/Codex extractor metadata and coverage
@@ -408,8 +485,7 @@ assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT
 assert_eq "6" "$(jq -r 'select(.kind=="error") | .n' "$CLAUDE_EVENT")" "Claude tool error counts is_error results but not output-less failures"
 assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Claude guard block counts edit-tool results and falls back to line-leading prefix when the tool is unknown"
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
-assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CLAUDE_EVENT")" "Claude correction mark keeps the high-precision prefix net"
-assert_eq "스웨거 링크 이상해. 다시 봐줘" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CLAUDE_EVENT")" "a complaint in mid-sentence is a candidate, a plain instruction is not"
+assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CLAUDE_EVENT")" "Claude adapter leaves corrections to the LLM digest"
 USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
 mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 {
@@ -422,6 +498,34 @@ mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 } >"$USAGE_DUP_FIXTURE"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
 assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
+CTX_FIXTURE="$TEST_TMP/ctx/cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+mkdir -p "${CTX_FIXTURE%.jsonl}/subagents"
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"id":"m1","model":"claude-test-model","usage":{"input_tokens":100,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":900},"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/tmp/service/.ai-harness/docs/testing.md"}},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"cat AGENTS.md .ai-harness/docs/testing.md"}},{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"x"}}]}}'
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"'"$(printf 'a%.0s' {1..400})"'"},{"type":"tool_result","tool_use_id":"b1","content":"'"$(printf 'b%.0s' {1..80})"'"},{"type":"tool_result","tool_use_id":"g1","content":[{"type":"text","text":"한글"}]}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:03Z","message":{"id":"m2","model":"claude-test-model","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":1000,"cache_creation_input_tokens":300},"content":[{"type":"text","text":"y"}]}}'
+  printf '%s\n' '{"type":"assistant","isSidechain":true,"cwd":"/tmp/service","timestamp":"2026-07-29T00:00:04Z","message":{"id":"m3","model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":99999},"content":[{"type":"text","text":"side"}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:05Z","message":{"id":"m4","model":"claude-test-model","usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":1200,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"z"}]}}'
+} >"$CTX_FIXTURE"
+for agent in a1 a2; do
+  printf '{"type":"assistant","isSidechain":true,"message":{"id":"%s","model":"claude-test-model","usage":{"input_tokens":3,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":7},"content":[{"type":"text","text":"x"}]}}\n' "$agent" >"${CTX_FIXTURE%.jsonl}/subagents/agent-$agent.jsonl"
+done
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$CTX_FIXTURE" "user_exit"
+CTX_EVENT="$EXTRACT_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+assert_eq "2 6 40 1000 14" "$(jq -r 'select(.kind=="session") | "\(.agents) \(.agent_tok_in) \(.agent_tok_out) \(.agent_cache_read) \(.agent_cache_write)"' "$CTX_EVENT")" "Claude subagent transcripts are summed into the parent session"
+assert_eq "116" "$(jq -r 'select(.kind=="session") | .tok_in' "$CTX_EVENT")" "Claude main tokens stay main-only (in-file sidechain lines kept as before)"
+assert_eq "1000 1310 1205" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last)"' "$CTX_EVENT")" "Claude context first/peak/last from main-chain calls only"
+assert_eq "Bash=20/1 Grep=1/1 Read=100/1" "$(jq -r 'select(.kind=="ctx_tool") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT" | sort | paste -sd " " -)" "Claude tool result size per tool (UTF-8 bytes/4)"
+assert_eq ".ai-harness/docs/testing.md=100/1" "$(jq -r 'select(.kind=="doc_ctx") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT")" "Claude doc context cost skips results mixing several docs"
+CTX_STATS_DATA="$TEST_TMP/ctx-stats"
+mkdir -p "$CTX_STATS_DATA/events"
+cp "$CTX_EVENT" "$CTX_STATS_DATA/events/"
+CTX_STATS="$(HARNESS_METRICS_DIR="$CTX_STATS_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$CTX_STATS" "| service | 1 | 1 | 116 | 4 | 2200 | 101199 | 6/40/1000 |" "stats shows subagent usage beside main usage"
+assert_contains "$CTX_STATS" "| service | 1 | 1000 | 1310 | 1310 |" "stats shows per-project context overhead and peak"
+assert_contains "$CTX_STATS" "| .ai-harness/docs/testing.md | 100 | 100 |" "stats shows doc context cost and per-read size"
+assert_contains "$CTX_STATS" "| Read | 100 |" "stats ranks tool result sizes"
 BASH_DOC_FIXTURE="$TEST_TMP/bash-doc/ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl"
 mkdir -p "${BASH_DOC_FIXTURE%/*}"
 bash_doc_line() { # $1=tool name, $2=input json
@@ -460,8 +564,7 @@ assert_eq "3" "$(jq -r 'select(.kind=="error") | .n' "$CODEX_EVENT")" "Codex too
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CODEX_EVENT")" "Codex permission denial requires is_error envelope (ignores clarify and quoted source text)"
 assert_eq "1" "$(jq -r 'select(.kind=="compact") | .n' "$CODEX_EVENT")" "Codex compaction"
 assert_eq "2" "$(jq -r 'select(.kind=="jira_issue" and .target=="JDA-123") | .n' "$CODEX_EVENT")" "Codex issue count without duplicate stream"
-assert_eq "1" "$(jq -r 'select(.kind=="correction_mark") | .n' "$CODEX_EVENT")" "Codex correction mark"
-assert_eq "배포했는데 여전히 안 나와" "$(jq -r 'select(.kind=="correction_candidate") | .target' "$CODEX_EVENT")" "Codex candidate matches mid-sentence and folds the excerpt onto one line"
+assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CODEX_EVENT")" "Codex adapter leaves corrections to the LLM digest"
 pass "source extractors"
 
 # 공용 SessionEnd hook이 Codex transcript를 올바른 extractor로 분류함
@@ -1276,6 +1379,10 @@ printf '%s\n' 'generated content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
 SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
 assert_eq "unchanged" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "managed generated file is unchanged"
 assert_eq "0.14.0" "$(jq -r '.harness_version' "$SYNC_ROOT/.ai-harness/harness.json")" "sync record updates harness version"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_ROOT" --version 0.15.0 --keep-version \
+  --file .agents/skills/example/SKILL.md
+assert_eq "0.14.0" "$(jq -r '.harness_version' "$SYNC_ROOT/.ai-harness/harness.json")" "partial sync record keeps harness version"
+assert_eq "0.15.0" "$(jq -r '.managed_files[".agents/skills/example/SKILL.md"].template_version' "$SYNC_ROOT/.ai-harness/harness.json")" "partial sync record still updates the file hash"
 printf '%s\n' 'user changed content' >"$SYNC_ROOT/.agents/skills/example/SKILL.md"
 SYNC_STATUS="$("$ROOT/scripts/harness-sync-state.sh" status --root "$SYNC_ROOT")"
 assert_eq "modified" "$(printf '%s' "$SYNC_STATUS" | jq -r '.[0].state')" "user-modified managed file requires approval"
@@ -1489,6 +1596,52 @@ assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | cont
 assert_contains "$HARNESS_INIT_CONTENT" "서버 렌더링 템플릿" "harness init detects server-rendered UI"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/ui.md" "harness init generates the UI context doc"
 pass "ui review contract and stack gating"
+# 프론트 팀 역할 세트: frontend-team stack이면 라우터·fe-architect·fe-implementer, design-system이면 fe-designer·design-audit까지.
+for f in frontend-team/SKILL.md design-audit/SKILL.md frontend-team/personas/fe-architect.md frontend-team/personas/fe-implementer.md frontend-team/personas/fe-designer.md; do
+  assert_file "$ROOT/templates/$f"
+done
+for role in fe-architect fe-implementer fe-designer; do
+  PERSONA="$(<"$ROOT/templates/frontend-team/personas/$role.md")"
+  assert_contains "$PERSONA" "name: $role" "$role persona names itself"
+  grep -Eq '^model: (opus|sonnet|haiku)$' "$ROOT/templates/frontend-team/personas/$role.md" || fail "$role persona pins a model"
+  assert_contains "$PERSONA" "다음 담당: <역할>:" "$role report ends with the handoff line"
+  assert_contains "$PERSONA" ".ai-harness/docs/frontend.md" "$role reads project facts from frontend.md"
+  assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "| $role |" "$role has a default model row"
+  # frontmatter skills는 같은 stack 게이트에서 생성되는 템플릿만 가리킨다.
+  while IFS= read -r skill; do
+    assert_file "$ROOT/templates/$skill/SKILL.md"
+  done < <(awk '/^---$/{n++; next} n==1 && /^  - /{print $2}' "$ROOT/templates/frontend-team/personas/$role.md")
+done
+# 공개 템플릿에는 원본 팀의 실명·사내 패키지·디자인 시스템 이름이 남지 않는다.
+for f in "$ROOT"/templates/frontend-team/SKILL.md "$ROOT"/templates/frontend-team/personas/*.md "$ROOT"/templates/design-audit/SKILL.md; do
+  if grep -nE 'jobda|Astryx|astryx|ingyu|sunwoong|seonyoung|인규|선웅|선영|@jobda' "$f"; then
+    fail "internal name leaked into public template: $f"
+  fi
+done
+TEAM_ROOT="$TEST_TMP/frontend-team-project"
+mkdir -p "$TEAM_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"frontend-team-project","level":"standard","integrations":["claude"],"stacks":["frontend","frontend-team"],"harness_version":"0.44.0"}' >"$TEAM_ROOT/.ai-harness/harness.json"
+TEAM_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/frontend-team/SKILL.md") | .action')" "frontend-team stack selects the role router"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-architect.md") | .action')" "frontend-team stack selects fe-architect"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-implementer.md") | .action')" "frontend-team stack selects fe-implementer"
+assert_eq "0" "$(printf '%s' "$TEAM_PLAN" | jq -r '[.items[] | select(.path | test("fe-designer|design-audit"))] | length')" "designer role needs the design-system stack"
+jq '.stacks += ["design-system"]' "$TEAM_ROOT/.ai-harness/harness.json" >"$TEAM_ROOT/m" && mv "$TEAM_ROOT/m" "$TEAM_ROOT/.ai-harness/harness.json"
+TEAM_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/agents/fe-designer.md") | .action')" "design-system stack selects fe-designer"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/SKILL.md") | .action')" "design-system stack selects design-audit"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | test("frontend-team|fe-|design-audit"))] | length')" "plain frontend stack does not create the role set"
+# 역할을 스택 역할 세트에 넘기면 범용 페르소나가 role_adopted로 정리 후보에 오르고, 세트 페르소나가 사라지면 계약 위반이다.
+mkdir -p "$TEAM_ROOT/.claude/agents"
+printf '%s\n' 'developer' >"$TEAM_ROOT/.claude/agents/developer.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$TEAM_ROOT" --version 0.44.0 --file .claude/agents/developer.md >/dev/null
+jq '.roles = {developer: {source: "stack", stack: "frontend-team", integrations: ["claude"], agents: ["fe-implementer", "fe-architect"], router: ".claude/skills/frontend-team/SKILL.md"}}' \
+  "$TEAM_ROOT/.ai-harness/harness.json" >"$TEAM_ROOT/m" && mv "$TEAM_ROOT/m" "$TEAM_ROOT/.ai-harness/harness.json"
+assert_eq "role_adopted" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$TEAM_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq -r '.orphaned[] | select(.path==".claude/agents/developer.md") | .reason')" "role handed to the stack role set orphans the generic persona"
+TEAM_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$TEAM_ROOT")"
+assert_eq "fe-architect,fe-implementer" "$(printf '%s' "$TEAM_SCAN" | jq -r '[.findings[] | select(.check=="role_agent_missing") | .token] | sort | join(",")')" "missing stack role persona is a contract finding"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" '"source": "stack"' "harness init records stack role mapping"
+pass "frontend team role set"
 
 # understand-change는 플러그인 전역 Skill이다: 프로젝트에 사본을 깔지 않고 런타임에 프로젝트 정책을 읽는다.
 UNDERSTAND_SKILL="$ROOT/skills/understand-change/SKILL.md"
@@ -1604,6 +1757,7 @@ pass "review graph adapters"
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+seed_correction_digest "$SIGNAL_DATA" "$SIGNAL_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl" 1
 SIGNAL_BATCH="$(
   HARNESS_METRICS_DIR="$SIGNAL_DATA" \
   HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=1 \
@@ -1849,9 +2003,7 @@ for sid in c d; do
   jq -cn --arg sid "$sid" \
     '{v:2,kind:"session",src:"claude",sid:$sid,project:"service",ended:"2026-01-01T00:00:00Z",coverage:["correction_mark"]}' \
     >"$CAP_DATA/events/$sid.jsonl"
-  jq -cn --arg sid "$sid" \
-    '{v:2,kind:"correction_mark",src:"claude",sid:$sid,project:"service",target:"fix",n:1}' \
-    >>"$CAP_DATA/events/$sid.jsonl"
+  seed_correction_digest "$CAP_DATA" "$CAP_DATA/events/$sid.jsonl" 1
 done
 for event_file in "$CAP_DATA/events"/*.jsonl; do
   HARNESS_METRICS_DIR="$CAP_DATA" HM_HARVEST_SESSION_THRESHOLD=0 \
@@ -1937,6 +2089,7 @@ pass "signal diversity and review locking"
 RESUME_DATA="$TEST_TMP/resume-data"
 HARNESS_METRICS_DIR="$RESUME_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 RESUME_EVENT="$RESUME_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+seed_correction_digest "$RESUME_DATA" "$RESUME_EVENT" 1
 HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" record "$RESUME_EVENT" >/dev/null
 HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
@@ -1955,10 +2108,10 @@ assert_eq "true" "$(jq -r 'has("event_revision")' "$RESUME_SEEN")" "legacy seen 
 RESUME_TMP="$RESUME_DATA/events/.resumed.jsonl"
 jq -c '
   if .kind=="session" then .ended="2027-01-01T00:00:00Z" | .turns=(.turns+1)
-  elif .kind=="correction_mark" then .n=2
   else . end
 ' "$RESUME_EVENT" >"$RESUME_TMP"
 mv "$RESUME_TMP" "$RESUME_EVENT"
+seed_correction_digest "$RESUME_DATA" "$RESUME_EVENT" 2
 RESUME_STATUS="$(
   HARNESS_METRICS_DIR="$RESUME_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
     "$ROOT/scripts/harvest-queue.sh" record "$RESUME_EVENT"
@@ -1990,6 +2143,8 @@ pass "resumed session revisions"
 RETENTION_DATA="$TEST_TMP/retention-data"
 HARNESS_METRICS_DIR="$RETENTION_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 RETENTION_EVENT="$RETENTION_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+# 옛 버전이 남긴 문구 규칙 교정(사용자 발화 원문)도 보관본에서 지워진다.
+jq -cn '{v:2,kind:"correction_mark",src:"claude",sid:"aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",project:"service",target:"아니 그거 말고",n:1}' >>"$RETENTION_EVENT"
 touch -t 202001010000 "$RETENTION_EVENT"
 HARNESS_METRICS_DIR="$RETENTION_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" record "$RETENTION_EVENT" >/dev/null
@@ -2143,7 +2298,7 @@ pass "backfill freshness and version invalidation"
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, correction_candidate, correction_mark, doc_read" "full Codex coverage declaration"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
@@ -2179,8 +2334,7 @@ jq -cn '{v:1, src:"claude", sid:"s9", kind:"session", started:"2026-10-10T00:00:
 RATIO_STATS="$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$RATIO_STATS" "## 비율" "ratio section"
 assert_contains "$RATIO_STATS" "| 워크플로 경유 세션 | 50% (3/6) |" "workflow pass ratio over harness-project active sessions"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 활성 세션 | 0.29 (2/7) |" "corrections per active session"
-assert_contains "$RATIO_STATS" "| 교정 마크 / 100턴 | 4.3 (2/46) |" "corrections per 100 turns"
+case "$RATIO_STATS" in *"교정 마크"*) fail "stats no longer reports rule-based correction marks" ;; esac
 assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
 case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
@@ -2200,6 +2354,7 @@ assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_UR
 MOVE_DATA="$TEST_TMP/move-data"
 HARNESS_METRICS_DIR="$MOVE_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
 MOVE_EVENT="$MOVE_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+seed_correction_digest "$MOVE_DATA" "$MOVE_EVENT" 1
 MOVE_MARKER="claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
 retag_move_event() {
   jq -c --arg p "$1" 'if .kind=="session" then .project=$p else . end' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
@@ -2233,8 +2388,7 @@ assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/sessions/$MOVE_MARKER
 assert_not_file "$HELD_EVENT_DATA/harvest-queue/p-held-old/analysis-batch.json"
 # 추출 규칙 변경으로 신호 수만 달라진 재추출은 검토 완료 세션을 다시 큐에 넣지 않는다.
 retag_move_event third-name
-jq -c 'select(.kind!="correction_mark")' "$MOVE_EVENT" >"$MOVE_EVENT.tmp"
-mv "$MOVE_EVENT.tmp" "$MOVE_EVENT"
+rm -f "$MOVE_DATA/digests/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
 assert_eq "unchanged" "$(move_record | jq -r '.record_action')" "re-extraction with changed signal counts stays reviewed"
 assert_not_file "$MOVE_DATA/harvest-queue/p-third-name/sessions/$MOVE_MARKER"
 assert_eq "0" "$(jq -r '.totals.corrections' "$MOVE_DATA/harvest-queue/p-third-name/seen/$MOVE_MARKER")" "reviewed marker takes the re-extracted totals"
@@ -2339,7 +2493,8 @@ assert_eq "1" "$(wc -l <"$TEST_TMP/auto-stub.out" | tr -d ' ')" "same batch runs
 AUTO_RUN_LINE="$(sed -n 1p "$TEST_TMP/auto-stub.out")"
 assert_eq "auto-svc|1" "${AUTO_RUN_LINE%|*}" "worker gets project and recursion guard"
 AUTO_WORK_DIR="${AUTO_RUN_LINE##*|}"
-assert_contains "$AUTO_WORK_DIR" "/harvest-auto/worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+assert_contains "$AUTO_WORK_DIR" "/auto-worktrees/p-auto-svc-" "agent runs in a dedicated worktree, not the user checkout"
+[[ "$AUTO_WORK_DIR" != "$AUTO_DATA"/* ]] || fail "the work tree must be outside the data directory the agent may not write: $AUTO_WORK_DIR"
 [[ ! -d "$AUTO_WORK_DIR" ]] || fail "work tree is removed after the run: $AUTO_WORK_DIR"
 assert_eq "1" "$(git -C "$AUTO_REPO" worktree list | wc -l | tr -d ' ')" "no leftover worktree registration"
 assert_eq "left_for_user" "$(auto_runs '[.[] | select(.event=="finished")] | last | .result')" "unreviewed run is left for user"
@@ -2503,6 +2658,18 @@ assert_eq "3" "$(jq '.findings | length' "$DIGEST_FILE")" "findings stored"
 assert_contains "$(<"$TEST_TMP/digest-input.txt")" "[U] " "model input carries user turns"
 assert_eq "2" "$(jq -r '.insights' "$DIGEST_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json")" "low-confidence findings are not counted"
 assert_contains "$(run_digest run)" "정리 0" "unchanged session is not digested twice"
+# v1 시절 findings가 빈 정리는 입력 없이 만든 것일 수 있어 다시 정리한다. v2 빈 결과는 그대로 둔다.
+cp "$DIGEST_FILE" "$DIGEST_FILE.orig"
+jq -c '.v = 1 | .findings = []' "$DIGEST_FILE" >"$DIGEST_FILE.tmp" && mv "$DIGEST_FILE.tmp" "$DIGEST_FILE"
+assert_contains "$(run_digest run)" "정리 1" "empty v1 digest is redone"
+assert_eq "2" "$(jq -r '.v' "$DIGEST_FILE")" "redone digest is v2"
+jq -c '.findings = []' "$DIGEST_FILE" >"$DIGEST_FILE.tmp" && mv "$DIGEST_FILE.tmp" "$DIGEST_FILE"
+assert_contains "$(run_digest run)" "정리 0" "empty v2 digest is kept"
+mv "$DIGEST_FILE.orig" "$DIGEST_FILE"
+# 시간 제한 래퍼는 백그라운드로 띄우므로 스크립트에서는 표준입력이 /dev/null로 바뀐다 — 이어 줘야 한다.
+# (실측: LLM 정리가 2026-10-12부터 빈 입력을 받아 findings가 늘 0건)
+printf 'source "%s/scripts/lib.sh"\nprintf piped-input | hm_run_with_timeout 5 cat\n' "$ROOT" >"$TEST_TMP/timeout-stdin.sh"
+assert_eq "piped-input" "$(/bin/bash "$TEST_TMP/timeout-stdin.sh" </dev/null)" "hm_run_with_timeout passes piped stdin inside a script"
 HARNESS_METRICS_DIR="$DIGEST_DATA" HM_HARVEST_SESSION_THRESHOLD=0 HM_HARVEST_CORRECTION_THRESHOLD=0 \
   HM_HARVEST_ERROR_THRESHOLD=0 HM_HARVEST_GUARD_THRESHOLD=0 HM_HARVEST_PERMISSION_THRESHOLD=0 \
   HM_HARVEST_INSIGHT_THRESHOLD=2 HM_HARVEST_INSIGHT_SESSION_THRESHOLD=1 \
@@ -2853,7 +3020,7 @@ printf '{}' | HARNESS_METRICS_DIR="$TICK_DATA" HM_INTERNAL_SESSION=1 HM_BACKFILL
 assert_not_file "$TICK_DATA/health.json"
 TICK_CLAUDE="$TEST_TMP/tick-claude/-tmp-x"
 mkdir -p "$TICK_CLAUDE" "$TEST_TMP/tick-codex"
-printf '{}\n' >"$TICK_CLAUDE/active.jsonl"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{type:"user",timestamp:$t}' >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker() {
   HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
     HM_BACKFILL_INTERVAL_HOURS=6 HM_BACKFILL_FOREGROUND=1 HM_HARVEST_AUTO=1 HM_HARVEST_GLOBAL_DAYS=0 \
@@ -2862,17 +3029,36 @@ run_tick_worker() {
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "success" "$(jq -r '.components.backfill.last_result' "$TICK_DATA/health.json")" "collection runs even while the user is active"
 assert_not_file "$TICK_DATA/harvest-auto/runs.jsonl"
+assert_eq "skipped:never_idle" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log says why LLM steps did not run"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 mkdir -p "$TICK_DATA/harvest-auto"
 jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"x",result:"failed",reason:"usage_limit"}' >"$TICK_DATA/harvest-auto/runs.jsonl"
-touch -t 200001010000 "$TICK_CLAUDE/active.jsonl"
+# 열린 세션은 쉬는 동안에도 시각 없는 줄(last-prompt·cost-state)을 덧붙인다. 파일 수정 시각이 아니라 마지막 기록 시각으로 판정한다.
+{
+  jq -cn '{type:"user",timestamp:"2000-01-01T00:00:00.000Z"}'
+  jq -cn '{type:"last-prompt",lastPrompt:"x"}'
+  jq -cn '{type:"cost-state",totalCostUSD:0}'
+} >"$TICK_CLAUDE/active.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0
 assert_eq "1" "$(wc -l <"$TICK_DATA/harvest-auto/runs.jsonl" | tr -d ' ')" "LLM steps rest right after a usage limit"
+assert_eq "skipped:usage_backoff" "$(jq -r '"\(.llm):\(.reason)"' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log names the usage backoff"
 jq '.components.backfill.last_attempt_at = "2020-01-01T00:00:00Z"' "$TICK_DATA/health.json" >"$TICK_DATA/h.tmp" && mv "$TICK_DATA/h.tmp" "$TICK_DATA/health.json"
 : >"$TICK_DATA/harvest-auto/runs.jsonl"
 run_tick_worker HM_IDLE_MINUTES=20 HM_IDLE_WAIT_HOURS=0 HM_HARVEST_GLOBAL_DAYS=7 HM_HARVEST_AUTO_FOREGROUND=1 \
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_CMD="$AUTO_STUB" AUTO_STUB_OUT="$TEST_TMP/tick-stub.out"
-assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "when the user is idle and no backoff applies, LLM steps run"
+assert_eq "_global" "$(cut -d'|' -f1 "$TEST_TMP/tick-stub.out")" "a session file touched only by untimestamped lines counts as idle, so LLM steps run"
+assert_eq "ran" "$(jq -r .llm "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log records the run"
+assert_eq "true" "$(jq -r '.started_at <= .at' "$TICK_DATA/logs/schedule.jsonl" | tail -n 1)" "the schedule log keeps when the round started"
+idle_check() { # → active|idle (HM_IDLE_MINUTES=20 기준, 위 tick 디렉터리)
+  HARNESS_METRICS_DIR="$TICK_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/tick-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/tick-codex" \
+    bash -c 'source "$1"; hm_recently_active 20 && echo active || echo idle' _ "$ROOT/scripts/lib.sh"
+}
+assert_eq "idle" "$(idle_check)" "untimestamped tail lines alone are idle"
+mkdir -p "$TEST_TMP/tick-codex/2999/01/01"
+jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '{timestamp:$t,type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "active" "$(idle_check)" "a fresh Codex rollout line counts as activity"
+jq -cn '{timestamp:"2000-01-01T00:00:00.000Z",type:"event_msg"}' >"$TEST_TMP/tick-codex/2999/01/01/rollout-x.jsonl"
+assert_eq "idle" "$(idle_check)" "a Codex rollout touched recently but last stamped long ago is idle"
 pass "hook-driven schedule with idle and usage gates"
 
 # 규칙 품질: 보이지 않는 문자·비밀값 거부, 총량 상한, 효과 수치 판정(세션 시작 시각 기준).
@@ -3105,7 +3291,8 @@ HM_SYNC_AUTO=1 sync_sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "auto sync launches one headless run"
 SYNC_RUN_LINE="$(sed -n 1p "$TEST_TMP/sync-stub.out")"
 assert_eq "sync-svc|1" "${SYNC_RUN_LINE%|*}" "sync run gets project and recursion guard"
-assert_contains "${SYNC_RUN_LINE##*|}" "/harvest-auto/worktrees/" "sync runs in a dedicated worktree"
+assert_contains "${SYNC_RUN_LINE##*|}" "/auto-worktrees/" "sync runs in a dedicated worktree"
+[[ "${SYNC_RUN_LINE##*|}" != "$SYNC_DATA"/* ]] || fail "the sync work tree must be outside the data directory"
 assert_eq "develop" "$(git -C "$SYNC_REPO" branch --show-current)" "user checkout is untouched"
 assert_eq "1" "$(git -C "$SYNC_REPO" worktree list | grep -vc sync-repo-wt | tr -d ' ')" "sync worktree is removed"
 assert_eq "sync|improved|https://example.com/pr/9|0.2" \
@@ -3263,7 +3450,7 @@ assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global"
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
-assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && return 1" "scheduled LLM steps skip while an unattended run is in flight"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
 
 
@@ -3279,5 +3466,91 @@ assert_file "$ROOT/LICENSE"
 assert_contains "$(<"$ROOT/LICENSE")" "MIT License" "LICENSE is MIT"
 assert_eq "ON_INSTALL" "$(jq -r '.plugins[0].policy.authentication' "$ROOT/.agents/plugins/marketplace.json")" "marketplace auth policy"
 pass "plugin metadata"
+
+# macOS /bin/bash 3.2는 단일 명령의 `read ... < <(...)`가 연 fd를 닫지 않는다. 반복 안에서 쓰면 fd 한도(256)에 닿아
+# 무인 실행 하위 셸이 CPU 100%로 며칠씩 멈췄다. 한 줄 읽기는 here-string으로 한다.
+FD_LEAK="$(grep -rnE '^[^#]*\bread\b[^|;#]*< <\(' "$ROOT/scripts" "$ROOT/templates" "$ROOT/hooks" 2>/dev/null || true)"
+[[ -z "$FD_LEAK" ]] || fail "single-command read from a process substitution leaks a file descriptor on bash 3.2: $FD_LEAK"
+if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]; then
+  assert_eq "ok" "$(cd "$TEST_TMP" && /bin/bash -c 'for i in $(seq 1 300); do IFS=$'"'"'\t'"'"' read -r a b <<<"$(printf "x\ty\n" | head -n 1)"; done; echo ok')" "here-string reads do not exhaust file descriptors on bash 3.2"
+fi
+pass "bash 3.2 file descriptor safety"
+
+# 재작업 비율: 머지 뒤 window일 안에 같은 이슈 키로 새 PR 작업이 시작되면 재작업이다. 원본 머지 전에 시작한 분할 PR은 세지 않는다.
+RW_REMOTE="$TEST_TMP/rework-remote.git"
+RW_REPO="$TEST_TMP/rework-repo"
+git init -q --bare "$RW_REMOTE"
+git init -q -b develop "$RW_REPO"
+rw_commit() { # file author epoch
+  printf '%s\n' "$1" >>"$RW_REPO/$1"
+  git -C "$RW_REPO" add "$1"
+  GIT_AUTHOR_NAME="$2" GIT_AUTHOR_EMAIL="$2@example.com" GIT_AUTHOR_DATE="@$3" \
+    GIT_COMMITTER_NAME="$2" GIT_COMMITTER_EMAIL="$2@example.com" GIT_COMMITTER_DATE="@$3" \
+    git -C "$RW_REPO" commit -q -m "$1"
+}
+rw_merge() { # branch pr epoch
+  GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.com GIT_AUTHOR_DATE="@$3" \
+    GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.com GIT_COMMITTER_DATE="@$3" \
+    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)"
+}
+DAY=86400
+T0=1790000000
+rw_commit base me "$T0"
+# PR #1 (NJ-1): 내 PR, 머지 T0+1d. PR #2: 같은 키를 머지 하루 뒤에 시작 → 재작업.
+git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY))
+# PR #3 (NJ-2)와 #4: #4는 #3 머지 전에 시작한 분할 PR → 재작업 아님.
+git -C "$RW_REPO" switch -q -c feature/NJ-2-b; rw_commit c me $((T0 + 3 * DAY)); git -C "$RW_REPO" switch -q develop
+git -C "$RW_REPO" switch -q -c feature/NJ-2; rw_commit d me $((T0 + 3 * DAY + 100)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-2 3 $((T0 + 4 * DAY))
+rw_merge feature/NJ-2-b 4 $((T0 + 5 * DAY))
+# PR #5 (NJ-3): 남의 PR → --author로 제외. PR #6 (NJ-4): 후속이 8일 뒤 → window 밖.
+git -C "$RW_REPO" switch -q -c feature/NJ-3; rw_commit e other $((T0 + 5 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-3 5 $((T0 + 6 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-4; rw_commit f me $((T0 + 6 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-4 6 $((T0 + 7 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-4-late; rw_commit g me $((T0 + 15 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-4-late 7 $((T0 + 16 * DAY))
+# PR #8 (NJ-0): 제외 키. PR #9 (NJ-5): 머지 직후라 window가 아직 안 끝남 → pending.
+git -C "$RW_REPO" switch -q -c feature/NJ-0; rw_commit h me $((T0 + 16 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-0 8 $((T0 + 17 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-5; rw_commit i me $((T0 + 17 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-5 9 $((T0 + 18 * DAY))
+git -C "$RW_REPO" remote add origin "$RW_REMOTE"
+git -C "$RW_REPO" push -q origin develop
+git -C "$RW_REPO" fetch -q origin
+RW="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --until "$(date -u -r $((T0 + 18 * DAY)) +%Y-%m-%d 2>/dev/null || date -u -d @$((T0 + 18 * DAY)) +%Y-%m-%d)" --now $((T0 + 19 * DAY)))"
+assert_eq "7" "$(jq -r '.merged_prs' <<<"$RW")" "rework counts my merged PRs except excluded keys and other authors"
+assert_eq "2" "$(jq -r '.pending_prs' <<<"$RW")" "PRs whose window is still open are pending"
+assert_eq "5" "$(jq -r '.settled_prs' <<<"$RW")" "pending PRs leave the denominator"
+assert_eq "1:2" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW")" "only a same-key PR started after the merge within the window is rework"
+assert_eq "20" "$(jq -r '.rework_ratio' <<<"$RW")" "rework ratio is rework over settled PRs"
+RW_WIDE="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)))"
+assert_eq "1:2,6:7" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW_WIDE")" "a wider window catches the late follow-up"
+pass "rework ratio from merge history"
+
+# 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
+PLACE_ROOT="$TEST_TMP/place-project"
+mkdir -p "$PLACE_ROOT/.ai-harness-stage" "$PLACE_ROOT/.claude"
+printf '%s\n' 'rendered' >"$PLACE_ROOT/.ai-harness-stage/review.md"
+"$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/review.md" --to .claude/commands/review.md >/dev/null
+assert_eq "rendered" "$(<"$PLACE_ROOT/.claude/commands/review.md")" "staged file is placed under .claude/commands"
+assert_not_file "$PLACE_ROOT/.ai-harness-stage/review.md"
+TEMPLATE_JS="$(find "$ROOT/templates" -name '*.js' -path '*workflows*' | head -n 1)"
+[[ -n "$TEMPLATE_JS" ]] || TEMPLATE_JS="$(find "$ROOT/templates" -type f -name '*.md' | head -n 1)"
+"$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$TEMPLATE_JS" --to .claude/workflows/review.js >/dev/null
+cmp -s "$TEMPLATE_JS" "$PLACE_ROOT/.claude/workflows/review.js" || fail "plugin template is copied verbatim"
+assert_file "$TEMPLATE_JS"
+printf '%s\n' '{}' >"$PLACE_ROOT/.ai-harness-stage/settings.json"
+for bad in .claude/settings.json .claude/settings.local.json .claude/hooks/guard.sh .claude/commands/../settings.json AGENTS.md; do
+  if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/settings.json" --to "$bad" 2>/dev/null; then
+    fail "place-claude-file must refuse $bad"
+  fi
+done
+printf '%s\n' 'secret' >"$TEST_TMP/outside.txt"
+if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$TEST_TMP/outside.txt" --to .claude/agents/x.md 2>/dev/null; then
+  fail "place-claude-file must refuse sources outside the project and plugin templates"
+fi
+mkdir -p "$TEST_TMP/escape"
+ln -s "$TEST_TMP/escape" "$PLACE_ROOT/.claude/agents"
+if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT/.ai-harness-stage/settings.json" --to .claude/agents/x.md 2>/dev/null; then
+  fail "place-claude-file must refuse a symlinked directory that leaves .claude"
+fi
+assert_not_file "$TEST_TMP/escape/x.md"
+pass "unattended .claude writes go through a restricted placer"
 
 printf '1..%d\n' "$TESTS"
