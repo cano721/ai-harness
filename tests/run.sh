@@ -331,7 +331,9 @@ tasks.named<JacocoReport>("jacocoTestReport") {
     executionData(tasks.test.get(), integrationTest.get())
 }
 GRADLE
-printf -- '- `./gradlew test --tests {pattern}`\n' >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md"
+cat >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- `./gradlew test --tests {pattern}`
+DOC
 assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
 pass "drift targeted command for tag-excluded tests"
 # JS 워크스페이스(apps/<pkg>/package.json)는 두 단계 아래에 있다. exec 뒤 바이너리와 별칭 경유 호출도 오탐을 만들면 안 된다.
