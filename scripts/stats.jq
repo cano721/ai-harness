@@ -26,6 +26,7 @@ def active_min_turns: 5;
 # 하네스가 생성하는 워크플로 진입점. 프로젝트가 따로 둔 워크플로는 읽힌 `.ai-harness/workflows/<이름>.md`에서 얻는다.
 def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
 def has_coverage($k): ((.coverage // []) | index($k)) != null;
+def median: sort | if length==0 then null else .[length/2 | floor] end;
 def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b))" end;
 
 . as $all
@@ -60,14 +61,25 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 + "\n\n기간: \(if $cutoff=="" then "전체" else $cutoff + " 이후" end)"
 + (if $project=="" then "" else " / 프로젝트: \($project)" end)
 
-+ "\n\n## 세션 (프로젝트별)\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write |\n|---|---|---|---|---|---|---|\n"
++ "\n\n## 세션 (프로젝트별)\n\n서브에이전트 열은 `agent_usage` 수집 세션만 반영한다(메인 열에 포함되지 않음).\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write | 서브에이전트 in/out/cache read |\n|---|---|---|---|---|---|---|---|\n"
 + ($S | group_by(.project) | map({p:.[0].project, s:length,
       t:(map(.turns//0)|add), i:(map(.tok_in//0)|add),
       o:(map(.tok_out//0)|add), c:(map(.cache_read//0)|add),
-      w:(map(.cache_write//0)|add)})
+      w:(map(.cache_write//0)|add),
+      ai:(map(.agent_tok_in//0)|add), ao:(map(.agent_tok_out//0)|add), ac:(map(.agent_cache_read//0)|add)})
    | sort_by(-.s)
-   | if length==0 then "| _(없음)_ | 0 | 0 | 0 | 0 | 0 | 0 |"
-     else map("| \(.p) | \(.s) | \(.t) | \(.i) | \(.o) | \(.c) | \(.w) |") | join("\n")
+   | if length==0 then "| _(없음)_ | 0 | 0 | 0 | 0 | 0 | 0 | 0/0/0 |"
+     else map("| \(.p) | \(.s) | \(.t) | \(.i) | \(.o) | \(.c) | \(.w) | \(.ai)/\(.ao)/\(.ac) |") | join("\n")
+     end)
+
++ "\n\n## 컨텍스트 (프로젝트별)\n\n첫 호출 ≈ 고정 오버헤드(시스템 프롬프트·툴·스킬·메모리·AGENTS.md + 첫 요청). 값은 세션 중앙값이며 `context` 수집 세션만 센다.\n\n"
++ ($S | map(select(has_coverage("context") and .ctx_peak != null))
+   | if length==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+     else "| 프로젝트 | 세션 | 첫 호출 | 최대 | 최대의 최대 |\n|---|---|---|---|---|\n"
+       + (group_by(.project) | map({p:.[0].project, s:length,
+            f:(map(.ctx_first) | median), m:(map(.ctx_peak) | median), x:(map(.ctx_peak) | max)})
+          | sort_by(-.s)
+          | map("| \(.p) | \(.s) | \(.f) | \(.m) | \(.x) |") | join("\n"))
      end)
 
 + "\n\n## 수집 범위\n\n| 소스 | 세션 | 지원 범위 |\n|---|---|---|\n"
@@ -94,6 +106,15 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 + metric_table(($E | rank("workflow"; 15)); coverage_count($S; "workflow"); $total)
 + "\n\n## 하네스 docs 읽힘\n\n| 문서 | 횟수 |\n|---|---|\n"
 + metric_table(($E | rank("doc_read"; 15)); coverage_count($S; "doc_read"); $total)
++ "\n\n## 하네스 docs 컨텍스트 비용 (추정 토큰)\n\n읽힐 때마다 컨텍스트에 실린 크기의 합. 1회당 = 합계 ÷ 크기를 잰 읽힘.\n\n| 문서 | 합계 | 1회당 |\n|---|---|---|\n"
++ ( (coverage_count($S; "doc_ctx")) as $sup
+    | ($E | map(select(.kind=="doc_ctx")) | group_by(.target)
+       | map({t:.[0].target, n:(map(.n)|add), calls:(map(.calls // 1)|add)}) | sort_by(-.n) | .[0:15]) as $rows
+    | if $sup==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+      elif ($rows|length)==0 then "_(관측 가능 \($sup)세션에서 없음)_"
+      else $rows | map("| \(.t) | \(.n) | \(.n / .calls | floor) |") | join("\n") end )
++ "\n\n## 툴 결과 크기 (추정 토큰, 상위)\n\n| 툴 | 토큰 |\n|---|---|\n"
++ metric_table(($E | rank("ctx_tool"; 10)); coverage_count($S; "ctx_tool"); $total)
 + "\n\n## 페르소나 위임\n\n| 페르소나 | 횟수 |\n|---|---|\n"
 + metric_table(($E | rank("persona"; 10)); coverage_count($S; "persona"); $total)
 + "\n\n## Bash 명령 (상위)\n\n| 명령 | 횟수 |\n|---|---|\n"

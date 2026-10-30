@@ -498,6 +498,34 @@ mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 } >"$USAGE_DUP_FIXTURE"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
 assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
+CTX_FIXTURE="$TEST_TMP/ctx/cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+mkdir -p "${CTX_FIXTURE%.jsonl}/subagents"
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"id":"m1","model":"claude-test-model","usage":{"input_tokens":100,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":900},"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/tmp/service/.ai-harness/docs/testing.md"}},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"cat AGENTS.md .ai-harness/docs/testing.md"}},{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"x"}}]}}'
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"'"$(printf 'a%.0s' {1..400})"'"},{"type":"tool_result","tool_use_id":"b1","content":"'"$(printf 'b%.0s' {1..80})"'"},{"type":"tool_result","tool_use_id":"g1","content":[{"type":"text","text":"한글"}]}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:03Z","message":{"id":"m2","model":"claude-test-model","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":1000,"cache_creation_input_tokens":300},"content":[{"type":"text","text":"y"}]}}'
+  printf '%s\n' '{"type":"assistant","isSidechain":true,"cwd":"/tmp/service","timestamp":"2026-07-29T00:00:04Z","message":{"id":"m3","model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":99999},"content":[{"type":"text","text":"side"}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:05Z","message":{"id":"m4","model":"claude-test-model","usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":1200,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"z"}]}}'
+} >"$CTX_FIXTURE"
+for agent in a1 a2; do
+  printf '{"type":"assistant","isSidechain":true,"message":{"id":"%s","model":"claude-test-model","usage":{"input_tokens":3,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":7},"content":[{"type":"text","text":"x"}]}}\n' "$agent" >"${CTX_FIXTURE%.jsonl}/subagents/agent-$agent.jsonl"
+done
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$CTX_FIXTURE" "user_exit"
+CTX_EVENT="$EXTRACT_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+assert_eq "2 6 40 1000 14" "$(jq -r 'select(.kind=="session") | "\(.agents) \(.agent_tok_in) \(.agent_tok_out) \(.agent_cache_read) \(.agent_cache_write)"' "$CTX_EVENT")" "Claude subagent transcripts are summed into the parent session"
+assert_eq "116" "$(jq -r 'select(.kind=="session") | .tok_in' "$CTX_EVENT")" "Claude main tokens stay main-only (in-file sidechain lines kept as before)"
+assert_eq "1000 1310 1205" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last)"' "$CTX_EVENT")" "Claude context first/peak/last from main-chain calls only"
+assert_eq "Bash=20/1 Grep=1/1 Read=100/1" "$(jq -r 'select(.kind=="ctx_tool") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT" | sort | paste -sd " " -)" "Claude tool result size per tool (UTF-8 bytes/4)"
+assert_eq ".ai-harness/docs/testing.md=100/1" "$(jq -r 'select(.kind=="doc_ctx") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT")" "Claude doc context cost skips results mixing several docs"
+CTX_STATS_DATA="$TEST_TMP/ctx-stats"
+mkdir -p "$CTX_STATS_DATA/events"
+cp "$CTX_EVENT" "$CTX_STATS_DATA/events/"
+CTX_STATS="$(HARNESS_METRICS_DIR="$CTX_STATS_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$CTX_STATS" "| service | 1 | 1 | 116 | 4 | 2200 | 101199 | 6/40/1000 |" "stats shows subagent usage beside main usage"
+assert_contains "$CTX_STATS" "| service | 1 | 1000 | 1310 | 1310 |" "stats shows per-project context overhead and peak"
+assert_contains "$CTX_STATS" "| .ai-harness/docs/testing.md | 100 | 100 |" "stats shows doc context cost and per-read size"
+assert_contains "$CTX_STATS" "| Read | 100 |" "stats ranks tool result sizes"
 BASH_DOC_FIXTURE="$TEST_TMP/bash-doc/ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl"
 mkdir -p "${BASH_DOC_FIXTURE%/*}"
 bash_doc_line() { # $1=tool name, $2=input json

@@ -106,6 +106,9 @@ jq -s -r '
   def table(k; title): map(select(.kind==k)) | sort_by(-.n)
     | if length==0 then ""
       else "\n## \(title)\n\n| 대상 | 횟수 |\n|---|---|\n" + (map("| \(.target) | \(.n) |") | join("\n")) + "\n" end;
+  def sized_table(k; title; col): map(select(.kind==k)) | sort_by(-.n) | .[0:10]
+    | if length==0 then ""
+      else "\n## \(title)\n\n| \(col) | 토큰 |\n|---|---|\n" + (map("| \(.target) | \(.n) |") | join("\n")) + "\n" end;
   (map(select(.kind=="session")) | .[0]) as $s
   | ($s.coverage // []) as $coverage
   | "# 세션 리포트 — \($s.sid[0:8])\n"
@@ -115,6 +118,12 @@ jq -s -r '
   + "\n- 턴: \($s.turns) · 모델: \($s.model // "?")"
   + (if $s.provider then " · provider: \($s.provider)" else "" end)
   + "\n- 토큰: in \($s.tok_in) / out \($s.tok_out) / cache read \($s.cache_read) / cache write \($s.cache_write // 0)"
+  + (if ($s.agents // 0) > 0
+     then "\n- 서브에이전트 \($s.agents)개: in \($s.agent_tok_in) / out \($s.agent_tok_out) / cache read \($s.agent_cache_read) / cache write \($s.agent_cache_write)"
+     else "" end)
+  + (if $s.ctx_peak != null
+     then "\n- 컨텍스트: 첫 호출 \($s.ctx_first) (≈고정 오버헤드) / 최대 \($s.ctx_peak) / 마지막 \($s.ctx_last)"
+     else "" end)
   + "\n- 수집 지원: \(if ($coverage|length)==0 then "legacy event" else ($coverage|join(", ")) end)"
   + "\n- transcript: \($s.transcript)\n"
   + table("workflow"; "워크플로/커맨드")
@@ -124,6 +133,8 @@ jq -s -r '
   + table("bash_cmd"; "Bash 명령")
   + table("mcp_tool"; "MCP 툴")
   + table("jira_issue"; "이슈 언급")
+  + sized_table("ctx_tool"; "툴 결과 크기 (추정 토큰, 상위)"; "툴")
+  + sized_table("doc_ctx"; "하네스 docs 컨텍스트 (추정 토큰)"; "문서")
   + (map(select(.kind=="error" or .kind=="guard_block" or .kind=="permission_deny" or .kind=="compact"))
      | if length==0 then "" else "\n## 신호\n\n" + (map("- \(.kind): \(.n)") | join("\n")) + "\n" end)
 ' "$EV"
