@@ -49,19 +49,6 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   def output_text:
     .payload.output
     | if type=="string" then . elif type=="array" then (map(.text? // "") | join("\n")) else tostring end;
-  def is_correction:
-    startswith("아니") or startswith("아냐") or startswith("그게 아니라")
-    or startswith("그거 말고") or startswith("그렇게 말고") or startswith("틀렸");
-  # 후보 그물은 Claude 어댑터(scripts/extract-claude.jq)와 같은 목록이다 — 한쪽만 고치면
-  # 플랫폼 간 수치 비교가 깨진다.
-  def correction_hints:
-    ["안 되", "안되", "안돼", "안 돼", "이상해", "이상하", "틀려", "틀린",
-     "여전히", "제대로", "아직도", "잘못", "왜 안", "왜 아직", "다시 해", "다시해",
-     "안 나와", "안나와", "안 뜨", "안뜨", "못 찾", "못찾", "실패했", "빠졌", "빼먹",
-     "맞아?", "맞나?", "한 거 맞", "한거 맞",
-     "doesn'"'"'t work", "does not work", "not working", "still fails", "still failing",
-     "that'"'"'s wrong", "thats wrong", "you missed", "didn'"'"'t work"];
-  def correction_candidate_max_len: 200;
   # 오류 발췌 — Claude 어댑터와 같은 규칙. 비밀값은 scripts/redact.jq로 가린다.
   # 출력 앞부분이 일반 출력(헤더·grep 결과)일 수 있어, 오류 낱말이 든 첫 줄을 우선한다.
   def error_focus: (split("\n") | map(select(test("(?i)error|fail|fatal|exception|not found|denied|cannot|refused|invalid|timed? ?out|no such|unexpected"))) | first) // .;
@@ -70,7 +57,6 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   # Claude 어댑터와 같은 내부 세션 판정 — 자동 harvest(--auto)가 띄운 headless 세션.
   def is_internal_prompt: test("^ai-harness harvest skill을 인자 \".*--auto");
   # 발췌는 한 줄로 접는다 — Claude 어댑터와 같은 이유(마크다운 불릿 렌더).
-  def excerpt: gsub("\\s+"; " ") | .[0:60];
   [inputs | fromjson? // empty] as $L
   | (first($L[] | select(.type=="session_meta")) // {}) as $meta
   | ($meta.payload.cwd // "") as $cwd
@@ -106,7 +92,7 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
         "jira_issue", "error", "guard_block", "permission_deny", "compact",
-        "correction_mark", "correction_candidate", "error_sample"
+        "error_sample"
       ]
     }),
   # Workflow commands are explicit in user prompts for both slash commands
@@ -179,18 +165,7 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
       | select(test("wants to clarify these questions") | not) ] | length
     | select(.>0) | $base + {kind:"permission_deny", n:.} ),
   ( [$L[] | select(.type=="summary" or .payload.type=="compaction_summary" or .isCompactSummary==true)] | length
-    | select(.>0) | $base + {kind:"compact", n:.} ),
-  ( $texts[] | select(is_correction)
-    | $base + {kind:"correction_mark", target:excerpt, n:1} ),
-  # 교정일 수 있는 턴. 판정은 /harvest가 격리 컨텍스트에서 한다 — 여기서는 지점만 남긴다.
-  ( $texts[]
-    | select(is_correction | not)
-    | select(length <= correction_candidate_max_len)
-    | select(startswith("/") | not)
-    | select(startswith("$") | not)
-    | . as $t
-    | select(any(correction_hints[]; . as $h | $t | contains($h)))
-    | $base + {kind:"correction_candidate", target:excerpt, n:1} )
+    | select(.>0) | $base + {kind:"compact", n:.} )
 ' "$T" > "$TMP"; then
   mv "$TMP" "$OUT"
 else

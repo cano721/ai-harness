@@ -450,6 +450,69 @@
       "skill": "ui-review",
       "source": "templates/ui-review/references/checklist.md",
       "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-team/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/frontend-team/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/design-audit/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/design-audit/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-team/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/frontend-team/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/design-audit/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/design-audit/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/agents/fe-architect.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend-team",
+      "role": "fe-architect",
+      "source": "templates/frontend-team/personas/fe-architect.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/agents/fe-implementer.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend-team",
+      "role": "fe-implementer",
+      "source": "templates/frontend-team/personas/fe-implementer.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/agents/fe-designer.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "design-system",
+      "role": "fe-designer",
+      "source": "templates/frontend-team/personas/fe-designer.md",
+      "mode": "copy"
     }
   ],
   "retired": [

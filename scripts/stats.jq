@@ -26,6 +26,7 @@ def active_min_turns: 5;
 # 하네스가 생성하는 워크플로 진입점. 프로젝트가 따로 둔 워크플로는 읽힌 `.ai-harness/workflows/<이름>.md`에서 얻는다.
 def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
 def has_coverage($k): ((.coverage // []) | index($k)) != null;
+def median: sort | if length==0 then null else .[length/2 | floor] end;
 def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b))" end;
 
 . as $all
@@ -38,7 +39,6 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($S | map({(.sid): true}) | add // {}) as $sidset
 | ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
 | ($S | length) as $total
-| (coverage_count($S; "correction_mark")) as $correction_supported
 | ($S | map({(.sid): (.project // "?")}) | add // {}) as $sidProject
 | ($S | map(select((.turns // 0) >= active_min_turns))) as $A
 # 워크플로 본문은 슬래시 커맨드 없이 Read·cat으로도 진입한다(workspace 멤버 세션 대부분).
@@ -56,23 +56,30 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid] // "?"): true})
    | add // {}) as $harnessProjects
 | ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
-| ($A | map(select(has_coverage("correction_mark")))) as $CA
-| ($CA | map({(.sid): true}) | add // {}) as $caSet
-| ([$E[] | select(.kind=="correction_mark" and $caSet[.sid] == true) | .n] | add // 0) as $marks
-| ([$CA[] | .turns] | add // 0) as $caTurns
 
 | "# Harness Metrics"
 + "\n\n기간: \(if $cutoff=="" then "전체" else $cutoff + " 이후" end)"
 + (if $project=="" then "" else " / 프로젝트: \($project)" end)
 
-+ "\n\n## 세션 (프로젝트별)\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write |\n|---|---|---|---|---|---|---|\n"
++ "\n\n## 세션 (프로젝트별)\n\n서브에이전트 열은 `agent_usage` 수집 세션만 반영한다(메인 열에 포함되지 않음).\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write | 서브에이전트 in/out/cache read |\n|---|---|---|---|---|---|---|---|\n"
 + ($S | group_by(.project) | map({p:.[0].project, s:length,
       t:(map(.turns//0)|add), i:(map(.tok_in//0)|add),
       o:(map(.tok_out//0)|add), c:(map(.cache_read//0)|add),
-      w:(map(.cache_write//0)|add)})
+      w:(map(.cache_write//0)|add),
+      ai:(map(.agent_tok_in//0)|add), ao:(map(.agent_tok_out//0)|add), ac:(map(.agent_cache_read//0)|add)})
    | sort_by(-.s)
-   | if length==0 then "| _(없음)_ | 0 | 0 | 0 | 0 | 0 | 0 |"
-     else map("| \(.p) | \(.s) | \(.t) | \(.i) | \(.o) | \(.c) | \(.w) |") | join("\n")
+   | if length==0 then "| _(없음)_ | 0 | 0 | 0 | 0 | 0 | 0 | 0/0/0 |"
+     else map("| \(.p) | \(.s) | \(.t) | \(.i) | \(.o) | \(.c) | \(.w) | \(.ai)/\(.ao)/\(.ac) |") | join("\n")
+     end)
+
++ "\n\n## 컨텍스트 (프로젝트별)\n\n첫 호출 ≈ 고정 오버헤드(시스템 프롬프트·툴·스킬·메모리·AGENTS.md + 첫 요청). 값은 세션 중앙값이며 `context` 수집 세션만 센다.\n\n"
++ ($S | map(select(has_coverage("context") and .ctx_peak != null))
+   | if length==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+     else "| 프로젝트 | 세션 | 첫 호출 | 최대 | 최대의 최대 |\n|---|---|---|---|---|\n"
+       + (group_by(.project) | map({p:.[0].project, s:length,
+            f:(map(.ctx_first) | median), m:(map(.ctx_peak) | median), x:(map(.ctx_peak) | max)})
+          | sort_by(-.s)
+          | map("| \(.p) | \(.s) | \(.f) | \(.m) | \(.x) |") | join("\n"))
      end)
 
 + "\n\n## 수집 범위\n\n| 소스 | 세션 | 지원 범위 |\n|---|---|---|\n"
@@ -86,9 +93,7 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
      end)
 
 + "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다.\n\n| 지표 | 값 |\n|---|---|\n"
-+ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |\n"
-+ "| 교정 마크 / 활성 세션 | \(if ($CA|length)==0 then "-" else "\($marks*100/($CA|length) | round | ./100) (\($marks)/\($CA|length))" end) |\n"
-+ "| 교정 마크 / 100턴 | \(if $caTurns==0 then "-" else "\($marks*1000/$caTurns | round | ./10) (\($marks)/\($caTurns))" end) |"
++ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |"
 + (if ($WA|length)==0 then ""
    else "\n\n| 프로젝트 | 워크플로 경유 |\n|---|---|\n"
      + ($WA | group_by(.project)
@@ -101,6 +106,15 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 + metric_table(($E | rank("workflow"; 15)); coverage_count($S; "workflow"); $total)
 + "\n\n## 하네스 docs 읽힘\n\n| 문서 | 횟수 |\n|---|---|\n"
 + metric_table(($E | rank("doc_read"; 15)); coverage_count($S; "doc_read"); $total)
++ "\n\n## 하네스 docs 컨텍스트 비용 (추정 토큰)\n\n읽힐 때마다 컨텍스트에 실린 크기의 합. 1회당 = 합계 ÷ 크기를 잰 읽힘.\n\n| 문서 | 합계 | 1회당 |\n|---|---|---|\n"
++ ( (coverage_count($S; "doc_ctx")) as $sup
+    | ($E | map(select(.kind=="doc_ctx")) | group_by(.target)
+       | map({t:.[0].target, n:(map(.n)|add), calls:(map(.calls // 1)|add)}) | sort_by(-.n) | .[0:15]) as $rows
+    | if $sup==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
+      elif ($rows|length)==0 then "_(관측 가능 \($sup)세션에서 없음)_"
+      else $rows | map("| \(.t) | \(.n) | \(.n / .calls | floor) |") | join("\n") end )
++ "\n\n## 툴 결과 크기 (추정 토큰, 상위)\n\n| 툴 | 토큰 |\n|---|---|\n"
++ metric_table(($E | rank("ctx_tool"; 10)); coverage_count($S; "ctx_tool"); $total)
 + "\n\n## 페르소나 위임\n\n| 페르소나 | 횟수 |\n|---|---|\n"
 + metric_table(($E | rank("persona"; 10)); coverage_count($S; "persona"); $total)
 + "\n\n## Bash 명령 (상위)\n\n| 명령 | 횟수 |\n|---|---|\n"
@@ -141,29 +155,4 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
           end
       end
   )
-+ "\n\n## 교정 마크 (LLM 정독 후보)\n\n"
-+ (
-    if $correction_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
-    else (($E | map(select(.kind=="correction_mark"))) as $c
-      | if ($c|length)==0 then
-          "_(관측 가능 \($correction_supported)세션에서 없음"
-          + (if $correction_supported<$total then "; \($total-$correction_supported)세션 미지원" else "" end)
-          + ")_"
-        else ($c | .[0:20] | map("- [\(.sid[0:8])] \(.target)") | join("\n"))
-          + (if $correction_supported<$total
-             then "\n\n_관측 범위: \($correction_supported)/\($total)세션_"
-             else "" end)
-        end)
-  end)
-+ "\n## 교정 후보 (판정 전 — 격리 서브에이전트가 확정)\n\n"
-+ (
-    (coverage_count($S; "correction_candidate")) as $cand_supported
-    | if $cand_supported==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
-      else (($E | map(select(.kind=="correction_candidate"))) as $c
-        | if ($c|length)==0 then
-            "_(관측 가능 \($cand_supported)세션에서 없음)_"
-          else ($c | .[0:30] | map("- [\(.sid[0:8])] \(.target)") | join("\n"))
-            + "\n\n_후보는 그 자체로 교정이 아니다. 확정 전에는 개선 근거로 쓰지 않는다._"
-          end)
-      end)
 + "\n"

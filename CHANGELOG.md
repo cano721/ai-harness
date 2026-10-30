@@ -6,12 +6,86 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-
 ## Unreleased
+
+### 버그 수정
+
+- **서브에이전트 토큰이 집계에서 빠지던 문제** — Claude Code는 서브에이전트 대화를 `<세션>/subagents/agent-*.jsonl`에 따로 기록하는데 추출기가 메인 transcript만 읽었습니다. 위임을 많이 하는 워크플로일수록 사용량이 적게 잡혔습니다. 이제 부모 세션의 `agent_tok_in`·`agent_tok_out`·`agent_cache_read`·`agent_cache_write`로 합산하고 `/metrics`가 메인 토큰 옆에 보여줍니다.
 
 ### 새 기능
 
+- **컨텍스트 사용 지표** — `/metrics`와 `/metrics session`이 세션의 컨텍스트를 어떻게 썼는지 보여줍니다: 첫 호출 크기(≈시스템 프롬프트·툴·스킬·메모리·AGENTS.md의 고정 오버헤드)·최대·마지막, 툴별 결과 크기, 하네스 docs가 읽힐 때 컨텍스트에 실은 크기(합계·1회당). 크기는 결과 본문의 UTF-8 바이트/4로 낸 추정입니다. 고정 오버헤드가 커진 프로젝트, 1회당 큰 문서(분할 후보), 컨텍스트를 채우는 툴을 근거 수치로 찾을 수 있습니다. Claude 세션만 수집하며 Codex는 미지원으로 표시됩니다.
 - **화면이 바뀌는 변경은 실제로 렌더링·조작해 검증합니다** — 코드 리뷰와 브라우저 테스트를 통과한 승인 대기 화면에서 `반려하기`가 펼침 표시 없는 `<summary>`라 일반 텍스트처럼 보였습니다. 테스트는 텍스트로 찾아 클릭했고, 검토 기록·스크린샷·해시 게이트도 이를 걸러내지 못했습니다. 새 UI 검토 계약(`ui-review` Skill·체크리스트·`ui-review-graph.json`)은 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 기본·접힌 상태·키보드·모바일·테마를 실제로 조작하는 UX 검토 → 수정·재검증 → 근거·한계 보고를 요구하고, 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 생겼습니다. Brief가 `화면 검증 시나리오`를 내면 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 화면을 검증하고, 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌며, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 기능 러너는 이 노드에 앱·브라우저 실행을 허용하되 캡처는 그 시도의 증거 디렉터리에만 쓰게 하고, 시나리오마다 조작 기록이 없거나 미검증 항목이 남은 `verified`는 미검증으로 봅니다. Brief가 화면 변경을 놓쳐도 템플릿·스타일·컴포넌트 파일이 바뀌었으면 그 화면을 검증하고, `ui_review` 노드가 없는 옛 그래프에서는 화면 변경을 done으로 끝내지 않습니다. `/harness-init`은 프론트 패키지뿐 아니라 서버 렌더링 템플릿(Jinja·Thymeleaf·JSP·ERB 등)도 UI로 감지해 stack `ui`로 생성하며, 프로젝트 디자인 규칙이 계약보다, 계약이 외부 디자인 Skill보다 우선합니다. (#150)
+
+## v0.48.0 (2026-10-30)
+### 새 기능
+
+- **통합 테스트를 단건으로 못 돌리는 안내를 찾아냅니다** — `test`가 `integration` 태그를 빼고 `integrationTest`가 그 태그만 돌리는 저장소에서, 워크플로·페르소나·docs가 단건 실행을 `./gradlew test --tests`로만 안내해 통합 테스트를 고친 에이전트가 "No tests found"를 보거나 엉뚱한 통과로 완료를 보고할 수 있었습니다(외부 하네스 진단에서 잡다 백엔드 3개 저장소 공통으로 지적). `docs-drift.sh`가 Gradle 태스크별 태그 필터와 게이트 연결(`dependsOn`·`executionData`)을 읽어 `targeted_command_gaps`(문서:줄 · 빠진 태그 · 대신 쓸 태스크)로 보고하고, `/harness-init --sync`가 "보호 파일 후속 조치" 표에 싣습니다. 새로 생성하는 워크플로 본문은 단위·통합 단건 명령을 나눠 적습니다.
+
+### 버그 수정
+
+- **프론트 템플릿이 프로젝트의 커버리지 게이트와 충돌하던 문제** — `frontend-testing` 스킬과 `fe-implementer`·`fe-architect` 페르소나가 "커버리지 목표는 두지 않는다"고 단정해, 초기 셋팅으로 로직 계층 100% 게이트(`coverageGate.json`·vitest `thresholds`)를 깐 저장소에서 에이전트가 `test:ci`를 건너뛸 근거가 됐습니다(외부 하네스 진단에서 jobda-b2b-web 지적, jobda-web도 같은 게이트). 이제 커버리지 목표·대상은 프로젝트 초기 셋팅(`testing.md`)을 따르고, 대상 파일을 바꾸면 커버리지까지 재는 명령을 돌리게 합니다. 숫자를 채우려는 단언 없는 테스트는 여전히 쓰지 않습니다.
+- **JS 모노레포에서 drift 리포트가 있는 스크립트를 stale로 올리던 문제** — `package.json`을 한 단계 아래까지만 읽어 `apps/<pkg>`·`packages/<pkg>`의 스크립트를 못 봤고, `pnpm --filter x exec tsc`의 바이너리와 `yarn web test:ci` 같은 루트 별칭 경유 호출을 스크립트로 잘못 읽었습니다(실측: jobda-b2b-web stale 4건·jobda-web 1건 전부 오탐). 이제 워크스페이스 `package.json`까지 읽되 사실로는 검증 스크립트(test·lint·coverage·type 등)만 올리고, `exec`·`dlx` 뒤는 건너뛰며, 호출의 둘째 토큰도 문서화된 것으로 봅니다.
+
+### 업데이트 후 해야 할 일
+
+- Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).
+- 프론트 저장소에서 `/harness-init --sync --apply`로 `frontend-testing` 스킬과 프론트 팀 페르소나를 갱신합니다.
+
+## v0.47.0 (2026-10-29)
+### 개선
+
+- **harvest 개선안 독립 검토(리뷰 루프)** — 개선안을 반영하기 전에 읽기 전용 검토 에이전트 `harvest-reviewer`가 쓴 쪽의 추론 없이 개선안·인용 근거·저장소 파일만 보고 판정합니다: 문구가 근거보다 넓은지, 근거가 주장을 뒷받침하는지, 기존 규칙·문서와 충돌하는지, 브랜치·제목이 저장소 규칙에 맞는지. `revise`면 고쳐서 새 검토자에게 다시 넘기고(최대 2회), 통과하지 못한 개선안은 뺍니다. 프로젝트는 커밋 전 `git diff`를, workspace·전역은 `auto-apply.sh apply` 전 규칙 문구를 검토하며, 결과는 PR 본문 `## 독립 검토` 절에 남습니다. 자동 harvest가 도달 불가 분기 1건 근거로 "테스트로 닿지 않는 방어 분기는 production에서 걷어낸다"를 draft PR에 그대로 올린 일이 계기입니다.
+- **이슈 없는 하네스 PR의 브랜치·제목** — 저장소 규칙이 이슈 키를 요구하면 harvest가 새 이슈를 만들거나 멈추지 않고 `git log`의 무이슈 관례 키(예: `NJ-00000`)로 브랜치(`feature/NJ-00000-<요약>`)·커밋·PR 제목을 만듭니다. 관례 키가 없을 때만 사람에게 넘깁니다.
+
+## v0.46.0 (2026-10-29)
+### 새 기능
+
+- **재작업 비율 `scripts/rework.sh`** — git 머지 기록만으로 "머지 뒤 N일(기본 7) 안에 같은 이슈 키로 새 PR 작업이 시작된 비율"을 잽니다. Bitbucket(`Merged in … (pull request #N)`)·GitHub(`Merge pull request #N from …`, 스쿼시 `(#N)`) 머지 제목을 읽고, 후속 PR의 시작을 가장 이른 커밋 시각으로 판단해 원본 머지 전에 시작한 분할 PR은 세지 않습니다. 여러 저장소·작성자 필터·제외 키를 받고, window가 안 끝난 PR은 분모에서 뺍니다. `/metrics`에 `rework`를 붙이거나 재작업 비율을 물으면 함께 보고합니다.
+
+### 동작 변경
+
+- **프론트 팀 역할의 Codex toml은 본문을 복사하지 않고 Claude 페르소나를 가리킨다** — 본문 사본은 sync가 md만 갱신해 Codex 쪽이 낡았습니다. `developer_instructions`는 `.claude/agents/<role>.md`를 읽으라는 지시만 담습니다.
+
+## v0.45.0 (2026-10-29)
+### 새 기능
+
+- **프론트 팀 역할 세트(`frontend-team`)** — 프론트엔드 저장소에서 `/harness-init`의 프론트 판단 Skill 하위 선택으로 `프론트 팀 구성`을 고르면, 범용 developer·reviewer·test-engineer 대신 `fe-architect`(구조·추상화·UX 디테일·모션·코드 리뷰)·`fe-implementer`(요구사항 충족·API 연동, 이슈 항목 하나 = 커밋 하나)를 만들고, 산출물이 생기는 자리로 담당을 가르는 `frontend-team` 라우터 스킬이 "다음 담당" 체인을 조율합니다. 디자인 규칙 문서와 스토리북 UI 패키지가 있으면 `fe-designer`와 다섯 축 채점 스킬 `design-audit`도 생성합니다. 페르소나 본문은 고정 템플릿이라 sync로 갱신되고, 경로·검증 명령·토큰 체계 같은 프로젝트 사실은 `.ai-harness/docs/frontend.md`의 `## 팀 역할`·`## 디자인 점검` 절에서 읽습니다. 실제 프론트 팀이 운영하던 역할 분담을 범용 원칙만 남겨 옮긴 것입니다.
+- **역할 매핑 `source: "stack"`** — manifest `roles`가 슬롯을 기존 에이전트뿐 아니라 스택 역할 세트에도 넘길 수 있습니다. 넘긴 슬롯의 범용 페르소나는 sync plan이 `orphaned`(`role_adopted`)로 올리고, 세트 페르소나 파일이 사라지면 `workflow-contract`가 `role_agent_missing`으로 잡습니다.
+
+## v0.44.0 (2026-10-29)
+### 버그 수정
+
+- **LLM 세션 정리가 2026-10-12부터 빈 입력으로 돌던 문제** — 정리 호출을 시간 제한 래퍼(`hm_run_with_timeout`)로 감싸면서 모델을 백그라운드로 띄웠는데, 스크립트의 백그라운드 명령은 표준입력이 `/dev/null`로 바뀝니다. 모델은 세션 기록 없이 "findings를 뽑아라"만 받아 매번 빈 결과를 돌려줬습니다(실측: Claude 세션 정리 187건 중 166건이 세션당 $0.0003·findings 0건, 위임 완료를 모른다는 같은 지적 3회를 모두 놓침). 래퍼가 표준입력을 그대로 넘기고, 그때 만든 빈 정리는 다시 정리합니다.
+
+### 동작 변경
+
+- **사용자 교정을 문구 규칙 대신 LLM 정리로만 판정** — "아니…"로 시작하는 발화(`correction_mark`)와 "안 되"·"이상해" 같은 단어(`correction_candidate`)로 교정을 줍던 규칙을 없앴습니다. 표현이 조금만 달라도 놓쳤습니다("다 된거아니야? 왜 자꾸 모르지?"). 큐의 교정 수(`corrections`)는 LLM 정리의 `correction` finding(medium 이상)을 세고, `/metrics`의 교정 마크 비율·목록과 `/harvest`의 교정 후보 판정 단계는 빠집니다. 자동 개선의 효과 판정(`auto-apply.sh effect`)은 오류 발췌와 LLM 정리 문구로 합니다.
+
+### 업데이트 후 해야 할 일
+
+- 교정 신호를 계속 받으려면 `~/.ai-harness/config`에 `HM_DIGEST=1`을 둡니다. 꺼져 있으면 교정 신호가 없습니다.
+
+## v0.43.2 (2026-10-29)
+### 버그 수정
+
+- **자동 sync·자동 harvest가 `.claude/` 아래 파일을 쓰지 못하던 문제** — Claude Code는 `.claude/`를 보호 경로로 두어 `acceptEdits`나 명시 허용 규칙으로도 Write/Edit를 열어 주지 않고, 무인 실행에는 승인할 사람이 없어 항상 거부됩니다(실측: jobda 자동 sync가 그래프 3개만 갱신하고 `.claude/commands`·`.claude/workflows` 6개와 새 러너를 못 씀). 이제 내용을 저장소 안 임시 경로에 쓴 뒤 `scripts/place-claude-file.sh`가 옮깁니다. 대상은 commands·agents·workflows·skills뿐이고 settings·hook과 저장소 밖 원본은 거부합니다.
+- **일부만 적용한 자동 sync가 완료로 기록되던 문제** — 쓰지 못한 파일이 있어도 `harness_version`을 올려 다음 sync가 나머지를 다시 잡지 않았고 결과도 `improved`였습니다. 이제 쓴 파일만 `harness-sync-state.sh record --keep-version`으로 기록하고 결과를 `partial`로 남깁니다.
+
+## v0.43.1 (2026-10-29)
+### 버그 수정
+
+- **자동 sync·자동 harvest가 저장소 파일을 고치지 못하던 문제** — 무인 실행의 작업 worktree를 데이터 디렉터리(`~/.ai-harness/harvest-auto/worktrees`) 안에 만들었는데, v0.35.1부터 무인 에이전트는 데이터 디렉터리 쓰기가 막혀(config·shim 보호) worktree 안의 `.ai-harness/`·`.claude/` 등 어떤 파일도 쓸 수 없었습니다(실측: 자동 sync 3건 모두 쓰기 거부로 `left_for_user`, 프로젝트 harvest는 개선을 적용할 수 없는 상태). 이제 worktree를 `~/.cache/ai-harness/worktrees`(`XDG_CACHE_HOME` 또는 `HM_AUTO_WORKTREE_DIR`로 변경, 데이터 디렉터리 안을 가리키면 기본값)에 둡니다.
+- **무인 실행이 끝난 뒤 프로세스가 CPU 100%로 며칠씩 멈추던 문제** — macOS 기본 `/bin/bash` 3.2는 단일 명령의 `read … < <(…)`가 연 파일 디스크립터를 닫지 않습니다. 실행 뒤 연쇄 sweep이 batch 저장소를 찾으며 이벤트 파일마다 이 형태로 읽어, fd 한도(256)에 닿은 하위 셸이 무한히 돌았습니다(실측 2건: 3일·22시간, fd 3~256이 모두 파이프). 한 줄 읽기를 here-string으로 바꾸고, 같은 형태가 다시 들어오지 않게 테스트로 막습니다.
+
+## v0.43.0 (2026-10-25)
+### 새 기능
+
+- **정기 실행 기록 `~/.ai-harness/logs/schedule.jsonl`** — 정기 실행이 LLM 단계를 돌렸는지, 넘겼다면 이유(`never_idle`·`usage_backoff`·`run_in_flight`)를 회차마다 한 줄 남깁니다(최근 200줄). worker 출력을 버려 지금까지는 왜 안 돌았는지 알 방법이 없었습니다.
+
+### 버그 수정
+
+- **세션 탭을 열어 두면 자동 harvest·sync·정리가 돌지 않던 문제** — 사용자가 쉬는지를 대화 기록 파일의 수정 시각으로 판정했는데, 열려 있는 Claude 세션은 쉬는 동안에도 시각 없는 줄(`last-prompt`·`cost-state`)을 덧붙입니다. 세션 탭이 여럿이면 하루 내내 작업 중으로 보여 LLM 단계가 대기 상한(4시간)까지 기다리다 넘어갔고(실측: 1시간 넘게 쉰 구간이 있었는데 10-22 02시 이후 하루 넘게 한 번도 안 돎), 뒤처진 저장소 7곳의 자동 sync도 시작되지 않았습니다. 이제 수정 시각으로 후보만 좁히고 기록 끝부분의 마지막 `timestamp`로 판정합니다.
 
 ### 동작 변경
 
