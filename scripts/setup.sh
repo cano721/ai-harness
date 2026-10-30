@@ -316,7 +316,8 @@ write_secret_env() { # KEY, 값은 stdin
   tmp="$SECRETS_FILE.tmp.$$"
   (
     umask 077
-    { [[ -f "$SECRETS_FILE" ]] && grep -v "^export $1=" "$SECRETS_FILE" || true; } >"$tmp"
+    : >"$tmp"
+    if [[ -f "$SECRETS_FILE" ]]; then grep -v "^export $1=" "$SECRETS_FILE" >"$tmp" || true; fi
     printf "export %s='%s'\n" "$1" "${value//$q/$q\\$q$q}" >>"$tmp"
   )
   mv "$tmp" "$SECRETS_FILE"
