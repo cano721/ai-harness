@@ -77,8 +77,10 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   # 호출 한 번의 컨텍스트 = 그 호출의 입력 전체(캐시 포함). 창 크기도 Codex가 함께 기록한다.
   | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
        | .payload.info.last_token_usage.input_tokens // empty]) as $ctx
+  # 세션 중 모델이 바뀌면 창 크기도 바뀐다 — 최대치가 나온 호출의 창으로 비율을 낸다.
   | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
-       | .payload.info.model_context_window // empty] | last // null) as $window
+       | .payload.info | select(.last_token_usage.input_tokens != null)
+       | {n:.last_token_usage.input_tokens, w:.model_context_window}] | max_by(.n) // {} | .w // null) as $window
   # 실제 모델명은 turn_context에 있다. provider를 모델명으로 대신 쓰지 않는다.
   | ([$L[] | select(.type=="turn_context") | .payload.model // empty] | last // null) as $model
   | (select(($L|length) > 0) | $base + {

@@ -573,14 +573,14 @@ CODEX_CTX_FIXTURE="$CODEX_CTX_DIR/rollout-2026-07-30T00-00-00-eeeeeeee-1111-2222
 mkdir -p "$CODEX_CTX_DIR"
 {
   sed 's/bbbbbbbb-1111-2222-3333-cccccccccccc/eeeeeeee-1111-2222-3333-ffffffffffff/' "$CODEX_FIXTURE" | grep -v '"token_count"'
-  for u in '1000 600 1000' '3000 2500 4000' '2000 1900 6000'; do
-    read -r last cached total <<<"$u"
-    printf '{"type":"event_msg","timestamp":"2026-07-30T00:00:09Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":5},"last_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":1},"model_context_window":10000}}}\n' "$total" "$cached" "$last" "$cached"
+  for u in '1000 600 1000 10000' '3000 2500 4000 10000' '2000 1900 6000 5000'; do
+    read -r last cached total window <<<"$u"
+    printf '{"type":"event_msg","timestamp":"2026-07-30T00:00:09Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":5},"last_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":1},"model_context_window":%s}}}\n' "$total" "$cached" "$last" "$cached" "$window"
   done
 } >"$CODEX_CTX_FIXTURE"
 HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-extract" "$ROOT/scripts/extract-codex.sh" "$CODEX_CTX_FIXTURE"
 CODEX_CTX_EVENT="$TEST_TMP/codex-ctx-extract/events/codex-2026-07-30T00-00-00-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
-assert_eq "1000 3000 2000 10000" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last) \(.ctx_window)"' "$CODEX_CTX_EVENT")" "Codex context per call and window from token_count"
+assert_eq "1000 3000 2000 10000" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last) \(.ctx_window)"' "$CODEX_CTX_EVENT")" "Codex context per call and the window in effect at the peak call (model switch shrinks it later)"
 CODEX_LEGACY_DATA="$TEST_TMP/codex-legacy"
 mkdir -p "$CODEX_LEGACY_DATA/events"
 jq -c 'if .kind=="session" then .coverage -= ["context"] | .tok_in = 100 | del(.ctx_first,.ctx_peak,.ctx_last,.ctx_window) else . end' "$CODEX_EVENT" \
