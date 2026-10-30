@@ -6,6 +6,16 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 새 기능
+
+- **`/setup` — 기본 스킬을 골라 전역에 설치합니다** — Datadog·Sentry·Jira·Confluence를 curl로 다루는 범용 Skill 카탈로그(`catalog/`)를 추가했습니다. 플러그인 Skill로 넣으면 쓰지 않는 도구까지 모든 세션에 실리므로, `/setup`에서 고른 것만 `~/.claude/skills/`(Codex `~/.agents/skills/`)에 복사하고 필요한 환경변수가 있는지 점검합니다(값은 받지 않음). 설치한 사본은 해시로 추적해 손대지 않은 것만 플러그인 업데이트 때 SessionStart가 갱신하고, 직접 고친 사본과 원래 있던 같은 이름의 Skill은 건드리지 않습니다. 플러그인에는 설치 시점 hook이 없어 셋업이 자동으로 시작되지는 않으며, 설치 후 첫 세션과 카탈로그에 새 Skill이 추가될 때 한 번씩 안내합니다(`HM_SETUP_HINT=0`으로 끔). 토큰은 키마다 발급 주소·읽기 scope를 안내하고, 대화에 남지 않도록 별도 터미널의 숨김 입력(`setup.sh set`)으로 받아 저장한 뒤 읽기 전용 호출로 연결을 확인합니다(`setup.sh check`). 기본 프로젝트·Jira 커스텀 필드 ID·이슈 생성 필수 항목 같은 회사·팀 전용 값은 계정에서 선택지를 읽어 와(`setup.sh detect`) `~/.ai-harness/skills/<name>.md`에 저장하며, 카탈로그 Skill이 먼저 읽습니다.
+
+### 업데이트 후 해야 할 일
+
+- `/ai-harness:setup`을 실행해 쓰는 도구의 기본 스킬을 고릅니다. 이미 같은 이름의 개인 Skill(예: `~/.claude/skills/jira`)이 있으면 그대로 두며, 교체는 명시했을 때만 백업 후 합니다.
+
 ## v0.49.0 (2026-10-30)
 ### 버그 수정
 
@@ -23,7 +33,6 @@
 ## v0.48.0 (2026-10-30)
 ### 새 기능
 
-- **`/setup` — 기본 스킬을 골라 전역에 설치합니다** — Datadog·Sentry·Jira·Confluence를 curl로 다루는 범용 Skill 카탈로그(`catalog/`)를 추가했습니다. 플러그인 Skill로 넣으면 쓰지 않는 도구까지 모든 세션에 실리므로, `/setup`에서 고른 것만 `~/.claude/skills/`(Codex `~/.agents/skills/`)에 복사하고 필요한 환경변수가 있는지 점검합니다(값은 받지 않음). 설치한 사본은 해시로 추적해 손대지 않은 것만 플러그인 업데이트 때 SessionStart가 갱신하고, 직접 고친 사본과 원래 있던 같은 이름의 Skill은 건드리지 않습니다. 플러그인에는 설치 시점 hook이 없어 셋업이 자동으로 시작되지는 않으며, 설치 후 첫 세션과 카탈로그에 새 Skill이 추가될 때 한 번씩 안내합니다(`HM_SETUP_HINT=0`으로 끔). 토큰은 키마다 발급 주소·읽기 scope를 안내하고, 대화에 남지 않도록 별도 터미널의 숨김 입력(`setup.sh set`)으로 받아 저장한 뒤 읽기 전용 호출로 연결을 확인합니다(`setup.sh check`). 기본 프로젝트·Jira 커스텀 필드 ID·이슈 생성 필수 항목 같은 회사·팀 전용 값은 계정에서 선택지를 읽어 와(`setup.sh detect`) `~/.ai-harness/skills/<name>.md`에 저장하며, 카탈로그 Skill이 먼저 읽습니다.
 - **통합 테스트를 단건으로 못 돌리는 안내를 찾아냅니다** — `test`가 `integration` 태그를 빼고 `integrationTest`가 그 태그만 돌리는 저장소에서, 워크플로·페르소나·docs가 단건 실행을 `./gradlew test --tests`로만 안내해 통합 테스트를 고친 에이전트가 "No tests found"를 보거나 엉뚱한 통과로 완료를 보고할 수 있었습니다(외부 하네스 진단에서 잡다 백엔드 3개 저장소 공통으로 지적). `docs-drift.sh`가 Gradle 태스크별 태그 필터와 게이트 연결(`dependsOn`·`executionData`)을 읽어 `targeted_command_gaps`(문서:줄 · 빠진 태그 · 대신 쓸 태스크)로 보고하고, `/harness-init --sync`가 "보호 파일 후속 조치" 표에 싣습니다. 새로 생성하는 워크플로 본문은 단위·통합 단건 명령을 나눠 적습니다.
 
 ### 버그 수정
@@ -33,7 +42,6 @@
 
 ### 업데이트 후 해야 할 일
 
-- `/ai-harness:setup`을 실행해 쓰는 도구의 기본 스킬을 고릅니다. 이미 같은 이름의 개인 Skill(예: `~/.claude/skills/jira`)이 있으면 그대로 두며, 교체는 명시했을 때만 백업 후 합니다.
 - Gradle 저장소에서 `/harness-init --sync`를 돌려 `targeted_command_gaps` 행을 확인하고, 해당 문서의 단건 실행 안내에 `./gradlew integrationTest --tests <pattern>`을 더합니다(보호 파일이라 자동으로 고치지 않습니다).
 - 프론트 저장소에서 `/harness-init --sync --apply`로 `frontend-testing` 스킬과 프론트 팀 페르소나를 갱신합니다.
 
