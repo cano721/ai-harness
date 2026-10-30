@@ -306,7 +306,7 @@ write_claude_env() { # KEY, 값은 stdin — jq 인자에 값을 싣지 않는�
   fi
   tmp="$CLAUDE_SETTINGS.tmp.$$"
   (umask 077; jq -Rs --arg k "$1" --argjson cur "$current" '. as $v | $cur | .env = ((.env // {}) + {($k): $v})' >"$tmp")
-  [[ -f "$CLAUDE_SETTINGS" ]] && chmod "$(stat -f %Lp "$CLAUDE_SETTINGS" 2>/dev/null || stat -c %a "$CLAUDE_SETTINGS")" "$tmp" 2>/dev/null
+  [[ -f "$CLAUDE_SETTINGS" ]] && chmod "$(filemode "$CLAUDE_SETTINGS")" "$tmp" 2>/dev/null
   mv "$tmp" "$CLAUDE_SETTINGS"
 }
 

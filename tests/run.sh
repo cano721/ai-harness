@@ -3408,7 +3408,7 @@ assert_eq "opus" "$(jq -r '.model' "$SETUP_T/settings.json")" "settings.json kee
 assert_eq "good-tok'en" "$(jq -r '.env.ATLASSIAN_API_TOKEN' "$SETUP_T/settings.json")" "secret saved to Claude settings"
 # shellcheck disable=SC2016  # 변수는 source한 하위 셸에서 펼친다
 assert_eq "good-tok'en" "$(env -i /bin/bash -c '. "$1"; printf %s "$ATLASSIAN_API_TOKEN"' _ "$SETUP_T/data/secrets.env")" "secret saved to sourceable Codex file"
-assert_eq "600" "$(stat -f %Lp "$SETUP_T/data/secrets.env" 2>/dev/null || stat -c %a "$SETUP_T/data/secrets.env")" "secrets file is private"
+assert_eq "600" "$(filemode "$SETUP_T/data/secrets.env")" "secrets file is private"
 assert_eq "settings" "$(setup_cmd list | jq -r 'select(.name=="jira") | .env[2].source')" "saved secret visible without restart"
 assert_eq "true Kim" "$(setup_cmd check jira | jq -r '"\(.ok) \(.as)"')" "check uses saved credentials"
 DETECT="$(setup_cmd detect jira)"
