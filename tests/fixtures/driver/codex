@@ -101,6 +101,7 @@ case "$node:$scenario" in
     git push -q -u origin HEAD 2>/dev/null
     case "$scenario" in
       merge_*|pm_*) url="https://github.com/acme/app/pull/7" ;;
+      bb_*) url="https://bitbucket.org/acme/app/pull-requests/7" ;;
       *) url="https://example.test/pr/7" ;;
     esac
     jq -n --arg u "$url" '{summary:"opened", branch:"feat/add-feature", pr_url:$u}' >"$out" ;;

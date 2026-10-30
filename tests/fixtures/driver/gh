@@ -19,21 +19,33 @@ approved=no
 case "$scenario" in merge_wait*|merge_noapproval) [[ -f "$FAKE_LOG.approved" ]] && approved=yes ;; *) approved=yes ;; esac
 reviews='[]'
 if [[ "$approved" == yes ]]; then
-  reviews="$(jq -cn --arg h "$head" '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}}]')"
+  reviews="$(jq -cn --arg h "$head" '[{author:{login:"alice"}, authorAssociation:"MEMBER", state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}}]')"
 fi
+r() { # login association state time commit
+  jq -cn --arg l "$1" --arg a "$2" --arg s "$3" --arg t "$4" --arg c "$5" '{author:{login:$l}, authorAssociation:$a, state:$s, submittedAt:$t, commit:{oid:$c}}'
+}
 case "$scenario" in
-  merge_stale) reviews="$(jq -cn '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:"0000000"}}]')" ;;
-  merge_self) reviews="$(jq -cn --arg h "$head" '[{author:{login:"me"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}}]')" ;;
-  merge_changes) reviews="$(jq -cn --arg h "$head" '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}},
-    {author:{login:"bob"}, state:"CHANGES_REQUESTED", submittedAt:"2026-10-30T02:00:00Z", commit:{oid:$h}}]')" ;;
+  merge_stale) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z 0000000)]" ;;
+  merge_self) reviews="[$(r me OWNER APPROVED 2026-10-30T01:00:00Z "$head")]" ;;
+  merge_outsider) reviews="[$(r stranger CONTRIBUTOR APPROVED 2026-10-30T01:00:00Z "$head")]" ;;
+  merge_bot) reviews="[$(r helper[bot] MEMBER APPROVED 2026-10-30T01:00:00Z "$head")]" ;;
+  merge_dismissed) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z "$head"),$(r alice MEMBER DISMISSED 2026-10-30T02:00:00Z "$head")]" ;;
+  merge_rereviewed) reviews="[$(r alice MEMBER CHANGES_REQUESTED 2026-10-30T01:00:00Z "$head"),$(r alice MEMBER APPROVED 2026-10-30T02:00:00Z "$head")]" ;;
+  merge_changes) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z "$head"),$(r bob COLLABORATOR CHANGES_REQUESTED 2026-10-30T02:00:00Z "$head")]" ;;
 esac
-state=OPEN; merge_commit=null
-if [[ -f "$FAKE_LOG.merged" || "$scenario" == merge_outside ]]; then state=MERGED; merge_commit="{\"oid\":\"$MERGE_SHA\"}"; fi
+state=OPEN; merge_commit=null; merged_at=""
+if [[ -f "$FAKE_LOG.merged" || "$scenario" == merge_outside ]]; then state=MERGED; merge_commit="{\"oid\":\"$MERGE_SHA\"}"; merged_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; fi
 [[ "$scenario" != merge_closed ]] || state=CLOSED
 [[ "$scenario" != merge_headmoved ]] || head=2222222222222222222222222222222222222222
 mergeable=MERGEABLE
 [[ "$scenario" != merge_conflict ]] || mergeable=CONFLICTING
+base=main
+[[ "$scenario" != merge_otherbase ]] || base=release
+checks='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
+[[ "$scenario" != merge_hostci_fail ]] || checks='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"StatusContext","state":"SUCCESS"}]'
 draft=false
 [[ "$scenario" != merge_draft ]] || draft=true
 jq -n --arg s "$state" --argjson d "$draft" --arg m "$mergeable" --arg h "$head" --argjson r "$reviews" --argjson mc "$merge_commit" \
-  '{state:$s, isDraft:$d, mergeable:$m, headRefOid:$h, baseRefName:"main", reviews:$r, author:{login:"me"}, mergeCommit:$mc}'
+  --arg b "$base" --arg ma "$merged_at" --argjson c "$checks" \
+  '{state:$s, isDraft:$d, mergeable:$m, headRefOid:$h, headRefName:"feat/add-feature", baseRefName:$b, reviews:$r, author:{login:"me"},
+    mergeCommit:$mc, mergedAt:(if $ma == "" then null else $ma end), statusCheckRollup:$c}'
