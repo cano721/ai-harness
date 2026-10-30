@@ -10,6 +10,7 @@
     "approval": {"write": false, "actor": "human", "output": "approved_brief"},
     "deliver": {"write": true, "actor": "agent", "output": "slice_evidence"},
     "review": {"write": false, "actor": "agent", "output": "findings"},
+    "ui_review": {"write": false, "actor": "agent", "browser": true, "output": "ui_review_report"},
     "repair": {"write": true, "actor": "agent", "output": "repair_evidence"},
     "publish": {"write": true, "actor": "agent", "network": true, "output": "pull_request"},
     "remote_ci": {"write": false, "actor": "agent", "network": true, "output": "remote_ci_result"},
@@ -25,6 +26,10 @@
     {"from": "deliver", "to": "review"},
     {"from": "review", "to": "publish", "when": "no_blocking_findings"},
     {"from": "review", "to": "repair", "when": "blocking_findings"},
+    {"from": "review", "to": "ui_review", "when": "no_blocking_findings_ui_affected"},
+    {"from": "ui_review", "to": "publish", "when": "ui_verified"},
+    {"from": "ui_review", "to": "repair", "when": "ui_issues"},
+    {"from": "ui_review", "to": "user_decision", "when": "ui_unverified"},
     {"from": "repair", "to": "review", "when": "required_checks_pass"},
     {"from": "repair", "to": "repair", "when": "required_checks_fail"},
     {"from": "repair", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"},
@@ -41,6 +46,7 @@
     "Every repair is followed by required checks and re-review.",
     "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",
     "Work that was pushed is not done until remote CI for the pushed commit has finished green or the repository has no remote CI; local runs of the CI commands do not stand in for it, a failure goes back through repair, and remote CI that cannot be observed ends as unverified, never as done.",
-    "The delivery node follows the project test policy: TDD, required, recommended, or no automated-test requirement."
+    "The delivery node follows the project test policy: TDD, required, recommended, or no automated-test requirement.",
+    "A change with ui_scenarios is not done until ui_review has rendered and operated them in a browser with no blocking UI finding; ui_review follows the project ui-review contract, does not change the working tree, and a UI that could not be verified ends at user_decision as unverified, never as done."
   ]
 }

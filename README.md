@@ -61,6 +61,7 @@ flowchart LR
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
+| `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
@@ -77,9 +78,39 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
 | `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
 
+### UI 검토 계약 (화면이 있는 프로젝트에서 `/harness-init`이 생성)
+
+코드 리뷰와 기능 테스트를 통과한 UI 변경도 "사람이 그 화면을 보고 쓸 수 있는가"는 검증되지 않은 채 남습니다. `ui-review`는 바뀐 화면을 **실제로 렌더링하고 조작**해 디자인 시스템 일관성과 사용성을 검토하고, 주요 문제를 고친 뒤 다시 검증하는 계약입니다. React·Vue 같은 프론트 패키지뿐 아니라 Flask/Jinja·Thymeleaf·JSP 같은 서버 렌더링 화면도 대상입니다.
+
+| 생성물 | 역할 | 생성 조건 |
+|---|---|---|
+| `ui-review` Skill + `references/checklist.md` | 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 실제 조작 UX 검토 → 수정·재검증 → 근거·한계 보고. 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 단독으로 기존 화면이나 UI PR을 점검할 때도 씁니다. | UI 감지 + opt-in (`stacks`에 `ui`) |
+| `.ai-harness/workflows/ui-review-graph.json` | 단독 UI 검토의 노드·전이 계약 | 위와 같음 |
+| `.ai-harness/docs/ui.md` | 앱 실행·로그인·지원 뷰포트·테마·기준 화면 등 프로젝트 고유 사실 (보호 파일) | 위와 같음 |
+
+기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 있습니다. Brief가 화면 검증 시나리오를 내면(리뷰는 변경이 화면을 바꿀 때) 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 브라우저로 화면을 검증합니다. 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌고, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 프로젝트의 디자인 문서·토큰·공통 컴포넌트·기준 화면이 계약보다 우선하고, 설치된 외부 디자인 Skill은 선택 보조로만 씁니다.
+
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+<a id="skill-catalog"></a>
+
+### 기본 스킬 카탈로그 (`/setup`으로 선택 설치)
+
+외부 도구를 curl로 다루는 범용 Skill입니다. 플러그인 Skill로 넣으면 쓰지 않는 도구의 설명까지 모든 세션에 실리므로, 플러그인은 원본(`catalog/`)만 들고 있고 `/setup`에서 고른 것만 사용자 전역 폴더(Claude `~/.claude/skills/`, Codex `~/.agents/skills/`)에 복사합니다.
+
+| Skill | 하는 일 | 필요한 환경변수 |
+|---|---|---|
+| `datadog` | 로그·메트릭·모니터·인시던트·이벤트 조회 (읽기 전용) | `DATADOG_API_KEY`, `DATADOG_APP_KEY` (`DD_*`도 인식), 선택 `DATADOG_SITE` |
+| `sentry` | 이슈·최근 이벤트(스택트레이스)·릴리스 조회 (읽기 전용) | `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, 선택 `SENTRY_URL` |
+| `jira` | 이슈 조회·JQL 검색·생성·수정·상태 전환·코멘트 | `JIRA_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
+| `confluence` | 페이지 조회·CQL 검색·생성·수정·코멘트·첨부 | `CONFLUENCE_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
+
+- **접속 정보**: `/setup`이 키마다 발급 주소·순서·필요한 읽기 scope를 안내합니다. base URL·이메일 같은 값은 대화로 받아 저장하고, 토큰은 대화에 남지 않도록 사용자가 별도 터미널에서 `scripts/setup.sh set --tool claude <KEY>`(숨김 입력)로 넣습니다. Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600, 셸 프로파일에서 source)에 저장됩니다. 저장 뒤 `setup.sh check <skill>`이 읽기 전용 호출 하나로 연결과 접속 계정을 확인하고, 401·403·404면 원인을 짚습니다. 각 Skill은 자격 증명을 명령 인자가 아니라 stdin(`curl -K -`)으로 넘깁니다.
+- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다.
+- 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
+- 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
+
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -87,9 +118,9 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 | 프로젝트 기능 | Codex (`Codex` 또는 `둘 다` 선택) | Claude (`Claude` 또는 `둘 다` 선택) | 역할 |
 |---|---|---|---|
-| 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md`<br>`.claude/workflows/implement-feature.js` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
-| 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md`<br>`.claude/workflows/fix-bug.js` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
-| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md`<br>`.claude/workflows/review.js` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
+| 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
+| 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
+| 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
 
@@ -114,6 +145,8 @@ codex plugin add ai-harness@ai-harness
 ```
 
 둘 중 사용하는 도구만 설치해도 됩니다. 설치 뒤 새 세션을 시작하면 hook과 skill이 로드됩니다.
+
+**전역 셋업 (선택)** — 새 세션에서 `/ai-harness:setup`을 실행하면 [기본 스킬 카탈로그](#skill-catalog)에서 필요한 것만 골라 설치하고 접속 정보·자동화 옵션을 점검합니다. 플러그인에는 설치 시점 hook이 없어 자동으로 시작되지는 않고, 설치 후 첫 세션에 한 번 안내합니다. Codex에서는 "ai-harness setup 스킬 실행해줘"처럼 요청합니다.
 
 **Claude Code 자동 업데이트 켜기 (권장)** — 서드파티 마켓플레이스는 자동 업데이트가 기본으로 꺼져 있습니다. `/plugin` → Marketplaces → ai-harness → Enable auto-update 를 켜면 Claude Code가 시작할 때 새 버전을 받습니다. 설치 후 첫 세션에서도 한 번 안내합니다.
 
@@ -204,21 +237,19 @@ stateDiagram-v2
 
 | 도구 | 실행 방식 |
 |---|---|
-| Codex | skill과 역할 agent(또는 단일 세션의 단계 경계)가 그래프 계약을 해석합니다. 별도의 그래프 런타임은 필요하지 않습니다. |
-| Claude Code 2.1.154 이상 | Brief가 승인된 뒤 선택적으로 프로젝트의 `.claude/workflows/implement-feature.js`가 구현 → 검토 → 수정 → 재검토를 실행할 수 있습니다. 완료 판정이 코드에 있어, blocking finding이 남으면 done을 반환하지 못합니다. |
-| 그 외 Claude Code | 현재 세션에서 같은 그래프 계약을 따릅니다. Dynamic Workflow를 사용할 수 없어도 기능 개발 흐름은 유지됩니다. |
-| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다(`approval: auto`면 `start` 한 번으로 PR까지). 아래 [그래프 러너](#feature-driver)를 보세요. |
+| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다(`approval: auto`면 `start` 한 번으로 PR까지). 기능 개발·버그 수정·변경 검토가 같은 러너와 같은 게이트를 씁니다. 아래 [그래프 러너](#feature-driver)를 보세요. |
+| 러너가 없을 때 | skill/command와 역할 agent(또는 단일 세션의 단계 경계)가 현재 세션에서 같은 그래프 계약을 따릅니다. |
 
-Dynamic Workflow는 계획·사용자 승인을 대신하지 않습니다. 승인은 항상 command 대화 단계에서 먼저 받고, 승인된 Brief를 인자로 넘겨야만 실행됩니다.
+예전에 Claude용으로 생성하던 Dynamic Workflow 사본(`.claude/workflows/*.js`)은 러너와 다른 게이트로 같은 그래프를 실행해 더 만들지 않습니다. `/harness-init --sync`가 정리 대상(`retired`)으로 안내합니다.
 
 <a id="feature-driver"></a>
 
-### 그래프 러너: `implement-feature-driver.sh`
+### 그래프 러너: `workflow-driver.sh`
 
-위 방식은 모델이 그래프를 따른다는 전제 위에 있습니다. 승인 여부는 모델이 대화를 읽고 판단하고(`.js`에는 모델이 `approved: true`를 넘깁니다), 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다.
+러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
 
 ```text
-대화                                   러너 (.ai-harness/workflows/implement-feature-driver.sh)
+대화                                   러너 (.ai-harness/workflows/workflow-driver.sh --workflow feature)
 /implement-feature 요청  ──────────▶  start   discover → brief  (읽기 전용 세션)
 Brief·검증 명령을 보여 줌  ◀──────────           approval에서 체크포인트 후 멈춤 (exit 10)
 "X는 빼줘"               ──────────▶  revise  approval → brief → approval
@@ -229,13 +260,19 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 
 `approval: auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
 
+| 워크플로 | 러너가 실행하는 흐름 |
+|---|---|
+| `feature` | discover → brief → approval → deliver → review(러너가 검증 명령 실행) ⇄ repair → ui_review → publish → remote_ci |
+| `bug-fix` | triage → reproduce → brief → approval → regression → fix → verify(러너가 검증 명령 실행) → review ⇄ repair → ui_review → publish → remote_ci. reproduce는 명령을 실행할 수 있지만 작업 트리를 바꾸면 멈추고, 메모·로그는 실행 디렉터리의 `reproduce/`에 남깁니다. 재현도 안전한 관측 계획도 없으면(근거 없는 "재현됨" 포함) 승인 전에 사람에게 넘깁니다 |
+| `review` | scope(검토 기준 커밋·검증 명령) → inspect → classify → done. blocking finding이 있으면 수리 범위(finding·검증 명령)를 보여 주고 멈춥니다(exit 10). 사용자가 대화에 `승인`을 입력하면(또는 `approval: auto`) repair → verify → re_review ⇄ repair로 이어 가고, 수리는 커밋하지 않고 작업 트리에 남깁니다. 동의는 보여 준 finding에 묶여, 재검토·화면 검증에서 범위 밖 finding이 나오면 그 finding을 보여 주고 다시 묻습니다. 제품 판단이 필요한 finding은 바로 `user_decision` |
+
 | 그래프 개념 | 러너가 하는 일 |
 |---|---|
 | 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
 | 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
-| git | `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(implement-feature): …`)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
+| git | `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
@@ -243,9 +280,9 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 
 종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
 
-한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다.
+한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
-이 워크플로 스크립트는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.claude/workflows/`에 생성하며, 프로젝트 진입점이 절대 경로를 `scriptPath`로 넘겨 호출합니다. 하네스가 없는 저장소에는 존재하지 않으므로, 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
+러너는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.ai-harness/workflows/`에 생성하며, 하네스가 없는 저장소에는 존재하지 않으므로 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
 ## 변경 이해 흐름: `/understand-change`
 
@@ -301,7 +338,7 @@ stateDiagram-v2
 4. **검토 루프** — targeted/전체 검증 뒤 재현 증거·회귀·호환성·범위 이탈을 검토합니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르도록 남거나 제품·환경 판단이 필요하면 사용자에게 넘깁니다.
 5. **PR** — 기능 개발과 같이 `git_policy`대로 커밋·push·PR을 합니다.
 
-생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 승인 뒤 선택적으로 프로젝트의 `.claude/workflows/fix-bug.js`를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
+생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow bug-fix`로 실행하고, 없으면 같은 흐름을 현재 세션에서 수행합니다.
 
 <a id="review"></a>
 
@@ -323,7 +360,7 @@ stateDiagram-v2
     re_review --> repair: blocking finding 남음
 ```
 
-초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. Claude Code `2.1.154+`에서는 검토 → 수리 → 재검토 루프에 선택적으로 프로젝트의 `.claude/workflows/review.js`를 사용할 수 있고, 그 외에는 같은 흐름을 현재 세션에서 수행합니다.
+초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow review`로 실행하고(수리는 사용자 승인 뒤, 커밋하지 않고 남김), 없으면 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 
@@ -379,6 +416,7 @@ stateDiagram-v2
   - 적용마다 이전 파일을 `~/.ai-harness/applied/`에 남기고, `auto-apply.sh revert --rule-id <id>`로 규칙 단위로 되돌립니다. `auto-apply.sh list --active`로 현재 규칙을 봅니다
   - 규칙마다 기대효과를 기록하고, 다음 실행이 적용 이후 재발 여부로 효과를 판정해 강화하거나 스스로 되돌립니다
   - 다음 세션 시작에 무엇을 적용·되돌렸는지 한 번 알립니다
+  - 적용 전에 규칙 문구를 [독립 검토](#auto-harvest)에 넣고, 통과한 것만 적용합니다
   - 한 실행에 최대 2건, Claude Code로만 실행합니다
 
 <a id="llm-digest"></a>
@@ -402,6 +440,7 @@ stateDiagram-v2
 - **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
 - **에이전트**: 세션을 만든 도구와 무관하게 `claude`가 있으면 Claude Code로 실행합니다(`HM_HARVEST_AUTO_AGENT=auto|claude|codex`). Codex 샌드박스는 쓰기 허용 경로에서도 `.git`을 읽기 전용으로 두어 커밋·push를 할 수 없으므로, Codex로 돌면 분석·보고까지만 하고 batch를 사람에게 넘깁니다
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
+- **독립 검토**: 반영 전에 읽기 전용 검토 에이전트(`agents/harvest-reviewer.md`)가 개선안만 보고 문구가 근거보다 넓은지·근거가 주장을 뒷받침하는지·저장소 규칙과 충돌하는지 판정합니다. `revise`면 고쳐서 새 검토자에게 다시 넘기고(최대 2회), 끝까지 통과하지 못한 개선안은 뺍니다. 판정은 PR 본문 `## 독립 검토` 절에 남습니다. 이슈 키를 요구하는 저장소는 새 이슈를 만들지 않고 git 기록의 무이슈 관례 키(예: `NJ-00000`)로 브랜치·제목을 만듭니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
 - **제거도 개선입니다**: 없는 경로·명령을 가리키거나 코드와 모순되는 줄, 교정을 유발한 규칙, 여러 파일에 반복된 지시, 사용 0회 자산을 제거 후보로 봅니다("최근 재발 없음"은 제거 근거가 아닙니다). 무인 실행은 줄 단위 제거까지만 draft PR로 내고, 파일·관리 생성물 삭제는 사람에게 넘깁니다. 개인 지침 블록의 자동 규칙은 블록 밖에 같은 문구가 생기면(`auto-apply.sh duplicates`) 되돌립니다
@@ -413,7 +452,7 @@ stateDiagram-v2
 - **통계 참고**: 근거는 있으나 아직 행동 변경으로 이어질 만큼 강하지 않은 경우입니다.
 - **개선점 없음**: cosmetic 정리나 단발성 노이즈는 적용하지 않습니다.
 
-비용 절제 장치가 두 가지 있습니다. **정독 게이트**는 가장 비싼 스텝(transcript 정독) 전에 압축 신호만으로 정독 가치를 판단해, 노이즈 batch는 정량 분석과 보고만으로 싸게 종료합니다. **결과 검증 루프**는 개선 PR마다 기대효과(`--expected`)를 기록해 두고, 다음 `/harvest`가 같은 패턴의 재발 여부로 그 개선을 채점합니다 — 재발이 확인되면 강화안 또는 revert를 제안해 효과 없는 규칙이 하네스에 쌓이는 것을 막습니다.
+비용 절제 장치가 두 가지 있습니다(반영 전 품질 관문은 위 독립 검토). **정독 게이트**는 가장 비싼 스텝(transcript 정독) 전에 압축 신호만으로 정독 가치를 판단해, 노이즈 batch는 정량 분석과 보고만으로 싸게 종료합니다. **결과 검증 루프**는 개선 PR마다 기대효과(`--expected`)를 기록해 두고, 다음 `/harvest`가 같은 패턴의 재발 여부로 그 개선을 채점합니다 — 재발이 확인되면 강화안 또는 revert를 제안해 효과 없는 규칙이 하네스에 쌓이는 것을 막습니다.
 
 정상 완료한 batch만 `mark-reviewed`로 소비합니다. `--dry-run`이나 실패한 분석은 pending을 지우지 않습니다.
 
@@ -614,6 +653,7 @@ HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
+HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
@@ -634,6 +674,7 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
+catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙

@@ -144,7 +144,7 @@ workspace 세션에서 `subagent_type: developer`는 멤버의 `.claude/agents/d
 
 템플릿과 harness-init 규정에서 다음을 고정한다.
 
-- **Claude**: 위임은 Agent 도구의 `subagent_type`. 계획은 대화 안의 Brief(별도 스킬 없음). Dynamic Workflow js는 2.1.154 이상에서만 선택적으로.
+- **Claude**: 위임은 Agent 도구의 `subagent_type`. 계획은 대화 안의 Brief(별도 스킬 없음). 그래프 실행은 Codex와 같은 러너(`.ai-harness/workflows/workflow-driver.sh`)를 쓰며, 별도의 Dynamic Workflow 사본은 두지 않는다.
 - **Codex**: `.codex/agents/*.toml` 네이티브 서브에이전트를 우선한다. `codex exec` 폴백은 `-C <저장소>`, 쓰기 단계는 `-s workspace-write`, 결과는 `-o`로 수집한다고 명시한다(기본 sandbox는 읽기 전용이라 그대로는 쓰기 단계를 수행할 수 없다). 둘 다 없으면 단일 세션에서 페르소나를 전환해 진행한다 — "중단"하지 않는다.
 - **위임 위반 처리**: "즉시 폐기" 금지. 중단 → diff 보존 → 범위 확인 → 올바른 역할에 재위임.
 - **fix-bug**: 회귀 테스트는 test-engineer, production 수정은 developer.

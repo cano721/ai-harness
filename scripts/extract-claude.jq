@@ -12,6 +12,28 @@ def tool_results: .message.content[]? | select(type=="object" and .type=="tool_r
 def result_text: .content | if type=="string" then . elif type=="array" then (map(.text? // "") | join(" ")) else "" end;
 
 def counted(k): group_by(.) | map({kind:k, target:.[0], n:length}) | .[];
+# {k, n} 목록을 k별로 합산한다. n은 추정 토큰 합, calls는 그 크기를 잰 결과 수.
+def sized(k): group_by(.k) | map({kind:k, target:.[0].k, n:(map(.n)|add), calls:length}) | .[];
+# 추정 토큰 = UTF-8 바이트/4. 영문은 문자/4, 한글(3바이트)은 문자당 ~0.75로 실제 토크나이저에 가깝다.
+def result_tokens: (result_text | utf8bytelength / 4 | floor);
+
+# 하네스 문서 읽기로 볼 경로 (정규화된 대상 목록).
+# 워크플로 본문은 Read보다 Bash(cat/sed/head)로 더 자주 읽힌다 — 실측 워크플로를 읽은 세션의 절반이 Bash로만 읽었다.
+# 읽기 명령으로 시작하는 구간의 경로만 센다. grep(검색)·리다이렉트·heredoc·sed -i(쓰기)는 읽음이 아니다 —
+# `cat > doc.md <<EOF`나 `sed -i … workflow.md`를 읽음으로 세면 워크플로 경유가 부풀려진다.
+def doc_paths:
+  [ ( select(.name=="Read") | .input.file_path // empty | select(type=="string") ),
+    ( select(.name=="Bash") | .input.command // empty | select(type=="string")
+      | splits("&&|\\|\\||[;|\\n]") | sub("^\\s+"; "")
+      | select(test("^(cat|sed|head|tail|nl|awk|less|more|bat)\\s"))
+      | select(test("^sed\\s+(-[A-Za-z]*i|--in-place)") | not)
+      | gsub("(>>?|<<-?)\\s*['\"]?[^\\s'\"]+['\"]?"; " ")
+      | match("[^\\s'\"<>]*(\\.ai-harness/[^\\s'\"<>|;&]+|AGENTS\\.md|CLAUDE\\.md)"; "g").string )
+  ]
+  | map(select(test("\\.ai-harness/|(^|/)AGENTS\\.md$|(^|/)CLAUDE\\.md$"))
+      | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
+        elif endswith("AGENTS.md") then "AGENTS.md"
+        else "CLAUDE.md" end);
 
 # 오류 발췌: 같은 실패가 여러 세션에 반복되는지 /harvest가 판단할 수 있게 본문 앞부분을 남긴다.
 # 비밀값은 scripts/redact.jq로 가린다(Codex 어댑터·LLM 정리와 공용).
@@ -40,6 +62,12 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
    + ($asst | map(select(.message.id != null)) | group_by(.message.id) | map(last.message.usage))) as $usage
 # tool_result → 호출한 툴 이름 (tool_use_id 기준). 신호를 "어느 툴의 결과인가"로 가릴 때 쓴다.
 | ($L | [.[] | tool_uses | select(.id != null) | {key:.id, value:.name}] | from_entries) as $toolNames
+# 메인 컨텍스트에 실린 줄만. 구형 transcript는 서브에이전트 대화를 isSidechain으로 같은 파일에 담았다.
+| ($L | map(select(.isSidechain != true))) as $main
+| ($main | [.[] | tool_uses | select(.id != null) | {key:.id, value:doc_paths}] | from_entries) as $docsById
+# 호출 한 번의 컨텍스트 = 새 입력 + 캐시 읽기 + 캐시 쓰기. 같은 message.id가 반복돼도 값이 같아 첫/최대/마지막에 영향 없다.
+| ($main | map(select(.type=="assistant" and .message.usage != null) | .message.usage
+    | (.input_tokens//0) + (.cache_read_input_tokens//0) + (.cache_creation_input_tokens//0))) as $ctx
 
 # ── session 메타 (빈 transcript는 유령 세션 방지 위해 미기록) ──
 | (select($n > 0) | $base + {
@@ -51,6 +79,11 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
     tok_out: ([$usage[] | (.output_tokens//0)] | add // 0),
     cache_read: ([$usage[] | (.cache_read_input_tokens//0)] | add // 0),
     cache_write: ([$usage[] | (.cache_creation_input_tokens//0)] | add // 0),
+    agents: $agent_usage.n,
+    agent_tok_in: $agent_usage.tok_in, agent_tok_out: $agent_usage.tok_out,
+    agent_cache_read: $agent_usage.cache_read, agent_cache_write: $agent_usage.cache_write,
+    # 첫 호출 ≈ 고정 오버헤드(시스템 프롬프트·툴·스킬·메모리·AGENTS.md + 첫 요청)
+    ctx_first: ($ctx | first // null), ctx_peak: ($ctx | max // null), ctx_last: ($ctx | last // null),
     model:   ([$asst[].message.model // empty | select(startswith("<") | not)] | last // null),
     reason:  (if $reason=="" then null else $reason end),
     internal: (($userMsgs | first | utext? // "") | is_internal_prompt),
@@ -58,7 +91,7 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
       "jira_issue", "error", "guard_block", "permission_deny", "compact",
-      "error_sample"
+      "error_sample", "agent_usage", "context", "ctx_tool", "doc_ctx"
     ]
   }),
 
@@ -73,22 +106,18 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
   | counted("persona") | $base + . ),
 
 # ── doc_read: 하네스 문서 읽힘 ──
-# 워크플로 본문은 Read보다 Bash(cat/sed/head)로 더 자주 읽힌다 — 실측 워크플로를 읽은 세션의 절반이 Bash로만 읽었다.
-# 읽기 명령으로 시작하는 구간의 경로만 센다. grep(검색)·리다이렉트·heredoc·sed -i(쓰기)는 읽음이 아니다 —
-# `cat > doc.md <<EOF`나 `sed -i … workflow.md`를 읽음으로 세면 워크플로 경유가 부풀려진다.
-( [ ( $L[] | tool_uses | select(.name=="Read") | .input.file_path // empty | select(type=="string") ),
-    ( $L[] | tool_uses | select(.name=="Bash") | .input.command // empty | select(type=="string")
-      | splits("&&|\\|\\||[;|\\n]") | sub("^\\s+"; "")
-      | select(test("^(cat|sed|head|tail|nl|awk|less|more|bat)\\s"))
-      | select(test("^sed\\s+(-[A-Za-z]*i|--in-place)") | not)
-      | gsub("(>>?|<<-?)\\s*['\"]?[^\\s'\"]+['\"]?"; " ")
-      | match("[^\\s'\"<>]*(\\.ai-harness/[^\\s'\"<>|;&]+|AGENTS\\.md|CLAUDE\\.md)"; "g").string )
-  ]
-  | map(select(test("\\.ai-harness/|(^|/)AGENTS\\.md$|(^|/)CLAUDE\\.md$"))
-      | if test("\\.ai-harness/") then ".ai-harness/" + (split(".ai-harness/")[1])
-        elif endswith("AGENTS.md") then "AGENTS.md"
-        else "CLAUDE.md" end)
-  | counted("doc_read") | $base + . ),
+( [ $L[] | tool_uses | doc_paths[] ] | counted("doc_read") | $base + . ),
+
+# ── doc_ctx: 하네스 문서가 컨텍스트에 실은 추정 토큰 ──
+# 결과 하나에 문서가 둘 이상 섞이면(`cat a.md b.md`) 몫을 가를 수 없어 세지 않는다.
+( [ $main[] | tool_results | select(.is_error != true)
+    | ($docsById[.tool_use_id // ""] // []) as $d | select(($d|length)==1)
+    | {k:$d[0], n:result_tokens} ]
+  | sized("doc_ctx") | $base + . ),
+
+# ── ctx_tool: 툴 결과가 컨텍스트에 실은 추정 토큰 (툴별) ──
+( [ $main[] | tool_results | {k:($toolNames[.tool_use_id // ""] // "?"), n:result_tokens} ]
+  | sized("ctx_tool") | $base + . ),
 
 # ── file_edit: 편집 핫스팟 ──
 ( [ $L[] | tool_uses | select(.name=="Edit" or .name=="Write" or .name=="MultiEdit" or .name=="NotebookEdit")

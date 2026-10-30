@@ -69,6 +69,9 @@ export HARNESS_METRICS_DIR
 # SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
 export HM_BACKFILL_INTERVAL_HOURS=0
 export HM_AUTO_WORKTREE_DIR="$TEST_TMP/auto-worktrees"
+# 셋업 안내는 전용 테스트만 켠다. 전역 스킬 폴더는 실제 홈을 건드리지 않게 격리한다.
+export HM_SETUP_HINT=0
+export HM_CLAUDE_SKILLS_DIR="$TEST_TMP/global-skills/claude" HM_CODEX_SKILLS_DIR="$TEST_TMP/global-skills/codex"
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
@@ -289,6 +292,67 @@ assert_eq "true" "$(jq -r '[.facts[] | select(.kind=="gradle_task") | .value] | 
 assert_eq "" "$(jq -r '[.facts[] | select(.value=="printVersion")] | join(",")' <<<"$KTS_SCAN")" "an internal task stays out of the facts even when documented"
 assert_eq "" "$(jq -r '[.facts[] | select(.value|startswith("jacocoVerification"))] | join(",")' <<<"$KTS_SCAN")" "an interpolated task name is not a fact, and a documented completion of it is not stale"
 pass "drift kotlin dsl and multi-task calls"
+# test가 integration 태그를 빼면 `./gradlew test --tests`만 안내한 문서는 통합 테스트를 targeted로 못 돌린다.
+TAGGED="$TEST_TMP/drift-tagged"
+mkdir -p "$TAGGED/.ai-harness/workflows" "$TAGGED/.ai-harness/docs"
+cat >"$TAGGED/build.gradle" <<'GRADLE'
+test {
+    useJUnitPlatform {
+        excludeTags 'regression', 'integration'
+    }
+}
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform { includeTags 'integration' }
+}
+tasks.register('regressionTest', Test) {
+    useJUnitPlatform { includeTags 'regression' }
+}
+jacocoTestReport {
+    dependsOn test, tasks.named('integrationTest')
+}
+GRADLE
+cat >"$TAGGED/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- 단위/통합 테스트: `./gradlew test --tests {pattern}`
+- 전체: `./gradlew build`, 회귀: `./gradlew regressionTest`
+DOC
+cat >"$TAGGED/.ai-harness/docs/testing.md" <<'DOC'
+./gradlew test --tests "{ClassName}"
+./gradlew integrationTest --tests "{ClassName}"
+DOC
+TAGGED_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED")"
+assert_eq ".ai-harness/workflows/fix-bug.md:1 integration integrationTest" "$(jq -r '[.targeted_command_gaps[] | "\(.doc):\(.line) \(.excluded_tag) \(.use_instead)"] | join(",")' <<<"$TAGGED_SCAN")" "a doc that targets only the tag-excluding task is reported; one that also targets the owner, and an ungated tag, are not"
+assert_eq "true" "$(jq -r '.drift' <<<"$TAGGED_SCAN")" "a targeted command gap counts as drift"
+mkdir -p "$TAGGED-kts/.ai-harness/workflows"
+cat >"$TAGGED-kts/build.gradle.kts" <<'GRADLE'
+tasks.test {
+    useJUnitPlatform { excludeTags("integration", "e2e") }
+}
+val integrationTest by tasks.registering(Test::class) {
+    useJUnitPlatform { includeTags("integration") }
+}
+tasks.named<JacocoReport>("jacocoTestReport") {
+    executionData(tasks.test.get(), integrationTest.get())
+}
+GRADLE
+cat >"$TAGGED-kts/.ai-harness/workflows/fix-bug.md" <<'DOC'
+- `./gradlew test --tests {pattern}`
+DOC
+assert_eq "integrationTest" "$(jq -r '[.targeted_command_gaps[].use_instead] | join(",")' <<<"$("$ROOT/scripts/docs-drift.sh" scan --root "$TAGGED-kts")")" "kotlin dsl tag filters and executionData gating are understood"
+pass "drift targeted command for tag-excluded tests"
+# JS 워크스페이스(apps/<pkg>/package.json)는 두 단계 아래에 있다. exec 뒤 바이너리와 별칭 경유 호출도 오탐을 만들면 안 된다.
+WS="$TEST_TMP/drift-workspace"
+mkdir -p "$WS/apps/web" "$WS/.ai-harness/docs"
+printf '{"scripts":{"web":"yarn workspace web","lint":"eslint ."}}\n' >"$WS/package.json"
+printf '{"scripts":{"test:ci":"vitest run --coverage","storybook":"storybook dev","eject":"x","lint:error":"eslint --quiet ."}}\n' >"$WS/apps/web/package.json"
+cat >"$WS/.ai-harness/docs/testing.md" <<'DOC'
+- `yarn web test:ci`, `yarn lint`
+- `pnpm --filter web storybook`
+- `pnpm --filter web exec tsc --noEmit`
+DOC
+WS_SCAN="$("$ROOT/scripts/docs-drift.sh" scan --root "$WS")"
+assert_eq "" "$(jq -r '[.stale_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a workspace script is not stale, and a binary after exec is not a script"
+assert_eq "lint:error" "$(jq -r '[.missing_in_docs[].value] | join(",")' <<<"$WS_SCAN")" "a script reached through a root alias counts as documented; only verification scripts of a workspace become facts"
+pass "drift js workspaces"
 
 # Workflow contract: protected workflow bodies, personas and settings checked against the managed graph
 CONTRACT="$TEST_TMP/contract-bad"
@@ -400,6 +464,13 @@ assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝�
 assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
+assert_contains "$HARVEST_CONTENT" "### 6.5. 독립 검토" "harvest reviews proposals before applying them"
+assert_contains "$HARVEST_CONTENT" "\`ai-harness:harvest-reviewer\` 서브에이전트" "harvest hands proposals to the bundled reviewer agent"
+assert_contains "$HARVEST_CONTENT" "최대 2회" "harvest review loop is bounded"
+assert_contains "$HARVEST_CONTENT" "관례 키(예: \`NJ-00000\`)" "harvest reuses the repo's no-issue key instead of a new issue"
+REVIEWER_AGENT="$ROOT/agents/harvest-reviewer.md"
+assert_file "$REVIEWER_AGENT"
+assert_eq "tools: Read, Grep, Glob" "$(grep '^tools:' "$REVIEWER_AGENT")" "harvest reviewer is read-only"
 pass "workspace mode scan, manifest, and routing"
 
 # Claude/Codex extractor metadata and coverage
@@ -430,6 +501,47 @@ mkdir -p "${USAGE_DUP_FIXTURE%/*}"
 } >"$USAGE_DUP_FIXTURE"
 HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$USAGE_DUP_FIXTURE" "user_exit"
 assert_eq "7 110 1020 12" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.tok_out) \(.cache_read) \(.cache_write)"' "$EXTRACT_DATA/events/claude-dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl")" "Claude usage counts each message.id once (content blocks repeat it) and keeps id-less lines"
+CTX_FIXTURE="$TEST_TMP/ctx/cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+mkdir -p "${CTX_FIXTURE%.jsonl}/subagents"
+{
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:00Z","message":{"role":"user","content":"go"}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:01Z","message":{"id":"m1","model":"claude-test-model","usage":{"input_tokens":100,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":900},"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/tmp/service/.ai-harness/docs/testing.md"}},{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"cat AGENTS.md .ai-harness/docs/testing.md"}},{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"x"}}]}}'
+  printf '%s\n' '{"type":"user","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"'"$(printf 'a%.0s' {1..400})"'"},{"type":"tool_result","tool_use_id":"b1","content":"'"$(printf 'b%.0s' {1..80})"'"},{"type":"tool_result","tool_use_id":"g1","content":[{"type":"text","text":"한글"}]}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:03Z","message":{"id":"m2","model":"claude-test-model","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":1000,"cache_creation_input_tokens":300},"content":[{"type":"text","text":"y"}]}}'
+  printf '%s\n' '{"type":"assistant","isSidechain":true,"cwd":"/tmp/service","timestamp":"2026-07-29T00:00:04Z","message":{"id":"m3","model":"claude-test-model","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":99999},"content":[{"type":"text","text":"side"}]}}'
+  printf '%s\n' '{"type":"assistant","cwd":"/tmp/service","timestamp":"2026-07-29T00:00:05Z","message":{"id":"m4","model":"claude-test-model","usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":1200,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"z"}]}}'
+} >"$CTX_FIXTURE"
+for agent in a1 a2; do
+  printf '{"type":"assistant","isSidechain":true,"message":{"id":"%s","model":"claude-test-model","usage":{"input_tokens":3,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":7},"content":[{"type":"text","text":"x"}]}}\n' "$agent" >"${CTX_FIXTURE%.jsonl}/subagents/agent-$agent.jsonl"
+done
+HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/extract-claude.sh" "$CTX_FIXTURE" "user_exit"
+CTX_EVENT="$EXTRACT_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+assert_eq "2 6 40 1000 14" "$(jq -r 'select(.kind=="session") | "\(.agents) \(.agent_tok_in) \(.agent_tok_out) \(.agent_cache_read) \(.agent_cache_write)"' "$CTX_EVENT")" "Claude subagent transcripts are summed into the parent session"
+assert_eq "116" "$(jq -r 'select(.kind=="session") | .tok_in' "$CTX_EVENT")" "Claude main tokens stay main-only (in-file sidechain lines kept as before)"
+assert_eq "1000 1310 1205" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last)"' "$CTX_EVENT")" "Claude context first/peak/last from main-chain calls only"
+assert_eq "Bash=20/1 Grep=1/1 Read=100/1" "$(jq -r 'select(.kind=="ctx_tool") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT" | sort | paste -sd " " -)" "Claude tool result size per tool (UTF-8 bytes/4)"
+assert_eq ".ai-harness/docs/testing.md=100/1" "$(jq -r 'select(.kind=="doc_ctx") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT")" "Claude doc context cost skips results mixing several docs"
+AGENT_BF_PROJ="$TEST_TMP/agent-bf-claude/project"
+AGENT_BF_DATA="$TEST_TMP/agent-bf-data"
+mkdir -p "$AGENT_BF_PROJ"
+cp -R "$CTX_FIXTURE" "${CTX_FIXTURE%.jsonl}" "$AGENT_BF_PROJ/"
+agent_bf() { HARNESS_METRICS_DIR="$AGENT_BF_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/agent-bf-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/none" "$ROOT/scripts/backfill.sh" >/dev/null; }
+agent_bf
+AGENT_BF_EVENT="$AGENT_BF_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+touch -t 202601010000 "$AGENT_BF_PROJ/$(basename "$CTX_FIXTURE")" "$AGENT_BF_EVENT"
+cp "$AGENT_BF_PROJ/cccccccc-1111-2222-3333-dddddddddddd/subagents/agent-a1.jsonl" "$AGENT_BF_PROJ/cccccccc-1111-2222-3333-dddddddddddd/subagents/agent-a3.jsonl"
+agent_bf
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .agents' "$AGENT_BF_EVENT")" "backfill re-extracts when only a subagent transcript is newer than the event"
+agent_bf
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .agents' "$AGENT_BF_EVENT")" "backfill stays stable after re-extracting a subagent update"
+CTX_STATS_DATA="$TEST_TMP/ctx-stats"
+mkdir -p "$CTX_STATS_DATA/events"
+cp "$CTX_EVENT" "$CTX_STATS_DATA/events/"
+CTX_STATS="$(HARNESS_METRICS_DIR="$CTX_STATS_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$CTX_STATS" "| service | 1 | 1 | 116 | 4 | 2200 | 101199 | 6/40/1000 |" "stats shows subagent usage beside main usage"
+assert_contains "$CTX_STATS" "| service | 1 | 1000 | 1310 | 1310 |" "stats shows per-project context overhead and peak"
+assert_contains "$CTX_STATS" "| .ai-harness/docs/testing.md | 100 | 100 |" "stats shows doc context cost and per-read size"
+assert_contains "$CTX_STATS" "| Read | 100 |" "stats ranks tool result sizes"
 BASH_DOC_FIXTURE="$TEST_TMP/bash-doc/ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl"
 mkdir -p "${BASH_DOC_FIXTURE%/*}"
 bash_doc_line() { # $1=tool name, $2=input json
@@ -458,6 +570,28 @@ assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_E
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
 assert_eq "openai" "$(jq -r 'select(.kind=="session") | .provider' "$CODEX_EVENT")" "Codex provider"
 assert_eq "11" "$(jq -r 'select(.kind=="session") | .cache_write' "$CODEX_EVENT")" "Codex cache write"
+assert_eq "40 60" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.cache_read)"' "$CODEX_EVENT")" "Codex input excludes cached input (OpenAI input_tokens includes it)"
+CODEX_CTX_DIR="$TEST_TMP/codex-ctx/2026/07/30"
+CODEX_CTX_FIXTURE="$CODEX_CTX_DIR/rollout-2026-07-30T00-00-00-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+mkdir -p "$CODEX_CTX_DIR"
+{
+  sed 's/bbbbbbbb-1111-2222-3333-cccccccccccc/eeeeeeee-1111-2222-3333-ffffffffffff/' "$CODEX_FIXTURE" | grep -v '"token_count"'
+  for u in '1000 600 1000 10000' '3000 2500 4000 10000' '2000 1900 6000 5000'; do
+    read -r last cached total window <<<"$u"
+    printf '{"type":"event_msg","timestamp":"2026-07-30T00:00:09Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":5},"last_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":1},"model_context_window":%s}}}\n' "$total" "$cached" "$last" "$cached" "$window"
+  done
+} >"$CODEX_CTX_FIXTURE"
+HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-extract" "$ROOT/scripts/extract-codex.sh" "$CODEX_CTX_FIXTURE"
+CODEX_CTX_EVENT="$TEST_TMP/codex-ctx-extract/events/codex-2026-07-30T00-00-00-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+assert_eq "1000 3000 2000 10000" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last) \(.ctx_window)"' "$CODEX_CTX_EVENT")" "Codex context per call and the window in effect at the peak call (model switch shrinks it later)"
+CODEX_LEGACY_DATA="$TEST_TMP/codex-legacy"
+mkdir -p "$CODEX_LEGACY_DATA/events"
+jq -c 'if .kind=="session" then .coverage -= ["context"] | .tok_in = 100 | del(.ctx_first,.ctx_peak,.ctx_last,.ctx_window) else . end' "$CODEX_EVENT" \
+  >"$CODEX_LEGACY_DATA/events/codex-legacy.jsonl"
+assert_contains "$(HARNESS_METRICS_DIR="$CODEX_LEGACY_DATA" "$ROOT/scripts/stats.sh")" "| jobda-agent | 1 | 3 | 40 |" "stats normalizes legacy Codex input that still included cached input"
+CODEX_CTX_REPORT="$(HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-data" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/codex-ctx" "$ROOT/scripts/session.sh" eeeeeeee)"
+assert_contains "$CODEX_CTX_REPORT" "최대 3000 / 마지막 2000 · 창 10000의 30%" "session report shows peak share of the Codex context window"
 assert_eq "reviewer" "$(jq -r 'select(.kind=="persona") | .target' "$CODEX_EVENT")" "Codex bridge persona"
 assert_eq ".ai-harness/docs/code-conventions.md .ai-harness/docs/testing.md" "$(jq -r 'select(.kind=="doc_read") | .target' "$CODEX_EVENT" | sort | paste -sd " " -)" "Codex bridge multi-doc read in one exec"
 assert_eq "1" "$(jq -r 'select(.kind=="guard_block") | .n' "$CODEX_EVENT")" "Codex guard block counts line-leading hook prefix only"
@@ -676,17 +810,44 @@ for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.
   assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
   assert_eq "done repair user_decision" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, and unverified"
 done
-assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
-if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
-fi
+# ui_review는 선택 노드다. 옛 그래프(노드 없음)도 유효하고, 노드가 있으면 화면 검증을 건너뛰는 경로가 없어야 한다. (#150)
+UI_GRAPH="$ROOT/templates/ui-review/references/ui-review-graph.json"
+"$ROOT/scripts/validate-ui-review-graph.sh" "$UI_GRAPH" >/dev/null
+for pair in "feature:$FEATURE_GRAPH" "bug-fix:$ROOT/templates/fix-bug/references/bug-fix-graph.json" "review:$ROOT/templates/review/references/review-graph.json"; do
+  validator="$ROOT/scripts/validate-${pair%%:*}-graph.sh"
+  graph="${pair#*:}"
+  assert_eq "false:true" "$(jq -r '"\(.nodes.ui_review.write):\(.nodes.ui_review.browser)"' "$graph")" "$(basename "$graph") verifies screens in a browser without writing"
+  jq 'del(.nodes.ui_review) | .transitions |= map(select(.from != "ui_review" and .to != "ui_review"))' "$graph" >"$INVALID_GRAPH"
+  "$validator" "$INVALID_GRAPH" >/dev/null || fail "$(basename "$graph") without ui_review stays valid for unsynced projects"
+  jq 'del(.transitions[] | select(.from == "ui_review" and (.to == "repair")))' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose UI issues cannot be repaired is invalid"; fi
+  jq '.nodes.ui_review.write = true' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose ui_review can write is invalid"; fi
+  jq --arg to "$(jq -r 'first(.transitions[] | select(.from == "ui_review" and .when == "ui_verified") | .to)' "$graph")" \
+    '.transitions += [{"from": "ui_review", "to": $to, "when": "ui_unverified_but_ship"}]' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with a ui_review bypass to done or publish is invalid"; fi
+  jq '.transitions = [{"from": "ui_review", "to": "repair", "when": "ui_verified"}] + .transitions' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with two ui_review exits on the same outcome is invalid"; fi
+done
+jq '.transitions += [{"from": "inspect", "to": "done", "when": "no_blocking_findings"}]' "$UI_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph that reaches done without ui_verified is invalid"; fi
+jq 'del(.transitions[] | select(.when == "ui_unverified"))' "$UI_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph without an unverified exit is invalid"; fi
+for adapter in implement-feature fix-bug review; do
+  assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "ui_review" "$adapter adapter routes UI changes through ui_review"
+  assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "workflow-driver.sh" "$adapter adapter runs the graph through the shared runner"
+done
 pass "feature delivery graph adapters"
 
 # 드라이버는 그래프를 모델 밖에서 실행한다: 전이는 그래프가, 승인은 사용자가 직접 입력한 메시지가, 완료는 드라이버가 실행한 검증이 정한다.
-DRIVER="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
+DRIVER="$ROOT/templates/workflow-driver/workflow-driver.sh"
+DRIVER_SHIM="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
 assert_file "$DRIVER"
-assert_contains "$(<"$FEATURE_SKILL")" "implement-feature-driver.sh" "feature skill points to the graph runner"
-assert_eq "1" "$(jq '[.artifacts[] | select(.path == ".ai-harness/workflows/implement-feature-driver.sh" and .level == "standard" and (has("integration") | not))] | length' "$ROOT/templates/managed-files.json")" "driver ships to every standard project regardless of integration"
+assert_file "$DRIVER_SHIM"
+assert_contains "$(<"$FEATURE_SKILL")" "workflow-driver.sh start --workflow feature" "feature skill points to the graph runner"
+for runner in workflow-driver.sh implement-feature-driver.sh; do
+  assert_eq "1" "$(jq --arg p ".ai-harness/workflows/$runner" '[.artifacts[] | select(.path == $p and .level == "standard" and (has("integration") | not) and (has("workflow") | not or $p != ".ai-harness/workflows/workflow-driver.sh"))] | length' "$ROOT/templates/managed-files.json")" "$runner ships to every standard project regardless of integration"
+done
 assert_eq "human" "$(jq -r '.nodes.approval.actor' "$FEATURE_GRAPH")" "approval is a human node the runner interrupts at"
 DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
@@ -821,6 +982,54 @@ start_and_approve noop
 assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "delivery without a change is not done"
 start_and_approve extra_check --check "test -f feature.txt"
 assert_eq "0:true" "$DRIVER_RC:$(run_state '.checks | index("test -f feature.txt") != null')" "--check joins the approved verification"
+
+# 화면이 바뀌는 기능은 Brief가 ui_scenarios를 내고, review 뒤 ui_review가 실제 화면을 검증한다. (#150)
+start_and_approve ui_ok
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a UI change reaches done only through a verified ui_review"
+assert_eq "review;ui_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "ui_review runs after a review with no blocking findings"
+assert_contains "$(<"$FAKE_LOG")" "ui_review workspace-write schema=yes net=yes add-dir=yes" "ui_review may run the app and a browser and save captures in the run directory; the fingerprint keeps the repository unchanged"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+assert_contains "$(<"$(dirname "$(run_state .ui_review.evidence_dir)")/brief.md")" "## 화면 검증 시나리오" "the approved brief carries the UI scenarios"
+assert_contains "$(<"$FAKE_LOG.ui_review.prompt")" "default and collapsed states" "ui_review looks at the default state before hovering"
+assert_contains "$(<"$FAKE_LOG.ui_review.prompt")" "a screenshot file existing" "ui_review is told what is not evidence"
+assert_contains "$DRIVER_OUT" "UI: verified" "the outcome reports the UI verification"
+[[ "$(<"$FAKE_LOG.brief.prompt")" == *"ui_scenarios"* ]] || fail "the brief node is asked for UI scenarios"
+start_and_approve ui_issues_once
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a blocking UI issue goes through repair and re-verification"
+assert_eq "ui_review;repair;review;ui_review" "$(grep -E '^(ui_review|repair|review) ' "$FAKE_LOG" | tail -n 4 | cut -d' ' -f1 | paste -sd ';' -)" "after repair the change is reviewed and its screens verified again"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "펼침 표시가 없어" "repair receives the UI finding"
+start_and_approve ui_unverified
+assert_eq "20:user_decision:unverified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a UI that could not be verified is never done"
+assert_contains "$DRIVER_OUT" "implementation done, UI unverified" "the outcome separates implementation from verification"
+assert_eq "0" "$(run_state .attempts)" "an unverified UI goes to a person without repair attempts"
+start_and_approve ui_empty_issues
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "issues without findings count as unverified, not as done"
+start_and_approve ui_hollow
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified without a record of operating each scenario is not evidence"
+start_and_approve ui_partial
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified with unverified items left is not done"
+start_and_approve ui_fake_capture
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "a capture named in the output but missing from the evidence directory is not evidence"
+start_and_approve ui_writes
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "ui_review that writes into the repository stops the run"
+assert_contains "$DRIVER_OUT" "capture.png" "the violation names the file the node left in the repository"
+# Brief가 화면 변경을 놓쳐도 화면 파일이 바뀌면 검증한다.
+start_and_approve screen_backstop
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run whose brief missed the screen change still ends verified"
+assert_contains "$(run_state '.ui_scenarios[0]')" "templates/approve.html" "changed screen files become a UI scenario"
+assert_eq "review;ui_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the backstop routes through ui_review"
+# 갱신하지 않은 그래프(ui_review 없음)는 그대로 따르되 화면을 검증하지 않았다고 밝힌다.
+new_driver_repo ui_legacy_graph
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.nodes.ui_review) | .transitions |= map(select(.from != "ui_review" and .to != "ui_review"))' \
+  "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a UI change on a graph without ui_review is never done"
+assert_contains "$DRIVER_OUT" "implementation done, UI unverified: the project graph has no ui_review node" "that outcome says the screens were not verified and how to fix it"
+assert_eq "null" "$(run_state .publish)" "nothing is published without UI verification"
 
 # 전이는 저장소 그래프가 정한다: review -> done 엣지를 지우면 done에 갈 수 없다.
 new_driver_repo graph_driven
@@ -1008,6 +1217,170 @@ driver resume
 assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "the escalation edge and repair limit come from the project graph"
 pass "feature delivery graph runner enforces the graph outside the model"
 
+# 버그 수정·변경 검토도 같은 러너가 실행한다. (#154)
+BUG_FIX_GRAPH_TEMPLATE="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+REVIEW_GRAPH_TEMPLATE="$ROOT/templates/review/references/review-graph.json"
+run_dir() { dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"; }
+bug_run() { # scenario [start args...] → 승인 뒤 resume까지
+  new_driver_repo "$1"
+  shift
+  driver start --workflow bug-fix --runtime codex --request "total ignores tax" "$@"
+  [[ "$DRIVER_RC" == 10 ]] || return 0
+  say_in_claude "승인"
+  driver resume
+}
+new_driver_repo bug_ok
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+assert_eq "10:approval:bug-fix" "$DRIVER_RC:$(run_state .node):$(run_state .workflow)" "a bug fix stops at approval after triage, reproduce, and brief"
+assert_eq "triage read-only schema=;reproduce workspace-write schema=yes add-dir=yes;brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "nothing writes before approval; reproduce may run commands and keeps its notes in the run directory"
+assert_contains "$DRIVER_OUT" "Bug Fix Brief" "the person sees a Bug Fix Brief"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "expected 110, got 100" "the brief carries the reproduction evidence"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" ".ai-harness/workflows/fix-bug.md" "bug-fix nodes read the project bug-fix workflow"
+assert_contains "$(run_state .graph)" "bug-fix-graph.json" "the run follows the bug-fix graph"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an approved bug fix reaches done"
+assert_contains "$(run_state '[.history[].to] | join(",")')" "regression,fix,verify,review,publish,remote_ci,done" "the runner follows the bug-fix graph"
+assert_eq "regression workspace-write;fix workspace-write;review read-only" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1,2 | paste -sd ';' -)" "regression and fix write after approval; review stays read-only"
+bug_run repro_blocked
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a bug that can be neither reproduced nor observed goes to a person before approval"
+assert_contains "$(<"$(run_dir)/unresolved.json")" "a sample order export" "the person sees what is needed to reproduce"
+[[ "$(<"$FAKE_LOG")" != *regression* ]] || fail "nothing writes when the bug cannot be reproduced"
+bug_run repro_hollow
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "reproduced without evidence is not a reproduction"
+bug_run repro_writes
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "reproduce that writes into the repository stops the run"
+FAKE_CHECK="grep -q fixed feature.txt" bug_run bug_fixcheck
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing verify goes to repair, then verify and review again"
+assert_eq "fix;repair;review" "$(grep -E '^(fix|repair|review) ' "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the failed check is repaired before review"
+bug_run bug_noop
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a bug fix without a change is not done"
+bug_run bug_fix_noop
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a regression test alone does not count as a fix"
+bug_run ui_bug
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a bug fix that changes a screen goes through ui_review"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+new_driver_repo bug_pr
+with_policy pr-only auto
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state '.checkpoints | length')" "an auto-approved pr-only bug fix checkpoints regression and fix, then opens a PR"
+assert_contains "$(git -C "$DRIVER_REPO" log --format=%s)" "wip(fix-bug): regression" "bug-fix checkpoints name the workflow"
+new_driver_repo bug_legacy_verify
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.transitions[] | select(.from == "verify" and .when == "required_checks_fail"))' "$BUG_FIX_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/bug-fix-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+FAKE_CHECK=false driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+say_in_claude "승인"
+FAKE_CHECK=false driver resume
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a graph without the verify failure edge hands a failed check to a person"
+assert_contains "$DRIVER_OUT" "no verify -> repair edge" "that outcome says how to fix it"
+# 실행의 워크플로는 상태가 정한다. 다른 워크플로로 이어 가지 않는다.
+driver status --workflow review --run "$(run_state .run_id)"
+assert_eq "2" "$DRIVER_RC" "a run cannot be resumed as another workflow"
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --repo "$DRIVER_REPO" 2>&1)" || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "the old feature entry point does not resume a bug-fix run"
+new_driver_repo shim_ok
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO=shim_ok PATH="$ROOT/tests/fixtures/driver:$PATH" \
+  bash "$DRIVER_SHIM" start --runtime codex --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+assert_eq "10:feature" "$DRIVER_RC:$(run_state .workflow)" "the old entry point runs the feature workflow"
+DRIVER_RC=0
+HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --workflow review --repo "$DRIVER_REPO" >/dev/null 2>&1 || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "the old entry point refuses another workflow instead of running the feature one"
+# 이 구분 전의 feature 실행(latest-feature 없음)은 그 뒤 다른 워크플로를 시작해도 이어 갈 수 있다.
+rm -f "$(dirname "$(run_dir)")/latest-feature"
+driver start --workflow bug-fix --runtime codex --request "total ignores tax"
+DRIVER_RC=0
+DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --repo "$DRIVER_REPO" 2>&1)" || DRIVER_RC=$?
+assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
+assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
+
+# review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
+review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다
+  new_driver_repo "$1"
+  echo change >"$DRIVER_REPO/feature.txt"
+  driver start --workflow review --runtime codex --request "review my uncommitted change"
+}
+review_run rv_clean
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a review without blocking findings is done"
+assert_eq "scope read-only schema=yes;inspect read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "the initial review is read-only"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state .diff_base)" "the review measures the change from the base the scope node named"
+new_driver_repo rv_empty
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a review with nothing to review stops instead of passing"
+assert_contains "$DRIVER_OUT" "nothing to review" "the person is told the review target is empty"
+review_run rv_blocks
+assert_eq "10:waiting_approval:classify" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "blocking findings wait for the person before any repair"
+assert_contains "$DRIVER_OUT" "feature.txt: missing case" "the person sees the findings to repair"
+assert_contains "$DRIVER_OUT" "수리하지 않으면 여기서 끝난다" "the person can keep the review without a repair"
+driver resume
+assert_eq "10:1" "$DRIVER_RC:$(grep -c '^inspect ' "$FAKE_LOG")" "resume without approval keeps waiting and does not review again"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:1:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .attempts):$(run_state .approval.source)" "an approved repair goes through verify and re-review to done"
+assert_eq "repair;re_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "every repair is followed by checks and re-review"
+assert_eq "fixed:1" "$(<"$DRIVER_REPO/feature.txt"):$(git -C "$DRIVER_REPO" rev-list --count HEAD)" "the repair stays uncommitted in the working tree"
+assert_contains "$DRIVER_OUT" "left uncommitted" "the outcome says the repair is not committed"
+review_run rv_decision
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a finding that needs a product decision goes to a person"
+review_run scope_bad_base
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a review base that is not a commit stops the run"
+review_run scope_nocheck
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a repair needs a verification command"
+new_driver_repo rv_auto
+with_policy pr-only auto
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "0:done:auto-policy:0" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source):$(run_state '.checkpoints | length')" "approval auto authorizes the repair, and review never commits"
+new_driver_repo rv_always_blocks
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 2' "$REVIEW_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/review-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+say_in_claude "승인"
+driver resume
+assert_eq "10" "$DRIVER_RC" "a finding the person has not seen asks again before it is repaired"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "re-review stops at the graph's repair limit"
+FAKE_CHECK="test -f $DRIVER_TMP/rv_verify_fail.seen || { touch $DRIVER_TMP/rv_verify_fail.seen; false; }"
+review_run rv_verify_fail
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failed check after repair goes back to repair"
+FAKE_CHECK=false
+new_driver_repo rv_verify_limit
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq '.limits.max_repair_attempts = 1' "$REVIEW_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/review-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+echo change >"$DRIVER_REPO/feature.txt"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "checks that keep failing reach the repair limit and go to a person"
+unset FAKE_CHECK
+review_run rv_new_finding
+say_in_claude "승인"
+driver resume
+assert_eq "10:re_review" "$DRIVER_RC:$(run_state .node)" "a new finding outside the approved repair scope asks again"
+assert_contains "$DRIVER_OUT" "auth flow must be redesigned" "the person sees the new finding before it is repaired"
+assert_eq "1" "$(grep -c '^repair ' "$FAKE_LOG")" "nothing repairs the new finding before the person agrees"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "after the second agreement the new finding is repaired and re-reviewed"
+review_run rv_ui
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a review of a screen change verifies the rendered screen"
+assert_contains "$(<"$FAKE_LOG")" "ui_review workspace-write schema=yes net=yes add-dir=yes" "review keeps captures in the run directory too"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+new_driver_repo rv_clean_screen
+mkdir -p "$DRIVER_REPO/templates"
+echo '<summary>반려하기</summary>' >"$DRIVER_REPO/templates/approve.html"
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a changed screen file is verified even when the reviewer listed no scenario"
+pass "bug-fix and review graphs run through the same runner"
+
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
 BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
@@ -1030,7 +1403,6 @@ assert_file "$BUG_FIX_GRAPH"
 "$ROOT/scripts/validate-bug-fix-graph.sh" "$BUG_FIX_GRAPH" >/dev/null
 assert_eq "false" "$(jq -r '.nodes.approval.write' "$BUG_FIX_GRAPH")" "bug-fix approval node is read-only"
 assert_eq "true" "$(jq -r '.nodes.regression.write' "$BUG_FIX_GRAPH")" "bug-fix regression node can write"
-assert_file "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/fix-bug/" "harness init uses the local bug-fix template"
 assert_contains "$HARNESS_INIT_CONTENT" "회귀 테스트는 test-engineer, production 수정은 developer" "fix-bug assigns the regression test to the test role"
 assert_contains "$HARNESS_INIT_CONTENT" "역할 범위 위반을 발견하면 변경을 폐기하지 않는다" "role violations preserve the diff instead of discarding it"
@@ -1039,9 +1411,6 @@ assert_contains "$HARNESS_INIT_CONTENT" "존재하지 않는 도구를 적지 �
 assert_contains "$HARNESS_INIT_CONTENT" "<module>/src/main/**" "persona write scopes follow the measured module layout"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel)/.ai-harness/hooks/direct-edit-guard.sh" "guard hook path does not depend on CLAUDE_PROJECT_DIR"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/bug-fix-graph.json" "harness init copies the local bug-fix graph"
-if command -v node >/dev/null 2>&1; then
-  node --check "$ROOT/templates/fix-bug/references/fix-bug-workflow.js"
-fi
 pass "bug-fix graph adapters"
 
 # 프로젝트 하네스 동기화 상태: 생성 직후 해시는 안전한 갱신 후보, 이후 수정은 승인 대상이다.
@@ -1068,7 +1437,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "7" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "8" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"
@@ -1250,6 +1619,27 @@ assert_contains "$HARNESS_INIT_CONTENT" "stack" "harness init documents the stac
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/frontend.md" "harness init generates the frontend context doc"
 pass "frontend judgment skills stack gating"
 
+# UI 검토 계약: 서버 렌더링 화면까지 stack 게이트 ui로 생성하고, 실제 렌더링·조작 근거를 요구한다. (#150)
+UIR_CONTENT="$(<"$ROOT/templates/ui-review/SKILL.md")"
+assert_file "$ROOT/templates/ui-review/references/checklist.md"
+assert_contains "$UIR_CONTENT" "Flask/Jinja" "ui-review covers server-rendered screens"
+assert_contains "$UIR_CONTENT" "## 거짓 통과" "ui-review lists false passes"
+assert_contains "$UIR_CONTENT" "\`unverified\`는 완료가 아니다" "ui-review never calls an unverified UI done"
+assert_contains "$UIR_CONTENT" "작업 트리를 바꾸지 않는다" "ui-review separates inspection from authoring"
+assert_contains "$UIR_CONTENT" "증거가 있고 지금 작업 트리에 대한" "ui-review states what automatic gates cannot judge"
+assert_contains "$(<"$ROOT/templates/ui-review/references/checklist.md")" "기본 상태로 식별" "the checklist starts from discoverability in the default state"
+UI_ROOT="$TEST_TMP/ui-project"
+mkdir -p "$UI_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"ui-project","level":"standard","integrations":["codex","claude"],"stacks":["ui"],"harness_version":"0.42.0"}' >"$UI_ROOT/.ai-harness/harness.json"
+UI_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$UI_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+for path in .ai-harness/workflows/ui-review-graph.json .agents/skills/ui-review/SKILL.md .claude/skills/ui-review/references/checklist.md; do
+  assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "ui stack selects $path"
+done
+assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path==".agents/skills/frontend-fundamentals/SKILL.md")] | length')" "a server-rendered UI project does not get React judgment skills"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | contains("ui-review"))] | length')" "the UI contract is opt-in: a frontend project without the ui stack is not given it"
+assert_contains "$HARNESS_INIT_CONTENT" "서버 렌더링 템플릿" "harness init detects server-rendered UI"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/ui.md" "harness init generates the UI context doc"
+pass "ui review contract and stack gating"
 # 프론트 팀 역할 세트: frontend-team stack이면 라우터·fe-architect·fe-implementer, design-system이면 fe-designer·design-audit까지.
 for f in frontend-team/SKILL.md design-audit/SKILL.md frontend-team/personas/fe-architect.md frontend-team/personas/fe-implementer.md frontend-team/personas/fe-designer.md; do
   assert_file "$ROOT/templates/$f"
@@ -1314,17 +1704,17 @@ assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("understand"))] | lengt
 # 코드를 바꾸는 진입점은 프로젝트 규칙 없이 노출하지 않는다. 워크플로 스크립트도 프로젝트에 설치된다.
 assert_not_file "$ROOT/workflows/implement-feature.js"
 assert_eq "0" "$(find "$ROOT/workflows" -type f 2>/dev/null | wc -l | tr -d ' ')" "no plugin-global dynamic workflows remain"
+# Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행했다. 더 만들지 않고, 남은 사본은 sync가 정리 대상으로 안내한다. (#154)
 for WORKFLOW_NAME in implement-feature fix-bug review; do
-  WORKFLOW_ENTRY="$(jq -c --arg path ".claude/workflows/$WORKFLOW_NAME.js" '.artifacts[] | select(.path == $path)' "$ROOT/templates/managed-files.json")"
-  [[ -n "$WORKFLOW_ENTRY" ]] || fail "$WORKFLOW_NAME workflow is not a managed project artifact"
-  assert_eq "claude" "$(jq -r '.integration' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow is scoped to the Claude integration"
-  assert_eq "standard" "$(jq -r '.level' <<<"$WORKFLOW_ENTRY")" "$WORKFLOW_NAME workflow ships at the standard level"
+  assert_eq "0" "$(jq --arg path ".claude/workflows/$WORKFLOW_NAME.js" '[.artifacts[] | select(.path == $path)] | length' "$ROOT/templates/managed-files.json")" "$WORKFLOW_NAME Dynamic Workflow is no longer generated"
+  assert_eq "1" "$(jq --arg path ".claude/workflows/$WORKFLOW_NAME.js" '[.retired[] | select(.path == $path)] | length' "$ROOT/templates/managed-files.json")" "$WORKFLOW_NAME Dynamic Workflow copies are retired"
 done
+assert_eq "0" "$(find "$ROOT/templates" -name '*-workflow.js' | wc -l | tr -d ' ')" "no Dynamic Workflow template remains"
 # 카탈로그가 가리키는 원본이 실제로 있어야 생성이 성공한다.
 while read -r CATALOG_SOURCE; do
   assert_file "$ROOT/$CATALOG_SOURCE"
 done < <(jq -r '.artifacts[].source' "$ROOT/templates/managed-files.json")
-pass "dynamic workflows ship as project artifacts, not plugin-global commands"
+pass "graph runners ship as project artifacts, not plugin-global commands"
 assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/understand-change/\`)" "harness init documents understand-change as a plugin skill"
 pass "understand-change plugin skill"
 
@@ -1405,9 +1795,7 @@ assert_file "$REVIEW_SKILL"
 assert_file "$REVIEW_GRAPH"
 "$ROOT/scripts/validate-review-graph.sh" "$REVIEW_GRAPH" >/dev/null
 assert_contains "$(<"$REVIEW_SKILL")" "do not report completion while a blocking finding remains" "review blocks completion"
-assert_file "$ROOT/templates/review/references/review-workflow.js"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/review/" "harness init uses the local review template"
-if command -v node >/dev/null 2>&1; then node --check "$ROOT/templates/review/references/review-workflow.js"; fi
 pass "review graph adapters"
 
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
@@ -1954,7 +2342,7 @@ pass "backfill freshness and version invalidation"
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, doc_read" "full Codex coverage declaration"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, context, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
@@ -3444,5 +3832,151 @@ assert_contains "$AF_ARGS" '--no-session-persistence' "unattended autofix keeps 
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" 'autofix-auto.sh" sweep' "backfill-due runs the autofix sweep"
 assert_contains "$(<"$ROOT/scripts/autofix-auto.sh")" 'harvest-auto/running.lock' "autofix shares the unattended-run lock"
 pass "autofix tracks manual PRs and runs with a restricted agent"
+# 기본 스킬 카탈로그: 플러그인 스킬이 아니라 선택 설치 원본이며, Codex도 읽을 수 있는 frontmatter만 쓴다.
+CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
+assert_eq "$CATALOG_NAMES" "$(find "$ROOT/catalog" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd' ' -)" "catalog.json lists every catalog skill"
+for name in $CATALOG_NAMES; do
+  skill_md="$ROOT/catalog/$name/SKILL.md"
+  assert_file "$skill_md"
+  assert_eq "name: $name" "$(sed -n '2p' "$skill_md")" "catalog $name frontmatter name"
+  assert_eq "description" "$(sed -n '3p' "$skill_md" | cut -d: -f1)" "catalog $name frontmatter description"
+  assert_eq "---" "$(sed -n '4p' "$skill_md")" "catalog $name frontmatter has only name and description"
+  [[ ! -e "$ROOT/skills/$name" ]] || fail "catalog skill $name must not be a plugin skill"
+  if grep -qiE 'midas|jobda|khb1122' "$skill_md"; then fail "catalog $name carries organization-specific values"; fi
+  if grep -qE 'curl[^|]*(-u |-H .(DD-API-KEY|Authorization))' "$skill_md"; then fail "catalog $name puts credentials on argv"; fi
+done
+pass "skill catalog is generic and stays out of plugin skills"
+
+SETUP_T="$TEST_TMP/setup"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+printf '{"env":{"SENTRY_AUTH_TOKEN":"sntrys_secret_value"}}\n' >"$SETUP_T/settings.json"
+setup_cmd() {
+  env -u DATADOG_API_KEY -u DD_API_KEY -u SENTRY_AUTH_TOKEN -u SENTRY_ORG -u ATLASSIAN_USER -u ATLASSIAN_API_TOKEN \
+    HARNESS_METRICS_DIR="$SETUP_T/data" HM_SETUP_CATALOG_DIR="$SETUP_CATALOG" HARNESS_CLAUDE_SETTINGS="$SETUP_T/settings.json" \
+    HM_CLAUDE_SKILLS_DIR="$SETUP_T/claude" HM_CODEX_SKILLS_DIR="$SETUP_T/codex" HM_SETUP_HINT=1 \
+    "${SETUP_ENV[@]+"${SETUP_ENV[@]}"}" "$ROOT/scripts/setup.sh" "$@"
+}
+setup_status() { setup_cmd list | jq -r --arg n "$1" --arg t "$2" 'select(.name == $n) | .status[$t]'; }
+SETUP_ENV=()
+mkdir -p "$SETUP_T/claude/jira"
+printf 'my own jira\n' >"$SETUP_T/claude/jira/SKILL.md"
+
+SETUP_ENV=(DATADOG_API_KEY=dd_secret_value)
+SETUP_LIST="$(setup_cmd list)"
+SETUP_ENV=()
+assert_eq "env" "$(jq -r 'select(.name=="datadog") | .env[0].source' <<<"$SETUP_LIST")" "env key found in process env"
+assert_eq "settings" "$(jq -r 'select(.name=="sentry") | .env[0].source' <<<"$SETUP_LIST")" "env key found in Claude settings"
+assert_eq "missing" "$(jq -r 'select(.name=="sentry") | .env[1].source' <<<"$SETUP_LIST")" "missing env key reported"
+if grep -qE 'dd_secret_value|sntrys_secret_value' <<<"$SETUP_LIST"; then fail "setup list must not print credential values"; fi
+assert_eq "foreign" "$(jq -r 'select(.name=="jira") | .status.claude' <<<"$SETUP_LIST")" "pre-existing skill is foreign"
+
+SETUP_OUT="$(setup_cmd install --tool claude datadog jira nope)"
+assert_eq "installed" "$(jq -r 'select(.name=="datadog") | .action' <<<"$SETUP_OUT")" "install catalog skill"
+assert_eq "skipped foreign" "$(jq -r 'select(.name=="jira") | "\(.action) \(.detail)"' <<<"$SETUP_OUT")" "foreign skill is kept"
+assert_eq "unknown" "$(jq -r 'select(.name=="nope") | .action' <<<"$SETUP_OUT")" "unknown skill rejected"
+assert_eq "my own jira" "$(cat "$SETUP_T/claude/jira/SKILL.md")" "foreign skill content untouched"
+cmp -s "$SETUP_CATALOG/datadog/SKILL.md" "$SETUP_T/claude/datadog/SKILL.md" || fail "installed copy matches catalog"
+assert_eq "current" "$(setup_status datadog claude)" "fresh install is current"
+assert_eq "absent" "$(setup_status datadog codex)" "other tool untouched"
+assert_eq "unchanged" "$(setup_cmd install --tool claude datadog | jq -r '.action')" "reinstall is a no-op"
+
+# 카탈로그가 바뀌면 손대지 않은 사본만 SessionStart가 갱신하고, 고친 사본은 남긴다.
+setup_cmd install --tool claude sentry >/dev/null
+printf '\nlocal note\n' >>"$SETUP_T/claude/sentry/SKILL.md"
+assert_eq "modified" "$(setup_status sentry claude)" "user-edited copy is modified"
+printf '\n<!-- v2 -->\n' >>"$SETUP_CATALOG/datadog/SKILL.md"
+printf '\n<!-- v2 -->\n' >>"$SETUP_CATALOG/sentry/SKILL.md"
+assert_eq "outdated" "$(setup_status datadog claude)" "untouched copy becomes outdated"
+setup_cmd 'done' >/dev/null
+REFRESH_NOTICE="$(printf '{}' | setup_cmd notify)"
+assert_contains "$(jq -r '.systemMessage' <<<"$REFRESH_NOTICE")" "갱신했습니다: datadog" "SessionStart refreshes untouched copies"
+cmp -s "$SETUP_CATALOG/datadog/SKILL.md" "$SETUP_T/claude/datadog/SKILL.md" || fail "refreshed copy matches new catalog"
+assert_contains "$(cat "$SETUP_T/claude/sentry/SKILL.md")" "local note" "edited copy kept on refresh"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "nothing to refresh or announce"
+
+assert_eq "skipped modified" "$(setup_cmd remove --tool claude sentry | jq -r '"\(.action) \(.detail)"')" "edited copy not removed without force"
+SETUP_OUT="$(setup_cmd install --tool claude --replace jira)"
+assert_eq "replaced" "$(jq -r '.action' <<<"$SETUP_OUT")" "replace foreign skill on request"
+assert_eq "my own jira" "$(cat "$(jq -r '.detail' <<<"$SETUP_OUT")/SKILL.md")" "replaced skill backed up"
+assert_eq "current" "$(setup_status jira claude)" "replaced skill is managed"
+assert_eq "removed" "$(setup_cmd remove --tool claude datadog | jq -r '.action')" "remove managed copy"
+[[ ! -e "$SETUP_T/claude/datadog" ]] || fail "removed skill dir still exists"
+assert_eq "installed installed" "$(setup_cmd install --tool both confluence | jq -r '.action' | paste -sd' ' -)" "install for both tools"
+assert_file "$SETUP_T/codex/confluence/SKILL.md"
+pass "setup installs, refreshes and removes only managed copies"
+
+# 셋업 안내: 처음 한 번, 셋업 뒤에는 카탈로그에 새 스킬이 생길 때만. Codex 세션은 슬래시 대신 스킬 이름으로 안내한다.
+SETUP_T="$TEST_TMP/setup-hint"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+HINT_OUT="$(printf '{"transcript_path":"/x/rollout-2026-10-30T00-00-00-abc.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$HINT_OUT" "ai-harness setup 스킬" "Codex hint names the skill"
+assert_contains "$HINT_OUT" "datadog·sentry·jira·confluence" "first hint lists the catalog"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "first hint shown once"
+setup_cmd 'done' >/dev/null
+jq '.version = 2 | .skills += [{name:"pagerduty", since:2, summary:"x", env:[]}]' "$SETUP_CATALOG/catalog.json" >"$SETUP_T/c.json"
+mv "$SETUP_T/c.json" "$SETUP_CATALOG/catalog.json"
+NEW_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$NEW_HINT" "새 기본 스킬이 추가됐습니다: pagerduty" "new catalog skills announced"
+assert_contains "$NEW_HINT" "/ai-harness:setup" "Claude hint uses the slash command"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "new-skill hint shown once"
+SETUP_T="$TEST_TMP/setup-off"
+mkdir -p "$SETUP_T"
+SETUP_ENV=(HM_SETUP_HINT=0)
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "HM_SETUP_HINT=0 silences the hint"
+SETUP_ENV=()
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
+pass "setup hint on first session and on new catalog skills"
+
+# 접속 정보: secret은 인자로 받지 않고 stdin으로만, 저장한 파일에서 바로 연결 확인. 자격 증명은 HTTP 호출 인자에도 싣지 않는다.
+SETUP_T="$TEST_TMP/setup-creds"
+SETUP_CATALOG="$ROOT/catalog"
+mkdir -p "$SETUP_T"
+printf '{"model":"opus","env":{"KEEP":"1"}}\n' >"$SETUP_T/settings.json"
+cat >"$SETUP_T/http.sh" <<'STUB'
+#!/usr/bin/env bash
+conf="$(cat)"
+printf '%s\n' "$*" >>"${0%/*}/argv.log"
+case "$conf" in *bad-token*) printf 'HTTP 401\n' >&2; exit 1 ;; esac
+case "$1" in
+  */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
+  */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
+  */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  *) printf 'HTTP 404\n' >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$SETUP_T/http.sh"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+if setup_cmd set --tool claude ATLASSIAN_API_TOKEN "tok-in-argv" 2>/dev/null; then fail "secret accepted as an argument"; fi
+assert_eq "missing" "$(setup_cmd check jira | jq -r 'if .missing then "missing" else "x" end')" "check reports missing keys"
+setup_cmd set --tool claude JIRA_BASE_URL https://acme.atlassian.net/ >/dev/null
+setup_cmd set --tool claude ATLASSIAN_USER me@acme.test >/dev/null
+printf "good-tok'en\n" | setup_cmd set --tool both ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "1" "$(jq -r '.env.KEEP' "$SETUP_T/settings.json")" "settings.json keeps other env"
+assert_eq "opus" "$(jq -r '.model' "$SETUP_T/settings.json")" "settings.json keeps other keys"
+assert_eq "good-tok'en" "$(jq -r '.env.ATLASSIAN_API_TOKEN' "$SETUP_T/settings.json")" "secret saved to Claude settings"
+# shellcheck disable=SC2016  # 변수는 source한 하위 셸에서 펼친다
+assert_eq "good-tok'en" "$(env -i /bin/bash -c '. "$1"; printf %s "$ATLASSIAN_API_TOKEN"' _ "$SETUP_T/data/secrets.env")" "secret saved to sourceable Codex file"
+assert_eq "600" "$(filemode "$SETUP_T/data/secrets.env")" "secrets file is private"
+assert_eq "settings" "$(setup_cmd list | jq -r 'select(.name=="jira") | .env[2].source')" "saved secret visible without restart"
+assert_eq "true Kim" "$(setup_cmd check jira | jq -r '"\(.ok) \(.as)"')" "check uses saved credentials"
+DETECT="$(setup_cmd detect jira)"
+assert_eq "customfield_10113 gh-sprint" "$(jq -r '.fields[0] | "\(.id) \(.type)"' <<<"$DETECT")" "detect finds sprint field by type"
+assert_eq "1" "$(jq -r '.fields | length' <<<"$DETECT")" "detect ignores other fields"
+assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists recent projects"
+printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
+assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"
+if grep -qE "tok|bad-token" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
+if setup_cmd list | grep -q "tok'en"; then fail "list prints a credential"; fi
+SETUP_ENV=()
+for name in $CATALOG_NAMES; do
+  assert_contains "$(<"$ROOT/catalog/$name/SKILL.md")" "/skills/$name.md" "catalog $name reads the user rule file"
+  assert_eq "true" "$(jq -r --arg n "$name" '.skills[] | select(.name==$n) | all(.env[] | select(.secret); .issue.url != null)' "$ROOT/catalog/catalog.json")" "catalog $name secrets carry an issue URL"
+done
+pass "setup stores credentials off the transcript and checks them"
 
 printf '1..%d\n' "$TESTS"
