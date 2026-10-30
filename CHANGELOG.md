@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.49.0 (2026-10-30)
 ### 버그 수정
 
 - **서브에이전트 토큰이 집계에서 빠지던 문제** — Claude Code는 서브에이전트 대화를 `<세션>/subagents/agent-*.jsonl`에 따로 기록하는데 추출기가 메인 transcript만 읽었습니다. 위임을 많이 하는 워크플로일수록 사용량이 적게 잡혔습니다. 이제 부모 세션의 `agent_tok_in`·`agent_tok_out`·`agent_cache_read`·`agent_cache_write`로 합산하고 `/metrics`가 메인 토큰 옆에 보여줍니다.
