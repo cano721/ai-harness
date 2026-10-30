@@ -377,6 +377,7 @@ stateDiagram-v2
   - 적용마다 이전 파일을 `~/.ai-harness/applied/`에 남기고, `auto-apply.sh revert --rule-id <id>`로 규칙 단위로 되돌립니다. `auto-apply.sh list --active`로 현재 규칙을 봅니다
   - 규칙마다 기대효과를 기록하고, 다음 실행이 적용 이후 재발 여부로 효과를 판정해 강화하거나 스스로 되돌립니다
   - 다음 세션 시작에 무엇을 적용·되돌렸는지 한 번 알립니다
+  - 적용 전에 규칙 문구를 [독립 검토](#auto-harvest)에 넣고, 통과한 것만 적용합니다
   - 한 실행에 최대 2건, Claude Code로만 실행합니다
 
 <a id="llm-digest"></a>
@@ -400,6 +401,7 @@ stateDiagram-v2
 - **대상**: `.ai-harness/harness.json`이 있는 git 저장소의, 교정·오류·차단·권한 거부 신호가 있는 batch만. 세션 수만 넘은 batch(`HM_HARVEST_AUTO_SESSIONS_ONLY=1`로 포함 가능)와 하네스가 없는 폴더·workspace의 batch는 기존처럼 알림으로 남깁니다
 - **에이전트**: 세션을 만든 도구와 무관하게 `claude`가 있으면 Claude Code로 실행합니다(`HM_HARVEST_AUTO_AGENT=auto|claude|codex`). Codex 샌드박스는 쓰기 허용 경로에서도 `.git`을 읽기 전용으로 두어 커밋·push를 할 수 없으므로, Codex로 돌면 분석·보고까지만 하고 batch를 사람에게 넘깁니다
 - **무인 규칙**: 사용자에게 묻지 않습니다. worker가 origin 기본 브랜치 최신 커밋으로 작업 전용 worktree(`~/.ai-harness/harvest-auto/worktrees/`)를 만들고 그 안에서만 에이전트를 실행한 뒤 지웁니다 — 사용자 체크아웃은 건드릴 수 없습니다. 결과는 **draft PR**까지이며 `scripts/open-pr.sh`가 원격을 보고 GitHub(`gh`) 또는 Bitbucket Cloud(REST, `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)로 엽니다. 확인이 필요한 분기나 PR을 열 수 없는 원격이면 batch를 소비하지 않고 끝내 수동 `/harvest`로 넘깁니다
+- **독립 검토**: 반영 전에 읽기 전용 검토 에이전트(`agents/harvest-reviewer.md`)가 개선안만 보고 문구가 근거보다 넓은지·근거가 주장을 뒷받침하는지·저장소 규칙과 충돌하는지 판정합니다. `revise`면 고쳐서 새 검토자에게 다시 넘기고(최대 2회), 끝까지 통과하지 못한 개선안은 뺍니다. 판정은 PR 본문 `## 독립 검토` 절에 남습니다. 이슈 키를 요구하는 저장소는 새 이슈를 만들지 않고 git 기록의 무이슈 관례 키(예: `NJ-00000`)로 브랜치·제목을 만듭니다
 - **비용 제한**: batch당 1회, 하루 `HM_HARVEST_AUTO_DAILY_MAX`회(기본 2), 동시 1개, 실행당 `HM_HARVEST_AUTO_BUDGET_USD`(기본 5, Claude만)
 - **재귀 방지**: 자동 실행 세션은 `HM_HARVEST_RUNNING=1`·`HM_INTERNAL_SESSION=1`로 표시되어 그 안에서 다시 harvest를 띄우거나 수집되지 않습니다
 - **제거도 개선입니다**: 없는 경로·명령을 가리키거나 코드와 모순되는 줄, 교정을 유발한 규칙, 여러 파일에 반복된 지시, 사용 0회 자산을 제거 후보로 봅니다("최근 재발 없음"은 제거 근거가 아닙니다). 무인 실행은 줄 단위 제거까지만 draft PR로 내고, 파일·관리 생성물 삭제는 사람에게 넘깁니다. 개인 지침 블록의 자동 규칙은 블록 밖에 같은 문구가 생기면(`auto-apply.sh duplicates`) 되돌립니다
@@ -411,7 +413,7 @@ stateDiagram-v2
 - **통계 참고**: 근거는 있으나 아직 행동 변경으로 이어질 만큼 강하지 않은 경우입니다.
 - **개선점 없음**: cosmetic 정리나 단발성 노이즈는 적용하지 않습니다.
 
-비용 절제 장치가 두 가지 있습니다. **정독 게이트**는 가장 비싼 스텝(transcript 정독) 전에 압축 신호만으로 정독 가치를 판단해, 노이즈 batch는 정량 분석과 보고만으로 싸게 종료합니다. **결과 검증 루프**는 개선 PR마다 기대효과(`--expected`)를 기록해 두고, 다음 `/harvest`가 같은 패턴의 재발 여부로 그 개선을 채점합니다 — 재발이 확인되면 강화안 또는 revert를 제안해 효과 없는 규칙이 하네스에 쌓이는 것을 막습니다.
+비용 절제 장치가 두 가지 있습니다(반영 전 품질 관문은 위 독립 검토). **정독 게이트**는 가장 비싼 스텝(transcript 정독) 전에 압축 신호만으로 정독 가치를 판단해, 노이즈 batch는 정량 분석과 보고만으로 싸게 종료합니다. **결과 검증 루프**는 개선 PR마다 기대효과(`--expected`)를 기록해 두고, 다음 `/harvest`가 같은 패턴의 재발 여부로 그 개선을 채점합니다 — 재발이 확인되면 강화안 또는 revert를 제안해 효과 없는 규칙이 하네스에 쌓이는 것을 막습니다.
 
 정상 완료한 batch만 `mark-reviewed`로 소비합니다. `--dry-run`이나 실패한 분석은 pending을 지우지 않습니다.
 
