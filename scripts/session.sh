@@ -122,7 +122,8 @@ jq -s -r '
      then "\n- 서브에이전트 \($s.agents)개: in \($s.agent_tok_in) / out \($s.agent_tok_out) / cache read \($s.agent_cache_read) / cache write \($s.agent_cache_write)"
      else "" end)
   + (if $s.ctx_peak != null
-     then "\n- 컨텍스트: 첫 호출 \($s.ctx_first) (≈고정 오버헤드) / 최대 \($s.ctx_peak) / 마지막 \($s.ctx_last)"
+     then "\n- 컨텍스트: 시작 \($s.ctx_first) (첫 호출 입력 — 시스템·툴·첫 턴 첨부·첫 요청) / 최대 \($s.ctx_peak) / 마지막 \($s.ctx_last)"
+       + (if $s.ctx_window then " · 창 \($s.ctx_window)의 \($s.ctx_peak * 100 / $s.ctx_window | round)%" else "" end)
      else "" end)
   + "\n- 수집 지원: \(if ($coverage|length)==0 then "legacy event" else ($coverage|join(", ")) end)"
   + "\n- transcript: \($s.transcript)\n"

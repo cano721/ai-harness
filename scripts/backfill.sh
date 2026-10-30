@@ -93,6 +93,15 @@ process() { # $1=transcript $2=event파일 $3=extractor
   local source_mtime=0 source_size=0 current_size=0
   mt="$(mtime "$t")"
   [[ -n "$mt" ]] || return
+  # 서브에이전트 transcript(<sid>/subagents/)는 부모 이벤트에 합산된다 — 메인보다 늦게 끝나면 그 시각으로 신선도를 판정한다.
+  # 롤업 판정은 원본(메인) 수정 시각과 비교하므로 mt는 그대로 둔다.
+  local src_mt="$mt" agent="" agent_mt=""
+  if [[ "$ex" == "extract-claude.sh" ]]; then
+    for agent in "${t%.jsonl}"/subagents/*.jsonl; do
+      agent_mt="$(mtime "$agent")"
+      [[ -n "$agent_mt" ]] && (( agent_mt > src_mt )) && src_mt="$agent_mt"
+    done
+  fi
 
   # 검토 완료 후 보관 정책으로 rollup된 세션은 extractor 변경만으로 상세 이벤트를 되살리지 않는다.
   # 단, 같은 세션 transcript가 실제로 갱신됐으면 재개된 세션이므로 다시 추출·큐 등록한다.
@@ -123,7 +132,7 @@ process() { # $1=transcript $2=event파일 $3=extractor
     ev_mt="$(mtime "$ev")"
     ev_v="$(jq -sr 'map(select(.kind=="session")) | first | .v // 0' "$ev" 2>/dev/null || printf '0')"
     if [[ "$ev_v" == "$HM_EVENT_VERSION" && -n "$ev_mt" ]] \
-      && (( ev_mt >= mt && ev_mt >= newest_dep )); then
+      && (( ev_mt >= src_mt && ev_mt >= newest_dep )); then
       skip_n=$((skip_n + 1))
       enqueue_event "$ev"
       return
