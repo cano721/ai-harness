@@ -133,6 +133,8 @@ case "$node:$scenario" in
     unverified:["모든 시나리오: 로그인 계정이 문서에 없다"]}' >"$out" ;;
   ui_review:ui_hollow) jq -n '{status:"verified", summary:"looks fine", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
+  ui_review:ui_fake_capture) echo note >"$adddir/notes.txt"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;

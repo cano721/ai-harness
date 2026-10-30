@@ -106,8 +106,13 @@ elif [[ -z "$RUN_ID" ]]; then
   if [[ -f "$latest" ]]; then
     RUN_ID="$(<"$latest")"
   elif [[ "$WORKFLOW" == feature ]]; then
-    # 이 구분 전의 실행에는 latest-feature가 없다. 가장 최근의 feature 실행(.workflow가 없으면 feature)을 잇는다.
-    while IFS= read -r f; do
+    # 이 구분 전의 실행에는 latest-feature가 없다. 옛 latest가 feature 실행이면 그것을, 아니면 가장 최근의 feature 실행
+    # (.workflow가 없으면 feature)을 잇는다 — 수정 시각만 보면 끝난 실행이 승인 대기 중인 실행을 가린다.
+    if [[ -f "$RUNS_DIR/latest" ]] \
+      && [[ "$(jq -r '.workflow // "feature"' "$RUNS_DIR/$(<"$RUNS_DIR/latest")/state.json" 2>/dev/null)" == feature ]]; then
+      RUN_ID="$(<"$RUNS_DIR/latest")"
+    fi
+    [[ -n "$RUN_ID" ]] || while IFS= read -r f; do
       [[ "$(jq -r '.workflow // "feature"' "$f" 2>/dev/null)" == feature ]] || continue
       RUN_ID="$(basename "$(dirname "$f")")"
       break
@@ -403,6 +408,18 @@ transcript_approval() {
         | {source:"codex-transcript", at:.timestamp, text:(.payload.message[:200])}' "$f" 2>/dev/null | head -n 1
     done < <(find "$codex_root" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
   fi
+}
+
+# verified의 캡처는 이름만 적은 것이 아니라 그 시도의 증거 디렉터리 안에 실제로 있어야 한다.
+captures_present() { # ui-review-output evidence-dir
+  local c n=0
+  while IFS= read -r c; do
+    [[ "$c" == /* ]] || c="$2/$c"
+    case "$c" in "$2"/*) ;; *) return 1 ;; esac
+    [[ "$c" != *..* && -s "$c" ]] || return 1
+    n=$((n + 1))
+  done <<<"$(jq -r '.scenarios[].captures[]' "$1")"
+  [[ "$n" -gt 0 ]]
 }
 
 record_approval() { # evidence-json
@@ -876,6 +893,10 @@ $(state .request)" "$SCOPE_SCHEMA"
         base="$(jq -r .base "$RUN/scope.out")"
         diff_base="$(git -C "$REPO" merge-base "$base" HEAD 2>/dev/null)" \
           || finish incomplete 30 "the review base '$base' is not a commit in this repository; fetch it or start again with a clearer request"
+        # 기준이 HEAD와 같아 검토할 변경이 없으면 finding 없음이 곧 통과가 된다. 대상 브랜치를 체크아웃하지 않은 경우다.
+        if git -C "$REPO" diff --quiet "$diff_base" && [[ -z "$(git -C "$REPO" ls-files --others --exclude-standard)" ]]; then
+          finish incomplete 30 "nothing to review: no changes since '$base' ($diff_base); check out the branch under review or start again with the right base"
+        fi
         jq -r --arg d "$diff_base" '.summary + "\n\nBase: \(.base) (\($d))\nChanged files:\n" + (.files | map("- " + .) | join("\n"))
           + "\n\nRequest:\n"' "$RUN/scope.out" >"$RUN/scope.md"
         state .request >>"$RUN/scope.md"
@@ -947,7 +968,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
           && jq -e --argjson n "$(state '.ui_scenarios | length')" \
             '(.blocking_findings | length) == 0 and (.unverified | length) == 0 and (.scenarios | length) >= $n
               and all(.scenarios[]; (.captures | length) > 0)' "$ui_out" >/dev/null \
-          && [[ -n "$(find "$evidence" -type f -print -quit)" ]]; then
+          && captures_present "$ui_out" "$evidence"; then
           state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
           go ui_review ui_verified
         elif [[ "$(state .ui_review.status)" == issues && "$(jq '.blocking_findings | length' "$ui_out")" -gt 0 ]]; then

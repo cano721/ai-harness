@@ -970,6 +970,8 @@ start_and_approve ui_hollow
 assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified without a record of operating each scenario is not evidence"
 start_and_approve ui_partial
 assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified with unverified items left is not done"
+start_and_approve ui_fake_capture
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "a capture named in the output but missing from the evidence directory is not evidence"
 start_and_approve ui_writes
 assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "ui_review that writes into the repository stops the run"
 assert_contains "$DRIVER_OUT" "capture.png" "the violation names the file the node left in the repository"
@@ -1266,6 +1268,10 @@ review_run rv_clean
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a review without blocking findings is done"
 assert_eq "scope read-only schema=yes;inspect read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "the initial review is read-only"
 assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state .diff_base)" "the review measures the change from the base the scope node named"
+new_driver_repo rv_empty
+driver start --workflow review --runtime codex --request "review my uncommitted change"
+assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a review with nothing to review stops instead of passing"
+assert_contains "$DRIVER_OUT" "nothing to review" "the person is told the review target is empty"
 review_run rv_blocks
 assert_eq "10:waiting_approval:classify" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "blocking findings wait for the person before any repair"
 assert_contains "$DRIVER_OUT" "feature.txt: missing case" "the person sees the findings to repair"
