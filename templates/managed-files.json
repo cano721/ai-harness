@@ -9,6 +9,12 @@
       "mode": "copy"
     },
     {
+      "path": ".ai-harness/workflows/workflow-driver.sh",
+      "level": "standard",
+      "source": "templates/workflow-driver/workflow-driver.sh",
+      "mode": "copy"
+    },
+    {
       "path": ".ai-harness/workflows/implement-feature-driver.sh",
       "level": "standard",
       "workflow": "implement-feature",
@@ -76,30 +82,6 @@
       "workflow": "review",
       "source": "templates/review/SKILL.md",
       "mode": "render"
-    },
-    {
-      "path": ".claude/workflows/implement-feature.js",
-      "level": "standard",
-      "integration": "claude",
-      "workflow": "implement-feature",
-      "source": "templates/implement-feature/references/implement-feature-workflow.js",
-      "mode": "copy"
-    },
-    {
-      "path": ".claude/workflows/fix-bug.js",
-      "level": "standard",
-      "integration": "claude",
-      "workflow": "fix-bug",
-      "source": "templates/fix-bug/references/fix-bug-workflow.js",
-      "mode": "copy"
-    },
-    {
-      "path": ".claude/workflows/review.js",
-      "level": "standard",
-      "integration": "claude",
-      "workflow": "review",
-      "source": "templates/review/references/review-workflow.js",
-      "mode": "copy"
     },
     {
       "path": ".agents/skills/declarative-code/SKILL.md",
@@ -527,6 +509,18 @@
     {
       "path": ".ai-harness/workflows/understanding-change-graph.json",
       "reason": "그래프 계약이 플러그인 스킬과 함께 배포된다. 프로젝트 사본은 갱신되지 않는다."
+    },
+    {
+      "path": ".claude/workflows/implement-feature.js",
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
+    },
+    {
+      "path": ".claude/workflows/fix-bug.js",
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
+    },
+    {
+      "path": ".claude/workflows/review.js",
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
     }
   ]
 }

@@ -38,6 +38,11 @@ has_transition approval regression auto_approved_by_policy
 has_transition regression fix
 has_transition fix verify
 has_transition verify review required_checks_pass
+# 검증 실패 엣지는 선택이다(없으면 러너가 사람에게 넘긴다). 있으면 repair로만 간다.
+jq -e '[.transitions[] | select(.from == "verify" and .when == "required_checks_fail")] | all(.to == "repair")' "$graph_path" >/dev/null || {
+  printf 'verify failure must go to repair\n' >&2
+  exit 1
+}
 has_transition review publish no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair verify

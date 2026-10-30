@@ -24,6 +24,7 @@
     {"from": "classify", "to": "ui_review", "when": "no_blocking_findings_ui_affected"},
     {"from": "repair", "to": "verify"},
     {"from": "verify", "to": "re_review", "when": "required_checks_pass"},
+    {"from": "verify", "to": "repair", "when": "required_checks_fail"},
     {"from": "re_review", "to": "done", "when": "no_blocking_findings"},
     {"from": "re_review", "to": "repair", "when": "blocking_findings"},
     {"from": "re_review", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"},

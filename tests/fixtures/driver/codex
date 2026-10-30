@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# implement-feature-driver 테스트용 가짜 codex. 프롬프트의 노드 이름과 FAKE_SCENARIO로 동작을 고른다.
+# workflow-driver 테스트용 가짜 codex. 프롬프트의 노드 이름과 FAKE_SCENARIO로 동작을 고른다.
 set -euo pipefail
 [[ "${1:-}" == exec ]] || exit 64
 shift
@@ -18,6 +18,13 @@ done
 prompt="$(cat)"
 case "$prompt" in
   *"You are the discover node"*) node=discover ;;
+  *"You are the triage node"*) node=triage ;;
+  *"You are the reproduce node"*) node=reproduce ;;
+  *"You are the regression node"*) node=regression ;;
+  *"You are the fix node"*) node=fix ;;
+  *"You are the scope node"*) node=scope ;;
+  *"You are the inspect node"*) node=inspect ;;
+  *"You are the re_review node"*) node=re_review ;;
   *"You are the brief node"*) node=brief ;;
   *"You are the deliver node"*) node=deliver ;;
   *"You are the review node"*) node=review ;;
@@ -39,6 +46,32 @@ auto=""
 case "$node:$scenario" in
   discover:brief_writes) echo sneaky >sneaky.txt; printf 'contract\n' >"$out" ;;
   discover:*) printf 'contract\n' >"$out" ;;
+  triage:*) printf 'observed: total is wrong; expected: total adds tax\n' >"$out" ;;
+  reproduce:repro_blocked) jq -n '{status:"blocked", summary:"needs production-like data", evidence:[], hypothesis:"", needed:["a sample order export"]}' >"$out" ;;
+  reproduce:repro_hollow) jq -n '{status:"reproduced", summary:"reproduced", evidence:[], hypothesis:"tax skipped", needed:[]}' >"$out" ;;
+  reproduce:repro_writes) echo log >repro.log; jq -n '{status:"reproduced", summary:"x", evidence:["x"], hypothesis:"", needed:[]}' >"$out" ;;
+  reproduce:*) [[ -n "$adddir" ]] && echo 'FAIL total' >"$adddir/run.log"
+    jq -n '{status:"reproduced", summary:"total misses tax", evidence:["npm test -- total: expected 110, got 100"], hypothesis:"tax is skipped for zero discounts", needed:[]}' >"$out" ;;
+  regression:bug_noop) printf 'nothing\n' >"$out" ;;
+  regression:*) mkdir -p tests; echo 'expect 110' >tests/total.test; printf 'regression test added\n' >"$out" ;;
+  fix:bug_noop|fix:bug_fix_noop) printf 'nothing\n' >"$out" ;;
+  fix:*) echo v1 >feature.txt; printf 'fixed\n' >"$out" ;;
+  scope:scope_bad_base) jq -n --arg c "$check" '{summary:"x", base:"no-such-ref", files:[], checks:[$c]}' >"$out" ;;
+  scope:scope_nocheck) jq -n '{summary:"review the uncommitted change", base:"HEAD", files:["feature.txt"], checks:[]}' >"$out" ;;
+  scope:*) jq -n --arg c "$check" '{summary:"review the uncommitted change", base:"HEAD", files:["feature.txt"], checks:[$c]}' >"$out" ;;
+  inspect:rv_clean*|inspect:scope_bad_base) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false, ui_scenarios:[]}' >"$out" ;;
+  inspect:rv_decision) jq -n '{summary:"x", blocking_findings:["pricing rule unclear"], non_blocking_findings:[], needs_user_decision:true, ui_scenarios:[]}' >"$out" ;;
+  inspect:rv_ui) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false, ui_scenarios:["심사자: 목록 -> 반려 -> 반려됨 확인"]}' >"$out" ;;
+  inspect:*) jq -n '{summary:"x", blocking_findings:["feature.txt: missing case"], non_blocking_findings:[], needs_user_decision:false, ui_scenarios:[]}' >"$out" ;;
+  re_review:rv_new_finding)
+    if [[ -f "$FAKE_LOG.new_finding" ]]; then
+      jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out"
+    else
+      touch "$FAKE_LOG.new_finding"
+      jq -n '{summary:"x", blocking_findings:["auth flow must be redesigned"], non_blocking_findings:[], needs_user_decision:false}' >"$out"
+    fi ;;
+  re_review:rv_always_blocks) jq -n '{summary:"x", blocking_findings:["still missing"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
+  re_review:*) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   brief:auto_questions) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:["which plan tier?"]}' >"$out" ;;
   brief:auto_decisions) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c],
     decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope that meets the request"}], needs_human:[]}' >"$out" ;;
@@ -100,6 +133,8 @@ case "$node:$scenario" in
     unverified:["모든 시나리오: 로그인 계정이 문서에 없다"]}' >"$out" ;;
   ui_review:ui_hollow) jq -n '{status:"verified", summary:"looks fine", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
+  ui_review:ui_fake_capture) echo note >"$adddir/notes.txt"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;

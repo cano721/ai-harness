@@ -6,7 +6,7 @@
   "terminals": ["done", "user_decision"],
   "nodes": {
     "triage": {"write": false, "output": "bug_facts"},
-    "reproduce": {"write": false, "output": "reproduction_evidence"},
+    "reproduce": {"write": false, "commands": true, "output": "reproduction_evidence"},
     "brief": {"write": false, "output": "bug_fix_brief"},
     "approval": {"write": false, "output": "approved_bug_fix_brief"},
     "regression": {"write": true, "output": "regression_evidence"},

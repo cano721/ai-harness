@@ -17,6 +17,8 @@ for edge in 'scope inspect' 'inspect classify' 'repair verify' 'verify re_review
 done
 jq -e '.transitions[] | select(.from == "classify" and .to == "done" and .when == "no_blocking_findings")' "$graph_path" >/dev/null
 jq -e '.transitions[] | select(.from == "re_review" and .to == "repair" and .when == "blocking_findings")' "$graph_path" >/dev/null
+# 검증 실패 엣지는 선택이다(없으면 러너가 사람에게 넘긴다). 있으면 repair로만 간다.
+jq -e '[.transitions[] | select(.from == "verify" and .when == "required_checks_fail")] | all(.to == "repair")' "$graph_path" >/dev/null
 if jq -e '.nodes | has("ui_review")' "$graph_path" >/dev/null; then
   for edge in 'classify ui_review no_blocking_findings_ui_affected' 're_review ui_review no_blocking_findings_ui_affected' \
     'ui_review done ui_verified' 'ui_review repair ui_issues_and_repair_authorized' 'ui_review user_decision ui_issues_need_user_decision_or_ui_unverified'; do
