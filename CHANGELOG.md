@@ -6,6 +6,16 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **서브에이전트 토큰이 집계에서 빠지던 문제** — Claude Code는 서브에이전트 대화를 `<세션>/subagents/agent-*.jsonl`에 따로 기록하는데 추출기가 메인 transcript만 읽었습니다. 위임을 많이 하는 워크플로일수록 사용량이 적게 잡혔습니다. 이제 부모 세션의 `agent_tok_in`·`agent_tok_out`·`agent_cache_read`·`agent_cache_write`로 합산하고 `/metrics`가 메인 토큰 옆에 보여줍니다.
+
+### 새 기능
+
+- **컨텍스트 사용 지표** — `/metrics`와 `/metrics session`이 세션의 컨텍스트를 어떻게 썼는지 보여줍니다: 첫 호출 크기(≈시스템 프롬프트·툴·스킬·메모리·AGENTS.md의 고정 오버헤드)·최대·마지막, 툴별 결과 크기, 하네스 docs가 읽힐 때 컨텍스트에 실은 크기(합계·1회당). 크기는 결과 본문의 UTF-8 바이트/4로 낸 추정입니다. 고정 오버헤드가 커진 프로젝트, 1회당 큰 문서(분할 후보), 컨텍스트를 채우는 툴을 근거 수치로 찾을 수 있습니다. Claude 세션만 수집하며 Codex는 미지원으로 표시됩니다.
+
 ## v0.48.0 (2026-10-30)
 ### 새 기능
 
