@@ -14,6 +14,8 @@ This is a project adapter, not the source of project policy. Read these files in
 
 The project workflow and graph are authoritative. They define review scope, risk checks, finding severity, repair ownership, required verification, re-review, and escalation conditions.
 
+When the change alters what users see or operate and the graph has a `ui_review` node, list the affected screens as UI scenarios and, after the code review has no blocking findings, verify them with the project `ui-review` skill (`.agents/skills/ui-review/SKILL.md` or `.claude/skills/ui-review/SKILL.md`) and `.ai-harness/docs/ui.md`: render and operate each scenario in a real browser without changing the working tree. A blocking UI issue is a blocking finding. If the screens could not be rendered or operated, report the UI as unverified, not the change as done.
+
 Perform the initial review read-only. Report the workflow-required findings with evidence; do not report completion while a blocking finding remains. Modify files only in an authorized repair the graph routes to.
 
 Committing and pushing a repair follows `git_policy` in `.ai-harness/harness.json`: `pr-only` — commit and push the reviewed change's work branch with a normal push; `direct` — commit and push the current branch with a normal push; missing or any other value — do not commit or push unless separately authorized. Do not open a new PR from a review, and never merge, force-push, or change project policy without separate authorization. The repair limit is `limits.max_repair_attempts` in the graph.

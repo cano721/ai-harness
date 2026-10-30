@@ -3,7 +3,7 @@
 set -euo pipefail
 [[ "${1:-}" == exec ]] || exit 64
 shift
-dir="" sandbox="" out="" schema="" net=""
+dir="" sandbox="" out="" schema="" net="" adddir=""
 while (($#)); do
   case "$1" in
     -C) dir="$2"; shift 2 ;;
@@ -11,6 +11,7 @@ while (($#)); do
     -o) out="$2"; shift 2 ;;
     --output-schema) schema="$2"; shift 2 ;;
     -c) [[ "$2" == sandbox_workspace_write.network_access=true ]] && net=yes; shift 2 ;;
+    --add-dir) adddir="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -20,12 +21,13 @@ case "$prompt" in
   *"You are the brief node"*) node=brief ;;
   *"You are the deliver node"*) node=deliver ;;
   *"You are the review node"*) node=review ;;
+  *"You are the ui_review node"*) node=ui_review ;;
   *"You are the repair node"*) node=repair ;;
   *"You are the publish node"*) node=publish ;;
   *"You are the remote_ci node"*) node=remote_ci ;;
   *) node=unknown ;;
 esac
-printf '%s %s schema=%s%s\n' "$node" "$sandbox" "${schema:+yes}" "${net:+ net=yes}" >>"$FAKE_LOG"
+printf '%s %s schema=%s%s%s\n' "$node" "$sandbox" "${schema:+yes}" "${net:+ net=yes}" "${adddir:+ add-dir=yes}" >>"$FAKE_LOG"
 cd "$dir"
 scenario="${FAKE_SCENARIO:-ok}"
 check="${FAKE_CHECK:-true}"
@@ -44,6 +46,8 @@ case "$node:$scenario" in
     decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope"}], needs_human:["drop the legacy plans table?"]}' >"$out" ;;
   brief:auto_legacy) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:[]}' >"$out" ;;
   brief:nocheck) jq -n '{brief:"# Brief", checks:[], open_questions:[]}' >"$out" ;;
+  brief:ui_*) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[],
+    ui_scenarios:["심사자: 승인 대기 목록 진입 -> 반려 사유 입력 후 반려 -> 반려됨 확인 -> 목록 복귀 (접힌 기본 상태, 데스크톱·390px, 라이트)"]}' >"$out" ;;
   brief:*)
     if [[ -n "$auto" ]]; then
       jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], decisions:[], needs_human:[]}' >"$out"
@@ -52,6 +56,7 @@ case "$node:$scenario" in
     fi ;;
   deliver:noop) printf 'nothing\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
+  deliver:screen_backstop) mkdir -p templates; echo '<summary>반려하기</summary>' >templates/approve.html; printf 'delivered\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
   publish:publish_unpushed) git add -A; git commit -qm "feat: add feature" || true; jq -n '{summary:"x", branch:"main", pr_url:""}' >"$out" ;;
@@ -81,5 +86,22 @@ case "$node:$scenario" in
   review:review_blocks) jq -n '{summary:"x", blocking_findings:["missing case"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   review:decision) jq -n '{summary:"x", blocking_findings:["pricing rule unclear"], non_blocking_findings:[], needs_user_decision:true}' >"$out" ;;
   review:*) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
+  ui_review:ui_writes) echo capture >capture.png; jq -n '{status:"verified", summary:"ok", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_issues_once)
+    if [[ -f "$FAKE_LOG.ui_failed" ]]; then
+      echo capture >"$adddir/default.png"
+      jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
+    else
+      touch "$FAKE_LOG.ui_failed"
+      jq -n '{status:"issues", summary:"반려하기가 일반 텍스트처럼 보인다", scenarios:[], non_blocking_findings:[], unverified:[],
+        blocking_findings:["반려하기 summary에 펼침 표시가 없어 기본 상태에서 조작 요소로 보이지 않는다"]}' >"$out"
+    fi ;;
+  ui_review:ui_unverified) jq -n '{status:"unverified", summary:"앱 서버를 띄우지 못했다", scenarios:[], blocking_findings:[], non_blocking_findings:[],
+    unverified:["모든 시나리오: 로그인 계정이 문서에 없다"]}' >"$out" ;;
+  ui_review:ui_hollow) jq -n '{status:"verified", summary:"looks fine", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
+  ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   *) exit 1 ;;
 esac

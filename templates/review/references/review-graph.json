@@ -11,6 +11,7 @@
     "repair": {"write": true, "output": "repair_evidence"},
     "verify": {"write": false, "output": "verification_evidence"},
     "re_review": {"write": false, "output": "remaining_findings"},
+    "ui_review": {"write": false, "browser": true, "output": "ui_review_report"},
     "done": {"write": false, "output": "review_handoff"},
     "user_decision": {"write": false, "output": "blocker_report"}
   },
@@ -20,16 +21,22 @@
     {"from": "classify", "to": "done", "when": "no_blocking_findings"},
     {"from": "classify", "to": "repair", "when": "blocking_findings_and_repair_authorized"},
     {"from": "classify", "to": "user_decision", "when": "blocking_findings_need_user_decision"},
+    {"from": "classify", "to": "ui_review", "when": "no_blocking_findings_ui_affected"},
     {"from": "repair", "to": "verify"},
     {"from": "verify", "to": "re_review", "when": "required_checks_pass"},
     {"from": "re_review", "to": "done", "when": "no_blocking_findings"},
     {"from": "re_review", "to": "repair", "when": "blocking_findings"},
-    {"from": "re_review", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"}
+    {"from": "re_review", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"},
+    {"from": "re_review", "to": "ui_review", "when": "no_blocking_findings_ui_affected"},
+    {"from": "ui_review", "to": "done", "when": "ui_verified"},
+    {"from": "ui_review", "to": "repair", "when": "ui_issues_and_repair_authorized"},
+    {"from": "ui_review", "to": "user_decision", "when": "ui_issues_need_user_decision_or_ui_unverified"}
   ],
   "limits": {"max_repair_attempts": 10},
   "invariants": [
     "Initial review nodes are read-only.",
     "A blocking finding cannot transition directly to done.",
-    "Every repair is followed by required checks and re-review."
+    "Every repair is followed by required checks and re-review.",
+    "A change that alters what users see or operate is not done until ui_review has rendered and operated its affected screens in a browser with no blocking UI finding; ui_review follows the project ui-review contract, does not change the working tree, and a UI that could not be verified ends at user_decision as unverified, never as done."
   ]
 }

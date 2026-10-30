@@ -807,6 +807,33 @@ for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.
   assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
   assert_eq "done repair user_decision" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, and unverified"
 done
+# ui_review는 선택 노드다. 옛 그래프(노드 없음)도 유효하고, 노드가 있으면 화면 검증을 건너뛰는 경로가 없어야 한다. (#150)
+UI_GRAPH="$ROOT/templates/ui-review/references/ui-review-graph.json"
+"$ROOT/scripts/validate-ui-review-graph.sh" "$UI_GRAPH" >/dev/null
+for pair in "feature:$FEATURE_GRAPH" "bug-fix:$ROOT/templates/fix-bug/references/bug-fix-graph.json" "review:$ROOT/templates/review/references/review-graph.json"; do
+  validator="$ROOT/scripts/validate-${pair%%:*}-graph.sh"
+  graph="${pair#*:}"
+  assert_eq "false:true" "$(jq -r '"\(.nodes.ui_review.write):\(.nodes.ui_review.browser)"' "$graph")" "$(basename "$graph") verifies screens in a browser without writing"
+  jq 'del(.nodes.ui_review) | .transitions |= map(select(.from != "ui_review" and .to != "ui_review"))' "$graph" >"$INVALID_GRAPH"
+  "$validator" "$INVALID_GRAPH" >/dev/null || fail "$(basename "$graph") without ui_review stays valid for unsynced projects"
+  jq 'del(.transitions[] | select(.from == "ui_review" and (.to == "repair")))' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose UI issues cannot be repaired is invalid"; fi
+  jq '.nodes.ui_review.write = true' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") whose ui_review can write is invalid"; fi
+  jq --arg to "$(jq -r 'first(.transitions[] | select(.from == "ui_review" and .when == "ui_verified") | .to)' "$graph")" \
+    '.transitions += [{"from": "ui_review", "to": $to, "when": "ui_unverified_but_ship"}]' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with a ui_review bypass to done or publish is invalid"; fi
+  jq '.transitions = [{"from": "ui_review", "to": "repair", "when": "ui_verified"}] + .transitions' "$graph" >"$INVALID_GRAPH"
+  if "$validator" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "$(basename "$graph") with two ui_review exits on the same outcome is invalid"; fi
+done
+jq '.transitions += [{"from": "inspect", "to": "done", "when": "no_blocking_findings"}]' "$UI_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph that reaches done without ui_verified is invalid"; fi
+jq 'del(.transitions[] | select(.when == "ui_unverified"))' "$UI_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-ui-review-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a ui-review graph without an unverified exit is invalid"; fi
+for adapter in implement-feature fix-bug review; do
+  assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "ui_review" "$adapter adapter routes UI changes through ui_review"
+  assert_contains "$(<"$ROOT/templates/$adapter/references/$adapter-workflow.js")" "ui_unverified" "$adapter Dynamic Workflow never calls an unverified UI done"
+done
 assert_file "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/templates/implement-feature/references/implement-feature-workflow.js"
@@ -952,6 +979,52 @@ start_and_approve noop
 assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "delivery without a change is not done"
 start_and_approve extra_check --check "test -f feature.txt"
 assert_eq "0:true" "$DRIVER_RC:$(run_state '.checks | index("test -f feature.txt") != null')" "--check joins the approved verification"
+
+# 화면이 바뀌는 기능은 Brief가 ui_scenarios를 내고, review 뒤 ui_review가 실제 화면을 검증한다. (#150)
+start_and_approve ui_ok
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a UI change reaches done only through a verified ui_review"
+assert_eq "review;ui_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "ui_review runs after a review with no blocking findings"
+assert_contains "$(<"$FAKE_LOG")" "ui_review workspace-write schema=yes net=yes add-dir=yes" "ui_review may run the app and a browser and save captures in the run directory; the fingerprint keeps the repository unchanged"
+assert_file "$(run_state .ui_review.evidence_dir)/default.png"
+assert_contains "$(<"$(dirname "$(run_state .ui_review.evidence_dir)")/brief.md")" "## 화면 검증 시나리오" "the approved brief carries the UI scenarios"
+assert_contains "$(<"$FAKE_LOG.ui_review.prompt")" "default and collapsed states" "ui_review looks at the default state before hovering"
+assert_contains "$(<"$FAKE_LOG.ui_review.prompt")" "a screenshot file existing" "ui_review is told what is not evidence"
+assert_contains "$DRIVER_OUT" "UI: verified" "the outcome reports the UI verification"
+[[ "$(<"$FAKE_LOG.brief.prompt")" == *"ui_scenarios"* ]] || fail "the brief node is asked for UI scenarios"
+start_and_approve ui_issues_once
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a blocking UI issue goes through repair and re-verification"
+assert_eq "ui_review;repair;review;ui_review" "$(grep -E '^(ui_review|repair|review) ' "$FAKE_LOG" | tail -n 4 | cut -d' ' -f1 | paste -sd ';' -)" "after repair the change is reviewed and its screens verified again"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "펼침 표시가 없어" "repair receives the UI finding"
+start_and_approve ui_unverified
+assert_eq "20:user_decision:unverified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a UI that could not be verified is never done"
+assert_contains "$DRIVER_OUT" "implementation done, UI unverified" "the outcome separates implementation from verification"
+assert_eq "0" "$(run_state .attempts)" "an unverified UI goes to a person without repair attempts"
+start_and_approve ui_empty_issues
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "issues without findings count as unverified, not as done"
+start_and_approve ui_hollow
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified without a record of operating each scenario is not evidence"
+start_and_approve ui_partial
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .ui_review.status)" "verified with unverified items left is not done"
+start_and_approve ui_writes
+assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "ui_review that writes into the repository stops the run"
+assert_contains "$DRIVER_OUT" "capture.png" "the violation names the file the node left in the repository"
+# Brief가 화면 변경을 놓쳐도 화면 파일이 바뀌면 검증한다.
+start_and_approve screen_backstop
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run whose brief missed the screen change still ends verified"
+assert_contains "$(run_state '.ui_scenarios[0]')" "templates/approve.html" "changed screen files become a UI scenario"
+assert_eq "review;ui_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the backstop routes through ui_review"
+# 갱신하지 않은 그래프(ui_review 없음)는 그대로 따르되 화면을 검증하지 않았다고 밝힌다.
+new_driver_repo ui_legacy_graph
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.nodes.ui_review) | .transitions |= map(select(.from != "ui_review" and .to != "ui_review"))' \
+  "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a UI change on a graph without ui_review is never done"
+assert_contains "$DRIVER_OUT" "implementation done, UI unverified: the project graph has no ui_review node" "that outcome says the screens were not verified and how to fix it"
+assert_eq "null" "$(run_state .publish)" "nothing is published without UI verification"
 
 # 전이는 저장소 그래프가 정한다: review -> done 엣지를 지우면 done에 갈 수 없다.
 new_driver_repo graph_driven
@@ -1381,6 +1454,27 @@ assert_contains "$HARNESS_INIT_CONTENT" "stack" "harness init documents the stac
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/frontend.md" "harness init generates the frontend context doc"
 pass "frontend judgment skills stack gating"
 
+# UI 검토 계약: 서버 렌더링 화면까지 stack 게이트 ui로 생성하고, 실제 렌더링·조작 근거를 요구한다. (#150)
+UIR_CONTENT="$(<"$ROOT/templates/ui-review/SKILL.md")"
+assert_file "$ROOT/templates/ui-review/references/checklist.md"
+assert_contains "$UIR_CONTENT" "Flask/Jinja" "ui-review covers server-rendered screens"
+assert_contains "$UIR_CONTENT" "## 거짓 통과" "ui-review lists false passes"
+assert_contains "$UIR_CONTENT" "\`unverified\`는 완료가 아니다" "ui-review never calls an unverified UI done"
+assert_contains "$UIR_CONTENT" "작업 트리를 바꾸지 않는다" "ui-review separates inspection from authoring"
+assert_contains "$UIR_CONTENT" "증거가 있고 지금 작업 트리에 대한" "ui-review states what automatic gates cannot judge"
+assert_contains "$(<"$ROOT/templates/ui-review/references/checklist.md")" "기본 상태로 식별" "the checklist starts from discoverability in the default state"
+UI_ROOT="$TEST_TMP/ui-project"
+mkdir -p "$UI_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"ui-project","level":"standard","integrations":["codex","claude"],"stacks":["ui"],"harness_version":"0.42.0"}' >"$UI_ROOT/.ai-harness/harness.json"
+UI_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$UI_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+for path in .ai-harness/workflows/ui-review-graph.json .agents/skills/ui-review/SKILL.md .claude/skills/ui-review/references/checklist.md; do
+  assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "ui stack selects $path"
+done
+assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path==".agents/skills/frontend-fundamentals/SKILL.md")] | length')" "a server-rendered UI project does not get React judgment skills"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | contains("ui-review"))] | length')" "the UI contract is opt-in: a frontend project without the ui stack is not given it"
+assert_contains "$HARNESS_INIT_CONTENT" "서버 렌더링 템플릿" "harness init detects server-rendered UI"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/docs/ui.md" "harness init generates the UI context doc"
+pass "ui review contract and stack gating"
 # 프론트 팀 역할 세트: frontend-team stack이면 라우터·fe-architect·fe-implementer, design-system이면 fe-designer·design-audit까지.
 for f in frontend-team/SKILL.md design-audit/SKILL.md frontend-team/personas/fe-architect.md frontend-team/personas/fe-implementer.md frontend-team/personas/fe-designer.md; do
   assert_file "$ROOT/templates/$f"

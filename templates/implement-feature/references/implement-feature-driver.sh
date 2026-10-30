@@ -13,6 +13,8 @@
 #     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
 #   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
 #     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
+#   - 화면 검증: Brief가 ui_scenarios를 내면 review 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
+#     주요 문제는 repair로 돌아가 다시 review·ui_review를 거치고, 검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
 # shellcheck disable=SC2016  # state_set·jq 인자의 $x는 셸이 아니라 jq 변수다
 set -euo pipefail
 
@@ -34,7 +36,7 @@ usage: implement-feature-driver.sh <command> [options]
 
   정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖)를 start 때 읽는다.
 
-exit: 0 done(push했으면 원격 CI 통과까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI 미확인 포함) · 30 미완료(원격 CI 진행 중이면 resume) · 40 불변식 위반 · 2 사용법
+exit: 0 done(push했으면 원격 CI 통과까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증 포함) · 30 미완료(원격 CI 진행 중이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
 }
@@ -125,6 +127,13 @@ guard_head() {
   [[ "$head" == "$(state '.head // .start_head')" ]] || finish invariant_violation 40 "HEAD moved during $1; only the driver's checkpoints and the publish node may commit"
 }
 
+# 화면을 그리는 파일(템플릿·스타일·컴포넌트)이 바뀌었는지. Brief가 화면 변경을 놓쳐도 화면 검증을 건너뛰지 않게 하는 결정적 백스톱이다.
+ui_files_changed() {
+  { git -C "$REPO" diff --name-only "$(state .start_head)"; git -C "$REPO" ls-files --others --exclude-standard; } \
+    | grep -E '\.(html?|jinja2?|j2|jsp|erb|haml|hbs|mustache|njk|twig|ftl|ejs|pug|cshtml|razor|blade\.php|vue|svelte|astro|tsx|jsx|svg|css|scss|sass|less)$' \
+    | grep -vE '(^|/)(__tests__|tests?|spec)/|\.(test|spec)\.' | sort -u || true
+}
+
 has_edge() { # from outcome
   jq -e --arg f "$1" --arg o "$2" 'any(.transitions[]; .from == $f and (.when // "") == $o)' "$GRAPH" >/dev/null
 }
@@ -187,9 +196,11 @@ stream_progress() { # label → stdout: result 이벤트 한 줄
 # run_agent <node> <label> <prompt> [schema] → $RUN/<label>.out. 쓰기 권한은 그래프의 nodes.<node>.write가 정한다.
 run_agent() {
   local node="$1" label="$2" prompt="$3" schema="${4:-}" rc=0 writable
-  local out="$RUN/$label.out" network
+  local out="$RUN/$label.out" network browser
   writable="$(jq -r --arg n "$node" '.nodes[$n].write' "$GRAPH")"
-  network="$(jq -r --arg n "$node" '.nodes[$n].network // false' "$GRAPH")"
+  # 화면 검증(browser)은 앱 서버를 띄우고 브라우저를 조종해야 하므로 네트워크 노드처럼 명령과 로컬 네트워크를 연다. 쓰기는 지문 비교가 막는다.
+  browser="$(jq -r --arg n "$node" '.nodes[$n].browser // false' "$GRAPH")"
+  network="$(jq -r --arg n "$node" '.nodes[$n].network // .nodes[$n].browser // false' "$GRAPH")"
   # 같은 label을 다시 쓰는 노드(publish 재실행·resume)가 이전 결과를 이번 결과로 읽지 않게 한다.
   rm -f "$out"
   printf '%s\n' "$prompt" >"$RUN/$label.prompt"
@@ -201,6 +212,8 @@ run_agent() {
       [[ -n "$schema" ]] && args+=(--output-schema "$schema")
       # push·PR·원격 CI 노드는 네트워크가 필요하다. workspace-write sandbox는 기본으로 네트워크를 막는다.
       [[ "$network" == true ]] && args+=(-c sandbox_workspace_write.network_access=true)
+      # 화면 캡처는 저장소가 아니라 이 노드의 증거 디렉터리에 남긴다.
+      [[ "$browser" == true ]] && args+=(--add-dir "$RUN/$label")
       # codex 출력은 원본(명령 출력·파일 내용)이다. 사람이 보는 터미널일 때만 함께 흘리고, 에이전트가 받는 stderr에는 넣지 않는다.
       if [[ -t 2 ]]; then
         codex "${args[@]}" - <"$RUN/$label.prompt" 2>&1 | tee "$RUN/$label.log" >&2 || rc=$?
@@ -221,6 +234,7 @@ run_agent() {
         args+=(--tools "Read,Grep,Glob" --permission-mode dontAsk)
       fi
       [[ -n "$schema" ]] && args+=(--json-schema "$(<"$schema")")
+      [[ "$browser" == true ]] && args+=(--add-dir "$RUN/$label")
       (cd "$REPO" && claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
       if ((rc == 0)); then
         jq -r 'if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
@@ -241,7 +255,8 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
   else
     before="$(fingerprint)"
     run_agent "$@"
-    [[ "$(fingerprint)" == "$before" ]] || finish invariant_violation 40 "read-only node '$node' changed the working tree"
+    [[ "$(fingerprint)" == "$before" ]] \
+      || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -). Remove those changes before starting again"
   fi
   guard_head "$node"
 }
@@ -442,6 +457,7 @@ BRIEF_SCHEMA="$RUN/brief-schema.json"
 REVIEW_SCHEMA="$RUN/review-schema.json"
 PUBLISH_SCHEMA="$RUN/publish-schema.json"
 REMOTE_CI_SCHEMA="$RUN/remote-ci-schema.json"
+UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 
 execute() {
   local node brief blocking
@@ -450,9 +466,10 @@ execute() {
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
       case "$node" in
         done) finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
-          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')" ;;
+          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
+          elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end'); see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(state 'if .ui_review.status == "unverified" then " (implementation done, UI unverified: " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end'); see $RUN/unresolved.json" ;;
       esac
     fi
     case "$node" in
@@ -472,6 +489,7 @@ $(state .request)"
 You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
 Put the exact shell commands that must pass before the feature is done in checks. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check.
+If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), and the viewports and themes the project supports. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see.
 $(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOF'
 approval is auto: no person reads this brief before delivery, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one, write the brief to follow it, and record it in decisions as {question, choice, rationale}.
 Put in needs_human only what a person alone can decide: a product judgment that changes the scope of the request; a hard-to-reverse choice such as deleting data, a migration, creating or dropping an index, or a deployment; a write to an external system. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
@@ -493,9 +511,12 @@ $(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%
           "$brief" >/dev/null 2>&1 || finish incomplete 30 "brief output does not match the schema ($brief)"
         cp "$brief" "$RUN/brief.json"
         jq -r '.brief + if (.decisions // [] | length) > 0
-          then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
+          then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end
+          + if (.ui_scenarios // [] | length) > 0
+          then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
+          | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
         state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
         [[ "$(state '.checks | length')" -gt 0 ]] \
@@ -567,11 +588,72 @@ $(<"$RUN/brief.md")" "$REVIEW_SCHEMA"
             || finish incomplete 30 "review output does not match the schema; the feature is not done ($review_out)"
           state_set '.findings = $r[0].blocking_findings | .needs_user_decision = $r[0].needs_user_decision' --slurpfile r "$review_out"
         fi
-        if [[ "$(state '.findings | length')" -eq 0 ]]; then
+        local ui_files
+        ui_files="$(ui_files_changed)"
+        if [[ "$(state '.findings | length')" -eq 0 && "$(state '.ui_scenarios // [] | length')" -eq 0 && -n "$ui_files" ]]; then
+          log "the brief listed no UI scenarios, but screen files changed; verifying them anyway"
+          state_set '.ui_scenarios = ($f | split("\n") | map(select(length > 0)
+            | "Screen rendered by \(.): open the page that uses it; derive the user role, entry -> key action -> success check -> return, and the states from the approved brief"))' --arg f "$ui_files"
+        fi
+        if [[ "$(state '.findings | length')" -gt 0 ]]; then
+          go review blocking_findings
+        elif [[ "$(state '.ui_scenarios // [] | length')" -gt 0 ]]; then
+          # 화면 검증 노드가 없는 그래프(동기화 전)로는 화면을 검증할 수 없다. 구현은 끝났어도 done이 아니다.
+          if ! has_edge review no_blocking_findings_ui_affected; then
+            local legacy="implementation done, UI unverified: the project graph has no ui_review node, so the screens were not verified; nothing was published. Sync the harness (/harness-init --sync), then start a new run or verify the screens and publish by hand"
+            jq -n --arg m "$legacy" '[$m]' >"$RUN/unresolved.json"
+            state_set '.node = "user_decision"'
+            finish user_decision 20 "$legacy"
+          fi
+          go review no_blocking_findings_ui_affected
+        else
           state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
           go review no_blocking_findings
+        fi
+        ;;
+      ui_review)
+        local ui_label ui_out evidence
+        ui_label="ui-review-$(state .attempts)"
+        evidence="$RUN/$ui_label"
+        # resume이 같은 시도를 다시 돌 때 이전 캡처가 이번 근거로 섞이지 않게 한다.
+        rm -rf "${RUN:?}/$ui_label"
+        mkdir -p "$evidence"
+        run_node ui_review "$ui_label" "$CONTEXT
+
+You are the ui_review node. Do not edit, create, or delete any file in the repository. Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with its references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first.
+The driver already ran the required checks and a code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser, and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
+Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
+If the change added or changed a design-system example or reference screen, open and operate that example too.
+These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
+Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence.
+status: verified when you rendered and operated every scenario, found no blocking UI issue, and have nothing in unverified; issues when there is at least one; unverified when you could not start the app, could not use a browser, or could not check any required scenario, viewport, or theme. A blocking UI issue means a user cannot find or misreads a key action, an action's name does not match its result, a required input or an error cannot be recovered from, a scenario cannot be finished with a keyboard or in a supported viewport or theme, a shared component exists for the role but a one-off was built, or a hard-to-reverse action has no confirmation.
+Return only JSON matching the schema.
+
+UI scenarios:
+$(state '.ui_scenarios | map("- " + .) | join("\n")')
+
+Approved Implementation Brief:
+$(<"$RUN/brief.md")" "$UI_REVIEW_SCHEMA"
+        ui_out="$RUN/$ui_label.out"
+        jq -e '(.status | IN("verified", "issues", "unverified")) and (.blocking_findings | type) == "array" and (.unverified | type) == "array"' "$ui_out" >/dev/null 2>&1 \
+          || finish incomplete 30 "ui_review output does not match the schema; the feature is not done ($ui_out)"
+        state_set '.ui_review = ($r[0] | {status, summary, unverified, evidence_dir: $e})' --slurpfile r "$ui_out" --arg e "$evidence"
+        # 검증하지 못했는데 문제만 적은 경우도 사람에게 넘긴다. issues인데 발견 사항이 비면 검증 근거가 없는 것이다.
+        # verified는 발견 없음·미검증 없음·시나리오마다 조작 기록이 있을 때만 믿는다. 기록 없는 verified는 근거 없는 통과다.
+        if [[ "$(state .ui_review.status)" == verified ]] \
+          && jq -e --argjson n "$(state '.ui_scenarios | length')" \
+            '(.blocking_findings | length) == 0 and (.unverified | length) == 0 and (.scenarios | length) >= $n
+              and all(.scenarios[]; (.captures | length) > 0)' "$ui_out" >/dev/null \
+          && [[ -n "$(find "$evidence" -type f -print -quit)" ]]; then
+          state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
+          go ui_review ui_verified
+        elif [[ "$(state .ui_review.status)" == issues && "$(jq '.blocking_findings | length' "$ui_out")" -gt 0 ]]; then
+          state_set '.findings = ($r[0].blocking_findings + ($r[0].unverified | map("not yet verified: " + .))) | .needs_user_decision = false' --slurpfile r "$ui_out"
+          go ui_review ui_issues
         else
-          go review blocking_findings
+          state_set '.ui_review.status = "unverified" | .ui_review.summary = (if $r[0].status == "verified" then "reported verified without a record for every scenario or with unverified items: " else "" end + $r[0].summary)
+            | .findings = ($r[0].blocking_findings + $r[0].unverified + [$e])' --slurpfile r "$ui_out" --arg e "evidence: $evidence"
+          go ui_review ui_unverified
         fi
         ;;
       repair)
@@ -656,22 +738,32 @@ fi
 
 if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","decisions","needs_human"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},
+{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","decisions","needs_human"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
   "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["question","choice","rationale"],
    "properties":{"question":{"type":"string"},"choice":{"type":"string"},"rationale":{"type":"string"}}}},
   "needs_human":{"type":"array","items":{"type":"string"}}}}
 EOF
 else
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","open_questions"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"open_questions":{"type":"array","items":{"type":"string"}}}}
+{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","open_questions"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+  "open_questions":{"type":"array","items":{"type":"string"}}}}
 EOF
 fi
 cat >"$REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","blocking_findings","non_blocking_findings","needs_user_decision"],
  "properties":{"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}},
   "non_blocking_findings":{"type":"array","items":{"type":"string"}},"needs_user_decision":{"type":"boolean"}}}
+EOF
+cat >"$UI_REVIEW_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["status","summary","scenarios","blocking_findings","non_blocking_findings","unverified"],
+ "properties":{"status":{"type":"string","enum":["verified","issues","unverified"]},"summary":{"type":"string"},
+  "scenarios":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["scenario","viewport","theme","actions","captures","result"],
+   "properties":{"scenario":{"type":"string"},"viewport":{"type":"string"},"theme":{"type":"string"},"actions":{"type":"string"},
+    "captures":{"type":"array","items":{"type":"string"}},"result":{"type":"string"}}}},
+  "blocking_findings":{"type":"array","items":{"type":"string"}},"non_blocking_findings":{"type":"array","items":{"type":"string"}},
+  "unverified":{"type":"array","items":{"type":"string"}}}}
 EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],

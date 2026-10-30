@@ -75,6 +75,18 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
 | `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
 
+### UI 검토 계약 (화면이 있는 프로젝트에서 `/harness-init`이 생성)
+
+코드 리뷰와 기능 테스트를 통과한 UI 변경도 "사람이 그 화면을 보고 쓸 수 있는가"는 검증되지 않은 채 남습니다. `ui-review`는 바뀐 화면을 **실제로 렌더링하고 조작**해 디자인 시스템 일관성과 사용성을 검토하고, 주요 문제를 고친 뒤 다시 검증하는 계약입니다. React·Vue 같은 프론트 패키지뿐 아니라 Flask/Jinja·Thymeleaf·JSP 같은 서버 렌더링 화면도 대상입니다.
+
+| 생성물 | 역할 | 생성 조건 |
+|---|---|---|
+| `ui-review` Skill + `references/checklist.md` | 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 실제 조작 UX 검토 → 수정·재검증 → 근거·한계 보고. 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 단독으로 기존 화면이나 UI PR을 점검할 때도 씁니다. | UI 감지 + opt-in (`stacks`에 `ui`) |
+| `.ai-harness/workflows/ui-review-graph.json` | 단독 UI 검토의 노드·전이 계약 | 위와 같음 |
+| `.ai-harness/docs/ui.md` | 앱 실행·로그인·지원 뷰포트·테마·기준 화면 등 프로젝트 고유 사실 (보호 파일) | 위와 같음 |
+
+기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 있습니다. Brief가 화면 검증 시나리오를 내면(리뷰는 변경이 화면을 바꿀 때) 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 브라우저로 화면을 검증합니다. 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌고, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 프로젝트의 디자인 문서·토큰·공통 컴포넌트·기준 화면이 계약보다 우선하고, 설치된 외부 디자인 Skill은 선택 보조로만 씁니다.
+
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
 하네스 라이프사이클 Skill(`/harness-init`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
