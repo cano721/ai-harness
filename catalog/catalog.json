@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "datadog",
+      "since": 1,
+      "summary": "Datadog 로그·메트릭·모니터·인시던트를 curl로 조회 (읽기 전용)",
+      "env": [
+        { "any": ["DATADOG_API_KEY", "DD_API_KEY"], "required": true },
+        { "any": ["DATADOG_APP_KEY", "DD_APP_KEY"], "required": true },
+        { "any": ["DATADOG_SITE", "DD_SITE"], "required": false, "note": "기본 datadoghq.com" }
+      ]
+    },
+    {
+      "name": "sentry",
+      "since": 1,
+      "summary": "Sentry 이슈·이벤트·릴리스를 curl로 조회 (읽기 전용)",
+      "env": [
+        { "any": ["SENTRY_AUTH_TOKEN"], "required": true },
+        { "any": ["SENTRY_ORG"], "required": true },
+        { "any": ["SENTRY_URL"], "required": false, "note": "기본 https://sentry.io (self-hosted만 설정)" }
+      ]
+    },
+    {
+      "name": "jira",
+      "since": 1,
+      "summary": "Jira 이슈 조회·검색·생성·수정·상태 전환·코멘트 (curl)",
+      "env": [
+        { "any": ["JIRA_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net" },
+        { "any": ["ATLASSIAN_USER"], "required": true },
+        { "any": ["ATLASSIAN_API_TOKEN"], "required": true }
+      ]
+    },
+    {
+      "name": "confluence",
+      "since": 1,
+      "summary": "Confluence 페이지 조회·검색·생성·수정·코멘트 (curl)",
+      "env": [
+        { "any": ["CONFLUENCE_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net/wiki" },
+        { "any": ["ATLASSIAN_USER"], "required": true },
+        { "any": ["ATLASSIAN_API_TOKEN"], "required": true }
+      ]
+    }
+  ]
+}
