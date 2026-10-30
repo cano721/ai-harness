@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scope": "project-template",
+  "name": "ui-review",
+  "entry": "scope",
+  "terminals": ["done", "user_decision"],
+  "nodes": {
+    "scope": {"write": false, "output": "ui_scenarios"},
+    "design_system": {"write": false, "output": "design_system_contract"},
+    "inspect": {"write": false, "browser": true, "output": "ui_review_report"},
+    "repair": {"write": true, "output": "repair_evidence"},
+    "verify": {"write": false, "output": "verification_evidence"},
+    "done": {"write": false, "output": "ui_review_handoff"},
+    "user_decision": {"write": false, "output": "blocker_report"}
+  },
+  "transitions": [
+    {"from": "scope", "to": "design_system"},
+    {"from": "design_system", "to": "inspect"},
+    {"from": "inspect", "to": "done", "when": "ui_verified"},
+    {"from": "inspect", "to": "repair", "when": "ui_issues_and_repair_authorized"},
+    {"from": "inspect", "to": "user_decision", "when": "ui_issues_need_user_decision"},
+    {"from": "inspect", "to": "user_decision", "when": "ui_unverified"},
+    {"from": "repair", "to": "verify"},
+    {"from": "repair", "to": "user_decision", "when": "repair_limit_reached_or_product_decision"},
+    {"from": "verify", "to": "inspect", "when": "required_checks_pass"},
+    {"from": "verify", "to": "repair", "when": "required_checks_fail"}
+  ],
+  "limits": {"max_repair_attempts": 10},
+  "invariants": [
+    "Inspection does not change the working tree; captures and notes live outside the repository.",
+    "ui_verified requires every scenario to have been rendered and operated in a browser; a passing test, an existing class or token, or a screenshot file is not that evidence.",
+    "A UI that could not be rendered or operated ends as ui_unverified at user_decision, never as done.",
+    "A blocking finding cannot transition directly to done.",
+    "Every repair is followed by required checks and re-inspection of the affected scenarios, including any design-system example it added or changed."
+  ]
+}

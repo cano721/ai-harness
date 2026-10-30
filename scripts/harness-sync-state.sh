@@ -149,7 +149,8 @@ case "$command_name" in
             jq -cn --arg path "$path" --argjson present "$present" --argjson tracked "$tracked" \
               --arg reason "$(jq -r --arg path "$path" '.retired[] | select(.path == $path) | .reason // ""' "$catalog")" \
               '{path:$path,present:$present,tracked:$tracked,reason:$reason,
-                detail:"retired by the template catalog; confirm removal of the file with the user, then drop the manifest entry with `forget`"}'
+                detail:("retired by the template catalog; confirm removal of the file with the user, then drop the manifest entry with `forget`"
+                  + (if $tracked then "" else " — not recorded as a managed file, so it may be user-owned with the same name; review its content before proposing removal" end))}'
           done | jq -s '.'
     )"
     # 설정이 바뀌어(level·integration·stack 제거, 역할을 기존 에이전트나 스택 역할 세트에 넘김) 더는 생성 대상이 아닌

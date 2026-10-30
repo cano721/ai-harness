@@ -6,6 +6,20 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.49.0 (2026-10-30)
+### 버그 수정
+
+- **서브에이전트 토큰이 집계에서 빠지던 문제** — Claude Code는 서브에이전트 대화를 `<세션>/subagents/agent-*.jsonl`에 따로 기록하는데 추출기가 메인 transcript만 읽었습니다. 위임을 많이 하는 워크플로일수록 사용량이 적게 잡혔습니다. 이제 부모 세션의 `agent_tok_in`·`agent_tok_out`·`agent_cache_read`·`agent_cache_write`로 합산하고 `/metrics`가 메인 토큰 옆에 보여줍니다.
+
+- **Codex 입력 토큰이 캐시 읽기와 이중으로 잡히던 문제** — OpenAI usage의 `input_tokens`는 `cached_input_tokens`를 포함하는데 그대로 `in tok`에 넣어, Codex 위주 프로젝트의 입력이 수십억으로 부풀었습니다. 이제 캐시 제외 입력을 기록하고, 재추출되지 않는 예전 이벤트는 집계 때 맞춥니다.
+- **서브에이전트만 갱신된 세션이 다시 추출되지 않던 문제** — 백필이 메인 transcript 수정 시각만 봐서, 백그라운드 서브에이전트가 메인보다 늦게 끝나면 그 토큰이 빠진 채 남았습니다.
+
+### 새 기능
+
+- **컨텍스트 사용 지표** — `/metrics`와 `/metrics session`이 세션의 컨텍스트를 어떻게 썼는지 보여줍니다: 시작 크기(첫 호출 입력 — 시스템 프롬프트·툴 정의와 첫 턴에 실리는 스킬·에이전트 목록·메모리·MCP 안내)·최대·마지막, 툴별 결과 크기, 하네스 docs가 읽힐 때 컨텍스트에 실은 크기(합계·1회당). 크기는 결과 본문의 UTF-8 바이트/4로 낸 추정입니다. 고정 오버헤드가 커진 프로젝트, 1회당 큰 문서(분할 후보), 컨텍스트를 채우는 툴을 근거 수치로 찾을 수 있습니다. Codex 세션은 시작·최대·마지막과 창 대비 %까지 수집하고, 툴 결과·docs 크기는 Claude 세션만 수집합니다.
+- **화면이 바뀌는 변경은 실제로 렌더링·조작해 검증합니다** — 코드 리뷰와 브라우저 테스트를 통과한 승인 대기 화면에서 `반려하기`가 펼침 표시 없는 `<summary>`라 일반 텍스트처럼 보였습니다. 테스트는 텍스트로 찾아 클릭했고, 검토 기록·스크린샷·해시 게이트도 이를 걸러내지 못했습니다. 새 UI 검토 계약(`ui-review` Skill·체크리스트·`ui-review-graph.json`)은 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 기본·접힌 상태·키보드·모바일·테마를 실제로 조작하는 UX 검토 → 수정·재검증 → 근거·한계 보고를 요구하고, 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 생겼습니다. Brief가 `화면 검증 시나리오`를 내면 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 화면을 검증하고, 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌며, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 기능 러너는 이 노드에 앱·브라우저 실행을 허용하되 캡처는 그 시도의 증거 디렉터리에만 쓰게 하고, 시나리오마다 조작 기록이 없거나 미검증 항목이 남은 `verified`는 미검증으로 봅니다. Brief가 화면 변경을 놓쳐도 템플릿·스타일·컴포넌트 파일이 바뀌었으면 그 화면을 검증하고, `ui_review` 노드가 없는 옛 그래프에서는 화면 변경을 done으로 끝내지 않습니다. `/harness-init`은 프론트 패키지뿐 아니라 서버 렌더링 템플릿(Jinja·Thymeleaf·JSP·ERB 등)도 UI로 감지해 stack `ui`로 생성하며, 프로젝트 디자인 규칙이 계약보다, 계약이 외부 디자인 Skill보다 우선합니다. (#150)
+- **버그 수정·변경 검토도 그래프 러너로 실행합니다** — 그래프 러너는 기능 개발만 실행했고, 버그 수정과 검토는 Claude Dynamic Workflow 사본(`.claude/workflows/*.js`)이 아니면 모델이 대화 안에서 그래프를 따랐습니다. 두 방식은 강제 수준이 달라 JS 사본은 화면 검증 캡처를 저장소 밖에 두라고만 지시하고 파일이 실제로 있는지 확인하지 못했습니다. 이제 러너 하나(`.ai-harness/workflows/workflow-driver.sh --workflow feature|bug-fix|review`)가 세 그래프를 Codex·Claude 모두 같은 게이트로 실행합니다. bug-fix는 triage → reproduce(명령 실행 가능, 작업 트리 불변, 근거 없는 "재현됨"은 사람에게) → Bug Fix Brief 승인 → regression → fix → 러너가 직접 실행하는 verify → review → ui_review → publish → remote_ci로, review는 scope → inspect → classify로 가고 blocking finding의 수리는 사용자가 대화에 `승인`을 입력한 뒤(또는 `approval: auto`)에만 시작해 커밋하지 않고 남깁니다. 화면 검증 캡처는 세 워크플로 모두 실행 디렉터리의 `ui-review-<시도>/`에 남고 러너가 파일이 있는지 확인합니다. review 그래프에는 검증 실패 엣지(`verify → repair`)를 더했습니다 — 없던 탓에 수리 뒤 검증이 실패하면 갈 곳이 없었습니다. review의 수리 동의는 보여 준 finding에 묶여, 재검토에서 범위 밖 finding이 나오면 다시 묻습니다. 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점으로 남고, Dynamic Workflow 사본은 더 생성하지 않습니다. (#154)
+
 ## v0.48.0 (2026-10-30)
 ### 새 기능
 
@@ -83,6 +97,7 @@
 
 ### 업데이트 후 해야 할 일
 
+- 화면이 있는 저장소에서 UI 검토 계약을 쓰려면 `/harness-init --sync`(또는 `--reconfigure`)에서 "UI 검토 계약 추가"를 고릅니다. 기존 프로젝트에는 자동으로 켜지지 않습니다. 켜면 `.ai-harness/docs/ui.md`에 앱 실행·로그인·지원 테마·기준 화면을 실측으로 채웁니다 — 비어 있으면 `ui_review`가 미검증을 보고합니다. 그래프만 갱신하고 계약을 켜지 않아도 `ui_review` 노드는 내장 지침으로 동작합니다.
 - workspace에서 `/harness-init --sync --apply`로 AGENTS.md Preflight ③ diff(완료 신호 대기)를 받아 승인합니다.
 - 각 멤버 저장소에서 `/harness-init --sync --apply`로 `feature-delivery-graph.json`·`bug-fix-graph.json`·러너·`/implement-feature`·`/fix-bug` 진입점을 갱신합니다. 프로젝트 워크플로 본문(`implement-feature.md`)에 원격 CI 확인 수단(예: `gh pr checks <PR> --watch`, Bitbucket pipeline 상태 조회)이 없으면 적어 둡니다 — `remote_ci` 노드가 이 사실을 씁니다. 그래프를 갱신하지 않은 저장소는 이전처럼 publish에서 끝나고, 러너 결과에 "remote CI: unverified"가 붙습니다.
 

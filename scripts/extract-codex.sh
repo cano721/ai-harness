@@ -74,6 +74,13 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   | (if ($userTexts|length) > $t2 then ($userTexts|length) else $t2 end) as $turns
   | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
        | .payload.info.total_token_usage // empty] | last // {}) as $tok
+  # 호출 한 번의 컨텍스트 = 그 호출의 입력 전체(캐시 포함). 창 크기도 Codex가 함께 기록한다.
+  | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
+       | .payload.info.last_token_usage.input_tokens // empty]) as $ctx
+  # 세션 중 모델이 바뀌면 창 크기도 바뀐다 — 최대치가 나온 호출의 창으로 비율을 낸다.
+  | ([$L[] | select(.type=="event_msg" and .payload.type=="token_count")
+       | .payload.info | select(.last_token_usage.input_tokens != null)
+       | {n:.last_token_usage.input_tokens, w:.model_context_window}] | max_by(.n) // {} | .w // null) as $window
   # 실제 모델명은 turn_context에 있다. provider를 모델명으로 대신 쓰지 않는다.
   | ([$L[] | select(.type=="turn_context") | .payload.model // empty] | last // null) as $model
   | (select(($L|length) > 0) | $base + {
@@ -81,10 +88,14 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
       started: ($meta.payload.timestamp // ($L[0].timestamp // null)),
       ended:   ([$L[] | .timestamp // empty] | last // null),
       turns:   $turns,
-      tok_in:  ($tok.input_tokens // 0),
+      # OpenAI usage의 input_tokens는 cached_input_tokens를 포함한다(total = input + output).
+      # Claude와 같은 의미(캐시 제외 입력)로 맞춰야 in과 cache read가 이중으로 잡히지 않는다.
+      tok_in:  ([($tok.input_tokens // 0) - ($tok.cached_input_tokens // 0), 0] | max),
       tok_out: ($tok.output_tokens // 0),
       cache_read: ($tok.cached_input_tokens // 0),
       cache_write: ($tok.cache_write_input_tokens // 0),
+      ctx_first: ($ctx | first // null), ctx_peak: ($ctx | max // null), ctx_last: ($ctx | last // null),
+      ctx_window: $window,
       model:   $model,
       provider: ($meta.payload.model_provider // null),
       internal: (($texts | first // "") | is_internal_prompt),
@@ -92,7 +103,7 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
         "jira_issue", "error", "guard_block", "permission_deny", "compact",
-        "error_sample"
+        "error_sample", "context"
       ]
     }),
   # Workflow commands are explicit in user prompts for both slash commands

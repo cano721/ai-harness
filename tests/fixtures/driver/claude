@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# implement-feature-driver 테스트용 가짜 claude. 노드 동작은 가짜 codex에 맡기고 stream-json 이벤트로 감싼다.
+# workflow-driver 테스트용 가짜 claude. 노드 동작은 가짜 codex에 맡기고 stream-json 이벤트로 감싼다.
 # 도구 입출력에 비밀 표식을 넣어, 러너가 원본 스트림을 디스크에 남기지 않는지 확인하게 한다.
 set -euo pipefail
 sandbox=read-only schema="" stream=""
