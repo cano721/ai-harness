@@ -518,6 +518,19 @@ assert_eq "116" "$(jq -r 'select(.kind=="session") | .tok_in' "$CTX_EVENT")" "Cl
 assert_eq "1000 1310 1205" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last)"' "$CTX_EVENT")" "Claude context first/peak/last from main-chain calls only"
 assert_eq "Bash=20/1 Grep=1/1 Read=100/1" "$(jq -r 'select(.kind=="ctx_tool") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT" | sort | paste -sd " " -)" "Claude tool result size per tool (UTF-8 bytes/4)"
 assert_eq ".ai-harness/docs/testing.md=100/1" "$(jq -r 'select(.kind=="doc_ctx") | "\(.target)=\(.n)/\(.calls)"' "$CTX_EVENT")" "Claude doc context cost skips results mixing several docs"
+AGENT_BF_PROJ="$TEST_TMP/agent-bf-claude/project"
+AGENT_BF_DATA="$TEST_TMP/agent-bf-data"
+mkdir -p "$AGENT_BF_PROJ"
+cp -R "$CTX_FIXTURE" "${CTX_FIXTURE%.jsonl}" "$AGENT_BF_PROJ/"
+agent_bf() { HARNESS_METRICS_DIR="$AGENT_BF_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/agent-bf-claude" HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/none" "$ROOT/scripts/backfill.sh" >/dev/null; }
+agent_bf
+AGENT_BF_EVENT="$AGENT_BF_DATA/events/claude-cccccccc-1111-2222-3333-dddddddddddd.jsonl"
+touch -t 202601010000 "$AGENT_BF_PROJ/$(basename "$CTX_FIXTURE")" "$AGENT_BF_EVENT"
+cp "$AGENT_BF_PROJ/cccccccc-1111-2222-3333-dddddddddddd/subagents/agent-a1.jsonl" "$AGENT_BF_PROJ/cccccccc-1111-2222-3333-dddddddddddd/subagents/agent-a3.jsonl"
+agent_bf
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .agents' "$AGENT_BF_EVENT")" "backfill re-extracts when only a subagent transcript is newer than the event"
+agent_bf
+assert_eq "3" "$(jq -r 'select(.kind=="session") | .agents' "$AGENT_BF_EVENT")" "backfill stays stable after re-extracting a subagent update"
 CTX_STATS_DATA="$TEST_TMP/ctx-stats"
 mkdir -p "$CTX_STATS_DATA/events"
 cp "$CTX_EVENT" "$CTX_STATS_DATA/events/"
@@ -554,6 +567,28 @@ assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_E
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
 assert_eq "openai" "$(jq -r 'select(.kind=="session") | .provider' "$CODEX_EVENT")" "Codex provider"
 assert_eq "11" "$(jq -r 'select(.kind=="session") | .cache_write' "$CODEX_EVENT")" "Codex cache write"
+assert_eq "40 60" "$(jq -r 'select(.kind=="session") | "\(.tok_in) \(.cache_read)"' "$CODEX_EVENT")" "Codex input excludes cached input (OpenAI input_tokens includes it)"
+CODEX_CTX_DIR="$TEST_TMP/codex-ctx/2026/07/30"
+CODEX_CTX_FIXTURE="$CODEX_CTX_DIR/rollout-2026-07-30T00-00-00-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+mkdir -p "$CODEX_CTX_DIR"
+{
+  sed 's/bbbbbbbb-1111-2222-3333-cccccccccccc/eeeeeeee-1111-2222-3333-ffffffffffff/' "$CODEX_FIXTURE" | grep -v '"token_count"'
+  for u in '1000 600 1000' '3000 2500 4000' '2000 1900 6000'; do
+    read -r last cached total <<<"$u"
+    printf '{"type":"event_msg","timestamp":"2026-07-30T00:00:09Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":5},"last_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":1},"model_context_window":10000}}}\n' "$total" "$cached" "$last" "$cached"
+  done
+} >"$CODEX_CTX_FIXTURE"
+HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-extract" "$ROOT/scripts/extract-codex.sh" "$CODEX_CTX_FIXTURE"
+CODEX_CTX_EVENT="$TEST_TMP/codex-ctx-extract/events/codex-2026-07-30T00-00-00-eeeeeeee-1111-2222-3333-ffffffffffff.jsonl"
+assert_eq "1000 3000 2000 10000" "$(jq -r 'select(.kind=="session") | "\(.ctx_first) \(.ctx_peak) \(.ctx_last) \(.ctx_window)"' "$CODEX_CTX_EVENT")" "Codex context per call and window from token_count"
+CODEX_LEGACY_DATA="$TEST_TMP/codex-legacy"
+mkdir -p "$CODEX_LEGACY_DATA/events"
+jq -c 'if .kind=="session" then .coverage -= ["context"] | .tok_in = 100 | del(.ctx_first,.ctx_peak,.ctx_last,.ctx_window) else . end' "$CODEX_EVENT" \
+  >"$CODEX_LEGACY_DATA/events/codex-legacy.jsonl"
+assert_contains "$(HARNESS_METRICS_DIR="$CODEX_LEGACY_DATA" "$ROOT/scripts/stats.sh")" "| jobda-agent | 1 | 3 | 40 |" "stats normalizes legacy Codex input that still included cached input"
+CODEX_CTX_REPORT="$(HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-data" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/none" \
+  HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/codex-ctx" "$ROOT/scripts/session.sh" eeeeeeee)"
+assert_contains "$CODEX_CTX_REPORT" "최대 3000 / 마지막 2000 · 창 10000의 30%" "session report shows peak share of the Codex context window"
 assert_eq "reviewer" "$(jq -r 'select(.kind=="persona") | .target' "$CODEX_EVENT")" "Codex bridge persona"
 assert_eq ".ai-harness/docs/code-conventions.md .ai-harness/docs/testing.md" "$(jq -r 'select(.kind=="doc_read") | .target' "$CODEX_EVENT" | sort | paste -sd " " -)" "Codex bridge multi-doc read in one exec"
 assert_eq "1" "$(jq -r 'select(.kind=="guard_block") | .n' "$CODEX_EVENT")" "Codex guard block counts line-leading hook prefix only"
@@ -2304,7 +2339,7 @@ pass "backfill freshness and version invalidation"
 # Claude와 Codex 모두 동일한 상세 수집 범위를 보고한다.
 STATS_OUTPUT="$(HARNESS_METRICS_DIR="$EXTRACT_DATA" "$ROOT/scripts/stats.sh")"
 assert_contains "$STATS_OUTPUT" "## 수집 범위" "coverage section"
-assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, doc_read" "full Codex coverage declaration"
+assert_contains "$STATS_OUTPUT" "| codex | 1 | bash_cmd, compact, context, doc_read" "full Codex coverage declaration"
 assert_contains "$STATS_OUTPUT" "cache write" "cache write column"
 pass "coverage-aware metrics"
 
