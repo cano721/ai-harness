@@ -15,6 +15,9 @@ STATE_DIR="$HM_DATA_DIR/setup"
 STATE="$STATE_DIR/state.json"
 LOCK="$STATE_DIR/.lock"
 CLAUDE_SETTINGS="${HARNESS_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+# Codex는 settings.json env가 없으므로 셸 프로파일이 source하는 파일에 둔다.
+SECRETS_FILE="$HM_DATA_DIR/secrets.env"
+PROFILE_DIR="$HM_DATA_DIR/skills"
 
 usage() {
   cat >&2 <<'EOF'
@@ -22,6 +25,9 @@ usage: setup.sh list
        setup.sh install --tool claude|codex|both [--replace] <skill>...
        setup.sh remove --tool claude|codex|both [--force] <skill>...
        setup.sh update [--tool claude|codex|both]
+       setup.sh set --tool claude|codex|both <KEY> [VALUE]   (secret 키는 VALUE 없이 숨김 입력)
+       setup.sh check <skill>
+       setup.sh detect <skill>
        setup.sh done
        setup.sh notify < SessionStart input
 EOF
@@ -92,17 +98,45 @@ skill_status() { # tool name
   fi
 }
 
-# 키 값은 읽지 않고 어디에 있는지만 본다: 프로세스 환경 → Claude settings.json env.
+secrets_value() { # KEY → 값 (secrets.env를 source하지 않고 우리가 쓴 형식만 읽는다)
+  local line re="^export $1='(.*)'\$" q="'"
+  [[ -f "$SECRETS_FILE" ]] || return 1
+  while IFS= read -r line; do
+    if [[ "$line" =~ $re ]]; then
+      local v="${BASH_REMATCH[1]}"
+      printf '%s' "${v//$q\\$q$q/$q}"
+      return 0
+    fi
+  done <"$SECRETS_FILE"
+  return 1
+}
+
+settings_value() { [[ -f "$CLAUDE_SETTINGS" ]] && jq -er --arg k "$1" '.env[$k] // empty | select(. != "")' "$CLAUDE_SETTINGS" 2>/dev/null; }
+
+# 키가 어디에 있는지: 프로세스 환경 → Claude settings.json env → secrets.env.
+# 방금 넣은 값은 실행 중인 세션 환경에 없으므로 파일까지 본다.
 env_source() {
   local key="$1"
   if [[ -n "${!key:-}" ]]; then
     printf 'env\n'
-  elif [[ -f "$CLAUDE_SETTINGS" ]] && jq -e --arg k "$key" '(.env[$k] // "") != ""' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+  elif settings_value "$key" >/dev/null; then
     printf 'settings\n'
+  elif secrets_value "$key" >/dev/null; then
+    printf 'secrets\n'
   else
     printf 'missing\n'
   fi
 }
+
+# 값은 이 프로세스 안에서만 쓰고 출력하지 않는다.
+resolve_value() {
+  local key="$1"
+  if [[ -n "${!key:-}" ]]; then printf '%s' "${!key}"; return 0; fi
+  settings_value "$key" && return 0
+  secrets_value "$key"
+}
+
+first_value() { local k; for k in "$@"; do resolve_value "$k" && return 0; done; return 1; }
 
 env_report() { # name → [{keys, required, note, found:<key|null>, source}]
   local entries out='[]' entry key src found source
@@ -115,7 +149,8 @@ env_report() { # name → [{keys, required, note, found:<key|null>, source}]
       if [[ "$src" != missing ]]; then found="$key"; source="$src"; break; fi
     done < <(jq -r '.any[]' <<<"$entry")
     out="$(jq -c --argjson e "$entry" --arg f "$found" --arg s "$source" \
-      '. + [{keys:$e.any, required:($e.required // false), note:($e.note // null), found:(if $f == "" then null else $f end), source:$s}]' <<<"$out")"
+      '. + [{keys:$e.any, required:($e.required // false), secret:($e.secret // false), note:($e.note // null), issue:($e.issue // null),
+             found:(if $f == "" then null else $f end), source:$s}]' <<<"$out")"
   done <<<"$entries"
   printf '%s\n' "$out"
 }
@@ -128,8 +163,11 @@ command_list() {
       status="$(skill_status "$tool" "$name")"
       statuses="$(jq -c --arg t "$tool" --arg s "$status" '. + {($t):$s}' <<<"$statuses")"
     done
+    local profile="$PROFILE_DIR/$name.md"
     jq -cn --arg n "$name" --argjson st "$statuses" --argjson env "$(env_report "$name")" --slurpfile c "$CATALOG" \
-      '($c[0].skills[] | select(.name == $n)) as $s | {name:$n, summary:$s.summary, status:$st, env:$env}'
+      --arg profile "$profile" --argjson has_profile "$([[ -s "$profile" ]] && echo true || echo false)" \
+      '($c[0].skills[] | select(.name == $n)) as $s
+       | {name:$n, summary:$s.summary, status:$st, env:$env, profile:{path:$profile, exists:$has_profile, questions:($s.profile // [])}}'
   done < <(catalog_names)
 }
 
@@ -256,6 +294,175 @@ command_update() {
   return 0
 }
 
+key_is_known() { jq -e --arg k "$1" 'any(.skills[].env[]?; .any | index($k))' "$CATALOG" >/dev/null; }
+key_is_secret() { jq -e --arg k "$1" 'any(.skills[].env[]?; (.any | index($k)) and (.secret // false))' "$CATALOG" >/dev/null; }
+
+write_claude_env() { # KEY, 값은 stdin — jq 인자에 값을 싣지 않는다
+  local tmp current='{}'
+  mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
+  if [[ -f "$CLAUDE_SETTINGS" ]]; then
+    jq -e 'type == "object"' "$CLAUDE_SETTINGS" >/dev/null 2>&1 || { printf 'not a JSON object, left unchanged: %s\n' "$CLAUDE_SETTINGS" >&2; return 1; }
+    current="$(cat "$CLAUDE_SETTINGS")"
+  fi
+  tmp="$CLAUDE_SETTINGS.tmp.$$"
+  (umask 077; jq -Rs --arg k "$1" --argjson cur "$current" '. as $v | $cur | .env = ((.env // {}) + {($k): $v})' >"$tmp")
+  [[ -f "$CLAUDE_SETTINGS" ]] && chmod "$(stat -f %Lp "$CLAUDE_SETTINGS" 2>/dev/null || stat -c %a "$CLAUDE_SETTINGS")" "$tmp" 2>/dev/null
+  mv "$tmp" "$CLAUDE_SETTINGS"
+}
+
+write_secret_env() { # KEY, 값은 stdin
+  local value tmp q="'"
+  value="$(cat)"
+  tmp="$SECRETS_FILE.tmp.$$"
+  (
+    umask 077
+    { [[ -f "$SECRETS_FILE" ]] && grep -v "^export $1=" "$SECRETS_FILE" || true; } >"$tmp"
+    printf "export %s='%s'\n" "$1" "${value//$q/$q\\$q$q}" >>"$tmp"
+  )
+  mv "$tmp" "$SECRETS_FILE"
+}
+
+# 접속 정보 저장. secret 키는 명령 인자로 받지 않는다(셸 기록·프로세스 목록·대화 기록에 남지 않게):
+# 터미널이면 숨김 입력, 아니면 stdin 한 줄(예: pbpaste | setup.sh set ...).
+command_set() {
+  local tool="" key="" value="" have_value=0 t
+  while (($#)); do
+    case "$1" in
+      --tool) tool="${2:-}"; shift 2 ;;
+      -*) usage ;;
+      *) if [[ -z "$key" ]]; then key="$1"; else value="$1"; have_value=1; fi; shift ;;
+    esac
+  done
+  [[ -n "$tool" && "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || usage
+  key_is_known "$key" || { printf 'unknown key: %s\n' "$key" >&2; exit 2; }
+  if ((have_value)); then
+    key_is_secret "$key" && { printf '%s is a secret: run without VALUE and enter it at the hidden prompt\n' "$key" >&2; exit 2; }
+  elif [[ -t 0 ]]; then
+    printf '%s (입력이 보이지 않습니다): ' "$key" >&2
+    IFS= read -rs value
+    printf '\n' >&2
+  else
+    IFS= read -r value || true
+  fi
+  [[ -n "$value" ]] || { printf 'empty value, nothing saved\n' >&2; exit 1; }
+  while IFS= read -r t; do
+    case "$t" in
+      claude) printf '%s' "$value" | write_claude_env "$key"; jq -cn --arg k "$key" --arg p "$CLAUDE_SETTINGS" '{key:$k, tool:"claude", saved:$p}' ;;
+      codex)
+        printf '%s' "$value" | write_secret_env "$key"
+        jq -cn --arg k "$key" --arg p "$SECRETS_FILE" '{key:$k, tool:"codex", saved:$p, shell_profile_line:"[ -f \"\($p)\" ] && . \"\($p)\""}'
+        ;;
+    esac
+  done < <(tools_for "$tool")
+}
+
+# 연결 확인과 자동 감지는 읽기 전용 호출만 한다. 자격 증명은 curl 설정(stdin)으로 넘긴다.
+http_get() { # url, curl 설정은 stdin → 본문 출력, 실패 시 "HTTP <code>"를 stderr
+  local body code out
+  if [[ -n "${HM_SETUP_HTTP:-}" ]]; then
+    "$HM_SETUP_HTTP" "$1"
+    return
+  fi
+  out="$(mktemp "${TMPDIR:-/tmp}/ai-harness-setup.XXXXXX")"
+  code="$(curl -sS -o "$out" -w '%{http_code}' --connect-timeout 5 --max-time 20 -K - "$1" 2>/dev/null || true)"
+  body="$(cat "$out")"; rm -f "$out"
+  printf '%s' "$body"
+  [[ "$code" =~ ^2 ]] || { printf 'HTTP %s\n' "${code:-000}" >&2; return 1; }
+}
+
+dd_conf() { printf 'header = "DD-API-KEY: %s"\nheader = "DD-APPLICATION-KEY: %s"\n' "$(first_value DATADOG_API_KEY DD_API_KEY)" "$(first_value DATADOG_APP_KEY DD_APP_KEY)"; }
+dd_base() { printf 'https://api.%s' "$(first_value DATADOG_SITE DD_SITE || echo datadoghq.com)"; }
+atl_conf() { printf 'user = "%s:%s"\n' "$(resolve_value ATLASSIAN_USER)" "$(resolve_value ATLASSIAN_API_TOKEN)"; }
+st_conf() { printf 'header = "Authorization: Bearer %s"\n' "$(resolve_value SENTRY_AUTH_TOKEN)"; }
+st_base() { local u; u="$(resolve_value SENTRY_URL || echo https://sentry.io)"; printf '%s/api/0/organizations/%s' "${u%/}" "$(resolve_value SENTRY_ORG)"; }
+mask_email() { sed -E 's/^(.).*@/\1***@/'; }
+
+check_hint() { # skill, http 오류 → 원인 안내
+  case "$1:$2" in
+    *:"HTTP 401") printf '자격 증명이 틀렸거나 만료됨 — 토큰을 다시 발급해 set으로 넣는다' ;;
+    datadog:"HTTP 403") printf 'Application key scope 부족 — user_access_read 등 읽기 scope를 더한다' ;;
+    sentry:"HTTP 403") printf '토큰 scope 부족 — org:read, project:read, event:read' ;;
+    *:"HTTP 403") printf '계정 권한 부족' ;;
+    *:"HTTP 404") printf '주소가 틀림 — base URL·사이트·조직 slug를 확인한다' ;;
+    *:"HTTP 000") printf '연결 실패 — 주소·네트워크·VPN을 확인한다' ;;
+    *) printf '%s' "$2" ;;
+  esac
+}
+
+command_check() {
+  local name="${1:-}" body err="" ok=true who=""
+  in_catalog "$name" || usage
+  local missing
+  missing="$(env_report "$name" | jq -r '[.[] | select(.required and .found == null) | .keys[0]] | join(",")')"
+  if [[ -n "$missing" ]]; then
+    jq -cn --arg n "$name" --arg m "$missing" '{name:$n, ok:false, missing:($m | split(",")), hint:"필수 키가 없다 — set으로 넣는다"}'
+    return 0
+  fi
+  case "$name" in
+    datadog)
+      if body="$(dd_conf | http_get "$(dd_base)/api/v1/validate" 2>"$STATE_DIR/.err")" && [[ "$(jq -r '.valid' <<<"$body" 2>/dev/null)" == true ]]; then
+        if body="$(dd_conf | http_get "$(dd_base)/api/v2/current_user" 2>"$STATE_DIR/.err")"; then
+          who="$(jq -r '.data.attributes.email // .data.attributes.handle // ""' <<<"$body" | mask_email)"
+        else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
+      else ok=false; err="$(cat "$STATE_DIR/.err")"; [[ -n "$err" ]] || err="HTTP 403"; fi
+      ;;
+    sentry)
+      if body="$(st_conf | http_get "$(st_base)/" 2>"$STATE_DIR/.err")"; then who="$(jq -r '.name // .slug' <<<"$body")"
+      else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
+      ;;
+    jira)
+      if body="$(atl_conf | http_get "$(resolve_value JIRA_BASE_URL | sed 's:/*$::')/rest/api/3/myself" 2>"$STATE_DIR/.err")"; then who="$(jq -r '.displayName // ""' <<<"$body")"
+      else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
+      ;;
+    confluence)
+      if body="$(atl_conf | http_get "$(resolve_value CONFLUENCE_BASE_URL | sed 's:/*$::')/rest/api/user/current" 2>"$STATE_DIR/.err")" \
+        && [[ "$(jq -r '.type' <<<"$body" 2>/dev/null)" != anonymous ]]; then who="$(jq -r '.displayName // ""' <<<"$body")"
+      else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
+      ;;
+  esac
+  rm -f "$STATE_DIR/.err"
+  err="$(printf '%s' "$err" | head -1)"
+  jq -cn --arg n "$name" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$( [[ $ok == true ]] || check_hint "$name" "$err")" \
+    '{name:$n, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
+}
+
+# 프로필 질문의 선택지를 계정에서 읽어 온다. 실패하면 빈 값 — 셋업은 사람에게 물어 진행한다.
+command_detect() {
+  local name="${1:-}" out='{}'
+  in_catalog "$name" || usage
+  case "$name" in
+    datadog)
+      out="$(dd_conf | HM_SETUP_POST='{"filter":{"query":"status:error","from":"now-24h","to":"now"},"compute":[{"aggregation":"count"}],"group_by":[{"facet":"service","limit":20}]}' \
+        http_post "$(dd_base)/api/v2/logs/analytics/aggregate" 2>/dev/null \
+        | jq -c '{error_services:([.data.buckets[]? | {service:.by.service, count:.computes.c0}] | sort_by(-.count))}' 2>/dev/null || echo '{}')"
+      ;;
+    sentry)
+      out="$(st_conf | http_get "$(st_base)/projects/" 2>/dev/null | jq -c '{projects:[.[]? | {slug, platform}]}' 2>/dev/null || echo '{}')"
+      ;;
+    jira)
+      local base fields projects
+      base="$(resolve_value JIRA_BASE_URL | sed 's:/*$::')"
+      fields="$(atl_conf | http_get "$base/rest/api/3/field" 2>/dev/null \
+        | jq -c '[.[]? | select((.schema.custom // "") | test("gh-sprint$|gh-epic-link$")) | {id, name, type:(.schema.custom | sub(".*:"; ""))}]' 2>/dev/null || echo '[]')"
+      projects="$(atl_conf | http_get "$base/rest/api/3/project/recent?maxResults=20" 2>/dev/null | jq -c '[.[]? | {key, name}]' 2>/dev/null || echo '[]')"
+      out="$(jq -cn --argjson f "$fields" --argjson p "$projects" '{fields:$f, recent_projects:$p}')"
+      ;;
+    confluence)
+      out="$(atl_conf | http_get "$(resolve_value CONFLUENCE_BASE_URL | sed 's:/*$::')/api/v2/spaces?limit=50&type=global" 2>/dev/null \
+        | jq -c '{spaces:[.results[]? | {key, name}]}' 2>/dev/null || echo '{}')"
+      ;;
+  esac
+  jq -c --arg n "$name" '{name:$n} + .' <<<"$out"
+}
+
+http_post() { # url, 본문은 HM_SETUP_POST, curl 설정은 stdin
+  if [[ -n "${HM_SETUP_HTTP:-}" ]]; then
+    "$HM_SETUP_HTTP" "$1" "$HM_SETUP_POST"
+    return
+  fi
+  curl -sS --fail --connect-timeout 5 --max-time 20 -K - -X POST -H 'Content-Type: application/json' --data-binary "$HM_SETUP_POST" "$1"
+}
+
 command_done() {
   read_state | jq --argjson v "$(catalog_version)" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.catalog_version = $v | .done_at = $now' | write_state
@@ -310,6 +517,9 @@ case "$cmd" in
   install) with_lock command_install "$@" ;;
   remove) with_lock command_remove "$@" ;;
   update) with_lock command_update "$@" ;;
+  set) command_set "$@" ;;
+  check) mkdir -p "$STATE_DIR"; command_check "$@" ;;
+  detect) command_detect "$@" ;;
   done) with_lock command_done ;;
   notify) command_notify ;;
   *) usage ;;

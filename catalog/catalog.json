@@ -6,9 +6,30 @@
       "since": 1,
       "summary": "Datadog 로그·메트릭·모니터·인시던트를 curl로 조회 (읽기 전용)",
       "env": [
-        { "any": ["DATADOG_API_KEY", "DD_API_KEY"], "required": true },
-        { "any": ["DATADOG_APP_KEY", "DD_APP_KEY"], "required": true },
-        { "any": ["DATADOG_SITE", "DD_SITE"], "required": false, "note": "기본 datadoghq.com" }
+        {
+          "any": ["DATADOG_API_KEY", "DD_API_KEY"], "required": true, "secret": true,
+          "issue": {
+            "url": "https://app.datadoghq.com/organization-settings/api-keys",
+            "steps": "Organization Settings → API Keys → New Key. 조직 공용 키가 있으면 관리자에게 받는다.",
+            "scopes": "API key에는 scope가 없다"
+          }
+        },
+        {
+          "any": ["DATADOG_APP_KEY", "DD_APP_KEY"], "required": true, "secret": true,
+          "issue": {
+            "url": "https://app.datadoghq.com/personal-settings/application-keys",
+            "steps": "Personal Settings → Application Keys → New Key → Edit에서 scope를 읽기 전용으로 좁힌다.",
+            "scopes": "logs_read_data, logs_read_index_data, metrics_read, monitors_read, incident_read, events_read, hosts_read, dashboards_read, apm_service_catalog_read, user_access_read"
+          }
+        },
+        {
+          "any": ["DATADOG_SITE", "DD_SITE"], "required": false, "note": "기본 datadoghq.com",
+          "issue": { "steps": "Datadog에 로그인한 주소의 도메인 (app.datadoghq.eu → datadoghq.eu, us5.datadoghq.com 등)" }
+        }
+      ],
+      "profile": [
+        { "key": "default_filters", "ask": "평소 볼 서비스·환경 필터 (예: env:prod service:api)", "detect": "최근 24시간 에러 로그의 서비스 목록" },
+        { "key": "links", "ask": "자주 보는 대시보드·모니터 (이름이나 ID)" }
       ]
     },
     {
@@ -16,9 +37,26 @@
       "since": 1,
       "summary": "Sentry 이슈·이벤트·릴리스를 curl로 조회 (읽기 전용)",
       "env": [
-        { "any": ["SENTRY_AUTH_TOKEN"], "required": true },
-        { "any": ["SENTRY_ORG"], "required": true },
-        { "any": ["SENTRY_URL"], "required": false, "note": "기본 https://sentry.io (self-hosted만 설정)" }
+        {
+          "any": ["SENTRY_AUTH_TOKEN"], "required": true, "secret": true,
+          "issue": {
+            "url": "https://sentry.io/settings/account/api/auth-tokens/",
+            "steps": "User Settings → Personal Tokens → Create New Token. 조직 공용이면 Settings → Developer Settings → Internal Integration.",
+            "scopes": "event:read, project:read, org:read"
+          }
+        },
+        {
+          "any": ["SENTRY_ORG"], "required": true,
+          "issue": { "steps": "Sentry URL의 조직 slug (https://<org>.sentry.io 또는 sentry.io/organizations/<org>/)" }
+        },
+        {
+          "any": ["SENTRY_URL"], "required": false, "note": "기본 https://sentry.io (self-hosted만 설정)",
+          "issue": { "steps": "self-hosted나 리전(https://de.sentry.io)일 때만 그 주소" }
+        }
+      ],
+      "profile": [
+        { "key": "default_projects", "ask": "평소 볼 프로젝트 slug", "detect": "조직의 프로젝트 목록" },
+        { "key": "environment", "ask": "기본 환경 (예: production)" }
       ]
     },
     {
@@ -26,9 +64,28 @@
       "since": 1,
       "summary": "Jira 이슈 조회·검색·생성·수정·상태 전환·코멘트 (curl)",
       "env": [
-        { "any": ["JIRA_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net" },
-        { "any": ["ATLASSIAN_USER"], "required": true },
-        { "any": ["ATLASSIAN_API_TOKEN"], "required": true }
+        {
+          "any": ["JIRA_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net",
+          "issue": { "steps": "Jira에 로그인한 주소의 https://<사이트>.atlassian.net 부분 (끝 / 없이)" }
+        },
+        {
+          "any": ["ATLASSIAN_USER"], "required": true,
+          "issue": { "steps": "Atlassian 계정 이메일" }
+        },
+        {
+          "any": ["ATLASSIAN_API_TOKEN"], "required": true, "secret": true,
+          "issue": {
+            "url": "https://id.atlassian.com/manage-profile/security/api-tokens",
+            "steps": "Create API token (scope 없는 classic 토큰). 만료일을 정해 두고 달력에 적는다.",
+            "scopes": "계정 권한을 그대로 따른다"
+          }
+        }
+      ],
+      "profile": [
+        { "key": "default_project", "ask": "기본 프로젝트 키", "detect": "최근 본 프로젝트 목록" },
+        { "key": "fields", "ask": "커스텀 필드 ID (스프린트·에픽 링크)", "detect": "필드 타입으로 자동 조회" },
+        { "key": "create_rules", "ask": "이슈 생성 시 반드시 채우는 항목 (예: 상위 에픽·활성 스프린트·수정 버전) 과 기본 이슈 타입" },
+        { "key": "conventions", "ask": "요약·설명 작성 규칙, 담당자·라벨 기본값 등 팀 관례" }
       ]
     },
     {
@@ -36,9 +93,27 @@
       "since": 1,
       "summary": "Confluence 페이지 조회·검색·생성·수정·코멘트 (curl)",
       "env": [
-        { "any": ["CONFLUENCE_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net/wiki" },
-        { "any": ["ATLASSIAN_USER"], "required": true },
-        { "any": ["ATLASSIAN_API_TOKEN"], "required": true }
+        {
+          "any": ["CONFLUENCE_BASE_URL"], "required": true, "note": "예: https://acme.atlassian.net/wiki",
+          "issue": { "steps": "Confluence 주소의 https://<사이트>.atlassian.net/wiki 부분 (Jira와 사이트가 다를 수 있다)" }
+        },
+        {
+          "any": ["ATLASSIAN_USER"], "required": true,
+          "issue": { "steps": "Atlassian 계정 이메일" }
+        },
+        {
+          "any": ["ATLASSIAN_API_TOKEN"], "required": true, "secret": true,
+          "issue": {
+            "url": "https://id.atlassian.com/manage-profile/security/api-tokens",
+            "steps": "Jira와 같은 Atlassian 계정이면 같은 토큰을 쓴다.",
+            "scopes": "계정 권한을 그대로 따른다"
+          }
+        }
+      ],
+      "profile": [
+        { "key": "default_space", "ask": "기본 스페이스 키", "detect": "접근 가능한 스페이스 목록" },
+        { "key": "default_parent", "ask": "새 페이지를 기본으로 둘 상위 페이지 (URL이나 ID)" },
+        { "key": "conventions", "ask": "제목 규칙·템플릿·라벨 등 팀 관례" }
       ]
     }
   ]

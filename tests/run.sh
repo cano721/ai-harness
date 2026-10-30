@@ -3379,4 +3379,52 @@ SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
 
+# 접속 정보: secret은 인자로 받지 않고 stdin으로만, 저장한 파일에서 바로 연결 확인. 자격 증명은 HTTP 호출 인자에도 싣지 않는다.
+SETUP_T="$TEST_TMP/setup-creds"
+SETUP_CATALOG="$ROOT/catalog"
+mkdir -p "$SETUP_T"
+printf '{"model":"opus","env":{"KEEP":"1"}}\n' >"$SETUP_T/settings.json"
+cat >"$SETUP_T/http.sh" <<'STUB'
+#!/usr/bin/env bash
+conf="$(cat)"
+printf '%s\n' "$*" >>"${0%/*}/argv.log"
+case "$conf" in *bad-token*) printf 'HTTP 401\n' >&2; exit 1 ;; esac
+case "$1" in
+  */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
+  */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
+  */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  *) printf 'HTTP 404\n' >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$SETUP_T/http.sh"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+if setup_cmd set --tool claude ATLASSIAN_API_TOKEN "tok-in-argv" 2>/dev/null; then fail "secret accepted as an argument"; fi
+assert_eq "missing" "$(setup_cmd check jira | jq -r 'if .missing then "missing" else "x" end')" "check reports missing keys"
+setup_cmd set --tool claude JIRA_BASE_URL https://acme.atlassian.net/ >/dev/null
+setup_cmd set --tool claude ATLASSIAN_USER me@acme.test >/dev/null
+printf "good-tok'en\n" | setup_cmd set --tool both ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "1" "$(jq -r '.env.KEEP' "$SETUP_T/settings.json")" "settings.json keeps other env"
+assert_eq "opus" "$(jq -r '.model' "$SETUP_T/settings.json")" "settings.json keeps other keys"
+assert_eq "good-tok'en" "$(jq -r '.env.ATLASSIAN_API_TOKEN' "$SETUP_T/settings.json")" "secret saved to Claude settings"
+# shellcheck disable=SC2016  # 변수는 source한 하위 셸에서 펼친다
+assert_eq "good-tok'en" "$(env -i /bin/bash -c '. "$1"; printf %s "$ATLASSIAN_API_TOKEN"' _ "$SETUP_T/data/secrets.env")" "secret saved to sourceable Codex file"
+assert_eq "600" "$(stat -f %Lp "$SETUP_T/data/secrets.env" 2>/dev/null || stat -c %a "$SETUP_T/data/secrets.env")" "secrets file is private"
+assert_eq "settings" "$(setup_cmd list | jq -r 'select(.name=="jira") | .env[2].source')" "saved secret visible without restart"
+assert_eq "true Kim" "$(setup_cmd check jira | jq -r '"\(.ok) \(.as)"')" "check uses saved credentials"
+DETECT="$(setup_cmd detect jira)"
+assert_eq "customfield_10113 gh-sprint" "$(jq -r '.fields[0] | "\(.id) \(.type)"' <<<"$DETECT")" "detect finds sprint field by type"
+assert_eq "1" "$(jq -r '.fields | length' <<<"$DETECT")" "detect ignores other fields"
+assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists recent projects"
+printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
+assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"
+if grep -qE "tok|bad-token" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
+if setup_cmd list | grep -q "tok'en"; then fail "list prints a credential"; fi
+SETUP_ENV=()
+for name in $CATALOG_NAMES; do
+  assert_contains "$(<"$ROOT/catalog/$name/SKILL.md")" "/skills/$name.md" "catalog $name reads the user rule file"
+  assert_eq "true" "$(jq -r --arg n "$name" '.skills[] | select(.name==$n) | all(.env[] | select(.secret); .issue.url != null)' "$ROOT/catalog/catalog.json")" "catalog $name secrets carry an issue URL"
+done
+pass "setup stores credentials off the transcript and checks them"
+
 printf '1..%d\n' "$TESTS"

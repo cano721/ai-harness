@@ -7,6 +7,10 @@ description: Sentry 이슈·이벤트(스택트레이스)·릴리스를 curl로 
 
 Sentry Web API를 curl로 직접 호출한다. 읽기 전용이다 — 이슈 resolve·ignore·assign 같은 변경은 사용자가 명시했을 때만, 바꿀 내용을 보여 주고 확인받은 뒤 한다.
 
+## 사용자 규칙 (먼저 읽기)
+
+`${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/skills/sentry.md`가 있으면 호출 전에 Read하고 따른다. `/ai-harness:setup`이 회사·팀 전용 값(기본 프로젝트·필터, 필드 ID, 생성 규칙, 관례)을 적어 두는 파일이다. 이 본문과 다르면 그 파일이 이긴다 — 단 자격 증명을 다루는 방식과 쓰기 전 확인 규칙은 이 본문을 따른다. 파일이 없으면 이 본문의 일반 규칙대로 하고, 매번 같은 값을 묻게 되면 `/ai-harness:setup`으로 저장하자고 한 번 제안한다.
+
 ## 인증
 
 | 환경변수 | 필수 | 설명 |
@@ -15,7 +19,7 @@ Sentry Web API를 curl로 직접 호출한다. 읽기 전용이다 — 이슈 re
 | `SENTRY_ORG` | 예 | organization slug |
 | `SENTRY_URL` | 아니오 | 기본 `https://sentry.io`. 리전 도메인(`https://de.sentry.io`)이나 self-hosted만 설정 |
 
-Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 셸 환경에서 읽는다. 토큰이 없으면 값을 대화에 붙여 넣게 하지 말고, 사용자가 직접 위 위치에 넣도록 안내한다. 토큰 값은 출력하거나 명령 인자에 펼치지 않는다.
+Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 셸 환경(`~/.ai-harness/secrets.env`를 source)에서 읽는다. 값이 없거나 401·403이면 값을 대화에 붙여 넣게 하지 말고 `/ai-harness:setup`(Codex는 ai-harness setup 스킬)으로 발급·저장·연결 확인을 안내한다. 값은 출력하거나 명령 인자에 펼치지 않는다.
 
 ## 호출 방법
 
