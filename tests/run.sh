@@ -770,6 +770,7 @@ for adapter in implement-feature fix-bug review; do
   assert_contains "$ADAPTER_CONTENT" '`.ai-harness/harness.json`' "$adapter adapter reads the policy from the manifest"
   [[ "$ADAPTER_CONTENT" != *"push, create a PR, merge, or change project policy unless separately authorized"* ]] || fail "$adapter adapter still forbids PRs regardless of git_policy"
   assert_contains "$ADAPTER_CONTENT" "never merge, force-push" "$adapter adapter never merges or force-pushes"
+  [[ "$adapter" == review ]] || assert_contains "$ADAPTER_CONTENT" "the only merge is the runner's \`merge\` node" "$adapter adapter leaves merging to the runner's merge node"
 done
 # 작업 시작 때 이슈 상태 전환은 manifest의 issue_policy가 정한다. review는 이슈 작업을 시작하지 않는다.
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
@@ -805,7 +806,7 @@ jq 'del(.transitions[] | select(.from == "remote_ci" and .to == "repair"))' "$FE
 if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose remote CI failure cannot be repaired is invalid"; fi
 for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json"; do
   assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
-  assert_eq "done repair user_decision" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, and unverified"
+  assert_eq "done repair user_decision merge" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, unverified, and merge under git_policy merge"
 done
 # ui_review는 선택 노드다. 옛 그래프(노드 없음)도 유효하고, 노드가 있으면 화면 검증을 건너뛰는 경로가 없어야 한다. (#150)
 UI_GRAPH="$ROOT/templates/ui-review/references/ui-review-graph.json"
@@ -1292,6 +1293,116 @@ DRIVER_RC=0
 DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status --repo "$DRIVER_REPO" 2>&1)" || DRIVER_RC=$?
 assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
 assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
+
+# git_policy merge: 병합 조건은 manifest merge_policy(init에서 사람이 정함)이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
+export HM_SMOKE_RETRY_SECONDS=0
+merge_run() { # scenario merge_policy-json [git_policy] → 저장소·manifest를 만들고 approval auto로 실행한다
+  new_driver_repo "$1"
+  with_policy "${3:-merge}" auto
+  jq --argjson m "$2" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" \
+    && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" commit -qam "merge policy"
+  driver start --runtime codex --request "add feature"
+}
+MP_BASIC='{"require":["human_approval","remote_ci","no_conflict","not_draft"],"min_approvals":1,"method":"squash","verify":["target_ci"]}'
+merge_run merge_ok "$MP_BASIC"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "merge policy merges and verifies when every condition holds"
+assert_contains "$(<"$FAKE_LOG")" "gh merge https://github.com/acme/app/pull/7 --squash --match-head-commit $(git -C "$DRIVER_REPO" rev-parse HEAD)" "the runner merges with the head pinned to the reviewed, pushed commit"
+assert_eq "remote_ci,merge,post_merge_verify" "$(run_state '[.history[] | select(.from | IN("remote_ci", "merge", "post_merge_verify")) | .from] | join(",")')" "merge follows remote CI and is verified after"
+assert_eq "1111111111111111111111111111111111111111:alice:passed" "$(run_state '"\(.merge.commit):\(.merge.approvals | join(",")):\(.post_merge.target_ci.status)"')" "the merge commit and the approvers are recorded"
+assert_contains "$DRIVER_OUT" "merged: 111111111111 (squash); after merge: target_ci passed" "done reports the merge and the post-merge checks"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "Never merge (under merge the driver merges later" "the publish node still never merges by itself"
+# 승인이 아직 없으면 병합하지 않고 기다리며, resume이 다시 본다.
+merge_run merge_wait "$MP_BASIC"
+assert_eq "30:incomplete:merge" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "missing human approval waits at merge"
+assert_contains "$DRIVER_OUT" "human approval: 0 of 1 on the current head" "the wait names the unmet condition"
+assert_eq "0" "$(grep -c '^gh merge' "$FAKE_LOG" || true)" "nothing is merged while a condition is unmet"
+touch "$FAKE_LOG.approved"
+driver resume
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG")" "resume merges once the approval arrives"
+# 승인은 지금 head에 대한 것이고 작성자 본인이 아니어야 한다.
+merge_run merge_stale "$MP_BASIC"
+assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "an approval of an older commit does not count"
+merge_run merge_self "$MP_BASIC"
+assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the author's own approval does not count"
+merge_run merge_draft "$MP_BASIC"
+assert_contains "$DRIVER_RC:$DRIVER_OUT" "30:" "a draft pull request waits"
+assert_contains "$DRIVER_OUT" "the pull request is a draft" "the draft condition is named"
+# 고를 수 없는 상태는 사람에게 넘긴다.
+for s in merge_changes:"a reviewer requested changes" merge_conflict:"merge conflicts" merge_closed:"closed without merging" \
+  merge_headmoved:"is not the pushed and reviewed commit" merge_host_down:"cannot read the pull request state" merge_cmd_fail:"merging failed"; do
+  merge_run "${s%%:*}" "$MP_BASIC"
+  assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "${s%%:*} goes to a person"
+  assert_contains "$DRIVER_OUT" "merge blocked: " "${s%%:*} says the merge was blocked"
+  assert_contains "$DRIVER_OUT" "${s#*:}" "${s%%:*} names the reason"
+done
+assert_eq "0" "$(grep -c '^gh merge' "$DRIVER_TMP/merge_changes.log" || true)" "requested changes are never merged over"
+# 사람이 먼저 병합했으면 그 병합 커밋으로 병합 후 검증을 이어 간다.
+merge_run merge_outside "$MP_BASIC"
+assert_eq "0:done:outside the runner:0" "$DRIVER_RC:$(run_state .status):$(run_state .merge.method):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a pull request merged by a person is verified without merging again"
+# 조건에 없는 항목은 보지 않는다: 승인만 빼면 승인 없이 병합한다(사람이 init에서 고른 정책).
+merge_run merge_noapproval '{"require":["remote_ci"],"method":"merge","verify":[]}'
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "conditions the person did not choose are not required"
+assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows merge_policy.method"
+# 원격 CI가 없다는 보고는 remote_ci 조건을 채우지 못한다.
+merge_run merge_ci_none "$MP_BASIC"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "require remote_ci needs a passed remote CI, not 'no CI'"
+# 무인 실행은 병합하지 않는다.
+new_driver_repo merge_unattended
+with_policy merge auto
+jq --argjson m "$MP_BASIC" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+git -C "$DRIVER_REPO" commit -qam "merge policy"
+HM_INTERNAL_SESSION=1 driver start --runtime codex --request "add feature"
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run never merges"
+assert_contains "$DRIVER_OUT" "merge: not done — unattended run" "the outcome says the merge was left to a person"
+# PR 호스트를 읽을 수 없는 URL이면 병합하지 않는다.
+merge_run ok_unknown_host "$MP_BASIC"
+assert_contains "$DRIVER_RC:$DRIVER_OUT" "20:" "an unsupported pull request host is not merged"
+assert_contains "$DRIVER_OUT" "unsupported pull request host" "the reason names the host"
+# 병합 정책이 비었거나 검증 명령이 없으면 시작하지 않는다.
+new_driver_repo merge_invalid
+with_policy merge auto
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "git_policy merge without merge_policy does not start"
+assert_contains "$DRIVER_OUT" "needs a valid merge_policy" "the error points at merge_policy"
+merge_run merge_invalid2 '{"require":["human_approval"],"verify":["smoke"]}'
+assert_eq "2" "$DRIVER_RC" "a smoke check without smoke_cmd does not start"
+# 병합 후 검증: 타깃 CI → 배포 확인 → 스모크. 실패는 되돌리지 않고 사람에게, 배포 미관측은 기한까지 resume.
+merge_run pm_ci_fail "$MP_BASIC"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed CI on the merge commit goes to a person"
+assert_contains "$DRIVER_OUT" "post-merge check failed: CI on main for the merge commit" "the failure is reported as post-merge"
+assert_contains "$(run_state '.findings[1]')" "git revert 1111111111111111111111111111111111111111" "rollback instructions are given, not executed"
+merge_run pm_ci_other "$MP_BASIC"
+assert_eq "20:unverified" "$DRIVER_RC:$(run_state .post_merge.target_ci.status)" "a CI result for another commit does not verify the merge"
+MP_DEPLOY="$(jq -cn --arg d "test -f $DRIVER_TMP/deployed-\$FAKE_SCENARIO" '{require:["human_approval"], verify:["target_ci","deploy","smoke"], deploy_check_cmd:$d, deploy_timeout_minutes:30, smoke_cmd:"test \"$HM_MERGE_COMMIT\" = 1111111111111111111111111111111111111111"}')"
+merge_run pm_deploy "$MP_DEPLOY"
+assert_eq "30:incomplete:post_merge_verify" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "a deploy not observed yet leaves the run resumable"
+assert_contains "$DRIVER_OUT" "not deployed yet" "the wait says the deploy is not observed"
+touch "$DRIVER_TMP/deployed-pm_deploy"
+driver resume
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(grep -c '^post_merge_verify ' "$FAKE_LOG")" "resume finishes deploy and smoke without rerunning the passed CI step"
+assert_contains "$DRIVER_OUT" "target_ci passed, deploy passed, smoke passed" "every post-merge check is reported"
+merge_run pm_deploy_late "$MP_DEPLOY"
+jq '.merge.merged_epoch -= 3600' "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)" >"$DRIVER_TMP/s.json" \
+  && mv "$DRIVER_TMP/s.json" "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"
+driver resume
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a deploy not observed within the timeout goes to a person"
+assert_contains "$DRIVER_OUT" "was not observed as deployed within 30 minutes" "the timeout is named"
+merge_run pm_smoke_fail '{"require":["human_approval"],"verify":["smoke"],"smoke_cmd":"false"}'
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a smoke check that fails twice goes to a person"
+assert_contains "$DRIVER_OUT" "the smoke check failed twice" "the smoke failure is named"
+# merge 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝낸다.
+new_driver_repo merge_oldgraph
+with_policy merge auto
+jq --argjson m "$MP_BASIC" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.nodes.merge, .nodes.post_merge_verify) | .transitions |= map(select(.from != "merge" and .from != "post_merge_verify" and .to != "merge"))' \
+  "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
+git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -qm "old graph"
+driver start --runtime codex --request "add feature"
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "a project graph without the merge node never merges"
+assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
+pass "merge policy: conditions from the manifest, merge by the runner, post-merge checks"
 
 # review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
 review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# workflow-driver 테스트용 가짜 gh. FAKE_SCENARIO와 $FAKE_LOG.* 표시 파일로 PR 상태를 정한다.
+#   merged 표시가 있으면 MERGED, approved 표시가 있으면 head에 대한 승인이 있다(merge_ok·merge_*_fail·pm_*는 처음부터 승인).
+set -euo pipefail
+MERGE_SHA=1111111111111111111111111111111111111111
+scenario="${FAKE_SCENARIO:-ok}"
+[[ "${1:-} ${2:-}" == "pr view" || "${1:-} ${2:-}" == "pr merge" ]] || exit 64
+sub="$2"
+shift 2
+printf 'gh %s %s\n' "$sub" "$*" >>"$FAKE_LOG"
+head="$(git rev-parse HEAD)"
+if [[ "$sub" == merge ]]; then
+  [[ "$scenario" != merge_cmd_fail ]] || { echo "GraphQL: Pull request is not mergeable" >&2; exit 1; }
+  touch "$FAKE_LOG.merged"
+  exit 0
+fi
+[[ "$scenario" != merge_host_down ]] || { echo "HTTP 502" >&2; exit 1; }
+approved=no
+case "$scenario" in merge_wait*|merge_noapproval) [[ -f "$FAKE_LOG.approved" ]] && approved=yes ;; *) approved=yes ;; esac
+reviews='[]'
+if [[ "$approved" == yes ]]; then
+  reviews="$(jq -cn --arg h "$head" '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}}]')"
+fi
+case "$scenario" in
+  merge_stale) reviews="$(jq -cn '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:"0000000"}}]')" ;;
+  merge_self) reviews="$(jq -cn --arg h "$head" '[{author:{login:"me"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}}]')" ;;
+  merge_changes) reviews="$(jq -cn --arg h "$head" '[{author:{login:"alice"}, state:"APPROVED", submittedAt:"2026-10-30T01:00:00Z", commit:{oid:$h}},
+    {author:{login:"bob"}, state:"CHANGES_REQUESTED", submittedAt:"2026-10-30T02:00:00Z", commit:{oid:$h}}]')" ;;
+esac
+state=OPEN; merge_commit=null
+if [[ -f "$FAKE_LOG.merged" || "$scenario" == merge_outside ]]; then state=MERGED; merge_commit="{\"oid\":\"$MERGE_SHA\"}"; fi
+[[ "$scenario" != merge_closed ]] || state=CLOSED
+[[ "$scenario" != merge_headmoved ]] || head=2222222222222222222222222222222222222222
+mergeable=MERGEABLE
+[[ "$scenario" != merge_conflict ]] || mergeable=CONFLICTING
+draft=false
+[[ "$scenario" != merge_draft ]] || draft=true
+jq -n --arg s "$state" --argjson d "$draft" --arg m "$mergeable" --arg h "$head" --argjson r "$reviews" --argjson mc "$merge_commit" \
+  '{state:$s, isDraft:$d, mergeable:$m, headRefOid:$h, baseRefName:"main", reviews:$r, author:{login:"me"}, mergeCommit:$mc}'
