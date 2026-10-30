@@ -26,6 +26,10 @@ def active_min_turns: 5;
 # 하네스가 생성하는 워크플로 진입점. 프로젝트가 따로 둔 워크플로는 읽힌 `.ai-harness/workflows/<이름>.md`에서 얻는다.
 def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
 def has_coverage($k): ((.coverage // []) | index($k)) != null;
+# Codex input_tokens는 캐시 읽기를 포함한다. 그 의미로 기록된 예전 이벤트(context 수집 전)는
+# 보관 정책상 재추출되지 않으므로 집계 때 캐시 제외 입력으로 맞춘다.
+def tok_in_norm: if .src=="codex" and (has_coverage("context") | not)
+  then ([(.tok_in // 0) - (.cache_read // 0), 0] | max) else (.tok_in // 0) end;
 def median: sort | if length==0 then null else .[length/2 | floor] end;
 def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b))" end;
 
@@ -63,7 +67,7 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 
 + "\n\n## 세션 (프로젝트별)\n\n서브에이전트 열은 `agent_usage` 수집 세션만 반영한다(메인 열에 포함되지 않음).\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write | 서브에이전트 in/out/cache read |\n|---|---|---|---|---|---|---|---|\n"
 + ($S | group_by(.project) | map({p:.[0].project, s:length,
-      t:(map(.turns//0)|add), i:(map(.tok_in//0)|add),
+      t:(map(.turns//0)|add), i:(map(tok_in_norm)|add),
       o:(map(.tok_out//0)|add), c:(map(.cache_read//0)|add),
       w:(map(.cache_write//0)|add),
       ai:(map(.agent_tok_in//0)|add), ao:(map(.agent_tok_out//0)|add), ac:(map(.agent_cache_read//0)|add)})
@@ -72,14 +76,15 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
      else map("| \(.p) | \(.s) | \(.t) | \(.i) | \(.o) | \(.c) | \(.w) | \(.ai)/\(.ao)/\(.ac) |") | join("\n")
      end)
 
-+ "\n\n## 컨텍스트 (프로젝트별)\n\n첫 호출 ≈ 고정 오버헤드(시스템 프롬프트·툴·스킬·메모리·AGENTS.md + 첫 요청). 값은 세션 중앙값이며 `context` 수집 세션만 센다.\n\n"
++ "\n\n## 컨텍스트 (프로젝트별)\n\n시작 = 첫 호출의 입력 전체: 시스템 프롬프트·툴 정의와 첫 턴에 함께 실리는 스킬·에이전트 목록·메모리(CLAUDE.md)·MCP 안내·훅 출력, 그리고 첫 요청. `/context`의 고정 항목 합보다 크게 나온다. 값은 세션 중앙값이며 `context` 수집 세션만 센다. 창 대비는 창 크기를 기록하는 소스(Codex)만.\n\n"
 + ($S | map(select(has_coverage("context") and .ctx_peak != null))
    | if length==0 then "_(수집 미지원 — 0회로 해석하면 안 됨)_"
-     else "| 프로젝트 | 세션 | 첫 호출 | 최대 | 최대의 최대 |\n|---|---|---|---|---|\n"
+     else "| 프로젝트 | 세션 | 시작 | 최대 | 최대의 최대 | 최대/창 |\n|---|---|---|---|---|---|\n"
        + (group_by(.project) | map({p:.[0].project, s:length,
-            f:(map(.ctx_first) | median), m:(map(.ctx_peak) | median), x:(map(.ctx_peak) | max)})
+            f:(map(.ctx_first) | median), m:(map(.ctx_peak) | median), x:(map(.ctx_peak) | max),
+            w:(map(select(.ctx_window != null) | .ctx_peak * 100 / .ctx_window) | median)})
           | sort_by(-.s)
-          | map("| \(.p) | \(.s) | \(.f) | \(.m) | \(.x) |") | join("\n"))
+          | map("| \(.p) | \(.s) | \(.f) | \(.m) | \(.x) | \(if .w == null then "-" else "\(.w | round)%" end) |") | join("\n"))
      end)
 
 + "\n\n## 수집 범위\n\n| 소스 | 세션 | 지원 범위 |\n|---|---|---|\n"
