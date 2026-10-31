@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)와 [자동 sync](#auto-sync)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
 
 ## 목차
 
@@ -14,6 +14,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [버그 수정 흐름](#bug-fix)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
+- [모니터링 기반 자동 수정](#autofix)
 - [DB 스캔 가드](#db-scan-guard)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
@@ -56,9 +57,11 @@ flowchart LR
 | `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 설정·생성물을 최신화할 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경·동기화합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
+| `/autofix` | 운영 에러(Sentry·Datadog·사용자 어댑터)를 근거로 버그를 고치고, 고친 뒤 정말 멈췄는지 확인할 때 | 저장소의 `monitor` 설정을 만들고, 에러 묶음을 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 병합·배포 뒤 같은 에러가 다시 나오는지 지켜봐 해결·재발을 판정합니다. | 사용자 실행, `HM_AUTOFIX_AUTO=1`이면 정기 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
+| `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
@@ -89,7 +92,25 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+<a id="skill-catalog"></a>
+
+### 기본 스킬 카탈로그 (`/setup`으로 선택 설치)
+
+외부 도구를 curl로 다루는 범용 Skill입니다. 플러그인 Skill로 넣으면 쓰지 않는 도구의 설명까지 모든 세션에 실리므로, 플러그인은 원본(`catalog/`)만 들고 있고 `/setup`에서 고른 것만 사용자 전역 폴더(Claude `~/.claude/skills/`, Codex `~/.agents/skills/`)에 복사합니다.
+
+| Skill | 하는 일 | 필요한 환경변수 |
+|---|---|---|
+| `datadog` | 로그·메트릭·모니터·인시던트·이벤트 조회 (읽기 전용) | `DATADOG_API_KEY`, `DATADOG_APP_KEY` (`DD_*`도 인식), 선택 `DATADOG_SITE` |
+| `sentry` | 이슈·최근 이벤트(스택트레이스)·릴리스 조회 (읽기 전용) | `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, 선택 `SENTRY_URL` |
+| `jira` | 이슈 조회·JQL 검색·생성·수정·상태 전환·코멘트 | `JIRA_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
+| `confluence` | 페이지 조회·CQL 검색·생성·수정·코멘트·첨부 | `CONFLUENCE_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
+
+- **접속 정보**: `/setup`이 키마다 발급 주소·순서·필요한 읽기 scope를 안내합니다. base URL·이메일 같은 값은 대화로 받아 저장하고, 토큰은 대화에 남지 않도록 사용자가 별도 터미널에서 `scripts/setup.sh set --tool claude <KEY>`(숨김 입력)로 넣습니다. Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600, 셸 프로파일에서 source)에 저장됩니다. 저장 뒤 `setup.sh check <skill>`이 읽기 전용 호출 하나로 연결과 접속 계정을 확인하고, 401·403·404면 원인을 짚습니다. 각 Skill은 자격 증명을 명령 인자가 아니라 stdin(`curl -K -`)으로 넘깁니다.
+- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다.
+- 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
+- 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
+
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -124,6 +145,8 @@ codex plugin add ai-harness@ai-harness
 ```
 
 둘 중 사용하는 도구만 설치해도 됩니다. 설치 뒤 새 세션을 시작하면 hook과 skill이 로드됩니다.
+
+**전역 셋업 (선택)** — 새 세션에서 `/ai-harness:setup`을 실행하면 [기본 스킬 카탈로그](#skill-catalog)에서 필요한 것만 골라 설치하고 접속 정보·자동화 옵션을 점검합니다. 플러그인에는 설치 시점 hook이 없어 자동으로 시작되지는 않고, 설치 후 첫 세션에 한 번 안내합니다. Codex에서는 "ai-harness setup 스킬 실행해줘"처럼 요청합니다.
 
 **Claude Code 자동 업데이트 켜기 (권장)** — 서드파티 마켓플레이스는 자동 업데이트가 기본으로 꺼져 있습니다. `/plugin` → Marketplaces → ai-harness → Enable auto-update 를 켜면 Claude Code가 시작할 때 새 버전을 받습니다. 설치 후 첫 세션에서도 한 번 안내합니다.
 
@@ -456,6 +479,35 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
+<a id="autofix"></a>
+
+## 모니터링 기반 자동 수정 (opt-in)
+
+모니터링 도구에 쌓인 운영 에러를 골라 고치고, **고친 뒤 그 에러가 더 나오지 않는 것까지** 확인합니다. 저장소마다 `/autofix setup`으로 `.ai-harness/harness.json`에 `monitor` 설정을 두고(자격증명은 넣지 않습니다), `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 대상 저장소 목록 `HM_AUTOFIX_REPOS="<project_id>,…"`를 두면 정기 실행(`backfill-due.sh`, 사용자가 쉬는 동안)이 돕니다. 목록에 없는 저장소는 manifest에 `monitor`가 있어도 무인 실행하지 않습니다 — 클론만 한 저장소가 자기 설정으로 자격증명을 쓰거나 명령을 실행하게 두지 않기 위해서입니다.
+
+```json
+"monitor": { "provider": "sentry", "org": "acme", "project": "api", "environment": "production",
+             "min_events": 10, "window_hours": 24, "deploy_branch": "main", "grace_hours": 24, "quiet_hours": 72 }
+```
+
+| provider | 설정 | 자격증명 |
+|---|---|---|
+| `sentry` | `org`, `project`, 선택 `environment` | `SENTRY_AUTH_TOKEN` (자체 호스팅은 config의 `HM_SENTRY_URL`) |
+| `datadog` | `query`(예: `service:api env:prod status:error`), 선택 `site` | `DATADOG_API_KEY`·`DATADOG_APP_KEY` |
+| `command` | `command`: 저장소 안 어댑터 스크립트(`list`·`detail`·`count` 하위 명령) | 어댑터가 처리 |
+
+자격증명은 환경변수 → `~/.claude/settings.json`의 `env` → `~/.ai-harness/config`(`HM_SENTRY_TOKEN`·`HM_DATADOG_*`) 순으로 찾습니다. 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못하도록 Sentry는 `*.sentry.io`, Datadog은 공개 사이트만 받습니다.
+
+정기 실행 한 번은 이렇게 돕니다.
+
+1. **검증(LLM 없음)**: 열린 PR의 상태를 보고(`open-pr.sh --status`) 병합되면 `verifying`, 사람이 닫으면 `declined`. 병합 커밋이 `deploy_branch`에 들어간 것을 처음 관찰한 때를 배포 시각으로 잡고(설정이 없으면 병합 시각), `grace_hours` 유예 뒤부터 관찰합니다. 관찰 창은 `quiet_hours`와 "수정 전 빈도라면 3건이 나왔을 시간" 중 긴 쪽(최대 14일)입니다. 창 안에 같은 시그니처가 다시 나오면 `regressed`, 끝까지 없으면 `resolved`입니다.
+2. **수정(무인 에이전트 1건)**: 새 에러, 재발한 에러, 해결 뒤 다시 나타난 에러 중 가장 많이 난 것을 작업 전용 worktree의 headless `claude -p "/ai-harness:autofix --auto …"`에 넘깁니다. 에이전트는 코드 버그인지 분류하고, 재현 테스트를 먼저 만들고, 프로젝트 `fix-bug` 절차로 고쳐 **draft PR**을 엽니다. 재현하지 못하거나 코드 버그가 아니면 PR 없이 `skipped`로 남기고 유예(7일) 뒤 다시 봅니다. 재발 재시도에는 지난 PR과 재발 근거를 같이 넘깁니다.
+
+- **상한**: 하루 `HM_AUTOFIX_DAILY_MAX`(3)회, 시그니처당 PR `HM_AUTOFIX_MAX_ATTEMPTS`(2)개 — 상한까지 재발하면 `gave_up`으로 사람에게 넘깁니다. 실행당 `HM_AUTOFIX_BUDGET_USD`($10), `HM_AUTOFIX_TIMEOUT_MIN`(60분). 무인 실행 lock은 자동 harvest·sync와 공유합니다(동시에 하나)
+- **안전장치**: 에러 본문은 외부 입력이라 비밀값을 가려 넘기고, 에이전트에 데이터로만 읽으라고 지시합니다. Bash는 빌드·테스트 명령(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo 등, `HM_AUTOFIX_BASH_ALLOW`로 추가)과 `fix/` 브랜치 push 같은 좁은 git 명령만 허용하고 나머지는 묻지 않고 거부합니다. 모니터링 자격증명은 에이전트 환경에서 빼고, 자격증명 파일 읽기도 막습니다. 테스트 러너는 저장소 코드를 실행하므로 이 경계가 완전하지는 않습니다 — 신뢰하는 저장소만 `HM_AUTOFIX_REPOS`에 넣으세요. 병합은 언제나 사람이 합니다
+- **상태 보기**: `/autofix status`, `scripts/autofix-auto.sh status|runs`. 기록은 `~/.ai-harness/autofix/`(시그니처별 `state.json`, `runs.jsonl`, 실행 로그)
+- **수동**: `/autofix`로 후보를 골라 이 세션에서 고칠 수 있고, 그렇게 연 PR도 `autofix-auto.sh track`으로 같은 검증에 올립니다
+
 <a id="db-scan-guard"></a>
 
 ## DB 스캔 가드 (opt-in)
@@ -480,6 +532,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 | 압축 이벤트 | `~/.ai-harness/events/` | 일반 180일, 교정·오류·차단·권한 거부가 있으면 365일 |
 | 통계 rollup | `~/.ai-harness/rollups/` | 상세 보관 기간 후 transcript 경로와 교정 문구를 제거해 전환 |
 | harvest 큐·검토 이력 | `~/.ai-harness/harvest-queue/` | pending, 현재 batch, 완료 marker, `review-history.jsonl` |
+| 자동 수정 상태 | `~/.ai-harness/autofix/` | 시그니처별 진행 상태(PR·배포·관찰·재발), 실행 기록, 최근 50개 실행 로그 |
 | 상태 | `~/.ai-harness/health.json`, `update-check.json` | 수집 건강 상태와 릴리스 확인 캐시만 기록 |
 
 상세 이벤트 삭제가 중단되면 원 marker를 유지해 다음 실행에서 재시도합니다. 같은 세션이 실제로 갱신되면 rollup 뒤에도 새 revision을 수집합니다. 프로젝트 ID는 `.ai-harness/harness.json`을 우선하고, 없으면 git origin/common-dir로 정규화해 worktree를 하나의 프로젝트로 묶습니다. 이미 삭제된 worktree는 Codex가 기록한 저장소 URL, 그다음 경로 규칙(`<repo>/feature-NJ-1`, `<repo>/NJ-1-설명` → `<repo>`)으로 판정하고, 한글 등 비ASCII 이름은 NFC로 맞춥니다. 규칙이 바뀌어 재추출된 세션은 이전 프로젝트 큐의 검토 상태를 그대로 가져갑니다.
@@ -578,6 +631,16 @@ HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤�
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
+HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
+HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
+HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")
+HM_AUTOFIX_DEPLOY_WAIT_DAYS=14   # 병합 커밋이 deploy_branch에 보이기를 기다리는 상한. 넘으면 gave_up
+HM_AUTOFIX_DAILY_MAX=3           # 하루 자동 수정 실행 상한
+HM_AUTOFIX_MAX_ATTEMPTS=2        # 시그니처당 PR 상한. 넘어서 재발하면 gave_up
+HM_AUTOFIX_SKIP_COOLDOWN_DAYS=7  # 코드 버그 아님·재현 불가로 넘긴 에러를 다시 볼 때까지
+HM_AUTOFIX_BUDGET_USD=10         # 자동 수정 1회 비용 상한
+HM_AUTOFIX_TIMEOUT_MIN=60
+HM_SENTRY_URL=                   # 자체 호스팅 Sentry 주소(저장소 설정의 base_url은 *.sentry.io만)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화
 HM_SIGNAL_EVENT_RETENTION_DAYS=365
 HM_BACKFILL_INTERVAL_HOURS=6     # 정기 backfill 주기. 0이면 비활성화
@@ -590,6 +653,7 @@ HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
+HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.
@@ -610,6 +674,7 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
+catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙

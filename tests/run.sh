@@ -69,6 +69,9 @@ export HARNESS_METRICS_DIR
 # SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
 export HM_BACKFILL_INTERVAL_HOURS=0
 export HM_AUTO_WORKTREE_DIR="$TEST_TMP/auto-worktrees"
+# 셋업 안내는 전용 테스트만 켠다. 전역 스킬 폴더는 실제 홈을 건드리지 않게 격리한다.
+export HM_SETUP_HINT=0
+export HM_CLAUDE_SKILLS_DIR="$TEST_TMP/global-skills/claude" HM_CODEX_SKILLS_DIR="$TEST_TMP/global-skills/codex"
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
@@ -3593,5 +3596,387 @@ if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT
 fi
 assert_not_file "$TEST_TMP/escape/x.md"
 pass "unattended .claude writes go through a restricted placer"
+
+# monitor-fetch.sh: 모니터링 도구 응답을 한 형식으로 맞추고, 자격증명을 보낼 곳을 저장소 설정이 정하지 못하게 한다.
+AF_DATA="$TEST_TMP/autofix-data"
+AF_STUB="$TEST_TMP/autofix-stub"
+AF_ORIGIN="$TEST_TMP/autofix-origin.git"
+AF_REPO="$TEST_TMP/autofix-repo"
+mkdir -p "$AF_STUB" "$AF_DATA"
+git init -q --bare "$AF_ORIGIN"
+git clone -q "$AF_ORIGIN" "$AF_REPO" 2>/dev/null
+git -C "$AF_REPO" config user.email test@example.com
+git -C "$AF_REPO" config user.name test
+# PR URL 소속 확인은 origin 설정값(github.com/acme/svc)으로, 실제 fetch·push는 로컬 bare 저장소로 간다.
+git -C "$AF_REPO" remote set-url origin git@github.com:acme/svc.git
+git -C "$AF_REPO" config url."$AF_ORIGIN".insteadOf git@github.com:acme/svc.git
+af_manifest() { # $1=monitor json → develop에 커밋·push
+  mkdir -p "$AF_REPO/.ai-harness"
+  jq -n --argjson m "$1" '{project_id:"af-svc",level:"standard",git_policy:"pr-only",monitor:$m}' >"$AF_REPO/.ai-harness/harness.json"
+  git -C "$AF_REPO" add -A && git -C "$AF_REPO" commit -q -m "monitor" && git -C "$AF_REPO" push -q origin HEAD:develop 2>/dev/null
+  git -C "$AF_REPO" fetch -q origin
+}
+git -C "$AF_REPO" checkout -q -b develop
+af_manifest '{"provider":"sentry","org":"acme","project":"api","environment":"production","min_events":10,"deploy_branch":"main","grace_hours":0,"quiet_hours":0}'
+git -C "$AF_REPO" push -q origin develop:main 2>/dev/null
+
+cat >"$AF_STUB/http" <<'EOF'
+#!/usr/bin/env bash
+# $1=METHOD $2=URL [$3=body]
+printf '%s %s\n' "$1" "$2" >>"$AF_STUB/http.log"
+case "$2" in
+  */issues/\?query=*) cat "$AF_STUB/sentry-issues.json" ;;
+  */events/latest/) cat "$AF_STUB/sentry-latest.json" ;;
+  */events/\?start=*) cat "$AF_STUB/sentry-events.json" ;;
+  */logs/events/search)
+    if [[ "$3" == *'"from":"now-'* ]]; then cat "$AF_STUB/dd-logs.json"; else cat "$AF_STUB/dd-count.json"; fi ;;
+  *) echo "unexpected $2" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$AF_STUB/http"
+jq -n '[
+  {id:"101",title:"NullPointerException: \"user\" is null\tx",culprit:"UserService.load",count:"900",firstSeen:"2026-10-01T00:00:00Z",lastSeen:"2026-10-28T00:00:00Z",permalink:"https://acme.sentry.io/issues/101/",stats:{"24h":[[1,20],[2,30]]}},
+  {id:"102",title:"rare",culprit:"x",count:"3",stats:{"24h":[[1,1],[2,2]]}}
+]' >"$AF_STUB/sentry-issues.json"
+jq -n '{message:"boom token=abcd1234secretvalue",entries:[{type:"exception",data:{values:[{type:"NullPointerException",value:"user is null",
+  stacktrace:{frames:[{filename:"Lib.java",function:"x",lineNo:1,inApp:false},{filename:"UserService.java",function:"load",lineNo:42,inApp:true}]}}]}}],
+  tags:[{key:"environment",value:"production"},{key:"user.email",value:"a@b.c"}]}' >"$AF_STUB/sentry-latest.json"
+printf '[]\n' >"$AF_STUB/sentry-events.json"
+export AF_STUB
+af_fetch() { HARNESS_METRICS_DIR="$AF_DATA" HM_MONITOR_HTTP="$AF_STUB/http" "$ROOT/scripts/monitor-fetch.sh" "$@"; }
+
+AF_LIST="$(af_fetch list --root "$AF_REPO")"
+assert_eq "1" "$(printf '%s\n' "$AF_LIST" | grep -c .)" "issues under min_events are not candidates"
+assert_eq "sentry:101|50|101" "$(jq -r '[.signature, .count, .meta.id] | join("|")' <<<"$AF_LIST")" "sentry window count sums the hourly stats"
+assert_contains "$(<"$AF_STUB/http.log")" "environment=production" "sentry list is scoped to the environment"
+AF_DETAIL="$(af_fetch detail --root "$AF_REPO" --meta '{"id":"101"}')"
+assert_eq "UserService.java" "$(jq -r '.exception[0].frames[0].file' <<<"$AF_DETAIL")" "detail lists the innermost frame first"
+assert_contains "$(jq -r '.message' <<<"$AF_DETAIL")" "token=***" "detail redacts secrets"
+[[ "$(jq -r '.tags | has("user.email")' <<<"$AF_DETAIL")" == "false" ]] || fail "detail keeps only allow-listed tags"
+assert_eq '{"seen":false,"count":0,"last_seen":null}' "$(af_fetch count --root "$AF_REPO" --meta '{"id":"101"}' --since 2026-10-29T00:00:00Z)" "no events since the fix"
+jq -n '[{dateCreated:"2000-01-01T00:00:00Z"},{dateCreated:"2999-01-01T00:00:00Z"}]' >"$AF_STUB/sentry-events.json"
+assert_eq "true|1" "$(af_fetch count --root "$AF_REPO" --meta '{"id":"101"}' --since 2026-10-29T00:00:00Z | jq -r '"\(.seen)|\(.count)"')" "only events after since count as a recurrence"
+printf '[]\n' >"$AF_STUB/sentry-events.json"
+# 진짜 HTTP 경로: 자격증명 없이는 시작하지 않고, 저장소 설정이 자격증명 전송처를 바꾸지 못한다.
+AF_RC=0; HARNESS_METRICS_DIR="$AF_DATA" HARNESS_CLAUDE_SETTINGS=/nonexistent SENTRY_AUTH_TOKEN="" HM_SENTRY_TOKEN="" \
+  "$ROOT/scripts/monitor-fetch.sh" list --root "$AF_REPO" >/dev/null 2>&1 || AF_RC=$?
+assert_eq "4" "$AF_RC" "missing sentry token is a config error"
+pass "monitor-fetch normalizes sentry issues and checks recurrence after a time"
+
+AF_BAD="$TEST_TMP/autofix-bad"
+mkdir -p "$AF_BAD/.ai-harness"
+af_bad() { # $1=monitor json → exit code of list
+  jq -n --argjson m "$1" '{monitor:$m}' >"$AF_BAD/.ai-harness/harness.json"
+  local rc=0
+  HARNESS_METRICS_DIR="$AF_DATA" SENTRY_AUTH_TOKEN=t DATADOG_API_KEY=k DATADOG_APP_KEY=a \
+    "$ROOT/scripts/monitor-fetch.sh" list --root "$AF_BAD" >/dev/null 2>&1 || rc=$?
+  printf '%s\n' "$rc"
+}
+assert_eq "4" "$(af_bad '{"provider":"sentry","org":"a","project":"b","base_url":"https://evil.example.com"}')" "repo config cannot send the sentry token to another host"
+assert_eq "4" "$(af_bad '{"provider":"datadog","query":"status:error","site":"evil.example.com"}')" "repo config cannot send datadog keys to another host"
+assert_eq "4" "$(af_bad '{"provider":"command","command":"/bin/sh"}')" "command adapter must live inside the repo"
+assert_eq "4" "$(af_bad '{"provider":"command","command":"../x.sh"}')" "command adapter path cannot climb out"
+assert_eq "4" "$(af_bad '{"provider":"nope"}')" "unknown provider is rejected"
+pass "monitor credentials only go to known hosts"
+
+# Datadog: 줄 번호만 다른 같은 버그는 한 묶음이다(수정 커밋 뒤에도 같은 시그니처로 검증할 수 있게).
+jq -n '{data:([range(12) as $i | {attributes:{service:"api",timestamp:"2026-10-28T0\($i % 10):00:00Z",
+  attributes:{error:{kind:"IllegalStateException",message:"order \($i) missing",stack:"java.lang.IllegalStateException\n\tat com.acme.Order.pay(Order.java:\(40 + $i))\n\tat com.acme.Api.call(Api.java:9)"}}}}]
+  + [{attributes:{service:"api",timestamp:"2026-10-28T01:00:00Z",attributes:{error:{kind:"Other",message:"x",stack:""}}}}])}' >"$AF_STUB/dd-logs.json"
+jq -n --argjson m '{"provider":"datadog","query":"service:api status:error","min_events":10}' '{monitor:$m}' >"$AF_BAD/.ai-harness/harness.json"
+AF_DD="$(af_fetch list --root "$AF_BAD")"
+assert_eq "1|12" "$(printf '%s\n' "$AF_DD" | jq -sr '"\(length)|\(.[0].count)"')" "datadog groups the same frame across line numbers"
+assert_contains "$(jq -r '.signature' <<<"$AF_DD")" "datadog:" "datadog signature"
+AF_DD_META="$(jq -c '.meta' <<<"$AF_DD")"
+jq '{data:(.data[0:2] | map(.attributes.timestamp = "2999-01-01T00:00:00Z"))}' "$AF_STUB/dd-logs.json" >"$AF_STUB/dd-count.json"
+assert_eq "true|2" "$(af_fetch count --root "$AF_BAD" --meta "$AF_DD_META" --since 2026-10-29T00:00:00Z | jq -r '"\(.seen)|\(.count)"')" "datadog recurrence matches the stored group key"
+assert_contains "$(tail -n 1 "$AF_STUB/http.log")" "logs/events/search" "datadog count searches logs"
+pass "monitor-fetch groups datadog logs into stable signatures"
+
+# command 어댑터: 저장소 안 스크립트가 같은 형식을 낸다.
+mkdir -p "$AF_BAD/tools"
+cat >"$AF_BAD/tools/monitor.sh" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  list) printf '%s\n' '{"signature":"own:1","title":"t","count":11}' '{"signature":"own:2","title":"u","count":1}' ;;
+  count) printf '%s\n' '{"count":3}' ;;
+esac
+EOF
+chmod +x "$AF_BAD/tools/monitor.sh"
+jq -n '{monitor:{provider:"command",command:"tools/monitor.sh"}}' >"$AF_BAD/.ai-harness/harness.json"
+assert_eq "own:1" "$(af_fetch list --root "$AF_BAD" | jq -r '.signature')" "command adapter list honours min_events"
+assert_eq "true" "$(af_fetch count --root "$AF_BAD" --meta '{}' --since 2026-10-29T00:00:00Z | jq -r '.seen')" "command adapter count implies seen"
+pass "monitor-fetch runs a repo-local command adapter"
+
+# open-pr.sh --status: PR URL만으로 상태를 본다.
+AF_RC=0; ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/3 >/dev/null 2>&1 || AF_RC=$?
+assert_eq "4" "$AF_RC" "bitbucket status needs credentials"
+AF_RC=0; "$ROOT/scripts/open-pr.sh" --status https://example.com/pr/1 >/dev/null 2>&1 || AF_RC=$?
+assert_eq "3" "$AF_RC" "unknown PR host is rejected"
+pass "open-pr reports PR state for verification"
+
+# autofix-auto.sh: 감지 → draft PR → 병합 → 배포 반영 → 관찰 → 해결/재발.
+cat >"$AF_STUB/agent" <<'EOF'
+#!/usr/bin/env bash
+n=$(( $(cat "$AF_STUB/agent-count" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" >"$AF_STUB/agent-count"
+cp "$1" "$AF_STUB/error-$n.json"
+printf '%s\n' "${AF_STUB_RESULT:-AI_HARNESS_AUTOFIX_RESULT outcome=pr_opened artifact=https://github.com/acme/svc/pull/$n}"
+EOF
+cat >"$AF_STUB/pr" <<'EOF'
+#!/usr/bin/env bash
+cat "$AF_STUB/pr-state.json"
+EOF
+chmod +x "$AF_STUB/agent" "$AF_STUB/pr"
+af_auto() {
+  HARNESS_METRICS_DIR="$AF_DATA" HM_AUTOFIX_AUTO=1 HM_AUTOFIX_FOREGROUND=1 HM_AUTOFIX_REPOS="${HM_AUTOFIX_REPOS-other, af-svc}" HM_MONITOR_HTTP="$AF_STUB/http" HM_AUTOFIX_DAILY_MAX="${HM_AUTOFIX_DAILY_MAX:-99}" \
+    HM_AUTOFIX_CMD="$AF_STUB/agent" HM_AUTOFIX_PR_STATUS_CMD="$AF_STUB/pr" \
+    HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AF_REPO" "$ROOT/scripts/autofix-auto.sh" "$@"
+}
+af_sig() { HARNESS_METRICS_DIR="$AF_DATA" "$ROOT/scripts/autofix-auto.sh" status --project af-svc | jq -r --arg s "${2:-sentry:101}" "select(.signature==\$s) | $1"; }
+af_state() { jq "$1" "$AF_DATA/autofix/p-af-svc/state.json" >"$AF_STUB/st.tmp" && mv "$AF_STUB/st.tmp" "$AF_DATA/autofix/p-af-svc/state.json"; }
+
+HARNESS_METRICS_DIR="$AF_DATA" HM_AUTOFIX_AUTO=0 HM_AUTOFIX_CMD="$AF_STUB/agent" "$ROOT/scripts/autofix-auto.sh" sweep
+assert_not_file "$AF_STUB/agent-count"
+HM_AUTOFIX_REPOS="" af_auto sweep
+assert_not_file "$AF_STUB/agent-count"
+HM_AUTOFIX_REPOS="other" af_auto sweep
+assert_not_file "$AF_STUB/agent-count"
+af_auto sweep
+assert_eq "1" "$(<"$AF_STUB/agent-count")" "sweep launches one fix"
+assert_eq "pr_open|https://github.com/acme/svc/pull/1|1" "$(af_sig '"\(.status)|\(.pr)|\(.attempts)"')" "agent PR is recorded"
+assert_eq "new|UserService.java" "$(jq -r '"\(.reason)|\(.detail.exception[0].frames[0].file)"' "$AF_STUB/error-1.json")" "agent gets the error detail"
+if git -C "$AF_REPO" worktree list | grep -q auto-worktrees; then fail "worker removes its worktree"; fi
+af_auto sweep
+assert_eq "1" "$(<"$AF_STUB/agent-count")" "a signature with an open PR is not fixed again"
+
+# 병합됐지만 배포 브랜치에 아직 없다 → 배포 대기.
+git -C "$AF_REPO" commit -q --allow-empty -m "fix" && AF_MERGE="$(git -C "$AF_REPO" rev-parse HEAD)"
+git -C "$AF_REPO" push -q origin HEAD:develop 2>/dev/null
+jq -n --arg c "$AF_MERGE" --arg m "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{state:"merged",merged_at:$m,merge_commit:$c}' >"$AF_STUB/pr-state.json"
+af_auto verify
+assert_eq "verifying|null" "$(af_sig '"\(.status)|\(.deployed_at)"')" "merged fix waits for the deploy branch"
+HM_AUTOFIX_DEPLOY_WAIT_DAYS=100000 af_auto verify
+assert_eq "verifying" "$(af_sig '.status')" "deploy wait is bounded but not yet over"
+git -C "$AF_REPO" push -q origin HEAD:main 2>/dev/null
+af_auto verify
+[[ "$(af_sig '.deployed_at')" != "null" ]] || fail "deploy is observed when the merge commit reaches the deploy branch"
+# 수정 전 24시간 50건 → 3건이 나올 시간(2h)만큼은 관찰한다. 막 배포됐으니 아직 판정하지 않는다.
+assert_eq "verifying" "$(af_sig '.status')" "quiet window is not over yet"
+[[ "$(af_sig '.verify_until')" != "null" ]] || fail "verify_until is recorded"
+af_state '.signatures["sentry:101"].deployed_at = "2026-10-01T00:00:00Z"'
+af_auto verify
+assert_eq "resolved" "$(af_sig '.status')" "no recurrence through the quiet window resolves the error"
+assert_eq "resolved" "$(jq -sr 'map(select(.event=="resolved")) | last | .event' "$AF_DATA/autofix/runs.jsonl")" "resolution is logged"
+pass "autofix opens a PR and verifies the error stops after deploy"
+
+# 재발: 해결 뒤 다시 목록에 오르면 지난 PR을 넘겨 다시 고친다. 시도 상한이면 사람에게 넘긴다.
+af_auto sweep
+assert_eq "2" "$(<"$AF_STUB/agent-count")" "a resolved error that reappears is fixed again"
+assert_eq "reappeared|https://github.com/acme/svc/pull/1" "$(jq -r '"\(.reason)|\(.previous.prs[0])"' "$AF_STUB/error-2.json")" "previous PR is passed on"
+af_state '.signatures["sentry:101"] += {status:"verifying",deployed_at:"2026-10-01T00:00:00Z"}'
+jq -n '[{dateCreated:"2999-01-01T00:00:00Z"}]' >"$AF_STUB/sentry-events.json"
+af_auto verify
+assert_eq "gave_up|1" "$(af_sig '"\(.status)|\(.regressions)"')" "recurrence after the last allowed attempt goes to a person"
+af_auto sweep
+assert_eq "2" "$(<"$AF_STUB/agent-count")" "gave_up is not retried"
+af_state '.signatures["sentry:101"] += {status:"verifying",attempts:1,regressions:[]}'
+af_auto verify
+assert_eq "regressed" "$(af_sig '.status')" "recurrence with attempts left is a regression"
+printf '[]\n' >"$AF_STUB/sentry-events.json"
+pass "autofix detects recurrence after a fix"
+
+# 사람이 닫은 PR은 다시 시도하지 않고, 코드 버그가 아닌 에러는 유예 동안 건너뛴다.
+af_state '.signatures["sentry:101"] += {status:"verifying",merged_at:"2000-01-01T00:00:00Z",deployed_at:null,merge_commit:"0000000000000000000000000000000000000000"}'
+af_auto verify
+assert_eq "gave_up|deploy_unobserved" "$(af_sig '"\(.status)|\(.outcome)"')" "a fix never seen on the deploy branch goes to a person"
+af_state '.signatures["sentry:101"] += {status:"pr_open",pr:"https://github.com/acme/svc/pull/9"}'
+jq -n '{state:"closed",merged_at:null,merge_commit:null}' >"$AF_STUB/pr-state.json"
+af_auto sweep
+assert_eq "declined|2" "$(af_sig '.status')|$(<"$AF_STUB/agent-count")" "declined PR is not retried"
+af_state 'del(.signatures["sentry:101"])'
+AF_STUB_RESULT="AI_HARNESS_AUTOFIX_RESULT outcome=not_code_bug" af_auto sweep
+assert_eq "skipped|not_code_bug|0" "$(af_sig '"\(.status)|\(.outcome)|\(.attempts)"')" "non-code errors are skipped without using an attempt"
+af_auto sweep
+assert_eq "3" "$(<"$AF_STUB/agent-count")" "skipped error waits for the cooldown"
+af_state 'del(.signatures["sentry:101"])'
+AF_STUB_RESULT="AI_HARNESS_AUTOFIX_RESULT outcome=pr_opened artifact=https://github.com/evil/other/pull/1" af_auto sweep
+assert_eq "failed|0|1" "$(af_sig '"\(.status)|\(.attempts)|\(.fails)"')" "a PR from another repository is not tracked"
+af_state 'del(.signatures["sentry:101"])'
+HM_AUTOFIX_DAILY_MAX=0 af_auto sweep
+assert_eq "4|daily_max" "$(<"$AF_STUB/agent-count")|$(jq -sr 'last | .reason' "$AF_DATA/autofix/runs.jsonl")" "daily cap stops new fixes"
+AF_STUB_RESULT="done" af_auto sweep
+assert_eq "skipped|no_result" "$(af_sig '"\(.status)|\(.outcome)"')" "a run without a result line is not mistaken for a PR"
+pass "autofix respects declined PRs, cooldowns and caps"
+
+# 상태 기록이 attempting에 멈췄어도 실행 기록에 PR이 있으면 그 PR로 복구하고, 다시 고치지 않는다.
+af_state '.signatures["sentry:101"] += {status:"attempting",launched_at:"2000-01-01T00:00:00Z",attempts:1,fails:0}'
+jq -cn '{at:"2000-01-01T01:00:00Z",event:"finished",project:"af-svc",signature:"sentry:101",outcome:"pr_opened",artifact:"https://github.com/acme/svc/pull/77"}' >>"$AF_DATA/autofix/runs.jsonl"
+jq -n '{state:"open"}' >"$AF_STUB/pr-state.json"
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+af_auto sweep
+assert_eq "pr_open|https://github.com/acme/svc/pull/77|$AF_BEFORE" "$(af_sig '"\(.status)|\(.pr)"')|$(<"$AF_STUB/agent-count")" "a PR recorded only in the run log is recovered"
+af_state '.signatures["sentry:101"] += {status:"attempting",launched_at:"2000-01-01T00:00:00Z",attempts:2,fails:0}'
+af_auto sweep
+assert_eq "$AF_BEFORE" "$(<"$AF_STUB/agent-count")" "stale attempts stop at the attempt limit"
+af_state 'del(.signatures["sentry:101"])'
+HARNESS_METRICS_DIR="$AF_DATA" "$ROOT/scripts/autofix-auto.sh" track --project af-svc --candidate "$AF_LIST" --pr https://github.com/acme/svc/pull/42
+assert_eq "pr_open|https://github.com/acme/svc/pull/42|50" "$(af_sig '"\(.status)|\(.pr)"')|$(jq -r '.signatures["sentry:101"].baseline.count' "$AF_DATA/autofix/p-af-svc/state.json")" "manual PR joins verification"
+AF_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/scripts/autofix-auto.sh")"
+assert_contains "$AF_ARGS" '--permission-mode dontAsk' "unlisted commands are denied without asking"
+if grep -qE '"Bash"|"Bash\((curl|gh|bash|sh|python|node) ' <<<"$AF_ARGS"; then fail "unattended autofix must not allow arbitrary Bash"; fi
+assert_contains "$AF_ARGS" '"Bash(git push -u origin fix/*)"' "push is limited to fix branches"
+assert_contains "$AF_ARGS" '"Read(~/.claude/settings.json)"' "agent cannot read credential settings"
+assert_contains "$AF_ARGS" "--settings \"\$scrub\"" "monitor credentials are blanked in the agent env"
+assert_contains "$AF_ARGS" '--no-session-persistence' "unattended autofix keeps no transcript"
+assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" 'autofix-auto.sh" sweep' "backfill-due runs the autofix sweep"
+assert_contains "$(<"$ROOT/scripts/autofix-auto.sh")" 'harvest-auto/running.lock' "autofix shares the unattended-run lock"
+pass "autofix tracks manual PRs and runs with a restricted agent"
+# 기본 스킬 카탈로그: 플러그인 스킬이 아니라 선택 설치 원본이며, Codex도 읽을 수 있는 frontmatter만 쓴다.
+CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
+assert_eq "$CATALOG_NAMES" "$(find "$ROOT/catalog" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd' ' -)" "catalog.json lists every catalog skill"
+for name in $CATALOG_NAMES; do
+  skill_md="$ROOT/catalog/$name/SKILL.md"
+  assert_file "$skill_md"
+  assert_eq "name: $name" "$(sed -n '2p' "$skill_md")" "catalog $name frontmatter name"
+  assert_eq "description" "$(sed -n '3p' "$skill_md" | cut -d: -f1)" "catalog $name frontmatter description"
+  assert_eq "---" "$(sed -n '4p' "$skill_md")" "catalog $name frontmatter has only name and description"
+  [[ ! -e "$ROOT/skills/$name" ]] || fail "catalog skill $name must not be a plugin skill"
+  if grep -qiE 'midas|jobda|khb1122' "$skill_md"; then fail "catalog $name carries organization-specific values"; fi
+  if grep -qE 'curl[^|]*(-u |-H .(DD-API-KEY|Authorization))' "$skill_md"; then fail "catalog $name puts credentials on argv"; fi
+done
+pass "skill catalog is generic and stays out of plugin skills"
+
+SETUP_T="$TEST_TMP/setup"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+printf '{"env":{"SENTRY_AUTH_TOKEN":"sntrys_secret_value"}}\n' >"$SETUP_T/settings.json"
+setup_cmd() {
+  env -u DATADOG_API_KEY -u DD_API_KEY -u SENTRY_AUTH_TOKEN -u SENTRY_ORG -u ATLASSIAN_USER -u ATLASSIAN_API_TOKEN \
+    HARNESS_METRICS_DIR="$SETUP_T/data" HM_SETUP_CATALOG_DIR="$SETUP_CATALOG" HARNESS_CLAUDE_SETTINGS="$SETUP_T/settings.json" \
+    HM_CLAUDE_SKILLS_DIR="$SETUP_T/claude" HM_CODEX_SKILLS_DIR="$SETUP_T/codex" HM_SETUP_HINT=1 \
+    "${SETUP_ENV[@]+"${SETUP_ENV[@]}"}" "$ROOT/scripts/setup.sh" "$@"
+}
+setup_status() { setup_cmd list | jq -r --arg n "$1" --arg t "$2" 'select(.name == $n) | .status[$t]'; }
+SETUP_ENV=()
+mkdir -p "$SETUP_T/claude/jira"
+printf 'my own jira\n' >"$SETUP_T/claude/jira/SKILL.md"
+
+SETUP_ENV=(DATADOG_API_KEY=dd_secret_value)
+SETUP_LIST="$(setup_cmd list)"
+SETUP_ENV=()
+assert_eq "env" "$(jq -r 'select(.name=="datadog") | .env[0].source' <<<"$SETUP_LIST")" "env key found in process env"
+assert_eq "settings" "$(jq -r 'select(.name=="sentry") | .env[0].source' <<<"$SETUP_LIST")" "env key found in Claude settings"
+assert_eq "missing" "$(jq -r 'select(.name=="sentry") | .env[1].source' <<<"$SETUP_LIST")" "missing env key reported"
+if grep -qE 'dd_secret_value|sntrys_secret_value' <<<"$SETUP_LIST"; then fail "setup list must not print credential values"; fi
+assert_eq "foreign" "$(jq -r 'select(.name=="jira") | .status.claude' <<<"$SETUP_LIST")" "pre-existing skill is foreign"
+
+SETUP_OUT="$(setup_cmd install --tool claude datadog jira nope)"
+assert_eq "installed" "$(jq -r 'select(.name=="datadog") | .action' <<<"$SETUP_OUT")" "install catalog skill"
+assert_eq "skipped foreign" "$(jq -r 'select(.name=="jira") | "\(.action) \(.detail)"' <<<"$SETUP_OUT")" "foreign skill is kept"
+assert_eq "unknown" "$(jq -r 'select(.name=="nope") | .action' <<<"$SETUP_OUT")" "unknown skill rejected"
+assert_eq "my own jira" "$(cat "$SETUP_T/claude/jira/SKILL.md")" "foreign skill content untouched"
+cmp -s "$SETUP_CATALOG/datadog/SKILL.md" "$SETUP_T/claude/datadog/SKILL.md" || fail "installed copy matches catalog"
+assert_eq "current" "$(setup_status datadog claude)" "fresh install is current"
+assert_eq "absent" "$(setup_status datadog codex)" "other tool untouched"
+assert_eq "unchanged" "$(setup_cmd install --tool claude datadog | jq -r '.action')" "reinstall is a no-op"
+
+# 카탈로그가 바뀌면 손대지 않은 사본만 SessionStart가 갱신하고, 고친 사본은 남긴다.
+setup_cmd install --tool claude sentry >/dev/null
+printf '\nlocal note\n' >>"$SETUP_T/claude/sentry/SKILL.md"
+assert_eq "modified" "$(setup_status sentry claude)" "user-edited copy is modified"
+printf '\n<!-- v2 -->\n' >>"$SETUP_CATALOG/datadog/SKILL.md"
+printf '\n<!-- v2 -->\n' >>"$SETUP_CATALOG/sentry/SKILL.md"
+assert_eq "outdated" "$(setup_status datadog claude)" "untouched copy becomes outdated"
+setup_cmd 'done' >/dev/null
+REFRESH_NOTICE="$(printf '{}' | setup_cmd notify)"
+assert_contains "$(jq -r '.systemMessage' <<<"$REFRESH_NOTICE")" "갱신했습니다: datadog" "SessionStart refreshes untouched copies"
+cmp -s "$SETUP_CATALOG/datadog/SKILL.md" "$SETUP_T/claude/datadog/SKILL.md" || fail "refreshed copy matches new catalog"
+assert_contains "$(cat "$SETUP_T/claude/sentry/SKILL.md")" "local note" "edited copy kept on refresh"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "nothing to refresh or announce"
+
+assert_eq "skipped modified" "$(setup_cmd remove --tool claude sentry | jq -r '"\(.action) \(.detail)"')" "edited copy not removed without force"
+SETUP_OUT="$(setup_cmd install --tool claude --replace jira)"
+assert_eq "replaced" "$(jq -r '.action' <<<"$SETUP_OUT")" "replace foreign skill on request"
+assert_eq "my own jira" "$(cat "$(jq -r '.detail' <<<"$SETUP_OUT")/SKILL.md")" "replaced skill backed up"
+assert_eq "current" "$(setup_status jira claude)" "replaced skill is managed"
+assert_eq "removed" "$(setup_cmd remove --tool claude datadog | jq -r '.action')" "remove managed copy"
+[[ ! -e "$SETUP_T/claude/datadog" ]] || fail "removed skill dir still exists"
+assert_eq "installed installed" "$(setup_cmd install --tool both confluence | jq -r '.action' | paste -sd' ' -)" "install for both tools"
+assert_file "$SETUP_T/codex/confluence/SKILL.md"
+pass "setup installs, refreshes and removes only managed copies"
+
+# 셋업 안내: 처음 한 번, 셋업 뒤에는 카탈로그에 새 스킬이 생길 때만. Codex 세션은 슬래시 대신 스킬 이름으로 안내한다.
+SETUP_T="$TEST_TMP/setup-hint"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+HINT_OUT="$(printf '{"transcript_path":"/x/rollout-2026-10-30T00-00-00-abc.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$HINT_OUT" "ai-harness setup 스킬" "Codex hint names the skill"
+assert_contains "$HINT_OUT" "datadog·sentry·jira·confluence" "first hint lists the catalog"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "first hint shown once"
+setup_cmd 'done' >/dev/null
+jq '.version = 2 | .skills += [{name:"pagerduty", since:2, summary:"x", env:[]}]' "$SETUP_CATALOG/catalog.json" >"$SETUP_T/c.json"
+mv "$SETUP_T/c.json" "$SETUP_CATALOG/catalog.json"
+NEW_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$NEW_HINT" "새 기본 스킬이 추가됐습니다: pagerduty" "new catalog skills announced"
+assert_contains "$NEW_HINT" "/ai-harness:setup" "Claude hint uses the slash command"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "new-skill hint shown once"
+SETUP_T="$TEST_TMP/setup-off"
+mkdir -p "$SETUP_T"
+SETUP_ENV=(HM_SETUP_HINT=0)
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "HM_SETUP_HINT=0 silences the hint"
+SETUP_ENV=()
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
+pass "setup hint on first session and on new catalog skills"
+
+# 접속 정보: secret은 인자로 받지 않고 stdin으로만, 저장한 파일에서 바로 연결 확인. 자격 증명은 HTTP 호출 인자에도 싣지 않는다.
+SETUP_T="$TEST_TMP/setup-creds"
+SETUP_CATALOG="$ROOT/catalog"
+mkdir -p "$SETUP_T"
+printf '{"model":"opus","env":{"KEEP":"1"}}\n' >"$SETUP_T/settings.json"
+cat >"$SETUP_T/http.sh" <<'STUB'
+#!/usr/bin/env bash
+conf="$(cat)"
+printf '%s\n' "$*" >>"${0%/*}/argv.log"
+case "$conf" in *bad-token*) printf 'HTTP 401\n' >&2; exit 1 ;; esac
+case "$1" in
+  */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
+  */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
+  */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  *) printf 'HTTP 404\n' >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$SETUP_T/http.sh"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+if setup_cmd set --tool claude ATLASSIAN_API_TOKEN "tok-in-argv" 2>/dev/null; then fail "secret accepted as an argument"; fi
+assert_eq "missing" "$(setup_cmd check jira | jq -r 'if .missing then "missing" else "x" end')" "check reports missing keys"
+setup_cmd set --tool claude JIRA_BASE_URL https://acme.atlassian.net/ >/dev/null
+setup_cmd set --tool claude ATLASSIAN_USER me@acme.test >/dev/null
+printf "good-tok'en\n" | setup_cmd set --tool both ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "1" "$(jq -r '.env.KEEP' "$SETUP_T/settings.json")" "settings.json keeps other env"
+assert_eq "opus" "$(jq -r '.model' "$SETUP_T/settings.json")" "settings.json keeps other keys"
+assert_eq "good-tok'en" "$(jq -r '.env.ATLASSIAN_API_TOKEN' "$SETUP_T/settings.json")" "secret saved to Claude settings"
+# shellcheck disable=SC2016  # 변수는 source한 하위 셸에서 펼친다
+assert_eq "good-tok'en" "$(env -i /bin/bash -c '. "$1"; printf %s "$ATLASSIAN_API_TOKEN"' _ "$SETUP_T/data/secrets.env")" "secret saved to sourceable Codex file"
+assert_eq "600" "$(filemode "$SETUP_T/data/secrets.env")" "secrets file is private"
+assert_eq "settings" "$(setup_cmd list | jq -r 'select(.name=="jira") | .env[2].source')" "saved secret visible without restart"
+assert_eq "true Kim" "$(setup_cmd check jira | jq -r '"\(.ok) \(.as)"')" "check uses saved credentials"
+DETECT="$(setup_cmd detect jira)"
+assert_eq "customfield_10113 gh-sprint" "$(jq -r '.fields[0] | "\(.id) \(.type)"' <<<"$DETECT")" "detect finds sprint field by type"
+assert_eq "1" "$(jq -r '.fields | length' <<<"$DETECT")" "detect ignores other fields"
+assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists recent projects"
+printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
+assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
+assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"
+if grep -qE "tok|bad-token" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
+if setup_cmd list | grep -q "tok'en"; then fail "list prints a credential"; fi
+SETUP_ENV=()
+for name in $CATALOG_NAMES; do
+  assert_contains "$(<"$ROOT/catalog/$name/SKILL.md")" "/skills/$name.md" "catalog $name reads the user rule file"
+  assert_eq "true" "$(jq -r --arg n "$name" '.skills[] | select(.name==$n) | all(.env[] | select(.secret); .issue.url != null)' "$ROOT/catalog/catalog.json")" "catalog $name secrets carry an issue URL"
+done
+pass "setup stores credentials off the transcript and checks them"
 
 printf '1..%d\n' "$TESTS"
