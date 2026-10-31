@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.50.0 (2026-10-31)
 ### 새 기능
 
 - **모니터링 기반 자동 버그 수정 `/autofix`** — 저장소 manifest에 `monitor`(Sentry·Datadog·저장소 안 어댑터)를 두고 `HM_AUTOFIX_AUTO=1`을 켜면, 정기 실행이 많이 난 운영 에러를 골라 작업 전용 worktree의 무인 에이전트에게 넘깁니다. 에이전트는 코드 버그인지 가리고 재현 테스트부터 만든 뒤 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 이어서 LLM 없이 검증합니다: PR 병합 → 병합 커밋이 `deploy_branch`에 들어간 때를 배포로 보고 → 유예 뒤 관찰 창(수정 전 빈도로 3건이 나왔을 시간 이상) 동안 같은 시그니처가 다시 나오지 않으면 `resolved`, 나오면 `regressed`로 지난 PR과 재발 근거를 넘겨 다시 고칩니다(시그니처당 PR 2개까지, 넘으면 사람에게). 자격증명은 저장소에 두지 않고, 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못합니다.
