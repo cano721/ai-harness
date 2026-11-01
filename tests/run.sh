@@ -460,6 +460,8 @@ assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel\`)로 멤버�
 assert_contains "$HARNESS_INIT_CONTENT" "같은 이름의 사용자 전역 페르소나" "workspace preflight warns that delegation can hit a same-named user persona"
 assert_contains "$HARNESS_INIT_CONTENT" 'check --wait --types worker_done,escalation,question' "workspace handoff waits for the supervised worker's completion signal"
 assert_contains "$HARNESS_INIT_CONTENT" '.ai-harness/handoffs/<인계 이름>.done.md' "workspace handoff without supervision waits for a completion file"
+assert_contains "$HARNESS_INIT_CONTENT" 'heartbeat 를 진행 신호로 보지 않는다' "workspace handoff does not treat heartbeats as progress"
+assert_contains "$HARNESS_INIT_CONTENT" '`orca terminal read` 로 worker 터미널 출력이 바뀌었는지' "workspace handoff checks a stalled worker's terminal while waiting"
 assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝나면 알려 주겠다"고 하지 않는다' "the coordinator does not promise to report completion it cannot observe"
 assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"

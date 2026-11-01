@@ -160,7 +160,7 @@ workspace 세션이 대상 저장소에 세션을 띄우는 방식은 실측에�
 - 대상 판정: 경로 첫 세그먼트가 아니라 git root(`git rev-parse --show-toplevel`, worktree는 `--git-common-dir`)와 그 안의 `.ai-harness/harness.json`.
 - BRIEF 형식 고정: 승인된 Brief, 대상 워크플로, `policy.md` 경로, lane. D1의 `approved_brief_file` 승인 근거가 된다.
 - 실행: 대상 cwd에서 Claude 또는 `codex -C <저장소>`.
-- 완료 신호: 디스패치한 세션은 반드시 완료를 알 수 있어야 한다. 터미널 매니저가 감독 디스패치를 지원하면(Orca `orchestration worker-start` → `check --wait --types worker_done,escalation,question`) 그것으로 띄우고 조율 세션이 대기 루프를 돌린다(타임아웃이면 다시 건다). 감독 방식이 없으면 인계 프롬프트에 완료 파일(결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다린다. 감독 없는 터미널 실행만 하면 멤버 세션이 PR을 만들고 끝나도 조율 세션이 모른다(2026-10-23 사고: 사용자가 물은 뒤에야 terminal read로 확인).
+- 완료 신호: 디스패치한 세션은 반드시 완료를 알 수 있어야 한다. 터미널 매니저가 감독 디스패치를 지원하면(Orca `orchestration worker-start` → `check --wait --types worker_done,escalation,question`) 그것으로 띄우고 조율 세션이 대기 루프를 돌린다(타임아웃이면 다시 건다). 감독 방식이 없으면 인계 프롬프트에 완료 파일(결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다린다. 감독 없는 터미널 실행만 하면 멤버 세션이 PR을 만들고 끝나도 조율 세션이 모른다(2026-10-23 사고: 사용자가 물은 뒤에야 terminal read로 확인). 감독 디스패치여도 완료 신호만 기다리면 멈춘 worker 를 모른다 — heartbeat 는 worker 가 하위 에이전트를 기다리며 멈춘 동안에도 계속 오고, `check --wait` 는 heartbeat 에도 반환된다. 대기 루프는 주기적으로(10~15분) worker 터미널 출력 변화를 보고, 변화가 없으면 터미널 입력(`orca terminal send --enter`)으로 깨운다 — `orchestration send` 는 유휴 세션을 깨우지 못했다(2026-10-31 사고: worker 가 약 1시간 멈췄는데 1시간 대기 상한이 두 번 끝난 뒤에야 발견).
 - 위임 세션의 완료: PR 생성이 아니라 원격 PR CI 결과까지다. 로컬 CI 동등 검증은 원격 CI를 대신하지 못한다(같은 사고: 맥 로컬 통과, 리눅스 CI의 시각 정밀도 차이로 원격 실패). 그래프의 `remote_ci` 노드가 원격 CI를 끝까지 보고, 실패면 같은 수리 루프로 고쳐 일반 push 후 다시 본다. 확인할 수단이 없으면 성공이 아니라 "원격 CI 미확인"으로 끝낸다.
 
 **R2. 플러그인 레벨 편집 가드 (안전망)**

@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **workspace 인계 대기가 멈춘 worker 를 잡습니다** — Orca 감독 디스패치에서 worker 가 하위 에이전트를 기다리며 멈춰도 heartbeat 는 계속 와서, 조율 세션이 완료 신호만 기다리다 대기 상한을 거듭 소진했습니다. 이제 workspace AGENTS.md 의 인계 규칙이 heartbeat 를 진행 신호로 보지 않고, 10~15분마다 worker 터미널 출력 변화를 확인해 멈췄으면 터미널 입력으로 깨우도록 안내합니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다.
+
 ## v0.50.0 (2026-10-31)
 ### 새 기능
 
