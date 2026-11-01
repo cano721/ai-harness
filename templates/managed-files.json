@@ -491,7 +491,7 @@
       "path": ".claude/agents/fe-designer.md",
       "level": "standard",
       "integration": "claude",
-      "stack": "design-system",
+      "stack": ["frontend-team", "design-system"],
       "role": "fe-designer",
       "source": "templates/frontend-team/personas/fe-designer.md",
       "mode": "copy"

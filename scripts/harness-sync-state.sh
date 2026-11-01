@@ -76,12 +76,13 @@ case "$command_name" in
         path="$(jq -r '.path' <<<"$artifact")"
         artifact_level="$(jq -r '.level // ""' <<<"$artifact")"
         integration="$(jq -r '.integration // ""' <<<"$artifact")"
-        stack="$(jq -r '.stack // ""' <<<"$artifact")"
+        # stack은 문자열 또는 배열이다. 배열이면 전부 manifest stacks에 있어야 한다(예: fe-designer = frontend-team + design-system).
+        required_stacks="$(jq -c '[.stack // empty] | flatten' <<<"$artifact")"
         [[ "$artifact_level" == "$level" ]] || continue
         if [[ -n "$integration" ]] && ! jq -e --arg integration "$integration" 'index($integration)' <<<"$integrations" >/dev/null; then
           continue
         fi
-        if [[ -n "$stack" ]] && ! jq -e --arg stack "$stack" 'index($stack)' <<<"$stacks" >/dev/null; then
+        if ! jq -e --argjson required "$required_stacks" '. as $have | $required | all(. as $s | $have | index($s) != null)' <<<"$stacks" >/dev/null; then
           continue
         fi
         target="$root/$path"
@@ -165,10 +166,10 @@ case "$command_name" in
             artifact="$(jq -c --arg path "$path" 'first(.artifacts[] | select(.path == $path)) // empty' "$catalog")"
             if [[ -n "$artifact" ]]; then
               orphan_reason="$(jq -r --arg level "$level" --argjson integrations "$integrations" --argjson stacks "$stacks" '
-                (.integration // "") as $integration | (.stack // "") as $stack
+                (.integration // "") as $integration | ([.stack // empty] | flatten) as $required
                 | if (.level // "") != $level then "level_changed"
                   elif $integration != "" and ($integrations | index($integration) | not) then "integration_removed"
-                  elif $stack != "" and ($stacks | index($stack) | not) then "stack_removed"
+                  elif ($required | any(. as $s | $stacks | index($s) | not)) then "stack_removed"
                   else "" end' <<<"$artifact")"
             else
               role_integration=""
