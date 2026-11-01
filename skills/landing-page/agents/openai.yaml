@@ -1,0 +1,4 @@
+interface:
+  display_name: "Landing Page"
+  short_description: "Plan, build, and verify a landing, introduction, or marketing page that defers to the project's design system."
+  default_prompt: "Use $landing-page to plan, build, and verify this marketing page: $ARGUMENTS"
