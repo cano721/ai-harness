@@ -88,9 +88,23 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 |---|---|---|
 | `ui-review` Skill + `references/checklist.md` | 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 실제 조작 UX 검토 → 수정·재검증 → 근거·한계 보고. 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 단독으로 기존 화면이나 UI PR을 점검할 때도 씁니다. | UI 감지 + opt-in (`stacks`에 `ui`) |
 | `.ai-harness/workflows/ui-review-graph.json` | 단독 UI 검토의 노드·전이 계약 | 위와 같음 |
+| `ui-review` `references/design-handoff.md` | 시안 처리 규칙. 구현 전 시안 값을 토큰과 대조하고(허용 오차 안이면 토큰으로 맞추고 목록, 새 값·새 패턴은 추천 기본값과 함께 화면당 한 번 질문), 검토 때 시안과 구현을 나란히 캡처해 차이를 일치·조정·누락·상충·승인 없이 추가로 나눕니다. `/landing-page`의 같은 파일과 내용이 같고, 프론트 팀 구성이면 `frontend-team`에도 들어갑니다. | 위와 같음 |
 | `.ai-harness/docs/ui.md` | 앱 실행·로그인·지원 뷰포트·테마·기준 화면 등 프로젝트 고유 사실 (보호 파일) | 위와 같음 |
 
 기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 있습니다. Brief가 화면 검증 시나리오를 내면(리뷰는 변경이 화면을 바꿀 때) 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 브라우저로 화면을 검증합니다. 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌고, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 프로젝트의 디자인 문서·토큰·공통 컴포넌트·기준 화면이 계약보다 우선하고, 설치된 외부 디자인 Skill은 선택 보조로만 씁니다.
+
+시안이 있으면 값의 기준은 여전히 토큰이고 점수(`design-audit`)도 규칙 문서·형제 페이지로만 매깁니다. 구조·흐름은 시안을 따르고, 시안과의 차이는 점수 밖 차이표로 보고합니다. 체크리스트는 모션(감소 모션 렌더 확인·전환 중 조작·반복 정지·깜빡임), 대비 4.5:1/3:1, 색 단독 상태, 200% 확대·320px 리플로, 터치 24px 하한과 44px 권장, 상태 알림(`aria-live`), 입력 효율, 빈 상태 유형, 401/403/404/429/500/오프라인 구분, 증거 출처(에뮬레이션·실기기)까지 봅니다.
+
+### 네이티브 UI 검토 (네이티브 앱에서 `/harness-init`이 생성)
+
+React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·`Podfile`), Android(`build.gradle`의 `com.android.application`·`com.android.library` 플러그인) 저장소를 네이티브 앱으로 감지합니다. 백엔드 Gradle 저장소는 감지하지 않고, React Native는 웹 프론트로 잡지 않습니다(`react-native-web`이면 둘 다).
+
+| 생성물 | 역할 | 생성 조건 |
+|---|---|---|
+| `native-ui` Skill + `references/checklist.md`·`platforms.md` | UI 검토 계약의 단계·판정·거짓 통과를 그대로 쓰고, 브라우저 대신 시뮬레이터·에뮬레이터로 렌더링·조작합니다. 안전 영역, 44pt/48dp 터치 영역, Dynamic Type·`sp`, 다크, 스크린리더 이름·역할·상태, 감소 모션, 뒤로 가기 상태 유지, 플랫폼별 탐색(iOS 탭 바·가장자리 스와이프, Android 내비게이션 바·레일·predictive back·edge-to-edge)과 `xcrun simctl`·`adb` 캡처 방법을 담습니다. 수치는 Apple HIG·Material 3·WCAG 2.2를 출처로 적습니다. | 네이티브 감지 + opt-in (`stacks`에 `native`) |
+| `native-ui` `references/ui-review-contract.md`·`design-handoff.md` | UI 검토 계약과 시안 처리 규칙의 사본. 웹 계약이 바뀌면 sync가 함께 갱신합니다. | 위와 같음 |
+
+대상 플랫폼·실행 명령·기기는 `.ai-harness/docs/ui.md`에 적습니다. 빌드·실행 도구가 없으면 `unverified`로 보고합니다.
 
 `feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 

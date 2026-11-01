@@ -1836,6 +1836,112 @@ assert_eq "fe-architect,fe-implementer" "$(printf '%s' "$TEAM_SCAN" | jq -r '[.f
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" '"source": "stack"' "harness init records stack role mapping"
 pass "frontend team role set"
 
+# 시안 처리 규칙은 landing-page 원본과 바이트 단위로 같은 사본을 ui-review·frontend-team·native-ui가 공유한다. (#186)
+HANDOFF_SRC="$ROOT/templates/ui-review/references/design-handoff.md"
+assert_file "$HANDOFF_SRC"
+cmp -s "$ROOT/skills/landing-page/references/design-handoff.md" "$HANDOFF_SRC" \
+  || fail "templates/ui-review/references/design-handoff.md must match skills/landing-page/references/design-handoff.md byte for byte"
+for HANDOFF_PATH in .agents/skills/ui-review/references/design-handoff.md .claude/skills/ui-review/references/design-handoff.md \
+  .agents/skills/frontend-team/references/design-handoff.md .claude/skills/frontend-team/references/design-handoff.md \
+  .agents/skills/native-ui/references/design-handoff.md .claude/skills/native-ui/references/design-handoff.md; do
+  assert_eq "templates/ui-review/references/design-handoff.md" "$(jq -r --arg p "$HANDOFF_PATH" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$HANDOFF_PATH ships the shared design handoff"
+done
+assert_contains "$UIR_CONTENT" "references/design-handoff.md" "ui-review reconciles a mockup through the design handoff"
+for HANDOFF_CLASS in "| 일치 |" "| 조정 |" "| 누락 |" "| 상충 |" "| 승인 없이 추가 |" "나란히 캡처"; do
+  assert_contains "$UIR_CONTENT" "$HANDOFF_CLASS" "ui-review classifies mockup differences: $HANDOFF_CLASS"
+done
+assert_contains "$UIR_CONTENT" "증거 출처" "ui-review reports where mobile evidence came from"
+assert_contains "$(<"$ROOT/templates/implement-feature/SKILL.md")" "the mockup source" "the feature brief carries the mockup source for UI scenarios"
+assert_contains "$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")" "the mockup source (file, frame, or node)" "the runner asks the brief for the mockup source"
+
+# 시안 정책: 값은 토큰, 점수는 규칙 문서·형제, 구조는 시안. "시안은 기준이 아니다" 단정은 남지 않는다.
+DESIGNER="$(<"$ROOT/templates/frontend-team/personas/fe-designer.md")"
+IMPLEMENTER="$(<"$ROOT/templates/frontend-team/personas/fe-implementer.md")"
+ARCHITECT="$(<"$ROOT/templates/frontend-team/personas/fe-architect.md")"
+AUDIT="$(<"$ROOT/templates/design-audit/SKILL.md")"
+for POLICY_FILE in fe-designer.md fe-implementer.md fe-architect.md; do
+  if grep -n '시안은 기준이 아니다\|시안을 뒤집고\|시안의 픽셀·색은 따르지 않고' "$ROOT/templates/frontend-team/personas/$POLICY_FILE"; then
+    fail "$POLICY_FILE still treats the mockup as no reference at all"
+  fi
+done
+if grep -n '시안은 기준이 아니다' "$ROOT/templates/design-audit/SKILL.md"; then fail "design-audit still says the mockup is no reference"; fi
+assert_contains "$DESIGNER" "구조·내용 순서·흐름의 기준은 시안이다" "fe-designer takes structure from the mockup"
+assert_contains "$DESIGNER" "토큰 초안도 후보다" "fe-designer keeps a token draft out of the rule document"
+assert_contains "$IMPLEMENTER" "화면당 한 번(최대" "fe-implementer asks about new values once per screen"
+assert_contains "$IMPLEMENTER" "PR의 \"결정 사항\"" "fe-implementer records unattended defaults in the PR"
+assert_contains "$IMPLEMENTER" "제품 동작으로 성립하는 쪽" "fe-implementer still settles conflicting mockups by product behavior"
+assert_contains "$ARCHITECT" "조용히 뒤집지 않는다" "fe-architect asks instead of silently overturning a mockup"
+assert_contains "$ARCHITECT" "추천 기본값은 규칙" "fe-architect recommends the rule as the default"
+assert_contains "$AUDIT" "점수는 디자인 규칙 문서와 형제 페이지로만 매긴다" "design-audit scores only against rules and siblings"
+assert_contains "$AUDIT" "시안이 정한 구조가 형제와 달라 축 A·D에 걸린다" "design-audit holds mockup structure for a rule decision"
+assert_contains "$AUDIT" "색만으로 상태를 전하면 축 B에서 잰다" "design-audit notes color-only state under axis B"
+for AXIS_ROW in "| A. 골격·위계 | 30 |" "| B. 색·강조·상태 | 20 |" "| C. 컴포넌트 문법 | 20 |" "| D. 형제 정합 | 15 |" "| E. 톤·정직성 | 15 |"; do
+  assert_contains "$AUDIT" "$AXIS_ROW" "design-audit keeps its axes and points: $AXIS_ROW"
+done
+assert_contains "$(<"$ROOT/templates/frontend-team/SKILL.md")" "references/design-handoff.md" "the role router points every role at the design handoff"
+pass "design handoff shared with product UI and mockup policy"
+
+# UI 검토 체크리스트: 모션 절과 WCAG 2.2 수치. 웹 터치 영역은 24px 하한 + 44px 권장이다. (#186)
+UIR_CHECKLIST="$(<"$ROOT/templates/ui-review/references/checklist.md")"
+for CHECK_ITEM in "## 모션" "prefers-reduced-motion: reduce" "전환이 다음 조작을 막지 않는다" "반복 애니메이션을 멈춘다" "1초에 3번" \
+  "4.5:1" "3:1" "색만으로 상태를 전하지 않는다" "200%" "320 CSS px" "24×24 CSS px" "44×44 CSS px" \
+  "aria-live" "aria-describedby" "autocomplete" "inputmode" "blur" "첫 사용" "진행률·남은 시간을 지어내지 않는다" \
+  "401" "403" "429" "오프라인" "드래그에 대안이 있다" "합성 터치"; do
+  assert_contains "$UIR_CHECKLIST" "$CHECK_ITEM" "ui-review checklist covers: $CHECK_ITEM"
+done
+if grep -n '(약 44px)' "$ROOT/templates/ui-review/references/checklist.md"; then fail "the 44px touch target is a recommendation, not the floor"; fi
+assert_eq "37" "$(grep -cE '^[0-9]+\. \*\*' "$ROOT/templates/ui-review/references/checklist.md")" "checklist items are numbered without gaps"
+for MOTION_RULE in "100–150ms" "150–250ms" "200–400ms" "퇴장은 진입보다 짧거나 같다" "bounce가 없다" "(hover: hover) and (pointer: fine)" "다음 조작을 막는가" "기본 상태에서 콘텐츠가 보인다"; do
+  assert_contains "$ARCHITECT" "$MOTION_RULE" "fe-architect motion covers: $MOTION_RULE"
+done
+pass "ui review checklist covers motion and WCAG 2.2 numbers"
+
+# 네이티브 앱: harness-init이 RN·Flutter·iOS·Android를 stack native로 감지하고, native-ui가 ui-review 계약을 사본으로 공유한다. (#186)
+# 감지는 harness-init 문서 규칙(에이전트가 실측해 판단)이라 실행 코드가 없다. 판정 근거가 되는 문구를 고정한다.
+for NATIVE_SIGNAL in "**네이티브 앱 감지**" "\`react-native\` 또는 \`expo\`" "\`pubspec.yaml\`의 \`flutter:\`" "\`*.xcodeproj\`·\`*.xcworkspace\`·\`Podfile\`" \
+  "\`com.android.application\` 또는 \`com.android.library\` 플러그인" "androidx.compose" "org.springframework.boot" "React Native·Expo 저장소는 웹 프론트(\`frontend\`)나 웹 UI(\`ui\`)로 잡지 않는다" \
+  "\`react-native-web\`으로 웹도 내면 \`native\`와 웹 쪽 stack을 둘 다" "6-2. **네이티브 UI 검토**" "\`*/skills/native-ui\`가 있으면 \`native\`"; do
+  assert_contains "$HARNESS_INIT_CONTENT" "$NATIVE_SIGNAL" "harness init native detection: $NATIVE_SIGNAL"
+done
+assert_contains "$HARNESS_INIT_CONTENT" "\`react-native\`나 \`expo\`가 함께 있으면 \`react\`는 웹 프론트의 근거가 아니다" "React Native is not detected as a web frontend"
+NATIVE_DIR="$ROOT/templates/native-ui"
+NATIVE_SKILL="$(<"$NATIVE_DIR/SKILL.md")"
+NATIVE_CHECKLIST="$(<"$NATIVE_DIR/references/checklist.md")"
+NATIVE_PLATFORMS="$(<"$NATIVE_DIR/references/platforms.md")"
+assert_contains "$NATIVE_SKILL" "name: native-ui" "native-ui names itself"
+assert_contains "$NATIVE_SKILL" "references/ui-review-contract.md" "native-ui reuses the ui-review contract"
+assert_contains "$NATIVE_SKILL" "\`unverified\`" "native-ui reports unverified when the app cannot run"
+assert_contains "$NATIVE_SKILL" "증거 출처" "native-ui records where evidence came from"
+for NATIVE_ITEM in "안전 영역" "44×44pt" "48×48dp" "8dp" "Dynamic Type" "\`sp\`" "다크" "VoiceOver·TalkBack" "감소 모션" "크로스페이드" "뒤로 가기가 상태를 지킨다" "모달은 닫는 길이 둘이다" "제스처에 대안이 있다" "긴 목록" "300ms" "크기 등급"; do
+  assert_contains "$NATIVE_CHECKLIST" "$NATIVE_ITEM" "native checklist covers: $NATIVE_ITEM"
+done
+for NATIVE_ITEM in "Apple Human Interface Guidelines" "Material Design 3" "2~5개" "3~5개" "내비게이션 레일" "predictive back" "edge-to-edge" \
+  "xcrun simctl io booted screenshot" "xcrun simctl ui booted appearance dark" "adb exec-out screencap -p" "settings put system font_scale 1.3" "## React Native·Expo" "## Flutter" "프로젝트 결정"; do
+  assert_contains "$NATIVE_PLATFORMS" "$NATIVE_ITEM" "native platform reference covers: $NATIVE_ITEM"
+done
+assert_contains "$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")" "native-ui skill" "the ui_review node follows native-ui for native screens"
+assert_eq "10" "$(jq '[.artifacts[] | select(.skill == "native-ui" and .stack == "native")] | length' "$ROOT/templates/managed-files.json")" "native-ui ships five files per integration behind the native stack"
+assert_eq "templates/ui-review/SKILL.md" "$(jq -r '.artifacts[] | select(.path == ".claude/skills/native-ui/references/ui-review-contract.md") | .source' "$ROOT/templates/managed-files.json")" "native-ui copies the ui-review contract instead of restating it"
+NATIVE_ROOT="$TEST_TMP/native-project"
+mkdir -p "$NATIVE_ROOT/.ai-harness"
+printf '%s\n' '{"project_id":"native-project","level":"standard","integrations":["codex","claude"],"stacks":["native"],"harness_version":"0.50.0"}' >"$NATIVE_ROOT/.ai-harness/harness.json"
+NATIVE_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$NATIVE_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+for path in .agents/skills/native-ui/SKILL.md .claude/skills/native-ui/references/checklist.md .claude/skills/native-ui/references/platforms.md .agents/skills/native-ui/references/ui-review-contract.md .claude/skills/native-ui/references/design-handoff.md; do
+  assert_eq "add" "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "native stack selects $path"
+done
+assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | test("skills/(ui-review|frontend-fundamentals|frontend-team)/"))] | length')" "a native-only project gets neither the web UI contract nor web frontend skills"
+assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path | contains("native-ui"))] | length')" "a web UI project does not get native-ui"
+# 기존 ui 프로젝트: 손대지 않은 계약은 갱신(refresh), 새 시안 처리 규칙은 추가(add)로 sync 계획에 오른다.
+SYNC_UI_ROOT="$TEST_TMP/ui-sync-project"
+mkdir -p "$SYNC_UI_ROOT/.ai-harness" "$SYNC_UI_ROOT/.claude/skills/ui-review/references"
+printf '%s\n' '{"project_id":"ui-sync-project","level":"standard","integrations":["claude"],"stacks":["ui"],"harness_version":"0.50.0"}' >"$SYNC_UI_ROOT/.ai-harness/harness.json"
+printf '%s\n' 'older checklist' >"$SYNC_UI_ROOT/.claude/skills/ui-review/references/checklist.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$SYNC_UI_ROOT" --version 0.50.0 --file .claude/skills/ui-review/references/checklist.md >/dev/null
+SYNC_UI_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_UI_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "refresh" "$(printf '%s' "$SYNC_UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/checklist.md") | .action')" "sync refreshes an untouched checklist to the new items"
+assert_eq "add" "$(printf '%s' "$SYNC_UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/design-handoff.md") | .action')" "sync adds the design handoff to an existing UI project"
+pass "native app detection and native-ui contract"
+
 # understand-change는 플러그인 전역 Skill이다: 프로젝트에 사본을 깔지 않고 런타임에 프로젝트 정책을 읽는다.
 UNDERSTAND_SKILL="$ROOT/skills/understand-change/SKILL.md"
 UNDERSTAND_GRAPH="$ROOT/skills/understand-change/references/understanding-change-graph.json"
