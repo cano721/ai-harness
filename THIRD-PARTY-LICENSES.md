@@ -129,3 +129,38 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## skills/landing-page
+
+- 출처: [mengto/skills](https://github.com/mengto/skills), [greensock/gsap-skills](https://github.com/greensock/gsap-skills), [philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill), [KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)
+- 라이선스: 모두 MIT
+- 사본이 아니라 **파생물**입니다. 원문 문장·예제·스크립트·컴포넌트 코드는 담지 않고, 다음 착상만 가져와 다시 썼습니다: GSAP 티커로 Lenis를 구동해 ScrollTrigger와 맞추는 구성과 JS 클래스 뒤에 숨김 상태를 두는 리빌 게이트(mengto), ScrollTrigger·프레임워크 정리 함정 목록(greensock), 컴포넌트를 기억이 아니라 레지스트리에서 받고 200 응답도 본문을 검증하며 props 타입을 읽는 규칙(reactbits.dev-skill), 영상에서 뽑은 타이밍에 측정·추정 라벨을 붙이는 규칙(motiscope). 수치는 우리 기본값이거나 WCAG 2.2·Core Web Vitals 같은 1차 출처를 따릅니다. React Bits 컴포넌트(MIT + Commons Clause)와 GSAP 라이브러리(GreenSock 자체 라이선스)는 포함하지 않으며, 사용할 때 그 라이선스를 확인하도록 Skill이 안내합니다.
+
+```
+MIT License
+
+Copyright (c) 2026 Meng To
+Copyright (c) 2026 GreenSock
+Copyright (c) 2026 Philotheephilix
+Copyright (c) 2026 Kumar Sashank Ghanta
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다.
 
 ## 목차
 
@@ -63,6 +63,8 @@ flowchart LR
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
 | `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
+| `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
+| `/design-system-builder` | 프로젝트의 디자인 시스템을 처음 만들거나, 흩어진 값을 정리하거나, 시안에서 토큰을 뽑을 때 | 기존 코드 추출(같은 의도로 3회 이상 쓰인 값만, 기존 이름 유지)·새로 설계(질문 라운드당 3개 이하, 추천 기본값 제시)·시안 추출(확인 전까지 draft) 중 하나로 디자인 규칙 문서·스택별 토큰 파일(CSS 변수·Tailwind·theme.ts·Flutter·Compose·SwiftUI)·반복된 공통 컴포넌트·기준 화면을 만듭니다. 규칙 문서의 필수 절이 `design-audit`의 채점 입력입니다. 기존 문서는 덮어쓰지 않고 refresh/merge를 묻고, 하네스 보호 파일은 diff 승인 후에만 고칩니다. 랜딩·업무 화면 구현에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
 
@@ -76,7 +78,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. | 프론트 감지 |
 | `feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. | **FSD 감지/opt-in일 때만** |
 | `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
-| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
+| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **디자인 규칙 문서 + 기준 화면(스토리북 또는 서버 렌더링 예시 페이지)이 있을 때 opt-in** (`stacks`에 `design-system`). 서버 렌더링 저장소도 대상이며, `fe-designer`는 프론트 팀 구성까지 있을 때만 |
 
 ### UI 검토 계약 (화면이 있는 프로젝트에서 `/harness-init`이 생성)
 
@@ -86,11 +88,25 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 |---|---|---|
 | `ui-review` Skill + `references/checklist.md` | 요청 분석 → 디자인 시스템 확인 → 디자인 시스템 검토 → 실제 조작 UX 검토 → 수정·재검증 → 근거·한계 보고. 클릭 성공·클래스 존재·스크린샷 파일을 통과 근거로 쓰지 않습니다. 단독으로 기존 화면이나 UI PR을 점검할 때도 씁니다. | UI 감지 + opt-in (`stacks`에 `ui`) |
 | `.ai-harness/workflows/ui-review-graph.json` | 단독 UI 검토의 노드·전이 계약 | 위와 같음 |
+| `ui-review` `references/design-handoff.md` | 시안 처리 규칙. 구현 전 시안 값을 토큰과 대조하고(허용 오차 안이면 토큰으로 맞추고 목록, 새 값·새 패턴은 추천 기본값과 함께 화면당 한 번 질문), 검토 때 시안과 구현을 나란히 캡처해 차이를 일치·조정·누락·상충·승인 없이 추가로 나눕니다. `/landing-page`의 같은 파일과 내용이 같고, 프론트 팀 구성이면 `frontend-team`에도 들어갑니다. | 위와 같음 |
 | `.ai-harness/docs/ui.md` | 앱 실행·로그인·지원 뷰포트·테마·기준 화면 등 프로젝트 고유 사실 (보호 파일) | 위와 같음 |
 
 기능·버그·리뷰 그래프에는 선택 노드 `ui_review`가 있습니다. Brief가 화면 검증 시나리오를 내면(리뷰는 변경이 화면을 바꿀 때) 코드 리뷰 뒤 이 노드가 작업 트리를 바꾸지 않고 브라우저로 화면을 검증합니다. 주요 문제는 repair → 재리뷰 → `ui_review`로 다시 돌고, 검증하지 못하면 done이 아니라 "구현 완료, 화면 미검증"으로 사람에게 넘깁니다. 프로젝트의 디자인 문서·토큰·공통 컴포넌트·기준 화면이 계약보다 우선하고, 설치된 외부 디자인 Skill은 선택 보조로만 씁니다.
 
-`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
+시안이 있으면 값의 기준은 여전히 토큰이고 점수(`design-audit`)도 규칙 문서·형제 페이지로만 매깁니다. 구조·흐름은 시안을 따르고, 시안과의 차이는 점수 밖 차이표로 보고합니다. 체크리스트는 모션(감소 모션 렌더 확인·전환 중 조작·반복 정지·깜빡임), 대비 4.5:1/3:1, 색 단독 상태, 200% 확대·320px 리플로, 터치 24px 하한과 44px 권장, 상태 알림(`aria-live`), 입력 효율, 빈 상태 유형, 401/403/404/429/500/오프라인 구분, 증거 출처(에뮬레이션·실기기)까지 봅니다.
+
+### 네이티브 UI 검토 (네이티브 앱에서 `/harness-init`이 생성)
+
+React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·`Podfile`), Android(`build.gradle`의 `com.android.application`·`com.android.library` 플러그인) 저장소를 네이티브 앱으로 감지합니다. 백엔드 Gradle 저장소는 감지하지 않고, React Native는 웹 프론트로 잡지 않습니다(`react-native-web`이면 둘 다).
+
+| 생성물 | 역할 | 생성 조건 |
+|---|---|---|
+| `native-ui` Skill + `references/checklist.md`·`platforms.md` | UI 검토 계약의 단계·판정·거짓 통과를 그대로 쓰고, 브라우저 대신 시뮬레이터·에뮬레이터로 렌더링·조작합니다. 안전 영역, 44pt/48dp 터치 영역, Dynamic Type·`sp`, 다크, 스크린리더 이름·역할·상태, 감소 모션, 뒤로 가기 상태 유지, 플랫폼별 탐색(iOS 탭 바·가장자리 스와이프, Android 내비게이션 바·레일·predictive back·edge-to-edge)과 `xcrun simctl`·`adb` 캡처 방법을 담습니다. 수치는 Apple HIG·Material 3·WCAG 2.2를 출처로 적습니다. | 네이티브 감지 + opt-in (`stacks`에 `native`) |
+| `native-ui` `references/ui-review-contract.md`·`design-handoff.md` | UI 검토 계약과 시안 처리 규칙의 사본. 웹 계약이 바뀌면 sync가 함께 갱신합니다. | 위와 같음 |
+
+대상 플랫폼·실행 명령·기기는 `.ai-harness/docs/ui.md`에 적습니다. 빌드·실행 도구가 없으면 `unverified`로 보고합니다.
+
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
 <a id="skill-catalog"></a>
 
@@ -110,7 +126,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -157,7 +173,7 @@ codex plugin add ai-harness@ai-harness
 - 규모: `minimal` 또는 `standard`
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
-- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람) 또는 직접 커밋 허용(`direct`)
+- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람), 직접 커밋 허용(`direct`), 또는 PR 후 병합(`merge` — 사람이 고른 병합 조건이 모두 맞을 때 러너가 병합하고 병합 후 검증까지. [병합 정책](#merge-policy))
 - 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
 - 이슈 상태 전환: 시작 시 진행 중(`issue_policy:"in-progress-on-start"` — 이슈 키·URL로 기능 개발·버그 수정을 시작하면 그 이슈를 먼저 진행 중으로 옮김) 또는 건드리지 않음(기본)
 
@@ -222,12 +238,17 @@ stateDiagram-v2
     repair --> user_decision: 그래프 수리 한도 도달·제품 판단 필요
     publish --> done: git_policy대로 커밋·push·PR (허용 안 되면 건너뜀)
     publish --> user_decision: push·PR 실패
+    publish --> merge: git_policy merge, 원격 CI 통과 뒤
+    merge --> post_merge_verify: 병합 조건 충족·병합
+    merge --> user_decision: 변경 요청·충돌·head 이동
+    post_merge_verify --> done: 병합 후 검증 통과
+    post_merge_verify --> user_decision: 병합 후 검증 실패 (되돌리지 않음)
 ```
 
 1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. `harness.json`의 `approval`이 `auto`면 판단이 갈리는 점을 추천안으로 정해 근거와 함께 Brief·PR 본문의 "결정 사항"에 남기고, 사람만 정할 수 있는 것이 없으면 바로 진행합니다.
 2. **구현** — 승인 후 작업을 작고 검증 가능한 delivery slice로 나눕니다. TDD 강제 프로젝트에서는 Red → Green → Refactor를 지키고, 그 외에는 프로젝트 테스트 정책을 따릅니다.
 3. **검토 루프** — acceptance case와 diff를 검토합니다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재검토로 해소를 확인합니다. 그래프의 수리 한도(`limits.max_repair_attempts`, 기본 10)에 이르거나 제품 결정이 필요하면 추측하지 않고 사용자에게 넘깁니다.
-4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. 병합과 force push는 어느 정책에서도 하지 않습니다. 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
+4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. force push는 어느 정책에서도 하지 않고, 병합은 `merge` 정책에서 러너만 합니다(아래 [병합 정책](#merge-policy)). 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
 
 같은 대화 안에 승인된 동일 범위의 Brief가 있으면 재승인 없이 구현을 이어갑니다. explorer, test-engineer, developer, reviewer 역할이 설정된 경우에만 독립적인 작업을 위임하며, 작은 작업은 단일 세션에서 동일한 순서를 지킵니다.
 
@@ -272,13 +293,42 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
 | 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
-| git | `git_policy`가 `pr-only`·`direct`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
+| git | `git_policy`가 `pr-only`·`direct`·`merge`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
 | 종료 | review의 blocking finding이 0개이고 publish가 확인되고, push했으면 원격 CI가 통과(또는 원격 CI 없음)일 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 러너의 체크포인트와 publish 밖에서 HEAD가 움직이면 멈춥니다 |
 
 종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
+
+<a id="merge-policy"></a>
+#### 병합 정책 (`git_policy: "merge"`)
+
+병합 조건과 병합 후 검증 범위는 `/harness-init` 인터뷰에서 사람이 고르고 manifest `merge_policy`에 남습니다. 기본값을 가정하지 않습니다.
+
+```json
+"git_policy": "merge",
+"merge_policy": {
+  "require": ["human_approval", "remote_ci", "no_conflict", "not_draft"],
+  "min_approvals": 1,
+  "method": "squash",
+  "verify": ["target_ci", "deploy", "smoke"],
+  "deploy_check_cmd": "scripts/deployed.sh \"$HM_MERGE_COMMIT\"",
+  "deploy_timeout_minutes": 60,
+  "smoke_cmd": "curl -fsS https://dv.example.com/health",
+  "base": "develop"
+}
+```
+
+| 단계 | 동작 |
+|---|---|
+| 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. `human_approval`은 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 `min_approvals`개(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), `remote_ci`는 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님) |
+| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) `method`대로 병합합니다. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신하고, `rebase`는 지원하지 않습니다 |
+| 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
+| 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
+
+무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다. 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다. 모니터링 재발 확인은 아직 선택지에 없습니다(#172 이후).
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 

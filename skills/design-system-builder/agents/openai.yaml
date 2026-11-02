@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design System Builder"
+  short_description: "Build a project's design rule document, tokens, shared components, and reference screen."
+  default_prompt: "Use $design-system-builder to build or update this project's design system: $ARGUMENTS"

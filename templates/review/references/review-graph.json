@@ -38,6 +38,6 @@
     "Initial review nodes are read-only.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
-    "A change that alters what users see or operate is not done until ui_review has rendered and operated its affected screens in a browser with no blocking UI finding; ui_review follows the project ui-review contract, does not change the working tree, and a UI that could not be verified ends at user_decision as unverified, never as done."
+    "A change that alters what users see or operate is not done until ui_review has rendered and operated its affected screens in a browser (a simulator or emulator for native screens) with no blocking UI finding; ui_review follows the project ui-review contract, does not change the working tree, and a UI that could not be verified ends at user_decision as unverified, never as done."
   ]
 }
