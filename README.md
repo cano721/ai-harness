@@ -312,7 +312,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
   "require": ["human_approval", "remote_ci", "no_conflict", "not_draft"],
   "min_approvals": 1,
   "method": "squash",
-  "verify": ["target_ci", "deploy", "smoke"],
+  "verify": ["target_ci", "deploy", "smoke", "monitor"],
   "deploy_check_cmd": "scripts/deployed.sh \"$HM_MERGE_COMMIT\"",
   "deploy_timeout_minutes": 60,
   "smoke_cmd": "curl -fsS https://dv.example.com/health",
@@ -325,10 +325,10 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. `human_approval`은 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 `min_approvals`개(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), `remote_ci`는 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님) |
 | 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
 | 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) `method`대로 병합합니다. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신하고, `rebase`는 지원하지 않습니다 |
-| 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
+| 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
-무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다. 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다. 모니터링 재발 확인은 아직 선택지에 없습니다(#172 이후).
+무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다. 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
