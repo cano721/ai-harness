@@ -64,6 +64,7 @@ flowchart LR
 | `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
+| `/design-system-builder` | 프로젝트의 디자인 시스템을 처음 만들거나, 흩어진 값을 정리하거나, 시안에서 토큰을 뽑을 때 | 기존 코드 추출(같은 의도로 3회 이상 쓰인 값만, 기존 이름 유지)·새로 설계(질문 라운드당 3개 이하, 추천 기본값 제시)·시안 추출(확인 전까지 draft) 중 하나로 디자인 규칙 문서·스택별 토큰 파일(CSS 변수·Tailwind·theme.ts·Flutter·Compose·SwiftUI)·반복된 공통 컴포넌트·기준 화면을 만듭니다. 규칙 문서의 필수 절이 `design-audit`의 채점 입력입니다. 기존 문서는 덮어쓰지 않고 refresh/merge를 묻고, 하네스 보호 파일은 diff 승인 후에만 고칩니다. 랜딩·업무 화면 구현에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
 
@@ -77,7 +78,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 | `no-unnecessary-effects` | `useEffect`를 쓰기 직전에. 정말 외부 시스템 동기화인지 결정 트리로 거릅니다. | 프론트 감지 |
 | `feature-sliced-design` | FSD v2.1로 구조를 잡거나 코드 위치·공개 API·cross-import를 정할 때. | **FSD 감지/opt-in일 때만** |
 | `frontend-team` | 파일을 만들거나 고치기 전에. 산출물이 생기는 자리로 `fe-architect`(구조·추상화·UX 디테일·리뷰)·`fe-implementer`(요구사항 구현·API 연동)·`fe-designer`(디자인 규칙 산출물·채점)에게 담당을 나누고 "다음 담당"으로 잇습니다. 범용 developer·reviewer·test-engineer 페르소나 대신 이 역할 셋이 생성됩니다. | **프론트 팀 구성 opt-in일 때만** |
-| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **프론트 팀 구성 + 디자인 규칙 문서·UI 패키지가 있을 때만** |
+| `design-audit` | 페이지·블록·컴포넌트가 디자인 규칙 문서를 지키는지 다섯 축(골격·색·컴포넌트 문법·형제 정합·톤)으로 채점할 때. `fe-designer`의 루프가 씁니다. | **디자인 규칙 문서 + 기준 화면(스토리북 또는 서버 렌더링 예시 페이지)이 있을 때 opt-in** (`stacks`에 `design-system`). 서버 렌더링 저장소도 대상이며, `fe-designer`는 프론트 팀 구성까지 있을 때만 |
 
 ### UI 검토 계약 (화면이 있는 프로젝트에서 `/harness-init`이 생성)
 
@@ -111,7 +112,7 @@ React/TypeScript 저장소에서 **판단**이 필요할 때 여는 Skill입니�
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
