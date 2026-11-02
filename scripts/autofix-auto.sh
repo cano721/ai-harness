@@ -467,6 +467,9 @@ command_track() {
   done
   [[ -n "$project" && "$pr" =~ ^https:// ]] || usage
   jq -e '.signature | type == "string"' <<<"$cand" >/dev/null 2>&1 || { echo "--candidate에 signature가 필요합니다" >&2; exit 2; }
+  # 검증은 허용 목록에 있고 기준 브랜치 manifest에 monitor가 있는 저장소만 돈다. 그 밖이면 pr_open에 영영 머무르므로 받지 않는다.
+  [[ -n "$(monitored_repos "$project")" ]] \
+    || { printf '%s는 검증 대상이 아닙니다: ~/.ai-harness/config의 HM_AUTOFIX_REPOS에 넣고, 기준 브랜치 manifest에 monitor 설정이 있어야 합니다\n' "$project" >&2; exit 3; }
   set_sig "$project" "$(jq -r '.signature' <<<"$cand")" '{status:"pr_open",pr:$u,pr_opened_at:$now,title:$c.title,provider:$c.provider,
       meta:($c.meta // {}),link:$c.link,attempts:(($cur.attempts // 0) + 1),first_detected_at:($cur.first_detected_at // $now),
       baseline:{count:($c.count // 0),window_hours:($c.window_hours // 24)},manual:true}' --arg u "$pr" --argjson c "$cand"

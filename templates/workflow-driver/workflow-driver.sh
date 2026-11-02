@@ -837,6 +837,20 @@ repo_has_ci_config() {
 }
 
 # 병합 방식에 맞는 되돌리기 안내. 병합 커밋이면 부모가 둘이라 -m 1이 필요하고, rebase는 여러 커밋이 올라간다.
+# 플러그인 위치: HM_PLUGIN_ROOT → 설치된 가장 새 버전(업데이트로 옛 캐시가 지워져도 따라간다) → 정기 실행이 기록한 경로.
+plugin_root() {
+  local dir found=""
+  [[ -z "${HM_PLUGIN_ROOT:-}" ]] || { printf '%s' "$HM_PLUGIN_ROOT"; return; }
+  found="$(for dir in "$HOME"/.claude/plugins/cache/ai-harness/ai-harness/*/ "$HOME"/.codex/plugins/cache/ai-harness/ai-harness/*/; do
+    [[ -f "${dir}scripts/autofix-auto.sh" ]] || continue
+    dir="${dir%/}"
+    printf '%s\t%s\n' "${dir##*/}" "$dir"
+  done | sort -t$'\t' -k1,1V | tail -n 1)"
+  found="${found#*$'\t'}"
+  [[ -n "$found" ]] || found="$(cat "${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/bin/plugin-root" 2>/dev/null || true)"
+  printf '%s' "$found"
+}
+
 rollback_hint() { # commit base
   local parents
   git -C "$REPO" fetch -q origin "$2" >/dev/null 2>&1 || true
@@ -924,21 +938,23 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
           continue
         fi
         project="$(jq -r '.project_id // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
-        af="${HM_PLUGIN_ROOT:-$(cat "${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/bin/plugin-root" 2>/dev/null || true)}/scripts/autofix-auto.sh"
+        af="$(plugin_root)/scripts/autofix-auto.sh"
         rc=0
         if [[ -n "$project" && -f "$af" ]]; then
-          bash "$af" track --project "$project" --candidate "$(jq -c '.monitor_error' "$STATE")" --pr "$(state .publish.pr_url)" \
+          jq -c '.monitor_error' "$STATE" >"$RUN/monitor-error.json"
+          bash "$af" track --project "$project" --candidate "$(<"$RUN/monitor-error.json")" --pr "$(state .publish.pr_url)" \
             >"$RUN/post-merge-monitor.log" 2>&1 </dev/null || rc=$?
         else
           rc=127
-          printf 'autofix-auto.sh not found (set HM_PLUGIN_ROOT or install the schedule with /harness-init) or project_id missing\n' >"$RUN/post-merge-monitor.log"
+          jq -c '.monitor_error' "$STATE" >"$RUN/monitor-error.json"
+          printf 'the ai-harness plugin (scripts/autofix-auto.sh) was not found; set HM_PLUGIN_ROOT, or project_id is missing\n' >"$RUN/post-merge-monitor.log"
         fi
         if ((rc == 0)); then
-          state_set '.post_merge.monitor = {status: "tracked", signature: .monitor_error.signature, note: ("recurrence of " + .monitor_error.signature + " is watched by /autofix; /autofix status shows resolved or regressed"), at: $t}' --arg t "$(now_utc)"
+          state_set '.post_merge.monitor = {status: "tracked", signature: .monitor_error.signature, note: ("recurrence of " + .monitor_error.signature + " is handed to /autofix; its scheduled sweep (HM_AUTOFIX_AUTO=1) or /autofix verify decides resolved or regressed"), at: $t}' --arg t "$(now_utc)"
         else
           state_set '.post_merge.monitor = {status: "failed", exit: $rc, tail: $tail, at: $t}' --argjson rc "$rc" --arg tail "$(tail -n 20 "$RUN/post-merge-monitor.log")" --arg t "$(now_utc)"
           fail="the monitoring error could not be registered for recurrence tracking (exit $rc, see $RUN/post-merge-monitor.log)"
-          hint="the merge itself is fine and was not reverted. Register the error by hand: autofix-auto.sh track --project ${project:-<project_id>} --candidate '$(jq -c '.monitor_error' "$STATE")' --pr $(state .publish.pr_url)"
+          hint="the merge itself is fine and was not reverted. Fix the cause in the log, then register the error by hand: <ai-harness plugin>/scripts/autofix-auto.sh track --project $(printf '%q' "${project:-<project_id>}") --candidate \"\$(cat $(printf '%q' "$RUN/monitor-error.json"))\" --pr $(printf '%q' "$(state .publish.pr_url)")"
         fi ;;
     esac
   done
@@ -1412,8 +1428,10 @@ case "$CMD" in
     fi
     monitor_error=null
     if [[ -n "$MONITOR_ERROR" ]]; then
-      monitor_error="$(jq -c 'select(type == "object" and (.signature | type == "string") and (.signature | length > 0))' <<<"$MONITOR_ERROR" 2>/dev/null || true)"
-      [[ -n "$monitor_error" ]] || { printf -- '--monitor-error needs one monitoring error as a JSON object with a signature (a line of /autofix candidates)\n' >&2; exit 2; }
+      monitor_error="$(jq -cs 'if length == 1 and (.[0] | type == "object" and (.signature | type == "string") and (.signature | length > 0)) then .[0] else empty end' <<<"$MONITOR_ERROR" 2>/dev/null || true)"
+      [[ -n "$monitor_error" ]] || { printf -- '--monitor-error needs one monitoring error as a JSON object with a signature (one line of /autofix candidates)\n' >&2; exit 2; }
+      # 관찰 창은 수정 전 빈도(창 안 발생 수)로 늘린다 — 정기 실행처럼 그 창의 길이를 같이 넘긴다.
+      monitor_error="$(jq -c --argjson h "$(jq '.monitor.window_hours // 24' "$REPO/.ai-harness/harness.json" 2>/dev/null || echo 24)" '{window_hours: $h} + .' <<<"$monitor_error")"
     fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
