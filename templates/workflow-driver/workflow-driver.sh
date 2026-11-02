@@ -934,7 +934,7 @@ PUBLISH_SCHEMA="$RUN/publish-schema.json"
 REMOTE_CI_SCHEMA="$RUN/remote-ci-schema.json"
 UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 
-UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), and the viewports and themes the project supports. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
+UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
 brief_prompt() {
   local role inputs
@@ -1238,7 +1238,8 @@ $(brief_context)" "$REVIEW_SCHEMA"
         run_node ui_review "$ui_label" "$CONTEXT
 
 You are the ui_review node. Do not edit, create, or delete any file in the repository. Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with its references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first.
-A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser, and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
+If the project has a native-ui skill (.agents/skills/native-ui/SKILL.md or .claude/skills/native-ui/SKILL.md) and the screens belong to a native app, follow it: render and operate them in a simulator or emulator instead of a browser, with the same evidence rules.
+A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser (a simulator or emulator for native screens, as above), and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
 Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.

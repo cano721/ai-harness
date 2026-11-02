@@ -434,6 +434,132 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/ui-review/references/design-handoff.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/ui-review/references/design-handoff.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/references/checklist.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/references/checklist.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/references/platforms.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/references/platforms.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/references/ui-review-contract.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/references/design-handoff.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/native-ui/references/web-checklist.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/checklist.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/SKILL.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/checklist.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/references/checklist.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/platforms.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/native-ui/references/platforms.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/ui-review-contract.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/design-handoff.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/web-checklist.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/checklist.md",
+      "mode": "copy"
+    },
+    {
       "path": ".agents/skills/frontend-team/SKILL.md",
       "level": "standard",
       "integration": "codex",
@@ -458,6 +584,24 @@
       "stack": "frontend-team",
       "skill": "frontend-team",
       "source": "templates/frontend-team/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".agents/skills/frontend-team/references/design-handoff.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/frontend-team/references/design-handoff.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/ui-review/references/design-handoff.md",
       "mode": "copy"
     },
     {

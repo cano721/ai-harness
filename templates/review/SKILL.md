@@ -14,7 +14,7 @@ This is a project adapter, not the source of project policy. Read these files in
 
 The project workflow and graph are authoritative. They define review scope, risk checks, finding severity, repair ownership, required verification, re-review, and escalation conditions.
 
-When the change alters what users see or operate and the graph has a `ui_review` node, list the affected screens as UI scenarios and, after the code review has no blocking findings, verify them with the project `ui-review` skill (`.agents/skills/ui-review/SKILL.md` or `.claude/skills/ui-review/SKILL.md`) and `.ai-harness/docs/ui.md`: render and operate each scenario in a real browser without changing the working tree. A blocking UI issue is a blocking finding. If the screens could not be rendered or operated, report the UI as unverified, not the change as done.
+When the change alters what users see or operate and the graph has a `ui_review` node, list the affected screens as UI scenarios (with the mockup source — file, frame, or node — when a mockup exists) and, after the code review has no blocking findings, verify them with the project `ui-review` skill (`.agents/skills/ui-review/SKILL.md` or `.claude/skills/ui-review/SKILL.md`) and `.ai-harness/docs/ui.md`: render and operate each scenario in a real browser without changing the working tree. A blocking UI issue is a blocking finding. If the screens could not be rendered or operated, report the UI as unverified, not the change as done.
 
 Perform the initial review read-only. Report the workflow-required findings with evidence; do not report completion while a blocking finding remains. Modify files only in an authorized repair the graph routes to.
 
