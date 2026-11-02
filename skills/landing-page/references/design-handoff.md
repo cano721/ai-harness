@@ -14,7 +14,7 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 
 | Property | Within tolerance when |
 |---|---|
-| Spacing, radius | ±2px, or less than half the gap to the neighboring step |
+| Spacing, radius | ±2px or less than half the gap to the neighboring step, whichever is smaller |
 | Font size | ±1px |
 | Color | ΔE2000 under 3 |
 | Duration | ±20ms |
@@ -35,7 +35,7 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 
 ### Accessibility violations
 
-Insufficient contrast (WCAG 2.2 SC 1.4.3, 1.4.11), meaning carried by color alone (SC 1.4.1), and targets smaller than 24×24 CSS px (SC 2.5.8) get a strong warning with a concrete fix. In an unattended run, apply the fix and report the mockup's original value next to it.
+Insufficient contrast (WCAG 2.2 SC 1.4.3, 1.4.11), meaning carried by color alone (SC 1.4.1), and targets smaller than 24×24 CSS px without 24px of spacing around them (SC 2.5.8) get a strong warning with a concrete fix. In an unattended run, apply the fix and report the mockup's original value next to it.
 
 ### Structure and flow
 

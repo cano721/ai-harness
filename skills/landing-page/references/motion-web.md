@@ -67,7 +67,12 @@ const io = new IntersectionObserver((entries) => {
     io.unobserve(entry.target);
   }
 }, { rootMargin: "0px 0px -15% 0px" });
-document.querySelectorAll("[data-reveal]").forEach((el) => io.observe(el));
+const lastReachable = document.documentElement.scrollHeight - innerHeight * 0.15;
+document.querySelectorAll("[data-reveal]").forEach((el) => {
+  // Items that can never reach the 85% line are shown immediately.
+  if (el.getBoundingClientRect().top + scrollY > lastReachable) el.classList.add("is-in");
+  else io.observe(el);
+});
 window.revealReady = true;
 ```
 

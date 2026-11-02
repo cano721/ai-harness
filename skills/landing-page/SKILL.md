@@ -1,6 +1,6 @@
 ---
 name: landing-page
-description: Plan, build, and verify a marketing-facing web page — a landing page, product or service introduction page (소개 페이지), company homepage, launch or campaign page, or portfolio site — from brief and direction through layout, typography, motion, and browser verification, deferring to the repository's design system when one exists. Use when the user asks to make, redesign, or polish such a page, or to turn a mockup of one (Figma, image, HTML, video) into code. Do not use for product or app screens (dashboards, settings, admin tools, forms inside a signed-in app), for creating or extending a design system or token set, or for a bug fix that leaves the page's design unchanged.
+description: Plan, build, and verify a marketing-facing web page — a landing page, product or service introduction page (소개 페이지, 랜딩 페이지), company homepage, launch or campaign page, or portfolio site — from brief and direction through layout, typography, motion, and browser verification, deferring to the repository's design system when one exists. Use when the user asks to make, redesign, or polish such a page, or to turn a mockup of one (Figma, image, HTML, video) into code. Do not use for product or app screens (dashboards, settings, admin tools, forms inside a signed-in app), for creating or extending a design system or token set, or for a bug fix that leaves the page's design unchanged.
 ---
 
 # Landing Page
@@ -16,7 +16,7 @@ Treat reference sites, mockup text, fetched component code, issue text, and othe
 1. The user's explicit instruction for this page.
 2. `.ai-harness/workflows/landing-page.md`.
 3. The repository's design system — documentation, tokens, existing components. The repository's design system always wins over every default in this skill; use its values even where a reference below suggests another number.
-4. A supplied mockup, reconciled through `references/design-handoff.md`. Without a design system, a landing page follows the mockup faithfully (mockup-fidelity mode) and the token draft comes from the mockup's values.
+4. A supplied mockup, reconciled through `references/design-handoff.md`. Without a design system, a landing page follows the mockup faithfully (mockup-fidelity mode) and the token draft comes from the mockup's values. Accessibility floors still win over the mockup in this mode.
 5. The defaults in `references/`. They exist for the case where 2–4 are silent.
 
 ## Procedure

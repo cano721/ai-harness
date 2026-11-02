@@ -1925,6 +1925,7 @@ assert_eq "0" "$(grep -ci 'landing' "$LANDING_DIR/references/design-handoff.md")
 # description은 마케팅 페이지에만 걸려야 한다. 업무 화면·디자인 시스템 요청을 가로채면 안 된다.
 LANDING_DESCRIPTION="$(awk '/^description:/{print; exit}' "$LANDING_SKILL")"
 assert_contains "$LANDING_DESCRIPTION" "소개 페이지" "landing-page description matches Korean introduction pages"
+assert_contains "$LANDING_DESCRIPTION" "랜딩 페이지" "landing-page description matches Korean landing pages"
 assert_contains "$LANDING_DESCRIPTION" "Do not use for product or app screens" "landing-page description excludes product UI"
 assert_contains "$LANDING_DESCRIPTION" "creating or extending a design system" "landing-page description excludes design system creation"
 assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("landing-page"))] | length' "$ROOT/templates/managed-files.json")" "landing-page is not a managed project artifact"
