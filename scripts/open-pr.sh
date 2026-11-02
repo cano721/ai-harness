@@ -8,16 +8,18 @@ usage() {
   cat >&2 <<'EOF'
 usage: open-pr.sh --title <title> --body-file <file> [--base <branch>] [--head <branch>]
        open-pr.sh --check     # push 전에 PR을 열 수 있는지(원격 종류·인증·접근)만 확인
+       open-pr.sh --status <PR URL>   # {state:open|merged|closed, merged_at, merge_commit} — 자동 수정 검증용
 env:   Bitbucket은 ATLASSIAN_USER + BITBUCKET_API_TOKEN (Basic Auth)
        HM_OPEN_PR_DRY_RUN=1 이면 요청만 출력하고 보내지 않는다
 EOF
   exit 2
 }
 
-title=""; body_file=""; base=""; head=""; check=0
+title=""; body_file=""; base=""; head=""; check=0; status_url=""
 while (( $# > 0 )); do
   case "$1" in
     --check) check=1; shift ;;
+    --status) status_url="${2:-}"; shift 2 ;;
     --title) title="${2:-}"; shift 2 ;;
     --body-file) body_file="${2:-}"; shift 2 ;;
     --base) base="${2:-}"; shift 2 ;;
@@ -25,13 +27,38 @@ while (( $# > 0 )); do
     *) usage ;;
   esac
 done
-(( check == 1 )) || [[ -n "$title" && -f "$body_file" ]] || usage
+(( check == 1 )) || [[ -n "$status_url" ]] || [[ -n "$title" && -f "$body_file" ]] || usage
 
 # 자격증명은 프로세스 인자(ps에 보임) 대신 stdin 설정으로 넘기고, 응답 없는 네트워크에 묶이지 않게 30초로 제한한다.
 bb_curl() {
   printf 'user = "%s:%s"\n' "$ATLASSIAN_USER" "$BITBUCKET_API_TOKEN" \
     | curl -sS --max-time 30 -K - -w '\n%{http_code}' "$@"
 }
+
+# PR URL만으로 상태를 본다 — 원격·체크아웃과 무관하게 돈다.
+if [[ -n "$status_url" ]]; then
+  case "$status_url" in
+    https://github.com/*/pull/[0-9]*)
+      gh pr view "$status_url" --json state,mergedAt,mergeCommit \
+        | jq -c '{state: (.state | ascii_downcase), merged_at: (.mergedAt // null), merge_commit: (.mergeCommit.oid? // null)}'
+      ;;
+    https://bitbucket.org/*/*/pull-requests/[0-9]*)
+      [[ -n "${ATLASSIAN_USER:-}" && -n "${BITBUCKET_API_TOKEN:-}" ]] || { echo "Bitbucket 조회에는 ATLASSIAN_USER와 BITBUCKET_API_TOKEN이 필요합니다" >&2; exit 4; }
+      rest="${status_url#https://bitbucket.org/}"
+      IFS=/ read -r ws repo _ id _ <<<"$rest"
+      [[ "$id" =~ ^[0-9]+$ ]] || { echo "PR URL 형식이 아닙니다: $status_url" >&2; exit 2; }
+      response="$(bb_curl "https://api.bitbucket.org/2.0/repositories/$ws/$repo/pullrequests/$id")"
+      code="${response##*$'\n'}"
+      [[ "$code" == 2* ]] || { echo "Bitbucket PR 조회 실패 (HTTP $code)" >&2; exit 5; }
+      # Bitbucket은 병합 시각 필드가 없다. 병합된 PR은 이후 수정되지 않으므로 updated_on을 병합 시각으로 쓴다.
+      jq -c '{state: (if .state == "MERGED" then "merged" elif .state == "OPEN" then "open" else "closed" end),
+        merged_at: (if .state == "MERGED" then .updated_on else null end), merge_commit: (.merge_commit.hash? // null)}' \
+        <<<"${response%$'\n'*}"
+      ;;
+    *) echo "지원하지 않는 PR URL: $status_url" >&2; exit 3 ;;
+  esac
+  exit
+fi
 
 remote="$(git remote get-url origin 2>/dev/null || true)"
 [[ -n "$remote" ]] || { echo "origin 원격이 없습니다" >&2; exit 3; }

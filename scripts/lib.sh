@@ -50,6 +50,7 @@ fi
 # exit 1이면서도 stdout에 파일시스템 정보를 뱉어 출력을 오염시킨다 (실측).
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 filesize() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null; }
+filemode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
 days_ago_iso() { date -u -d "$1 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -v-"$1"d +%Y-%m-%dT%H:%M:%S; }
 iso_to_epoch() {
   local value="${1:-}" normalized=""

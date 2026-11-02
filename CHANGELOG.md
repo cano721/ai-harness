@@ -10,6 +10,21 @@
 
 ### 버그 수정
 
+- **workspace 인계 대기가 멈춘 worker 를 잡습니다** — Orca 감독 디스패치에서 worker 가 하위 에이전트를 기다리며 멈춰도 heartbeat 는 계속 와서, 조율 세션이 완료 신호만 기다리다 대기 상한을 거듭 소진했습니다. 이제 workspace AGENTS.md 의 인계 규칙이 heartbeat 를 진행 신호로 보지 않고, 10~15분마다 worker 터미널 출력 변화를 확인해 멈췄으면 터미널 입력으로 깨우도록 안내합니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다.
+
+## v0.50.0 (2026-10-31)
+### 새 기능
+
+- **모니터링 기반 자동 버그 수정 `/autofix`** — 저장소 manifest에 `monitor`(Sentry·Datadog·저장소 안 어댑터)를 두고 `HM_AUTOFIX_AUTO=1`을 켜면, 정기 실행이 많이 난 운영 에러를 골라 작업 전용 worktree의 무인 에이전트에게 넘깁니다. 에이전트는 코드 버그인지 가리고 재현 테스트부터 만든 뒤 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 이어서 LLM 없이 검증합니다: PR 병합 → 병합 커밋이 `deploy_branch`에 들어간 때를 배포로 보고 → 유예 뒤 관찰 창(수정 전 빈도로 3건이 나왔을 시간 이상) 동안 같은 시그니처가 다시 나오지 않으면 `resolved`, 나오면 `regressed`로 지난 PR과 재발 근거를 넘겨 다시 고칩니다(시그니처당 PR 2개까지, 넘으면 사람에게). 자격증명은 저장소에 두지 않고, 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못합니다.
+- **`/setup` — 기본 스킬을 골라 전역에 설치합니다** — Datadog·Sentry·Jira·Confluence를 curl로 다루는 범용 Skill 카탈로그(`catalog/`)를 추가했습니다. 플러그인 Skill로 넣으면 쓰지 않는 도구까지 모든 세션에 실리므로, `/setup`에서 고른 것만 `~/.claude/skills/`(Codex `~/.agents/skills/`)에 복사하고 필요한 환경변수가 있는지 점검합니다(값은 받지 않음). 설치한 사본은 해시로 추적해 손대지 않은 것만 플러그인 업데이트 때 SessionStart가 갱신하고, 직접 고친 사본과 원래 있던 같은 이름의 Skill은 건드리지 않습니다. 플러그인에는 설치 시점 hook이 없어 셋업이 자동으로 시작되지는 않으며, 설치 후 첫 세션과 카탈로그에 새 Skill이 추가될 때 한 번씩 안내합니다(`HM_SETUP_HINT=0`으로 끔). 토큰은 키마다 발급 주소·읽기 scope를 안내하고, 대화에 남지 않도록 별도 터미널의 숨김 입력(`setup.sh set`)으로 받아 저장한 뒤 읽기 전용 호출로 연결을 확인합니다(`setup.sh check`). 기본 프로젝트·Jira 커스텀 필드 ID·이슈 생성 필수 항목 같은 회사·팀 전용 값은 계정에서 선택지를 읽어 와(`setup.sh detect`) `~/.ai-harness/skills/<name>.md`에 저장하며, 카탈로그 Skill이 먼저 읽습니다.
+
+### 업데이트 후 해야 할 일
+
+- `/ai-harness:setup`을 실행해 쓰는 도구의 기본 스킬을 고릅니다. 이미 같은 이름의 개인 Skill(예: `~/.claude/skills/jira`)이 있으면 그대로 두며, 교체는 명시했을 때만 백업 후 합니다.
+
+## v0.49.0 (2026-10-30)
+### 버그 수정
+
 - **서브에이전트 토큰이 집계에서 빠지던 문제** — Claude Code는 서브에이전트 대화를 `<세션>/subagents/agent-*.jsonl`에 따로 기록하는데 추출기가 메인 transcript만 읽었습니다. 위임을 많이 하는 워크플로일수록 사용량이 적게 잡혔습니다. 이제 부모 세션의 `agent_tok_in`·`agent_tok_out`·`agent_cache_read`·`agent_cache_write`로 합산하고 `/metrics`가 메인 토큰 옆에 보여줍니다.
 
 - **Codex 입력 토큰이 캐시 읽기와 이중으로 잡히던 문제** — OpenAI usage의 `input_tokens`는 `cached_input_tokens`를 포함하는데 그대로 `in tok`에 넣어, Codex 위주 프로젝트의 입력이 수십억으로 부풀었습니다. 이제 캐시 제외 입력을 기록하고, 재추출되지 않는 예전 이벤트는 집계 때 맞춥니다.

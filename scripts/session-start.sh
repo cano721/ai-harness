@@ -25,6 +25,10 @@ if [[ -n "$transcript" && "$(basename "$transcript")" != rollout-*.jsonl && ! -e
   fi
 fi
 
+setup_result="$(printf '%s' "$input" | "$ROOT/scripts/setup.sh" notify 2>/dev/null || true)"
+setup_message="$(jq -r '.systemMessage // empty' <<<"$setup_result" 2>/dev/null || true)"
+[[ -n "$setup_message" ]] && messages+=("$setup_message")
+
 "$ROOT/scripts/backfill-due.sh" >/dev/null 2>&1 || true
 
 sync_result="$(printf '%s' "$input" | "$ROOT/scripts/sync-auto.sh" notify 2>/dev/null || true)"

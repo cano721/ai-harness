@@ -2,7 +2,7 @@
 # 수집·정리·자동 harvest의 단일 진입점. 에이전트 hook(SessionStart, 응답마다 Stop → tick.sh)이 부른다 —
 # OS 스케줄러에 기대지 않아 macOS·Linux·Windows(WSL)와 Claude Code·Codex에서 똑같이 돈다.
 # 마지막 backfill이 HM_BACKFILL_INTERVAL_HOURS(기본 6)보다 오래됐으면 저우선순위로
-# backfill → (LLM 단계: 정리 → 자동 harvest·sync sweep) → 릴리스 정보 갱신을 한 번에 돈다.
+# backfill → (LLM 단계: 정리 → 자동 harvest·sync sweep → 자동 버그 수정) → 릴리스 정보 갱신을 한 번에 돈다.
 # LLM 단계는 사용자가 쉬는 동안만 돈다(최근 활동이 없을 때까지 대기, 사용량 한도 직후엔 휴지).
 # 여러 호출이 겹쳐도 주기 판정과 lock을 공유하므로 한 번만 돈다.
 set -uo pipefail
@@ -71,12 +71,14 @@ if [[ "${1:-}" == "--worker" ]]; then
   trap 'hm_release_lock "$LOCK_DIR"' EXIT
   nice -n 10 "$DIR/backfill.sh" >/dev/null 2>&1 || true
   # LLM 단계는 새로 회수된 세션까지 반영된 뒤, 사용자가 쉬는 동안에만 돈다.
-  if [[ "${HM_DIGEST:-0}" != "1" && "${HM_HARVEST_AUTO:-0}" != "1" && "${HM_SYNC_AUTO:-0}" != "1" ]]; then
+  if [[ "${HM_DIGEST:-0}" != "1" && "${HM_HARVEST_AUTO:-0}" != "1" && "${HM_SYNC_AUTO:-0}" != "1" && "${HM_AUTOFIX_AUTO:-0}" != "1" ]]; then
     schedule_log off
   elif llm_steps_ready; then
     schedule_log ran
     [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
     "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
+    # 모니터링 기반 자동 수정: 검증(LLM 없음) 뒤, 무인 실행이 비어 있으면 새 에러 1건을 고친다.
+    "$DIR/autofix-auto.sh" sweep >/dev/null 2>&1 || true
   else
     schedule_log skipped "$SKIP_REASON"
   fi
