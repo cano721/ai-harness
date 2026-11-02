@@ -12,11 +12,15 @@
 #     (needs_human)이 비어 있을 때 그래프의 auto_approved_by_policy 엣지로 통과한다. decisions는 brief.md와 PR 본문에 남는다.
 #     review 그래프에는 승인 노드가 없다. blocking finding을 고치는 repair는 같은 승인(또는 approval: auto)을 받은 뒤에만 시작한다.
 #   - 검증: Brief(review는 수리 범위)에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
-#   - git: harness.json의 git_policy가 pr-only·direct면 쓰기 노드 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
+#   - git: harness.json의 git_policy가 pr-only·direct·merge면 쓰기 노드 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
 #     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. review는 publish 노드가 없어 수리를 커밋하지 않고 남긴다.
 #     publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
 #   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
 #     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
+#   - 병합: git_policy가 merge면 원격 CI 뒤 merge 노드에서 이 스크립트가 PR 호스트(gh·Bitbucket API)에서 직접 읽은 상태로
+#     merge_policy.require 조건(사람 승인·원격 CI·충돌 없음·draft 아님)을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+#     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
+#     병합 뒤 post_merge_verify가 merge_policy.verify(타깃 CI·배포 확인 명령·스모크 명령)를 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
@@ -40,9 +44,9 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)이다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
 
-  정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖)를 start 때 읽는다.
+  정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|merge|그 밖), merge_policy를 start 때 읽는다.
 
-exit: 0 done(push했으면 원격 CI 통과까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증 포함) · 30 미완료(원격 CI 진행 중이면 resume) · 40 불변식 위반 · 2 사용법
+exit: 0 done(push했으면 원격 CI 통과까지, merge면 병합 후 검증까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
 }
@@ -525,7 +529,7 @@ publish() {
   local policy problems="[]" out pr_url
   policy="$(state '.policy.git // ""')"
   case "$policy" in
-    pr-only|direct) ;;
+    pr-only|direct|merge) ;;
     *)
       state_set '.publish = {skipped: $m}' --arg m "git_policy '${policy:-unset}' does not allow the agent to commit; changes are left uncommitted"
       go publish published_or_not_required
@@ -539,10 +543,10 @@ publish() {
 You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
 - Use the git conventions, base branch, and PR tool that AGENTS.md and the project workflow name (for example /bitbucket or gh). Reviewers, labels, and similar settings come from the project's default rules.
 - Commit any remaining change. The driver's unpushed checkpoint commits (wip($TEMPLATE): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
-- pr-only: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body. If a pull request for this branch is already open (a repair after remote CI failed), push to it and return its URL instead of opening another.
+- pr-only or merge: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body. If a pull request for this branch is already open (a repair after remote CI failed), push to it and return its URL instead of opening another.
 - direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
 - If the brief has a \"결정 사항\" section, the agent made those choices without asking a person. Copy it unchanged into a PR body section titled \"결정 사항\" so a person can overturn them before merging; when no PR is opened, put it in the body of the last commit message instead.
-- Never merge, never force-push, never push to the base branch under pr-only, and do not change file contents: the committed tree must equal the reviewed one.
+- Never merge (under merge the driver merges later, once the merge conditions hold), never force-push, never push to the base branch under pr-only or merge, and do not change file contents: the committed tree must equal the reviewed one.
 Return only JSON matching the schema; pr_url is empty when no PR was opened.
 
 Checks the driver ran: $(state '.checks | join(" ; ")')
@@ -562,9 +566,9 @@ $(brief_context)" "$PUBLISH_SCHEMA"
   fi
   [[ "$(git -C "$REPO" rev-parse '@{upstream}' 2>/dev/null || true)" == "$(git -C "$REPO" rev-parse HEAD)" ]] \
     || problems="$(jq -c '. + ["HEAD is not pushed to its upstream"]' <<<"$problems")"
-  [[ "$policy" != pr-only || -n "$pr_url" ]] \
-    || problems="$(jq -c '. + ["git_policy pr-only requires a pull request, but pr_url is empty"]' <<<"$problems")"
-  state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p}' \
+  [[ "$policy" == direct || -n "$pr_url" ]] \
+    || problems="$(jq -c --arg g "$policy" '. + ["git_policy \($g) requires a pull request, but pr_url is empty"]' <<<"$problems")"
+  state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
     --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg u "$pr_url" \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
   if [[ "$problems" == "[]" ]]; then
@@ -613,13 +617,24 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
     unverified_because "the CI result is for ${commit:-no commit}, not the pushed commit $head"
   fi
   # "원격 CI 없음"은 저장소에 CI 설정이 없을 때만 믿는다. 설정이 있는데 체크가 안 보이면 아직 등록 전이거나 볼 수단이 없는 것이다.
-  if [[ "$status" == none && -n "$(git -C "$REPO" ls-files -- .github/workflows bitbucket-pipelines.yml .gitlab-ci.yml \
-    Jenkinsfile .circleci azure-pipelines.yml .buildkite .drone.yml .travis.yml 2>/dev/null)" ]]; then
+  if [[ "$status" == none ]] && repo_has_ci_config; then
     unverified_because "the session reported no remote CI, but the repository has CI configuration"
   fi
   state_set '.remote_ci = ($r[0] + {head: $h, pr_url: $u, at: $t})' --slurpfile r "$out" --arg h "$head" --arg u "$pr_url" --arg t "$(now_utc)"
   case "$status" in
-    passed|none) go remote_ci remote_ci_passed_or_not_required ;;
+    passed|none)
+      if [[ "$(state '.policy.git')" == merge && -n "$pr_url" ]]; then
+        if [[ "$(state '.policy.unattended // false')" == true ]]; then
+          state_set '.merge = {skipped: "unattended run; merging is left to a person"}'
+        elif [[ -n "$(edge_when remote_ci merge)" ]]; then
+          go remote_ci "$(edge_when remote_ci merge)"
+          return
+        else
+          state_set '.merge = {skipped: "the project graph has no merge node; sync the harness (/harness-init --sync)"}'
+        fi
+      fi
+      go remote_ci remote_ci_passed_or_not_required
+      ;;
     failed)
       state_set '.findings = (.remote_ci | if (.failures | length) > 0 then .failures else [.summary] end | map("remote CI failed: " + .))
         | .needs_user_decision = false'
@@ -631,6 +646,281 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
       go remote_ci remote_ci_unverified
       ;;
   esac
+}
+
+# PR 호스트에서 PR 상태를 직접 읽는다. 병합 조건은 모델의 보고가 아니라 이 결과로 판정한다.
+# 출력: {state: OPEN|MERGED|CLOSED, draft, head, head_ref, base, mergeable: true|false|"pending", ci: passed|failed|pending|none,
+#        approvals: [로그인], changes_requested, merge_commit, merged_at}
+pr_provider() { # url
+  if [[ "$1" =~ ^https://bitbucket\.org/[^/]+/[^/]+/pull-requests/[0-9]+ ]]; then echo bitbucket
+  elif [[ "$1" =~ ^https://[^/]+/[^/]+/[^/]+/pull/[0-9]+ ]]; then echo github
+  else echo unknown; fi
+}
+# host/owner/repo (소문자). PR이 이 저장소(origin)의 것인지 비교한다. insteadOf로 바뀌기 전의 설정값을 본다.
+repo_slug() { # url
+  sed -E 's#^[a-z+]+://##; s#^[^@/]+@##; s#:([^0-9/][^/]*/)#/\1#; s#\.git/?$##; s#/(pull|pull-requests)/[0-9]+.*$##' <<<"$1" | tr '[:upper:]' '[:lower:]'
+}
+bb_api() { # method path [json-body]
+  [[ -n "${ATLASSIAN_USER:-}" && -n "${BITBUCKET_API_TOKEN:-}" ]] || { echo "ATLASSIAN_USER and BITBUCKET_API_TOKEN are not set" >&2; return 1; }
+  local args=(-sS --fail --max-time 60 -K - -X "$1" "https://api.bitbucket.org/2.0/repositories/$2")
+  [[ -n "${3:-}" ]] && args+=(-H 'Content-Type: application/json' -d "$3")
+  # 자격증명은 ps에 보이는 인자 대신 stdin 설정으로 넘긴다. 설정 문법의 \ 와 " 는 이스케이프한다.
+  local user="${ATLASSIAN_USER//\\/\\\\}" token="${BITBUCKET_API_TOKEN//\\/\\\\}"
+  printf 'user = "%s:%s"\n' "${user//\"/\\\"}" "${token//\"/\\\"}" | (cd "$REPO" && curl "${args[@]}")
+}
+bb_path() { # url → workspace/repo/pullrequests/<id>
+  sed -E 's#^https://bitbucket\.org/([^/]+)/([^/]+)/pull-requests/([0-9]+).*#\1/\2/pullrequests/\3#' <<<"$1"
+}
+pr_facts() { # url
+  local pr diff statuses
+  case "$(pr_provider "$1")" in
+    github)
+      # 승인은 쓰기 권한이 있는 사람(OWNER·MEMBER·COLLABORATOR)이 지금 head에 남긴 것만, 작성자·봇은 빼고, 리뷰어마다 마지막 판단만 센다.
+      (cd "$REPO" && gh pr view "$1" --json state,isDraft,mergeable,headRefOid,headRefName,baseRefName,reviews,author,mergeCommit,mergedAt,statusCheckRollup) | jq -c '
+        .author.login as $author | .headRefOid as $head
+        | ([.reviews[] | select(.author.login != $author and (.author.login | endswith("[bot]") | not)
+              and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")))]
+            | group_by(.author.login) | map(max_by(.submittedAt))) as $latest
+        | [.statusCheckRollup[]? | if .__typename == "StatusContext" then (.state // "")
+            else (if (.status // "") != "COMPLETED" then "PENDING" else (.conclusion // "") end) end] as $checks
+        | {state, draft: .isDraft, head: $head, head_ref: .headRefName, base: .baseRefName,
+           mergeable: (if .mergeable == "MERGEABLE" then true elif .mergeable == "CONFLICTING" then false else "pending" end),
+           ci: (if ($checks | length) == 0 then "none"
+                elif any($checks[]; IN("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE")) then "failed"
+                elif any($checks[]; IN("PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "")) then "pending" else "passed" end),
+           approvals: [$latest[] | select(.state == "APPROVED" and .commit.oid == $head
+             and (.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"))) | .author.login],
+           changes_requested: any($latest[]; .state == "CHANGES_REQUESTED"),
+           merge_commit: (.mergeCommit.oid // ""), merged_at: (.mergedAt // "")}' ;;
+    bitbucket)
+      # Bitbucket 승인은 커밋에 묶이지 않는다. 마지막 push 뒤에 참여(participated_on)한 승인만 센다.
+      pr="$(bb_api GET "$(bb_path "$1")")" || return 1
+      diff="$(bb_api GET "$(bb_path "$1")/diffstat?pagelen=500")" || return 1
+      statuses="$(bb_api GET "$(sed -E 's#/pullrequests/[0-9]+$##' <<<"$(bb_path "$1")")/commit/$(jq -r .source.commit.hash <<<"$pr")/statuses?pagelen=100")" || return 1
+      jq -c --argjson d "$diff" --argjson s "$statuses" --arg pushed "$(state '.publish.pushed_at // ""')" '
+        .author.uuid as $author
+        | [$s.values[]?.state] as $checks
+        | {state: (if .state == "OPEN" or .state == "MERGED" then .state else "CLOSED" end), draft: (.draft // false),
+           head: .source.commit.hash, head_ref: .source.branch.name, base: .destination.branch.name,
+           mergeable: (if any($d.values[]?; .status == "merge conflict") then false else true end),
+           ci: (if ($checks | length) == 0 then "none" elif any($checks[]; IN("FAILED", "STOPPED")) then "failed"
+                elif any($checks[]; . == "INPROGRESS") then "pending" else "passed" end),
+           approvals: [.participants[]? | select(.approved and .user.uuid != $author and ((.participated_on // "") > $pushed))
+             | (.user.nickname // .user.display_name)],
+           changes_requested: any(.participants[]?; .state == "changes_requested"),
+           merge_commit: (.merge_commit.hash // ""), merged_at: (if .state == "MERGED" then .updated_on else "" end)}' <<<"$pr" ;;
+    *) echo "unsupported pull request host: $1" >&2; return 1 ;;
+  esac
+}
+pr_merge() { # url method head
+  case "$(pr_provider "$1")" in
+    github) (cd "$REPO" && gh pr merge "$1" "--$2" --match-head-commit "$3") ;;
+    bitbucket)
+      # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었고, rebase에 맞는 전략은 없다.
+      [[ "$2" != rebase ]] || { echo "method rebase is not supported for Bitbucket; choose squash or merge in merge_policy" >&2; return 1; }
+      bb_api POST "$(bb_path "$1")/merge" \
+        "$(jq -cn --arg m "$2" '{merge_strategy: (if $m == "merge" then "merge_commit" else "squash" end), close_source_branch: false}')" >/dev/null ;;
+  esac
+}
+iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601? // empty'; }
+
+# merge: manifest merge_policy.require의 조건을 PR 호스트에서 읽은 상태로 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+merge() {
+  local url head facts blocked="[]" unmet="[]" mp err origin method i merged_epoch
+  url="$(state '.publish.pr_url // ""')"
+  head="$(state .head)"
+  mp="$(jq -c '.policy.merge' "$STATE")"
+  method="$(jq -r .method <<<"$mp")"
+  [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
+    || finish invariant_violation 40 "merge node reached although git_policy is not merge or the run is unattended"
+  if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
+    err="$(head -c 300 "$RUN/merge.err")"
+    state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "cannot read the pull request state from its host: ${err:-no output}"
+    go merge merge_blocked
+    return
+  fi
+  printf '%s\n' "$facts" >"$RUN/merge-facts.json"
+  # 병합할 PR은 publish가 보고한 URL이다. 이 저장소·이 실행이 push한 브랜치·시작 때 정한 기준 브랜치의 PR인지 확인한다.
+  origin="$(git -C "$REPO" config --get remote.origin.url || true)"
+  [[ -n "$origin" && "$(repo_slug "$origin")" == "$(repo_slug "$url")" ]] \
+    || blocked="$(jq -c --arg u "$url" --arg o "${origin:-none}" '. + ["the pull request \($u) is not in this repository (origin \($o))"]' <<<"$blocked")"
+  [[ "$(jq -r .base <<<"$facts")" == "$(jq -r .base <<<"$mp")" ]] \
+    || blocked="$(jq -c --argjson f "$facts" --arg b "$(jq -r .base <<<"$mp")" '. + ["the pull request targets \($f.base), not the base branch \($b) the merge policy allows"]' <<<"$blocked")"
+  [[ "$(jq -r .head_ref <<<"$facts")" == "$(state '.publish.branch // ""')" ]] \
+    || blocked="$(jq -c --argjson f "$facts" --arg b "$(state '.publish.branch // ""')" '. + ["the pull request comes from \($f.head_ref), not the pushed branch \($b)"]' <<<"$blocked")"
+  if [[ "$blocked" == "[]" ]]; then
+    case "$(jq -r .state <<<"$facts")" in
+      MERGED)
+        # 사람이 먼저 병합했거나, 지난 시도의 병합이 늦게 반영됐다. 병합 후 검증은 그 병합 커밋으로 이어 간다.
+        merged_epoch="$(iso_epoch "$(jq -r .merged_at <<<"$facts")")"
+        [[ -n "$(jq -r .merge_commit <<<"$facts")" ]] \
+          || finish incomplete 30 "the pull request is merged but the host has not reported the merge commit yet; run resume to check again"
+        state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then $m else "outside the runner" end),
+            approvals: (.merge.approvals // []), merged_at: $f.merged_at, merged_epoch: ($e | tonumber)}' \
+          --argjson f "$facts" --arg m "$method" --arg e "${merged_epoch:-$(date -u +%s)}"
+        log "the pull request is merged: $(jq -r .merge_commit <<<"$facts")"
+        go merge merged
+        return ;;
+      CLOSED) blocked='["the pull request was closed without merging"]' ;;
+    esac
+  fi
+  # 승인·CI는 리뷰하고 push한 그 커밋에 대한 것이어야 한다. head가 움직였으면 누군가 push했다.
+  [[ ${#head} -ge 7 && "$(jq -r .head <<<"$facts")" =~ ^[0-9a-f]{7,}$ && "$head" == "$(jq -r .head <<<"$facts")"* ]] \
+    || blocked="$(jq -c --arg h "$head" --arg p "$(jq -r .head <<<"$facts")" '. + ["the pull request head \($p) is not the pushed and reviewed commit \($h)"]' <<<"$blocked")"
+  while IFS= read -r cond; do
+    case "$cond" in
+      human_approval)
+        if [[ "$(jq -r .changes_requested <<<"$facts")" == true ]]; then
+          blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
+        elif (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
+          unmet="$(jq -c --argjson f "$facts" --argjson n "$(jq -r .min_approvals <<<"$mp")" \
+            '. + ["human approval: \($f.approvals | length) of \($n) on the current head\(if ($f.approvals | length) > 0 then " (" + ($f.approvals | join(", ")) + ")" else "" end)"]' <<<"$unmet")"
+        fi ;;
+      remote_ci)
+        # remote_ci 노드의 보고만으로 정하지 않는다. 호스트가 그 head에 대해 보고한 체크도 통과여야 한다.
+        if [[ "$(state '.remote_ci.status // ""')" != passed || "$(state '.remote_ci.head // ""')" != "$head" ]]; then
+          blocked="$(jq -c --arg s "$(state '.remote_ci.status // "missing"')" '. + ["remote CI for the head is \($s), not passed"]' <<<"$blocked")"
+        else
+          case "$(jq -r .ci <<<"$facts")" in
+            passed) ;;
+            pending) unmet="$(jq -c '. + ["the host still reports checks running on the head"]' <<<"$unmet")" ;;
+            *) blocked="$(jq -c --arg c "$(jq -r .ci <<<"$facts")" '. + ["the host reports the checks on the head as \($c), not passed"]' <<<"$blocked")" ;;
+          esac
+        fi ;;
+      no_conflict)
+        case "$(jq -r .mergeable <<<"$facts")" in
+          false) blocked="$(jq -c '. + ["the pull request has merge conflicts with its base"]' <<<"$blocked")" ;;
+          pending) unmet="$(jq -c '. + ["the host has not finished checking for conflicts"]' <<<"$unmet")" ;;
+        esac ;;
+      not_draft)
+        [[ "$(jq -r .draft <<<"$facts")" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
+    esac
+  done <<<"$(jq -r '.require[]' <<<"$mp")"
+  if [[ "$blocked" != "[]" ]]; then
+    state_set '.findings = $b | .merge = {blocked: $b, facts: $f}' --argjson b "$blocked" --argjson f "$facts"
+    go merge merge_blocked
+    return
+  fi
+  if [[ "$unmet" != "[]" ]]; then
+    state_set '.merge = {waiting: $u, facts: $f, checked_at: $t}' --argjson u "$unmet" --argjson f "$facts" --arg t "$(now_utc)"
+    finish incomplete 30 "waiting for merge conditions on $url: $(jq -r 'join("; ")' <<<"$unmet"); run resume to check again"
+  fi
+  if ! pr_merge "$url" "$method" "$head" >"$RUN/merge.log" 2>&1; then
+    state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "merging failed: $(tail -c 300 "$RUN/merge.log")"
+    go merge merge_blocked
+    return
+  fi
+  state_set '.merge = {requested: true, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg t "$(now_utc)"
+  log "merge requested for $url ($method)"
+  # 호스트가 병합(과 병합 커밋)을 보고하기까지 잠깐 걸릴 수 있다. 끝내 안 보이면 resume이 다시 읽는다.
+  for i in 1 2 3 4 5; do
+    facts="$(pr_facts "$url" 2>/dev/null || printf '{}')"
+    [[ "$(jq -r '.state // ""' <<<"$facts")" == MERGED && -n "$(jq -r '.merge_commit // ""' <<<"$facts")" ]] && break
+    ((i == 5)) || sleep "${HM_MERGE_POLL_SECONDS:-5}"
+  done
+  [[ "$(jq -r '.state // ""' <<<"$facts")" == MERGED && -n "$(jq -r '.merge_commit // ""' <<<"$facts")" ]] \
+    || finish incomplete 30 "the merge of $url was requested but the host does not report it merged yet; run resume to check again"
+  state_set '.merge = (.merge + {commit: $f.merge_commit, base: $f.base, method: $m, merged_at: $f.merged_at, merged_epoch: ($e | tonumber)})' \
+    --argjson f "$facts" --arg m "$method" --arg e "$(iso_epoch "$(jq -r .merged_at <<<"$facts")" || true)"
+  state_set 'if .merge.merged_epoch == null then .merge.merged_epoch = ($n | tonumber) else . end' --arg n "$(date -u +%s)"
+  log "merged $url as $(jq -r .merge_commit <<<"$facts") ($method)"
+  go merge merged
+}
+
+repo_has_ci_config() {
+  [[ -n "$(git -C "$REPO" ls-files -- .github/workflows bitbucket-pipelines.yml .gitlab-ci.yml \
+    Jenkinsfile .circleci azure-pipelines.yml .buildkite .drone.yml .travis.yml 2>/dev/null)" ]]
+}
+
+# 병합 방식에 맞는 되돌리기 안내. 병합 커밋이면 부모가 둘이라 -m 1이 필요하고, rebase는 여러 커밋이 올라간다.
+rollback_hint() { # commit base
+  local parents
+  git -C "$REPO" fetch -q origin "$2" >/dev/null 2>&1 || true
+  parents="$(git -C "$REPO" rev-list --parents -n 1 "$1" 2>/dev/null | wc -w | tr -d ' ')"
+  if [[ "$(state .merge.method)" == rebase ]]; then
+    printf 'the change is merged and was not reverted. It was rebased onto %s as several commits; to roll it back, revert those commits (git revert --no-edit <first>^..%s) on a new branch and open a pull request' "$2" "$1"
+  elif [[ "$parents" -gt 2 || ( -z "$parents" || "$parents" == 0 ) && "$(state .merge.method)" == merge ]]; then
+    printf 'the change is merged and was not reverted. To roll it back, revert the merge commit on a new branch (git revert -m 1 %s) and open a pull request' "$1"
+  else
+    printf 'the change is merged and was not reverted. To roll it back, revert %s on a new branch (git revert %s) and open a pull request' "$1" "$1"
+  fi
+}
+
+# post_merge_verify: merge_policy.verify를 순서대로(타깃 CI → 배포 확인 → 스모크) 확인한다. 끝난 단계는 resume에서 다시 하지 않는다.
+# 실패해도 되돌리지 않는다. 되돌릴지는 사람이 정한다.
+post_merge_verify() {
+  local commit base step label out status rc fail="" cmd waited timeout reported
+  commit="$(state '.merge.commit // ""')"
+  base="$(state '.merge.base // ""')"
+  [[ -n "$commit" ]] || fail="the host did not report a merge commit, so nothing can be verified against it"
+  for step in $(jq -r '.policy.merge.verify[]' "$STATE"); do
+    [[ -z "$fail" ]] || break
+    [[ "$(jq -r --arg s "$step" '.post_merge[$s].status // ""' "$STATE")" != passed ]] || continue
+    case "$step" in
+      target_ci)
+        label="post-merge-ci"
+        run_node post_merge_verify "$label" "$CONTEXT
+
+You are the post_merge_verify node. Do not edit any file, commit, or push. The pull request $(state .publish.pr_url) was merged into $base as commit $commit. Find out whether the remote CI for exactly that commit on $base passed, without asking anyone anything:
+- Use the PR or CI tool that AGENTS.md and the project workflow name (for example gh run list --commit, or the Bitbucket pipelines API through /bitbucket).
+- Wait until every check or pipeline for the commit reaches a final state, polling about once a minute. A fresh merge commit can take a few minutes before its checks appear.
+- passed: every check finished successfully. failed: any check failed; put each failing check in failures with the decisive lines of its log. none: the repository runs no CI on $base. pending: checks are still running after about 60 minutes. unverified: you cannot read the CI result; say why in summary.
+- A local run of the CI commands is not a remote result. Never report passed from it.
+Return only JSON matching the schema; commit is the SHA the result belongs to." "$REMOTE_CI_SCHEMA"
+        out="$RUN/$label.out"
+        jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string" and (.summary | type) == "string"' \
+          "$out" >/dev/null 2>&1 || finish incomplete 30 "post-merge CI output does not match the schema ($out); run resume to check again"
+        status="$(jq -r .status "$out")"
+        reported="$(jq -r .commit "$out")"
+        if [[ "$status" == passed || "$status" == none ]] && [[ ${#reported} -lt 7 || ( "$commit" != "$reported"* && "$reported" != "$commit"* ) ]]; then
+          status=unverified
+          jq '.summary = "the CI result is not for the merge commit"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+        fi
+        if [[ "$status" == none ]] && repo_has_ci_config; then
+          status=unverified
+          jq '.summary = "the session reported no CI on the base branch, but the repository has CI configuration"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+        fi
+        state_set '.post_merge.target_ci = ($r[0] + {status: $s, at: $t})' --slurpfile r "$out" --arg s "$status" --arg t "$(now_utc)"
+        case "$status" in
+          passed|none) state_set '.post_merge.target_ci.status = "passed" | .post_merge.target_ci.reported = $s' --arg s "$status" ;;
+          pending) finish incomplete 30 "CI for the merge commit $commit is still running; run resume to check again" ;;
+          *) fail="CI on $base for the merge commit $commit is $status: $(jq -r '.summary + (if (.failures // []) | length > 0 then " — " + (.failures | join("; ")) else "" end)' "$out")" ;;
+        esac ;;
+      deploy|smoke)
+        cmd="$(jq -r --arg s "$step" 'if $s == "deploy" then .policy.merge.deploy_check_cmd else .policy.merge.smoke_cmd end' "$STATE")"
+        rc=0
+        (cd "$REPO" && HM_MERGE_COMMIT="$commit" HM_BASE_BRANCH="$base" HM_PR_URL="$(state .publish.pr_url)" bash -c "$cmd") \
+          >"$RUN/post-merge-$step.log" 2>&1 </dev/null || rc=$?
+        if ((rc != 0)) && [[ "$step" == smoke ]]; then
+          # 배포 직후의 일시 실패와 실제 실패를 가르려 한 번만 다시 본다.
+          sleep "${HM_SMOKE_RETRY_SECONDS:-30}"
+          rc=0
+          (cd "$REPO" && HM_MERGE_COMMIT="$commit" HM_BASE_BRANCH="$base" HM_PR_URL="$(state .publish.pr_url)" bash -c "$cmd") \
+            >"$RUN/post-merge-$step.log" 2>&1 </dev/null || rc=$?
+        fi
+        state_set '.post_merge[$s] = {status: (if $rc == 0 then "passed" else "failed" end), command: $c, exit: $rc, tail: $tail, at: $t}' \
+          --arg s "$step" --arg c "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 20 "$RUN/post-merge-$step.log")" --arg t "$(now_utc)"
+        if ((rc != 0)); then
+          if [[ "$step" == deploy && ( "$rc" == 126 || "$rc" == 127 ) ]]; then
+            fail="the deploy check could not run (exit $rc — command not found or not executable): $cmd"
+          elif [[ "$step" == deploy ]]; then
+            waited=$(( ($(date -u +%s) - $(state '.merge.merged_epoch // 0')) / 60 ))
+            timeout="$(state '.policy.merge.deploy_timeout_minutes')"
+            ((waited >= timeout)) \
+              || finish incomplete 30 "the merge commit $commit is not deployed yet (deploy check exit $rc, ${waited} of ${timeout} minutes); run resume to check again"
+            fail="the merge commit $commit was not observed as deployed within $timeout minutes (deploy check: $cmd)"
+          else
+            fail="the smoke check failed twice after the merge (exit $rc): $cmd"
+          fi
+        fi ;;
+    esac
+  done
+  if [[ -n "$fail" ]]; then
+    state_set '.findings = [$f, $r] | .post_merge.failed = $f' --arg f "$fail" --arg r "$(rollback_hint "$commit" "$base")"
+    go post_merge_verify "$(edge_when post_merge_verify user_decision)"
+    return
+  fi
+  go post_merge_verify post_merge_verified
 }
 
 CONTEXT="Read AGENTS.md, .ai-harness/workflows/$TEMPLATE.md, .ai-harness/workflows/$GRAPH_NAME and the project docs they select before anything else."
@@ -689,10 +979,12 @@ execute() {
             finish "done" 0 "no blocking findings remain$(state 'if .attempts > 0 then "; \(.attempts) repair round(s) passed the required checks (run by the driver) and re-review; the repairs are left uncommitted — commit and push them as git_policy allows" else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary else "" end')"
           fi
           finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
-          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
+          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
+            + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status] | join(", ")) else "" end)
+          elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
       esac
     fi
     # review가 수리 동의를 기다리던 노드면 그 노드를 다시 실행하지 않고 동의만 확인한다.
@@ -1026,6 +1318,12 @@ $(brief_context)"
       remote_ci)
         remote_ci
         ;;
+      merge)
+        merge
+        ;;
+      post_merge_verify)
+        post_merge_verify
+        ;;
       *) finish invariant_violation 40 "the driver has no handler for graph node '$node'" ;;
     esac
   done
@@ -1044,27 +1342,51 @@ case "$CMD" in
     # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다.
     if [[ "$WORKFLOW" != review ]]; then
       case "$git_policy" in
-        pr-only|direct)
+        pr-only|direct|merge)
           [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
             || { printf 'git_policy lets the runner commit; commit or stash the existing changes first so they do not mix into the run\n' >&2; exit 2; }
           ;;
       esac
-      if [[ "$git_policy" == pr-only ]]; then
+      if [[ "$git_policy" == pr-only || "$git_policy" == merge ]]; then
         base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
         [[ -z "$base" || "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" != "${base#origin/}" ]] \
-          || { printf 'git_policy pr-only: start on a work branch or worktree, not the base branch %s\n' "${base#origin/}" >&2; exit 2; }
+          || { printf 'git_policy %s: start on a work branch or worktree, not the base branch %s\n' "$git_policy" "${base#origin/}" >&2; exit 2; }
       fi
+    fi
+    # merge 조건과 병합 후 검증은 사람이 init에서 정한다. 실행 중 manifest가 바뀌어도 시작 때의 정책을 따른다.
+    merge_policy=null
+    if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
+      merge_policy="$(jq -c '.merge_policy // {} | {
+          require: (.require // []), min_approvals: (.min_approvals // 1), method: (.method // "squash"), verify: (.verify // []),
+          deploy_check_cmd: (.deploy_check_cmd // ""), deploy_timeout_minutes: (.deploy_timeout_minutes // 60), smoke_cmd: (.smoke_cmd // ""),
+          base: (.base // "")}' "$REPO/.ai-harness/harness.json")"
+      jq -e '(.require | type == "array" and length > 0 and all(.[]; IN("human_approval", "remote_ci", "no_conflict", "not_draft")))
+          and (.min_approvals | type == "number" and . >= 1) and (.method | IN("squash", "merge", "rebase"))
+          and (.verify | type == "array" and all(.[]; IN("target_ci", "deploy", "smoke")))
+          and ((.verify | index("deploy") | not) or (.deploy_check_cmd | length > 0))
+          and ((.verify | index("smoke") | not) or (.smoke_cmd | length > 0))
+          and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
+        || { printf 'git_policy merge needs a valid merge_policy in .ai-harness/harness.json: require (one or more of human_approval, remote_ci, no_conflict, not_draft), method squash|merge|rebase, verify (target_ci, deploy, smoke) with deploy_check_cmd or smoke_cmd for deploy or smoke. Rerun /harness-init to set it\n' >&2; exit 2; }
+      # 병합할 수 있는 기준 브랜치. manifest에 없으면 origin의 기본 브랜치로 정하고, 둘 다 없으면 시작하지 않는다.
+      if [[ "$(jq -r .base <<<"$merge_policy")" == "" ]]; then
+        base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+        [[ -n "$base" ]] || { printf 'git_policy merge: set merge_policy.base or the origin default branch (git remote set-head origin --auto) so the runner knows which branch it may merge into\n' >&2; exit 2; }
+        merge_policy="$(jq -c --arg b "${base#origin/}" '.base = $b' <<<"$merge_policy")"
+      fi
+      [[ "$(jq -r .method <<<"$merge_policy")" != rebase || "$(git -C "$REPO" config --get remote.origin.url || true)" != *bitbucket.org* ]] \
+        || { printf 'git_policy merge: method rebase is not supported for Bitbucket; choose squash or merge in merge_policy\n' >&2; exit 2; }
     fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
     printf '%s\n' "$RUN_ID" >"$(latest_file "$WORKFLOW")"
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
-      --arg git "$git_policy" \
+      --arg git "$git_policy" --argjson merge "$merge_policy" --arg unattended "${HM_INTERNAL_SESSION:-}" \
       --arg appr "$(jq -r '.approval // "human"' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf human)" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
-        policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:(($git == "pr-only" or $git == "direct") and $wf != "review")},
+        policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
+          merge:$merge, unattended:($unattended == "1")},
         status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
   watch)

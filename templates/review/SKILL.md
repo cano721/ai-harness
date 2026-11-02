@@ -18,7 +18,7 @@ When the change alters what users see or operate and the graph has a `ui_review`
 
 Perform the initial review read-only. Report the workflow-required findings with evidence; do not report completion while a blocking finding remains. Modify files only in an authorized repair the graph routes to.
 
-Committing and pushing a repair follows `git_policy` in `.ai-harness/harness.json`: `pr-only` — commit and push the reviewed change's work branch with a normal push; `direct` — commit and push the current branch with a normal push; missing or any other value — do not commit or push unless separately authorized. Do not open a new PR from a review, and never merge, force-push, or change project policy without separate authorization. The repair limit is `limits.max_repair_attempts` in the graph.
+Committing and pushing a repair follows `git_policy` in `.ai-harness/harness.json`: `pr-only` or `merge` — commit and push the reviewed change's work branch with a normal push (a review never merges, even under `merge`); `direct` — commit and push the current branch with a normal push; missing or any other value — do not commit or push unless separately authorized. Do not open a new PR from a review, and never merge, force-push, or change project policy without separate authorization. The repair limit is `limits.max_repair_attempts` in the graph.
 
 ## Graph runner
 

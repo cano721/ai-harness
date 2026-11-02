@@ -66,6 +66,23 @@ if jq -e '.nodes | has("ui_review")' "$graph_path" >/dev/null; then
   }
 fi
 
+# merge는 선택 노드다(git_policy merge). 있으면 원격 CI 통과 뒤에만 닿고, 병합 후 검증을 건너뛰는 경로가 없어야 한다.
+if jq -e '.nodes | has("merge")' "$graph_path" >/dev/null; then
+  has_transition remote_ci merge remote_ci_passed_and_merge_policy
+  has_transition merge post_merge_verify merged
+  has_transition merge user_decision merge_blocked
+  has_transition post_merge_verify "done" post_merge_verified
+  has_transition post_merge_verify user_decision post_merge_failed_or_unverified
+  jq -e '.nodes.merge.write == false and .nodes.post_merge_verify.write == false
+    and (.invariants | any(startswith("Only the merge node merges")))
+    and ([.transitions[] | select(.to == "merge") | .from] == ["remote_ci"])
+    and ([.transitions[] | select(.from == "merge") | .to] | sort == ["post_merge_verify", "user_decision"])
+    and ([.transitions[] | select(.to == "post_merge_verify") | .from] == ["merge"])' "$graph_path" >/dev/null || {
+    printf 'invalid merge node\n' >&2
+    exit 1
+  }
+fi
+
 jq -e '
   (.nodes.approval.write == false)
   and (.nodes.regression.write == true)

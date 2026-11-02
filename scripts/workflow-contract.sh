@@ -62,7 +62,7 @@ if [[ -f "$graph" ]]; then
 fi
 
 # ── git 정책 ─────────────────────────────────────────────────────────────────
-# 에이전트의 커밋·push·PR은 manifest git_policy가 정한다. pr-only·direct만 허용, 그 밖(미설정 포함)은 별도 허가가 필요하다.
+# 에이전트의 커밋·push·PR은 manifest git_policy가 정한다. pr-only·direct·merge만 허용, 그 밖(미설정 포함)은 별도 허가가 필요하다.
 manifest="$root/.ai-harness/harness.json"
 git_policy=""
 [[ -f "$manifest" ]] && git_policy="$(jq -r '.git_policy // ""' "$manifest" 2>/dev/null || true)"
@@ -115,7 +115,7 @@ for body in ${bodies[@]+"${bodies[@]}"}; do
     [[ -f "$a" ]] || continue
     if grep -q 'git_policy' "$a"; then
       case "$git_policy" in
-        pr-only|direct) ;;
+        pr-only|direct|merge) ;;
         *) forbid="git_policy가 '${git_policy:-미설정}'이라 어댑터($(rel "$a"))가 에이전트의 PR 생성을 허용하지 않는다 — PR 단계를 사용자 승인 조건으로 두거나 git_policy를 pr-only로 바꾼다" ;;
       esac
       break

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# workflow-driver 테스트용 가짜 curl. Bitbucket Cloud API(api.bitbucket.org)만 흉내 낸다. 작업 디렉터리는 저장소다.
+set -euo pipefail
+method=GET url=""
+while (($#)); do
+  case "$1" in
+    -X) method="$2"; shift 2 ;;
+    -K|-H|-d|--max-time) shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+cfg="$(cat)"
+[[ "$cfg" == 'user = "'*':'*'"' ]] || { echo "credentials not passed on stdin" >&2; exit 2; }
+printf 'curl %s %s\n' "$method" "${url#https://api.bitbucket.org/2.0/repositories/}" >>"$FAKE_LOG"
+scenario="${FAKE_SCENARIO:-ok}"
+case "$method $url" in
+  "POST "*/merge) touch "$FAKE_LOG.merged"; echo '{}' ;;
+  *"/diffstat"*) echo '{"values":[{"status":"modified"}]}' ;;
+  *"/statuses"*) echo '{"values":[{"state":"SUCCESSFUL"}]}' ;;
+  *"/pullrequests/"*)
+    participated=2999-01-01T00:00:00Z
+    [[ "$scenario" != bb_stale ]] || participated=2000-01-01T00:00:00Z
+    merged=no; [[ -f "$FAKE_LOG.merged" ]] && merged=yes
+    jq -n --arg h "$(git rev-parse HEAD | cut -c1-12)" --arg p "$participated" --arg m "$merged" '{
+      state: (if $m == "yes" then "MERGED" else "OPEN" end), draft: false, updated_on: "2026-10-30T03:00:00.123456+00:00",
+      author: {uuid: "{me}"}, source: {commit: {hash: $h}, branch: {name: "feat/add-feature"}}, destination: {branch: {name: "main"}},
+      participants: [{user: {uuid: "{alice}", nickname: "alice"}, approved: true, state: "approved", participated_on: $p}],
+      merge_commit: (if $m == "yes" then {hash: "111111111111"} else null end)}' ;;
+  *) echo "unexpected request: $method $url" >&2; exit 22 ;;
+esac
