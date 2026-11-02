@@ -21,6 +21,7 @@
 #     merge_policy.require 조건(사람 승인·원격 CI·충돌 없음·draft 아님)을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
 #     병합 뒤 post_merge_verify가 merge_policy.verify(타깃 CI·배포 확인 명령·스모크 명령)를 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
+#     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
@@ -35,6 +36,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options
 
   start   --request "<요청>" | --request-file <file>   계획 노드를 실행하고 승인 대기에서 멈춘다
           [--check "<검증 명령>"]...                    Brief(review는 수리 범위)가 제안한 검증에 더할 명령
+          [--monitor-error <file>]                      고치는 모니터링 에러(/autofix candidates의 한 줄). merge_policy.verify의 monitor가 병합 뒤 재발 추적에 올린다
   revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
   resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
   approve                                               터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
@@ -61,6 +63,7 @@ REQUEST=""
 FEEDBACK=""
 WORKFLOW=""
 CLI_CHECKS=()
+MONITOR_ERROR=""
 while (($#)); do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || usage; REPO="$2"; shift 2 ;;
@@ -71,6 +74,7 @@ while (($#)); do
     --request-file) [[ $# -ge 2 && -f "$2" ]] || usage; REQUEST="$(<"$2")"; shift 2 ;;
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
+    --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
     -h|--help) usage ;;
     *) printf 'unknown option: %s\n' "$1" >&2; usage ;;
   esac
@@ -849,13 +853,13 @@ rollback_hint() { # commit base
 # post_merge_verify: merge_policy.verify를 순서대로(타깃 CI → 배포 확인 → 스모크) 확인한다. 끝난 단계는 resume에서 다시 하지 않는다.
 # 실패해도 되돌리지 않는다. 되돌릴지는 사람이 정한다.
 post_merge_verify() {
-  local commit base step label out status rc fail="" cmd waited timeout reported
+  local commit base step label out status rc fail="" hint="" cmd waited timeout reported af project
   commit="$(state '.merge.commit // ""')"
   base="$(state '.merge.base // ""')"
   [[ -n "$commit" ]] || fail="the host did not report a merge commit, so nothing can be verified against it"
   for step in $(jq -r '.policy.merge.verify[]' "$STATE"); do
     [[ -z "$fail" ]] || break
-    [[ "$(jq -r --arg s "$step" '.post_merge[$s].status // ""' "$STATE")" != passed ]] || continue
+    ! [[ "$(jq -r --arg s "$step" '.post_merge[$s].status // ""' "$STATE")" =~ ^(passed|tracked|skipped)$ ]] || continue
     case "$step" in
       target_ci)
         label="post-merge-ci"
@@ -913,10 +917,34 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
             fail="the smoke check failed twice after the merge (exit $rc): $cmd"
           fi
         fi ;;
+      monitor)
+        # 재발은 배포 뒤 수 시간~14일을 지켜봐야 알 수 있다. /autofix의 정기 검증이 판정하도록 PR을 추적에 올리는 데까지가 이 단계다.
+        if [[ "$(state '.monitor_error // null')" == null ]]; then
+          state_set '.post_merge.monitor = {status: "skipped", note: "no monitoring error was given to this run (start --monitor-error)", at: $t}' --arg t "$(now_utc)"
+          continue
+        fi
+        project="$(jq -r '.project_id // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+        af="${HM_PLUGIN_ROOT:-$(cat "${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/bin/plugin-root" 2>/dev/null || true)}/scripts/autofix-auto.sh"
+        rc=0
+        if [[ -n "$project" && -f "$af" ]]; then
+          bash "$af" track --project "$project" --candidate "$(jq -c '.monitor_error' "$STATE")" --pr "$(state .publish.pr_url)" \
+            >"$RUN/post-merge-monitor.log" 2>&1 </dev/null || rc=$?
+        else
+          rc=127
+          printf 'autofix-auto.sh not found (set HM_PLUGIN_ROOT or install the schedule with /harness-init) or project_id missing\n' >"$RUN/post-merge-monitor.log"
+        fi
+        if ((rc == 0)); then
+          state_set '.post_merge.monitor = {status: "tracked", signature: .monitor_error.signature, note: ("recurrence of " + .monitor_error.signature + " is watched by /autofix; /autofix status shows resolved or regressed"), at: $t}' --arg t "$(now_utc)"
+        else
+          state_set '.post_merge.monitor = {status: "failed", exit: $rc, tail: $tail, at: $t}' --argjson rc "$rc" --arg tail "$(tail -n 20 "$RUN/post-merge-monitor.log")" --arg t "$(now_utc)"
+          fail="the monitoring error could not be registered for recurrence tracking (exit $rc, see $RUN/post-merge-monitor.log)"
+          hint="the merge itself is fine and was not reverted. Register the error by hand: autofix-auto.sh track --project ${project:-<project_id>} --candidate '$(jq -c '.monitor_error' "$STATE")' --pr $(state .publish.pr_url)"
+        fi ;;
     esac
   done
   if [[ -n "$fail" ]]; then
-    state_set '.findings = [$f, $r] | .post_merge.failed = $f' --arg f "$fail" --arg r "$(rollback_hint "$commit" "$base")"
+    [[ -n "$hint" ]] || hint="$(rollback_hint "$commit" "$base")"
+    state_set '.findings = [$f, $r] | .post_merge.failed = $f' --arg f "$fail" --arg r "$hint"
     go post_merge_verify "$(edge_when post_merge_verify user_decision)"
     return
   fi
@@ -980,7 +1008,7 @@ execute() {
           fi
           finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
           elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
-            + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status] | join(", ")) else "" end)
+            + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status + (if .value.note then " (" + .value.note + ")" else "" end)] | join(", ")) else "" end)
           elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
@@ -1362,32 +1390,43 @@ case "$CMD" in
           base: (.base // "")}' "$REPO/.ai-harness/harness.json")"
       jq -e '(.require | type == "array" and length > 0 and all(.[]; IN("human_approval", "remote_ci", "no_conflict", "not_draft")))
           and (.min_approvals | type == "number" and . >= 1) and (.method | IN("squash", "merge", "rebase"))
-          and (.verify | type == "array" and all(.[]; IN("target_ci", "deploy", "smoke")))
+          and (.verify | type == "array" and all(.[]; IN("target_ci", "deploy", "smoke", "monitor")))
           and ((.verify | index("deploy") | not) or (.deploy_check_cmd | length > 0))
           and ((.verify | index("smoke") | not) or (.smoke_cmd | length > 0))
           and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
-        || { printf 'git_policy merge needs a valid merge_policy in .ai-harness/harness.json: require (one or more of human_approval, remote_ci, no_conflict, not_draft), method squash|merge|rebase, verify (target_ci, deploy, smoke) with deploy_check_cmd or smoke_cmd for deploy or smoke. Rerun /harness-init to set it\n' >&2; exit 2; }
+        || { printf 'git_policy merge needs a valid merge_policy in .ai-harness/harness.json: require (one or more of human_approval, remote_ci, no_conflict, not_draft), method squash|merge|rebase, verify (target_ci, deploy, smoke, monitor) with deploy_check_cmd or smoke_cmd for deploy or smoke. Rerun /harness-init to set it\n' >&2; exit 2; }
       # 병합할 수 있는 기준 브랜치. manifest에 없으면 origin의 기본 브랜치로 정하고, 둘 다 없으면 시작하지 않는다.
       if [[ "$(jq -r .base <<<"$merge_policy")" == "" ]]; then
         base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
         [[ -n "$base" ]] || { printf 'git_policy merge: set merge_policy.base or the origin default branch (git remote set-head origin --auto) so the runner knows which branch it may merge into\n' >&2; exit 2; }
         merge_policy="$(jq -c --arg b "${base#origin/}" '.base = $b' <<<"$merge_policy")"
       fi
+      # 검증 순서는 고정이다: 병합 커밋의 CI → 배포 → 스모크 → 재발 추적 등록.
+      merge_policy="$(jq -c '.verify |= [("target_ci", "deploy", "smoke", "monitor") as $s | select(index($s)) | $s]' <<<"$merge_policy")"
+      if jq -e '.verify | index("monitor")' <<<"$merge_policy" >/dev/null; then
+        jq -e '(.monitor.provider | type == "string") and (.project_id | type == "string" and length > 0)' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1 \
+          || { printf 'merge_policy.verify monitor needs the monitor settings (/autofix setup) and project_id in .ai-harness/harness.json\n' >&2; exit 2; }
+      fi
       [[ "$(jq -r .method <<<"$merge_policy")" != rebase || "$(git -C "$REPO" config --get remote.origin.url || true)" != *bitbucket.org* ]] \
         || { printf 'git_policy merge: method rebase is not supported for Bitbucket; choose squash or merge in merge_policy\n' >&2; exit 2; }
+    fi
+    monitor_error=null
+    if [[ -n "$MONITOR_ERROR" ]]; then
+      monitor_error="$(jq -c 'select(type == "object" and (.signature | type == "string") and (.signature | length > 0))' <<<"$MONITOR_ERROR" 2>/dev/null || true)"
+      [[ -n "$monitor_error" ]] || { printf -- '--monitor-error needs one monitoring error as a JSON object with a signature (a line of /autofix candidates)\n' >&2; exit 2; }
     fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
     printf '%s\n' "$RUN_ID" >"$(latest_file "$WORKFLOW")"
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
-      --arg git "$git_policy" --argjson merge "$merge_policy" --arg unattended "${HM_INTERNAL_SESSION:-}" \
+      --arg git "$git_policy" --argjson merge "$merge_policy" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
       --arg appr "$(jq -r '.approval // "human"' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf human)" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
         policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
           merge:$merge, unattended:($unattended == "1")},
-        status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
+        monitor_error:$mon, status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
   watch)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }

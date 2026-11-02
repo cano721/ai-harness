@@ -1431,6 +1431,45 @@ assert_contains "$DRIVER_OUT" "was not observed as deployed within 30 minutes" "
 merge_run pm_smoke_fail '{"require":["human_approval"],"verify":["smoke"],"smoke_cmd":"false","base":"main"}'
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a smoke check that fails twice goes to a person"
 assert_contains "$DRIVER_OUT" "the smoke check failed twice" "the smoke failure is named"
+# 모니터링 재발 확인: 관찰 창이 길어 러너는 고친 에러를 /autofix 추적에 올리는 데까지 한다.
+monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_id가 있는 저장소에서 verify monitor로 실행한다
+  local scenario="$1"
+  shift
+  new_driver_repo "$scenario"
+  with_policy merge auto
+  as_host_repo github.com/acme/app
+  jq '.project_id = "acme-app" | .monitor = {provider: "command", command: "bin/errors"}
+    | .merge_policy = {require: ["human_approval"], verify: ["monitor", "target_ci"], base: "main"}' \
+    "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" commit -qam "merge policy"
+  driver start --runtime codex --request "fix the crash" "$@"
+}
+mkdir -p "$DRIVER_TMP/plugin/scripts"
+cat >"$DRIVER_TMP/plugin/scripts/autofix-auto.sh" <<'EOF'
+printf 'autofix %s\n' "$*" >>"$FAKE_LOG"
+[[ "$FAKE_SCENARIO" != pm_monitor_fail ]] || { echo "state lock failed" >&2; exit 1; }
+EOF
+printf '%s\n' '{"signature":"sig-42","title":"NullPointerException in Checkout","count":12,"meta":{"id":"42"}}' >"$DRIVER_TMP/monitor-error.json"
+export HM_PLUGIN_ROOT="$DRIVER_TMP/plugin"
+monitor_run pm_monitor --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "the monitor step finishes the run once the error is tracked"
+assert_contains "$(<"$FAKE_LOG")" "autofix track --project acme-app --candidate {\"signature\":\"sig-42\"" "the fixed error is registered with /autofix for the merged pull request"
+assert_contains "$(<"$FAKE_LOG")" "--pr https://github.com/acme/app/pull/7" "the tracked pull request is the merged one"
+assert_eq "target_ci,monitor" "$(run_state '.post_merge | keys_unsorted | join(",")')" "post-merge checks run in the fixed order whatever order the manifest lists"
+assert_contains "$DRIVER_OUT" "monitor tracked (recurrence of sig-42 is watched by /autofix" "done says the recurrence check continues in /autofix"
+monitor_run pm_monitor_none
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^autofix ' "$FAKE_LOG" || true)" "a run without a monitoring error has nothing to track"
+assert_contains "$DRIVER_OUT" "monitor skipped (no monitoring error was given" "the skip is reported, not hidden"
+monitor_run pm_monitor_fail --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed registration goes to a person"
+assert_contains "$(run_state '.findings[1]')" "Register the error by hand: autofix-auto.sh track --project acme-app" "the person gets the track command, not rollback advice"
+unset HM_PLUGIN_ROOT
+printf '%s\n' '{"title":"no signature"}' >"$DRIVER_TMP/bad-error.json"
+monitor_run pm_monitor_bad --monitor-error "$DRIVER_TMP/bad-error.json"
+assert_eq "2" "$DRIVER_RC" "a monitoring error without a signature does not start"
+merge_run pm_monitor_noconfig '{"require":["human_approval"],"verify":["monitor"],"base":"main"}'
+assert_eq "2" "$DRIVER_RC" "verify monitor without the monitor settings does not start"
+assert_contains "$DRIVER_OUT" "needs the monitor settings (/autofix setup)" "the error points at /autofix setup"
 # merge 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝낸다.
 new_driver_repo merge_oldgraph
 with_policy merge auto
