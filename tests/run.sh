@@ -1866,7 +1866,7 @@ for POLICY_FILE in fe-designer.md fe-implementer.md fe-architect.md; do
 done
 if grep -n '시안은 기준이 아니다' "$ROOT/templates/design-audit/SKILL.md"; then fail "design-audit still says the mockup is no reference"; fi
 assert_contains "$DESIGNER" "구조·내용 순서·흐름의 기준은 시안이다" "fe-designer takes structure from the mockup"
-assert_contains "$DESIGNER" "토큰 초안도 후보다" "fe-designer keeps a token draft out of the rule document"
+assert_contains "$DESIGNER" "새 토큰 제안도 후보다" "fe-designer keeps new token proposals out of the rule document"
 assert_contains "$IMPLEMENTER" "화면당 한 번(최대" "fe-implementer asks about new values once per screen"
 assert_contains "$IMPLEMENTER" "PR의 \"결정 사항\"" "fe-implementer records unattended defaults in the PR"
 assert_contains "$IMPLEMENTER" "제품 동작으로 성립하는 쪽" "fe-implementer still settles conflicting mockups by product behavior"
@@ -1899,7 +1899,7 @@ pass "ui review checklist covers motion and WCAG 2.2 numbers"
 # 네이티브 앱: harness-init이 RN·Flutter·iOS·Android를 stack native로 감지하고, native-ui가 ui-review 계약을 사본으로 공유한다. (#186)
 # 감지는 harness-init 문서 규칙(에이전트가 실측해 판단)이라 실행 코드가 없다. 판정 근거가 되는 문구를 고정한다.
 for NATIVE_SIGNAL in "**네이티브 앱 감지**" "\`react-native\` 또는 \`expo\`" "\`pubspec.yaml\`의 \`flutter:\`" "\`*.xcodeproj\`·\`*.xcworkspace\`·\`Podfile\`" \
-  "\`com.android.application\` 또는 \`com.android.library\` 플러그인" "androidx.compose" "org.springframework.boot" "React Native·Expo 저장소는 웹 프론트(\`frontend\`)나 웹 UI(\`ui\`)로 잡지 않는다" \
+  "\`com.android.application\` 플러그인, 또는 화면을 가진 \`com.android.library\`" "화면 없는 SDK 라이브러리는 제외" "androidx.compose" "org.springframework.boot" "React Native·Expo 저장소는 웹 프론트(\`frontend\`)나 웹 UI(\`ui\`)로 잡지 않는다" \
   "\`react-native-web\`으로 웹도 내면 \`native\`와 웹 쪽 stack을 둘 다" "6-2. **네이티브 UI 검토**" "\`*/skills/native-ui\`가 있으면 \`native\`"; do
   assert_contains "$HARNESS_INIT_CONTENT" "$NATIVE_SIGNAL" "harness init native detection: $NATIVE_SIGNAL"
 done
@@ -1920,7 +1920,8 @@ for NATIVE_ITEM in "Apple Human Interface Guidelines" "Material Design 3" "2~5�
   assert_contains "$NATIVE_PLATFORMS" "$NATIVE_ITEM" "native platform reference covers: $NATIVE_ITEM"
 done
 assert_contains "$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")" "native-ui skill" "the ui_review node follows native-ui for native screens"
-assert_eq "10" "$(jq '[.artifacts[] | select(.skill == "native-ui" and .stack == "native")] | length' "$ROOT/templates/managed-files.json")" "native-ui ships five files per integration behind the native stack"
+assert_eq "12" "$(jq '[.artifacts[] | select(.skill == "native-ui" and .stack == "native")] | length' "$ROOT/templates/managed-files.json")" "native-ui ships six files per integration behind the native stack"
+assert_eq "templates/ui-review/references/checklist.md" "$(jq -r '.artifacts[] | select(.path == ".claude/skills/native-ui/references/web-checklist.md") | .source' "$ROOT/templates/managed-files.json")" "native-ui ships the shared web checklist it points to"
 assert_eq "templates/ui-review/SKILL.md" "$(jq -r '.artifacts[] | select(.path == ".claude/skills/native-ui/references/ui-review-contract.md") | .source' "$ROOT/templates/managed-files.json")" "native-ui copies the ui-review contract instead of restating it"
 NATIVE_ROOT="$TEST_TMP/native-project"
 mkdir -p "$NATIVE_ROOT/.ai-harness"

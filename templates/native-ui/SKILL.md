@@ -40,6 +40,8 @@ description: >
 | URL | 화면 경로(딥 링크가 있으면 그 주소, 없으면 진입 탭·버튼 순서) |
 | 캡처 | 시뮬레이터·에뮬레이터 스크린샷. 찍는 명령은 [플랫폼 참조](references/platforms.md) |
 | 기준 화면 | 프로젝트의 컴포넌트 카탈로그 화면·스토리북(있을 때). 없으면 같은 역할의 이웃 화면 |
+| 시안 처리 규칙의 px | pt(iOS)·dp(Android). 허용 오차 수치는 그대로, 터치 영역 하한(24px)은 이 Skill 체크리스트 4번(44pt·48dp)으로 읽는다 |
+| 계약 안의 `references/checklist.md` | 이 Skill의 [웹 공통 체크리스트](references/web-checklist.md)와 [네이티브 체크리스트](references/checklist.md) |
 | 키보드로 완주 | 스크린리더(VoiceOver·TalkBack)로 완주. 외부 키보드·태블릿을 지원하면 키보드도 |
 
 ## 증거

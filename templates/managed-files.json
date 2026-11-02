@@ -497,6 +497,15 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/native-ui/references/web-checklist.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/checklist.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/native-ui/SKILL.md",
       "level": "standard",
       "integration": "claude",
@@ -539,6 +548,15 @@
       "stack": "native",
       "skill": "native-ui",
       "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/native-ui/references/web-checklist.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "native",
+      "skill": "native-ui",
+      "source": "templates/ui-review/references/checklist.md",
       "mode": "copy"
     },
     {

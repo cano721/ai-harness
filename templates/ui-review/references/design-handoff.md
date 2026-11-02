@@ -14,7 +14,7 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 
 | Property | Within tolerance when |
 |---|---|
-| Spacing, radius | ±2px, or less than half the gap to the neighboring step |
+| Spacing, radius | ±2px or less than half the gap to the neighboring step, whichever is smaller |
 | Font size | ±1px |
 | Color | ΔE2000 under 3 |
 | Duration | ±20ms |
@@ -28,6 +28,8 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 | Concept mismatch | A structure that differs from how sibling screens do the same job | Build it as the mockup shows, and record it as pending a rule decision |
 | Local defect | Misaligned element, inconsistent padding within one card, a typo | Fix silently and list it |
 
+A mockup value that breaks the type or emphasis hierarchy (a secondary link set at body size) is a value difference, not a concept mismatch: ask, with the design-system rule as the recommended default; unattended, follow the rule. Only layout structure, content order, and flow count as concept mismatches.
+
 ### Question budget
 
 - New values not in the tokens, and patterns the existing components cannot express, are asked about once per screen, at most three to five questions, each with a recommended default.
@@ -35,7 +37,7 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 
 ### Accessibility violations
 
-Insufficient contrast (WCAG 2.2 SC 1.4.3, 1.4.11), meaning carried by color alone (SC 1.4.1), and targets smaller than 24×24 CSS px (SC 2.5.8) get a strong warning with a concrete fix. In an unattended run, apply the fix and report the mockup's original value next to it.
+Insufficient contrast (WCAG 2.2 SC 1.4.3, 1.4.11), meaning carried by color alone (SC 1.4.1), and targets smaller than 24×24 CSS px without 24px of spacing around them (SC 2.5.8) get a strong warning with a concrete fix. In an unattended run, apply the fix and report the mockup's original value next to it.
 
 ### Structure and flow
 

@@ -28,6 +28,8 @@ Values within tolerance are the mockup approximating a token. Use the token sile
 | Concept mismatch | A structure that differs from how sibling screens do the same job | Build it as the mockup shows, and record it as pending a rule decision |
 | Local defect | Misaligned element, inconsistent padding within one card, a typo | Fix silently and list it |
 
+A mockup value that breaks the type or emphasis hierarchy (a secondary link set at body size) is a value difference, not a concept mismatch: ask, with the design-system rule as the recommended default; unattended, follow the rule. Only layout structure, content order, and flow count as concept mismatches.
+
 ### Question budget
 
 - New values not in the tokens, and patterns the existing components cannot express, are asked about once per screen, at most three to five questions, each with a recommended default.
