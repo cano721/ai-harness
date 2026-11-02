@@ -6,7 +6,9 @@ Default path: `docs/design-system.md`. Use an existing path instead when the pro
 
 ### Required sections — the design-audit input contract
 
-`design-audit` scores against these sections, so their headings are fixed. Write each heading text exactly as below, in this order. When the project's docs are in another language, keep the heading and append a translation in parentheses (`## 레이아웃 (Layout)`); translate only the body.
+`design-audit` scores against these sections, so their headings are fixed. Write each heading text exactly as below, in this order. When the project's docs are in another language, keep the heading and append a translation in parentheses (`## 레이아웃 (Layout)`); translate only the body. `design-audit` ignores the parenthesized part when matching.
+
+Widths, breakpoints, and viewports in the document are referenced by token or constant name; their values live in the token file, like every other value.
 
 | # | Heading | design-audit axis | Must contain |
 |---|---|---|---|
