@@ -77,7 +77,8 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 1. `$ROOT/scripts/autofix-auto.sh candidates --project <id>`로 후보를 보여 준다(프로젝트 ID는 manifest `project_id`). 후보가 없으면 `monitor-fetch.sh list` 전체를 보여 주고 끝낸다.
 2. 사용자가 고른 에러의 상세를 `$ROOT/scripts/monitor-fetch.sh detail --root . --meta '<meta>'`로 가져온다.
 3. 아래 **수정 절차** 1~5를 이 세션에서 하되, 승인 게이트는 프로젝트 정책(`approval`)대로 사람에게 묻는다.
-4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다.
+4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 기준 브랜치 manifest에 `monitor`가 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
+   - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 manifest가 `git_policy:"merge"`에 `merge_policy.verify`의 `monitor`를 골랐으면, 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
 
 ## 수정 절차 (무인·수동 공통)
 

@@ -61,8 +61,8 @@ $ROOT/scripts/existing-assets.sh scan --root . --templates "$ROOT/templates"
    - **병합 조건**(다중 선택, `require`): `사람 승인`(`human_approval` — PR 작성자·봇이 아닌, 쓰기 권한이 있는 리뷰어의 승인이 지금 head에 `min_approvals`개 이상, 변경 요청이 있으면 막힘. GitHub는 리뷰의 커밋으로, Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만 센다. 승인 수도 묻는다, 기본 1) / `원격 CI 통과`(`remote_ci` — "CI 없음"은 통과가 아니다) / `충돌 없음`(`no_conflict`) / `draft 아님`(`not_draft`). 하나도 고르지 않으면 받지 않는다. 8번 승인 게이트가 `정책 승인`(`auto`)인데 `사람 승인`을 빼면 "사람이 한 번도 보지 않은 변경이 병합된다"고 알리고 다시 확인받는다.
    - **병합 방식**(`method`): `squash` / `merge` / `rebase`(Bitbucket은 지원하지 않는다). §1에서 기준 브랜치의 머지 이력(머지 커밋 제목·부모 수)을 보고 저장소 관례를 기본값으로 제안한다.
    - **병합 대상 브랜치**(`base`): 러너가 병합할 수 있는 기준 브랜치. 실측한 기준 브랜치(`develop` 등)를 제안해 확정받는다. 비우면 origin 기본 브랜치이고, 둘 다 없으면 러너가 시작하지 않는다. 다른 브랜치를 향한 PR·다른 저장소의 PR·이 실행이 push하지 않은 브랜치의 PR은 병합하지 않는다.
-   - **병합 후 검증**(다중 선택, `verify`, 순서 고정 target_ci → deploy → smoke): `타깃 브랜치 CI`(`target_ci` — 병합 커밋에 대한 원격 CI. 권장 기본) / `배포 반영 확인`(`deploy` — 프로젝트가 주는 `deploy_check_cmd`가 0으로 끝나면 배포됨. 기준 브랜치에 커밋이 있다는 것은 배포가 아니므로 배포 상태 API나 health endpoint의 버전·커밋을 `$HM_MERGE_COMMIT`과 비교하는 명령이어야 한다. `deploy_timeout_minutes`(기본 60) 안에 관측되지 않으면 사람에게 넘긴다. 자동 배포가 없는 저장소면 이 선택지를 보이지 않는다) / `스모크 명령`(`smoke` — `smoke_cmd`, 실패하면 한 번 더 보고 그래도 실패면 사람에게. `deploy` 없이 고르면 배포 전 코드를 볼 수 있다고 알린다). 명령은 실측으로 제안하되 사람이 확정한다. 운영 자격증명이 필요한 명령은 저장소에 비밀을 쓰지 않고 환경변수를 읽게 한다.
-   - 모니터링 재발 확인은 아직 선택지에 없다(#172의 monitor 어댑터 이후).
+   - **병합 후 검증**(다중 선택, `verify`, 순서 고정 target_ci → deploy → smoke → monitor): `타깃 브랜치 CI`(`target_ci` — 병합 커밋에 대한 원격 CI. 권장 기본) / `배포 반영 확인`(`deploy` — 프로젝트가 주는 `deploy_check_cmd`가 0으로 끝나면 배포됨. 기준 브랜치에 커밋이 있다는 것은 배포가 아니므로 배포 상태 API나 health endpoint의 버전·커밋을 `$HM_MERGE_COMMIT`과 비교하는 명령이어야 한다. `deploy_timeout_minutes`(기본 60) 안에 관측되지 않으면 사람에게 넘긴다. 자동 배포가 없는 저장소면 이 선택지를 보이지 않는다) / `스모크 명령`(`smoke` — `smoke_cmd`, 실패하면 한 번 더 보고 그래도 실패면 사람에게. `deploy` 없이 고르면 배포 전 코드를 볼 수 있다고 알린다). 명령은 실측으로 제안하되 사람이 확정한다. 운영 자격증명이 필요한 명령은 저장소에 비밀을 쓰지 않고 환경변수를 읽게 한다.
+   - **모니터링 재발 확인**(`monitor`, 위 다중 선택에 함께): manifest에 `monitor` 설정(`/autofix setup`)과 `project_id`가 있을 때만 보인다. 재발은 배포 뒤 수 시간~14일을 지켜봐야 알 수 있어 러너 안에서 끝나지 않는다 — 러너는 이 실행이 고친 운영 에러(`start --monitor-error <파일>`, `/autofix candidates`의 한 줄)를 병합된 PR과 함께 `/autofix` 추적에 올리는 데까지 하고, 해결·재발 판정은 `/autofix`의 정기 검증(`HM_AUTOFIX_AUTO=1`과 `HM_AUTOFIX_REPOS`, 또는 `/autofix verify`)이 한다. 고친 에러가 없는 실행(대부분의 기능 개발)은 이 단계를 건너뛴다고 알린다.
    - 무인 실행(자동 harvest·sync·`HM_INTERNAL_SESSION=1`)은 어떤 설정이어도 병합하지 않는다. 병합 후 검증이 실패해도 되돌리지 않고 되돌리는 방법을 안내해 사람에게 넘긴다.
 4. **도구 통합**: `Codex` / `Claude` / `둘 다` / `통합 파일 없음`. standard의 Codex Skill은 `Codex` 또는 `둘 다`일 때만 `.agents/skills/`에 생성한다. Claude용 `.claude/`와 `CLAUDE.md`는 `Claude` 또는 `둘 다`일 때만 생성한다.
 5. **편집 가드**: 켜기 / 끄기. 가드는 규모와 독립적인 선택 옵션이며, 소스 수정 전에 관련 하네스 문서를 읽었는지 확인한다. transcript를 읽을 수 없으면 fail-open한다.
@@ -73,7 +73,7 @@ $ROOT/scripts/existing-assets.sh scan --root . --templates "$ROOT/templates"
 8. **승인 게이트** (standard일 때): `사람 승인`(manifest `approval:"human"`, 기본 — Brief를 보여 주고 사람이 승인할 때까지 파일을 수정하지 않는다) / `정책 승인`(`approval:"auto"` — Brief를 산출물(러너 실행 디렉터리·PR 본문)로 남기고 승인 노드를 통과한다. 위임 세션·상위 오케스트레이터가 사람 없이 PR까지 가는 운영용). auto에서는 Brief가 열린 질문 대신 추천안을 골라 근거와 함께 `결정 사항`으로 남기고(러너 실행 디렉터리 `brief.md`·PR 본문 — 사람은 병합 전에 뒤집을 수 있다), 사람만 정할 수 있는 것(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포 같은 되돌리기 어려운 선택, 외부 시스템 쓰기)이 있을 때만 승인에서 멈춘다. 그래프가 `user_decision`으로 보내는 수리 한도 초과·제품 판단, 병합·force push 같은 비가역 작업도 사람에게 간다. `PR 필수`와 함께 고르면 "이슈를 맡기면 PR까지, 병합만 사람" 흐름이 된다.
 9. **이슈 상태 전환** (standard일 때): `시작 시 진행 중`(manifest `issue_policy:"in-progress-on-start"` — 이슈 키·URL로 `implement-feature`·`fix-bug`를 시작하면 브랜치·worktree 준비와 탐색 전에 그 이슈를 진행 중으로 옮긴다. 상태 이름이 아니라 대상 상태 분류가 진행 중인 전환을 고르고, 이미 진행 중이면 그대로, 완료·종료면 다시 열지 않고 사람에게 묻는다) / `건드리지 않음`(필드 없음, 기본). §1에서 이슈 트래커를 쓰는 흔적(브랜치·커밋의 이슈 키, `/jira` 같은 이슈 도구)이 보일 때 설명에 반영한다.
 
-답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구(`pr-only`면 "에이전트는 커밋·일반 push·PR 생성까지, 병합·force push는 사람", `direct`면 "커밋·일반 push까지, force push 금지", `merge`면 "에이전트는 커밋·일반 push·PR 생성, `merge_policy` 조건이 모두 맞을 때 러너가 병합과 병합 후 검증까지. force push·기준 브랜치 직접 push 금지, 무인 실행은 병합하지 않는다"), **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 승인 게이트(8번)·git 통제 수준(3번)·병합 정책(3-1)·이슈 상태 전환(9번)은 manifest `approval`·`git_policy`·`merge_policy`·`issue_policy`에만 기록한다 — 어댑터·러너가 런타임에 manifest를 읽으므로 어댑터 본문을 정책별로 바꿔 렌더하지 않는다(정책을 바꿔도 관리 생성물 해시가 그대로다). manifest `stacks` 값은 `frontend`·`fsd`·`ui`·`native`·`frontend-team`·`design-system` 중에서 쓴다. 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도), UI 검토 계약을 생성하면 `ui`를 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 프론트 팀 구성을 고르면 `frontend-team`을(항상 `frontend`와 함께 — 역할 페르소나가 프론트 판단 Skill을 쓴다), 디자이너 역할까지 생성하면 `design-system`도 기록하고, `roles`에 developer·reviewer·test-engineer를 `source:"stack"`으로 넘긴다(§4 프론트 팀 역할 세트). 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다. 7번에서 기존 에이전트에 넘긴 슬롯은 아래 구조에서 그 integration의 페르소나 파일을 빼고, 기존 에이전트의 모델은 바꾸지 않는다.
+답에 따라 생성물 조정: 워크플로 본문의 TDD 절차 유무, test-engineer 페르소나 유무, 선택한 도구의 어댑터와 agent별 모델 설정, guard hook 유무, AGENTS.md의 Git 룰 문구(`pr-only`면 "에이전트는 커밋·일반 push·PR 생성까지, 병합·force push는 사람", `direct`면 "커밋·일반 push까지, force push 금지", `merge`면 "에이전트는 커밋·일반 push·PR 생성, `merge_policy` 조건이 모두 맞을 때 러너가 병합과 병합 후 검증까지. force push·기준 브랜치 직접 push 금지, 무인 실행은 병합하지 않는다"), **프론트 판단 Skill 생성 여부(및 FSD 포함 여부)**. 승인 게이트(8번)·git 통제 수준(3번)·병합 정책(3-1)·이슈 상태 전환(9번)은 manifest `approval`·`git_policy`·`merge_policy`·`issue_policy`에만 기록한다 — 어댑터·러너가 런타임에 manifest를 읽으므로 어댑터 본문을 정책별로 바꿔 렌더하지 않는다(정책을 바꿔도 관리 생성물 해시가 그대로다). manifest `stacks` 값은 `frontend`·`fsd`·`ui`·`native`·`frontend-team`·`design-system` 중에서 쓴다. 프론트 Skill을 생성하면 manifest의 `stacks`에 `frontend`를(FSD까지면 `fsd`도), UI 검토 계약을 생성하면 `ui`를 기록해 이후 동기화가 이 stack 게이트로 대상을 거른다. 프론트 팀 구성을 고르면 `frontend-team`을(항상 `frontend`와 함께 — 역할 페르소나가 프론트 판단 Skill을 쓴다), 디자이너 역할까지 생성하면 `design-system`도 기록하고(6-1에서 디자인 채점을 고르면 프론트 팀 구성과 무관하게 `design-system`을 기록한다), `roles`에 developer·reviewer·test-engineer를 `source:"stack"`으로 넘긴다(§4 프론트 팀 역할 세트). 모델은 사용자 인터뷰로 묻지 않고 아래 역할 기본값을 사용한다. 7번에서 기존 에이전트에 넘긴 슬롯은 아래 구조에서 그 integration의 페르소나 파일을 빼고, 기존 에이전트의 모델은 바꾸지 않는다.
 
 ## 3. 생성 구조 (인터뷰 답 기준으로 가감)
 
@@ -190,7 +190,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
   - Claude 페르소나는 `templates/frontend-team/personas/<role>.md`를 `.claude/agents/`에 **그대로 복사**하는 관리 생성물이다(본문 고정 — 다음 sync가 갱신한다). 프로젝트 고유 사실은 본문에 쓰지 않고 `.ai-harness/docs/frontend.md`에 채운다. Codex를 선택했으면 `.codex/agents/<role>.toml`을 만들되 본문을 복사하지 않고, `developer_instructions`에 "`.claude/agents/<role>.md`의 본문(frontmatter 아래)을 먼저 Read하고 따른다 — 담당 경계는 `.agents/skills/frontend-team/SKILL.md`"만 적는다. 본문 사본을 두면 sync가 md만 갱신해 Codex 쪽이 낡는다. `name`·`description`은 md frontmatter에서, `model`·`model_reasoning_effort`는 아래 모델 표에서(범용 역할 toml과 같이 카탈로그 밖 생성물).
   - `design-system` stack(`design-audit`)은 디자인 규칙 문서(예: `docs/design-system.md`·`DESIGN.md` — `/design-system-builder`의 필수 절을 갖추면 축 대응이 바로 잡힌다)와 **기준 화면**이 둘 다 있을 때만 켠다. 기준 화면은 실제로 열어 조작할 수 있는 컴포넌트·상태 예시다 — 스토리북이든 서버 렌더링 앱의 예시 페이지(예: `/design-system`)든 된다. 문서만 있고 기준 화면이 없으면 형제·컴포넌트 대조의 근거가 없으므로 켜지 않는다. `fe-designer` 페르소나는 `frontend-team`과 `design-system`이 **둘 다** 있을 때만 생성된다(카탈로그 `stack`이 배열이면 전부 필요) — 서버 렌더링 저장소처럼 프론트 팀 구성이 없으면 `design-audit`만 생기고, 채점은 `design-audit` Skill을 직접 호출해 쓴다. `fe-designer`가 없으면 그 칸을 `fe-implementer`가 맡는다고 라우터 스킬에 이미 적혀 있다.
   - `roles`에는 `{"developer": {"source": "stack", "stack": "frontend-team", "integrations": [<선택한 도구>], "agents": ["fe-implementer", "fe-architect"], "router": "<integration의 skills 경로>/frontend-team/SKILL.md"}}`처럼 developer(`fe-implementer`·`fe-architect`, 디자이너가 있으면 `fe-designer`도)·reviewer(`fe-architect`)·test-engineer(developer와 같은 목록)를 기록한다. 이미 생성된 범용 페르소나는 sync plan이 `orphaned`(`role_adopted`)로 올린다.
-  - `frontend.md`에 두 절을 실측으로 쓴다. `## 팀 역할`: 앱 코드 경로와 UI 패키지 경로(라우터의 "빨간 불" 범위), 역할별 끝내기 전 검증 명령(포맷·린트·테스트·빌드, UI 패키지 타입 검사·스토리북 빌드), 로컬 앱·스토리북 실행 명령과 주소, 의존성 추가 방식, 모션 토큰 이름, 프로젝트가 쓰는 역할 호칭(있으면). `## 디자인 점검`(design-system일 때, `frontend.md`가 없으면 `ui.md`에): 디자인 규칙 문서 경로, `design-audit` 다섯 축(A 골격·위계 / B 색·강조·상태 / C 컴포넌트 문법 / D 형제 정합 / E 톤·정직성)에 대응하는 문서 절, 페이지 분류와 분류별 형제 페이지 목록, 페이지·블록·컴포넌트의 소스·스토리 위치, 값의 근거 파일, 디자인 시스템 스캐폴드 도구.
+  - `frontend.md`에 두 절을 실측으로 쓴다. `## 팀 역할`: 앱 코드 경로와 UI 패키지 경로(라우터의 "빨간 불" 범위), 역할별 끝내기 전 검증 명령(포맷·린트·테스트·빌드, UI 패키지 타입 검사·스토리북 빌드), 로컬 앱·스토리북 실행 명령과 주소, 의존성 추가 방식, 모션 토큰 이름, 프로젝트가 쓰는 역할 호칭(있으면). `## 디자인 점검`(design-system일 때, `frontend.md`가 없으면 `ui.md`에 — 둘 다 없으면 `ui.md`를 이 절로 시작한다): 디자인 규칙 문서 경로, `design-audit` 다섯 축(A 골격·위계 / B 색·강조·상태 / C 컴포넌트 문법 / D 형제 정합 / E 톤·정직성)에 대응하는 문서 절, 페이지 분류와 분류별 형제 페이지 목록, 페이지·블록·컴포넌트의 소스·스토리 위치, 값의 근거 파일, 디자인 시스템 스캐폴드 도구.
   - 역할 페르소나 본문은 범용 원칙만 담는다 — 팀 고유 규칙은 `frontend.md`·`code-conventions.md`에 두면 페르소나가 Preflight에서 읽는다. 기존 팀 에이전트를 이 세트로 교체할 때(§1-1) 옮길 내용이 범용 원칙이면 이 템플릿을 고치는 PR로 올리고, 프로젝트 사실이면 `frontend.md`로 옮긴다.
 - AGENTS.md 워크플로 표에는 `/implement-feature`·`/fix-bug`·`/review`를 프로젝트 진입점으로 싣고, `/understand-change`와 `/explain-for`는 **플러그인 제공 스킬**로 구분해 표기한다 — 프로젝트 파일이 아니므로 하네스 동기화가 아니라 플러그인 설치로 제공된다는 점을 함께 적는다. 프론트 판단 Skill·UI 검토 계약을 생성했으면 프로젝트 로컬 Skill로 표에 함께 싣는다.
 - Claude 어댑터도 프로젝트 로컬 workflow·graph를 `@.ai-harness/...`로 참조한다. 러너가 있으면 Codex와 같이 `.ai-harness/workflows/workflow-driver.sh`로 실행하고, 없으면 현재 세션 흐름으로 그래프를 따른다. 사용하지 않는 도구의 디렉터리·설정 파일은 만들지 않는다.
@@ -218,7 +218,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
   "excluded": { "<relative path>": { "reason": "existing | <사용자가 뺀 이유>", "since": "YYYY-MM-DD" } } }
 ```
 
-- `git_policy`: `pr-only` | `direct` | `merge`. 그 밖의 값이나 미설정은 에이전트가 별도 허가 없이 커밋·push·PR을 하지 않는 것으로 읽는다. `merge`면 `merge_policy`가 필요하다: `{"require": ["human_approval", "remote_ci", "no_conflict", "not_draft"], "min_approvals": 1, "method": "squash" | "merge" | "rebase", "verify": ["target_ci", "deploy", "smoke"], "deploy_check_cmd": "<배포 확인 명령>", "deploy_timeout_minutes": 60, "smoke_cmd": "<스모크 명령>", "base": "<병합 대상 브랜치>"}`(3-1에서 사람이 고른 것만). `require`가 비었거나, `deploy`·`smoke`를 고르고 명령이 없으면 러너가 시작하지 않는다. 러너는 start 때의 정책을 실행 끝까지 쓴다. `approval`: `human`(기본, 미설정 포함) | `auto`. 둘 다 어댑터·러너가 런타임에 읽는다. `issue_policy`: `in-progress-on-start` | 미설정(이슈 상태를 건드리지 않음). 어댑터가 런타임에 읽는다. `monitor`: 모니터링 기반 자동 수정 설정(`/autofix setup`이 쓴다). init·sync는 이 필드를 만들거나 지우지 않고 그대로 둔다.
+- `git_policy`: `pr-only` | `direct` | `merge`. 그 밖의 값이나 미설정은 에이전트가 별도 허가 없이 커밋·push·PR을 하지 않는 것으로 읽는다. `merge`면 `merge_policy`가 필요하다: `{"require": ["human_approval", "remote_ci", "no_conflict", "not_draft"], "min_approvals": 1, "method": "squash" | "merge" | "rebase", "verify": ["target_ci", "deploy", "smoke", "monitor"], "deploy_check_cmd": "<배포 확인 명령>", "deploy_timeout_minutes": 60, "smoke_cmd": "<스모크 명령>", "base": "<병합 대상 브랜치>"}`(3-1에서 사람이 고른 것만). `require`가 비었거나, `deploy`·`smoke`를 고르고 명령이 없거나, `monitor`를 고르고 manifest `monitor`·`project_id`가 없으면 러너가 시작하지 않는다. 러너는 start 때의 정책을 실행 끝까지 쓴다. `approval`: `human`(기본, 미설정 포함) | `auto`. 둘 다 어댑터·러너가 런타임에 읽는다. `issue_policy`: `in-progress-on-start` | 미설정(이슈 상태를 건드리지 않음). 어댑터가 런타임에 읽는다. `monitor`: 모니터링 기반 자동 수정 설정(`/autofix setup`이 쓴다). init·sync는 이 필드를 만들거나 지우지 않고 그대로 둔다.
 - `roles`에 없는 슬롯은 하네스 페르소나를 생성한 것으로 본다. `roles`·`excluded`는 손으로 쓰지 않는다 — `excluded`는 `harness-sync-state.sh exclude|include`로, `roles`는 인터뷰 확정 결과를 jq로 기록한다.
 - `excluded`에 있는 경로는 plan에서 `action:"excluded"`로만 보이고 add·refresh 대상이 되지 않는다. 되돌리기는 `include`.
 
@@ -312,13 +312,14 @@ Claude Code는 시작 디렉토리의 `.claude/`를 로드하므로 workspace �
 ### 7-1. 감지
 
 ```bash
-$ROOT/scripts/workspace-scan.sh scan --root .            # 기본 depth 2
-$ROOT/scripts/workspace-scan.sh scan --root . --depth 3  # 그룹 폴더가 더 깊을 때만
+$ROOT/scripts/workspace-scan.sh scan --root . --fetch            # 기본 depth 2
+$ROOT/scripts/workspace-scan.sh scan --root . --fetch --depth 3  # 그룹 폴더가 더 깊을 때만
 ```
 
 - `.git` **디렉터리**만 멤버 후보다. 서브모듈·worktree는 `.git`이 파일이라 제외되고 `node_modules` 아래는 내려가지 않는다.
 - 멤버 `project_id`는 멤버 `harness.json`의 값을 우선하고, 없으면 origin 저장소명 → 폴더명 순으로 정한다(`project_id_for_cwd`와 같은 규칙). 출처는 `id_source`(`manifest` / `origin` / `path`)로 붙는다. `manifest`·`origin` 출처의 `project_id`가 여럿이면 한 저장소의 clone이므로 멤버 하나로 접고 나머지 경로를 `also_paths`에 둔다. `path` 출처(폴더명 폴백)는 identity가 아니라서 접지 않는다 — 무관한 `teamA/backend`·`teamB/backend`는 둘 다 멤버다. 다른 멤버 안에 중첩된 `.git`(커밋된 vendor clone 등)은 그 멤버의 일부로 보고 멤버로 잡지 않는다. 접은 뒤 멤버가 1개면 `candidate:false`다 — 같은 저장소의 worktree 폴더만 모인 곳은 workspace가 아니다.
-- 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
+- 멤버 하네스는 **원격 기준 브랜치**의 `harness.json`을 먼저 읽고, 원격에 없을 때만 작업 트리를 읽는다. 멤버 체크아웃은 각자 따로 pull 되어 자주 뒤처져 있으므로 작업 트리만 읽으면 원격에 이미 생긴 하네스를 `harness:false`로 기록한다. `--fetch`는 멤버마다 `git fetch origin`을 먼저 해 원격 추적 ref를 최신으로 맞춘다(워킹트리·브랜치는 건드리지 않고, 실패해도 계속한다) — scan·write 모두 기본으로 붙인다. 기준 브랜치는 추측하지 않는다: 기본은 멤버의 origin 기본 브랜치(`origin/HEAD`)이고, 멤버들이 기능을 통합 브랜치(`develop` 등)에 먼저 병합하고 기본 브랜치는 릴리스 때만 갱신하는 workspace면 `--base <branch>`로 지정한다. 지정한 값은 manifest `base_branch`에 남아 이후 scan이 이어 쓰고, 그 브랜치가 없는 멤버는 origin 기본 브랜치로 읽는다. 7-2 확인 때 멤버들의 브랜치 구성(git-flow 여부)을 보고 `--base`가 필요한지 사용자에게 함께 확인한다. 멤버마다 어디서 읽었는지(`manifest_ref`: `origin/<branch>` | `worktree`)와 기준 ref·뒤처진 커밋 수(`base_ref`·`behind`)가 붙으므로, 7-2 멤버 표에 `behind`가 큰 멤버를 함께 보인다(체크아웃 최신화는 Preflight ⑤ 조건에서만).
+- 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`·`harness_version`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
 
 ### 7-2. 확인
 
@@ -338,7 +339,7 @@ CLAUDE.md                  # "@AGENTS.md" — Claude 또는 둘 다를 선택했
 매니페스트는 손으로 쓰지 않고 스크립트로 기록한다. 생략한 값은 기존 manifest에서 유지되고 `harness_version`은 현재 플러그인 버전으로 찍힌다. 첫 기록은 `candidate:true`일 때만 되고 git 저장소 안에서는 거부된다. 기존 manifest의 재기록(7-6)은 멤버가 줄어도 허용된다.
 
 ```bash
-$ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
+$ROOT/scripts/workspace-scan.sh write --root . --fetch --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
 ```
 
 `managed_files`는 없다. AGENTS.md·CLAUDE.md는 보호 파일이고 그 외 관리 생성물이 없으므로 `harness-sync-state.sh`를 거치지 않는다. 계측은 workspace 세션을 `workspace_id`로 귀속한다(`project_id_for_cwd`가 `workspace.json`을 git 판정보다 먼저 본다). 멤버별 편집 귀속은 후속 버전에서 다룬다.
@@ -360,14 +361,15 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 2. 인터뷰는 첫 멤버에서 2번의 전체 항목을 묻고, 두 번째 멤버부터는 앞 멤버의 답을 기본값으로 보여 **"같음 / 다르게 답함"** 하나만 묻는다. 실측이 기본값과 모순되면(앞 멤버는 TDD인데 이 멤버는 테스트 0개 등) 2번의 경고 규칙대로 지적한다.
 3. 멤버 하나가 끝나면 생성 파일 목록과 실측 근거를 보고하고 커밋 여부를 확인한 뒤 다음 멤버로 간다. 저장소마다 브랜치·PR이 따로이므로 한 멤버를 끝내기 전에 다음 멤버 파일을 만들지 않는다.
 4. 선택이 3개를 넘으면 앞의 3개만 처리하고 나머지는 "각 저장소에서 `/harness-init`"으로 안내한다. 상위 세션 컨텍스트 보호가 목적이다. 실측 분석은 Explore 서브에이전트에 위임할 수 있지만 인터뷰는 서브에이전트가 사용자에게 질문할 수 없어 메인 세션에서 한다.
-5. 모두 끝나면 `workspace-scan.sh write --root .`로 매니페스트를 다시 기록하고(멤버가 `harness:true`와 실측 정책으로 바뀐다), AGENTS.md 멤버 표는 diff를 보여 **승인 후에만** 편집한다.
+5. 모두 끝나면 `workspace-scan.sh write --root . --fetch`로 매니페스트를 다시 기록하고(멤버가 `harness:true`와 실측 정책으로 바뀐다), AGENTS.md 멤버 표는 diff를 보여 **승인 후에만** 편집한다.
 
 ### 7-6. 기존 workspace: 동기화
 
 `scan`은 기존 `workspace.json`이 있으면 `diff`를 함께 낸다 — `added`(새 멤버 폴더), `removed`(사라진 멤버), `changed`(멤버의 하네스 유무·정책이 바뀜).
 
 - `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
-- `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
+- scan은 `--fetch`로 돌린다 — 없으면 원격 추적 ref가 낡아 `changed`를 놓친다.
+- `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root . --fetch`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
 - 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있거나 낡았으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음, 첫 줄·①③④가 "cwd의 `.claude/`만 로드하므로 해결 불가"·"경로 첫 세그먼트" 기준, ③④에 "옮길 수 없으면 워크플로를 직접 읽고 따른다"·"`general-purpose` 프롬프트에 인라인" 탈출구가 남음, ③이 새 세션을 띄우기만 하고 완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음) 같은 방식으로 diff를 제안하고 승인 후 반영한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
 - `persona_shadows`는 7-2와 같이 경고로 보인다.
 - 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.
