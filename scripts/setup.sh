@@ -352,40 +352,76 @@ command_design_list() {
   done < <(jq -c '.skills[]' "$DESIGN_CATALOG")
 }
 
+# 카탈로그 값이 git 인자·경로로 들어가기 전에 모양을 확인한다(HM_SETUP_DESIGN_CATALOG로 바꿀 수 있으므로).
+design_source_error() { # entry → 문제가 있으면 사유 출력
+  jq -r '
+    def bad_path: type != "string" or . == "" or startswith("/") or startswith("-") or (split("/") | index("..") != null);
+    if (.source.repo // "" | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) then "invalid source.repo"
+    elif (.source.ref // "" | test("^[0-9a-f]{40}$") | not) then "source.ref must be a 40-character commit"
+    elif (.source.path | if type == "object" then ((.claude // "" | bad_path) or (.codex // "" | bad_path)) else bad_path end) then "invalid source.path"
+    else empty end' <<<"$1"
+}
+
 # 원본 저장소의 고정 커밋에서 필요한 폴더와 루트 라이선스만 받는다(부분 클론 + sparse checkout).
-fetch_design_source() { # entry work_dir
+fetch_design_source() { # entry work_dir — 실패 사유는 $STATE_DIR/.err
   local entry="$1" work="$2" repo ref p patterns=('/LICENSE*' '/COPYING*' '/NOTICE*')
   repo="$(jq -r '.source.repo' <<<"$entry")"
   ref="$(jq -r '.source.ref' <<<"$entry")"
   while IFS= read -r p; do patterns+=("/$p/"); done < <(jq -r '.source.path | if type == "object" then .[] else . end' <<<"$entry")
+  : >"$STATE_DIR/.err"
   rm -rf "$work"
-  mkdir -p "$work"
-  git -C "$work" init -q
-  git -C "$work" remote add origin "$GIT_BASE/$repo"
-  git -C "$work" sparse-checkout set --no-cone "${patterns[@]}"
-  git -C "$work" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>"$STATE_DIR/.err" \
-    || git -C "$work" fetch -q --depth 1 origin "$ref" 2>"$STATE_DIR/.err" || return 1
-  git -C "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>>"$STATE_DIR/.err" || return 1
+  # 원본이 사라져도 자격 증명 프롬프트에서 멈추지 않는다.
+  mkdir -p "$work" \
+    && GIT_TERMINAL_PROMPT=0 git -C "$work" init -q 2>>"$STATE_DIR/.err" \
+    && git -C "$work" remote add origin "$GIT_BASE/$repo" 2>>"$STATE_DIR/.err" \
+    && git -C "$work" sparse-checkout set --no-cone "${patterns[@]}" 2>>"$STATE_DIR/.err" \
+    || return 1
+  GIT_TERMINAL_PROMPT=0 git -C "$work" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>"$STATE_DIR/.err" \
+    || GIT_TERMINAL_PROMPT=0 git -C "$work" fetch -q --depth 1 origin "$ref" 2>"$STATE_DIR/.err" || return 1
+  GIT_TERMINAL_PROMPT=0 git -C "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>>"$STATE_DIR/.err" || return 1
   [[ "$(git -C "$work" rev-parse HEAD)" == "$ref" ]] || { printf 'fetched commit is not %s\n' "$ref" >"$STATE_DIR/.err"; return 1; }
 }
 
-copy_design_skill() { # tool entry work_dir → 실패 사유를 stdout
-  local tool="$1" entry="$2" work="$3" name src dest tmp lic
+# 설치할 사본을 스킬 폴더 밖에 먼저 만들고 검증한다. 성공하면 그 경로, 실패하면 사유를 출력한다.
+# 사용자 폴더는 이 단계가 끝날 때까지 건드리지 않는다.
+stage_design_skill() { # tool entry work_dir
+  local tool="$1" entry="$2" work="$3" name path src tmp lic
   name="$(jq -r '.name' <<<"$entry")"
-  src="$work/$(design_path "$entry" "$tool")"
-  [[ -f "$src/SKILL.md" ]] || { printf 'SKILL.md not found at %s\n' "$(design_path "$entry" "$tool")"; return 1; }
+  path="$(design_path "$entry" "$tool")"
+  src="$work/$path"
+  [[ -f "$src/SKILL.md" ]] || { printf 'SKILL.md not found at %s\n' "$path"; return 1; }
   grep -qE "^name:[[:space:]]*['\"]?${name}['\"]?[[:space:]]*\$" "$src/SKILL.md" || { printf 'SKILL.md name is not %s\n' "$name"; return 1; }
-  dest="$(skills_dir "$tool")/$name"
   tmp="$STATE_DIR/tmp/$tool-$name.$$"
-  mkdir -p "$(skills_dir "$tool")" "$STATE_DIR/tmp"
   rm -rf "$tmp"
-  cp -R "$src" "$tmp"
+  cp -R "$src" "$tmp" || { rm -rf "$tmp"; printf 'copy failed\n'; return 1; }
   # 스킬 폴더에 라이선스가 없으면 원본 저장소 루트의 것을 함께 둔다 — 사용자 PC의 사본도 출처·조건을 안다.
   if ! compgen -G "$tmp/LICENSE*" >/dev/null; then
-    for lic in "$work"/LICENSE* "$work"/COPYING* "$work"/NOTICE*; do [[ -f "$lic" ]] && cp "$lic" "$tmp/"; done
+    for lic in "$work"/LICENSE* "$work"/COPYING* "$work"/NOTICE*; do
+      [[ -f "$lic" ]] || continue
+      cp "$lic" "$tmp/" || { rm -rf "$tmp"; printf 'copy failed\n'; return 1; }
+    done
   fi
-  rm -rf "$dest"
-  mv "$tmp" "$dest"
+  printf '%s\n' "$tmp"
+}
+
+# 준비된 사본을 제자리에 둔다. 옮기다 실패하면 원래 폴더(또는 백업)를 되돌린다.
+place_design_skill() { # tool entry staged backup → 실패 사유를 stdout
+  local tool="$1" entry="$2" staged="$3" backup="$4" name dest old
+  name="$(jq -r '.name' <<<"$entry")"
+  dest="$(skills_dir "$tool")/$name"
+  old="$STATE_DIR/tmp/old-$tool-$name.$$"
+  mkdir -p "$(skills_dir "$tool")" || { printf 'cannot create %s\n' "$(skills_dir "$tool")"; return 1; }
+  if [[ -e "$dest" ]]; then
+    rm -rf "$old"
+    mv "$dest" "$old" || { rm -rf "$staged"; printf 'cannot move existing %s\n' "$dest"; return 1; }
+  fi
+  if ! mv "$staged" "$dest"; then
+    rm -rf "$staged" "$dest"
+    if [[ -e "$old" ]]; then mv "$old" "$dest"; elif [[ -n "$backup" ]]; then mv "$backup" "$dest"; fi
+    printf 'cannot place %s\n' "$dest"
+    return 1
+  fi
+  rm -rf "$old"
   read_state | jq --arg k "$tool:$name" --arg sha "$(tree_sha "$dest")" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg src "$(jq -r '.source.repo' <<<"$entry")" --arg ref "$(jq -r '.source.ref' <<<"$entry")" \
     '.installed[$k] = {sha:$sha, at:$now, source:$src, ref:$ref}' | write_state
@@ -394,10 +430,11 @@ copy_design_skill() { # tool entry work_dir → 실패 사유를 stdout
 command_design_install() {
   parse_tool_args "$@"
   [[ -n "$TOOL" && ${#NAMES[@]} -gt 0 ]] || usage
-  local arg name entry tool status backup work fetched why names=()
+  local arg name entry tool status backup work fetched why staged names=()
   for arg in "${NAMES[@]}"; do
     while IFS= read -r name; do names+=("$name"); done < <(design_names "$arg")
   done
+  mkdir -p "$STATE_DIR/tmp"
   for name in "${names[@]}"; do
     entry="$(design_entry "$name")"
     [[ -n "$entry" ]] || { result "-" "$name" "unknown"; continue; }
@@ -405,10 +442,14 @@ command_design_install() {
     fetched=""
     while IFS= read -r tool; do
       status="$(design_status "$tool" "$entry")"
+      # 원본을 고정할 수 없는 스킬은 사용자가 직접 깐 사본이 있어도(--replace여도) 받지 않는다.
+      if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
+        result "$tool" "$name" "skipped" "manual"
+        continue
+      fi
       case "$status" in
         builtin) result "$tool" "$name" "builtin" ;;
         unavailable) result "$tool" "$name" "skipped" "unavailable" ;;
-        manual) result "$tool" "$name" "skipped" "manual" ;;
         current) result "$tool" "$name" "unchanged" ;;
         absent | outdated | modified | foreign)
           if [[ "$status" == modified || "$status" == foreign ]] && ((FLAG == 0)); then
@@ -416,16 +457,28 @@ command_design_install() {
             continue
           fi
           if [[ -z "$fetched" ]]; then
-            mkdir -p "$STATE_DIR/tmp"
-            if fetch_design_source "$entry" "$work"; then fetched=ok; else fetched=fail; fi
+            why="$(design_source_error "$entry")"
+            if [[ -n "$why" ]]; then
+              printf '%s\n' "$why" >"$STATE_DIR/.err"; fetched=fail
+            elif fetch_design_source "$entry" "$work"; then
+              fetched=ok
+            else
+              fetched=fail
+            fi
           fi
           if [[ "$fetched" == fail ]]; then
             result "$tool" "$name" "failed" "$(head -n 3 "$STATE_DIR/.err" 2>/dev/null | paste -sd' ' -)"
             continue
           fi
+          if ! staged="$(stage_design_skill "$tool" "$entry" "$work")"; then
+            result "$tool" "$name" "failed" "$staged"
+            continue
+          fi
           backup=""
-          [[ "$status" == modified || "$status" == foreign ]] && backup="$(backup_skill "$tool" "$name")"
-          if ! why="$(copy_design_skill "$tool" "$entry" "$work")"; then
+          if [[ "$status" == modified || "$status" == foreign ]]; then
+            backup="$(backup_skill "$tool" "$name")"
+          fi
+          if ! why="$(place_design_skill "$tool" "$entry" "$staged" "$backup")"; then
             result "$tool" "$name" "failed" "$why"
             continue
           fi
@@ -698,7 +751,8 @@ command_notify() {
 with_lock() {
   mkdir -p "$STATE_DIR"
   hm_acquire_lock "$LOCK" || { printf 'setup state busy: %s\n' "$LOCK" >&2; exit 1; }
-  trap 'hm_release_lock "$LOCK"' EXIT
+  # 중간 사본(tmp)은 잠금을 쥔 실행만 쓴다. 중단돼도 다음 실행 전에 남지 않게 지운다.
+  trap 'rm -rf "$STATE_DIR/tmp"; hm_release_lock "$LOCK"' EXIT
   "$@"
 }
 

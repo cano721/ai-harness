@@ -4570,6 +4570,26 @@ assert_contains "$(setup_cmd design install --tool claude wrongname | jq -r '"\(
 [[ ! -e "$SETUP_T/claude/wrongname" ]] || fail "refused skill left a folder"
 assert_eq "failed" "$(setup_cmd design install --tool claude badref | jq -r '.action')" "unknown pinned commit fails"
 assert_eq "unknown" "$(setup_cmd design install --tool claude nope | jq -r '.action')" "unknown design skill rejected"
+# 검증에 실패하는 교체는 사용자 폴더를 옮기기 전에 멈춘다.
+mkdir -p "$SETUP_T/claude/wrongname"
+printf 'mine\n' >"$SETUP_T/claude/wrongname/SKILL.md"
+assert_eq "failed" "$(setup_cmd design install --tool claude --replace wrongname | jq -r '.action')" "invalid replacement fails"
+assert_eq "mine" "$(cat "$SETUP_T/claude/wrongname/SKILL.md")" "failed replacement keeps the user's folder in place"
+rm -rf "$SETUP_T/claude/wrongname"
+# 원본을 고정할 수 없는 스킬은 직접 깐 사본이 있어도 --replace로 받으러 가지 않는다.
+mkdir -p "$SETUP_T/claude/hand"
+printf 'hand made\n' >"$SETUP_T/claude/hand/SKILL.md"
+assert_eq "foreign" "$(design_status hand claude)" "hand-installed unpinnable skill shows as foreign"
+assert_eq "skipped manual" "$(setup_cmd design install --tool claude --replace hand | jq -r '"\(.action) \(.detail)"')" "unpinnable skill is never fetched"
+assert_eq "hand made" "$(cat "$SETUP_T/claude/hand/SKILL.md")" "hand-installed unpinnable skill untouched"
+# 카탈로그 값은 git 인자·경로가 되기 전에 확인한다.
+jq '.skills += [{name:"escape", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:"../.."}, license:"MIT", review:{runs:"none", network:"none"}},
+  {name:"nocodex", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:{claude:"skills/foo"}}, license:"MIT", review:{runs:"none", network:"none"}}]' \
+  "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool claude escape | jq -r '"\(.action) \(.detail)"')" "path escaping the source repository is refused"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool codex nocodex | jq -r '"\(.action) \(.detail)"')" "missing per-tool path is refused"
+jq '(.skills[] | select(.name=="badref") | .source.ref) = "--upload-pack=touch"' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed source.ref must be a 40-character commit" "$(setup_cmd design install --tool claude badref | jq -r '"\(.action) \(.detail)"')" "a non-commit ref is refused before git runs"
 # 사용자가 원래 갖고 있던 같은 이름 스킬은 --replace 없이는 그대로 둔다.
 setup_cmd design remove --tool claude foo >/dev/null
 mkdir -p "$SETUP_T/claude/foo"
