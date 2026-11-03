@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.53.1 (2026-11-03)
 ### 버그 수정
 
 - **자동 수정 검증이 배포를 확인한 실행에서 바로 관찰을 시작합니다** — 배포 반영 시각을 판정 기준 시각이 아니라 `git fetch` 뒤 시계로 기록해, 그 사이 초가 넘어가면 `grace_hours: 0`이어도 그 실행에서는 관찰 기한(`verify_until`)이 잡히지 않고 다음 정기 실행으로 미뤄졌습니다. 테스트도 같은 이유로 간헐적으로 실패했습니다.
