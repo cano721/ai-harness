@@ -291,6 +291,66 @@ maybe_global_run() {
 
 sync_marker() { printf '%s/%s.json\n' "$SYNC_DIR" "$(hm_short_key "$1")"; }
 
+pr_cmd() { # open-pr.sh 인자 그대로. 응답 없는 호스트가 sweep·실행 lock을 붙잡지 않게 시간 제한을 둔다. 테스트는 HM_OPEN_PR_CMD로 바꾼다
+  local -a cmd=("$DIR/open-pr.sh")
+  [[ -z "${HM_OPEN_PR_CMD:-}" ]] || read -r -a cmd <<<"$HM_OPEN_PR_CMD"
+  hm_run_with_timeout "${HM_OPEN_PR_TIMEOUT_SEC:-60}" "${cmd[@]}" "$@"
+}
+
+pr_repo() { # PR URL → 저장소 URL (…/pull/N, …/pull-requests/N 제거)
+  local u="${1%/}"
+  u="${u%/*}"
+  printf '%s\n' "${u%/pull*}"
+}
+
+# 이 저장소의 자동 sync가 연 PR 중 아직 정리하지 않은 최근 5건(오래된 것부터). 일부 적용이면 harness_version을
+# 올리지 않아 다음 플러그인 버전 sync가 같은 파일로 새 PR을 다시 열고, 옛 PR은 열린 채 쌓였다.
+prior_sync_prs() { # $1=project [$2=제외할 URL]
+  [[ -f "$RUNS_FILE" ]] || return 0
+  jq -Rrn --arg p "$1" --arg skip "${2:-}" '[inputs | fromjson? | objects | select(.project == $p and .scope == "sync")]
+    | ([.[] | select(.event == "superseded") | .artifact // empty]) as $done
+    | [.[] | select(.event == "finished") | .artifact // "" | select(startswith("https://") and . != $skip)]
+    | reduce .[] as $u ([]; if any(.[]; . == $u) or any($done[]; . == $u) then . else . + [$u] end)
+    | .[-5:][]' "$RUNS_FILE" 2>/dev/null || true
+}
+
+# 새 sync를 띄우지 않을 이유. 사람이 코멘트·리뷰·승인을 남긴 열린 sync PR이 있으면 그 PR을 기준으로 이야기가
+# 진행 중이고, 같은 파일을 고치는 두 PR은 함께 병합할 수 없다. 상태를 못 읽으면 PR이 다시 쌓이지 않게 기다린다
+# (그 경우 PR 생성도 같은 자격증명이 필요해 어차피 실패한다).
+sync_blocked_reason() { # $1=project
+  local url="" st="" rc=0
+  while IFS= read -r url; do
+    [[ -n "$url" ]] || continue
+    rc=0
+    st="$(pr_cmd --status "$url" 2>/dev/null)" || rc=$?
+    # 2·3: 형식이 아니거나 지원하지 않는 호스트 — 이 경로로는 끝내 읽을 수 없으니 관리 대상에서 뺀다.
+    case "$rc" in 2|3) continue ;; esac
+    if (( rc != 0 )) || ! jq -e '.state | type == "string"' <<<"$st" >/dev/null 2>&1; then
+      printf 'sync_pr_status_unknown\n'; return 0
+    fi
+    if jq -e '.state == "open" and (.activity // 0) > 0' <<<"$st" >/dev/null 2>&1; then
+      printf 'sync_pr_in_review\n'; return 0
+    fi
+  done <<<"$(prior_sync_prs "$1")"
+}
+
+# 새 sync PR이 실제로 열려 있으면, 같은 저장소의 옛 sync PR 중 아무도 손대지 않은 열린 PR을 닫는다.
+# 같은 project_id를 쓰는 다른 저장소의 PR은 건드리지 않는다.
+supersede_sync_prs() { # $1=project $2=새 PR URL
+  local url="" st="" repo=""
+  st="$(pr_cmd --status "$2" 2>/dev/null)" || return 0
+  jq -e '.state == "open"' <<<"$st" >/dev/null 2>&1 || return 0
+  repo="$(pr_repo "$2")"
+  while IFS= read -r url; do
+    [[ -n "$url" && "$(pr_repo "$url")" == "$repo" ]] || continue
+    st="$(pr_cmd --status "$url" 2>/dev/null)" || continue
+    jq -e '.state == "open" and (.activity // 0) == 0' <<<"$st" >/dev/null 2>&1 || continue
+    pr_cmd --decline "$url" --comment "자동 sync가 새 플러그인 버전 PR로 대체했습니다: $2" >/dev/null 2>&1 || continue
+    append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$1" --arg artifact "$url" --arg by "$2" \
+      '{at:$at,event:"superseded",project:$project,scope:"sync",artifact:$artifact,by:$by}')"
+  done <<<"$(prior_sync_prs "$1" "$2")"
+}
+
 # 기준 브랜치의 harness_version이 플러그인보다 낮은 하네스 저장소를 /harness-init --sync로 따라오게 한다.
 # 저장소·플러그인 버전 조합당 한 번이고, 일시 실패만 MAX_FAILS까지 다시 시도한다.
 maybe_sync_run() {
@@ -309,6 +369,12 @@ maybe_sync_run() {
       fails="$(jq -r '.fails // 0' "$marker" 2>/dev/null)"
       [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
       (( fails < MAX_FAILS )) || continue
+    fi
+    local blocked=""
+    blocked="$(sync_blocked_reason "$project")"
+    if [[ -n "$blocked" ]]; then
+      log_skip "$project" "sync-$plugin" "$blocked"
+      continue
     fi
     local used=""
     used="$(started_today sync)"
@@ -584,6 +650,9 @@ command_run() {
       artifact:(if $artifact != "" then $artifact else ($review.review.artifact? // null) end),log:$log}
       + (if $no_agent then {no_agent:true} else {} end)
       + (if $reason == "" then {} else {reason:$reason} end)')"
+  if [[ "$scope" == "sync" && "$artifact" == https://* ]]; then
+    case "$result" in improved|partial) supersede_sync_prs "$project" "$artifact" ;; esac
+  fi
   if (( exit_code == 0 )); then
     "$DIR/health.sh" success "$component" >/dev/null 2>&1 || true
   else
