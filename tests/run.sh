@@ -2211,7 +2211,7 @@ UPDATE_NOW="$(date +%s)"
 jq -cn --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson checked_at_epoch "$UPDATE_NOW" \
   '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"https://example.test/releases/v9.9.9",notes_url:"https://example.test/releases/v9.9.9",last_result:"success",last_error:"",checked_at:$checked_at,checked_at_epoch:$checked_at_epoch}' \
   >"$UPDATE_DATA/update-check.json"
-UPDATE_STATUS="$(HARNESS_METRICS_DIR="$UPDATE_DATA" "$ROOT/scripts/check-update.sh" status)"
+UPDATE_STATUS="$(HARNESS_METRICS_DIR="$UPDATE_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/check-update.sh" status)"
 assert_eq "true" "$(printf '%s' "$UPDATE_STATUS" | jq -r '.update_available')" "cached newer version detected"
 assert_eq "9.9.9" "$(printf '%s' "$UPDATE_STATUS" | jq -r '.latest_version')" "cached latest version"
 UPDATE_NOTICE="$(HARNESS_METRICS_DIR="$UPDATE_DATA" "$ROOT/scripts/check-update.sh" notify)"
@@ -2256,6 +2256,19 @@ assert_eq "2" "$(printf '%s' "$BACKOFF_THIRD" | jq -r '.failure_count')" "consec
 BACKOFF_SECONDS=$(( $(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json") - $(jq -r '.last_attempt_epoch' "$BACKOFF_DATA/update-check.json") ))
 assert_eq "1200" "$BACKOFF_SECONDS" "backoff doubles on the second consecutive failure"
 pass "failed release checks back off without spending the success TTL"
+
+# 사용자가 직접 부르는 status는 성공 TTL 안이어도 다시 조회한다. 정기 refresh는 TTL을 지킨다.
+FRESH_DATA="$TEST_TMP/update-fresh-status"
+mkdir -p "$FRESH_DATA"
+jq -cn --argjson checked_at_epoch "$(date +%s)" \
+  '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"",notes_url:"",last_result:"success",last_error:"",checked_at:"2026-01-01T00:00:00Z",checked_at_epoch:$checked_at_epoch}' \
+  >"$FRESH_DATA/update-check.json"
+HARNESS_METRICS_DIR="$FRESH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" refresh >/dev/null 2>&1
+assert_eq "success" "$(jq -r '.last_result' "$FRESH_DATA/update-check.json")" "refresh honors the success TTL"
+FRESH_STATUS="$(HARNESS_METRICS_DIR="$FRESH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status)"
+assert_eq "failure" "$(printf '%s' "$FRESH_STATUS" | jq -r '.last_result')" "status looks up even inside the success TTL"
+assert_eq "9.9.9" "$(printf '%s' "$FRESH_STATUS" | jq -r '.latest_version')" "status lookup failure keeps the cached release"
+pass "explicit status bypasses the success TTL"
 
 # 손상된 캐시가 조회 자체를 죽이면 알림이 조용히 사라진다.
 CORRUPT_DATA="$TEST_TMP/update-corrupt"
