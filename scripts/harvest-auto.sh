@@ -521,7 +521,7 @@ prune_logs() {
 command_run() {
   local project="$1" batch_id="$2" repo_root="$3" agent="$4" scope="${5:-project}"
   local started_at="" start_epoch=0 log_file="" exit_code=0 review="null" cost="null" result="" work_dir="" base_ref=""
-  local artifact="" component="harvest_auto" ran_agent=1
+  local artifact="" component="harvest_auto" ran_agent=1 head_sha=""
   [[ "$scope" == "sync" ]] && component="sync_auto"
   mkdir -p "$LOG_DIR"
   if ! hm_acquire_lock "$RUN_LOCK" 1; then
@@ -577,6 +577,8 @@ command_run() {
       # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
       (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
         env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+      # 에이전트가 PR로 올린 커밋. 자동 병합 판정은 이 커밋을 기준으로 하고, 병합할 때 head가 같은지 다시 본다.
+      head_sha="$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || true)"
     fi
     if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
       # 이번 worktree만 정리한다. 저장소 전체 prune은 잠시 분리된 사용자 worktree 메타까지 지울 수 있다.
@@ -652,6 +654,16 @@ command_run() {
       + (if $reason == "" then {} else {reason:$reason} end)')"
   if [[ "$scope" == "sync" && "$artifact" == https://* ]]; then
     case "$result" in improved|partial) supersede_sync_prs "$project" "$artifact" ;; esac
+  fi
+  # 자동 병합(opt-in): 조건이 맞는 PR만 대기열에 넣고, 병합은 sweep이 원격 CI를 확인한 뒤 한다.
+  local pr_url="$artifact"
+  [[ -n "$pr_url" ]] || pr_url="$(jq -r '.review.artifact // empty' <<<"$review" 2>/dev/null)"
+  if [[ ( "$scope" == "sync" || "$scope" == "project" ) && "$pr_url" == https://* && -n "$head_sha" ]] && (( exit_code == 0 )); then
+    case "$result" in
+      improved|partial)
+        "$DIR/auto-merge.sh" enqueue --project "$project" --scope "$scope" --repo "$repo_root" --base "$base_ref" \
+          --head "$head_sha" --pr "$pr_url" --since "$started_at" --result "$result" --review "$review" >/dev/null 2>&1 || true ;;
+    esac
   fi
   if (( exit_code == 0 )); then
     "$DIR/health.sh" success "$component" >/dev/null 2>&1 || true
