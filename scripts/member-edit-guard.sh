@@ -49,8 +49,8 @@ shown="${rel:-$member}"
 {
   printf '[Direct edit guard] %s 는 하네스가 있는 저장소입니다. 이 세션(서브에이전트 포함)은 그 저장소 밖에서 열려 저장소의 편집 가드·페르소나·권한이 빠져 있으므로 코드를 바꾸지 않습니다. 워크플로를 읽었어도 같습니다.\n' "$shown"
   printf '구현은 멤버 세션으로 인계하세요 — 인계 프롬프트에 이슈·범위·base 브랜치·이미 정한 결정·진행 방식을 담습니다:\n'
-  printf '  (a) %s 에서 새 세션을 열고 인계 프롬프트를 넘긴다: `cd %s && claude "<인계>"` 또는 `codex -C %s "<인계>"`.\n' "$shown" "$shown" "$shown"
-  printf '      완료를 알 수 있게 넘긴다 — 터미널 매니저가 감독 디스패치를 지원하면 그것으로 넘기고 완료 신호를 기다린다(Orca: `orca orchestration worker-start` → `orca orchestration check --wait`). 아니면 인계 프롬프트에 끝날 때 남길 완료 파일(결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다린다. 완료를 알 장치 없이 "끝나면 알려 주겠다"고 하지 마세요.\n'
+  printf '  (a) %s 에서 새 세션을 열고 인계 프롬프트를 넘긴다: `cd %s && claude --bg -n <인계 이름> "<인계>"`(조율 세션과 같은 권한 모드) 또는 `codex exec -C %s "<인계>"`(백그라운드 실행).\n' "$shown" "$shown" "$shown"
+  printf '      완료를 알 수 있게 넘긴다 — `claude --bg` 세션은 `SendMessage`(`notify_when_idle: true`)로 턴 종료 알림을 구독해 기다리고, 사용자는 `claude attach <id>`로 보고 끼어들 수 있다. 사용자가 Orca 감독을 원하면 `orca orchestration worker-start` → `orca orchestration check --wait`로 기다린다. 둘 다 안 되면 인계 프롬프트에 끝날 때 남길 완료 파일(결과·PR 링크·원격 CI 상태)을 지시하고 그 파일을 기다린다. 완료를 알 장치 없이 "끝나면 알려 주겠다"고 하지 마세요.\n'
   printf '  (b) `/cd %s` 로 이 세션을 옮긴다.\n' "$shown"
   printf '둘 다 할 수 없으면 구현하지 말고 사용자에게 `/cd`나 새 세션을 요청하고 멈추세요. Bash로 파일을 써서 우회하지 마세요.\n'
 } >&2
