@@ -127,6 +127,25 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
+<a id="design-skills"></a>
+
+### 외부 디자인 스킬 (`/setup design`으로 선택 설치)
+
+ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 담지 않고 절차만 둡니다. 그 빈자리는 외부 디자인 스킬이 채우는데, 여러 개가 깔리면 모두 "UI 다듬어"에 반응해 결과가 PC마다 달라집니다. 그래서 **디자인 스킬 지도**(`templates/ui-review/references/design-skills.md`)가 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정합니다. 프로젝트 디자인 규칙 > ai-harness 계약 > 지도 순으로 따르고, 설치되지 않은 스킬은 건너뜁니다.
+
+| 작업 | 주도 | 보조(영역) |
+|---|---|---|
+| 지표 리포트·대시보드 | `impeccable` | `dataviz`(차트·지표 카드·차트 색), `ui-ux-pro-max`(토큰 없을 때 팔레트·폰트) |
+| 랜딩·소개 | `/landing-page` | `design-taste-frontend`(방향 후보), `motion`(모션 API), `web-design-guidelines`(최종 점검) |
+| 디자인 시스템 | `/design-system-builder` | `design-system-patterns`(테마 구조), `awesome-design`(참고 명세) |
+| 제품 화면 다듬기 | `impeccable` | `emil-design-eng`(마감), `motion` |
+| 하네스 저장소 화면 변경 | `ui-review`·`frontend-team` | `impeccable`(비평), `web-design-guidelines`(접근성) |
+| 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않는다 |
+
+- **설치**: `/ai-harness:setup design`이 `catalog/design-skills.json`의 원본 저장소·고정 커밋에서 스킬 폴더만 받아(부분 클론) Claude `~/.claude/skills/`, Codex `~/.agents/skills/`에 둡니다. 사본을 재배포하지 않고, 라이선스와 실행 스크립트·네트워크 호출 검토 결과를 카탈로그에 적었습니다. 필수 묶음은 `impeccable`과 Claude 내장 `dataviz`(Codex 대응 없음)입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 안내만 합니다. SessionStart는 외부 디자인 스킬을 자동 갱신하지 않습니다.
+- **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
+- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
+
 하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
@@ -777,7 +796,8 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
-catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수)
+catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 외부 디자인 스킬의 원본·고정 커밋·검토 기록)
+agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙

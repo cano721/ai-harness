@@ -2018,6 +2018,13 @@ for path in .agents/skills/native-ui/SKILL.md .claude/skills/native-ui/reference
   assert_eq "add" "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "native stack selects $path"
 done
 assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | test("skills/(ui-review|frontend-fundamentals|frontend-team)/"))] | length')" "a native-only project gets neither the web UI contract nor web frontend skills"
+# native-ui에 복사된 계약의 상대 링크는 native-ui에 배포되는 파일을 가리키거나, native-ui 본문이 웹 전용이라 무시한다고 적은 것이어야 한다.
+while IFS= read -r NATIVE_LINK; do
+  if [[ -n "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p ".claude/skills/native-ui/$NATIVE_LINK" '.items[] | select(.path==$p) | .path')" ]]; then continue; fi
+  assert_contains "$NATIVE_SKILL" "계약 안의 \`$NATIVE_LINK\`" "native-ui says how to read the contract link $NATIVE_LINK"
+  assert_contains "$(grep -F "계약 안의 \`$NATIVE_LINK\`" "$NATIVE_DIR/SKILL.md")" "무시한다" "native-ui ignores the web-only contract link $NATIVE_LINK"
+done < <(grep -oE '\]\(references/[^)]+\)' "$ROOT/templates/ui-review/SKILL.md" | sed -E 's/^\]\(//; s/\)$//' | sort -u)
+assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | endswith("design-skills.md"))] | length')" "a native-only project gets no web design skill map"
 assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path | contains("native-ui"))] | length')" "a web UI project does not get native-ui"
 # 기존 ui 프로젝트: 손대지 않은 계약은 갱신(refresh), 새 시안 처리 규칙은 추가(add)로 sync 계획에 오른다.
 SYNC_UI_ROOT="$TEST_TMP/ui-sync-project"
@@ -2126,6 +2133,71 @@ assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("landing-page"))] | len
 assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/landing-page/\`)" "harness init documents landing-page as a plugin skill"
 assert_contains "$(<"$ROOT/THIRD-PARTY-LICENSES.md")" "## skills/landing-page" "landing-page credits its upstream licenses"
 pass "landing-page plugin skill"
+
+# 디자인 스킬 지도: 작업마다 주도 하나, 영역마다 주인 하나. 한 원본을 바이트 단위로 같은 사본으로 나눠 읽고, 설치된 스킬만 쓴다. (#210)
+MAP_SRC="$ROOT/templates/ui-review/references/design-skills.md"
+assert_file "$MAP_SRC"
+for MAP_COPY in "$ROOT/skills/landing-page/references/design-skills.md" "$ROOT/skills/design-system-builder/references/design-skills.md"; do
+  cmp -s "$MAP_COPY" "$MAP_SRC" || fail "$MAP_COPY must match templates/ui-review/references/design-skills.md byte for byte"
+done
+for MAP_SKILL in ui-review frontend-team design-audit; do
+  for MAP_BASE in .agents .claude; do
+    assert_eq "templates/ui-review/references/design-skills.md" "$(jq -r --arg p "$MAP_BASE/skills/$MAP_SKILL/references/design-skills.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$MAP_BASE $MAP_SKILL ships the design skill map"
+  done
+done
+for MAP_READER in skills/landing-page/SKILL.md skills/design-system-builder/SKILL.md templates/ui-review/SKILL.md templates/frontend-team/SKILL.md templates/design-audit/SKILL.md; do
+  assert_contains "$(<"$ROOT/$MAP_READER")" "references/design-skills.md" "$MAP_READER points at the design skill map"
+done
+assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/design-skills.md") | .action')" "ui stack syncs the map"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/references/design-skills.md") | .action')" "design-system stack syncs the map"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | endswith("design-skills.md"))] | length')" "a frontend project without UI contracts gets no map copy"
+MAP_CONTENT="$(<"$MAP_SRC")"
+assert_contains "$MAP_CONTENT" "**Installed skills only.**" "map uses installed skills only"
+assert_contains "$MAP_CONTENT" "work exactly as you would without this map" "map keeps current behavior when a skill is missing"
+assert_contains "$MAP_CONTENT" "A skill on this map never overrides a project value" "project rules stay above the map"
+assert_contains "$MAP_CONTENT" "## Forbidden pairs" "map names forbidden pairs"
+# 표의 주도 칸에는 스킬이 하나뿐이고, 영역 표의 영역마다 주인이 하나다.
+MAP_JOBS="$(awk '/^## Jobs/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Job/ && !/^\|---/' "$MAP_SRC")"
+assert_eq "6" "$(grep -c . <<<"$MAP_JOBS")" "map lists six jobs"
+while IFS= read -r MAP_ROW; do
+  MAP_LEAD="$(awk -F'|' '{print $3}' <<<"$MAP_ROW")"
+  [[ "$MAP_LEAD" != *"·"* && "$MAP_LEAD" != *","* ]] || fail "map job has more than one lead: $MAP_ROW"
+done <<<"$MAP_JOBS"
+MAP_LANES="$(awk '/^## Lanes/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Lane/ && !/^\|---/' "$MAP_SRC" | awk -F'|' '{print $2}')"
+assert_eq "$(grep -c . <<<"$MAP_LANES")" "$(sort -u <<<"$MAP_LANES" | grep -c .)" "each lane appears once"
+# 카탈로그의 모든 외부 디자인 스킬이 지도에 자리가 있다.
+DESIGN_CATALOG="$ROOT/catalog/design-skills.json"
+while IFS= read -r DESIGN_NAME; do
+  assert_contains "$MAP_CONTENT" "\`$DESIGN_NAME\`" "map assigns $DESIGN_NAME"
+done < <(jq -r '.skills[].name' "$DESIGN_CATALOG")
+# 설치 가능한 항목은 원본 저장소·40자 커밋·경로·라이선스·실행/네트워크 검토를 모두 적었다.
+assert_eq "0" "$(jq '[.skills[] | select((.builtin // null) == null and .installable != false)
+  | select((.source.repo | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) or (.source.ref | test("^[0-9a-f]{40}$") | not)
+           or (.source.path == null) or (.license // "") == "" or (.review.runs // "") == "" or (.review.network // "") == "")] | length' "$DESIGN_CATALOG")" "every installable design skill records repo, pinned commit, path, license and review"
+assert_eq "dataviz,impeccable" "$(jq -r '[.skills[] | select(.bundle=="core") | .name] | sort | join(",")' "$DESIGN_CATALOG")" "core bundle is impeccable plus dataviz"
+assert_eq "0" "$(jq '[.skills[] | select(.installable == false and ((.note // "") == ""))] | length' "$DESIGN_CATALOG")" "skills setup cannot pin say where to get them"
+HARNESS_INIT_DESIGN="$(<"$ROOT/skills/harness-init/SKILL.md")"
+assert_contains "$HARNESS_INIT_DESIGN" "백엔드·라이브러리 저장소에는 권하지 않는다" "harness init suggests design skills only for UI repositories"
+assert_contains "$HARNESS_INIT_DESIGN" "\`ui\`·\`frontend-team\`·\`design-system\` 중 하나가 있을 때만" "harness init suggests design skills only where the map ships"
+assert_contains "$HARNESS_INIT_DESIGN" "/ai-harness:setup design" "harness init points at setup for design skills"
+# 독립 디자인 검토는 플러그인 전역 에이전트다. 렌더링에 Bash를 쓰되 편집 도구는 없다.
+# Bash가 있으면 쓰기를 기술적으로 막지 못하므로 "읽기 전용"이라 주장하지 않고, Skill 도구가 없으므로 외부 스킬을 쓴다고 하지 않는다.
+DESIGN_REVIEWER="$ROOT/agents/design-reviewer.md"
+assert_file "$DESIGN_REVIEWER"
+DESIGN_REVIEWER_TOOLS="$(grep '^tools:' "$DESIGN_REVIEWER")"
+assert_eq "tools: Read, Grep, Glob, Bash" "$DESIGN_REVIEWER_TOOLS" "design reviewer has no edit or skill tools"
+DESIGN_REVIEWER_CONTENT="$(<"$DESIGN_REVIEWER")"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "**쓰기 도구가 없다. Bash는 렌더링 한정이다.**" "design reviewer limits Bash to rendering"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "기술적 강제가 아니라" "design reviewer does not overstate its Bash restriction"
+if grep -qiE "읽기 전용이다|read-only" "$DESIGN_REVIEWER"; then fail "design reviewer claims to be read-only while it has Bash"; fi
+if [[ "$DESIGN_REVIEWER_TOOLS" != *Skill* ]]; then
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "외부 디자인 스킬(\`impeccable\`·\`web-design-guidelines\` 등)은 쓰지 않는다" "design reviewer without the Skill tool does not promise outside skills"
+  if grep -q "^외부 스킬:" "$DESIGN_REVIEWER"; then fail "design reviewer report still has an outside-skill line"; fi
+  MAP_REVIEW_ROW="$(grep '^| Independent review' "$MAP_SRC")"
+  assert_contains "$MAP_REVIEW_ROW" "in a fresh reviewer session only" "map keeps outside review skills out of the design-reviewer agent"
+fi
+assert_contains "$(<"$DESIGN_REVIEWER")" "\`unverified\`" "design reviewer does not pass what it could not render"
+pass "design skill map, catalog and independent reviewer"
 
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
 DIAGRAM_SKILL="$ROOT/skills/diagram/SKILL.md"
@@ -4746,6 +4818,141 @@ assert_eq "" "$(printf '{}' | setup_cmd notify)" "HM_SETUP_HINT=0 silences the h
 SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
+
+# 외부 디자인 스킬: 사본을 들지 않고 원본 저장소의 고정 커밋에서 스킬 폴더만 받는다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않는다. (#210)
+SETUP_T="$TEST_TMP/setup-design"
+SETUP_CATALOG="$SETUP_T/catalog"
+DESIGN_REMOTE="$SETUP_T/remote/acme/skills"
+mkdir -p "$SETUP_T" "$DESIGN_REMOTE/skills/foo" "$DESIGN_REMOTE/a/bar" "$DESIGN_REMOTE/b/bar" "$DESIGN_REMOTE/unrelated"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+printf -- '---\nname: foo\n---\nfoo v1\n' >"$DESIGN_REMOTE/skills/foo/SKILL.md"
+printf -- '---\nname: bar\n---\nclaude bar\n' >"$DESIGN_REMOTE/a/bar/SKILL.md"
+printf -- '---\nname: bar\n---\ncodex bar\n' >"$DESIGN_REMOTE/b/bar/SKILL.md"
+printf 'MIT upstream\n' >"$DESIGN_REMOTE/LICENSE"
+printf 'not part of any skill\n' >"$DESIGN_REMOTE/unrelated/big.txt"
+git -C "$DESIGN_REMOTE" init -q
+git -C "$DESIGN_REMOTE" add -A
+git -C "$DESIGN_REMOTE" -c user.name=t -c user.email=t@t commit -qm v1
+DESIGN_REF1="$(git -C "$DESIGN_REMOTE" rev-parse HEAD)"
+design_catalog() { # foo ref
+  jq -n --arg ref "$1" '{version:1, skills:[
+    {name:"foo", bundle:"core", summary:"foo", source:{repo:"acme/skills", ref:$ref, path:"skills/foo"}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"viz", bundle:"core", summary:"viz", builtin:"claude", note:"built in"},
+    {name:"bar", bundle:"extra", summary:"bar", source:{repo:"acme/skills", ref:$ref, path:{claude:"a/bar", codex:"b/bar"}}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"hand", bundle:"extra", summary:"hand", installable:false, note:"install by hand"},
+    {name:"wrongname", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:$ref, path:"a/bar"}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"badref", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"0000000000000000000000000000000000000000", path:"skills/foo"}, license:"MIT", review:{runs:"none", network:"none"}}
+  ]}' >"$SETUP_CATALOG/design-skills.json"
+}
+design_catalog "$DESIGN_REF1"
+SETUP_ENV=(HM_SETUP_GIT_BASE="$SETUP_T/remote")
+design_status() { setup_cmd design list | jq -r --arg n "$1" --arg t "$2" 'select(.name == $n) | .status[$t]'; }
+assert_eq "absent" "$(design_status foo claude)" "design skill starts absent"
+DESIGN_OUT="$(setup_cmd design install --tool both core)"
+assert_eq "installed installed" "$(jq -r 'select(.name=="foo") | .action' <<<"$DESIGN_OUT" | paste -sd' ' -)" "core bundle installs foo for both tools"
+assert_eq "builtin" "$(jq -r 'select(.name=="viz" and .tool=="claude") | .action' <<<"$DESIGN_OUT")" "built-in skill needs no install"
+assert_eq "skipped unavailable" "$(jq -r 'select(.name=="viz" and .tool=="codex") | "\(.action) \(.detail)"' <<<"$DESIGN_OUT")" "built-in skill is unavailable on the other tool"
+assert_eq "0" "$(jq -r 'select(.name=="bar")' <<<"$DESIGN_OUT" | grep -c . || true)" "core bundle leaves extras alone"
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v1" "installed copy comes from the pinned commit"
+assert_eq "MIT upstream" "$(cat "$SETUP_T/codex/foo/LICENSE")" "upstream license travels with a skill folder that has none"
+[[ ! -e "$SETUP_T/claude/foo/unrelated" && ! -e "$SETUP_T/claude/unrelated" ]] || fail "only the skill folder is installed"
+assert_eq "$DESIGN_REF1" "$(jq -r '.installed["claude:foo"].ref' "$SETUP_T/data/setup/state.json")" "state records the pinned commit"
+assert_eq "current" "$(design_status foo codex)" "installed design skill is current"
+[[ -z "$(find "$SETUP_T/data/setup/tmp" -mindepth 1 -maxdepth 1 2>/dev/null)" ]] || fail "fetch work dirs are cleaned up"
+setup_cmd design install --tool both bar >/dev/null
+assert_contains "$(cat "$SETUP_T/claude/bar/SKILL.md")" "claude bar" "per-tool path installs the Claude variant"
+assert_contains "$(cat "$SETUP_T/codex/bar/SKILL.md")" "codex bar" "per-tool path installs the Codex variant"
+assert_eq "skipped manual" "$(setup_cmd design install --tool claude hand | jq -r '"\(.action) \(.detail)"')" "unpinnable skill is not installed"
+assert_eq "manual" "$(design_status hand claude)" "unpinnable skill reports manual"
+assert_contains "$(setup_cmd design install --tool claude wrongname | jq -r '"\(.action) \(.detail)"')" "failed SKILL.md name is not wrongname" "folder whose SKILL.md names another skill is refused"
+[[ ! -e "$SETUP_T/claude/wrongname" ]] || fail "refused skill left a folder"
+assert_eq "failed" "$(setup_cmd design install --tool claude badref | jq -r '.action')" "unknown pinned commit fails"
+assert_eq "unknown" "$(setup_cmd design install --tool claude nope | jq -r '.action')" "unknown design skill rejected"
+# 검증에 실패하는 교체는 사용자 폴더를 옮기기 전에 멈춘다.
+mkdir -p "$SETUP_T/claude/wrongname"
+printf 'mine\n' >"$SETUP_T/claude/wrongname/SKILL.md"
+assert_eq "failed" "$(setup_cmd design install --tool claude --replace wrongname | jq -r '.action')" "invalid replacement fails"
+assert_eq "mine" "$(cat "$SETUP_T/claude/wrongname/SKILL.md")" "failed replacement keeps the user's folder in place"
+rm -rf "$SETUP_T/claude/wrongname"
+# 원본을 고정할 수 없는 스킬은 직접 깐 사본이 있어도 --replace로 받으러 가지 않는다.
+mkdir -p "$SETUP_T/claude/hand"
+printf 'hand made\n' >"$SETUP_T/claude/hand/SKILL.md"
+assert_eq "foreign" "$(design_status hand claude)" "hand-installed unpinnable skill shows as foreign"
+assert_eq "skipped manual" "$(setup_cmd design install --tool claude --replace hand | jq -r '"\(.action) \(.detail)"')" "unpinnable skill is never fetched"
+assert_eq "hand made" "$(cat "$SETUP_T/claude/hand/SKILL.md")" "hand-installed unpinnable skill untouched"
+# 카탈로그 값은 git 인자·경로가 되기 전에 확인한다.
+jq '.skills += [{name:"escape", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:"../.."}, license:"MIT", review:{runs:"none", network:"none"}},
+  {name:"nocodex", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:{claude:"skills/foo"}}, license:"MIT", review:{runs:"none", network:"none"}}]' \
+  "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool claude escape | jq -r '"\(.action) \(.detail)"')" "path escaping the source repository is refused"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool codex nocodex | jq -r '"\(.action) \(.detail)"')" "missing per-tool path is refused"
+jq '(.skills[] | select(.name=="badref") | .source.ref) = "--upload-pack=touch"' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed source.ref must be a 40-character commit" "$(setup_cmd design install --tool claude badref | jq -r '"\(.action) \(.detail)"')" "a non-commit ref is refused before git runs"
+# "."은 .git까지 복사하고, glob은 sparse 패턴을 넓히고, ".."은 원본 저장소 밖을 가리킨다.
+for DESIGN_BAD in 'path:"."' 'path:"a/*"' 'path:"!a"' 'path:"a//b"' 'path:"a/./b"' 'repo:"../x"' 'repo:"acme/.."'; do
+  jq --arg ref "$DESIGN_REF1" ".skills += [{name:\"bad\", bundle:\"extra\", summary:\"x\", source:({repo:\"acme/skills\", ref:\$ref, path:\"skills/foo\"} + {$DESIGN_BAD}), license:\"MIT\", review:{runs:\"none\", network:\"none\"}}]" \
+    "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bad.json"
+  DESIGN_BAD_OUT="$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bad.json" setup_cmd design install --tool claude bad | jq -r '"\(.action) \(.detail)"')"
+  assert_contains "$DESIGN_BAD_OUT" "failed invalid source." "catalog value $DESIGN_BAD is refused before git runs"
+  [[ ! -e "$SETUP_T/claude/bad" ]] || fail "refused catalog value $DESIGN_BAD left a folder"
+done
+# 빈 묶음도 bash 3.2 set -u에서 멈추지 않는다.
+jq '.skills |= map(select(.bundle != "extra"))' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/core-only.json"
+HM_SETUP_DESIGN_CATALOG="$SETUP_T/core-only.json" setup_cmd design install --tool claude extra >/dev/null || fail "an empty bundle fails under set -u"
+# 스킬 자리에 파일이나 symlink가 있으면 우리가 깐 사본이 아니다.
+printf 'a file\n' >"$SETUP_T/claude/bar2"
+jq '.skills += [(.skills[] | select(.name=="bar") | .name = "bar2" | .source.path = "a/bar")]' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bar2.json"
+assert_eq "skipped foreign" "$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bar2.json" setup_cmd design install --tool claude bar2 | jq -r '"\(.action) \(.detail)"')" "a file in the skill slot is foreign"
+assert_eq "a file" "$(cat "$SETUP_T/claude/bar2")" "a file in the skill slot is kept"
+rm -f "$SETUP_T/claude/bar2"
+# 관리 사본에 사용자가 더한 symlink·빈 디렉터리는 수정으로 본다 — 지우지 않는다.
+ln -s /etc/hosts "$SETUP_T/claude/bar/my-link"
+assert_eq "modified" "$(design_status bar claude)" "a symlink added to a managed copy counts as modified"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool claude bar | jq -r '"\(.action) \(.detail)"')" "a managed copy with a user symlink is not removed"
+[[ -L "$SETUP_T/claude/bar/my-link" ]] || fail "user symlink removed"
+rm "$SETUP_T/claude/bar/my-link"
+mkdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "modified" "$(design_status bar claude)" "an empty directory added to a managed copy counts as modified"
+rmdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "current" "$(design_status bar claude)" "the untouched managed copy is current again"
+# 외부 git은 프롬프트·hook·LFS 필터 없이, 느린 연결을 끊고 돈다.
+SETUP_SRC="$(<"$ROOT/scripts/setup.sh")"
+for DESIGN_GIT_OPT in "GIT_TERMINAL_PROMPT=0" "GIT_SSH_COMMAND='ssh -o BatchMode=yes'" "http.lowSpeedLimit=1000" "http.lowSpeedTime=30" "core.hooksPath=/dev/null" "filter.lfs.process=" "GIT_LFS_SKIP_SMUDGE=1"; do
+  assert_contains "$SETUP_SRC" "$DESIGN_GIT_OPT" "design git runs with $DESIGN_GIT_OPT"
+done
+# shellcheck disable=SC2016  # 셸 변수가 아니라 setup.sh 소스의 문자열을 찾는다
+[[ "$(grep -cE '^[[:space:]]*(GIT_[A-Z_]+=[^ ]+ )*git -C "\$work"' "$ROOT/scripts/setup.sh")" == 0 ]] || fail "design fetch calls git without design_git"
+# 교체하며 옮겨 둔 기존 폴더는 중단돼도 지워지는 tmp가 아니라 backups에 있다.
+# shellcheck disable=SC2016  # 소스 문자열 그대로
+assert_contains "$SETUP_SRC" 'old="$STATE_DIR/backups/old-' "replaced folder waits in backups, not tmp"
+# 사용자가 원래 갖고 있던 같은 이름 스킬은 --replace 없이는 그대로 둔다.
+setup_cmd design remove --tool claude foo >/dev/null
+mkdir -p "$SETUP_T/claude/foo"
+printf 'my own foo\n' >"$SETUP_T/claude/foo/SKILL.md"
+assert_eq "skipped foreign" "$(setup_cmd design install --tool claude foo | jq -r '"\(.action) \(.detail)"')" "foreign design skill kept"
+DESIGN_OUT="$(setup_cmd design install --tool claude --replace foo)"
+assert_eq "replaced" "$(jq -r '.action' <<<"$DESIGN_OUT")" "foreign design skill replaced on request"
+assert_eq "my own foo" "$(cat "$(jq -r '.detail' <<<"$DESIGN_OUT")/SKILL.md")" "replaced design skill backed up"
+# 고정 커밋이 바뀌면 outdated. 고친 사본은 갱신하지 않는다. SessionStart·update는 네트워크로 외부 스킬을 갱신하지 않는다.
+printf -- '---\nname: foo\n---\nfoo v2\n' >"$DESIGN_REMOTE/skills/foo/SKILL.md"
+git -C "$DESIGN_REMOTE" -c user.name=t -c user.email=t@t commit -qam v2
+design_catalog "$(git -C "$DESIGN_REMOTE" rev-parse HEAD)"
+assert_eq "outdated" "$(design_status foo claude)" "new pinned commit makes the copy outdated"
+printf '{}' | setup_cmd notify >/dev/null
+setup_cmd update >/dev/null
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v1" "SessionStart and update leave design skills alone"
+printf 'local\n' >>"$SETUP_T/codex/foo/SKILL.md"
+DESIGN_OUT="$(setup_cmd design install --tool both foo)"
+assert_eq "updated" "$(jq -r 'select(.tool=="claude") | .action' <<<"$DESIGN_OUT")" "outdated design skill updates"
+assert_eq "skipped modified" "$(jq -r 'select(.tool=="codex") | "\(.action) \(.detail)"' <<<"$DESIGN_OUT")" "edited design skill is not overwritten"
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v2" "update installs the new pinned commit"
+assert_eq "removed" "$(setup_cmd design remove --tool claude foo | jq -r '.action')" "remove managed design skill"
+[[ ! -e "$SETUP_T/claude/foo" ]] || fail "removed design skill dir still exists"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool codex foo | jq -r '"\(.action) \(.detail)"')" "edited design skill is not removed without --force"
+SETUP_ENV=()
+# 기본 스킬 목록·안내에는 외부 디자인 스킬이 섞이지 않는다.
+assert_eq "0" "$(setup_cmd list | jq -r 'select(.name=="foo" or .name=="impeccable") | .name' | grep -c . || true)" "plain list shows only the base catalog"
+pass "setup installs design skills from pinned upstream commits"
 
 # 접속 정보: secret은 인자로 받지 않고 stdin으로만, 저장한 파일에서 바로 연결 확인. 자격 증명은 HTTP 호출 인자에도 싣지 않는다.
 SETUP_T="$TEST_TMP/setup-creds"

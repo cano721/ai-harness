@@ -129,14 +129,17 @@ AGENTS.md                    # 진입점 (아래 구성)
       SKILL.md
       references/checklist.md
       references/design-handoff.md   # 시안 처리 규칙 (landing-page와 같은 내용)
+      references/design-skills.md    # 디자인 스킬 지도 (외부 디자인 스킬의 주도·영역, landing-page와 같은 내용)
     native-ui/               # stack:native일 때만. 네이티브 앱 렌더링·조작 검토
       SKILL.md
       references/            # checklist.md·platforms.md + ui-review 계약·시안 처리 규칙 사본
     frontend-team/           # stack:frontend-team일 때만. 프론트 역할 라우터
       SKILL.md
       references/design-handoff.md   # 세 역할이 따르는 시안 처리 규칙
+      references/design-skills.md    # 디자인 스킬 지도
     design-audit/            # stack:design-system일 때만. 디자인 규칙 채점
       SKILL.md
+      references/design-skills.md    # 디자인 스킬 지도 (외부 스킬 결과는 점수 밖)
 .codex/
   agents/                    # Codex 또는 둘 다를 선택한 standard
     explorer.toml             # model·model_reasoning_effort가 지정된 read-only agent
@@ -183,6 +186,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - `/diagram`도 **플러그인 전역 Skill**(`skills/diagram/`)이며 프로젝트에 진입점이나 보호 파일을 만들지 않는다. 플러그인에 고정된 Archify 엔진(`vendor/archify/`)으로 다이어그램을 그리고, 초기화가 만든 `.ai-harness/docs/architecture.md`는 어디를 볼지 정하는 지도로만 읽는다 — 근거는 커밋된 소스다. 관리 생성물·동기화 대상이 아니다.
 - `/landing-page`도 **플러그인 전역 Skill**(`skills/landing-page/`)이며 프로젝트에 진입점이나 보호 파일을 만들지 않는다. 소개·랜딩·마케팅 페이지를 브리프 → 방향 → 레이아웃·타이포 → 모션 → 브라우저 검증 순서로 만드는 판단 절차만 담고, 톤·브랜드·토큰 같은 제품 사실은 실행 시 저장소(디자인 시스템 문서·토큰·컴포넌트)에서 읽거나 사용자와 정한다 — 저장소 디자인 시스템이 있으면 항상 스킬 기본값보다 우선한다. 브랜드 출처·승인된 문구 같은 조정이 필요한 프로젝트만 `.ai-harness/workflows/landing-page.md`를 직접 만들어 두면 스킬이 런타임에 읽는다. 초기화는 그 파일을 생성하지 않으며, 관리 생성물·동기화 대상도 아니다. 업무 화면(제품 UI)은 `ui-review` 계약을 따르고 이 스킬을 쓰지 않는다. 시안 처리 규칙의 원본은 `skills/landing-page/references/design-handoff.md`다.
 - `/design-system-builder`도 **플러그인 전역 Skill**(`skills/design-system-builder/`)이며 프로젝트에 진입점이나 관리 생성물을 만들지 않는다(stack 이름 `design-system`과 다른 것이다 — 그쪽은 규칙 문서를 채점하는 `design-audit`를 까는 게이트다). 기존 코드 추출·새로 설계·시안 추출로 디자인 규칙 문서·스택별 토큰 파일·3회 이상 반복된 공통 컴포넌트·기준 화면을 만들고, 그 규칙 문서의 필수 절이 `design-audit` 다섯 축의 입력 계약이다. 하네스가 없는 저장소에서도 동작하고, 하네스가 있으면 `frontend.md`·`ui.md`를 먼저 읽되 보호 파일이므로 `## 디자인 점검` 등의 변경은 diff를 보여 승인받은 뒤에만 반영한다. 초기화는 이 Skill을 부르지 않는다 — 규칙 문서와 기준 화면이 생긴 뒤 `--reconfigure`로 `design-system` stack을 켤 수 있다고 안내만 한다.
+- **디자인 스킬 지도**(`templates/ui-review/references/design-skills.md`)는 설치된 외부 디자인 스킬(`impeccable`·`dataviz`·`design-taste-frontend` 등) 중 작업마다 하나만 주도하고 나머지는 겹치지 않는 영역만 돕게 정한 단일 출처다. `landing-page`·`design-system-builder`는 플러그인 안에, `ui-review`·`frontend-team`·`design-audit`는 생성물 `references/`에 바이트 단위로 같은 사본을 두고(관리 생성물, sync가 갱신), 프로젝트 규칙 > ai-harness 계약 > 지도 순으로 따른다. 하네스 UI 계약이 없는 저장소나 단일 HTML 리포트의 독립 디자인 검토는 플러그인 전역 에이전트 `ai-harness:design-reviewer`(Claude, 편집 도구 없음·Bash는 렌더링 한정, 외부 스킬은 쓰지 않음)가 맡는다.
 - **프론트 판단 Skill**(`frontend-fundamentals`·`declarative-code`·`frontend-testing`·`no-unnecessary-effects`, FSD면 `feature-sliced-design` 추가)은 `implement-feature` 부류와 달리 워크플로 어댑터가 아니라 `templates/<name>/`의 **자립 지침을 프로젝트로 복사**한 것이다. 코드를 직접 바꾸지 않는 읽기 전용 판단이지만 프론트엔드 전용이라 플러그인 전역 Skill로 두지 않는다 — 백엔드 저장소에 노출되면 노이즈이므로, 프론트엔드로 감지된 프로젝트에서만 stack 게이트(`frontend`/`fsd`)로 생성한다. Codex는 `.agents/skills/<name>/`, Claude는 `.claude/skills/<name>/`에 SKILL.md와 `references/`를 통째로 복사한다. 각 Skill이 참조하는 프로젝트 고유 사실(디자인 시스템·테마 토큰명, 선언 사다리, FSD 여부)은 `templates`를 일반화하며 빠졌으므로 `.ai-harness/docs/frontend.md`에 실측으로 채운다(보호 파일 — 자동 갱신하지 않는다). Skill 본문은 이 문서가 있으면 우선하도록 이미 적혀 있다. `feature-sliced-design`·`no-unnecessary-effects`는 각각 MIT 라이선스 상류의 사본이며(`THIRD-PARTY-LICENSES.md`), 복사본에도 각 SKILL.md 하단의 저작권 문구가 남는다.
 - **UI 검토 계약**(`ui-review`)도 `templates/ui-review/`의 자립 지침을 복사하는 Skill이며 stack 게이트 `ui`로만 생성한다. 프론트 판단 Skill과 달리 서버 렌더링 화면(Flask/Jinja·Thymeleaf·JSP 등)도 대상이다. 계약은 작성과 검토를 나눈다: 화면을 만드는 쪽은 deliver·repair 노드, 판정하는 쪽은 그래프의 `ui_review` 노드(작업 트리를 바꾸지 않고 앱을 띄워 브라우저로 렌더링·조작하며, 캡처는 저장소 밖에 둔다)다. feature·bug 그래프는 Brief가 `ui_scenarios`를 낼 때, review 그래프는 변경이 사용자 화면을 바꿀 때 `ui_review`를 거치고, 주요 문제는 repair → 재검토 → `ui_review` 재검증으로, 검증하지 못하면 done이 아니라 `user_decision`(미검증)으로 간다. 단독 진입은 Skill 자체(`/ui-review`, Codex `$ui-review`)와 `.ai-harness/workflows/ui-review-graph.json`이다. 우선순위는 프로젝트 규칙(디자인 문서·의미 토큰·공통 컴포넌트·기준 화면, `.ai-harness/docs/ui.md`) → 계약 → 외부 디자인 Skill(선택 보조, 쓰면 이름·버전 기록)이다. 프로젝트 고유 사실은 `.ai-harness/docs/ui.md`에 실측으로 채운다(보호 파일). 앱을 띄우는 명령이나 로그인 방법을 확인하지 못했으면 추측으로 채우지 말고 비워 둔 채 그 사실을 적는다 — `ui_review`가 그 이유로 미검증을 보고하게 하는 편이 거짓 통과보다 낫다.
 - **네이티브 UI 검토**(`native-ui`)는 stack 게이트 `native`로만 생성한다. 웹 `ui-review` 계약을 다시 쓰지 않고, 계약 원본(`templates/ui-review/SKILL.md`)과 시안 처리 규칙을 `references/`에 그대로 복사해 단계·판정·거짓 통과를 공유한다 — 사본은 관리 생성물이라 sync가 웹 계약과 함께 갱신한다. Skill 본문은 계약을 네이티브로 읽는 법(브라우저 → 시뮬레이터·에뮬레이터, 뷰포트 → 크기 등급, 테마 → 다크·큰 글자)과 체크리스트·플랫폼별 캡처 방법만 담는다. 빌드·실행 도구가 없거나 앱을 띄우지 못하면 `unverified`다. 시안 처리 규칙의 원본은 `skills/landing-page/references/design-handoff.md`이고 `templates/ui-review/references/design-handoff.md`는 바이트 단위로 같은 사본이다(테스트가 일치를 검사한다).
@@ -244,7 +248,8 @@ $ROOT/scripts/harness-sync-state.sh record --root . --version <플러그인 버�
   --file <관리 생성물 상대 경로> [...]
 ```
 
-5. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
+5. **외부 디자인 스킬 안내** (웹 UI 계약을 생성해 manifest `stacks`에 `ui`·`frontend-team`·`design-system` 중 하나가 있을 때만 — 지도(`design-skills.md`)가 없는 저장소에서는 어느 스킬이 주도할지 정해지지 않으므로 권하지 않는다. `frontend`만 있거나 네이티브(`native`)만 있는 저장소, 백엔드·라이브러리 저장소에는 권하지 않는다): `$ROOT/scripts/setup.sh design list`로 상태를 보고, 필수 묶음(`core`: `impeccable`, Claude 내장 `dataviz`) 중 선택한 도구에 없는 것이 있으면 `/ai-harness:setup design`(Codex는 "ai-harness setup 스킬로 디자인 스킬 설치")을 한 줄로 권한다. 설치는 init이 하지 않는다 — 사용자 전역 폴더를 바꾸는 일이라 사용자가 setup에서 고른다. 생성한 UI 계약(`ui-review`·`frontend-team`·`design-audit`)은 `references/design-skills.md` 지도로 설치된 스킬만 쓰고, 없으면 지금 동작 그대로 간다.
+6. 선택한 도구의 진입점과 agent 모델 기본값을 안내: Codex는 `.agents/skills/`의 자연어 호출과 `.codex/agents/`, Claude는 `.claude/commands/`와 `.claude/agents/`를 사용한다. 모델을 사용할 수 없다는 오류가 있으면 대체 후보를 사용자에게 제시한다. 이후 세션부터 활동이 자동 수집되며, 2~4주 뒤 `/metrics`로 관찰, `/harvest <프로젝트>`로 개선 사이클을 시작한다.
 
 ## 6. 기존 하네스: 동기화와 설정 변경
 
