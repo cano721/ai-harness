@@ -3968,7 +3968,8 @@ AM_SINCE="2026-11-03T00:00:00Z"
 am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
 am_harvest_enqueue() { HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr "$1" --since "$AM_SINCE" --review "$AM_REVIEW"; }
 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/1 --since "$AM_SINCE"
-assert_not_file "$AM_DATA/harvest-auto/runs.jsonl"
+assert_eq "auto_merge_eligible" "$(am_runs 'last | .event')" "with the setting off a passing sync PR is only noted as eligible"
+assert_eq "0" "$(am_pending)" "nothing is queued while the setting is off"
 am_sync_enqueue https://github.com/other/am/pull/1
 assert_eq "pr_repo_mismatch" "$(am_runs 'last | .reason')" "a PR URL of another repo is refused"
 AM_BASE=develop am_sync_enqueue https://github.com/acme/am/pull/1
@@ -4044,6 +4045,21 @@ assert_eq "github|squash|abc1234" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr
 assert_eq "bitbucket|merge_commit" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --merge https://bitbucket.org/ws/r/pull-requests/4 --head abc1234 --method merge | jq -r '"\(.provider)|\(.merge_strategy)"')" "Bitbucket merge request"
 if "$ROOT/scripts/open-pr.sh" --merge https://github.com/acme/svc/pull/3 --head 'x; rm' >/dev/null 2>&1; then fail "merge requires a commit hash head"; fi
 if HARNESS_METRICS_DIR="$AM_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project am-svc --first-pass maybe >/dev/null 2>&1; then fail "first-pass accepts only pass|revised"; fi
+# 꺼져 있을 때: 켰다면 병합됐을 sync PR이 30일에 3건 이상이면 켜는 방법을 30일에 한 번 안내한다. harvest는 권하지 않는다.
+AM_DATA="$TEST_TMP/am-hint"
+for AM_N in 61 62; do am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr "https://github.com/acme/am/pull/$AM_N" --since "$AM_SINCE"; done
+assert_eq "" "$(am notify)" "two eligible PRs are not enough for a hint"
+am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/63 --since "$AM_SINCE"
+am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/64 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "3" "$(am_runs '[.[] | select(.event == "auto_merge_eligible")] | length')" "harvest PRs are not judged in the background"
+assert_eq "" "$(HM_AUTO_MERGE_HINT=0 am notify)" "the hint can be turned off"
+assert_eq "" "$(HM_SYNC_AUTO_MERGE=1 am notify)" "no hint once auto merge is on"
+AM_HINT="$(am notify | jq -r '.systemMessage')"
+assert_contains "$AM_HINT" "3건" "the hint shows the evidence"
+assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting"
+assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
+assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
 pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.

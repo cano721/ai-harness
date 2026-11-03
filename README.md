@@ -557,6 +557,7 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 
 - **흐름**: 무인 실행이 PR을 연 직후 내용 조건을 판정해 대기열(`~/.ai-harness/auto-merge/pending/`)에 넣고, 정기 실행이 매 회차(유휴·한도와 무관, LLM 없음) 호스트 조건을 확인해 draft를 풀고 head를 고정해 병합합니다. Bitbucket은 head를 고정할 수 없어 병합 직전에 다시 읽어 맞춰 봅니다
 - **기록·알림**: `runs.jsonl`에 `auto_merge_queued`·`auto_merged`(병합 커밋)·`auto_merge_skipped`(사유)로 남고, 세션 시작 때 지난 알림 뒤의 병합·사람 확인 필요 건수를 알립니다
+- **켜기 안내**: 꺼져 있어도 자동 sync PR은 LLM 없이 내용 조건만 판정해 `auto_merge_eligible`로 남깁니다. 최근 30일에 3건(`HM_AUTO_MERGE_HINT_MIN`) 이상이면 세션 시작 때 그 건수와 켜는 방법을 30일에 한 번 안내합니다(`HM_AUTO_MERGE_HINT=0`이면 끔). 기본값은 바꾸지 않고, harvest는 권하지 않습니다
 - **되돌리기**: 자동으로 하지 않습니다. 자동 병합된 harvest 개선이 다음 harvest 검증에서 효과가 없으면 revert PR을 사람 검토용으로 엽니다(자동 병합 대상 아님)
 - 한계: harvest의 독립 검토 세션도 LLM이라 diff에 섞인 지시문에 흔들릴 수 있습니다 — 경로·크기·모드 제한과 함께 쓰는 마지막 관문입니다(검토 1회 비용, 기본 상한 `HM_AUTO_MERGE_REVIEW_BUDGET_USD=1`). Bitbucket merge API는 head를 고정할 수 없어 draft 해제 전후와 병합 응답에서 head를 다시 맞춰 보지만, 마지막 확인과 병합 사이의 push는 막지 못합니다. 병합 직전에 달린 코멘트도 같은 틈이 있습니다. 병합 실패(호스트 merge check·권한)는 draft로 되돌리고 다시 시도하지 않으며 사람에게 넘깁니다
 
@@ -712,6 +713,7 @@ HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤�
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
 HM_SYNC_AUTO_MERGE=0             # 1이면 검증되는 자동 sync PR을 병합(저장소 harness.json auto_merge.sync도 true여야 함)
 HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병합(auto_merge.harvest도 true여야 함)
+HM_AUTO_MERGE_HINT=1             # 0이면 자동 sync 병합 켜기 안내(조건을 만족한 sync PR이 30일 3건 이상일 때)를 끔
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증

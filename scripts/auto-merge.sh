@@ -35,6 +35,7 @@ EOF
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 iso_epoch() { date -u -j -f %Y-%m-%dT%H:%M:%SZ "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null; }
 blob_sha256() { git -C "$1" cat-file blob "$2" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}'; }
 append_run() { mkdir -p "$(dirname "$RUNS_FILE")" && printf '%s\n' "$1" >>"$RUNS_FILE"; }
@@ -257,7 +258,13 @@ command_enqueue() {
   done
   [[ -n "$project" && -n "$scope" && "$pr" == https://* && "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || usage
   args=(--scope "$scope" --repo "$repo" --base "$base" --head "$head" --result "$result" --review "$review")
-  opt_in_env "$scope" || return 0
+  if ! opt_in_env "$scope"; then
+    # 꺼져 있으면 sync PR만 LLM 없이 내용 조건을 판정해 둔다. 켜도 될 근거가 쌓이면 세션 시작 때 한 번 안내한다.
+    if [[ "$scope" == sync ]] && command_check "${args[@]}" >/dev/null; then
+      record auto_merge_eligible "$project" "$scope" "$pr"
+    fi
+    return 0
+  fi
   repo_allows "$repo" "$base" "$scope" || { record auto_merge_skipped "$project" "$scope" "$pr" "repo_opt_out"; return 0; }
   # PR이 향해야 할 브랜치. 원격 추적 ref(origin/<branch>)가 아니면 PR 대상과 맞춰 볼 수 없다.
   [[ "$base" == origin/?* ]] || { record auto_merge_skipped "$project" "$scope" "$pr" "no_base_branch"; return 0; }
@@ -356,24 +363,44 @@ command_sweep() {
   hm_release_lock "$AM_DIR/sweep.lock"
 }
 
+# 자동 sync 병합이 꺼져 있고, 켰다면 병합됐을 sync PR(내용 조건 통과)이 최근 30일에 쌓였으면 켜는 방법을 30일에 한 번 안내한다.
+# 기본값을 바꾸지 않고 근거를 보여 준다. harvest는 권하지 않는다(독립 검토 비용이 들고 팀 지침을 바꾸므로 사용자가 직접 판단).
+hint_message() {
+  local marker="$AM_DIR/hinted_at" last=0 now=0 n=0 min="${HM_AUTO_MERGE_HINT_MIN:-3}"
+  [[ "${HM_AUTO_MERGE_HINT:-1}" != "0" && "${HM_SYNC_AUTO_MERGE:-0}" != "1" && -f "$RUNS_FILE" ]] || return 0
+  [[ "$min" =~ ^[0-9]+$ ]] || min=3
+  now="$(date -u +%s)"
+  last="$(cat "$marker" 2>/dev/null || echo 0)"; [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  (( now - last >= 30 * 86400 )) || return 0
+  n="$(jq -Rrn --arg since "$(epoch_iso $((now - 30 * 86400)))" \
+    '[inputs | fromjson? | objects | select(.event == "auto_merge_eligible" and (.at // "") >= $since) | .artifact] | unique | length' \
+    "$RUNS_FILE" 2>/dev/null)"
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n >= min )) || return 0
+  mkdir -p "$AM_DIR" && printf '%s\n' "$now" >"$marker"
+  printf '%s\n' "ai-harness: 최근 30일 자동 sync PR ${n}건이 자동 병합 내용 조건(템플릿 그대로 복사·manifest 해시 일치·정책 불변)을 만족했습니다. 이런 PR의 병합을 맡기려면 /ai-harness:setup에서 HM_SYNC_AUTO_MERGE를 켜고, 저장소 기준 브랜치의 .ai-harness/harness.json에 \"auto_merge\": {\"sync\": true}를 넣으세요(CI 통과·사람 활동 없음도 병합 직전에 확인합니다). 이 안내 끄기: HM_AUTO_MERGE_HINT=0"
+}
+
 command_notify() {
   # 알림 위치는 시각이 아니라 이미 본 줄 수로 기억한다(같은 초에 붙은 기록을 빠뜨리지 않게). 파일이 줄었으면 처음부터 본다.
-  local marker="$AM_DIR/notified_lines" seen=0 total=0 msg=""
+  local marker="$AM_DIR/notified_lines" seen=0 total=0 msg="" hint="" joined=""
   [[ -f "$RUNS_FILE" ]] || return 0
   seen="$(cat "$marker" 2>/dev/null || echo 0)"; [[ "$seen" =~ ^[0-9]+$ ]] || seen=0
   total="$(wc -l <"$RUNS_FILE" | tr -d ' ')"
   (( seen <= total )) || seen=0
-  (( total > seen )) || return 0
-  msg="$(sed -n "$((seen + 1)),${total}p" "$RUNS_FILE" | jq -Rrn '[inputs | fromjson? | objects
-      | select(.event == "auto_merged" or (.event == "auto_merge_skipped"
-          and ((.reason // "") | tostring | test("^(repo_opt_out|opted_out|merged_elsewhere|closed|unsupported_host)$") | not)))]
-    | if length == 0 then empty else
-        "ai-harness 자동 병합: " + ([.[] | select(.event == "auto_merged")] | length | tostring) + "건 병합, "
-        + ([.[] | select(.event == "auto_merge_skipped")] | length | tostring) + "건은 사람 확인 필요 — "
-        + ([.[] | "\(.artifact) (\(if .event == "auto_merged" then "병합" + (if .reason then ", " + (.reason | tostring) else "" end) else (.reason | tostring) end))"] | .[-5:] | join(", "))
-      end' 2>/dev/null)" || return 0
-  mkdir -p "$AM_DIR" && printf '%s\n' "$total" >"$marker"
-  [[ -n "$msg" ]] && jq -cn --arg m "$msg" '{systemMessage:$m}'
+  if (( total > seen )); then
+    msg="$(sed -n "$((seen + 1)),${total}p" "$RUNS_FILE" | jq -Rrn '[inputs | fromjson? | objects
+        | select(.event == "auto_merged" or (.event == "auto_merge_skipped"
+            and ((.reason // "") | tostring | test("^(repo_opt_out|opted_out|merged_elsewhere|closed|unsupported_host)$") | not)))]
+      | if length == 0 then empty else
+          "ai-harness 자동 병합: " + ([.[] | select(.event == "auto_merged")] | length | tostring) + "건 병합, "
+          + ([.[] | select(.event == "auto_merge_skipped")] | length | tostring) + "건은 사람 확인 필요 — "
+          + ([.[] | "\(.artifact) (\(if .event == "auto_merged" then "병합" + (if .reason then ", " + (.reason | tostring) else "" end) else (.reason | tostring) end))"] | .[-5:] | join(", "))
+        end' 2>/dev/null)" || msg=""
+    mkdir -p "$AM_DIR" && printf '%s\n' "$total" >"$marker"
+  fi
+  hint="$(hint_message)"
+  joined="$(printf '%s\n%s' "$msg" "$hint" | awk 'NF')"
+  [[ -n "$joined" ]] && jq -cn --arg m "$joined" '{systemMessage:$m}'
   return 0
 }
 
