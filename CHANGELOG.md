@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.52.0 (2026-11-03)
 ### 새 기능
 
 - **`git_policy: "merge"` — 사람이 정한 조건으로 병합하고 병합 후 검증까지 합니다** — 지금까지 워크플로는 PR과 원격 CI까지만 했고, 승인 → 병합 → 배포 확인은 사람이 매번 직접 했습니다. 새 정책을 고르면 `/harness-init` 인터뷰에서 병합 조건(`human_approval`·`remote_ci`·`no_conflict`·`not_draft`, 승인 수)·병합 방식·병합 후 검증(`target_ci`·`deploy`·`smoke`와 그 명령, `monitor`)을 사람이 고르고 manifest `merge_policy`에 남깁니다. 기능·버그 그래프에 `merge`·`post_merge_verify` 노드가 생겼습니다. 러너가 원격 CI 뒤 PR 호스트(GitHub `gh`, Bitbucket Cloud REST)에서 PR 상태를 직접 읽어 조건을 판정하고(지금 head에 대한, 작성자가 아닌 리뷰어의 승인만 셉니다), 모두 맞으면 head를 고정해 병합합니다. 아직 안 맞는 조건은 exit 30으로 기다리고 `resume`이 다시 보며, 변경 요청·충돌·head 이동은 사람에게 넘깁니다. 병합 후 검증이 실패해도 되돌리지 않고 되돌리는 방법을 안내합니다. `monitor`는 고친 운영 에러(`start --monitor-error`)를 `/autofix` 재발 추적에 올리는 데까지 하고, 해결·재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 합니다. 무인 실행과 `merge` 노드가 없는 옛 그래프는 병합하지 않습니다. (#176)
