@@ -56,6 +56,7 @@ flowchart LR
 |---|---|---|---|
 | `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 설정·생성물을 최신화할 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경·동기화합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
+| `/harness-impact` | 하네스를 도입하고 무엇이 나아졌는지 보고 싶을 때 ("하네스 효과 보여줘") | 설치일 직전 기간과 최근 기간을 같은 길이로 비교합니다. 같은 지적을 다시 하게 된 횟수(LLM 세션 정리의 교정), 하네스가 막은 위험한 수정, 작업당 턴, 툴 오류, 선택 시 재작업 PR 비율, 그 사이 harvest·자동 적용이 배운 규칙을 오프라인 HTML 리포트 한 파일로 엽니다. 설치 전 기록이 없거나 표본이 적거나 모델 구성이 바뀌었으면 리포트가 신뢰도 경고를 함께 보여주고, 변화를 원인으로 단정하지 않습니다. 원인을 확인하려면 `--ab`로 같은 과제를 합성 저장소에서 하네스 유무로 실제 에이전트에 돌려 숨긴 검사로 채점합니다(확인 후 실행, 비용 상한, Claude Code 전용). 설치 30일 뒤 세션 시작 때 한 번 안내합니다. | 요청 시 자동 선택·사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
 | `/autofix` | 운영 에러(Sentry·Datadog·사용자 어댑터)를 근거로 버그를 고치고, 고친 뒤 정말 멈췄는지 확인할 때 | 저장소의 `monitor` 설정을 만들고, 에러 묶음을 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 병합·배포 뒤 같은 에러가 다시 나오는지 지켜봐 해결·재발을 판정합니다. | 사용자 실행, `HM_AUTOFIX_AUTO=1`이면 정기 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
@@ -126,7 +127,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -704,6 +705,8 @@ HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
 HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
+HM_IMPACT_HINT=1                 # 0이면 설치 N일 뒤 /harness-impact 안내(프로젝트당 한 번)를 띄우지 않음
+HM_IMPACT_HINT_DAYS=30
 ```
 
 저장 위치를 바꾸려면 셸 프로파일에 설정합니다.

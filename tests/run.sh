@@ -71,6 +71,8 @@ export HM_BACKFILL_INTERVAL_HOURS=0
 export HM_AUTO_WORKTREE_DIR="$TEST_TMP/auto-worktrees"
 # 셋업 안내는 전용 테스트만 켠다. 전역 스킬 폴더는 실제 홈을 건드리지 않게 격리한다.
 export HM_SETUP_HINT=0
+# 도입 효과 안내도 전용 테스트만 켠다.
+export HM_IMPACT_HINT=0
 export HM_CLAUDE_SKILLS_DIR="$TEST_TMP/global-skills/claude" HM_CODEX_SKILLS_DIR="$TEST_TMP/global-skills/codex"
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
@@ -2749,6 +2751,25 @@ case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project exc
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
 pass "session ratio metrics"
 
+# 날짜 구간 필터: 설치일 전후처럼 특정 날짜로 자른다. until은 그 날을 포함하지 않는다.
+RANGE_DATA="$TEST_TMP/range-data"
+mkdir -p "$RANGE_DATA/events"
+for spec in r1:2026-09-20 r2:2026-10-01 r3:2026-10-15 r4:2026-10-31; do
+  jq -cn --arg sid "${spec%%:*}" --arg d "${spec#*:}" '{v:3, src:"claude", sid:$sid, project:"svc", kind:"session",
+    started:($d+"T01:00:00Z"), ended:($d+"T02:00:00Z"), turns:6, coverage:["workflow"]}' >"$RANGE_DATA/events/claude-${spec%%:*}.jsonl"
+done
+RANGE_STATS="$(HARNESS_METRICS_DIR="$RANGE_DATA" "$ROOT/scripts/stats.sh" --since 2026-10-01 --until 2026-10-31)"
+assert_contains "$RANGE_STATS" "기간: 2026-10-01 ~ 2026-10-31 전날" "stats prints the date range"
+assert_contains "$RANGE_STATS" "| svc | 2 | 12 |" "stats keeps sessions inside [since, until)"
+assert_contains "$(HARNESS_METRICS_DIR="$RANGE_DATA" "$ROOT/scripts/stats.sh" --until 2026-10-01)" "| svc | 1 | 6 |" "until alone keeps earlier sessions"
+if HARNESS_METRICS_DIR="$RANGE_DATA" "$ROOT/scripts/stats.sh" --days 7 --since 2026-10-01 >/dev/null 2>&1; then
+  fail "stats rejects --days with --since"
+fi
+if HARNESS_METRICS_DIR="$RANGE_DATA" "$ROOT/scripts/stats.sh" --since 2026/10/01 >/dev/null 2>&1; then
+  fail "stats rejects a malformed --since"
+fi
+pass "stats date range filter"
+
 # Codex rollout의 저장소 URL은 삭제된 worktree에서도 프로젝트를 지킨다.
 REPO_URL_DATA="$TEST_TMP/repo-url-data"
 REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
@@ -4396,5 +4417,195 @@ printf '%s\n' 'fe-designer' >"$SSR_ROOT/.claude/agents/fe-designer.md"
 "$ROOT/scripts/harness-sync-state.sh" record --root "$SSR_ROOT" --version 0.50.0 --file .claude/agents/fe-designer.md >/dev/null
 assert_eq "stack_removed" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SSR_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq -r '.orphaned[] | select(.path==".claude/agents/fe-designer.md") | .reason')" "fe-designer without frontend-team is an orphan"
 pass "design-system stack accepts a non-Storybook reference screen"
+
+
+# harness-impact: 설치일 기준 전후 비교. 설치일은 harness.json initialized → AGENTS.md 첫 커밋 → --at 순으로 정한다. (#197)
+IMPACT_DATA="$TEST_TMP/impact-data"
+IMPACT_REPO="$TEST_TMP/impact-repo"
+mkdir -p "$IMPACT_DATA/events" "$IMPACT_DATA/digests" "$IMPACT_REPO/.ai-harness"
+printf '%s\n' '{"project_id":"svc","level":"standard","initialized":"2026-10-01"}' >"$IMPACT_REPO/.ai-harness/harness.json"
+impact_session() { # sid date turns model [events-json...]
+  local sid="$1" d="$2" turns="$3" model="$4"; shift 4
+  {
+    jq -cn --arg sid "$sid" --arg d "$d" --argjson t "$turns" --arg m "$model" '{v:3, src:"claude", sid:$sid, project:"svc", kind:"session",
+      started:($d+"T01:00:00Z"), ended:($d+"T01:30:00Z"), turns:$t, tok_out:100, ctx_peak:5000, model:$m,
+      coverage:["workflow","doc_read","error","guard_block","permission_deny","compact"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --argjson e "$ev" '{v:3, src:"claude", sid:$sid, project:"svc", n:1} + $e'
+    done
+  } >"$IMPACT_DATA/events/claude-$sid.jsonl"
+}
+impact_session b1 2026-09-20 20 claude-opus-5-5 '{"kind":"error","n":3}' '{"kind":"jira_issue","target":"NJ-1","n":2}' '{"kind":"jira_issue","target":"NJ-9","n":1}'
+impact_session b2 2026-09-25 22 claude-opus-5-5 '{"kind":"jira_issue","target":"NJ-1","n":1}'
+impact_session a1 2026-10-05 8 claude-opus-5-5 '{"kind":"guard_block","n":2}' '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"jira_issue","target":"NJ-2","n":1}'
+impact_session a2 2026-10-20 10 claude-opus-5-5 '{"kind":"workflow","target":"ai-harness:implement-feature"}' '{"kind":"jira_issue","target":"NJ-3","n":1}'
+# 설치 전 구간 밖과 다른 프로젝트·내부 세션은 세지 않는다.
+impact_session old 2026-08-01 30 claude-opus-5-5
+jq -cn '{v:3, src:"claude", sid:"other", project:"else", kind:"session", started:"2026-10-06T01:00:00Z", ended:"2026-10-06T02:00:00Z", turns:9}' \
+  >"$IMPACT_DATA/events/claude-other.jsonl"
+jq -cn '{v:3, src:"claude", sid:"int", project:"svc", kind:"session", internal:true, started:"2026-10-06T01:00:00Z", ended:"2026-10-06T02:00:00Z", turns:9}' \
+  >"$IMPACT_DATA/events/claude-int.jsonl"
+seed_correction_digest "$IMPACT_DATA" "$IMPACT_DATA/events/claude-b1.jsonl" 3
+seed_correction_digest "$IMPACT_DATA" "$IMPACT_DATA/events/claude-b2.jsonl" 3
+seed_correction_digest "$IMPACT_DATA" "$IMPACT_DATA/events/claude-a1.jsonl" 1
+seed_correction_digest "$IMPACT_DATA" "$IMPACT_DATA/events/claude-a2.jsonl" 0
+mkdir -p "$IMPACT_DATA/harvest-queue/$(hm_project_key svc)" "$IMPACT_DATA/applied"
+jq -cn '{v:1, project:"svc", reviewed_at:"2026-10-10T00:00:00Z", review:{outcome:"improved", summary:"테스트 먼저 규칙 추가", expected:"재발 0", artifact:"https://example.com/pr/1"}},
+  {v:1, project:"svc", reviewed_at:"2026-10-12T00:00:00Z", review:{outcome:"no-change", summary:"근거 부족"}}' \
+  >"$IMPACT_DATA/harvest-queue/$(hm_project_key svc)/review-history.jsonl"
+jq -cn '{at:"2026-10-15T00:00:00Z", event:"applied", id:"g1", scope:"global", project:"_global", text:"전역 규칙"},
+  {at:"2026-10-16T00:00:00Z", event:"applied", id:"w1", scope:"workspace", project:"else", text:"남의 규칙"}' \
+  >"$IMPACT_DATA/applied/applied.jsonl"
+
+IMPACT_JSON="$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --today 2026-10-30)"
+assert_eq "2026-10-01 harness.json svc" "$(jq -r '"\(.installed.date) \(.installed.source) \(.project)"' <<<"$IMPACT_JSON")" "impact reads install date from harness.json"
+assert_eq "2026-09-01 2026-10-01 2026-10-01 2026-10-31 30" \
+  "$(jq -r '"\(.periods.before.since) \(.periods.before.until) \(.periods.after.since) \(.periods.after.until) \(.window_days)"' <<<"$IMPACT_JSON")" \
+  "impact compares equal windows on both sides of the install date"
+assert_eq "2 2" "$(jq -r '"\(.periods.before.sessions) \(.periods.after.sessions)"' <<<"$IMPACT_JSON")" "impact counts only this project's non-internal sessions in each window"
+assert_eq "21 9" "$(jq -r '"\(.periods.before.turns_median) \(.periods.after.turns_median)"' <<<"$IMPACT_JSON")" "impact reports median turns per active session"
+assert_eq "1 42 2 2 9 1" "$(jq -r '[.periods.before.tasks, .periods.before.task_turns_median, .periods.before.task_sessions_median,
+  .periods.after.tasks, .periods.after.task_turns_median, .periods.after.task_sessions_median] | map(tostring) | join(" ")' <<<"$IMPACT_JSON")" \
+  "impact groups sessions into tasks by their most-mentioned issue key"
+assert_eq "1" "$(jq -r '.periods.before.task_hours_median' <<<"$IMPACT_JSON")" "impact measures task time as the sum of its session durations"
+assert_eq "6 3 1 0.5" "$(jq -r '"\(.periods.before.corrections) \(.periods.before.corrections_per_session) \(.periods.after.corrections) \(.periods.after.corrections_per_session)"' <<<"$IMPACT_JSON")" \
+  "impact counts digest corrections per digested session"
+assert_eq "0 2 1.5 0" "$(jq -r '"\(.periods.before.guard_blocks) \(.periods.after.guard_blocks) \(.periods.before.errors_per_session) \(.periods.after.errors_per_session)"' <<<"$IMPACT_JSON")" \
+  "impact reports guard blocks and errors per session"
+assert_eq "6 1 false" "$(jq -r '"\(.corrections.before.items | length) \(.corrections.after.total) \(.corrections.before.truncated)"' <<<"$IMPACT_JSON")" "impact lists correction summaries for grouping"
+assert_eq "2026-09-14 2026-09-21 2026-10-05 2026-10-19" "$(jq -r '[.weekly[] | select(.sessions > 0) | .week] | join(" ")' <<<"$IMPACT_JSON")" "impact buckets sessions by Monday week"
+assert_eq "harvest:테스트 먼저 규칙 추가 rule:전역 규칙" "$(jq -r '[.timeline[] | "\(.kind):\(.summary)"] | join(" ")' <<<"$IMPACT_JSON")" \
+  "impact timeline keeps improved harvests and global or own rules"
+assert_eq "2 2" "$(jq -r '"\(.adoption.harness_sessions) \(.adoption.active_sessions)"' <<<"$IMPACT_JSON")" "impact adoption counts sessions that used the harness after install"
+assert_contains "$(jq -r '.warnings | join(",")' <<<"$IMPACT_JSON")" "low_sample" "impact warns when either window has few sessions"
+case "$(jq -r '.warnings | join(",")' <<<"$IMPACT_JSON")" in *model_shift*) fail "same model mix is not a model shift" ;; esac
+
+# 설치 직후면 지난 날만큼만 양쪽을 맞춘다.
+assert_eq "2026-09-21 2026-10-11 10" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --today 2026-10-10 \
+  | jq -r '"\(.periods.before.since) \(.periods.after.until) \(.window_days)"')" "impact shortens both windows right after install"
+# 설치가 오래됐으면 후 구간은 최근 window일이고, 전 구간은 그대로 설치일 직전이다.
+assert_eq "2026-09-01 2026-10-01 2026-12-01 2026-12-31 gap" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --today 2026-12-30 \
+  | jq -r '"\(.periods.before.since) \(.periods.before.until) \(.periods.after.since) \(.periods.after.until) \(.warnings | map(select(. == "gap")) | join(""))"')" \
+  "impact compares the latest window with the days just before install"
+# --at이 harness.json보다 우선하고, harness.json이 없으면 AGENTS.md 첫 커밋 날짜를 쓴다.
+assert_eq "2026-09-25 at" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --project svc --at 2026-09-25 --today 2026-10-30 \
+  | jq -r '"\(.installed.date) \(.installed.source)"')" "impact --at overrides the recorded install date"
+IMPACT_GIT="$TEST_TMP/impact-git"
+mkdir -p "$IMPACT_GIT"
+git -C "$IMPACT_GIT" init -q
+printf 'rules\n' >"$IMPACT_GIT/AGENTS.md"
+git -C "$IMPACT_GIT" add AGENTS.md
+GIT_AUTHOR_DATE=2026-09-15T00:00:00Z GIT_COMMITTER_DATE=2026-09-15T00:00:00Z \
+  git -C "$IMPACT_GIT" -c user.email=t@example.com -c user.name=t commit -q -m harness
+assert_eq "2026-09-15 agents_md_commit" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_GIT" --project svc --today 2026-10-30 \
+  | jq -r '"\(.installed.date) \(.installed.source)"')" "impact falls back to the first AGENTS.md commit"
+if HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$TEST_TMP/impact-none" --project svc >/dev/null 2>&1; then
+  fail "impact fails without any install date"
+fi
+assert_contains "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --project svc --at 2026-08-15 --today 2026-08-20 | jq -r '.warnings | join(",")')" \
+  "before_missing" "impact flags an empty before window"
+pass "impact compares windows around the install date"
+
+# 리포트: 데이터와 에이전트가 묶은 하이라이트를 오프라인 HTML 한 파일에 싣는다. 데이터 속 </script>로 페이지를 깨지 못한다.
+IMPACT_DATA_FILE="$TEST_TMP/impact.json"
+jq '.corrections.before.items[0].summary = "</script><script>alert(1)</script>"' <<<"$IMPACT_JSON" >"$IMPACT_DATA_FILE"
+printf '%s\n' '{"headline":"같은 지적이 줄었어요","groups":[{"label":"테스트 먼저","before":3,"after":0}],"cases":[]}' >"$TEST_TMP/impact-hl.json"
+IMPACT_HTML="$TEST_TMP/impact.html"
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --highlights "$TEST_TMP/impact-hl.json" --out "$IMPACT_HTML" >/dev/null
+assert_file "$IMPACT_HTML"
+IMPACT_HTML_CONTENT="$(cat "$IMPACT_HTML")"
+assert_contains "$IMPACT_HTML_CONTENT" "같은 지적이 줄었어요" "report embeds the headline"
+assert_contains "$IMPACT_HTML_CONTENT" '"installed"' "report embeds the compare data"
+case "$IMPACT_HTML_CONTENT" in *"</script><script>alert"*) fail "report escapes </script> inside embedded data" ;; esac
+case "$IMPACT_HTML_CONTENT" in *"https://cdn"*|*"<script src="*|*"<link rel=\"stylesheet\" href=\"http"*) fail "report loads nothing from the network" ;; esac
+assert_eq "1" "$(grep -c '__IMPACT_DATA__' "$ROOT/skills/harness-impact/report-template.html")" "template has one data placeholder"
+case "$IMPACT_HTML_CONTENT" in *__IMPACT_DATA__*|*__IMPACT_HIGHLIGHTS__*) fail "report fills every placeholder" ;; esac
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --out "$TEST_TMP/impact-nohl.html" >/dev/null
+assert_contains "$(cat "$TEST_TMP/impact-nohl.html")" "const HIGHLIGHTS = null" "report renders without highlights"
+pass "impact renders an offline report"
+
+# 설치 30일 뒤 SessionStart에서 한 번만 안내한다.
+IMPACT_HINT_INPUT="$(jq -cn --arg cwd "$IMPACT_REPO" '{cwd:$cwd, transcript_path:"/x/s.jsonl"}')"
+assert_eq "" "$(HM_IMPACT_HINT=1 HM_IMPACT_TODAY=2026-10-20 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" notify <<<"$IMPACT_HINT_INPUT")" "no impact hint before 30 days"
+IMPACT_HINT="$(HM_IMPACT_HINT=1 HM_IMPACT_TODAY=2026-10-31 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" notify <<<"$IMPACT_HINT_INPUT")"
+assert_contains "$(jq -r '.systemMessage' <<<"$IMPACT_HINT")" "하네스 효과 보여줘" "impact hint suggests the natural-language request"
+assert_eq "" "$(HM_IMPACT_HINT=1 HM_IMPACT_TODAY=2026-11-01 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" notify <<<"$IMPACT_HINT_INPUT")" "impact hint shows once per project"
+assert_eq "" "$(HM_IMPACT_HINT=0 HM_IMPACT_TODAY=2026-12-31 HARNESS_METRICS_DIR="$TEST_TMP/impact-hint-off" "$ROOT/scripts/impact.sh" notify <<<"$IMPACT_HINT_INPUT")" "HM_IMPACT_HINT=0 turns the hint off"
+assert_eq "" "$(HM_IMPACT_HINT=1 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" notify <<<'{"cwd":"/nonexistent/x"}')" "impact hint is silent outside a harness project"
+pass "impact hint after 30 days"
+
+# 리뷰 회귀: 오늘이 속한 주가 주간 추이에서 빠지지 않고, 깨진 이벤트 줄·digest 파일이 compare를 멈추지 않는다.
+assert_eq "2026-11-02" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --at 2026-09-01 --window 60 --today 2026-11-04 \
+  | jq -r '.weekly | last | .week')" "impact weekly series ends with the current week"
+printf '{"v":3,"src":"claude","sid":"a2","project":"svc","kind":"error","n":1}\n{"v":3,"kind":"err' >>"$IMPACT_DATA/events/claude-a2.jsonl"
+printf '{"v":2,"findings":[{"category":"correction"' >"$IMPACT_DATA/digests/claude-broken.json"
+assert_eq "2 1" "$(HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root "$IMPACT_REPO" --today 2026-10-30 \
+  | jq -r '"\(.periods.after.sessions) \(.periods.after.corrections)"')" "impact skips a truncated event line and a broken digest"
+# notify는 어떤 실패에도 조용히 0으로 끝난다.
+IMPACT_BAD="$TEST_TMP/impact-bad"
+mkdir -p "$IMPACT_BAD/.ai-harness"
+printf '%s\n' '{"initialized":"2026-13-45"}' >"$IMPACT_BAD/.ai-harness/harness.json"
+IMPACT_BAD_OUT="$(HM_IMPACT_HINT=1 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" notify <<<"{\"cwd\":\"$IMPACT_BAD\"}"; echo "rc=$?")"
+assert_eq "rc=0" "$IMPACT_BAD_OUT" "impact notify exits 0 quietly on an invalid install date"
+set +e
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" compare --root >/dev/null 2>&1
+IMPACT_RC=$?
+set -e
+assert_eq "2" "$IMPACT_RC" "impact rejects an option without its value"
+pass "impact review regressions"
+
+# A/B: 하네스 있는 저장소와 없는 저장소에서 같은 과제를 돌려 숨긴 검사로 채점한다. 가짜 에이전트로 채점·집계·비용 상한을 검사한다.
+AB_DATA="$TEST_TMP/ab-data"
+AB_STUB="$ROOT/tests/fixtures/ab/stub-agent.sh"
+assert_eq "8" "$(HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" estimate --runs 2 | jq -r '.agent_runs')" "ab estimate counts cases x 2 arms x runs"
+AB_OUT="$(HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --out "$TEST_TMP/ab.json" 2>/dev/null)"
+assert_eq "$TEST_TMP/ab.json" "$AB_OUT" "ab run prints the result path"
+assert_eq "apply-coupon:1:0.25 cancel-order:1:0.43" "$(jq -r '[.cases[] | "\(.name):\(.arms.harness.mean_score):\(.arms.bare.mean_score)"] | join(" ")' "$TEST_TMP/ab.json")" \
+  "ab grades the rule-following implementation fully and the naive one partially"
+assert_eq "0 0 1.4 stub false" "$(jq -r '"\([.cases[].arms[].errors] | add) \([.cases[].arms.bare.full_pass_runs] | add) \(.total_cost_usd) \(.agent) \(.partial)"' "$TEST_TMP/ab.json")" \
+  "ab runs the agent as an internal session and sums cost"
+assert_eq "7일 뒤 환불 90% 내림:0" "$(jq -r '.cases[] | select(.name == "cancel-order") | .arms.bare.checks[] | select(.kind == "project_rule") | "\(.name):\(.passed)"' "$TEST_TMP/ab.json" | head -1)" \
+  "ab keeps the case's check order and marks project rules"
+assert_contains "$(jq -r '.cases[0].arms.bare.runs[0].diff' "$TEST_TMP/ab.json")" "def cancel_order" "ab keeps the agent's diff for the report"
+HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --max-cost 0.5 --run-budget 0.2 --out "$TEST_TMP/ab-partial.json" >/dev/null 2>&1
+assert_eq "true 1 1" "$(jq -r '"\(.partial) \(.cases[0].arms.harness.runs | length) \(.cases[0].arms.bare.runs | length)"' "$TEST_TMP/ab-partial.json")" \
+  "ab stops at the cost ceiling only between rounds so both arms keep the same runs"
+assert_eq "1 0" "$(jq -r '.cases[] | select(.name == "cancel-order") | "\(.arms.harness.score_by_kind.project_rule) \(.arms.bare.score_by_kind.project_rule)"' "$TEST_TMP/ab.json")" \
+  "ab reports scores by check kind"
+# 오류 난 실행(예산 초과·타임아웃)은 점수 평균에서 빠진다.
+AB_FAIL_STUB="$TEST_TMP/ab-fail-stub.sh"
+printf '#!/usr/bin/env bash\nif [[ -f AGENTS.md ]]; then exec %q "$@"; fi\nexit 7\n' "$AB_STUB" >"$AB_FAIL_STUB"
+chmod +x "$AB_FAIL_STUB"
+HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_FAIL_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --case cancel-order --run-budget 1 --out "$TEST_TMP/ab-err.json" >/dev/null 2>&1
+assert_eq "1 0 null 1 1" "$(jq -r '.cases[0].arms.bare | "\(.errors) \(.scored_runs) \(.mean_score) \(.runs[0].cost_usd) \(.runs | length)"' "$TEST_TMP/ab-err.json")" \
+  "ab leaves errored runs out of the score and counts unknown cost as the run budget"
+if HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" run --case nope >/dev/null 2>&1; then fail "ab rejects an unknown case"; fi
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --ab "$TEST_TMP/ab.json" --out "$TEST_TMP/impact-ab.html" >/dev/null
+IMPACT_AB_HTML="$(cat "$TEST_TMP/impact-ab.html")"
+assert_contains "$IMPACT_AB_HTML" '"runs_per_arm":1' "report embeds the A/B result"
+case "$IMPACT_AB_HTML" in *__IMPACT_AB__*) fail "report fills the A/B placeholder" ;; esac
+assert_contains "$(cat "$TEST_TMP/impact-nohl.html")" "const AB = null" "report renders without A/B"
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --ab "$TEST_TMP/ab.json" --out "$TEST_TMP/ab-only.html" >/dev/null
+assert_contains "$(cat "$TEST_TMP/ab-only.html")" "const DATA = null" "report renders A/B alone when there is no install date"
+pass "ab experiment runner"
+
+# harness-impact는 전역 Skill이다: 도입 효과 요청을 받고, 사용량·개선 요청은 metrics·harvest로 보낸다.
+IMPACT_SKILL_CONTENT="$(<"$ROOT/skills/harness-impact/SKILL.md")"
+assert_file "$ROOT/skills/harness-impact/agents/openai.yaml"
+assert_contains "$IMPACT_SKILL_CONTENT" "impact.sh compare" "harness-impact runs the compare script"
+assert_contains "$IMPACT_SKILL_CONTENT" "impact.sh render" "harness-impact renders the report"
+assert_contains "$IMPACT_SKILL_CONTENT" "토큰 총량이나 절약 시간은 헤드라인에 쓰지 않는다" "harness-impact keeps token totals out of the headline"
+assert_contains "$IMPACT_SKILL_CONTENT" "원인을 증명하지 않는다" "harness-impact does not claim causation"
+assert_contains "$(sed -n '1,5p' "$ROOT/skills/harness-impact/SKILL.md")" "that is metrics" "harness-impact description hands usage reports to metrics"
+assert_contains "$(sed -n '1,5p' "$ROOT/skills/metrics/SKILL.md")" "harness-impact" "metrics description hands impact requests to harness-impact"
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'impact.sh" notify' "SessionStart carries the impact hint"
+assert_contains "$IMPACT_SKILL_CONTENT" "ab.sh estimate" "harness-impact shows the A/B size first"
+assert_contains "$IMPACT_SKILL_CONTENT" "실행 전에 확인을 받는다" "harness-impact asks before spending on A/B runs"
+# plugin eval이 A/B 과제를 트리거 케이스로 잘못 읽지 않게 prompt.md를 두지 않는다.
+assert_eq "0" "$(find "$ROOT/evals/ab" -name prompt.md | wc -l | tr -d ' ')" "A/B tasks are not plugin eval cases"
+for c in ko-show-effect ko-before-after ko-report ko-ab-request en-impact ko-token-usage ko-improve-harness; do
+  assert_file "$ROOT/evals/harness-impact/$c/prompt.md"
+done
+pass "harness-impact plugin skill"
 
 printf '1..%d\n' "$TESTS"
