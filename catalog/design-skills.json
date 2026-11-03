@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-11-03",
+  "map": "templates/ui-review/references/design-skills.md",
+  "policy": "원본 저장소에서 고정 커밋으로 받아 설치한다. ai-harness는 사본을 재배포하지 않는다. ref를 올릴 때는 라이선스와 실행 스크립트를 다시 검토하고 review를 갱신한다.",
+  "skills": [
+    {
+      "name": "impeccable",
+      "bundle": "core",
+      "summary": "제품·대시보드·리포트 화면 설계와 비평 전반 (지도에서 제품 화면·지표 리포트의 주도)",
+      "source": {
+        "repo": "pbakaus/impeccable",
+        "ref": "9fadc41729c38fd47d7ae622b501558653f9d2e9",
+        "path": { "claude": ".claude/skills/impeccable", "codex": ".agents/skills/impeccable" }
+      },
+      "license": "Apache-2.0",
+      "review": {
+        "runs": "Node 스크립트(scripts/live-browser*.js)가 로컬 개발 서버와 로컬 브라우저(CDP WebSocket)를 조작해 화면을 캡처·비평한다.",
+        "network": "localhost만. 외부 호출 없음.",
+        "notes": "Codex 경로는 agents/*.toml 하위 에이전트를 함께 담는다."
+      }
+    },
+    {
+      "name": "dataviz",
+      "bundle": "core",
+      "summary": "차트·지표 카드·차트 팔레트 검증 (지표 리포트에서 차트 영역)",
+      "builtin": "claude",
+      "note": "Claude에 내장된 스킬이라 설치하지 않는다. 공개 원본 저장소가 없어 Codex에는 대응이 없다."
+    },
+    {
+      "name": "design-taste-frontend",
+      "bundle": "extra",
+      "summary": "갤러리 247곳 기반 시각 방향 자료 (랜딩 페이지의 방향 후보)",
+      "source": { "repo": "Leonxlnx/taste-skill", "ref": "12af471f627f866411b4bd785b19646d3672784c", "path": "skills/taste-skill" },
+      "license": "MIT",
+      "review": {
+        "runs": "Node 스크립트(scripts/*.mjs)가 로컬 브라우저 검사기(CDP)를 돌리고, 요청 시 에셋을 내려받는다.",
+        "network": "assets.mjs가 공개 이미지 API(Openverse, Met Museum, Art Institute of Chicago, NASA, picsum)와 Google Fonts·jsDelivr를 호출한다.",
+        "notes": "설명이 앱 화면까지 넓게 반응한다. 지도는 랜딩의 방향 후보로만 쓴다."
+      }
+    },
+    {
+      "name": "ui-ux-pro-max",
+      "bundle": "extra",
+      "summary": "스타일·팔레트·폰트·차트 검색 자료 (토큰 없는 프로젝트의 팔레트·폰트 조회)",
+      "source": { "repo": "nextlevelbuilder/ui-ux-pro-max-skill", "ref": "713eef51b04efc98d6fa565323b495f7c9c89fd4", "path": ".claude/skills/ui-ux-pro-max" },
+      "license": "MIT",
+      "review": {
+        "runs": "Python 스크립트(scripts/search.py 등)가 동봉된 CSV 데이터를 로컬에서 검색한다.",
+        "network": "검색은 로컬. 동봉 데이터 갱신용 코드만 외부 주소를 참조한다.",
+        "notes": "프로젝트 토큰이 있으면 팔레트·폰트를 쓰지 않는다(지도의 금지 조합)."
+      }
+    },
+    {
+      "name": "design-system-patterns",
+      "bundle": "extra",
+      "summary": "토큰·테마 구조 패턴 (디자인 시스템 작업의 테마 구조 영역)",
+      "source": { "repo": "wshobson/agents", "ref": "7e2fb559cf4b824b27f1fec49fe88f7511066d26", "path": "plugins/ui-design/skills/design-system-patterns" },
+      "license": "MIT",
+      "review": { "runs": "실행 스크립트 없음(문서만).", "network": "없음." },
+      "overlaps": "design-system-builder가 토큰 이름·구조를 정하므로 대부분 대체된다."
+    },
+    {
+      "name": "emil-design-eng",
+      "bundle": "extra",
+      "summary": "UI 마감 디테일 원칙 (제품 화면 다듬기의 마감 영역)",
+      "source": { "repo": "emilkowalski/skill", "ref": "f1090bec277140d02ed202440185ad9d02ac1490", "path": "skills/emil-design-eng" },
+      "license": "MIT",
+      "review": { "runs": "실행 스크립트 없음(문서만).", "network": "없음." }
+    },
+    {
+      "name": "web-design-guidelines",
+      "bundle": "extra",
+      "summary": "웹 인터페이스 가이드라인 점검 (랜딩 최종 점검·하네스 UI 변경의 접근성 점검)",
+      "source": { "repo": "vercel-labs/agent-skills", "ref": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62", "path": "skills/web-design-guidelines" },
+      "license": "MIT",
+      "review": {
+        "runs": "실행 스크립트 없음.",
+        "network": "실행할 때마다 raw.githubusercontent.com/vercel-labs/web-interface-guidelines의 main 브랜치 규칙을 받아 쓴다. 고정 ref는 절차만 고정하고 규칙 본문은 고정하지 않는다.",
+        "notes": "라이선스는 저장소 README의 MIT 표기 기준(LICENSE 파일 없음). 하네스 저장소에서는 ui-review·design-audit가 일부를 대체한다."
+      },
+      "overlaps": "ui-review·design-audit(하네스 UI 계약이 있는 저장소)"
+    },
+    {
+      "name": "awesome-design",
+      "bundle": "extra",
+      "summary": "실제 사이트의 DESIGN.md 명세 모음 (디자인 시스템 작업의 참고 명세)",
+      "installable": false,
+      "note": "원본 VoltAgent/awesome-design-md(MIT)는 DESIGN.md 모음이고 SKILL.md가 없다. 스킬로 감싼 배포본의 원본을 확인하지 못해 setup이 설치하지 않는다. 이미 설치돼 있으면 지도대로 참고 명세로만 쓴다."
+    },
+    {
+      "name": "motion",
+      "bundle": "extra",
+      "summary": "Motion(구 Framer Motion) 라이브러리 API·애니메이션 점검 (모션 영역)",
+      "installable": false,
+      "note": "Motion이 AI Kit(https://motion.dev/docs/ai-kit)로 MCP 서버와 함께 배포한다. 고정할 공개 원본 저장소를 확인하지 못해 setup이 설치하지 않는다. 공식 문서대로 설치한다."
+    }
+  ]
+}

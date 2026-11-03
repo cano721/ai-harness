@@ -443,12 +443,30 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/ui-review/references/design-skills.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/ui-review/references/design-handoff.md",
       "level": "standard",
       "integration": "claude",
       "stack": "ui",
       "skill": "ui-review",
       "source": "templates/ui-review/references/design-handoff.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/ui-review/references/design-skills.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/design-skills.md",
       "mode": "copy"
     },
     {
@@ -578,6 +596,15 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/design-audit/references/design-skills.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/frontend-team/SKILL.md",
       "level": "standard",
       "integration": "claude",
@@ -596,6 +623,15 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/frontend-team/references/design-skills.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/frontend-team/references/design-handoff.md",
       "level": "standard",
       "integration": "claude",
@@ -605,12 +641,30 @@
       "mode": "copy"
     },
     {
+      "path": ".claude/skills/frontend-team/references/design-skills.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "frontend-team",
+      "skill": "frontend-team",
+      "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/design-audit/SKILL.md",
       "level": "standard",
       "integration": "claude",
       "stack": "design-system",
       "skill": "design-audit",
       "source": "templates/design-audit/SKILL.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/design-audit/references/design-skills.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/ui-review/references/design-skills.md",
       "mode": "copy"
     },
     {
