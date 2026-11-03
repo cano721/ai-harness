@@ -264,7 +264,7 @@ command_remove() {
       status="$(skill_status "$tool" "$name")"
       case "$status" in
         absent) forget_skill "$tool" "$name"; result "$tool" "$name" "absent" ;;
-        current | outdated)
+        current | outdated | superseded)
           dir="$(skills_dir "$tool")"
           rm -rf "${dir:?}/$name"
           forget_skill "$tool" "$name"
@@ -326,16 +326,27 @@ design_path() { # entry tool → 원본 저장소 안 스킬 폴더 경로 (도�
   jq -r --arg t "$2" '.source.path // "" | if type == "object" then (.[$t] // "") else . end' <<<"$1"
 }
 
-# builtin(그 도구에 내장) | unavailable(내장이지만 이 도구엔 없음) | manual(원본 미고정 — setup이 설치하지 않음)
+# builtin(그 도구나 ai-harness에 내장) | unavailable(내장이지만 이 도구엔 없음) | manual(원본 미고정 — setup이 설치하지 않음)
+# | superseded(setup이 예전에 깐 사본인데 이제 ai-harness에 내장 — 지워도 된다)
 # | absent | current | outdated(고정 ref가 바뀜) | modified | foreign
 design_status() { # tool entry
-  local tool="$1" entry="$2" name target recorded
+  local tool="$1" entry="$2" name target recorded builtin
   name="$(jq -r '.name' <<<"$entry")"
-  if [[ "$(jq -r '.builtin // ""' <<<"$entry")" != "" ]]; then
-    [[ "$(jq -r '.builtin' <<<"$entry")" == "$tool" ]] && printf 'builtin\n' || printf 'unavailable\n'
+  builtin="$(jq -r '.builtin // ""' <<<"$entry")"
+  target="$(skills_dir "$tool")/$name"
+  if [[ "$builtin" == ai-harness ]]; then
+    # 사용자가 직접 둔 같은 이름 폴더는 foreign으로 남기고, setup이 기록한 사본만 superseded로 알린다.
+    foreign_entry "$target" && { printf 'foreign\n'; return; }
+    [[ -d "$target" ]] || { printf 'builtin\n'; return; }
+    recorded="$(record_sha "$tool" "$name")"
+    [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
+    [[ "$(tree_sha "$target")" == "$recorded" ]] && printf 'superseded\n' || printf 'modified\n'
     return
   fi
-  target="$(skills_dir "$tool")/$name"
+  if [[ -n "$builtin" ]]; then
+    [[ "$builtin" == "$tool" ]] && printf 'builtin\n' || printf 'unavailable\n'
+    return
+  fi
   if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
     [[ -e "$target" || -L "$target" ]] && printf 'foreign\n' || printf 'manual\n'
     return
@@ -360,8 +371,10 @@ command_design_list() {
     for tool in claude codex; do
       statuses="$(jq -c --arg t "$tool" --arg s "$(design_status "$tool" "$entry")" '. + {($t):$s}' <<<"$statuses")"
     done
-    jq -c --argjson st "$statuses" '{name, bundle, summary, license:(.license // null), source:(.source // null),
-      review:(.review // null), overlaps:(.overlaps // null), note:(.note // null), status:$st}' <<<"$entry"
+    # 내장 스킬과 같은 이름으로 사용자가 직접 둔 폴더는 지우지 않지만, 이름이 겹친다는 사실은 알린다.
+    jq -c --argjson st "$statuses" '{name, bundle, summary, builtin:(.builtin // null), license:(.license // null), source:(.source // null),
+      review:(.review // null), overlaps:(.overlaps // null), absorbed:(.absorbed // null), note:(.note // null), status:$st,
+      conflict:(if .builtin == "ai-harness" then ([$st | to_entries[] | select(.value == "foreign") | {key, value:"같은 이름 내장 스킬 있음 — 직접 둔 폴더라 지우지 않음, 필요하면 직접 정리"}] | from_entries | if . == {} then null else . end) else null end)}' <<<"$entry"
   done < <(jq -c '.skills[]' "$DESIGN_CATALOG")
 }
 
@@ -466,6 +479,11 @@ command_design_install() {
     fetched=""
     while IFS= read -r tool; do
       status="$(design_status "$tool" "$entry")"
+      # ai-harness에 내장된 스킬은 받지 않는다(--replace여도). 남아 있는 예전 사본은 remove가 지운다.
+      if [[ "$(jq -r '.builtin // ""' <<<"$entry")" == ai-harness ]]; then
+        result "$tool" "$name" "builtin"
+        continue
+      fi
       # 원본을 고정할 수 없는 스킬은 사용자가 직접 깐 사본이 있어도(--replace여도) 받지 않는다.
       if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
         result "$tool" "$name" "skipped" "manual"
@@ -530,7 +548,7 @@ command_design_remove() {
       case "$status" in
         absent | manual) forget_skill "$tool" "$name"; result "$tool" "$name" "absent" ;;
         builtin | unavailable) result "$tool" "$name" "skipped" "$status" ;;
-        current | outdated)
+        current | outdated | superseded)
           dir="$(skills_dir "$tool")"
           rm -rf "${dir:?}/$name"
           forget_skill "$tool" "$name"

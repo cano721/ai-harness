@@ -452,6 +452,15 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/ui-review/references/web-interface-guidelines.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/web-interface-guidelines.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/ui-review/references/design-handoff.md",
       "level": "standard",
       "integration": "claude",
@@ -467,6 +476,15 @@
       "stack": "ui",
       "skill": "ui-review",
       "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/ui-review/references/web-interface-guidelines.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "ui",
+      "skill": "ui-review",
+      "source": "templates/ui-review/references/web-interface-guidelines.md",
       "mode": "copy"
     },
     {

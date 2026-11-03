@@ -2191,12 +2191,45 @@ assert_contains "$DESIGN_REVIEWER_CONTENT" "**쓰기 도구가 없다. Bash는 �
 assert_contains "$DESIGN_REVIEWER_CONTENT" "기술적 강제가 아니라" "design reviewer does not overstate its Bash restriction"
 if grep -qiE "읽기 전용이다|read-only" "$DESIGN_REVIEWER"; then fail "design reviewer claims to be read-only while it has Bash"; fi
 if [[ "$DESIGN_REVIEWER_TOOLS" != *Skill* ]]; then
-  assert_contains "$DESIGN_REVIEWER_CONTENT" "외부 디자인 스킬(\`impeccable\`·\`web-design-guidelines\` 등)은 쓰지 않는다" "design reviewer without the Skill tool does not promise outside skills"
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "외부 디자인 스킬(\`impeccable\` 등)은 쓰지 않는다" "design reviewer without the Skill tool does not promise outside skills"
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "skills/web-design-guidelines/references/web-interface-guidelines.md" "design reviewer reads the built-in interface guideline rules"
   if grep -q "^외부 스킬:" "$DESIGN_REVIEWER"; then fail "design reviewer report still has an outside-skill line"; fi
   MAP_REVIEW_ROW="$(grep '^| Independent review' "$MAP_SRC")"
   assert_contains "$MAP_REVIEW_ROW" "in a fresh reviewer session only" "map keeps outside review skills out of the design-reviewer agent"
 fi
 assert_contains "$(<"$DESIGN_REVIEWER")" "\`unverified\`" "design reviewer does not pass what it could not render"
+# 작고 안정적인 세 스킬은 내장이다: 고정 사본을 담고, setup이 설치하지 않으며, 네트워크 없이 동작한다.
+assert_eq "design-system-patterns,emil-design-eng,web-design-guidelines" "$(jq -r '[.skills[] | select(.builtin=="ai-harness") | .name] | sort | join(",")' "$DESIGN_CATALOG")" "three small design skills are built into ai-harness"
+assert_eq "0" "$(jq '[.skills[] | select(.builtin=="ai-harness")
+  | select((.source.ref // "" | test("^[0-9a-f]{40}$") | not) or (.license // "") == "" or (.absorbed // "") == "" or (.note // "") == "")] | length' "$DESIGN_CATALOG")" "built-in design skills record the pinned origin, license, where they live and what to do with old copies"
+while IFS= read -r BUILTIN_REPO; do
+  assert_contains "$(<"$ROOT/THIRD-PARTY-LICENSES.md")" "https://github.com/$BUILTIN_REPO" "THIRD-PARTY-LICENSES names $BUILTIN_REPO"
+done < <(jq -r '.skills[] | select(.builtin=="ai-harness") | .source.repo' "$DESIGN_CATALOG")
+assert_contains "$MAP_CONTENT" "## Built in" "map lists the built-in design skills"
+WIG_SRC="$ROOT/templates/ui-review/references/web-interface-guidelines.md"
+assert_file "$WIG_SRC"
+cmp -s "$ROOT/skills/web-design-guidelines/references/web-interface-guidelines.md" "$WIG_SRC" \
+  || fail "skills/web-design-guidelines/references/web-interface-guidelines.md must match templates/ui-review/references/web-interface-guidelines.md byte for byte"
+assert_contains "$(<"$WIG_SRC")" "## Output Format" "pinned interface guideline rules keep the upstream output format"
+for WIG_BASE in .claude .agents; do
+  assert_eq "templates/ui-review/references/web-interface-guidelines.md" "$(jq -r --arg p "$WIG_BASE/skills/ui-review/references/web-interface-guidelines.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$WIG_BASE ui-review ships the pinned interface guideline rules"
+done
+assert_contains "$(<"$ROOT/templates/ui-review/SKILL.md")" "references/web-interface-guidelines.md" "ui-review checks code against the pinned interface guideline rules"
+assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/web-interface-guidelines.md") | .action')" "ui stack syncs the interface guideline rules"
+WIG_SKILL="$(<"$ROOT/skills/web-design-guidelines/SKILL.md")"
+assert_contains "$WIG_SKILL" "references/web-interface-guidelines.md" "web-design-guidelines reads its pinned rules"
+# 규칙을 받는 도구 호출은 금지하고, 출처 URL 언급은 허용한다.
+if grep -qiE "\b(webfetch|web_fetch|curl|wget|fetch the latest|fetch fresh)\b" "$ROOT/skills/web-design-guidelines/SKILL.md"; then fail "web-design-guidelines still fetches its rules"; fi
+for BUILTIN_SKILL in web-design-guidelines emil-design-eng; do
+  assert_contains "$(sed -n '1,4p' "$ROOT/skills/$BUILTIN_SKILL/SKILL.md")" "description: Built into ai-harness as a pinned" "$BUILTIN_SKILL description says it is the built-in pinned copy"
+done
+assert_contains "$MAP_CONTENT" "use the \`ai-harness:\`-prefixed one" "map picks the ai-harness skill when two share a name"
+EMIL_SKILL="$ROOT/skills/emil-design-eng/SKILL.md"
+assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "license: MIT" "emil-design-eng copy names its license"
+assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "emilkowalski/skill@$(jq -r '.skills[] | select(.name=="emil-design-eng") | .source.ref' "$DESIGN_CATALOG")" "emil-design-eng copy names the pinned commit the catalog records"
+assert_file "$ROOT/skills/design-system-builder/references/theme-and-components.md"
+assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "references/theme-and-components.md" "design-system-builder reads the absorbed theme and component patterns"
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/theme-and-components.md")" "tokens.md\` owns token layers, names" "absorbed patterns defer token naming to design-system-builder"
 pass "design skill map, catalog and independent reviewer"
 
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
@@ -4949,6 +4982,26 @@ assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v2" "update install
 assert_eq "removed" "$(setup_cmd design remove --tool claude foo | jq -r '.action')" "remove managed design skill"
 [[ ! -e "$SETUP_T/claude/foo" ]] || fail "removed design skill dir still exists"
 assert_eq "skipped modified" "$(setup_cmd design remove --tool codex foo | jq -r '"\(.action) \(.detail)"')" "edited design skill is not removed without --force"
+# ai-harness에 내장된 항목: 받지 않고, setup이 예전에 깐 사본만 superseded로 알려 지울 수 있게 한다. 사용자가 둔 폴더는 건드리지 않는다.
+assert_eq "outdated" "$(design_status bar claude)" "bar is an unmodified managed copy (of an older pin) before it becomes built in"
+jq '(.skills[] | select(.name=="bar")) += {builtin:"ai-harness"} | .skills += [{name:"mine", bundle:"extra", summary:"x", builtin:"ai-harness", note:"built in"}]' \
+  "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+mkdir -p "$SETUP_T/claude/mine" && printf 'my own\n' >"$SETUP_T/claude/mine/SKILL.md"
+printf 'local\n' >>"$SETUP_T/codex/bar/SKILL.md"
+assert_eq "superseded" "$(design_status bar claude)" "an old setup copy of a now built-in skill is superseded"
+assert_eq "modified" "$(design_status bar codex)" "an edited old copy of a built-in skill stays modified"
+assert_eq "foreign" "$(design_status mine claude)" "a hand-placed folder named like a built-in skill is foreign"
+assert_eq "builtin" "$(design_status mine codex)" "a built-in skill with nothing installed is builtin"
+assert_contains "$(setup_cmd design list | jq -r 'select(.name=="mine") | .conflict.claude')" "같은 이름 내장 스킬 있음" "list flags a hand-placed folder that shadows a built-in skill"
+assert_eq "null null" "$(setup_cmd design list | jq -r 'select(.name=="mine" or .name=="foo") | .conflict.codex // "null"' | paste -sd' ' -)" "no conflict notice without a hand-placed folder"
+assert_eq "ai-harness" "$(setup_cmd design list | jq -r 'select(.name=="bar") | .builtin')" "list says the skill is built into ai-harness"
+assert_eq "builtin builtin" "$(setup_cmd design install --tool both --replace bar | jq -r '.action' | paste -sd' ' -)" "a built-in skill is never fetched, even with --replace"
+assert_contains "$(cat "$SETUP_T/claude/bar/SKILL.md")" "claude bar" "install leaves the superseded copy in place"
+assert_eq "skipped foreign" "$(setup_cmd design remove --tool claude mine | jq -r '"\(.action) \(.detail)"')" "a hand-placed folder is not removed"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool codex bar | jq -r '"\(.action) \(.detail)"')" "an edited superseded copy needs --force"
+assert_eq "removed" "$(setup_cmd design remove --tool claude bar | jq -r '.action')" "a superseded copy is removable"
+[[ ! -e "$SETUP_T/claude/bar" ]] || fail "removed superseded copy still exists"
+assert_eq "builtin" "$(design_status bar claude)" "after removal only the built-in copy remains"
 SETUP_ENV=()
 # 기본 스킬 목록·안내에는 외부 디자인 스킬이 섞이지 않는다.
 assert_eq "0" "$(setup_cmd list | jq -r 'select(.name=="foo" or .name=="impeccable") | .name' | grep -c . || true)" "plain list shows only the base catalog"

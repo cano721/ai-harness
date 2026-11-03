@@ -66,7 +66,7 @@ Never ask for something the code already answers. Values the user does not confi
 Follow the references in this order — later steps reference earlier names:
 
 1. Tokens: `references/tokens.md`, then `references/motion-tokens.md`.
-2. Components: `references/components.md`.
+2. Components: `references/components.md`. When the project needs a runtime theme switch (dark, system preference, several brands) or builds components in a component library, also `references/theme-and-components.md`.
 3. Rule document, reference screen, and harness handoff: `references/output-format.md`.
 
 Write values only in the token file. The rule document names tokens and states rules; it does not repeat values.
