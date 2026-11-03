@@ -544,16 +544,25 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 ```
 
 ```json
-// 저장소 .ai-harness/harness.json — PR이 아니라 기준 브랜치의 값을 읽는다(PR이 스스로 자동 병합을 켜지 못한다)
-"auto_merge": { "sync": true, "harvest": false, "method": "squash" }
+// 저장소 .ai-harness/harness.json — PR이 아니라 기준 브랜치의 값을 읽는다(PR이 스스로 켜거나 기준을 느슨하게 하지 못한다)
+"auto_merge": {
+  "sync": true, "harvest": false, "method": "squash",
+  "sync_partial": false,       // 일부 적용 sync PR도 병합 (기본 false)
+  "require_ci": true,          // false면 CI가 없는 저장소도 병합. 실패한 CI는 어느 설정에서도 막음 (기본 true)
+  "wait_hours": 72,            // CI·상태 확인을 기다리는 시간, 넘으면 사람에게 (기본 72, 최대 336)
+  "harvest_max_files": 3,      // harvest PR 파일 수 상한 (기본 3, 최대 5)
+  "harvest_max_lines": 40      // harvest PR 추가+삭제 줄 상한 (기본 40, 최대 100)
+}
 ```
+
+사용자 설정은 "이 PC에서 자동 병합을 쓸지"만 정하고, 기준은 저장소마다 manifest에 둡니다. 아래 안전 최소 기준은 저장소 설정으로 바꿀 수 없습니다.
 
 | 대상 | 병합 조건 (모두 만족) |
 |---|---|
-| sync PR | 결과 `improved`(일부 적용은 `HM_SYNC_AUTO_MERGE_PARTIAL=1`일 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
-| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`HM_HARVEST_AUTO_MERGE_MAX_FILES`·`_MAX_LINES`) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
+| sync PR | 결과 `improved`(일부 적용은 `sync_partial: true`일 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
+| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_files`·`harvest_max_lines`) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
 | 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
-| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, CI가 없거나 `HM_AUTO_MERGE_WAIT_HOURS`(72) 안에 안 끝나면 사람에게) |
+| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci: false`일 때만 병합) |
 
 - **흐름**: 무인 실행이 PR을 연 직후 내용 조건을 판정해 대기열(`~/.ai-harness/auto-merge/pending/`)에 넣고, 정기 실행이 매 회차(유휴·한도와 무관, LLM 없음) 호스트 조건을 확인해 draft를 풀고 head를 고정해 병합합니다. Bitbucket은 head를 고정할 수 없어 병합 직전에 다시 읽어 맞춰 봅니다
 - **기록·알림**: `runs.jsonl`에 `auto_merge_queued`·`auto_merged`(병합 커밋)·`auto_merge_skipped`(사유)로 남고, 세션 시작 때 지난 알림 뒤의 병합·사람 확인 필요 건수를 알립니다

@@ -3886,7 +3886,29 @@ am_sync_head s-ok
 AM_SYNC_OK="$(am_commit sync)"
 assert_eq "ok" "$(am_check --scope sync --head "$AM_SYNC_OK")" "a copy-only sync PR passes"
 assert_eq "partial_sync" "$(am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "partial sync needs its own opt-in"
-assert_eq "ok" "$(HM_SYNC_AUTO_MERGE_PARTIAL=1 am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "partial sync passes when allowed"
+AM_REVIEW='{"review":{"first_pass":"pass","expected":"재발 0"}}'
+# 저장소 조정값은 기준 브랜치 manifest에서만 읽고, 플러그인 상한을 넘지 못한다.
+am_base_with() { # name jq-filter → origin/<name>: develop에 manifest 조정값을 바꾼 기준 브랜치
+  git -C "$AM_REPO" checkout -q -B "$1" develop && am_manifest "$2" && git -C "$AM_REPO" commit -q -am "$1"
+  git -C "$AM_REPO" update-ref "refs/remotes/origin/$1" "$1"
+}
+am_on() { # base-name branch → base 위에서 새 브랜치
+  git -C "$AM_REPO" checkout -q -B "$2" "$1"
+}
+am_base_with partial-on '.auto_merge.sync_partial = true'
+am_on partial-on s-partial
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_PARTIAL="$(am_commit partial)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-on --scope sync --head "$AM_PARTIAL" --result partial)" "partial sync passes when the base manifest allows it"
+am_base_with lines-60 '.auto_merge.harvest_max_lines = 60'
+am_on lines-60 h-60 && seq 1 60 >>"$AM_REPO/AGENTS.md"
+AM_H60="$(am_commit h60)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-60 --scope project --head "$AM_H60" --review "$AM_REVIEW")" "the repo can raise the harvest line cap"
+am_base_with lines-999 '.auto_merge.harvest_max_lines = 999'
+am_on lines-999 h-999 && seq 1 101 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:101" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-999 --scope project --head "$(am_commit h999)" --review "$AM_REVIEW")" "the plugin cap still applies"
 am_sync_head s-bytes
 printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
 am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
@@ -3906,6 +3928,16 @@ assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --he
 am_sync_head s-del
 git -C "$AM_REPO" rm -q app.js
 assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
+# 기준 브랜치에 이미 관리 항목이 있는 저장소(실제 저장소는 모두 그렇다): 남아 있으면 통과, 지우면 거부.
+am_base_with managed '.managed_files["AGENTS.md"] = {content_sha256:"aaaa"}'
+am_on managed s-keep
+mkdir -p "$AM_REPO/.ai-harness/workflows" && cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit keep)")" "existing managed entries that stay are fine"
+am_manifest '.managed_files["AGENTS.md"].template_version = "9.9.9"'
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit tv)")" "recording a new template_version for an untouched file is fine"
+am_manifest 'del(.managed_files["AGENTS.md"])'
+assert_eq "manifest_entry_removed" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit drop)")" "removing a managed entry is refused"
 am_sync_head s-otherhash
 am_manifest '.managed_files["AGENTS.md"] = {content_sha256:"1111"}'
 assert_eq "manifest_hash_changed_without_file:AGENTS.md" "$(am_check --scope sync --head "$(am_commit otherhash)")" "hashes of untouched files cannot change"
@@ -3913,7 +3945,6 @@ am_sync_head s-tab
 printf 'x\n' >"$AM_REPO/$AM_RUNNER"$'\t'
 assert_eq "bad_path" "$(am_check --scope sync --head "$(am_commit tab)")" "a path with a tab cannot pose as a managed file"
 # harvest PR: 문서만, 작게, 일반 파일 모드, 1회차 독립 검토 통과·기대효과 기록.
-AM_REVIEW='{"review":{"first_pass":"pass","expected":"재발 0"}}'
 am_hcheck() { am_check --scope project --head "$1" --review "${2:-$AM_REVIEW}"; }
 am_branch h-ok
 printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
@@ -4060,6 +4091,22 @@ assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting
 assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
 assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
 assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
+# CI가 없는 저장소: 기본은 기다리다 사람에게, require_ci:false면 병합. 실패한 CI는 어느 설정에서도 막는다.
+AM_DATA="$TEST_TMP/am-noci"
+: >"$AM_PR_LOG"
+am_base_with noci '.auto_merge.require_ci = false'
+am_on noci s-noci
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_NOCI="$(am_commit noci)"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/71 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/noci --head "$AM_NOCI" --pr https://github.com/acme/am/pull/72 --since "$AM_SINCE"
+am_state 71 "$AM_SYNC_OK" '.ci = "none"'
+am_state 72 "$AM_NOCI" '.ci = "none" | .base = "noci"'
+HM_SYNC_AUTO_MERGE=1 am sweep
+assert_eq "https://github.com/acme/am/pull/72" "$(cut -d'|' -f1 "$AM_PR_LOG")" "only the repo that does not require CI merges without CI"
+assert_eq "1" "$(am_pending)" "the repo that requires CI keeps waiting"
 pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.

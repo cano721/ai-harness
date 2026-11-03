@@ -219,7 +219,7 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 ```
 
 - `git_policy`: `pr-only` | `direct` | `merge`. 그 밖의 값이나 미설정은 에이전트가 별도 허가 없이 커밋·push·PR을 하지 않는 것으로 읽는다. `merge`면 `merge_policy`가 필요하다: `{"require": ["human_approval", "remote_ci", "no_conflict", "not_draft"], "min_approvals": 1, "method": "squash" | "merge" | "rebase", "verify": ["target_ci", "deploy", "smoke", "monitor"], "deploy_check_cmd": "<배포 확인 명령>", "deploy_timeout_minutes": 60, "smoke_cmd": "<스모크 명령>", "base": "<병합 대상 브랜치>"}`(3-1에서 사람이 고른 것만). `require`가 비었거나, `deploy`·`smoke`를 고르고 명령이 없거나, `monitor`를 고르고 manifest `monitor`·`project_id`가 없으면 러너가 시작하지 않는다. 러너는 start 때의 정책을 실행 끝까지 쓴다. `approval`: `human`(기본, 미설정 포함) | `auto`. 둘 다 어댑터·러너가 런타임에 읽는다. `issue_policy`: `in-progress-on-start` | 미설정(이슈 상태를 건드리지 않음). 어댑터가 런타임에 읽는다. `monitor`: 모니터링 기반 자동 수정 설정(`/autofix setup`이 쓴다). init·sync는 이 필드를 만들거나 지우지 않고 그대로 둔다.
-- `auto_merge`(선택): `{"sync": bool, "harvest": bool, "method": "squash"|"merge"|"default"}`. 무인 sync·harvest PR의 자동 병합을 저장소 단위로 허용한다(사용자 설정 `HM_SYNC_AUTO_MERGE`·`HM_HARVEST_AUTO_MERGE`도 켜져야 동작). init·sync는 이 필드를 묻거나 쓰지 않는다 — 사람이 직접 켜고, sync는 보존한다.
+- `auto_merge`(선택): `{"sync": bool, "harvest": bool, "method": "squash"|"merge"|"default", "sync_partial": bool, "require_ci": bool, "wait_hours": n, "harvest_max_files": n, "harvest_max_lines": n}`(조정값 기본·상한은 README 자동 병합 절). 무인 sync·harvest PR의 자동 병합을 저장소 단위로 허용한다(사용자 설정 `HM_SYNC_AUTO_MERGE`·`HM_HARVEST_AUTO_MERGE`도 켜져야 동작). init·sync는 이 필드를 묻거나 쓰지 않는다 — 사람이 직접 켜고, sync는 보존한다.
 - `roles`에 없는 슬롯은 하네스 페르소나를 생성한 것으로 본다. `roles`·`excluded`는 손으로 쓰지 않는다 — `excluded`는 `harness-sync-state.sh exclude|include`로, `roles`는 인터뷰 확정 결과를 jq로 기록한다.
 - `excluded`에 있는 경로는 plan에서 `action:"excluded"`로만 보이고 add·refresh 대상이 되지 않는다. 되돌리기는 `include`.
 

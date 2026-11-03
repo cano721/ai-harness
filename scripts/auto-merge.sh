@@ -18,9 +18,6 @@ AM_DIR="$HM_DATA_DIR/auto-merge"
 PENDING_DIR="$AM_DIR/pending"
 RUNS_FILE="$HM_DATA_DIR/harvest-auto/runs.jsonl"
 CATALOG="$ROOT/templates/managed-files.json"
-WAIT_HOURS="${HM_AUTO_MERGE_WAIT_HOURS:-72}"; [[ "$WAIT_HOURS" =~ ^[0-9]+$ ]] || WAIT_HOURS=72
-MAX_FILES="${HM_HARVEST_AUTO_MERGE_MAX_FILES:-3}"; [[ "$MAX_FILES" =~ ^[0-9]+$ ]] || MAX_FILES=3
-MAX_LINES="${HM_HARVEST_AUTO_MERGE_MAX_LINES:-40}"; [[ "$MAX_LINES" =~ ^[0-9]+$ ]] || MAX_LINES=40
 
 usage() {
   cat >&2 <<'EOF'
@@ -58,6 +55,22 @@ opt_in_env() { # scope → 전역 설정 켜짐?
 base_manifest() { git -C "$1" show "$2:.ai-harness/harness.json" 2>/dev/null; }
 repo_allows() { # repo base scope
   base_manifest "$1" "$2" | jq -e --arg k "$(opt_in_key "$3")" '.auto_merge[$k] == true' >/dev/null 2>&1
+}
+
+# 저장소별 조정값. 기준 브랜치의 manifest auto_merge에서만 읽는다(PR이 자기 기준을 느슨하게 하지 못한다).
+# 안전 최소 기준(head 고정·같은 저장소·대상 브랜치·이름 바꾸기·삭제·모드 거부·정책 불변·사람 활동 시 중단)은 여기서 바꿀 수 없다.
+policy_num() { # repo base key default cap → default ≤ … ≤ cap 안의 정수
+  local v=""
+  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" '.auto_merge[$k] // empty | if type == "number" then floor else empty end' 2>/dev/null)"
+  [[ "$v" =~ ^[0-9]+$ ]] || v="$4"
+  (( v <= $5 )) || v="$5"
+  printf '%s\n' "$v"
+}
+policy_bool() { # repo base key default(true|false)
+  local v=""
+  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" '.auto_merge[$k] | if type == "boolean" then tostring else empty end' 2>/dev/null)"
+  [[ "$v" == true || "$v" == false ]] || v="$4"
+  printf '%s\n' "$v"
 }
 
 # host/owner/repo (소문자). PR URL과 git 원격 URL을 같은 꼴로 맞춰 비교한다.
@@ -107,7 +120,7 @@ check_sync() { # repo base head result
   local base_json="" head_json="" key=""
   case "$result" in
     improved) ;;
-    partial) [[ "${HM_SYNC_AUTO_MERGE_PARTIAL:-0}" == "1" ]] || { echo "partial_sync"; return 1; } ;;
+    partial) [[ "$(policy_bool "$repo" "$base" sync_partial false)" == true ]] || { echo "partial_sync"; return 1; } ;;
     *) echo "result_$result"; return 1 ;;
   esac
   base_json="$(base_manifest "$repo" "$base")" || { echo "base_manifest_missing"; return 1; }
@@ -118,16 +131,18 @@ check_sync() { # repo base head result
     || { echo "manifest_policy_changed"; return 1; }
   why="$(read_changes "$repo" "$base" "$head")" || { echo "$why"; return 1; }
   read_changes "$repo" "$base" "$head" >/dev/null
-  # 관리 해시는 이번에 바꾼 파일 것만 바뀔 수 있다. 손대지 않은 파일의 해시를 고치거나 항목을 지우면 다음 sync가 그 값을 믿는다.
+  # 내용 해시(content_sha256)는 이번에 바꾼 파일 것만 바뀔 수 있다(template_version 갱신은 괜찮다). 손대지 않은 파일의 해시를
+  # 고치거나 항목을 지우면 다음 sync가 그 값을 믿는다.
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     local hit=0 j=0
     while (( j < ${#CH_PATH[@]} )); do [[ "${CH_PATH[$j]}" == "$key" ]] && hit=1; j=$((j + 1)); done
     (( hit == 1 )) || { echo "manifest_hash_changed_without_file:$key"; return 1; }
   done <<<"$(jq -rn --argjson a "$base_json" --argjson b "$head_json" \
-    '($a.managed_files // {}) as $x | $b.managed_files // {} | to_entries[] | select($x[.key] != .value) | .key')"
+    '($a.managed_files // {}) as $x | $b.managed_files // {} | to_entries[]
+     | select(($x[.key].content_sha256? // null) != (.value.content_sha256? // null)) | .key')"
   jq -e -n --argjson a "$base_json" --argjson b "$head_json" \
-    '($b.managed_files // {}) as $y | [($a.managed_files // {}) | keys[] | select(($y | has(.)) | not)] | length == 0' >/dev/null 2>&1 \
+    '($b.managed_files // {}) as $y | [($a.managed_files // {}) | keys[] | select(. as $k | $y | has($k) | not)] | length == 0' >/dev/null 2>&1 \
     || { echo "manifest_entry_removed"; return 1; }
   while (( i < ${#CH_PATH[@]} )); do
     mode="${CH_MODE[$i]}"; status="${CH_STATUS[$i]}"; f="${CH_PATH[$i]}"
@@ -153,7 +168,9 @@ check_sync() { # repo base head result
 }
 
 check_harvest() { # repo base head result review
-  local repo="$1" base="$2" head="$3" result="$4" review="$5" mode="" status="" f="" i=0 lines=0 why=""
+  local repo="$1" base="$2" head="$3" result="$4" review="$5" mode="" status="" f="" i=0 lines=0 why="" max_files=3 max_lines=40
+  max_files="$(policy_num "$repo" "$base" harvest_max_files 3 5)"
+  max_lines="$(policy_num "$repo" "$base" harvest_max_lines 40 100)"
   [[ "$result" == improved ]] || { echo "result_$result"; return 1; }
   # harvest 에이전트가 남긴 값은 자기 신고다. 거르는 데만 쓰고, 통과 근거는 아래 독립 검토가 맡는다.
   [[ "$(jq -r '.review.first_pass // empty' <<<"$review" 2>/dev/null)" == "pass" ]] || { echo "review_not_first_pass"; return 1; }
@@ -168,9 +185,9 @@ check_harvest() { # repo base head result review
     [[ "$f" == "AGENTS.md" || "$f" =~ ^\.ai-harness/docs/.+\.md$ || "$f" =~ ^\.ai-harness/workflows/[^/]+\.md$ ]] \
       || { echo "non_doc_file:$f"; return 1; }
   done
-  (( ${#CH_PATH[@]} <= MAX_FILES )) || { echo "too_many_files:${#CH_PATH[@]}"; return 1; }
+  (( ${#CH_PATH[@]} <= max_files )) || { echo "too_many_files:${#CH_PATH[@]}"; return 1; }
   lines="$(git -C "$repo" diff --numstat --no-renames "$base...$head" 2>/dev/null | awk '{a += ($1 == "-" ? 0 : $1) + ($2 == "-" ? 0 : $2)} END {print a + 0}')"
-  (( lines <= MAX_LINES )) || { echo "too_many_lines:$lines"; return 1; }
+  (( lines <= max_lines )) || { echo "too_many_lines:$lines"; return 1; }
   echo ok
 }
 
@@ -295,6 +312,7 @@ same_head() { [[ ${#2} -ge 12 && "$1" == "$2"* ]]; }
 
 sweep_one() { # file → 처리 끝이면 사유(병합이면 "merged")를 출력, 기다리면 아무것도 출력하지 않는다
   local item="" project="" scope="" pr="" head="" method="" repo="" base="" since="" at="" st="" rc=0 age=0 now_head="" created=""
+  local wait_s=0 require_ci=true ci=""
   item="$(cat "$1")"
   project="$(jq -r '.project' <<<"$item")"; scope="$(jq -r '.scope' <<<"$item")"; pr="$(jq -r '.pr' <<<"$item")"
   head="$(jq -r '.head' <<<"$item")"; method="$(jq -r '.method // "default"' <<<"$item")"
@@ -304,10 +322,12 @@ sweep_one() { # file → 처리 끝이면 사유(병합이면 "merged")를 출�
   # 끈 설정은 대기 중인 PR에도 바로 적용한다.
   opt_in_env "$scope" || { echo "opted_out"; return; }
   if [[ ! -d "$repo" || -z "$base" ]] || ! repo_allows "$repo" "$base" "$scope"; then echo "repo_opt_out"; return; fi
+  wait_s=$(( $(policy_num "$repo" "$base" wait_hours 72 336) * 3600 ))
+  require_ci="$(policy_bool "$repo" "$base" require_ci true)"
   st="$(pr_cmd --status "$pr" 2>/dev/null)" || rc=$?
   if (( rc == 2 || rc == 3 )); then echo "unsupported_host"; return; fi
   if (( rc != 0 )) || ! jq -e '.state | type == "string"' <<<"$st" >/dev/null 2>&1; then
-    (( age > WAIT_HOURS * 3600 )) && echo "status_unknown"
+    (( age > wait_s )) && echo "status_unknown"
     return
   fi
   case "$(jq -r '.state' <<<"$st")" in
@@ -324,10 +344,13 @@ sweep_one() { # file → 처리 끝이면 사유(병합이면 "merged")를 출�
   [[ -n "$since" && ${#created} -eq 19 && ! "$created" < "$since" ]] || { echo "pr_not_from_this_run"; return; }
   (( $(jq -r '.activity // 0' <<<"$st") == 0 )) || { echo "human_activity"; return; }
   [[ "$(jq -r '.mergeable // "unknown"' <<<"$st")" != conflicting ]] || { echo "conflict"; return; }
-  case "$(jq -r '.ci // "none"' <<<"$st")" in
+  ci="$(jq -r '.ci // "none"' <<<"$st")"
+  # CI가 없는 저장소는 require_ci:false일 때만 병합한다. 실패는 어느 설정에서도 막는다.
+  [[ "$ci" == none && "$require_ci" == false ]] && ci=success
+  case "$ci" in
     failure) echo "ci_failed"; return ;;
     success) ;;
-    *) (( age > WAIT_HOURS * 3600 )) && echo "ci_not_finished"; return ;;
+    *) (( age > wait_s )) && echo "ci_not_finished"; return ;;
   esac
   rc=0
   pr_cmd --merge "$pr" --head "$head" --method "$method" >/dev/null 2>"$AM_DIR/last-merge-error" || rc=$?
