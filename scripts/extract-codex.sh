@@ -102,7 +102,7 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
       cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
       coverage: [
         "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
-        "jira_issue", "error", "guard_block", "permission_deny", "compact",
+        "jira_issue", "error", "guard_block", "guard_sample", "permission_deny", "compact",
         "error_sample", "context"
       ]
     }),
@@ -167,6 +167,15 @@ if jq -c -R -n -L "$DIR" --argjson event_version "$HM_EVENT_VERSION" \
   ( [ tool_outputs($R) | output_text
       | select(test("(^|\\n)\\[Direct edit guard\\]")) ] | length
     | select(.>0) | $base + {kind:"guard_block", n:.} ),
+  # 가드 차단 사례: 무엇을 막았는지 리포트가 보여줄 수 있게 같은 출력에서 툴 이름과 차단 문구를 발췌한다.
+  ( ([ $R[] | select(.payload.type=="function_call" or .payload.type=="custom_tool_call")
+       | {key:(.payload.call_id // ""), value:(.payload.name // "?")} ] | from_entries) as $callNames
+    | [ tool_outputs($R)
+        | ($callNames[.payload.call_id // ""] // "?") as $tool
+        | output_text
+        | select(test("(^|\\n)\\[Direct edit guard\\]"))
+        | $tool + ": " + guard_excerpt($cwd) ]
+    | error_samples("guard_sample") | $base + . ),
   # 권한 거부도 실패한 호출에서만 센다: 브리지 JSON 봉투가 is_error인 출력에 거부 문구가 있을 때.
   # 추출기 소스·PR 본문·커밋 메시지에 인용된 같은 문구는 거부가 아니다.
   # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 문구가 오지만 권한 거부가 아니다.

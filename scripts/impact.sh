@@ -121,7 +121,10 @@ command_compare() {
       | map((.[0].f | split("/") | last | rtrimstr(".json")) as $k
         | (map(.l) | join("\n") | fromjson? // null) as $j
         | select($j | type == "object" and (((.v // 0) | numbers) >= 2))
-        | {($k): [($j.findings // [])[]? | objects | select(.category == "correction") | {summary, evidence}]})
+        | [($j.findings // [])[]? | objects] as $fs
+        | {($k): {c: [$fs[] | select(.category == "correction") | {summary, evidence}],
+                  m: [$fs[] | select(.category == "missing_context") | {summary, evidence}],
+                  f: [$fs[] | {category, summary}]}})
       | add // {}' "${digests[@]}" >"$tmp/digests.json"
   else
     printf '{}\n' >"$tmp/digests.json"
@@ -169,9 +172,17 @@ command_render() {
   [[ -n "$highlights" ]] && hl_json="$(jq -c . "$highlights")"
   local ab_file="/dev/null"
   [[ -n "$ab" ]] && ab_file="$ab"
+  # 개선별 재발 판정은 에이전트가 고른 finding id로 여기서 계산한다(scripts/impact-evidence.jq).
+  local data_file="/dev/null"
+  if [[ -n "$data" ]]; then
+    IMPACT_RENDER_TMP="$(mktemp "${TMPDIR:-/tmp}/ai-harness-impact-render.XXXXXX")"
+    trap 'rm -f "$IMPACT_RENDER_TMP"' EXIT
+    jq -L "$DIR" --argjson h "$hl_json" 'include "impact-evidence"; evidence($h)' "$data" >"$IMPACT_RENDER_TMP"
+    data_file="$IMPACT_RENDER_TMP"
+  fi
   # 데이터 속 '<'를 <로 바꿔 </script>·<!-- 가 페이지 구조를 깨지 못하게 한다.
   jq -rn --rawfile t "$ROOT_DIR/skills/harness-impact/report-template.html" \
-    --slurpfile d "${data:-/dev/null}" --argjson h "$hl_json" --slurpfile ab "$ab_file" '
+    --slurpfile d "$data_file" --argjson h "$hl_json" --slurpfile ab "$ab_file" '
     def safe: tojson | gsub("<"; "\\u003c");
     $t | split("/*__IMPACT_DATA__*/null") | join(($d[0] // null) | safe)
        | split("/*__IMPACT_HIGHLIGHTS__*/null") | join($h | safe)

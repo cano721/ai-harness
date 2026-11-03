@@ -1,0 +1,44 @@
+# impact.sh render: compare JSON + 에이전트 하이라이트 → 리포트에 싣는 JSON.
+# 개선별 재발 판정은 여기서 계산한다. 에이전트는 개선 패턴에 맞는 finding id만 고르고, 세는 일과 판정은 하지 않는다.
+#   - 후보 목록에 없는 id는 버린다(지어낸 id가 숫자를 만들지 못하게).
+#   - 같은 세션의 finding 여러 개는 한 세션으로 센다.
+#   - 반영 뒤 관측 세션이 min_observed 미만이고 재발도 없으면 "판단 보류" — 성공으로 세지 않는다.
+# 후보 목록은 리포트에 싣지 않고, 맞춘 finding 요약 몇 개만 근거로 남긴다.
+
+def min_observed: 5;
+def example_cap: 3;
+
+def matched($ids; $cands):
+  ($cands | map({(.id): .}) | add // {}) as $ok
+  | [$ids[]? | strings | select($ok[.] != null) | $ok[.]] | unique_by(.id);
+
+def sessions_of: map(.id | split("#")[0]) | unique | length;
+
+def verdict($bh; $ah; $observed; $before_observed):
+  if $bh == 0 then "no_baseline"
+  elif $observed < min_observed then (if $ah > 0 then "recurred" else "hold" end)
+  elif $ah == 0 then "gone"
+  elif ($ah / $observed) < ($bh / ([$before_observed, 1] | max)) then "reduced"
+  else "recurred" end;
+
+def evidence($h):
+  (($h // {}).improvements // [] | map(select(type == "object" and (.id | type) == "string") | {(.id): .}) | add // {}) as $HI
+  | .improvements = ((.improvements // []) | map(
+      . as $x
+      | ($x.before.candidates.items // []) as $bc
+      | ($x.after.candidates.items // []) as $ac
+      | $HI[$x.id] as $m
+      | (if $m == null then {verdict: "unmatched"}
+         else
+           matched($m.before; $bc) as $bm
+           | matched($m.after; $ac) as $am
+           | ($bm | sessions_of) as $bh
+           | ($am | sessions_of) as $ah
+           | {label: ($m.label // null), note: ($m.note // null),
+              before_hits: $bh, after_hits: $ah,
+              before_truncated: ($x.before.candidates.truncated // false),
+              verdict: verdict($bh; $ah; $x.after.observed; $x.before.observed),
+              before_examples: ($bm | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary})),
+              after_examples: ($am | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary}))}
+         end) as $r
+      | $x | del(.before.candidates, .after.candidates) | . + {result: $r}));

@@ -518,6 +518,9 @@ assert_eq "claude-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CLA
 assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT")" "Claude cache write"
 assert_eq "6" "$(jq -r 'select(.kind=="error") | .n' "$CLAUDE_EVENT")" "Claude tool error counts is_error results but not output-less failures"
 assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Claude guard block counts edit-tool results and falls back to line-leading prefix when the tool is unknown"
+assert_eq "?: [Direct edit guard] src/app.ts 수정 전에 docs를 먼저 Read 하세요.|Edit: [Direct edit guard] src/app.ts 수정 전에 다음 docs를 먼저 Read 하세요:" \
+  "$(jq -rs '[.[] | select(.kind=="guard_sample") | .target] | sort | join("|")' "$CLAUDE_EVENT")" \
+  "Claude guard sample names the tool and the blocked target without the hook wrapper"
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
 assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CLAUDE_EVENT")" "Claude adapter leaves corrections to the LLM digest"
 USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
@@ -626,6 +629,7 @@ assert_contains "$CODEX_CTX_REPORT" "최대 3000 / 마지막 2000 · 창 10000�
 assert_eq "reviewer" "$(jq -r 'select(.kind=="persona") | .target' "$CODEX_EVENT")" "Codex bridge persona"
 assert_eq ".ai-harness/docs/code-conventions.md .ai-harness/docs/testing.md" "$(jq -r 'select(.kind=="doc_read") | .target' "$CODEX_EVENT" | sort | paste -sd " " -)" "Codex bridge multi-doc read in one exec"
 assert_eq "1" "$(jq -r 'select(.kind=="guard_block") | .n' "$CODEX_EVENT")" "Codex guard block counts line-leading hook prefix only"
+assert_eq "1" "$(jq -rs '[.[] | select(.kind=="guard_sample" and (.target | contains("src/app.ts")))] | length' "$CODEX_EVENT")" "Codex guard sample keeps the blocked target"
 assert_eq "src/app.ts" "$(jq -r 'select(.kind=="file_edit") | .target' "$CODEX_EVENT")" "Codex bridge file edit"
 assert_eq "mcp__jira__get_issue" "$(jq -r 'select(.kind=="mcp_tool") | .target' "$CODEX_EVENT")" "Codex bridge MCP tool"
 assert_eq "ai-harness:metrics" "$(jq -r 'select(.kind=="workflow") | .target' "$CODEX_EVENT")" "Codex skill workflow"
@@ -4671,6 +4675,64 @@ case "$IMPACT_HTML_CONTENT" in *__IMPACT_DATA__*|*__IMPACT_HIGHLIGHTS__*) fail "
 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --out "$TEST_TMP/impact-nohl.html" >/dev/null
 assert_contains "$(cat "$TEST_TMP/impact-nohl.html")" "const HIGHLIGHTS = null" "report renders without highlights"
 pass "impact renders an offline report"
+
+# 판단 근거: 개선별 재발 추적(근거 batch → 반영 뒤 세션), 가드 차단 사례, missing_context 추이. (#209)
+EV_DATA="$TEST_TMP/impact-ev-data"
+EV_REPO="$TEST_TMP/impact-ev-repo"
+mkdir -p "$EV_DATA/events" "$EV_DATA/digests" "$EV_REPO/.ai-harness" "$EV_DATA/harvest-queue/$(hm_project_key ev)"
+printf '%s\n' '{"project_id":"ev","initialized":"2026-10-01"}' >"$EV_REPO/.ai-harness/harness.json"
+ev_session() { # sid date coverage-json findings-json|"" [events-json...]
+  local sid="$1" d="$2" cov="$3" findings="$4"; shift 4
+  {
+    jq -cn --arg sid "$sid" --arg d "$d" --argjson cov "$cov" '{v:3, src:"claude", sid:$sid, project:"ev", kind:"session",
+      started:($d+"T01:00:00Z"), ended:($d+"T01:30:00Z"), turns:6, model:"m", coverage:$cov}'
+    for ev in "$@"; do jq -cn --arg sid "$sid" --argjson e "$ev" '{v:3, src:"claude", sid:$sid, project:"ev", n:1} + $e'; done
+  } >"$EV_DATA/events/claude-$sid.jsonl"
+  [[ -z "$findings" ]] || jq -cn --argjson f "$findings" '{v:2, findings:$f}' >"$EV_DATA/digests/claude-$sid.json"
+}
+EV_OLD='["error","guard_block"]'
+EV_NEW='["error","guard_block","guard_sample"]'
+ev_session b1 2026-10-03 "$EV_OLD" '[{"category":"correction","summary":"커버리지 게이트를 CI에서야 발견"},{"category":"missing_context","summary":"테스트 TZ를 모름"}]' '{"kind":"guard_block","n":2}'
+ev_session b2 2026-10-04 "$EV_OLD" '[{"category":"workflow_gap","summary":"커버리지 100% 게이트 늦게 확인"}]'
+ev_session b3 2026-10-05 "$EV_OLD" ""
+ev_session a1 2026-10-11 "$EV_NEW" '[{"category":"missing_context","summary":"배포 절차를 모름"}]' \
+  '{"kind":"guard_block","n":1}' '{"kind":"guard_sample","target":"Edit: [Direct edit guard] src/a.ts 수정 전에 docs를 먼저 Read 하세요.","n":1}'
+for i in 2 3 4; do ev_session "a$i" "2026-10-1$i" "$EV_NEW" '[]'; done
+ev_session a5 2026-10-15 "$EV_NEW" '[{"category":"correction","summary":"또 커버리지 게이트를 PR에서 발견"}]'
+jq -cn '{v:1, project:"ev", reviewed_at:"2026-10-10T00:00:00Z", markers:["claude-b1.json","claude-b2.json","claude-b3.json"],
+    review:{outcome:"improved", summary:"커버리지 게이트 선검증", expected:"재발 0", artifact:"https://example.com/pr/7", change:"add"}},
+  {v:1, project:"ev", reviewed_at:"2026-10-20T00:00:00Z", review:{outcome:"improved", summary:"마커 없는 옛 기록", expected:"재발 0"}}' \
+  >"$EV_DATA/harvest-queue/$(hm_project_key ev)/review-history.jsonl"
+EV_JSON="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "h1 batch 3 2 3 5 2" "$(jq -r '.improvements[0] | "\(.id) \(.before.basis) \(.before.batch_sessions) \(.before.observed) \(.before.candidates.items | length) \(.after.observed) \(.after.candidates.items | length)"' <<<"$EV_JSON")" \
+  "impact tracks each improvement from its evidence batch to the digested sessions after it"
+assert_eq "claude-b1#0 claude-b1#1 claude-b2#0" "$(jq -r '[.improvements[0].before.candidates.items[].id] | join(" ")' <<<"$EV_JSON")" \
+  "impact candidate ids point at a finding in a session digest"
+assert_eq "h2 window 2026-09-20 0" "$(jq -r '.improvements[1] | "\(.id) \(.before.basis) \(.before.since) \(.after.observed)"' <<<"$EV_JSON")" \
+  "impact falls back to the days before an improvement that has no batch markers"
+assert_eq "2 0.29" "$(jq -r '.periods.after | "\(.missing_context) \(.missing_context_per_session)"' <<<"$EV_JSON")" \
+  "impact counts missing-context findings per digested session"
+assert_eq "테스트 TZ를 모름" "$(jq -r '.missing_context.after.items | last | .summary' <<<"$EV_JSON")" "impact lists missing-context summaries"
+assert_eq "true" "$(jq -r '[.weekly[] | has("missing_context_per_session")] | all' <<<"$EV_JSON")" "impact weekly series carries missing context"
+assert_eq "1 2 Edit: [Direct edit guard] src/a.ts" "$(jq -r '.periods.after | "\(.guard_samples | length) \(.guard_blocks_unsampled) \(.guard_samples[0].target | .[0:34])"' <<<"$EV_JSON")" \
+  "impact shows what the guard blocked and counts blocks recorded before samples existed"
+
+# 판정은 render가 계산한다: 후보에 없는 id는 버리고, 세션 단위로 세며, 관측이 적으면 보류한다.
+EV_FILE="$TEST_TMP/impact-ev.json"
+printf '%s\n' "$EV_JSON" >"$EV_FILE"
+ev_verdict() { # highlights-json → "verdict before after" per improvement
+  printf '%s\n' "$1" >"$TEST_TMP/impact-ev-hl.json"
+  HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
+  sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '[.improvements[].result | "\(.verdict):\(.before_hits // "-"):\(.after_hits // "-")"] | join(" ")'
+}
+assert_eq "reduced:2:1 unmatched:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
+  "impact verdict counts sessions, ignores unknown ids, and marks unmatched improvements"
+assert_eq "gone:2:0 no_baseline:0:0" "$(ev_verdict '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":[]},{"id":"h2","before":[],"after":[]}]}')" \
+  "impact verdict says gone only with a baseline"
+assert_eq "hold recurred recurred reduced" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [verdict(2; 0; 3; 10), verdict(2; 1; 3; 10), verdict(1; 3; 5; 2), verdict(5; 1; 5; 10)] | join(" ")')" \
+  "impact holds judgment on few observed sessions unless the pattern recurred, and compares rates otherwise"
+case "$(cat "$TEST_TMP/impact-ev.html")" in *'"candidates"'*) fail "report drops the candidate pool and keeps only matched examples" ;; esac
+pass "impact evidence per improvement, guard cases, and missing context"
 
 # 설치 30일 뒤 SessionStart에서 한 번만 안내한다.
 IMPACT_HINT_INPUT="$(jq -cn --arg cwd "$IMPACT_REPO" '{cwd:$cwd, transcript_path:"/x/s.jsonl"}')"
