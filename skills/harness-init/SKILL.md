@@ -312,13 +312,14 @@ Claude Code는 시작 디렉토리의 `.claude/`를 로드하므로 workspace �
 ### 7-1. 감지
 
 ```bash
-$ROOT/scripts/workspace-scan.sh scan --root .            # 기본 depth 2
-$ROOT/scripts/workspace-scan.sh scan --root . --depth 3  # 그룹 폴더가 더 깊을 때만
+$ROOT/scripts/workspace-scan.sh scan --root . --fetch            # 기본 depth 2
+$ROOT/scripts/workspace-scan.sh scan --root . --fetch --depth 3  # 그룹 폴더가 더 깊을 때만
 ```
 
 - `.git` **디렉터리**만 멤버 후보다. 서브모듈·worktree는 `.git`이 파일이라 제외되고 `node_modules` 아래는 내려가지 않는다.
 - 멤버 `project_id`는 멤버 `harness.json`의 값을 우선하고, 없으면 origin 저장소명 → 폴더명 순으로 정한다(`project_id_for_cwd`와 같은 규칙). 출처는 `id_source`(`manifest` / `origin` / `path`)로 붙는다. `manifest`·`origin` 출처의 `project_id`가 여럿이면 한 저장소의 clone이므로 멤버 하나로 접고 나머지 경로를 `also_paths`에 둔다. `path` 출처(폴더명 폴백)는 identity가 아니라서 접지 않는다 — 무관한 `teamA/backend`·`teamB/backend`는 둘 다 멤버다. 다른 멤버 안에 중첩된 `.git`(커밋된 vendor clone 등)은 그 멤버의 일부로 보고 멤버로 잡지 않는다. 접은 뒤 멤버가 1개면 `candidate:false`다 — 같은 저장소의 worktree 폴더만 모인 곳은 workspace가 아니다.
-- 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
+- 멤버 하네스는 **원격 기준 브랜치**(`origin/develop`, 없으면 origin 기본 브랜치)의 `harness.json`을 먼저 읽고, 원격에 없을 때만 작업 트리를 읽는다. 멤버 체크아웃은 각자 따로 pull 되어 자주 뒤처져 있으므로 작업 트리만 읽으면 원격에 이미 생긴 하네스를 `harness:false`로 기록한다. `--fetch`는 멤버마다 `git fetch origin`을 먼저 해 원격 추적 ref를 최신으로 맞춘다(워킹트리·브랜치는 건드리지 않고, 실패해도 계속한다) — scan·write 모두 기본으로 붙인다. 멤버마다 어디서 읽었는지(`manifest_ref`: `origin/<branch>` | `worktree`)와 기준 ref·뒤처진 커밋 수(`base_ref`·`behind`)가 붙으므로, 7-2 멤버 표에 `behind`가 큰 멤버를 함께 보인다(체크아웃 최신화는 Preflight ⑤ 조건에서만).
+- 멤버마다 `harness:true|false`와 실측 정책(`level`·`test_policy`·`git_policy`·`edit_guard`·`harness_version`)이 붙는다. `harness:false`인 멤버는 그 저장소에 하네스가 없다는 표시이며, 이 시점에 init하지 않는다.
 
 ### 7-2. 확인
 
@@ -338,7 +339,7 @@ CLAUDE.md                  # "@AGENTS.md" — Claude 또는 둘 다를 선택했
 매니페스트는 손으로 쓰지 않고 스크립트로 기록한다. 생략한 값은 기존 manifest에서 유지되고 `harness_version`은 현재 플러그인 버전으로 찍힌다. 첫 기록은 `candidate:true`일 때만 되고 git 저장소 안에서는 거부된다. 기존 manifest의 재기록(7-6)은 멤버가 줄어도 허용된다.
 
 ```bash
-$ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
+$ROOT/scripts/workspace-scan.sh write --root . --fetch --workspace-id <폴더명 또는 사용자 확인 ID> --integrations claude
 ```
 
 `managed_files`는 없다. AGENTS.md·CLAUDE.md는 보호 파일이고 그 외 관리 생성물이 없으므로 `harness-sync-state.sh`를 거치지 않는다. 계측은 workspace 세션을 `workspace_id`로 귀속한다(`project_id_for_cwd`가 `workspace.json`을 git 판정보다 먼저 본다). 멤버별 편집 귀속은 후속 버전에서 다룬다.
@@ -360,14 +361,15 @@ $ROOT/scripts/workspace-scan.sh write --root . --workspace-id <폴더명 또는 
 2. 인터뷰는 첫 멤버에서 2번의 전체 항목을 묻고, 두 번째 멤버부터는 앞 멤버의 답을 기본값으로 보여 **"같음 / 다르게 답함"** 하나만 묻는다. 실측이 기본값과 모순되면(앞 멤버는 TDD인데 이 멤버는 테스트 0개 등) 2번의 경고 규칙대로 지적한다.
 3. 멤버 하나가 끝나면 생성 파일 목록과 실측 근거를 보고하고 커밋 여부를 확인한 뒤 다음 멤버로 간다. 저장소마다 브랜치·PR이 따로이므로 한 멤버를 끝내기 전에 다음 멤버 파일을 만들지 않는다.
 4. 선택이 3개를 넘으면 앞의 3개만 처리하고 나머지는 "각 저장소에서 `/harness-init`"으로 안내한다. 상위 세션 컨텍스트 보호가 목적이다. 실측 분석은 Explore 서브에이전트에 위임할 수 있지만 인터뷰는 서브에이전트가 사용자에게 질문할 수 없어 메인 세션에서 한다.
-5. 모두 끝나면 `workspace-scan.sh write --root .`로 매니페스트를 다시 기록하고(멤버가 `harness:true`와 실측 정책으로 바뀐다), AGENTS.md 멤버 표는 diff를 보여 **승인 후에만** 편집한다.
+5. 모두 끝나면 `workspace-scan.sh write --root . --fetch`로 매니페스트를 다시 기록하고(멤버가 `harness:true`와 실측 정책으로 바뀐다), AGENTS.md 멤버 표는 diff를 보여 **승인 후에만** 편집한다.
 
 ### 7-6. 기존 workspace: 동기화
 
 `scan`은 기존 `workspace.json`이 있으면 `diff`를 함께 낸다 — `added`(새 멤버 폴더), `removed`(사라진 멤버), `changed`(멤버의 하네스 유무·정책이 바뀜).
 
 - `--sync`만 있으면 표만 보이고 파일·manifest를 바꾸지 않는다.
-- `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root .`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
+- scan은 `--fetch`로 돌린다 — 없으면 원격 추적 ref가 낡아 `changed`를 놓친다.
+- `--sync --apply`: `added`·`changed`는 `workspace-scan.sh write --root . --fetch`로 manifest를 갱신한다. `removed`는 멤버 목록을 보이고 **사용자 확인 후에만** write한다(폴더가 잠시 없는 것일 수 있다). AGENTS.md 멤버 표·Quick Commands는 보호 파일이므로 diff를 제안하고 승인 후 편집한다.
 - 기존 AGENTS.md Preflight에 7-4의 단계가 빠져 있거나 낡았으면(예: 이전 버전으로 만든 workspace에 Preflight ⑤ 멤버 최신 여부 확인이 없음, 첫 줄·①③④가 "cwd의 `.claude/`만 로드하므로 해결 불가"·"경로 첫 세그먼트" 기준, ③④에 "옮길 수 없으면 워크플로를 직접 읽고 따른다"·"`general-purpose` 프롬프트에 인라인" 탈출구가 남음, ③이 새 세션을 띄우기만 하고 완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음) 같은 방식으로 diff를 제안하고 승인 후 반영한다. 사용자가 손으로 고친 문구는 덮어쓰지 않는다.
 - `persona_shadows`는 7-2와 같이 경고로 보인다.
 - 멤버 저장소 자체의 동기화는 여기서 하지 않는다. 각 멤버에서 `/harness-init --sync`를 안내한다.

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # workspace 감지·매니페스트 기록. 여러 독립 git 저장소가 한 폴더에 있을 때 /harness-init이 쓴다.
-#   scan  --root <dir> [--depth N]   : 후보 여부·멤버·기존 manifest와의 diff를 JSON으로
-#   write --root <dir> [--depth N] [--workspace-id <id>] [--integrations a,b] [--version <v>]
+#   scan  --root <dir> [--depth N] [--fetch]   : 후보 여부·멤버·기존 manifest와의 diff를 JSON으로
+#   write --root <dir> [--depth N] [--fetch] [--workspace-id <id>] [--integrations a,b] [--version <v>]
 #         : scan 결과로 .ai-harness/workspace.json을 기록 (생략한 값은 기존 manifest 유지)
+# 멤버 하네스는 원격 기준 브랜치(origin/develop → origin 기본 브랜치)의 harness.json을 먼저 읽는다.
+# 멤버 체크아웃은 자주 뒤처져 있어 작업 트리만 읽으면 원격에 생긴 하네스를 놓친다.
+# 워킹트리는 건드리지 않는다. --fetch는 멤버마다 git fetch origin을 먼저 한다(실패해도 계속).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
 
 usage() {
-  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--workspace-id <id>] [--integrations a,b] [--version <v>]\n' "$0" >&2
+  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--fetch] [--workspace-id <id>] [--integrations a,b] [--version <v>]\n' "$0" >&2
   exit 2
 }
 
@@ -22,6 +25,7 @@ depth=2
 workspace_id=""
 integrations=""
 version=""
+fetch=false
 while (($#)); do
   case "$1" in
     --root) root="${2:-}"; shift 2 ;;
@@ -29,6 +33,7 @@ while (($#)); do
     --workspace-id) workspace_id="${2:-}"; shift 2 ;;
     --integrations) integrations="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
+    --fetch) fetch=true; shift ;;
     *) usage ;;
   esac
 done
@@ -44,30 +49,68 @@ fi
 
 # .git 디렉터리만 멤버 후보다. 서브모듈·worktree는 .git이 파일이라 제외되고,
 # node_modules 아래는 의존성 저장소라 내려가지 않는다.
+# 멤버의 원격 기준 ref. 통합 브랜치(origin/develop)가 있으면 그것, 없으면 origin 기본 브랜치.
+member_base_ref() {
+  local repo="$1" head=""
+  if git -C "$repo" rev-parse -q --verify refs/remotes/origin/develop >/dev/null 2>&1; then
+    printf 'origin/develop\n'
+    return
+  fi
+  head="$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ -n "$head" ]] && git -C "$repo" rev-parse -q --verify "refs/remotes/$head" >/dev/null 2>&1; then
+    printf '%s\n' "$head"
+  fi
+}
+
 members='[]'
 while IFS= read -r gitdir; do
   [[ -n "$gitdir" ]] || continue
   repo="${gitdir%/.git}"
   rel="${repo#"$root"/}"
+  if [[ "$fetch" == true ]]; then
+    git -C "$repo" fetch -q origin >/dev/null 2>&1 || true
+  fi
+  base_ref="$(member_base_ref "$repo")"
+  behind='null'
+  remote_manifest=""
+  if [[ -n "$base_ref" ]]; then
+    behind="$(git -C "$repo" rev-list --count "HEAD..$base_ref" 2>/dev/null || printf 'null')"
+    remote_manifest="$(git -C "$repo" show "$base_ref:.ai-harness/harness.json" 2>/dev/null || true)"
+    jq -e 'type == "object"' >/dev/null 2>&1 <<<"$remote_manifest" || remote_manifest=""
+  fi
+  member_manifest="$repo/.ai-harness/harness.json"
+  manifest_json=""
+  manifest_ref=""
+  if [[ -n "$remote_manifest" ]]; then
+    manifest_json="$remote_manifest"
+    manifest_ref="$base_ref"
+  elif [[ -f "$member_manifest" ]] && jq -e 'type == "object"' "$member_manifest" >/dev/null 2>&1; then
+    manifest_json="$(<"$member_manifest")"
+    manifest_ref="worktree"
+  fi
   project_id="$(project_id_for_cwd "$repo")"
   # id_source: 폴더명 폴백(path)은 실제 identity가 아니므로 clone 접기 대상에서 제외한다.
   # 그렇지 않으면 origin도 manifest도 없는 무관한 두 저장소가 폴더명이 같다는 이유로 하나로 접힌다.
   id_source="path"
-  member_manifest="$repo/.ai-harness/harness.json"
-  if [[ -f "$member_manifest" ]] && [[ -n "$(jq -r '.project_id // empty' "$member_manifest" 2>/dev/null)" ]]; then
+  if [[ -n "$manifest_json" ]] && [[ -n "$(jq -r '.project_id // empty' <<<"$manifest_json" 2>/dev/null)" ]]; then
     id_source="manifest"
   elif [[ -n "$(git -C "$repo" remote get-url origin 2>/dev/null || true)" ]]; then
     id_source="origin"
   fi
-  if [[ -f "$member_manifest" ]] && entry="$(jq -c --arg path "$rel" --arg pid "$project_id" --arg src "$id_source" '{
+  if [[ -n "$manifest_json" ]] && entry="$(jq -c --arg path "$rel" --arg pid "$project_id" --arg src "$id_source" \
+      --arg mref "$manifest_ref" --arg bref "$base_ref" --argjson behind "$behind" '{
         path: $path, project_id: (.project_id // $pid), id_source: $src, harness: true,
         level: (.level // null), test_policy: (.test_policy // null),
-        git_policy: (.git_policy // null), edit_guard: (.edit_guard // false)
-      }' "$member_manifest" 2>/dev/null)"; then
+        git_policy: (.git_policy // null), edit_guard: (.edit_guard // false),
+        harness_version: (.harness_version // null), manifest_ref: $mref,
+        base_ref: (if $bref == "" then null else $bref end), behind: $behind
+      }' <<<"$manifest_json" 2>/dev/null)"; then
     :
   else
     entry="$(jq -cn --arg path "$rel" --arg pid "$project_id" --arg src "$id_source" \
-      '{path: $path, project_id: $pid, id_source: $src, harness: false}')"
+      --arg bref "$base_ref" --argjson behind "$behind" \
+      '{path: $path, project_id: $pid, id_source: $src, harness: false,
+        base_ref: (if $bref == "" then null else $bref end), behind: $behind}')"
   fi
   members="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$members")"
 done < <(find "$root" -mindepth 2 -maxdepth "$((depth + 1))" \

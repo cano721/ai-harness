@@ -152,6 +152,25 @@ NESTED="$TEST_TMP/nested"
 make_repo "$NESTED/outer" git@github.com:acme/outer.git
 make_repo "$NESTED/outer/vendor/lib" git@github.com:vendor/lib.git
 assert_eq "false 1 outer" "$(jq -r '"\(.candidate) \(.members|length) \(.members[0].path)"' <<<"$("$ROOT/scripts/workspace-scan.sh" scan --root "$NESTED" --depth 3)")" "a .git nested inside a member is not a separate member"
+# 멤버 체크아웃이 뒤처져 있어도 원격 기준 브랜치(origin/develop)의 하네스를 읽는다. 워킹트리는 건드리지 않는다.
+STALE_WS="$TEST_TMP/stale-ws"
+git init -q --bare "$TEST_TMP/stale-remote.git"
+make_repo "$STALE_WS/front" "$TEST_TMP/stale-remote.git"
+git -C "$STALE_WS/front" push -q origin HEAD:refs/heads/develop
+STALE_PUSHER="$TEST_TMP/stale-pusher"
+git clone -q -b develop "$TEST_TMP/stale-remote.git" "$STALE_PUSHER"
+mkdir -p "$STALE_PUSHER/.ai-harness"
+jq -n '{project_id:"acme-front", level:"standard", test_policy:"tdd", git_policy:"pr-only", edit_guard:false, harness_version:"0.45.0"}' > "$STALE_PUSHER/.ai-harness/harness.json"
+git -C "$STALE_PUSHER" -c user.email=t@e -c user.name=t add .ai-harness
+git -C "$STALE_PUSHER" -c user.email=t@e -c user.name=t commit -q -m harness
+git -C "$STALE_PUSHER" push -q origin develop
+make_repo "$STALE_WS/back"
+STALE_LOCAL_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$STALE_WS")"
+assert_eq "false" "$(jq -r '.members[] | select(.path=="front") | .harness' <<<"$STALE_LOCAL_SCAN")" "without fetch the stale remote-tracking ref has no harness"
+STALE_SCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$STALE_WS" --fetch)"
+assert_eq "acme-front true origin/develop origin/develop 1 0.45.0" "$(jq -r '.members[] | select(.path=="front") | "\(.project_id) \(.harness) \(.manifest_ref) \(.base_ref) \(.behind) \(.harness_version)"' <<<"$STALE_SCAN")" "a stale member checkout reports the harness on its remote base branch"
+[[ ! -e "$STALE_WS/front/.ai-harness" ]] || fail "scan must not touch the member working tree"
+assert_eq "worktree null" "$(jq -r '.members[] | select(.path=="api") | "\(.manifest_ref) \(.base_ref)"' <<<"$WS_SCAN")" "a member without a remote base falls back to its working tree manifest"
 pass "workspace mode detection"
 
 # 코드↔docs drift: 빌드 파일의 검증 태스크와 문서에 적힌 명령 호출을 대조한다.
