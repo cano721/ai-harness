@@ -22,7 +22,7 @@
 ### 업데이트 후 해야 할 일
 
 - UI 계약(`ui-review`·`frontend-team`·`design-audit`)을 생성한 프로젝트는 `/harness-init --sync`로 `references/design-skills.md`를 받습니다.
-- `/setup design`으로 `web-design-guidelines`·`emil-design-eng`·`design-system-patterns`를 받았다면 `design list`에서 `superseded`로 보입니다. 이제 내장이니 `/ai-harness:setup design`에서 지우세요(`design remove --tool both <이름>`). 직접 고친 사본은 `--force`가 필요하고, 직접 둔 같은 이름 폴더는 건드리지 않습니다.
+- `/setup design`으로 `web-design-guidelines`·`emil-design-eng`·`design-system-patterns`를 받았다면 `design list`에서 `superseded`로 보입니다. 이제 내장이니 `/ai-harness:setup design`에서 지우세요(`design remove --tool both <이름>`). 직접 고친 사본은 `--force`가 필요하고, 직접 둔 같은 이름 폴더는 건드리지 않고 `design list`의 `conflict`로 알립니다 — 필요하면 직접 정리하세요.
 - UI 계약을 생성한 프로젝트는 `/harness-init --sync`로 `ui-review/references/web-interface-guidelines.md`를 받습니다.
 - 네이티브 UI 검토(`native-ui`)를 생성한 프로젝트는 다음 `/harness-init --sync`에서 `native-ui/SKILL.md`와 계약 사본 `references/ui-review-contract.md` 갱신이 한 번 뜹니다. 계약 사본의 지도 링크는 웹 전용이라 네이티브에는 지도를 배포하지 않습니다.
 

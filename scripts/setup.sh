@@ -371,8 +371,10 @@ command_design_list() {
     for tool in claude codex; do
       statuses="$(jq -c --arg t "$tool" --arg s "$(design_status "$tool" "$entry")" '. + {($t):$s}' <<<"$statuses")"
     done
+    # 내장 스킬과 같은 이름으로 사용자가 직접 둔 폴더는 지우지 않지만, 이름이 겹친다는 사실은 알린다.
     jq -c --argjson st "$statuses" '{name, bundle, summary, builtin:(.builtin // null), license:(.license // null), source:(.source // null),
-      review:(.review // null), overlaps:(.overlaps // null), absorbed:(.absorbed // null), note:(.note // null), status:$st}' <<<"$entry"
+      review:(.review // null), overlaps:(.overlaps // null), absorbed:(.absorbed // null), note:(.note // null), status:$st,
+      conflict:(if .builtin == "ai-harness" then ([$st | to_entries[] | select(.value == "foreign") | {key, value:"같은 이름 내장 스킬 있음 — 직접 둔 폴더라 지우지 않음, 필요하면 직접 정리"}] | from_entries | if . == {} then null else . end) else null end)}' <<<"$entry"
   done < <(jq -c '.skills[]' "$DESIGN_CATALOG")
 }
 

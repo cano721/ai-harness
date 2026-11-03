@@ -170,8 +170,8 @@ SOFTWARE.
 ## skills/web-design-guidelines · templates/ui-review/references/web-interface-guidelines.md
 
 - 출처: [vercel-labs/web-interface-guidelines](https://github.com/vercel-labs/web-interface-guidelines) `command.md` @ `434b7f91364665f2f733b310ec54809bf8f37937`
-- 라이선스: MIT
-- 규칙 본문(`references/web-interface-guidelines.md`)은 고정 커밋의 `command.md`를 바이트 그대로 담은 **사본**입니다. `SKILL.md`는 [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)의 `skills/web-design-guidelines`(README의 MIT 표기)를 실행 때 규칙을 받지 않도록 고쳐 쓴 파생물입니다.
+- 라이선스: MIT (`web-interface-guidelines`는 LICENSE 파일. `SKILL.md` 절차 출처 [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)는 상류 README에 명시, 별도 LICENSE 파일 없음)
+- 규칙 본문(`references/web-interface-guidelines.md`)은 고정 커밋의 `command.md`를 바이트 그대로 담은 **사본**입니다. `SKILL.md`는 [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)의 `skills/web-design-guidelines`를 실행 때 규칙을 받지 않도록 고쳐 쓴 파생물입니다.
 
 ```
 MIT License

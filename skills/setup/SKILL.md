@@ -140,9 +140,9 @@ ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자�
    ```bash
    $ROOT/scripts/setup.sh design list
    ```
-   스킬마다 `bundle`(`core` 필수 / `extra` 선택), `summary`, `license`, `source`(저장소·커밋), `review`(실행하는 것·네트워크), `overlaps`(하네스 스킬이 대체하는 부분), `status.claude`·`status.codex`가 나온다. 상태는 위 표에 셋이 더 있다: `builtin`(그 도구에 내장 — 설치 불필요), `unavailable`(이 도구엔 대응 없음), `manual`(고정할 원본을 확인하지 못해 setup이 설치하지 않음 — `note`의 공식 경로로 직접 설치), `superseded`(setup이 예전에 받은 사본인데 이제 ai-harness에 내장됨 — `absorbed`가 내장 위치). `builtin`이 `ai-harness`인 항목에 같은 이름 폴더가 있으면 setup이 기록한 사본만 `superseded`이고, 고친 사본은 `modified`, 사용자가 직접 둔 폴더는 `foreign`이다. `outdated`는 카탈로그의 고정 커밋이 바뀌었다는 뜻이다.
+   스킬마다 `bundle`(`core` 필수 / `extra` 선택), `summary`, `license`, `source`(저장소·커밋), `review`(실행하는 것·네트워크), `overlaps`(하네스 스킬이 대체하는 부분), `status.claude`·`status.codex`가 나온다. 상태는 위 표에 셋이 더 있다: `builtin`(그 도구에 내장 — 설치 불필요), `unavailable`(이 도구엔 대응 없음), `manual`(고정할 원본을 확인하지 못해 setup이 설치하지 않음 — `note`의 공식 경로로 직접 설치), `superseded`(setup이 예전에 받은 사본인데 이제 ai-harness에 내장됨 — `absorbed`가 내장 위치). `builtin`이 `ai-harness`인 항목에 같은 이름 폴더가 있으면 setup이 기록한 사본만 `superseded`이고, 고친 사본은 `modified`, 사용자가 직접 둔 폴더는 `foreign`이고 `conflict`에 도구별 안내가 붙는다. `outdated`는 카탈로그의 고정 커밋이 바뀌었다는 뜻이다.
 2. 표로 보여 준다: 스킬 · 묶음 · 하는 일 · 라이선스 · 실행하는 것/네트워크 · Claude/Codex 상태. `review.network`에 외부 호출이 있으면 그 줄을 그대로 보여 준다.
-3. 고르게 한다. 기본 선택은 `core`. 내장 항목은 고를 대상에서 빼고 "내장"으로만 표시한다. `superseded`가 있으면 "이제 내장이라 지워도 된다"고 알리고 `design remove`를 권한다 — `web-design-guidelines`의 예전 사본은 실행할 때마다 원격 규칙을 받으므로 특히 권한다. 사용자가 고르지 않으면 지우지 않는다. 하네스 스킬이 이미 대체하는 것(`overlaps`)은 "대부분 대체됨"으로 표시한다. 도구는 2단계와 같은 규칙.
+3. 고르게 한다. 기본 선택은 `core`. 내장 항목은 고를 대상에서 빼고 "내장"으로만 표시한다. `superseded`가 있으면 "이제 내장이라 지워도 된다"고 알리고 `design remove`를 권한다 — `web-design-guidelines`의 예전 사본은 실행할 때마다 원격 규칙을 받으므로 특히 권한다. 사용자가 고르지 않으면 지우지 않는다. `conflict`가 있으면 그 문구를 그대로 보여 준다 — 직접 둔 폴더라 setup이 지우지 않으며, 옛 `web-design-guidelines`는 실행할 때마다 원격 규칙을 받으니 필요하면 사용자가 직접 정리한다. 하네스 스킬이 이미 대체하는 것(`overlaps`)은 "대부분 대체됨"으로 표시한다. 도구는 2단계와 같은 규칙.
 4. 설치·제거:
    ```bash
    $ROOT/scripts/setup.sh design install --tool <claude|codex|both> <core|extra|all|이름>...

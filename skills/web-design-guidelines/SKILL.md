@@ -1,6 +1,6 @@
 ---
 name: web-design-guidelines
-description: Review UI code for Web Interface Guidelines compliance. Use when asked to "review my UI", "check accessibility", "audit design", "review UX", or "check my site against best practices".
+description: Built into ai-harness as a pinned offline copy — never fetches its rules. Review UI code for Web Interface Guidelines compliance. Use when asked to "review my UI", "check accessibility", "audit design", "review UX", or "check my site against best practices".
 license: MIT
 metadata:
   source: rules from vercel-labs/web-interface-guidelines@434b7f91364665f2f733b310ec54809bf8f37937 command.md; procedure adapted from vercel-labs/agent-skills skills/web-design-guidelines

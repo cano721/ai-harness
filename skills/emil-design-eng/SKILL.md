@@ -1,10 +1,10 @@
 ---
 name: emil-design-eng
-description: This skill encodes Emil Kowalski's philosophy on UI polish, component design, animation decisions, and the invisible details that make software feel great.
+description: Built into ai-harness as a pinned copy. This skill encodes Emil Kowalski's philosophy on UI polish, component design, animation decisions, and the invisible details that make software feel great.
 license: MIT
 metadata:
   source: emilkowalski/skill@f1090bec277140d02ed202440185ad9d02ac1490 skills/emil-design-eng/SKILL.md
-  copy: verbatim body; frontmatter adds only license and source. Copyright (c) 2026 Emil Kowalski — full text in THIRD-PARTY-LICENSES.md.
+  copy: verbatim body; frontmatter adds only license, source and the built-in marker at the start of description. Copyright (c) 2026 Emil Kowalski — full text in THIRD-PARTY-LICENSES.md.
 ---
 
 # Design Engineering

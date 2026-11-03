@@ -2218,7 +2218,12 @@ assert_contains "$(<"$ROOT/templates/ui-review/SKILL.md")" "references/web-inter
 assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/web-interface-guidelines.md") | .action')" "ui stack syncs the interface guideline rules"
 WIG_SKILL="$(<"$ROOT/skills/web-design-guidelines/SKILL.md")"
 assert_contains "$WIG_SKILL" "references/web-interface-guidelines.md" "web-design-guidelines reads its pinned rules"
-if grep -qi "webfetch\|fetch the latest\|fetch fresh" "$ROOT/skills/web-design-guidelines/SKILL.md"; then fail "web-design-guidelines still fetches its rules"; fi
+# 규칙을 받는 도구 호출은 금지하고, 출처 URL 언급은 허용한다.
+if grep -qiE "\b(webfetch|web_fetch|curl|wget|fetch the latest|fetch fresh)\b" "$ROOT/skills/web-design-guidelines/SKILL.md"; then fail "web-design-guidelines still fetches its rules"; fi
+for BUILTIN_SKILL in web-design-guidelines emil-design-eng; do
+  assert_contains "$(sed -n '1,4p' "$ROOT/skills/$BUILTIN_SKILL/SKILL.md")" "description: Built into ai-harness as a pinned" "$BUILTIN_SKILL description says it is the built-in pinned copy"
+done
+assert_contains "$MAP_CONTENT" "use the \`ai-harness:\`-prefixed one" "map picks the ai-harness skill when two share a name"
 EMIL_SKILL="$ROOT/skills/emil-design-eng/SKILL.md"
 assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "license: MIT" "emil-design-eng copy names its license"
 assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "emilkowalski/skill@$(jq -r '.skills[] | select(.name=="emil-design-eng") | .source.ref' "$DESIGN_CATALOG")" "emil-design-eng copy names the pinned commit the catalog records"
@@ -4987,6 +4992,8 @@ assert_eq "superseded" "$(design_status bar claude)" "an old setup copy of a now
 assert_eq "modified" "$(design_status bar codex)" "an edited old copy of a built-in skill stays modified"
 assert_eq "foreign" "$(design_status mine claude)" "a hand-placed folder named like a built-in skill is foreign"
 assert_eq "builtin" "$(design_status mine codex)" "a built-in skill with nothing installed is builtin"
+assert_contains "$(setup_cmd design list | jq -r 'select(.name=="mine") | .conflict.claude')" "같은 이름 내장 스킬 있음" "list flags a hand-placed folder that shadows a built-in skill"
+assert_eq "null null" "$(setup_cmd design list | jq -r 'select(.name=="mine" or .name=="foo") | .conflict.codex // "null"' | paste -sd' ' -)" "no conflict notice without a hand-placed folder"
 assert_eq "ai-harness" "$(setup_cmd design list | jq -r 'select(.name=="bar") | .builtin')" "list says the skill is built into ai-harness"
 assert_eq "builtin builtin" "$(setup_cmd design install --tool both --replace bar | jq -r '.action' | paste -sd' ' -)" "a built-in skill is never fetched, even with --replace"
 assert_contains "$(cat "$SETUP_T/claude/bar/SKILL.md")" "claude bar" "install leaves the superseded copy in place"
