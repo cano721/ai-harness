@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- **`/harness-update`가 매번 최신 릴리스를 조회합니다** — 확인용 `check-update.sh status`도 24시간 캐시 기한 안이면 조회를 건너뛰어, 캐시가 생긴 뒤 나온 릴리스가 있어도 "최신 상태"라고 답했습니다. 이제 `status`는 캐시 기한과 무관하게 조회하고(실패 백오프 중이면 캐시를 씀), 세션 시작 알림과 정기 `refresh`는 그대로 24시간 캐시를 지킵니다.
+
 ## v0.53.1 (2026-11-03)
 ### 버그 수정
 
