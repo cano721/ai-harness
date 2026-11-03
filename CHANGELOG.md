@@ -14,7 +14,7 @@
 
 ### 동작 변경
 
-- **workspace 인계가 Claude Code 백그라운드 세션을 기본으로 씁니다** — Orca 감독 디스패치로 넘기면 worker heartbeat 마다 조율 세션이 깨어나 "살아 있다는 신호뿐이라 확인 처리했다"는 보고를 반복했고, Orca 가 없으면 완료 파일에 기대야 했습니다. 이제 workspace AGENTS.md Preflight ③과 편집 가드 안내는 멤버 디렉토리에서 `claude --bg`(조율 세션과 같은 권한 모드)로 띄우고 `SendMessage`의 `notify_when_idle`로 턴 종료 알림을 받아 결과를 판단하게 합니다. 사용자는 `claude attach <id>`로 worker 를 보고 끼어들 수 있고, worker 는 세션 간 메시지로 질문·결과를 보냅니다. Codex 멤버는 `codex exec` 백그라운드 실행, Orca 감독은 사용자가 원하거나 재시도·의존 관계가 필요할 때의 선택지가 되며 heartbeat 만 든 batch 는 보고하지 않습니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다.
+- **workspace 인계가 Claude Code 백그라운드 세션을 기본으로 씁니다** — Orca 감독 디스패치로 넘기면 worker heartbeat 마다 조율 세션이 깨어나 "살아 있다는 신호뿐이라 확인 처리했다"는 보고를 반복했고, Orca 가 없으면 완료 파일에 기대야 했습니다. 이제 workspace AGENTS.md Preflight ③과 편집 가드 안내는 멤버 디렉토리에서 `claude --bg`(조율 세션과 같은 권한 모드)로 띄우고 `SendMessage`의 `notify_when_idle`로 턴 종료 알림을 받아 결과를 판단하게 합니다. 사용자는 `claude attach <id>`로 worker 를 보고 끼어들 수 있고, worker 는 세션 간 메시지로 질문·결과를 보냅니다. Codex 멤버는 이전처럼 `codex -C`와 완료 파일로 넘기고, Orca 감독은 사용자가 원하거나 재시도·의존 관계가 필요할 때의 선택지가 되며 heartbeat 만 든 batch 는 보고하지 않습니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다.
 
 ### 버그 수정
 
