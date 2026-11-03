@@ -47,6 +47,14 @@ rework_json() { # repo author since until(포함) → JSON 또는 null
 
 need_value() { (($# >= 2)) || usage; }
 
+# 명령마다 임시 디렉토리 하나를 쓰고, 종료 때 한 trap으로 지운다(함수마다 trap을 걸면 앞의 것을 덮는다).
+IMPACT_TMP=""
+impact_tmp() {
+  [[ -n "$IMPACT_TMP" ]] && return 0
+  IMPACT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-impact.XXXXXX")"
+  trap 'find "$IMPACT_TMP" -depth -delete 2>/dev/null || true' EXIT
+}
+
 command_compare() {
   local root="" project="" at="" window=30 today="" author="" installed="" inst_date="" inst_src=""
   while (($#)); do
@@ -103,8 +111,7 @@ command_compare() {
   qkey="$(hm_project_key "$project")"
   history="$HM_DATA_DIR/harvest-queue/$qkey/review-history.jsonl"
   local applied="$HM_DATA_DIR/applied/applied.jsonl"
-  IMPACT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-impact.XXXXXX")"
-  trap 'find "$IMPACT_TMP" -depth -delete 2>/dev/null || true' EXIT
+  impact_tmp
   local tmp="$IMPACT_TMP"
 
   # 세션별 이벤트 파일 이름(확장자 뺀 것)이 digest 파일 이름과 같다.
@@ -169,16 +176,19 @@ command_render() {
   fi
   mkdir -p "$(dirname "$out")"
   local hl_json="null"
-  [[ -n "$highlights" ]] && hl_json="$(jq -c . "$highlights")"
+  # 객체가 아닌 하이라이트(배열·문자열)는 없는 것으로 본다. 깨진 JSON은 jq가 오류로 알린다.
+  if [[ -n "$highlights" ]]; then
+    hl_json="$(jq -c 'if type == "object" then . else null end' "$highlights")" || { echo "하이라이트 JSON을 읽지 못함: $highlights" >&2; exit 2; }
+    [[ "$hl_json" != "null" ]] || echo "하이라이트가 JSON 객체가 아니라 무시함: $highlights" >&2
+  fi
   local ab_file="/dev/null"
   [[ -n "$ab" ]] && ab_file="$ab"
   # 개선별 재발 판정은 에이전트가 고른 finding id로 여기서 계산한다(scripts/impact-evidence.jq).
   local data_file="/dev/null"
   if [[ -n "$data" ]]; then
-    IMPACT_RENDER_TMP="$(mktemp "${TMPDIR:-/tmp}/ai-harness-impact-render.XXXXXX")"
-    trap 'rm -f "$IMPACT_RENDER_TMP"' EXIT
-    jq -L "$DIR" --argjson h "$hl_json" 'include "impact-evidence"; evidence($h)' "$data" >"$IMPACT_RENDER_TMP"
-    data_file="$IMPACT_RENDER_TMP"
+    impact_tmp
+    data_file="$IMPACT_TMP/render.json"
+    jq -L "$DIR" --argjson h "$hl_json" 'include "impact-evidence"; evidence($h)' "$data" >"$data_file"
   fi
   # 데이터 속 '<'를 <로 바꿔 </script>·<!-- 가 페이지 구조를 깨지 못하게 한다.
   jq -rn --rawfile t "$ROOT_DIR/skills/harness-impact/report-template.html" \

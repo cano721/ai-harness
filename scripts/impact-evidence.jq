@@ -3,6 +3,9 @@
 #   - 후보 목록에 없는 id는 버린다(지어낸 id가 숫자를 만들지 못하게).
 #   - 같은 세션의 finding 여러 개는 한 세션으로 센다.
 #   - 반영 뒤 관측 세션이 min_observed 미만이고 재발도 없으면 "판단 보류" — 성공으로 세지 않는다.
+#   - 반영 뒤 후보가 상한에 잘렸으면 재발이 빠졌을 수 있어 "사라짐" 대신 "판단 보류"다.
+#   - 근거 batch는 문제가 있어 뽑힌 세션이라 비율이 부풀려진다. 에이전트가 반영 전 30일(window)도 맞췄으면
+#     비율 비교 기준을 그쪽(반영 뒤와 같은 정의: 정리된 세션 전부)으로 삼는다.
 # 후보 목록은 리포트에 싣지 않고, 맞춘 finding 요약 몇 개만 근거로 남긴다.
 
 def min_observed: 5;
@@ -22,23 +25,32 @@ def verdict($bh; $ah; $observed; $before_observed):
   else "recurred" end;
 
 def evidence($h):
-  (($h // {}).improvements // [] | map(select(type == "object" and (.id | type) == "string") | {(.id): .}) | add // {}) as $HI
+  ((($h | objects) // {}).improvements // [] | map(select(type == "object" and (.id | type) == "string") | {(.id): .}) | add // {}) as $HI
   | .improvements = ((.improvements // []) | map(
       . as $x
       | ($x.before.candidates.items // []) as $bc
+      | ($x.before.window.candidates.items // []) as $wc
       | ($x.after.candidates.items // []) as $ac
+      | ($x.after.candidates.truncated // false) as $atrunc
       | $HI[$x.id] as $m
       | (if $m == null then {verdict: "unmatched"}
          else
            matched($m.before; $bc) as $bm
            | matched($m.after; $ac) as $am
+           | (if $x.before.window != null and ($m | has("window")) then matched($m.window; $wc) else null end) as $wm
            | ($bm | sessions_of) as $bh
            | ($am | sessions_of) as $ah
+           | (if $wm == null then null else ($wm | sessions_of) end) as $wh
+           | (if ($wh // 0) > 0 then "window" else "batch" end) as $base
+           | (if $base == "window" then verdict($wh; $ah; $x.after.observed; $x.before.window.observed)
+              else verdict($bh; $ah; $x.after.observed; $x.before.observed) end) as $v
            | {label: ($m.label // null), note: ($m.note // null),
-              before_hits: $bh, after_hits: $ah,
+              before_hits: $bh, after_hits: $ah, window_hits: $wh, baseline: $base,
               before_truncated: ($x.before.candidates.truncated // false),
-              verdict: verdict($bh; $ah; $x.after.observed; $x.before.observed),
+              window_truncated: ($x.before.window.candidates.truncated // false),
+              after_truncated: $atrunc,
+              verdict: (if $v == "gone" and $atrunc then "hold" else $v end),
               before_examples: ($bm | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary})),
               after_examples: ($am | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary}))}
          end) as $r
-      | $x | del(.before.candidates, .after.candidates) | . + {result: $r}));
+      | $x | del(.before.candidates, .before.window.candidates, .after.candidates) | . + {result: $r}));

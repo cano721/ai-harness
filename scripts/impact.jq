@@ -82,10 +82,11 @@ def harness_use:
     | {total: length, truncated: (length > 200), items: .[0:200]};
   def corrections_in($since; $until): findings_in($since; $until; "c");
   # 세션들의 finding을 에이전트가 개선 패턴과 맞춰 볼 후보로 낸다. id = 세션 파일 이름#finding 순번.
+  # 상한을 넘으면 최신부터 남긴다. 반영 뒤 쪽에서 오래된 쪽을 남기면 최근 재발이 빠져 "사라짐"으로 읽힌다.
   def candidates($sessions):
     [$sessions[] | ._f as $f | day_of as $d | ($D[$f].f // []) | to_entries[]
       | {id: "\($f)#\(.key)", date: $d, category: .value.category, summary: .value.summary}]
-    | sort_by(.date, .id) | {truncated: (length > candidate_cap), items: .[0:candidate_cap]};
+    | sort_by(.date, .id) | reverse | {truncated: (length > candidate_cap), items: .[0:candidate_cap]};
   def top_model: to_entries | max_by(.value) | .key;
 
   period($bs; $inst) as $before
@@ -120,7 +121,10 @@ def harness_use:
     corrections: {before: corrections_in($bs; $inst), after: corrections_in($asince; $au)},
     missing_context: {before: findings_in($bs; $inst; "m"), after: findings_in($asince; $au; "m")},
     # 개선별 재발 추적: harvest가 반영한 개선마다 근거 batch(반영 전)와 반영 뒤 세션의 finding을 나란히 낸다.
-    # 둘 다 설치 후·같은 시기라 모델·작업 구성 차이가 전후 비교보다 작다. 패턴 매칭은 에이전트가 highlights에서 한다.
+    # 패턴 매칭은 에이전트가 highlights에서 한다.
+    # batch는 harvest 큐가 신호(교정·오류·차단·insight) 있는 세션을 먼저 골라 만든 표본이고, 반영 뒤 쪽은 정리된 세션 전부다.
+    # 그래서 batch 비율과 반영 뒤 비율을 맞대면 "줄어듦"이 쉽게 나온다. 같은 정의(정리된 세션 전부)의 반영 전 30일을
+    # window로 함께 내고, render는 window 매칭이 있으면 그 비율로 줄어듦·재발을 판정한다.
     improvements: (
       [$history[0][] | select((.review.outcome // "") == "improved" and ((.reviewed_at // "") != ""))
         | select((.reviewed_at[0:10]) < $au)]
@@ -128,14 +132,16 @@ def harness_use:
       | map(.key as $i | .value as $h | $h.reviewed_at as $at
         | ([$h.markers // [] | .[] | strings | rtrimstr(".json")] | map({(.): true}) | add // {}) as $mk
         | ($PD | map(select($mk[._f] == true))) as $BM
+        | ($at[0:10] | ep) as $e | (($e - baseline_days * 86400) | todate[0:10]) as $from
+        | ($PD | map(select(day_of >= $from and (.started // .ended // "") < $at))) as $WS
         | (if ($mk | length) > 0 then {basis: "batch", sessions: $BM}
-           else ($at[0:10] | ep) as $e | (($e - baseline_days * 86400) | todate[0:10]) as $from
-             | {basis: "window", since: $from, sessions: ($PD | map(select(day_of >= $from and (.started // .ended // "") < $at)))} end) as $B
+           else {basis: "window", since: $from, sessions: $WS} end) as $B
         | ($PD | map(select((.started // .ended // "") >= $at and day_of < $au))) as $AF
         | {id: "h\($i + 1)", date: $at[0:10], summary: $h.review.summary, expected: $h.review.expected,
            artifact: $h.review.artifact, change: $h.review.change,
-           before: {basis: $B.basis, since: $B.since, batch_sessions: ($mk | length), observed: ($B.sessions | length),
-                    candidates: candidates($B.sessions)},
+           before: ({basis: $B.basis, since: $B.since, batch_sessions: ($mk | length), observed: ($B.sessions | length),
+                    candidates: candidates($B.sessions)}
+                    + (if $B.basis == "batch" then {window: {since: $from, observed: ($WS | length), candidates: candidates($WS)}} else {} end)),
            after: {since: $at, observed: ($AF | length), candidates: candidates($AF)}})
     ),
     timeline: (

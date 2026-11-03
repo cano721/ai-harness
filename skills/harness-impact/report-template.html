@@ -263,7 +263,7 @@ const VERDICT = {
   gone: { label: "사라짐", icon: "check", text: "반영 뒤 같은 유형이 다시 나오지 않았어요" },
   reduced: { label: "줄어듦", icon: "down", text: "반영 뒤 같은 유형이 나오는 비율이 줄었어요" },
   recurred: { label: "재발", icon: "alert", text: "반영 뒤에도 같은 유형이 비슷하거나 더 자주 나왔어요" },
-  hold: { label: "판단 보류", icon: "pause", text: "반영 뒤 정리된 세션이 적어 아직 판단하지 않아요" },
+  hold: { label: "판단 보류", icon: "pause", text: "반영 뒤 정리된 세션이 적거나 반영 뒤 목록이 잘려 아직 판단하지 않아요" },
   no_baseline: { label: "기준 없음", icon: "dash", text: "근거 세션 정리에서 이 유형을 찾지 못해 비교할 기준이 없어요" },
   unmatched: { label: "판정 안 함", icon: "dash", text: "이번 리포트에서 이 개선의 패턴을 맞춰 보지 않았어요" },
 };
@@ -326,7 +326,7 @@ app.append(kpis);
 
 // 3. 개선별 성과
 app.append(el("h2", {}, "하네스가 고친 실수, 다시 나왔나"));
-app.append(el("p", { class: "lead" }, "/harvest 가 반영한 개선마다, 근거가 된 세션들과 반영 뒤 세션에서 같은 유형의 문제가 나온 비율을 비교해요. 두 쪽 모두 설치 후·같은 시기라 모델이나 작업 구성 차이가 전후 비교보다 작아요. 반영 뒤 정리된 세션이 5개 미만이면 성공으로 세지 않아요."));
+app.append(el("p", { class: "lead" }, "/harvest 가 반영한 개선마다, 근거가 된 세션들과 반영 뒤 세션에서 같은 유형의 문제가 나온 비율을 비교해요. 두 쪽 모두 설치 후·같은 시기라 모델이나 작업 구성 차이가 전후 비교보다 작아요. 다만 근거 세션은 문제가 있어 /harvest 에 뽑힌 표본이라 비율이 높게 나와요 — 반영 전 30일의 정리된 세션도 맞춘 개선은 그 비율과 비교해요. 반영 뒤 정리된 세션이 5개 미만이거나 반영 뒤 목록이 잘렸으면 성공으로 세지 않아요."));
 if (IMPS.length) {
   const box = el("div", { class: "stack" });
   for (const x of IMPS) {
@@ -349,7 +349,9 @@ if (IMPS.length) {
         " · ", v.text),
       judged ? el("div", { class: "rates", role: "group", "aria-label": "반영 전후 발생 비율" },
         rateRow(x.before.basis === "batch" ? "근거 세션" : "반영 전 30일", r.before_hits, x.before.observed, bRate, "--context", r.before_truncated),
-        rateRow("반영 뒤", r.after_hits, x.after.observed, aRate, "--series", false)) : null,
+        r.window_hits != null && x.before.window ? rateRow("반영 전 30일", r.window_hits, x.before.window.observed, rate(r.window_hits, x.before.window.observed), "--context", r.window_truncated) : null,
+        rateRow("반영 뒤", r.after_hits, x.after.observed, aRate, "--series", r.after_truncated)) : null,
+      judged && r.baseline === "batch" && x.before.basis === "batch" ? el("p", { class: "expected" }, "근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.") : null,
       r.label && x.summary ? el("p", { class: "expected" }, x.summary) : null,
       x.expected ? el("p", { class: "expected" }, "harvest가 남긴 기대: ", x.expected) : null,
       r.note ? el("p", { class: "expected" }, r.note) : null);
@@ -384,6 +386,8 @@ app.append(el("p", { class: "lead" }, "편집 가드가 멈춘 수정이에요. 
     })));
   }
   const un = A.guard_blocks_unsampled || 0;
+  const rest = (A.guard_blocks || 0) - un - samples.reduce((t, g) => t + (g.n || 0), 0);
+  if (samples.length && rest > 0) card.append(el("p", { class: "expected" }, "목록 밖 차단 ", rest, "건은 상위 종류만 보여주거나 세션당 사례 상한에 걸려 빠졌어요."));
   if (un > 0) card.append(el("p", { class: "expected" }, samples.length ? "그 밖에 " : "", "차단 ", un, "건은 사례를 기록하기 전 추출본이라 무엇을 막았는지 남아 있지 않아요. 다음 기록 갱신 때 transcript가 남아 있으면 채워져요."));
   if (!samples.length && !un) card.append(el("p", { class: "empty" }, "최근 구간에 막은 수정이 없어요."));
   app.append(card);

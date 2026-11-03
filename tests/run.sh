@@ -4706,8 +4706,10 @@ jq -cn '{v:1, project:"ev", reviewed_at:"2026-10-10T00:00:00Z", markers:["claude
 EV_JSON="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
 assert_eq "h1 batch 3 2 3 5 2" "$(jq -r '.improvements[0] | "\(.id) \(.before.basis) \(.before.batch_sessions) \(.before.observed) \(.before.candidates.items | length) \(.after.observed) \(.after.candidates.items | length)"' <<<"$EV_JSON")" \
   "impact tracks each improvement from its evidence batch to the digested sessions after it"
-assert_eq "claude-b1#0 claude-b1#1 claude-b2#0" "$(jq -r '[.improvements[0].before.candidates.items[].id] | join(" ")' <<<"$EV_JSON")" \
-  "impact candidate ids point at a finding in a session digest"
+assert_eq "claude-b2#0 claude-b1#1 claude-b1#0" "$(jq -r '[.improvements[0].before.candidates.items[].id] | join(" ")' <<<"$EV_JSON")" \
+  "impact candidate ids point at a finding in a session digest, newest first"
+assert_eq "2026-09-10 2 3 null" "$(jq -r '"\(.improvements[0].before.window | "\(.since) \(.observed) \(.candidates.items | length)") \(.improvements[1].before.window)"' <<<"$EV_JSON")" \
+  "impact adds a 30-day window baseline of all digested sessions next to a batch baseline"
 assert_eq "h2 window 2026-09-20 0" "$(jq -r '.improvements[1] | "\(.id) \(.before.basis) \(.before.since) \(.after.observed)"' <<<"$EV_JSON")" \
   "impact falls back to the days before an improvement that has no batch markers"
 assert_eq "2 0.29" "$(jq -r '.periods.after | "\(.missing_context) \(.missing_context_per_session)"' <<<"$EV_JSON")" \
@@ -4732,7 +4734,85 @@ assert_eq "gone:2:0 no_baseline:0:0" "$(ev_verdict '{"improvements":[{"id":"h1",
 assert_eq "hold recurred recurred reduced" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [verdict(2; 0; 3; 10), verdict(2; 1; 3; 10), verdict(1; 3; 5; 2), verdict(5; 1; 5; 10)] | join(" ")')" \
   "impact holds judgment on few observed sessions unless the pattern recurred, and compares rates otherwise"
 case "$(cat "$TEST_TMP/impact-ev.html")" in *'"candidates"'*) fail "report drops the candidate pool and keeps only matched examples" ;; esac
+# batch는 문제로 뽑힌 표본이다: window를 맞췄으면 같은 정의(정리된 세션 전부)의 비율로 판정한다.
+# window 2세션 중 1 → 0.5, 반영 뒤 5세션 중 1 → 0.2 = reduced. batch 기준(2/2=1.0)이었어도 reduced지만 baseline이 바뀐다.
+ev_baseline() {
+  printf '%s\n' "$1" >"$TEST_TMP/impact-ev-hl.json"
+  HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
+  sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '.improvements[0].result | "\(.verdict) \(.baseline) \(.window_hits)"'
+}
+assert_eq "reduced window 1" "$(ev_baseline '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"window":["claude-b1#0"],"after":["claude-a5#0"]}]}')" \
+  "impact compares against the window baseline when the agent matched it"
+assert_eq "reduced batch null" "$(ev_baseline '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":["claude-a5#0"]}]}')" \
+  "impact falls back to the batch baseline and says so"
+assert_contains "$(cat "$TEST_TMP/impact-ev.html")" "문제로 뽑힌 표본" "impact report states the selection bias of the evidence batch"
 pass "impact evidence per improvement, guard cases, and missing context"
+
+# 후보 상한은 최신을 남기고, 반영 뒤가 잘리면 "사라짐"을 "판단 보류"로 내린다.
+CAP_DATA="$TEST_TMP/impact-cap-data"
+mkdir -p "$CAP_DATA/events" "$CAP_DATA/digests" "$CAP_DATA/harvest-queue/$(hm_project_key ev)"
+cp "$EV_DATA/harvest-queue/$(hm_project_key ev)/review-history.jsonl" "$CAP_DATA/harvest-queue/$(hm_project_key ev)/"
+cp "$EV_DATA/events/claude-b1.jsonl" "$EV_DATA/events/claude-b2.jsonl" "$CAP_DATA/events/"
+cp "$EV_DATA/digests/claude-b1.json" "$EV_DATA/digests/claude-b2.json" "$CAP_DATA/digests/"
+for i in $(seq 1 31); do
+  d="2026-10-$((10 + (i % 20)))"
+  jq -cn --arg sid "c$i" --arg d "$d" '{v:3, src:"claude", sid:$sid, project:"ev", kind:"session",
+    started:($d+"T02:00:00Z"), ended:($d+"T02:30:00Z"), turns:6, model:"m", coverage:["error"]}' >"$CAP_DATA/events/claude-c$i.jsonl"
+  jq -cn --arg d "$d" '{v:2, findings:[range(10) | {category:"workflow_gap", summary:"잡일 \(.) \($d)"}]}' >"$CAP_DATA/digests/claude-c$i.json"
+done
+CAP_JSON="$(HARNESS_METRICS_DIR="$CAP_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "true 300 2026-10-29" "$(jq -r '.improvements[0].after.candidates | "\(.truncated) \(.items | length) \(.items[0].date)"' <<<"$CAP_JSON")" \
+  "impact keeps the newest candidates when more than 300 findings follow an improvement"
+printf '%s\n' "$CAP_JSON" >"$TEST_TMP/impact-cap.json"
+printf '%s\n' '{"improvements":[{"id":"h1","before":["claude-b1#0"],"after":[]}]}' >"$TEST_TMP/impact-cap-hl.json"
+HARNESS_METRICS_DIR="$CAP_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TMP/impact-cap.json" --highlights "$TEST_TMP/impact-cap-hl.json" --out "$TEST_TMP/impact-cap.html" >/dev/null
+assert_eq "hold true" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-cap.html" | jq -r '.improvements[0].result | "\(.verdict) \(.after_truncated)"')" \
+  "impact holds a gone verdict when the after list was truncated"
+pass "impact candidate cap keeps the newest findings"
+
+# 하이라이트가 객체가 아니면 없는 것으로 보고 리포트를 만든다. 옛 compare JSON(improvements 없음)도 그린다.
+printf '%s\n' '[1,2]' >"$TEST_TMP/impact-bad-hl.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-bad-hl.json" --out "$TEST_TMP/impact-bad.html" >/dev/null 2>&1 \
+  || fail "impact render accepts non-object highlights"
+assert_contains "$(cat "$TEST_TMP/impact-bad.html")" "const HIGHLIGHTS = null" "impact render ignores array highlights"
+printf '%s\n' '"text"' >"$TEST_TMP/impact-bad-hl.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-bad-hl.json" --out "$TEST_TMP/impact-bad.html" >/dev/null 2>&1 \
+  || fail "impact render accepts string highlights"
+jq 'del(.improvements, .missing_context, .timeline)' "$EV_FILE" >"$TEST_TMP/impact-old.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TMP/impact-old.json" --out "$TEST_TMP/impact-old.html" >/dev/null \
+  || fail "impact render draws an old compare JSON without improvements"
+assert_eq "[]" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-old.html" | jq -c '.improvements')" "impact render treats missing improvements as none"
+pass "impact render tolerates odd inputs"
+
+# digest가 null·깨짐이면 건너뛰고, 세션 0건·이력 없음이어도 compare가 JSON을 낸다.
+ODD_DATA="$TEST_TMP/impact-odd-data"
+mkdir -p "$ODD_DATA/events" "$ODD_DATA/digests"
+cp "$EV_DATA/events/claude-a1.jsonl" "$ODD_DATA/events/"
+printf 'null\n' >"$ODD_DATA/digests/claude-a1.json"
+printf '{"v":2, "findings":[\n' >"$ODD_DATA/digests/claude-zz.json"
+ODD_JSON="$(HARNESS_METRICS_DIR="$ODD_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "1 0 [] []" "$(jq -c '[.periods.after.sessions, .periods.after.digested_sessions, .improvements, .timeline]' <<<"$ODD_JSON" | jq -r 'map(tojson) | join(" ")')" \
+  "impact skips null and broken digests and runs without harvest history"
+EMPTY_DATA="$TEST_TMP/impact-empty-data"
+mkdir -p "$EMPTY_DATA"
+assert_eq "0 0" "$(HARNESS_METRICS_DIR="$EMPTY_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30 | jq -r '"\(.periods.before.sessions) \(.periods.after.sessions)"')" \
+  "impact compare works with no sessions at all"
+pass "impact compare tolerates missing data"
+
+# 경로 가림: 홈·/root·Windows 홈·끝 슬래시 없는 홈·끝 슬래시 있는 cwd. 날짜가 든 긴 파일 이름은 지우지 않는다.
+TILDE='~'
+redact_case() { jq -rn -L "$ROOT/scripts" --arg s "$1" --arg cwd "$2" 'include "redact"; $s | redact_path($cwd) | redact'; }
+assert_eq "$TILDE/.ssh/config" "$(redact_case "/root/.ssh/config" "")" "redact_path hides /root"
+assert_eq '~\proj\a.ts' "$(redact_case 'C:\Users\bob\proj\a.ts' "")" "redact_path hides a Windows home"
+assert_eq "ls $TILDE" "$(redact_case "ls /Users/bob" "")" "redact_path hides a home without trailing slash"
+assert_eq "src/a.ts" "$(redact_case "/Users/bob/app/src/a.ts" "/Users/bob/app/")" "redact_path strips a cwd given with a trailing slash"
+assert_eq "$TILDE/x /rootfs/y" "$(redact_case "/home/al/x /rootfs/y" "")" "redact_path leaves paths that only start like /root"
+assert_eq "db/2026-10-05-add-user-index-migration.sql" "$(redact_case "db/2026-10-05-add-user-index-migration.sql" "")" "redact keeps long dated file names"
+assert_eq "see 2026-10-05-add-user-index-migration.sql" "$(redact_case "see 2026-10-05-add-user-index-migration.sql" "")" "redact keeps a bare long file name"
+assert_eq "x *** y" "$(redact_case "x abcd1234efgh5678ijkl9012mnop y" "")" "redact still hides a bare key-like string"
+assert_eq "src/*** ***" "$(redact_case "src/sk-abcDEF1234567890xyzw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlc2lnbmF0dXJl" "")" \
+  "redact hides known token prefixes and JWTs even inside a path"
+pass "redact covers home paths and keeps file names"
 
 # 설치 30일 뒤 SessionStart에서 한 번만 안내한다.
 IMPACT_HINT_INPUT="$(jq -cn --arg cwd "$IMPACT_REPO" '{cwd:$cwd, transcript_path:"/x/s.jsonl"}')"
