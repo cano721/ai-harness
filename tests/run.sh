@@ -3983,6 +3983,66 @@ fi
 assert_not_file "$TEST_TMP/escape/x.md"
 pass "unattended .claude writes go through a restricted placer"
 
+# 무인 sync는 셸 복사가 없어 큰 러너를 옮기지 못하고 일부 적용으로 끝났다. 카탈로그 copy 항목은 이 스크립트로 바이트 그대로 옮긴다.
+mf_refuse() { # expected-message root path...
+  local want="$1" root="$2" rc=0 err=""
+  shift 2
+  local args=() p
+  for p in "$@"; do args+=(--path "$p"); done
+  err="$("$ROOT/scripts/place-managed-file.sh" --root "$root" "${args[@]}" 2>&1 >/dev/null)" || rc=$?
+  [[ "$rc" == 2 ]] || fail "place-managed-file must refuse $* with exit 2 (got $rc: $err)"
+  assert_contains "$err" "$want" "refusal reason for $*"
+}
+mf_sha() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{print $1}'; }
+MF_ROOT="$TEST_TMP/managed-place"
+mkdir -p "$MF_ROOT"
+MF_RUNNER=".ai-harness/workflows/workflow-driver.sh"
+MF_SKILL=".claude/skills/frontend-testing/SKILL.md"
+assert_eq "copy|copy" "$(jq -r --arg a "$MF_RUNNER" --arg b "$MF_SKILL" '[.artifacts[] | select(.path == $a or .path == $b) | .mode] | join("|")' "$ROOT/templates/managed-files.json")" "fixture paths are copy artifacts"
+"$ROOT/scripts/place-managed-file.sh" --root "$MF_ROOT" --path "$MF_RUNNER" --path "$MF_SKILL" >/dev/null
+cmp -s "$ROOT/templates/workflow-driver/workflow-driver.sh" "$MF_ROOT/$MF_RUNNER" || fail "runner is copied byte for byte"
+cmp -s "$ROOT/templates/frontend-testing/SKILL.md" "$MF_ROOT/$MF_SKILL" || fail "copy artifact under .claude is placed"
+[[ -x "$MF_ROOT/$MF_RUNNER" ]] || fail "runner keeps the template's executable bit"
+[[ ! -x "$MF_ROOT/$MF_SKILL" ]] || fail "non-executable template stays non-executable"
+[[ -z "$(find "$MF_ROOT" -name '.place.*')" ]] || fail "no temporary files are left behind"
+# 기록된 해시와 같은(사람이 고치지 않은) 옛 사본만 덮어쓴다.
+printf 'old\n' >"$MF_ROOT/$MF_RUNNER"
+mkdir -p "$MF_ROOT/.ai-harness"
+jq -n --arg p "$MF_RUNNER" --arg h "$(mf_sha "$MF_ROOT/$MF_RUNNER")" '{managed_files: {($p): {content_sha256: $h}}}' >"$MF_ROOT/.ai-harness/harness.json"
+"$ROOT/scripts/place-managed-file.sh" --root "$MF_ROOT" --path "$MF_RUNNER" >/dev/null
+cmp -s "$ROOT/templates/workflow-driver/workflow-driver.sh" "$MF_ROOT/$MF_RUNNER" || fail "an unchanged older copy is refreshed"
+printf 'edited by a person\n' >"$MF_ROOT/$MF_RUNNER"
+mf_refuse "modified since it was recorded" "$MF_ROOT" "$MF_RUNNER"
+assert_eq "edited by a person" "$(<"$MF_ROOT/$MF_RUNNER")" "a modified managed file is not overwritten"
+printf 'mine\n' >"$MF_ROOT/$MF_SKILL"
+mf_refuse "untracked" "$MF_ROOT" "$MF_SKILL"
+assert_eq "mine" "$(<"$MF_ROOT/$MF_SKILL")" "an unrecorded existing file is not overwritten"
+MF_RENDER="$(jq -r 'first(.artifacts[] | select(.mode == "render") | .path)' "$ROOT/templates/managed-files.json")"
+mf_refuse "not a copy artifact" "$MF_ROOT" "$MF_RENDER"
+mf_refuse "not a copy artifact" "$MF_ROOT" .claude/settings.json
+mf_refuse "not a copy artifact" "$MF_ROOT" AGENTS.md
+for bad in ../outside.sh /etc/passwd .ai-harness/workflows/../../x.sh; do
+  mf_refuse "invalid path" "$MF_ROOT" "$bad"
+done
+assert_not_file "$MF_ROOT/AGENTS.md"
+MF_FRESH="$TEST_TMP/managed-place-fresh"
+mkdir -p "$MF_FRESH"
+mf_refuse "not a copy artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
+assert_not_file "$MF_FRESH/$MF_RUNNER"
+[[ ! -d "$MF_FRESH/.ai-harness" ]] || fail "a rejected call creates no directories"
+mkdir -p "$TEST_TMP/mf-escape" "$MF_FRESH/.claude"
+ln -s "$TEST_TMP/mf-escape" "$MF_FRESH/.claude/skills"
+mf_refuse "escapes the project" "$MF_FRESH" "$MF_SKILL"
+[[ ! -e "$TEST_TMP/mf-escape/frontend-testing" ]] || fail "nothing is created through the escaping link"
+mkdir -p "$MF_FRESH/.ai-harness/workflows"
+ln -s "$TEST_TMP/mf-escape/target.sh" "$MF_FRESH/$MF_RUNNER"
+mf_refuse "is a symlink" "$MF_FRESH" "$MF_RUNNER"
+assert_not_file "$TEST_TMP/mf-escape/target.sh"
+rm -f "$MF_FRESH/$MF_RUNNER" && mkdir -p "$MF_FRESH/$MF_RUNNER"
+mf_refuse "is a directory" "$MF_FRESH" "$MF_RUNNER"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "place-managed-file.sh --root . --path" "unattended sync copies copy artifacts with the placer"
+pass "unattended sync places copy artifacts byte for byte"
+
 # monitor-fetch.sh: 모니터링 도구 응답을 한 형식으로 맞추고, 자격증명을 보낼 곳을 저장소 설정이 정하지 못하게 한다.
 AF_DATA="$TEST_TMP/autofix-data"
 AF_STUB="$TEST_TMP/autofix-stub"
