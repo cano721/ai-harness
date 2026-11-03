@@ -1,6 +1,6 @@
 ---
 name: metrics
-description: 에이전트 사용량 리포트. 전체 집계(기간·프로젝트별 세션·토큰, 워크플로 순위, docs 읽힘, 페르소나 위임, 에러/가드 신호) 또는 세션 1개 정밀 리포트(session 모드). 조회 전용.
+description: 에이전트 사용량 리포트. 전체 집계(기간·프로젝트별 세션·토큰, 워크플로 순위, docs 읽힘, 페르소나 위임, 에러/가드 신호) 또는 세션 1개 정밀 리포트(session 모드). 조회 전용. 하네스 도입 효과·설치 전후 비교는 harness-impact.
 ---
 
 # /metrics — 에이전트 사용량 리포트
@@ -29,7 +29,7 @@ $ROOT/scripts/backfill.sh
 $ROOT/scripts/health.sh status
 $ROOT/scripts/stats.sh --days <N> [--project <P>]
 ```
-`all`이면 `--days` 생략. 추세 언급을 위해 직전 동일 기간과 비교하고 싶으면 `--days 2N` 결과와 차분.
+`all`이면 `--days` 생략. 추세 언급을 위해 직전 동일 기간과 비교하고 싶으면 `--days 2N` 결과와 차분. 특정 날짜 구간은 `--since YYYY-MM-DD [--until YYYY-MM-DD]`(until 날짜 미포함). 하네스 설치 전후 비교 요청이면 `harness-impact`로 넘긴다.
 
 프로젝트가 지정됐으면 과거 event cache도 누적량 판정에 포함하고 준비 상태를 확인한다.
 

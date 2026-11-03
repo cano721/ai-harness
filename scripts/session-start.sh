@@ -39,6 +39,10 @@ applied_result="$("$ROOT/scripts/auto-apply.sh" notify 2>/dev/null || true)"
 applied_message="$(jq -r '.systemMessage // empty' <<<"$applied_result" 2>/dev/null || true)"
 [[ -n "$applied_message" ]] && messages+=("$applied_message")
 
+impact_result="$(printf '%s' "$input" | "$ROOT/scripts/impact.sh" notify 2>/dev/null || true)"
+impact_message="$(jq -r '.systemMessage // empty' <<<"$impact_result" 2>/dev/null || true)"
+[[ -n "$impact_message" ]] && messages+=("$impact_message")
+
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"
 [[ -n "$queue_message" ]] && messages+=("$queue_message")

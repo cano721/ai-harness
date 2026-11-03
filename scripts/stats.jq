@@ -1,5 +1,5 @@
 # events/*.jsonl (slurp) → 마크다운 통계
-# 인자: $cutoff (ISO, ""=전체) / $project (""=전체)
+# 인자: $cutoff (ISO 또는 날짜, ""=전체) / $until (날짜, 그 날 미포함, ""=끝 없음) / $project (""=전체)
 def rank(k; top): map(select(.kind==k))
   | group_by(.target) | map({t: .[0].target, n: (map(.n)|add)})
   | sort_by(-.n) | .[0:top];
@@ -38,7 +38,8 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($all | map(select(.kind=="session"
     and ((.internal // false) | not)
     and ($project=="" or .project==$project)
-    and ($cutoff=="" or ((.ended // .started // "") >= $cutoff))))) as $S
+    and ($cutoff=="" or ((.ended // .started // "") >= $cutoff))
+    and ($until=="" or ((.ended // .started // "") < $until))))) as $S
 # 배열 index 스캔(세션수×이벤트수)이 아니라 객체 lookup으로 소속 세션을 판정한다.
 | ($S | map({(.sid): true}) | add // {}) as $sidset
 | ($all | map(select(.kind!="session" and $sidset[.sid // ""] == true))) as $E
@@ -62,7 +63,7 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
 
 | "# Harness Metrics"
-+ "\n\n기간: \(if $cutoff=="" then "전체" else $cutoff + " 이후" end)"
++ "\n\n기간: \(if $until != "" then "\($cutoff) ~ \($until) 전날" | ltrimstr(" ") elif $cutoff=="" then "전체" else $cutoff + " 이후" end)"
 + (if $project=="" then "" else " / 프로젝트: \($project)" end)
 
 + "\n\n## 세션 (프로젝트별)\n\n서브에이전트 열은 `agent_usage` 수집 세션만 반영한다(메인 열에 포함되지 않음).\n\n| 프로젝트 | 세션 | 턴 | in tok | out tok | cache read | cache write | 서브에이전트 in/out/cache read |\n|---|---|---|---|---|---|---|---|\n"
