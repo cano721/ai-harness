@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Impact"
+  short_description: "Compare real agent sessions before and after the harness install and open an offline before/after report."
+  default_prompt: "Use $harness-impact to show what changed since this project adopted the harness: $ARGUMENTS"

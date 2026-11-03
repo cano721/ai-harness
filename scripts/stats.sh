@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# 사용: stats.sh [--days N] [--project 이름] [--analysis-batch]
+# 사용: stats.sh [--days N | --since YYYY-MM-DD] [--until YYYY-MM-DD] [--project 이름] [--analysis-batch]
+# --until 날짜는 포함하지 않는다(설치일 전후처럼 같은 날을 두 구간에 넣지 않게).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib.sh
 source "$DIR/lib.sh"
-DAYS=""; PROJECT=""; ANALYSIS_BATCH=0
+DAYS=""; SINCE=""; UNTIL=""; PROJECT=""; ANALYSIS_BATCH=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --days) DAYS="$2"; shift 2 ;;
+    --since) SINCE="$2"; shift 2 ;;
+    --until) UNTIL="$2"; shift 2 ;;
     --project) PROJECT="$2"; shift 2 ;;
     --analysis-batch) ANALYSIS_BATCH=1; shift ;;
     *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
   esac
 done
-CUTOFF=""
+for d in "$SINCE" "$UNTIL"; do
+  [[ -z "$d" || "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "잘못된 날짜: $d (YYYY-MM-DD)" >&2; exit 1; }
+done
+[[ -n "$DAYS" && -n "$SINCE" ]] && { echo "--days와 --since는 함께 쓸 수 없음" >&2; exit 1; }
+CUTOFF="$SINCE"
 if [[ -n "$DAYS" ]]; then
   [[ "$DAYS" =~ ^[0-9]+$ ]] || { echo "잘못된 --days 값: $DAYS (숫자만)" >&2; exit 1; }
   CUTOFF="$(days_ago_iso "$DAYS")"
@@ -35,4 +42,4 @@ else
   done
 fi
 [[ ${#files[@]} -eq 0 ]] && { echo "집계할 이벤트 없음"; exit 1; }
-jq -s -r --arg cutoff "$CUTOFF" --arg project "$PROJECT" -f "$DIR/stats.jq" "${files[@]}"
+jq -s -r --arg cutoff "$CUTOFF" --arg until "$UNTIL" --arg project "$PROJECT" -f "$DIR/stats.jq" "${files[@]}"
