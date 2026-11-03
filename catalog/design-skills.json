@@ -2,7 +2,7 @@
   "version": 1,
   "reviewed_at": "2026-11-03",
   "map": "templates/ui-review/references/design-skills.md",
-  "policy": "원본 저장소에서 고정 커밋으로 받아 설치한다. ai-harness는 사본을 재배포하지 않는다. ref를 올릴 때는 라이선스와 실행 스크립트를 다시 검토하고 review를 갱신한다.",
+  "policy": "원본 저장소에서 고정 커밋으로 받아 설치한다. 사본을 재배포하는 것은 builtin이 ai-harness인 항목뿐이고(출처·라이선스 전문은 THIRD-PARTY-LICENSES.md) setup은 그 항목을 설치하지 않는다. ref를 올릴 때는 라이선스와 실행 스크립트를 다시 검토하고 review를 갱신한다.",
   "skills": [
     {
       "name": "impeccable",
@@ -55,31 +55,31 @@
       "name": "design-system-patterns",
       "bundle": "extra",
       "summary": "토큰·테마 구조 패턴 (디자인 시스템 작업의 테마 구조 영역)",
+      "builtin": "ai-harness",
       "source": { "repo": "wshobson/agents", "ref": "7e2fb559cf4b824b27f1fec49fe88f7511066d26", "path": "plugins/ui-design/skills/design-system-patterns" },
       "license": "MIT",
-      "review": { "runs": "실행 스크립트 없음(문서만).", "network": "없음." },
-      "overlaps": "design-system-builder가 토큰 이름·구조를 정하므로 대부분 대체된다."
+      "absorbed": "design-system-builder의 references/theme-and-components.md — 테마 전환·컴포넌트 구조만 다시 썼다. 토큰 이름·계층·대비는 원래대로 design-system-builder가 정한다.",
+      "note": "ai-harness에 내장됐다(별도 스킬이 아니라 design-system-builder의 참고 문서). 예전에 setup design으로 받은 사본은 status가 superseded이고 design remove로 지워도 된다."
     },
     {
       "name": "emil-design-eng",
       "bundle": "extra",
       "summary": "UI 마감 디테일 원칙 (제품 화면 다듬기의 마감 영역)",
+      "builtin": "ai-harness",
       "source": { "repo": "emilkowalski/skill", "ref": "f1090bec277140d02ed202440185ad9d02ac1490", "path": "skills/emil-design-eng" },
       "license": "MIT",
-      "review": { "runs": "실행 스크립트 없음(문서만).", "network": "없음." }
+      "absorbed": "플러그인 스킬 skills/emil-design-eng — 본문 그대로의 사본.",
+      "note": "ai-harness에 내장됐다(ai-harness:emil-design-eng). 예전에 setup design으로 받은 사본은 status가 superseded이고 design remove로 지워도 된다."
     },
     {
       "name": "web-design-guidelines",
       "bundle": "extra",
       "summary": "웹 인터페이스 가이드라인 점검 (랜딩 최종 점검·하네스 UI 변경의 접근성 점검)",
-      "source": { "repo": "vercel-labs/agent-skills", "ref": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62", "path": "skills/web-design-guidelines" },
+      "builtin": "ai-harness",
+      "source": { "repo": "vercel-labs/web-interface-guidelines", "ref": "434b7f91364665f2f733b310ec54809bf8f37937", "path": "command.md" },
       "license": "MIT",
-      "review": {
-        "runs": "실행 스크립트 없음.",
-        "network": "실행할 때마다 raw.githubusercontent.com/vercel-labs/web-interface-guidelines의 main 브랜치 규칙을 받아 쓴다. 고정 ref는 절차만 고정하고 규칙 본문은 고정하지 않는다.",
-        "notes": "라이선스는 저장소 README의 MIT 표기 기준(LICENSE 파일 없음). 하네스 저장소에서는 ui-review·design-audit가 일부를 대체한다."
-      },
-      "overlaps": "ui-review·design-audit(하네스 UI 계약이 있는 저장소)"
+      "absorbed": "플러그인 스킬 skills/web-design-guidelines와 ui-review의 references/web-interface-guidelines.md — 규칙 본문 command.md를 고정 커밋 사본으로 담아 실행 때 받지 않는다. 절차는 vercel-labs/agent-skills의 같은 이름 스킬(MIT)을 오프라인용으로 고쳐 썼다.",
+      "note": "ai-harness에 내장됐다(ai-harness:web-design-guidelines, 네트워크 없이 동작). 예전에 setup design으로 받은 사본은 실행할 때마다 원격 규칙을 받으므로, status가 superseded이면 design remove로 지우기를 권한다."
     },
     {
       "name": "awesome-design",

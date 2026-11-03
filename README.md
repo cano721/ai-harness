@@ -107,7 +107,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 
 대상 플랫폼·실행 명령·기기는 `.ai-harness/docs/ui.md`에 적습니다. 빌드·실행 도구가 없으면 `unverified`로 보고합니다.
 
-`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. 전역 Skill `web-design-guidelines`의 규칙 본문은 [vercel-labs/web-interface-guidelines](https://github.com/vercel-labs/web-interface-guidelines)(MIT)의 고정 커밋 사본이고, `emil-design-eng`은 [emilkowalski/skill](https://github.com/emilkowalski/skill)(MIT)의 사본, `/design-system-builder`의 `references/theme-and-components.md`는 [wshobson/agents](https://github.com/wshobson/agents)의 `design-system-patterns`(MIT)에서 일부를 다시 쓴 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
 <a id="skill-catalog"></a>
 
@@ -129,24 +129,25 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 
 <a id="design-skills"></a>
 
-### 외부 디자인 스킬 (`/setup design`으로 선택 설치)
+### 디자인 스킬 (내장 3종 + `/setup design`으로 선택 설치)
 
-ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 담지 않고 절차만 둡니다. 그 빈자리는 외부 디자인 스킬이 채우는데, 여러 개가 깔리면 모두 "UI 다듬어"에 반응해 결과가 PC마다 달라집니다. 그래서 **디자인 스킬 지도**(`templates/ui-review/references/design-skills.md`)가 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정합니다. 프로젝트 디자인 규칙 > ai-harness 계약 > 지도 순으로 따르고, 설치되지 않은 스킬은 건너뜁니다.
+ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 담지 않고 절차만 둡니다. 그 빈자리는 외부 디자인 스킬이 채우고 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 고정 사본으로 내장했는데, 여러 개가 깔리면 모두 "UI 다듬어"에 반응해 결과가 PC마다 달라집니다. 그래서 **디자인 스킬 지도**(`templates/ui-review/references/design-skills.md`)가 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정합니다. 프로젝트 디자인 규칙 > ai-harness 계약 > 지도 순으로 따르고, 설치되지 않은 스킬은 건너뜁니다.
 
 | 작업 | 주도 | 보조(영역) |
 |---|---|---|
 | 지표 리포트·대시보드 | `impeccable` | `dataviz`(차트·지표 카드·차트 색), `ui-ux-pro-max`(토큰 없을 때 팔레트·폰트) |
 | 랜딩·소개 | `/landing-page` | `design-taste-frontend`(방향 후보), `motion`(모션 API), `web-design-guidelines`(최종 점검) |
-| 디자인 시스템 | `/design-system-builder` | `design-system-patterns`(테마 구조), `awesome-design`(참고 명세) |
+| 디자인 시스템 | `/design-system-builder` | 내장 `references/theme-and-components.md`(테마 전환·컴포넌트 구조, `design-system-patterns` 흡수), `awesome-design`(참고 명세) |
 | 제품 화면 다듬기 | `impeccable` | `emil-design-eng`(마감), `motion` |
 | 하네스 저장소 화면 변경 | `ui-review`·`frontend-team` | `impeccable`(비평), `web-design-guidelines`(접근성) |
-| 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않는다 |
+| 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않고 내장 가이드라인 규칙 파일만 읽는다 |
 
-- **설치**: `/ai-harness:setup design`이 `catalog/design-skills.json`의 원본 저장소·고정 커밋에서 스킬 폴더만 받아(부분 클론) Claude `~/.claude/skills/`, Codex `~/.agents/skills/`에 둡니다. 사본을 재배포하지 않고, 라이선스와 실행 스크립트·네트워크 호출 검토 결과를 카탈로그에 적었습니다. 필수 묶음은 `impeccable`과 Claude 내장 `dataviz`(Codex 대응 없음)입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 안내만 합니다. SessionStart는 외부 디자인 스킬을 자동 갱신하지 않습니다.
+- **내장**: `web-design-guidelines`(규칙 본문을 [vercel-labs/web-interface-guidelines](https://github.com/vercel-labs/web-interface-guidelines) 고정 커밋 사본으로 담아 실행 때 받지 않음 — 플러그인 스킬 `ai-harness:web-design-guidelines`와 생성물 `ui-review/references/web-interface-guidelines.md`)·`emil-design-eng`(플러그인 스킬 `ai-harness:emil-design-eng`)은 네트워크 없이 동작하고, `design-system-patterns`는 겹치지 않는 테마 전환·컴포넌트 구조만 `/design-system-builder`의 참고 문서로 흡수했습니다. `/setup design`은 이 셋을 설치하지 않고, 예전에 받은 사본은 `design list`에 `superseded`로 보여 `design remove`로 지울 수 있게 합니다(사용자가 직접 둔 같은 이름 폴더는 건드리지 않습니다).
+- **설치**: `/ai-harness:setup design`이 `catalog/design-skills.json`의 원본 저장소·고정 커밋에서 스킬 폴더만 받아(부분 클론) Claude `~/.claude/skills/`, Codex `~/.agents/skills/`에 둡니다. 외부 스킬은 사본을 재배포하지 않고, 라이선스와 실행 스크립트·네트워크 호출 검토 결과를 카탈로그에 적었습니다. 필수 묶음은 `impeccable`과 Claude 내장 `dataviz`(Codex 대응 없음)입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 안내만 합니다. SessionStart는 외부 디자인 스킬을 자동 갱신하지 않습니다.
 - **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
-- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
+- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -796,7 +797,7 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
-catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 외부 디자인 스킬의 원본·고정 커밋·검토 기록)
+catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 디자인 스킬의 원본·고정 커밋·검토 기록과 내장 여부)
 agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)

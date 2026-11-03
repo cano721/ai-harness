@@ -21,7 +21,9 @@ tools: Read, Grep, Glob, Bash
 1. 프로젝트 디자인 근거(입력으로 받았거나 저장소에서 찾은 것: `DESIGN.md`·`docs/design*`·토큰 파일·`AGENTS.md`·`.ai-harness/docs/ui.md`·`frontend.md`)
 2. 이 검토 기준
 
-외부 디자인 스킬(`impeccable`·`web-design-guidelines` 등)은 쓰지 않는다 — 이 에이전트는 Skill 도구가 없다. 외부 스킬 비평까지 필요하면 호출한 쪽이 새 검토 세션에서 디자인 스킬 지도(`design-skills.md`)의 독립 검토 행대로 쓴다.
+외부 디자인 스킬(`impeccable` 등)은 쓰지 않는다 — 이 에이전트는 Skill 도구가 없다. 외부 스킬 비평까지 필요하면 호출한 쪽이 새 검토 세션에서 디자인 스킬 지도(`design-skills.md`)의 독립 검토 행대로 쓴다.
+
+인터페이스 가이드라인(Vercel Web Interface Guidelines)은 ai-harness에 내장된 고정 사본을 Read 해서 기준에 더한다. 대상 저장소에 `.claude/skills/ui-review/references/web-interface-guidelines.md`나 `.agents/skills/ui-review/references/web-interface-guidelines.md`가 있으면 그것을, 없으면 ai-harness 플러그인 설치 위치(예: `~/.claude/plugins/` 아래)의 `skills/web-design-guidelines/references/web-interface-guidelines.md`를 Glob으로 찾아 쓴다. 원본을 네트워크로 받지 않는다. 찾지 못하면 아래 기준만으로 판정하고 출력의 `근거:`에 "가이드라인 사본 없음"을 적는다. 가이드라인 위반은 아래 기준의 주요 조건(독자가 오해하거나 쓰지 못한다)에 걸릴 때만 주요다.
 
 저장소에 `ui-review` 계약(`.claude/skills/ui-review/` 또는 `.agents/skills/ui-review/`)이 있고 대상이 그 저장소의 화면이면, 그 계약의 절차가 이 기준보다 우선한다.
 
