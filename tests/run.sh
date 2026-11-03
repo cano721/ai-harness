@@ -3706,7 +3706,7 @@ SYNC_STUB="$TEST_TMP/sync-stub.sh"
 cat >"$SYNC_STUB" <<'STUB'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$1" "${HM_HARVEST_RUNNING:-}" "$(pwd -P)" >>"$SYNC_STUB_OUT"
-echo '{"type":"result","total_cost_usd":0.2,"result":"done\nAI_HARNESS_SYNC_RESULT outcome=improved artifact=https://example.com/pr/9"}'
+echo '{"type":"result","total_cost_usd":0.2,"result":"done\nAI_HARNESS_SYNC_RESULT outcome='"${SYNC_STUB_OUTCOME:-improved}"' artifact=https://example.com/pr/'"${SYNC_STUB_PR:-9}"'"}'
 STUB
 chmod +x "$SYNC_STUB"
 sync_sweep() {
@@ -3770,6 +3770,81 @@ SYNC_DATA2="$TEST_TMP/sync-data2"
 assert_contains "$(printf '{"cwd":"%s"}' "$SYNC_REPO" | HARNESS_METRICS_DIR="$SYNC_DATA2" "$ROOT/scripts/sync-auto.sh" notify | jq -r '.systemMessage')" "0.1.0" "notice reads the base branch, not the checkout"
 git -C "$SYNC_REPO" checkout -q develop
 pass "harness version notice and opt-in auto sync"
+
+# 일부 적용이면 harness_version이 그대로라 다음 버전 sync가 같은 파일로 새 PR을 열고 옛 PR이 쌓였다.
+# 새 PR이 열리면 아무도 손대지 않은 옛 sync PR을 닫고, 사람이 리뷰 중이면 새 sync를 띄우지 않는다.
+export PRS_STUB_DIR="$TEST_TMP/pr-stub"
+mkdir -p "$PRS_STUB_DIR"
+cat >"$PRS_STUB_DIR/pr" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  --status) id="${2##*/}"; [[ ! -f "$PRS_STUB_DIR/down" ]] || exit 5; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
+  --decline) printf '%s|%s\n' "$2" "$4" >>"$PRS_STUB_DIR/declined" ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$PRS_STUB_DIR/pr"
+prs_sweep() { # 이전 플러그인 버전으로 끝난 것처럼 마커를 되돌린 뒤 sweep
+  jq -cn '{plugin:"0.0.1",result:"partial",fails:0}' >"$SYNC_DATA/sync-auto/p-sync-svc.json"
+  HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_OPEN_PR_CMD="$PRS_STUB_DIR/pr" sync_sweep
+}
+PRS_LAUNCHED="$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')"
+SYNC_STUB_PR=10 SYNC_STUB_OUTCOME=partial prs_sweep
+assert_eq "$((PRS_LAUNCHED + 1))" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "a newer plugin version runs sync again"
+assert_eq "https://example.com/pr/9" "$(cut -d'|' -f1 "$PRS_STUB_DIR/declined")" "the untouched older sync PR is declined"
+assert_contains "$(cut -d'|' -f2 "$PRS_STUB_DIR/declined")" "https://example.com/pr/10" "decline comment links the new PR"
+assert_eq "https://example.com/pr/9|https://example.com/pr/10" \
+  "$(sync_runs '[.[] | select(.event=="superseded")] | last | "\(.artifact)|\(.by)"')" "superseded PR is recorded"
+# 이미 닫힌 PR과 새 PR 자신은 닫지 않는다.
+printf '%s\n' '{"state":"closed","activity":0}' >"$PRS_STUB_DIR/state-9.json"
+SYNC_STUB_PR=11 prs_sweep
+assert_eq "https://example.com/pr/10" "$(sed -n 2p "$PRS_STUB_DIR/declined" | cut -d'|' -f1)" "only open older PRs are declined"
+assert_eq "2" "$(wc -l <"$PRS_STUB_DIR/declined" | tr -d ' ')" "closed PRs and the new PR itself are left alone"
+# 사람이 코멘트·리뷰·승인을 남긴 옛 PR이 열려 있으면 새 sync를 띄우지 않는다.
+printf '%s\n' '{"state":"open","activity":2}' >"$PRS_STUB_DIR/state-11.json"
+PRS_LAUNCHED="$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')"
+SYNC_STUB_PR=12 prs_sweep
+assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "sync waits while a person reviews the older sync PR"
+assert_eq "sync_pr_in_review" "$(sync_runs 'last | .reason')" "the skip names the reason"
+assert_eq "2" "$(wc -l <"$PRS_STUB_DIR/declined" | tr -d ' ')" "a reviewed PR is never declined"
+# PR 상태를 못 읽으면 판정하지 않고 기다린다 — 그대로 띄우면 PR이 다시 쌓인다.
+rm -f "$PRS_STUB_DIR/state-11.json" && : >"$PRS_STUB_DIR/down"
+SYNC_STUB_PR=12 prs_sweep
+assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "unknown PR state holds the sync"
+assert_eq "sync_pr_status_unknown" "$(sync_runs 'last | .reason')" "the hold names the reason"
+rm -f "$PRS_STUB_DIR/down"
+# 지원하지 않는 호스트의 PR은 읽을 수 없을 뿐 일시 장애가 아니다 — 막지 않는다(위 sync 테스트의 example.com PR이 그 경우).
+# 새 PR이 열려 있지 않으면(에이전트가 적은 URL이 틀림) 옛 PR을 닫지 않는다. 다른 저장소의 PR도 닫지 않는다.
+printf '%s\n' '{"state":"closed","activity":0}' >"$PRS_STUB_DIR/state-13.json"
+SYNC_STUB_PR=13 prs_sweep
+assert_eq "2" "$(wc -l <"$PRS_STUB_DIR/declined" | tr -d ' ')" "nothing is declined when the new PR is not open"
+jq -cn '{at:"2026-01-01T00:00:00Z",event:"finished",project:"sync-svc",scope:"sync",result:"partial",artifact:"https://other.example/pr/7"}' >>"$SYNC_DATA/harvest-auto/runs.jsonl"
+rm -f "$PRS_STUB_DIR/state-13.json"
+SYNC_STUB_PR=14 prs_sweep
+assert_contains "$(cat "$PRS_STUB_DIR/declined")" "https://example.com/pr/13" "the latest untouched PR of the same repo is declined"
+if grep -q other.example "$PRS_STUB_DIR/declined"; then fail "a PR of another repo with the same project id is left alone"; fi
+# activity: GitHub는 봇의 코멘트·리뷰를 세지 않고, Bitbucket은 코멘트 수 + 승인·변경 요청 참여자를 센다.
+PRS_BIN="$TEST_TMP/pr-bin"
+mkdir -p "$PRS_BIN"
+cat >"$PRS_BIN/gh" <<'STUB'
+#!/usr/bin/env bash
+echo '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"comments":[{"author":{"login":"ci-preview[bot]"}},{"author":{"login":"alice"}}],"reviews":[{"author":{"login":"github-actions"}}]}'
+STUB
+cat >"$PRS_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n200' '{"state":"OPEN","comment_count":1,"participants":[{"approved":false,"state":null},{"approved":true,"state":"approved"},{"approved":false,"state":"changes_requested"}]}'
+STUB
+chmod +x "$PRS_BIN/gh" "$PRS_BIN/curl"
+assert_eq "open|1" "$(PATH="$PRS_BIN:$PATH" "$ROOT/scripts/open-pr.sh" --status https://github.com/acme/svc/pull/3 | jq -r '"\(.state)|\(.activity)"')" "GitHub activity ignores bots"
+assert_eq "open|3" "$(PATH="$PRS_BIN:$PATH" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 | jq -r '"\(.state)|\(.activity)"')" "Bitbucket activity counts comments and reviewing participants"
+# PR 호스트 요청 형태(dry-run): GitHub close, Bitbucket decline + 메시지.
+assert_eq "github|https://github.com/acme/svc/pull/3|x" \
+  "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://github.com/acme/svc/pull/3 --comment x | jq -r '"\(.provider)|\(.decline)|\(.comment)"')" "GitHub decline request"
+assert_eq "bitbucket|x" \
+  "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://bitbucket.org/ws/repo/pull-requests/4 --comment x | jq -r '"\(.provider)|\(.message)"')" "Bitbucket decline request"
+if HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://example.com/pr/1 >/dev/null 2>&1; then fail "unknown PR hosts are refused"; fi
+pass "auto sync supersedes its own older PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
 CHAIN_DATA="$TEST_TMP/chain-data"
@@ -3982,6 +4057,66 @@ if "$ROOT/scripts/place-claude-file.sh" --root "$PLACE_ROOT" --from "$PLACE_ROOT
 fi
 assert_not_file "$TEST_TMP/escape/x.md"
 pass "unattended .claude writes go through a restricted placer"
+
+# 무인 sync는 셸 복사가 없어 큰 러너를 옮기지 못하고 일부 적용으로 끝났다. 카탈로그 copy 항목은 이 스크립트로 바이트 그대로 옮긴다.
+mf_refuse() { # expected-message root path...
+  local want="$1" root="$2" rc=0 err=""
+  shift 2
+  local args=() p
+  for p in "$@"; do args+=(--path "$p"); done
+  err="$("$ROOT/scripts/place-managed-file.sh" --root "$root" "${args[@]}" 2>&1 >/dev/null)" || rc=$?
+  [[ "$rc" == 2 ]] || fail "place-managed-file must refuse $* with exit 2 (got $rc: $err)"
+  assert_contains "$err" "$want" "refusal reason for $*"
+}
+mf_sha() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{print $1}'; }
+MF_ROOT="$TEST_TMP/managed-place"
+mkdir -p "$MF_ROOT"
+MF_RUNNER=".ai-harness/workflows/workflow-driver.sh"
+MF_SKILL=".claude/skills/frontend-testing/SKILL.md"
+assert_eq "copy|copy" "$(jq -r --arg a "$MF_RUNNER" --arg b "$MF_SKILL" '[.artifacts[] | select(.path == $a or .path == $b) | .mode] | join("|")' "$ROOT/templates/managed-files.json")" "fixture paths are copy artifacts"
+"$ROOT/scripts/place-managed-file.sh" --root "$MF_ROOT" --path "$MF_RUNNER" --path "$MF_SKILL" >/dev/null
+cmp -s "$ROOT/templates/workflow-driver/workflow-driver.sh" "$MF_ROOT/$MF_RUNNER" || fail "runner is copied byte for byte"
+cmp -s "$ROOT/templates/frontend-testing/SKILL.md" "$MF_ROOT/$MF_SKILL" || fail "copy artifact under .claude is placed"
+[[ -x "$MF_ROOT/$MF_RUNNER" ]] || fail "runner keeps the template's executable bit"
+[[ ! -x "$MF_ROOT/$MF_SKILL" ]] || fail "non-executable template stays non-executable"
+[[ -z "$(find "$MF_ROOT" -name '.place.*')" ]] || fail "no temporary files are left behind"
+# 기록된 해시와 같은(사람이 고치지 않은) 옛 사본만 덮어쓴다.
+printf 'old\n' >"$MF_ROOT/$MF_RUNNER"
+mkdir -p "$MF_ROOT/.ai-harness"
+jq -n --arg p "$MF_RUNNER" --arg h "$(mf_sha "$MF_ROOT/$MF_RUNNER")" '{managed_files: {($p): {content_sha256: $h}}}' >"$MF_ROOT/.ai-harness/harness.json"
+"$ROOT/scripts/place-managed-file.sh" --root "$MF_ROOT" --path "$MF_RUNNER" >/dev/null
+cmp -s "$ROOT/templates/workflow-driver/workflow-driver.sh" "$MF_ROOT/$MF_RUNNER" || fail "an unchanged older copy is refreshed"
+printf 'edited by a person\n' >"$MF_ROOT/$MF_RUNNER"
+mf_refuse "modified since it was recorded" "$MF_ROOT" "$MF_RUNNER"
+assert_eq "edited by a person" "$(<"$MF_ROOT/$MF_RUNNER")" "a modified managed file is not overwritten"
+printf 'mine\n' >"$MF_ROOT/$MF_SKILL"
+mf_refuse "untracked" "$MF_ROOT" "$MF_SKILL"
+assert_eq "mine" "$(<"$MF_ROOT/$MF_SKILL")" "an unrecorded existing file is not overwritten"
+MF_RENDER="$(jq -r 'first(.artifacts[] | select(.mode == "render") | .path)' "$ROOT/templates/managed-files.json")"
+mf_refuse "not a copy artifact" "$MF_ROOT" "$MF_RENDER"
+mf_refuse "not a copy artifact" "$MF_ROOT" .claude/settings.json
+mf_refuse "not a copy artifact" "$MF_ROOT" AGENTS.md
+for bad in ../outside.sh /etc/passwd .ai-harness/workflows/../../x.sh; do
+  mf_refuse "invalid path" "$MF_ROOT" "$bad"
+done
+assert_not_file "$MF_ROOT/AGENTS.md"
+MF_FRESH="$TEST_TMP/managed-place-fresh"
+mkdir -p "$MF_FRESH"
+mf_refuse "not a copy artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
+assert_not_file "$MF_FRESH/$MF_RUNNER"
+[[ ! -d "$MF_FRESH/.ai-harness" ]] || fail "a rejected call creates no directories"
+mkdir -p "$TEST_TMP/mf-escape" "$MF_FRESH/.claude"
+ln -s "$TEST_TMP/mf-escape" "$MF_FRESH/.claude/skills"
+mf_refuse "escapes the project" "$MF_FRESH" "$MF_SKILL"
+[[ ! -e "$TEST_TMP/mf-escape/frontend-testing" ]] || fail "nothing is created through the escaping link"
+mkdir -p "$MF_FRESH/.ai-harness/workflows"
+ln -s "$TEST_TMP/mf-escape/target.sh" "$MF_FRESH/$MF_RUNNER"
+mf_refuse "is a symlink" "$MF_FRESH" "$MF_RUNNER"
+assert_not_file "$TEST_TMP/mf-escape/target.sh"
+rm -f "$MF_FRESH/$MF_RUNNER" && mkdir -p "$MF_FRESH/$MF_RUNNER"
+mf_refuse "is a directory" "$MF_FRESH" "$MF_RUNNER"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "place-managed-file.sh --root . --path" "unattended sync copies copy artifacts with the placer"
+pass "unattended sync places copy artifacts byte for byte"
 
 # monitor-fetch.sh: 모니터링 도구 응답을 한 형식으로 맞추고, 자격증명을 보낼 곳을 저장소 설정이 정하지 못하게 한다.
 AF_DATA="$TEST_TMP/autofix-data"

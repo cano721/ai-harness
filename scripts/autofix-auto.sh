@@ -164,7 +164,9 @@ verify_repo() { # $1=repo json
         if [[ -z "$deployed_at" ]]; then
           (( fetched == 1 )) || { hm_run_with_timeout "${HM_FETCH_TIMEOUT_SEC:-60}" git -C "$repo" fetch -q origin >/dev/null 2>&1; fetched=1; }
           if git -C "$repo" merge-base --is-ancestor "$(jq -r '.merge_commit' <<<"$rec")" "origin/$deploy_branch" 2>/dev/null; then
-            deployed_at="$(now_iso)"
+            # 이번 판정의 기준 시각(now_e)으로 남긴다. fetch 뒤 시계로 찍으면 초가 넘어가 now_e보다 늦어지고,
+            # 유예 0시간이어도 이번 실행에서 판정을 건너뛴다.
+            deployed_at="$(epoch_iso "$now_e")"
             set_sig "$project" "$sig" '{deployed_at:$d}' --arg d "$deployed_at"
             log_event "$project" deployed "$sig" "$(jq -cn --arg b "$deploy_branch" '{branch:$b}')"
           else
