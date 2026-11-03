@@ -43,6 +43,10 @@ impact_result="$(printf '%s' "$input" | "$ROOT/scripts/impact.sh" notify 2>/dev/
 impact_message="$(jq -r '.systemMessage // empty' <<<"$impact_result" 2>/dev/null || true)"
 [[ -n "$impact_message" ]] && messages+=("$impact_message")
 
+merge_result="$("$ROOT/scripts/auto-merge.sh" notify 2>/dev/null || true)"
+merge_message="$(jq -r '.systemMessage // empty' <<<"$merge_result" 2>/dev/null || true)"
+[[ -n "$merge_message" ]] && messages+=("$merge_message")
+
 queue_result="$(printf '%s' "$input" | "$ROOT/scripts/harvest-queue.sh" notify 2>/dev/null || true)"
 queue_message="$(jq -r '.systemMessage // empty' <<<"$queue_result" 2>/dev/null || true)"
 [[ -n "$queue_message" ]] && messages+=("$queue_message")

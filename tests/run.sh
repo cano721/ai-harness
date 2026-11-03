@@ -3859,6 +3859,193 @@ assert_eq "bitbucket|x" \
 if HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://example.com/pr/1 >/dev/null 2>&1; then fail "unknown PR hosts are refused"; fi
 pass "auto sync supersedes its own older PRs"
 
+# 자동 병합(opt-in): 내용 판정은 로컬 git 객체로, 병합은 호스트 상태(같은 head·대상 브랜치·CI 통과·사람 활동 없음)를 본 뒤에.
+AM_REPO="$TEST_TMP/am-repo"
+make_repo "$AM_REPO" https://github.com/acme/am.git
+git -C "$AM_REPO" checkout -q -b develop
+mkdir -p "$AM_REPO/.ai-harness/workflows" "$AM_REPO/.ai-harness/docs"
+jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{},auto_merge:{sync:true,harvest:true,method:"squash"}}' >"$AM_REPO/.ai-harness/harness.json"
+printf '# rules\n' >"$AM_REPO/AGENTS.md"
+printf '# testing\n' >"$AM_REPO/.ai-harness/docs/testing.md"
+printf 'x\n' >"$AM_REPO/app.js"
+git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m base
+git -C "$AM_REPO" update-ref refs/remotes/origin/develop develop
+am_sha() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{print $1}'; }
+am_branch() { git -C "$AM_REPO" checkout -q -B "$1" develop; }
+am_commit() { git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m "$1" && git -C "$AM_REPO" rev-parse HEAD; }
+am_manifest() { jq "$1" "$AM_REPO/.ai-harness/harness.json" >"$AM_REPO/.ai-harness/hj" && mv "$AM_REPO/.ai-harness/hj" "$AM_REPO/.ai-harness/harness.json"; }
+am_check() { "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/develop "$@"; }
+AM_RUNNER=".ai-harness/workflows/workflow-driver.sh"
+am_sync_head() { # 러너를 템플릿 그대로 넣고 manifest 해시를 맞춘 sync 커밋
+  am_branch "$1"
+  mkdir -p "$AM_REPO/.ai-harness/workflows"
+  cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+  am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+}
+am_sync_head s-ok
+AM_SYNC_OK="$(am_commit sync)"
+assert_eq "ok" "$(am_check --scope sync --head "$AM_SYNC_OK")" "a copy-only sync PR passes"
+assert_eq "partial_sync" "$(am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "partial sync needs its own opt-in"
+assert_eq "ok" "$(HM_SYNC_AUTO_MERGE_PARTIAL=1 am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "partial sync passes when allowed"
+am_sync_head s-bytes
+printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
+am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
+assert_eq "copy_differs:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit bytes)")" "a copy that differs from the template is refused"
+am_sync_head s-mode
+chmod 644 "$AM_REPO/$AM_RUNNER"
+assert_eq "bad_mode:100644:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit mode)")" "a copy must keep the template's executable bit"
+am_sync_head s-hash
+am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"0000\""
+assert_eq "manifest_hash_mismatch:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit hash)")" "a manifest hash that does not match is refused"
+am_sync_head s-policy
+am_manifest '.git_policy = "merge"'
+assert_eq "manifest_policy_changed" "$(am_check --scope sync --head "$(am_commit policy)")" "a sync that changes policy fields is refused"
+am_sync_head s-render
+mkdir -p "$AM_REPO/.claude/commands" && printf 'x\n' >"$AM_REPO/.claude/commands/review.md"
+assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit render)")" "a render artifact needs a person"
+am_sync_head s-del
+git -C "$AM_REPO" rm -q app.js
+assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
+am_sync_head s-otherhash
+am_manifest '.managed_files["AGENTS.md"] = {content_sha256:"1111"}'
+assert_eq "manifest_hash_changed_without_file:AGENTS.md" "$(am_check --scope sync --head "$(am_commit otherhash)")" "hashes of untouched files cannot change"
+am_sync_head s-tab
+printf 'x\n' >"$AM_REPO/$AM_RUNNER"$'\t'
+assert_eq "bad_path" "$(am_check --scope sync --head "$(am_commit tab)")" "a path with a tab cannot pose as a managed file"
+# harvest PR: 문서만, 작게, 일반 파일 모드, 1회차 독립 검토 통과·기대효과 기록.
+AM_REVIEW='{"review":{"first_pass":"pass","expected":"재발 0"}}'
+am_hcheck() { am_check --scope project --head "$1" --review "${2:-$AM_REVIEW}"; }
+am_branch h-ok
+printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+AM_HARVEST_OK="$(am_commit harvest)"
+assert_eq "ok" "$(am_hcheck "$AM_HARVEST_OK")" "a small doc-only harvest PR passes"
+assert_eq "review_not_first_pass" "$(am_hcheck "$AM_HARVEST_OK" '{"review":{"first_pass":"revised","expected":"x"}}')" "a revised proposal needs a person"
+assert_eq "no_expected_effect" "$(am_hcheck "$AM_HARVEST_OK" '{"review":{"first_pass":"pass"}}')" "an improvement without expected effect needs a person"
+am_branch h-ko
+printf -- '- 규칙\n' >"$AM_REPO/.ai-harness/docs/한글-규칙.md"
+assert_eq "ok" "$(am_hcheck "$(am_commit ko)")" "Korean doc paths are read as they are"
+am_branch h-newline
+printf -- '- r\n' >>"$AM_REPO/AGENTS.md"
+printf 'x\n' >"$AM_REPO/.ai-harness/docs/a.md"$'\n'"zz" && printf 'y\n' >>"$AM_REPO/app.js"
+assert_eq "bad_path" "$(am_hcheck "$(am_commit newline)")" "a path with a newline cannot hide other entries"
+am_branch h-rename
+git -C "$AM_REPO" mv app.js .ai-harness/docs/app.md
+assert_eq "unsupported_change:D:app.js" "$(am_hcheck "$(am_commit rename)")" "a rename cannot hide the deleted source"
+am_branch h-link
+rm "$AM_REPO/AGENTS.md" && ln -s /etc/hosts "$AM_REPO/AGENTS.md"
+assert_eq "unsupported_change:T:AGENTS.md" "$(am_hcheck "$(am_commit link)")" "a doc turned into a symlink is refused"
+am_branch h-exec
+printf -- '- r\n' >>"$AM_REPO/.ai-harness/docs/testing.md" && chmod 755 "$AM_REPO/.ai-harness/docs/testing.md"
+assert_eq "bad_mode:100755:.ai-harness/docs/testing.md" "$(am_hcheck "$(am_commit exec)")" "an executable doc is refused"
+am_branch h-code
+printf 'y\n' >>"$AM_REPO/app.js"
+assert_eq "non_doc_file:app.js" "$(am_hcheck "$(am_commit code)")" "a harvest PR touching code is refused"
+am_branch h-graph
+mkdir -p "$AM_REPO/.ai-harness/workflows" && printf '{}\n' >"$AM_REPO/.ai-harness/workflows/review-graph.json"
+assert_eq "non_doc_file:.ai-harness/workflows/review-graph.json" "$(am_hcheck "$(am_commit graph)")" "a harvest PR touching a graph is refused"
+am_branch h-many
+for f in a b c d; do printf 'x\n' >"$AM_REPO/.ai-harness/docs/$f.md"; done
+assert_eq "too_many_files:4" "$(am_hcheck "$(am_commit many)")" "file count cap"
+am_branch h-long
+seq 1 41 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:41" "$(am_hcheck "$(am_commit long)")" "line count cap"
+# 대기열: 전역 opt-in·기준 브랜치의 저장소 설정·같은 저장소 PR·독립 검토를 모두 통과해야 들어간다.
+AM_DATA="$TEST_TMP/am-data"
+cat >"$TEST_TMP/am-review" <<'STUB'
+#!/usr/bin/env bash
+token="$(grep -o 'AUTO_MERGE_REVIEW [a-z0-9]\{16\} pass' | head -n 1 | cut -d' ' -f2)"
+case "${AM_REVIEW_MODE:-pass}" in
+  pass) printf 'looks fine\nAUTO_MERGE_REVIEW %s pass\n' "$token" ;;
+  fail) printf 'AUTO_MERGE_REVIEW %s fail weakens checks\n' "$token" ;;
+  forged) printf 'AUTO_MERGE_REVIEW deadbeefdeadbeef pass\n' ;;
+esac
+STUB
+chmod +x "$TEST_TMP/am-review"
+am() { HARNESS_METRICS_DIR="$AM_DATA" HM_OPEN_PR_CMD="$TEST_TMP/am-pr" HM_AUTO_MERGE_REVIEW_CMD="$TEST_TMP/am-review" "$ROOT/scripts/auto-merge.sh" "$@"; }
+am_runs() { jq -sr "$1" "$AM_DATA/harvest-auto/runs.jsonl"; }
+am_pending() { find "$AM_DATA/auto-merge/pending" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+AM_SINCE="2026-11-03T00:00:00Z"
+am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
+am_harvest_enqueue() { HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr "$1" --since "$AM_SINCE" --review "$AM_REVIEW"; }
+am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/1 --since "$AM_SINCE"
+assert_not_file "$AM_DATA/harvest-auto/runs.jsonl"
+am_sync_enqueue https://github.com/other/am/pull/1
+assert_eq "pr_repo_mismatch" "$(am_runs 'last | .reason')" "a PR URL of another repo is refused"
+AM_BASE=develop am_sync_enqueue https://github.com/acme/am/pull/1
+assert_eq "no_base_branch" "$(am_runs 'last | .reason')" "the base must be a remote branch"
+am_sync_enqueue https://github.com/acme/am/pull/1
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a passing sync PR is queued"
+assert_eq "1" "$(am_pending)" "one pending entry"
+AM_REVIEW_MODE=fail am_harvest_enqueue https://github.com/acme/am/pull/20
+assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a harvest PR the independent reviewer fails is not queued"
+AM_REVIEW_MODE=forged am_harvest_enqueue https://github.com/acme/am/pull/21
+assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a verdict without this run's token is not accepted"
+am_harvest_enqueue https://github.com/acme/am/pull/22
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a harvest PR passing the independent review is queued"
+git -C "$AM_REPO" checkout -q -B off develop && am_manifest '.auto_merge.harvest = false' && git -C "$AM_REPO" commit -q -am off
+git -C "$AM_REPO" update-ref refs/remotes/origin/off off
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "repo_opt_out" "$(am_runs 'last | .reason')" "the base branch manifest must allow it"
+# sweep: 호스트 상태 스텁. CI 진행 중이면 기다리고, 통과하면 head를 고정해 병합한다.
+cat >"$TEST_TMP/am-pr" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  --status) id="${2##*/}"; cat "$AM_PR_STATE_DIR/$id.json" 2>/dev/null || cat "$AM_PR_STATE_DIR/default.json" ;;
+  --merge) printf '%s|%s|%s\n' "$2" "$4" "$6" >>"$AM_PR_LOG"; exit "$(cat "$AM_PR_STATE_DIR/merge-rc" 2>/dev/null || echo 0)" ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$TEST_TMP/am-pr"
+export AM_PR_STATE_DIR="$TEST_TMP/am-state" AM_PR_LOG="$TEST_TMP/am-merged"
+mkdir -p "$AM_PR_STATE_DIR"
+am_state() { jq -n --arg h "${2:-$AM_SYNC_OK}" "{state:\"open\",head:\$h,base:\"develop\",created:\"2026-11-03T00:05:00\",activity:0,mergeable:\"mergeable\",ci:\"success\",draft:true} | ${3:-.}" >"$AM_PR_STATE_DIR/$1.json"; }
+am_state 1 "$AM_SYNC_OK" '.ci = "pending"'
+am_state 22 "$AM_HARVEST_OK" '.ci = "pending"'
+HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
+assert_eq "2" "$(am_pending)" "pending CI keeps the entries"
+assert_not_file "$AM_PR_LOG"
+am_state 1
+am_state 22 "$AM_HARVEST_OK"
+HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
+assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the repo method"
+assert_eq "2" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "both queued PRs are merged"
+assert_eq "auto_merged" "$(am_runs 'last | .event')" "the merge is recorded"
+assert_eq "0" "$(am_pending)" "merged entries leave the queue"
+assert_contains "$(am notify | jq -r '.systemMessage')" "2건 병합" "SessionStart reports auto merges"
+assert_eq "" "$(am notify)" "the notice is shown once"
+: >"$AM_PR_LOG"
+for AM_CASE in 'head|.head = "0000000000000000"|head_moved' 'short|.head = "'"${AM_SYNC_OK:0:6}"'"|head_moved' 'base|.base = "main"|pr_base_mismatch' \
+  'activity|.activity = 1|human_activity' 'ci|.ci = "failure"|ci_failed' 'conflict|.mergeable = "conflicting"|conflict' 'closed|.state = "closed"|closed' \
+  'old|.created = "2026-11-02T23:59:59"|pr_not_from_this_run'; do
+  IFS='|' read -r AM_N AM_F AM_R <<<"$AM_CASE"
+  am_sync_enqueue "https://github.com/acme/am/pull/$AM_N"
+  am_state "$AM_N" "$AM_SYNC_OK" "$AM_F"
+  HM_SYNC_AUTO_MERGE=1 am sweep
+  assert_eq "auto_merge_skipped|$AM_R" "$(am_runs 'last | "\(.event)|\(.reason)"')" "sweep hands $AM_N to a person"
+done
+am_sync_enqueue https://github.com/acme/am/pull/30
+am_state 30
+am sweep
+assert_eq "auto_merge_skipped|opted_out" "$(am_runs 'last | "\(.event)|\(.reason)"')" "turning the setting off drops queued PRs"
+assert_eq "0" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "nothing else was merged"
+# 병합 결과 종료 코드: 7은 병합됨(head 다름), 8은 실패 뒤 draft 복구 실패.
+for AM_CASE in '7|auto_merged|head_mismatch' '8|auto_merge_skipped|merge_failed_not_redrafted' '5|auto_merge_skipped|merge_failed'; do
+  IFS='|' read -r AM_RC AM_E AM_R <<<"$AM_CASE"
+  printf '%s\n' "$AM_RC" >"$AM_PR_STATE_DIR/merge-rc"
+  am_sync_enqueue "https://github.com/acme/am/pull/4$AM_RC"
+  am_state "4$AM_RC"
+  HM_SYNC_AUTO_MERGE=1 am sweep
+  assert_eq "$AM_E|$AM_R" "$(am_runs 'last | "\(.event)|\(.reason)"')" "merge exit $AM_RC is recorded as $AM_R"
+done
+rm -f "$AM_PR_STATE_DIR/merge-rc"
+assert_contains "$(am notify | jq -r '.systemMessage')" "head_mismatch" "a merge with a different head is surfaced"
+# 병합 요청 형태(dry-run).
+assert_eq "github|squash|abc1234" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --merge https://github.com/acme/svc/pull/3 --head abc1234 | jq -r '"\(.provider)|\(.method)|\(.head)"')" "GitHub merge request"
+assert_eq "bitbucket|merge_commit" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --merge https://bitbucket.org/ws/r/pull-requests/4 --head abc1234 --method merge | jq -r '"\(.provider)|\(.merge_strategy)"')" "Bitbucket merge request"
+if "$ROOT/scripts/open-pr.sh" --merge https://github.com/acme/svc/pull/3 --head 'x; rm' >/dev/null 2>&1; then fail "merge requires a commit hash head"; fi
+if HARNESS_METRICS_DIR="$AM_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project am-svc --first-pass maybe >/dev/null 2>&1; then fail "first-pass accepts only pass|revised"; fi
+pass "opt-in auto merge of verified unattended PRs"
+
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
 CHAIN_DATA="$TEST_TMP/chain-data"
 mkdir -p "$CHAIN_DATA/events" "$TEST_TMP/chain-claude" "$TEST_TMP/chain-codex"

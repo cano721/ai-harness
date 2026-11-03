@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
 
 ## 목차
 
@@ -329,7 +329,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
-무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다. 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
+무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다(무인 실행의 PR은 별도 opt-in인 [자동 병합](#auto-merge)만 병합합니다). 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
@@ -531,6 +531,35 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다. 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
+<a id="auto-merge"></a>
+
+### 자동 병합 (opt-in)
+
+자동 sync·자동 harvest가 연 draft PR을 사람이 매번 검토·병합하지 않아도 되게, **기계적으로 검증되는 PR만** 병합합니다. 두 설정이 모두 켜져야 동작합니다.
+
+```bash
+# ~/.ai-harness/config
+HM_SYNC_AUTO_MERGE=1       # 자동 sync PR
+HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
+```
+
+```json
+// 저장소 .ai-harness/harness.json — PR이 아니라 기준 브랜치의 값을 읽는다(PR이 스스로 자동 병합을 켜지 못한다)
+"auto_merge": { "sync": true, "harvest": false, "method": "squash" }
+```
+
+| 대상 | 병합 조건 (모두 만족) |
+|---|---|
+| sync PR | 결과 `improved`(일부 적용은 `HM_SYNC_AUTO_MERGE_PARTIAL=1`일 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
+| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`HM_HARVEST_AUTO_MERGE_MAX_FILES`·`_MAX_LINES`) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
+| 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
+| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, CI가 없거나 `HM_AUTO_MERGE_WAIT_HOURS`(72) 안에 안 끝나면 사람에게) |
+
+- **흐름**: 무인 실행이 PR을 연 직후 내용 조건을 판정해 대기열(`~/.ai-harness/auto-merge/pending/`)에 넣고, 정기 실행이 매 회차(유휴·한도와 무관, LLM 없음) 호스트 조건을 확인해 draft를 풀고 head를 고정해 병합합니다. Bitbucket은 head를 고정할 수 없어 병합 직전에 다시 읽어 맞춰 봅니다
+- **기록·알림**: `runs.jsonl`에 `auto_merge_queued`·`auto_merged`(병합 커밋)·`auto_merge_skipped`(사유)로 남고, 세션 시작 때 지난 알림 뒤의 병합·사람 확인 필요 건수를 알립니다
+- **되돌리기**: 자동으로 하지 않습니다. 자동 병합된 harvest 개선이 다음 harvest 검증에서 효과가 없으면 revert PR을 사람 검토용으로 엽니다(자동 병합 대상 아님)
+- 한계: harvest의 독립 검토 세션도 LLM이라 diff에 섞인 지시문에 흔들릴 수 있습니다 — 경로·크기·모드 제한과 함께 쓰는 마지막 관문입니다(검토 1회 비용, 기본 상한 `HM_AUTO_MERGE_REVIEW_BUDGET_USD=1`). Bitbucket merge API는 head를 고정할 수 없어 draft 해제 전후와 병합 응답에서 head를 다시 맞춰 보지만, 마지막 확인과 병합 사이의 push는 막지 못합니다. 병합 직전에 달린 코멘트도 같은 틈이 있습니다. 병합 실패(호스트 merge check·권한)는 draft로 되돌리고 다시 시도하지 않으며 사람에게 넘깁니다
+
 <a id="autofix"></a>
 
 ## 모니터링 기반 자동 수정 (opt-in)
@@ -681,6 +710,8 @@ HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
 HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
 HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤처진 저장소에 /harness-init --sync를 백그라운드 실행(draft PR)
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
+HM_SYNC_AUTO_MERGE=0             # 1이면 검증되는 자동 sync PR을 병합(저장소 harness.json auto_merge.sync도 true여야 함)
+HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병합(auto_merge.harvest도 true여야 함)
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
