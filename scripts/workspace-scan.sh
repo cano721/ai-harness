@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # workspace 감지·매니페스트 기록. 여러 독립 git 저장소가 한 폴더에 있을 때 /harness-init이 쓴다.
-#   scan  --root <dir> [--depth N] [--fetch]   : 후보 여부·멤버·기존 manifest와의 diff를 JSON으로
-#   write --root <dir> [--depth N] [--fetch] [--workspace-id <id>] [--integrations a,b] [--version <v>]
+#   scan  --root <dir> [--depth N] [--fetch] [--base <branch>]   : 후보 여부·멤버·기존 manifest와의 diff를 JSON으로
+#   write --root <dir> [--depth N] [--fetch] [--base <branch>] [--workspace-id <id>] [--integrations a,b] [--version <v>]
 #         : scan 결과로 .ai-harness/workspace.json을 기록 (생략한 값은 기존 manifest 유지)
-# 멤버 하네스는 원격 기준 브랜치(origin/develop → origin 기본 브랜치)의 harness.json을 먼저 읽는다.
+# 멤버 하네스는 원격 기준 브랜치의 harness.json을 먼저 읽는다. 기준은 --base(없으면 manifest의 base_branch)가
+# 멤버 origin에 있으면 그 브랜치, 아니면 origin 기본 브랜치(origin/HEAD)다. 브랜치 이름을 추측하지 않는다.
 # 멤버 체크아웃은 자주 뒤처져 있어 작업 트리만 읽으면 원격에 생긴 하네스를 놓친다.
 # 워킹트리는 건드리지 않는다. --fetch는 멤버마다 git fetch origin을 먼저 한다(실패해도 계속).
 set -euo pipefail
@@ -12,7 +13,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/lib.sh"
 
 usage() {
-  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--fetch] [--workspace-id <id>] [--integrations a,b] [--version <v>]\n' "$0" >&2
+  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--fetch] [--base <branch>] [--workspace-id <id>] [--integrations a,b] [--version <v>]\n' "$0" >&2
   exit 2
 }
 
@@ -26,6 +27,7 @@ workspace_id=""
 integrations=""
 version=""
 fetch=false
+base_branch=""
 while (($#)); do
   case "$1" in
     --root) root="${2:-}"; shift 2 ;;
@@ -34,13 +36,25 @@ while (($#)); do
     --integrations) integrations="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
     --fetch) fetch=true; shift ;;
+    --base) base_branch="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ -n "$root" && -d "$root" ]] || usage
+if [[ -n "$base_branch" ]] && ! git check-ref-format --branch "$base_branch" >/dev/null 2>&1; then
+  printf 'invalid base branch: %s\n' "$base_branch" >&2
+  exit 2
+fi
 [[ "$depth" =~ ^[0-9]+$ && "$depth" -ge 1 ]] || { printf 'depth must be a positive integer: %s\n' "$depth" >&2; exit 2; }
 root="$(cd "$root" && pwd -P)"
 manifest_path="$root/.ai-harness/workspace.json"
+existing='null'
+if [[ -f "$manifest_path" ]]; then
+  existing="$(jq -c '.' "$manifest_path" 2>/dev/null || printf 'null')"
+fi
+if [[ -z "$base_branch" ]]; then
+  base_branch="$(jq -r '.base_branch // empty' <<<"$existing" 2>/dev/null || true)"
+fi
 
 root_is_git=false
 if git -C "$root" rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -49,12 +63,15 @@ fi
 
 # .git 디렉터리만 멤버 후보다. 서브모듈·worktree는 .git이 파일이라 제외되고,
 # node_modules 아래는 의존성 저장소라 내려가지 않는다.
-# 멤버의 원격 기준 ref. 통합 브랜치(origin/develop)가 있으면 그것, 없으면 origin 기본 브랜치.
+# 멤버의 원격 기준 ref. 지정한 기준 브랜치가 멤버 origin에 있으면 그것, 없으면 origin 기본 브랜치.
 member_base_ref() {
   local repo="$1" head=""
-  if git -C "$repo" rev-parse -q --verify refs/remotes/origin/develop >/dev/null 2>&1; then
-    printf 'origin/develop\n'
+  if [[ -n "$base_branch" ]] && git -C "$repo" rev-parse -q --verify "refs/remotes/origin/$base_branch" >/dev/null 2>&1; then
+    printf 'origin/%s\n' "$base_branch"
     return
+  fi
+  if [[ -z "$(git -C "$repo" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null || true)" && "$fetch" == true ]]; then
+    git -C "$repo" remote set-head origin --auto >/dev/null 2>&1 || true
   fi
   head="$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
   if [[ -n "$head" ]] && git -C "$repo" rev-parse -q --verify "refs/remotes/$head" >/dev/null 2>&1; then
@@ -127,11 +144,6 @@ members="$(jq -c '
         | .[0] + (if length > 1 then {also_paths: (.[1:] | map(.path))} else {} end))
   | sort_by(.path)' <<<"$members")"
 
-existing='null'
-if [[ -f "$manifest_path" ]]; then
-  existing="$(jq -c '.' "$manifest_path" 2>/dev/null || printf 'null')"
-fi
-
 # workspace 세션의 subagent_type 위임은 멤버 페르소나가 아니라 같은 이름의 사용자 전역 페르소나로 갈 수 있다.
 user_agents="${HM_USER_AGENTS_DIR:-$HOME/.claude/agents}"
 shadows='[]'
@@ -146,7 +158,7 @@ while IFS= read -r path; do
 done < <(jq -r '.[] | select(.harness) | .path' <<<"$members")
 
 scan="$(jq -cn --arg root "$root" --argjson depth "$depth" --argjson root_is_git "$root_is_git" \
-  --argjson members "$members" --argjson existing "$existing" --argjson shadows "$shadows" '
+  --argjson members "$members" --argjson existing "$existing" --argjson shadows "$shadows" --arg base "$base_branch" '
   def key: {harness, level, test_policy, git_policy, edit_guard, project_id};
   ($existing.members // []) as $old
   | ($members | map(.path)) as $now_paths
@@ -154,6 +166,7 @@ scan="$(jq -cn --arg root "$root" --argjson depth "$depth" --argjson root_is_git
   | {
       root: $root, depth: $depth, root_is_git: $root_is_git,
       candidate: (($root_is_git | not) and ($members | length) >= 2),
+      base_branch: (if $base == "" then null else $base end),
       members: $members,
       persona_shadows: $shadows,
       manifest: $existing,
@@ -191,6 +204,7 @@ case "$command_name" in
             workspace_id: (if $wid != "" then $wid else ($old.workspace_id // $folder) end),
             integrations: (if $integrations != "" then ($integrations | split(",") | map(select(. != ""))) else ($old.integrations // []) end),
             members: $scan.members,
+            base_branch: $scan.base_branch,
             initialized: ($old.initialized // $today),
             harness_version: (if $version != "" then $version else ($old.harness_version // null) end)
           }' > "$tmp"; then

@@ -14,7 +14,7 @@
 
 ### 버그 수정
 
-- **workspace 멤버 하네스를 원격 기준 브랜치에서 읽습니다** — `workspace-scan.sh`가 멤버 작업 트리의 `harness.json`만 읽어, 체크아웃이 뒤처진 멤버는 원격에 하네스가 있어도 `harness:false`로 기록됐습니다. 이제 `origin/develop`(없으면 origin 기본 브랜치)의 manifest를 먼저 읽고 없을 때만 작업 트리로 폴백하며, `--fetch`로 멤버별 `git fetch origin`을 먼저 합니다. 멤버마다 `manifest_ref`·`base_ref`·`behind`가 붙습니다. 워킹트리는 건드리지 않습니다. (#194)
+- **workspace 멤버 하네스를 원격 기준 브랜치에서 읽습니다** — `workspace-scan.sh`가 멤버 작업 트리의 `harness.json`만 읽어, 체크아웃이 뒤처진 멤버는 원격에 하네스가 있어도 `harness:false`로 기록됐습니다. 이제 원격 기준 브랜치의 manifest를 먼저 읽고 없을 때만 작업 트리로 폴백하며, `--fetch`로 멤버별 `git fetch origin`을 먼저 합니다. 기준은 origin 기본 브랜치이고, 통합 브랜치(`develop` 등)를 쓰는 workspace는 `--base <branch>`로 지정하면 manifest `base_branch`에 남습니다. 멤버마다 `manifest_ref`·`base_ref`·`behind`가 붙습니다. 워킹트리는 건드리지 않습니다. (#194)
 - **디자인 채점이 규칙 문서의 절을 못 찾아 축을 통째로 비우지 않습니다** — v0.51.0의 `design-audit`는 축에 대응하는 절이 없으면 바로 "미확인"으로 두어, 절 이름이 다른 기존 규칙 문서나 `## 레이아웃 (Layout)`처럼 번역을 붙인 제목에서 축이 채점되지 않을 수 있었습니다. 이제 `## 디자인 점검`의 대응 → 필수 절 이름(괄호 부가 표기 무시) → 목차 순서로 찾고, 모두 실패한 축만 미확인으로 둡니다. 프론트 팀 구성 없이 디자인 채점만 골라도 manifest에 `design-system`을 기록합니다. (#185)
 
 ## v0.51.0 (2026-11-02)
