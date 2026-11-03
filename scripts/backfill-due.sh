@@ -82,6 +82,10 @@ if [[ "${1:-}" == "--worker" ]]; then
   else
     schedule_log skipped "$SKIP_REASON"
   fi
+  # 자동 병합 대기열은 LLM 없이 PR 호스트 상태만 보므로 유휴·한도와 상관없이 매 회차 확인한다.
+  if [[ "${HM_HARVEST_AUTO_MERGE:-0}" == "1" || "${HM_SYNC_AUTO_MERGE:-0}" == "1" ]]; then
+    "$DIR/auto-merge.sh" sweep >/dev/null 2>&1 || true
+  fi
   "$DIR/check-update.sh" refresh >/dev/null 2>&1 || true
   exit 0
 fi

@@ -122,9 +122,15 @@ $ROOT/scripts/setup.sh check <name>
 | `HM_DIGEST` | `0` | 하루 한 번 최근 세션을 저비용 모델로 정리해 사용자 교정·마찰을 harvest 근거로 남긴다 (LLM 비용 발생) |
 | `HM_HARVEST_AUTO` | `0` | analysis batch가 생기면 `/harvest --auto`를 백그라운드로 돌려 draft PR까지 만든다 |
 | `HM_SYNC_AUTO` | `0` | 하네스가 플러그인보다 뒤처진 저장소에 `/harness-init --sync`를 백그라운드로 돌려 draft PR을 만든다 |
+| `HM_SYNC_AUTO_MERGE` | `0` | 자동 sync PR 중 기계적으로 검증되는 것(템플릿 그대로 복사한 생성물·`harness.json`만 바뀜, CI 통과, 사람 활동 없음)을 병합한다. `HM_SYNC_AUTO=1`과 함께 쓴다 |
+| `HM_HARVEST_AUTO_MERGE` | `0` | 자동 harvest PR 중 작은 문서 변경이고 worker가 띄운 독립 검토를 통과한 것을 병합한다(검토 1회 LLM 비용). `HM_HARVEST_AUTO=1`과 함께 쓴다 |
 | `HM_DB_SCAN_GUARD` | `0` | 스키마 조건 없는 information_schema 조회를 Bash 실행 전에 막는다 |
 
-자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 병합을 하지 않고 draft PR까지만 한다는 점을 함께 알린다.
+자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 draft PR까지만 하고, 병합은 자동 병합 옵션을 켠 경우에만 한다는 점을 함께 알린다.
+
+자동 병합 옵션을 고르면 두 가지를 더 알린다.
+- 저장소마다 `.ai-harness/harness.json`에 `"auto_merge": {"sync": true}`(harvest면 `"harvest": true`)가 **기준 브랜치에 병합되어 있어야** 동작한다. 이 설정은 사람이 PR로 넣는다 — 무인 실행의 PR은 이 값을 바꿀 수 없다.
+- 처음에는 sync만 켜고 저장소 한 곳에서 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
 
 ## 디자인 스킬 (`design`)
 
