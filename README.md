@@ -140,11 +140,11 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 | 디자인 시스템 | `/design-system-builder` | `design-system-patterns`(테마 구조), `awesome-design`(참고 명세) |
 | 제품 화면 다듬기 | `impeccable` | `emil-design-eng`(마감), `motion` |
 | 하네스 저장소 화면 변경 | `ui-review`·`frontend-team` | `impeccable`(비평), `web-design-guidelines`(접근성) |
-| 독립 디자인 검토 | `ai-harness:design-reviewer` 에이전트 | `impeccable`(비평), `web-design-guidelines`(점검) |
+| 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않는다 |
 
 - **설치**: `/ai-harness:setup design`이 `catalog/design-skills.json`의 원본 저장소·고정 커밋에서 스킬 폴더만 받아(부분 클론) Claude `~/.claude/skills/`, Codex `~/.agents/skills/`에 둡니다. 사본을 재배포하지 않고, 라이선스와 실행 스크립트·네트워크 호출 검토 결과를 카탈로그에 적었습니다. 필수 묶음은 `impeccable`과 Claude 내장 `dataviz`(Codex 대응 없음)입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 안내만 합니다. SessionStart는 외부 디자인 스킬을 자동 갱신하지 않습니다.
-- **권유 시점**: `/harness-init`이 프론트엔드·UI를 감지한 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
-- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평하고 파일은 고치지 않습니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
+- **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
+- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
 하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 

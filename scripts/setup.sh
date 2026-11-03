@@ -33,7 +33,7 @@ usage: setup.sh list
        setup.sh detect <skill>
        setup.sh design list
        setup.sh design install --tool claude|codex|both [--replace] <skill|core|extra|all>...
-       setup.sh design remove --tool claude|codex|both [--force] <skill>...
+       setup.sh design remove --tool claude|codex|both [--force] <skill>...   (이름만, 묶음 core|extra|all 아님)
        setup.sh done
        setup.sh notify < SessionStart input
 EOF
@@ -58,14 +58,25 @@ tools_for() {
 sha256_stdin() { { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}'; }
 
 # 폴더 내용 해시: 상대 경로와 파일 해시 목록의 해시. .DS_Store 같은 OS 부산물은 뺀다.
+# symlink와 빈 디렉터리도 넣는다 — 사용자가 더한 링크를 "손대지 않은 사본"으로 보고 지우지 않게.
+# 일반 파일 줄의 형식은 그대로라 파일만 있는 기존 기록 해시는 바뀌지 않는다.
 tree_sha() {
   (
     cd "$1"
-    find . -type f ! -name '.DS_Store' | LC_ALL=C sort | while IFS= read -r f; do
-      printf '%s %s\n' "$f" "$(sha256_stdin <"$f")"
+    find . \( -type f -o -type l -o -type d -empty \) ! -name '.DS_Store' | LC_ALL=C sort | while IFS= read -r f; do
+      if [[ -L "$f" ]]; then
+        printf '%s -> %s\n' "$f" "$(readlink "$f")"
+      elif [[ -d "$f" ]]; then
+        printf '%s/\n' "$f"
+      else
+        printf '%s %s\n' "$f" "$(sha256_stdin <"$f")"
+      fi
     done
   ) | sha256_stdin
 }
+
+# 스킬 자리에 디렉터리가 아닌 것(파일·symlink·깨진 링크)이 있으면 우리가 깐 사본이 아니다.
+foreign_entry() { [[ -L "$1" || (-e "$1" && ! -d "$1") ]]; }
 
 catalog_names() { jq -r '.skills[].name' "$CATALOG"; }
 in_catalog() { jq -e --arg n "$1" 'any(.skills[]; .name == $n)' "$CATALOG" >/dev/null; }
@@ -91,6 +102,7 @@ record_sha() { read_state | jq -r --arg k "$1:$2" '.installed[$k].sha // ""'; }
 skill_status() { # tool name
   local target recorded current
   target="$(skills_dir "$1")/$2"
+  foreign_entry "$target" && { printf 'foreign\n'; return; }
   [[ -d "$target" ]] || { printf 'absent\n'; return; }
   recorded="$(record_sha "$1" "$2")"
   [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
@@ -325,9 +337,10 @@ design_status() { # tool entry
   fi
   target="$(skills_dir "$tool")/$name"
   if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
-    [[ -d "$target" ]] && printf 'foreign\n' || printf 'manual\n'
+    [[ -e "$target" || -L "$target" ]] && printf 'foreign\n' || printf 'manual\n'
     return
   fi
+  foreign_entry "$target" && { printf 'foreign\n'; return; }
   [[ -d "$target" ]] || { printf 'absent\n'; return; }
   recorded="$(record_sha "$tool" "$name")"
   [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
@@ -355,11 +368,22 @@ command_design_list() {
 # 카탈로그 값이 git 인자·경로로 들어가기 전에 모양을 확인한다(HM_SETUP_DESIGN_CATALOG로 바꿀 수 있으므로).
 design_source_error() { # entry → 문제가 있으면 사유 출력
   jq -r '
-    def bad_path: type != "string" or . == "" or startswith("/") or startswith("-") or (split("/") | index("..") != null);
-    if (.source.repo // "" | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) then "invalid source.repo"
+    # 세그먼트는 허용 문자만: glob(*, [, 선행 !)은 sparse 패턴을 넓히고, "."은 .git까지 복사하며, ".."은 원본 밖을 가리킨다.
+    def bad_segments: split("/") | any(. == "" or . == "." or . == ".." or startswith("-"));
+    def bad_path: type != "string" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$") | not) or bad_segments;
+    if (.source.repo // "" | (test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) or bad_segments) then "invalid source.repo"
     elif (.source.ref // "" | test("^[0-9a-f]{40}$") | not) then "source.ref must be a 40-character commit"
     elif (.source.path | if type == "object" then ((.claude // "" | bad_path) or (.codex // "" | bad_path)) else bad_path end) then "invalid source.path"
     else empty end' <<<"$1"
+}
+
+# 원본 저장소용 git: 자격 증명·SSH 프롬프트에서 멈추지 않고, 느린 연결은 30초 뒤 끊고, 받은 저장소의 hook·LFS 필터를 돌리지 않는다.
+design_git() { # work_dir git-args...
+  local work="$1"
+  shift
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' GIT_LFS_SKIP_SMUDGE=1 \
+    git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 -c core.hooksPath=/dev/null \
+    -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false -C "$work" "$@"
 }
 
 # 원본 저장소의 고정 커밋에서 필요한 폴더와 루트 라이선스만 받는다(부분 클론 + sparse checkout).
@@ -370,16 +394,15 @@ fetch_design_source() { # entry work_dir — 실패 사유는 $STATE_DIR/.err
   while IFS= read -r p; do patterns+=("/$p/"); done < <(jq -r '.source.path | if type == "object" then .[] else . end' <<<"$entry")
   : >"$STATE_DIR/.err"
   rm -rf "$work"
-  # 원본이 사라져도 자격 증명 프롬프트에서 멈추지 않는다.
   mkdir -p "$work" \
-    && GIT_TERMINAL_PROMPT=0 git -C "$work" init -q 2>>"$STATE_DIR/.err" \
-    && git -C "$work" remote add origin "$GIT_BASE/$repo" 2>>"$STATE_DIR/.err" \
-    && git -C "$work" sparse-checkout set --no-cone "${patterns[@]}" 2>>"$STATE_DIR/.err" \
+    && design_git "$work" init -q 2>>"$STATE_DIR/.err" \
+    && design_git "$work" remote add origin "$GIT_BASE/$repo" 2>>"$STATE_DIR/.err" \
+    && design_git "$work" sparse-checkout set --no-cone "${patterns[@]}" 2>>"$STATE_DIR/.err" \
     || return 1
-  GIT_TERMINAL_PROMPT=0 git -C "$work" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>"$STATE_DIR/.err" \
-    || GIT_TERMINAL_PROMPT=0 git -C "$work" fetch -q --depth 1 origin "$ref" 2>"$STATE_DIR/.err" || return 1
-  GIT_TERMINAL_PROMPT=0 git -C "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>>"$STATE_DIR/.err" || return 1
-  [[ "$(git -C "$work" rev-parse HEAD)" == "$ref" ]] || { printf 'fetched commit is not %s\n' "$ref" >"$STATE_DIR/.err"; return 1; }
+  design_git "$work" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>"$STATE_DIR/.err" \
+    || design_git "$work" fetch -q --depth 1 origin "$ref" 2>"$STATE_DIR/.err" || return 1
+  design_git "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>>"$STATE_DIR/.err" || return 1
+  [[ "$(design_git "$work" rev-parse HEAD)" == "$ref" ]] || { printf 'fetched commit is not %s\n' "$ref" >"$STATE_DIR/.err"; return 1; }
 }
 
 # 설치할 사본을 스킬 폴더 밖에 먼저 만들고 검증한다. 성공하면 그 경로, 실패하면 사유를 출력한다.
@@ -409,15 +432,16 @@ place_design_skill() { # tool entry staged backup → 실패 사유를 stdout
   local tool="$1" entry="$2" staged="$3" backup="$4" name dest old
   name="$(jq -r '.name' <<<"$entry")"
   dest="$(skills_dir "$tool")/$name"
-  old="$STATE_DIR/tmp/old-$tool-$name.$$"
-  mkdir -p "$(skills_dir "$tool")" || { printf 'cannot create %s\n' "$(skills_dir "$tool")"; return 1; }
-  if [[ -e "$dest" ]]; then
+  # 옮겨 둔 기존 폴더는 tmp가 아니라 backups에 둔다 — 중단돼도 with_lock trap이 tmp와 함께 지우지 않는다.
+  old="$STATE_DIR/backups/old-$tool-$name-$(date +%Y%m%d%H%M%S).$$"
+  mkdir -p "$(skills_dir "$tool")" "$STATE_DIR/backups" || { printf 'cannot create %s\n' "$(skills_dir "$tool")"; return 1; }
+  if [[ -e "$dest" || -L "$dest" ]]; then
     rm -rf "$old"
     mv "$dest" "$old" || { rm -rf "$staged"; printf 'cannot move existing %s\n' "$dest"; return 1; }
   fi
   if ! mv "$staged" "$dest"; then
     rm -rf "$staged" "$dest"
-    if [[ -e "$old" ]]; then mv "$old" "$dest"; elif [[ -n "$backup" ]]; then mv "$backup" "$dest"; fi
+    if [[ -e "$old" || -L "$old" ]]; then mv "$old" "$dest"; elif [[ -n "$backup" ]]; then mv "$backup" "$dest"; fi
     printf 'cannot place %s\n' "$dest"
     return 1
   fi
@@ -435,7 +459,7 @@ command_design_install() {
     while IFS= read -r name; do names+=("$name"); done < <(design_names "$arg")
   done
   mkdir -p "$STATE_DIR/tmp"
-  for name in "${names[@]}"; do
+  for name in "${names[@]+"${names[@]}"}"; do
     entry="$(design_entry "$name")"
     [[ -n "$entry" ]] || { result "-" "$name" "unknown"; continue; }
     work="$STATE_DIR/tmp/src-$name.$$"

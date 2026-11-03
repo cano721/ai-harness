@@ -2002,6 +2002,13 @@ for path in .agents/skills/native-ui/SKILL.md .claude/skills/native-ui/reference
   assert_eq "add" "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "native stack selects $path"
 done
 assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | test("skills/(ui-review|frontend-fundamentals|frontend-team)/"))] | length')" "a native-only project gets neither the web UI contract nor web frontend skills"
+# native-ui에 복사된 계약의 상대 링크는 native-ui에 배포되는 파일을 가리키거나, native-ui 본문이 웹 전용이라 무시한다고 적은 것이어야 한다.
+while IFS= read -r NATIVE_LINK; do
+  if [[ -n "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p ".claude/skills/native-ui/$NATIVE_LINK" '.items[] | select(.path==$p) | .path')" ]]; then continue; fi
+  assert_contains "$NATIVE_SKILL" "계약 안의 \`$NATIVE_LINK\`" "native-ui says how to read the contract link $NATIVE_LINK"
+  assert_contains "$(grep -F "계약 안의 \`$NATIVE_LINK\`" "$NATIVE_DIR/SKILL.md")" "무시한다" "native-ui ignores the web-only contract link $NATIVE_LINK"
+done < <(grep -oE '\]\(references/[^)]+\)' "$ROOT/templates/ui-review/SKILL.md" | sed -E 's/^\]\(//; s/\)$//' | sort -u)
+assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | endswith("design-skills.md"))] | length')" "a native-only project gets no web design skill map"
 assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path | contains("native-ui"))] | length')" "a web UI project does not get native-ui"
 # 기존 ui 프로젝트: 손대지 않은 계약은 갱신(refresh), 새 시안 처리 규칙은 추가(add)로 sync 계획에 오른다.
 SYNC_UI_ROOT="$TEST_TMP/ui-sync-project"
@@ -2155,12 +2162,24 @@ assert_eq "dataviz,impeccable" "$(jq -r '[.skills[] | select(.bundle=="core") | 
 assert_eq "0" "$(jq '[.skills[] | select(.installable == false and ((.note // "") == ""))] | length' "$DESIGN_CATALOG")" "skills setup cannot pin say where to get them"
 HARNESS_INIT_DESIGN="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_DESIGN" "백엔드·라이브러리 저장소에는 권하지 않는다" "harness init suggests design skills only for UI repositories"
+assert_contains "$HARNESS_INIT_DESIGN" "\`ui\`·\`frontend-team\`·\`design-system\` 중 하나가 있을 때만" "harness init suggests design skills only where the map ships"
 assert_contains "$HARNESS_INIT_DESIGN" "/ai-harness:setup design" "harness init points at setup for design skills"
-# 독립 디자인 검토는 플러그인 전역 에이전트다. 렌더링에 Bash를 쓰되 파일을 고치는 도구는 없다.
+# 독립 디자인 검토는 플러그인 전역 에이전트다. 렌더링에 Bash를 쓰되 편집 도구는 없다.
+# Bash가 있으면 쓰기를 기술적으로 막지 못하므로 "읽기 전용"이라 주장하지 않고, Skill 도구가 없으므로 외부 스킬을 쓴다고 하지 않는다.
 DESIGN_REVIEWER="$ROOT/agents/design-reviewer.md"
 assert_file "$DESIGN_REVIEWER"
-assert_eq "tools: Read, Grep, Glob, Bash" "$(grep '^tools:' "$DESIGN_REVIEWER")" "design reviewer cannot edit files"
-assert_contains "$(<"$DESIGN_REVIEWER")" "**파일을 고치지 않는다.**" "design reviewer leaves the work tree alone"
+DESIGN_REVIEWER_TOOLS="$(grep '^tools:' "$DESIGN_REVIEWER")"
+assert_eq "tools: Read, Grep, Glob, Bash" "$DESIGN_REVIEWER_TOOLS" "design reviewer has no edit or skill tools"
+DESIGN_REVIEWER_CONTENT="$(<"$DESIGN_REVIEWER")"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "**쓰기 도구가 없다. Bash는 렌더링 한정이다.**" "design reviewer limits Bash to rendering"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "기술적 강제가 아니라" "design reviewer does not overstate its Bash restriction"
+if grep -qiE "읽기 전용이다|read-only" "$DESIGN_REVIEWER"; then fail "design reviewer claims to be read-only while it has Bash"; fi
+if [[ "$DESIGN_REVIEWER_TOOLS" != *Skill* ]]; then
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "외부 디자인 스킬(\`impeccable\`·\`web-design-guidelines\` 등)은 쓰지 않는다" "design reviewer without the Skill tool does not promise outside skills"
+  if grep -q "^외부 스킬:" "$DESIGN_REVIEWER"; then fail "design reviewer report still has an outside-skill line"; fi
+  MAP_REVIEW_ROW="$(grep '^| Independent review' "$MAP_SRC")"
+  assert_contains "$MAP_REVIEW_ROW" "in a fresh reviewer session only" "map keeps outside review skills out of the design-reviewer agent"
+fi
 assert_contains "$(<"$DESIGN_REVIEWER")" "\`unverified\`" "design reviewer does not pass what it could not render"
 pass "design skill map, catalog and independent reviewer"
 
@@ -4590,6 +4609,43 @@ assert_eq "failed invalid source.path" "$(setup_cmd design install --tool claude
 assert_eq "failed invalid source.path" "$(setup_cmd design install --tool codex nocodex | jq -r '"\(.action) \(.detail)"')" "missing per-tool path is refused"
 jq '(.skills[] | select(.name=="badref") | .source.ref) = "--upload-pack=touch"' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
 assert_eq "failed source.ref must be a 40-character commit" "$(setup_cmd design install --tool claude badref | jq -r '"\(.action) \(.detail)"')" "a non-commit ref is refused before git runs"
+# "."은 .git까지 복사하고, glob은 sparse 패턴을 넓히고, ".."은 원본 저장소 밖을 가리킨다.
+for DESIGN_BAD in 'path:"."' 'path:"a/*"' 'path:"!a"' 'path:"a//b"' 'path:"a/./b"' 'repo:"../x"' 'repo:"acme/.."'; do
+  jq --arg ref "$DESIGN_REF1" ".skills += [{name:\"bad\", bundle:\"extra\", summary:\"x\", source:({repo:\"acme/skills\", ref:\$ref, path:\"skills/foo\"} + {$DESIGN_BAD}), license:\"MIT\", review:{runs:\"none\", network:\"none\"}}]" \
+    "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bad.json"
+  DESIGN_BAD_OUT="$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bad.json" setup_cmd design install --tool claude bad | jq -r '"\(.action) \(.detail)"')"
+  assert_contains "$DESIGN_BAD_OUT" "failed invalid source." "catalog value $DESIGN_BAD is refused before git runs"
+  [[ ! -e "$SETUP_T/claude/bad" ]] || fail "refused catalog value $DESIGN_BAD left a folder"
+done
+# 빈 묶음도 bash 3.2 set -u에서 멈추지 않는다.
+jq '.skills |= map(select(.bundle != "extra"))' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/core-only.json"
+HM_SETUP_DESIGN_CATALOG="$SETUP_T/core-only.json" setup_cmd design install --tool claude extra >/dev/null || fail "an empty bundle fails under set -u"
+# 스킬 자리에 파일이나 symlink가 있으면 우리가 깐 사본이 아니다.
+printf 'a file\n' >"$SETUP_T/claude/bar2"
+jq '.skills += [(.skills[] | select(.name=="bar") | .name = "bar2" | .source.path = "a/bar")]' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bar2.json"
+assert_eq "skipped foreign" "$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bar2.json" setup_cmd design install --tool claude bar2 | jq -r '"\(.action) \(.detail)"')" "a file in the skill slot is foreign"
+assert_eq "a file" "$(cat "$SETUP_T/claude/bar2")" "a file in the skill slot is kept"
+rm -f "$SETUP_T/claude/bar2"
+# 관리 사본에 사용자가 더한 symlink·빈 디렉터리는 수정으로 본다 — 지우지 않는다.
+ln -s /etc/hosts "$SETUP_T/claude/bar/my-link"
+assert_eq "modified" "$(design_status bar claude)" "a symlink added to a managed copy counts as modified"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool claude bar | jq -r '"\(.action) \(.detail)"')" "a managed copy with a user symlink is not removed"
+[[ -L "$SETUP_T/claude/bar/my-link" ]] || fail "user symlink removed"
+rm "$SETUP_T/claude/bar/my-link"
+mkdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "modified" "$(design_status bar claude)" "an empty directory added to a managed copy counts as modified"
+rmdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "current" "$(design_status bar claude)" "the untouched managed copy is current again"
+# 외부 git은 프롬프트·hook·LFS 필터 없이, 느린 연결을 끊고 돈다.
+SETUP_SRC="$(<"$ROOT/scripts/setup.sh")"
+for DESIGN_GIT_OPT in "GIT_TERMINAL_PROMPT=0" "GIT_SSH_COMMAND='ssh -o BatchMode=yes'" "http.lowSpeedLimit=1000" "http.lowSpeedTime=30" "core.hooksPath=/dev/null" "filter.lfs.process=" "GIT_LFS_SKIP_SMUDGE=1"; do
+  assert_contains "$SETUP_SRC" "$DESIGN_GIT_OPT" "design git runs with $DESIGN_GIT_OPT"
+done
+# shellcheck disable=SC2016  # 셸 변수가 아니라 setup.sh 소스의 문자열을 찾는다
+[[ "$(grep -cE '^[[:space:]]*(GIT_[A-Z_]+=[^ ]+ )*git -C "\$work"' "$ROOT/scripts/setup.sh")" == 0 ]] || fail "design fetch calls git without design_git"
+# 교체하며 옮겨 둔 기존 폴더는 중단돼도 지워지는 tmp가 아니라 backups에 있다.
+# shellcheck disable=SC2016  # 소스 문자열 그대로
+assert_contains "$SETUP_SRC" 'old="$STATE_DIR/backups/old-' "replaced folder waits in backups, not tmp"
 # 사용자가 원래 갖고 있던 같은 이름 스킬은 --replace 없이는 그대로 둔다.
 setup_cmd design remove --tool claude foo >/dev/null
 mkdir -p "$SETUP_T/claude/foo"

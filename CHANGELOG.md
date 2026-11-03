@@ -10,12 +10,13 @@
 ### 새 기능
 
 - **작업별 디자인 스킬 지도** — ai-harness는 디자인 데이터셋 없이 절차만 두는데, 빈자리를 채울 외부 디자인 스킬을 지정하지 않아 대시보드·리포트처럼 ai-harness가 비운 영역은 PC에 깔린 스킬에 따라 결과가 갈렸습니다(`impeccable`·`ui-ux-pro-max`·`design-taste-frontend`·`web-design-guidelines`가 모두 "UI 다듬어"에 반응). 이제 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정한 지도(`design-skills.md`)가 있고, 같은 영역을 두 스킬이 주도하는 조합은 금지로 적었습니다. `landing-page`·`design-system-builder`와 생성되는 `ui-review`·`frontend-team`·`design-audit`가 같은 사본을 참조합니다. 설치된 스킬만 쓰고, 없으면 지금 동작 그대로입니다. 프로젝트 규칙 > ai-harness 계약 > 지도 순서는 그대로입니다. (#210)
-- **외부 디자인 스킬 설치 `/setup design`** — 원본 저장소의 고정 커밋에서 필요한 폴더만 받아 Claude·Codex 전역 스킬 폴더에 설치합니다. ai-harness는 사본을 재배포하지 않고, `catalog/design-skills.json`에 저장소·커밋·라이선스·실행 스크립트와 네트워크 호출 검토 결과를 적었습니다. 필수 묶음(`core`)은 `impeccable`과 Claude 내장 `dataviz`, 나머지는 선택입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 설치하지 않고 경로만 안내합니다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않습니다. `/harness-init`은 프론트엔드·UI를 감지한 저장소에서만 필수 묶음이 없을 때 한 줄로 권합니다. (#210)
-- **독립 디자인 검토 에이전트 `ai-harness:design-reviewer`** — 하네스 UI 계약이 없는 저장소나 단일 HTML 리포트에는 만든 쪽 판단과 떨어진 디자인 비평 수단이 없었습니다. 새 플러그인 전역 에이전트(Claude)가 대상을 실제로 렌더링·조작해 위계·가독성·색·차트·상태·접근성을 판정하고, 파일은 고치지 않습니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다. (#210)
+- **외부 디자인 스킬 설치 `/setup design`** — 원본 저장소의 고정 커밋에서 필요한 폴더만 받아 Claude·Codex 전역 스킬 폴더에 설치합니다. ai-harness는 사본을 재배포하지 않고, `catalog/design-skills.json`에 저장소·커밋·라이선스·실행 스크립트와 네트워크 호출 검토 결과를 적었습니다. 필수 묶음(`core`)은 `impeccable`과 Claude 내장 `dataviz`, 나머지는 선택입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 설치하지 않고 경로만 안내합니다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않습니다. `/harness-init`은 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만 필수 묶음이 없을 때 한 줄로 권합니다. (#210)
+- **독립 디자인 검토 에이전트 `ai-harness:design-reviewer`** — 하네스 UI 계약이 없는 저장소나 단일 HTML 리포트에는 만든 쪽 판단과 떨어진 디자인 비평 수단이 없었습니다. 새 플러그인 전역 에이전트(Claude)가 대상을 실제로 렌더링·조작해 위계·가독성·색·차트·상태·접근성을 판정합니다. 편집 도구가 없고 Bash는 렌더링에만 쓰며(플러그인 에이전트라 기술적으로 막지는 못함), 외부 디자인 스킬은 쓰지 않습니다 — 외부 스킬 비평은 새 검토 세션에서 지도대로 씁니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다. (#210)
 
 ### 업데이트 후 해야 할 일
 
 - UI 계약(`ui-review`·`frontend-team`·`design-audit`)을 생성한 프로젝트는 `/harness-init --sync`로 `references/design-skills.md`를 받습니다.
+- 네이티브 UI 검토(`native-ui`)를 생성한 프로젝트는 다음 `/harness-init --sync`에서 `native-ui/SKILL.md`와 계약 사본 `references/ui-review-contract.md` 갱신이 한 번 뜹니다. 계약 사본의 지도 링크는 웹 전용이라 네이티브에는 지도를 배포하지 않습니다.
 
 ### 버그 수정
 
