@@ -3909,6 +3909,12 @@ assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base o
 am_base_with lines-999 '.auto_merge.harvest_max_lines = 999'
 am_on lines-999 h-999 && seq 1 101 >>"$AM_REPO/AGENTS.md"
 assert_eq "too_many_lines:101" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-999 --scope project --head "$(am_commit h999)" --review "$AM_REVIEW")" "the plugin cap still applies"
+am_base_with files-big '.auto_merge.harvest_max_files = 1e20'
+am_on files-big h-files && for f in a b c d e f; do printf 'x\n' >"$AM_REPO/.ai-harness/docs/$f.md"; done
+assert_eq "too_many_files:6" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/files-big --scope project --head "$(am_commit hfiles)" --review "$AM_REVIEW")" "a huge cap is clamped to the plugin cap"
+am_base_with lines-bad '.auto_merge.harvest_max_lines = "999"'
+am_on lines-bad h-bad && seq 1 41 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:41" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-bad --scope project --head "$(am_commit hbad)" --review "$AM_REVIEW")" "a non-number value falls back to the default"
 am_sync_head s-bytes
 printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
 am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
@@ -3936,7 +3942,9 @@ am_manifest ".managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_RE
 assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit keep)")" "existing managed entries that stay are fine"
 am_manifest '.managed_files["AGENTS.md"].template_version = "9.9.9"'
 assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit tv)")" "recording a new template_version for an untouched file is fine"
-am_manifest 'del(.managed_files["AGENTS.md"])'
+am_manifest '.managed_files["app.js"] = {template_version:"x"}'
+assert_eq "manifest_hash_changed_without_file:app.js" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit newkey)")" "a new entry without its file is refused"
+am_manifest 'del(.managed_files["app.js"]) | del(.managed_files["AGENTS.md"])'
 assert_eq "manifest_entry_removed" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit drop)")" "removing a managed entry is refused"
 am_sync_head s-otherhash
 am_manifest '.managed_files["AGENTS.md"] = {content_sha256:"1111"}'
@@ -4107,6 +4115,10 @@ am_state 72 "$AM_NOCI" '.ci = "none" | .base = "noci"'
 HM_SYNC_AUTO_MERGE=1 am sweep
 assert_eq "https://github.com/acme/am/pull/72" "$(cut -d'|' -f1 "$AM_PR_LOG")" "only the repo that does not require CI merges without CI"
 assert_eq "1" "$(am_pending)" "the repo that requires CI keeps waiting"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/noci --head "$AM_NOCI" --pr https://github.com/acme/am/pull/73 --since "$AM_SINCE"
+am_state 73 "$AM_NOCI" '.ci = "failure" | .base = "noci"'
+HM_SYNC_AUTO_MERGE=1 am sweep
+assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/73")] | last | "\(.event)|\(.reason)"')" "failed CI blocks even without require_ci"
 pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.

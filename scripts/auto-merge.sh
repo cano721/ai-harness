@@ -61,7 +61,8 @@ repo_allows() { # repo base scope
 # 안전 최소 기준(head 고정·같은 저장소·대상 브랜치·이름 바꾸기·삭제·모드 거부·정책 불변·사람 활동 시 중단)은 여기서 바꿀 수 없다.
 policy_num() { # repo base key default cap → default ≤ … ≤ cap 안의 정수
   local v=""
-  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" '.auto_merge[$k] // empty | if type == "number" then floor else empty end' 2>/dev/null)"
+  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" --argjson cap "$5" \
+    '.auto_merge[$k] // empty | if type == "number" and . >= 0 then ([floor, $cap] | min) else empty end' 2>/dev/null)"
   [[ "$v" =~ ^[0-9]+$ ]] || v="$4"
   (( v <= $5 )) || v="$5"
   printf '%s\n' "$v"
@@ -131,8 +132,8 @@ check_sync() { # repo base head result
     || { echo "manifest_policy_changed"; return 1; }
   why="$(read_changes "$repo" "$base" "$head")" || { echo "$why"; return 1; }
   read_changes "$repo" "$base" "$head" >/dev/null
-  # 내용 해시(content_sha256)는 이번에 바꾼 파일 것만 바뀔 수 있다(template_version 갱신은 괜찮다). 손대지 않은 파일의 해시를
-  # 고치거나 항목을 지우면 다음 sync가 그 값을 믿는다.
+  # 관리 항목은 이번에 바꾼 파일 것만 바뀌거나 새로 생길 수 있다(template_version 갱신만은 괜찮다). 손대지 않은 파일의
+  # 항목을 고치거나 더하거나 지우면 다음 sync가 그 값을 믿는다.
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     local hit=0 j=0
@@ -140,7 +141,8 @@ check_sync() { # repo base head result
     (( hit == 1 )) || { echo "manifest_hash_changed_without_file:$key"; return 1; }
   done <<<"$(jq -rn --argjson a "$base_json" --argjson b "$head_json" \
     '($a.managed_files // {}) as $x | $b.managed_files // {} | to_entries[]
-     | select(($x[.key].content_sha256? // null) != (.value.content_sha256? // null)) | .key')"
+     | select(($x[.key] // null | if type == "object" then del(.template_version) else . end)
+         != (.value | if type == "object" then del(.template_version) else . end)) | .key')"
   jq -e -n --argjson a "$base_json" --argjson b "$head_json" \
     '($b.managed_files // {}) as $y | [($a.managed_files // {}) | keys[] | select(. as $k | $y | has($k) | not)] | length == 0' >/dev/null 2>&1 \
     || { echo "manifest_entry_removed"; return 1; }
@@ -277,7 +279,9 @@ command_enqueue() {
   args=(--scope "$scope" --repo "$repo" --base "$base" --head "$head" --result "$result" --review "$review")
   if ! opt_in_env "$scope"; then
     # 꺼져 있으면 sync PR만 LLM 없이 내용 조건을 판정해 둔다. 켜도 될 근거가 쌓이면 세션 시작 때 한 번 안내한다.
-    if [[ "$scope" == sync ]] && command_check "${args[@]}" >/dev/null; then
+    origin="$(slug_of_remote "$(git -C "$repo" remote get-url origin 2>/dev/null)" 2>/dev/null || true)"
+    if [[ "$scope" == sync && "$base" == origin/?* && -n "$origin" && "$(slug_of_pr "$pr" 2>/dev/null)" == "$origin" ]] \
+      && ( command_check "${args[@]}" ) >/dev/null 2>&1; then
       record auto_merge_eligible "$project" "$scope" "$pr"
     fi
     return 0
@@ -398,7 +402,8 @@ hint_message() {
   n="$(jq -Rrn --arg since "$(epoch_iso $((now - 30 * 86400)))" \
     '[inputs | fromjson? | objects | select(.event == "auto_merge_eligible" and (.at // "") >= $since) | .artifact] | unique | length' \
     "$RUNS_FILE" 2>/dev/null)"
-  [[ "$n" =~ ^[0-9]+$ ]] && (( n >= min )) || return 0
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  (( n >= min )) || return 0
   mkdir -p "$AM_DIR" && printf '%s\n' "$now" >"$marker"
   printf '%s\n' "ai-harness: 최근 30일 자동 sync PR ${n}건이 자동 병합 내용 조건(템플릿 그대로 복사·manifest 해시 일치·정책 불변)을 만족했습니다. 이런 PR의 병합을 맡기려면 /ai-harness:setup에서 HM_SYNC_AUTO_MERGE를 켜고, 저장소 기준 브랜치의 .ai-harness/harness.json에 \"auto_merge\": {\"sync\": true}를 넣으세요(CI 통과·사람 활동 없음도 병합 직전에 확인합니다). 이 안내 끄기: HM_AUTO_MERGE_HINT=0"
 }
@@ -418,8 +423,7 @@ command_notify() {
           "ai-harness 자동 병합: " + ([.[] | select(.event == "auto_merged")] | length | tostring) + "건 병합, "
           + ([.[] | select(.event == "auto_merge_skipped")] | length | tostring) + "건은 사람 확인 필요 — "
           + ([.[] | "\(.artifact) (\(if .event == "auto_merged" then "병합" + (if .reason then ", " + (.reason | tostring) else "" end) else (.reason | tostring) end))"] | .[-5:] | join(", "))
-        end' 2>/dev/null)" || msg=""
-    mkdir -p "$AM_DIR" && printf '%s\n' "$total" >"$marker"
+        end' 2>/dev/null)" && { mkdir -p "$AM_DIR" && printf '%s\n' "$total" >"$marker"; } || msg=""
   fi
   hint="$(hint_message)"
   joined="$(printf '%s\n%s' "$msg" "$hint" | awk 'NF')"

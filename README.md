@@ -543,17 +543,24 @@ HM_SYNC_AUTO_MERGE=1       # 자동 sync PR
 HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 ```
 
+저장소 `.ai-harness/harness.json` — PR이 아니라 기준 브랜치의 값을 읽습니다(PR이 스스로 켜거나 기준을 느슨하게 하지 못합니다).
+
 ```json
-// 저장소 .ai-harness/harness.json — PR이 아니라 기준 브랜치의 값을 읽는다(PR이 스스로 켜거나 기준을 느슨하게 하지 못한다)
 "auto_merge": {
   "sync": true, "harvest": false, "method": "squash",
-  "sync_partial": false,       // 일부 적용 sync PR도 병합 (기본 false)
-  "require_ci": true,          // false면 CI가 없는 저장소도 병합. 실패한 CI는 어느 설정에서도 막음 (기본 true)
-  "wait_hours": 72,            // CI·상태 확인을 기다리는 시간, 넘으면 사람에게 (기본 72, 최대 336)
-  "harvest_max_files": 3,      // harvest PR 파일 수 상한 (기본 3, 최대 5)
-  "harvest_max_lines": 40      // harvest PR 추가+삭제 줄 상한 (기본 40, 최대 100)
+  "sync_partial": false, "require_ci": true, "wait_hours": 72,
+  "harvest_max_files": 3, "harvest_max_lines": 40
 }
 ```
+
+| 키 | 기본 | 뜻 |
+|---|---|---|
+| `sync`·`harvest` | `false` | 그 종류의 무인 PR 자동 병합 허용 |
+| `method` | `default` | `squash`·`merge`·`default`(호스트 기본) |
+| `sync_partial` | `false` | 일부 적용 sync PR도 병합 |
+| `require_ci` | `true` | `false`면 CI가 없는 저장소도 병합. 실패한 CI·브랜치 보호에 막힌 PR은 어느 설정에서도 병합하지 않음 |
+| `wait_hours` | `72` (최대 336) | CI·상태 확인을 기다리는 시간, 넘으면 사람에게 |
+| `harvest_max_files`·`harvest_max_lines` | `3`·`40` (최대 5·100) | harvest PR 크기 상한 |
 
 사용자 설정은 "이 PC에서 자동 병합을 쓸지"만 정하고, 기준은 저장소마다 manifest에 둡니다. 아래 안전 최소 기준은 저장소 설정으로 바꿀 수 없습니다.
 

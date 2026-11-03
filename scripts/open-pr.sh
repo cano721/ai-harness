@@ -164,7 +164,7 @@ if [[ -n "$status_url" ]]; then
             mergeable: ((.mergeable // "UNKNOWN") | ascii_downcase),
             # 아직 생기지 않은 필수 검사는 rollup에 없다. 브랜치 보호가 막고 있으면(BLOCKED) 통과로 보지 않는다.
             ci: ((.statusCheckRollup // []) as $c | (.mergeStateStatus // "") as $ms
-              | if ($c | length) == 0 then "none"
+              | if ($c | length) == 0 then (if $ms == "BLOCKED" then "pending" else "none" end)
                 elif any($c[]; ((.conclusion // "") | test("^(FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE)$"))
                   or ((.state // "") | test("^(FAILURE|ERROR)$"))) then "failure"
                 elif any($c[]; ((.status // "COMPLETED") != "COMPLETED") or ((.state // "") | test("^(PENDING|EXPECTED)$"))) then "pending"
