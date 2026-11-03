@@ -20,7 +20,8 @@
   --good: #006300;
   --bad: #d03b3b;
   --warn: #fab219;
-  --install: #eb6834;
+  --series-2: #eb6834;
+  --install: #52514e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -37,7 +38,8 @@
     --series-soft: rgba(57, 135, 229, 0.12);
     --good: #0ca30c;
     --bad: #e66767;
-    --install: #d95926;
+    --series-2: #d95926;
+    --install: #c3c2b7;
   }
 }
 :root[data-theme="dark"] {
@@ -54,7 +56,8 @@
   --series-soft: rgba(57, 135, 229, 0.12);
   --good: #0ca30c;
   --bad: #e66767;
-  --install: #d95926;
+  --series-2: #d95926;
+  --install: #c3c2b7;
 }
 * { box-sizing: border-box; }
 html, body { overflow-x: hidden; }
@@ -115,6 +118,18 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid
 th { color: var(--ink-2); font-weight: 600; }
 .warn-list li { margin: 4px 0; }
 .empty { color: var(--muted); }
+.bars { display: grid; gap: 6px; margin: 8px 0 4px; }
+.bar { display: grid; grid-template-columns: 96px 1fr 48px; gap: 8px; align-items: center; font-size: 13px; }
+.bar .track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 4px; }
+.bar .pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.key { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 1px; }
+.pass { color: var(--good); }
+.fail { color: var(--bad); }
+details { margin-top: 8px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+pre { font-size: 12px; line-height: 1.45; overflow: auto; max-height: 360px; background: var(--page); border: 1px solid var(--ring); border-radius: 8px; padding: 10px; }
+.abgrid { display: grid; gap: 12px; }
 footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
@@ -123,6 +138,7 @@ footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
 <script>
 const DATA = /*__IMPACT_DATA__*/null;
 const HIGHLIGHTS = /*__IMPACT_HIGHLIGHTS__*/null;
+const AB = /*__IMPACT_AB__*/null;
 
 const app = document.getElementById("app");
 function el(tag, attrs, ...kids) {
@@ -144,17 +160,19 @@ function sv(tag, attrs) {
   return n;
 }
 const fmt = (v, d = 1) => v == null ? "–" : (Number.isInteger(v) ? String(v) : v.toFixed(d));
-const B = DATA.periods.before, A = DATA.periods.after;
-const warnings = new Set(DATA.warnings || []);
+const B = DATA ? DATA.periods.before : null, A = DATA ? DATA.periods.after : null;
+const warnings = new Set((DATA && DATA.warnings) || []);
 
 // 지표 정의: lower=true면 줄어드는 쪽이 좋아진 것
 const METRICS = [
   { key: "corrections_per_session", label: "반복 교정 (세션당)", lower: true, n: p => p.digested_sessions,
     note: "LLM 세션 정리가 찾은 사용자 교정. 같은 말을 다시 하게 된 횟수" },
-  { key: "guard_blocks", label: "하네스가 막은 위험 작업", lower: null, n: p => p.sessions,
+  { key: "guard_blocks", label: "하네스가 막은 위험 작업", lower: null, unit: "건", n: p => p.sessions,
     note: "편집 가드가 멈춘 수정. 늘면 막아준 것이 늘어난 것" },
-  { key: "turns_median", label: "작업당 주고받은 턴 (중앙값)", lower: true, n: p => p.active_sessions,
-    note: "턴 5 이상 세션 기준" },
+  { key: "task_turns_median", label: "이슈 1건 끝내는 데 입력한 프롬프트 (중앙값)", lower: true, n: p => p.tasks,
+    note: "같은 이슈 키를 다룬 세션들의 턴 합. 이슈 키가 있는 작업만" },
+  { key: "turns_median", label: "세션당 턴 (중앙값)", lower: null, n: p => p.active_sessions,
+    note: "작업 크기에 따라 늘 수 있어 좋고 나쁨을 칠하지 않아요" },
   { key: "errors_per_session", label: "툴 오류 (세션당)", lower: true, n: p => p.sessions,
     note: "실패한 명령·툴 호출" },
 ];
@@ -164,7 +182,7 @@ function delta(m, b, a) {
   if (b === a) return { text: "변화 없음", cls: "flat" };
   if (m.lower === null) {
     const diff = a - b;
-    return { text: (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff) + "건", cls: "flat" };
+    return { text: (diff > 0 ? "▲ " : "▼ ") + fmt(Math.abs(diff)) + (m.unit || ""), cls: "flat" };
   }
   const pct = b === 0 ? null : Math.round(Math.abs(a - b) / b * 100);
   const better = m.lower ? a < b : a > b;
@@ -177,12 +195,13 @@ function autoHeadline() {
   const cb = B.corrections_per_session, ca = A.corrections_per_session;
   if (cb != null && ca != null && cb > 0 && ca < cb) parts.push("같은 지적이 " + Math.round((cb - ca) / cb * 100) + "% 줄었고");
   if (A.guard_blocks > 0) parts.push("위험한 수정 " + A.guard_blocks + "건을 막았어요");
-  const tb = B.turns_median, ta = A.turns_median;
-  if (!parts.length && tb != null && ta != null && ta < tb) parts.push("작업당 턴이 " + fmt(tb) + " → " + fmt(ta) + "로 줄었어요");
+  const tb = B.task_turns_median, ta = A.task_turns_median;
+  if (!parts.length && tb != null && ta != null && ta < tb) parts.push("이슈 1건에 드는 프롬프트가 " + fmt(tb) + " → " + fmt(ta) + "로 줄었어요");
   if (!parts.length) return "도입 전후 변화를 정리했어요";
   return parts.join(", ");
 }
 
+if (DATA) {
 // 헤더
 app.append(el("header", {},
   el("div", { class: "meta" }, DATA.project, " · 설치 ", DATA.installed.date,
@@ -378,6 +397,61 @@ app.append(el("div", { class: "card" },
   ad.top_docs.length ? el("div", { class: "list" }, ad.top_docs.map(d =>
     el("div", { class: "row" }, el("span", { class: "what" }, d.target), el("span", { class: "tag" }, d.n, "회")))) : null));
 
+} else {
+  app.append(el("header", {}, el("h1", {}, "하네스 유무 통제 실험")));
+}
+// 통제 실험 (A/B)
+if (AB && (AB.cases || []).length) {
+  const KIND = { correct: "기본 동작", project_rule: "프로젝트 규칙", convention: "컨벤션", process: "작업 절차" };
+  const pct = v => v == null ? "–" : Math.round(v * 100) + "%";
+  const H = "harness", N = "bare";
+  const arms = AB.cases.map(c => c.arms);
+  const avg = k => { const xs = arms.map(a => a[k].mean_score).filter(v => v != null); return xs.length ? xs.reduce((x, y) => x + y, 0) / xs.length : null; };
+  app.append(el("h2", {}, "통제 실험: 같은 과제, 하네스 있음 vs 없음"));
+  app.append(el("p", { class: "sub" }, "같은 코드 저장소에 하네스 파일(AGENTS.md·.ai-harness/docs)만 있고 없게 해서, 같은 요청을 실제 에이전트로 ",
+    AB.runs_per_arm, "회씩 돌리고 숨긴 검사로 채점했어요. 평균 통과율: 하네스 있음 ", pct(avg(H)), " · 없음 ", pct(avg(N)),
+    " · 모델 ", AB.model, " · 비용 $", AB.total_cost_usd, AB.partial ? " · 비용 상한으로 일부만 실행" : ""));
+  const legend = el("p", { class: "sub" },
+    el("span", { class: "key", style: "background: var(--series)" }), "하네스 있음  ",
+    el("span", { class: "key", style: "background: var(--series-2)" }), "하네스 없음");
+  app.append(legend);
+  const grid = el("div", { class: "abgrid" });
+  for (const c of AB.cases) {
+    const h = c.arms[H], n = c.arms[N];
+    const bar = (label, v, color) => el("div", { class: "bar" }, el("span", {}, label),
+      el("span", { class: "track" }, el("span", { class: "fill", style: "display:block; width:" + Math.round((v || 0) * 100) + "%; background: var(" + color + ")" })),
+      el("span", { class: "pct" }, pct(v)));
+    const names = [...new Set([...h.checks, ...n.checks].map(x => x.name))];
+    const find = (arm, name) => arm.checks.find(x => x.name === name);
+    const cell = x => x ? el("td", { class: x.passed === x.total ? "pass" : (x.passed === 0 ? "fail" : "") }, x.passed, "/", x.total) : el("td", {}, "–");
+    const card = el("div", { class: "card" },
+      el("strong", {}, c.name),
+      el("div", { class: "bars" }, bar("하네스 있음", h.mean_score, "--series"), bar("하네스 없음", n.mean_score, "--series-2")),
+      el("p", { class: "expected" }, "종류별 통과율 (있음 vs 없음) — ",
+        ["basic", "project_rule", "convention", "process"].filter(k => (h.score_by_kind || {})[k] != null || (n.score_by_kind || {})[k] != null)
+          .map(k => ({ basic: "기본 동작", project_rule: "프로젝트 규칙", convention: "컨벤션", process: "작업 절차" })[k] + " " + pct((h.score_by_kind || {})[k]) + " vs " + pct((n.score_by_kind || {})[k])).join(" · ")),
+      el("p", { class: "expected" }, "모든 검사 통과 ", h.full_pass_runs, "/", h.scored_runs, "회 vs ", n.full_pass_runs, "/", n.scored_runs,
+        "회 · 평균 턴 ", fmt(h.mean_turns), " vs ", fmt(n.mean_turns), " · 평균 비용 $", fmt(h.mean_cost_usd, 2), " vs $", fmt(n.mean_cost_usd, 2),
+        (h.errors || n.errors) ? " · 오류로 점수에서 뺀 실행 " + h.errors + " / " + n.errors : ""),
+      el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "검사"), el("th", {}, "종류"), el("th", {}, "있음"), el("th", {}, "없음"))),
+        el("tbody", {}, names.map(name => {
+          const a = find(h, name), b = find(n, name), k = (a || b).kind;
+          return el("tr", {}, el("td", {}, name), el("td", {}, KIND[k] || k), cell(a), cell(b));
+        }))));
+    const failed = n.runs.filter(r => r.error == null && r.checks.some(x => !x.pass));
+    if (failed.length) {
+      const r = failed[0];
+      card.append(el("details", {}, el("summary", {}, "하네스 없을 때 놓친 것 보기 (", r.run, "회차)"),
+        el("ul", { class: "warn-list" }, r.checks.filter(x => !x.pass).map(x => el("li", {}, x.name, x.detail ? el("div", { class: "expected" }, x.detail) : null))),
+        r.diff ? el("pre", {}, r.diff) : null));
+    }
+    grid.append(card);
+  }
+  app.append(grid);
+  app.append(el("p", { class: "empty" }, "검사에는 하네스 문서에만 적힌 프로젝트 규칙이 들어 있어요. 이 실험은 \"그 규칙을 문서로 알려주면 지키는가\"를 보는 것이고, 모델의 일반 능력을 재는 것이 아니에요."));
+}
+
+if (DATA) {
 // 신뢰도
 const WARN_TEXT = {
   before_missing: "설치 전 기록이 없어요. transcript가 보관 기간(기본 30일) 뒤 지워졌을 수 있어요. 전후 비교 대신 설치 후 추이만 보세요.",
@@ -396,7 +470,8 @@ app.append(el("div", { class: "card" },
     el("li", {}, "모델 구성 — 전: ", models(B), " / 후: ", models(A)),
     el("li", {}, "LLM 정리된 세션 — 전 ", B.digested_sessions, " / 후 ", A.digested_sessions))));
 
-app.append(el("footer", {}, "ai-harness harness-impact · 생성 ", DATA.generated_at, " · 이 파일은 로컬 기록만으로 만들어졌고 외부로 전송되지 않았어요."));
+}
+app.append(el("footer", {}, "ai-harness harness-impact · 생성 ", (DATA && DATA.generated_at) || (AB && AB.generated_at) || "", " · 이 파일은 로컬 기록만으로 만들어졌고 외부로 전송되지 않았어요."));
 </script>
 </body>
 </html>

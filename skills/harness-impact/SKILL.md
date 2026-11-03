@@ -1,6 +1,6 @@
 ---
 name: harness-impact
-description: Show what changed after this project adopted the AI harness — compare the latest window of real agent sessions with the same number of days just before the install date (repeated user corrections, risky edits the harness blocked, turns per task, tool errors, optional rework rate, the rules the harness learned) and open it as an offline HTML report. Use when the user asks whether the harness helps or what improved since it was installed ("하네스 효과 보여줘", "하네스 도입 전후 비교", "하네스 쓰고 뭐가 나아졌어", "도입 효과 보고서", "harness impact", "before and after the harness"). Do not use for plain usage, token, or cost reports (that is metrics) or for improving the harness itself (that is harvest).
+description: Show what changed after this project adopted the AI harness — compare the latest window of real agent sessions with the same number of days just before the install date (repeated user corrections, risky edits the harness blocked, turns per task, tool errors, optional rework rate, the rules the harness learned) and open it as an offline HTML report; on request, also run a controlled A/B experiment that gives the same task to a real agent in a repository with and without the harness files. Use when the user asks whether the harness helps or what improved since it was installed ("하네스 효과 보여줘", "하네스 도입 전후 비교", "하네스 쓰고 뭐가 나아졌어", "도입 효과 보고서", "harness impact", "before and after the harness", "하네스 없이 돌리면 얼마나 달라?"). Do not use for plain usage, token, or cost reports (that is metrics) or for improving the harness itself (that is harvest).
 ---
 
 # /harness-impact — 하네스 도입 효과 리포트
@@ -13,6 +13,7 @@ description: Show what changed after this project adopted the AI harness — com
 - `--at YYYY-MM-DD` — 설치일 직접 지정 (기본: `.ai-harness/harness.json`의 `initialized` → `AGENTS.md` 첫 커밋 날짜)
 - `--window N` — 비교 구간 일수 (기본 30)
 - `rework` — 재작업 PR 비율도 함께 (git 원격 기록을 읽으므로 느릴 수 있다)
+- `--ab` — 통제 실험도 함께 (아래 "A/B 실험". 실제 에이전트를 여러 번 돌려 시간·비용이 든다)
 
 ## 절차
 
@@ -45,9 +46,9 @@ $ROOT/scripts/impact.sh compare [--root <dir>] [--at <date>] [--window <N>] >"$O
   - `warnings`에 `before_missing`이 있으면 전후 비교 대신 최근 상태를 말한다(예: "최근 작업 16개 모두 하네스 문서를 읽고 시작했어요").
 - 교정이 양쪽 다 없으면 `groups`는 빈 배열로 두고 다른 지표로 헤드라인을 쓴다.
 
-4. **리포트 생성·열기**:
+4. **리포트 생성·열기** (A/B 실험을 하기로 했으면 이 단계 전에 아래 "A/B 실험"을 끝내고 `--ab <결과 JSON>`을 붙인다. 설치일을 못 찾아 2단계를 건너뛰었으면 `--data` 없이 `--ab`만으로 만든다):
 ```bash
-REPORT="$($ROOT/scripts/impact.sh render --data "<OUT>/data.json" --highlights "<OUT>/highlights.json")"
+REPORT="$($ROOT/scripts/impact.sh render --data "<OUT>/data.json" --highlights "<OUT>/highlights.json" [--ab <ab.json>])"
 open "$REPORT" 2>/dev/null || xdg-open "$REPORT" 2>/dev/null || true
 ```
 리포트는 `~/.ai-harness/reports/`에 남는다. 외부 리소스를 불러오지 않는 단일 파일이라 그대로 공유할 수 있다. 다만 교정 요약이 들어 있으니 공유 전에 내용을 확인하라고 알린다.
@@ -67,8 +68,25 @@ open "$REPORT" 2>/dev/null || xdg-open "$REPORT" 2>/dev/null || true
 | `gap` | 최근 구간이 설치일보다 뒤에서 시작 — 그 사이는 주간 추이로 본다 |
 | `short_window` | 비교 구간이 7일 미만 (설치 직후이거나 `--window`가 짧음) |
 
+## A/B 실험 (`--ab` 또는 "하네스 없이 돌리면 얼마나 달라?" 같은 원인 확인 요청)
+
+같은 과제를 같은 코드 저장소에서 하네스 파일(AGENTS.md·CLAUDE.md·`.ai-harness/docs`)이 있을 때와 없을 때 실제 에이전트로 돌리고, 숨긴 검사로 채점한다. 실제 사용 기록 비교와 달리 작업 종류·모델이 같으므로 차이를 하네스 문서 덕분이라고 말할 수 있다. 과제와 검사는 플러그인에 든 합성 저장소(`$ROOT/evals/ab/`)라 사용자 프로젝트 코드는 쓰지 않는다.
+
+1. Claude Code에서만 돈다(`claude -p`, `python3`, `git` 필요). Codex에서 요청받으면 Claude Code에서 실행하라고 안내하고 멈춘다. 설치일이 없는 프로젝트나 프로젝트 밖에서도 A/B만 따로 할 수 있다.
+2. 규모를 먼저 보여주고 **실행 전에 확인을 받는다**. 실제 에이전트 실행이라 구독 사용량·비용을 쓴다.
+```bash
+$ROOT/scripts/ab.sh estimate [--runs 2]
+```
+`agent_runs`(케이스 × 2조건 × 회차)와 함께 "회당 수 분, 상한 `--max-cost`(기본 $10)"를 알린다. 모델을 정하지 않았으면 `--model sonnet`을 추천한다.
+3. 승인되면 실행한다. 오래 걸리므로 백그라운드로 돌리고 끝나면 결과를 읽는다.
+```bash
+$ROOT/scripts/ab.sh run --runs 2 --model sonnet --max-cost 10   # 마지막 줄이 결과 JSON 경로
+```
+4. 결과를 `render --ab`로 리포트에 싣고, 터미널에는 케이스별 **종류별** 통과율(`score_by_kind`: 기본 동작 vs 프로젝트 규칙, 있음 vs 없음)과 하네스 없을 때 놓친 검사 이름을 요약한다. 프로젝트 규칙 점수는 문서로만 알 수 있는 규칙이라 없음 쪽이 낮은 게 당연하다 — 기본 동작 점수가 비슷한지도 함께 말한다. `partial: true`면 비용 상한으로 일부 회차만 돈 것이고, `errors`는 오류로 점수에서 뺀 실행 수다.
+
+한계를 함께 말한다: 검사에는 하네스 문서에만 적힌 프로젝트 규칙이 들어 있어, 이 실험은 "규칙을 문서로 알려주면 지키는가"를 본다. 회차가 적으면 우연이 섞인다. 두 조건 모두 사용자의 전역 설정(CLAUDE.md·플러그인)은 같게 로드된다.
+
 ## 원칙
 
 - 이 리포트는 변화를 보여줄 뿐 원인을 증명하지 않는다. 결과를 전할 때 "하네스 덕분"이라고 단정하지 않는다.
-- 같은 과제를 하네스 유무로 돌려 원인을 확인하는 A/B 실험은 아직 이 스킬에 없다. 사용자가 원인 검증을 원하면 그렇게 말한다.
 - 사용량·토큰·비용만 묻는 요청은 `metrics`, 하네스를 고치는 요청은 `harvest`로 보낸다.

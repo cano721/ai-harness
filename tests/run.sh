@@ -4435,10 +4435,10 @@ impact_session() { # sid date turns model [events-json...]
     done
   } >"$IMPACT_DATA/events/claude-$sid.jsonl"
 }
-impact_session b1 2026-09-20 20 claude-opus-5-5 '{"kind":"error","n":3}'
-impact_session b2 2026-09-25 22 claude-opus-5-5
-impact_session a1 2026-10-05 8 claude-opus-5-5 '{"kind":"guard_block","n":2}' '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}'
-impact_session a2 2026-10-20 10 claude-opus-5-5 '{"kind":"workflow","target":"ai-harness:implement-feature"}'
+impact_session b1 2026-09-20 20 claude-opus-5-5 '{"kind":"error","n":3}' '{"kind":"jira_issue","target":"NJ-1","n":2}' '{"kind":"jira_issue","target":"NJ-9","n":1}'
+impact_session b2 2026-09-25 22 claude-opus-5-5 '{"kind":"jira_issue","target":"NJ-1","n":1}'
+impact_session a1 2026-10-05 8 claude-opus-5-5 '{"kind":"guard_block","n":2}' '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}' '{"kind":"jira_issue","target":"NJ-2","n":1}'
+impact_session a2 2026-10-20 10 claude-opus-5-5 '{"kind":"workflow","target":"ai-harness:implement-feature"}' '{"kind":"jira_issue","target":"NJ-3","n":1}'
 # 설치 전 구간 밖과 다른 프로젝트·내부 세션은 세지 않는다.
 impact_session old 2026-08-01 30 claude-opus-5-5
 jq -cn '{v:3, src:"claude", sid:"other", project:"else", kind:"session", started:"2026-10-06T01:00:00Z", ended:"2026-10-06T02:00:00Z", turns:9}' \
@@ -4464,6 +4464,10 @@ assert_eq "2026-09-01 2026-10-01 2026-10-01 2026-10-31 30" \
   "impact compares equal windows on both sides of the install date"
 assert_eq "2 2" "$(jq -r '"\(.periods.before.sessions) \(.periods.after.sessions)"' <<<"$IMPACT_JSON")" "impact counts only this project's non-internal sessions in each window"
 assert_eq "21 9" "$(jq -r '"\(.periods.before.turns_median) \(.periods.after.turns_median)"' <<<"$IMPACT_JSON")" "impact reports median turns per active session"
+assert_eq "1 42 2 2 9 1" "$(jq -r '[.periods.before.tasks, .periods.before.task_turns_median, .periods.before.task_sessions_median,
+  .periods.after.tasks, .periods.after.task_turns_median, .periods.after.task_sessions_median] | map(tostring) | join(" ")' <<<"$IMPACT_JSON")" \
+  "impact groups sessions into tasks by their most-mentioned issue key"
+assert_eq "1" "$(jq -r '.periods.before.task_hours_median' <<<"$IMPACT_JSON")" "impact measures task time as the sum of its session durations"
 assert_eq "6 3 1 0.5" "$(jq -r '"\(.periods.before.corrections) \(.periods.before.corrections_per_session) \(.periods.after.corrections) \(.periods.after.corrections_per_session)"' <<<"$IMPACT_JSON")" \
   "impact counts digest corrections per digested session"
 assert_eq "0 2 1.5 0" "$(jq -r '"\(.periods.before.guard_blocks) \(.periods.after.guard_blocks) \(.periods.before.errors_per_session) \(.periods.after.errors_per_session)"' <<<"$IMPACT_JSON")" \
@@ -4550,6 +4554,41 @@ set -e
 assert_eq "2" "$IMPACT_RC" "impact rejects an option without its value"
 pass "impact review regressions"
 
+# A/B: 하네스 있는 저장소와 없는 저장소에서 같은 과제를 돌려 숨긴 검사로 채점한다. 가짜 에이전트로 채점·집계·비용 상한을 검사한다.
+AB_DATA="$TEST_TMP/ab-data"
+AB_STUB="$ROOT/tests/fixtures/ab/stub-agent.sh"
+assert_eq "8" "$(HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" estimate --runs 2 | jq -r '.agent_runs')" "ab estimate counts cases x 2 arms x runs"
+AB_OUT="$(HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --out "$TEST_TMP/ab.json" 2>/dev/null)"
+assert_eq "$TEST_TMP/ab.json" "$AB_OUT" "ab run prints the result path"
+assert_eq "apply-coupon:1:0.25 cancel-order:1:0.43" "$(jq -r '[.cases[] | "\(.name):\(.arms.harness.mean_score):\(.arms.bare.mean_score)"] | join(" ")' "$TEST_TMP/ab.json")" \
+  "ab grades the rule-following implementation fully and the naive one partially"
+assert_eq "0 0 1.4 stub false" "$(jq -r '"\([.cases[].arms[].errors] | add) \([.cases[].arms.bare.full_pass_runs] | add) \(.total_cost_usd) \(.agent) \(.partial)"' "$TEST_TMP/ab.json")" \
+  "ab runs the agent as an internal session and sums cost"
+assert_eq "7일 뒤 환불 90% 내림:0" "$(jq -r '.cases[] | select(.name == "cancel-order") | .arms.bare.checks[] | select(.kind == "project_rule") | "\(.name):\(.passed)"' "$TEST_TMP/ab.json" | head -1)" \
+  "ab keeps the case's check order and marks project rules"
+assert_contains "$(jq -r '.cases[0].arms.bare.runs[0].diff' "$TEST_TMP/ab.json")" "def cancel_order" "ab keeps the agent's diff for the report"
+HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --max-cost 0.5 --run-budget 0.2 --out "$TEST_TMP/ab-partial.json" >/dev/null 2>&1
+assert_eq "true 1 1" "$(jq -r '"\(.partial) \(.cases[0].arms.harness.runs | length) \(.cases[0].arms.bare.runs | length)"' "$TEST_TMP/ab-partial.json")" \
+  "ab stops at the cost ceiling only between rounds so both arms keep the same runs"
+assert_eq "1 0" "$(jq -r '.cases[] | select(.name == "cancel-order") | "\(.arms.harness.score_by_kind.project_rule) \(.arms.bare.score_by_kind.project_rule)"' "$TEST_TMP/ab.json")" \
+  "ab reports scores by check kind"
+# 오류 난 실행(예산 초과·타임아웃)은 점수 평균에서 빠진다.
+AB_FAIL_STUB="$TEST_TMP/ab-fail-stub.sh"
+printf '#!/usr/bin/env bash\nif [[ -f AGENTS.md ]]; then exec %q "$@"; fi\nexit 7\n' "$AB_STUB" >"$AB_FAIL_STUB"
+chmod +x "$AB_FAIL_STUB"
+HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_FAIL_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --case cancel-order --run-budget 1 --out "$TEST_TMP/ab-err.json" >/dev/null 2>&1
+assert_eq "1 0 null 1 1" "$(jq -r '.cases[0].arms.bare | "\(.errors) \(.scored_runs) \(.mean_score) \(.runs[0].cost_usd) \(.runs | length)"' "$TEST_TMP/ab-err.json")" \
+  "ab leaves errored runs out of the score and counts unknown cost as the run budget"
+if HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" run --case nope >/dev/null 2>&1; then fail "ab rejects an unknown case"; fi
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --ab "$TEST_TMP/ab.json" --out "$TEST_TMP/impact-ab.html" >/dev/null
+IMPACT_AB_HTML="$(cat "$TEST_TMP/impact-ab.html")"
+assert_contains "$IMPACT_AB_HTML" '"runs_per_arm":1' "report embeds the A/B result"
+case "$IMPACT_AB_HTML" in *__IMPACT_AB__*) fail "report fills the A/B placeholder" ;; esac
+assert_contains "$(cat "$TEST_TMP/impact-nohl.html")" "const AB = null" "report renders without A/B"
+HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --ab "$TEST_TMP/ab.json" --out "$TEST_TMP/ab-only.html" >/dev/null
+assert_contains "$(cat "$TEST_TMP/ab-only.html")" "const DATA = null" "report renders A/B alone when there is no install date"
+pass "ab experiment runner"
+
 # harness-impact는 전역 Skill이다: 도입 효과 요청을 받고, 사용량·개선 요청은 metrics·harvest로 보낸다.
 IMPACT_SKILL_CONTENT="$(<"$ROOT/skills/harness-impact/SKILL.md")"
 assert_file "$ROOT/skills/harness-impact/agents/openai.yaml"
@@ -4560,7 +4599,11 @@ assert_contains "$IMPACT_SKILL_CONTENT" "원인을 증명하지 않는다" "harn
 assert_contains "$(sed -n '1,5p' "$ROOT/skills/harness-impact/SKILL.md")" "that is metrics" "harness-impact description hands usage reports to metrics"
 assert_contains "$(sed -n '1,5p' "$ROOT/skills/metrics/SKILL.md")" "harness-impact" "metrics description hands impact requests to harness-impact"
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'impact.sh" notify' "SessionStart carries the impact hint"
-for c in ko-show-effect ko-before-after ko-report en-impact ko-token-usage ko-improve-harness; do
+assert_contains "$IMPACT_SKILL_CONTENT" "ab.sh estimate" "harness-impact shows the A/B size first"
+assert_contains "$IMPACT_SKILL_CONTENT" "실행 전에 확인을 받는다" "harness-impact asks before spending on A/B runs"
+# plugin eval이 A/B 과제를 트리거 케이스로 잘못 읽지 않게 prompt.md를 두지 않는다.
+assert_eq "0" "$(find "$ROOT/evals/ab" -name prompt.md | wc -l | tr -d ' ')" "A/B tasks are not plugin eval cases"
+for c in ko-show-effect ko-before-after ko-report ko-ab-request en-impact ko-token-usage ko-improve-harness; do
   assert_file "$ROOT/evals/harness-impact/$c/prompt.md"
 done
 pass "harness-impact plugin skill"

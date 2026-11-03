@@ -3,7 +3,7 @@
 #   impact.sh compare [--root <dir>] [--project <id>] [--at YYYY-MM-DD] [--window <days>] [--today YYYY-MM-DD] [--author <pattern>]
 #       최근 window일(후)과 설치일 직전 같은 길이(전)를 비교한 JSON을 낸다.
 #       설치일: --at → <root>/.ai-harness/harness.json initialized → AGENTS.md 첫 커밋 날짜. 셋 다 없으면 exit 3.
-#   impact.sh render --data <json> [--highlights <json>] [--out <html>]
+#   impact.sh render --data <json> [--highlights <json>] [--ab <json>] [--out <html>]
 #       compare JSON과 (에이전트가 교정을 묶은) 하이라이트 JSON을 오프라인 HTML 한 파일로 만든다. 경로를 출력한다.
 #   impact.sh notify   (SessionStart stdin JSON)
 #       설치 후 HM_IMPACT_HINT_DAYS(기본 30)일이 지난 하네스 프로젝트에서 한 번만 안내한다. HM_IMPACT_HINT=0이면 끈다.
@@ -145,29 +145,37 @@ command_compare() {
 }
 
 command_render() {
-  local data="" highlights="" out=""
+  local data="" highlights="" ab="" out=""
   while (($#)); do
     case "$1" in
       --data) data="${2:-}"; need_value "$@"; shift 2 ;;
       --highlights) highlights="${2:-}"; need_value "$@"; shift 2 ;;
+      --ab) ab="${2:-}"; need_value "$@"; shift 2 ;;
       --out) out="${2:-}"; need_value "$@"; shift 2 ;;
       *) usage ;;
     esac
   done
-  [[ -f "$data" ]] || { echo "데이터 파일 없음: $data" >&2; exit 2; }
+  [[ -n "$data" || -n "$ab" ]] || { echo "--data 또는 --ab가 필요함" >&2; exit 2; }
+  [[ -z "$data" || -f "$data" ]] || { echo "데이터 파일 없음: $data" >&2; exit 2; }
   [[ -z "$highlights" || -f "$highlights" ]] || { echo "하이라이트 파일 없음: $highlights" >&2; exit 2; }
+  [[ -z "$ab" || -f "$ab" ]] || { echo "A/B 결과 파일 없음: $ab" >&2; exit 2; }
   if [[ -z "$out" ]]; then
-    out="$HM_DATA_DIR/reports/impact-$(hm_short_key "$(jq -r '.project // "project"' "$data")")-$(date -u +%Y-%m-%d).html"
+    local name="ab"
+    [[ -n "$data" ]] && name="$(jq -r '.project // "project"' "$data")"
+    out="$HM_DATA_DIR/reports/impact-$(hm_short_key "$name")-$(date -u +%Y-%m-%d).html"
   fi
   mkdir -p "$(dirname "$out")"
   local hl_json="null"
   [[ -n "$highlights" ]] && hl_json="$(jq -c . "$highlights")"
+  local ab_file="/dev/null"
+  [[ -n "$ab" ]] && ab_file="$ab"
   # 데이터 속 '<'를 <로 바꿔 </script>·<!-- 가 페이지 구조를 깨지 못하게 한다.
   jq -rn --rawfile t "$ROOT_DIR/skills/harness-impact/report-template.html" \
-    --slurpfile d "$data" --argjson h "$hl_json" '
+    --slurpfile d "${data:-/dev/null}" --argjson h "$hl_json" --slurpfile ab "$ab_file" '
     def safe: tojson | gsub("<"; "\\u003c");
-    $t | split("/*__IMPACT_DATA__*/null") | join($d[0] | safe)
-       | split("/*__IMPACT_HIGHLIGHTS__*/null") | join($h | safe)' >"$out"
+    $t | split("/*__IMPACT_DATA__*/null") | join(($d[0] // null) | safe)
+       | split("/*__IMPACT_HIGHLIGHTS__*/null") | join($h | safe)
+       | split("/*__IMPACT_AB__*/null") | join(($ab[0] // null) | safe)' >"$out"
   printf '%s\n' "$out"
 }
 

@@ -11,6 +11,7 @@ def median: map(select(. != null)) | sort
     elif length % 2 == 1 then .[length / 2 | floor]
     else (.[length / 2 - 1] + .[length / 2]) / 2 end;
 def round2: (. * 100 | round) / 100;
+def secs: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 def per($a; $b): if $b == 0 then null else ($a / $b | round2) end;
 def has_cov($k): ((.coverage // []) | index($k)) != null;
 # 월요일 시작 주. gmtime[6]은 0=일요일.
@@ -27,6 +28,9 @@ def harness_use:
 | ($all | map(select(.kind != "session" and $sidset[.sid // ""] == true)) | group_by(.sid)
    | map({(.[0].sid): .}) | add // {}) as $EV
 | def evsum($s; $k): [($EV[$s.sid] // [])[] | select(.kind == $k) | (.n // 1)] | add // 0;
+  # 세션이 가장 많이 언급한 이슈 키를 그 세션의 작업으로 본다(여러 키를 스친 세션을 중복으로 세지 않게).
+  def task_key($s): [($EV[$s.sid] // [])[] | select(.kind == "jira_issue" and (.target // "") != "")]
+    | if length == 0 then null else (sort_by(-(.n // 1), .target) | .[0].target) end;
   def period($since; $until):
     ($S | map(select(day_of >= $since and day_of < $until))) as $P
     | ($P | map(select((.turns // 0) >= active_min_turns))) as $A
@@ -38,7 +42,7 @@ def harness_use:
         active_sessions: ($A | length),
         turns_median: ($A | map(.turns) | median),
         minutes_median: ($A | map(select(.started and .ended)
-          | (((.ended | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - (.started | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 60 | round)) | median),
+          | try ((((.ended | secs) - (.started | secs)) / 60) | round) catch null) | median),
         tok_out_median: ($A | map(.tok_out) | median),
         ctx_peak_median: ($A | map(.ctx_peak) | median),
         errors_per_session: per([$ER[] | evsum(.; "error")] | add // 0; $ER | length),
@@ -49,7 +53,15 @@ def harness_use:
         corrections: ([$DG[] | $D[._f] | length] | add // 0),
         corrections_per_session: per([$DG[] | $D[._f] | length] | add // 0; $DG | length),
         models: ($P | map(.model // "unknown") | group_by(.) | map({(.[0]): length}) | add // {})
-      };
+      }
+      + ($P | map(. as $s | task_key($s) as $k | select($k != null) | $s + {_task: $k}) | group_by(._task)
+         | map({sessions: length, turns: (map(.turns // 0) | add),
+                # 작업 시간 = 세션별 (끝 - 시작) 합. 첫 시작~마지막 끝은 밤·주말을 끼어 부풀려진다.
+                hours: (map(try (((.ended | secs) - (.started | secs)) / 3600) catch null | numbers) | add // null)})
+         | {tasks: length,
+            task_sessions_median: (map(.sessions) | median),
+            task_turns_median: (map(.turns) | median),
+            task_hours_median: (map(.hours) | median | if . == null then null else round2 end)});
   # 에이전트가 묶을 목록. 상한을 넘으면 truncated로 알린다(묶음 수치를 센 값처럼 쓰지 않게).
   def corrections_in($since; $until):
     [$S[] | select(day_of >= $since and day_of < $until) | day_of as $d | ($D[._f] // [])[]
