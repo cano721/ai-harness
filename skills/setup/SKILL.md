@@ -47,7 +47,7 @@ $ROOT/scripts/setup.sh design list
    - extra 개별 — `bundle:"extra"`이면서 `builtin`이 `null`이고 `source`가 있는 설치 가능 항목(현재 `design-taste-frontend`·`ui-ux-pro-max`)을 여러 개 고른다. 항목마다 `review.runs`·`review.network`를 한 줄로 함께 보여 줘 외부 스크립트·네트워크 사용을 알고 고르게 한다. core도 함께 원하면 같이 고를 수 있다.
    - 건너뛰기.
 
-   core의 설치 대상(`impeccable`)이 이미 `current`면 질문을 줄인다 — "core 설치됨"을 알리고 기본 선택을 건너뛰기로 둔 채 extra만 물을지 확인한다. `current`인 extra는 기본 선택이다. 내장(`builtin`)·수동(`manual`) 항목은 고를 대상에서 빼고 상태만 표시한다. `superseded`·`conflict` 안내는 [디자인 스킬](#디자인-스킬-design) 3번 규칙 그대로다. 도구는 위 2번 답을 재사용한다. 고르지 않은 디자인 스킬은 지우지 않는다.
+   상태는 고른 도구 기준으로 본다. core의 설치 대상(`impeccable`)이 이미 `current`거나 `foreign`(사용자가 직접 둔 같은 이름 스킬)이면 질문을 줄인다 — "core 있음"을 알리고 기본 선택을 건너뛰기로 둔 채 extra만 물을지 확인한다. `foreign`은 "직접 둔 사본이 있어 그대로 쓴다 — 고정 커밋 사본으로 바꾸려면 교체를 명시"라고 표시하고 권장하지 않는다(골라도 `skipped foreign`이 된다). 교체를 명시하면 3단계 `--replace` 규칙을 따른다. `current`인 extra는 기본 선택, `foreign`인 extra는 같은 표시로 고를 대상에서 뺀다. 내장(`builtin`)·수동(`manual`) 항목은 고를 대상에서 빼고 상태만 표시한다. `superseded`·`conflict` 안내는 [디자인 스킬](#디자인-스킬-design) 3번 규칙 그대로다. 도구는 위 2번 답을 재사용한다. 고르지 않은 디자인 스킬은 지우지 않는다.
 
 ## 3. 설치·제거
 
