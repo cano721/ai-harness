@@ -1,11 +1,11 @@
 ---
 name: setup
-description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며, 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
+description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
 ---
 
 # /setup — ai-harness 전역 셋업
 
-플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인)만, `design`이면 [디자인 스킬](#디자인-스킬-design)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
+플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인), 디자인 스킬 상태 요약만, `design`이면 [디자인 스킬](#디자인-스킬-design)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉터리의 두 단계 상위(플러그인 루트).
 
@@ -27,6 +27,14 @@ $ROOT/scripts/setup.sh list
 
 표로 보여 준다: 스킬 · 하는 일 · Claude/Codex 상태 · 접속 정보(필수 키 중 빠진 것) · 사용자 규칙 파일 유무(`profile.exists`).
 
+디자인 스킬 상태도 함께 본다(대화형 셋업과 `status`):
+
+```bash
+$ROOT/scripts/setup.sh design list
+```
+
+한 줄로 요약한다: 묶음별로 설치됨(`current`)·안 됨(`absent`)·갱신 필요(`outdated`), 내장(`builtin`)·수동(`manual`) 항목 이름, `superseded`·`conflict`가 있으면 그 안내. 상태값 뜻은 [디자인 스킬](#디자인-스킬-design) 1번.
+
 ## 2. 고르기
 
 다음을 묻는다. 질문 도구가 있으면 그것으로, 없으면 번호 목록으로 묻는다.
@@ -34,6 +42,12 @@ $ROOT/scripts/setup.sh list
 1. **설치할 스킬** (여러 개 선택). 이미 `current`인 것은 기본 선택, `foreign`은 "이미 직접 만든 스킬 있음 — 유지 권장"으로 표시한다.
 2. **도구**: 지금 세션의 도구를 기본값으로 — Claude Code면 `claude`, Codex면 `codex`. 둘 다 쓰면 `both`.
 3. 선택에서 빠진 `current`/`outdated` 스킬이 있으면 제거할지 따로 확인한다. 묻지 않고 지우지 않는다.
+4. **디자인 스킬** (질문 하나). 1단계 `design list` 결과로 묻는다.
+   - `core` (권장) — `impeccable` + Claude 내장 `dataviz`. 화면·대시보드·리포트 작업의 주도 스킬이다.
+   - extra 개별 — `bundle:"extra"`이면서 `builtin`이 `null`이고 `source`가 있는 설치 가능 항목(현재 `design-taste-frontend`·`ui-ux-pro-max`)을 여러 개 고른다. 항목마다 `review.runs`·`review.network`를 한 줄로 함께 보여 줘 외부 스크립트·네트워크 사용을 알고 고르게 한다. core도 함께 원하면 같이 고를 수 있다.
+   - 건너뛰기.
+
+   core의 설치 대상(`impeccable`)이 이미 `current`면 질문을 줄인다 — "core 설치됨"을 알리고 기본 선택을 건너뛰기로 둔 채 extra만 물을지 확인한다. `current`인 extra는 기본 선택이다. 내장(`builtin`)·수동(`manual`) 항목은 고를 대상에서 빼고 상태만 표시한다. `superseded`·`conflict` 안내는 [디자인 스킬](#디자인-스킬-design) 3번 규칙 그대로다. 도구는 위 2번 답을 재사용한다. 고르지 않은 디자인 스킬은 지우지 않는다.
 
 ## 3. 설치·제거
 
@@ -47,6 +61,12 @@ $ROOT/scripts/setup.sh remove --tool <claude|codex|both> <name>...
 - `skipped foreign`: 사용자가 원래 갖고 있던 스킬이라 그대로 뒀다고 알린다. 사용자가 **교체를 명시**했을 때만 `install --replace`로 다시 실행한다 — 기존 폴더는 지우지 않고 `~/.ai-harness/setup/backups/`로 옮겨지며, 결과 `detail`에 그 경로가 나온다.
 - `skipped modified`: 사용자가 고친 사본이다. 덮어쓰기는 같은 방식(`--replace`, 백업 후 교체)으로 사용자가 원할 때만 한다.
 - 새로 깐 스킬은 다음 세션부터 로드된다고 알린다.
+
+2단계에서 디자인 스킬을 골랐으면 같은 도구로 기존 경로를 쓴다(결과 처리는 [디자인 스킬](#디자인-스킬-design) 4번):
+
+```bash
+$ROOT/scripts/setup.sh design install --tool <claude|codex|both> <core|이름>...
+```
 
 ## 4. 갱신 (`update`)
 
