@@ -18,7 +18,7 @@
 
 ### 업데이트 후 해야 할 일
 
-- `design-system` stack을 쓰는 저장소는 `/harness-init --sync`로 `design-audit`(Figma 프레임 채점 절)과 새 `design-audit/references/figma-mcp.md`를 받으세요. (#225)
+- `design-system` stack을 쓰는 저장소는 `/harness-init --sync`로 `design-audit`(Figma 프레임 채점 절)과 새 `design-audit/references/figma-mcp.md`를 받으세요. `ui`·`frontend-team` stack 저장소도 디자인 스킬 지도(`design-skills.md`)에 `figma-screen` 행이 추가됐으니 `--sync`하세요. (#225)
 
 ## v0.55.2 (2026-11-04)
 ### 버그 수정
