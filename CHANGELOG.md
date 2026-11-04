@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **대화형 `/setup` 디자인 질문이 직접 깐 스킬을 "없음"으로 보던 문제** — 사용자가 직접 둔 `impeccable`(`foreign`)이 있어도 core 설치를 권했고, 골라도 `skipped foreign`으로 건너뛰어 권유와 결과가 엇갈렸습니다. 이제 `foreign`도 이미 있는 것으로 보고, 고정 커밋 사본으로 바꾸려면 교체를 명시하게 안내합니다. (#220)
+
 ## v0.55.0 (2026-11-04)
 ### 새 기능
 
