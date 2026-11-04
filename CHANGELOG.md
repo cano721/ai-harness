@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 새 기능
+
+- **대화형 `/ai-harness:setup`이 디자인 스킬 설치도 묻습니다** — 인자 없는 셋업은 기본 카탈로그만 물어, `/setup design`을 따로 알지 못하면 디자인 스킬 지도의 주도 스킬(`impeccable`)이 빠진 채 화면 작업을 하게 됐습니다. 이제 고르기 단계에서 `core`(권장, `impeccable` + Claude 내장 `dataviz`) / extra 개별 / 건너뛰기를 한 번 묻고, extra는 각 항목이 실행하는 것과 네트워크 사용을 함께 보여 줍니다. 이미 설치된 core는 다시 권하지 않고, 설치는 기존 `design install`을 그대로 씁니다. `/setup status`에도 디자인 스킬 상태 요약이 나옵니다. (#220)
+
 ## v0.54.0 (2026-11-04)
 ### 새 기능
 
