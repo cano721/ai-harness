@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.54.0 (2026-11-04)
 ### 새 기능
 
 - **작업별 디자인 스킬 지도** — ai-harness는 디자인 데이터셋 없이 절차만 두는데, 빈자리를 채울 외부 디자인 스킬을 지정하지 않아 대시보드·리포트처럼 ai-harness가 비운 영역은 PC에 깔린 스킬에 따라 결과가 갈렸습니다(`impeccable`·`ui-ux-pro-max`·`design-taste-frontend`·`web-design-guidelines`가 모두 "UI 다듬어"에 반응). 이제 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정한 지도(`design-skills.md`)가 있고, 같은 영역을 두 스킬이 주도하는 조합은 금지로 적었습니다. `landing-page`·`design-system-builder`와 생성되는 `ui-review`·`frontend-team`·`design-audit`가 같은 사본을 참조합니다. 설치된 스킬만 쓰고, 없으면 지금 동작 그대로입니다. 프로젝트 규칙 > ai-harness 계약 > 지도 순서는 그대로입니다. (#210)
