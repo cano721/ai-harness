@@ -4227,6 +4227,7 @@ assert_contains "$SETUP_PICK" "**디자인 스킬**" "interactive setup asks abo
 assert_contains "$SETUP_PICK" "\`core\` (권장)" "design question recommends core"
 assert_contains "$SETUP_PICK" "review.runs\`·\`review.network" "extra choices show what runs and what network is used"
 assert_contains "$SETUP_PICK" "건너뛰기" "design question can be skipped"
+assert_contains "$SETUP_PICK" "\`current\`거나 \`foreign\`" "design question treats a user-placed skill as already present"
 assert_contains "$SETUP_PICK" "setup.sh design install --tool" "design choice reuses design install"
 assert_contains "$(sed -n '8p' "$ROOT/skills/setup/SKILL.md")" "디자인 스킬 상태 요약" "setup status includes design skill status"
 assert_contains "$(awk '/^description:/{print; exit}' "$ROOT/skills/setup/SKILL.md")" "대화형 셋업에서 함께 묻는다" "setup description says interactive setup asks about design"
