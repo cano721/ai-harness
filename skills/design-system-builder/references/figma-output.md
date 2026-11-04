@@ -22,7 +22,7 @@ Run this only after the token file and the rule document exist — on the same r
 | Semantic | `Semantic` | one per theme in `## 메타` (`Light`, `Dark`, …) |
 | Component | `Component` (only if the token file has this layer) | same as `Semantic` |
 
-- **Name:** drop the leading `--`, turn the category prefix into a group: `--color-text-muted` → `color/text-muted`, `--space-4` → `space/4`, `--radius-md` → `radius/md`. Non-CSS stacks map their theme keys the same way (category / rest). The rule is mechanical so the next run and the audit can find a variable from its token name without a mapping file.
+- **Name** (libraries this skill generates; an existing kit keeps its own names): drop the leading `--`, turn the category prefix into a group: `--color-text-muted` → `color/text-muted`, `--space-4` → `space/4`, `--radius-md` → `radius/md`. Non-CSS stacks map their theme keys the same way (category / rest). The rule is mechanical so the next run and the audit can find a variable from its token name without a mapping file.
 - **Aliases stay aliases.** A semantic token that points at a primitive becomes a variable aliasing that primitive in each mode — never the resolved value.
 - **Types:** colors → COLOR; spacing, radius, size, border width → FLOAT in px (convert rem at the project's root size and say which size you used); font family, weight name → STRING.
 - **Scopes** limit where designers can pick each variable: color text roles → text fill; surface/background roles → frame and shape fill; border roles → stroke; space → gap and padding (and width/height only for size tokens); radius → corner radius. Primitives get no scopes, so designers reach them only through semantic tokens — the same rule as code.
@@ -69,7 +69,7 @@ Before writing, and whenever the user asks "피그마랑 코드 값 맞아?", co
 
 ## Verify
 
-- Read back with `get_variable_defs` and `get_metadata`: every token the rule document names has a variable; every semantic variable resolves in every mode; every component set has the variants the document records; no fill or spacing inside a component is raw.
+- Read back with a read-only `use_figma` script (per-node bindings and variant lists; `get_variable_defs` only returns a union): every token the rule document names has a variable; every semantic variable resolves in every mode; every component set has the variants the document records; no fill or spacing inside a component is raw.
 - Recompute contrast for the documented pairs from the values Figma now holds.
-- `get_screenshot` the `Foundations` and `Components` pages in each mode and look at them.
+- `get_screenshot` the `Foundations` and `Components` sections (frames, not whole pages) in each mode and look at them.
 - Report what was created, updated, skipped, and orphaned, and anything the write tool refused.

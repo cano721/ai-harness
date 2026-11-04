@@ -47,4 +47,14 @@ A mockup (design file, exported frames, screenshot) is an input, not the standar
 2. **Leave defective values out of the token draft.** A value is defective when it fails contrast in its pairing, sits off the spacing grid, duplicates a near-identical value for the same intent, or exists in only one frame. List each excluded value with its reason.
 3. Map what remains onto the project's existing tokens first; propose new tokens only for intents the project does not yet have.
 4. The whole token draft is `draft` until the user confirms it. Ask **once**, with the excluded list beside the draft — not value by value.
-5. If the mockup exposes design variables (collections, modes), map modes to themes and collections to token categories; keep the project's names.
+5. If the mockup exposes design variables (collections, modes), map collections to token categories and keep the project's names. Modes are not always themes: a collection can switch brands (`Brand A` / `Brand B`) or densities. Record what each mode set means in `## 메타` (`테마:` for light/dark, `브랜드 모드:` for brands) instead of forcing brands into the theme line.
+
+### A Figma design kit as the source
+
+When the design system already lives in Figma (an existing kit, no token file) and the user wants a rule document from it:
+
+- Read through the Figma MCP (`figma-mcp.md`). Whole kit pages are too large for `get_metadata`; inventory variables, text and effect styles, and component sets with a read-only `use_figma` script run on the kit file, and screenshot frames, not pages.
+- Treat the kit's values as already decided — they are the system, not a mockup draft — but still exclude spec screens' off-scale values from the rules, as above.
+- Screen classes, siblings, and copy come from the product's existing screens (planning files, the live product), not from the kit. Sections with no source say `근거 없음 — 미확인`.
+- `## 메타`: `토큰 파일: 없음 — <kit URL>의 Figma Variables가 값의 원천` and `Figma 라이브러리: <kit URL> — 원천`. Rule sections name variables by the kit's own names; the "values live in the token file" rule then means "values live in the kit".
+- Generating a token file from the kit is a separate, explicit step (Design mode for the format, values from the kit).

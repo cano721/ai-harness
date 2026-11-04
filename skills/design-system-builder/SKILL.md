@@ -38,7 +38,7 @@ Look, do not guess. Record what you find; it decides the mode and the output for
 |---|---|---|
 | **Extract** | The codebase already has repeated values and components | `references/extract.md` |
 | **Design** | Little or nothing to extract, or the user asks for a new system | Question rounds below, then `references/tokens.md` |
-| **From mockup** | The user gives a design file, mockup, or screenshot as the source | `references/extract.md` — "From a mockup" |
+| **From mockup** | The user gives a design file, mockup, or screenshot as the source — including an existing Figma design kit | `references/extract.md` — "From a mockup", and "A Figma design kit as the source" |
 
 Modes combine: extract what exists, then design only the gaps. State the chosen mode in one line before working.
 
