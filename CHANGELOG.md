@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **`/setup` 디자인 상태 요약과 도구별 판단** — 상태 요약이 직접 둔 사본(`foreign`)·고친 사본(`modified`)을 말하지 않아 "안 됨"으로 뭉뚱그려질 수 있었고, `both`에서 도구마다 상태가 다를 때(Claude는 직접 둔 사본, Codex는 없음) core 권유 기준이 정해져 있지 않았습니다. 이제 요약은 그 상태와 도구별 차이를 쓰고, 권유는 도구별로 판단합니다. (#220)
+
 ## v0.55.1 (2026-11-04)
 ### 버그 수정
 
