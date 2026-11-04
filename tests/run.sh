@@ -5140,12 +5140,13 @@ export LANGFUSE_SECRET_KEY_QA='sk-lf-qa'
 SECRETS
 mkdir -p "$LF_T/home/.claude"
 printf '{"env":{"LANGFUSE_HOST_QA":"https://qa.example.test"}}\n' >"$LF_T/home/.claude/settings.json"
-LF_LOOKUP="$(env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" python3 -I -c '
+LF_LOOKUP="$(env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("lf", sys.argv[1]); lf = importlib.util.module_from_spec(spec); spec.loader.exec_module(lf)
 print(lf.suffix("checkout-bot"), lf.lookup("LANGFUSE_PUBLIC_KEY_QA"), lf.credentials("qa")[0], ",".join(lf.aliases()))
 ' "$ROOT/catalog/langfuse/scripts/lf.py")"
 assert_eq "_CHECKOUT_BOT pk-lf-q'a https://qa.example.test qa" "$LF_LOOKUP" "secrets.env and settings.json keys are read (quote escapes undone)"
+[[ ! -e "$ROOT/catalog/langfuse/scripts/__pycache__" ]] || fail "tests leave no bytecode in the catalog (it would ship with installed copies)"
 
 register() { env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" python3 -I "$ROOT/catalog/langfuse/scripts/register.py" "$@"; }
 for bad in Bad_Alias -lead 'a b' '../x'; do
