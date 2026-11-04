@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>하네스 도입 효과</title>
 <style>
+/* 팔레트: dataviz 기본 인스턴스. 계열 2색(#2a78d6/#eb6834, 다크 #3987e5/#d95926)은 validate_palette.js 라이트·다크 통과.
+   상태색(good/critical/warning)은 계열과 섞지 않고 항상 아이콘+문구와 함께 쓴다. */
 :root {
   color-scheme: light;
   --page: #f9f9f7;
@@ -17,10 +19,12 @@
   --ring: rgba(11, 11, 11, 0.10);
   --series: #2a78d6;
   --series-soft: rgba(42, 120, 214, 0.08);
+  --series-2: #eb6834;
+  --context: #c3c2b7;
   --good: #006300;
   --bad: #d03b3b;
-  --warn: #fab219;
-  --series-2: #eb6834;
+  --warn-ink: #8a5a00;
+  --warn-soft: rgba(250, 178, 25, 0.16);
   --install: #52514e;
 }
 @media (prefers-color-scheme: dark) {
@@ -36,9 +40,12 @@
     --ring: rgba(255, 255, 255, 0.10);
     --series: #3987e5;
     --series-soft: rgba(57, 135, 229, 0.12);
+    --series-2: #d95926;
+    --context: #52514e;
     --good: #0ca30c;
     --bad: #e66767;
-    --series-2: #d95926;
+    --warn-ink: #fab219;
+    --warn-soft: rgba(250, 178, 25, 0.12);
     --install: #c3c2b7;
   }
 }
@@ -54,9 +61,12 @@
   --ring: rgba(255, 255, 255, 0.10);
   --series: #3987e5;
   --series-soft: rgba(57, 135, 229, 0.12);
+  --series-2: #d95926;
+  --context: #52514e;
   --good: #0ca30c;
   --bad: #e66767;
-  --series-2: #d95926;
+  --warn-ink: #fab219;
+  --warn-soft: rgba(250, 178, 25, 0.12);
   --install: #c3c2b7;
 }
 * { box-sizing: border-box; }
@@ -67,27 +77,37 @@ body {
   color: var(--ink);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", sans-serif;
 }
+::selection { background: var(--series-soft); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--series); outline-offset: 2px; border-radius: 4px; }
+a { color: var(--series); text-underline-offset: 3px; }
 main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
 header .meta { color: var(--ink-2); font-size: 13px; }
-h1 { font-size: 26px; line-height: 1.3; margin: 8px 0 4px; letter-spacing: -0.01em; }
-h2 { font-size: 17px; margin: 40px 0 12px; }
-.sub { color: var(--ink-2); margin: 0 0 4px; }
+h1 { font-size: 26px; line-height: 1.3; margin: 8px 0 8px; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 17px; margin: 48px 0 6px; }
+h2 + .lead { margin: 0 0 14px; color: var(--ink-2); font-size: 13px; max-width: 70ch; }
+.verdict { color: var(--ink-2); margin: 0; max-width: 70ch; }
+.verdict b { color: var(--ink); font-weight: 600; }
 .card {
   background: var(--surface);
   border: 1px solid var(--ring);
   border-radius: 12px;
   padding: 16px;
 }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px; margin-top: 24px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; margin-top: 24px; }
 .kpi .label { color: var(--ink-2); font-size: 13px; }
 .kpi .value { font-size: 28px; font-weight: 650; margin: 4px 0 2px; letter-spacing: -0.01em; }
 .kpi .from { color: var(--muted); font-size: 15px; font-weight: 400; }
 .kpi .delta { font-size: 13px; font-weight: 600; }
 .kpi .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-.kpi.dim { opacity: 0.6; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 .flat { color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 1.5;
+  color: var(--warn-ink); background: var(--warn-soft); border-radius: 999px; padding: 0 8px;
+}
+.chip svg { flex: none; }
 .list { display: grid; gap: 8px; }
 .row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
 .row .when { color: var(--muted); font-size: 13px; min-width: 88px; font-variant-numeric: tabular-nums; }
@@ -95,15 +115,40 @@ h2 { font-size: 17px; margin: 40px 0 12px; }
 .row .tag { font-size: 12px; color: var(--ink-2); border: 1px solid var(--ring); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
 .expected { color: var(--ink-2); font-size: 13px; }
 .groups .row .what { font-weight: 550; }
-.groups .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
-.cols h3 { font-size: 14px; margin: 0 0 8px; color: var(--ink-2); }
+.cols h3, .card h3 { font-size: 14px; margin: 0 0 8px; color: var(--ink-2); }
+/* 개선별 성과 */
+.imp { display: grid; gap: 10px; }
+.imp p { margin: 0; }
+.imp details { margin-top: 0; }
+.imp-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; justify-content: space-between; }
+.imp-title { font-weight: 600; flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.badge.gone, .badge.reduced { color: var(--good); }
+.badge.recurred { color: var(--bad); }
+.badge.hold, .badge.no_baseline, .badge.unmatched { color: var(--ink-2); }
+.rates { display: grid; gap: 6px; }
+.rate { display: grid; grid-template-columns: minmax(84px, 120px) 1fr minmax(96px, auto); gap: 10px; align-items: center; font-size: 13px; }
+.rate .who { color: var(--ink-2); }
+.rate .track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.rate .fill { display: block; height: 100%; border-radius: 4px; min-width: 2px; }
+.rate .fill.zero { min-width: 0; }
+.rate .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.evid { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--ink-2); }
+.evid li { display: flex; gap: 8px; }
+.evid .when { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+/* 막은 위험 */
+/* 가드 문구는 막은 대상과 이유가 앞 두 줄에 있다. 전체는 hover로 본다. */
+.guard .row .what { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.guard .kind { font-size: 12px; color: var(--ink-2); border: 1px solid var(--ring); border-radius: 999px; padding: 0 8px; white-space: nowrap; }
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .tabs button, .linkbtn {
   font: inherit; font-size: 13px; color: var(--ink-2); background: transparent;
   border: 1px solid var(--ring); border-radius: 999px; padding: 4px 12px; cursor: pointer;
 }
+.tabs button:hover, .linkbtn:hover { color: var(--ink); border-color: var(--axis); }
 .tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-2); font-weight: 600; }
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
@@ -113,9 +158,12 @@ h2 { font-size: 17px; margin: 40px 0 12px; }
   white-space: nowrap; display: none;
 }
 .tip strong { font-size: 15px; }
+.scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 th { color: var(--ink-2); font-weight: 600; }
+td .chips { margin-top: 4px; }
+.warn-list { margin: 0; padding-left: 18px; }
 .warn-list li { margin: 4px 0; }
 .empty { color: var(--muted); }
 .bars { display: grid; gap: 6px; margin: 8px 0 4px; }
@@ -130,7 +178,13 @@ details { margin-top: 8px; }
 summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
 pre { font-size: 12px; line-height: 1.45; overflow: auto; max-height: 360px; background: var(--page); border: 1px solid var(--ring); border-radius: 8px; padding: 10px; }
 .abgrid { display: grid; gap: 12px; }
+.stack { display: grid; gap: 12px; }
 footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
+@media (max-width: 480px) {
+  h1 { font-size: 22px; }
+  .rate { grid-template-columns: 1fr minmax(88px, auto); }
+  .rate .track { grid-column: 1 / -1; grid-row: 2; }
+}
 </style>
 </head>
 <body>
@@ -159,138 +213,200 @@ function sv(tag, attrs) {
   for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
   return n;
 }
-const fmt = (v, d = 1) => v == null ? "–" : (Number.isInteger(v) ? String(v) : v.toFixed(d));
+// 16px 선 아이콘. 상태는 색만으로 전하지 않는다.
+const ICONS = {
+  check: "M3.5 8.5l3 3 6-7",
+  down: "M8 3v10M4 9l4 4 4-4",
+  alert: "M8 2.5l6 11H2zM8 7v3M8 12v.01",
+  pause: "M6 4v8M10 4v8",
+  dash: "M4 8h8",
+  shield: "M8 2l5 2v4c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4z",
+};
+function icon(name, size = 14) {
+  const s = sv("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor",
+    "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
+  s.append(sv("path", { d: ICONS[name] }));
+  return s;
+}
+const fmt = (v, d = 1) => v == null ? "–" : (Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? String(Math.round(v)) : v.toFixed(d));
 const B = DATA ? DATA.periods.before : null, A = DATA ? DATA.periods.after : null;
 const warnings = new Set((DATA && DATA.warnings) || []);
+const beforeMissing = warnings.has("before_missing");
 
-// 지표 정의: lower=true면 줄어드는 쪽이 좋아진 것
-const METRICS = [
-  { key: "corrections_per_session", label: "반복 교정 (세션당)", lower: true, n: p => p.digested_sessions,
-    note: "LLM 세션 정리가 찾은 사용자 교정. 같은 말을 다시 하게 된 횟수" },
-  { key: "guard_blocks", label: "하네스가 막은 위험 작업", lower: null, unit: "건", n: p => p.sessions,
-    note: "편집 가드가 멈춘 수정. 늘면 막아준 것이 늘어난 것" },
-  { key: "task_turns_median", label: "이슈 1건 끝내는 데 입력한 프롬프트 (중앙값)", lower: true, n: p => p.tasks,
-    note: "같은 이슈 키를 다룬 세션들의 턴 합. 이슈 키가 있는 작업만" },
-  { key: "turns_median", label: "세션당 턴 (중앙값)", lower: null, n: p => p.active_sessions,
-    note: "작업 크기에 따라 늘 수 있어 좋고 나쁨을 칠하지 않아요" },
-  { key: "errors_per_session", label: "툴 오류 (세션당)", lower: true, n: p => p.sessions,
-    note: "실패한 명령·툴 호출" },
-];
+// 숫자 옆에 붙는 신뢰도 경고. 아래 "신뢰도와 한계"에 같은 뜻을 길게 쓴다.
+const CHIP = {
+  model_shift: "모델이 바뀜",
+  low_sample: "표본 적음",
+  few_digests: "정리된 세션 적음",
+  before_missing: "설치 전 기록 없음",
+  rework_split: "이슈 분할 PR이 섞일 수 있음",
+};
+function chips(keys) {
+  const ks = keys.filter(Boolean);
+  return ks.length ? el("div", { class: "chips" }, ks.map(k => el("span", { class: "chip" }, icon("alert", 12), CHIP[k] || k))) : null;
+}
 
-function delta(m, b, a) {
-  if (b == null || a == null) return { text: "비교 불가", cls: "flat" };
+function delta(lower, b, a, unit) {
+  if (b == null || a == null) return { text: beforeMissing ? "설치 전 기록 없음" : "비교 불가", cls: "flat" };
   if (b === a) return { text: "변화 없음", cls: "flat" };
-  if (m.lower === null) {
+  if (lower === null) {
     const diff = a - b;
-    return { text: (diff > 0 ? "▲ " : "▼ ") + fmt(Math.abs(diff)) + (m.unit || ""), cls: "flat" };
+    return { text: (diff > 0 ? "▲ " : "▼ ") + fmt(Math.abs(diff)) + (unit || ""), cls: "flat" };
   }
   const pct = b === 0 ? null : Math.round(Math.abs(a - b) / b * 100);
-  const better = m.lower ? a < b : a > b;
-  const arrow = a < b ? "▼" : "▲";
-  return { text: arrow + " " + (pct == null ? "" : pct + "% ") + (better ? "개선" : "악화"), cls: better ? "good" : "bad" };
+  const better = lower ? a < b : a > b;
+  return { text: (a < b ? "▼ " : "▲ ") + (pct == null ? "" : pct + "% ") + (better ? "개선" : "악화"), cls: better ? "good" : "bad" };
+}
+
+const IMPS = (DATA && DATA.improvements) || [];
+const VERDICT = {
+  gone: { label: "사라짐", icon: "check", text: "반영 뒤 같은 유형이 다시 나오지 않았어요" },
+  reduced: { label: "줄어듦", icon: "down", text: "반영 뒤 같은 유형이 나오는 비율이 줄었어요" },
+  recurred: { label: "재발", icon: "alert", text: "반영 뒤에도 같은 유형이 비슷하거나 더 자주 나왔어요" },
+  hold: { label: "판단 보류", icon: "pause", text: "반영 뒤 정리된 세션이 적거나 반영 뒤 목록이 잘려 아직 판단하지 않아요" },
+  no_baseline: { label: "기준 없음", icon: "dash", text: "근거 세션 정리에서 이 유형을 찾지 못해 비교할 기준이 없어요" },
+  unmatched: { label: "판정 안 함", icon: "dash", text: "이번 리포트에서 이 개선의 패턴을 맞춰 보지 않았어요" },
+};
+const vcount = k => IMPS.filter(x => (x.result || {}).verdict === k).length;
+
+function verdictLine() {
+  const parts = [];
+  if (IMPS.length) {
+    const ok = vcount("gone") + vcount("reduced"), bad = vcount("recurred");
+    const wait = IMPS.length - ok - bad;
+    parts.push(el("span", {}, "반영한 개선 ", el("b", {}, IMPS.length + "건"), " 중 ",
+      el("b", {}, "효과 확인 " + ok), " · ", el("b", {}, "재발 " + bad), " · 아직 판단 못 함 " + wait));
+  }
+  if (A.guard_blocks > 0) parts.push(el("span", {}, "최근 구간에 위험한 수정 ", el("b", {}, A.guard_blocks + "건"), "을 막았어요"));
+  if (!parts.length) return null;
+  const p = el("p", { class: "verdict" });
+  parts.forEach((x, i) => { if (i) p.append(". "); p.append(x); });
+  p.append(".");
+  return p;
 }
 
 function autoHeadline() {
-  const parts = [];
+  const ok = vcount("gone") + vcount("reduced");
+  if (ok) return "하네스가 고친 실수 " + ok + "가지가 다시 나오지 않거나 줄었어요";
   const cb = B.corrections_per_session, ca = A.corrections_per_session;
-  if (cb != null && ca != null && cb > 0 && ca < cb) parts.push("같은 지적이 " + Math.round((cb - ca) / cb * 100) + "% 줄었고");
-  if (A.guard_blocks > 0) parts.push("위험한 수정 " + A.guard_blocks + "건을 막았어요");
-  const tb = B.task_turns_median, ta = A.task_turns_median;
-  if (!parts.length && tb != null && ta != null && ta < tb) parts.push("이슈 1건에 드는 프롬프트가 " + fmt(tb) + " → " + fmt(ta) + "로 줄었어요");
-  if (!parts.length) return "도입 전후 변화를 정리했어요";
-  return parts.join(", ");
+  if (cb != null && ca != null && cb > 0 && ca < cb) return "같은 지적이 " + Math.round((cb - ca) / cb * 100) + "% 줄었어요";
+  if (A.guard_blocks > 0) return "위험한 수정 " + A.guard_blocks + "건을 막았어요";
+  return "도입 전후 변화를 정리했어요";
 }
 
 if (DATA) {
-// 헤더
+// 1. 판정
 app.append(el("header", {},
   el("div", { class: "meta" }, DATA.project, " · 설치 ", DATA.installed.date,
     " · 설치 전 ", B.since, "~", B.until, " vs 최근 ", A.since, "~", A.until, " (각 ", DATA.window_days, "일, 끝 날짜 미포함)"),
   el("h1", {}, (HIGHLIGHTS && HIGHLIGHTS.headline) || autoHeadline()),
-  el("p", { class: "sub" }, "설치 전 ", B.sessions, "세션 · 최근 ", A.sessions,
-    "세션을 비교했어요. 숫자는 변화이고, 원인은 아래 신뢰도와 함께 판단해 주세요.")
-));
+  verdictLine()));
 
-// 체감 카드
-const lowSample = warnings.has("low_sample") || warnings.has("before_missing");
+// 2. 핵심 카드: 하네스가 직접 겨냥하는 세 가지
+const digestChips = p => [warnings.has("few_digests") ? "few_digests" : null, beforeMissing ? "before_missing" : null];
+const CARDS = [
+  { label: "같은 지적을 다시 한 횟수 (세션당)", b: B.corrections_per_session, a: A.corrections_per_session, lower: true,
+    note: "LLM 세션 정리가 찾은 사용자 교정 · 정리된 세션 " + B.digested_sessions + " → " + A.digested_sessions + "개", chips: digestChips() },
+  { label: "프로젝트 사실을 몰라 생긴 문제 (세션당)", b: B.missing_context_per_session, a: A.missing_context_per_session, lower: true,
+    note: "에이전트가 프로젝트 규칙·환경을 몰라 틀리거나 물은 일. 하네스 문서가 줄여야 하는 것", chips: digestChips() },
+  { label: "하네스가 막은 위험한 수정", b: B.guard_blocks, a: A.guard_blocks, lower: null, unit: "건",
+    note: "편집 가드가 멈춘 수정. 아래 \"막은 위험\"에 무엇을 막았는지 있어요", chips: [beforeMissing ? "before_missing" : null] },
+];
 const kpis = el("section", { class: "kpis", "aria-label": "핵심 지표" });
-for (const m of METRICS) {
-  const b = B[m.key], a = A[m.key], d = delta(m, b, a);
-  const dim = m.n(B) < 10 || m.n(A) < 10;
-  kpis.append(el("div", { class: "card kpi" + (dim ? " dim" : "") },
-    el("div", { class: "label" }, m.label),
-    el("div", { class: "value" }, el("span", { class: "from" }, fmt(b), " → "), fmt(a)),
-    el("div", { class: "delta " + d.cls }, d.text),
-    el("div", { class: "note" }, m.note, dim ? " · 표본 적음" : "")));
-}
-if (DATA.rework && DATA.rework.before && DATA.rework.after) {
-  const rb = DATA.rework.before.rework_ratio, ra = DATA.rework.after.rework_ratio;
-  const d = delta({ lower: true }, rb, ra);
+for (const c of CARDS) {
+  const d = delta(c.lower, beforeMissing ? null : c.b, c.a, c.unit);
   kpis.append(el("div", { class: "card kpi" },
-    el("div", { class: "label" }, "재작업 PR 비율"),
-    el("div", { class: "value" }, el("span", { class: "from" }, fmt(rb), "% → "), fmt(ra), "%"),
+    el("div", { class: "label" }, c.label),
+    el("div", { class: "value" }, beforeMissing ? null : el("span", { class: "from" }, fmt(c.b), " → "), fmt(c.a), c.unit && c.a != null ? el("span", { class: "from" }, c.unit) : null),
     el("div", { class: "delta " + d.cls }, d.text),
-    el("div", { class: "note" }, "머지 뒤 같은 이슈로 다시 PR을 연 비율 · PR ",
-      DATA.rework.before.settled_prs, " → ", DATA.rework.after.settled_prs, "건")));
+    el("div", { class: "note" }, c.note),
+    chips(c.chips)));
 }
 app.append(kpis);
 
-// 사례
-const hasGroups = HIGHLIGHTS && (HIGHLIGHTS.groups || []).length;
-app.append(el("h2", {}, hasGroups ? "줄어든 반복 지적" : "교정 기록"));
-if (hasGroups) {
-  const g = el("div", { class: "card list groups" });
-  for (const x of HIGHLIGHTS.groups) {
-    g.append(el("div", { class: "row" },
-      el("span", { class: "what" }, x.label),
-      el("span", { class: "num" }, "설치 전 ", x.before, "회 → 후 ", x.after, "회")));
+// 3. 개선별 성과
+app.append(el("h2", {}, "하네스가 고친 실수, 다시 나왔나"));
+app.append(el("p", { class: "lead" }, "/harvest 가 반영한 개선마다, 근거가 된 세션들과 반영 뒤 세션에서 같은 유형의 문제가 나온 비율을 비교해요. 두 쪽 모두 설치 후·같은 시기라 모델이나 작업 구성 차이가 전후 비교보다 작아요. 다만 근거 세션은 문제가 있어 /harvest 에 뽑힌 표본이라 비율이 높게 나와요 — 반영 전 30일의 정리된 세션도 맞춘 개선은 그 비율과 비교해요. 반영 뒤 정리된 세션이 5개 미만이거나 반영 뒤 목록이 잘렸으면 성공으로 세지 않아요."));
+if (IMPS.length) {
+  const box = el("div", { class: "stack" });
+  for (const x of IMPS) {
+    const r = x.result || { verdict: "unmatched" };
+    const v = VERDICT[r.verdict] || VERDICT.unmatched;
+    const judged = r.before_hits != null;
+    const rate = (h, n) => n ? h / n : 0;
+    const bRate = judged ? rate(r.before_hits, x.before.observed) : null;
+    const aRate = judged ? rate(r.after_hits, x.after.observed) : null;
+    const rateRow = (who, h, n, val, color, trunc) => el("div", { class: "rate" },
+      el("span", { class: "who" }, who),
+      el("span", { class: "track" }, el("span", { class: "fill" + (val ? "" : " zero"), style: "width:" + Math.round((val || 0) * 100) + "%; background: var(" + color + ")" })),
+      el("span", { class: "val" }, (trunc ? "≥" : "") + h + " / " + n + "세션"));
+    const card = el("article", { class: "card imp" },
+      el("div", { class: "imp-head" },
+        el("span", { class: "imp-title" }, r.label || x.summary),
+        el("span", { class: "badge " + r.verdict }, icon(v.icon), v.label)),
+      el("div", { class: "expected" }, x.date, " 반영",
+        x.artifact ? [" · ", /^https?:\/\//.test(x.artifact) ? el("a", { href: x.artifact, rel: "noreferrer" }, "변경 보기") : x.artifact] : null,
+        " · ", v.text),
+      judged ? el("div", { class: "rates", role: "group", "aria-label": "반영 전후 발생 비율" },
+        rateRow(x.before.basis === "batch" ? "근거 세션" : "반영 전 30일", r.before_hits, x.before.observed, bRate, "--context", r.before_truncated),
+        r.window_hits != null && x.before.window ? rateRow("반영 전 30일", r.window_hits, x.before.window.observed, rate(r.window_hits, x.before.window.observed), "--context", r.window_truncated) : null,
+        rateRow("반영 뒤", r.after_hits, x.after.observed, aRate, "--series", r.after_truncated)) : null,
+      judged && r.baseline === "batch" && x.before.basis === "batch" ? el("p", { class: "expected" }, "근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.") : null,
+      r.label && x.summary ? el("p", { class: "expected" }, x.summary) : null,
+      x.expected ? el("p", { class: "expected" }, "harvest가 남긴 기대: ", x.expected) : null,
+      r.note ? el("p", { class: "expected" }, r.note) : null);
+    const ex = [...(r.after_examples || []).map(e => ({ ...e, side: "반영 뒤" })), ...(r.before_examples || []).map(e => ({ ...e, side: "근거" }))];
+    if (ex.length) {
+      card.append(el("details", {}, el("summary", {}, "맞춘 사례 보기 (", ex.length, ")"),
+        el("ul", { class: "evid" }, ex.map(e => el("li", {}, el("span", { class: "when" }, e.side, " ", e.date), el("span", {}, e.summary))))));
+    }
+    box.append(card);
   }
-  app.append(g);
+  app.append(box);
 } else {
-  const col = (title, items) => el("div", { class: "card" }, el("h3", {}, title),
-    items.length ? el("div", { class: "list" }, items.slice(0, 8).map(c =>
-      el("div", { class: "row" }, el("span", { class: "when" }, c.date), el("span", { class: "what" }, c.summary))))
-    : el("p", { class: "empty" }, "기록 없음"));
-  app.append(el("div", { class: "cols" },
-    col("설치 전 교정", DATA.corrections.before.items), col("최근 교정", DATA.corrections.after.items)));
-}
-if (HIGHLIGHTS && (HIGHLIGHTS.cases || []).length) {
-  app.append(el("h2", {}, "이번 기간 하이라이트"));
-  const c = el("div", { class: "list" });
-  for (const x of HIGHLIGHTS.cases) {
-    c.append(el("div", { class: "card" }, el("strong", {}, x.title), x.detail ? el("p", { class: "expected" }, x.detail) : null));
-  }
-  app.append(c);
+  app.append(el("p", { class: "empty" }, "아직 /harvest 가 반영한 개선이 없어요. 개선이 반영되면 그 뒤에 같은 실수가 다시 나오는지 여기서 따라가요."));
 }
 
-// 성장 타임라인
-app.append(el("h2", {}, "하네스가 배운 것"));
-if ((DATA.timeline || []).length) {
-  const t = el("div", { class: "card list" });
-  for (const x of DATA.timeline) {
-    t.append(el("div", { class: "row" },
-      el("span", { class: "when" }, x.date),
-      el("span", { class: "what" }, x.summary || "",
-        x.expected ? el("div", { class: "expected" }, "기대: ", x.expected) : null),
-      el("span", { class: "tag" }, x.kind === "harvest" ? "harvest 개선" : (x.scope === "global" ? "전역 규칙" : "자동 규칙"))));
+// 4. 막은 위험
+app.append(el("h2", {}, "막은 위험"));
+app.append(el("p", { class: "lead" }, "편집 가드가 멈춘 수정이에요. 대개 필요한 문서를 읽기 전에 코드를 바꾸려 했거나, 하네스가 빠진 세션에서 저장소를 바꾸려 한 경우예요. 경로는 작업 폴더 기준으로 줄이고 비밀값은 가렸어요."));
+{
+  const samples = A.guard_samples || [];
+  const card = el("div", { class: "card guard" });
+  if (samples.length) {
+    const kindOf = t => { const m = /\[([A-Za-z ]+ guard)\]/.exec(t); return m ? m[1] : "guard"; };
+    card.append(el("div", { class: "list" }, samples.map(g => {
+      const i = g.target.indexOf(": ");
+      const tool = i > 0 ? g.target.slice(0, i) : "?";
+      const what = (i > 0 ? g.target.slice(i + 2) : g.target).replace(/^\[[A-Za-z ]+ guard\]\s*/, "");
+      return el("div", { class: "row" },
+        el("span", { class: "kind" }, kindOf(g.target)),
+        el("span", { class: "what", title: what }, el("strong", {}, tool), " · ", what),
+        el("span", { class: "num" }, g.n, "회"));
+    })));
   }
-  app.append(t);
-} else {
-  app.append(el("p", { class: "empty" }, "이 기간에 반영된 개선이 없어요. /harvest 가 개선을 반영하면 여기에 쌓여요."));
+  const un = A.guard_blocks_unsampled || 0;
+  const rest = (A.guard_blocks || 0) - un - samples.reduce((t, g) => t + (g.n || 0), 0);
+  if (samples.length && rest > 0) card.append(el("p", { class: "expected" }, "목록 밖 차단 ", rest, "건은 상위 종류만 보여주거나 세션당 사례 상한에 걸려 빠졌어요."));
+  if (un > 0) card.append(el("p", { class: "expected" }, samples.length ? "그 밖에 " : "", "차단 ", un, "건은 사례를 기록하기 전 추출본이라 무엇을 막았는지 남아 있지 않아요. 다음 기록 갱신 때 transcript가 남아 있으면 채워져요."));
+  if (!samples.length && !un) card.append(el("p", { class: "empty" }, "최근 구간에 막은 수정이 없어요."));
+  app.append(card);
 }
 
-// 주간 추이
+// 5. 주간 추이
 const SERIES = [
   { key: "corrections_per_session", label: "교정/세션" },
-  { key: "turns_median", label: "턴 중앙값" },
-  { key: "errors_per_session", label: "오류/세션" },
+  { key: "missing_context_per_session", label: "몰라서 생긴 문제/세션" },
   { key: "guard_blocks", label: "막은 위험" },
+  { key: "errors_per_session", label: "오류/세션" },
+  { key: "turns_median", label: "턴 중앙값" },
   { key: "sessions", label: "세션 수" },
 ];
 app.append(el("h2", {}, "주간 추이"));
+app.append(el("p", { class: "lead" }, "교정·몰라서 생긴 문제는 LLM 정리가 된 세션 기준이에요. 정리된 세션이 없는 주는 선이 끊겨요."));
 const tabs = el("div", { class: "tabs", role: "group", "aria-label": "지표 선택" });
 const chartBox = el("div", { class: "card chart" });
-const tableBox = el("div", { class: "card", hidden: "" });
+const tableBox = el("div", { class: "card scroll", hidden: "" });
 const tableBtn = el("button", { class: "linkbtn", type: "button", "aria-pressed": "false" }, "표로 보기");
 app.append(tabs, chartBox, tableBox);
 let current = SERIES[0];
@@ -314,14 +430,15 @@ tableBtn.addEventListener("click", () => {
 function drawChart() {
   chartBox.replaceChildren();
   const weeks = DATA.weekly || [];
-  const W = 900, H = 260, L = 44, R = 16, T = 16, Bm = 36;
+  // 좁은 화면에서는 좌표계를 줄여 축 글자가 읽히는 크기로 남게 한다.
+  const narrow = (chartBox.clientWidth || 900) < 600;
+  const W = narrow ? 440 : 900, H = narrow ? 240 : 260, L = 36, R = 12, T = 16, Bm = 36;
   const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": current.label + " 주간 추이" });
   const vals = weeks.map(w => w[current.key]);
   const max = Math.max(1, ...vals.filter(v => v != null));
   const step = weeks.length > 1 ? (W - L - R) / (weeks.length - 1) : 0;
   const x = i => L + i * step;
   const y = v => T + (H - T - Bm) * (1 - v / max);
-  // 설치 후 영역
   const firstAfter = weeks.findIndex(w => w.after_install);
   if (firstAfter >= 0) {
     const xi = firstAfter === 0 ? L : (x(firstAfter - 1) + x(firstAfter)) / 2;
@@ -331,7 +448,12 @@ function drawChart() {
     lab.textContent = "하네스 설치 " + DATA.installed.date;
     svg.append(lab);
   }
-  // 격자 3단
+  // harvest 개선 반영일: 개선별 성과와 같은 날짜를 추이에서도 찾을 수 있게 짧은 눈금으로 표시한다.
+  for (const imp of IMPS) {
+    const wi = weeks.findIndex((w, i) => w.week <= imp.date && (i === weeks.length - 1 || weeks[i + 1].week > imp.date));
+    if (wi < 0) continue;
+    svg.append(sv("line", { x1: x(wi), x2: x(wi), y1: H - Bm - 8, y2: H - Bm, stroke: "var(--ink-2)", "stroke-width": 2 }));
+  }
   for (let k = 0; k <= 2; k++) {
     const v = max * k / 2, yy = y(v);
     svg.append(sv("line", { x1: L, x2: W - R, y1: yy, y2: yy, stroke: k === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
@@ -340,12 +462,12 @@ function drawChart() {
     svg.append(t);
   }
   weeks.forEach((w, i) => {
-    if (weeks.length > 10 && i % 2) return;
+    const every = Math.max(1, Math.ceil(weeks.length / (narrow ? 5 : 10)));
+    if (i % every) return;
     const t = sv("text", { x: x(i), y: H - Bm + 18, "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 });
     t.textContent = w.week.slice(5);
     svg.append(t);
   });
-  // 선: 값이 없는 주는 끊는다
   let d = "", pen = false;
   vals.forEach((v, i) => {
     if (v == null) { pen = false; return; }
@@ -357,13 +479,13 @@ function drawChart() {
     if (v == null) return;
     svg.append(sv("circle", { cx: x(i), cy: y(v), r: 4, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2 }));
   });
-  // 크로스헤어 + 툴팁
   const cross = sv("line", { y1: T, y2: H - Bm, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
   svg.append(cross);
   const hit = sv("rect", { x: L, y: 0, width: W - L - R, height: H, fill: "transparent" });
   svg.append(hit);
   const tip = el("div", { class: "tip", role: "status" });
   chartBox.append(svg, tip);
+  if (IMPS.length) chartBox.append(el("p", { class: "expected" }, "아래 짧은 눈금: /harvest 개선 반영 주"));
   hit.addEventListener("pointermove", ev => {
     const r = svg.getBoundingClientRect();
     const px = (ev.clientX - r.left) * W / r.width;
@@ -372,7 +494,8 @@ function drawChart() {
     if (!w) return;
     cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
     tip.replaceChildren(el("strong", {}, fmt(w[current.key])), " ", current.label,
-      el("div", { class: "expected" }, w.week, " 주 · ", w.sessions, "세션 · ", w.after_install ? "설치 후" : "설치 전"));
+      el("div", { class: "expected" }, w.week, " 주 · ", w.sessions, "세션",
+        w.digested_sessions != null ? " (정리 " + w.digested_sessions + ")" : "", " · ", w.after_install ? "설치 후" : "설치 전"));
     tip.style.display = "block";
     const left = x(i) * r.width / W;
     tip.style.left = Math.min(Math.max(0, left - 60), r.width - tip.offsetWidth) + "px";
@@ -388,11 +511,86 @@ function drawChart() {
 }
 drawChart();
 
-// 도입 현황
-app.append(el("h2", {}, "도입 현황 (최근 구간)"));
+// 6. 상세
+app.append(el("h2", {}, "상세"));
+app.append(el("p", { class: "lead" }, "턴·시간·토큰은 작업 크기와 모델에 크게 좌우돼 보조 지표로만 봐요. 경고가 붙은 숫자는 하네스 효과로 읽지 마세요."));
+{
+  const shift = warnings.has("model_shift") ? "model_shift" : null;
+  const low = warnings.has("low_sample") ? "low_sample" : null;
+  const ROWS = [
+    { label: "이슈 1건 끝내는 데 입력한 프롬프트 (중앙값)", key: "task_turns_median", lower: true, chips: [shift, low] },
+    { label: "이슈 1건 작업 시간 (시간, 중앙값)", key: "task_hours_median", lower: true, chips: [shift, low] },
+    { label: "세션당 턴 (중앙값)", key: "turns_median", lower: null, chips: [shift, low] },
+    { label: "세션당 출력 토큰 (중앙값)", key: "tok_out_median", lower: null, chips: [shift] },
+    { label: "툴 오류 (세션당)", key: "errors_per_session", lower: true, chips: [shift] },
+    { label: "작업 세션 (턴 5 이상)", key: "active_sessions", lower: null, chips: [] },
+    { label: "정리된 세션", key: "digested_sessions", lower: null, chips: [] },
+  ];
+  const tr = (label, b, a, d, ch) => el("tr", {}, el("td", {}, label, chips(ch)), el("td", { class: "num" }, b), el("td", { class: "num" }, a), el("td", { class: d.cls }, d.text));
+  // 모델이 바뀐 구간의 차이는 좋고 나쁨을 칠하지 않는다 — 초록 "개선"이 하네스 효과로 읽힌다.
+  const body = ROWS.map(m => {
+    const d = delta(m.lower, B[m.key], A[m.key]);
+    if (shift && m.chips.includes(shift)) d.cls = "flat";
+    return tr(m.label, fmt(B[m.key]), fmt(A[m.key]), d, m.chips);
+  });
+  if (DATA.rework && DATA.rework.before && DATA.rework.after) {
+    const rb = DATA.rework.before.rework_ratio, ra = DATA.rework.after.rework_ratio;
+    body.push(tr("재작업 PR 비율 (%) · PR " + DATA.rework.before.settled_prs + " → " + DATA.rework.after.settled_prs + "건",
+      fmt(rb), fmt(ra), delta(true, rb, ra), ["rework_split"]));
+  }
+  app.append(el("div", { class: "card scroll" }, el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, "지표"), el("th", {}, "설치 전"), el("th", {}, "최근"), el("th", {}, "변화"))),
+    el("tbody", {}, body))));
+  if (DATA.rework) app.append(el("p", { class: "expected" }, "재작업은 머지 뒤 같은 이슈 키로 다시 연 PR이에요. 이슈 하나를 단계별 PR로 나누거나 자리표시 키(NJ-00000 같은)를 쓰는 팀에서는 재작업이 아닌 PR이 섞여 높게 나와요."));
+}
+
+const hasGroups = HIGHLIGHTS && (HIGHLIGHTS.groups || []).length;
+if (hasGroups) {
+  app.append(el("h3", { style: "margin: 24px 0 8px; font-size: 14px" }, "줄어든 반복 지적"));
+  const g = el("div", { class: "card list groups" });
+  for (const x of HIGHLIGHTS.groups) {
+    g.append(el("div", { class: "row" },
+      el("span", { class: "what" }, x.label),
+      el("span", { class: "num" }, "설치 전 ", x.before, "회 → 후 ", x.after, "회")));
+  }
+  app.append(g);
+}
+if (HIGHLIGHTS && (HIGHLIGHTS.cases || []).length) {
+  app.append(el("h3", { style: "margin: 24px 0 8px; font-size: 14px" }, "이번 기간 하이라이트"));
+  const c = el("div", { class: "list" });
+  for (const x of HIGHLIGHTS.cases) {
+    c.append(el("div", { class: "card" }, el("strong", {}, x.title), x.detail ? el("p", { class: "expected" }, x.detail) : null));
+  }
+  app.append(c);
+}
+{
+  const col = (title, items) => el("div", { class: "card" }, el("h3", {}, title),
+    items.length ? el("div", { class: "list" }, items.slice(0, 8).map(c =>
+      el("div", { class: "row" }, el("span", { class: "when" }, c.date), el("span", { class: "what" }, c.summary))))
+    : el("p", { class: "empty" }, "기록 없음"));
+  const det = (title, pair) => el("details", {}, el("summary", {}, title, " (설치 전 ", pair.before.total, " · 최근 ", pair.after.total, ")"),
+    el("div", { class: "cols", style: "margin-top: 8px" }, col("설치 전", pair.before.items), col("최근", pair.after.items)));
+  app.append(det("사용자 교정 목록", DATA.corrections));
+  if (DATA.missing_context) app.append(det("프로젝트 사실을 몰라 생긴 문제 목록", DATA.missing_context));
+}
+
+const rules = (DATA.timeline || []).filter(x => x.kind !== "harvest");
+if (rules.length) {
+  app.append(el("h3", { style: "margin: 24px 0 8px; font-size: 14px" }, "자동 적용된 규칙"));
+  const t = el("div", { class: "card list" });
+  for (const x of rules) {
+    t.append(el("div", { class: "row" },
+      el("span", { class: "when" }, x.date),
+      el("span", { class: "what" }, x.summary || "", x.expected ? el("div", { class: "expected" }, "기대: ", x.expected) : null),
+      el("span", { class: "tag" }, x.scope === "global" ? "전역 규칙" : "자동 규칙")));
+  }
+  app.append(t);
+}
+
 const ad = DATA.adoption;
+app.append(el("h3", { style: "margin: 24px 0 8px; font-size: 14px" }, "도입 현황 (최근 구간)"));
 app.append(el("div", { class: "card" },
-  el("p", {}, "작업 세션 ", ad.active_sessions, "개 중 ", ad.harness_sessions,
+  el("p", { style: "margin: 0 0 8px" }, "작업 세션 ", ad.active_sessions, "개 중 ", ad.harness_sessions,
     "개가 하네스 문서·워크플로를 사용했어요", ad.active_sessions ? " (" + Math.round(ad.harness_sessions * 100 / ad.active_sessions) + "%)." : "."),
   ad.top_docs.length ? el("div", { class: "list" }, ad.top_docs.map(d =>
     el("div", { class: "row" }, el("span", { class: "what" }, d.target), el("span", { class: "tag" }, d.n, "회")))) : null));
@@ -454,12 +652,12 @@ if (AB && (AB.cases || []).length) {
 if (DATA) {
 // 신뢰도
 const WARN_TEXT = {
-  before_missing: "설치 전 기록이 없어요. transcript가 보관 기간(기본 30일) 뒤 지워졌을 수 있어요. 전후 비교 대신 설치 후 추이만 보세요.",
+  before_missing: "설치 전 기록이 없어요. transcript가 보관 기간(기본 30일) 뒤 지워졌을 수 있어요. 전후 비교 대신 개선별 성과와 설치 후 추이를 보세요.",
   short_window: "설치한 지 7일이 안 돼 비교 구간이 짧아요.",
   gap: "최근 구간과 설치일 사이에 기간이 있어요. 그 사이 변화는 주간 추이에서 보세요.",
-  low_sample: "한쪽 구간의 작업 세션이 10개 미만이라 우연한 차이일 수 있어요. 흐린 카드가 해당돼요.",
-  few_digests: "LLM 세션 정리가 된 세션이 적어 교정 수치의 신뢰도가 낮아요.",
-  model_shift: "두 구간에 주로 쓴 모델이 달라요. 턴·토큰 차이에 모델 영향이 섞여 있어요.",
+  low_sample: "한쪽 구간의 작업 세션이 10개 미만이라 우연한 차이일 수 있어요.",
+  few_digests: "LLM 세션 정리가 된 세션이 적어 교정·몰라서 생긴 문제 수치의 신뢰도가 낮아요.",
+  model_shift: "두 구간에 주로 쓴 모델이 달라요. 턴·시간·토큰 차이에 모델 영향이 크게 섞여 있어요. 개선별 성과는 같은 시기끼리 비교라 영향이 작아요.",
 };
 app.append(el("h2", {}, "신뢰도와 한계"));
 const models = p => Object.entries(p.models || {}).map(([k, v]) => k + " " + v).join(", ") || "–";
@@ -467,6 +665,7 @@ app.append(el("div", { class: "card" },
   el("ul", { class: "warn-list" },
     [...warnings].map(w => el("li", {}, WARN_TEXT[w] || w)),
     el("li", {}, "같은 기간에 작업 종류·팀 상황도 바뀌어요. 이 리포트는 변화를 보여줄 뿐 하네스가 원인이라고 증명하지 않아요."),
+    el("li", {}, "개선별 성과의 \"같은 유형\"은 에이전트가 세션 정리 요약을 읽고 맞춘 것이에요. 맞춘 사례를 열어 직접 확인할 수 있어요."),
     el("li", {}, "모델 구성 — 전: ", models(B), " / 후: ", models(A)),
     el("li", {}, "LLM 정리된 세션 — 전 ", B.digested_sessions, " / 후 ", A.digested_sessions))));
 

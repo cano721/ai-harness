@@ -82,6 +82,8 @@ history의 `improved` 레코드 중 `review.expected`가 있는 것을 이번 ba
 
 **제거 레코드**(`review.change`가 `remove`·`mixed`): expected는 "빠진 규칙·문서가 막던 실수가 다시 나타나지 않는다"는 기준이다. 같은 패턴이 재발하면 제거가 틀린 것이므로 6단계에서 **복원**(해당 PR revert 또는 더 정확한 문구로 재추가)을 개선안으로 올린다.
 
+**자동 병합된 개선**(`$ROOT/scripts/harvest-auto.sh runs`에 그 PR이 `event:"auto_merged"`로 있음)이 재발이면 사람이 아직 보지 않은 변경이다. 강화안을 내지 말고 그 PR의 revert를 개선안으로 올리며, PR 본문 첫 줄에 "자동 병합된 개선 <PR URL>이 효과가 없어 되돌립니다"를 밝힌다. 이 PR은 `--first-pass` 없이 기록해 자동 병합 대상에서 뺀다.
+
 `expected`가 없는 improved 레코드(구버전 기록)는 검증 대상이 아니다. 검증 결과는 통과/재발/보류 모두 최종 보고서에 포함한다.
 
 ### 3. 정량 신호 해석
@@ -211,6 +213,8 @@ $ROOT/scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 ```
 
 개선이 제거를 포함하면 `--change remove`(추가와 제거가 섞였으면 `--change mixed`, 추가만이면 `--change add`)를 함께 준다 — 2단계가 제거 레코드를 복원 여부로 검증하는 입력이다.
+
+프로젝트 PR이면 `--first-pass`도 준다. 6.5단계에서 PR에 남은 **모든** 개선안이 1회차 검토에 `pass`였으면 `pass`, 하나라도 `revise`를 거쳤거나 자기 점검(Agent 도구 없음)이었으면 `revised`다. 자동 병합(opt-in)은 `pass`인 PR만 대상으로 삼으므로 사실대로 적는다. 아래 2단계의 되돌리기 PR에는 `--first-pass`를 주지 않는다 — 사람이 검토해야 한다.
 
 `--expected`는 6단계 개선안의 기대효과를 그대로 옮긴다(개선안 여러 건이면 핵심 1건 기준). 이 값이 2단계 검증의 입력이 된다 — 생략하면 이번 개선은 다음 harvest가 검증하지 못한다.
 

@@ -492,7 +492,19 @@ assert_contains "$HARNESS_INIT_CONTENT" '.ai-harness/handoffs/<인계 이름>.do
 assert_contains "$HARNESS_INIT_CONTENT" 'heartbeat 를 진행 신호로 보지 않는다' "workspace handoff does not treat heartbeats as progress"
 assert_contains "$HARNESS_INIT_CONTENT" '로 worker 터미널 출력이 바뀌었는지' "workspace handoff checks a stalled worker's terminal while waiting"
 assert_contains "$HARNESS_INIT_CONTENT" '이 장치 없이 사용자에게 "끝나면 알려 주겠다"고 하지 않는다' "the coordinator does not promise to report completion it cannot observe"
-assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(감독 디스패치 또는 완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
+assert_contains "$HARNESS_INIT_CONTENT" '완료 신호(백그라운드 세션 알림·감독 디스패치·완료 파일)를 기다리지 않음' "workspace sync flags a Preflight that hands off without waiting"
+assert_contains "$HARNESS_INIT_CONTENT" '백그라운드 세션 없이 Orca 감독 디스패치를 기본 경로로 둠' "workspace sync flags a Preflight that still defaults to Orca supervision"
+assert_contains "$HARNESS_INIT_CONTENT" 'claude --bg -n <인계 이름> "<인계>"' "workspace handoff defaults to a Claude Code background session in the member"
+assert_contains "$HARNESS_INIT_CONTENT" 'notify_when_idle: true' "workspace handoff subscribes to the worker's turn-end notice"
+assert_contains "$HARNESS_INIT_CONTENT" '알림은 worker 가 **턴을 끝낼 때마다** 한 번 오며 완료를 뜻하지 않는다' "a turn-end notice is not treated as completion"
+assert_contains "$HARNESS_INIT_CONTENT" '권한 모드는 조율 세션과 맞춘다' "the background worker matches the coordinator's permission mode so messages are not held"
+assert_contains "$HARNESS_INIT_CONTENT" 'claude respawn <id>' "a background session stuck without a transcript restarts only that session"
+[[ "$HARNESS_INIT_CONTENT" != *'respawn --all 후'* ]] || fail "handoff does not restart every background session"
+assert_contains "$HARNESS_INIT_CONTENT" '메시지 없이 — 구독만 하고 worker 를 방해하지 않는다' "the turn-end subscription sends no message to the worker"
+assert_contains "$HARNESS_INIT_CONTENT" '사용자가 Orca 감독을 요청했거나 재시도·의존 관계 관리가 필요하면' "Orca supervision is an opt-in path, not the default"
+assert_contains "$HARNESS_INIT_CONTENT" 'Codex 멤버는 새 터미널 탭에서' "Codex members keep the interactive launch"
+assert_contains "$HARNESS_INIT_CONTENT" '로 띄우고 아래 완료 파일 방식으로 기다린다' "Codex members wait on a completion file"
+assert_contains "$HARNESS_INIT_CONTENT" 'heartbeat 만 든 batch 는 사용자에게 보고하지 않고 ack 한 뒤 다시 건다' "Orca supervision does not report heartbeat-only batches to the user"
 HARVEST_CONTENT="$(<"$ROOT/skills/harvest/SKILL.md")"
 assert_contains "$HARVEST_CONTENT" "local:<path>" "harvest records a local artifact for non-git workspaces"
 assert_contains "$HARVEST_CONTENT" "### 6.5. 독립 검토" "harvest reviews proposals before applying them"
@@ -518,6 +530,9 @@ assert_eq "claude-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CLA
 assert_eq "40" "$(jq -r 'select(.kind=="session") | .cache_write' "$CLAUDE_EVENT")" "Claude cache write"
 assert_eq "6" "$(jq -r 'select(.kind=="error") | .n' "$CLAUDE_EVENT")" "Claude tool error counts is_error results but not output-less failures"
 assert_eq "2" "$(jq -r 'select(.kind=="guard_block") | .n' "$CLAUDE_EVENT")" "Claude guard block counts edit-tool results and falls back to line-leading prefix when the tool is unknown"
+assert_eq "?: [Direct edit guard] src/app.ts 수정 전에 docs를 먼저 Read 하세요.|Edit: [Direct edit guard] src/app.ts 수정 전에 다음 docs를 먼저 Read 하세요:" \
+  "$(jq -rs '[.[] | select(.kind=="guard_sample") | .target] | sort | join("|")' "$CLAUDE_EVENT")" \
+  "Claude guard sample names the tool and the blocked target without the hook wrapper"
 assert_eq "1" "$(jq -r 'select(.kind=="permission_deny") | .n' "$CLAUDE_EVENT")" "Claude permission denial requires is_error and the observed leading phrase (ignores clarify, source text, git log)"
 assert_eq "0" "$(jq -s '[.[] | select(.kind | startswith("correction"))] | length' "$CLAUDE_EVENT")" "Claude adapter leaves corrections to the LLM digest"
 USAGE_DUP_FIXTURE="$TEST_TMP/usage-dup/dddddddd-1111-2222-3333-eeeeeeeeeeee.jsonl"
@@ -626,6 +641,7 @@ assert_contains "$CODEX_CTX_REPORT" "최대 3000 / 마지막 2000 · 창 10000�
 assert_eq "reviewer" "$(jq -r 'select(.kind=="persona") | .target' "$CODEX_EVENT")" "Codex bridge persona"
 assert_eq ".ai-harness/docs/code-conventions.md .ai-harness/docs/testing.md" "$(jq -r 'select(.kind=="doc_read") | .target' "$CODEX_EVENT" | sort | paste -sd " " -)" "Codex bridge multi-doc read in one exec"
 assert_eq "1" "$(jq -r 'select(.kind=="guard_block") | .n' "$CODEX_EVENT")" "Codex guard block counts line-leading hook prefix only"
+assert_eq "1" "$(jq -rs '[.[] | select(.kind=="guard_sample" and (.target | contains("src/app.ts")))] | length' "$CODEX_EVENT")" "Codex guard sample keeps the blocked target"
 assert_eq "src/app.ts" "$(jq -r 'select(.kind=="file_edit") | .target' "$CODEX_EVENT")" "Codex bridge file edit"
 assert_eq "mcp__jira__get_issue" "$(jq -r 'select(.kind=="mcp_tool") | .target' "$CODEX_EVENT")" "Codex bridge MCP tool"
 assert_eq "ai-harness:metrics" "$(jq -r 'select(.kind=="workflow") | .target' "$CODEX_EVENT")" "Codex skill workflow"
@@ -2002,6 +2018,13 @@ for path in .agents/skills/native-ui/SKILL.md .claude/skills/native-ui/reference
   assert_eq "add" "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p "$path" '.items[] | select(.path==$p) | .action')" "native stack selects $path"
 done
 assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | test("skills/(ui-review|frontend-fundamentals|frontend-team)/"))] | length')" "a native-only project gets neither the web UI contract nor web frontend skills"
+# native-ui에 복사된 계약의 상대 링크는 native-ui에 배포되는 파일을 가리키거나, native-ui 본문이 웹 전용이라 무시한다고 적은 것이어야 한다.
+while IFS= read -r NATIVE_LINK; do
+  if [[ -n "$(printf '%s' "$NATIVE_PLAN" | jq -r --arg p ".claude/skills/native-ui/$NATIVE_LINK" '.items[] | select(.path==$p) | .path')" ]]; then continue; fi
+  assert_contains "$NATIVE_SKILL" "계약 안의 \`$NATIVE_LINK\`" "native-ui says how to read the contract link $NATIVE_LINK"
+  assert_contains "$(grep -F "계약 안의 \`$NATIVE_LINK\`" "$NATIVE_DIR/SKILL.md")" "무시한다" "native-ui ignores the web-only contract link $NATIVE_LINK"
+done < <(grep -oE '\]\(references/[^)]+\)' "$ROOT/templates/ui-review/SKILL.md" | sed -E 's/^\]\(//; s/\)$//' | sort -u)
+assert_eq "0" "$(printf '%s' "$NATIVE_PLAN" | jq -r '[.items[] | select(.path | endswith("design-skills.md"))] | length')" "a native-only project gets no web design skill map"
 assert_eq "0" "$(printf '%s' "$UI_PLAN" | jq -r '[.items[] | select(.path | contains("native-ui"))] | length')" "a web UI project does not get native-ui"
 # 기존 ui 프로젝트: 손대지 않은 계약은 갱신(refresh), 새 시안 처리 규칙은 추가(add)로 sync 계획에 오른다.
 SYNC_UI_ROOT="$TEST_TMP/ui-sync-project"
@@ -2111,6 +2134,104 @@ assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/la
 assert_contains "$(<"$ROOT/THIRD-PARTY-LICENSES.md")" "## skills/landing-page" "landing-page credits its upstream licenses"
 pass "landing-page plugin skill"
 
+# 디자인 스킬 지도: 작업마다 주도 하나, 영역마다 주인 하나. 한 원본을 바이트 단위로 같은 사본으로 나눠 읽고, 설치된 스킬만 쓴다. (#210)
+MAP_SRC="$ROOT/templates/ui-review/references/design-skills.md"
+assert_file "$MAP_SRC"
+for MAP_COPY in "$ROOT/skills/landing-page/references/design-skills.md" "$ROOT/skills/design-system-builder/references/design-skills.md"; do
+  cmp -s "$MAP_COPY" "$MAP_SRC" || fail "$MAP_COPY must match templates/ui-review/references/design-skills.md byte for byte"
+done
+for MAP_SKILL in ui-review frontend-team design-audit; do
+  for MAP_BASE in .agents .claude; do
+    assert_eq "templates/ui-review/references/design-skills.md" "$(jq -r --arg p "$MAP_BASE/skills/$MAP_SKILL/references/design-skills.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$MAP_BASE $MAP_SKILL ships the design skill map"
+  done
+done
+for MAP_READER in skills/landing-page/SKILL.md skills/design-system-builder/SKILL.md templates/ui-review/SKILL.md templates/frontend-team/SKILL.md templates/design-audit/SKILL.md; do
+  assert_contains "$(<"$ROOT/$MAP_READER")" "references/design-skills.md" "$MAP_READER points at the design skill map"
+done
+assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/design-skills.md") | .action')" "ui stack syncs the map"
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/references/design-skills.md") | .action')" "design-system stack syncs the map"
+assert_eq "0" "$(printf '%s' "$FE_PLAN" | jq -r '[.items[] | select(.path | endswith("design-skills.md"))] | length')" "a frontend project without UI contracts gets no map copy"
+MAP_CONTENT="$(<"$MAP_SRC")"
+assert_contains "$MAP_CONTENT" "**Installed skills only.**" "map uses installed skills only"
+assert_contains "$MAP_CONTENT" "work exactly as you would without this map" "map keeps current behavior when a skill is missing"
+assert_contains "$MAP_CONTENT" "A skill on this map never overrides a project value" "project rules stay above the map"
+assert_contains "$MAP_CONTENT" "## Forbidden pairs" "map names forbidden pairs"
+# 표의 주도 칸에는 스킬이 하나뿐이고, 영역 표의 영역마다 주인이 하나다.
+MAP_JOBS="$(awk '/^## Jobs/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Job/ && !/^\|---/' "$MAP_SRC")"
+assert_eq "6" "$(grep -c . <<<"$MAP_JOBS")" "map lists six jobs"
+while IFS= read -r MAP_ROW; do
+  MAP_LEAD="$(awk -F'|' '{print $3}' <<<"$MAP_ROW")"
+  [[ "$MAP_LEAD" != *"·"* && "$MAP_LEAD" != *","* ]] || fail "map job has more than one lead: $MAP_ROW"
+done <<<"$MAP_JOBS"
+MAP_LANES="$(awk '/^## Lanes/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Lane/ && !/^\|---/' "$MAP_SRC" | awk -F'|' '{print $2}')"
+assert_eq "$(grep -c . <<<"$MAP_LANES")" "$(sort -u <<<"$MAP_LANES" | grep -c .)" "each lane appears once"
+# 카탈로그의 모든 외부 디자인 스킬이 지도에 자리가 있다.
+DESIGN_CATALOG="$ROOT/catalog/design-skills.json"
+while IFS= read -r DESIGN_NAME; do
+  assert_contains "$MAP_CONTENT" "\`$DESIGN_NAME\`" "map assigns $DESIGN_NAME"
+done < <(jq -r '.skills[].name' "$DESIGN_CATALOG")
+# 설치 가능한 항목은 원본 저장소·40자 커밋·경로·라이선스·실행/네트워크 검토를 모두 적었다.
+assert_eq "0" "$(jq '[.skills[] | select((.builtin // null) == null and .installable != false)
+  | select((.source.repo | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) or (.source.ref | test("^[0-9a-f]{40}$") | not)
+           or (.source.path == null) or (.license // "") == "" or (.review.runs // "") == "" or (.review.network // "") == "")] | length' "$DESIGN_CATALOG")" "every installable design skill records repo, pinned commit, path, license and review"
+assert_eq "dataviz,impeccable" "$(jq -r '[.skills[] | select(.bundle=="core") | .name] | sort | join(",")' "$DESIGN_CATALOG")" "core bundle is impeccable plus dataviz"
+assert_eq "0" "$(jq '[.skills[] | select(.installable == false and ((.note // "") == ""))] | length' "$DESIGN_CATALOG")" "skills setup cannot pin say where to get them"
+HARNESS_INIT_DESIGN="$(<"$ROOT/skills/harness-init/SKILL.md")"
+assert_contains "$HARNESS_INIT_DESIGN" "백엔드·라이브러리 저장소에는 권하지 않는다" "harness init suggests design skills only for UI repositories"
+assert_contains "$HARNESS_INIT_DESIGN" "\`ui\`·\`frontend-team\`·\`design-system\` 중 하나가 있을 때만" "harness init suggests design skills only where the map ships"
+assert_contains "$HARNESS_INIT_DESIGN" "/ai-harness:setup design" "harness init points at setup for design skills"
+# 독립 디자인 검토는 플러그인 전역 에이전트다. 렌더링에 Bash를 쓰되 편집 도구는 없다.
+# Bash가 있으면 쓰기를 기술적으로 막지 못하므로 "읽기 전용"이라 주장하지 않고, Skill 도구가 없으므로 외부 스킬을 쓴다고 하지 않는다.
+DESIGN_REVIEWER="$ROOT/agents/design-reviewer.md"
+assert_file "$DESIGN_REVIEWER"
+DESIGN_REVIEWER_TOOLS="$(grep '^tools:' "$DESIGN_REVIEWER")"
+assert_eq "tools: Read, Grep, Glob, Bash" "$DESIGN_REVIEWER_TOOLS" "design reviewer has no edit or skill tools"
+DESIGN_REVIEWER_CONTENT="$(<"$DESIGN_REVIEWER")"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "**쓰기 도구가 없다. Bash는 렌더링 한정이다.**" "design reviewer limits Bash to rendering"
+assert_contains "$DESIGN_REVIEWER_CONTENT" "기술적 강제가 아니라" "design reviewer does not overstate its Bash restriction"
+if grep -qiE "읽기 전용이다|read-only" "$DESIGN_REVIEWER"; then fail "design reviewer claims to be read-only while it has Bash"; fi
+if [[ "$DESIGN_REVIEWER_TOOLS" != *Skill* ]]; then
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "외부 디자인 스킬(\`impeccable\` 등)은 쓰지 않는다" "design reviewer without the Skill tool does not promise outside skills"
+  assert_contains "$DESIGN_REVIEWER_CONTENT" "skills/web-design-guidelines/references/web-interface-guidelines.md" "design reviewer reads the built-in interface guideline rules"
+  if grep -q "^외부 스킬:" "$DESIGN_REVIEWER"; then fail "design reviewer report still has an outside-skill line"; fi
+  MAP_REVIEW_ROW="$(grep '^| Independent review' "$MAP_SRC")"
+  assert_contains "$MAP_REVIEW_ROW" "in a fresh reviewer session only" "map keeps outside review skills out of the design-reviewer agent"
+fi
+assert_contains "$(<"$DESIGN_REVIEWER")" "\`unverified\`" "design reviewer does not pass what it could not render"
+# 작고 안정적인 세 스킬은 내장이다: 고정 사본을 담고, setup이 설치하지 않으며, 네트워크 없이 동작한다.
+assert_eq "design-system-patterns,emil-design-eng,web-design-guidelines" "$(jq -r '[.skills[] | select(.builtin=="ai-harness") | .name] | sort | join(",")' "$DESIGN_CATALOG")" "three small design skills are built into ai-harness"
+assert_eq "0" "$(jq '[.skills[] | select(.builtin=="ai-harness")
+  | select((.source.ref // "" | test("^[0-9a-f]{40}$") | not) or (.license // "") == "" or (.absorbed // "") == "" or (.note // "") == "")] | length' "$DESIGN_CATALOG")" "built-in design skills record the pinned origin, license, where they live and what to do with old copies"
+while IFS= read -r BUILTIN_REPO; do
+  assert_contains "$(<"$ROOT/THIRD-PARTY-LICENSES.md")" "https://github.com/$BUILTIN_REPO" "THIRD-PARTY-LICENSES names $BUILTIN_REPO"
+done < <(jq -r '.skills[] | select(.builtin=="ai-harness") | .source.repo' "$DESIGN_CATALOG")
+assert_contains "$MAP_CONTENT" "## Built in" "map lists the built-in design skills"
+WIG_SRC="$ROOT/templates/ui-review/references/web-interface-guidelines.md"
+assert_file "$WIG_SRC"
+cmp -s "$ROOT/skills/web-design-guidelines/references/web-interface-guidelines.md" "$WIG_SRC" \
+  || fail "skills/web-design-guidelines/references/web-interface-guidelines.md must match templates/ui-review/references/web-interface-guidelines.md byte for byte"
+assert_contains "$(<"$WIG_SRC")" "## Output Format" "pinned interface guideline rules keep the upstream output format"
+for WIG_BASE in .claude .agents; do
+  assert_eq "templates/ui-review/references/web-interface-guidelines.md" "$(jq -r --arg p "$WIG_BASE/skills/ui-review/references/web-interface-guidelines.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$WIG_BASE ui-review ships the pinned interface guideline rules"
+done
+assert_contains "$(<"$ROOT/templates/ui-review/SKILL.md")" "references/web-interface-guidelines.md" "ui-review checks code against the pinned interface guideline rules"
+assert_eq "add" "$(printf '%s' "$UI_PLAN" | jq -r '.items[] | select(.path==".claude/skills/ui-review/references/web-interface-guidelines.md") | .action')" "ui stack syncs the interface guideline rules"
+WIG_SKILL="$(<"$ROOT/skills/web-design-guidelines/SKILL.md")"
+assert_contains "$WIG_SKILL" "references/web-interface-guidelines.md" "web-design-guidelines reads its pinned rules"
+# 규칙을 받는 도구 호출은 금지하고, 출처 URL 언급은 허용한다.
+if grep -qiE "\b(webfetch|web_fetch|curl|wget|fetch the latest|fetch fresh)\b" "$ROOT/skills/web-design-guidelines/SKILL.md"; then fail "web-design-guidelines still fetches its rules"; fi
+for BUILTIN_SKILL in web-design-guidelines emil-design-eng; do
+  assert_contains "$(sed -n '1,4p' "$ROOT/skills/$BUILTIN_SKILL/SKILL.md")" "description: Built into ai-harness as a pinned" "$BUILTIN_SKILL description says it is the built-in pinned copy"
+done
+assert_contains "$MAP_CONTENT" "use the \`ai-harness:\`-prefixed one" "map picks the ai-harness skill when two share a name"
+EMIL_SKILL="$ROOT/skills/emil-design-eng/SKILL.md"
+assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "license: MIT" "emil-design-eng copy names its license"
+assert_contains "$(sed -n '1,8p' "$EMIL_SKILL")" "emilkowalski/skill@$(jq -r '.skills[] | select(.name=="emil-design-eng") | .source.ref' "$DESIGN_CATALOG")" "emil-design-eng copy names the pinned commit the catalog records"
+assert_file "$ROOT/skills/design-system-builder/references/theme-and-components.md"
+assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "references/theme-and-components.md" "design-system-builder reads the absorbed theme and component patterns"
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/theme-and-components.md")" "tokens.md\` owns token layers, names" "absorbed patterns defer token naming to design-system-builder"
+pass "design skill map, catalog and independent reviewer"
+
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
 DIAGRAM_SKILL="$ROOT/skills/diagram/SKILL.md"
 ARCHIFY_DIR="$ROOT/vendor/archify"
@@ -2211,7 +2332,7 @@ UPDATE_NOW="$(date +%s)"
 jq -cn --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson checked_at_epoch "$UPDATE_NOW" \
   '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"https://example.test/releases/v9.9.9",notes_url:"https://example.test/releases/v9.9.9",last_result:"success",last_error:"",checked_at:$checked_at,checked_at_epoch:$checked_at_epoch}' \
   >"$UPDATE_DATA/update-check.json"
-UPDATE_STATUS="$(HARNESS_METRICS_DIR="$UPDATE_DATA" "$ROOT/scripts/check-update.sh" status)"
+UPDATE_STATUS="$(HARNESS_METRICS_DIR="$UPDATE_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/check-update.sh" status)"
 assert_eq "true" "$(printf '%s' "$UPDATE_STATUS" | jq -r '.update_available')" "cached newer version detected"
 assert_eq "9.9.9" "$(printf '%s' "$UPDATE_STATUS" | jq -r '.latest_version')" "cached latest version"
 UPDATE_NOTICE="$(HARNESS_METRICS_DIR="$UPDATE_DATA" "$ROOT/scripts/check-update.sh" notify)"
@@ -2256,6 +2377,19 @@ assert_eq "2" "$(printf '%s' "$BACKOFF_THIRD" | jq -r '.failure_count')" "consec
 BACKOFF_SECONDS=$(( $(jq -r '.next_retry_epoch' "$BACKOFF_DATA/update-check.json") - $(jq -r '.last_attempt_epoch' "$BACKOFF_DATA/update-check.json") ))
 assert_eq "1200" "$BACKOFF_SECONDS" "backoff doubles on the second consecutive failure"
 pass "failed release checks back off without spending the success TTL"
+
+# 사용자가 직접 부르는 status는 성공 TTL 안이어도 다시 조회한다. 정기 refresh는 TTL을 지킨다.
+FRESH_DATA="$TEST_TMP/update-fresh-status"
+mkdir -p "$FRESH_DATA"
+jq -cn --argjson checked_at_epoch "$(date +%s)" \
+  '{v:1,installed_version:"0.10.0",latest_version:"9.9.9",release_url:"",notes_url:"",last_result:"success",last_error:"",checked_at:"2026-01-01T00:00:00Z",checked_at_epoch:$checked_at_epoch}' \
+  >"$FRESH_DATA/update-check.json"
+HARNESS_METRICS_DIR="$FRESH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" refresh >/dev/null 2>&1
+assert_eq "success" "$(jq -r '.last_result' "$FRESH_DATA/update-check.json")" "refresh honors the success TTL"
+FRESH_STATUS="$(HARNESS_METRICS_DIR="$FRESH_DATA" HM_UPDATE_RELEASE_URL="not-a-url" "$ROOT/scripts/check-update.sh" status)"
+assert_eq "failure" "$(printf '%s' "$FRESH_STATUS" | jq -r '.last_result')" "status looks up even inside the success TTL"
+assert_eq "9.9.9" "$(printf '%s' "$FRESH_STATUS" | jq -r '.latest_version')" "status lookup failure keeps the cached release"
+pass "explicit status bypasses the success TTL"
 
 # 손상된 캐시가 조회 자체를 죽이면 알림이 조용히 사라진다.
 CORRUPT_DATA="$TEST_TMP/update-corrupt"
@@ -3414,9 +3548,10 @@ member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; s
 }
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code is blocked"
 assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
-assert_contains "$(<"$GW/err")" 'cd jobda && claude "<인계>"' "block message leads with handing off to a member session"
 assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
-assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message hands off through supervised dispatch so the coordinator learns of completion"
+assert_contains "$(<"$GW/err")" 'cd jobda && claude --bg -n <인계 이름> "<인계>"' "block message hands off to a Claude Code background session in the member"
+assert_contains "$(<"$GW/err")" 'notify_when_idle: true' "block message waits on the background session's turn-end notice"
+assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message keeps Orca supervision as an option when the user wants it"
 assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
 [[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
@@ -3845,6 +3980,268 @@ assert_eq "bitbucket|x" \
   "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://bitbucket.org/ws/repo/pull-requests/4 --comment x | jq -r '"\(.provider)|\(.message)"')" "Bitbucket decline request"
 if HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://example.com/pr/1 >/dev/null 2>&1; then fail "unknown PR hosts are refused"; fi
 pass "auto sync supersedes its own older PRs"
+
+# 자동 병합(opt-in): 내용 판정은 로컬 git 객체로, 병합은 호스트 상태(같은 head·대상 브랜치·CI 통과·사람 활동 없음)를 본 뒤에.
+AM_REPO="$TEST_TMP/am-repo"
+make_repo "$AM_REPO" https://github.com/acme/am.git
+git -C "$AM_REPO" checkout -q -b develop
+mkdir -p "$AM_REPO/.ai-harness/workflows" "$AM_REPO/.ai-harness/docs"
+jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{},auto_merge:{sync:true,harvest:true,method:"squash"}}' >"$AM_REPO/.ai-harness/harness.json"
+printf '# rules\n' >"$AM_REPO/AGENTS.md"
+printf '# testing\n' >"$AM_REPO/.ai-harness/docs/testing.md"
+printf 'x\n' >"$AM_REPO/app.js"
+git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m base
+git -C "$AM_REPO" update-ref refs/remotes/origin/develop develop
+am_sha() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{print $1}'; }
+am_branch() { git -C "$AM_REPO" checkout -q -B "$1" develop; }
+am_commit() { git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m "$1" && git -C "$AM_REPO" rev-parse HEAD; }
+am_manifest() { jq "$1" "$AM_REPO/.ai-harness/harness.json" >"$AM_REPO/.ai-harness/hj" && mv "$AM_REPO/.ai-harness/hj" "$AM_REPO/.ai-harness/harness.json"; }
+am_check() { "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/develop "$@"; }
+AM_RUNNER=".ai-harness/workflows/workflow-driver.sh"
+am_sync_head() { # 러너를 템플릿 그대로 넣고 manifest 해시를 맞춘 sync 커밋
+  am_branch "$1"
+  mkdir -p "$AM_REPO/.ai-harness/workflows"
+  cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+  am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+}
+am_sync_head s-ok
+AM_SYNC_OK="$(am_commit sync)"
+assert_eq "ok" "$(am_check --scope sync --head "$AM_SYNC_OK")" "a copy-only sync PR passes"
+assert_eq "partial_sync" "$(am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "partial sync needs its own opt-in"
+AM_REVIEW='{"review":{"first_pass":"pass","expected":"재발 0"}}'
+# 저장소 조정값은 기준 브랜치 manifest에서만 읽고, 플러그인 상한을 넘지 못한다.
+am_base_with() { # name jq-filter → origin/<name>: develop에 manifest 조정값을 바꾼 기준 브랜치
+  git -C "$AM_REPO" checkout -q -B "$1" develop && am_manifest "$2" && git -C "$AM_REPO" commit -q -am "$1"
+  git -C "$AM_REPO" update-ref "refs/remotes/origin/$1" "$1"
+}
+am_on() { # base-name branch → base 위에서 새 브랜치
+  git -C "$AM_REPO" checkout -q -B "$2" "$1"
+}
+am_base_with partial-on '.auto_merge.sync_partial = true'
+am_on partial-on s-partial
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_PARTIAL="$(am_commit partial)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-on --scope sync --head "$AM_PARTIAL" --result partial)" "partial sync passes when the base manifest allows it"
+am_base_with lines-60 '.auto_merge.harvest_max_lines = 60'
+am_on lines-60 h-60 && seq 1 60 >>"$AM_REPO/AGENTS.md"
+AM_H60="$(am_commit h60)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-60 --scope project --head "$AM_H60" --review "$AM_REVIEW")" "the repo can raise the harvest line cap"
+am_base_with lines-999 '.auto_merge.harvest_max_lines = 999'
+am_on lines-999 h-999 && seq 1 101 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:101" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-999 --scope project --head "$(am_commit h999)" --review "$AM_REVIEW")" "the plugin cap still applies"
+am_base_with files-big '.auto_merge.harvest_max_files = 1e20'
+am_on files-big h-files && for f in a b c d e f; do printf 'x\n' >"$AM_REPO/.ai-harness/docs/$f.md"; done
+assert_eq "too_many_files:6" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/files-big --scope project --head "$(am_commit hfiles)" --review "$AM_REVIEW")" "a huge cap is clamped to the plugin cap"
+am_base_with lines-bad '.auto_merge.harvest_max_lines = "999"'
+am_on lines-bad h-bad && seq 1 41 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:41" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-bad --scope project --head "$(am_commit hbad)" --review "$AM_REVIEW")" "a non-number value falls back to the default"
+am_sync_head s-bytes
+printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
+am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
+assert_eq "copy_differs:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit bytes)")" "a copy that differs from the template is refused"
+am_sync_head s-mode
+chmod 644 "$AM_REPO/$AM_RUNNER"
+assert_eq "bad_mode:100644:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit mode)")" "a copy must keep the template's executable bit"
+am_sync_head s-hash
+am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"0000\""
+assert_eq "manifest_hash_mismatch:$AM_RUNNER" "$(am_check --scope sync --head "$(am_commit hash)")" "a manifest hash that does not match is refused"
+am_sync_head s-policy
+am_manifest '.git_policy = "merge"'
+assert_eq "manifest_policy_changed" "$(am_check --scope sync --head "$(am_commit policy)")" "a sync that changes policy fields is refused"
+am_sync_head s-render
+mkdir -p "$AM_REPO/.claude/commands" && printf 'x\n' >"$AM_REPO/.claude/commands/review.md"
+assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit render)")" "a render artifact needs a person"
+am_sync_head s-del
+git -C "$AM_REPO" rm -q app.js
+assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
+# 기준 브랜치에 이미 관리 항목이 있는 저장소(실제 저장소는 모두 그렇다): 남아 있으면 통과, 지우면 거부.
+am_base_with managed '.managed_files["AGENTS.md"] = {content_sha256:"aaaa"}'
+am_on managed s-keep
+mkdir -p "$AM_REPO/.ai-harness/workflows" && cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit keep)")" "existing managed entries that stay are fine"
+am_manifest '.managed_files["AGENTS.md"].template_version = "9.9.9"'
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit tv)")" "recording a new template_version for an untouched file is fine"
+am_manifest '.managed_files["app.js"] = {template_version:"x"}'
+assert_eq "manifest_hash_changed_without_file:app.js" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit newkey)")" "a new entry without its file is refused"
+am_manifest 'del(.managed_files["app.js"]) | del(.managed_files["AGENTS.md"])'
+assert_eq "manifest_entry_removed" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/managed --scope sync --head "$(am_commit drop)")" "removing a managed entry is refused"
+am_sync_head s-otherhash
+am_manifest '.managed_files["AGENTS.md"] = {content_sha256:"1111"}'
+assert_eq "manifest_hash_changed_without_file:AGENTS.md" "$(am_check --scope sync --head "$(am_commit otherhash)")" "hashes of untouched files cannot change"
+am_sync_head s-tab
+printf 'x\n' >"$AM_REPO/$AM_RUNNER"$'\t'
+assert_eq "bad_path" "$(am_check --scope sync --head "$(am_commit tab)")" "a path with a tab cannot pose as a managed file"
+# harvest PR: 문서만, 작게, 일반 파일 모드, 1회차 독립 검토 통과·기대효과 기록.
+am_hcheck() { am_check --scope project --head "$1" --review "${2:-$AM_REVIEW}"; }
+am_branch h-ok
+printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+AM_HARVEST_OK="$(am_commit harvest)"
+assert_eq "ok" "$(am_hcheck "$AM_HARVEST_OK")" "a small doc-only harvest PR passes"
+assert_eq "review_not_first_pass" "$(am_hcheck "$AM_HARVEST_OK" '{"review":{"first_pass":"revised","expected":"x"}}')" "a revised proposal needs a person"
+assert_eq "no_expected_effect" "$(am_hcheck "$AM_HARVEST_OK" '{"review":{"first_pass":"pass"}}')" "an improvement without expected effect needs a person"
+am_branch h-ko
+printf -- '- 규칙\n' >"$AM_REPO/.ai-harness/docs/한글-규칙.md"
+assert_eq "ok" "$(am_hcheck "$(am_commit ko)")" "Korean doc paths are read as they are"
+am_branch h-newline
+printf -- '- r\n' >>"$AM_REPO/AGENTS.md"
+printf 'x\n' >"$AM_REPO/.ai-harness/docs/a.md"$'\n'"zz" && printf 'y\n' >>"$AM_REPO/app.js"
+assert_eq "bad_path" "$(am_hcheck "$(am_commit newline)")" "a path with a newline cannot hide other entries"
+am_branch h-rename
+git -C "$AM_REPO" mv app.js .ai-harness/docs/app.md
+assert_eq "unsupported_change:D:app.js" "$(am_hcheck "$(am_commit rename)")" "a rename cannot hide the deleted source"
+am_branch h-link
+rm "$AM_REPO/AGENTS.md" && ln -s /etc/hosts "$AM_REPO/AGENTS.md"
+assert_eq "unsupported_change:T:AGENTS.md" "$(am_hcheck "$(am_commit link)")" "a doc turned into a symlink is refused"
+am_branch h-exec
+printf -- '- r\n' >>"$AM_REPO/.ai-harness/docs/testing.md" && chmod 755 "$AM_REPO/.ai-harness/docs/testing.md"
+assert_eq "bad_mode:100755:.ai-harness/docs/testing.md" "$(am_hcheck "$(am_commit exec)")" "an executable doc is refused"
+am_branch h-code
+printf 'y\n' >>"$AM_REPO/app.js"
+assert_eq "non_doc_file:app.js" "$(am_hcheck "$(am_commit code)")" "a harvest PR touching code is refused"
+am_branch h-graph
+mkdir -p "$AM_REPO/.ai-harness/workflows" && printf '{}\n' >"$AM_REPO/.ai-harness/workflows/review-graph.json"
+assert_eq "non_doc_file:.ai-harness/workflows/review-graph.json" "$(am_hcheck "$(am_commit graph)")" "a harvest PR touching a graph is refused"
+am_branch h-many
+for f in a b c d; do printf 'x\n' >"$AM_REPO/.ai-harness/docs/$f.md"; done
+assert_eq "too_many_files:4" "$(am_hcheck "$(am_commit many)")" "file count cap"
+am_branch h-long
+seq 1 41 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:41" "$(am_hcheck "$(am_commit long)")" "line count cap"
+# 대기열: 전역 opt-in·기준 브랜치의 저장소 설정·같은 저장소 PR·독립 검토를 모두 통과해야 들어간다.
+AM_DATA="$TEST_TMP/am-data"
+cat >"$TEST_TMP/am-review" <<'STUB'
+#!/usr/bin/env bash
+token="$(grep -o 'AUTO_MERGE_REVIEW [a-z0-9]\{16\} pass' | head -n 1 | cut -d' ' -f2)"
+case "${AM_REVIEW_MODE:-pass}" in
+  pass) printf 'looks fine\nAUTO_MERGE_REVIEW %s pass\n' "$token" ;;
+  fail) printf 'AUTO_MERGE_REVIEW %s fail weakens checks\n' "$token" ;;
+  forged) printf 'AUTO_MERGE_REVIEW deadbeefdeadbeef pass\n' ;;
+esac
+STUB
+chmod +x "$TEST_TMP/am-review"
+am() { HARNESS_METRICS_DIR="$AM_DATA" HM_OPEN_PR_CMD="$TEST_TMP/am-pr" HM_AUTO_MERGE_REVIEW_CMD="$TEST_TMP/am-review" "$ROOT/scripts/auto-merge.sh" "$@"; }
+am_runs() { jq -sr "$1" "$AM_DATA/harvest-auto/runs.jsonl"; }
+am_pending() { find "$AM_DATA/auto-merge/pending" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+AM_SINCE="2026-11-03T00:00:00Z"
+am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
+am_harvest_enqueue() { HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr "$1" --since "$AM_SINCE" --review "$AM_REVIEW"; }
+am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/1 --since "$AM_SINCE"
+assert_eq "auto_merge_eligible" "$(am_runs 'last | .event')" "with the setting off a passing sync PR is only noted as eligible"
+assert_eq "0" "$(am_pending)" "nothing is queued while the setting is off"
+am_sync_enqueue https://github.com/other/am/pull/1
+assert_eq "pr_repo_mismatch" "$(am_runs 'last | .reason')" "a PR URL of another repo is refused"
+AM_BASE=develop am_sync_enqueue https://github.com/acme/am/pull/1
+assert_eq "no_base_branch" "$(am_runs 'last | .reason')" "the base must be a remote branch"
+am_sync_enqueue https://github.com/acme/am/pull/1
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a passing sync PR is queued"
+assert_eq "1" "$(am_pending)" "one pending entry"
+AM_REVIEW_MODE=fail am_harvest_enqueue https://github.com/acme/am/pull/20
+assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a harvest PR the independent reviewer fails is not queued"
+AM_REVIEW_MODE=forged am_harvest_enqueue https://github.com/acme/am/pull/21
+assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a verdict without this run's token is not accepted"
+am_harvest_enqueue https://github.com/acme/am/pull/22
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a harvest PR passing the independent review is queued"
+git -C "$AM_REPO" checkout -q -B off develop && am_manifest '.auto_merge.harvest = false' && git -C "$AM_REPO" commit -q -am off
+git -C "$AM_REPO" update-ref refs/remotes/origin/off off
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "repo_opt_out" "$(am_runs 'last | .reason')" "the base branch manifest must allow it"
+# sweep: 호스트 상태 스텁. CI 진행 중이면 기다리고, 통과하면 head를 고정해 병합한다.
+cat >"$TEST_TMP/am-pr" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  --status) id="${2##*/}"; cat "$AM_PR_STATE_DIR/$id.json" 2>/dev/null || cat "$AM_PR_STATE_DIR/default.json" ;;
+  --merge) printf '%s|%s|%s\n' "$2" "$4" "$6" >>"$AM_PR_LOG"; exit "$(cat "$AM_PR_STATE_DIR/merge-rc" 2>/dev/null || echo 0)" ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$TEST_TMP/am-pr"
+export AM_PR_STATE_DIR="$TEST_TMP/am-state" AM_PR_LOG="$TEST_TMP/am-merged"
+mkdir -p "$AM_PR_STATE_DIR"
+am_state() { jq -n --arg h "${2:-$AM_SYNC_OK}" "{state:\"open\",head:\$h,base:\"develop\",created:\"2026-11-03T00:05:00\",activity:0,mergeable:\"mergeable\",ci:\"success\",draft:true} | ${3:-.}" >"$AM_PR_STATE_DIR/$1.json"; }
+am_state 1 "$AM_SYNC_OK" '.ci = "pending"'
+am_state 22 "$AM_HARVEST_OK" '.ci = "pending"'
+HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
+assert_eq "2" "$(am_pending)" "pending CI keeps the entries"
+assert_not_file "$AM_PR_LOG"
+am_state 1
+am_state 22 "$AM_HARVEST_OK"
+HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
+assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the repo method"
+assert_eq "2" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "both queued PRs are merged"
+assert_eq "auto_merged" "$(am_runs 'last | .event')" "the merge is recorded"
+assert_eq "0" "$(am_pending)" "merged entries leave the queue"
+assert_contains "$(am notify | jq -r '.systemMessage')" "2건 병합" "SessionStart reports auto merges"
+assert_eq "" "$(am notify)" "the notice is shown once"
+: >"$AM_PR_LOG"
+for AM_CASE in 'head|.head = "0000000000000000"|head_moved' 'short|.head = "'"${AM_SYNC_OK:0:6}"'"|head_moved' 'base|.base = "main"|pr_base_mismatch' \
+  'activity|.activity = 1|human_activity' 'ci|.ci = "failure"|ci_failed' 'conflict|.mergeable = "conflicting"|conflict' 'closed|.state = "closed"|closed' \
+  'old|.created = "2026-11-02T23:59:59"|pr_not_from_this_run'; do
+  IFS='|' read -r AM_N AM_F AM_R <<<"$AM_CASE"
+  am_sync_enqueue "https://github.com/acme/am/pull/$AM_N"
+  am_state "$AM_N" "$AM_SYNC_OK" "$AM_F"
+  HM_SYNC_AUTO_MERGE=1 am sweep
+  assert_eq "auto_merge_skipped|$AM_R" "$(am_runs 'last | "\(.event)|\(.reason)"')" "sweep hands $AM_N to a person"
+done
+am_sync_enqueue https://github.com/acme/am/pull/30
+am_state 30
+am sweep
+assert_eq "auto_merge_skipped|opted_out" "$(am_runs 'last | "\(.event)|\(.reason)"')" "turning the setting off drops queued PRs"
+assert_eq "0" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "nothing else was merged"
+# 병합 결과 종료 코드: 7은 병합됨(head 다름), 8은 실패 뒤 draft 복구 실패.
+for AM_CASE in '7|auto_merged|head_mismatch' '8|auto_merge_skipped|merge_failed_not_redrafted' '5|auto_merge_skipped|merge_failed'; do
+  IFS='|' read -r AM_RC AM_E AM_R <<<"$AM_CASE"
+  printf '%s\n' "$AM_RC" >"$AM_PR_STATE_DIR/merge-rc"
+  am_sync_enqueue "https://github.com/acme/am/pull/4$AM_RC"
+  am_state "4$AM_RC"
+  HM_SYNC_AUTO_MERGE=1 am sweep
+  assert_eq "$AM_E|$AM_R" "$(am_runs 'last | "\(.event)|\(.reason)"')" "merge exit $AM_RC is recorded as $AM_R"
+done
+rm -f "$AM_PR_STATE_DIR/merge-rc"
+assert_contains "$(am notify | jq -r '.systemMessage')" "head_mismatch" "a merge with a different head is surfaced"
+# 병합 요청 형태(dry-run).
+assert_eq "github|squash|abc1234" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --merge https://github.com/acme/svc/pull/3 --head abc1234 | jq -r '"\(.provider)|\(.method)|\(.head)"')" "GitHub merge request"
+assert_eq "bitbucket|merge_commit" "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --merge https://bitbucket.org/ws/r/pull-requests/4 --head abc1234 --method merge | jq -r '"\(.provider)|\(.merge_strategy)"')" "Bitbucket merge request"
+if "$ROOT/scripts/open-pr.sh" --merge https://github.com/acme/svc/pull/3 --head 'x; rm' >/dev/null 2>&1; then fail "merge requires a commit hash head"; fi
+if HARNESS_METRICS_DIR="$AM_DATA" "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project am-svc --first-pass maybe >/dev/null 2>&1; then fail "first-pass accepts only pass|revised"; fi
+# 꺼져 있을 때: 켰다면 병합됐을 sync PR이 30일에 3건 이상이면 켜는 방법을 30일에 한 번 안내한다. harvest는 권하지 않는다.
+AM_DATA="$TEST_TMP/am-hint"
+for AM_N in 61 62; do am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr "https://github.com/acme/am/pull/$AM_N" --since "$AM_SINCE"; done
+assert_eq "" "$(am notify)" "two eligible PRs are not enough for a hint"
+am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/63 --since "$AM_SINCE"
+am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/64 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "3" "$(am_runs '[.[] | select(.event == "auto_merge_eligible")] | length')" "harvest PRs are not judged in the background"
+assert_eq "" "$(HM_AUTO_MERGE_HINT=0 am notify)" "the hint can be turned off"
+assert_eq "" "$(HM_SYNC_AUTO_MERGE=1 am notify)" "no hint once auto merge is on"
+AM_HINT="$(am notify | jq -r '.systemMessage')"
+assert_contains "$AM_HINT" "3건" "the hint shows the evidence"
+assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting"
+assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
+assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
+# CI가 없는 저장소: 기본은 기다리다 사람에게, require_ci:false면 병합. 실패한 CI는 어느 설정에서도 막는다.
+AM_DATA="$TEST_TMP/am-noci"
+: >"$AM_PR_LOG"
+am_base_with noci '.auto_merge.require_ci = false'
+am_on noci s-noci
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_NOCI="$(am_commit noci)"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/71 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/noci --head "$AM_NOCI" --pr https://github.com/acme/am/pull/72 --since "$AM_SINCE"
+am_state 71 "$AM_SYNC_OK" '.ci = "none"'
+am_state 72 "$AM_NOCI" '.ci = "none" | .base = "noci"'
+HM_SYNC_AUTO_MERGE=1 am sweep
+assert_eq "https://github.com/acme/am/pull/72" "$(cut -d'|' -f1 "$AM_PR_LOG")" "only the repo that does not require CI merges without CI"
+assert_eq "1" "$(am_pending)" "the repo that requires CI keeps waiting"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/noci --head "$AM_NOCI" --pr https://github.com/acme/am/pull/73 --since "$AM_SINCE"
+am_state 73 "$AM_NOCI" '.ci = "failure" | .base = "noci"'
+HM_SYNC_AUTO_MERGE=1 am sweep
+assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/73")] | last | "\(.event)|\(.reason)"')" "failed CI blocks even without require_ci"
+pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
 CHAIN_DATA="$TEST_TMP/chain-data"
@@ -4455,6 +4852,161 @@ SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
 
+# 외부 디자인 스킬: 사본을 들지 않고 원본 저장소의 고정 커밋에서 스킬 폴더만 받는다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않는다. (#210)
+SETUP_T="$TEST_TMP/setup-design"
+SETUP_CATALOG="$SETUP_T/catalog"
+DESIGN_REMOTE="$SETUP_T/remote/acme/skills"
+mkdir -p "$SETUP_T" "$DESIGN_REMOTE/skills/foo" "$DESIGN_REMOTE/a/bar" "$DESIGN_REMOTE/b/bar" "$DESIGN_REMOTE/unrelated"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+printf -- '---\nname: foo\n---\nfoo v1\n' >"$DESIGN_REMOTE/skills/foo/SKILL.md"
+printf -- '---\nname: bar\n---\nclaude bar\n' >"$DESIGN_REMOTE/a/bar/SKILL.md"
+printf -- '---\nname: bar\n---\ncodex bar\n' >"$DESIGN_REMOTE/b/bar/SKILL.md"
+printf 'MIT upstream\n' >"$DESIGN_REMOTE/LICENSE"
+printf 'not part of any skill\n' >"$DESIGN_REMOTE/unrelated/big.txt"
+git -C "$DESIGN_REMOTE" init -q
+git -C "$DESIGN_REMOTE" add -A
+git -C "$DESIGN_REMOTE" -c user.name=t -c user.email=t@t commit -qm v1
+DESIGN_REF1="$(git -C "$DESIGN_REMOTE" rev-parse HEAD)"
+design_catalog() { # foo ref
+  jq -n --arg ref "$1" '{version:1, skills:[
+    {name:"foo", bundle:"core", summary:"foo", source:{repo:"acme/skills", ref:$ref, path:"skills/foo"}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"viz", bundle:"core", summary:"viz", builtin:"claude", note:"built in"},
+    {name:"bar", bundle:"extra", summary:"bar", source:{repo:"acme/skills", ref:$ref, path:{claude:"a/bar", codex:"b/bar"}}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"hand", bundle:"extra", summary:"hand", installable:false, note:"install by hand"},
+    {name:"wrongname", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:$ref, path:"a/bar"}, license:"MIT", review:{runs:"none", network:"none"}},
+    {name:"badref", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"0000000000000000000000000000000000000000", path:"skills/foo"}, license:"MIT", review:{runs:"none", network:"none"}}
+  ]}' >"$SETUP_CATALOG/design-skills.json"
+}
+design_catalog "$DESIGN_REF1"
+SETUP_ENV=(HM_SETUP_GIT_BASE="$SETUP_T/remote")
+design_status() { setup_cmd design list | jq -r --arg n "$1" --arg t "$2" 'select(.name == $n) | .status[$t]'; }
+assert_eq "absent" "$(design_status foo claude)" "design skill starts absent"
+DESIGN_OUT="$(setup_cmd design install --tool both core)"
+assert_eq "installed installed" "$(jq -r 'select(.name=="foo") | .action' <<<"$DESIGN_OUT" | paste -sd' ' -)" "core bundle installs foo for both tools"
+assert_eq "builtin" "$(jq -r 'select(.name=="viz" and .tool=="claude") | .action' <<<"$DESIGN_OUT")" "built-in skill needs no install"
+assert_eq "skipped unavailable" "$(jq -r 'select(.name=="viz" and .tool=="codex") | "\(.action) \(.detail)"' <<<"$DESIGN_OUT")" "built-in skill is unavailable on the other tool"
+assert_eq "0" "$(jq -r 'select(.name=="bar")' <<<"$DESIGN_OUT" | grep -c . || true)" "core bundle leaves extras alone"
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v1" "installed copy comes from the pinned commit"
+assert_eq "MIT upstream" "$(cat "$SETUP_T/codex/foo/LICENSE")" "upstream license travels with a skill folder that has none"
+[[ ! -e "$SETUP_T/claude/foo/unrelated" && ! -e "$SETUP_T/claude/unrelated" ]] || fail "only the skill folder is installed"
+assert_eq "$DESIGN_REF1" "$(jq -r '.installed["claude:foo"].ref' "$SETUP_T/data/setup/state.json")" "state records the pinned commit"
+assert_eq "current" "$(design_status foo codex)" "installed design skill is current"
+[[ -z "$(find "$SETUP_T/data/setup/tmp" -mindepth 1 -maxdepth 1 2>/dev/null)" ]] || fail "fetch work dirs are cleaned up"
+setup_cmd design install --tool both bar >/dev/null
+assert_contains "$(cat "$SETUP_T/claude/bar/SKILL.md")" "claude bar" "per-tool path installs the Claude variant"
+assert_contains "$(cat "$SETUP_T/codex/bar/SKILL.md")" "codex bar" "per-tool path installs the Codex variant"
+assert_eq "skipped manual" "$(setup_cmd design install --tool claude hand | jq -r '"\(.action) \(.detail)"')" "unpinnable skill is not installed"
+assert_eq "manual" "$(design_status hand claude)" "unpinnable skill reports manual"
+assert_contains "$(setup_cmd design install --tool claude wrongname | jq -r '"\(.action) \(.detail)"')" "failed SKILL.md name is not wrongname" "folder whose SKILL.md names another skill is refused"
+[[ ! -e "$SETUP_T/claude/wrongname" ]] || fail "refused skill left a folder"
+assert_eq "failed" "$(setup_cmd design install --tool claude badref | jq -r '.action')" "unknown pinned commit fails"
+assert_eq "unknown" "$(setup_cmd design install --tool claude nope | jq -r '.action')" "unknown design skill rejected"
+# 검증에 실패하는 교체는 사용자 폴더를 옮기기 전에 멈춘다.
+mkdir -p "$SETUP_T/claude/wrongname"
+printf 'mine\n' >"$SETUP_T/claude/wrongname/SKILL.md"
+assert_eq "failed" "$(setup_cmd design install --tool claude --replace wrongname | jq -r '.action')" "invalid replacement fails"
+assert_eq "mine" "$(cat "$SETUP_T/claude/wrongname/SKILL.md")" "failed replacement keeps the user's folder in place"
+rm -rf "$SETUP_T/claude/wrongname"
+# 원본을 고정할 수 없는 스킬은 직접 깐 사본이 있어도 --replace로 받으러 가지 않는다.
+mkdir -p "$SETUP_T/claude/hand"
+printf 'hand made\n' >"$SETUP_T/claude/hand/SKILL.md"
+assert_eq "foreign" "$(design_status hand claude)" "hand-installed unpinnable skill shows as foreign"
+assert_eq "skipped manual" "$(setup_cmd design install --tool claude --replace hand | jq -r '"\(.action) \(.detail)"')" "unpinnable skill is never fetched"
+assert_eq "hand made" "$(cat "$SETUP_T/claude/hand/SKILL.md")" "hand-installed unpinnable skill untouched"
+# 카탈로그 값은 git 인자·경로가 되기 전에 확인한다.
+jq '.skills += [{name:"escape", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:"../.."}, license:"MIT", review:{runs:"none", network:"none"}},
+  {name:"nocodex", bundle:"extra", summary:"x", source:{repo:"acme/skills", ref:"'"$DESIGN_REF1"'", path:{claude:"skills/foo"}}, license:"MIT", review:{runs:"none", network:"none"}}]' \
+  "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool claude escape | jq -r '"\(.action) \(.detail)"')" "path escaping the source repository is refused"
+assert_eq "failed invalid source.path" "$(setup_cmd design install --tool codex nocodex | jq -r '"\(.action) \(.detail)"')" "missing per-tool path is refused"
+jq '(.skills[] | select(.name=="badref") | .source.ref) = "--upload-pack=touch"' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+assert_eq "failed source.ref must be a 40-character commit" "$(setup_cmd design install --tool claude badref | jq -r '"\(.action) \(.detail)"')" "a non-commit ref is refused before git runs"
+# "."은 .git까지 복사하고, glob은 sparse 패턴을 넓히고, ".."은 원본 저장소 밖을 가리킨다.
+for DESIGN_BAD in 'path:"."' 'path:"a/*"' 'path:"!a"' 'path:"a//b"' 'path:"a/./b"' 'repo:"../x"' 'repo:"acme/.."'; do
+  jq --arg ref "$DESIGN_REF1" ".skills += [{name:\"bad\", bundle:\"extra\", summary:\"x\", source:({repo:\"acme/skills\", ref:\$ref, path:\"skills/foo\"} + {$DESIGN_BAD}), license:\"MIT\", review:{runs:\"none\", network:\"none\"}}]" \
+    "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bad.json"
+  DESIGN_BAD_OUT="$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bad.json" setup_cmd design install --tool claude bad | jq -r '"\(.action) \(.detail)"')"
+  assert_contains "$DESIGN_BAD_OUT" "failed invalid source." "catalog value $DESIGN_BAD is refused before git runs"
+  [[ ! -e "$SETUP_T/claude/bad" ]] || fail "refused catalog value $DESIGN_BAD left a folder"
+done
+# 빈 묶음도 bash 3.2 set -u에서 멈추지 않는다.
+jq '.skills |= map(select(.bundle != "extra"))' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/core-only.json"
+HM_SETUP_DESIGN_CATALOG="$SETUP_T/core-only.json" setup_cmd design install --tool claude extra >/dev/null || fail "an empty bundle fails under set -u"
+# 스킬 자리에 파일이나 symlink가 있으면 우리가 깐 사본이 아니다.
+printf 'a file\n' >"$SETUP_T/claude/bar2"
+jq '.skills += [(.skills[] | select(.name=="bar") | .name = "bar2" | .source.path = "a/bar")]' "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/bar2.json"
+assert_eq "skipped foreign" "$(HM_SETUP_DESIGN_CATALOG="$SETUP_T/bar2.json" setup_cmd design install --tool claude bar2 | jq -r '"\(.action) \(.detail)"')" "a file in the skill slot is foreign"
+assert_eq "a file" "$(cat "$SETUP_T/claude/bar2")" "a file in the skill slot is kept"
+rm -f "$SETUP_T/claude/bar2"
+# 관리 사본에 사용자가 더한 symlink·빈 디렉터리는 수정으로 본다 — 지우지 않는다.
+ln -s /etc/hosts "$SETUP_T/claude/bar/my-link"
+assert_eq "modified" "$(design_status bar claude)" "a symlink added to a managed copy counts as modified"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool claude bar | jq -r '"\(.action) \(.detail)"')" "a managed copy with a user symlink is not removed"
+[[ -L "$SETUP_T/claude/bar/my-link" ]] || fail "user symlink removed"
+rm "$SETUP_T/claude/bar/my-link"
+mkdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "modified" "$(design_status bar claude)" "an empty directory added to a managed copy counts as modified"
+rmdir "$SETUP_T/claude/bar/my-empty"
+assert_eq "current" "$(design_status bar claude)" "the untouched managed copy is current again"
+# 외부 git은 프롬프트·hook·LFS 필터 없이, 느린 연결을 끊고 돈다.
+SETUP_SRC="$(<"$ROOT/scripts/setup.sh")"
+for DESIGN_GIT_OPT in "GIT_TERMINAL_PROMPT=0" "GIT_SSH_COMMAND='ssh -o BatchMode=yes'" "http.lowSpeedLimit=1000" "http.lowSpeedTime=30" "core.hooksPath=/dev/null" "filter.lfs.process=" "GIT_LFS_SKIP_SMUDGE=1"; do
+  assert_contains "$SETUP_SRC" "$DESIGN_GIT_OPT" "design git runs with $DESIGN_GIT_OPT"
+done
+# shellcheck disable=SC2016  # 셸 변수가 아니라 setup.sh 소스의 문자열을 찾는다
+[[ "$(grep -cE '^[[:space:]]*(GIT_[A-Z_]+=[^ ]+ )*git -C "\$work"' "$ROOT/scripts/setup.sh")" == 0 ]] || fail "design fetch calls git without design_git"
+# 교체하며 옮겨 둔 기존 폴더는 중단돼도 지워지는 tmp가 아니라 backups에 있다.
+# shellcheck disable=SC2016  # 소스 문자열 그대로
+assert_contains "$SETUP_SRC" 'old="$STATE_DIR/backups/old-' "replaced folder waits in backups, not tmp"
+# 사용자가 원래 갖고 있던 같은 이름 스킬은 --replace 없이는 그대로 둔다.
+setup_cmd design remove --tool claude foo >/dev/null
+mkdir -p "$SETUP_T/claude/foo"
+printf 'my own foo\n' >"$SETUP_T/claude/foo/SKILL.md"
+assert_eq "skipped foreign" "$(setup_cmd design install --tool claude foo | jq -r '"\(.action) \(.detail)"')" "foreign design skill kept"
+DESIGN_OUT="$(setup_cmd design install --tool claude --replace foo)"
+assert_eq "replaced" "$(jq -r '.action' <<<"$DESIGN_OUT")" "foreign design skill replaced on request"
+assert_eq "my own foo" "$(cat "$(jq -r '.detail' <<<"$DESIGN_OUT")/SKILL.md")" "replaced design skill backed up"
+# 고정 커밋이 바뀌면 outdated. 고친 사본은 갱신하지 않는다. SessionStart·update는 네트워크로 외부 스킬을 갱신하지 않는다.
+printf -- '---\nname: foo\n---\nfoo v2\n' >"$DESIGN_REMOTE/skills/foo/SKILL.md"
+git -C "$DESIGN_REMOTE" -c user.name=t -c user.email=t@t commit -qam v2
+design_catalog "$(git -C "$DESIGN_REMOTE" rev-parse HEAD)"
+assert_eq "outdated" "$(design_status foo claude)" "new pinned commit makes the copy outdated"
+printf '{}' | setup_cmd notify >/dev/null
+setup_cmd update >/dev/null
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v1" "SessionStart and update leave design skills alone"
+printf 'local\n' >>"$SETUP_T/codex/foo/SKILL.md"
+DESIGN_OUT="$(setup_cmd design install --tool both foo)"
+assert_eq "updated" "$(jq -r 'select(.tool=="claude") | .action' <<<"$DESIGN_OUT")" "outdated design skill updates"
+assert_eq "skipped modified" "$(jq -r 'select(.tool=="codex") | "\(.action) \(.detail)"' <<<"$DESIGN_OUT")" "edited design skill is not overwritten"
+assert_contains "$(cat "$SETUP_T/claude/foo/SKILL.md")" "foo v2" "update installs the new pinned commit"
+assert_eq "removed" "$(setup_cmd design remove --tool claude foo | jq -r '.action')" "remove managed design skill"
+[[ ! -e "$SETUP_T/claude/foo" ]] || fail "removed design skill dir still exists"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool codex foo | jq -r '"\(.action) \(.detail)"')" "edited design skill is not removed without --force"
+# ai-harness에 내장된 항목: 받지 않고, setup이 예전에 깐 사본만 superseded로 알려 지울 수 있게 한다. 사용자가 둔 폴더는 건드리지 않는다.
+assert_eq "outdated" "$(design_status bar claude)" "bar is an unmodified managed copy (of an older pin) before it becomes built in"
+jq '(.skills[] | select(.name=="bar")) += {builtin:"ai-harness"} | .skills += [{name:"mine", bundle:"extra", summary:"x", builtin:"ai-harness", note:"built in"}]' \
+  "$SETUP_CATALOG/design-skills.json" >"$SETUP_T/d.json" && mv "$SETUP_T/d.json" "$SETUP_CATALOG/design-skills.json"
+mkdir -p "$SETUP_T/claude/mine" && printf 'my own\n' >"$SETUP_T/claude/mine/SKILL.md"
+printf 'local\n' >>"$SETUP_T/codex/bar/SKILL.md"
+assert_eq "superseded" "$(design_status bar claude)" "an old setup copy of a now built-in skill is superseded"
+assert_eq "modified" "$(design_status bar codex)" "an edited old copy of a built-in skill stays modified"
+assert_eq "foreign" "$(design_status mine claude)" "a hand-placed folder named like a built-in skill is foreign"
+assert_eq "builtin" "$(design_status mine codex)" "a built-in skill with nothing installed is builtin"
+assert_contains "$(setup_cmd design list | jq -r 'select(.name=="mine") | .conflict.claude')" "같은 이름 내장 스킬 있음" "list flags a hand-placed folder that shadows a built-in skill"
+assert_eq "null null" "$(setup_cmd design list | jq -r 'select(.name=="mine" or .name=="foo") | .conflict.codex // "null"' | paste -sd' ' -)" "no conflict notice without a hand-placed folder"
+assert_eq "ai-harness" "$(setup_cmd design list | jq -r 'select(.name=="bar") | .builtin')" "list says the skill is built into ai-harness"
+assert_eq "builtin builtin" "$(setup_cmd design install --tool both --replace bar | jq -r '.action' | paste -sd' ' -)" "a built-in skill is never fetched, even with --replace"
+assert_contains "$(cat "$SETUP_T/claude/bar/SKILL.md")" "claude bar" "install leaves the superseded copy in place"
+assert_eq "skipped foreign" "$(setup_cmd design remove --tool claude mine | jq -r '"\(.action) \(.detail)"')" "a hand-placed folder is not removed"
+assert_eq "skipped modified" "$(setup_cmd design remove --tool codex bar | jq -r '"\(.action) \(.detail)"')" "an edited superseded copy needs --force"
+assert_eq "removed" "$(setup_cmd design remove --tool claude bar | jq -r '.action')" "a superseded copy is removable"
+[[ ! -e "$SETUP_T/claude/bar" ]] || fail "removed superseded copy still exists"
+assert_eq "builtin" "$(design_status bar claude)" "after removal only the built-in copy remains"
+SETUP_ENV=()
+# 기본 스킬 목록·안내에는 외부 디자인 스킬이 섞이지 않는다.
+assert_eq "0" "$(setup_cmd list | jq -r 'select(.name=="foo" or .name=="impeccable") | .name' | grep -c . || true)" "plain list shows only the base catalog"
+pass "setup installs design skills from pinned upstream commits"
+
 # 접속 정보: secret은 인자로 받지 않고 stdin으로만, 저장한 파일에서 바로 연결 확인. 자격 증명은 HTTP 호출 인자에도 싣지 않는다.
 SETUP_T="$TEST_TMP/setup-creds"
 SETUP_CATALOG="$ROOT/catalog"
@@ -4658,6 +5210,144 @@ case "$IMPACT_HTML_CONTENT" in *__IMPACT_DATA__*|*__IMPACT_HIGHLIGHTS__*) fail "
 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --out "$TEST_TMP/impact-nohl.html" >/dev/null
 assert_contains "$(cat "$TEST_TMP/impact-nohl.html")" "const HIGHLIGHTS = null" "report renders without highlights"
 pass "impact renders an offline report"
+
+# 판단 근거: 개선별 재발 추적(근거 batch → 반영 뒤 세션), 가드 차단 사례, missing_context 추이. (#209)
+EV_DATA="$TEST_TMP/impact-ev-data"
+EV_REPO="$TEST_TMP/impact-ev-repo"
+mkdir -p "$EV_DATA/events" "$EV_DATA/digests" "$EV_REPO/.ai-harness" "$EV_DATA/harvest-queue/$(hm_project_key ev)"
+printf '%s\n' '{"project_id":"ev","initialized":"2026-10-01"}' >"$EV_REPO/.ai-harness/harness.json"
+ev_session() { # sid date coverage-json findings-json|"" [events-json...]
+  local sid="$1" d="$2" cov="$3" findings="$4"; shift 4
+  {
+    jq -cn --arg sid "$sid" --arg d "$d" --argjson cov "$cov" '{v:3, src:"claude", sid:$sid, project:"ev", kind:"session",
+      started:($d+"T01:00:00Z"), ended:($d+"T01:30:00Z"), turns:6, model:"m", coverage:$cov}'
+    for ev in "$@"; do jq -cn --arg sid "$sid" --argjson e "$ev" '{v:3, src:"claude", sid:$sid, project:"ev", n:1} + $e'; done
+  } >"$EV_DATA/events/claude-$sid.jsonl"
+  [[ -z "$findings" ]] || jq -cn --argjson f "$findings" '{v:2, findings:$f}' >"$EV_DATA/digests/claude-$sid.json"
+}
+EV_OLD='["error","guard_block"]'
+EV_NEW='["error","guard_block","guard_sample"]'
+ev_session b1 2026-10-03 "$EV_OLD" '[{"category":"correction","summary":"커버리지 게이트를 CI에서야 발견"},{"category":"missing_context","summary":"테스트 TZ를 모름"}]' '{"kind":"guard_block","n":2}'
+ev_session b2 2026-10-04 "$EV_OLD" '[{"category":"workflow_gap","summary":"커버리지 100% 게이트 늦게 확인"}]'
+ev_session b3 2026-10-05 "$EV_OLD" ""
+ev_session a1 2026-10-11 "$EV_NEW" '[{"category":"missing_context","summary":"배포 절차를 모름"}]' \
+  '{"kind":"guard_block","n":1}' '{"kind":"guard_sample","target":"Edit: [Direct edit guard] src/a.ts 수정 전에 docs를 먼저 Read 하세요.","n":1}'
+for i in 2 3 4; do ev_session "a$i" "2026-10-1$i" "$EV_NEW" '[]'; done
+ev_session a5 2026-10-15 "$EV_NEW" '[{"category":"correction","summary":"또 커버리지 게이트를 PR에서 발견"}]'
+jq -cn '{v:1, project:"ev", reviewed_at:"2026-10-10T00:00:00Z", markers:["claude-b1.json","claude-b2.json","claude-b3.json"],
+    review:{outcome:"improved", summary:"커버리지 게이트 선검증", expected:"재발 0", artifact:"https://example.com/pr/7", change:"add"}},
+  {v:1, project:"ev", reviewed_at:"2026-10-20T00:00:00Z", review:{outcome:"improved", summary:"마커 없는 옛 기록", expected:"재발 0"}}' \
+  >"$EV_DATA/harvest-queue/$(hm_project_key ev)/review-history.jsonl"
+EV_JSON="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "h1 batch 3 2 3 5 2" "$(jq -r '.improvements[0] | "\(.id) \(.before.basis) \(.before.batch_sessions) \(.before.observed) \(.before.candidates.items | length) \(.after.observed) \(.after.candidates.items | length)"' <<<"$EV_JSON")" \
+  "impact tracks each improvement from its evidence batch to the digested sessions after it"
+assert_eq "claude-b2#0 claude-b1#1 claude-b1#0" "$(jq -r '[.improvements[0].before.candidates.items[].id] | join(" ")' <<<"$EV_JSON")" \
+  "impact candidate ids point at a finding in a session digest, newest first"
+assert_eq "2026-09-10 2 3 null" "$(jq -r '"\(.improvements[0].before.window | "\(.since) \(.observed) \(.candidates.items | length)") \(.improvements[1].before.window)"' <<<"$EV_JSON")" \
+  "impact adds a 30-day window baseline of all digested sessions next to a batch baseline"
+assert_eq "h2 window 2026-09-20 0" "$(jq -r '.improvements[1] | "\(.id) \(.before.basis) \(.before.since) \(.after.observed)"' <<<"$EV_JSON")" \
+  "impact falls back to the days before an improvement that has no batch markers"
+assert_eq "2 0.29" "$(jq -r '.periods.after | "\(.missing_context) \(.missing_context_per_session)"' <<<"$EV_JSON")" \
+  "impact counts missing-context findings per digested session"
+assert_eq "테스트 TZ를 모름" "$(jq -r '.missing_context.after.items | last | .summary' <<<"$EV_JSON")" "impact lists missing-context summaries"
+assert_eq "true" "$(jq -r '[.weekly[] | has("missing_context_per_session")] | all' <<<"$EV_JSON")" "impact weekly series carries missing context"
+assert_eq "1 2 Edit: [Direct edit guard] src/a.ts" "$(jq -r '.periods.after | "\(.guard_samples | length) \(.guard_blocks_unsampled) \(.guard_samples[0].target | .[0:34])"' <<<"$EV_JSON")" \
+  "impact shows what the guard blocked and counts blocks recorded before samples existed"
+
+# 판정은 render가 계산한다: 후보에 없는 id는 버리고, 세션 단위로 세며, 관측이 적으면 보류한다.
+EV_FILE="$TEST_TMP/impact-ev.json"
+printf '%s\n' "$EV_JSON" >"$EV_FILE"
+ev_verdict() { # highlights-json → "verdict before after" per improvement
+  printf '%s\n' "$1" >"$TEST_TMP/impact-ev-hl.json"
+  HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
+  sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '[.improvements[].result | "\(.verdict):\(.before_hits // "-"):\(.after_hits // "-")"] | join(" ")'
+}
+assert_eq "reduced:2:1 unmatched:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
+  "impact verdict counts sessions, ignores unknown ids, and marks unmatched improvements"
+assert_eq "gone:2:0 no_baseline:0:0" "$(ev_verdict '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":[]},{"id":"h2","before":[],"after":[]}]}')" \
+  "impact verdict says gone only with a baseline"
+assert_eq "hold recurred recurred reduced" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [verdict(2; 0; 3; 10), verdict(2; 1; 3; 10), verdict(1; 3; 5; 2), verdict(5; 1; 5; 10)] | join(" ")')" \
+  "impact holds judgment on few observed sessions unless the pattern recurred, and compares rates otherwise"
+case "$(cat "$TEST_TMP/impact-ev.html")" in *'"candidates"'*) fail "report drops the candidate pool and keeps only matched examples" ;; esac
+# batch는 문제로 뽑힌 표본이다: window를 맞췄으면 같은 정의(정리된 세션 전부)의 비율로 판정한다.
+# window 2세션 중 1 → 0.5, 반영 뒤 5세션 중 1 → 0.2 = reduced. batch 기준(2/2=1.0)이었어도 reduced지만 baseline이 바뀐다.
+ev_baseline() {
+  printf '%s\n' "$1" >"$TEST_TMP/impact-ev-hl.json"
+  HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
+  sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '.improvements[0].result | "\(.verdict) \(.baseline) \(.window_hits)"'
+}
+assert_eq "reduced window 1" "$(ev_baseline '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"window":["claude-b1#0"],"after":["claude-a5#0"]}]}')" \
+  "impact compares against the window baseline when the agent matched it"
+assert_eq "reduced batch null" "$(ev_baseline '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":["claude-a5#0"]}]}')" \
+  "impact falls back to the batch baseline and says so"
+assert_contains "$(cat "$TEST_TMP/impact-ev.html")" "문제로 뽑힌 표본" "impact report states the selection bias of the evidence batch"
+pass "impact evidence per improvement, guard cases, and missing context"
+
+# 후보 상한은 최신을 남기고, 반영 뒤가 잘리면 "사라짐"을 "판단 보류"로 내린다.
+CAP_DATA="$TEST_TMP/impact-cap-data"
+mkdir -p "$CAP_DATA/events" "$CAP_DATA/digests" "$CAP_DATA/harvest-queue/$(hm_project_key ev)"
+cp "$EV_DATA/harvest-queue/$(hm_project_key ev)/review-history.jsonl" "$CAP_DATA/harvest-queue/$(hm_project_key ev)/"
+cp "$EV_DATA/events/claude-b1.jsonl" "$EV_DATA/events/claude-b2.jsonl" "$CAP_DATA/events/"
+cp "$EV_DATA/digests/claude-b1.json" "$EV_DATA/digests/claude-b2.json" "$CAP_DATA/digests/"
+for i in $(seq 1 31); do
+  d="2026-10-$((10 + (i % 20)))"
+  jq -cn --arg sid "c$i" --arg d "$d" '{v:3, src:"claude", sid:$sid, project:"ev", kind:"session",
+    started:($d+"T02:00:00Z"), ended:($d+"T02:30:00Z"), turns:6, model:"m", coverage:["error"]}' >"$CAP_DATA/events/claude-c$i.jsonl"
+  jq -cn --arg d "$d" '{v:2, findings:[range(10) | {category:"workflow_gap", summary:"잡일 \(.) \($d)"}]}' >"$CAP_DATA/digests/claude-c$i.json"
+done
+CAP_JSON="$(HARNESS_METRICS_DIR="$CAP_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "true 300 2026-10-29" "$(jq -r '.improvements[0].after.candidates | "\(.truncated) \(.items | length) \(.items[0].date)"' <<<"$CAP_JSON")" \
+  "impact keeps the newest candidates when more than 300 findings follow an improvement"
+printf '%s\n' "$CAP_JSON" >"$TEST_TMP/impact-cap.json"
+printf '%s\n' '{"improvements":[{"id":"h1","before":["claude-b1#0"],"after":[]}]}' >"$TEST_TMP/impact-cap-hl.json"
+HARNESS_METRICS_DIR="$CAP_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TMP/impact-cap.json" --highlights "$TEST_TMP/impact-cap-hl.json" --out "$TEST_TMP/impact-cap.html" >/dev/null
+assert_eq "hold true" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-cap.html" | jq -r '.improvements[0].result | "\(.verdict) \(.after_truncated)"')" \
+  "impact holds a gone verdict when the after list was truncated"
+pass "impact candidate cap keeps the newest findings"
+
+# 하이라이트가 객체가 아니면 없는 것으로 보고 리포트를 만든다. 옛 compare JSON(improvements 없음)도 그린다.
+printf '%s\n' '[1,2]' >"$TEST_TMP/impact-bad-hl.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-bad-hl.json" --out "$TEST_TMP/impact-bad.html" >/dev/null 2>&1 \
+  || fail "impact render accepts non-object highlights"
+assert_contains "$(cat "$TEST_TMP/impact-bad.html")" "const HIGHLIGHTS = null" "impact render ignores array highlights"
+printf '%s\n' '"text"' >"$TEST_TMP/impact-bad-hl.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-bad-hl.json" --out "$TEST_TMP/impact-bad.html" >/dev/null 2>&1 \
+  || fail "impact render accepts string highlights"
+jq 'del(.improvements, .missing_context, .timeline)' "$EV_FILE" >"$TEST_TMP/impact-old.json"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TMP/impact-old.json" --out "$TEST_TMP/impact-old.html" >/dev/null \
+  || fail "impact render draws an old compare JSON without improvements"
+assert_eq "[]" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-old.html" | jq -c '.improvements')" "impact render treats missing improvements as none"
+pass "impact render tolerates odd inputs"
+
+# digest가 null·깨짐이면 건너뛰고, 세션 0건·이력 없음이어도 compare가 JSON을 낸다.
+ODD_DATA="$TEST_TMP/impact-odd-data"
+mkdir -p "$ODD_DATA/events" "$ODD_DATA/digests"
+cp "$EV_DATA/events/claude-a1.jsonl" "$ODD_DATA/events/"
+printf 'null\n' >"$ODD_DATA/digests/claude-a1.json"
+printf '{"v":2, "findings":[\n' >"$ODD_DATA/digests/claude-zz.json"
+ODD_JSON="$(HARNESS_METRICS_DIR="$ODD_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30)"
+assert_eq "1 0 [] []" "$(jq -c '[.periods.after.sessions, .periods.after.digested_sessions, .improvements, .timeline]' <<<"$ODD_JSON" | jq -r 'map(tojson) | join(" ")')" \
+  "impact skips null and broken digests and runs without harvest history"
+EMPTY_DATA="$TEST_TMP/impact-empty-data"
+mkdir -p "$EMPTY_DATA"
+assert_eq "0 0" "$(HARNESS_METRICS_DIR="$EMPTY_DATA" "$ROOT/scripts/impact.sh" compare --root "$EV_REPO" --today 2026-10-30 | jq -r '"\(.periods.before.sessions) \(.periods.after.sessions)"')" \
+  "impact compare works with no sessions at all"
+pass "impact compare tolerates missing data"
+
+# 경로 가림: 홈·/root·Windows 홈·끝 슬래시 없는 홈·끝 슬래시 있는 cwd. 날짜가 든 긴 파일 이름은 지우지 않는다.
+TILDE='~'
+redact_case() { jq -rn -L "$ROOT/scripts" --arg s "$1" --arg cwd "$2" 'include "redact"; $s | redact_path($cwd) | redact'; }
+assert_eq "$TILDE/.ssh/config" "$(redact_case "/root/.ssh/config" "")" "redact_path hides /root"
+assert_eq '~\proj\a.ts' "$(redact_case 'C:\Users\bob\proj\a.ts' "")" "redact_path hides a Windows home"
+assert_eq "ls $TILDE" "$(redact_case "ls /Users/bob" "")" "redact_path hides a home without trailing slash"
+assert_eq "src/a.ts" "$(redact_case "/Users/bob/app/src/a.ts" "/Users/bob/app/")" "redact_path strips a cwd given with a trailing slash"
+assert_eq "$TILDE/x /rootfs/y" "$(redact_case "/home/al/x /rootfs/y" "")" "redact_path leaves paths that only start like /root"
+assert_eq "db/2026-10-05-add-user-index-migration.sql" "$(redact_case "db/2026-10-05-add-user-index-migration.sql" "")" "redact keeps long dated file names"
+assert_eq "see 2026-10-05-add-user-index-migration.sql" "$(redact_case "see 2026-10-05-add-user-index-migration.sql" "")" "redact keeps a bare long file name"
+assert_eq "x *** y" "$(redact_case "x abcd1234efgh5678ijkl9012mnop y" "")" "redact still hides a bare key-like string"
+assert_eq "src/*** ***" "$(redact_case "src/sk-abcDEF1234567890xyzw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlc2lnbmF0dXJl" "")" \
+  "redact hides known token prefixes and JWTs even inside a path"
+pass "redact covers home paths and keeps file names"
 
 # 설치 30일 뒤 SessionStart에서 한 번만 안내한다.
 IMPACT_HINT_INPUT="$(jq -cn --arg cwd "$IMPACT_REPO" '{cwd:$cwd, transcript_path:"/x/s.jsonl"}')"

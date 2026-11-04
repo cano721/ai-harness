@@ -42,6 +42,8 @@ description: >
 | 기준 화면 | 프로젝트의 컴포넌트 카탈로그 화면·스토리북(있을 때). 없으면 같은 역할의 이웃 화면 |
 | 시안 처리 규칙의 px | pt(iOS)·dp(Android). 허용 오차 수치는 그대로, 터치 영역 하한(24px)은 이 Skill 체크리스트 4번(44pt·48dp)으로 읽는다 |
 | 계약 안의 `references/checklist.md` | 이 Skill의 [웹 공통 체크리스트](references/web-checklist.md)와 [네이티브 체크리스트](references/checklist.md) |
+| 계약 안의 `references/design-skills.md`(디자인 스킬 지도) | 웹 전용이라 이 Skill에 배포하지 않는다. 링크는 무시한다 — 지도의 웹 디자인 스킬은 네이티브 화면을 주도하지 않고, 외부 디자인 Skill은 위 우선순위 4번(선택 보조)으로만 쓴다 |
+| 계약 안의 `references/web-interface-guidelines.md`(웹 인터페이스 가이드라인) | 웹 코드용 규칙이라 이 Skill에 배포하지 않는다. 링크는 무시한다 — 네이티브 화면은 [네이티브 체크리스트](references/checklist.md)와 플랫폼 지침으로 본다 |
 | 키보드로 완주 | 스크린리더(VoiceOver·TalkBack)로 완주. 외부 키보드·태블릿을 지원하면 키보드도 |
 
 ## 증거

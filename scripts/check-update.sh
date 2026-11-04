@@ -162,11 +162,14 @@ fi
 
 # notify는 SessionStart hook에서 돌며 3초 예산을 공유하므로 네트워크를 건드리지 않는다.
 # 갱신은 정기 backfill 뒤 refresh와 사용자가 직접 부르는 status가 담당한다.
+# status는 "지금 최신인가"에 답해야 하므로 성공 TTL을 건너뛴다. 실패 백오프는 그대로 따른다.
 should_refresh=false
 if [[ "$COMMAND" == "notify" ]]; then
   should_refresh=false
 elif [[ "${HM_UPDATE_CHECK_ENABLED:-1}" == "0" ]]; then
   should_refresh=false
+elif [[ "$COMMAND" == "status" ]]; then
+  should_refresh=true
 elif [[ -z "$cached_latest" || "$cached_epoch" -le 0 ]]; then
   should_refresh=true
 elif (( now_epoch - cached_epoch >= check_hours * 3600 )); then

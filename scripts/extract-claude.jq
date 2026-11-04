@@ -90,7 +90,7 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
     cwd: $cwd, transcript: $path, source_mtime:$source_mtime, source_size:$source_size,
     coverage: [
       "workflow", "persona", "doc_read", "file_edit", "bash_cmd", "mcp_tool",
-      "jira_issue", "error", "guard_block", "permission_deny", "compact",
+      "jira_issue", "error", "guard_block", "guard_sample", "permission_deny", "compact",
       "error_sample", "agent_usage", "context", "ctx_tool", "doc_ctx"
     ]
   }),
@@ -163,6 +163,14 @@ def is_internal_prompt: test("<command-name>/ai-harness:harvest</command-name>")
     | result_text
     | select(test("(^|\\n)(PreToolUse:[A-Za-z]+ hook error: .*)?\\[Direct edit guard\\]"))] | length
   | select(.>0) | $base + {kind:"guard_block", n:.} ),
+# 가드 차단 사례: 무엇을 막았는지(툴·대상·가드 종류) 리포트가 보여줄 수 있게 위와 같은 결과에서 발췌한다.
+( [$L[] | tool_results | select(.is_error==true)
+    | (($toolNames[.tool_use_id // ""] // "")) as $tool
+    | select($tool == "" or ($tool | IN("Edit","Write","MultiEdit","NotebookEdit")))
+    | result_text
+    | select(test("(^|\\n)(PreToolUse:[A-Za-z]+ hook error: .*)?\\[Direct edit guard\\]"))
+    | (if $tool == "" then "?" else $tool end) + ": " + guard_excerpt($cwd)]
+  | error_samples("guard_sample") | $base + . ),
 # 권한 거부는 is_error 결과이고 거부 문구로 시작한다. 추출기 소스·PR 본문·커밋 메시지 속 같은 문구는 거부가 아니다.
 # 실측: 거부 메시지는 "The user doesn't want to proceed with this tool use." 한 형태뿐이라 그것만 센다.
 # AskUserQuestion에서 사용자가 "clarify"를 고르면 같은 거부 문구가 오지만 권한 거부가 아님

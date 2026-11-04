@@ -1,11 +1,11 @@
 ---
 name: setup
-description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
+description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며, 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
 ---
 
 # /setup — ai-harness 전역 셋업
 
-플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
+플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인)만, `design`이면 [디자인 스킬](#디자인-스킬-design)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉터리의 두 단계 상위(플러그인 루트).
 
@@ -122,9 +122,34 @@ $ROOT/scripts/setup.sh check <name>
 | `HM_DIGEST` | `0` | 하루 한 번 최근 세션을 저비용 모델로 정리해 사용자 교정·마찰을 harvest 근거로 남긴다 (LLM 비용 발생) |
 | `HM_HARVEST_AUTO` | `0` | analysis batch가 생기면 `/harvest --auto`를 백그라운드로 돌려 draft PR까지 만든다 |
 | `HM_SYNC_AUTO` | `0` | 하네스가 플러그인보다 뒤처진 저장소에 `/harness-init --sync`를 백그라운드로 돌려 draft PR을 만든다 |
+| `HM_SYNC_AUTO_MERGE` | `0` | 자동 sync PR 중 기계적으로 검증되는 것(템플릿 그대로 복사한 생성물·`harness.json`만 바뀜, CI 통과, 사람 활동 없음)을 병합한다. `HM_SYNC_AUTO=1`과 함께 쓴다 |
+| `HM_HARVEST_AUTO_MERGE` | `0` | 자동 harvest PR 중 작은 문서 변경이고 worker가 띄운 독립 검토를 통과한 것을 병합한다(검토 1회 LLM 비용). `HM_HARVEST_AUTO=1`과 함께 쓴다 |
 | `HM_DB_SCAN_GUARD` | `0` | 스키마 조건 없는 information_schema 조회를 Bash 실행 전에 막는다 |
 
-자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 병합을 하지 않고 draft PR까지만 한다는 점을 함께 알린다.
+자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 draft PR까지만 하고, 병합은 자동 병합 옵션을 켠 경우에만 한다는 점을 함께 알린다.
+
+자동 병합 옵션을 고르면 두 가지를 더 알린다.
+- 저장소마다 `.ai-harness/harness.json`에 `"auto_merge": {"sync": true}`(harvest면 `"harvest": true`)가 **기준 브랜치에 병합되어 있어야** 동작한다. 이 설정은 사람이 PR로 넣는다 — 무인 실행의 PR은 이 값을 바꿀 수 없다.
+- 처음에는 sync만 켜고 저장소 한 곳에서 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
+
+## 디자인 스킬 (`design`)
+
+ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자리를 채우는 외부 디자인 스킬은 `catalog/design-skills.json`이 원본 저장소·고정 커밋·라이선스·실행 스크립트 검토 결과를 적고, 어느 작업에서 어느 스킬이 주도하는지는 디자인 스킬 지도(`$ROOT/templates/ui-review/references/design-skills.md`)가 정한다. 위 기본 카탈로그와 달리 사본을 들고 있지 않고 **원본 저장소의 고정 커밋에서 받는다**. 예외로 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 ai-harness에 고정 사본으로 내장돼 있어(`builtin: "ai-harness"`) 설치하지 않는다.
+
+1. 현재 상태:
+   ```bash
+   $ROOT/scripts/setup.sh design list
+   ```
+   스킬마다 `bundle`(`core` 필수 / `extra` 선택), `summary`, `license`, `source`(저장소·커밋), `review`(실행하는 것·네트워크), `overlaps`(하네스 스킬이 대체하는 부분), `status.claude`·`status.codex`가 나온다. 상태는 위 표에 셋이 더 있다: `builtin`(그 도구에 내장 — 설치 불필요), `unavailable`(이 도구엔 대응 없음), `manual`(고정할 원본을 확인하지 못해 setup이 설치하지 않음 — `note`의 공식 경로로 직접 설치), `superseded`(setup이 예전에 받은 사본인데 이제 ai-harness에 내장됨 — `absorbed`가 내장 위치). `builtin`이 `ai-harness`인 항목에 같은 이름 폴더가 있으면 setup이 기록한 사본만 `superseded`이고, 고친 사본은 `modified`, 사용자가 직접 둔 폴더는 `foreign`이고 `conflict`에 도구별 안내가 붙는다. `outdated`는 카탈로그의 고정 커밋이 바뀌었다는 뜻이다.
+2. 표로 보여 준다: 스킬 · 묶음 · 하는 일 · 라이선스 · 실행하는 것/네트워크 · Claude/Codex 상태. `review.network`에 외부 호출이 있으면 그 줄을 그대로 보여 준다.
+3. 고르게 한다. 기본 선택은 `core`. 내장 항목은 고를 대상에서 빼고 "내장"으로만 표시한다. `superseded`가 있으면 "이제 내장이라 지워도 된다"고 알리고 `design remove`를 권한다 — `web-design-guidelines`의 예전 사본은 실행할 때마다 원격 규칙을 받으므로 특히 권한다. 사용자가 고르지 않으면 지우지 않는다. `conflict`가 있으면 그 문구를 그대로 보여 준다 — 직접 둔 폴더라 setup이 지우지 않으며, 옛 `web-design-guidelines`는 실행할 때마다 원격 규칙을 받으니 필요하면 사용자가 직접 정리한다. 하네스 스킬이 이미 대체하는 것(`overlaps`)은 "대부분 대체됨"으로 표시한다. 도구는 2단계와 같은 규칙.
+4. 설치·제거:
+   ```bash
+   $ROOT/scripts/setup.sh design install --tool <claude|codex|both> <core|extra|all|이름>...
+   $ROOT/scripts/setup.sh design remove --tool <claude|codex|both> <이름>...
+   ```
+   결과 `action`은 위와 같고 `builtin`(내장 — `--replace`여도 받지 않음)·`failed`(`detail`에 git 오류나 SKILL.md 확인 실패)가 더 있다. `superseded` 사본은 `remove`가 지우고, 고친 사본(`modified`)은 `--force`일 때만 백업 후 지운다. `foreign`·`modified` 처리와 `--replace`·`--force` 규칙은 3단계와 같다 — 사용자가 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않는다.
+5. 외부 디자인 스킬은 SessionStart가 자동 갱신하지 않는다(설치할 때만 네트워크를 쓴다). 카탈로그의 고정 커밋이 바뀌어 `outdated`가 되면 `design install`을 다시 실행해 갱신한다.
 
 ## 9. 마무리
 

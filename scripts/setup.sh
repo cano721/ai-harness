@@ -18,6 +18,9 @@ CLAUDE_SETTINGS="${HARNESS_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 # Codex는 settings.json env가 없으므로 셸 프로파일이 source하는 파일에 둔다.
 SECRETS_FILE="$HM_DATA_DIR/secrets.env"
 PROFILE_DIR="$HM_DATA_DIR/skills"
+# 외부 디자인 스킬은 복사본을 두지 않고 원본 저장소의 고정 커밋에서 받는다.
+DESIGN_CATALOG="${HM_SETUP_DESIGN_CATALOG:-$CATALOG_DIR/design-skills.json}"
+GIT_BASE="${HM_SETUP_GIT_BASE:-https://github.com}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -28,6 +31,9 @@ usage: setup.sh list
        setup.sh set --tool claude|codex|both <KEY> [VALUE]   (secret 키는 VALUE 없이 숨김 입력)
        setup.sh check <skill>
        setup.sh detect <skill>
+       setup.sh design list
+       setup.sh design install --tool claude|codex|both [--replace] <skill|core|extra|all>...
+       setup.sh design remove --tool claude|codex|both [--force] <skill>...   (이름만, 묶음 core|extra|all 아님)
        setup.sh done
        setup.sh notify < SessionStart input
 EOF
@@ -52,14 +58,25 @@ tools_for() {
 sha256_stdin() { { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}'; }
 
 # 폴더 내용 해시: 상대 경로와 파일 해시 목록의 해시. .DS_Store 같은 OS 부산물은 뺀다.
+# symlink와 빈 디렉터리도 넣는다 — 사용자가 더한 링크를 "손대지 않은 사본"으로 보고 지우지 않게.
+# 일반 파일 줄의 형식은 그대로라 파일만 있는 기존 기록 해시는 바뀌지 않는다.
 tree_sha() {
   (
     cd "$1"
-    find . -type f ! -name '.DS_Store' | LC_ALL=C sort | while IFS= read -r f; do
-      printf '%s %s\n' "$f" "$(sha256_stdin <"$f")"
+    find . \( -type f -o -type l -o -type d -empty \) ! -name '.DS_Store' | LC_ALL=C sort | while IFS= read -r f; do
+      if [[ -L "$f" ]]; then
+        printf '%s -> %s\n' "$f" "$(readlink "$f")"
+      elif [[ -d "$f" ]]; then
+        printf '%s/\n' "$f"
+      else
+        printf '%s %s\n' "$f" "$(sha256_stdin <"$f")"
+      fi
     done
   ) | sha256_stdin
 }
+
+# 스킬 자리에 디렉터리가 아닌 것(파일·symlink·깨진 링크)이 있으면 우리가 깐 사본이 아니다.
+foreign_entry() { [[ -L "$1" || (-e "$1" && ! -d "$1") ]]; }
 
 catalog_names() { jq -r '.skills[].name' "$CATALOG"; }
 in_catalog() { jq -e --arg n "$1" 'any(.skills[]; .name == $n)' "$CATALOG" >/dev/null; }
@@ -85,6 +102,7 @@ record_sha() { read_state | jq -r --arg k "$1:$2" '.installed[$k].sha // ""'; }
 skill_status() { # tool name
   local target recorded current
   target="$(skills_dir "$1")/$2"
+  foreign_entry "$target" && { printf 'foreign\n'; return; }
   [[ -d "$target" ]] || { printf 'absent\n'; return; }
   recorded="$(record_sha "$1" "$2")"
   [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
@@ -246,7 +264,7 @@ command_remove() {
       status="$(skill_status "$tool" "$name")"
       case "$status" in
         absent) forget_skill "$tool" "$name"; result "$tool" "$name" "absent" ;;
-        current | outdated)
+        current | outdated | superseded)
           dir="$(skills_dir "$tool")"
           rm -rf "${dir:?}/$name"
           forget_skill "$tool" "$name"
@@ -292,6 +310,274 @@ command_update() {
     [[ -n "$name" ]] && result "-" "$name" "updated"
   done < <(refresh_outdated "${tools[@]+"${tools[@]}"}")
   return 0
+}
+
+design_entry() { jq -c --arg n "$1" '.skills[] | select(.name == $n)' "$DESIGN_CATALOG"; }
+
+design_names() { # core | extra | all | <name> → 이름 목록
+  case "$1" in
+    all) jq -r '.skills[].name' "$DESIGN_CATALOG" ;;
+    core | extra) jq -r --arg b "$1" '.skills[] | select(.bundle == $b) | .name' "$DESIGN_CATALOG" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+design_path() { # entry tool → 원본 저장소 안 스킬 폴더 경로 (도구마다 다를 수 있다)
+  jq -r --arg t "$2" '.source.path // "" | if type == "object" then (.[$t] // "") else . end' <<<"$1"
+}
+
+# builtin(그 도구나 ai-harness에 내장) | unavailable(내장이지만 이 도구엔 없음) | manual(원본 미고정 — setup이 설치하지 않음)
+# | superseded(setup이 예전에 깐 사본인데 이제 ai-harness에 내장 — 지워도 된다)
+# | absent | current | outdated(고정 ref가 바뀜) | modified | foreign
+design_status() { # tool entry
+  local tool="$1" entry="$2" name target recorded builtin
+  name="$(jq -r '.name' <<<"$entry")"
+  builtin="$(jq -r '.builtin // ""' <<<"$entry")"
+  target="$(skills_dir "$tool")/$name"
+  if [[ "$builtin" == ai-harness ]]; then
+    # 사용자가 직접 둔 같은 이름 폴더는 foreign으로 남기고, setup이 기록한 사본만 superseded로 알린다.
+    foreign_entry "$target" && { printf 'foreign\n'; return; }
+    [[ -d "$target" ]] || { printf 'builtin\n'; return; }
+    recorded="$(record_sha "$tool" "$name")"
+    [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
+    [[ "$(tree_sha "$target")" == "$recorded" ]] && printf 'superseded\n' || printf 'modified\n'
+    return
+  fi
+  if [[ -n "$builtin" ]]; then
+    [[ "$builtin" == "$tool" ]] && printf 'builtin\n' || printf 'unavailable\n'
+    return
+  fi
+  if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
+    [[ -e "$target" || -L "$target" ]] && printf 'foreign\n' || printf 'manual\n'
+    return
+  fi
+  foreign_entry "$target" && { printf 'foreign\n'; return; }
+  [[ -d "$target" ]] || { printf 'absent\n'; return; }
+  recorded="$(record_sha "$tool" "$name")"
+  [[ -n "$recorded" ]] || { printf 'foreign\n'; return; }
+  if [[ "$(tree_sha "$target")" != "$recorded" ]]; then
+    printf 'modified\n'
+  elif [[ "$(read_state | jq -r --arg k "$tool:$name" '.installed[$k].ref // ""')" == "$(jq -r '.source.ref' <<<"$entry")" ]]; then
+    printf 'current\n'
+  else
+    printf 'outdated\n'
+  fi
+}
+
+command_design_list() {
+  local entry tool
+  while IFS= read -r entry; do
+    local statuses='{}'
+    for tool in claude codex; do
+      statuses="$(jq -c --arg t "$tool" --arg s "$(design_status "$tool" "$entry")" '. + {($t):$s}' <<<"$statuses")"
+    done
+    # 내장 스킬과 같은 이름으로 사용자가 직접 둔 폴더는 지우지 않지만, 이름이 겹친다는 사실은 알린다.
+    jq -c --argjson st "$statuses" '{name, bundle, summary, builtin:(.builtin // null), license:(.license // null), source:(.source // null),
+      review:(.review // null), overlaps:(.overlaps // null), absorbed:(.absorbed // null), note:(.note // null), status:$st,
+      conflict:(if .builtin == "ai-harness" then ([$st | to_entries[] | select(.value == "foreign") | {key, value:"같은 이름 내장 스킬 있음 — 직접 둔 폴더라 지우지 않음, 필요하면 직접 정리"}] | from_entries | if . == {} then null else . end) else null end)}' <<<"$entry"
+  done < <(jq -c '.skills[]' "$DESIGN_CATALOG")
+}
+
+# 카탈로그 값이 git 인자·경로로 들어가기 전에 모양을 확인한다(HM_SETUP_DESIGN_CATALOG로 바꿀 수 있으므로).
+design_source_error() { # entry → 문제가 있으면 사유 출력
+  jq -r '
+    # 세그먼트는 허용 문자만: glob(*, [, 선행 !)은 sparse 패턴을 넓히고, "."은 .git까지 복사하며, ".."은 원본 밖을 가리킨다.
+    def bad_segments: split("/") | any(. == "" or . == "." or . == ".." or startswith("-"));
+    def bad_path: type != "string" or (test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$") | not) or bad_segments;
+    if (.source.repo // "" | (test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) or bad_segments) then "invalid source.repo"
+    elif (.source.ref // "" | test("^[0-9a-f]{40}$") | not) then "source.ref must be a 40-character commit"
+    elif (.source.path | if type == "object" then ((.claude // "" | bad_path) or (.codex // "" | bad_path)) else bad_path end) then "invalid source.path"
+    else empty end' <<<"$1"
+}
+
+# 원본 저장소용 git: 자격 증명·SSH 프롬프트에서 멈추지 않고, 느린 연결은 30초 뒤 끊고, 받은 저장소의 hook·LFS 필터를 돌리지 않는다.
+design_git() { # work_dir git-args...
+  local work="$1"
+  shift
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' GIT_LFS_SKIP_SMUDGE=1 \
+    git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 -c core.hooksPath=/dev/null \
+    -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false -C "$work" "$@"
+}
+
+# 원본 저장소의 고정 커밋에서 필요한 폴더와 루트 라이선스만 받는다(부분 클론 + sparse checkout).
+fetch_design_source() { # entry work_dir — 실패 사유는 $STATE_DIR/.err
+  local entry="$1" work="$2" repo ref p patterns=('/LICENSE*' '/COPYING*' '/NOTICE*')
+  repo="$(jq -r '.source.repo' <<<"$entry")"
+  ref="$(jq -r '.source.ref' <<<"$entry")"
+  while IFS= read -r p; do patterns+=("/$p/"); done < <(jq -r '.source.path | if type == "object" then .[] else . end' <<<"$entry")
+  : >"$STATE_DIR/.err"
+  rm -rf "$work"
+  mkdir -p "$work" \
+    && design_git "$work" init -q 2>>"$STATE_DIR/.err" \
+    && design_git "$work" remote add origin "$GIT_BASE/$repo" 2>>"$STATE_DIR/.err" \
+    && design_git "$work" sparse-checkout set --no-cone "${patterns[@]}" 2>>"$STATE_DIR/.err" \
+    || return 1
+  design_git "$work" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>"$STATE_DIR/.err" \
+    || design_git "$work" fetch -q --depth 1 origin "$ref" 2>"$STATE_DIR/.err" || return 1
+  design_git "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD 2>>"$STATE_DIR/.err" || return 1
+  [[ "$(design_git "$work" rev-parse HEAD)" == "$ref" ]] || { printf 'fetched commit is not %s\n' "$ref" >"$STATE_DIR/.err"; return 1; }
+}
+
+# 설치할 사본을 스킬 폴더 밖에 먼저 만들고 검증한다. 성공하면 그 경로, 실패하면 사유를 출력한다.
+# 사용자 폴더는 이 단계가 끝날 때까지 건드리지 않는다.
+stage_design_skill() { # tool entry work_dir
+  local tool="$1" entry="$2" work="$3" name path src tmp lic
+  name="$(jq -r '.name' <<<"$entry")"
+  path="$(design_path "$entry" "$tool")"
+  src="$work/$path"
+  [[ -f "$src/SKILL.md" ]] || { printf 'SKILL.md not found at %s\n' "$path"; return 1; }
+  grep -qE "^name:[[:space:]]*['\"]?${name}['\"]?[[:space:]]*\$" "$src/SKILL.md" || { printf 'SKILL.md name is not %s\n' "$name"; return 1; }
+  tmp="$STATE_DIR/tmp/$tool-$name.$$"
+  rm -rf "$tmp"
+  cp -R "$src" "$tmp" || { rm -rf "$tmp"; printf 'copy failed\n'; return 1; }
+  # 스킬 폴더에 라이선스가 없으면 원본 저장소 루트의 것을 함께 둔다 — 사용자 PC의 사본도 출처·조건을 안다.
+  if ! compgen -G "$tmp/LICENSE*" >/dev/null; then
+    for lic in "$work"/LICENSE* "$work"/COPYING* "$work"/NOTICE*; do
+      [[ -f "$lic" ]] || continue
+      cp "$lic" "$tmp/" || { rm -rf "$tmp"; printf 'copy failed\n'; return 1; }
+    done
+  fi
+  printf '%s\n' "$tmp"
+}
+
+# 준비된 사본을 제자리에 둔다. 옮기다 실패하면 원래 폴더(또는 백업)를 되돌린다.
+place_design_skill() { # tool entry staged backup → 실패 사유를 stdout
+  local tool="$1" entry="$2" staged="$3" backup="$4" name dest old
+  name="$(jq -r '.name' <<<"$entry")"
+  dest="$(skills_dir "$tool")/$name"
+  # 옮겨 둔 기존 폴더는 tmp가 아니라 backups에 둔다 — 중단돼도 with_lock trap이 tmp와 함께 지우지 않는다.
+  old="$STATE_DIR/backups/old-$tool-$name-$(date +%Y%m%d%H%M%S).$$"
+  mkdir -p "$(skills_dir "$tool")" "$STATE_DIR/backups" || { printf 'cannot create %s\n' "$(skills_dir "$tool")"; return 1; }
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    rm -rf "$old"
+    mv "$dest" "$old" || { rm -rf "$staged"; printf 'cannot move existing %s\n' "$dest"; return 1; }
+  fi
+  if ! mv "$staged" "$dest"; then
+    rm -rf "$staged" "$dest"
+    if [[ -e "$old" || -L "$old" ]]; then mv "$old" "$dest"; elif [[ -n "$backup" ]]; then mv "$backup" "$dest"; fi
+    printf 'cannot place %s\n' "$dest"
+    return 1
+  fi
+  rm -rf "$old"
+  read_state | jq --arg k "$tool:$name" --arg sha "$(tree_sha "$dest")" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg src "$(jq -r '.source.repo' <<<"$entry")" --arg ref "$(jq -r '.source.ref' <<<"$entry")" \
+    '.installed[$k] = {sha:$sha, at:$now, source:$src, ref:$ref}' | write_state
+}
+
+command_design_install() {
+  parse_tool_args "$@"
+  [[ -n "$TOOL" && ${#NAMES[@]} -gt 0 ]] || usage
+  local arg name entry tool status backup work fetched why staged names=()
+  for arg in "${NAMES[@]}"; do
+    while IFS= read -r name; do names+=("$name"); done < <(design_names "$arg")
+  done
+  mkdir -p "$STATE_DIR/tmp"
+  for name in "${names[@]+"${names[@]}"}"; do
+    entry="$(design_entry "$name")"
+    [[ -n "$entry" ]] || { result "-" "$name" "unknown"; continue; }
+    work="$STATE_DIR/tmp/src-$name.$$"
+    fetched=""
+    while IFS= read -r tool; do
+      status="$(design_status "$tool" "$entry")"
+      # ai-harness에 내장된 스킬은 받지 않는다(--replace여도). 남아 있는 예전 사본은 remove가 지운다.
+      if [[ "$(jq -r '.builtin // ""' <<<"$entry")" == ai-harness ]]; then
+        result "$tool" "$name" "builtin"
+        continue
+      fi
+      # 원본을 고정할 수 없는 스킬은 사용자가 직접 깐 사본이 있어도(--replace여도) 받지 않는다.
+      if [[ "$(jq -r 'if .installable == false then "false" else "true" end' <<<"$entry")" == false ]]; then
+        result "$tool" "$name" "skipped" "manual"
+        continue
+      fi
+      case "$status" in
+        builtin) result "$tool" "$name" "builtin" ;;
+        unavailable) result "$tool" "$name" "skipped" "unavailable" ;;
+        current) result "$tool" "$name" "unchanged" ;;
+        absent | outdated | modified | foreign)
+          if [[ "$status" == modified || "$status" == foreign ]] && ((FLAG == 0)); then
+            result "$tool" "$name" "skipped" "$status"
+            continue
+          fi
+          if [[ -z "$fetched" ]]; then
+            why="$(design_source_error "$entry")"
+            if [[ -n "$why" ]]; then
+              printf '%s\n' "$why" >"$STATE_DIR/.err"; fetched=fail
+            elif fetch_design_source "$entry" "$work"; then
+              fetched=ok
+            else
+              fetched=fail
+            fi
+          fi
+          if [[ "$fetched" == fail ]]; then
+            result "$tool" "$name" "failed" "$(head -n 3 "$STATE_DIR/.err" 2>/dev/null | paste -sd' ' -)"
+            continue
+          fi
+          if ! staged="$(stage_design_skill "$tool" "$entry" "$work")"; then
+            result "$tool" "$name" "failed" "$staged"
+            continue
+          fi
+          backup=""
+          if [[ "$status" == modified || "$status" == foreign ]]; then
+            backup="$(backup_skill "$tool" "$name")"
+          fi
+          if ! why="$(place_design_skill "$tool" "$entry" "$staged" "$backup")"; then
+            result "$tool" "$name" "failed" "$why"
+            continue
+          fi
+          case "$status" in
+            absent) result "$tool" "$name" "installed" ;;
+            outdated) result "$tool" "$name" "updated" ;;
+            *) result "$tool" "$name" "replaced" "$backup" ;;
+          esac
+          ;;
+      esac
+    done < <(tools_for "$TOOL")
+    rm -rf "$work"
+  done
+}
+
+command_design_remove() {
+  parse_tool_args "$@"
+  [[ -n "$TOOL" && ${#NAMES[@]} -gt 0 ]] || usage
+  local name entry tool status backup dir
+  for name in "${NAMES[@]}"; do
+    entry="$(design_entry "$name")"
+    [[ -n "$entry" ]] || { result "-" "$name" "unknown"; continue; }
+    while IFS= read -r tool; do
+      status="$(design_status "$tool" "$entry")"
+      case "$status" in
+        absent | manual) forget_skill "$tool" "$name"; result "$tool" "$name" "absent" ;;
+        builtin | unavailable) result "$tool" "$name" "skipped" "$status" ;;
+        current | outdated | superseded)
+          dir="$(skills_dir "$tool")"
+          rm -rf "${dir:?}/$name"
+          forget_skill "$tool" "$name"
+          result "$tool" "$name" "removed"
+          ;;
+        modified)
+          if ((FLAG)); then
+            backup="$(backup_skill "$tool" "$name")"
+            forget_skill "$tool" "$name"
+            result "$tool" "$name" "removed" "$backup"
+          else
+            result "$tool" "$name" "skipped" "modified"
+          fi
+          ;;
+        foreign) result "$tool" "$name" "skipped" "foreign" ;;
+      esac
+    done < <(tools_for "$TOOL")
+  done
+}
+
+command_design() {
+  local sub="${1:-}"
+  (($#)) && shift
+  case "$sub" in
+    list) command_design_list ;;
+    install) with_lock command_design_install "$@" ;;
+    remove) with_lock command_design_remove "$@" ;;
+    *) usage ;;
+  esac
 }
 
 key_is_known() { jq -e --arg k "$1" 'any(.skills[].env[]?; .any | index($k))' "$CATALOG" >/dev/null; }
@@ -507,7 +793,8 @@ command_notify() {
 with_lock() {
   mkdir -p "$STATE_DIR"
   hm_acquire_lock "$LOCK" || { printf 'setup state busy: %s\n' "$LOCK" >&2; exit 1; }
-  trap 'hm_release_lock "$LOCK"' EXIT
+  # 중간 사본(tmp)은 잠금을 쥔 실행만 쓴다. 중단돼도 다음 실행 전에 남지 않게 지운다.
+  trap 'rm -rf "$STATE_DIR/tmp"; hm_release_lock "$LOCK"' EXIT
   "$@"
 }
 
@@ -521,6 +808,7 @@ case "$cmd" in
   set) command_set "$@" ;;
   check) mkdir -p "$STATE_DIR"; command_check "$@" ;;
   detect) command_detect "$@" ;;
+  design) command_design "$@" ;;
   done) with_lock command_done ;;
   notify) command_notify ;;
   *) usage ;;

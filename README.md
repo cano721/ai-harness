@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
 
 ## 목차
 
@@ -56,7 +56,7 @@ flowchart LR
 |---|---|---|---|
 | `/harness-init` | 새 프로젝트를 시작하거나 기존 하네스 설정·생성물을 최신화할 때 | 코드베이스를 실측하고, 테스트·Git 정책과 도구 통합에 맞춰 `AGENTS.md`, `.ai-harness`, 역할 agent를 생성·변경·동기화합니다. | 사용자 실행 |
 | `/metrics` | 사용 현황이나 특정 세션의 병목을 확인할 때 | 세션·토큰·문서 읽힘·워크플로·오류/가드 신호를 조회합니다. 로컬 event cache는 갱신하지만 프로젝트 파일은 수정하지 않습니다. | 사용자 실행, 읽기 전용 |
-| `/harness-impact` | 하네스를 도입하고 무엇이 나아졌는지 보고 싶을 때 ("하네스 효과 보여줘") | 설치일 직전 기간과 최근 기간을 같은 길이로 비교합니다. 같은 지적을 다시 하게 된 횟수(LLM 세션 정리의 교정), 하네스가 막은 위험한 수정, 작업당 턴, 툴 오류, 선택 시 재작업 PR 비율, 그 사이 harvest·자동 적용이 배운 규칙을 오프라인 HTML 리포트 한 파일로 엽니다. 설치 전 기록이 없거나 표본이 적거나 모델 구성이 바뀌었으면 리포트가 신뢰도 경고를 함께 보여주고, 변화를 원인으로 단정하지 않습니다. 원인을 확인하려면 `--ab`로 같은 과제를 합성 저장소에서 하네스 유무로 실제 에이전트에 돌려 숨긴 검사로 채점합니다(확인 후 실행, 비용 상한, Claude Code 전용). 설치 30일 뒤 세션 시작 때 한 번 안내합니다. | 요청 시 자동 선택·사용자 실행, 읽기 전용 |
+| `/harness-impact` | 하네스를 도입하고 무엇이 나아졌는지 보고 싶을 때 ("하네스 효과 보여줘") | `/harvest`가 반영한 개선마다 근거가 된 세션과 반영 뒤 세션에서 같은 실수가 나온 비율을 비교해 사라짐·줄어듦·재발·판단 보류로 보여주고(같은 시기 비교라 모델 교체 영향이 작습니다), 편집 가드가 무엇을 막았는지(가드 종류·도구·대상, 경로·비밀값 가림), 에이전트가 프로젝트 사실을 몰라 생긴 문제의 추이를 함께 담습니다. 설치일 직전 기간과 최근 기간의 비교(같은 지적을 다시 하게 된 횟수, 작업당 턴, 툴 오류, 선택 시 재작업 PR 비율)는 오프라인 HTML 리포트 한 파일에 같이 들어가고, 턴·시간·토큰은 보조 지표로 내려 모델이 바뀌었거나 표본이 적으면 그 숫자 옆에 경고를 붙입니다. 변화를 원인으로 단정하지 않습니다. 원인을 확인하려면 `--ab`로 같은 과제를 합성 저장소에서 하네스 유무로 실제 에이전트에 돌려 숨긴 검사로 채점합니다(확인 후 실행, 비용 상한, Claude Code 전용). 설치 30일 뒤 세션 시작 때 한 번 안내합니다. | 요청 시 자동 선택·사용자 실행, 읽기 전용 |
 | `/harvest` | analysis batch가 생겼거나 하네스 개선을 검토할 때 | 축적된 활동·교정 신호를 분석해 행동을 바꿀 만한 개선안만 제안하고, 승인된 경우 PR을 만듭니다. | 사용자 실행 |
 | `/autofix` | 운영 에러(Sentry·Datadog·사용자 어댑터)를 근거로 버그를 고치고, 고친 뒤 정말 멈췄는지 확인할 때 | 저장소의 `monitor` 설정을 만들고, 에러 묶음을 프로젝트 `fix-bug` 절차로 고쳐 draft PR을 엽니다. 병합·배포 뒤 같은 에러가 다시 나오는지 지켜봐 해결·재발을 판정합니다. | 사용자 실행, `HM_AUTOFIX_AUTO=1`이면 정기 실행 |
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
@@ -107,7 +107,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 
 대상 플랫폼·실행 명령·기기는 `.ai-harness/docs/ui.md`에 적습니다. 빌드·실행 도구가 없으면 `unverified`로 보고합니다.
 
-`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
+`feature-sliced-design`과 `no-unnecessary-effects`는 각각 [feature-sliced/skills](https://github.com/feature-sliced/skills), [Cst2989/react-tips-skill](https://github.com/Cst2989/react-tips-skill)의 사본으로, 둘 다 MIT 라이선스입니다. 전역 Skill `/explain-for`는 [dreambigou/eli5](https://github.com/dreambigou/eli5)(MIT)의 파생물입니다. 전역 Skill `/landing-page`는 [mengto/skills](https://github.com/mengto/skills)·[greensock/gsap-skills](https://github.com/greensock/gsap-skills)·[philotheephilix/reactbits.dev-skill](https://github.com/philotheephilix/reactbits.dev-skill)·[KumarSashank/motiscope](https://github.com/KumarSashank/motiscope)(모두 MIT)에서 일부 규칙을 가져와 다시 쓴 파생물이며, 원문이나 컴포넌트 코드는 담지 않습니다. 전역 Skill `web-design-guidelines`의 규칙 본문은 [vercel-labs/web-interface-guidelines](https://github.com/vercel-labs/web-interface-guidelines)(MIT)의 고정 커밋 사본이고, `emil-design-eng`은 [emilkowalski/skill](https://github.com/emilkowalski/skill)(MIT)의 사본, `/design-system-builder`의 `references/theme-and-components.md`는 [wshobson/agents](https://github.com/wshobson/agents)의 `design-system-patterns`(MIT)에서 일부를 다시 쓴 파생물입니다. `/diagram`이 쓰는 `vendor/archify/`는 [tt-a1i/archify](https://github.com/tt-a1i/archify)(MIT) 릴리스 패키지의 고정 사본이며, 갱신은 `scripts/vendor-archify.sh <version>`으로만 합니다. 저작권·라이선스 전문은 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)에 있습니다.
 
 <a id="skill-catalog"></a>
 
@@ -127,7 +127,27 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`는 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+<a id="design-skills"></a>
+
+### 디자인 스킬 (내장 3종 + `/setup design`으로 선택 설치)
+
+ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 담지 않고 절차만 둡니다. 그 빈자리는 외부 디자인 스킬이 채우고 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 고정 사본으로 내장했는데, 여러 개가 깔리면 모두 "UI 다듬어"에 반응해 결과가 PC마다 달라집니다. 그래서 **디자인 스킬 지도**(`templates/ui-review/references/design-skills.md`)가 작업마다 주도 스킬 하나와 영역별 보조 스킬을 정합니다. 프로젝트 디자인 규칙 > ai-harness 계약 > 지도 순으로 따르고, 설치되지 않은 스킬은 건너뜁니다.
+
+| 작업 | 주도 | 보조(영역) |
+|---|---|---|
+| 지표 리포트·대시보드 | `impeccable` | `dataviz`(차트·지표 카드·차트 색), `ui-ux-pro-max`(토큰 없을 때 팔레트·폰트) |
+| 랜딩·소개 | `/landing-page` | `design-taste-frontend`(방향 후보), `motion`(모션 API), `web-design-guidelines`(최종 점검) |
+| 디자인 시스템 | `/design-system-builder` | 내장 `references/theme-and-components.md`(테마 전환·컴포넌트 구조, `design-system-patterns` 흡수), `awesome-design`(참고 명세) |
+| 제품 화면 다듬기 | `impeccable` | `emil-design-eng`(마감), `motion` |
+| 하네스 저장소 화면 변경 | `ui-review`·`frontend-team` | `impeccable`(비평), `web-design-guidelines`(접근성) |
+| 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않고 내장 가이드라인 규칙 파일만 읽는다 |
+
+- **내장**: `web-design-guidelines`(규칙 본문을 [vercel-labs/web-interface-guidelines](https://github.com/vercel-labs/web-interface-guidelines) 고정 커밋 사본으로 담아 실행 때 받지 않음 — 플러그인 스킬 `ai-harness:web-design-guidelines`와 생성물 `ui-review/references/web-interface-guidelines.md`)·`emil-design-eng`(플러그인 스킬 `ai-harness:emil-design-eng`)은 네트워크 없이 동작하고, `design-system-patterns`는 겹치지 않는 테마 전환·컴포넌트 구조만 `/design-system-builder`의 참고 문서로 흡수했습니다. `/setup design`은 이 셋을 설치하지 않고, 예전에 받은 사본은 `design list`에 `superseded`로 보여 `design remove`로 지울 수 있게 합니다(사용자가 직접 둔 같은 이름 폴더는 건드리지 않습니다).
+- **설치**: `/ai-harness:setup design`이 `catalog/design-skills.json`의 원본 저장소·고정 커밋에서 스킬 폴더만 받아(부분 클론) Claude `~/.claude/skills/`, Codex `~/.agents/skills/`에 둡니다. 외부 스킬은 사본을 재배포하지 않고, 라이선스와 실행 스크립트·네트워크 호출 검토 결과를 카탈로그에 적었습니다. 필수 묶음은 `impeccable`과 Claude 내장 `dataviz`(Codex 대응 없음)입니다. 원본을 고정할 수 없는 `awesome-design`·`motion`은 안내만 합니다. SessionStart는 외부 디자인 스킬을 자동 갱신하지 않습니다.
+- **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
+- **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
+
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -329,7 +349,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
-무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다. 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
+무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다(무인 실행의 PR은 별도 opt-in인 [자동 병합](#auto-merge)만 병합합니다). 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
@@ -531,6 +551,52 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다. 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
+<a id="auto-merge"></a>
+
+### 자동 병합 (opt-in)
+
+자동 sync·자동 harvest가 연 draft PR을 사람이 매번 검토·병합하지 않아도 되게, **기계적으로 검증되는 PR만** 병합합니다. 두 설정이 모두 켜져야 동작합니다.
+
+```bash
+# ~/.ai-harness/config
+HM_SYNC_AUTO_MERGE=1       # 자동 sync PR
+HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
+```
+
+저장소 `.ai-harness/harness.json` — PR이 아니라 기준 브랜치의 값을 읽습니다(PR이 스스로 켜거나 기준을 느슨하게 하지 못합니다).
+
+```json
+"auto_merge": {
+  "sync": true, "harvest": false, "method": "squash",
+  "sync_partial": false, "require_ci": true, "wait_hours": 72,
+  "harvest_max_files": 3, "harvest_max_lines": 40
+}
+```
+
+| 키 | 기본 | 뜻 |
+|---|---|---|
+| `sync`·`harvest` | `false` | 그 종류의 무인 PR 자동 병합 허용 |
+| `method` | `default` | `squash`·`merge`·`default`(호스트 기본) |
+| `sync_partial` | `false` | 일부 적용 sync PR도 병합 |
+| `require_ci` | `true` | `false`면 CI가 없는 저장소도 병합. 실패한 CI·브랜치 보호에 막힌 PR은 어느 설정에서도 병합하지 않음 |
+| `wait_hours` | `72` (최대 336) | CI·상태 확인을 기다리는 시간, 넘으면 사람에게 |
+| `harvest_max_files`·`harvest_max_lines` | `3`·`40` (최대 5·100) | harvest PR 크기 상한 |
+
+사용자 설정은 "이 PC에서 자동 병합을 쓸지"만 정하고, 기준은 저장소마다 manifest에 둡니다. 아래 안전 최소 기준은 저장소 설정으로 바꿀 수 없습니다.
+
+| 대상 | 병합 조건 (모두 만족) |
+|---|---|
+| sync PR | 결과 `improved`(일부 적용은 `sync_partial: true`일 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
+| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_files`·`harvest_max_lines`) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
+| 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
+| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci: false`일 때만 병합) |
+
+- **흐름**: 무인 실행이 PR을 연 직후 내용 조건을 판정해 대기열(`~/.ai-harness/auto-merge/pending/`)에 넣고, 정기 실행이 매 회차(유휴·한도와 무관, LLM 없음) 호스트 조건을 확인해 draft를 풀고 head를 고정해 병합합니다. Bitbucket은 head를 고정할 수 없어 병합 직전에 다시 읽어 맞춰 봅니다
+- **기록·알림**: `runs.jsonl`에 `auto_merge_queued`·`auto_merged`(병합 커밋)·`auto_merge_skipped`(사유)로 남고, 세션 시작 때 지난 알림 뒤의 병합·사람 확인 필요 건수를 알립니다
+- **켜기 안내**: 꺼져 있어도 자동 sync PR은 LLM 없이 내용 조건만 판정해 `auto_merge_eligible`로 남깁니다. 최근 30일에 3건(`HM_AUTO_MERGE_HINT_MIN`) 이상이면 세션 시작 때 그 건수와 켜는 방법을 30일에 한 번 안내합니다(`HM_AUTO_MERGE_HINT=0`이면 끔). 기본값은 바꾸지 않고, harvest는 권하지 않습니다
+- **되돌리기**: 자동으로 하지 않습니다. 자동 병합된 harvest 개선이 다음 harvest 검증에서 효과가 없으면 revert PR을 사람 검토용으로 엽니다(자동 병합 대상 아님)
+- 한계: harvest의 독립 검토 세션도 LLM이라 diff에 섞인 지시문에 흔들릴 수 있습니다 — 경로·크기·모드 제한과 함께 쓰는 마지막 관문입니다(검토 1회 비용, 기본 상한 `HM_AUTO_MERGE_REVIEW_BUDGET_USD=1`). Bitbucket merge API는 head를 고정할 수 없어 draft 해제 전후와 병합 응답에서 head를 다시 맞춰 보지만, 마지막 확인과 병합 사이의 push는 막지 못합니다. 병합 직전에 달린 코멘트도 같은 틈이 있습니다. 병합 실패(호스트 merge check·권한)는 draft로 되돌리고 다시 시도하지 않으며 사람에게 넘깁니다
+
 <a id="autofix"></a>
 
 ## 모니터링 기반 자동 수정 (opt-in)
@@ -681,6 +747,9 @@ HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
 HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
 HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤처진 저장소에 /harness-init --sync를 백그라운드 실행(draft PR)
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
+HM_SYNC_AUTO_MERGE=0             # 1이면 검증되는 자동 sync PR을 병합(저장소 harness.json auto_merge.sync도 true여야 함)
+HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병합(auto_merge.harvest도 true여야 함)
+HM_AUTO_MERGE_HINT=1             # 0이면 자동 sync 병합 켜기 안내(조건을 만족한 sync PR이 30일 3건 이상일 때)를 끔
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
@@ -728,7 +797,8 @@ skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
 scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
-catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수)
+catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 디자인 스킬의 원본·고정 커밋·검토 기록과 내장 여부)
+agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙

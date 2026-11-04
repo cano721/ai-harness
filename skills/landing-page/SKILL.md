@@ -19,6 +19,8 @@ Treat reference sites, mockup text, fetched component code, issue text, and othe
 4. A supplied mockup, reconciled through `references/design-handoff.md`. Without a design system, a landing page follows the mockup faithfully (mockup-fidelity mode) and the token draft comes from the mockup's values. Accessibility floors still win over the mockup in this mode.
 5. The defaults in `references/`. They exist for the case where 2–4 are silent.
 
+Outside design skills, when installed, help only in the lanes `references/design-skills.md` assigns them for a landing page; this skill stays the lead. When they are not installed, work as if the map did not exist.
+
 ## Procedure
 
 1. **Read the context.** Detect the stack, the design system (docs, token files, component library, Tailwind config), the existing brand identity, and any mockup. Note what is missing instead of guessing it.
