@@ -623,6 +623,15 @@
       "mode": "copy"
     },
     {
+      "path": ".agents/skills/design-audit/references/figma-mcp.md",
+      "level": "standard",
+      "integration": "codex",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/design-audit/references/figma-mcp.md",
+      "mode": "copy"
+    },
+    {
       "path": ".claude/skills/frontend-team/SKILL.md",
       "level": "standard",
       "integration": "claude",
@@ -683,6 +692,15 @@
       "stack": "design-system",
       "skill": "design-audit",
       "source": "templates/ui-review/references/design-skills.md",
+      "mode": "copy"
+    },
+    {
+      "path": ".claude/skills/design-audit/references/figma-mcp.md",
+      "level": "standard",
+      "integration": "claude",
+      "stack": "design-system",
+      "skill": "design-audit",
+      "source": "templates/design-audit/references/figma-mcp.md",
       "mode": "copy"
     },
     {

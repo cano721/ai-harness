@@ -2232,6 +2232,46 @@ assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "references/
 assert_contains "$(<"$ROOT/skills/design-system-builder/references/theme-and-components.md")" "tokens.md\` owns token layers, names" "absorbed patterns defer token naming to design-system-builder"
 pass "design skill map, catalog and independent reviewer"
 
+# 디자이너 Figma 흐름: 공용 Figma MCP 규칙과 채점 기준은 바이트 단위 사본이고, figma-screen은 design-audit 기준으로 루프를 돈다.
+FIGMA_MCP_SRC="$ROOT/templates/design-audit/references/figma-mcp.md"
+assert_file "$FIGMA_MCP_SRC"
+for FIGMA_COPY in "$ROOT/skills/design-system-builder/references/figma-mcp.md" "$ROOT/skills/figma-screen/references/figma-mcp.md"; do
+  cmp -s "$FIGMA_COPY" "$FIGMA_MCP_SRC" || fail "$FIGMA_COPY must match templates/design-audit/references/figma-mcp.md byte for byte"
+done
+for FIGMA_BASE in .claude .agents; do
+  assert_eq "templates/design-audit/references/figma-mcp.md" "$(jq -r --arg p "$FIGMA_BASE/skills/design-audit/references/figma-mcp.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$FIGMA_BASE design-audit ships the Figma MCP rules"
+done
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/references/figma-mcp.md") | .action')" "design-system stack syncs the Figma MCP rules"
+FIGMA_MCP="$(<"$FIGMA_MCP_SRC")"
+assert_contains "$FIGMA_MCP" "\`use_figma\`" "Figma MCP rules name the write tool"
+assert_contains "$FIGMA_MCP" "Do not fall back to a different output silently" "Figma preflight stops instead of improvising"
+assert_contains "$FIGMA_MCP" "Never detach an instance" "Figma writing keeps library instances"
+assert_contains "$AUDIT" "## Figma 프레임이 대상일 때" "design-audit scores Figma frames"
+assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "references/figma-mcp.md" "design-audit reads the Figma MCP rules"
+assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "Figma 파일에 점수를 남기지 않는다" "design-audit keeps scores out of the Figma file"
+DSB_SKILL="$(<"$ROOT/skills/design-system-builder/SKILL.md")"
+assert_contains "$DSB_SKILL" "references/figma-output.md" "design-system-builder publishes a Figma library through its reference"
+assert_contains "$DSB_SKILL" "references/figma-mcp.md" "design-system-builder reads the Figma MCP rules"
+FIGMA_OUT="$(<"$ROOT/skills/design-system-builder/references/figma-output.md")"
+assert_contains "$FIGMA_OUT" "**The token file is the source. The Figma library is generated from it.**" "token file stays the source of truth for Figma"
+assert_contains "$FIGMA_OUT" "\`--color-text-muted\` → \`color/text-muted\`" "Figma variable names derive mechanically from token names"
+assert_contains "$FIGMA_OUT" "## Drift check" "Figma output reports drift instead of overwriting"
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/output-format.md")" "- Figma 라이브러리:" "rule document meta records the Figma library"
+FIGMA_SCREEN_DIR="$ROOT/skills/figma-screen"
+assert_file "$FIGMA_SCREEN_DIR/agents/openai.yaml"
+cmp -s "$FIGMA_SCREEN_DIR/references/design-audit.md" "$ROOT/templates/design-audit/SKILL.md" \
+  || fail "skills/figma-screen/references/design-audit.md must match templates/design-audit/SKILL.md byte for byte"
+FIGMA_SCREEN="$(<"$FIGMA_SCREEN_DIR/SKILL.md")"
+assert_contains "$(sed -n '1,4p' "$FIGMA_SCREEN_DIR/SKILL.md")" "name: figma-screen" "figma-screen names itself"
+assert_contains "$FIGMA_SCREEN" "references/design-audit.md" "figma-screen scores with the design-audit copy"
+assert_contains "$FIGMA_SCREEN" "references/figma-mcp.md" "figma-screen reads the Figma MCP rules"
+assert_contains "$FIGMA_SCREEN" "**Stop when the verdict is 통과 (90+) and no axis is below half.**" "figma-screen loop stops on the fe-designer condition"
+assert_contains "$FIGMA_SCREEN" "**At most three audits.**" "figma-screen loop is bounded"
+assert_contains "$FIGMA_SCREEN" "Never raise the score by removing what the requirement asked for" "figma-screen does not trade requirements for score"
+assert_contains "$FIGMA_SCREEN" "Do not edit the library file" "figma-screen leaves the library to design-system-builder"
+assert_contains "$(<"$ROOT/README.md")" "| \`/figma-screen\` |" "README lists figma-screen"
+pass "designer Figma flow"
+
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
 DIAGRAM_SKILL="$ROOT/skills/diagram/SKILL.md"
 ARCHIFY_DIR="$ROOT/vendor/archify"
