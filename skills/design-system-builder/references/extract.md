@@ -56,5 +56,5 @@ When the design system already lives in Figma (an existing kit, no token file) a
 - Read through the Figma MCP (`figma-mcp.md`). Whole kit pages are too large for `get_metadata`; inventory variables, text and effect styles, and component sets with a read-only `use_figma` script run on the kit file, and screenshot frames, not pages.
 - Treat the kit's values as already decided — they are the system, not a mockup draft — but still exclude spec screens' off-scale values from the rules, as above.
 - Screen classes, siblings, and copy come from the product's existing screens (planning files, the live product), not from the kit. Sections with no source say `근거 없음 — 미확인`.
-- `## 메타`: `토큰 파일: 없음 — <kit URL>의 Figma Variables가 값의 원천` and `Figma 라이브러리: <kit URL> — 원천`. Rule sections name variables by the kit's own names; the "values live in the token file" rule then means "values live in the kit".
+- `## 메타`: `토큰 파일: 없음 — <kit URL>의 Figma Variables가 값의 원천` and the `Figma 라이브러리` line in its source variant (`references/output-format.md`), with the `libraryKey`. Rule sections name variables by the kit's own names; the "values live in the token file" rule then means "values live in the kit".
 - Generating a token file from the kit is a separate, explicit step (Design mode for the format, values from the kit).

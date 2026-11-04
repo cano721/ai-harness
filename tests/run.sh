@@ -2158,7 +2158,7 @@ assert_contains "$MAP_CONTENT" "A skill on this map never overrides a project va
 assert_contains "$MAP_CONTENT" "## Forbidden pairs" "map names forbidden pairs"
 # 표의 주도 칸에는 스킬이 하나뿐이고, 영역 표의 영역마다 주인이 하나다.
 MAP_JOBS="$(awk '/^## Jobs/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Job/ && !/^\|---/' "$MAP_SRC")"
-assert_eq "6" "$(grep -c . <<<"$MAP_JOBS")" "map lists six jobs"
+assert_eq "7" "$(grep -c . <<<"$MAP_JOBS")" "map lists seven jobs"
 while IFS= read -r MAP_ROW; do
   MAP_LEAD="$(awk -F'|' '{print $3}' <<<"$MAP_ROW")"
   [[ "$MAP_LEAD" != *"·"* && "$MAP_LEAD" != *","* ]] || fail "map job has more than one lead: $MAP_ROW"
@@ -2271,8 +2271,19 @@ FIGMA_SCREEN="$(<"$FIGMA_SCREEN_DIR/SKILL.md")"
 assert_contains "$(sed -n '1,4p' "$FIGMA_SCREEN_DIR/SKILL.md")" "name: figma-screen" "figma-screen names itself"
 assert_contains "$FIGMA_SCREEN" "references/design-audit.md" "figma-screen scores with the design-audit copy"
 assert_contains "$FIGMA_SCREEN" "references/figma-mcp.md" "figma-screen reads the Figma MCP rules"
-assert_contains "$FIGMA_SCREEN" "**Stop when the verdict is 통과 (90+) and no axis is below half.**" "figma-screen loop stops on the fe-designer condition"
-assert_contains "$FIGMA_SCREEN" "**At most three audits.**" "figma-screen loop is bounded"
+assert_contains "$FIGMA_SCREEN" "**Stop when the verdict is 통과 and no axis is below half or \`미확인\`.**" "figma-screen loop stops only on a complete pass"
+assert_contains "$FIGMA_SCREEN" "**At most three audits**, the clean-up audit included." "the clean-up audit counts toward the cap"
+assert_contains "$FIGMA_SCREEN" "**Same organization as the library.**" "figma-screen checks fonts and organization before drawing"
+assert_contains "$AUDIT" "**대상 파일에도, 다른 어떤 파일에도 쓰지 않는다**" "Figma audit never writes"
+assert_contains "$AUDIT" "라이브러리 검색에 같은 역할의 컴포넌트가 없고" "a proposal name alone does not escape the deduction"
+assert_contains "$(<"$MAP_SRC")" "| Draw or extend a product screen in Figma from the design system library | \`figma-screen\` |" "design skill map routes Figma screens to figma-screen"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "\`/figma-screen\`도 **플러그인 전역 Skill**" "harness-init documents figma-screen"
+assert_eq ".agents/skills/design-audit/references/figma-mcp.md" "$(jq -r '.artifacts[] | select(.path==".agents/skills/design-audit/references/figma-mcp.md") | .path' "$ROOT/templates/managed-files.json")" "codex design-audit ships the Figma MCP rules"
+# Agent Skills 규격: description은 1024자 이하.
+for SKILL_FILE in "$ROOT"/skills/*/SKILL.md; do
+  DESC_LEN="$(python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8").read().split("---")[1]; m=re.search(r"^description:\s*(.*?)(?=^[A-Za-z_-]+:|\Z)",s,re.S|re.M); d=m.group(1).strip(); d=" ".join(l.strip() for l in d[1:].splitlines()).strip() if d.startswith(">") else d; print(len(d))' "$SKILL_FILE")"
+  [ "$DESC_LEN" -le 1024 ] || fail "$SKILL_FILE description is $DESC_LEN characters (max 1024)"
+done
 assert_contains "$FIGMA_SCREEN" "**The audit is independent.**" "figma-screen does not score its own drawing"
 assert_contains "$FIGMA_SCREEN" "the brief's **decision list**" "the independent audit gets decisions, not reasoning"
 assert_contains "$FIGMA_SCREEN" "report it as \`불성립\`" "an unfinished audit round is reported, not hidden"

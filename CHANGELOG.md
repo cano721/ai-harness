@@ -16,6 +16,10 @@
 
 - **langfuse 스크립트가 연결 실패·잘못된 설정 파일에서 traceback으로 죽지 않음** — `LANGFUSE_HOST`가 틀렸거나 네트워크가 끊기면 `lf.py`가 Python traceback을 쏟았습니다. 이제 닿지 못한 주소와 `LANGFUSE_HOST` 확인 안내 한 줄로 끝납니다. `register.py`는 `~/.claude/settings.json`이 JSON 객체가 아니면 리전 탐색 전에 멈추고 파일을 건드리지 않으며, 저장은 임시 파일을 거쳐 원자적으로 바꿔 중간에 끊겨도 설정 파일이 비지 않습니다.
 
+### 업데이트 후 해야 할 일
+
+- `design-system` stack을 쓰는 저장소는 `/harness-init --sync`로 `design-audit`(Figma 프레임 채점 절)과 새 `design-audit/references/figma-mcp.md`를 받으세요. (#225)
+
 ## v0.55.2 (2026-11-04)
 ### 버그 수정
 

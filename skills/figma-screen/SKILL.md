@@ -42,7 +42,8 @@ Write a short brief and show it. Ask at most three questions, each with a recomm
 
 Follow the writing rules in `figma-mcp.md`. In addition:
 
-- Target: the page and position the user named, or a new page `<screen name>` in the file the user named or created in drafts. Never inside the library or the spec file.
+- Target: the page and position the user named, or a new page `<screen name>` in the file the user named or created in drafts. A file the user named as the target may also hold the spec ("이 피그마 화면에 필터 추가해줘"); a file given only as a spec or reference stays read-only. Never inside the library.
+- **Same organization as the library.** Text styles need the library's fonts; an organization's shared fonts (and its team libraries) are not available in a file owned by another team or plan, and the first text write fails. Preflight: in the target, `loadFontAsync` the families the library's text styles use; if one is missing, stop and recommend a target file in the library's organization.
 - One frame per state, named `<screen> / <state>`, side by side in a section named after the screen. Set the brief's mode on each.
 - Skeleton first (auto layout frames with the class's spacing variables), then instances, then text. Read back after each.
 - Copy follows `## 문구`. Example data never contradicts the requirement's counts or fields.
@@ -60,13 +61,15 @@ build → independent audit → fix violations, highest deduction first → inde
 - **The audit is independent.** Run each round in a fresh agent (a subagent, or a new session) that gets only:
   - `references/design-audit.md`, `references/figma-mcp.md`, the rule document path;
   - the target file, state frame node-ids, and sibling node-ids;
-  - the brief's **decision list** — facts, not reasoning: assumptions taken, `스펙 미정` items, `제안 / ` and `자산 필요 / ` frames, skipped states, and decisions the user made (a value the user said to hold for a rule decision is scored as `규칙 결정 필요`, not deducted);
-  - from round two, the previous round's violation list and what changed since. A fix that trades one rule for another (contrast vs sibling tone) is reported as a rule-document conflict under `규칙 결정 필요`, not deducted twice.
+  - the brief's **decision list** — facts, not reasoning: assumptions taken, `스펙 미정` items, `제안 / ` and `자산 필요 / ` frames, skipped states, and decisions the user made, each quoting the user's words;
+  - from round two, the previous round's violation list and what changed since.
+
+  The rubric decides how each of these is scored; do not tell the auditor what to conclude.
 
   It does not see your reasoning and must not write to any file. If the host cannot start one, audit yourself and mark every score `자기 채점` in the report.
 - Run the audit exactly as the rubric says — same axes, points, units, and output contract. Do not adjust the rubric to the screen.
-- **Stop when the verdict is 통과 (90+) and no axis is below half.** Before stopping, fix any remaining violation that needs no new raw spacing value, no requirement change, and no rule decision, then audit once more if anything changed.
-- **At most three audits.** If the third still fails, stop and report the remaining violations with their evidence and why each was not fixed. A round that could not finish (tool-call limit, tool error) counts toward the three; report it as `불성립` with the error, and report any fix made after the last finished round as unverified.
+- **Stop when the verdict is 통과 and no axis is below half or `미확인`.** (The rubric's own thresholds decide 통과.) An axis left `미확인` — siblings unreadable, a rule section missing — means the screen has not passed. Before stopping, fix any remaining violation that needs no new raw spacing value, no requirement change, and no rule decision, then audit again if anything changed.
+- **At most three audits**, the clean-up audit included. If the third still fails, stop and report the remaining violations with their evidence and why each was not fixed. A round that could not finish (tool-call limit, tool error) counts toward the three; report it as `불성립` with the error. Any fix made after the last finished audit is reported as unverified.
 - Never raise the score by removing what the requirement asked for, by inventing library components, by adding off-scale spacing, or by editing the library. A rule-vs-requirement conflict goes to the user as a question, not a silent choice.
 - `규칙 결정 필요` items (proposals, token drift, structure that differs from siblings because the requirement says so) do not block the stop condition; they go to the report.
 
@@ -76,7 +79,7 @@ End with, in this order:
 
 1. Link to the section (`figma.com/design/<fileKey>/…?node-id=…`), and the frames created or changed.
 2. The final audit in the rubric's output contract, plus each round's score in one line (`1차 78 → 2차 88 → 3차 93`), and whether the audits were independent.
-3. **Differences from the spec mockup** (when the spec is a mockup), using the design handoff kinds: matched, adjusted to a token, missing from the library, conflicting with the rule document, added without a spec.
+3. **Differences from the spec mockup** (when the spec is a mockup), using the design handoff kinds unchanged — Matched, Adjusted, Missing, Conflicting, Added without approval — plus a separate list of spec elements the library has no component or variable for.
 4. Gaps proposed as `제안 / …` frames, `자산 필요 / …` placeholders, skipped states with the reason, and `스펙 미정` choices.
 5. Raw values that remain and why; any read-only script run on another file.
 6. What was not verified (hover and focus states not drawn, other breakpoints).

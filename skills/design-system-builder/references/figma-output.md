@@ -11,7 +11,8 @@ Run this only after the token file and the rule document exist — on the same r
 ## Target
 
 - A dedicated library file. Use the URL the user gives, or create one with `create_new_file` after the user agrees. Never write the design system into a product or screen file.
-- Record it in the rule document's `## 메타`: `- Figma 라이브러리: <file URL> — 생성 <YYYY-MM-DD>, 기준 <token file path>@<short commit or "uncommitted">`.
+- Record it in the rule document's `## 메타` in the format `references/output-format.md` defines (generated variant, with the `libraryKey`).
+- On a later run, show the URL recorded there and confirm it is still the target before writing.
 - Tell the user that publishing the file as a team library is a manual step in Figma (Assets → Publish); this skill does not publish.
 
 ## Variables
@@ -21,6 +22,8 @@ Run this only after the token file and the rule document exist — on the same r
 | Primitive | `Primitives` | one (`Value`) |
 | Semantic | `Semantic` | one per theme in `## 메타` (`Light`, `Dark`, …) |
 | Component | `Component` (only if the token file has this layer) | same as `Semantic` |
+
+Brands are modes too. When the token file defines several brands (`## 메타` `브랜드 모드`), the `Semantic` collection gets one mode per brand × theme pair (`Brand A Light`), or, when themes and brands vary independently, a second collection `Brand` whose modes are brands and which `Semantic` aliases into. Say which in the report.
 
 - **Name** (libraries this skill generates; an existing kit keeps its own names): drop the leading `--`, turn the category prefix into a group: `--color-text-muted` → `color/text-muted`, `--space-4` → `space/4`, `--radius-md` → `radius/md`. Non-CSS stacks map their theme keys the same way (category / rest). The rule is mechanical so the next run and the audit can find a variable from its token name without a mapping file.
 - **Aliases stay aliases.** A semantic token that points at a primitive becomes a variable aliasing that primitive in each mode — never the resolved value.
