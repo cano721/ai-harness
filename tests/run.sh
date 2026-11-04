@@ -4221,6 +4221,15 @@ assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting
 assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
 assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
 assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
+# 대화형 /setup 고르기 단계가 디자인 스킬도 묻는다(#220). 설치는 기존 design install 경로를 쓴다.
+SETUP_PICK="$(awk '/^## 2\. 고르기/{f=1;next} /^## 4\./{f=0} f' "$ROOT/skills/setup/SKILL.md")"
+assert_contains "$SETUP_PICK" "**디자인 스킬**" "interactive setup asks about design skills"
+assert_contains "$SETUP_PICK" "\`core\` (권장)" "design question recommends core"
+assert_contains "$SETUP_PICK" "review.runs\`·\`review.network" "extra choices show what runs and what network is used"
+assert_contains "$SETUP_PICK" "건너뛰기" "design question can be skipped"
+assert_contains "$SETUP_PICK" "setup.sh design install --tool" "design choice reuses design install"
+assert_contains "$(sed -n '8p' "$ROOT/skills/setup/SKILL.md")" "디자인 스킬 상태 요약" "setup status includes design skill status"
+assert_contains "$(awk '/^description:/{print; exit}' "$ROOT/skills/setup/SKILL.md")" "대화형 셋업에서 함께 묻는다" "setup description says interactive setup asks about design"
 # CI가 없는 저장소: 기본은 기다리다 사람에게, require_ci:false면 병합. 실패한 CI는 어느 설정에서도 막는다.
 AM_DATA="$TEST_TMP/am-noci"
 : >"$AM_PR_LOG"
