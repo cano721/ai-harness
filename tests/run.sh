@@ -4787,6 +4787,7 @@ cp -R "$ROOT/catalog" "$SETUP_CATALOG"
 printf '{"env":{"SENTRY_AUTH_TOKEN":"sntrys_secret_value"}}\n' >"$SETUP_T/settings.json"
 setup_cmd() {
   env -u DATADOG_API_KEY -u DD_API_KEY -u SENTRY_AUTH_TOKEN -u SENTRY_ORG -u ATLASSIAN_USER -u ATLASSIAN_API_TOKEN \
+    -u LANGFUSE_PUBLIC_KEY -u LANGFUSE_SECRET_KEY -u LANGFUSE_HOST \
     HARNESS_METRICS_DIR="$SETUP_T/data" HM_SETUP_CATALOG_DIR="$SETUP_CATALOG" HARNESS_CLAUDE_SETTINGS="$SETUP_T/settings.json" \
     HM_CLAUDE_SKILLS_DIR="$SETUP_T/claude" HM_CODEX_SKILLS_DIR="$SETUP_T/codex" HM_SETUP_HINT=1 \
     "${SETUP_ENV[@]+"${SETUP_ENV[@]}"}" "$ROOT/scripts/setup.sh" "$@"
@@ -4850,7 +4851,7 @@ assert_contains "$HINT_OUT" "ai-harness setup 스킬" "Codex hint names the skil
 assert_contains "$HINT_OUT" "datadog·sentry·jira·confluence" "first hint lists the catalog"
 assert_eq "" "$(printf '{}' | setup_cmd notify)" "first hint shown once"
 setup_cmd 'done' >/dev/null
-jq '.version = 2 | .skills += [{name:"pagerduty", since:2, summary:"x", env:[]}]' "$SETUP_CATALOG/catalog.json" >"$SETUP_T/c.json"
+jq '.version += 1 | .skills += [{name:"pagerduty", since:.version, summary:"x", env:[]}]' "$SETUP_CATALOG/catalog.json" >"$SETUP_T/c.json"
 mv "$SETUP_T/c.json" "$SETUP_CATALOG/catalog.json"
 NEW_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
 assert_contains "$NEW_HINT" "새 기본 스킬이 추가됐습니다: pagerduty" "new catalog skills announced"
@@ -5033,6 +5034,7 @@ case "$1" in
   */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
   */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
   */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  */api/public/projects) printf '{"data":[{"id":"p1","name":"Demo"}]}' ;;
   *) printf 'HTTP 404\n' >&2; exit 1 ;;
 esac
 STUB
@@ -5058,7 +5060,19 @@ assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists 
 printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
 assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
 assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"
-if grep -qE "tok|bad-token" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
+assert_eq "LANGFUSE_PUBLIC_KEY,LANGFUSE_SECRET_KEY" "$(setup_cmd check langfuse | jq -r '.missing | join(",")')" "langfuse check names missing project keys"
+printf 'pk-lf-good\n' | setup_cmd set --tool claude LANGFUSE_PUBLIC_KEY >/dev/null
+printf 'sk-lf-good\n' | setup_cmd set --tool claude LANGFUSE_SECRET_KEY >/dev/null
+assert_eq "true Demo" "$(setup_cmd check langfuse | jq -r '"\(.ok) \(.as)"')" "langfuse check shows the project the keys point to"
+assert_eq "https://cloud.langfuse.com/api/public/projects" "$(tail -1 "$SETUP_T/argv.log")" "langfuse check defaults to the EU cloud host"
+setup_cmd set --tool claude LANGFUSE_HOST https://us.cloud.langfuse.com/ >/dev/null
+setup_cmd check langfuse >/dev/null
+assert_eq "https://us.cloud.langfuse.com/api/public/projects" "$(tail -1 "$SETUP_T/argv.log")" "langfuse check follows LANGFUSE_HOST"
+printf 'sk-lf-bad-token\n' | setup_cmd set --tool claude LANGFUSE_SECRET_KEY >/dev/null
+LF_CHECK="$(setup_cmd check langfuse)"
+assert_eq "false HTTP 401" "$(jq -r '"\(.ok) \(.error)"' <<<"$LF_CHECK")" "langfuse check reports rejected keys"
+assert_contains "$(jq -r '.hint' <<<"$LF_CHECK")" "LANGFUSE_HOST" "langfuse 401 points at key or region mismatch"
+if grep -qE "tok|bad-token|pk-lf|sk-lf" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
 if setup_cmd list | grep -q "tok'en"; then fail "list prints a credential"; fi
 SETUP_ENV=()
 for name in $CATALOG_NAMES; do
@@ -5066,6 +5080,84 @@ for name in $CATALOG_NAMES; do
   assert_eq "true" "$(jq -r --arg n "$name" '.skills[] | select(.name==$n) | all(.env[] | select(.secret); .issue.url != null)' "$ROOT/catalog/catalog.json")" "catalog $name secrets carry an issue URL"
 done
 pass "setup stores credentials off the transcript and checks them"
+
+# langfuse 카탈로그 스킬은 scripts/까지 디렉터리째 설치·추적되고, 위험 등급 차단·별칭·키 파일 읽기는 네트워크 없이 확인한다.
+SETUP_T="$TEST_TMP/setup-langfuse"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+assert_eq "installed installed" "$(setup_cmd install --tool both langfuse | jq -r '.action' | paste -sd' ' -)" "langfuse installs for both tools"
+for tool in claude codex; do
+  assert_eq "./SKILL.md ./scripts/lf.py ./scripts/register.py" "$(cd "$SETUP_T/$tool/langfuse" && find . -type f | LC_ALL=C sort | paste -sd' ' -)" "langfuse $tool copy carries its scripts"
+  assert_eq "current" "$(setup_status langfuse "$tool")" "langfuse $tool copy is current"
+done
+printf '# local\n' >>"$SETUP_T/codex/langfuse/scripts/lf.py"
+assert_eq "modified" "$(setup_status langfuse codex)" "edited script marks the copy modified"
+printf '# v2\n' >>"$SETUP_CATALOG/langfuse/scripts/register.py"
+assert_eq "outdated" "$(setup_status langfuse claude)" "changed catalog script marks the untouched copy outdated"
+assert_eq "updated" "$(setup_cmd update --tool claude | jq -r 'select(.name=="langfuse") | .action')" "untouched copy refreshed with the new script"
+assert_contains "$(<"$SETUP_T/claude/langfuse/scripts/register.py")" "# v2" "refreshed copy carries the new script"
+assert_contains "$(<"$SETUP_T/codex/langfuse/scripts/lf.py")" "# local" "edited copy kept on refresh"
+if grep -rhE '^(import|from) ' "$ROOT/catalog/langfuse/scripts" | grep -vqE '^import (argparse|base64|json|os|re|shutil|subprocess|sys|time|urllib\.(error|parse|request))$'; then
+  fail "langfuse scripts use only the standard library"
+fi
+
+LF_T="$SETUP_T/lf"
+mkdir -p "$LF_T/home/.cache/langfuse-skill" "$LF_T/data"
+lf() {
+  env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" \
+    LANGFUSE_PUBLIC_KEY=pk-lf-default LANGFUSE_SECRET_KEY=sk-lf-default LANGFUSE_HOST=http://127.0.0.1:9 \
+    LANGFUSE_PUBLIC_KEY_CHECKOUT_BOT=pk-lf-bot LANGFUSE_SECRET_KEY_CHECKOUT_BOT=sk-lf-bot \
+    "${LF_ENV[@]+"${LF_ENV[@]}"}" python3 -I "$ROOT/catalog/langfuse/scripts/lf.py" "$@"
+}
+LF_ENV=()
+# 도구 목록 캐시를 미리 둔다 — 호출 전에 차단되므로 127.0.0.1:9로는 요청이 나가지 않는다.
+LF_TOOLS='[{"name":"listTraces","annotations":{"readOnlyHint":true}},{"name":"createComment","annotations":{}},{"name":"deleteDataset","annotations":{"destructiveHint":true}}]'
+printf '%s' "$LF_TOOLS" >"$LF_T/home/.cache/langfuse-skill/http_127_0_0_1_9.tools.json"
+printf '%s' "$LF_TOOLS" >"$LF_T/home/.cache/langfuse-skill/https_bot_example_test.tools.json"
+LF_ENV=(LANGFUSE_HOST_CHECKOUT_BOT=https://bot.example.test)
+assert_eq "read write destructive" "$(lf -p checkout-bot tools | awk '{print $2}' | paste -sd' ' -)" "tool risk comes from MCP annotations"
+LF_ENV=()
+set +e
+LF_ERR="$(lf call createComment '{}' 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "write tool without --yes exits 2"
+assert_contains "$LF_ERR" "BLOCKED" "write tool is blocked"
+LF_ERR="$(lf call deleteDataset '{}' --yes 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "destructive tool with only --yes exits 2"
+assert_contains "$LF_ERR" "--allow-destructive" "destructive block names the flag"
+LF_ERR="$(lf rest DELETE /api/public/datasets/x --yes 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "REST DELETE is blocked"
+LF_ERR="$(lf rest POST /api/public/comments 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "REST write without --yes is blocked"
+LF_ERR="$(lf -p missing-proj tools 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "unknown alias stops instead of using the default keys"
+assert_contains "$LF_ERR" "checkout-bot" "unknown alias lists registered aliases"
+set -e
+assert_eq "(default) checkout-bot" "$(lf aliases | paste -sd' ' -)" "aliases map env suffixes back to names"
+cat >"$LF_T/data/secrets.env" <<'SECRETS'
+export LANGFUSE_PUBLIC_KEY_QA='pk-lf-q'\''a'
+export LANGFUSE_SECRET_KEY_QA='sk-lf-qa'
+SECRETS
+mkdir -p "$LF_T/home/.claude"
+printf '{"env":{"LANGFUSE_HOST_QA":"https://qa.example.test"}}\n' >"$LF_T/home/.claude/settings.json"
+LF_LOOKUP="$(env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("lf", sys.argv[1]); lf = importlib.util.module_from_spec(spec); spec.loader.exec_module(lf)
+print(lf.suffix("checkout-bot"), lf.lookup("LANGFUSE_PUBLIC_KEY_QA"), lf.credentials("qa")[0], ",".join(lf.aliases()))
+' "$ROOT/catalog/langfuse/scripts/lf.py")"
+assert_eq "_CHECKOUT_BOT pk-lf-q'a https://qa.example.test qa" "$LF_LOOKUP" "secrets.env and settings.json keys are read (quote escapes undone)"
+[[ ! -e "$ROOT/catalog/langfuse/scripts/__pycache__" ]] || fail "tests leave no bytecode in the catalog (it would ship with installed copies)"
+
+register() { env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" python3 -I "$ROOT/catalog/langfuse/scripts/register.py" "$@"; }
+for bad in Bad_Alias -lead 'a b' '../x'; do
+  set +e
+  LF_ERR="$(register "$bad" --stage pk 2>&1)"; LF_RC=$?
+  set -e
+  assert_eq "1" "$LF_RC" "register rejects alias '$bad'"
+  assert_contains "$LF_ERR" "alias:" "register explains the alias rule for '$bad'"
+done
+[[ ! -e "$LF_T/data/langfuse-staging" ]] || fail "rejected alias leaves no staging directory"
+pass "langfuse catalog skill installs with scripts and enforces risk classes offline"
 
 # design-system-builder는 플러그인 전역 Skill이다: 프로젝트에 파일을 깔지 않고, 만든 규칙 문서가 design-audit의 입력 계약이 된다.
 DSB_DIR="$ROOT/skills/design-system-builder"
