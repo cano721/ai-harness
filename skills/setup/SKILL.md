@@ -1,6 +1,6 @@
 ---
 name: setup
-description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
+description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
 ---
 
 # /setup — ai-harness 전역 셋업
@@ -82,7 +82,7 @@ $ROOT/scripts/setup.sh update
 
 설치한 스킬마다 `list`의 `env[]`를 본다. `found:null`이고 `required:true`인 키를 하나씩 처리한다. 이미 있는 키도 6단계 연결 확인에서 실패하면 같은 절차로 다시 넣는다.
 
-1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다.
+1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다. Langfuse 키는 개인이 아니라 프로젝트 단위다 — 여기서는 기본 프로젝트 한 쌍만 넣고, 다른 프로젝트는 설치된 스킬의 `scripts/register.py <별칭>`(클립보드 단계, 리전 자동 탐지)으로 더한다고 안내한다.
 2. **저장 대상** — 2단계에서 고른 도구: Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600).
 3. **비밀 아닌 값**(`secret:false` — base URL·이메일·조직 slug·사이트): 대화로 받아 바로 저장한다.
    ```bash
@@ -104,7 +104,7 @@ $ROOT/scripts/setup.sh update
 $ROOT/scripts/setup.sh check <name>
 ```
 
-읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회). 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
+읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회, Langfuse 키가 가리키는 프로젝트 조회 — 401이면 키나 리전(`LANGFUSE_HOST`) 불일치). 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
 
 - `ok:true` — `as`(누구로 접속했는지)를 보여 준다. 다른 계정이면 사용자에게 확인한다.
 - `ok:false` — `error`와 `hint`를 보여 주고 5단계로 돌아가 해당 키를 다시 넣는다. 두 번 실패하면 멈추고 사용자에게 넘긴다.
