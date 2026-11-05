@@ -28,7 +28,7 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 |---|---|
 | Destinations | The primary action, or any link, leads nowhere real (`#`, a self-anchor loop, an empty `href`) |
 | Placeholders | A `[... 필요]`-style placeholder is visible to visitors |
-| Claims | A claim of popularity, quantity, rank, or result ("많이", "인기", "대표", "N명이") without evidence on the page |
+| Claims | A claim of popularity, quantity, rank, or result ("많이", "인기", "N명이") without evidence on the page |
 | First action | The primary action is not inside the first viewport |
 | Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind the text, not computed colors |
 | Overflow | Horizontal scroll or clipped text at any viewport |
@@ -45,29 +45,39 @@ Each review runs in a fresh reviewer that did not build the page: the `ai-harnes
 - where the design evidence is (design system, rule document, token mirror);
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
-- the `사용자 입력 필요` list so far — each item with what is missing and how the page shows it now;
+- the `사용자 입력 필요` list so far, as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
 - from the second round, the previous round's findings and what changed since.
 
-Not your direction notes, not your report, not "I fixed it". It does not edit files. The reviewer checks that each `사용자 입력 필요` item really needs the user and is shown the way the list says; it reports them under their own heading, not as new majors. Anything else it finds is a finding as usual. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토` in the report.
+Not your direction notes, not your report, not "I fixed it". It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
 
 Marketing checks the reviewer adds to its own criteria:
 
-- One-second view: what is this about, and is the product's category clear (for example, that it is AI, not a person)? Five-second view: what should I do?
+- One-second view: what is this about, and what kind of product is it — could the imagery suggest a different kind of product than it is? Five-second view: what should I do?
 - Squint: the claim and the action stay dominant.
 - Cover the logo: could a competitor own this page? Generic is a finding when nothing on the page belongs only to this product.
 - Does every visible action lead somewhere, and does every element that looks interactive respond?
 - Is every claim either evidenced on the page or phrased as a description rather than a claim?
 - Phone: composed, not shrunk.
+- Tells: patterns from the tell lists in `direction.md`, `layout-type.md`, and `motion-web.md` that the direction did not choose.
 
 ## Verdicts
 
 | Verdict | When |
 |---|---|
-| `verified` | Every viewport, theme, reduced-motion and no-JS state was rendered and operated, and no major problem remains |
-| `issues` | One or more major problems remain |
+| `verified` | Every viewport, theme, reduced-motion and no-JS state was rendered and operated (the state checks below), an independent review found no major problem, and the `사용자 입력 필요` list is empty |
+| `issues` | One or more major problems remain, or the `사용자 입력 필요` list is not empty — `issues (공개 불가: 입력 대기)` when those are all that remain |
 | `unverified` | The page could not be rendered or operated, or a required viewport, theme, or state was not actually checked |
 
-A **major problem** is what `ui-review` calls one — the visitor cannot find or misreads the main action, an action's name differs from its result, a state cannot be completed by keyboard or at a supported viewport — plus, for a public page: an action with no real destination, a placeholder visible to visitors, a claim without evidence, and a page that misstates what the product is. Spacing and alignment that do not change any of that are minor.
+A **major problem** (the same definition as the harness `ui-review` contract, repeated here so it applies without one):
+
+- the visitor cannot find or misreads the main action, or an action's name differs from its result;
+- a required input or an error cannot be recovered from;
+- a flow cannot be completed by keyboard, or at a supported viewport or theme;
+- a one-off build where a shared component of the same role exists;
+- a hard-to-undo action without confirmation;
+- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is.
+
+Spacing and alignment that do not change any of that are minor.
 
 `unverified` is not done. A major problem left in the page is not done.
 
@@ -76,14 +86,38 @@ A **major problem** is what `ui-review` calls one — the visitor cannot find or
 - Run the built-in `web-design-guidelines` check after the first review's fixes, so the last reviews see its result. Its rules assume English UI copy (title case, straight quotes); where they conflict with the project's own copy rules or the page's language, the project wins — note which rules you skipped.
 
 - Fix majors first, highest impact first; then minors that are cheap. Re-capture the same states after fixing; "fixed" is not evidence.
-- **Needs the user** — a real URL, a media asset, legal text, a business fact, a product decision, the conditions behind a sourced offer ("웰컴 크레딧", "무료") — is not a fix the loop can make. Classify it as `사용자 입력 필요` and keep it in the list, not on the page: no review banner. In the page, the item takes its least misleading form — an unknown destination is a `<button type="button" disabled>` with the visible label (still announced, plainly inactive), missing legal text is a placeholder in the footer, an offer with unconfirmed conditions is left out. Mark each with `data-needs-input` so it can be found.
+- **Needs the user** — a real URL, a media asset, legal text, a business fact, a product decision, the conditions behind an offer the sources mention without terms — is not a fix the loop can make. Classify it as `사용자 입력 필요` and keep it in the list: no review banner on the page. In the page, the item takes its least misleading form, marked with `data-needs-input`:
+  - an unknown destination: a `<button type="button" aria-disabled="true">` with the visible label and a short visible reason, so it stays focusable and announced; the first-action check counts it as `사용자 입력 필요`, not as a pass;
+  - missing legal or business text: a labeled placeholder where it belongs;
+  - an offer with unconfirmed terms: left out.
+
+  A placeholder that carries `data-needs-input` and is on the list is not a second finding; it is why the page stays at `issues (공개 불가: 입력 대기)`.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
 - **At most three reviews.** After the third, report what remains with its evidence. A review that could not finish counts and is reported as such.
+- **In a harness repository** the `ui_review` gate has no `사용자 입력 필요` class; list those items as product decisions in the brief or pull request, which the workflow routes to `user_decision` instead of repair.
+
+## State checks
+
+- Hover, and `:focus-visible` on every interactive element.
+- Form errors, empty or missing data, overlong text (long names, long Korean words without spaces).
+- Keyboard only: skip link first, logical tab order, visible focus, no trap; a horizontally scrolling region is reachable.
+- JavaScript disabled (or the motion script blocked): all content visible, links and forms usable.
+- `prefers-reduced-motion: reduce`: no movement beyond opacity and color; nothing missing.
+- `forced-colors: active`: borders, focus rings, and icons remain visible; no meaning carried only by background images or color.
 
 ## False passes
 
-The `ui-review` list applies. In particular, none of these is evidence: a capture file without the state it shows, a test that clicked by text, a class or token present in the markup, a report line saying it was fixed, a self-check with no independent review.
+None of these is evidence on its own:
+
+| Looks like evidence | What it misses | Check instead |
+|---|---|---|
+| A browser test found the element by text and clicked it | Whether a person recognizes it as clickable | Point at each control on the default-state capture |
+| The right class or token is in the markup | Whether other CSS overrode it | The rendered look against the design system |
+| A capture file exists | Which state, viewport, and theme it shows | One capture per state checked |
+| An attribute (`aria-expanded`, a theme flag) is set | Whether the rendering changes with it | Render each state separately |
+| "Fixed" in a report | Whether the page changed | A new capture of the same state after the fix |
+| The self-check passed | Everything a maker does not see in their own page | An independent review |
 
 ## Accessibility details
 

@@ -2145,6 +2145,18 @@ assert_contains "$LANDING_VERIFY" "Each review runs in a fresh reviewer that did
 assert_contains "$LANDING_VERIFY" "**Needs the user**" "landing-page stops looping on what only the user can supply"
 assert_contains "$LANDING_VERIFY" "**When the only majors left are \`사용자 입력 필요\` items, stop.**" "the loop stops when only user input remains"
 assert_contains "$LANDING_VERIFY" "the \`사용자 입력 필요\` list so far" "the reviewer gets the user-input list"
+assert_contains "$LANDING_VERIFY" "**keeps the verdict at \`issues\`**" "the user-input list never turns a major into a pass"
+assert_contains "$LANDING_VERIFY" "is at best \`unverified\`, never \`verified\`" "a self review cannot verify"
+assert_contains "$LANDING_VERIFY" "## State checks" "verify keeps hover, focus, keyboard and forced-colors checks"
+assert_contains "$LANDING_VERIFY" "## False passes" "verify carries its own false-pass list"
+if command -v node >/dev/null; then
+  LANDING_JS_DIR="$TEST_TMP/landing-js"; mkdir -p "$LANDING_JS_DIR"
+  awk -v d="$LANDING_JS_DIR" '/^```(js|javascript)$/{n++; f=d"/b"n".js"; on=1; next} /^```/{on=0} on{print > f}' "$LANDING_DIR/references/motion-web.md"
+  for LANDING_JS in "$LANDING_JS_DIR"/*.js; do
+    [ -e "$LANDING_JS" ] || continue
+    node --check "$LANDING_JS" 2>/dev/null || fail "motion-web.md JavaScript example does not parse: $LANDING_JS"
+  done
+fi
 assert_contains "$(<"$ROOT/agents/design-reviewer.md")" "### 사용자 입력 필요 (입력으로 받은 경우)" "design reviewer reports user-input items apart from majors"
 assert_contains "$(<"$ROOT/templates/design-audit/references/figma-mcp.md")" "## Reading a design kit's values" "Figma MCP rules say how to read a kit inventory"
 assert_contains "$LANDING_VERIFY" "**Values the design system or the reconciled mockup set are not defects here.**" "verify does not override design-system values"
