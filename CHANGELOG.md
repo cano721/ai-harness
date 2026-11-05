@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.60.0 (2026-11-05)
 ### 새 기능
 
 - **`/setup`이 팀 규칙 원본을 가져옴** — 회사·팀 규칙(`~/.ai-harness/skills/<name>.md`)이 개인 홈에만 있어 팀원에게 퍼뜨릴 길이 없었고, 각자 자유 서술로 답하다 "에이전트는 Story를 만들지 않는다" 같은 조직 규칙이 빠졌습니다. 이제 조직이 규칙을 한 곳(git 저장소나 공유 폴더의 `skills/<name>.md`)에 두면 `/setup team`(대화형 셋업에서도)이 개인 설정 `HM_TEAM_RULES` → 저장소 표식(`harness.json`·`workspace.json`의 `team_rules`) 순으로 원본을 찾아, 개인 파일과의 차이를 보여 주고 확인받은 뒤에만 씁니다. 파일은 팀 블록(원본 해시 기록)과 개인 블록으로 나뉘어 다시 가져와도 개인 규칙은 그대로이고, 원본이 바뀌면 세션 시작 안내가 알립니다(자동으로 덮어쓰지 않음, git 원본은 하루 한 번 백그라운드로 받아 둠). `/harness-init`은 팀 규칙 원본이 있는지 묻고 있으면 표식을 넣습니다. (#243)
