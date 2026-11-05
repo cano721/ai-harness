@@ -67,6 +67,7 @@ lf -p <별칭> rest GET <경로> k=v …     # 공개 REST (MCP 에 없는 것�
 ## 공통 규칙
 
 - **시간 범위는 거의 모든 조회에 필수**다(`fromStartTime`/`toStartTime` 또는 `fromTimestamp`/`toTimestamp`, ISO 8601 UTC). 기본 최근 1시간: `date -u -v-1H +%Y-%m-%dT%H:%M:%SZ`(macOS) / `date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ`(GNU).
+- **`listObservations` 의 시간 범위는 최대 14일(336시간)** — Langfuse 가 도구에 건 제한이다(키 설정 아님). traceId·observation id 로 좁혀도 적용되고, 끝 시각이 시작+336시간을 넘으면 거부된다(`lf.py` exit 1). 더 긴 기간은 인접 구간으로 나눠 앞 구간의 `toStartTime` 을 다음 `fromStartTime` 으로 이어 붙인다. 건수·비용·지연처럼 집계만 필요하면 `queryMetrics`, id 를 아는 한 건은 `getObservation` 으로 받는다 — 둘은 30일 범위도 받는 것을 확인했다.
 - trace 는 별도 단위가 아니다 — **observation 이 기본 단위**. trace 목록 = `isRootObservation: true` 인 observation, trace 상세 = `traceId` 로 observation 전부. 응답의 `url` 이 Langfuse 화면 링크다.
 - `listObservations` 의 `limit` 최대 100, `input`/`output` 을 고르면 50. `fields` 를 안 주면 간단한 기본 필드만 온다(`getObservationFieldSchema` 에 전체 목록).
 - 목록은 커서식: `meta.cursor` 가 있으면 다음 장이 있다(한 장이 비어도). 인자 `cursor` 로 넘긴다.
@@ -84,7 +85,16 @@ lf -p <별칭> rest GET <경로> k=v …     # 공개 REST (MCP 에 없는 것�
    ```bash
    lf -p A call listObservations '{"limit":20,"fromStartTime":"'$F'","toStartTime":"'$T'","isRootObservation":true,"environment":"<env>"}'
    ```
-   `userId`·`name`·`type`·`level`·`traceId` 인자로 좁힌다. 복잡한 조건은 `filter`(스키마 확인).
+   `userId`·`name`·`type`·`level`·`traceId` 인자로 좁힌다. 복잡한 조건은 `filter`(스키마 확인). 14일보다 긴 기간은 공통 규칙대로 14일 구간으로 나눈다:
+   ```bash
+   F=2026-09-01T00:00:00Z; END=2026-10-01T00:00:00Z   # macOS date 기준
+   while [[ "$F" < "$END" ]]; do
+     T=$(date -u -j -v+14d -f %Y-%m-%dT%H:%M:%SZ "$F" +%Y-%m-%dT%H:%M:%SZ); [[ "$T" > "$END" ]] && T=$END
+     lf -p A call listObservations '{"limit":100,"fromStartTime":"'$F'","toStartTime":"'$T'","isRootObservation":true}'
+     F=$T
+   done
+   ```
+   구간마다 `meta.cursor` 가 있으면 그 구간 안에서 먼저 끝까지 넘긴다.
 
 2. **trace 상세** — trace id
    ```bash
