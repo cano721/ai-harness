@@ -42,6 +42,9 @@ A project may add sections after these. It may not rename or drop a required one
 - 테마: <light | light, dark | …> — 전환 방식: <attribute/class/media/platform>
 - 뷰포트: <supported minimum width>, <breakpoints by token or px>
 - 확인 대기: <count> — 목록은 마지막 보고에 있다
+- Figma 라이브러리: <file URL> (libraryKey <key>) — 생성 <YYYY-MM-DD>, 기준 <token file path>@<commit>   ← Figma output을 만든 경우
+- Figma 라이브러리: <kit URL> (libraryKey <key>) — 원천   ← Figma 키트가 값의 원천인 경우
+- 브랜드 모드: <mode names> — 화면별 기본: <rule> (변수 모드가 테마가 아니라 브랜드일 때만)
 ```
 
 Status meaning:

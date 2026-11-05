@@ -2158,7 +2158,7 @@ assert_contains "$MAP_CONTENT" "A skill on this map never overrides a project va
 assert_contains "$MAP_CONTENT" "## Forbidden pairs" "map names forbidden pairs"
 # 표의 주도 칸에는 스킬이 하나뿐이고, 영역 표의 영역마다 주인이 하나다.
 MAP_JOBS="$(awk '/^## Jobs/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Job/ && !/^\|---/' "$MAP_SRC")"
-assert_eq "6" "$(grep -c . <<<"$MAP_JOBS")" "map lists six jobs"
+assert_eq "7" "$(grep -c . <<<"$MAP_JOBS")" "map lists seven jobs"
 while IFS= read -r MAP_ROW; do
   MAP_LEAD="$(awk -F'|' '{print $3}' <<<"$MAP_ROW")"
   [[ "$MAP_LEAD" != *"·"* && "$MAP_LEAD" != *","* ]] || fail "map job has more than one lead: $MAP_ROW"
@@ -2231,6 +2231,70 @@ assert_file "$ROOT/skills/design-system-builder/references/theme-and-components.
 assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "references/theme-and-components.md" "design-system-builder reads the absorbed theme and component patterns"
 assert_contains "$(<"$ROOT/skills/design-system-builder/references/theme-and-components.md")" "tokens.md\` owns token layers, names" "absorbed patterns defer token naming to design-system-builder"
 pass "design skill map, catalog and independent reviewer"
+
+# 디자이너 Figma 흐름: 공용 Figma MCP 규칙과 채점 기준은 바이트 단위 사본이고, figma-screen은 design-audit 기준으로 루프를 돈다.
+FIGMA_MCP_SRC="$ROOT/templates/design-audit/references/figma-mcp.md"
+assert_file "$FIGMA_MCP_SRC"
+for FIGMA_COPY in "$ROOT/skills/design-system-builder/references/figma-mcp.md" "$ROOT/skills/figma-screen/references/figma-mcp.md"; do
+  cmp -s "$FIGMA_COPY" "$FIGMA_MCP_SRC" || fail "$FIGMA_COPY must match templates/design-audit/references/figma-mcp.md byte for byte"
+done
+for FIGMA_BASE in .claude .agents; do
+  assert_eq "templates/design-audit/references/figma-mcp.md" "$(jq -r --arg p "$FIGMA_BASE/skills/design-audit/references/figma-mcp.md" '.artifacts[] | select(.path==$p) | .source' "$ROOT/templates/managed-files.json")" "$FIGMA_BASE design-audit ships the Figma MCP rules"
+done
+assert_eq "add" "$(printf '%s' "$TEAM_PLAN" | jq -r '.items[] | select(.path==".claude/skills/design-audit/references/figma-mcp.md") | .action')" "design-system stack syncs the Figma MCP rules"
+FIGMA_MCP="$(<"$FIGMA_MCP_SRC")"
+assert_contains "$FIGMA_MCP" "\`use_figma\`" "Figma MCP rules name the write tool"
+assert_contains "$FIGMA_MCP" "Do not fall back to a different output silently" "Figma preflight stops instead of improvising"
+assert_contains "$FIGMA_MCP" "Never detach an instance" "Figma writing keeps library instances"
+assert_contains "$FIGMA_MCP" "\`create_session\`" "Figma MCP rules open the server session first"
+assert_contains "$FIGMA_MCP" "### When Figma's skill and ai-harness disagree" "ai-harness rules win over Figma's own skills on what is written"
+assert_contains "$FIGMA_MCP" "**Per-node facts come from a read-only \`use_figma\` script**" "bound or raw is judged per node, not from the variable union"
+assert_contains "$FIGMA_MCP" "**Sizing is not a token value.**" "sizing to match siblings is not a raw-value violation"
+assert_contains "$FIGMA_MCP" "**A View seat has a small MCP tool-call limit**" "Figma preflight warns that a View seat cannot finish the loop"
+assert_contains "$FIGMA_MCP" "never swap in a nearby variable" "a value with no variable keeps the spec value"
+assert_contains "$FIGMA_MCP" "**The library's fonts load in the target.**" "every Figma writer checks library fonts before writing text"
+assert_contains "$FIGMA_MCP" "**Hidden layers are not part of the design.**" "hidden spec layers are not read as differences"
+assert_contains "$AUDIT" "## Figma 프레임이 대상일 때" "design-audit scores Figma frames"
+assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "references/figma-mcp.md" "design-audit reads the Figma MCP rules"
+assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "Figma 파일에 점수를 남기지 않는다" "design-audit keeps scores out of the Figma file"
+DSB_SKILL="$(<"$ROOT/skills/design-system-builder/SKILL.md")"
+assert_contains "$DSB_SKILL" "references/figma-output.md" "design-system-builder publishes a Figma library through its reference"
+assert_contains "$DSB_SKILL" "references/figma-mcp.md" "design-system-builder reads the Figma MCP rules"
+FIGMA_OUT="$(<"$ROOT/skills/design-system-builder/references/figma-output.md")"
+assert_contains "$FIGMA_OUT" "**The token file is the source. The Figma library is generated from it.**" "token file stays the source of truth for Figma"
+assert_contains "$FIGMA_OUT" "\`--color-text-muted\` → \`color/text-muted\`" "Figma variable names derive mechanically from token names"
+assert_contains "$FIGMA_OUT" "## Drift check" "Figma output reports drift instead of overwriting"
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/output-format.md")" "- Figma 라이브러리:" "rule document meta records the Figma library"
+FIGMA_SCREEN_DIR="$ROOT/skills/figma-screen"
+assert_file "$FIGMA_SCREEN_DIR/agents/openai.yaml"
+cmp -s "$FIGMA_SCREEN_DIR/references/design-audit.md" "$ROOT/templates/design-audit/SKILL.md" \
+  || fail "skills/figma-screen/references/design-audit.md must match templates/design-audit/SKILL.md byte for byte"
+FIGMA_SCREEN="$(<"$FIGMA_SCREEN_DIR/SKILL.md")"
+assert_contains "$(sed -n '1,4p' "$FIGMA_SCREEN_DIR/SKILL.md")" "name: figma-screen" "figma-screen names itself"
+assert_contains "$FIGMA_SCREEN" "references/design-audit.md" "figma-screen scores with the design-audit copy"
+assert_contains "$FIGMA_SCREEN" "references/figma-mcp.md" "figma-screen reads the Figma MCP rules"
+assert_contains "$FIGMA_SCREEN" "**Stop when the verdict is 통과 and no axis is below half or \`미확인\`.**" "figma-screen loop stops only on a complete pass"
+assert_contains "$FIGMA_SCREEN" "**At most three audits**, the clean-up audit included." "the clean-up audit counts toward the cap"
+assert_contains "$FIGMA_SCREEN" "**Same organization as the library.**" "figma-screen checks fonts and organization before drawing"
+assert_contains "$AUDIT" "**대상 파일에도, 다른 어떤 파일에도 쓰지 않는다**" "Figma audit never writes"
+assert_contains "$AUDIT" "라이브러리 검색에 같은 역할의 컴포넌트가 없고" "a proposal name alone does not escape the deduction"
+assert_contains "$(<"$MAP_SRC")" "| Draw or extend a product screen in Figma from the design system library | \`figma-screen\` |" "design skill map routes Figma screens to figma-screen"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "\`/figma-screen\`도 **플러그인 전역 Skill**" "harness-init documents figma-screen"
+assert_eq ".agents/skills/design-audit/references/figma-mcp.md" "$(jq -r '.artifacts[] | select(.path==".agents/skills/design-audit/references/figma-mcp.md") | .path' "$ROOT/templates/managed-files.json")" "codex design-audit ships the Figma MCP rules"
+# Agent Skills 규격: description은 1024자 이하.
+for SKILL_FILE in "$ROOT"/skills/*/SKILL.md; do
+  DESC_LEN="$(python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8").read().split("---")[1]; m=re.search(r"^description:\s*(.*?)(?=^[A-Za-z_-]+:|\Z)",s,re.S|re.M); d=m.group(1).strip(); d=" ".join(l.strip() for l in d[1:].splitlines()).strip() if d.startswith(">") else d; print(len(d))' "$SKILL_FILE")"
+  [ "$DESC_LEN" -le 1024 ] || fail "$SKILL_FILE description is $DESC_LEN characters (max 1024)"
+done
+assert_contains "$FIGMA_SCREEN" "**The audit is independent.**" "figma-screen does not score its own drawing"
+assert_contains "$FIGMA_SCREEN" "the brief's **decision list**" "the independent audit gets decisions, not reasoning"
+assert_contains "$FIGMA_SCREEN" "report it as \`불성립\`" "an unfinished audit round is reported, not hidden"
+assert_contains "$FIGMA_SCREEN" "**Each state frame must be coherent.**" "figma-screen checks actions per state"
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/extract.md")" "### A Figma design kit as the source" "design-system-builder extracts rules from an existing Figma kit"
+assert_contains "$FIGMA_SCREEN" "Never raise the score by removing what the requirement asked for" "figma-screen does not trade requirements for score"
+assert_contains "$FIGMA_SCREEN" "Do not edit the library file" "figma-screen leaves the library to design-system-builder"
+assert_contains "$(<"$ROOT/README.md")" "| \`/figma-screen\` |" "README lists figma-screen"
+pass "designer Figma flow"
 
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
 DIAGRAM_SKILL="$ROOT/skills/diagram/SKILL.md"
