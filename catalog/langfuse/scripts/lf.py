@@ -3,13 +3,17 @@
 
 Credentials (per Langfuse project): LANGFUSE_PUBLIC_KEY[_ALIAS], LANGFUSE_SECRET_KEY[_ALIAS],
 LANGFUSE_HOST[_ALIAS]. Lookup order: process env -> ~/.claude/settings.json "env" ->
-${HARNESS_METRICS_DIR:-~/.ai-harness}/secrets.env. Secrets are never printed.
+${HARNESS_METRICS_DIR:-~/.ai-harness}/secrets.env. When a key has no value, LANGFUSE_PUBLIC_KEY_CMD[_ALIAS] /
+LANGFUSE_SECRET_KEY_CMD[_ALIAS] name a shell command that prints it (AWS SSM, Vault, 1Password, ...). Commands are read
+only from those two user files; a *_CMD in the process env is ignored.
+Secrets are never printed.
 """
 import argparse
 import base64
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -19,6 +23,8 @@ import urllib.request
 DEFAULT_HOST = "https://cloud.langfuse.com"
 CACHE_DIR = os.path.expanduser("~/.cache/langfuse-skill")
 CACHE_TTL = 24 * 3600
+CMD_TIMEOUT = 60
+KEY_PREFIX = {"LANGFUSE_PUBLIC_KEY": "pk-lf-", "LANGFUSE_SECRET_KEY": "sk-lf-"}
 SETTINGS_FILES = [os.path.expanduser("~/.claude/settings.json")]
 
 
@@ -63,18 +69,44 @@ def suffix(alias):
 
 
 def aliases():
-    names = set(os.environ) | set(settings_env())
-    found = []
-    for n in sorted(names):
-        m = re.fullmatch(r"LANGFUSE_PUBLIC_KEY(_[A-Z0-9_]+)?", n)
-        if m:
-            found.append(m.group(1)[1:].lower().replace("_", "-") if m.group(1) else "")
-    return found
+    files = settings_env()
+    found = set()
+    for n in set(os.environ) | set(files):
+        m = re.fullmatch(r"LANGFUSE_PUBLIC_KEY(_CMD)?(?:_([A-Z0-9_]+))?", n)
+        if m and not (m.group(1) and n not in files):
+            found.add(m.group(2).lower().replace("_", "-") if m.group(2) else "")
+    return sorted(found)
+
+
+def key_value(base, alias):
+    value = lookup(base + suffix(alias))
+    if value:
+        return value
+    name = base + "_CMD" + suffix(alias)
+    command = settings_env().get(name)
+    if not command:
+        return None
+    try:
+        r = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, timeout=CMD_TIMEOUT,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        die(f"{name} timed out after {CMD_TIMEOUT}s", 1)
+    if r.returncode:
+        tail = "\n".join(r.stderr.strip().splitlines()[-5:])
+        die(f"{name} failed (exit {r.returncode}){': ' + tail if tail else ''}", 1)
+    value = r.stdout.strip()
+    if "\n" in value or not value.startswith(KEY_PREFIX[base]):
+        die(f"{name} must print one line starting with {KEY_PREFIX[base]} (output not shown)", 1)
+    return value
 
 
 def credentials(alias):
+    if alias and not re.fullmatch(r"[a-z0-9][a-z0-9-]*", alias):
+        die("alias: lowercase letters, digits and '-' only")
+    if alias == "cmd" or alias.startswith("cmd-"):
+        die(f"alias '{alias}' is reserved: its env names collide with the *_CMD keys")
     s = suffix(alias)
-    pk, sk = lookup("LANGFUSE_PUBLIC_KEY" + s), lookup("LANGFUSE_SECRET_KEY" + s)
+    pk, sk = key_value("LANGFUSE_PUBLIC_KEY", alias), key_value("LANGFUSE_SECRET_KEY", alias)
     if not (pk and sk):
         known = ", ".join(a or "(default)" for a in aliases()) or "none"
         die(f"Langfuse keys not registered for project '{alias or '(default)'}'. Registered: {known}")

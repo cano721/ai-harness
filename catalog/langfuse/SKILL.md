@@ -23,6 +23,7 @@ Langfuse API 키는 **개인 키가 아니라 프로젝트 키**다(조직 키�
 
 - 별칭 → 접미사: 대문자 + `-`→`_` (`checkout-bot` → `_CHECKOUT_BOT`). 별칭 없음 = 접미사 없는 기본 키.
 - `lf.py` 는 프로세스 환경 → `~/.claude/settings.json` 의 `env` → `${HARNESS_METRICS_DIR:-~/.ai-harness}/secrets.env` 순서로 읽는다. 방금 등록한 키도 세션 재시작 없이 쓴다.
+- **비밀 저장소에서 꺼내기** — 키 값 대신 `LANGFUSE_PUBLIC_KEY_CMD[_<별칭>]`·`LANGFUSE_SECRET_KEY_CMD[_<별칭>]` 에 키를 한 줄로 출력하는 명령을 둘 수 있다(AWS SSM·Secrets Manager·Vault·1Password 등 무엇이든). `lf.py` 는 같은 이름의 키 값이 없을 때만 그 명령을 실행하고, 결과는 메모리에서만 쓴다. 명령은 `~/.claude/settings.json`·`secrets.env` 에서만 읽고, 프로세스 환경에 있는 `*_CMD` 는 무시한다. 명령이 실패하면 그 stderr 끝부분을 보여 주고 멈춘다(로그인·권한 확인은 사용자 몫). 어떤 저장소·경로를 쓰는지는 팀마다 다르므로 사용자 규칙 파일(`key_source`)을 따른다. 별칭 `cmd`·`cmd-*` 는 이 이름과 겹쳐 쓸 수 없다.
 - 별칭을 줬는데 키가 없으면 기본 키로 대신하지 않고 멈춘다 — 다른 프로젝트 데이터를 그 프로젝트 것으로 오인하지 않기 위해서다.
 - 기본 키(접미사 없음)는 `/ai-harness:setup`(Codex는 ai-harness setup 스킬)이 발급 안내·저장·연결 확인까지 한다. 키가 없거나 401이면 그쪽으로 안내한다.
 - **키를 대화에 붙여 넣게 하지 않는다.** 프로젝트를 더할 때(별칭)는 클립보드 단계로 등록한다(키 값은 대화·출력·명령 인자에 남지 않음):
@@ -30,6 +31,9 @@ Langfuse API 키는 **개인 키가 아니라 프로젝트 키**다(조직 키�
   2. Secret key 복사 → `python3 -I scripts/register.py <별칭> --stage sk`
   3. `python3 -I scripts/register.py <별칭>` — 리전을 차례로 호출해 맞는 host 를 찾고, 키가 가리키는 프로젝트 이름을 보여 준 뒤 저장한다.
   - macOS 에서 단계 없이 `register.py <별칭>` 만 실행하면 가려진 입력 창 두 개로 받는다.
+  - 키가 비밀 저장소에 있으면 발급·복사 대신 `python3 -I scripts/register.py <별칭> --pk-cmd '<명령>' --sk-cmd '<명령>'` — 명령을 실행해 같은 방식으로 리전·프로젝트를 확인한 뒤 명령과 host 를 저장한다. 명령은 비밀이 아니므로 인자로 받아도 된다. 예: `--sk-cmd 'aws ssm get-parameter --name /team/langfuse/checkout-bot/sk --with-decryption --query Parameter.Value --output text'`
+  - 한 별칭에 두 방식 중 하나만 남긴다 — 저장할 때 다른 방식의 기존 값을 지운다(키 값이 남아 있으면 명령보다 먼저 쓰이므로).
+  - 기본 키도 같은 절차에 별칭 `default` 를 쓴다.
 - 키 생성 버튼이 안 보이면 그 프로젝트에 키 생성 권한이 없는 것이다 — 프로젝트 owner/admin 에게 조회용 키를 따로 발급받게 안내한다(서비스가 쓰는 키와 분리하면 폐기가 쉽다).
 
 ## 도구

@@ -82,7 +82,7 @@ $ROOT/scripts/setup.sh update
 
 설치한 스킬마다 `list`의 `env[]`를 본다. `found:null`이고 `required:true`인 키를 하나씩 처리한다. 이미 있는 키도 6단계 연결 확인에서 실패하면 같은 절차로 다시 넣는다.
 
-1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다. Langfuse 키는 개인이 아니라 프로젝트 단위다 — 여기서는 기본 프로젝트 한 쌍만 넣고, 다른 프로젝트는 설치된 스킬의 `scripts/register.py <별칭>`(클립보드 단계, 리전 자동 탐지)으로 더한다고 안내한다.
+1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다. Langfuse는 아래 [Langfuse 키](#langfuse-키)를 따른다.
 2. **저장 대상** — 2단계에서 고른 도구: Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600).
 3. **비밀 아닌 값**(`secret:false` — base URL·이메일·조직 slug·사이트): 대화로 받아 바로 저장한다.
    ```bash
@@ -97,6 +97,24 @@ $ROOT/scripts/setup.sh update
 5. Codex에 저장했으면 결과의 `shell_profile_line`을 셸 프로파일(`~/.zshrc` 등)에 한 번 넣으라고 안내한다.
 
 값을 출력하거나 `echo $KEY`로 확인하지 않는다.
+
+### Langfuse 키
+
+키는 개인이 아니라 프로젝트 단위다. 여기서는 기본 프로젝트 한 쌍만 넣고, 다른 프로젝트는 같은 스크립트에 별칭을 주어 더한다고 안내한다. `setup.sh set` 대신 설치된 스킬의 `register.py`를 쓴다 — 리전(host)을 자동으로 찾아 저장하므로 EU 밖 계정이 `LANGFUSE_HOST`를 따로 넣지 않아도 된다. 아래 `<lf>`는 설치된 사본의 `scripts/` 절대 경로(Claude `~/.claude/skills/langfuse/scripts`, Codex `~/.agents/skills/langfuse/scripts`).
+
+먼저 묻는다: **키를 각자 발급하는가, 팀 비밀 저장소(AWS SSM·Vault·1Password 등)에 있는가?** 사용자 규칙 파일에 `key_source`가 이미 있으면 묻지 않고 따른다.
+
+- **직접 발급** — 발급 안내(`issue`)를 보여 주고, 키 값은 대화로 받지 않고 클립보드 단계로 넣는다. 이 세션의 Bash로 실행해도 된다(값이 출력되지 않음).
+  1. Public Key를 복사하게 한 뒤 `python3 -I <lf>/register.py default --stage pk`
+  2. Secret Key를 복사하게 한 뒤 `python3 -I <lf>/register.py default --stage sk`
+  3. `python3 -I <lf>/register.py default` — 리전 탐색·프로젝트 이름 확인 후 저장
+- **비밀 저장소** — 발급 안내를 건너뛴다. 키를 한 줄로 출력하는 명령 두 개를 사용자와 정한다(경로는 사용자가 알려 준 규칙대로 — 추측하지 않는다). 명령은 비밀이 아니므로 대화로 받아도 된다.
+  ```bash
+  python3 -I <lf>/register.py default --pk-cmd '<명령>' --sk-cmd '<명령>'
+  ```
+  명령이 실패하면 그 오류(로그인 만료·권한 없음 등)를 보여 주고 사용자가 고친 뒤 다시 한다. 예: AWS SSM은 `aws ssm get-parameter --name <경로> --with-decryption --query Parameter.Value --output text`(필요하면 `--profile`), 권한 `ssm:GetParameter`·`kms:Decrypt`.
+
+`register.py`는 Claude `settings.json`에 저장하고 `secrets.env`가 있으면 그곳에도 저장한다. `~/.claude`가 없으면(Codex만 사용) `secrets.env`를 만들어 저장한다. 스킬 스크립트는 두 파일을 모두 직접 읽는다. 저장소 종류·경로 규칙은 7단계 사용자 규칙(`key_source`)에 남긴다.
 
 ## 6. 연결 확인
 
