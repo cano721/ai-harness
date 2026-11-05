@@ -26,6 +26,8 @@ This file is the single source. ai-harness keeps byte-identical copies next to e
 | UI change in a repository with an ai-harness UI contract (`ui-review`, `frontend-team`, `design-audit`) | the contract (`ui-review` or the `frontend-team` route) | `impeccable` (critique only during review; fixes go back to the writer) · `web-design-guidelines` (interface and accessibility check) |
 | Independent review of a finished screen or page, with or without a harness | a fresh reviewer session or the `ai-harness:design-reviewer` agent (Claude) | in a fresh reviewer session only: `impeccable` (critique) · `web-design-guidelines` (interface check) — read-only use. The agent cannot load skills; it reviews with its own criteria plus the built-in interface guideline rules file |
 
+A landing page in a repository with an ai-harness UI contract matches two rows; `landing-page` leads the build and the contract's `ui_review` is the only review gate — `landing-page` does not run its own review loop there.
+
 Native apps follow `native-ui`; none of the web skills above lead there.
 
 ## Lanes

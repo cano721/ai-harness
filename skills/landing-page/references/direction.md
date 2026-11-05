@@ -53,9 +53,16 @@ Record the chosen direction in the report (idea, audience, action, color strateg
 
 ## 5. Evidence
 
-- Never fabricate testimonials, logos, metrics, user counts, ratings, press, or awards. Where real evidence is missing, insert a visibly labeled placeholder (for example `[고객 후기 필요]`) and list each one in the report.
+- Never fabricate testimonials, logos, metrics, user counts, ratings, press, or awards. Where real evidence is missing, insert a visibly labeled placeholder (for example `[고객 후기 필요]`) and list each one in the report. Placeholders are for review; a page with one still visible is not ready to publish.
+- A sourced offer with unconfirmed conditions ("웰컴 크레딧으로 첫 연습을", "무료") is a claim too: until its conditions are confirmed, leave it out and list it as `사용자 입력 필요`.
+- Implied claims need evidence too. A heading like "요즘 많이 연습한 질문" or "most popular" claims popularity; without data, describe instead ("직무별로 이런 질문을 연습해요").
+- Example data inside a product mockup (a sample report, a score) is labeled as an example on the page and never used as a claim.
+- Say what the product is in the first viewport in plain words. When imagery could suggest something else (photos of people for an AI interviewer), the headline or lead says it.
 - Images: record the source and license of every image or video; generated images are labeled as such in the report.
 - A form with no backend: use `mailto:` or a disabled state and say in the report that it is not connected.
+- An action whose destination is unknown is a `사용자 입력 필요` item in the report. Do not point it at the page itself to make it look like it works.
+- A secondary action whose content does not exist yet (a sample clip, a demo) is left out until it does, rather than opening an empty placeholder.
+- Facts come from the sources the user named. A source that turns out to hold another company's material (a competitor archive) is a reference for structure only; none of its facts are the product's.
 
 ## 6. Copy
 

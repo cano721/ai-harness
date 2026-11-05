@@ -1,6 +1,6 @@
 # Figma MCP
 
-How ai-harness skills that write to Figma or score Figma frames use the Figma MCP. One copy ships with each of them (`design-system-builder`, `figma-screen`, `design-audit`); they must stay identical. Server behavior below was observed on the remote server in 2026-11; when the server's own instructions say otherwise, follow the server for *how* to call a tool and this file for *what* may be written.
+How ai-harness skills that write to Figma, score Figma frames, or read a Figma design kit use the Figma MCP. One copy ships with each of them (`design-system-builder`, `figma-screen`, `design-audit`, `landing-page`); they must stay identical. Server behavior below was observed on the remote server in 2026-11; when the server's own instructions say otherwise, follow the server for *how* to call a tool and this file for *what* may be written.
 
 ## Which server
 
@@ -28,7 +28,7 @@ Not every server version lists every tool. A forbidden tool that is absent is st
 Check these in order and stop at the first failure with the fix in one line. Do not fall back to a different output silently.
 
 1. **The write tool is listed.** If only `authenticate`/`complete_authentication` are listed, the connector is not authorized in this session: ask the user to authorize the Figma server (Claude Code: `/mcp`; Codex: its MCP login for the server). A connector authorized after the session started may stay invisible to that session; a new session sees it.
-2. **Session and Figma's skill.** If `create_session` is listed, call it first. Load `figma-use` with `get_figma_skill` and pass `skillNames` to `use_figma` the way its description requires.
+2. **Session and Figma's skill.** If `create_session` is listed, call it first. Load `figma-use` with `get_figma_skill` (it takes the skill's URI, `skill://figma/figma-use/SKILL.md`) and pass `skillNames` to `use_figma` the way its description requires — a skill loaded as a resource is named with a `resource:` prefix (`resource:figma-use`).
 3. **Where the seat can write, and how much.** `whoami` lists plans and seats. The user's **drafts** were writable even with a View seat on that plan; a team or project file needs a Full (or Dev with edit) seat there. If several plans are listed and the target is not a draft, ask which plan owns it. **A View seat has a small MCP tool-call limit** (observed: one screen, two audit rounds, and a few fixes used it up, and then reads failed too). The limit belongs to the plan that owns the file being called, so **reading** that organization's library or spec files spends it too, even when the target file sits elsewhere. Before a write-and-audit loop that touches a plan where the user has a View seat, say so and recommend a Full seat on that plan; continue only if the user accepts the risk.
 4. **The target is explicit.** A file URL (`figma.com/design/<fileKey>/…`, node `?node-id=1-2` → `1:2`) or the user's go-ahead to create one in drafts. Never write into a file the user did not name or create through this run.
 5. **The library is reachable.** The library does not have to be enabled in the target file: components, variables, and styles import by key (`importComponentSetByKeyAsync`, `importComponentByKeyAsync`, `importVariableByKeyAsync`, `importStyleByKeyAsync`). Get keys from `search_design_system` scoped with `includeLibraryKeys: [<libraryKey>]` (an unscoped component search can fail and mixes in other libraries), or from a read-only `use_figma` inventory script run on the library file. The `libraryKey` comes from the rule document's `## 메타` when recorded there, else from the results of an unscoped *variable* or *style* search (each result carries its library's key and name; several libraries can share a variable or style name, so take the key whose library name matches the library file named in `## 메타` or by the user). An unscoped search can also come back empty when the target file is outside the library's organization. Put the key in the report; only `design-system-builder` writes it into `## 메타`, after the user approves. If imports fail, report the error and stop.
@@ -56,6 +56,13 @@ Figma's skills decide *how* to drive the Plugin API. ai-harness decides *what* e
 - **Small batches, read back.** Write a section, read it back, then continue. Report partial writes with what was and was not created. Read back the values you set, not only that the node exists — paint opacity set together with a variable binding has been silently dropped.
 - **Other files are read-only.** A `use_figma` script run on the library or spec file must only read. Before running it, check the script has no setter, create, remove, or import call. Say in the report that you ran one. An auditor that must not write gets no other write tool.
 - **No scores or review notes on the canvas.**
+
+## Reading a design kit's values
+
+To use a kit as a page's or a document's value source (not to review a frame):
+
+- `get_variable_defs` returns only what a selected node uses, in the default mode; it cannot list a collection. Use a read-only `use_figma` script on the kit file: `getLocalVariableCollectionsAsync`/`getLocalVariablesAsync` with each mode's values and aliases resolved, `getLocalTextStylesAsync`, `getLocalEffectStylesAsync`, and the bound variables of the component variants you will mirror. Return only names, modes, resolved values, and code syntax.
+- `get_design_context` serves design-to-code generation; a kit inventory does not need it.
 
 ## Reading for review
 

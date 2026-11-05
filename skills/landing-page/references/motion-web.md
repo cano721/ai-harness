@@ -34,6 +34,8 @@ Use the design system's motion tokens when they exist. Otherwise:
 - First-load sequence: at most 1.2s total, at most four elements. No preloader screens.
 - Reveal once; trigger when the element's top reaches 85% of the viewport height. Travel 12–32px. Blur up to 8px, display type only.
 - Items whose top sits in the last 15% of the page's scroll range never cross that line: leave them static, or use `start: "clamp(top 85%)"` in ScrollTrigger.
+- Never put a reveal on the first-viewport LCP candidate; a late script would hide it for the fallback's whole delay.
+- Code in this file shows patterns. Check every library API against the installed version's docs or types before using it.
 - Hidden starting states live only under a JavaScript class and `prefers-reduced-motion: no-preference`, with a timed fallback that shows everything if the reveal script has not started:
 
 ```html
