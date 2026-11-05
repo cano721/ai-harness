@@ -1,4 +1,0 @@
-interface:
-  display_name: "Figma Screen"
-  short_description: "Draw a design-system-only screen in Figma and fix it until design-audit passes."
-  default_prompt: "Use $figma-screen to draw this screen in Figma from the project's design system library: $ARGUMENTS"
