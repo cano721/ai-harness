@@ -1,6 +1,6 @@
 ---
 name: design-system-builder
-description: Build or update a project's design system — a design rule document, a token file in the project's own stack format, the shared components that already repeat, and a reference screen — from existing code, the user's answers, or a mockup — and, on request, publish it as a Figma library. Use when the request is to create (디자인 시스템 만들어줘, 토큰 정리, 디자인 규칙 문서), extract, document, refresh, or reorganize a design system, design tokens, theme tokens, dark-mode tokens, a type or spacing scale, or the design rule document that design-audit scores against, or to put it into Figma (디자인 시스템 피그마에 만들어줘). Do not use to build a landing page, marketing page, or product/business screen, or to implement a feature UI, or to draw a new screen in Figma (that is figma-screen) — those consume the design system, they do not define it. Do not use to score a screen against existing rules (that is design-audit).
+description: Build or update a project's design system — a design rule document, a token file in the project's own stack format, the shared components that already repeat, and a reference screen — from existing code, the user's answers, or a mockup — and, on request, publish it as a Figma library. Use when the request is to create (디자인 시스템 만들어줘, 토큰 정리, 디자인 규칙 문서), extract, document, refresh, or reorganize a design system, design tokens, theme tokens, dark-mode tokens, a type or spacing scale, or the design rule document that design-audit scores against, or to put it into Figma (디자인 시스템 피그마에 만들어줘). Do not use to build a landing page, marketing page, or product/business screen, or to implement a feature UI, or to draw a new screen from the design system in Figma or code (that is design-screen) — those consume the design system, they do not define it. Do not use to score a screen against existing rules (that is design-audit).
 ---
 
 # Design System Builder
@@ -103,7 +103,7 @@ End with:
 
 - Do not build feature screens, landing pages, or marketing pages here. Those consume the design system.
 - Do not score screens. `design-audit` scores against the document this skill produces.
-- Do not draw product screens in Figma. `figma-screen` builds them from the library this skill publishes.
+- Do not draw product screens, in Figma or in code. `design-screen` builds them from the library and tokens this skill publishes.
 - Do not copy values from Figma back into the token file without the drift check's `figma wins` and the user's confirmation.
 - Do not import palettes, font pairings, or another brand's design document. Generate from the project and the user's answers.
 - Do not commit, push, or open a pull request unless the user asks.
