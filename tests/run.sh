@@ -5094,6 +5094,7 @@ cat >"$SETUP_T/http.sh" <<'STUB'
 conf="$(cat)"
 printf '%s\n' "$*" >>"${0%/*}/argv.log"
 case "$conf" in *bad-token*) printf 'HTTP 401\n' >&2; exit 1 ;; esac
+case "$conf" in *pk-lf-from-cmd:sk-lf-from-cmd*) printf '{"data":[{"id":"p2","name":"FromCmd"}]}'; exit 0 ;; esac
 case "$1" in
   */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
   */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
@@ -5136,6 +5137,20 @@ printf 'sk-lf-bad-token\n' | setup_cmd set --tool claude LANGFUSE_SECRET_KEY >/d
 LF_CHECK="$(setup_cmd check langfuse)"
 assert_eq "false HTTP 401" "$(jq -r '"\(.ok) \(.error)"' <<<"$LF_CHECK")" "langfuse check reports rejected keys"
 assert_contains "$(jq -r '.hint' <<<"$LF_CHECK")" "LANGFUSE_HOST" "langfuse 401 points at key or region mismatch"
+# 키 대신 비밀 저장소 명령(_CMD): 사용자 파일에 저장된 명령만 실행하고, 프로세스 환경의 명령은 무시한다.
+jq 'del(.env.LANGFUSE_PUBLIC_KEY, .env.LANGFUSE_SECRET_KEY)' "$SETUP_T/settings.json" >"$SETUP_T/settings.tmp" && mv "$SETUP_T/settings.tmp" "$SETUP_T/settings.json"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh" LANGFUSE_PUBLIC_KEY_CMD="touch $SETUP_T/planted; printf pk-lf-from-cmd" LANGFUSE_SECRET_KEY_CMD="printf sk-lf-from-cmd")
+assert_eq "LANGFUSE_PUBLIC_KEY,LANGFUSE_SECRET_KEY" "$(setup_cmd check langfuse | jq -r '.missing | join(",")')" "langfuse key commands in the process env are ignored"
+[[ ! -e "$SETUP_T/planted" ]] || fail "a key command from the process env ran"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+setup_cmd set --tool claude LANGFUSE_PUBLIC_KEY_CMD 'printf "pk-lf-from-cmd\n"' >/dev/null
+setup_cmd set --tool claude LANGFUSE_SECRET_KEY_CMD 'printf sk-lf-from-cmd' >/dev/null
+assert_eq "true FromCmd" "$(setup_cmd check langfuse | jq -r '"\(.ok) \(.as)"')" "langfuse check runs the saved key commands"
+assert_eq "LANGFUSE_SECRET_KEY_CMD settings" "$(setup_cmd list | jq -r 'select(.name=="langfuse") | .env[1] | "\(.found) \(.source)"')" "a saved key command counts as the key"
+setup_cmd set --tool claude LANGFUSE_SECRET_KEY_CMD 'echo "session expired" >&2; exit 254' >/dev/null
+LF_CHECK="$(setup_cmd check langfuse)"
+assert_eq "false key command failed" "$(jq -r '"\(.ok) \(.error)"' <<<"$LF_CHECK")" "langfuse check reports a failing key command"
+assert_contains "$(jq -r '.hint' <<<"$LF_CHECK")" "ssm:GetParameter" "failing key command hint names login and permissions"
 if grep -qE "tok|bad-token|pk-lf|sk-lf" "$SETUP_T/argv.log"; then fail "credentials leaked into HTTP call arguments"; fi
 if setup_cmd list | grep -q "tok'en"; then fail "list prints a credential"; fi
 SETUP_ENV=()
@@ -5236,6 +5251,98 @@ assert_eq "1" "$LF_RC" "register stops when settings.json is not a JSON object"
 assert_contains "$LF_ERR" "not a JSON object" "register names the unusable settings file"
 assert_eq "[]" "$(<"$LF_T/home/.claude/settings.json")" "register leaves a non-object settings.json unchanged"
 [[ -e "$LF_T/data/langfuse-staging/bad-settings.sk" ]] || fail "register keeps staged keys when it stops before saving"
+
+# 비밀 저장소 명령(_CMD): 사용자 파일의 명령만 실행하고, 같은 별칭의 키 값이 있으면 그것이 먼저다. 실패·형식 오류는 값 없이 멈춘다.
+jq -n '{env:{
+  LANGFUSE_PUBLIC_KEY_CMD_VAULT:"printf pk-lf-vault", LANGFUSE_SECRET_KEY_CMD_VAULT:"printf \"sk-lf-vault\\n\"",
+  LANGFUSE_PUBLIC_KEY_CMD_BROKEN:"printf pk-lf-b", LANGFUSE_SECRET_KEY_CMD_BROKEN:"echo expired-token >&2; exit 3",
+  LANGFUSE_PUBLIC_KEY_CMD_NOISY:"printf pk-lf-n", LANGFUSE_SECRET_KEY_CMD_NOISY:"printf leaked-value"}}' >"$LF_T/home/.claude/settings.json"
+LF_AUTH="$(env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" \
+  LANGFUSE_PUBLIC_KEY_CMD_EVIL="touch $LF_T/planted; printf pk-lf-e" LANGFUSE_SECRET_KEY_CMD_EVIL="printf sk-lf-e" \
+  python3 -I -B -c '
+import base64, importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("lf", sys.argv[1]); lf = importlib.util.module_from_spec(spec); spec.loader.exec_module(lf)
+user = lambda a: base64.b64decode(lf.credentials(a)[1].split()[1]).decode()
+first = user("vault")
+os.environ["LANGFUSE_SECRET_KEY_VAULT"] = "sk-lf-direct"
+print(first, user("vault"), ",".join(lf.aliases()))
+' "$ROOT/catalog/langfuse/scripts/lf.py")"
+assert_eq "pk-lf-vault:sk-lf-vault pk-lf-vault:sk-lf-direct broken,noisy,qa,vault" "$LF_AUTH" "key commands from the user files supply keys, stored values win, env commands are not aliases"
+set +e
+LF_ENV=(LANGFUSE_PUBLIC_KEY_CMD_EVIL="touch $LF_T/planted; printf pk-lf-e" LANGFUSE_SECRET_KEY_CMD_EVIL="printf sk-lf-e")
+LF_ERR="$(lf -p evil tools 2>&1)"; LF_RC=$?
+LF_ENV=()
+assert_eq "2" "$LF_RC" "a key command in the process env is not run"
+[[ ! -e "$LF_T/planted" ]] || fail "lf.py ran a key command from the process env"
+LF_ERR="$(lf -p broken tools 2>&1)"; LF_RC=$?
+assert_eq "1" "$LF_RC" "failing key command exits 1"
+assert_contains "$LF_ERR" "LANGFUSE_SECRET_KEY_CMD_BROKEN failed (exit 3): expired-token" "failing key command names itself and shows its stderr"
+LF_ERR="$(lf -p noisy tools 2>&1)"; LF_RC=$?
+assert_eq "1" "$LF_RC" "key command printing a non-key exits 1"
+assert_contains "$LF_ERR" "must print one line starting with sk-lf-" "non-key output is explained"
+if grep -q "leaked-value" <<<"$LF_ERR"; then fail "key command output is printed on a format error"; fi
+LF_ERR="$(lf -p cmd tools 2>&1)"; LF_RC=$?
+assert_eq "2" "$LF_RC" "alias 'cmd' is reserved in lf.py"
+for bad in CMD Vault cmd_x; do
+  LF_ERR="$(lf -p "$bad" tools 2>&1)"; LF_RC=$?
+  assert_eq "2" "$LF_RC" "lf.py rejects alias '$bad' before mapping it to env names"
+done
+LF_ERR="$(register cmd-x --stage pk 2>&1)"; LF_RC=$?
+assert_eq "1" "$LF_RC" "alias 'cmd-*' is reserved in register.py"
+set -e
+
+# register.py --pk-cmd/--sk-cmd: 명령으로 키를 받아 리전을 확인하고 명령과 host만 저장한다. 다른 방식의 기존 값은 지운다.
+cat >"$LF_T/server.py" <<'PY'
+import http.server, os, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        ok = self.path == "/api/public/projects" and self.headers.get("Authorization", "").startswith("Basic ")
+        self.send_response(200 if ok else 401)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"data":[{"id":"p","name":"Stub"}]}' if ok else b'{}')
+    def log_message(self, *a):
+        pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1] + ".tmp", "w") as f:
+    f.write(str(s.server_address[1]))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+s.serve_forever()
+PY
+python3 -I -B "$LF_T/server.py" "$LF_T/port" &
+LF_SRV=$!
+for _ in $(seq 100); do [[ -s "$LF_T/port" ]] && break; sleep 0.1; done
+LF_HOST="http://127.0.0.1:$(<"$LF_T/port")"
+regh() { env -i PATH="$PATH" HOME="$LF_T/home" HARNESS_METRICS_DIR="$LF_T/data" LANGFUSE_HOST="$LF_HOST" python3 -I -B "$ROOT/catalog/langfuse/scripts/register.py" "$@"; }
+jq -n '{model:"opus", env:{KEEP:"1", LANGFUSE_PUBLIC_KEY_VAULT2:"pk-lf-old", LANGFUSE_SECRET_KEY_VAULT2:"sk-lf-old"}}' >"$LF_T/home/.claude/settings.json"
+printf "export LANGFUSE_SECRET_KEY_VAULT2='sk-lf-old'\nexport OTHER='1'\n" >"$LF_T/data/secrets.env"
+printf 'pk-lf-stale' >"$LF_T/data/langfuse-staging/vault2.pk"
+set +e
+LF_ERR="$(regh vault2 --pk-cmd 'printf pk-lf-v2' --sk-cmd 'echo denied >&2; exit 255' 2>&1)"; LF_RC=$?
+set -e
+assert_eq "1" "$LF_RC" "register stops when a key command fails"
+assert_contains "$LF_ERR" "nothing saved" "failed key command saves nothing"
+assert_eq "pk-lf-old" "$(jq -r '.env.LANGFUSE_PUBLIC_KEY_VAULT2' "$LF_T/home/.claude/settings.json")" "failed key command leaves settings unchanged"
+LF_OUT="$(regh vault2 --pk-cmd 'printf pk-lf-v2' --sk-cmd 'printf sk-lf-v2' 2>&1)"
+assert_contains "$LF_OUT" "project=['Stub']" "register checks the keys the commands print"
+if grep -qE "pk-lf-v2|sk-lf-v2" <<<"$LF_OUT"; then fail "register prints keys from commands"; fi
+assert_eq "printf pk-lf-v2|printf sk-lf-v2|$LF_HOST|null|null|1" \
+  "$(jq -r '.env | [.LANGFUSE_PUBLIC_KEY_CMD_VAULT2, .LANGFUSE_SECRET_KEY_CMD_VAULT2, .LANGFUSE_HOST_VAULT2, .LANGFUSE_PUBLIC_KEY_VAULT2, .LANGFUSE_SECRET_KEY_VAULT2, .KEEP] | map(tostring) | join("|")' "$LF_T/home/.claude/settings.json")" \
+  "register saves commands and host, drops the stored keys of that alias"
+assert_eq "export OTHER='1'|export LANGFUSE_PUBLIC_KEY_CMD_VAULT2='printf pk-lf-v2'|export LANGFUSE_SECRET_KEY_CMD_VAULT2='printf sk-lf-v2'|export LANGFUSE_HOST_VAULT2='$LF_HOST'" \
+  "$(paste -sd'|' "$LF_T/data/secrets.env")" "secrets.env gets the commands and loses the stored key"
+[[ ! -e "$LF_T/data/langfuse-staging/vault2.pk" ]] || fail "saving commands clears staged keys of that alias"
+mkdir -p "$LF_T/nohome"
+env -i PATH="$PATH" HOME="$LF_T/nohome" HARNESS_METRICS_DIR="$LF_T/nohome/data" LANGFUSE_HOST="$LF_HOST" \
+  python3 -I -B "$ROOT/catalog/langfuse/scripts/register.py" solo --pk-cmd 'printf pk-lf-s' --sk-cmd 'printf sk-lf-s' >/dev/null 2>&1
+assert_contains "$(<"$LF_T/nohome/data/secrets.env")" "LANGFUSE_SECRET_KEY_CMD_SOLO='printf sk-lf-s'" "without ~/.claude register creates secrets.env"
+assert_eq "600" "$(filemode "$LF_T/nohome/data/secrets.env")" "created secrets.env is private"
+printf 'pk-lf-new' >"$LF_T/data/langfuse-staging/vault2.pk"
+printf 'sk-lf-new' >"$LF_T/data/langfuse-staging/vault2.sk"
+regh vault2 >/dev/null 2>&1
+assert_eq "pk-lf-new|null|null" "$(jq -r '.env | [.LANGFUSE_PUBLIC_KEY_VAULT2, .LANGFUSE_PUBLIC_KEY_CMD_VAULT2, .LANGFUSE_SECRET_KEY_CMD_VAULT2] | map(tostring) | join("|")' "$LF_T/home/.claude/settings.json")" "registering keys drops the commands of that alias"
+kill "$LF_SRV" 2>/dev/null || true
+wait "$LF_SRV" 2>/dev/null || true
 pass "langfuse catalog skill installs with scripts and enforces risk classes offline"
 
 # design-system-builder는 플러그인 전역 Skill이다: 프로젝트에 파일을 깔지 않고, 만든 규칙 문서가 design-audit의 입력 계약이 된다.
