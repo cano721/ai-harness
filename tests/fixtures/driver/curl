@@ -18,6 +18,15 @@ case "$method $url" in
   "POST "*/merge) touch "$FAKE_LOG.merged"; echo '{}' ;;
   *"/diffstat"*) echo '{"values":[{"status":"modified"}]}' ;;
   *"/statuses"*) echo '{"values":[{"state":"SUCCESSFUL"}]}' ;;
+  # 기준 브랜치 보호(branch restrictions). FAKE_PROTECTION=bb_glob|bb_model|bb_denied|그 밖(제한 없음)
+  *"/branch-restrictions"*)
+    case "${FAKE_PROTECTION:-}" in
+      bb_glob) echo '{"values":[{"kind":"require_approvals_to_merge","value":1,"branch_match_kind":"glob","pattern":"ma*"},{"kind":"push","branch_match_kind":"glob","pattern":"main"}]}' ;;
+      bb_model) echo '{"values":[{"kind":"require_approvals_to_merge","value":2,"branch_match_kind":"branching_model","branch_type":"development"},{"kind":"require_passing_builds_to_merge","value":1,"branch_match_kind":"glob","pattern":"release/*"}]}' ;;
+      bb_denied) echo "curl: (22) The requested URL returned error: 403" >&2; exit 22 ;;
+      *) echo '{"values":[{"kind":"require_approvals_to_merge","value":1,"branch_match_kind":"glob","pattern":"release/*"}]}' ;;
+    esac ;;
+  *"/branching-model"*) echo '{"development":{"branch":{"name":"main"}},"production":null}' ;;
   *"/pullrequests/"*)
     participated=2999-01-01T00:00:00Z
     [[ "$scenario" != bb_stale ]] || participated=2000-01-01T00:00:00Z

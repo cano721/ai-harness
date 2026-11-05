@@ -213,6 +213,26 @@ $ROOT/scripts/setup.sh team list
 - 저장소마다 `.ai-harness/harness.json`에 `"auto_merge": {"sync": true}`(harvest면 `"harvest": true`)가 **기준 브랜치에 병합되어 있어야** 동작한다. 이 설정은 사람이 PR로 넣는다 — 무인 실행의 PR은 이 값을 바꿀 수 없다.
 - 처음에는 sync만 켜고 저장소 한 곳에서 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
 
+### 8-1. 워크플로 자동화 단계 (선택)
+
+워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 저장소 `git_policy`·`merge_policy`를 그대로 따른다.
+
+1. 기본 단계 `HM_DELIVERY_LEVEL`:
+   - `pr` — PR까지. 병합·배포는 사람이 한다 (직접 리뷰하고 싶은 사람)
+   - `merge` — 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
+   - `deploy` — `merge`에 더해 저장소에 있는 배포 확인·스모크 명령까지. 저장소에 그 명령이 없으면 `merge`까지 하고 결과에 밝힌다
+2. 저장소마다 다르게 하고 싶으면 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>,…"`로 덮어쓴다. `project_id`는 저장소 `.ai-harness/harness.json`의 `project_id`(없으면 origin 저장소 이름)이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
+3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 저장소 `merge_policy`의 값(없으면 네 조건 모두·승인 1·squash)을 쓴다.
+   - `HM_MERGE_REQUIRE` — `human_approval`·`remote_ci`·`no_conflict`·`not_draft` 중 쉼표 구분
+   - `HM_MERGE_MIN_APPROVALS` — 1 이상
+   - `HM_MERGE_METHOD` — `squash`·`merge`·`rebase`(Bitbucket은 rebase 불가)
+
+`merge`·`deploy`를 고르면 다음을 함께 알린다.
+- 팀 통제는 PR 호스트의 브랜치 보호다. 러너는 병합 직전에 기준 브랜치의 보호 규칙을 읽고, **필수 승인이 걸려 있지 않거나 읽을 수 없으면 병합하지 않고 사람에게 넘긴다**. GitHub 예전 브랜치 보호와 Bitbucket branch restrictions는 저장소 관리자 권한이 있어야 읽히므로, 권한이 없으면 GitHub 규칙 세트로 보호하거나 직접 병합한다.
+- 호스트의 필수 승인 수·필수 체크는 내 조건보다 우선하는 하한으로 더해진다.
+- 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
+- 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
+
 ## 디자인 스킬 (`design`)
 
 ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자리를 채우는 외부 디자인 스킬은 `catalog/design-skills.json`이 원본 저장소·고정 커밋·라이선스·실행 스크립트 검토 결과를 적고, 어느 작업에서 어느 스킬이 주도하는지는 디자인 스킬 지도(`$ROOT/templates/ui-review/references/design-skills.md`)가 정한다. 위 기본 카탈로그와 달리 사본을 들고 있지 않고 **원본 저장소의 고정 커밋에서 받는다**. 예외로 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 ai-harness에 고정 사본으로 내장돼 있어(`builtin: "ai-harness"`) 설치하지 않는다.

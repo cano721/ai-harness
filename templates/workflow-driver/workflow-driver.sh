@@ -22,6 +22,10 @@
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
 #     병합 뒤 post_merge_verify가 merge_policy.verify(타깃 CI·배포 확인 명령·스모크 명령)를 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
 #     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
+#   - 자동화 단계: 사용자 설정(~/.ai-harness/config)의 HM_DELIVERY_LEVEL(pr|merge|deploy, 저장소별은 HM_DELIVERY_LEVEL_REPOS)이 있으면
+#     병합 여부는 그 값이 정하고 git_policy는 커밋·PR 범위만 정한다. 병합 조건 최소치·방식은 HM_MERGE_*, 기준 브랜치·배포·스모크 명령은
+#     저장소 merge_policy(저장소 사실)에서 읽는다. 이 경로의 병합은 호스트가 기준 브랜치에 필수 승인을 거는 보호 규칙을 읽을 수 있을
+#     때만 하고, 보호가 없거나 읽지 못하면 사람에게 넘긴다. 사용자 설정이 없으면 저장소 git_policy·merge_policy를 그대로 따른다.
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
@@ -47,6 +51,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
 
   정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|merge|그 밖), merge_policy를 start 때 읽는다.
+  자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)가 있으면 병합 여부는 그것이 정한다.
 
 exit: 0 done(push했으면 원격 CI 통과까지, merge면 병합 후 검증까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
@@ -728,9 +733,67 @@ pr_merge() { # url method head
 }
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601? // empty'; }
 
+# 기준 브랜치의 호스트 보호 규칙: {approvals: 필수 승인 수, checks: 필수 체크 수}. 개인 자동화 단계의 병합 안전장치다.
+# 출처 하나라도 필수 승인을 보이면 그것으로 판정한다. 필수 승인이 0인데 읽지 못한 출처가 있으면 실패(stderr에 이유)한다.
+branch_protection() { # pr-url base
+  local slug ws_repo out model="" a c approvals=0 checks=0 unreadable="" kind value match pattern btype applies
+  case "$(pr_provider "$1")" in
+    github)
+      slug="$(repo_slug "$1")"
+      slug="${slug#*/}"
+      # 규칙 세트(rulesets)는 읽기 권한으로 보인다. 예전 branch protection은 관리자만 읽을 수 있어 실패할 수 있다.
+      if out="$(cd "$REPO" && gh api "repos/$slug/rules/branches/$2" 2>"$RUN/protection.err")"; then
+        read -r a c <<<"$(jq -r '[([.[]? | select(.type == "pull_request") | .parameters.required_approving_review_count // 0] | max // 0),
+          ([.[]? | select(.type == "required_status_checks") | .parameters.required_status_checks[]?] | length)] | @tsv' <<<"$out")"
+        approvals="$a" checks="$c"
+      else
+        unreadable="rulesets: $(head -c 200 "$RUN/protection.err")"
+      fi
+      if out="$(cd "$REPO" && gh api "repos/$slug/branches/$2/protection" 2>"$RUN/protection.err")"; then
+        read -r a c <<<"$(jq -r '[(.required_pull_request_reviews.required_approving_review_count // 0),
+          ((.required_status_checks.checks // .required_status_checks.contexts // []) | length)] | @tsv' <<<"$out")"
+        ((a <= approvals)) || approvals="$a"
+        ((c <= checks)) || checks="$c"
+      elif ! grep -q 'Branch not protected' "$RUN/protection.err"; then
+        unreadable="${unreadable:+$unreadable; }branch protection: $(head -c 200 "$RUN/protection.err")"
+      fi ;;
+    bitbucket)
+      ws_repo="$(sed -E 's#^https://bitbucket\.org/([^/]+)/([^/]+)/.*#\1/\2#' <<<"$1")"
+      # branch restrictions는 저장소 관리자 권한이 있어야 읽힌다. 못 읽으면 병합하지 않는다.
+      out="$(bb_api GET "$ws_repo/branch-restrictions?pagelen=100" 2>"$RUN/protection.err")" \
+        || { printf 'branch restrictions: %s\n' "$(head -c 200 "$RUN/protection.err")" >&2; return 1; }
+      if jq -e 'any(.values[]?; .branch_match_kind == "branching_model")' <<<"$out" >/dev/null; then
+        model="$(bb_api GET "$ws_repo/branching-model" 2>"$RUN/protection.err")" \
+          || unreadable="branching model: $(head -c 200 "$RUN/protection.err")"
+      fi
+      while IFS=$'\x1f' read -r kind value match pattern btype; do
+        applies=""
+        if [[ "$match" == glob ]]; then
+          # shellcheck disable=SC2053  # pattern은 Bitbucket glob이다
+          [[ "$2" == $pattern ]] && applies=1
+        elif [[ "$match" == branching_model && -n "$model" ]]; then
+          [[ "$(jq -r --arg t "$btype" 'if $t == "development" then .development.branch.name // ""
+            elif $t == "production" and .production.enabled != false then .production.branch.name // "" else "" end' <<<"$model")" == "$2" ]] && applies=1
+        fi
+        [[ -n "$applies" ]] || continue
+        case "$kind" in
+          require_passing_builds_to_merge) ((value <= checks)) || checks="$value" ;;
+          *) ((value <= approvals)) || approvals="$value" ;;
+        esac
+      done < <(jq -r '.values[]? | select(.kind | IN("require_approvals_to_merge", "require_default_reviewer_approvals_to_merge", "require_passing_builds_to_merge"))
+        | [.kind, (.value // 0 | tostring), (.branch_match_kind // "glob"), (.pattern // ""), (.branch_type // "")] | join("\u001f")' <<<"$out") ;;
+    *) echo "unsupported pull request host: $1" >&2; return 1 ;;
+  esac
+  if ((approvals == 0)) && [[ -n "$unreadable" ]]; then
+    printf '%s\n' "$unreadable" >&2
+    return 1
+  fi
+  jq -cn --argjson a "$approvals" --argjson c "$checks" '{approvals: $a, checks: $c}'
+}
+
 # merge: manifest merge_policy.require의 조건을 PR 호스트에서 읽은 상태로 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 merge() {
-  local url head facts blocked="[]" unmet="[]" mp err origin method i merged_epoch
+  local url head facts blocked="[]" unmet="[]" mp err origin method i merged_epoch protection
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
@@ -767,6 +830,22 @@ merge() {
         return ;;
       CLOSED) blocked='["the pull request was closed without merging"]' ;;
     esac
+  fi
+  # 개인 자동화 단계로 병합할 때는 팀 통제가 호스트 브랜치 보호에 있다. 필수 승인이 걸린 기준 브랜치에만 병합하고,
+  # 호스트의 필수 승인 수·필수 체크를 병합 조건의 하한으로 더한다. 저장소 merge_policy 경로(사용자 설정 없음)는 그대로다.
+  if [[ "$blocked" == "[]" && "$(state '.policy.delivery // null')" != null ]]; then
+    if ! protection="$(branch_protection "$url" "$(jq -r .base <<<"$mp")" 2>"$RUN/protection.why")"; then
+      blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" --arg e "$(head -c 300 "$RUN/protection.why")" \
+        '. + ["cannot read the branch protection of \($b) from the host (\($e)); a personal delivery level merges only into a branch the host protects with required approvals — merge by hand or let the runner read the protection"]' <<<"$blocked")"
+    elif [[ "$(jq -r .approvals <<<"$protection")" -lt 1 ]]; then
+      blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" \
+        '. + ["\($b) has no host branch protection that requires an approving review; a personal delivery level merges only into a protected branch — protect it on the host or merge by hand"]' <<<"$blocked")"
+    else
+      state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$(jq -r .base <<<"$mp")" --arg t "$(now_utc)"
+      mp="$(jq -c --argjson p "$protection" '.require = ((.require + ["human_approval"]) | unique)
+        | .min_approvals = ([.min_approvals, $p.approvals] | max)
+        | if $p.checks > 0 then .require = ((.require + ["remote_ci"]) | unique) else . end' <<<"$mp")"
+    fi
   fi
   # 승인·CI는 리뷰하고 push한 그 커밋에 대한 것이어야 한다. head가 움직였으면 누군가 push했다.
   [[ ${#head} -ge 7 && "$(jq -r .head <<<"$facts")" =~ ^[0-9a-f]{7,}$ && "$head" == "$(jq -r .head <<<"$facts")"* ]] \
@@ -1025,7 +1104,7 @@ execute() {
           finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
           elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
             + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status + (if .value.note then " (" + .value.note + ")" else "" end)] | join(", ")) else "" end)
-          elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
+          elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
            finish "$node" 20 "a person must decide$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
@@ -1374,6 +1453,51 @@ $(brief_context)"
   done
 }
 
+# 사용자 설정 값: ~/.ai-harness/config에서 KEY의 마지막 줄, 없으면 같은 이름의 환경변수. lib.sh의 hm_load_config와 같은
+# 문법(KEY=VALUE, 따옴표 또는 공백 전까지)만 읽고 셸로 실행하지 않는다. 이 러너는 프로젝트에 복사되어 lib.sh를 쓰지 않는다.
+user_config() { # KEY
+  local file="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/config" line value="" found="" re_quoted='^"([^"]*)"' re_single="^'([^']*)'"
+  if [[ -f "$file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)=(.*)$ && "${BASH_REMATCH[2]}" == "$1" ]] || continue
+      value="${BASH_REMATCH[3]}"
+      if [[ "$value" =~ $re_quoted || "$value" =~ $re_single ]]; then value="${BASH_REMATCH[1]}"; else value="${value%%[[:space:]]*}"; fi
+      found=1
+    done <"$file"
+  fi
+  if [[ -n "$found" ]]; then printf '%s' "$value"; else printf '%s' "${!1:-}"; fi
+}
+# 저장소별 설정의 키. lib.sh project_id_for_cwd(HM_AUTOFIX_REPOS·/metrics가 쓰는 project_id)와 같은 순서로 정한다.
+project_key() {
+  local id common
+  id="$(jq -r '.project_id // empty' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+  if [[ -z "$id" ]]; then
+    id="$(git -C "$REPO" remote get-url origin 2>/dev/null || true)"
+    id="${id%/}"; id="${id##*/}"; id="${id##*:}"; id="${id%.git}"
+  fi
+  if [[ -z "$id" ]]; then
+    common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    [[ "${common##*/}" != .git ]] || { id="${common%/.git}"; id="${id##*/}"; }
+  fi
+  printf '%s' "${id:-${REPO##*/}}"
+}
+# 개인 자동화 단계: HM_DELIVERY_LEVEL_REPOS의 "<project_id>=<단계>"(쉼표·공백 구분)가 이 저장소를 가리키면 그것, 아니면 HM_DELIVERY_LEVEL.
+# 출력: "<단계> <출처>" 또는 빈 문자열(설정 없음 — 저장소 git_policy·merge_policy를 따른다).
+delivery_level() {
+  local key entry level="" source="" entries=()
+  key="$(project_key)"
+  IFS=$', \t' read -r -a entries <<<"$(user_config HM_DELIVERY_LEVEL_REPOS)"
+  for entry in "${entries[@]+"${entries[@]}"}"; do
+    [[ "$entry" == *=* && "${entry%%=*}" == "$key" ]] || continue
+    level="${entry#*=}" source="HM_DELIVERY_LEVEL_REPOS:$key"
+  done
+  if [[ -z "$level" ]]; then
+    level="$(user_config HM_DELIVERY_LEVEL)"
+    [[ -z "$level" ]] || source=HM_DELIVERY_LEVEL
+  fi
+  [[ -z "$level" ]] || printf '%s %s' "$level" "$source"
+}
+
 case "$CMD" in
   start)
     case "${RUNTIME:-}" in
@@ -1383,6 +1507,24 @@ case "$CMD" in
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
     git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+    # 개인 자동화 단계가 있으면 병합 여부는 그것이 정한다. 저장소 git_policy는 커밋·PR 범위만 정한다:
+    # pr-only·merge → PR(단계가 merge·deploy면 러너가 병합), direct → PR 없이 push(병합할 PR이 없다), 그 밖 → 커밋하지 않는다.
+    delivery=null
+    if [[ "$WORKFLOW" != review ]] && read -r level level_source <<<"$(delivery_level)" && [[ -n "$level" ]]; then
+      [[ "$level" =~ ^(pr|merge|deploy)$ ]] \
+        || { printf '%s in ~/.ai-harness/config is "%s"; the delivery level must be pr, merge, or deploy\n' "${level_source%%:*}" "$level" >&2; exit 2; }
+      note=""
+      case "$git_policy" in
+        pr-only|merge)
+          [[ "$git_policy" != merge || "$level" != pr ]] \
+            || note="the personal delivery level stops at the pull request (the repository git_policy merge only sets the PR scope)"
+          if [[ "$level" == pr ]]; then git_policy="pr-only"; else git_policy=merge; fi ;;
+        direct) [[ "$level" == pr ]] || note="git_policy direct pushes without a pull request, so there is nothing to merge" ;;
+        *) [[ "$level" == pr ]] || note="git_policy '${git_policy:-unset}' does not let the agent commit, so there is nothing to merge" ;;
+      esac
+      delivery="$(jq -cn --arg l "$level" --arg s "$level_source" --arg g "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" --arg n "$note" \
+        '{level: $l, source: $s, repo_git_policy: $g} + (if $n == "" then {} else {note: $n} end)')"
+    fi
     # 체크포인트는 git add -A로 커밋한다. 실행 전 변경이 섞이거나 기준 브랜치에 커밋이 쌓이지 않게 시작 조건을 막는다.
     # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다.
     if [[ "$WORKFLOW" != review ]]; then
@@ -1400,7 +1542,31 @@ case "$CMD" in
     fi
     # merge 조건과 병합 후 검증은 사람이 init에서 정한다. 실행 중 manifest가 바뀌어도 시작 때의 정책을 따른다.
     merge_policy=null
-    if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
+    if [[ "$git_policy" == merge && "$WORKFLOW" != review && "$delivery" != null ]]; then
+      # 개인 단계: 병합 조건 최소치·방식은 사용자 설정(없으면 저장소 merge_policy, 그것도 없으면 네 조건 모두·승인 1·squash),
+      # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
+      merge_policy="$(jq -c --arg lvl "$level" --arg req "$(user_config HM_MERGE_REQUIRE)" --arg min "$(user_config HM_MERGE_MIN_APPROVALS)" \
+        --arg method "$(user_config HM_MERGE_METHOD)" '(.merge_policy // {}) as $r
+        | ($r.deploy_check_cmd // "") as $deploy | ($r.smoke_cmd // "") as $smoke
+        | (if ($r.verify | type) == "array" then $r.verify
+           else [(if $deploy != "" then "deploy" else empty end), (if $smoke != "" then "smoke" else empty end)] end) as $avail
+        | [$avail[] | select(IN("deploy", "smoke", "monitor")) | select((. != "deploy" or $deploy != "") and (. != "smoke" or $smoke != ""))] as $post
+        | {require: (if $req != "" then [$req | splits("[,[:space:]]+") | select(. != "")]
+                     else ($r.require // ["human_approval", "remote_ci", "no_conflict", "not_draft"]) end),
+           min_approvals: (if $min != "" then ($min | tonumber? // $min) else ($r.min_approvals // 1) end),
+           method: (if $method != "" then $method else ($r.method // "squash") end),
+           verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
+           deploy_check_cmd: $deploy, deploy_timeout_minutes: ($r.deploy_timeout_minutes // 60), smoke_cmd: $smoke, base: ($r.base // "")}' \
+        "$REPO/.ai-harness/harness.json")"
+      if [[ "$level" == deploy ]] && ! jq -e '.verify | index("deploy") or index("smoke")' <<<"$merge_policy" >/dev/null; then
+        delivery="$(jq -c '.note = "the repository has no deploy or smoke check (merge_policy.deploy_check_cmd, smoke_cmd), so the run stops after the merge and target CI"' <<<"$delivery")"
+      fi
+      jq -e '(.require | length > 0 and all(.[]; IN("human_approval", "remote_ci", "no_conflict", "not_draft")))
+          and (.min_approvals | type == "number" and . >= 1) and (.method | IN("squash", "merge", "rebase"))
+          and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
+        || { printf 'the personal merge settings are invalid: HM_MERGE_REQUIRE (one or more of human_approval, remote_ci, no_conflict, not_draft), HM_MERGE_MIN_APPROVALS (1 or more), HM_MERGE_METHOD squash|merge|rebase in ~/.ai-harness/config (when unset: merge_policy in .ai-harness/harness.json); got %s\n' \
+          "$(jq -c '{require, min_approvals, method, deploy_timeout_minutes}' <<<"$merge_policy")" >&2; exit 2; }
+    elif [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
       merge_policy="$(jq -c '.merge_policy // {} | {
           require: (.require // []), min_approvals: (.min_approvals // 1), method: (.method // "squash"), verify: (.verify // []),
           deploy_check_cmd: (.deploy_check_cmd // ""), deploy_timeout_minutes: (.deploy_timeout_minutes // 60), smoke_cmd: (.smoke_cmd // ""),
@@ -1412,6 +1578,8 @@ case "$CMD" in
           and ((.verify | index("smoke") | not) or (.smoke_cmd | length > 0))
           and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
         || { printf 'git_policy merge needs a valid merge_policy in .ai-harness/harness.json: require (one or more of human_approval, remote_ci, no_conflict, not_draft), method squash|merge|rebase, verify (target_ci, deploy, smoke, monitor) with deploy_check_cmd or smoke_cmd for deploy or smoke. Rerun /harness-init to set it\n' >&2; exit 2; }
+    fi
+    if [[ "$merge_policy" != null ]]; then
       # 병합할 수 있는 기준 브랜치. manifest에 없으면 origin의 기본 브랜치로 정하고, 둘 다 없으면 시작하지 않는다.
       if [[ "$(jq -r .base <<<"$merge_policy")" == "" ]]; then
         base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
@@ -1439,12 +1607,12 @@ case "$CMD" in
     printf '%s\n' "$RUN_ID" >"$(latest_file "$WORKFLOW")"
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
-      --arg git "$git_policy" --argjson merge "$merge_policy" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
+      --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
       --arg appr "$(jq -r '.approval // "human"' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf human)" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
         policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
-          merge:$merge, unattended:($unattended == "1")},
+          merge:$merge, delivery:$delivery, unattended:($unattended == "1")},
         monitor_error:$mon, status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
   watch)
