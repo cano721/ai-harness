@@ -1,6 +1,6 @@
 ---
 name: design-system-builder
-description: Build or update a project's design system — a design rule document, a token file in the project's own stack format, the shared components that already repeat, and a reference screen — by extracting it from existing code, designing it with the user, or extracting it from a mockup. Use when the request is to create (디자인 시스템 만들어줘, 토큰 정리, 디자인 규칙 문서), extract, document, refresh, or reorganize a design system, design tokens, theme tokens, dark-mode tokens, a type or spacing scale, or the design rule document that design-audit scores against. Do not use to build a landing page, marketing page, or product/business screen, or to implement a feature UI — those consume the design system, they do not define it. Do not use to score a screen against existing rules (that is design-audit).
+description: Build or update a project's design system — a design rule document, a token file in the project's own stack format, the shared components that already repeat, and a reference screen — from existing code, the user's answers, or a mockup — and, on request, publish it as a Figma library. Use when the request is to create (디자인 시스템 만들어줘, 토큰 정리, 디자인 규칙 문서), extract, document, refresh, or reorganize a design system, design tokens, theme tokens, dark-mode tokens, a type or spacing scale, or the design rule document that design-audit scores against, or to put it into Figma (디자인 시스템 피그마에 만들어줘). Do not use to build a landing page, marketing page, or product/business screen, or to implement a feature UI, or to draw a new screen in Figma (that is figma-screen) — those consume the design system, they do not define it. Do not use to score a screen against existing rules (that is design-audit).
 ---
 
 # Design System Builder
@@ -11,6 +11,7 @@ Produce this project's design system as files the team and other skills can rely
 2. **Token file** — the normative values, in the format of the project's stack (`references/tokens.md`, `references/motion-tokens.md`).
 3. **Shared components** — only patterns that already repeat three or more times (`references/components.md`).
 4. **Reference screen** — a page people can open and operate: an example page for server-rendered apps, Storybook for component-library apps.
+5. **Figma library** (only when asked) — the same tokens as Figma variables, type roles as text styles, shared components as component sets, generated from the token file (`references/figma-output.md`).
 
 Every value is derived for this project. This skill carries no palette, font pairing, or brand; it carries the procedure for choosing them.
 
@@ -37,7 +38,7 @@ Look, do not guess. Record what you find; it decides the mode and the output for
 |---|---|---|
 | **Extract** | The codebase already has repeated values and components | `references/extract.md` |
 | **Design** | Little or nothing to extract, or the user asks for a new system | Question rounds below, then `references/tokens.md` |
-| **From mockup** | The user gives a design file, mockup, or screenshot as the source | `references/extract.md` — "From a mockup" |
+| **From mockup** | The user gives a design file, mockup, or screenshot as the source — including an existing Figma design kit | `references/extract.md` — "From a mockup", and "A Figma design kit as the source" |
 
 Modes combine: extract what exists, then design only the gaps. State the chosen mode in one line before working.
 
@@ -68,6 +69,7 @@ Follow the references in this order — later steps reference earlier names:
 1. Tokens: `references/tokens.md`, then `references/motion-tokens.md`.
 2. Components: `references/components.md`. When the project needs a runtime theme switch (dark, system preference, several brands) or builds components in a component library, also `references/theme-and-components.md`.
 3. Rule document, reference screen, and harness handoff: `references/output-format.md`.
+4. Figma library, when the user asked for it: `references/figma-output.md`, after reading `references/figma-mcp.md`. It runs after the token file and rule document exist, writes only to a dedicated library file, and records that file in `## 메타`.
 
 Write values only in the token file. The rule document names tokens and states rules; it does not repeat values.
 
@@ -83,6 +85,7 @@ If the project has a rule document and a reference screen but the harness does n
 - Contrast for every documented foreground/background pair meets WCAG 2.2 AA in every theme: 4.5:1 for body text, 3:1 for large text, UI component boundaries, and focus indicators. Compute it; do not eyeball it.
 - The reference screen renders with the new tokens. Open it in a browser (or the platform preview) when one is available and look at both themes; if you cannot, say so instead of claiming it renders.
 - Run the project's existing build, lint, and test commands for the files you changed.
+- When a Figma library was written, the read-back checks in `references/figma-output.md` passed, or the report says which failed.
 
 ## Report
 
@@ -93,11 +96,14 @@ End with:
 - Proposed values still awaiting confirmation, and excluded values with the reason (for example, a mockup color that failed contrast).
 - Open decisions — these live in the report and the document's meta status, not in the rule body.
 - Harness diffs awaiting approval, and verification run versus not run.
+- Figma library: file link, what was created, updated, and left as orphans, drift found, and the manual publish step still to do.
 - Optional guardrails to adopt (a hardcoded-value lint, a contrast check in CI), offered, not installed.
 
 ## Boundaries
 
 - Do not build feature screens, landing pages, or marketing pages here. Those consume the design system.
 - Do not score screens. `design-audit` scores against the document this skill produces.
+- Do not draw product screens in Figma. `figma-screen` builds them from the library this skill publishes.
+- Do not copy values from Figma back into the token file without the drift check's `figma wins` and the user's confirmation.
 - Do not import palettes, font pairings, or another brand's design document. Generate from the project and the user's answers.
 - Do not commit, push, or open a pull request unless the user asks.
