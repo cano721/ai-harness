@@ -133,9 +133,10 @@ settings_value() { [[ -f "$CLAUDE_SETTINGS" ]] && jq -er --arg k "$1" '.env[$k] 
 
 # 키가 어디에 있는지: 프로세스 환경 → Claude settings.json env → secrets.env.
 # 방금 넣은 값은 실행 중인 세션 환경에 없으므로 파일까지 본다.
+# *_CMD(키를 꺼내는 명령)는 사용자 파일에서만 읽고 프로세스 환경의 것은 무시한다.
 env_source() {
   local key="$1"
-  if [[ -n "${!key:-}" ]]; then
+  if [[ "$key" != *_CMD* && -n "${!key:-}" ]]; then
     printf 'env\n'
   elif settings_value "$key" >/dev/null; then
     printf 'settings\n'
@@ -581,7 +582,7 @@ command_design() {
 }
 
 key_is_known() { jq -e --arg k "$1" 'any(.skills[].env[]?; .any | index($k))' "$CATALOG" >/dev/null; }
-key_is_secret() { jq -e --arg k "$1" 'any(.skills[].env[]?; (.any | index($k)) and (.secret // false))' "$CATALOG" >/dev/null; }
+key_is_secret() { [[ "$1" != *_CMD* ]] && jq -e --arg k "$1" 'any(.skills[].env[]?; (.any | index($k)) and (.secret // false))' "$CATALOG" >/dev/null; }
 
 write_claude_env() { # KEY, 값은 stdin — jq 인자에 값을 싣지 않는다
   local tmp current='{}'
@@ -662,12 +663,21 @@ dd_base() { printf 'https://api.%s' "$(first_value DATADOG_SITE DD_SITE || echo 
 atl_conf() { printf 'user = "%s:%s"\n' "$(resolve_value ATLASSIAN_USER)" "$(resolve_value ATLASSIAN_API_TOKEN)"; }
 st_conf() { printf 'header = "Authorization: Bearer %s"\n' "$(resolve_value SENTRY_AUTH_TOKEN)"; }
 st_base() { local u; u="$(resolve_value SENTRY_URL || echo https://sentry.io)"; printf '%s/api/0/organizations/%s' "${u%/}" "$(resolve_value SENTRY_ORG)"; }
-lf_conf() { printf 'user = "%s:%s"\n' "$(resolve_value LANGFUSE_PUBLIC_KEY)" "$(resolve_value LANGFUSE_SECRET_KEY)"; }
+# Langfuse 키: 저장된 값, 없으면 사용자 파일의 <KEY>_CMD 명령 출력(SSM·Vault 등). 값은 출력하지 않는다.
+lf_key() {
+  local cmd value
+  resolve_value "$1" && return 0
+  cmd="$(settings_value "$1_CMD" || secrets_value "$1_CMD")" || return 1
+  value="$(/bin/sh -c "$cmd" </dev/null 2>/dev/null)" || return 1
+  [[ -n "$value" && "$value" != *$'\n'* ]] || return 1
+  printf '%s' "$value"
+}
 lf_base() { local u; u="$(resolve_value LANGFUSE_HOST || echo https://cloud.langfuse.com)"; printf '%s' "${u%/}"; }
 mask_email() { sed -E 's/^(.).*@/\1***@/'; }
 
 check_hint() { # skill, http 오류 → 원인 안내
   case "$1:$2" in
+    langfuse:"key command failed") printf 'LANGFUSE_*_KEY_CMD 명령이 실패했거나 키 한 줄을 출력하지 않음 — 별도 터미널에서 그 명령을 직접 실행해 로그인·권한(SSM이면 ssm:GetParameter·kms:Decrypt)을 확인한다' ;;
     langfuse:"HTTP 401") printf '키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST를 그 주소로 set한다' ;;
     *:"HTTP 401") printf '자격 증명이 틀렸거나 만료됨 — 토큰을 다시 발급해 set으로 넣는다' ;;
     datadog:"HTTP 403") printf 'Application key scope 부족 — user_access_read 등 읽기 scope를 더한다' ;;
@@ -710,7 +720,9 @@ command_check() {
       else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
       ;;
     langfuse)
-      if body="$(lf_conf | http_get "$(lf_base)/api/public/projects" 2>"$STATE_DIR/.err")"; then who="$(jq -r '[.data[]?.name] | join(", ")' <<<"$body")"
+      local pk sk
+      if ! pk="$(lf_key LANGFUSE_PUBLIC_KEY)" || ! sk="$(lf_key LANGFUSE_SECRET_KEY)"; then ok=false; err="key command failed"
+      elif body="$(printf 'user = "%s:%s"\n' "$pk" "$sk" | http_get "$(lf_base)/api/public/projects" 2>"$STATE_DIR/.err")"; then who="$(jq -r '[.data[]?.name] | join(", ")' <<<"$body")"
       else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
       ;;
   esac

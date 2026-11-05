@@ -4,9 +4,14 @@
   register.py <alias> --stage pk   # user copied the public key; read it from the clipboard
   register.py <alias> --stage sk   # user copied the secret key
   register.py <alias>              # verify staged keys (or ask via hidden macOS dialogs) and save
+  register.py <alias> --pk-cmd '<command>' --sk-cmd '<command>'
+                                   # keys live in a secret store (AWS SSM, Vault, 1Password, ...): save the commands
+                                   # that print them; lf.py runs them on each call and keeps the keys in memory only
 
 Use "default" as alias for the unsuffixed LANGFUSE_* keys. Saves to ~/.claude/settings.json "env"
 (Claude Code) and, when ${HARNESS_METRICS_DIR:-~/.ai-harness}/secrets.env already exists, there too (Codex).
+Without ~/.claude it creates secrets.env.
+Saving one form removes the other form for that alias, since a stored key would shadow the command.
 Key values are never printed.
 """
 import base64
@@ -25,6 +30,7 @@ DATA_DIR = os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-ha
 STAGE_DIR = os.path.join(DATA_DIR if os.path.isdir(DATA_DIR) else os.path.expanduser("~/.cache"), "langfuse-staging")
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 SECRETS = os.path.join(DATA_DIR, "secrets.env")
+CMD_TIMEOUT = 60
 
 
 def die(msg):
@@ -56,6 +62,21 @@ def dialog(label, title):
     if r.returncode:
         die("dialog cancelled or unavailable — use --stage pk / --stage sk with the clipboard instead")
     return r.stdout.strip()
+
+
+def run_key_command(command, kind):
+    try:
+        r = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, timeout=CMD_TIMEOUT,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        die(f"--{kind}-cmd timed out after {CMD_TIMEOUT}s — nothing saved")
+    if r.returncode:
+        tail = "\n".join(r.stderr.strip().splitlines()[-5:])
+        die(f"--{kind}-cmd failed (exit {r.returncode}){': ' + tail if tail else ''} — nothing saved")
+    value = r.stdout.strip()
+    if "\n" in value or not value.startswith(PREFIX[kind]):
+        die(f"--{kind}-cmd must print one line starting with {PREFIX[kind]} (output not shown) — nothing saved")
+    return value
 
 
 def write_private(path, text):
@@ -91,12 +112,15 @@ def load_settings():
     return data
 
 
-def save_settings(data, values):
+def save_settings(data, values, drop):
     if not os.path.isdir(os.path.dirname(SETTINGS)):
         return False
     if os.path.exists(SETTINGS):
         shutil.copy(SETTINGS, SETTINGS + ".bak-langfuse")
-    data.setdefault("env", {}).update(values)
+    env = data.setdefault("env", {})
+    for k in drop:
+        env.pop(k, None)
+    env.update(values)
     tmp = f"{SETTINGS}.tmp.{os.getpid()}"
     write_private(tmp, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     if os.path.exists(SETTINGS):
@@ -105,14 +129,15 @@ def save_settings(data, values):
     return True
 
 
-def save_secrets(values):
-    if not os.path.exists(SECRETS):
+def save_secrets(values, drop, create):
+    if not (os.path.exists(SECRETS) or create):
         return False
     lines = []
     if os.path.exists(SECRETS):
         with open(SECRETS) as f:
             lines = [l for l in f.read().splitlines()
-                     if not any(l.startswith(f"export {k}=") for k in values)]
+                     if not any(l.startswith(f"export {k}=") for k in [*values, *drop])]
+    os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
     for k, v in values.items():
         lines.append(f"export {k}='" + v.replace("'", "'\\''") + "'")
     write_private(SECRETS, "\n".join(lines) + "\n")
@@ -127,7 +152,26 @@ def main():
     alias = args[0]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", alias):
         die("alias: lowercase letters, digits and '-' only")
+    if alias == "cmd" or alias.startswith("cmd-"):
+        die("alias: 'cmd' and 'cmd-*' are reserved (they collide with the *_CMD keys)")
     suffix = "" if alias == "default" else "_" + alias.upper().replace("-", "_")
+    direct = [f"LANGFUSE_PUBLIC_KEY{suffix}", f"LANGFUSE_SECRET_KEY{suffix}"]
+    commands = [f"LANGFUSE_PUBLIC_KEY_CMD{suffix}", f"LANGFUSE_SECRET_KEY_CMD{suffix}"]
+
+    if "--pk-cmd" in args or "--sk-cmd" in args:
+        opts = dict(zip(args[1::2], args[2::2]))
+        if len(args) != 5 or set(opts) != {"--pk-cmd", "--sk-cmd"} or not all(opts.values()):
+            die("usage: register.py <alias> --pk-cmd '<command>' --sk-cmd '<command>'")
+        pk, sk = run_key_command(opts["--pk-cmd"], "pk"), run_key_command(opts["--sk-cmd"], "sk")
+        settings = load_settings()
+        host, projects = find_host(pk, sk)
+        if not host:
+            die("authentication failed in every region — nothing saved")
+        values = {commands[0]: opts["--pk-cmd"], commands[1]: opts["--sk-cmd"], f"LANGFUSE_HOST{suffix}": host}
+        report(alias, save_all(settings, values, direct), host, projects)
+        clear_stage(os.path.join(STAGE_DIR, alias))
+        return
+
     os.makedirs(STAGE_DIR, mode=0o700, exist_ok=True)
     stage = os.path.join(STAGE_DIR, alias)
 
@@ -153,13 +197,25 @@ def main():
     host, projects = find_host(pk, sk)
     if not host:
         die("authentication failed in every region — nothing saved (staged keys kept for retry)")
-    values = {f"LANGFUSE_PUBLIC_KEY{suffix}": pk, f"LANGFUSE_SECRET_KEY{suffix}": sk,
-              f"LANGFUSE_HOST{suffix}": host}
-    targets = [name for name, ok in (("~/.claude/settings.json", save_settings(settings, values)),
-                                     ("secrets.env", save_secrets(values))) if ok]
+    values = {direct[0]: pk, direct[1]: sk, f"LANGFUSE_HOST{suffix}": host}
+    targets = save_all(settings, values, commands)
+    clear_stage(stage)
+    report(alias, targets, host, projects)
+
+
+def clear_stage(stage):
     for ext in (".pk", ".sk"):
         if os.path.exists(stage + ext):
             os.remove(stage + ext)
+
+
+def save_all(settings, values, drop):
+    claude = save_settings(settings, values, drop)
+    secrets = save_secrets(values, drop, create=not claude)
+    return [name for name, ok in (("~/.claude/settings.json", claude), ("secrets.env", secrets)) if ok]
+
+
+def report(alias, targets, host, projects):
     print(f"[{alias}] saved to {', '.join(targets) or 'nowhere'} — host={host} project={projects}. "
           "New env applies to the next session; lf.py reads the files directly.")
 
