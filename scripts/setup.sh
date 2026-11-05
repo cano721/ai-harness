@@ -662,10 +662,13 @@ dd_base() { printf 'https://api.%s' "$(first_value DATADOG_SITE DD_SITE || echo 
 atl_conf() { printf 'user = "%s:%s"\n' "$(resolve_value ATLASSIAN_USER)" "$(resolve_value ATLASSIAN_API_TOKEN)"; }
 st_conf() { printf 'header = "Authorization: Bearer %s"\n' "$(resolve_value SENTRY_AUTH_TOKEN)"; }
 st_base() { local u; u="$(resolve_value SENTRY_URL || echo https://sentry.io)"; printf '%s/api/0/organizations/%s' "${u%/}" "$(resolve_value SENTRY_ORG)"; }
+lf_conf() { printf 'user = "%s:%s"\n' "$(resolve_value LANGFUSE_PUBLIC_KEY)" "$(resolve_value LANGFUSE_SECRET_KEY)"; }
+lf_base() { local u; u="$(resolve_value LANGFUSE_HOST || echo https://cloud.langfuse.com)"; printf '%s' "${u%/}"; }
 mask_email() { sed -E 's/^(.).*@/\1***@/'; }
 
 check_hint() { # skill, http 오류 → 원인 안내
   case "$1:$2" in
+    langfuse:"HTTP 401") printf '키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST를 그 주소로 set한다' ;;
     *:"HTTP 401") printf '자격 증명이 틀렸거나 만료됨 — 토큰을 다시 발급해 set으로 넣는다' ;;
     datadog:"HTTP 403") printf 'Application key scope 부족 — user_access_read 등 읽기 scope를 더한다' ;;
     sentry:"HTTP 403") printf '토큰 scope 부족 — org:read, project:read, event:read' ;;
@@ -705,6 +708,10 @@ command_check() {
       if body="$(atl_conf | http_get "$(resolve_value CONFLUENCE_BASE_URL | sed 's:/*$::')/rest/api/user/current" 2>"$STATE_DIR/.err")" \
         && [[ "$(jq -r '.type' <<<"$body" 2>/dev/null)" != anonymous ]]; then who="$(jq -r '.displayName // ""' <<<"$body")"
       else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
+      ;;
+    langfuse)
+      if body="$(lf_conf | http_get "$(lf_base)/api/public/projects" 2>"$STATE_DIR/.err")"; then who="$(jq -r '[.data[]?.name] | join(", ")' <<<"$body")"
+      else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
       ;;
   esac
   rm -f "$STATE_DIR/.err"

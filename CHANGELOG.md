@@ -6,6 +6,15 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.56.0 (2026-11-05)
+### 새 기능
+
+- **기본 스킬 카탈로그에 `langfuse` 추가** — Langfuse를 보려면 MCP 서버를 따로 등록하거나(도구 정의 약 95개가 매 세션 컨텍스트를 차지) API를 직접 짜야 했습니다. 이제 `/ai-harness:setup`에서 고르면 설치·프로젝트 키 저장·연결 확인(키가 가리키는 프로젝트 이름, 401이면 키/리전 불일치 안내)까지 되고, 스킬은 Langfuse 공식 MCP 도구를 서버 등록 없이 스크립트로 불러 trace·비용·지연·프롬프트·점수·데이터셋을 조회합니다. 쓰기 도구는 `--yes`, 삭제·덮어쓰기 도구는 `--allow-destructive` 없이는 스크립트가 막습니다. 키는 프로젝트 단위이고, 다른 프로젝트는 스킬의 `register.py <별칭>`으로 키를 대화에 남기지 않고 더합니다. Python 3(표준 라이브러리)이 필요합니다.
+
+### 버그 수정
+
+- **langfuse 스크립트가 연결 실패·잘못된 설정 파일에서 traceback으로 죽지 않음** — `LANGFUSE_HOST`가 틀렸거나 네트워크가 끊기면 `lf.py`가 Python traceback을 쏟았습니다. 이제 닿지 못한 주소와 `LANGFUSE_HOST` 확인 안내 한 줄로 끝납니다. `register.py`는 `~/.claude/settings.json`이 JSON 객체가 아니면 리전 탐색 전에 멈추고 파일을 건드리지 않으며, 저장은 임시 파일을 거쳐 원자적으로 바꿔 중간에 끊겨도 설정 파일이 비지 않습니다.
+
 ## v0.55.2 (2026-11-04)
 ### 버그 수정
 
