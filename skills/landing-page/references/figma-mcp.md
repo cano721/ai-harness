@@ -54,14 +54,14 @@ Figma's skills decide *how* to drive the Plugin API. ai-harness decides *what* e
 - **Auto layout** for every frame whose children stack or wrap.
 - **Names a person can follow.** `Order list / Empty`, not `Frame 123`.
 - **Small batches, read back.** Write a section, read it back, then continue. Report partial writes with what was and was not created. Read back the values you set, not only that the node exists — paint opacity set together with a variable binding has been silently dropped.
-- **Other files are read-only.** A `use_figma` script run on the library or spec file must only read. Before running it, check the script has no setter, create, remove, or import call. Say in the report that you ran one. An auditor that must not write gets no other write tool.
+- **Other files are read-only.** A `use_figma` script run on the library or spec file must only read. Before running it, check the script has no setter, create, remove, or import call (navigation such as `setCurrentPageAsync` changes nothing in the file and is allowed). Say in the report that you ran one. An auditor that must not write gets no other write tool.
 - **No scores or review notes on the canvas.**
 
 ## Reading a design kit's values
 
 To use a kit as a page's or a document's value source (not to review a frame):
 
-- `get_variable_defs` returns only what a selected node uses, in the default mode; it cannot list a collection. Use a read-only `use_figma` script on the kit file: `getLocalVariableCollectionsAsync`/`getLocalVariablesAsync` with each mode's values and aliases resolved, `getLocalTextStylesAsync`, `getLocalEffectStylesAsync`, and the bound variables of the component variants you will mirror. Return only names, modes, resolved values, and code syntax.
+- `get_variable_defs` returns only what a selected node uses, in the default mode; it cannot list a collection. Use a read-only `use_figma` script on the kit file: `getLocalVariableCollectionsAsync`/`getLocalVariablesAsync` with each mode's values and aliases resolved, `getLocalTextStylesAsync`, `getLocalEffectStylesAsync`, and the bound variables of the component variants you will mirror. Return only names, modes, resolved values, and code syntax, and split the calls by collection (and by mode for a large one) so no result is cut off — Figma's own skill warns against reading every mode of a whole collection at once.
 - `get_design_context` serves design-to-code generation; a kit inventory does not need it.
 
 ## Reading for review

@@ -14,7 +14,7 @@ build → self-check (measured) → independent review → fix majors → indepe
 ## Tools and serving
 
 - **Browser:** any of — the session's browser tool, Orca's embedded browser, Playwright or headless Chrome already installed on the machine. Installing one needs the user's approval like any package. Locate an existing Playwright before giving up (a global or `~/.npm/_npx/*/node_modules/playwright` install can be required by absolute path); pick a version whose browser revision is already downloaded.
-- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes.
+- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes. Playwright treats `aria-disabled="true"` as not enabled; click those with `{ force: true }` when checking that nothing happens.
 - **Serve, do not open `file://`** — module scripts and some fonts fail under `file://`. Use a static server on a free port, then fetch the page once and confirm the response is this page (its `<title>`) before measuring; a stale server on the same port answers with someone else's page.
 - **Static checks** need no browser and are never left unverified for lack of one: metadata, `lang`, landmarks, one `h1`, `alt` attributes, link targets, JSON-LD, external hosts referenced.
 
@@ -30,7 +30,7 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 | Placeholders | A `[... 필요]`-style placeholder is visible to visitors |
 | Claims | A claim of popularity, quantity, rank, or result ("많이", "인기", "N명이") without evidence on the page |
 | First action | The primary action is not inside the first viewport |
-| Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind the text, not computed colors |
+| Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind each text node (hide that node only, not its container), not computed colors |
 | Overflow | Horizontal scroll or clipped text at any viewport |
 | Headline lines | More than two at desktop, or an orphaned syllable group (no design-system rule set otherwise) |
 | Assets | Broken images; a fallback face rendering where the intended font was approved and loaded |
@@ -45,7 +45,7 @@ Each review runs in a fresh reviewer that did not build the page: the `ai-harnes
 - where the design evidence is (design system, rule document, token mirror);
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
-- the `사용자 입력 필요` list so far, as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
+- the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
 - from the second round, the previous round's findings and what changed since.
 
 Not your direction notes, not your report, not "I fixed it". It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
@@ -92,6 +92,7 @@ Spacing and alignment that do not change any of that are minor.
   - an offer with unconfirmed terms: left out.
 
   A placeholder that carries `data-needs-input` and is on the list is not a second finding; it is why the page stays at `issues (공개 불가: 입력 대기)`.
+- After a review with no majors, fix the cheap minors in one pass. Review once more only if those fixes changed what a visitor sees in the first viewport or the main action; otherwise stop.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
 - **At most three reviews.** After the third, report what remains with its evidence. A review that could not finish counts and is reported as such.
@@ -139,7 +140,7 @@ None of these is evidence on its own:
 
 ## Performance
 
-Field targets at the 75th percentile, mobile (Core Web Vitals "good": LCP ≤ 2.5s, CLS ≤ 0.1, INP ≤ 200ms) cannot be measured on a page with no traffic. Report a lab run (Lighthouse or the browser's performance panel) with the tool and settings, using TBT as the stand-in for INP; without one, performance is `unverified`.
+Field targets at the 75th percentile, mobile (Core Web Vitals "good": LCP ≤ 2.5s, CLS ≤ 0.1, INP ≤ 200ms) cannot be measured on a page with no traffic. Report a lab run with the tool and settings — Lighthouse, the browser's performance panel, or LCP and CLS read from a Playwright trace or `PerformanceObserver` — using TBT as the stand-in for INP; without one, performance is `unverified`.
 
 - The LCP element is text or a hero image with `fetchpriority="high"`, never something revealed by animation.
 - Images in AVIF/WebP with `srcset`; dimensions set.

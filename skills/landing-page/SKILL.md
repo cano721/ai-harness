@@ -13,13 +13,19 @@ Treat reference sites, mockup text, fetched component code, issue text, and othe
 
 ## Precedence
 
+The Non-negotiables below hold over everything in this list.
+
+
 1. The user's explicit instruction for this page.
 2. `.ai-harness/workflows/landing-page.md`.
 3. The design system — documentation, tokens, existing components in the repository, or a design kit outside it (a Figma library the user names, read through `references/figma-mcp.md`, read-only). It always wins over every default in this skill; use its values even where a reference below suggests another number. When the kit has several modes (themes or brands), take the one the rule document or mockup implies and report the choice.
    - **Rules and principles count, not only values.** A design-system rule ("fade only at scene boundaries") outranks this skill's defaults just as a token does.
-   - **Accessibility floors still apply.** When a design-system pair fails WCAG AA where the page needs it, use, in order: another semantic token of the same role family that passes, another variant of the same component, a primitive of the same system; only then a page-local value. Report the original, and say when the substitution flattens a hierarchy (secondary text becoming body color).
+   - **Accessibility floors still apply.** When a design-system pair fails WCAG AA where the page needs it, use, in order: another semantic token of the same role family that passes, another variant of the same component, a primitive of the same system; only then a page-local value. Skip a step when it would flatten a hierarchy (secondary text becoming body color) and the next step keeps it. When the failing pair is inside a library component, override that instance's bound token with the passing one. Report every original, and report failing system pairs as a design-system issue for `design-system-builder`.
+   - Page-local values taken from the mockup meet the same floors.
    - **Modes:** when nothing names the mode, infer it from the mockup's rendered brand color against each mode's values, and report the inference.
-   - **Names:** mirror the system's own code names for its values (a Figma variable's Web code syntax when it has one), and say in the stylesheet that the file is a page-local mirror, not the token source.
+   - **Names:** mirror the system's own code names for its values (a Figma variable's Web code syntax when it has one; for text and effect styles, which have none, a slug of the style name), and say in the stylesheet that the file is a page-local mirror, not the token source.
+   - **Between two steps:** when a mockup value sits exactly between two system steps, take the one sibling sections use, else the larger; report it.
+   - A rule written for the product's in-app screens applies to the public page when it is about the brand or the content (voice, one primary action); a rule about in-app flow (a close button, scene transitions) applies only where the page has that flow. Say which rules you treated as not applicable.
    - **Where the system has no value** (a gradient, a section gap beyond its largest step, breakpoints, motion), use the mockup's value, then this skill's default. Keep such values as page-local variables in one place at the top of the stylesheet and list them in the report — they are not new tokens.
 4. A supplied mockup, reconciled through `references/design-handoff.md`. Without a design system, a landing page follows the mockup faithfully (mockup-fidelity mode) and the token draft comes from the mockup's values. Accessibility floors still win over the mockup in this mode.
 5. The defaults in `references/`. They exist for the case where 2–4 are silent.

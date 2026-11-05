@@ -14,7 +14,7 @@ Libraries, component registries, CDN scripts, and WebGL effects change between v
 
 - Detect the package manager from the lockfile. Reuse libraries already in the dependency list before adding a new one.
 - Do not run an install command without the user's approval. Propose the exact command and the reason.
-- Anything from another host — scripts, stylesheets, web fonts, images — needs the user's approval, like a package. In an unattended run add none and propose them in the report.
+- Anything from another host — scripts, stylesheets, web fonts, images — needs the user's approval, like a package. In an unattended run add none and propose them in the report. An approved stylesheet's own font files (a split webfont CSS loading many subset files) are part of that approval; SRI cannot cover them — say so in the report, and skip the single-file preload when the subset in use cannot be named.
 - CDN files: pin an exact version, add `integrity` (SRI) and `crossorigin`, and check the site's Content Security Policy allows the host. Prefer a package import when the project has a bundler.
 - Compute SRI from the bytes you fetched (`openssl dgst -sha384 -binary <file> | openssl base64 -A`); never write a hash from memory. Fetch twice and compare. Do not put SRI on files a CDN generates on request (jsDelivr's auto-minified `.min` files say so in their header); use the original file path instead.
 - Component registry CLIs (`npx shadcn add <url>` and similar) run code and write files: run one only after approval, show the file list and each target path first, refuse targets outside the page's source folders, install dependencies with `--ignore-scripts`, and read the fetched code for network calls, `eval`, and `innerHTML` before wiring it up.
