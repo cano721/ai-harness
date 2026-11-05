@@ -69,14 +69,14 @@ const io = new IntersectionObserver((entries) => {
     io.unobserve(entry.target);
   }
 }, { rootMargin: "0px 0px -15% 0px" });
+const items = document.querySelectorAll("[data-reveal]");
+items.forEach((el) => io.observe(el));
 window.revealReady = true;
-// Measure after fonts load so the page height is final.
+// After fonts load the page height is final: show items that can never reach the 85% line.
 document.fonts.ready.then(() => {
   const lastReachable = document.documentElement.scrollHeight - innerHeight * 0.15;
-  document.querySelectorAll("[data-reveal]").forEach((el) => {
-    // Items that can never reach the 85% line are shown immediately.
+  items.forEach((el) => {
     if (el.getBoundingClientRect().top + scrollY > lastReachable) el.classList.add("is-in");
-    else io.observe(el);
   });
 });
 ```

@@ -1,6 +1,6 @@
 # Verify
 
-A page is done when it has been looked at, by someone other than its maker, and nothing major is left — not when it builds. The verdicts, the meaning of a major problem, and the false-pass list are the same as the harness `ui-review` contract, so a page reads the same way whichever path checked it.
+A page is done when it has been looked at, by someone other than its maker, and nothing major is left — not when it builds. The verdicts, the meaning of a major problem, and the false-pass list follow the harness `ui-review` contract, so a page reads the same way whichever path checked it — with one difference: here a review by the page's own maker cannot reach `verified`.
 
 ## Which loop runs
 
@@ -95,7 +95,7 @@ Spacing and alignment that do not change any of that are minor.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
 - **At most three reviews.** After the third, report what remains with its evidence. A review that could not finish counts and is reported as such.
-- **In a harness repository** the `ui_review` gate has no `사용자 입력 필요` class; list those items as product decisions in the brief or pull request, which the workflow routes to `user_decision` instead of repair.
+- **In a harness repository** the `ui_review` gate has no `사용자 입력 필요` class; list those items as product decisions in the brief or pull request; the workflow's repair step hands a product decision to `user_decision` rather than trying to fix it.
 
 ## State checks
 
