@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.56.0 (2026-11-05)
 ### 새 기능
 
 - **기본 스킬 카탈로그에 `langfuse` 추가** — Langfuse를 보려면 MCP 서버를 따로 등록하거나(도구 정의 약 95개가 매 세션 컨텍스트를 차지) API를 직접 짜야 했습니다. 이제 `/ai-harness:setup`에서 고르면 설치·프로젝트 키 저장·연결 확인(키가 가리키는 프로젝트 이름, 401이면 키/리전 불일치 안내)까지 되고, 스킬은 Langfuse 공식 MCP 도구를 서버 등록 없이 스크립트로 불러 trace·비용·지연·프롬프트·점수·데이터셋을 조회합니다. 쓰기 도구는 `--yes`, 삭제·덮어쓰기 도구는 `--allow-destructive` 없이는 스크립트가 막습니다. 키는 프로젝트 단위이고, 다른 프로젝트는 스킬의 `register.py <별칭>`으로 키를 대화에 남기지 않고 더합니다. Python 3(표준 라이브러리)이 필요합니다.
