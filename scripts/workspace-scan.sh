@@ -2,6 +2,7 @@
 # workspace 감지·매니페스트 기록. 여러 독립 git 저장소가 한 폴더에 있을 때 /harness-init이 쓴다.
 #   scan  --root <dir> [--depth N] [--fetch] [--base <branch>]   : 후보 여부·멤버·기존 manifest와의 diff를 JSON으로
 #   write --root <dir> [--depth N] [--fetch] [--base <branch>] [--workspace-id <id>] [--integrations a,b] [--version <v>]
+#         [--team-rules <git URL|경로> [--team-rules-ref <ref>]]
 #         : scan 결과로 .ai-harness/workspace.json을 기록 (생략한 값은 기존 manifest 유지)
 # 멤버 하네스는 원격 기준 브랜치의 harness.json을 먼저 읽는다. 기준은 --base(없으면 manifest의 base_branch)가
 # 멤버 origin에 있으면 그 브랜치, 아니면 origin 기본 브랜치(origin/HEAD)다. 브랜치 이름을 추측하지 않는다.
@@ -13,7 +14,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/lib.sh"
 
 usage() {
-  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--fetch] [--base <branch>] [--workspace-id <id>] [--integrations a,b] [--version <v>]\n' "$0" >&2
+  printf 'usage: %s <scan|write> --root <dir> [--depth N] [--fetch] [--base <branch>] [--workspace-id <id>] [--integrations a,b] [--version <v>] [--team-rules <source> [--team-rules-ref <ref>]]\n' "$0" >&2
   exit 2
 }
 
@@ -28,6 +29,8 @@ integrations=""
 version=""
 fetch=false
 base_branch=""
+team_rules=""
+team_rules_ref=""
 while (($#)); do
   case "$1" in
     --root) root="${2:-}"; shift 2 ;;
@@ -37,6 +40,8 @@ while (($#)); do
     --version) version="${2:-}"; shift 2 ;;
     --fetch) fetch=true; shift ;;
     --base) base_branch="${2:-}"; shift 2 ;;
+    --team-rules) team_rules="${2:-}"; shift 2 ;;
+    --team-rules-ref) team_rules_ref="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -197,7 +202,8 @@ case "$command_name" in
     mkdir -p "$root/.ai-harness"
     tmp="$(mktemp "$root/.ai-harness/.workspace.XXXXXX")"
     if jq -n --argjson scan "$scan" --arg wid "$workspace_id" --arg integrations "$integrations" \
-        --arg version "$version" --arg today "$(date +%Y-%m-%d)" --arg folder "$(basename "$root")" '
+        --arg version "$version" --arg today "$(date +%Y-%m-%d)" --arg folder "$(basename "$root")" \
+        --arg team_rules "$team_rules" --arg team_rules_ref "$team_rules_ref" '
         ($scan.manifest // {}) as $old
         | {
             kind: "workspace",
@@ -207,7 +213,10 @@ case "$command_name" in
             base_branch: $scan.base_branch,
             initialized: ($old.initialized // $today),
             harness_version: (if $version != "" then $version else ($old.harness_version // null) end)
-          }' > "$tmp"; then
+          }
+        # 팀 규칙 원본 표식: 지정하면 바꾸고, 생략하면 기존 값을 유지한다.
+        + (if $team_rules != "" then {team_rules: ({source: $team_rules} + (if $team_rules_ref != "" then {ref: $team_rules_ref} else {} end))}
+           elif $old.team_rules then {team_rules: $old.team_rules} else {} end)' > "$tmp"; then
       mv "$tmp" "$manifest_path"
       jq -c '.' "$manifest_path"
     else
