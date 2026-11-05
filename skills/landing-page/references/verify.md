@@ -14,7 +14,7 @@ build → self-check (measured) → independent review → fix majors → indepe
 ## Tools and serving
 
 - **Browser:** any of — the session's browser tool, Orca's embedded browser, Playwright or headless Chrome already installed on the machine. Installing one needs the user's approval like any package. Locate an existing Playwright before giving up (a global or `~/.npm/_npx/*/node_modules/playwright` install can be required by absolute path); pick a version whose browser revision is already downloaded.
-- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes. Playwright treats `aria-disabled="true"` as not enabled; click those with `{ force: true }` when checking that nothing happens.
+- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes. Playwright treats `aria-disabled="true"` as not enabled; click those with `{ force: true }` when checking that nothing happens. After switching media (print, forced colors, a theme), wait out CSS transitions before reading computed styles.
 - **Serve, do not open `file://`** — module scripts and some fonts fail under `file://`. Use a static server on a free port, then fetch the page once and confirm the response is this page (its `<title>`) before measuring; a stale server on the same port answers with someone else's page.
 - **Static checks** need no browser and are never left unverified for lack of one: metadata, `lang`, landmarks, one `h1`, `alt` attributes, link targets, JSON-LD, external hosts referenced.
 
@@ -30,7 +30,7 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 | Placeholders | A `[... 필요]`-style placeholder is visible to visitors |
 | Claims | A claim of popularity, quantity, rank, or result ("많이", "인기", "N명이") without evidence on the page |
 | First action | The primary action is not inside the first viewport |
-| Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind each text node (hide that node only, not its container), not computed colors |
+| Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind each text node (hide that node and its `::before`/`::after` only, not its container; keep the sample inside rounded corners), not computed colors |
 | Overflow | Horizontal scroll or clipped text at any viewport |
 | Headline lines | More than two at desktop, or an orphaned syllable group (no design-system rule set otherwise) |
 | Assets | Broken images; a fallback face rendering where the intended font was approved and loaded |
@@ -38,12 +38,12 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 
 ## Independent review
 
-Each review runs in a fresh reviewer that did not build the page: the `ai-harness:design-reviewer` agent, or a new session. Give it only:
+Each review runs in a new reviewer that did not build the page — a new one every round, not a continued one: the `ai-harness:design-reviewer` agent, or a new session. Give it only:
 
 - the served URL or file path, how to serve it, viewports and states to check;
 - the audience and the one action the page exists for;
 - where the design evidence is (design system, rule document, token mirror), and **which layers apply**: brand only, or the product UI layer too (and where), per `SKILL.md` precedence — so the reviewer does not score marketing layout against product UI steps;
-- the source facts the page must match, copied into a plain file next to the page (the reviewer has no access to design tools such as Figma);
+- the source facts the page must match, copied into a plain file outside the served folder (the reviewer has no access to design tools such as Figma);
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
 - the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
@@ -88,7 +88,7 @@ Spacing and alignment that do not change any of that are minor.
 
 - Fix majors first, highest impact first; then minors that are cheap. Re-capture the same states after fixing; "fixed" is not evidence.
 - **Needs the user** — a real URL, a media asset, legal text, a business fact, a product decision, the conditions behind an offer the sources mention without terms — is not a fix the loop can make. Classify it as `사용자 입력 필요` and keep it in the list: no review banner on the page. In the page, the item takes its least misleading form, marked with `data-needs-input`:
-  - an unknown destination: a `<button type="button" aria-disabled="true">` that keeps the primary action's look, with the visible label and a short visible reason beside it, so it stays focusable, announced, and measurable as the main action; the first-action check counts it as `사용자 입력 필요`, not as a pass;
+  - an unknown destination: a `<button type="button" aria-disabled="true">` that keeps the primary action's look, with the visible label and a short visible reason beside it, so it stays focusable, announced, and measurable as the main action. It drops its hover and pressed changes. A copy in a sticky header carries its own short reason, since the first one scrolls away; the first-action check counts it as `사용자 입력 필요`, not as a pass;
   - missing legal or business text: a labeled placeholder where it belongs;
   - an offer with unconfirmed terms: left out.
 
@@ -96,7 +96,7 @@ Spacing and alignment that do not change any of that are minor.
 - After a review with no majors, fix the cheap minors in one pass. Review once more only if those fixes changed the first viewport's content (text, the main action, the hero image) at desktop or phone width — not alignment or spacing tweaks; otherwise stop.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
-- **At most three reviews.** After the third, report what remains with its evidence. A review that could not finish counts and is reported as such.
+- **At most three reviews.** After the third, report what remains with its evidence; fixes made after it are checked by your own measurements only and reported as not independently reviewed. A review that could not finish counts and is reported as such.
 - **In a harness repository** the `ui_review` gate has no `사용자 입력 필요` class; list those items as product decisions in the brief or pull request; the workflow's repair step hands a product decision to `user_decision` rather than trying to fix it.
 
 ## State checks
@@ -144,7 +144,7 @@ None of these is evidence on its own:
 Field targets at the 75th percentile, mobile (Core Web Vitals "good": LCP ≤ 2.5s, CLS ≤ 0.1, INP ≤ 200ms) cannot be measured on a page with no traffic. Report a lab run with the tool and settings — Lighthouse, the browser's performance panel, or LCP and CLS read from a Playwright trace or `PerformanceObserver` — using TBT as the stand-in for INP; without one, performance is `unverified`.
 
 - The LCP element is text or a hero image with `fetchpriority="high"`, never something revealed by animation.
-- Images in AVIF/WebP with `srcset`; dimensions set.
+- Images in AVIF/WebP with `srcset`; dimensions set. Without a local converter, ship optimized JPEG or PNG and list the converter as needing approval.
 - Fonts: WOFF2, subset, at most two families; preload only the first-viewport file.
 - Motion and WebGL code loads after first paint and only where used.
 

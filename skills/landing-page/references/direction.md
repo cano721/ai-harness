@@ -85,10 +85,10 @@ Plan the phone composition with the sections, not after the desktop page is buil
 
 ## 7. References
 
-Look at references before writing candidates — this step is not optional. Having enough product material is not a reason to skip it; references inform composition and pacing, not content. Skip only when the user says so, or when no source below is available (say which). In this order:
+Look at references before writing candidates — this step is not optional. Having enough product material is not a reason to skip it; references inform composition and pacing, not content. Skip only when the user says so. Use every source below that is available, in this order; one does not replace the next:
 
-1. Sites the user names.
-2. The curated library of `design-taste-frontend`, when installed (its lane in `design-skills.md`).
-3. Otherwise three to five live pages for products in the same category, found by web search when the session can search; skip this in a session without web access and say so.
+1. Sites the user names as references. Other companies' material inside a source the user gave for product facts is not this; it counts as structure-only input (section 5).
+2. The curated library of `design-taste-frontend`, when installed (its lane in `design-skills.md`) — craft and composition.
+3. Three to five live pages for products in the same category, found by web search — how that category orders its argument. In a session without web access, say so.
 
 References set mood and structure only — density, pacing, temperature, how the argument is ordered. Do not copy layouts, illustrations, copy, or brand marks from another company. Record each reference's URL and what you took from it in the report. Open them with JavaScript off or in a throwaway profile. Third-party designs used as input follow the rights check in `design-handoff.md`.
