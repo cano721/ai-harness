@@ -22,7 +22,7 @@ build → self-check (measured) → independent review → fix majors → indepe
 
 Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the site supports; after motion settles or with reduced motion on. Measure with `getBoundingClientRect()` and computed styles; do not judge by eye.
 
-**Values the design system or the reconciled mockup set are not defects here.** The defaults in this skill are not standards to enforce against them. Only the accessibility floors apply to every value; when a design-system pair fails one, follow the substitution rule in `SKILL.md`. A default the page breaks without a system value behind it is a finding; a system value that differs from a default is at most a note.
+**Values the brand, the product UI layer (where it applies), or the reconciled mockup set are not defects here.** The defaults in this skill are not standards to enforce against them. Only the accessibility floors apply to every value; when a design-system pair fails one, follow the substitution rule in `SKILL.md`. A default the page breaks without a system value behind it is a finding; a system value that differs from a default is at most a note.
 
 | Check | Defect when |
 |---|---|
@@ -42,13 +42,14 @@ Each review runs in a fresh reviewer that did not build the page: the `ai-harnes
 
 - the served URL or file path, how to serve it, viewports and states to check;
 - the audience and the one action the page exists for;
-- where the design evidence is (design system, rule document, token mirror);
+- where the design evidence is (design system, rule document, token mirror), and **which layers apply**: brand only, or the product UI layer too (and where), per `SKILL.md` precedence — so the reviewer does not score marketing layout against product UI steps;
+- the source facts the page must match, copied into a plain file next to the page (the reviewer has no access to design tools such as Figma);
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
 - the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
 - from the second round, the previous round's findings and what changed since.
 
-Not your direction notes, not your report, not "I fixed it". It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
+Not your direction notes, not your report, not "I fixed it". Serve the page from a folder that holds only the page and its assets, and tell the reviewer which paths are the maker's (logs, notes, drafts) and must not be read. It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
 
 Marketing checks the reviewer adds to its own criteria:
 
@@ -87,12 +88,12 @@ Spacing and alignment that do not change any of that are minor.
 
 - Fix majors first, highest impact first; then minors that are cheap. Re-capture the same states after fixing; "fixed" is not evidence.
 - **Needs the user** — a real URL, a media asset, legal text, a business fact, a product decision, the conditions behind an offer the sources mention without terms — is not a fix the loop can make. Classify it as `사용자 입력 필요` and keep it in the list: no review banner on the page. In the page, the item takes its least misleading form, marked with `data-needs-input`:
-  - an unknown destination: a `<button type="button" aria-disabled="true">` with the visible label and a short visible reason, so it stays focusable and announced; the first-action check counts it as `사용자 입력 필요`, not as a pass;
+  - an unknown destination: a `<button type="button" aria-disabled="true">` that keeps the primary action's look, with the visible label and a short visible reason beside it, so it stays focusable, announced, and measurable as the main action; the first-action check counts it as `사용자 입력 필요`, not as a pass;
   - missing legal or business text: a labeled placeholder where it belongs;
   - an offer with unconfirmed terms: left out.
 
   A placeholder that carries `data-needs-input` and is on the list is not a second finding; it is why the page stays at `issues (공개 불가: 입력 대기)`.
-- After a review with no majors, fix the cheap minors in one pass. Review once more only if those fixes changed what a visitor sees in the first viewport or the main action; otherwise stop.
+- After a review with no majors, fix the cheap minors in one pass. Review once more only if those fixes changed the first viewport's content (text, the main action, the hero image) at desktop or phone width — not alignment or spacing tweaks; otherwise stop.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
 - **At most three reviews.** After the third, report what remains with its evidence. A review that could not finish counts and is reported as such.

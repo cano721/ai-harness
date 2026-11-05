@@ -27,7 +27,8 @@ Decide whose visual language the page speaks before designing anything.
 | Situation | Signal | Rule |
 |---|---|---|
 | Redesign | The user asks for a new look | New identity allowed; keep logo and name unless told otherwise |
-| Established | A design system or a consistent set of live pages exists | Inherit it. Do not introduce new fonts, colors, or component styles |
+| Established brand | A brand or product design system, or a consistent set of live pages, exists | Inherit the brand layer — no new fonts, colors, or component styles. Layout, composition, and pacing are still this page's to direct (see `SKILL.md` precedence) |
+| Established marketing site | Live marketing pages with their own look exist | Inherit them whole, layout included |
 | Incomplete | Some brand assets exist (logo, one color) but no system | Keep what exists, fill the gaps, and list every value you added |
 | None | Nothing exists | A new identity is yours to propose; confirm the direction once |
 
@@ -35,7 +36,7 @@ Adding a section or page to an established site never justifies a new identity.
 
 ## 3. Direction candidates
 
-Skip this step when a mockup or an established identity already decides the look.
+Skip this step only when a mockup of this page or an established marketing site already decides the look. An established brand fixes the colors, typefaces, and voice of every candidate; the candidates differ in composition, pacing, imagery, and signature moment.
 
 1. **Theme inventory** — list 8–12 concrete things the product is about: materials, verbs, places, rituals, artifacts its users handle. Avoid category clichés (circuits for software, leaves for sustainability).
 2. **Idea sentence** — one sentence that states the page's point of view. Test it by substituting a competitor's name; if the sentence still holds, it says nothing.
@@ -50,6 +51,15 @@ Record the chosen direction in the report (idea, audience, action, color strateg
 - The first viewport states the thesis and shows proof of it: the product itself, a result, or a concrete scene. A headline alone is not a thesis.
 - For software, show real interface fragments at legible size instead of icon grids or abstract illustrations.
 - Remove any section whose claim repeats another.
+
+### Per width
+
+Plan the phone composition with the sections, not after the desktop page is built. One responsive page serves every width; separate desktop and mobile pages only when the user or the site's infrastructure requires them.
+
+- For each section, write what changes at phone width: order, what collapses or drops, how a row of items regroups (a four-across row becomes two-by-two, a horizontal swipe row, or one featured item).
+- The phone's first screen holds the thesis and the primary action; name what moves below it.
+- Images that need a different crop at phone width get one through `<picture>` sources (art direction), not just scaling.
+- A mockup for both widths is followed for each. A desktop-only mockup leaves the phone to this plan; say "no phone mockup" in the report.
 
 ## 5. Evidence
 
@@ -75,4 +85,10 @@ Record the chosen direction in the report (idea, audience, action, color strateg
 
 ## 7. References
 
-Reference sites set mood only — density, pacing, temperature. Do not copy layouts, illustrations, copy, or brand marks from another company. Third-party designs used as input follow the rights check in `design-handoff.md`.
+Look at references before writing candidates — this step is not optional. Having enough product material is not a reason to skip it; references inform composition and pacing, not content. Skip only when the user says so, or when no source below is available (say which). In this order:
+
+1. Sites the user names.
+2. The curated library of `design-taste-frontend`, when installed (its lane in `design-skills.md`).
+3. Otherwise three to five live pages for products in the same category, found by web search when the session can search; skip this in a session without web access and say so.
+
+References set mood and structure only — density, pacing, temperature, how the argument is ordered. Do not copy layouts, illustrations, copy, or brand marks from another company. Record each reference's URL and what you took from it in the report. Open them with JavaScript off or in a throwaway profile. Third-party designs used as input follow the rights check in `design-handoff.md`.
