@@ -125,7 +125,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 | `langfuse` | trace·비용·지연·프롬프트·점수·데이터셋 조회, 변경은 확인 뒤 (공식 MCP 도구를 서버 등록 없이 Python 스크립트로 호출, 여러 프로젝트는 별칭) | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (프로젝트 키) 또는 그 키를 비밀 저장소(AWS SSM·Vault 등)에서 꺼내는 명령 `LANGFUSE_PUBLIC_KEY_CMD`, `LANGFUSE_SECRET_KEY_CMD`, 선택 `LANGFUSE_HOST` (등록 스크립트가 리전 자동 탐지) |
 
 - **접속 정보**: `/setup`이 키마다 발급 주소·순서·필요한 읽기 scope를 안내합니다. base URL·이메일 같은 값은 대화로 받아 저장하고, 토큰은 대화에 남지 않도록 사용자가 별도 터미널에서 `scripts/setup.sh set --tool claude <KEY>`(숨김 입력)로 넣습니다. Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600, 셸 프로파일에서 source)에 저장됩니다. 저장 뒤 `setup.sh check <skill>`이 읽기 전용 호출 하나로 연결과 접속 계정을 확인하고, 401·403·404면 원인을 짚습니다. 각 Skill은 자격 증명을 명령 인자가 아니라 stdin(`curl -K -`)으로 넘깁니다.
-- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다.
+- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다. 조직이 규칙을 한 곳(git 저장소나 공유 폴더의 `skills/<name>.md`)에 두면 `/setup team`이 개인 설정 `HM_TEAM_RULES` 또는 저장소 표식(`harness.json`·`workspace.json`의 `team_rules`)으로 원본을 찾아, 개인 파일과의 차이를 보여 주고 확인받은 뒤 팀 블록으로 넣습니다. 다시 가져오면 팀 블록만 바뀌고 개인 블록은 그대로이며, 원본이 바뀌면 세션 시작 안내가 알립니다(자동으로 덮어쓰지 않음).
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
@@ -777,6 +777,10 @@ HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
 HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
+HM_TEAM_RULES=                   # 팀 규칙 원본(git URL 또는 로컬 경로, skills/<name>.md). 비우면 저장소 표식(team_rules)을 본다
+HM_TEAM_RULES_REF=               # git 원본의 브랜치·태그·커밋(비우면 기본 브랜치)
+HM_TEAM_RULES_REFRESH_HOURS=24   # git 원본을 백그라운드로 다시 받는 주기. 0이면 받지 않음(/setup team은 항상 받음)
+HM_TEAM_RULES_HINT=1             # 0이면 팀 규칙 갱신·미적용 원본 안내를 띄우지 않음
 HM_IMPACT_HINT=1                 # 0이면 설치 N일 뒤 /harness-impact 안내(프로젝트당 한 번)를 띄우지 않음
 HM_IMPACT_HINT_DAYS=30
 ```

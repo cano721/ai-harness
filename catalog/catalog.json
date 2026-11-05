@@ -85,6 +85,9 @@
         { "key": "default_project", "ask": "기본 프로젝트 키", "detect": "최근 본 프로젝트 목록" },
         { "key": "fields", "ask": "커스텀 필드 ID (스프린트·에픽 링크)", "detect": "필드 타입으로 자동 조회" },
         { "key": "create_rules", "ask": "이슈 생성 시 반드시 채우는 항목 (예: 상위 에픽·활성 스프린트·수정 버전) 과 기본 이슈 타입" },
+        { "key": "issue_types", "ask": "에이전트가 새로 만들어도 되는 이슈 타입과 계층 (예: 에픽 > Task > SubTask, Story는 기획자만 만든다 — 에이전트는 만들지 않는다)", "detect": "기본 프로젝트의 생성 가능한 이슈 타입과 계층 (createmeta)" },
+        { "key": "unused_statuses", "ask": "쓰지 않는 상태·전환 — 에이전트가 고르지 않는다 (예: Drop, 보류)", "detect": "대표 이슈의 전환 목록 (transitions)" },
+        { "key": "followup_issues", "ask": "후속·반영 이슈 처리 (예: 리뷰 반영·후속 작업은 새 Task가 아니라 원 이슈의 SubTask로 만든다)" },
         { "key": "conventions", "ask": "요약·설명 작성 규칙, 담당자·라벨 기본값 등 팀 관례" }
       ]
     },

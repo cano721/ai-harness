@@ -473,13 +473,19 @@ WS_RESCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
 assert_eq "web" "$(jq -r '.diff.removed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member that disappeared"
 assert_eq "group/batch" "$(jq -r '.diff.changed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member whose harness changed"
 assert_eq "web" "$(jq -r '.members[] | select(.path=="web") | .path' "$WS_MANIFEST")" "scan alone never rewrites the manifest"
+"$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" --team-rules https://git.example/acme/team-rules.git --team-rules-ref main >/dev/null
+assert_eq "https://git.example/acme/team-rules.git main" "$(jq -r '"\(.team_rules.source) \(.team_rules.ref)"' "$WS_MANIFEST")" "workspace manifest records the team rules marker"
 "$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" >/dev/null
+assert_eq "https://git.example/acme/team-rules.git" "$(jq -r '.team_rules.source' "$WS_MANIFEST")" "rewrite keeps the team rules marker"
 assert_eq "acme claude $(jq -r '.version' "$ROOT/release.json")" "$(jq -r '"\(.workspace_id) \(.integrations|join(",")) \(.harness_version)"' "$WS_MANIFEST")" "rewrite keeps identity and stamps the current plugin version"
 assert_eq "api group/batch" "$(jq -r '[.members[].path] | sort | join(" ")' "$WS_MANIFEST")" "rewrite applies the rescanned members"
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh scan" "harness init detects workspaces with the scan script"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workspace.json" "harness init documents the workspace manifest"
 assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh write" "harness init records the manifest with the script"
+assert_contains "$HARNESS_INIT_CONTENT" "\"team_rules\": {\"source\"" "harness init documents the team rules marker"
+assert_contains "$HARNESS_INIT_CONTENT" "--team-rules <source>" "workspace init records the team rules marker with the script"
+assert_contains "$HARNESS_INIT_CONTENT" "**팀 규칙 원본**" "harness init asks about a team rules source"
 assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks members without a harness"
 assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-list --count HEAD..origin/<base>" "workspace preflight checks member checkout freshness"
@@ -4938,6 +4944,108 @@ SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
 
+# 팀 규칙: 개인 config → 저장소 표식 순으로 원본을 찾고, 차이를 보여 준 sha로만 팀 블록을 쓴다. 개인 블록은 유지. (#243)
+SETUP_T="$TEST_TMP/setup-team"
+SETUP_CATALOG="$ROOT/catalog"
+TEAM_SRC="$SETUP_T/team-rules"
+TEAM_REPO="$SETUP_T/repo"
+mkdir -p "$TEAM_SRC/skills" "$TEAM_REPO/.ai-harness" "$TEAM_REPO/src/deep" "$SETUP_T/data/skills"
+printf -- '- 에이전트는 Story를 만들지 않는다\n' >"$TEAM_SRC/skills/jira.md"
+printf 'not a catalog skill\n' >"$TEAM_SRC/skills/notes.md"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0)
+team_cmd() { (cd "${TEAM_CWD:-$TEAM_REPO/src/deep}" && HOME="$SETUP_T/home" setup_cmd team "$@"); }
+assert_eq "null" "$(team_cmd source | jq -r '.source')" "no source without config or repo marker"
+assert_eq "[]" "$(team_cmd list | jq -c '.skills')" "list without a source is empty"
+jq -n '{project_id:"svc", team_rules:{source:"../team-rules"}}' >"$TEAM_REPO/.ai-harness/harness.json"
+TEAM_REAL="$(cd "$TEAM_SRC" && pwd -P)"
+assert_eq "$TEAM_REAL" "$(team_cmd source | jq -r '.source')" "repo marker found from a subdirectory, relative to the repo root"
+assert_contains "$(team_cmd source | jq -r '.from')" ".ai-harness/harness.json" "source names the marker file"
+mkdir -p "$SETUP_T/other/skills"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="$SETUP_T/other")
+assert_eq "config" "$(team_cmd source | jq -r '.from')" "personal config wins over the repo marker"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0)
+TEAM_LIST="$(team_cmd list)"
+assert_eq "jira:new" "$(jq -r '[.skills[] | "\(.name):\(.state)"] | join(" ")' <<<"$TEAM_LIST")" "list shows only catalog skills the source has"
+TEAM_SHA="$(jq -r '.skills[0].sha256' <<<"$TEAM_LIST")"
+printf '# jira 사용자 규칙\n- 기본 프로젝트: NJ\n' >"$SETUP_T/data/skills/jira.md"
+assert_eq "untracked" "$(team_cmd list | jq -r '.skills[0].state')" "a profile without a team block is untracked"
+TEAM_DIFF="$(team_cmd diff jira)"
+assert_contains "$TEAM_DIFF" "+- 에이전트는 Story를 만들지 않는다" "diff shows the team rule to add"
+assert_contains "$TEAM_DIFF" "sha256 $TEAM_SHA" "diff names the sha to apply"
+assert_eq "# jira 사용자 규칙" "$(head -1 "$SETUP_T/data/skills/jira.md")" "diff does not write"
+assert_eq "stale" "$(team_cmd apply jira --sha "$(printf '%064d' 0)" 2>/dev/null | jq -r '.action')" "apply refuses a sha other than the diffed source"
+assert_eq "applied" "$(team_cmd apply jira --sha "$TEAM_SHA" | jq -r '.action')" "apply writes after confirmation"
+TEAM_FILE="$(<"$SETUP_T/data/skills/jira.md")"
+assert_contains "$TEAM_FILE" "sha256=\"$TEAM_SHA\"" "team block records the source sha"
+assert_contains "$TEAM_FILE" "- 기본 프로젝트: NJ" "personal rules kept"
+assert_eq "current" "$(team_cmd list | jq -r '.skills[0].state')" "applied block is current"
+assert_eq "unchanged" "$(team_cmd apply jira --sha "$TEAM_SHA" | jq -r '.action')" "re-apply of the same source is a no-op"
+# 원본이 바뀌면: SessionStart는 알리기만 하고(같은 sha는 한 번), 재적용은 팀 블록만 바꾼다.
+printf -- '- 이슈 타입: 에픽 > Task > SubTask, 에이전트는 Story를 만들지 않는다\n- Drop 상태를 쓰지 않는다\n' >"$TEAM_SRC/skills/jira.md"
+printf '\n- 개인 메모\n' >>"$SETUP_T/data/skills/jira.md"
+setup_cmd 'done' >/dev/null
+TEAM_NOTE="$(printf '{"cwd":"%s"}' "$TEAM_REPO" | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$TEAM_NOTE" "팀 규칙 원본이 갱신됐습니다: jira" "SessionStart notices a changed team source"
+assert_contains "$TEAM_NOTE" "자동으로 덮어쓰지 않습니다" "the notice does not overwrite"
+assert_contains "$(<"$SETUP_T/data/skills/jira.md")" "에이전트는 Story를 만들지 않는다
+<!--" "SessionStart leaves the profile alone"
+assert_eq "" "$(printf '{"cwd":"%s"}' "$TEAM_REPO" | setup_cmd notify)" "the same change is announced once"
+assert_eq "changed" "$(team_cmd list | jq -r '.skills[0].state')" "list shows the source changed"
+TEAM_SHA="$(team_cmd list | jq -r '.skills[0].sha256')"
+team_cmd apply jira --sha "$TEAM_SHA" >/dev/null
+TEAM_FILE="$(<"$SETUP_T/data/skills/jira.md")"
+assert_contains "$TEAM_FILE" "- Drop 상태를 쓰지 않는다" "re-apply updates the team block"
+assert_eq "1" "$(grep -c '에이전트는 Story' "$SETUP_T/data/skills/jira.md")" "old team block replaced, not duplicated"
+assert_contains "$TEAM_FILE" "- 기본 프로젝트: NJ" "re-apply keeps personal rules"
+assert_contains "$TEAM_FILE" "- 개인 메모" "re-apply keeps personal edits"
+# 새 파일은 팀 블록 + 빈 개인 블록으로 만든다.
+printf -- '- 기본 스페이스: ENG\n' >"$TEAM_SRC/skills/confluence.md"
+team_cmd apply confluence --sha "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .sha256')" >/dev/null
+assert_contains "$(<"$SETUP_T/data/skills/confluence.md")" "# confluence 개인 규칙" "new profile gets a personal section"
+# 깨진 마커·마커를 품은 원본은 쓰지 않는다.
+printf '<!-- ai-harness:team-rules:end -->\n' >>"$SETUP_T/data/skills/confluence.md"
+assert_eq "broken" "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .state')" "a profile with broken markers is reported"
+if team_cmd apply confluence --sha "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .sha256')" >/dev/null 2>&1; then fail "apply over broken markers"; fi
+printf '<!-- ai-harness:team-rules:begin source="x" ref="" sha256="%s" -->\n' "$(printf '%064d' 0)" >"$TEAM_SRC/skills/sentry.md"
+if team_cmd diff sentry >/dev/null 2>&1; then fail "a source carrying a marker is accepted"; fi
+if team_cmd diff nope >/dev/null 2>&1; then fail "unknown skill accepted"; fi
+# 저장소 표식이 가리키지만 아직 가져오지 않은 원본은 원본마다 한 번 알린다.
+TEAM_REPO2="$SETUP_T/repo2"
+mkdir -p "$TEAM_REPO2/.ai-harness" "$SETUP_T/team2/skills"
+jq -n --arg s "$SETUP_T/team2" '{team_rules:{source:$s}}' >"$TEAM_REPO2/.ai-harness/workspace.json"
+assert_contains "$(printf '{"cwd":"%s"}' "$TEAM_REPO2" | setup_cmd notify | jq -r '.systemMessage')" "팀 규칙 원본이 지정돼 있습니다" "workspace marker offers the source once"
+assert_eq "" "$(printf '{"cwd":"%s"}' "$TEAM_REPO2" | setup_cmd notify)" "the offer is shown once"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES_HINT=0)
+cp "$TEAM_SRC/skills/jira.md" "$SETUP_T/jira.keep"
+printf -- '- 바뀜\n' >"$TEAM_SRC/skills/jira.md"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "HM_TEAM_RULES_HINT=0 silences team notices"
+mv "$SETUP_T/jira.keep" "$TEAM_SRC/skills/jira.md"
+# git 원본: skills/만 캐시로 받고, ref를 따른다. SessionStart는 네트워크 없이 캐시와 비교한다.
+TEAM_GIT="$SETUP_T/team-git"
+mkdir -p "$TEAM_GIT/skills" "$TEAM_GIT/other"
+printf -- '- git v1\n' >"$TEAM_GIT/skills/datadog.md"
+printf 'secret-ish\n' >"$TEAM_GIT/other/x.txt"
+git -C "$TEAM_GIT" init -q -b main
+git -C "$TEAM_GIT" add -A && git -C "$TEAM_GIT" -c user.name=t -c user.email=t@t commit -qm v1
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="file://$TEAM_GIT" HM_TEAM_RULES_REF=main)
+TEAM_LIST="$(team_cmd list)"
+assert_eq "datadog:new" "$(jq -r '[.skills[] | "\(.name):\(.state)"] | join(" ")' <<<"$TEAM_LIST")" "git source lists its rules"
+[[ -z "$(find "$SETUP_T/data/setup/team" -path '*/src/other' 2>/dev/null)" ]] || fail "git fetch takes only skills/"
+team_cmd apply datadog --sha "$(jq -r '.skills[0].sha256' <<<"$TEAM_LIST")" >/dev/null
+assert_contains "$(<"$SETUP_T/data/skills/datadog.md")" 'ref="main"' "team block records the ref"
+printf -- '- git v2\n' >"$TEAM_GIT/skills/datadog.md"
+git -C "$TEAM_GIT" -c user.name=t -c user.email=t@t commit -qam v2
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "SessionStart does not fetch"
+setup_cmd team refresh
+assert_contains "$(printf '{}' | setup_cmd notify | jq -r '.systemMessage')" "갱신됐습니다: datadog" "refreshed git cache shows the change"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="file://$TEAM_GIT" HM_TEAM_RULES_REF="--upload-pack=touch")
+if team_cmd list >/dev/null 2>&1; then fail "an option-like ref is accepted"; fi
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES='ext::sh -c touch% /tmp/pwned')
+assert_eq "config" "$(team_cmd source | jq -r '.from')" "config source is reported"
+if team_cmd list >/dev/null 2>&1; then fail "a non-git, non-directory source is accepted"; fi
+SETUP_ENV=()
+pass "setup imports team rules with diff, confirmation and update notices"
+
 # 외부 디자인 스킬: 사본을 들지 않고 원본 저장소의 고정 커밋에서 스킬 폴더만 받는다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않는다. (#210)
 SETUP_T="$TEST_TMP/setup-design"
 SETUP_CATALOG="$SETUP_T/catalog"
@@ -5108,6 +5216,9 @@ case "$1" in
   */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
   */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
   */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  */rest/api/3/issue/createmeta/*/issuetypes*) printf '{"issueTypes":[{"id":"1","name":"Epic","subtask":false,"hierarchyLevel":1},{"id":"2","name":"Task","subtask":false,"hierarchyLevel":0},{"id":"3","name":"Story","subtask":false,"hierarchyLevel":0},{"id":"4","name":"Sub-task","subtask":true,"hierarchyLevel":-1}]}' ;;
+  */rest/api/3/search/jql*) printf '{"issues":[{"key":"%s-7"}]}' "$(sed -E 's/.*project%3D([A-Z0-9_]+).*/\1/' <<<"$1")" ;;
+  */rest/api/3/issue/*-7/transitions) printf '{"transitions":[{"id":"11","name":"진행","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}},{"id":"31","name":"Drop","to":{"name":"Drop","statusCategory":{"key":"done"}}}]}' ;;
   */api/public/projects) printf '{"data":[{"id":"p1","name":"Demo"}]}' ;;
   *) printf 'HTTP 404\n' >&2; exit 1 ;;
 esac
@@ -5131,6 +5242,11 @@ DETECT="$(setup_cmd detect jira)"
 assert_eq "customfield_10113 gh-sprint" "$(jq -r '.fields[0] | "\(.id) \(.type)"' <<<"$DETECT")" "detect finds sprint field by type"
 assert_eq "1" "$(jq -r '.fields | length' <<<"$DETECT")" "detect ignores other fields"
 assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists recent projects"
+# 이슈 타입 계층·쓰지 않는 상태 질문의 선택지: 기본(최근) 프로젝트의 생성 가능 타입과 대표 이슈의 전환. (#243)
+assert_eq "Epic:1 Task:0 Story:0 Sub-task:-1" "$(jq -r '[.issue_types[] | "\(.name):\(.hierarchy)"] | join(" ")' <<<"$DETECT")" "detect lists creatable issue types with hierarchy"
+assert_eq "ABC-7 Drop:done" "$(jq -r '"\(.transitions.issue) \(.transitions.list[1] | "\(.name):\(.category)")"' <<<"$DETECT")" "detect lists transitions of a representative issue"
+assert_eq "XY-7" "$(setup_cmd detect jira --project XY | jq -r '.transitions.issue')" "detect takes the project to inspect"
+assert_eq "null 0" "$(setup_cmd detect jira --project 'a;b' | jq -r '"\(.project) \(.issue_types | length)"')" "detect ignores an invalid project key"
 printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
 assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
 assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"
