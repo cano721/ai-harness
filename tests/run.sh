@@ -4,12 +4,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-tests.XXXXXX")"
 TESTS=0
+# bash 3.2 can leave $? at 0 inside the EXIT trap after a `set -u` abort, so the run
+# only counts as passed when it reached the final line.
+TESTS_FINISHED=0
 
 cleanup() {
   case "$TEST_TMP" in
     */ai-harness-tests.*) find "$TEST_TMP" -depth -delete 2>/dev/null || true ;;
     *) printf 'unexpected test temp path, preserving: %s\n' "$TEST_TMP" >&2 ;;
   esac
+  if [ "$TESTS_FINISHED" != 1 ]; then
+    printf 'tests aborted before the end (after %d passing groups)\n' "$TESTS" >&2
+    exit 1
+  fi
 }
 trap cleanup EXIT
 
@@ -5772,3 +5779,4 @@ done
 pass "harness-impact plugin skill"
 
 printf '1..%d\n' "$TESTS"
+TESTS_FINISHED=1
