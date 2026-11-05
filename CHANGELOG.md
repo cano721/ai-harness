@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.58.0 (2026-11-05)
 ### 새 기능
 
 - **langfuse 키를 비밀 저장소에서 꺼내 쓰기** — 키를 사람마다 Langfuse에서 발급받아 로컬 설정에 넣는 방법뿐이라, 팀이 키를 AWS SSM 같은 비밀 저장소에 두고 있어도 각자 발급·복사해야 했습니다. 이제 키 값 대신 그 키를 출력하는 명령(`LANGFUSE_PUBLIC_KEY_CMD`·`LANGFUSE_SECRET_KEY_CMD`, 별칭이면 `_<별칭>` 접미사)을 둘 수 있고, 스크립트가 호출 때 실행해 메모리에서만 씁니다. SSM·Secrets Manager·Vault·1Password 등 저장소를 가리지 않으며, 어떤 저장소·경로를 쓰는지는 사용자 규칙 파일(`key_source`)에 남깁니다. 명령은 `~/.claude/settings.json`·`secrets.env`에서만 읽고, 프로세스 환경 변수로 들어온 명령은 실행하지 않습니다. 등록은 `register.py <별칭> --pk-cmd '<명령>' --sk-cmd '<명령>'`으로 하고, 명령을 실행해 리전·프로젝트를 확인한 뒤 저장합니다.
