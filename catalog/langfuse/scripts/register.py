@@ -78,16 +78,30 @@ def find_host(pk, sk):
     return None, None
 
 
-def save_settings(values):
-    if not os.path.isdir(os.path.dirname(SETTINGS)):
-        return False
-    data = {}
-    if os.path.exists(SETTINGS):
-        shutil.copy(SETTINGS, SETTINGS + ".bak-langfuse")
+def load_settings():
+    if not os.path.exists(SETTINGS):
+        return {}
+    try:
         with open(SETTINGS) as f:
             data = json.load(f)
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("env", {}), dict):
+        die(f"not a JSON object (or its env is not), left unchanged: {SETTINGS} — nothing saved")
+    return data
+
+
+def save_settings(data, values):
+    if not os.path.isdir(os.path.dirname(SETTINGS)):
+        return False
+    if os.path.exists(SETTINGS):
+        shutil.copy(SETTINGS, SETTINGS + ".bak-langfuse")
     data.setdefault("env", {}).update(values)
-    write_private(SETTINGS, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    tmp = f"{SETTINGS}.tmp.{os.getpid()}"
+    write_private(tmp, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    if os.path.exists(SETTINGS):
+        shutil.copymode(SETTINGS, tmp)
+    os.replace(tmp, SETTINGS)
     return True
 
 
@@ -134,13 +148,14 @@ def main():
         sk = dialog("Secret Key (sk-lf-...)", f"Langfuse: {alias}")
     if not (pk.startswith(PREFIX["pk"]) and sk.startswith(PREFIX["sk"])):
         die("key format mismatch (pk-lf- / sk-lf-)")
+    settings = load_settings()
 
     host, projects = find_host(pk, sk)
     if not host:
         die("authentication failed in every region — nothing saved (staged keys kept for retry)")
     values = {f"LANGFUSE_PUBLIC_KEY{suffix}": pk, f"LANGFUSE_SECRET_KEY{suffix}": sk,
               f"LANGFUSE_HOST{suffix}": host}
-    targets = [name for name, ok in (("~/.claude/settings.json", save_settings(values)),
+    targets = [name for name, ok in (("~/.claude/settings.json", save_settings(settings, values)),
                                      ("secrets.env", save_secrets(values))) if ok]
     for ext in (".pk", ".sk"):
         if os.path.exists(stage + ext):

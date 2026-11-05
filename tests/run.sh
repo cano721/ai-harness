@@ -5129,6 +5129,10 @@ LF_ERR="$(lf rest DELETE /api/public/datasets/x --yes 2>&1)"; LF_RC=$?
 assert_eq "2" "$LF_RC" "REST DELETE is blocked"
 LF_ERR="$(lf rest POST /api/public/comments 2>&1)"; LF_RC=$?
 assert_eq "2" "$LF_RC" "REST write without --yes is blocked"
+LF_ERR="$(lf call listTraces '{}' 2>&1)"; LF_RC=$?
+assert_eq "1" "$LF_RC" "unreachable host exits 1"
+assert_contains "$LF_ERR" "cannot reach http://127.0.0.1:9" "unreachable host is reported without a traceback"
+if grep -q "Traceback" <<<"$LF_ERR"; then fail "unreachable host leaks a Python traceback"; fi
 LF_ERR="$(lf -p missing-proj tools 2>&1)"; LF_RC=$?
 assert_eq "2" "$LF_RC" "unknown alias stops instead of using the default keys"
 assert_contains "$LF_ERR" "checkout-bot" "unknown alias lists registered aliases"
@@ -5157,6 +5161,17 @@ for bad in Bad_Alias -lead 'a b' '../x'; do
   assert_contains "$LF_ERR" "alias:" "register explains the alias rule for '$bad'"
 done
 [[ ! -e "$LF_T/data/langfuse-staging" ]] || fail "rejected alias leaves no staging directory"
+mkdir -p "$LF_T/data/langfuse-staging"
+printf 'pk-lf-x' >"$LF_T/data/langfuse-staging/bad-settings.pk"
+printf 'sk-lf-x' >"$LF_T/data/langfuse-staging/bad-settings.sk"
+printf '[]\n' >"$LF_T/home/.claude/settings.json"
+set +e
+LF_ERR="$(register bad-settings 2>&1)"; LF_RC=$?
+set -e
+assert_eq "1" "$LF_RC" "register stops when settings.json is not a JSON object"
+assert_contains "$LF_ERR" "not a JSON object" "register names the unusable settings file"
+assert_eq "[]" "$(<"$LF_T/home/.claude/settings.json")" "register leaves a non-object settings.json unchanged"
+[[ -e "$LF_T/data/langfuse-staging/bad-settings.sk" ]] || fail "register keeps staged keys when it stops before saving"
 pass "langfuse catalog skill installs with scripts and enforces risk classes offline"
 
 # design-system-builder는 플러그인 전역 Skill이다: 프로젝트에 파일을 깔지 않고, 만든 규칙 문서가 design-audit의 입력 계약이 된다.

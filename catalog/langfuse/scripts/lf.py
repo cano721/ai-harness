@@ -95,6 +95,8 @@ def http(method, url, auth, body=None, timeout=60):
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
         die(f"HTTP {e.code} {method} {url}\n{raw[:2000]}", 1)
+    except (urllib.error.URLError, OSError) as e:
+        die(f"cannot reach {url}: {getattr(e, 'reason', e)} (check LANGFUSE_HOST)", 1)
     if raw.startswith("event:") or raw.startswith("data:"):
         raw = "\n".join(l[5:].strip() for l in raw.splitlines() if l.startswith("data:"))
     try:
@@ -229,7 +231,10 @@ def main():
         except ValueError as e:
             die(f"arguments must be JSON: {e}")
         res = mcp(host, auth, "tools/call", {"name": a.tool, "arguments": args})
-        texts = [x.get("text", "") for x in (res or {}).get("content", []) if x.get("type") == "text"]
+        if not isinstance(res, dict):
+            emit(res, a.max_str)
+            sys.exit(1)
+        texts = [x.get("text", "") for x in res.get("content", []) if x.get("type") == "text"]
         payload = texts[0] if len(texts) == 1 else texts
         if isinstance(payload, str):
             try:
@@ -237,7 +242,7 @@ def main():
             except ValueError:
                 pass
         emit(payload, a.max_str)
-        if res and res.get("isError"):
+        if res.get("isError"):
             sys.exit(1)
     elif a.cmd == "rest":
         if a.method != "GET" and not a.yes:
