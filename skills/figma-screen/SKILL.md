@@ -22,6 +22,7 @@ Run the checks in `figma-mcp.md`. Then find two inputs.
 |---|---|---|
 | **Figma library** | Rule document `## 메타` → `Figma 라이브러리`; else the library URL the user gives. Its components, variables, and styles must import by key into the target file | Stop. Offer `design-system-builder` (Figma output from code tokens). Do not draw with raw values instead. |
 | **Rule document** | The path the user gives; else `.ai-harness/docs/frontend.md`/`ui.md` `## 디자인 점검`; else `docs/design-system.md`, `DESIGN.md` | If the library exists but no document does, offer to extract a `draft` document from the library and the spec's existing screens with `design-system-builder` ("From a mockup"; a Figma kit is the value source, so the token-file line says so). Score against it and say every score is against a draft. |
+| **Spec** | The requirement document or frame the user gives | If it cannot be read (permission, tool-call limit), stop and say so. A copy the user or an earlier run saved locally may stand in only when the user agrees; name it in the report. |
 
 Answer in the language of the request.
 
@@ -33,7 +34,7 @@ Write a short brief and show it. Ask at most three questions, each with a recomm
 - **Siblings** from `## 형제 목록`. Look for their frames in the target file, then in the spec's file (planning files often hold the neighboring screens), then the code reference screen. The new screen matches them in the places the list names.
 - **Mode** for each library collection with several modes (theme or brand), from the rule document or the spec.
 - **Content and data** exactly as the requirement states. Where it is silent, use the fewest elements that make the screen work and list each as `스펙 미정`.
-- **States**: default, plus every state the requirement or screen class implies — empty, loading, error, no permission, long content. Each becomes its own frame. If the library has nothing made for that state (loading needs a skeleton, spinner, or progress component; an empty image placeholder reads as "no image", not "loading"), do not invent one: skip that state, say why, and list what the library would need.
+- **States**: default, plus every state the requirement or screen class implies — empty, loading, error, no permission, long content. Each becomes its own frame. If the library has nothing made for that state (loading needs a skeleton, spinner, progress component, or an illustration the library made for loading; an empty image placeholder reads as "no image", not "loading"), do not invent one: skip that state, say why, and list what the library would need.
 - **Library mapping**: for each element, the library component and variant it uses. An element with no match is a **gap** (step 3). A content asset the library does not hold (logo, photo) is not a gap — see step 3.
 - **The spec as a mockup**: when the spec frame is already a high-fidelity screen, note the differences you will make on purpose (library version, values off the scale) so they reach the report's difference table.
 - **Viewport** from `## 메타`/`## 반응형`, or the spec frame's width.
@@ -68,7 +69,7 @@ build → independent audit → fix violations, highest deduction first → inde
 
   It does not see your reasoning and must not write to any file. If the host cannot start one, audit yourself and mark every score `자기 채점` in the report.
 - Run the audit exactly as the rubric says — same axes, points, units, and output contract. Do not adjust the rubric to the screen.
-- **Stop when the verdict is 통과 and no axis is below half or `미확인`.** (The rubric's own thresholds decide 통과.) An axis left `미확인` — siblings unreadable, a rule section missing — means the screen has not passed. Before stopping, fix any remaining violation that needs no new raw spacing value, no requirement change, and no rule decision, then audit again if anything changed.
+- **Stop when the verdict is 통과 and no axis is below half or `미확인`.** (The rubric's own thresholds decide 통과.) An axis left `미확인` — siblings unreadable, a rule section missing — means the screen has not passed. Before stopping, fix every remaining violation that needs no new raw spacing value, no requirement change, and no rule decision — all of them in one pass — then audit once more if anything changed.
 - **At most three audits**, the clean-up audit included. If the third still fails, stop and report the remaining violations with their evidence and why each was not fixed. A round that could not finish (tool-call limit, tool error) counts toward the three; report it as `불성립` with the error. Any fix made after the last finished audit is reported as unverified.
 - Never raise the score by removing what the requirement asked for, by inventing library components, by adding off-scale spacing, or by editing the library. A rule-vs-requirement conflict goes to the user as a question, not a silent choice.
 - `규칙 결정 필요` items (proposals, token drift, structure that differs from siblings because the requirement says so) do not block the stop condition; they go to the report.
@@ -78,7 +79,7 @@ build → independent audit → fix violations, highest deduction first → inde
 End with, in this order:
 
 1. Link to the section (`figma.com/design/<fileKey>/…?node-id=…`), and the frames created or changed.
-2. The final audit in the rubric's output contract, plus each round's score in one line (`1차 78 → 2차 88 → 3차 93`), and whether the audits were independent.
+2. The final audit in the rubric's output contract, plus each round's score in one line (`1차 78 → 2차 88 → 3차 93`), and whether the audits were independent. `규칙 결정 필요` items are the union across all rounds, not only the last one.
 3. **Differences from the spec mockup** (when the spec is a mockup), using the design handoff kinds unchanged — Matched, Adjusted, Missing, Conflicting, Added without approval — plus a separate list of spec elements the library has no component or variable for.
 4. Gaps proposed as `제안 / …` frames, `자산 필요 / …` placeholders, skipped states with the reason, and `스펙 미정` choices.
 5. Raw values that remain and why; any read-only script run on another file.

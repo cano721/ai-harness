@@ -6,19 +6,24 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## v0.56.0 (2026-11-05)
+## Unreleased
+
 ### 새 기능
 
-- **기본 스킬 카탈로그에 `langfuse` 추가** — Langfuse를 보려면 MCP 서버를 따로 등록하거나(도구 정의 약 95개가 매 세션 컨텍스트를 차지) API를 직접 짜야 했습니다. 이제 `/ai-harness:setup`에서 고르면 설치·프로젝트 키 저장·연결 확인(키가 가리키는 프로젝트 이름, 401이면 키/리전 불일치 안내)까지 되고, 스킬은 Langfuse 공식 MCP 도구를 서버 등록 없이 스크립트로 불러 trace·비용·지연·프롬프트·점수·데이터셋을 조회합니다. 쓰기 도구는 `--yes`, 삭제·덮어쓰기 도구는 `--allow-destructive` 없이는 스크립트가 막습니다. 키는 프로젝트 단위이고, 다른 프로젝트는 스킬의 `register.py <별칭>`으로 키를 대화에 남기지 않고 더합니다. Python 3(표준 라이브러리)이 필요합니다.
 - **디자이너용 Figma 흐름** — 디자인 기능이 전부 코드·스토리북 산출물 기준이라, 디자이너가 디자인 시스템으로 Figma에서 시안을 만들거나 시안이 규칙에 맞는지 확인할 수단이 없었습니다. Figma 원격 MCP의 쓰기 도구(`use_figma`)를 써서 세 가지를 더했습니다. (1) `/design-system-builder`가 요청 시 토큰 파일을 원본으로 Figma 라이브러리를 만듭니다 — 토큰 계층별 Variables 컬렉션(테마=mode, semantic은 primitive alias, scope·Web code syntax), 타입 역할별 Text style, 반복 컴포넌트의 variant 컴포넌트, 규칙 요약 페이지. 변수 이름은 토큰 이름에서 기계적으로 정해지고(`--color-text-muted` → `color/text-muted`), 다시 실행하면 이름으로 갱신하며 Figma에서 바뀐 값은 어긋남 표로 보여 주고 덮어쓸지 묻습니다. (2) `design-audit`이 Figma 프레임도 같은 축·배점·출력 계약으로 채점합니다 — 바인딩 안 된 값·detach 인스턴스·라이브러리 밖 컴포넌트를 기존 축에 귀속하고, 위치는 `프레임 › 레이어 (node-id)`로 적습니다. (3) 새 전역 스킬 `/figma-screen`이 기획을 라이브러리 인스턴스와 Variables만으로 상태별 Figma 프레임으로 그리고, `design-audit` 기준 채점 → 감점 순 수정 루프를 통과까지(최대 3회) 돕니다. 채점은 그린 에이전트가 아니라 독립 에이전트가 맡고(결정 목록만 넘기고 추론은 넘기지 않음), Figma 공식 스킬과 규칙이 부딪히면(`html_to_figma` 시작, 로컬 컴포넌트, 이미지 생성) ai-harness 규칙을 따릅니다. 이미 Figma에 있는 디자인 킷에서 규칙 문서 draft를 뽑는 경로도 `/design-system-builder`에 생겼습니다. drafts는 View seat로도 쓸 수 있지만 View seat는 MCP 호출 한도가 작아 채점 루프를 끝까지 못 갈 수 있어 미리 알립니다. 연결이나 권한이 없으면 다른 방식으로 대신 만들지 않고 멈춥니다. (#225)
-
-### 버그 수정
-
-- **langfuse 스크립트가 연결 실패·잘못된 설정 파일에서 traceback으로 죽지 않음** — `LANGFUSE_HOST`가 틀렸거나 네트워크가 끊기면 `lf.py`가 Python traceback을 쏟았습니다. 이제 닿지 못한 주소와 `LANGFUSE_HOST` 확인 안내 한 줄로 끝납니다. `register.py`는 `~/.claude/settings.json`이 JSON 객체가 아니면 리전 탐색 전에 멈추고 파일을 건드리지 않으며, 저장은 임시 파일을 거쳐 원자적으로 바꿔 중간에 끊겨도 설정 파일이 비지 않습니다.
 
 ### 업데이트 후 해야 할 일
 
 - `design-system` stack을 쓰는 저장소는 `/harness-init --sync`로 `design-audit`(Figma 프레임 채점 절)과 새 `design-audit/references/figma-mcp.md`를 받으세요. `ui`·`frontend-team` stack 저장소도 디자인 스킬 지도(`design-skills.md`)에 `figma-screen` 행이 추가됐으니 `--sync`하세요. (#225)
+
+## v0.56.0 (2026-11-05)
+### 새 기능
+
+- **기본 스킬 카탈로그에 `langfuse` 추가** — Langfuse를 보려면 MCP 서버를 따로 등록하거나(도구 정의 약 95개가 매 세션 컨텍스트를 차지) API를 직접 짜야 했습니다. 이제 `/ai-harness:setup`에서 고르면 설치·프로젝트 키 저장·연결 확인(키가 가리키는 프로젝트 이름, 401이면 키/리전 불일치 안내)까지 되고, 스킬은 Langfuse 공식 MCP 도구를 서버 등록 없이 스크립트로 불러 trace·비용·지연·프롬프트·점수·데이터셋을 조회합니다. 쓰기 도구는 `--yes`, 삭제·덮어쓰기 도구는 `--allow-destructive` 없이는 스크립트가 막습니다. 키는 프로젝트 단위이고, 다른 프로젝트는 스킬의 `register.py <별칭>`으로 키를 대화에 남기지 않고 더합니다. Python 3(표준 라이브러리)이 필요합니다.
+
+### 버그 수정
+
+- **langfuse 스크립트가 연결 실패·잘못된 설정 파일에서 traceback으로 죽지 않음** — `LANGFUSE_HOST`가 틀렸거나 네트워크가 끊기면 `lf.py`가 Python traceback을 쏟았습니다. 이제 닿지 못한 주소와 `LANGFUSE_HOST` 확인 안내 한 줄로 끝납니다. `register.py`는 `~/.claude/settings.json`이 JSON 객체가 아니면 리전 탐색 전에 멈추고 파일을 건드리지 않으며, 저장은 임시 파일을 거쳐 원자적으로 바꿔 중간에 끊겨도 설정 파일이 비지 않습니다.
 
 ## v0.55.2 (2026-11-04)
 ### 버그 수정

@@ -2252,6 +2252,8 @@ assert_contains "$FIGMA_MCP" "**Per-node facts come from a read-only \`use_figma
 assert_contains "$FIGMA_MCP" "**Sizing is not a token value.**" "sizing to match siblings is not a raw-value violation"
 assert_contains "$FIGMA_MCP" "**A View seat has a small MCP tool-call limit**" "Figma preflight warns that a View seat cannot finish the loop"
 assert_contains "$FIGMA_MCP" "never swap in a nearby variable" "a value with no variable keeps the spec value"
+assert_contains "$FIGMA_MCP" "**The library's fonts load in the target.**" "every Figma writer checks library fonts before writing text"
+assert_contains "$FIGMA_MCP" "**Hidden layers are not part of the design.**" "hidden spec layers are not read as differences"
 assert_contains "$AUDIT" "## Figma 프레임이 대상일 때" "design-audit scores Figma frames"
 assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "references/figma-mcp.md" "design-audit reads the Figma MCP rules"
 assert_contains "$(<"$ROOT/templates/design-audit/SKILL.md")" "Figma 파일에 점수를 남기지 않는다" "design-audit keeps scores out of the Figma file"
