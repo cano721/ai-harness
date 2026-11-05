@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **langfuse 스킬이 observation 조회 기간 14일 제한을 안내** — `listObservations`는 Langfuse가 시간 범위를 최대 14일(336시간)로 제한하는데 문서에 없어, 30일·90일처럼 넓게 조회하면 거부되고 결과가 없는 것처럼 보일 수 있었습니다. 이제 스킬이 긴 기간을 14일 구간으로 나눠 이어 조회하고, 집계만 필요하면 `queryMetrics`로 한 번에 받습니다(30일 범위 확인).
+
 ## v0.58.0 (2026-11-05)
 ### 새 기능
 
