@@ -2158,6 +2158,8 @@ assert_contains "$LANDING_VERIFY" "Each review runs in a new reviewer that did n
 assert_contains "$LANDING_VERIFY" "It drops its hover and pressed changes" "landing-page disabled primary action does not react"
 assert_contains "$LANDING_VERIFY" "reported as not independently reviewed" "landing-page fixes after the last review are labeled"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "one does not replace the next" "landing-page reference sources are cumulative"
+assert_contains "$(cat skills/landing-page/references/direction.md)" "Look at the pages, not only their text" "landing-page references are seen, not only read"
+assert_contains "$(cat skills/landing-page/references/direction.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"
 assert_contains "$LANDING_VERIFY" "**Needs the user**" "landing-page stops looping on what only the user can supply"
 assert_contains "$LANDING_VERIFY" "**When the only majors left are \`사용자 입력 필요\` items, stop.**" "the loop stops when only user input remains"
 assert_contains "$LANDING_VERIFY" "the \`사용자 입력 필요\` list so far" "the reviewer gets the user-input list"

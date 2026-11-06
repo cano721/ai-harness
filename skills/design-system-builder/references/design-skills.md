@@ -19,7 +19,7 @@ This file is the single source. ai-harness keeps byte-identical copies next to e
 | Job | Lead | Supporting (lane) |
 |---|---|---|
 | Data report, metrics dashboard, admin or analytics screen — including a single-file HTML report | `impeccable` | `dataviz` (chart form, stat tiles, chart palette validation) · `ui-ux-pro-max` (palette and type lookup, only when the project has no tokens) |
-| Landing, introduction, marketing, launch page | `landing-page` | `design-taste-frontend` (direction candidates in the direction step only) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
+| Landing, introduction, marketing, launch page | `landing-page` | `design-taste-frontend` (references and direction candidates in the direction step only) · `awesome-design` (the specification of a site the user names as a reference; never values to import) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
 | Draw or extend a product screen in Figma from the design system library | `figma-screen` | Figma's own MCP skills (`figma-use` and what it requires) for Plugin API patterns only — ai-harness rules decide what is written (`figma-mcp.md`) |
 | Create or extend a design system | `design-system-builder` | its own `references/theme-and-components.md` (theme switching and component structure, absorbed from `design-system-patterns`) · `awesome-design` (reference specifications to study, never to copy) |
 | Polish an existing product screen | `impeccable` | `emil-design-eng` (finishing details) · `motion` (Motion library API) |
