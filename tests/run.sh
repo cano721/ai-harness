@@ -1538,6 +1538,79 @@ assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LO
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
 pass "merge policy: conditions from the manifest, merge by the runner, post-merge checks"
 
+# 개인 자동화 단계(#242): 병합 여부는 사용자 config의 단계가, 팀 통제는 호스트 브랜치 보호가 정한다. 저장소 merge_policy는 사실만 준다.
+DL_DATA="$DRIVER_TMP/delivery-data"
+mkdir -p "$DL_DATA"
+delivery_run() { # scenario git_policy harness-jq-filter config-text [host/owner/repo] → 사용자 config를 두고 approval auto로 실행한다
+  new_driver_repo "$1"
+  with_policy "$2" auto
+  as_host_repo "${5:-github.com/acme/app}"
+  jq "$3" "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" commit -qam "repository facts"
+  printf '%s\n' "$4" >"$DL_DATA/config"
+  HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
+}
+DL_FACTS='.project_id = "acme-app" | .merge_policy = {base: "main", deploy_check_cmd: "true", smoke_cmd: "true"}'
+gh_merges() { grep -c '^gh merge' "$FAKE_LOG" || true; }
+export FAKE_PROTECTION=classic
+delivery_run dl_pr merge ".merge_policy = $MP_BASIC" 'HM_DELIVERY_LEVEL=pr'
+assert_eq "0:done:0:pr-only" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git)" "level pr stops at the pull request even when the repository says git_policy merge"
+[[ "$(run_state '[.history[].to] | join(",")')" != *merge* ]] || fail "level pr never reaches the merge node"
+assert_contains "$DRIVER_OUT" "delivery level pr: the personal delivery level stops at the pull request" "done says the personal level stopped at the PR"
+delivery_run dl_merge pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL="merge"  # 내 단계'
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "level merge merges a pr-only repository's pull request"
+assert_eq "target_ci" "$(run_state '.post_merge | keys_unsorted | join(",")')" "level merge verifies up to the target branch CI, not deploy or smoke"
+assert_eq "1:1:main" "$(run_state '"\(.protection.approvals):\(.protection.checks):\(.protection.base)"')" "the merge node read the base branch protection from the host"
+assert_contains "$(<"$FAKE_LOG")" "gh api repos/acme/app/branches/main/protection" "classic branch protection is read for the base branch"
+assert_eq "human_approval,remote_ci,no_conflict,not_draft:1:squash" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.min_approvals):\(.policy.merge.method)"')" "without personal merge settings or repository conditions every condition applies"
+delivery_run dl_deploy pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=deploy'
+assert_eq "0:done:target_ci,deploy,smoke" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy goes on to the repository's deploy and smoke checks"
+delivery_run dl_deploy_nocmd pr-only '.merge_policy = {base: "main"}' 'HM_DELIVERY_LEVEL=deploy'
+assert_eq "0:done:target_ci" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy without deploy or smoke commands stops after the merge"
+assert_contains "$DRIVER_OUT" "delivery level deploy: the repository has no deploy or smoke check" "the result says why deploy was not verified"
+delivery_run dl_repo_level pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=pr' 'HM_DELIVERY_LEVEL_REPOS="other=deploy, acme-app=merge"' 'HM_MERGE_REQUIRE="human_approval remote_ci"' 'HM_MERGE_METHOD=merge')"
+assert_eq "0:done:1:HM_DELIVERY_LEVEL_REPOS:acme-app" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery.source)" "a per-repository level overrides the default level"
+assert_eq "human_approval,remote_ci:merge" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.method)"')" "personal merge conditions and method come from the user config"
+assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the personal merge method is used"
+export FAKE_PROTECTION=ruleset
+delivery_run dl_ruleset pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+assert_eq "30:merge:0" "$DRIVER_RC:$(run_state .node):$(gh_merges)" "the host's required approval count is a floor over the personal one"
+assert_contains "$DRIVER_OUT" "human approval: 1 of 2" "the runner waits for the approvals the host ruleset requires"
+for p in none:"has no host branch protection that requires an approving review" checks_only:"has no host branch protection that requires an approving review" \
+  denied:"cannot read the branch protection of main from the host"; do
+  export FAKE_PROTECTION="${p%%:*}"
+  delivery_run "dl_prot_${p%%:*}" pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+  assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "protection ${p%%:*}: a personal level does not merge into an unprotected or unreadable branch"
+  assert_contains "$DRIVER_OUT" "${p#*:}" "protection ${p%%:*}: the person is told why"
+done
+export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='token'
+export FAKE_PROTECTION=bb_glob
+delivery_run dl_bb_glob pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .protection.approvals)" "a Bitbucket branch restriction matching the base by glob allows the merge"
+export FAKE_PROTECTION=bb_model
+delivery_run dl_bb_model pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "30:2:0" "$DRIVER_RC:$(run_state .protection.approvals):$(run_state .protection.checks)" "a branching-model restriction applies to the development branch; other patterns do not"
+export FAKE_PROTECTION=bb_denied
+delivery_run dl_bb_denied pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "unreadable Bitbucket branch restrictions are not merged over"
+unset ATLASSIAN_USER BITBUCKET_API_TOKEN
+export FAKE_PROTECTION=none
+delivery_run dl_legacy merge ".merge_policy = $MP_BASIC" ''
+assert_eq "0:done:1:null:0" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery):$(grep -c '^gh api' "$FAKE_LOG" || true)" "without a personal level the repository merge_policy applies as before, without a protection check"
+export FAKE_PROTECTION=classic
+HM_INTERNAL_SESSION=1 delivery_run dl_unattended pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run does not merge on a personal level either"
+assert_contains "$DRIVER_OUT" "merge: not done — unattended run" "the unattended outcome says the merge was left to a person"
+unset FAKE_PROTECTION
+delivery_run dl_bad pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=ship'
+assert_eq "2" "$DRIVER_RC" "an unknown delivery level does not start"
+assert_contains "$DRIVER_OUT" "must be pr, merge, or deploy" "the error names the levels"
+delivery_run dl_bad_require pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=merge' 'HM_MERGE_REQUIRE=lgtm')"
+assert_eq "2" "$DRIVER_RC" "invalid personal merge conditions do not start"
+assert_contains "$DRIVER_OUT" "HM_MERGE_REQUIRE" "the error names the personal setting"
+rm -f "$DL_DATA/config"
+pass "delivery level: personal stage, repository facts, host branch protection"
+
 # review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
 review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다
   new_driver_repo "$1"

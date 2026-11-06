@@ -6,6 +6,15 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.61.0 (2026-11-06)
+### 새 기능
+
+- **워크플로 자동화 단계를 개인 설정으로** — 에이전트가 PR 뒤 어디까지 스스로 가는지(PR까지 / 병합까지 / 배포·검증까지)가 저장소 `harness.json` 한 곳에만 있어서, 한 사람이 저장소를 "병합까지"로 올리면 모두의 에이전트가 병합했고 바꾸려면 팀 PR이 필요했습니다. 이제 `~/.ai-harness/config`의 `HM_DELIVERY_LEVEL=pr|merge|deploy`(저장소별은 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>"`)가 병합 여부를 정하고, 병합 조건 최소치·방식은 `HM_MERGE_REQUIRE`·`HM_MERGE_MIN_APPROVALS`·`HM_MERGE_METHOD`, 기준 브랜치·배포·스모크 명령은 저장소 `merge_policy`(저장소 사실)에서 읽습니다. 팀 통제는 PR 호스트의 브랜치 보호에 맡겨, 러너가 병합 직전에 기준 브랜치 보호(GitHub 규칙 세트·브랜치 보호, Bitbucket branch restrictions)를 읽고 필수 승인이 없거나 읽지 못하면 병합하지 않고 사람에게 넘깁니다. 호스트의 필수 승인 수·필수 체크는 병합 조건의 하한으로 더해집니다. `deploy`인데 저장소에 배포·스모크 명령이 없으면 병합까지 하고 결과에 밝힙니다. `/ai-harness:setup`에서 고를 수 있고, `/harness-init`은 병합 여부 대신 병합에 쓸 저장소 사실만 묻습니다. 개인 설정이 없으면 기존 `git_policy`·`merge_policy` 동작 그대로이고, 무인 실행은 이 설정으로 병합하지 않습니다. (#242)
+
+### 업데이트 후 해야 할 일
+
+- 병합을 맡기려면 `/ai-harness:setup`에서 자동화 단계를 고르고, 기준 브랜치에 호스트 보호(필수 승인 1 이상)가 걸려 있는지 확인하세요. 러너 문구가 바뀌었으므로 하네스 저장소는 `/harness-init --sync`로 `workflow-driver.sh`와 어댑터를 받으세요.
+
 ## v0.60.0 (2026-11-05)
 ### 새 기능
 
