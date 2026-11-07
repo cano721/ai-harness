@@ -335,7 +335,8 @@ if (IMPS.length) {
     const judged = r.before_hits != null;
     const rate = (h, n) => n ? h / n : 0;
     const bRate = judged ? rate(r.before_hits, x.before.observed) : null;
-    const aRate = judged ? rate(r.after_hits, x.after.observed) : null;
+    const aObs = r.observed != null ? r.observed : x.after.observed;
+    const aRate = judged ? rate(r.after_hits, aObs) : null;
     const rateRow = (who, h, n, val, color, trunc) => el("div", { class: "rate" },
       el("span", { class: "who" }, who),
       el("span", { class: "track" }, el("span", { class: "fill" + (val ? "" : " zero"), style: "width:" + Math.round((val || 0) * 100) + "%; background: var(" + color + ")" })),
@@ -350,7 +351,8 @@ if (IMPS.length) {
       judged ? el("div", { class: "rates", role: "group", "aria-label": "반영 전후 발생 비율" },
         rateRow(x.before.basis === "batch" ? "근거 세션" : "반영 전 30일", r.before_hits, x.before.observed, bRate, "--context", r.before_truncated),
         r.window_hits != null && x.before.window ? rateRow("반영 전 30일", r.window_hits, x.before.window.observed, rate(r.window_hits, x.before.window.observed), "--context", r.window_truncated) : null,
-        rateRow("반영 뒤", r.after_hits, x.after.observed, aRate, "--series", r.after_truncated)) : null,
+        rateRow("반영 뒤", r.after_hits, aObs, aRate, "--series", r.after_truncated)) : null,
+      judged && r.as_of ? el("p", { class: "expected" }, r.as_of, "까지 맞춘 결과예요", r.unjudged > 0 ? " · 그 뒤 정리된 세션 " + r.unjudged + "개는 아직 맞춰 보지 않았어요" : "", ".") : null,
       judged && r.baseline === "batch" && x.before.basis === "batch" ? el("p", { class: "expected" }, "근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.") : null,
       r.label && x.summary ? el("p", { class: "expected" }, x.summary) : null,
       x.expected ? el("p", { class: "expected" }, "harvest가 남긴 기대: ", x.expected) : null,

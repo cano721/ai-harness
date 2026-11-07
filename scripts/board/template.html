@@ -208,6 +208,40 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 #sdlg .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
 #sdlg fieldset { border: 0; padding: 0; margin: 0; }
 #sdlg [hidden] { display: none !important; }
+.iwrap { min-width: 0; max-width: 1100px; }
+.iscroll { overflow-x: auto; }
+.irepo { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; max-width: 1100px; margin-bottom: 14px; }
+.irepo .ihead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.irepo .ihead b { font-size: 15px; }
+.irepo .ihead .meta { flex: 1; min-width: 0; }
+.irepo .ihead .warn, .imeta .warn { color: var(--human); }
+.irepo .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.irepo .acts a, .irepo .acts button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 9px; text-decoration: none; cursor: pointer; }
+.irepo .acts button:disabled { opacity: .6; cursor: progress; }
+.isum { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.isum th, .isum td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.isum th:first-child, .isum td:first-child { text-align: left; white-space: normal; min-width: 9em; }
+.isum th { font-size: 11px; color: var(--muted); font-weight: 600; }
+.isum td.trend { text-align: left; }
+.spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; vertical-align: middle; }
+.spark span { width: 6px; background: var(--run); border-radius: 1px; min-height: 1px; opacity: .85; }
+.spark span.pre { background: var(--muted); opacity: .5; }
+.spark span.gap { background: transparent; border-bottom: 1px dashed var(--line); }
+.isec { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; }
+.icards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 8px; }
+.icard { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); font-size: 13px; min-width: 0; }
+.icard .itop { display: flex; gap: 8px; align-items: flex-start; }
+.icard .itop b { flex: 1; min-width: 0; word-break: break-word; }
+.icard p { margin: 4px 0 0; color: var(--muted); font-size: 12px; word-break: break-word; }
+.icard p.ifacts { color: var(--text); }
+.icard a { color: var(--run); }
+.icard details { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.icard details ul { margin: 4px 0 0; padding-left: 16px; }
+.vbadge { flex: none; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.vbadge.gone, .vbadge.reduced { color: var(--done); border-color: var(--done); }
+.vbadge.recurred { color: var(--human); border-color: var(--human); }
+.icrit { font-size: 12px; color: var(--muted); max-width: 1100px; margin: 0 0 14px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; }
+.icrit b { color: var(--text); font-weight: 600; }
 #toast { position: fixed; right: 20px; bottom: 20px; max-width: 420px; padding: 10px 14px; border-radius: 10px;
   background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 13px; }
 #toast[data-ok="true"] { border-left: 3px solid var(--done); }
@@ -311,6 +345,11 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       desc: '에이전트가 PR 뒤 어디까지 스스로 갈지는 내 설정이라 바로 바뀝니다(다른 사람에게 영향 없음, 고르지 않으면 PR까지). 저장소별 단계가 내 기본보다 우선합니다. 저장소 harness.json은 에이전트가 커밋·PR을 해도 되는지와 기준 브랜치·배포·스모크 명령만 정하고 PR로 바꿉니다. 병합은 호스트가 기준 브랜치에 필수 승인을 걸어 둔 저장소에서만 일어납니다.',
       cols: [],
     },
+    impact: {
+      label: '하네스 효과', sub: '개선과 재발 여부', custom: true,
+      desc: '하네스가 고친 것(/harvest가 반영한 개선)이 그 뒤에 다시 나왔는지와, 설치 전후 사람 교정·프로젝트 사실 부족·가드 차단을 저장소별로 봅니다. 집계는 /ai-harness:harness-impact와 같은 impact.sh compare를 뒤에서 하루 한 번 돌린 결과입니다. 읽기 전용 — 보드는 개선을 되돌리거나 하네스를 고치지 않습니다.',
+      cols: [],
+    },
   };
   const KIND = { harvest: 'harvest', 'harvest-global': 'harvest 전역', sync: 'sync', runner: '워크플로', rule: '규칙', schedule: '스케줄', agent: '대화형', bg: '백그라운드' };
   const DRAWER_ACTIONS = ['view', 'send', 'cleanup'];
@@ -324,7 +363,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   };
 
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } };
-  let view = ['harness', 'settings'].includes(store('hb-view')) ? store('hb-view') : 'work';
+  let view = ['harness', 'settings', 'impact'].includes(store('hb-view')) ? store('hb-view') : 'work';
   let filter = 'all';
   let openIdle = store('hb-idle') === '1';
 
@@ -761,6 +800,15 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
         b.onclick = () => { view = key; filter = 'all'; store('hb-view', key); renderAll(); };
         views.append(b); continue;
       }
+      if (key === 'impact') {
+        const rec = (idata?.repos || []).reduce((n, r) => n + (r.improvements || []).filter((x) => x.result?.verdict === 'recurred').length, 0);
+        const b = el('button', 'nav'); b.setAttribute('aria-current', String(key === view));
+        const lab = el('span', 'label', v.label); lab.append(el('span', 'sub', v.sub));
+        b.append(lab, el('span', 'badge', String(rec || (idata ? idata.repos.length : '·'))));
+        b.title = rec ? `재발 ${rec}건` : '저장소 수';
+        b.onclick = () => { view = key; filter = 'all'; store('hb-view', key); renderAll(); };
+        views.append(b); continue;
+      }
       const items = inView(key);
       const human = items.filter((i) => i.state === 'needs_human' || i.state === 'review').length;
       const active = items.filter((i) => !['done', 'idle'].includes(i.state)).length;
@@ -773,6 +821,16 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       views.append(b);
     }
     const box = document.getElementById('projects'); box.replaceChildren();
+    if (view === 'impact') {
+      for (const p of ['all', ...(idata?.repos || []).map((r) => r.name)]) {
+        const b = el('button', 'nav proj'); b.setAttribute('aria-current', String(p === filter));
+        b.append(el('span', 'label', p === 'all' ? '전체' : p));
+        b.onclick = () => { filter = p; renderAll(); };
+        box.append(b);
+      }
+      document.getElementById('foot').textContent = `갱신 ${new Date(data.generated_at).toLocaleTimeString('ko-KR')}${SERVER ? ' · 5초마다' : ' · 정적 파일'}`;
+      return;
+    }
     const items = inView(view);
     const counts = {};
     items.forEach((i) => { counts[i.project] = (counts[i.project] || 0) + (['done', 'idle'].includes(i.state) ? 0 : 1); });
@@ -788,6 +846,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 
   function renderBoard() {
     const v = VIEWS[view];
+    if (view === 'impact') return renderImpact();
     if (v.custom) return renderSettings();
     const items = inView(view).filter((it) => filter === 'all' || it.project === filter);
     document.getElementById('vtitle').textContent = v.label;
@@ -1024,10 +1083,157 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (res.ok) { await refresh(); loadSettings(true); }
   });
 
+  // ---- 하네스 효과 ----
+  // 판정 이름과 뜻은 /ai-harness:harness-impact 리포트(skills/harness-impact/report-template.html)와 같은 말을 쓴다.
+  const VERDICT = {
+    gone: ['사라짐', '반영 뒤 같은 유형이 다시 나오지 않았어요'],
+    reduced: ['줄어듦', '반영 뒤 같은 유형이 나오는 비율이 줄었어요'],
+    recurred: ['재발', '반영 뒤에도 같은 유형이 비슷하거나 더 자주 나왔어요'],
+    hold: ['판단 보류', '반영 뒤 정리된 세션이 적거나 반영 뒤 목록이 잘려 아직 판단하지 않아요'],
+    no_baseline: ['기준 없음', '근거 세션 정리에서 이 유형을 찾지 못해 비교할 기준이 없어요'],
+    unmatched: ['판정 안 함', '이 개선의 패턴을 아직 맞춰 보지 않았어요 — 그 저장소에서 /ai-harness:harness-impact를 돌리면 채워져요'],
+  };
+  const CHANGE = { add: '규칙 추가', remove: '규칙 제거', mixed: '추가·제거' };
+  let idata = null, ifetchedAt = 0, ibusy = false;
+  async function loadImpact(force) {
+    if (!SERVER || ibusy) return;
+    const pending = (idata?.repos || []).some((r) => r.state === 'running' || r.state === 'queued');
+    if (!force && idata && Date.now() - ifetchedAt < (pending ? 4000 : 60000)) return;
+    ibusy = true;
+    try { idata = await (await fetch('/impact?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' })).json(); ifetchedAt = Date.now(); } catch (e) {}
+    ibusy = false;
+    if (view === 'impact') { renderSidebar(); renderImpact(); }
+  }
+  const num = (v, unit) => (v == null ? '–' : `${v}${unit || ''}`);
+  const pct = (v) => (v == null ? '–' : `${Math.round(v * 100) / 100}%`);
+  function spark(weekly, key) {
+    const vals = weekly.map((w) => w[key]);
+    const max = Math.max(0, ...vals.filter((x) => x != null));
+    const s = el('span', 'spark'); s.setAttribute('role', 'img');
+    s.setAttribute('aria-label', weekly.map((w) => `${w.week} ${w[key] ?? '없음'}`).join(', '));
+    for (const w of weekly) {
+      const x = w[key];
+      const bar = el('span', x == null ? 'gap' : w.after_install ? null : 'pre');
+      bar.style.height = x == null ? '22px' : `${max ? Math.max(2, Math.round((x / max) * 22)) : 2}px`;
+      bar.title = `${w.week} 주${w.after_install ? '' : ' (설치 전)'} · ${x ?? '데이터 없음'}`;
+      s.append(bar);
+    }
+    return s;
+  }
+  function impCard(r, x) {
+    const res = x.result || {};
+    const [vl, vt] = VERDICT[res.verdict] || VERDICT.unmatched;
+    const c = el('div', 'icard');
+    const top = el('div', 'itop'); top.append(el('b', null, res.label || x.summary || '(요약 없음)'), el('span', 'vbadge ' + (res.verdict || 'unmatched'), vl));
+    c.append(top);
+    const meta = el('p');
+    meta.append(`${x.date || ''} 반영 · ${CHANGE[x.change] || x.change}`);
+    if (x.artifact) {
+      meta.append(' · ');
+      if (/^https?:\/\//.test(x.artifact)) { const a = el('a', null, prLabel(x.artifact)); a.href = x.artifact; a.target = '_blank'; a.rel = 'noopener noreferrer'; meta.append(a); }
+      else meta.append(x.artifact);
+    }
+    c.append(meta);
+    if (res.label && x.summary) c.append(el('p', null, x.summary));
+    if (x.expected) c.append(el('p', null, `기대효과: ${x.expected}`));
+    const judged = res.after_hits != null;
+    const facts = [`반영 뒤 관찰 ${num(x.observed_now)}세션`];
+    if (judged) facts.push(`같은 유형 재발 ${res.after_truncated ? '≥' : ''}${res.after_hits}세션 / ${res.observed}세션`);
+    if (judged) facts.push(`${res.baseline === 'window' ? '반영 전 30일' : '근거 세션'} ${res.baseline === 'window' ? res.window_hits : res.before_hits}세션 / ${res.baseline === 'window' ? x.window_observed : x.before_observed}세션`);
+    c.append(el('p', 'ifacts', facts.join(' · ')));
+    c.append(el('p', null, vt));
+    if (judged && res.as_of) c.append(el('p', null, `${res.as_of}까지 맞춘 결과${res.unjudged > 0 ? ` · 그 뒤 정리된 세션 ${res.unjudged}개는 아직 맞춰 보지 않음` : ''}`));
+    if (judged && res.baseline === 'batch' && x.basis === 'batch') c.append(el('p', null, '근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.'));
+    if (res.note) c.append(el('p', null, res.note));
+    const ex = [...(res.after_examples || []).map((e) => ['반영 뒤', e]), ...(res.before_examples || []).map((e) => ['근거', e])];
+    if (ex.length) {
+      const d = el('details'); d.append(el('summary', null, `맞춘 사례 ${ex.length}`));
+      const ul = el('ul'); for (const [side, e] of ex) ul.append(el('li', null, `${side} ${e.date} · ${e.summary}`));
+      d.append(ul); c.append(d);
+    }
+    return c;
+  }
+  function impactRepo(r) {
+    const box = el('section', 'irepo');
+    const head = el('div', 'ihead');
+    head.append(el('b', null, r.name));
+    const meta = el('span', 'meta');
+    const when = r.computed_at ? `${ago(r.computed_at)} 계산 (${r.cache_day})` : '';
+    if (r.state === 'running') meta.append(`계산 중 (${ago(r.running_since)} 시작)${when ? ` · 지난 결과: ${when}` : ''}`);
+    else if (r.state === 'queued') meta.append(`계산 대기${when ? ` · 지난 결과: ${when}` : ''}`);
+    else if (when) meta.append(when);
+    else if (r.state === 'none') meta.append('아직 계산하지 않음');
+    if (r.project && r.installed) meta.append(` · 설치 ${r.installed.date} · 비교 각 ${r.window_days}일`);
+    head.append(meta);
+    const acts = el('span', 'acts');
+    const rb = el('button', null, r.state === 'running' || r.state === 'queued' ? '계산 중…' : '다시 계산'); rb.type = 'button';
+    rb.disabled = r.state === 'running' || r.state === 'queued';
+    rb.onclick = async () => { rb.disabled = true; const res = await spost('/impact/refresh', { repo: r.repo }); toast(res.message, res.ok); loadImpact(true); };
+    acts.append(rb);
+    if (r.cache_day) { const a = el('a', null, '전체 리포트 열기'); a.href = `/impact/report?t=${encodeURIComponent(TOKEN)}&repo=${encodeURIComponent(r.repo)}`; a.target = '_blank'; a.rel = 'noopener'; acts.append(a); }
+    head.append(acts);
+    box.append(head);
+    if (r.error && r.state === 'failed') box.append(el('p', 'warn', `계산 실패 (${r.error.at ? ago(r.error.at) : ''}): ${r.error.reason}`));
+    if (r.view_error) box.append(el('p', 'warn', `결과를 읽지 못함: ${r.view_error}`));
+    if (!r.project) return box;
+    if ((r.warnings || []).length) box.append(el('p', 'meta', `신뢰도 경고: ${r.warnings.join(', ')} — 뜻은 전체 리포트의 신뢰도 절에 있어요`));
+    const t = el('table', 'isum');
+    const B = r.before || {}, A = r.after || {}, W = r.weekly || [];
+    const hr = el('tr'); for (const h of ['', `설치 전 (${B.since}~)`, `최근 (${A.since}~)`, `주별 (최근 ${W.length}주, 회색=설치 전)`]) hr.append(el('th', null, h));
+    t.append(hr);
+    const row = (label, b, a, key) => {
+      const tr = el('tr'); tr.append(el('td', null, label), el('td', null, b), el('td', null, a));
+      const td = el('td', 'trend'); if (key) td.append(spark(W, key)); tr.append(td); t.append(tr);
+    };
+    row('사람 교정 (세션당)', `${num(B.corrections_per_session)} · ${num(B.corrections)}회`, `${num(A.corrections_per_session)} · ${num(A.corrections)}회`, 'corrections_per_session');
+    row('프로젝트 사실 부족 (세션당)', `${num(B.missing_context_per_session)} · ${num(B.missing_context)}회`, `${num(A.missing_context_per_session)} · ${num(A.missing_context)}회`, 'missing_context_per_session');
+    row('가드 차단', num(B.guard_blocks, '건'), num(A.guard_blocks, '건'), 'guard_blocks');
+    if (r.rework) row('재작업 PR 비율', `${pct(r.rework.before?.ratio)} · PR ${num(r.rework.before?.prs)}`, `${pct(r.rework.after?.ratio)} · PR ${num(r.rework.after?.prs)}`, null);
+    else row('재작업 PR 비율', '–', '–', null);
+    row('LLM 정리된 세션', num(B.digested_sessions), num(A.digested_sessions), 'digested_sessions');
+    const sc = el('div', 'iscroll'); sc.append(t); box.append(sc);
+    if (!r.rework) box.append(el('p', 'meta', '재작업 비율은 그 저장소에 git user.email이 있어야 계산해요.'));
+    const imps = r.improvements || [];
+    const adds = imps.filter((x) => x.change !== 'remove'), removes = imps.filter((x) => x.change === 'remove');
+    box.append(el('div', 'isec', `하네스가 고친 것 ${adds.length}${r.matched_through ? ` · 매칭 기준일 ${r.matched_through}` : ' · 아직 매칭 없음'}`));
+    if (adds.length) { const g = el('div', 'icards'); adds.forEach((x) => g.append(impCard(r, x))); box.append(g); }
+    else box.append(el('div', 'empty', '아직 /harvest가 반영한 개선이 없어요'));
+    if (removes.length) {
+      box.append(el('div', 'isec', `쓰이지 않던 규칙 제거 ${removes.length} — 실수를 막으려 더한 규칙이 아니라 낡거나 쓰이지 않던 규칙을 걷어 낸 것. 재발은 그 규칙이 맡던 실수가 다시 나왔다는 뜻`));
+      const g = el('div', 'icards'); removes.forEach((x) => g.append(impCard(r, x))); box.append(g);
+    }
+    return box;
+  }
+  function renderImpact() {
+    const v = VIEWS.impact;
+    document.getElementById('vtitle').textContent = v.label;
+    document.getElementById('newbtn').hidden = true;
+    document.getElementById('vdesc').textContent = v.desc;
+    const board = document.getElementById('board'); board.replaceChildren(); board.style.gridTemplateColumns = '1fr';
+    if (!SERVER) { board.append(el('div', 'empty', '서버 모드에서만 볼 수 있음')); return; }
+    if (!idata) { document.getElementById('vmeta').textContent = ''; board.append(el('div', 'empty', '불러오는 중…')); loadImpact(true); return; }
+    loadImpact(false);
+    const repos = idata.repos.filter((r) => filter === 'all' || r.name === filter);
+    const all = idata.repos.flatMap((r) => r.improvements || []);
+    const cnt = (k) => all.filter((x) => x.result?.verdict === k).length;
+    document.getElementById('vmeta').textContent = `저장소 ${idata.repos.length} · 개선 ${all.length} · 효과 확인 ${cnt('gone') + cnt('reduced')} · 재발 ${cnt('recurred')}`;
+    const wrap = el('div', 'iwrap');
+    const crit = el('div', 'icrit');
+    crit.append(el('b', null, '판정 기준 (/harness-impact와 같음) '),
+      '근거 세션에 그 유형이 없으면 기준 없음, 반영 뒤 정리된 세션이 5개 미만이고 재발이 없으면 판단 보류(성공으로 세지 않음), 반영 뒤 0이면 사라짐(반영 뒤 목록이 잘렸으면 판단 보류), 발생 비율이 줄면 줄어듦, 아니면 재발. ',
+      '비율 기준은 반영 전 30일 매칭이 있으면 그쪽, 없으면 근거 batch입니다. ',
+      '같은 유형인지 맞추는 일은 /ai-harness:harness-impact가 하고, 보드는 그 저장소에서 마지막으로 맞춘 결과를 그날까지의 세션에 다시 씁니다. 맞춰 보지 않은 개선은 반영 뒤 관찰 세션이 5개 미만이면 판단 보류, 아니면 판정 안 함입니다.');
+    wrap.append(crit);
+    for (const r of repos) wrap.append(impactRepo(r));
+    if (!repos.length) wrap.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
+    board.append(wrap);
+  }
+
   function renderAll() { renderSidebar(); renderBoard(); }
 
   if (SERVER) {
     refresh().then(() => loadSettings(true)).catch((e) => toast('상태를 읽지 못함: ' + e.message, false)); setInterval(() => refresh().catch(() => {}), 5000);
+    setInterval(() => { if (view === 'impact' && !document.hidden) loadImpact(false); }, 4000);
     // 뒤에 있던 탭으로 돌아오면 바로 새로 읽는다(뒤 탭 타이머는 브라우저가 늦춰서 화면이 낡아 있을 수 있음)
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh().catch(() => {}); });
   }
