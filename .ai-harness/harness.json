@@ -1,0 +1,64 @@
+{
+  "project_id": "ai-harness",
+  "level": "standard",
+  "test_policy": "tdd",
+  "git_policy": "pr-only",
+  "approval": "auto",
+  "merge_policy": {
+    "base": "develop"
+  },
+  "integrations": [
+    "claude",
+    "codex"
+  ],
+  "stacks": [],
+  "edit_guard": false,
+  "initialized": "2026-11-07",
+  "harness_version": "0.64.0",
+  "managed_files": {
+    ".ai-harness/workflows/feature-delivery-graph.json": {
+      "content_sha256": "acfcda7293ed9fe741113f5011c9d2b27f1245c9c07443e8e8d4dabaea0246f1",
+      "template_version": "0.64.0"
+    },
+    ".ai-harness/workflows/workflow-driver.sh": {
+      "content_sha256": "16536ae8586576fb97e9260b73df2f90a8cdd5198605dffdeb7be59134e3b386",
+      "template_version": "0.64.0"
+    },
+    ".ai-harness/workflows/implement-feature-driver.sh": {
+      "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
+      "template_version": "0.64.0"
+    },
+    ".ai-harness/workflows/bug-fix-graph.json": {
+      "content_sha256": "04c3e686a754a87d6ab0d3fe6e963cd5cf70c0bc3a3799a2114c08c388aea5dd",
+      "template_version": "0.64.0"
+    },
+    ".ai-harness/workflows/review-graph.json": {
+      "content_sha256": "84f6c23d91da9f16f6e03c41dcdb7b5ce3726945539293639fea03426be79170",
+      "template_version": "0.64.0"
+    },
+    ".agents/skills/implement-feature/SKILL.md": {
+      "content_sha256": "f17b31d928f422e4a383556e80186151a8bac791befb76258ca0c7c450e6c093",
+      "template_version": "0.64.0"
+    },
+    ".agents/skills/fix-bug/SKILL.md": {
+      "content_sha256": "1d1c2b32b0da2a954ab3b96bd41dbc45d2da18dd48b4d85473c43c1ce6ebf2d0",
+      "template_version": "0.64.0"
+    },
+    ".agents/skills/review/SKILL.md": {
+      "content_sha256": "b079d01a38e183fd572c16544daf77407060b30ddff3cd61f8ad2559cf9db115",
+      "template_version": "0.64.0"
+    },
+    ".claude/commands/implement-feature.md": {
+      "content_sha256": "9bbd5df82d9298d1da2e6a7dcebfe3bb4aea268a855f4104cc8478150c5ce0e8",
+      "template_version": "0.64.0"
+    },
+    ".claude/commands/fix-bug.md": {
+      "content_sha256": "89ef9d2e102b2adf5a136f39ff5da8614626ab37edb20430e75f20b0e1e95373",
+      "template_version": "0.64.0"
+    },
+    ".claude/commands/review.md": {
+      "content_sha256": "cf1647ded0799b4e47ea4ce8decd463fcf0087661d41311780ce657757a13753",
+      "template_version": "0.64.0"
+    }
+  }
+}
