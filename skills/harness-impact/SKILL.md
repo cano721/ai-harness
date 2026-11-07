@@ -63,6 +63,7 @@ REPORT="$($ROOT/scripts/impact.sh render --data "<OUT>/data.json" --highlights "
 open "$REPORT" 2>/dev/null || xdg-open "$REPORT" 2>/dev/null || true
 ```
 리포트는 `~/.ai-harness/reports/`에 남는다. 외부 리소스를 불러오지 않는 단일 파일이라 그대로 공유할 수 있다. 다만 교정 요약이 들어 있으니 공유 전에 내용을 확인하라고 알린다.
+render는 이번 하이라이트(개선별 매칭)를 compare의 `today`와 함께 `~/.ai-harness/reports/highlights/<프로젝트>.json`에 보관한다. `/ai-harness:board`의 "하네스 효과" 화면은 이 매칭을 그날까지의 세션에만 다시 써 리포트와 같은 판정을 보이고, 그 뒤 세션은 "아직 맞춰 보지 않음"으로 센다. 맞춰 보지 않은 개선은 반영 뒤 정리된 세션이 5개 미만이면 판단 보류, 아니면 판정 안 함이다.
 
 5. **터미널 요약**: 표를 붙이지 말고 3~5줄로.
    - 한 줄 개요: 프로젝트 · 설치일 · 비교 구간 · 세션 수

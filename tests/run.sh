@@ -7,9 +7,11 @@ TESTS=0
 
 cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
-  local board_pid
-  board_pid="$(jq -r '.pid // empty' "$TEST_TMP/board/data/board/server.json" 2>/dev/null || true)"
-  [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
+  local board_pid conf
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json"; do
+    board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
+    [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
+  done
   case "$TEST_TMP" in
     */ai-harness-tests.*) find "$TEST_TMP" -depth -delete 2>/dev/null || true ;;
     *) printf 'unexpected test temp path, preserving: %s\n' "$TEST_TMP" >&2 ;;
@@ -5835,8 +5837,11 @@ ev_verdict() { # highlights-json → "verdict before after" per improvement
   HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
   sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '[.improvements[].result | "\(.verdict):\(.before_hits // "-"):\(.after_hits // "-")"] | join(" ")'
 }
-assert_eq "reduced:2:1 unmatched:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
-  "impact verdict counts sessions, ignores unknown ids, and marks unmatched improvements"
+# 맞춰 보지 않은 h2는 반영 뒤 관측 세션이 0이라 "판단 보류"다(5개 이상이면 "판정 안 함").
+assert_eq "reduced:2:1 hold:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
+  "impact verdict counts sessions, ignores unknown ids, and holds unmatched improvements with few sessions"
+assert_eq "unmatched hold" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [pending_verdict(5), pending_verdict(4)] | join(" ")')" \
+  "an unmatched improvement is held below the observed minimum and left unjudged above it"
 assert_eq "gone:2:0 no_baseline:0:0" "$(ev_verdict '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":[]},{"id":"h2","before":[],"after":[]}]}')" \
   "impact verdict says gone only with a baseline"
 assert_eq "hold recurred recurred reduced" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [verdict(2; 0; 3; 10), verdict(2; 1; 3; 10), verdict(1; 3; 5; 2), verdict(5; 1; 5; 10)] | join(" ")')" \
@@ -6179,5 +6184,141 @@ if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/s
   fail "board code carries no organization URL"
 fi
 pass "harness board skill and hook wiring"
+
+# 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
+# compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
+BIMP_T="$BOARD_T/impact"
+BIMP_DATA="$BIMP_T/data"
+mkdir -p "$BIMP_T/repos/app/.ai-harness" "$BIMP_T/repos/noinst/.ai-harness" "$BIMP_DATA/harvest-auto"
+git -C "$BIMP_T/repos/app" init -q
+printf '{"project_id":"app","initialized":"2026-10-01"}\n' >"$BIMP_T/repos/app/.ai-harness/harness.json"
+printf '{"project_id":"noinst"}\n' >"$BIMP_T/repos/noinst/.ai-harness/harness.json"
+jq -cn --arg r "$BIMP_T/repos/app" '{event:"finished", project:"app", scope:"repo", at:"2026-11-01T00:00:00Z", repo:$r, result:"none"}' \
+  >"$BIMP_DATA/harvest-auto/runs.jsonl"
+bimp_fixture() { # today → 가짜 compare JSON
+  jq -n --arg today "$1" '{v:1, project:"app", root:"/x", today:$today, installed:{date:"2026-10-01", source:"harness.json"}, window_days:30,
+    periods:{
+      before:{since:"2026-09-01", until:"2026-10-01", sessions:12, digested_sessions:10, corrections:8, corrections_per_session:0.8,
+              missing_context:5, missing_context_per_session:0.5, guard_blocks:0, turns_median:9},
+      after:{since:"2026-10-05", until:"2026-11-04", sessions:20, digested_sessions:18, corrections:3, corrections_per_session:0.17,
+             missing_context:2, missing_context_per_session:0.11, guard_blocks:4, turns_median:7}},
+    weekly:[{week:"2026-09-28", after_install:false, sessions:3, digested_sessions:3, corrections_per_session:0.7, missing_context_per_session:0.3, guard_blocks:0},
+            {week:"2026-10-05", after_install:true, sessions:5, digested_sessions:4, corrections_per_session:null, missing_context_per_session:0.2, guard_blocks:2}],
+    corrections:{before:{total:1, truncated:false, items:[{date:"2026-09-02", summary:"교정 원문은 보드에 싣지 않음", evidence:"x"}]},
+                 after:{total:0, truncated:false, items:[]}},
+    missing_context:{before:{total:0, truncated:false, items:[]}, after:{total:0, truncated:false, items:[]}},
+    rework:null, warnings:["low_sample"], timeline:[], adoption:{active_sessions:0, harness_sessions:0, top_docs:[]},
+    improvements:[
+      {id:"h1", date:"2026-10-10", summary:"커버리지 게이트 선검증", expected:"재발 0", artifact:"https://example.com/pr/1", change:"add",
+       before:{basis:"batch", batch_sessions:3, observed:3, candidates:{truncated:false, items:[
+         {id:"s-b1#0", date:"2026-10-03", category:"correction", summary:"게이트를 CI에서야 발견"},
+         {id:"s-b2#0", date:"2026-10-04", category:"workflow_gap", summary:"게이트 늦게 확인"}]}},
+       after:{since:"2026-10-10T00:00:00Z", observed:10, observed_by_day:{"2026-10-12":3, "2026-10-20":3, "2026-11-02":4},
+              candidates:{truncated:false, items:[{id:"s-a1#0", date:"2026-10-20", category:"workflow_gap", summary:"다른 일"},
+                                                  {id:"s-a9#0", date:"2026-11-02", category:"correction", summary:"또 게이트"}]}}},
+      {id:"h2", date:"2026-10-15", summary:"배포 순서 규칙", expected:null, artifact:"https://example.com/pr/2", change:"add",
+       before:{basis:"batch", batch_sessions:1, observed:10, candidates:{truncated:false, items:[{id:"s-b3#0", date:"2026-10-14", category:"correction", summary:"배포 순서 틀림"}]}},
+       after:{since:"2026-10-15T00:00:00Z", observed:10, observed_by_day:{"2026-10-16":3, "2026-10-22":3, "2026-11-02":4},
+              candidates:{truncated:false, items:[{id:"s-a2#0", date:"2026-10-22", category:"correction", summary:"배포 순서 또 틀림"}]}}},
+      {id:"h3", date:"2026-10-28", summary:"새 규칙", expected:null, artifact:null, change:"add",
+       before:{basis:"window", observed:2, candidates:{truncated:false, items:[]}},
+       after:{since:"2026-10-28T00:00:00Z", observed:2, observed_by_day:{"2026-11-02":2}, candidates:{truncated:false, items:[]}}},
+      {id:"h4", date:"2026-10-02", summary:"안 쓰는 규칙 제거", expected:null, artifact:null, change:"remove",
+       before:{basis:"window", observed:4, candidates:{truncated:false, items:[]}},
+       after:{since:"2026-10-02T00:00:00Z", observed:9, observed_by_day:{"2026-10-10":9}, candidates:{truncated:false, items:[]}}}]}'
+}
+bimp_fixture 2026-10-25 >"$BIMP_T/old.json"
+bimp_fixture 2026-11-03 >"$BIMP_T/new.json"
+# /harness-impact 3·4단계: 에이전트가 맞춘 하이라이트로 render하면 그 매칭이 compare의 --today와 함께 보관된다.
+printf '%s\n' '{"improvements":[{"id":"h1","before":["s-b1#0","s-b2#0"],"after":[]},{"id":"h2","before":["s-b3#0"],"after":["s-a2#0"]}]}' >"$BIMP_T/hl.json"
+HARNESS_METRICS_DIR="$BIMP_DATA" "$ROOT/scripts/impact.sh" render --data "$BIMP_T/old.json" --highlights "$BIMP_T/hl.json" --out "$BIMP_T/skill.html" >/dev/null
+BIMP_KEEP="$BIMP_DATA/reports/highlights/$(hm_short_key app).json"
+assert_eq "app 2026-10-25 2" "$(jq -r '"\(.project) \(.matched_through) \(.improvements | length)"' "$BIMP_KEEP")" "impact render keeps the matching per project with the day it covers"
+# 보관된 매칭은 그날까지의 세션으로만 판정한다: h1은 10-25까지 6세션 중 재발 0 → 사라짐, 그 뒤 4세션은 아직 맞춰 보지 않음.
+BIMP_VIEW="$(HARNESS_METRICS_DIR="$BIMP_DATA" "$ROOT/scripts/impact.sh" view --data "$BIMP_T/new.json")"
+assert_eq "gone:6:4:2026-10-25 recurred:6:4:2026-10-25 hold unmatched" \
+  "$(jq -r '[.improvements[].result | if .after_hits == null then .verdict else "\(.verdict):\(.observed):\(.unjudged):\(.as_of)" end] | join(" ")' <<<"$BIMP_VIEW")" \
+  "impact view judges kept matches only up to the matched day and holds unmatched improvements with few sessions"
+assert_eq "false" "$(jq '[.. | objects | has("candidates")] | any' <<<"$BIMP_VIEW")" "impact view drops the candidate pools"
+assert_eq "$BIMP_KEEP" "$(jq -r '.highlights.file' <<<"$BIMP_VIEW")" "impact view names the kept matching"
+cat >"$BIMP_T/impact.sh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == compare ]]; then
+  printf '%s\n' "\$3" >>"$BIMP_T/compare.log"
+  case "\$3" in */noinst) echo "설치일을 찾지 못함" >&2; exit 3 ;; esac
+  sleep 0.3
+  cat "$BIMP_T/new.json"
+  exit 0
+fi
+exec bash "$ROOT/scripts/impact.sh" "\$@"
+EOF
+chmod +x "$BIMP_T/impact.sh"
+BIMP_PORT="$(free_port)"
+bimp_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BIMP_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BIMP_PORT" BOARD_NO_BROWSER=1 BOARD_IMPACT_SH="$BIMP_T/impact.sh" \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BIMP_URL="$(bimp_sh open | jq -r '.url')"
+BIMP_TOKEN="${BIMP_URL#*t=}"
+BIMP_BASE="http://127.0.0.1:$BIMP_PORT"
+bimp_get() { curl -s "$BIMP_BASE/impact?t=$BIMP_TOKEN"; }
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact?t=wrong")" "impact endpoint checks the token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BIMP_PORT" "$BIMP_BASE/impact?t=$BIMP_TOKEN")" "impact endpoint checks the Host"
+BIMP_FIRST="$(bimp_get)"
+assert_eq "true" "$(jq '.ok and (.repos | length) == 2 and all(.repos[]; .state == "queued" or .state == "running")' <<<"$BIMP_FIRST")" \
+  "impact endpoint answers at once and computes in the background"
+BIMP=""
+for _ in $(seq 100); do
+  BIMP="$(bimp_get)"
+  jq -e 'all(.repos[]; .state == "ready" or .state == "failed")' <<<"$BIMP" >/dev/null && break
+  sleep 0.1
+done
+BIMP_APP="$(jq -c '.repos[] | select(.name == "app")' <<<"$BIMP")"
+BIMP_NO="$(jq -c '.repos[] | select(.name == "noinst")' <<<"$BIMP")"
+assert_eq "ready" "$(jq -r '.state' <<<"$BIMP_APP")" "impact computes a repo with an install date"
+assert_eq "true" "$(jq '(.computed_at | type) == "string" and .installed.date == "2026-10-01" and .before.corrections == 8 and .after.guard_blocks == 4
+  and (.weekly | length) == 2 and .warnings == ["low_sample"] and .matched_through == "2026-10-25" and .rework == null' <<<"$BIMP_APP")" "impact endpoint shape: periods, weekly, warnings"
+assert_eq "h4:remove:unmatched h3:add:hold h2:add:recurred h1:add:gone" "$(jq -r '[.improvements[] | "\(.id):\(.change):\(.result.verdict)"] | join(" ")' <<<"$BIMP_APP")" \
+  "impact endpoint lists improvements newest first with the change kind"
+assert_eq "$(jq -c '[.improvements[] | .result.verdict] | reverse' <<<"$BIMP_VIEW")" "$(jq -c '[.improvements[].result.verdict]' <<<"$BIMP_APP")" \
+  "board verdicts are the ones impact.sh view computes"
+assert_eq "10 0 6 4" "$(jq -r '.improvements[] | select(.id == "h1") | "\(.observed_now) \(.result.after_hits) \(.result.observed) \(.result.unjudged)"' <<<"$BIMP_APP")" \
+  "impact card carries sessions observed now and the judged recurrence"
+case "$BIMP" in *candidates*|*"교정 원문"*) fail "impact endpoint does not ship candidate pools or correction text" ;; esac
+assert_eq "failed 3" "$(jq -r '"\(.state) \(.error.code)"' <<<"$BIMP_NO")" "impact shows a failed compare"
+assert_contains "$(jq -r '.error.reason' <<<"$BIMP_NO")" "설치일을 찾지 못함" "impact says why the compare failed"
+BIMP_CALLS="$(wc -l <"$BIMP_T/compare.log" | tr -d ' ')"
+assert_eq "2" "$BIMP_CALLS" "impact computes each repo once"
+BIMP_AT="$(jq -r '.computed_at' <<<"$BIMP_APP")"
+bimp_get >/dev/null
+sleep 0.5
+assert_eq "2 $BIMP_AT" "$(wc -l <"$BIMP_T/compare.log" | tr -d ' ') $(bimp_get | jq -r '.repos[] | select(.name == "app") | .computed_at')" \
+  "impact reuses today's cache and does not retry today's failure on its own"
+BIMP_REPO="$(jq -r '.repo' <<<"$BIMP_APP")"
+BIMP_BODY="$(jq -cn --arg t "$BIMP_TOKEN" --arg r "$BIMP_REPO" '{t: $t, repo: $r}')"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$BIMP_BODY" "$BIMP_BASE/impact/refresh")" "impact refresh checks the Origin"
+assert_eq "false" "$(curl -s -X POST -H "Origin: $BIMP_BASE" -d "$(jq -cn --arg t "$BIMP_TOKEN" '{t: $t, repo: "/etc"}')" "$BIMP_BASE/impact/refresh" | jq -r '.ok')" \
+  "impact refresh accepts only harness repos"
+sleep 1  # computed_at은 초 단위
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BIMP_BASE" -d "$BIMP_BODY" "$BIMP_BASE/impact/refresh" | jq -r '.ok')" "impact refresh queues a recompute"
+for _ in $(seq 100); do
+  BIMP_NOW="$(bimp_get | jq -r '.repos[] | select(.name == "app") | "\(.state) \(.computed_at)"')"
+  [[ "$BIMP_NOW" == ready* && "$BIMP_NOW" != "ready $BIMP_AT" ]] && break
+  sleep 0.1
+done
+assert_eq "3" "$(wc -l <"$BIMP_T/compare.log" | tr -d ' ')" "impact refresh runs compare again"
+[[ "$(bimp_get | jq -r '.repos[] | select(.name == "app") | .computed_at')" != "$BIMP_AT" ]] || fail "impact refresh replaces today's cache"
+assert_contains "$(cat "$BIMP_DATA/board/actions.jsonl")" '"action": "impact_refresh"' "impact refresh is logged"
+BIMP_REPORT="$(curl -s "$BIMP_BASE/impact/report?t=$BIMP_TOKEN&repo=$(jq -rn --arg v "$BIMP_REPO" '$v | @uri')")"
+assert_contains "$BIMP_REPORT" "const DATA = " "impact report renders the offline report"
+assert_contains "$BIMP_REPORT" '"as_of":"2026-10-25"' "impact report reuses the kept matching up to its day"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/report?t=$BIMP_TOKEN&repo=%2Fetc")" "impact report accepts only harness repos"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/report?t=wrong&repo=x")" "impact report checks the token"
+assert_eq "2026-10-25" "$(jq -r '.matched_through' "$BIMP_KEEP")" "a board render does not overwrite the kept matching"
+assert_eq "true" "$(bimp_sh stop | jq -r '.stopped')" "impact board stops"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "판정 기준 (/harness-impact와 같음)" "impact view states the verdict rule"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 효과" "board skill documents the impact view"
+pass "harness board impact view: background cache, refresh, failure reason, verdicts from impact"
 
 printf '1..%d\n' "$TESTS"

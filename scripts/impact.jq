@@ -142,7 +142,10 @@ def harness_use:
            before: ({basis: $B.basis, since: $B.since, batch_sessions: ($mk | length), observed: ($B.sessions | length),
                     candidates: candidates($B.sessions)}
                     + (if $B.basis == "batch" then {window: {since: $from, observed: ($WS | length), candidates: candidates($WS)}} else {} end)),
-           after: {since: $at, observed: ($AF | length), candidates: candidates($AF)}})
+           # 날짜별 관측 세션 수: 저장해 둔 매칭(highlights.matched_through)으로 판정할 때 그날까지의 분모를 다시 센다.
+           after: {since: $at, observed: ($AF | length),
+                   observed_by_day: ($AF | map(day_of) | group_by(.) | map({(.[0]): length}) | add // {}),
+                   candidates: candidates($AF)}})
     ),
     timeline: (
       ([$history[0][] | select((.review.outcome // "") == "improved")

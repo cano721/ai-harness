@@ -6,6 +6,9 @@ GET  /status.json?t=...          status.sh 결과(작업 = claude agents, 하네
 GET  /transcript?t&id&offset     세션 대화를 offset 이후만 읽어 돌려줌(파일 tail)
 POST /action  {t, id, action}    미리 정한 작업만 실행. send는 {text}
 POST /new     {t, cwd, prompt}   claude --bg 새 세션
+GET  /impact?t=...               하네스 효과: 저장소별 impact.sh compare 캐시 + 판정(계산은 뒤에서, 하루 한 번)
+POST /impact/refresh {t, repo}   그 저장소를 다시 계산하도록 줄 세움
+GET  /impact/report?t&repo       그 저장소의 오프라인 리포트(impact.sh render)를 만들어 보여 줌
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -18,6 +21,7 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
+import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import settings as hsettings  # noqa: E402
 
@@ -284,6 +288,21 @@ def harness_repos():
 
 
 _protect = {}  # repo -> {at, base, result}
+IMPACT = himpact.Store(DATA)
+
+
+def impact_state():
+    repos = harness_repos()
+    IMPACT.ensure(repos)
+    return {"ok": True, "today": datetime.now().strftime("%Y-%m-%d"),
+            "repos": [IMPACT.repo_state(r, os.path.basename(r)) for r in repos]}
+
+
+def impact_refresh(repo):
+    if repo not in harness_repos():
+        return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
+    queued = IMPACT.refresh(repo)
+    return {"ok": True, "message": "다시 계산을 시작함 — 저장소에 따라 수십 초 걸림" if queued else "이미 계산 중"}
 
 
 def settings_state():
@@ -826,6 +845,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, settings_state())
         if u.path == "/repos":
             return self._send(200, known_repos())
+        if u.path == "/impact":
+            return self._send(200, impact_state())
+        if u.path == "/impact/report":
+            repo = q.get("repo", [None])[0]
+            if repo not in harness_repos():
+                return self._send(404, {"ok": False, "message": "하네스 저장소 목록에 없는 경로"})
+            path, err = IMPACT.report(repo)
+            if not path:
+                return self._send(409, {"ok": False, "message": err})
+            with open(path, encoding="utf-8") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/transcript":
             cached = (_cache["data"] or {}).get("items")
             iid = q.get("id", [None])[0]
@@ -876,6 +906,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings":
             res = request_facts_change(req)
             log({"action": "settings_facts", "repo": req.get("repo"), **res})
+            return self._send(200, res)
+        if path == "/impact/refresh":
+            res = impact_refresh(req.get("repo"))
+            log({"action": "impact_refresh", "repo": req.get("repo"), **res})
             return self._send(200, res)
         if path == "/seen":
             ids = set(req.get("ids") or [])
