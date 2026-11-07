@@ -2238,6 +2238,8 @@ assert_contains "$LANDING_VERIFY" "It drops its hover and pressed changes" "land
 assert_contains "$LANDING_VERIFY" "reported as not independently reviewed" "landing-page fixes after the last review are labeled"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "one does not replace the next" "landing-page reference sources are cumulative"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "Look at the pages, not only their text" "landing-page references are seen, not only read"
+assert_contains "$(cat skills/landing-page/references/direction.md)" "JavaScript on — many sites render nothing without it" "landing-page reference captures render the page"
+assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"
 assert_contains "$LANDING_VERIFY" "**Needs the user**" "landing-page stops looping on what only the user can supply"
 assert_contains "$LANDING_VERIFY" "**When the only majors left are \`사용자 입력 필요\` items, stop.**" "the loop stops when only user input remains"

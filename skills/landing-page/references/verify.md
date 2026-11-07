@@ -14,7 +14,7 @@ build → self-check (measured) → independent review → fix majors → indepe
 ## Tools and serving
 
 - **Browser:** any of — the session's browser tool, Orca's embedded browser, Playwright or headless Chrome already installed on the machine. Installing one needs the user's approval like any package. Locate an existing Playwright before giving up (a global or `~/.npm/_npx/*/node_modules/playwright` install can be required by absolute path); pick a version whose browser revision is already downloaded.
-- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes. Playwright treats `aria-disabled="true"` as not enabled; click those with `{ force: true }` when checking that nothing happens. After switching media (print, forced colors, a theme), wait out CSS transitions before reading computed styles.
+- **States** with Playwright: `page.emulateMedia({ reducedMotion: "reduce" })`, `page.emulateMedia({ forcedColors: "active" })`, a context with `javaScriptEnabled: false`, `colorScheme` for themes. Playwright treats `aria-disabled="true"` as not enabled; click those with `{ force: true }` when checking that nothing happens. After switching media (print, forced colors, a theme), wait out CSS transitions before reading computed styles. Scroll through the page before a full-page capture so lazy images load; in a context with JavaScript off, scroll from the test script (`page.mouse.wheel`), since timers inside `page.evaluate` do not run there.
 - **Serve, do not open `file://`** — module scripts and some fonts fail under `file://`. Use a static server on a free port, then fetch the page once and confirm the response is this page (its `<title>`) before measuring; a stale server on the same port answers with someone else's page.
 - **Static checks** need no browser and are never left unverified for lack of one: metadata, `lang`, landmarks, one `h1`, `alt` attributes, link targets, JSON-LD, external hosts referenced.
 
@@ -31,7 +31,7 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 | Claims | A claim of popularity, quantity, rank, or result ("많이", "인기", "N명이") without evidence on the page |
 | First action | The primary action is not inside the first viewport |
 | Contrast | Below WCAG AA (4.5:1 text, 3:1 large text, UI boundaries, focus). Over images or gradients, sample the rendered pixels behind each text node (hide that node and its `::before`/`::after` only, not its container; keep the sample inside rounded corners), not computed colors |
-| Overflow | Horizontal scroll or clipped text at any viewport |
+| Overflow | Horizontal scroll or clipped text at any viewport, in every state (JavaScript off included) |
 | Headline lines | More than two at desktop, or an orphaned syllable group (no design-system rule set otherwise) |
 | Assets | Broken images; a fallback face rendering where the intended font was approved and loaded |
 | Size floor | Body under 15px or small text under 13px when the design system has no smaller step for that role (the 16–20px body in `layout-type.md` is a default, not the floor) |
@@ -40,13 +40,13 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 
 Each review runs in a new reviewer that did not build the page — a new one every round, not a continued one: the `ai-harness:design-reviewer` agent, or a new session. Give it only:
 
-- the served URL or file path, how to serve it, viewports and states to check;
+- the served URL or file path (fetched once just before writing the briefing, with its `<title>` confirmed), how to serve it, viewports and states to check;
 - the audience and the one action the page exists for;
 - where the design evidence is (design system, rule document, token mirror), and **which layers apply**: brand only, or the product UI layer too (and where), per `SKILL.md` precedence — so the reviewer does not score marketing layout against product UI steps;
-- the source facts the page must match, copied into a plain file outside the served folder (the reviewer has no access to design tools such as Figma);
+- the source facts the page must match, copied into a plain file outside the served folder (the reviewer has no access to design tools such as Figma): every sentence and example value the page shows, each with its source location (a node id, a page and line), plus the source facts the page leaves out — a copy that misses them turns reviews into fact disputes;
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
-- the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits;
+- the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits — together with the forms such items take below (a disabled main action keeps its look), so the form is not reported as a defect;
 - from the second round, the previous round's findings and what changed since.
 
 Not your direction notes, not your report, not "I fixed it". Serve the page from a folder that holds only the page and its assets, and tell the reviewer which paths are the maker's (logs, notes, drafts) and must not be read. It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
