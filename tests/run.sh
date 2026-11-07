@@ -2224,6 +2224,11 @@ assert_contains "$LANDING_SKILL_CONTENT" "prefers-reduced-motion: reduce" "landi
 assert_contains "$LANDING_SKILL_CONTENT" "If a script fails to load or throws, every piece of content must still be visible" "landing-page keeps content visible when scripts fail"
 assert_contains "$LANDING_MOTION" "html.js [data-reveal]" "hidden reveal states sit behind a JavaScript gate"
 assert_contains "$LANDING_MOTION" "window.revealReady" "the reveal gate has a timed fallback"
+# Lenis를 켜면 흔히 깨지는 지점(안쪽 스크롤·모달 잠금·이중 루프·정리)을 함께 안내한다.
+assert_contains "$LANDING_MOTION" "data-lenis-prevent" "lenis guide keeps nested scroll areas native"
+assert_contains "$LANDING_MOTION" "lenis.stop()" "lenis guide locks scrolling behind modals"
+assert_contains "$LANDING_MOTION" "autoRaf: false" "lenis guide avoids a second frame loop under GSAP"
+assert_contains "$LANDING_MOTION" "lenis.destroy()" "lenis guide destroys the instance on unmount"
 assert_contains "$LANDING_SKILL_CONTENT" "Never reproduce third-party component or library code from memory" "landing-page forbids recalled third-party code"
 assert_contains "$LANDING_EXTERNAL" "Never reproduce third-party component or library code from memory" "external-code repeats the fetch rule"
 assert_contains "$LANDING_EXTERNAL" "Do not run an install command without the user's approval" "landing-page installs only after approval"

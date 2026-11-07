@@ -111,12 +111,23 @@ Off by default: it overrides native scrolling and is the most common source of "
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(pointer: coarse)").matches;
 if (!reduce && !coarse) {
-  const lenis = new Lenis({ lerp: 0.1 });
+  const lenis = new Lenis({ lerp: 0.1, autoRaf: false });
   lenis.on("scroll", ScrollTrigger.update);
   gsap.ticker.add((time) => lenis.raf(time * 1000));
   gsap.ticker.lagSmoothing(0);
 }
 ```
+
+Where it usually breaks:
+
+- **One frame loop.** Either Lenis's own loop (`autoRaf: true`) or the GSAP ticker calling `lenis.raf()`, never both; two loops step the scroll twice per frame and drift from ScrollTrigger. In React, `<ReactLenis root options={{ autoRaf: false }}>` from `lenis/react` with the same ticker hookup.
+- **Its stylesheet.** Import `lenis/dist/lenis.css`; without it `scroll-behavior: smooth` or a fixed `html` height fights the interpolation.
+- **Nested scroll areas.** Menus, modals, code blocks, and carousels that scroll on their own get `data-lenis-prevent`, or the wheel moves the page instead of them.
+- **Modals and drawers.** `lenis.stop()` when one opens and `lenis.start()` when it closes; the page behind must not scroll.
+- **In-page links.** `anchors: true` (with an `offset` for a fixed header) or `lenis.scrollTo(target, { offset })`, so the target lands below the header instead of under it. Move focus to the target too.
+- **Cleanup.** `lenis.destroy()` and `gsap.ticker.remove()` on unmount or route change; a single-page app otherwise keeps one instance per visited page.
+
+Option names change between Lenis versions; check the installed version's README before relying on one (see `external-code.md`).
 
 ## WebGL and canvas backgrounds
 
