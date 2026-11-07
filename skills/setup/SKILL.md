@@ -215,14 +215,14 @@ $ROOT/scripts/setup.sh team list
 
 ### 8-1. 워크플로 자동화 단계 (선택)
 
-워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 저장소 `git_policy`·`merge_policy`를 그대로 따른다.
+워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 러너는 PR까지만 한다. 병합 여부를 정하는 곳은 이 설정뿐이다(저장소의 예전 `git_policy:"merge"`·`merge_policy` 병합 조건은 더 이상 쓰지 않는다).
 
 1. 기본 단계 `HM_DELIVERY_LEVEL`:
    - `pr` — PR까지. 병합·배포는 사람이 한다 (직접 리뷰하고 싶은 사람)
    - `merge` — 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
    - `deploy` — `merge`에 더해 저장소에 있는 배포 확인·스모크 명령까지. 저장소에 그 명령이 없으면 `merge`까지 하고 결과에 밝힌다
 2. 저장소마다 다르게 하고 싶으면 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>,…"`로 덮어쓴다. `project_id`는 저장소 `.ai-harness/harness.json`의 `project_id`(없으면 origin 저장소 이름)이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
-3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 저장소 `merge_policy`의 값(없으면 네 조건 모두·승인 1·squash)을 쓴다.
+3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 네 조건 모두·승인 1·squash를 쓴다. 현재 저장소 manifest `merge_policy`에 예전 `require`·`min_approvals`·`method`가 남아 있으면 그 값을 보여 주고 옮길지 묻는다 — 러너는 그 값을 읽지 않는다.
    - `HM_MERGE_REQUIRE` — `human_approval`·`remote_ci`·`no_conflict`·`not_draft` 중 쉼표 구분
    - `HM_MERGE_MIN_APPROVALS` — 1 이상
    - `HM_MERGE_METHOD` — `squash`·`merge`·`rebase`(Bitbucket은 rebase 불가)

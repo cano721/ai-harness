@@ -62,7 +62,7 @@ if [[ -f "$graph" ]]; then
 fi
 
 # ── git 정책 ─────────────────────────────────────────────────────────────────
-# 에이전트의 커밋·push·PR은 manifest git_policy가 정한다. pr-only·direct·merge만 허용, 그 밖(미설정 포함)은 별도 허가가 필요하다.
+# 에이전트의 커밋·push·PR은 manifest git_policy가 정한다. pr-only·direct(예전 값 merge는 pr-only와 같음)만 허용, 그 밖(미설정 포함)은 별도 허가가 필요하다.
 manifest="$root/.ai-harness/harness.json"
 git_policy=""
 [[ -f "$manifest" ]] && git_policy="$(jq -r '.git_policy // ""' "$manifest" 2>/dev/null || true)"
