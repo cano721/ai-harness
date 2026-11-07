@@ -56,6 +56,7 @@ Marketing checks the reviewer adds to its own criteria:
 - One-second view: what is this about, and what kind of product is it — could the imagery suggest a different kind of product than it is? Five-second view: what should I do?
 - Squint: the claim and the action stay dominant.
 - Cover the logo: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
+- Template look, judged apart from the content: would a designer glancing at the captures take this for a template or an AI-made page? Name the giveaway — the stock hero formula (small colored label, two-line headline, paragraph, dark button, cards on the right), a row of identical cards, a category gradient, evenly spaced sections with the same rhythm, motion that only plays. A unique product concept does not excuse a stock look; in the first viewport it is a major problem.
 - Does every visible action lead somewhere, and does every element that looks interactive respond?
 - Is every claim either evidenced on the page or phrased as a description rather than a claim?
 - Phone: composed, not shrunk.
@@ -76,7 +77,7 @@ A **major problem** (the same definition as the harness `ui-review` contract, re
 - a flow cannot be completed by keyboard, or at a supported viewport or theme;
 - a one-off build where a shared component of the same role exists;
 - a hard-to-undo action without confirmation;
-- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed.
+- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed, or that reads as a template by its look alone.
 
 Spacing and alignment that do not change any of that are minor.
 

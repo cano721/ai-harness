@@ -1,6 +1,24 @@
 # Motion for Marketing Pages
 
-Motion is optional. A page with one well-placed effect beats a page where everything moves. There is no minimum count: a typical budget is one signature moment, entrance reveals, interaction feedback, and at most one extra.
+How much moves is a direction decision, not a fixed budget. Each direction candidate names one **motion level**:
+
+| Level | What it holds | Fits |
+|---|---|---|
+| Calm | One signature moment, entrance reveals, interaction feedback, at most one extra | The restrained candidate; dense or serious content |
+| Lively | Several moments tied to the argument, a try-it demo, hover and pointer response on the evidence | Most product pages |
+| Showpiece | Pinned scroll scenes, a scrubbed story, a try-it demo at the center, a WebGL or canvas moment | The bold candidate, launches, campaigns |
+
+At every level, every effect answers the four questions below, and the floors at the end of this file hold. A higher level is not more decoration: each extra moment explains something or lets the visitor do something.
+
+## Try-it demo
+
+Watching an animation is not interaction. On a product page, let the visitor do the product's core action in a few seconds, inside the page:
+
+- Pick from the product's real choices (a plan, a persona, an input) and see the product's response change — not a looping video of someone else doing it.
+- Run on fixed example data in the page, labeled as an example. No backend calls, no real model, no claims drawn from the demo.
+- Works by keyboard and touch, announces changes to screen readers (`aria-live="polite"`), and under reduced motion still responds, just without movement.
+- With JavaScript off, show the demo's default state as a static example.
+- One per page is usually enough; it is often the signature moment.
 
 ## Four questions before any effect
 
@@ -98,7 +116,7 @@ document.fonts.ready.then(() => {
 
 ## GSAP and ScrollTrigger
 
-- Choose GSAP only when the plan needs timelines, scrubbed scenes, or pinning; CSS and IntersectionObserver cover simple reveals. Reuse an animation library the project already has.
+- Choose GSAP only when the plan needs timelines, scrubbed scenes, or pinning; CSS and IntersectionObserver cover simple reveals. Reuse an animation library the project already has. A direction whose signature moment is a scroll scene (walking from one place to the next, a story told by scrolling) needs pinning and scrub: propose the library with the candidate and ask for approval then, rather than faking the scene with reveals.
 - Wrap all motion in `gsap.matchMedia()` with a `(prefers-reduced-motion: no-preference)` condition so it reverts cleanly when the preference changes.
 - Use `gsap.quickTo()` for values updated on every pointer move.
 - Scrub: `scrub: true` when smooth scrolling already smooths input; otherwise a small number (≤ 0.5).
