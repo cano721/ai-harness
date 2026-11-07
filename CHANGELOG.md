@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.62.0 (2026-11-07)
 ### 동작 변경
 
 - **저장소 병합 설정 제거 — 개인 단계가 없으면 항상 PR까지** — v0.61.0 뒤에도 개인 자동화 단계가 없는 사용자는 저장소 `git_policy:"merge"` + `merge_policy` 조건으로 병합해서, 한 사람이 저장소를 "병합까지"로 올리면 모두의 에이전트가 병합했고 이 경로는 호스트 브랜치 보호도 확인하지 않았습니다. 이제 병합 여부는 개인 설정(`HM_DELIVERY_LEVEL`·`HM_DELIVERY_LEVEL_REPOS`)만 정하고, 없으면 PR까지입니다. 기존 `git_policy:"merge"`는 `pr-only`로 읽고, `merge_policy`의 `require`·`min_approvals`·`method`는 쓰지 않습니다(개인 `HM_MERGE_*` → 네 조건 모두·승인 1·squash). 시작은 막지 않고 실행 시작과 결과에 `notice:`로 알립니다. 병합은 언제나 호스트 브랜치 보호(필수 승인)를 확인한 뒤에만 합니다 — 업데이트 전에 시작해 병합을 기다리던 실행을 `resume`해도 같습니다. `/harness-init`은 git 통제에서 `merge`를 고르지 않고, sync·설정 변경이 예전 병합 설정을 저장소 사실만 남기도록 정리하자고 제안합니다(사람 확인 뒤 적용). 무인 PR 자동 병합(`auto_merge`)은 그대로입니다. (#248)
