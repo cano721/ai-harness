@@ -55,7 +55,7 @@ Marketing checks the reviewer adds to its own criteria:
 
 - One-second view: what is this about, and what kind of product is it — could the imagery suggest a different kind of product than it is? Five-second view: what should I do?
 - Squint: the claim and the action stay dominant.
-- Cover the logo: could a competitor own this page? Generic is a finding when nothing on the page belongs only to this product.
+- Cover the logo: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
 - Does every visible action lead somewhere, and does every element that looks interactive respond?
 - Is every claim either evidenced on the page or phrased as a description rather than a claim?
 - Phone: composed, not shrunk.
@@ -76,7 +76,7 @@ A **major problem** (the same definition as the harness `ui-review` contract, re
 - a flow cannot be completed by keyboard, or at a supported viewport or theme;
 - a one-off build where a shared component of the same role exists;
 - a hard-to-undo action without confirmation;
-- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is.
+- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed.
 
 Spacing and alignment that do not change any of that are minor.
 

@@ -27,7 +27,7 @@ Decide whose visual language the page speaks before designing anything.
 | Situation | Signal | Rule |
 |---|---|---|
 | Redesign | The user asks for a new look | New identity allowed; keep logo and name unless told otherwise |
-| Established brand | A brand or product design system, or a consistent set of live pages, exists | Inherit the brand layer — no new fonts, colors, or component styles. Layout, composition, and pacing are still this page's to direct (see `SKILL.md` precedence) |
+| Established brand | A brand or product design system, or a consistent set of live pages, exists | Keep the brand anchors (logo, name, one brand color, voice) and the product's component styles where product UI appears. Display type, extra colors, imagery, layout, composition, and pacing are this page's to direct (see `SKILL.md` precedence) |
 | Established marketing site | Live marketing pages with their own look exist | Inherit them whole, layout included |
 | Incomplete | Some brand assets exist (logo, one color) but no system | Keep what exists, fill the gaps, and list every value you added |
 | None | Nothing exists | A new identity is yours to propose; confirm the direction once |
@@ -36,12 +36,15 @@ Adding a section or page to an established site never justifies a new identity.
 
 ## 3. Direction candidates
 
-Skip this step only when a mockup of this page or an established marketing site already decides the look. An established brand fixes the colors, typefaces, and voice of every candidate; the candidates differ in composition, pacing, imagery, and signature moment.
+Skip this step only when a mockup of this page or an established marketing site already decides the look. An established brand fixes the anchors of every candidate (logo, name, one brand color, voice); everything else may differ.
 
 1. **Theme inventory** — list 8–12 concrete things the product is about: materials, verbs, places, rituals, artifacts its users handle. Avoid category clichés (circuits for software, leaves for sustainability).
 2. **Idea sentence** — one sentence that states the page's point of view. Test it by substituting a competitor's name; if the sentence still holds, it says nothing.
-3. **Candidates** — propose two or three directions, built from the references the user kept (section 7), each naming the references it draws on, with: the idea sentence, type character, color strategy, one signature moment, and what it rules out. Always include one restrained standard option as an exit.
-4. **Pick one.** In an unattended run, pick and give the reason in one line.
+3. **Candidates** — propose two or three directions, built from the references the user kept (section 7), each naming the references it draws on, with: the idea sentence, type character, color strategy, one signature moment, the outside resources it needs (a display face, video, a motion library — each needing approval), and what it rules out.
+   - **They differ in the first viewport,** not only below it. The signature moment is visible in the first viewport at desktop and phone width. At most one candidate uses the text-left, visual-right hero.
+   - **One bold, one restrained.** One candidate pushes as far as the brand anchors allow — scale, full-bleed imagery or color, an unexpected composition; one is the restrained standard option as an exit.
+   - In an unattended run, use only what the user approved in advance and keep the bold candidate within it.
+4. **First-viewport drafts, then pick one.** In an interactive session, build only the first viewport of each candidate as a quick HTML draft (real copy, real assets, no polish), capture it at 1440 and 390, and show the captures side by side; the user picks, and only the pick is built as a page. Ask for the approvals the picked candidate needs at the same time. In an unattended run, pick and give the reason in one line.
 
 Record the chosen direction in the report (idea, audience, action, color strategy, type pair, signature moment). Keep it out of the code.
 
