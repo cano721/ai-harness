@@ -234,6 +234,29 @@ $ROOT/scripts/setup.sh team list
 - 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
 - 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
 
+### 8-2. 보드에서 권한 요청 답하기 (선택)
+
+`/ai-harness:board`(Harness Board)에서 다른 세션의 권한 요청을 허용/거부하려면 Claude Code PermissionRequest 훅이 필요하다. **묻지 않고 연결하지 않는다.** 현재 상태를 먼저 본다:
+
+```bash
+$ROOT/scripts/board/board.sh hook status
+```
+
+`installed`면 연결돼 있다고 알리고 끌지 묻는다. `others`에 다른 경로의 `permission-hook.py`가 있으면(예전에 손으로 둔 보드 훅) 그 줄을 보여 주고, 두 훅이 같은 요청을 함께 받는다는 것을 알린다 — 지울지는 사용자가 정하고, 지운다면 사용자가 직접 `~/.claude/settings.json`에서 뺀다.
+
+물을 때 함께 알린다.
+- 보드가 떠 있고 최근 30분 안에 누군가 보드를 본 경우에만 요청을 보드로 넘긴다. 보드가 꺼져 있으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻는다.
+- 보드는 사람이 누른 허용/거부만 돌려준다. 질문(AskUserQuestion)은 넘기지 않는다.
+- Claude Code 전용이다(Codex에는 같은 훅이 없다).
+
+고르면:
+
+```bash
+$ROOT/scripts/board/board.sh hook on    # 끄기: hook off
+```
+
+훅 파일을 `~/.ai-harness/board/bin/permission-hook.py`에 복사하고 `~/.claude/settings.json`에 PermissionRequest 항목(timeout 3600)을 더한다. 바꾸기 전 백업(`settings.json.bak-board-<시각>`)을 남기고 그 경로를 결과 `backup`으로 준다. `off`는 이 항목만 빼고 다른 훅·설정은 그대로 둔다. 새 세션부터 적용된다고 알린다.
+
 ## 디자인 스킬 (`design`)
 
 ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자리를 채우는 외부 디자인 스킬은 `catalog/design-skills.json`이 원본 저장소·고정 커밋·라이선스·실행 스크립트 검토 결과를 적고, 어느 작업에서 어느 스킬이 주도하는지는 디자인 스킬 지도(`$ROOT/templates/ui-review/references/design-skills.md`)가 정한다. 위 기본 카탈로그와 달리 사본을 들고 있지 않고 **원본 저장소의 고정 커밋에서 받는다**. 예외로 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 ai-harness에 고정 사본으로 내장돼 있어(`builtin: "ai-harness"`) 설치하지 않는다.
