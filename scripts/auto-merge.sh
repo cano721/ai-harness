@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 무인 실행(자동 sync·harvest)이 연 draft PR을 조건이 모두 맞을 때만 병합한다. opt-in이며 기본은 꺼져 있다.
-# - 켜려면 전역 설정(HM_SYNC_AUTO_MERGE=1 / HM_HARVEST_AUTO_MERGE=1)과 저장소 manifest의 auto_merge.{sync,harvest}가 모두 true여야 한다.
-#   저장소 설정은 PR이 아니라 기준 브랜치에서 읽는다 — PR이 스스로 자동 병합을 켜지 못한다. sweep 때 다시 확인한다.
+# - 켜고 끄는 것은 사용자 설정(HM_SYNC_AUTO_MERGE=1 / HM_HARVEST_AUTO_MERGE=1)만 정하고, sweep 때 다시 확인한다.
+#   저장소 manifest의 auto_merge.{sync,harvest} 허용 스위치는 읽지 않는다 — 안전은 아래 내용 조건과 병합 직전 호스트 조건이 맡는다.
 # - PR을 만든 에이전트가 보고한 값(PR URL, 검토 통과 여부)은 믿지 않는다. PR이 이 저장소·기준 브랜치를 향하는지,
 #   head가 판정한 커밋인지는 PR 호스트에서 직접 읽고, harvest PR은 worker가 따로 띄운 읽기 전용 검토를 통과해야 한다.
 # - 내용 판정(check)은 PR을 연 직후 로컬 git 객체로 한다. 통과하면 대기열에 넣고, 병합은 정기 sweep이 LLM 없이
@@ -48,30 +48,55 @@ pr_cmd() {
   hm_run_with_timeout "${HM_OPEN_PR_TIMEOUT_SEC:-60}" "${cmd[@]}" "$@"
 }
 
-opt_in_key() { [[ "$1" == sync ]] && printf 'sync\n' || printf 'harvest\n'; }
-opt_in_env() { # scope → 전역 설정 켜짐?
+opt_in_env() { # scope → 사용자 설정 켜짐?
   if [[ "$1" == sync ]]; then [[ "${HM_SYNC_AUTO_MERGE:-0}" == "1" ]]; else [[ "${HM_HARVEST_AUTO_MERGE:-0}" == "1" ]]; fi
 }
 base_manifest() { git -C "$1" show "$2:.ai-harness/harness.json" 2>/dev/null; }
-repo_allows() { # repo base scope
-  base_manifest "$1" "$2" | jq -e --arg k "$(opt_in_key "$3")" '.auto_merge[$k] == true' >/dev/null 2>&1
+# 예전 저장소 허용 스위치(auto_merge.sync·harvest, 또는 auto_merge: false)가 남아 있는지. 막지 않고 한 번 알리기만 한다.
+has_legacy_switch() { # repo base
+  base_manifest "$1" "$2" | jq -e '.auto_merge | type == "boolean" or (type == "object" and (has("sync") or has("harvest")))' >/dev/null 2>&1
 }
 
-# 저장소별 조정값. 기준 브랜치의 manifest auto_merge에서만 읽는다(PR이 자기 기준을 느슨하게 하지 못한다).
-# 안전 최소 기준(head 고정·같은 저장소·대상 브랜치·이름 바꾸기·삭제·모드 거부·정책 불변·사람 활동 시 중단)은 여기서 바꿀 수 없다.
-policy_num() { # repo base key default cap → default ≤ … ≤ cap 안의 정수
-  local v=""
-  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" --argjson cap "$5" \
-    '.auto_merge[$k] // empty | if type == "number" and . >= 0 then ([floor, $cap] | min) else empty end' 2>/dev/null)"
-  [[ "$v" =~ ^[0-9]+$ ]] || v="$4"
+# 조정값은 사용자 설정 HM_AUTO_MERGE_<KEY>(워크플로 자동화 단계의 HM_MERGE_*와 같은 개인 설정)에서 읽고, 기준 브랜치
+# manifest의 auto_merge.<key>가 있으면 함께 본다. 안전에 걸린 값은 둘 중 안전한 쪽(더 작은 상한, 더 엄격한 불리언)을 고른다 —
+# 저장소 값은 하한일 뿐 허용 스위치가 아니다. PR이 바꾼 manifest는 읽지 않으므로 PR이 자기 기준을 느슨하게 하지 못한다.
+# 안전 최소 기준(head 고정·같은 저장소·대상 브랜치·이름 바꾸기·삭제·모드 거부·정책 불변·사람 활동 시 중단·CI 실패 거부)은 여기서 바꿀 수 없다.
+user_value() { # key → HM_AUTO_MERGE_<KEY> 값
+  local name=""
+  name="HM_AUTO_MERGE_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  printf '%s\n' "${!name:-}"
+}
+repo_value() { # repo base key → 기준 브랜치 manifest의 auto_merge.<key>(JSON) 또는 빈 줄
+  base_manifest "$1" "$2" | jq -c --arg k "$3" '.auto_merge | if type == "object" and has($k) then .[$k] else empty end' 2>/dev/null
+}
+policy_num() { # repo base key default cap strict|prefer → 0..cap 정수. strict: 둘 다 있으면 작은 값, prefer: 사용자 값 우선
+  local user="" repo="" v=""
+  user="$(user_value "$3")"
+  [[ "$user" =~ ^[0-9]{1,6}$ ]] && user="$((10#$user))" || user=""
+  repo="$(repo_value "$1" "$2" "$3" | jq -r --argjson cap "$5" 'if type == "number" and . >= 0 then ([floor, $cap] | min) else empty end' 2>/dev/null)"
+  [[ "$repo" =~ ^[0-9]+$ ]] || repo=""
+  if [[ -n "$user" && -n "$repo" && "$6" == strict ]]; then
+    v=$(( user < repo ? user : repo ))
+  else
+    v="${user:-${repo:-$4}}"
+  fi
   (( v <= $5 )) || v="$5"
   printf '%s\n' "$v"
 }
-policy_bool() { # repo base key default(true|false)
-  local v=""
-  v="$(base_manifest "$1" "$2" | jq -r --arg k "$3" '.auto_merge[$k] | if type == "boolean" then tostring else empty end' 2>/dev/null)"
-  [[ "$v" == true || "$v" == false ]] || v="$4"
-  printf '%s\n' "$v"
+policy_bool() { # repo base key default safe → 어느 쪽이든 safe 값이면 safe, 아니면 적힌 값(사용자 우선), 둘 다 없으면 default
+  local user="" repo=""
+  case "$(user_value "$3")" in 1|true) user=true ;; 0|false) user=false ;; esac
+  repo="$(repo_value "$1" "$2" "$3" | jq -r 'if type == "boolean" then tostring else empty end' 2>/dev/null)"
+  if [[ "$user" == "$5" || "$repo" == "$5" ]]; then printf '%s\n' "$5"
+  elif [[ -n "$user$repo" ]]; then printf '%s\n' "${user:-$repo}"
+  else printf '%s\n' "$4"
+  fi
+}
+policy_method() { # repo base → squash|merge|default. 안전과 무관해 사용자 설정 우선, 없으면 기준 브랜치 manifest, 없으면 호스트 기본
+  local m=""
+  m="$(user_value method)"
+  [[ -n "$m" ]] || m="$(repo_value "$1" "$2" method | jq -r 'if type == "string" then . else empty end' 2>/dev/null)"
+  case "$m" in squash|merge|default) printf '%s\n' "$m" ;; *) printf 'default\n' ;; esac
 }
 
 # host/owner/repo (소문자). PR URL과 git 원격 URL을 같은 꼴로 맞춰 비교한다.
@@ -121,7 +146,7 @@ check_sync() { # repo base head result
   local base_json="" head_json="" key=""
   case "$result" in
     improved) ;;
-    partial) [[ "$(policy_bool "$repo" "$base" sync_partial false)" == true ]] || { echo "partial_sync"; return 1; } ;;
+    partial) [[ "$(policy_bool "$repo" "$base" sync_partial false false)" == true ]] || { echo "partial_sync"; return 1; } ;;
     *) echo "result_$result"; return 1 ;;
   esac
   base_json="$(base_manifest "$repo" "$base")" || { echo "base_manifest_missing"; return 1; }
@@ -171,8 +196,8 @@ check_sync() { # repo base head result
 
 check_harvest() { # repo base head result review
   local repo="$1" base="$2" head="$3" result="$4" review="$5" mode="" status="" f="" i=0 lines=0 why="" max_files=3 max_lines=40
-  max_files="$(policy_num "$repo" "$base" harvest_max_files 3 5)"
-  max_lines="$(policy_num "$repo" "$base" harvest_max_lines 40 100)"
+  max_files="$(policy_num "$repo" "$base" harvest_max_files 3 5 strict)"
+  max_lines="$(policy_num "$repo" "$base" harvest_max_lines 40 100 strict)"
   [[ "$result" == improved ]] || { echo "result_$result"; return 1; }
   # harvest 에이전트가 남긴 값은 자기 신고다. 거르는 데만 쓰고, 통과 근거는 아래 독립 검토가 맡는다.
   [[ "$(jq -r '.review.first_pass // empty' <<<"$review" 2>/dev/null)" == "pass" ]] || { echo "review_not_first_pass"; return 1; }
@@ -286,7 +311,10 @@ command_enqueue() {
     fi
     return 0
   fi
-  repo_allows "$repo" "$base" "$scope" || { record auto_merge_skipped "$project" "$scope" "$pr" "repo_opt_out"; return 0; }
+  # 예전 저장소 허용 스위치는 막지 않는다. 남아 있으면 세션 시작 때 한 번 알리도록 기록한다(알린 뒤에는 기록하지 않는다).
+  if [[ ! -f "$AM_DIR/legacy_switch_noticed" ]] && has_legacy_switch "$repo" "$base"; then
+    record auto_merge_legacy_switch "$project" "$scope" "$pr"
+  fi
   # PR이 향해야 할 브랜치. 원격 추적 ref(origin/<branch>)가 아니면 PR 대상과 맞춰 볼 수 없다.
   [[ "$base" == origin/?* ]] || { record auto_merge_skipped "$project" "$scope" "$pr" "no_base_branch"; return 0; }
   # PR URL은 에이전트가 보고한 값이다 — 이 저장소의 PR인지 먼저 맞춰 본다(브랜치·head는 sweep이 호스트에서 확인).
@@ -301,8 +329,7 @@ command_enqueue() {
     record auto_merge_skipped "$project" "$scope" "$pr" "independent_review_failed"
     return 0
   fi
-  method="$(base_manifest "$repo" "$base" | jq -r '.auto_merge.method // "default"' 2>/dev/null)"
-  case "$method" in squash|merge|default) ;; *) method="default" ;; esac
+  method="$(policy_method "$repo" "$base")"
   mkdir -p "$PENDING_DIR"
   jq -cn --arg project "$project" --arg scope "$scope" --arg pr "$pr" --arg head "$head" --arg method "$method" \
     --arg repo "$repo" --arg base "$base" --arg since "${since:0:19}" --arg at "$(now_iso)" \
@@ -325,9 +352,9 @@ sweep_one() { # file → 처리 끝이면 사유(병합이면 "merged")를 출�
   age=$(( $(date -u +%s) - $(iso_epoch "$at" || date -u +%s) ))
   # 끈 설정은 대기 중인 PR에도 바로 적용한다.
   opt_in_env "$scope" || { echo "opted_out"; return; }
-  if [[ ! -d "$repo" || -z "$base" ]] || ! repo_allows "$repo" "$base" "$scope"; then echo "repo_opt_out"; return; fi
-  wait_s=$(( $(policy_num "$repo" "$base" wait_hours 72 336) * 3600 ))
-  require_ci="$(policy_bool "$repo" "$base" require_ci true)"
+  if [[ ! -d "$repo" || -z "$base" ]]; then echo "repo_missing"; return; fi
+  wait_s=$(( $(policy_num "$repo" "$base" wait_hours 72 336 prefer) * 3600 ))
+  require_ci="$(policy_bool "$repo" "$base" require_ci true true)"
   st="$(pr_cmd --status "$pr" 2>/dev/null)" || rc=$?
   if (( rc == 2 || rc == 3 )); then echo "unsupported_host"; return; fi
   if (( rc != 0 )) || ! jq -e '.state | type == "string"' <<<"$st" >/dev/null 2>&1; then
@@ -349,7 +376,7 @@ sweep_one() { # file → 처리 끝이면 사유(병합이면 "merged")를 출�
   (( $(jq -r '.activity // 0' <<<"$st") == 0 )) || { echo "human_activity"; return; }
   [[ "$(jq -r '.mergeable // "unknown"' <<<"$st")" != conflicting ]] || { echo "conflict"; return; }
   ci="$(jq -r '.ci // "none"' <<<"$st")"
-  # CI가 없는 저장소는 require_ci:false일 때만 병합한다. 실패는 어느 설정에서도 막는다.
+  # CI가 없는 저장소는 require_ci가 false일 때만 병합한다(사용자 설정·기준 브랜치 manifest 어느 쪽도 true가 아닐 때). 실패는 어느 설정에서도 막는다.
   [[ "$ci" == none && "$require_ci" == false ]] && ci=success
   case "$ci" in
     failure) echo "ci_failed"; return ;;
@@ -405,12 +432,12 @@ hint_message() {
   [[ "$n" =~ ^[0-9]+$ ]] || return 0
   (( n >= min )) || return 0
   mkdir -p "$AM_DIR" && printf '%s\n' "$now" >"$marker"
-  printf '%s\n' "ai-harness: 최근 30일 자동 sync PR ${n}건이 자동 병합 내용 조건(템플릿 그대로 복사·manifest 해시 일치·정책 불변)을 만족했습니다. 이런 PR의 병합을 맡기려면 /ai-harness:setup에서 HM_SYNC_AUTO_MERGE를 켜고, 저장소 기준 브랜치의 .ai-harness/harness.json에 \"auto_merge\": {\"sync\": true}를 넣으세요(CI 통과·사람 활동 없음도 병합 직전에 확인합니다). 이 안내 끄기: HM_AUTO_MERGE_HINT=0"
+  printf '%s\n' "ai-harness: 최근 30일 자동 sync PR ${n}건이 자동 병합 내용 조건(템플릿 그대로 복사·manifest 해시 일치·정책 불변)을 만족했습니다. 이런 PR의 병합을 맡기려면 /ai-harness:setup에서 HM_SYNC_AUTO_MERGE를 켜세요(저장소 설정은 필요 없고, CI 통과·사람 활동 없음은 병합 직전에 확인합니다). 이 안내 끄기: HM_AUTO_MERGE_HINT=0"
 }
 
 command_notify() {
   # 알림 위치는 시각이 아니라 이미 본 줄 수로 기억한다(같은 초에 붙은 기록을 빠뜨리지 않게). 파일이 줄었으면 처음부터 본다.
-  local marker="$AM_DIR/notified_lines" seen=0 total=0 msg="" hint="" joined=""
+  local marker="$AM_DIR/notified_lines" seen=0 total=0 msg="" hint="" joined="" legacy=""
   [[ -f "$RUNS_FILE" ]] || return 0
   seen="$(cat "$marker" 2>/dev/null || echo 0)"; [[ "$seen" =~ ^[0-9]+$ ]] || seen=0
   total="$(wc -l <"$RUNS_FILE" | tr -d ' ')"
@@ -418,15 +445,25 @@ command_notify() {
   if (( total > seen )); then
     msg="$(sed -n "$((seen + 1)),${total}p" "$RUNS_FILE" | jq -Rrn '[inputs | fromjson? | objects
         | select(.event == "auto_merged" or (.event == "auto_merge_skipped"
-            and ((.reason // "") | tostring | test("^(repo_opt_out|opted_out|merged_elsewhere|closed|unsupported_host)$") | not)))]
+            and ((.reason // "") | tostring | test("^(repo_opt_out|repo_missing|opted_out|merged_elsewhere|closed|unsupported_host)$") | not)))]
       | if length == 0 then empty else
           "ai-harness 자동 병합: " + ([.[] | select(.event == "auto_merged")] | length | tostring) + "건 병합, "
           + ([.[] | select(.event == "auto_merge_skipped")] | length | tostring) + "건은 사람 확인 필요 — "
           + ([.[] | "\(.artifact) (\(if .event == "auto_merged" then "병합" + (if .reason then ", " + (.reason | tostring) else "" end) else (.reason | tostring) end))"] | .[-5:] | join(", "))
         end' 2>/dev/null)" && { mkdir -p "$AM_DIR" && printf '%s\n' "$total" >"$marker"; } || msg=""
+    # 예전 저장소 허용 스위치(auto_merge.sync·harvest)가 남은 저장소를 봤으면 더는 쓰지 않는다고 한 번만 알린다.
+    if [[ ! -f "$AM_DIR/legacy_switch_noticed" ]]; then
+      legacy="$(sed -n "$((seen + 1)),${total}p" "$RUNS_FILE" | jq -Rrn '[inputs | fromjson? | objects
+          | select(.event == "auto_merge_legacy_switch") | .project] | unique
+        | if length == 0 then empty else
+            "ai-harness 자동 병합: 저장소 harness.json의 auto_merge 허용 스위치(sync·harvest)는 더 이상 쓰지 않습니다 — 켜고 끄기는 사용자 설정(HM_SYNC_AUTO_MERGE·HM_HARVEST_AUTO_MERGE)만 봅니다. 남아 있는 저장소: "
+            + (.[:5] | join(", ")) + ". 지우지 않아도 동작에는 영향이 없습니다."
+          end' 2>/dev/null)" || legacy=""
+      [[ -z "$legacy" ]] || { mkdir -p "$AM_DIR" && : >"$AM_DIR/legacy_switch_noticed"; }
+    fi
   fi
   hint="$(hint_message)"
-  joined="$(printf '%s\n%s' "$msg" "$hint" | awk 'NF')"
+  joined="$(printf '%s\n%s\n%s' "$msg" "$legacy" "$hint" | awk 'NF')"
   [[ -n "$joined" ]] && jq -cn --arg m "$joined" '{systemMessage:$m}'
   return 0
 }

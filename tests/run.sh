@@ -4162,7 +4162,8 @@ AM_REPO="$TEST_TMP/am-repo"
 make_repo "$AM_REPO" https://github.com/acme/am.git
 git -C "$AM_REPO" checkout -q -b develop
 mkdir -p "$AM_REPO/.ai-harness/workflows" "$AM_REPO/.ai-harness/docs"
-jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{},auto_merge:{sync:true,harvest:true,method:"squash"}}' >"$AM_REPO/.ai-harness/harness.json"
+# 저장소 auto_merge 설정 없이 사용자 설정만으로 동작한다(#250).
+jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{}}' >"$AM_REPO/.ai-harness/harness.json"
 printf '# rules\n' >"$AM_REPO/AGENTS.md"
 printf '# testing\n' >"$AM_REPO/.ai-harness/docs/testing.md"
 printf 'x\n' >"$AM_REPO/app.js"
@@ -4213,6 +4214,24 @@ assert_eq "too_many_files:6" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_
 am_base_with lines-bad '.auto_merge.harvest_max_lines = "999"'
 am_on lines-bad h-bad && seq 1 41 >>"$AM_REPO/AGENTS.md"
 assert_eq "too_many_lines:41" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-bad --scope project --head "$(am_commit hbad)" --review "$AM_REVIEW")" "a non-number value falls back to the default"
+# 조정값은 사용자 설정 HM_AUTO_MERGE_*로도 정한다. 저장소 값이 함께 있으면 안전한 쪽(작은 상한·엄격한 불리언)을 쓴다.
+assert_eq "ok" "$(HM_AUTO_MERGE_SYNC_PARTIAL=1 am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "the user setting allows partial sync without a repo setting"
+am_base_with partial-off '.auto_merge.sync_partial = false'
+am_on partial-off s-partial-off
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_PARTIAL_OFF="$(am_commit partialoff)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-off --scope sync --head "$AM_PARTIAL_OFF")" "the strict fixture itself passes as a full sync"
+assert_eq "partial_sync" "$(HM_AUTO_MERGE_SYNC_PARTIAL=1 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-off --scope sync --head "$AM_PARTIAL_OFF" --result partial)" "a repo that refuses partial sync stays strict"
+assert_eq "partial_sync" "$(HM_AUTO_MERGE_SYNC_PARTIAL=0 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-on --scope sync --head "$AM_PARTIAL" --result partial)" "a user who refuses partial sync stays strict"
+am_branch h-u60 && seq 1 60 >>"$AM_REPO/AGENTS.md"
+AM_HU60="$(am_commit hu60)"
+assert_eq "ok" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=60 am_check --scope project --head "$AM_HU60" --review "$AM_REVIEW")" "the user setting raises the harvest line cap"
+assert_eq "too_many_lines:60" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=50 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-60 --scope project --head "$AM_H60" --review "$AM_REVIEW")" "with both set the smaller cap wins"
+am_branch h-u999 && seq 1 101 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:101" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=999 am_check --scope project --head "$(am_commit hu999)" --review "$AM_REVIEW")" "the plugin cap applies to the user setting"
+assert_eq "too_many_lines:60" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=abc am_check --scope project --head "$AM_HU60" --review "$AM_REVIEW")" "a bad user value falls back to the default"
 am_sync_head s-bytes
 printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
 am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
@@ -4302,7 +4321,7 @@ am() { HARNESS_METRICS_DIR="$AM_DATA" HM_OPEN_PR_CMD="$TEST_TMP/am-pr" HM_AUTO_M
 am_runs() { jq -sr "$1" "$AM_DATA/harvest-auto/runs.jsonl"; }
 am_pending() { find "$AM_DATA/auto-merge/pending" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 AM_SINCE="2026-11-03T00:00:00Z"
-am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
+am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 HM_AUTO_MERGE_METHOD=squash am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
 am_harvest_enqueue() { HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr "$1" --since "$AM_SINCE" --review "$AM_REVIEW"; }
 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/1 --since "$AM_SINCE"
 assert_eq "auto_merge_eligible" "$(am_runs 'last | .event')" "with the setting off a passing sync PR is only noted as eligible"
@@ -4320,10 +4339,23 @@ AM_REVIEW_MODE=forged am_harvest_enqueue https://github.com/acme/am/pull/21
 assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a verdict without this run's token is not accepted"
 am_harvest_enqueue https://github.com/acme/am/pull/22
 assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a harvest PR passing the independent review is queued"
-git -C "$AM_REPO" checkout -q -B off develop && am_manifest '.auto_merge.harvest = false' && git -C "$AM_REPO" commit -q -am off
-git -C "$AM_REPO" update-ref refs/remotes/origin/off off
-HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
-assert_eq "repo_opt_out" "$(am_runs 'last | .reason')" "the base branch manifest must allow it"
+assert_eq "0" "$(am_runs '[.[] | select(.event == "auto_merge_legacy_switch")] | length')" "no legacy notice for a repo without auto_merge"
+# 저장소 허용 스위치는 더 이상 막지 않는다(#250): auto_merge.harvest:false·auto_merge:false여도 사용자 설정이 켜져 있으면 대상이다.
+am_base_with off '.auto_merge.harvest = false | .auto_merge.method = "merge"'
+am_on off h-off && printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+AM_HARVEST_OFF="$(am_commit hoff)"
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OFF" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a repo switch set to false no longer blocks"
+assert_eq "auto_merge_legacy_switch" "$(am_runs '.[-2].event')" "the old repo switch is recorded for a notice"
+assert_eq "merge" "$(jq -r 'select(.pr == "https://github.com/acme/am/pull/23") | .method' "$AM_DATA"/auto-merge/pending/*.json)" "the repo method is used when the user sets none"
+am_base_with off-all '.auto_merge = false'
+am_on off-all h-offall && printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+HM_HARVEST_AUTO_MERGE=1 HM_AUTO_MERGE_METHOD=squash am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off-all --head "$(am_commit hoffall)" --pr https://github.com/acme/am/pull/24 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "auto_merge: false no longer blocks"
+assert_eq "squash" "$(jq -r 'select(.pr == "https://github.com/acme/am/pull/24") | .method' "$AM_DATA"/auto-merge/pending/*.json)" "the user method comes first"
+rm -f "$AM_DATA"/auto-merge/pending/*.json
+am_sync_enqueue https://github.com/acme/am/pull/1
+am_harvest_enqueue https://github.com/acme/am/pull/22
 # sweep: 호스트 상태 스텁. CI 진행 중이면 기다리고, 통과하면 head를 고정해 병합한다.
 cat >"$TEST_TMP/am-pr" <<'STUB'
 #!/usr/bin/env bash
@@ -4345,12 +4377,19 @@ assert_not_file "$AM_PR_LOG"
 am_state 1
 am_state 22 "$AM_HARVEST_OK"
 HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
-assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the repo method"
+assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the user method"
+assert_eq "https://github.com/acme/am/pull/22|$AM_HARVEST_OK|default" "$(sort "$AM_PR_LOG" | sed -n 2p)" "without any method setting the host default is used"
 assert_eq "2" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "both queued PRs are merged"
 assert_eq "auto_merged" "$(am_runs 'last | .event')" "the merge is recorded"
 assert_eq "0" "$(am_pending)" "merged entries leave the queue"
-assert_contains "$(am notify | jq -r '.systemMessage')" "2건 병합" "SessionStart reports auto merges"
+AM_NOTICE="$(am notify | jq -r '.systemMessage')"
+assert_contains "$AM_NOTICE" "2건 병합" "SessionStart reports auto merges"
+assert_contains "$AM_NOTICE" "auto_merge 허용 스위치(sync·harvest)는 더 이상 쓰지 않습니다" "SessionStart says the repo switch is no longer used"
+assert_contains "$AM_NOTICE" "남아 있는 저장소: am-svc." "the notice names the repo"
 assert_eq "" "$(am notify)" "the notice is shown once"
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OFF" --pr https://github.com/acme/am/pull/25 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "after the notice the old switch is not recorded again"
+rm -f "$AM_DATA"/auto-merge/pending/*.json
 : >"$AM_PR_LOG"
 for AM_CASE in 'head|.head = "0000000000000000"|head_moved' 'short|.head = "'"${AM_SYNC_OK:0:6}"'"|head_moved' 'base|.base = "main"|pr_base_mismatch' \
   'activity|.activity = 1|human_activity' 'ci|.ci = "failure"|ci_failed' 'conflict|.mergeable = "conflicting"|conflict' 'closed|.state = "closed"|closed' \
@@ -4394,7 +4433,7 @@ assert_eq "" "$(HM_SYNC_AUTO_MERGE=1 am notify)" "no hint once auto merge is on"
 AM_HINT="$(am notify | jq -r '.systemMessage')"
 assert_contains "$AM_HINT" "3건" "the hint shows the evidence"
 assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting"
-assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
+[[ "$AM_HINT" != *'auto_merge'* ]] || fail "the hint no longer asks for a repo setting"
 assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
 assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
 # 대화형 /setup 고르기 단계가 디자인 스킬도 묻는다(#220). 설치는 기존 design install 경로를 쓴다.
@@ -4429,6 +4468,24 @@ HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" 
 am_state 73 "$AM_NOCI" '.ci = "failure" | .base = "noci"'
 HM_SYNC_AUTO_MERGE=1 am sweep
 assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/73")] | last | "\(.event)|\(.reason)"')" "failed CI blocks even without require_ci"
+# require_ci도 사용자 설정으로 끌 수 있지만, 기준 브랜치가 require_ci:true면 그쪽이 이긴다. 실패한 CI는 여전히 막는다.
+rm -f "$AM_DATA"/auto-merge/pending/*.json && : >"$AM_PR_LOG"
+am_base_with ci-on '.auto_merge.require_ci = true'
+am_on ci-on s-cion
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_CION="$(am_commit cion)"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/74 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/ci-on --head "$AM_CION" --pr https://github.com/acme/am/pull/75 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/76 --since "$AM_SINCE"
+am_state 74 "$AM_SYNC_OK" '.ci = "none"'
+am_state 75 "$AM_CION" '.ci = "none" | .base = "ci-on"'
+am_state 76 "$AM_SYNC_OK" '.ci = "failure"'
+HM_SYNC_AUTO_MERGE=1 HM_AUTO_MERGE_REQUIRE_CI=0 am sweep
+assert_eq "https://github.com/acme/am/pull/74" "$(cut -d'|' -f1 "$AM_PR_LOG")" "the user setting merges a repo without CI and without a repo value"
+assert_eq "1" "$(am_pending)" "a repo that requires CI keeps waiting despite the user setting"
+assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/76")] | last | "\(.event)|\(.reason)"')" "failed CI blocks with the user setting too"
 pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
