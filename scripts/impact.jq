@@ -2,6 +2,8 @@
 # 인자: $project $root $inst(설치일) $src(출처) $bs(전 시작) $asince(후 시작) $au(후 끝, 미포함) $len(구간 일수) $today
 #       $digests[0] {파일이름: {c: 교정, m: 프로젝트 사실 모름(missing_context), f: 모든 finding}}
 #       $history[0] harvest 리뷰 이력 · $applied[0] 자동 적용 규칙 · $rb/$ra 재작업(JSON|null)
+# 지표별 비교 가능성·설치 후 추세는 impact-assess.jq가 정한다(-L scripts). 저장소 상태는 판정이 붙은 뒤 evidence가 더한다.
+include "impact-assess";
 
 def active_min_turns: 5;
 # 개선별 재발 후보: 한쪽 목록 상한, 반영 전 근거가 batch 기록에 없을 때 볼 날 수.
@@ -111,7 +113,9 @@ def harness_use:
             after_install: ($w >= ($inst | week_of)),
             sessions: ($W | length),
             turns_median: ($W | map(select((.turns // 0) >= active_min_turns) | .turns) | median),
+            corrections: ([$WD[] | $D[._f].c | length] | add // 0),
             corrections_per_session: per([$WD[] | $D[._f].c | length] | add // 0; $WD | length),
+            missing_context: ([$WD[] | $D[._f].m | length] | add // 0),
             missing_context_per_session: per([$WD[] | $D[._f].m | length] | add // 0; $WD | length),
             digested_sessions: ($WD | length),
             errors_per_session: per([$W[] | select(has_cov("error")) | evsum(.; "error")] | add // 0; $W | map(select(has_cov("error"))) | length),
@@ -172,4 +176,4 @@ def harness_use:
         (if $before.sessions > 0 and $after.sessions > 0
             and ($before.models | top_model) != ($after.models | top_model) then "model_shift" else empty end) ]
     )
-  }
+  } | . + {assessment: assess}

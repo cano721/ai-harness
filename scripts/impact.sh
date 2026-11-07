@@ -169,7 +169,7 @@ command_compare() {
     --arg bs "$before_since" --arg asince "$after_since" --arg au "$after_until" --argjson len "$len" --arg today "$today" \
     --slurpfile digests "$tmp/digests.json" --slurpfile history "$tmp/history.json" --slurpfile applied "$tmp/applied.json" \
     --argjson rb "$rework_before" --argjson ra "$rework_after" \
-    -f "$DIR/impact.jq" "$tmp/events.jsonl"
+    -L "$DIR" -f "$DIR/impact.jq" "$tmp/events.jsonl"
 }
 
 command_render() {

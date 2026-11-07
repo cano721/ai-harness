@@ -5902,6 +5902,81 @@ HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TM
 assert_eq "[]" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-old.html" | jq -c '.improvements')" "impact render treats missing improvements as none"
 pass "impact render tolerates odd inputs"
 
+# 비교 가능성·추세·저장소 상태는 집계 쪽(impact-assess.jq)이 정한다. 보드와 리포트는 그 값을 그대로 쓴다. (#260)
+# 설치 전 정리된 세션이 없으면 0 → N을 비교하지 않고 이유를 낸다. 표본이 충분할 때만 증감을 낸다.
+assess_q() { jq -rn -L "$ROOT/scripts" --argjson d "$1" "include \"impact-assess\"; \$d | $2"; }
+ASSESS_P='{"periods":{"before":{"sessions":12,"digested_sessions":0,"corrections_per_session":null,"missing_context_per_session":null,"guard_blocks":0},
+  "after":{"sessions":30,"digested_sessions":18,"corrections_per_session":0.8,"missing_context_per_session":6.4,"guard_blocks":4}},"weekly":[],"rework":null}'
+assert_eq "false no_baseline_digests null|false after_only|false no_rework" \
+  "$(assess_q "$ASSESS_P" 'assess.metrics | "\(.corrections_per_session | "\(.comparable) \(.reason) \(.change)")|\(.guard_blocks | "\(.comparable) \(.reason)")|\(.rework | "\(.comparable) \(.reason)")"')" \
+  "impact does not compare a metric whose before window has no digested sessions"
+assert_eq "false no_baseline_sessions" \
+  "$(assess_q "$ASSESS_P" '.periods.before.sessions = 0 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact says the before window had no sessions at all"
+assert_eq "false few_digests" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 3 | .periods.before.corrections_per_session = 0.5 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact does not compare a metric with few digested sessions on either side"
+assert_eq "true null down|true null flat|true null up" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 10 | [.periods.before.corrections_per_session = (1.3, 0.8, 0.3)
+    | assess.metrics.corrections_per_session | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares a metric when both windows have enough digested sessions"
+assert_eq "false few_prs null|true null down" \
+  "$(assess_q "$ASSESS_P" '[.rework = ({before:{rework_ratio:0, settled_prs:3}, after:{rework_ratio:40, settled_prs:20}}, {before:{rework_ratio:40, settled_prs:12}, after:{rework_ratio:10, settled_prs:20}})
+    | assess.metrics.rework | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares rework only with enough settled PRs on both sides"
+
+# 추세: 설치 후 최근 주에서 정리된 세션이 있는 주의 앞 절반과 뒤 절반 비율을 맞댄다. 설치 전 주와 정리 1개뿐인 주는 빼고, 모자라면 데이터 부족.
+assess_week() { jq -cn --arg w "$1" --argjson a "$2" --argjson d "$3" --argjson c "$4" \
+  '{week:$w, after_install:$a, sessions:$d, digested_sessions:$d, corrections:$c, corrections_per_session:(if $d == 0 then null else $c / $d end), missing_context:0, missing_context_per_session:0}'; }
+ASSESS_W="[$(assess_week 2026-09-28 false 4 40),$(assess_week 2026-10-05 true 4 4),$(assess_week 2026-10-12 true 1 9),$(assess_week 2026-10-19 true 4 4),$(assess_week 2026-10-26 true 4 1),$(assess_week 2026-11-02 true 4 0)]"
+assert_eq "down 4 16 1 0.13 2026-10-05" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session | \"\(.verdict) \(.weeks) \(.digested) \(.first) \(.last) \(.series[0].week)\"")" \
+  "impact trend compares the first and last half of digested after-install weeks"
+assert_eq "up flat insufficient" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | [(.weekly | map(.corrections = (if .week >= \"2026-10-26\" then 4 else 1 end))), (.weekly | map(.corrections = 2)), (.weekly | .[0:4])] as \$v
+    | [\$v[] as \$w | .weekly = \$w | assess.trends.corrections_per_session.verdict] | join(\" \")")" \
+  "impact trend says up, flat, or not enough data"
+# 3주(3·3·4세션)면 앞·뒤 절반이 각 1주라 표본이 작다 — 판정하지 않는다. 비율 값이 비면 비교하지 않는다.
+assert_eq "insufficient no_value" "$(assess_q "$ASSESS_P" "(${ASSESS_W}[1:5] | .[1].digested_sessions = 0 | .[0].digested_sessions = 3 | .[2].digested_sessions = 3) as \$w
+  | (.weekly = \$w | assess.trends.corrections_per_session.verdict),
+    (.periods.before.digested_sessions = 10 | assess.metrics.corrections_per_session.reason)" | tr '\n' ' ' | sed 's/ $//')" \
+  "impact trend needs enough sessions in each half, and a metric needs values on both sides"
+assert_eq "5" "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session.series | length")" "impact trend series lists the recent after-install weeks it looked at"
+
+# 저장소 상태: 효과(개선 사라짐·줄어듦, 줄어드는 추세, 비교 가능한 감소)와 나쁜 신호(재발, 느는 추세)로 정하고, 신호가 없으면 왜 모르는지 남긴다.
+assert_eq "effective mixed attention watching insufficient no_sessions" \
+  "$(assess_q "$ASSESS_P" "[
+    (.weekly = $ASSESS_W | .improvements = []),
+    (.weekly = $ASSESS_W | .improvements = [{result:{verdict:\"recurred\"}}]),
+    (.improvements = [{result:{verdict:\"recurred\"}}]),
+    (.weekly = (\$d.weekly + [${ASSESS_W}[] | .corrections = 2]) | .improvements = [{result:{verdict:\"hold\"}}]),
+    (.improvements = [{result:{verdict:\"unmatched\"}}]),
+    (.periods.after.sessions = 0 | .improvements = [])]
+    | map(assess_status.key) | join(\" \")")" \
+  "impact sums each repo into effective, mixed, attention, watching, insufficient, or no recent sessions"
+assert_eq "no_baseline few_recent_digests unmatched_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"unmatched"}}] | assess_status.gaps | map(if .n then "\(.why):\(.n)" else .why end) | join(" ")')" \
+  "impact says why a repo has no answer yet"
+assert_eq "insufficient no_baseline_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"no_baseline"}}] | assess_status | "\(.key) \(.gaps | map(select(.why == "no_baseline_improvements")) | map("\(.why):\(.n)") | join(""))"')" \
+  "impact does not count an improvement without a baseline as being watched"
+
+# compare·render·view가 같은 값을 싣는다. EV는 설치 전 정리된 세션이 없다.
+assert_eq "false no_baseline_sessions false after_only" \
+  "$(jq -r '.assessment.metrics | "\(.corrections_per_session.comparable) \(.corrections_per_session.reason) \(.guard_blocks.comparable) \(.guard_blocks.reason)"' <<<"$EV_JSON")" \
+  "impact compare carries comparability per metric"
+assert_eq "few_digests" "$(jq -r '.assessment.metrics.missing_context_per_session.reason' <<<"$IMPACT_JSON")" "impact compare flags few digested sessions"
+EV_VIEW="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$EV_FILE")"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$(jq -r '.highlights.file' <<<"$EV_VIEW")" --out "$TEST_TMP/impact-assess.html" >/dev/null
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-assess.html" | jq -c '.assessment')" \
+  "impact report and view carry the same assessment"
+assert_eq "effective" "$(jq -r '.assessment.status.key' <<<"$EV_VIEW")" "impact view adds the repo status"
+# 옛 캐시(assessment 없음)도 view가 같은 규칙으로 채운다.
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(jq 'del(.assessment)' "$EV_FILE" >"$TEST_TMP/impact-noassess.json"; HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$TEST_TMP/impact-noassess.json" | jq -c '.assessment')" \
+  "impact view assesses an old compare JSON the same way"
+assert_contains "$(<"$ROOT/skills/harness-impact/report-template.html")" "비교 불가" "impact report says when a metric cannot be compared"
+pass "impact assessment: comparability, after-install trend, repo status"
+
 # digest가 null·깨짐이면 건너뛰고, 세션 0건·이력 없음이어도 compare가 JSON을 낸다.
 ODD_DATA="$TEST_TMP/impact-odd-data"
 mkdir -p "$ODD_DATA/events" "$ODD_DATA/digests"
@@ -6288,6 +6363,10 @@ assert_eq "h4:remove:unmatched h3:add:hold h2:add:recurred h1:add:gone" "$(jq -r
   "impact endpoint lists improvements newest first with the change kind"
 assert_eq "$(jq -c '[.improvements[] | .result.verdict] | reverse' <<<"$BIMP_VIEW")" "$(jq -c '[.improvements[].result.verdict]' <<<"$BIMP_APP")" \
   "board verdicts are the ones impact.sh view computes"
+assert_eq "$(jq -c '.assessment' <<<"$BIMP_VIEW")" "$(jq -c '.assessment' <<<"$BIMP_APP")" \
+  "board carries the comparability, trends, and repo status impact.sh view computes"
+assert_eq "mixed true down" "$(jq -r '.assessment | "\(.status.key) \(.metrics.corrections_per_session.comparable) \(.metrics.corrections_per_session.change)"' <<<"$BIMP_APP")" \
+  "board repo status weighs improvements that held against ones that recurred"
 assert_eq "10 0 6 4" "$(jq -r '.improvements[] | select(.id == "h1") | "\(.observed_now) \(.result.after_hits) \(.result.observed) \(.result.unjudged)"' <<<"$BIMP_APP")" \
   "impact card carries sessions observed now and the judged recurrence"
 case "$BIMP" in *candidates*|*"교정 원문"*) fail "impact endpoint does not ship candidate pools or correction text" ;; esac
@@ -6323,6 +6402,7 @@ assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/rep
 assert_eq "2026-10-25" "$(jq -r '.matched_through' "$BIMP_KEEP")" "a board render does not overwrite the kept matching"
 assert_eq "true" "$(bimp_sh stop | jq -r '.stopped')" "impact board stops"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "판정 기준 (/harness-impact와 같음)" "impact view states the verdict rule"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "다시 계산 실패" "impact view keeps showing a failed recompute next to the last result"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 효과" "board skill documents the impact view"
 pass "harness board impact view: background cache, refresh, failure reason, verdicts from impact"
 
