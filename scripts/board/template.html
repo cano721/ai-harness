@@ -246,7 +246,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   <form method="dialog">
     <h3>새 세션 (claude 백그라운드)</h3>
     <label for="fcwd">작업 경로</label>
-    <input id="fcwd" list="repos" required placeholder="/Users/.../repo">
+    <input id="fcwd" list="repos" required placeholder="/path/to/repo">
     <datalist id="repos"></datalist>
     <label for="fname">이름 (선택)</label>
     <input id="fname" placeholder="예: NJ-1234 버그 확인">
@@ -316,9 +316,9 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   const DRAWER_ACTIONS = ['view', 'send', 'cleanup'];
   const ACTION_LABEL = { harvest_now: 'harvest 지금 돌리기', open_agent: '세션으로 열기' };
   const CAUSE = {
-    bitbucket_ip: {
-      title: 'Bitbucket IP 화이트리스트 밖이라 PR을 열지 못함',
-      detail: '같은 원인으로 자동 sync가 멈췄습니다. 사내망/VPN에 연결된 상태에서 다시 실행하면 한 번에 풀립니다.',
+    remote_blocked: {
+      title: '원격 저장소 접근이 막혀 PR을 열지 못함',
+      detail: '같은 원인으로 자동 sync가 멈췄습니다. 원격 호스트가 접속 위치(IP 허용 목록·VPN)나 권한으로 막고 있는지 확인한 뒤 다시 실행하세요.',
       cmd: '/ai-harness:harness-init --sync --apply',
     },
   };
@@ -914,7 +914,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       if (r.error) { row.append(el('div')); meta.append(el('span', 'warn', r.error)); row.append(meta); box.append(row); continue; }
       row.append(ladder(r.mine, '기본 따름', (k) => setLevel({ scope: 'repo', repo: r.repo, level: k })));
       const e = r.effective || {};
-      const src = { repo: '이 저장소 내 설정', default: '내 기본', team: e.legacy ? '저장소 병합 설정 — 곧 없어짐(#248)' : '기본' }[e.source];
+      const src = { repo: '이 저장소 내 설정', default: '내 기본', team: '기본' }[e.source];
       meta.append(el('span', e.level ? null : 'warn', `적용: ${e.level ? LVL[e.level] : r.level === 'direct' ? '직접 커밋(PR 없음)' : 'git 통제 미설정 — 커밋·PR 안 함'} (${src})`));
       for (const note of e.notes || []) meta.append(el('span', 'warn', note));
       const mp = r.merge_policy || {};

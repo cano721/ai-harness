@@ -1,7 +1,7 @@
 """하네스 설정: 개인 자동화 단계(즉시)와 저장소 사실(PR).
 
 자동화 단계(PR까지/병합까지/배포·검증까지)는 사람마다 다르므로 ~/.ai-harness/config의
-HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS에 둔다(ai-harness #242). 보드가 바로 쓴다.
+HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS에 둔다(#242). 병합 여부는 이 개인 설정만 정한다(#248). 보드가 바로 쓴다.
 기준 브랜치·배포 확인·스모크 명령은 저장소 사실이라 harness.json에 있고, 보드는 직접 고치지 않는다 —
 그 저장소에서 /ai-harness:harness-init 설정 변경을 돌려 draft PR로 낸다.
 """
@@ -78,13 +78,11 @@ def read_repo(repo):
             m = json.load(f)
     except Exception as e:
         return {"repo": repo, "name": os.path.basename(repo), "error": f"harness.json을 읽지 못함: {e}"}
-    am = m.get("auto_merge") or {}
     return {
         "repo": repo, "name": os.path.basename(repo),
         "branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
         "level": level_of(m), "git_policy": m.get("git_policy"), "merge_policy": m.get("merge_policy"),
         "approval": m.get("approval") or "human",
-        "auto_merge": {"sync": bool(am.get("sync")), "harvest": bool(am.get("harvest"))},
         "monitor_ready": bool(m.get("monitor") and m.get("project_id")),
         "suggest": suggest(repo),
         "key": project_key(repo), "runner": runner_state(repo),
@@ -227,17 +225,15 @@ def effective(row, cfg):
                      + f" — 고른 단계({LEVEL_KO[personal]})는 /harness-init --sync 뒤부터 적용, 그 전엔 저장소 설정을 따름")
         personal, src = None, "team"
     level = personal or ("pr" if row["level"] in LEVELS else None)
-    legacy = not personal and row["level"] in ("merge", "deploy")
-    if legacy:  # #248 전까지 러너는 저장소 merge 설정으로 병합한다
-        level = row["level"]
-        notes.append("저장소 harness.json이 병합까지로 되어 있어 내 설정이 없으면 병합함 — #248로 없어질 예정. 내 단계를 고르면 그것을 따름")
     gp = row.get("git_policy")
+    if gp == "merge":  # 러너는 예전 git_policy:"merge"를 pr-only로 읽는다(#248)
+        notes.append("저장소 harness.json의 병합 설정(git_policy: merge)은 더 이상 쓰이지 않아 PR까지로 읽힘 — /harness-init --sync가 정리를 제안")
     if personal and personal != "pr" and gp not in ("pr-only", "merge"):
         notes.append("저장소가 PR을 만들지 않는 설정(" + (gp or "미설정") + ")이라 병합할 PR이 없음")
     mp = row.get("merge_policy") or {}
     if level == "deploy" and src != "team" and not (mp.get("deploy_check_cmd") or mp.get("smoke_cmd")):
         notes.append("저장소에 배포 확인·스모크 명령이 없어 병합까지만 함 — 아래에서 저장소 사실을 추가할 수 있음")
-    return {"level": level, "source": src, "notes": notes, "legacy": legacy}
+    return {"level": level, "source": src, "notes": notes}
 
 
 # ---- 호스트 브랜치 보호(개인 단계의 병합 안전장치) ----

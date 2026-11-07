@@ -14,6 +14,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [버그 수정 흐름](#bug-fix)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
+- [Harness Board](#board)
 - [모니터링 기반 자동 수정](#autofix)
 - [DB 스캔 가드](#db-scan-guard)
 - [수집 데이터와 보관](#data-retention)
@@ -62,6 +63,7 @@ flowchart LR
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
+| `/board` | 작업 세션·하네스 자동 실행·개인 자동화 설정을 한 화면에서 보고 답하고 싶을 때 ("보드 열어줘") | [Harness Board](#board)를 필요할 때 띄워 브라우저로 엽니다. 이미 떠 있으면 그 주소를 다시 열고, `stop`·`status`로 끄거나 확인합니다. 세션 대화 보기·입력 보내기·질문과 권한 요청 답하기·끝난 세션 정리, 자동 harvest·sync 결과와 대기 harvest 실행, `~/.ai-harness/config` 개인 설정 변경을 합니다. 데몬 없이 `127.0.0.1`에만 뜹니다. Python 3(표준 라이브러리)이 필요합니다. | 사용자 실행 |
 | `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
@@ -149,7 +151,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 - **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
 - **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`·`/design-screen`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/board`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`·`/design-screen`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -627,6 +629,26 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 - **되돌리기**: 자동으로 하지 않습니다. 자동 병합된 harvest 개선이 다음 harvest 검증에서 효과가 없으면 revert PR을 사람 검토용으로 엽니다(자동 병합 대상 아님)
 - 한계: harvest의 독립 검토 세션도 LLM이라 diff에 섞인 지시문에 흔들릴 수 있습니다 — 경로·크기·모드 제한과 함께 쓰는 마지막 관문입니다(검토 1회 비용, 기본 상한 `HM_AUTO_MERGE_REVIEW_BUDGET_USD=1`). Bitbucket merge API는 head를 고정할 수 없어 draft 해제 전후와 병합 응답에서 head를 다시 맞춰 보지만, 마지막 확인과 병합 사이의 push는 막지 못합니다. 병합 직전에 달린 코멘트도 같은 틈이 있습니다. 병합 실패(호스트 merge check·권한)는 draft로 되돌리고 다시 시도하지 않으며 사람에게 넘깁니다
 
+<a id="board"></a>
+
+## Harness Board (`/board`)
+
+자동 harvest·sync·자동 병합은 정기 실행이 하고, 보드는 그 결과와 사람이 시킨 작업 세션을 **보여 주고 사람이 답하는 화면**입니다. 상시 서비스가 아니라 `/ai-harness:board`(Codex `$board`)가 필요할 때 띄우고 `stop`으로 끕니다.
+
+```bash
+scripts/board/board.sh open      # 떠 있으면 그 주소, 없으면 띄우고 브라우저를 엽니다 (출력 JSON의 url)
+scripts/board/board.sh status    # running · url
+scripts/board/board.sh stop
+```
+
+- **작업**: `claude agents --json --all`과 세션 대화 기록으로 상태(사람 필요·진행 중·결과 확인·쉬는 중)를 보입니다. 대화 보기, 입력 보내기(백그라운드 세션은 멈춘 뒤 같은 ID로 이어 가고, Orca 터미널의 대화형 세션은 그 터미널에 입력), 질문 답 버튼, 권한 요청 허용/거부, 끝난 세션 정리(worktree는 변경·원격에 없는 커밋·다른 살아 있는 세션이 없을 때만, 강제 삭제 없음, 대화 기록은 지우지 않음).
+- **하네스 동작**: 자동 harvest·sync 실행 결과, 대기 중인 harvest(지금 돌리기), 정기 실행, 워크플로 러너, 자동 적용 규칙. 검토가 필요한 PR이 호스트에서 병합·거절되면 완료로 내립니다.
+- **하네스 설정**: 개인 자동화 단계(`HM_DELIVERY_LEVEL`·`HM_DELIVERY_LEVEL_REPOS`), 자동 harvest·sync의 실행/병합(`HM_*_AUTO`·`HM_*_AUTO_MERGE`)과 하루 상한을 `~/.ai-harness/config`에 바로 씁니다(다른 줄·권한 보존, 원자적 쓰기). 저장소 사실(기준 브랜치·배포·스모크 명령)은 `harness.json`을 직접 고치지 않고 그 저장소에서 `/harness-init` 설정 변경 세션을 띄워 draft PR로 냅니다.
+- **보안**: `127.0.0.1`에만 묶이고, 실행마다 새 URL 토큰·Host(DNS rebinding)·Origin을 검사합니다. 브라우저에서 명령 문자열을 받지 않고 항목별로 허용된 작업만 서버가 인자를 만들어 실행합니다. 보드는 다른 세션의 질문·권한에 사람 없이 답하지 않습니다.
+- **권한 요청 훅 (선택)**: 보드에서 권한 요청에 답하려면 `/setup`의 자동화 옵션에서 PermissionRequest 훅을 연결합니다(`board.sh hook on|off`, `~/.claude/settings.json` 백업 후 추가·제거). 보드가 꺼져 있거나 30분 넘게 아무도 보지 않으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻습니다. 훅 전용 토큰과 주소는 `~/.ai-harness/board/server.json`(0600, 종료 시 삭제)에만 있습니다.
+- **선택 의존**: Orca가 없으면 세션 묶음과 대화형 터미널 입력만 빠집니다. Jira 키 링크는 `BOARD_JIRA_URL`·`JIRA_BASE_URL` 또는 사용자 규칙 파일에 적힌 주소가 있을 때만 붙습니다. Bitbucket PR 상태·브랜치 보호는 `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`, GitHub는 `gh`로 읽습니다.
+- **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
+
 <a id="autofix"></a>
 
 ## 모니터링 기반 자동 수정 (opt-in)
@@ -840,7 +862,7 @@ export HARNESS_METRICS_DIR="/custom/path"  # 기본: ~/.ai-harness
 .agents/plugins/  Codex 마켓플레이스
 skills/           Claude·Codex가 공용으로 읽는 skill 지시
 hooks/            SessionStart 알림·정기 backfill 호출·PreToolUse 가드 정의
-scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트
+scripts/          수집·집계·보관·업데이트·그래프 검증 스크립트 (scripts/board/는 /board 로컬 서버)
 vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scripts/vendor-archify.sh로만 갱신)
 catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 디자인 스킬의 원본·고정 커밋·검토 기록과 내장 여부)
 agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
@@ -849,13 +871,13 @@ tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
-macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
+macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/board`·`langfuse`는 Python 3(표준 라이브러리)을 씁니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
 개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 
 ```bash
 bash tests/run.sh
-shellcheck scripts/*.sh tests/*.sh
+shellcheck scripts/*.sh scripts/board/*.sh tests/*.sh
 ```
 
 ## 라이선스

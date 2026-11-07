@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # 사람이 시킨 작업(에이전트 세션) 상태. 출처: Claude Code 공식 `claude agents --json --all` + 세션 transcript.
 # 어느 터미널에서 띄운 세션이든 잡힌다. Orca는 필요 없다.
 # 항목 state: needs_human(응답 대기·실패) | running(작업 중) | done(끝남·입력 가능, 최근 DONE_HOURS 이내)

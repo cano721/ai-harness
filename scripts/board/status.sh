@@ -1,14 +1,14 @@
-#!/bin/bash
-# ai-harness 상태 정규화 프로토타입: ~/.ai-harness 데이터를 칸반 항목 JSON으로 바꾼다.
-# 출력: {generated_at, items:[{kind, project, state, at, title, detail, link, log, cmd}]}
-# state: running | needs_human | blocked | done
+#!/usr/bin/env bash
+# Harness Board 상태: ~/.ai-harness 데이터와 작업 세션(work.sh)을 칸반 항목 JSON으로 바꾼다.
+# 출력: {generated_at, window_days, items:[{section, kind, project, state, at, title, detail, link, log, cmd, id, actions}]}
+# state: queued | running | needs_human | blocked | done
 set -euo pipefail
 
 DATA="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
 DAYS="${BOARD_DAYS:-7}"
 STALE_HOURS="${BOARD_STALE_HOURS:-6}"
 now_e=$(date -u +%s)
-since=$(date -u -r $((now_e - DAYS * 86400)) +%Y-%m-%dT%H:%M:%SZ)
+since=$(jq -rn --argjson e "$((now_e - DAYS * 86400))" '$e | todate')
 
 result_excerpt() {
   local log=$1
@@ -130,6 +130,18 @@ else
   echo '[]' > "$tmp/applied.json"
 fi
 
+# 5) harvest 대기: analysis batch가 쌓였지만 아직 돌지 않은 프로젝트. '지금 돌리기'는 이 항목에만 붙는다.
+: > "$tmp/queue.jsonl"
+for b in "$DATA"/harvest-queue/*/analysis-batch.json; do
+  [ -f "$b" ] || continue
+  jq -c 'select(.has_analysis_batch != false and .project != null) |
+    {kind: "harvest", project, state: "queued", at: (.created_at // null),
+     title: "harvest 대기 (세션 \(.counts.sessions // "?")개)",
+     detail: (if (.reasons // []) == [] then null else "근거: " + (.reasons | join(", ")) end),
+     link: null, log: null, cmd: "/ai-harness:harvest"}' "$b" >> "$tmp/queue.jsonl" 2>/dev/null || true
+done
+jq -s . "$tmp/queue.jsonl" > "$tmp/queue.json"
+
 bash "$(dirname "$0")/work.sh" > "$tmp/work.json" 2>/dev/null || echo '[]' > "$tmp/work.json"
 jq -e 'type == "array"' "$tmp/work.json" >/dev/null 2>&1 || echo '[]' > "$tmp/work.json"
 
@@ -139,6 +151,6 @@ jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpf
      | .id = "\(.kind)|\(.project)|\(.at)"
      | .actions = ([ (select(.state == "queued" and (.kind | startswith("harvest"))) | "harvest_now"),
                      (select(.state == "needs_human" and .repo != null) | "open_agent") ])
-     | .cause = (if .state == "needs_human" and ((.detail // "") | test("whitelist|화이트리스트|HTTP 403|원격에 접근할 수 없|PR 생성 사전 점검 실패|PR을 열 수 없")) then "bitbucket_ip" else null end)))
+     | .cause = (if .state == "needs_human" and ((.detail // "") | test("whitelist|화이트리스트|HTTP 403|원격에 접근할 수 없|PR 생성 사전 점검 실패|PR을 열 수 없")) then "remote_blocked" else null end)))
      + $work[0] | sort_by(.at // "") | reverse)}' \
   "$tmp/runs2.json" "$tmp/skips.json" "$tmp/sched.json" "$tmp/runner.json" "$tmp/applied.json" "$tmp/queue.json"

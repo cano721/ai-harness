@@ -1,12 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # 보드 버튼이 부르는 작업. 인자는 서버가 status.json 항목에서 만든 값만 받는다.
 #   board-actions.sh harvest-now <project>
-#   board-actions.sh open-agent <repo> <prompt>
 # 출력: 한 줄 JSON {ok, message}
 set -uo pipefail
 
 DATA="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
-PLUGIN="${HM_PLUGIN_ROOT:-$(jq -r '.plugins | to_entries[] | select(.key | startswith("ai-harness@")) | .value[0].installPath' ~/.claude/plugins/installed_plugins.json 2>/dev/null | head -n 1)}"
+PLUGIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 reply() { jq -cn --argjson ok "$1" --arg m "$2" '{ok: $ok, message: $m}'; }
 
@@ -30,7 +29,7 @@ origin_of() {
 }
 
 harvest_now() {
-  local project=$1 batch="" b status origin cwd src marker before after
+  local project=$1 batch="" b status origin cwd src marker before after_result reason
   for b in "$DATA"/harvest-queue/*/analysis-batch.json; do
     [ "$(jq -r '.project' "$b" 2>/dev/null)" = "$project" ] && { batch=$b; break; }
   done
@@ -56,31 +55,7 @@ harvest_now() {
   fi
 }
 
-open_agent() {
-  local repo=$1 prompt=$2 out
-  command -v orca >/dev/null || { reply false "orca CLI 없음"; return; }
-  out=$(orca agent launch --agent claude --worktree "path:$repo" --prompt "$prompt" --focus --json 2>&1)
-  if jq -e '.ok == true' >/dev/null 2>&1 <<<"$out"; then
-    reply true "Orca에 $(basename "$repo") 에이전트 탭을 열었음"
-  else
-    reply false "Orca 실행 실패: $(printf '%s' "$out" | jq -r '.error.message? // .message? // empty' 2>/dev/null || printf '%s' "$out" | head -c 200)"
-  fi
-}
-
-focus_terminal() {
-  local handle=$1
-  [[ "$handle" =~ ^term_[0-9a-f-]+$ ]] || { reply false "잘못된 터미널 handle"; return; }
-  if orca terminal switch --terminal "$handle" --json >/dev/null 2>&1; then
-    osascript -e 'tell application "Orca" to activate' >/dev/null 2>&1 || true
-    reply true "Orca에서 해당 터미널로 이동함"
-  else
-    reply false "터미널로 이동하지 못함 (이미 닫혔을 수 있음)"
-  fi
-}
-
 case "${1:-}" in
-  focus) focus_terminal "$2" ;;
-  harvest-now) harvest_now "$2" ;;
-  open-agent) open_agent "$2" "$3" ;;
+  harvest-now) harvest_now "${2:-}" ;;
   *) reply false "unknown action"; exit 2 ;;
 esac

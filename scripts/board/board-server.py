@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harness Board 로컬 서버 (프로토타입, 표준 라이브러리만 사용). Orca 없이 동작한다.
+"""Harness Board 로컬 서버 (표준 라이브러리만 사용). Orca 없이 동작한다. 띄우고 끄는 것은 board.sh가 한다.
 
 GET  /?t=TOKEN                   보드 화면
 GET  /status.json?t=...          status.sh 결과(작업 = claude agents, 하네스 = ~/.ai-harness)
@@ -8,6 +8,8 @@ POST /action  {t, id, action}    미리 정한 작업만 실행. send는 {text}
 POST /new     {t, cwd, prompt}   claude --bg 새 세션
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
+127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
+상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
 import atexit, json, os, re, secrets, shutil, signal, subprocess, sys, threading, time, webbrowser
 from datetime import datetime, timezone
@@ -22,8 +24,8 @@ import settings as hsettings  # noqa: E402
 DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN = secrets.token_urlsafe(24)
 HOST, PORT = "127.0.0.1", int(os.environ.get("BOARD_PORT", "8765"))
-LOG = os.environ.get("BOARD_ACTION_LOG", os.path.join(DIR, "board-actions.jsonl"))
-DATA = os.environ.get("HARNESS_METRICS_DIR", os.path.expanduser("~/.ai-harness"))
+DATA = os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness")
+LOG = os.environ.get("BOARD_ACTION_LOG") or os.path.join(DATA, "board", "actions.jsonl")
 INITIAL_BYTES = 1536 * 1024
 HOOK_TOKEN = secrets.token_urlsafe(24)
 HOOK_CONF = os.path.join(DATA, "board", "server.json")  # 권한 훅이 보드를 찾는 곳. 서버가 꺼지면 지운다
@@ -42,21 +44,27 @@ def utc():
 
 
 def log(entry):
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": utc(), **entry}, ensure_ascii=False) + "\n")
 
 
 def jira_base():
-    """Jira 주소: BOARD_JIRA_URL, 없으면 설치된 jira 스킬 문서에 적힌 atlassian 주소. 없으면 링크 없이 키만 보인다."""
-    url = os.environ.get("BOARD_JIRA_URL")
-    if url:
-        return url.rstrip("/")
-    try:
-        with open(os.path.expanduser("~/.claude/skills/jira/SKILL.md"), encoding="utf-8") as f:
-            m = re.search(r"https://[a-z0-9-]+\.atlassian\.net", f.read())
-        return m.group(0) if m else None
-    except OSError:
-        return None
+    """Jira 주소: BOARD_JIRA_URL·JIRA_BASE_URL 환경변수, 없으면 사용자 규칙 파일·설치된 jira 스킬 문서에 적힌 atlassian 주소.
+    어디에도 없으면 링크 없이 키만 보인다. 코드에 조직 주소를 두지 않는다."""
+    for key in ("BOARD_JIRA_URL", "JIRA_BASE_URL"):
+        url = os.environ.get(key)
+        if url and re.fullmatch(r"https://[\w.-]+(:\d+)?/?", url):
+            return url.rstrip("/")
+    for path in (os.path.join(DATA, "skills", "jira.md"), os.path.expanduser("~/.claude/skills/jira/SKILL.md")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                m = re.search(r"https://[a-z0-9-]+\.atlassian\.net", f.read())
+        except OSError:
+            continue
+        if m:
+            return m.group(0)
+    return None
 
 
 JIRA = jira_base()
@@ -567,12 +575,25 @@ def status_with_permissions():
     return {**data, "items": items}
 
 
-def write_hook_conf():
+def write_hook_conf(url):
+    """board.sh·권한 훅이 이 서버를 찾는 곳. token은 훅 전용, url은 브라우저 토큰이 든 주소라 0600으로만 쓴다."""
     os.makedirs(os.path.dirname(HOOK_CONF), exist_ok=True)
-    fd = os.open(HOOK_CONF, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = HOOK_CONF + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid()}, f)
-    atexit.register(lambda: os.path.exists(HOOK_CONF) and os.remove(HOOK_CONF))
+        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url}, f)
+    os.replace(tmp, HOOK_CONF)
+    atexit.register(remove_hook_conf)
+
+
+def remove_hook_conf():
+    """내가 쓴 server.json만 지운다 — 그 사이 다른 서버가 덮어썼으면 남긴다."""
+    conf = _load(HOOK_CONF)
+    if isinstance(conf, dict) and conf.get("pid") == os.getpid():
+        try:
+            os.remove(HOOK_CONF)
+        except OSError:
+            pass
 
 
 # ---- 세션 작업 ----
@@ -876,12 +897,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    try:
+        srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError as e:
+        print(f"board: {HOST}:{PORT}에 묶지 못함 — {e.strerror or e}", file=sys.stderr, flush=True)
+        sys.exit(3)
     srv.daemon_threads = True
-    write_hook_conf()
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
-    print(url, flush=True)
+    write_hook_conf(url)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if sys.stdout.isatty():  # board.sh가 띄우면 주소는 server.json(0600)으로만 전한다 — 로그에 토큰을 남기지 않는다
+        print(url, flush=True)
     if "--no-open" not in sys.argv:
         webbrowser.open(url)
     srv.serve_forever()
