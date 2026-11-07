@@ -14,7 +14,10 @@ Libraries, component registries, CDN scripts, and WebGL effects change between v
 
 - Detect the package manager from the lockfile. Reuse libraries already in the dependency list before adding a new one.
 - Do not run an install command without the user's approval. Propose the exact command and the reason.
-- CDN scripts: pin an exact version, add `integrity` (SRI) and `crossorigin`, and check the site's Content Security Policy allows the host. Prefer a package import when the project has a bundler.
+- Anything from another host — scripts, stylesheets, web fonts, images — needs the user's approval, like a package. In an unattended run add none and propose them in the report. An approved stylesheet's own font files (a split webfont CSS loading many subset files) are part of that approval; SRI cannot cover them — say so in the report, and skip the single-file preload when the subset in use cannot be named.
+- CDN files: pin an exact version, add `integrity` (SRI) and `crossorigin`, and check the site's Content Security Policy allows the host. Prefer a package import when the project has a bundler.
+- Compute SRI from the bytes you fetched (`openssl dgst -sha384 -binary <file> | openssl base64 -A`); never write a hash from memory. Fetch twice and compare. Do not put SRI on files a CDN generates on request (jsDelivr's auto-minified `.min` files say so in their header); use the original file path instead.
+- Component registry CLIs (`npx shadcn add <url>` and similar) run code and write files: run one only after approval, show the file list and each target path first, refuse targets outside the page's source folders, install dependencies with `--ignore-scripts`, and read the fetched code for network calls, `eval`, and `innerHTML` before wiring it up.
 
 ## Stack detection
 
@@ -25,7 +28,7 @@ Libraries, component registries, CDN scripts, and WebGL effects change between v
 | `vue` / `nuxt` | Create a `gsap.context()` in `onMounted`, call `ctx.revert()` in `onUnmounted`; render browser-only effects client-side (`<ClientOnly>` in Nuxt) |
 | `svelte` / `@sveltejs/kit` | Create the context in `onMount` and return a cleanup that reverts it; guard browser APIs |
 | `astro` | Put motion in a component script or an island loaded with `client:visible` |
-| Plain HTML | ES module or `defer` scripts; no inline scripts the CSP forbids |
+| Plain HTML | ES module or `defer` scripts; no inline scripts the CSP forbids — when the reveal gate in `motion-web.md` needs one, use a CSP nonce or hash, or move it to a file and rely on its timed fallback |
 | `tailwindcss` | Use the project's configured theme values; no arbitrary values for things the theme already defines |
 
 React example — the pattern, not a component to copy blindly:
