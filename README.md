@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소, 또는 사용자가 [개인 자동화 단계](#delivery-level)를 `merge`·`deploy`로 고르고 호스트가 기준 브랜치에 필수 승인을 건 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
 
 ## 목차
 
@@ -66,7 +66,7 @@ flowchart LR
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
 | `/design-system-builder` | 프로젝트의 디자인 시스템을 처음 만들거나, 흩어진 값을 정리하거나, 시안에서 토큰을 뽑을 때 | 기존 코드 추출(같은 의도로 3회 이상 쓰인 값만, 기존 이름 유지)·새로 설계(질문 라운드당 3개 이하, 추천 기본값 제시)·시안 추출(확인 전까지 draft) 중 하나로 디자인 규칙 문서·스택별 토큰 파일(CSS 변수·Tailwind·theme.ts·Flutter·Compose·SwiftUI)·반복된 공통 컴포넌트·기준 화면을 만듭니다. 규칙 문서의 필수 절이 `design-audit`의 채점 입력입니다. 기존 문서는 덮어쓰지 않고 refresh/merge를 묻고, 하네스 보호 파일은 diff 승인 후에만 고칩니다. 요청하면 토큰 파일을 원본으로 Figma 라이브러리(Variables·Text style·컴포넌트 variant)를 생성하고, 이후에는 Figma와 토큰 값의 어긋남을 보고합니다(Figma 원격 MCP 쓰기 권한 필요). 랜딩·업무 화면 구현에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
-| `/figma-screen` | 디자이너가 디자인 시스템으로 Figma에 새 화면 시안을 그리거나 기존 시안에 요구사항을 붙일 때 | 기획을 화면 분류·형제·상태(빈·로딩·에러 등)·라이브러리 매핑으로 정리한 뒤, 라이브러리 컴포넌트 인스턴스와 Variables만으로 Figma 프레임을 만듭니다. 라이브러리에 없는 요소는 `제안 / …` 프레임으로 따로 둡니다. 그 다음 `design-audit` 기준(같은 축·배점, Figma 프레임 채점 절)으로 채점하고 감점 순으로 고쳐 다시 재는 루프를 통과(90+·절반 미만 축 없음)까지, 최대 3회 돕니다. 요구사항을 깎거나 라이브러리를 고쳐 점수를 올리지 않습니다. 규칙 문서와 `/design-system-builder`가 만든 Figma 라이브러리, Figma 원격 MCP 쓰기 권한이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
+| `/design-screen` | 디자인 시스템으로 새 화면 시안을 그리거나 기존 화면에 요구사항을 붙일 때 — Figma든 코드든 | 디자인 시스템이 가진 것(Figma 라이브러리·코드 토큰과 공통 컴포넌트)과 요청으로 그릴 곳을 고릅니다. 둘 다 있고 요청이 말하지 않으면 한 번 묻습니다. 기획을 화면 분류·형제·상태(빈·로딩·에러 등)·컴포넌트 매핑으로 정리한 뒤, Figma면 라이브러리 인스턴스와 Variables만으로 프레임을, 코드면 프로젝트 스택으로 토큰·공통 컴포넌트만 쓴 화면과 상태별 목 데이터를 만들어 브라우저로 캡처합니다. 디자인 시스템에 없는 요소는 `제안 / …`으로 따로 둡니다. 그 다음 `design-audit` 기준으로 독립 채점하고 감점 순으로 고쳐 다시 재는 루프를 통과(90+·절반 미만 축 없음)까지, 최대 3회 돕니다. 요구사항을 깎거나 디자인 시스템을 고쳐 점수를 올리지 않습니다. 코드 시안은 커밋하지 않고, 실데이터 연동·테스트·PR은 프로젝트 기능 워크플로(`implement-feature`)로 넘깁니다. 규칙 문서가 필요하고, Figma 대상은 Figma 라이브러리와 Figma 원격 MCP 쓰기 권한이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
 
 ### 프론트엔드 코드 판단 Skill (프론트 프로젝트에서 `/harness-init`이 생성)
 
@@ -125,7 +125,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 | `langfuse` | trace·비용·지연·프롬프트·점수·데이터셋 조회, 변경은 확인 뒤 (공식 MCP 도구를 서버 등록 없이 Python 스크립트로 호출, 여러 프로젝트는 별칭) | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (프로젝트 키) 또는 그 키를 비밀 저장소(AWS SSM·Vault 등)에서 꺼내는 명령 `LANGFUSE_PUBLIC_KEY_CMD`, `LANGFUSE_SECRET_KEY_CMD`, 선택 `LANGFUSE_HOST` (등록 스크립트가 리전 자동 탐지) |
 
 - **접속 정보**: `/setup`이 키마다 발급 주소·순서·필요한 읽기 scope를 안내합니다. base URL·이메일 같은 값은 대화로 받아 저장하고, 토큰은 대화에 남지 않도록 사용자가 별도 터미널에서 `scripts/setup.sh set --tool claude <KEY>`(숨김 입력)로 넣습니다. Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600, 셸 프로파일에서 source)에 저장됩니다. 저장 뒤 `setup.sh check <skill>`이 읽기 전용 호출 하나로 연결과 접속 계정을 확인하고, 401·403·404면 원인을 짚습니다. 각 Skill은 자격 증명을 명령 인자가 아니라 stdin(`curl -K -`)으로 넘깁니다.
-- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다.
+- **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다. 조직이 규칙을 한 곳(git 저장소나 공유 폴더의 `skills/<name>.md`)에 두면 `/setup team`이 개인 설정 `HM_TEAM_RULES` 또는 저장소 표식(`harness.json`·`workspace.json`의 `team_rules`)으로 원본을 찾아, 개인 파일과의 차이를 보여 주고 확인받은 뒤 팀 블록으로 넣습니다. 다시 가져오면 팀 블록만 바뀌고 개인 블록은 그대로이며, 원본이 바뀌면 세션 시작 안내가 알립니다(자동으로 덮어쓰지 않음).
 - 설치한 사본은 해시로 추적합니다. 손대지 않은 사본은 플러그인이 업데이트되면 SessionStart가 새 버전으로 갱신하고 알립니다. 직접 고친 사본과, 원래 있던 같은 이름의 Skill은 건드리지 않습니다 — 교체는 `/setup`에서 명시했을 때만, 기존 폴더를 `~/.ai-harness/setup/backups/`로 옮긴 뒤 합니다.
 - 카탈로그에 새 Skill이 추가되면 SessionStart가 한 번 알립니다. 안내를 끄려면 `HM_SETUP_HINT=0`.
 
@@ -149,7 +149,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 - **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
 - **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`·`/figma-screen`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`)과 `/landing-page`·`/design-screen`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -196,7 +196,7 @@ codex plugin add ai-harness@ai-harness
 - 규모: `minimal` 또는 `standard`
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
-- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람), 직접 커밋 허용(`direct`), 또는 PR 후 병합(`merge` — 사람이 고른 병합 조건이 모두 맞을 때 러너가 병합하고 병합 후 검증까지. [병합 정책](#merge-policy))
+- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람), 직접 커밋 허용(`direct`), 또는 PR 후 병합(`merge` — 사람이 고른 병합 조건이 모두 맞을 때 러너가 병합하고 병합 후 검증까지. [병합 정책](#merge-policy)). 병합 여부는 사용자마다 [개인 자동화 단계](#delivery-level)로 따로 고를 수 있습니다
 - 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
 - 이슈 상태 전환: 시작 시 진행 중(`issue_policy:"in-progress-on-start"` — 이슈 키·URL로 기능 개발·버그 수정을 시작하면 그 이슈를 먼저 진행 중으로 옮김) 또는 건드리지 않음(기본)
 
@@ -352,6 +352,37 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
 무인 실행(자동 harvest·sync, `HM_INTERNAL_SESSION=1`)과 `merge` 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝냅니다(무인 실행의 PR은 별도 opt-in인 [자동 병합](#auto-merge)만 병합합니다). 정책은 실행을 시작할 때 읽어 끝까지 씁니다 — 실행 중 PR이 manifest를 바꿔도 그 실행의 조건은 바뀌지 않습니다.
+
+<a id="delivery-level"></a>
+#### 개인 자동화 단계 (`HM_DELIVERY_LEVEL`)
+
+에이전트가 어디까지 스스로 진행할지는 사람마다 다릅니다. 사용자 설정 `~/.ai-harness/config`에 자동화 단계를 두면 **병합 여부는 그 값이** 정하고, 저장소 `git_policy`는 커밋·PR 범위만 정합니다. 팀 통제는 하네스가 따로 상한을 두지 않고 **PR 호스트의 브랜치 보호**(필수 승인·필수 체크)에 맡깁니다. `/ai-harness:setup`에서 고르거나 직접 적습니다.
+
+```bash
+HM_DELIVERY_LEVEL=pr                               # 기본 단계: pr | merge | deploy
+HM_DELIVERY_LEVEL_REPOS="acme-app=merge,api=deploy"  # 저장소별 덮어쓰기(<project_id>=<단계>, 쉼표·공백 구분)
+HM_MERGE_REQUIRE="human_approval,remote_ci,no_conflict,not_draft"  # 병합 조건 최소치 (선택)
+HM_MERGE_MIN_APPROVALS=1                           # (선택)
+HM_MERGE_METHOD=squash                             # squash | merge | rebase (선택)
+```
+
+| 단계 | `git_policy` `pr-only`·`merge` | `direct` | 그 밖(커밋 안 함) |
+|---|---|---|---|
+| `pr` | PR까지(저장소가 `merge`여도 병합하지 않음) | PR 없이 push | 커밋하지 않음 |
+| `merge` | PR → 병합 → 병합 커밋의 원격 CI(`target_ci`) | PR 없이 push(병합할 PR 없음 — 결과에 밝힘) | 커밋하지 않음 |
+| `deploy` | `merge`에 더해 저장소에 있는 배포 확인·스모크(·재발 추적)까지. 저장소에 배포·스모크 명령이 없으면 `merge`까지 하고 결과에 밝힘 | 위와 같음 | 커밋하지 않음 |
+
+| 값 | 어디에 | 누가 바꾸나 |
+|---|---|---|
+| 내 단계, 병합 조건 최소치(`HM_MERGE_*`), 병합 방식 | 사용자 설정 `~/.ai-harness/config` | 사용자가 즉시 |
+| `merge_policy.base`·`deploy_check_cmd`·`deploy_timeout_minutes`·`smoke_cmd`·쓸 수 있는 `verify` | 저장소 `harness.json` (저장소 사실) | PR |
+| 필수 승인 수·필수 체크 | 호스트 브랜치 보호 | 호스트 관리자 |
+
+- **안전장치**: 이 경로의 `merge` 노드는 병합 직전에 호스트에서 기준 브랜치의 보호 규칙을 읽습니다. GitHub는 규칙 세트(`GET /repos/{owner}/{repo}/rules/branches/{branch}`, 읽기 권한으로 보임)와 브랜치 보호(`GET /repos/{owner}/{repo}/branches/{branch}/protection`, 관리자만 읽힘)를, Bitbucket Cloud는 branch restrictions(`require_approvals_to_merge`·`require_default_reviewer_approvals_to_merge`·`require_passing_builds_to_merge`, glob 패턴과 branching model 대상 모두 — 관리자 권한 필요)를 봅니다. **필수 승인이 1 이상**인 보호가 없거나 읽을 수 없으면 병합하지 않고 `user_decision`(exit 20)으로 넘깁니다. 필수 체크만 있는 보호도 리뷰 없는 병합을 막지 못하므로 보호 없음으로 봅니다. 보호가 있으면 호스트의 필수 승인 수와 필수 체크를 병합 조건의 하한으로 더해(`human_approval`·`min_approvals`, `remote_ci`) 러너가 직접 판정합니다.
+- **조건 기본값**: `HM_MERGE_*`가 없으면 저장소 `merge_policy`의 `require`·`min_approvals`·`method`를, 그것도 없으면 네 조건 모두·승인 1·`squash`를 씁니다.
+- **저장소 키**: `HM_DELIVERY_LEVEL_REPOS`의 키는 `/metrics`·`HM_AUTOFIX_REPOS`와 같은 `project_id`입니다(`harness.json`의 `project_id` → origin 저장소 이름).
+- **무인 실행**은 이 경로로도 병합하지 않습니다. 무인 PR의 병합은 지금처럼 [자동 병합](#auto-merge)(`auto_merge` + `HM_*_AUTO_MERGE`)만 합니다.
+- **호환**: 개인 단계가 없으면 위 [병합 정책](#merge-policy)대로 저장소 `git_policy`·`merge_policy`를 따릅니다(기존 저장소 동작 그대로, 보호 규칙 확인 없음).
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
@@ -754,6 +785,11 @@ HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병
 HM_AUTO_MERGE_HINT=1             # 0이면 자동 sync 병합 켜기 안내(조건을 만족한 sync PR이 30일 3건 이상일 때)를 끔
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
+HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 저장소 git_policy·merge_policy를 따름
+HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
+HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 저장소 merge_policy.require, 그것도 없으면 네 조건 모두)
+HM_MERGE_MIN_APPROVALS=          # 비면 저장소 값 또는 1
+HM_MERGE_METHOD=                 # squash|merge|rebase. 비면 저장소 값 또는 squash
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
 HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
 HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")
@@ -777,6 +813,10 @@ HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
 HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
+HM_TEAM_RULES=                   # 팀 규칙 원본(git URL 또는 로컬 경로, skills/<name>.md). 비우면 저장소 표식(team_rules)을 본다
+HM_TEAM_RULES_REF=               # git 원본의 브랜치·태그·커밋(비우면 기본 브랜치)
+HM_TEAM_RULES_REFRESH_HOURS=24   # git 원본을 백그라운드로 다시 받는 주기. 0이면 받지 않음(/setup team은 항상 받음)
+HM_TEAM_RULES_HINT=1             # 0이면 팀 규칙 갱신·미적용 원본 안내를 띄우지 않음
 HM_IMPACT_HINT=1                 # 0이면 설치 N일 뒤 /harness-impact 안내(프로젝트당 한 번)를 띄우지 않음
 HM_IMPACT_HINT_DAYS=30
 ```

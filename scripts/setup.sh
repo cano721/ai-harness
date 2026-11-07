@@ -34,6 +34,10 @@ usage: setup.sh list
        setup.sh design list
        setup.sh design install --tool claude|codex|both [--replace] <skill|core|extra|all>...
        setup.sh design remove --tool claude|codex|both [--force] <skill>...   (이름만, 묶음 core|extra|all 아님)
+       setup.sh team source|list [--cwd DIR]
+       setup.sh team diff <skill> [--cwd DIR]
+       setup.sh team apply <skill> --sha <sha256> [--cwd DIR]
+       setup.sh team refresh
        setup.sh done
        setup.sh notify < SessionStart input
 EOF
@@ -734,8 +738,9 @@ command_check() {
 
 # 프로필 질문의 선택지를 계정에서 읽어 온다. 실패하면 빈 값 — 셋업은 사람에게 물어 진행한다.
 command_detect() {
-  local name="${1:-}" out='{}'
+  local name="${1:-}" out='{}' project=""
   in_catalog "$name" || usage
+  [[ "${2:-}" == --project ]] && project="${3:-}"
   case "$name" in
     datadog)
       out="$(dd_conf | HM_SETUP_POST='{"filter":{"query":"status:error","from":"now-24h","to":"now"},"compute":[{"aggregation":"count"}],"group_by":[{"facet":"service","limit":20}]}' \
@@ -746,12 +751,30 @@ command_detect() {
       out="$(st_conf | http_get "$(st_base)/projects/" 2>/dev/null | jq -c '{projects:[.[]? | {slug, platform}]}' 2>/dev/null || echo '{}')"
       ;;
     jira)
-      local base fields projects
+      local base fields projects types='[]' issue="" transitions='[]'
       base="$(resolve_value JIRA_BASE_URL | sed 's:/*$::')"
       fields="$(atl_conf | http_get "$base/rest/api/3/field" 2>/dev/null \
         | jq -c '[.[]? | select((.schema.custom // "") | test("gh-sprint$|gh-epic-link$")) | {id, name, type:(.schema.custom | sub(".*:"; ""))}]' 2>/dev/null || echo '[]')"
       projects="$(atl_conf | http_get "$base/rest/api/3/project/recent?maxResults=20" 2>/dev/null | jq -c '[.[]? | {key, name}]' 2>/dev/null || echo '[]')"
-      out="$(jq -cn --argjson f "$fields" --argjson p "$projects" '{fields:$f, recent_projects:$p}')"
+      # 이슈 타입 계층·쓰지 않는 상태 질문의 선택지: 기본 프로젝트(없으면 최근 프로젝트)의 생성 가능 타입과 최근 이슈의 전환 목록.
+      [[ -n "$project" ]] || project="$(jq -r '.[0].key // empty' <<<"$projects")"
+      if [[ "$project" =~ ^[A-Z][A-Z0-9_]+$ ]]; then
+        types="$(atl_conf | http_get "$base/rest/api/3/issue/createmeta/$project/issuetypes?maxResults=100" 2>/dev/null \
+          | jq -c '[(.issueTypes // .values // [])[]? | {id, name, subtask:(.subtask // false), hierarchy:(.hierarchyLevel // null)}]' 2>/dev/null || echo '[]')"
+        issue="$(atl_conf | http_get "$base/rest/api/3/search/jql?jql=project%3D$project%20ORDER%20BY%20updated%20DESC&maxResults=1&fields=status" 2>/dev/null \
+          | jq -r '.issues[0].key // empty' 2>/dev/null || true)"
+        if [[ "$issue" =~ ^[A-Z][A-Z0-9_]+-[0-9]+$ ]]; then
+          transitions="$(atl_conf | http_get "$base/rest/api/3/issue/$issue/transitions" 2>/dev/null \
+            | jq -c '[.transitions[]? | {id, name, to:.to.name, category:(.to.statusCategory.key // null)}]' 2>/dev/null || echo '[]')"
+        else
+          issue=""
+        fi
+      else
+        project=""
+      fi
+      out="$(jq -cn --argjson f "$fields" --argjson p "$projects" --arg project "$project" --argjson t "$types" --arg issue "$issue" --argjson tr "$transitions" \
+        '{fields:$f, recent_projects:$p, project:(if $project == "" then null else $project end), issue_types:$t,
+          transitions:{issue:(if $issue == "" then null else $issue end), list:$tr}}')"
       ;;
     confluence)
       out="$(atl_conf | http_get "$(resolve_value CONFLUENCE_BASE_URL | sed 's:/*$::')/api/v2/spaces?limit=50&type=global" 2>/dev/null \
@@ -767,6 +790,301 @@ http_post() { # url, 본문은 HM_SETUP_POST, curl 설정은 stdin
     return
   fi
   curl -sS --fail --connect-timeout 5 --max-time 20 -K - -X POST -H 'Content-Type: application/json' --data-binary "$HM_SETUP_POST" "$1"
+}
+
+# 팀 규칙: 조직이 한 곳(git 저장소 또는 로컬 경로)의 skills/<name>.md에 둔 규칙을 사용자 규칙 파일의 팀 블록으로 가져온다.
+# 원본은 개인 config(HM_TEAM_RULES) 또는 저장소 표식(harness.json·workspace.json의 team_rules)에서만 찾는다 — 내용이 에이전트 지시가 되므로.
+# 자동으로 덮어쓰지 않는다: diff로 보여 주고, 확인한 sha로만 apply한다. 블록 밖(개인 규칙)은 건드리지 않는다.
+TEAM_DIR="$STATE_DIR/team"
+TEAM_BEGIN='<!-- ai-harness:team-rules:begin'
+TEAM_END='<!-- ai-harness:team-rules:end -->'
+TEAM_MARK_RE='^<!-- ai-harness:team-rules:begin source="([^"]*)" ref="([^"]*)" sha256="([0-9a-f]{64})" -->$'
+
+team_is_git() { [[ "$1" =~ ^(https://|ssh://|git@|file://) ]]; }
+
+team_normalize() { # source base_dir → 로컬 경로는 절대 경로로
+  local src="$1"
+  if team_is_git "$src"; then printf '%s\n' "$src"; return; fi
+  case "$src" in
+    \~) src="$HOME" ;;
+    \~/*) src="$HOME/${src#??}" ;;
+    /*) ;;
+    *) src="$2/$src" ;;
+  esac
+  if [[ -d "$src" ]]; then (cd "$src" && pwd -P); else printf '%s\n' "$src"; fi
+}
+
+team_invalid() { # source ref → 문제가 있으면 사유 출력
+  if [[ -z "$1" || "$1" == *[\"\>]* || "$1" == *$'\n'* || "$1" == -* ]]; then
+    printf 'invalid team rules source\n'
+  elif team_is_git "$1" && [[ "$1" =~ [[:space:]] ]]; then
+    printf 'invalid team rules source\n'
+  elif [[ "$1" =~ ^https://[^/]*@ ]]; then
+    printf 'team rules source must not carry credentials\n'
+  elif [[ -n "$2" && ( ! "$2" =~ ^[A-Za-z0-9._/-]+$ || "$2" == -* || "$2" == *..* ) ]]; then
+    printf 'invalid team rules ref\n'
+  fi
+}
+
+# 원본 발견: 개인 config → cwd에서 위로 올라가며 가장 가까운 .ai-harness/harness.json·workspace.json의 team_rules.
+team_discover() { # cwd → {source, ref, from} 또는 {source:null}
+  local dir m f src
+  if [[ -n "${HM_TEAM_RULES:-}" ]]; then
+    jq -cn --arg s "$(team_normalize "$HM_TEAM_RULES" "$HOME")" --arg r "${HM_TEAM_RULES_REF:-}" '{source:$s, ref:$r, from:"config"}'
+    return
+  fi
+  dir="$(cd "$1" 2>/dev/null && pwd -P)" || dir=""
+  while [[ -n "$dir" ]]; do
+    for f in harness.json workspace.json; do
+      m="$dir/.ai-harness/$f"
+      [[ -f "$m" ]] || continue
+      src="$(jq -r '.team_rules.source // empty | strings' "$m" 2>/dev/null || true)"
+      [[ -n "$src" ]] || continue
+      jq -cn --arg s "$(team_normalize "$src" "$dir")" --arg r "$(jq -r '.team_rules.ref // "" | strings' "$m" 2>/dev/null)" --arg f "$m" \
+        '{source:$s, ref:$r, from:$f}'
+      return
+    done
+    [[ "$dir" == / ]] && break
+    dir="$(dirname "$dir")"
+  done
+  printf '{"source":null}\n'
+}
+
+team_cache() { printf '%s/%s\n' "$TEAM_DIR" "$(printf '%s\n%s' "$1" "$2" | sha256_stdin | cut -c1-16)"; }
+
+# 원본을 받는다. 로컬 경로는 그 자리를 읽고, git은 skills/만 캐시로 받는다(프롬프트·hook·LFS 없이).
+team_fetch() { # source ref — 실패 사유는 stderr
+  local src="$1" ref="$2" cache work why
+  why="$(team_invalid "$src" "$ref")"
+  [[ -z "$why" ]] || { printf '%s\n' "$why" >&2; return 1; }
+  team_is_git "$src" || return 0
+  cache="$(team_cache "$src" "$ref")"
+  work="$TEAM_DIR/work.$$"
+  mkdir -p "$cache"
+  date +%s >"$cache/attempted_at"
+  rm -rf "$work"
+  mkdir -p "$work"
+  if ! { design_git "$work" init -q \
+    && design_git "$work" remote add origin "$src" \
+    && design_git "$work" sparse-checkout set --no-cone '/skills/' \
+    && design_git "$work" fetch -q --depth 1 origin "${ref:-HEAD}" \
+    && design_git "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD; } 2>"$TEAM_DIR/.err"; then
+    rm -rf "$work"
+    head -n 3 "$TEAM_DIR/.err" >&2
+    return 1
+  fi
+  rm -rf "$cache/src"
+  mv "$work" "$cache/src"
+  date +%s >"$cache/fetched_at"
+}
+
+team_skills_dir() { # source ref → 받아 둔 skills/ 경로 (네트워크 없음)
+  local d="$1/skills"
+  team_is_git "$1" && d="$(team_cache "$1" "$2")/src/skills"
+  [[ -d "$d" ]] || return 1
+  printf '%s\n' "$d"
+}
+
+# 필드 구분은 US(0x1f) — 탭은 IFS 공백이라 빈 ref가 접힌다.
+TEAM_SEP=$'\x1f'
+
+team_marker() { # profile → "source<US>ref<US>sha" (블록이 하나뿐이고 온전할 때만)
+  local line
+  [[ -f "$1" ]] || return 1
+  [[ "$(grep -cF "$TEAM_BEGIN" "$1")" == 1 && "$(grep -cxF "$TEAM_END" "$1")" == 1 ]] || return 1
+  line="$(grep -m1 -F "$TEAM_BEGIN" "$1")"
+  [[ "$line" =~ $TEAM_MARK_RE ]] || return 1
+  awk -v b="$TEAM_BEGIN" -v e="$TEAM_END" 'index($0, b) == 1 {s = NR} $0 == e {t = NR} END {exit !(s && t > s)}' "$1" || return 1
+  printf '%s%s%s%s%s\n' "${BASH_REMATCH[1]}" "$TEAM_SEP" "${BASH_REMATCH[2]}" "$TEAM_SEP" "${BASH_REMATCH[3]}"
+}
+
+team_broken() { # profile — 마커 흔적은 있는데 온전한 블록 하나가 아니면 참
+  [[ -f "$1" ]] && grep -qF 'ai-harness:team-rules:' "$1" && ! team_marker "$1" >/dev/null
+}
+
+# 적용 결과 파일 내용: 팀 블록만 새 원본으로 바꾸고 나머지(개인 규칙)는 그대로 둔다.
+team_merge() { # name profile team_file source ref sha
+  local name="$1" profile="$2" block
+  block="$(mktemp "${TMPDIR:-/tmp}/ai-harness-team.XXXXXX")"
+  {
+    printf '%s source="%s" ref="%s" sha256="%s" -->\n' "$TEAM_BEGIN" "$4" "$5" "$6"
+    cat "$3"
+    [[ -z "$(tail -c 1 "$3")" ]] || printf '\n'
+    printf '%s\n' "$TEAM_END"
+  } >"$block"
+  if team_marker "$profile" >/dev/null; then
+    awk -v b="$TEAM_BEGIN" -v e="$TEAM_END" -v bf="$block" '
+      index($0, b) == 1 { while ((getline l < bf) > 0) print l; skip = 1; next }
+      skip && $0 == e { skip = 0; next }
+      !skip { print }' "$profile"
+  elif [[ -s "$profile" ]]; then
+    cat "$block"
+    printf '\n'
+    cat "$profile"
+  else
+    cat "$block"
+    printf '\n# %s 개인 규칙\n<!-- 팀 규칙 블록(위 마커 사이) 밖은 개인 규칙이다. /ai-harness:setup으로 팀 규칙을 다시 가져와도 이 부분은 그대로 남는다. -->\n' "$name"
+  fi
+  rm -f "$block"
+}
+
+team_state() { # profile sha → new | untracked | current | changed | broken
+  local recorded
+  [[ -s "$1" ]] || { printf 'new\n'; return; }
+  team_broken "$1" && { printf 'broken\n'; return; }
+  recorded="$(team_marker "$1" | cut -d "$TEAM_SEP" -f3)" || true
+  if [[ -z "$recorded" ]]; then printf 'untracked\n'
+  elif [[ "$recorded" == "$2" ]]; then printf 'current\n'
+  else printf 'changed\n'; fi
+}
+
+team_err() { jq -cn --arg e "$1" --argjson d "$2" '$d + {error:$e}'; exit 1; }
+
+# diff·apply가 쓸 원본 한 개를 준비한다: TEAM_NAME·TEAM_FILE·TEAM_SHA·TEAM_SRC·TEAM_REF·TEAM_PROFILE
+team_prepare() { # name disc
+  local skills
+  TEAM_NAME="$1"
+  in_catalog "$TEAM_NAME" || team_err "unknown skill" "$2"
+  TEAM_SRC="$(jq -r '.source // empty' <<<"$2")"
+  TEAM_REF="$(jq -r '.ref // ""' <<<"$2")"
+  [[ -n "$TEAM_SRC" ]] || team_err "no team rules source" "$2"
+  [[ -z "$(team_invalid "$TEAM_SRC" "$TEAM_REF")" ]] || team_err "$(team_invalid "$TEAM_SRC" "$TEAM_REF")" "$2"
+  skills="$(team_skills_dir "$TEAM_SRC" "$TEAM_REF")" || { team_fetch "$TEAM_SRC" "$TEAM_REF" && skills="$(team_skills_dir "$TEAM_SRC" "$TEAM_REF")"; } \
+    || team_err "cannot read team rules source" "$2"
+  TEAM_FILE="$skills/$TEAM_NAME.md"
+  [[ -f "$TEAM_FILE" && ! -L "$TEAM_FILE" ]] || team_err "no skills/$TEAM_NAME.md in source" "$2"
+  # 원본이 마커를 품으면 블록 경계가 깨진다.
+  ! grep -qF 'ai-harness:team-rules:' "$TEAM_FILE" || team_err "source file contains a team-rules marker" "$2"
+  TEAM_SHA="$(sha256_stdin <"$TEAM_FILE")"
+  TEAM_PROFILE="$PROFILE_DIR/$TEAM_NAME.md"
+  ! team_broken "$TEAM_PROFILE" || team_err "broken team-rules block in $TEAM_PROFILE — fix the markers by hand" "$2"
+}
+
+command_team() {
+  local sub="${1:-}" cwd="$PWD" name="" sha="" disc src ref skills f n out
+  (($#)) && shift
+  while (($#)); do
+    case "$1" in
+      --cwd) cwd="${2:-}"; shift 2 ;;
+      --sha) sha="${2:-}"; shift 2 ;;
+      -*) usage ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  mkdir -p "$TEAM_DIR"
+  case "$sub" in
+    source) team_discover "$cwd" ;;
+    list)
+      disc="$(team_discover "$cwd")"
+      src="$(jq -r '.source // empty' <<<"$disc")"
+      ref="$(jq -r '.ref // ""' <<<"$disc")"
+      [[ -n "$src" ]] || { jq -c '. + {skills:[]}' <<<"$disc"; return 0; }
+      if ! team_fetch "$src" "$ref" 2>"$TEAM_DIR/.fetch-err" || ! skills="$(team_skills_dir "$src" "$ref")"; then
+        team_err "$(head -n 1 "$TEAM_DIR/.fetch-err" 2>/dev/null || true) (cannot read team rules source)" "$disc"
+      fi
+      out='[]'
+      while IFS= read -r n; do
+        f="$skills/$n.md"
+        [[ -f "$f" && ! -L "$f" ]] || continue
+        sha="$(sha256_stdin <"$f")"
+        out="$(jq -c --arg n "$n" --arg sha "$sha" --arg p "$PROFILE_DIR/$n.md" --arg st "$(team_state "$PROFILE_DIR/$n.md" "$sha")" \
+          '. + [{name:$n, sha256:$sha, profile:$p, state:$st}]' <<<"$out")"
+      done < <(catalog_names)
+      jq -c --argjson s "$out" '. + {skills:$s}' <<<"$disc"
+      ;;
+    diff)
+      disc="$(team_discover "$cwd")"
+      team_prepare "$name" "$disc"
+      out="$(mktemp "${TMPDIR:-/tmp}/ai-harness-team.XXXXXX")"
+      team_merge "$TEAM_NAME" "$TEAM_PROFILE" "$TEAM_FILE" "$TEAM_SRC" "$TEAM_REF" "$TEAM_SHA" >"$out"
+      f="$TEAM_PROFILE"
+      [[ -f "$f" ]] || f=/dev/null
+      diff -u --label "현재 $TEAM_PROFILE" --label "적용 후 (sha256 $TEAM_SHA)" "$f" "$out" || true
+      rm -f "$out"
+      ;;
+    apply)
+      disc="$(team_discover "$cwd")"
+      team_prepare "$name" "$disc"
+      [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || usage
+      [[ "$sha" == "$TEAM_SHA" ]] || team_err "source changed since the diff — run diff again (now $TEAM_SHA)" "{\"name\":\"$TEAM_NAME\",\"action\":\"stale\"}"
+      mkdir -p "$PROFILE_DIR"
+      out="$PROFILE_DIR/.$TEAM_NAME.md.tmp.$$"
+      team_merge "$TEAM_NAME" "$TEAM_PROFILE" "$TEAM_FILE" "$TEAM_SRC" "$TEAM_REF" "$TEAM_SHA" >"$out"
+      if [[ -f "$TEAM_PROFILE" ]] && cmp -s "$out" "$TEAM_PROFILE"; then
+        rm -f "$out"
+        jq -cn --arg n "$TEAM_NAME" --arg p "$TEAM_PROFILE" --arg s "$TEAM_SHA" '{name:$n, action:"unchanged", profile:$p, sha256:$s}'
+      else
+        mv "$out" "$TEAM_PROFILE"
+        jq -cn --arg n "$TEAM_NAME" --arg p "$TEAM_PROFILE" --arg s "$TEAM_SHA" '{name:$n, action:"applied", profile:$p, sha256:$s}'
+      fi
+      ;;
+    refresh) team_refresh ;;
+    *) usage ;;
+  esac
+}
+
+# 적용해 둔 팀 블록들의 원본(source·ref 쌍)을 줄마다 출력.
+team_applied_sources() {
+  local f
+  for f in "$PROFILE_DIR"/*.md; do
+    [[ -f "$f" ]] || continue
+    team_marker "$f" | cut -d "$TEAM_SEP" -f1,2 || true
+  done | LC_ALL=C sort -u
+}
+
+# 백그라운드: git 원본을 다시 받는다. 동시에 하나만.
+team_refresh() {
+  local src ref
+  mkdir -p "$TEAM_DIR"
+  hm_acquire_lock "$TEAM_DIR/.lock" 1 || return 0
+  trap 'hm_release_lock "$TEAM_DIR/.lock"' EXIT
+  while IFS="$TEAM_SEP" read -r src ref; do
+    team_is_git "$src" || continue
+    team_fetch "$src" "$ref" 2>/dev/null || true
+  done < <(team_applied_sources)
+}
+
+# SessionStart: 적용한 팀 블록의 sha와 받아 둔 원본을 비교해 바뀐 것만 알린다(같은 sha는 한 번). 네트워크는 쓰지 않는다 —
+# git 원본은 HM_TEAM_RULES_REFRESH_HOURS(기본 24)마다 백그라운드로 다시 받아 다음 세션에서 비교한다.
+team_notify() { # cwd setup_cmd → 메시지 줄
+  local cwd="$1" setup_cmd="$2" f marker src ref sha name skills new last changed=() stale=0 hours disc
+  [[ "${HM_TEAM_RULES_HINT:-1}" != 0 ]] || return 0
+  hours="${HM_TEAM_RULES_REFRESH_HOURS:-24}"
+  [[ "$hours" =~ ^[0-9]+$ ]] || hours=24
+  for f in "$PROFILE_DIR"/*.md; do
+    [[ -f "$f" ]] || continue
+    marker="$(team_marker "$f")" || continue
+    IFS="$TEAM_SEP" read -r src ref sha <<<"$marker"
+    name="$(basename "$f" .md)"
+    if team_is_git "$src"; then
+      last="$(cat "$(team_cache "$src" "$ref")/attempted_at" 2>/dev/null || echo 0)"
+      [[ "$last" =~ ^[0-9]+$ ]] || last=0
+      ((hours > 0 && $(date +%s) - last >= hours * 3600)) && stale=1
+    fi
+    skills="$(team_skills_dir "$src" "$ref")" || continue
+    [[ -f "$skills/$name.md" ]] || continue
+    new="$(sha256_stdin <"$skills/$name.md")"
+    [[ "$new" != "$sha" ]] || continue
+    [[ "$(read_state | jq -r --arg n "$name" '.team.notified[$n] // ""')" != "$new" ]] || continue
+    read_state | jq --arg n "$name" --arg s "$new" '.team.notified[$n] = $s' | write_state
+    changed+=("$name")
+  done
+  if ((stale)); then
+    nohup "$DIR/setup.sh" team refresh </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+  if ((${#changed[@]} > 0)); then
+    printf '팀 규칙 원본이 갱신됐습니다: %s. %s team 으로 차이를 확인하고 반영하세요. (자동으로 덮어쓰지 않습니다)\n' \
+      "$(IFS=,; printf '%s' "${changed[*]}" | sed 's/,/, /g')" "$setup_cmd"
+  fi
+  # 이 저장소(또는 config)가 가리키는 원본을 아직 한 번도 적용하지 않았으면 원본마다 한 번 알린다.
+  disc="$(team_discover "$cwd")"
+  src="$(jq -r '.source // empty' <<<"$disc")"
+  [[ -n "$src" ]] || return 0
+  team_applied_sources | cut -d "$TEAM_SEP" -f1 | grep -qxF -- "$src" && return 0
+  [[ "$(read_state | jq -r --arg s "$src" '.team.offered[$s] // ""')" == "" ]] || return 0
+  read_state | jq --arg s "$src" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.team.offered[$s] = $now' | write_state
+  printf '팀 규칙 원본이 지정돼 있습니다(%s). %s team 으로 차이를 확인하고 가져오세요.\n' "$src" "$setup_cmd"
 }
 
 command_done() {
@@ -804,6 +1122,11 @@ command_notify() {
     printf '%s\n' "$version" >"$STATE_DIR/hint-shown"
   fi
 
+  local cwd team_msg
+  cwd="$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null || true)"
+  team_msg="$(team_notify "${cwd:-$PWD}" "$setup_cmd" 2>/dev/null || true)"
+  [[ -n "$team_msg" ]] && messages+=("$team_msg")
+
   if ((${#messages[@]} > 0)); then
     jq -cn --arg m "$(IFS=$'\n'; printf '%s' "${messages[*]}")" '{systemMessage:$m}'
   fi
@@ -827,6 +1150,7 @@ case "$cmd" in
   set) command_set "$@" ;;
   check) mkdir -p "$STATE_DIR"; command_check "$@" ;;
   detect) command_detect "$@" ;;
+  team) command_team "$@" ;;
   design) command_design "$@" ;;
   done) with_lock command_done ;;
   notify) command_notify ;;

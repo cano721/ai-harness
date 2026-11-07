@@ -480,13 +480,19 @@ WS_RESCAN="$("$ROOT/scripts/workspace-scan.sh" scan --root "$WS_ROOT")"
 assert_eq "web" "$(jq -r '.diff.removed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member that disappeared"
 assert_eq "group/batch" "$(jq -r '.diff.changed | join(",")' <<<"$WS_RESCAN")" "rescan reports a member whose harness changed"
 assert_eq "web" "$(jq -r '.members[] | select(.path=="web") | .path' "$WS_MANIFEST")" "scan alone never rewrites the manifest"
+"$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" --team-rules https://git.example/acme/team-rules.git --team-rules-ref main >/dev/null
+assert_eq "https://git.example/acme/team-rules.git main" "$(jq -r '"\(.team_rules.source) \(.team_rules.ref)"' "$WS_MANIFEST")" "workspace manifest records the team rules marker"
 "$ROOT/scripts/workspace-scan.sh" write --root "$WS_ROOT" >/dev/null
+assert_eq "https://git.example/acme/team-rules.git" "$(jq -r '.team_rules.source' "$WS_MANIFEST")" "rewrite keeps the team rules marker"
 assert_eq "acme claude $(jq -r '.version' "$ROOT/release.json")" "$(jq -r '"\(.workspace_id) \(.integrations|join(",")) \(.harness_version)"' "$WS_MANIFEST")" "rewrite keeps identity and stamps the current plugin version"
 assert_eq "api group/batch" "$(jq -r '[.members[].path] | sort | join(" ")' "$WS_MANIFEST")" "rewrite applies the rescanned members"
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh scan" "harness init detects workspaces with the scan script"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workspace.json" "harness init documents the workspace manifest"
 assert_contains "$HARNESS_INIT_CONTENT" "workspace-scan.sh write" "harness init records the manifest with the script"
+assert_contains "$HARNESS_INIT_CONTENT" "\"team_rules\": {\"source\"" "harness init documents the team rules marker"
+assert_contains "$HARNESS_INIT_CONTENT" "--team-rules <source>" "workspace init records the team rules marker with the script"
+assert_contains "$HARNESS_INIT_CONTENT" "**팀 규칙 원본**" "harness init asks about a team rules source"
 assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks members without a harness"
 assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-list --count HEAD..origin/<base>" "workspace preflight checks member checkout freshness"
@@ -1539,6 +1545,79 @@ assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LO
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
 pass "merge policy: conditions from the manifest, merge by the runner, post-merge checks"
 
+# 개인 자동화 단계(#242): 병합 여부는 사용자 config의 단계가, 팀 통제는 호스트 브랜치 보호가 정한다. 저장소 merge_policy는 사실만 준다.
+DL_DATA="$DRIVER_TMP/delivery-data"
+mkdir -p "$DL_DATA"
+delivery_run() { # scenario git_policy harness-jq-filter config-text [host/owner/repo] → 사용자 config를 두고 approval auto로 실행한다
+  new_driver_repo "$1"
+  with_policy "$2" auto
+  as_host_repo "${5:-github.com/acme/app}"
+  jq "$3" "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" commit -qam "repository facts"
+  printf '%s\n' "$4" >"$DL_DATA/config"
+  HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
+}
+DL_FACTS='.project_id = "acme-app" | .merge_policy = {base: "main", deploy_check_cmd: "true", smoke_cmd: "true"}'
+gh_merges() { grep -c '^gh merge' "$FAKE_LOG" || true; }
+export FAKE_PROTECTION=classic
+delivery_run dl_pr merge ".merge_policy = $MP_BASIC" 'HM_DELIVERY_LEVEL=pr'
+assert_eq "0:done:0:pr-only" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git)" "level pr stops at the pull request even when the repository says git_policy merge"
+[[ "$(run_state '[.history[].to] | join(",")')" != *merge* ]] || fail "level pr never reaches the merge node"
+assert_contains "$DRIVER_OUT" "delivery level pr: the personal delivery level stops at the pull request" "done says the personal level stopped at the PR"
+delivery_run dl_merge pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL="merge"  # 내 단계'
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "level merge merges a pr-only repository's pull request"
+assert_eq "target_ci" "$(run_state '.post_merge | keys_unsorted | join(",")')" "level merge verifies up to the target branch CI, not deploy or smoke"
+assert_eq "1:1:main" "$(run_state '"\(.protection.approvals):\(.protection.checks):\(.protection.base)"')" "the merge node read the base branch protection from the host"
+assert_contains "$(<"$FAKE_LOG")" "gh api repos/acme/app/branches/main/protection" "classic branch protection is read for the base branch"
+assert_eq "human_approval,remote_ci,no_conflict,not_draft:1:squash" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.min_approvals):\(.policy.merge.method)"')" "without personal merge settings or repository conditions every condition applies"
+delivery_run dl_deploy pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=deploy'
+assert_eq "0:done:target_ci,deploy,smoke" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy goes on to the repository's deploy and smoke checks"
+delivery_run dl_deploy_nocmd pr-only '.merge_policy = {base: "main"}' 'HM_DELIVERY_LEVEL=deploy'
+assert_eq "0:done:target_ci" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy without deploy or smoke commands stops after the merge"
+assert_contains "$DRIVER_OUT" "delivery level deploy: the repository has no deploy or smoke check" "the result says why deploy was not verified"
+delivery_run dl_repo_level pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=pr' 'HM_DELIVERY_LEVEL_REPOS="other=deploy, acme-app=merge"' 'HM_MERGE_REQUIRE="human_approval remote_ci"' 'HM_MERGE_METHOD=merge')"
+assert_eq "0:done:1:HM_DELIVERY_LEVEL_REPOS:acme-app" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery.source)" "a per-repository level overrides the default level"
+assert_eq "human_approval,remote_ci:merge" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.method)"')" "personal merge conditions and method come from the user config"
+assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the personal merge method is used"
+export FAKE_PROTECTION=ruleset
+delivery_run dl_ruleset pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+assert_eq "30:merge:0" "$DRIVER_RC:$(run_state .node):$(gh_merges)" "the host's required approval count is a floor over the personal one"
+assert_contains "$DRIVER_OUT" "human approval: 1 of 2" "the runner waits for the approvals the host ruleset requires"
+for p in none:"has no host branch protection that requires an approving review" checks_only:"has no host branch protection that requires an approving review" \
+  denied:"cannot read the branch protection of main from the host"; do
+  export FAKE_PROTECTION="${p%%:*}"
+  delivery_run "dl_prot_${p%%:*}" pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+  assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "protection ${p%%:*}: a personal level does not merge into an unprotected or unreadable branch"
+  assert_contains "$DRIVER_OUT" "${p#*:}" "protection ${p%%:*}: the person is told why"
+done
+export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='token'
+export FAKE_PROTECTION=bb_glob
+delivery_run dl_bb_glob pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .protection.approvals)" "a Bitbucket branch restriction matching the base by glob allows the merge"
+export FAKE_PROTECTION=bb_model
+delivery_run dl_bb_model pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "30:2:0" "$DRIVER_RC:$(run_state .protection.approvals):$(run_state .protection.checks)" "a branching-model restriction applies to the development branch; other patterns do not"
+export FAKE_PROTECTION=bb_denied
+delivery_run dl_bb_denied pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "unreadable Bitbucket branch restrictions are not merged over"
+unset ATLASSIAN_USER BITBUCKET_API_TOKEN
+export FAKE_PROTECTION=none
+delivery_run dl_legacy merge ".merge_policy = $MP_BASIC" ''
+assert_eq "0:done:1:null:0" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery):$(grep -c '^gh api' "$FAKE_LOG" || true)" "without a personal level the repository merge_policy applies as before, without a protection check"
+export FAKE_PROTECTION=classic
+HM_INTERNAL_SESSION=1 delivery_run dl_unattended pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run does not merge on a personal level either"
+assert_contains "$DRIVER_OUT" "merge: not done — unattended run" "the unattended outcome says the merge was left to a person"
+unset FAKE_PROTECTION
+delivery_run dl_bad pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=ship'
+assert_eq "2" "$DRIVER_RC" "an unknown delivery level does not start"
+assert_contains "$DRIVER_OUT" "must be pr, merge, or deploy" "the error names the levels"
+delivery_run dl_bad_require pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=merge' 'HM_MERGE_REQUIRE=lgtm')"
+assert_eq "2" "$DRIVER_RC" "invalid personal merge conditions do not start"
+assert_contains "$DRIVER_OUT" "HM_MERGE_REQUIRE" "the error names the personal setting"
+rm -f "$DL_DATA/config"
+pass "delivery level: personal stage, repository facts, host branch protection"
+
 # review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
 review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다
   new_driver_repo "$1"
@@ -2292,10 +2371,10 @@ assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "references/
 assert_contains "$(<"$ROOT/skills/design-system-builder/references/theme-and-components.md")" "tokens.md\` owns token layers, names" "absorbed patterns defer token naming to design-system-builder"
 pass "design skill map, catalog and independent reviewer"
 
-# 디자이너 Figma 흐름: 공용 Figma MCP 규칙과 채점 기준은 바이트 단위 사본이고, figma-screen은 design-audit 기준으로 루프를 돈다.
+# 디자이너 Figma 흐름: 공용 Figma MCP 규칙과 채점 기준은 바이트 단위 사본이고, design-screen은 Figma·코드 어느 대상이든 design-audit 기준으로 루프를 돈다.
 FIGMA_MCP_SRC="$ROOT/templates/design-audit/references/figma-mcp.md"
 assert_file "$FIGMA_MCP_SRC"
-for FIGMA_COPY in "$ROOT/skills/design-system-builder/references/figma-mcp.md" "$ROOT/skills/figma-screen/references/figma-mcp.md" "$ROOT/skills/landing-page/references/figma-mcp.md"; do
+for FIGMA_COPY in "$ROOT/skills/design-system-builder/references/figma-mcp.md" "$ROOT/skills/design-screen/references/figma-mcp.md" "$ROOT/skills/landing-page/references/figma-mcp.md"; do
   cmp -s "$FIGMA_COPY" "$FIGMA_MCP_SRC" || fail "$FIGMA_COPY must match templates/design-audit/references/figma-mcp.md byte for byte"
 done
 for FIGMA_BASE in .claude .agents; do
@@ -2325,35 +2404,44 @@ assert_contains "$FIGMA_OUT" "**The token file is the source. The Figma library 
 assert_contains "$FIGMA_OUT" "\`--color-text-muted\` → \`color/text-muted\`" "Figma variable names derive mechanically from token names"
 assert_contains "$FIGMA_OUT" "## Drift check" "Figma output reports drift instead of overwriting"
 assert_contains "$(<"$ROOT/skills/design-system-builder/references/output-format.md")" "- Figma 라이브러리:" "rule document meta records the Figma library"
-FIGMA_SCREEN_DIR="$ROOT/skills/figma-screen"
-assert_file "$FIGMA_SCREEN_DIR/agents/openai.yaml"
-cmp -s "$FIGMA_SCREEN_DIR/references/design-audit.md" "$ROOT/templates/design-audit/SKILL.md" \
-  || fail "skills/figma-screen/references/design-audit.md must match templates/design-audit/SKILL.md byte for byte"
-FIGMA_SCREEN="$(<"$FIGMA_SCREEN_DIR/SKILL.md")"
-assert_contains "$(sed -n '1,4p' "$FIGMA_SCREEN_DIR/SKILL.md")" "name: figma-screen" "figma-screen names itself"
-assert_contains "$FIGMA_SCREEN" "references/design-audit.md" "figma-screen scores with the design-audit copy"
-assert_contains "$FIGMA_SCREEN" "references/figma-mcp.md" "figma-screen reads the Figma MCP rules"
-assert_contains "$FIGMA_SCREEN" "**Stop when the verdict is 통과 and no axis is below half or \`미확인\`.**" "figma-screen loop stops only on a complete pass"
-assert_contains "$FIGMA_SCREEN" "**At most three audits**, the clean-up audit included." "the clean-up audit counts toward the cap"
-assert_contains "$FIGMA_SCREEN" "**Same organization as the library.**" "figma-screen checks fonts and organization before drawing"
+DESIGN_SCREEN_DIR="$ROOT/skills/design-screen"
+assert_file "$DESIGN_SCREEN_DIR/agents/openai.yaml"
+cmp -s "$DESIGN_SCREEN_DIR/references/design-audit.md" "$ROOT/templates/design-audit/SKILL.md" \
+  || fail "skills/design-screen/references/design-audit.md must match templates/design-audit/SKILL.md byte for byte"
+DESIGN_SCREEN="$(<"$DESIGN_SCREEN_DIR/SKILL.md")"
+assert_contains "$(sed -n '1,4p' "$DESIGN_SCREEN_DIR/SKILL.md")" "name: design-screen" "design-screen names itself"
+assert_contains "$DESIGN_SCREEN" "references/design-audit.md" "design-screen scores with the design-audit copy"
+assert_contains "$(<"$DESIGN_SCREEN_DIR/references/figma-target.md")" "](figma-mcp.md)" "design-screen Figma target reads the Figma MCP rules"
+assert_contains "$DESIGN_SCREEN" "references/figma-target.md" "design-screen routes Figma drawing to its reference"
+assert_contains "$DESIGN_SCREEN" "references/code-target.md" "design-screen routes code drawing to its reference"
+assert_contains "$DESIGN_SCREEN" "A Figma spec does not make the target Figma" "the spec format does not pick the target"
+assert_contains "$DESIGN_SCREEN" "Do not draw the target from the other side's raw values." "a missing design system side stops instead of improvising"
+DESIGN_SCREEN_CODE="$(<"$DESIGN_SCREEN_DIR/references/code-target.md")"
+assert_contains "$DESIGN_SCREEN_CODE" "**Data is a local fixture.**" "code target draws with fixtures, not real data"
+assert_contains "$DESIGN_SCREEN_CODE" "Do not add a prop, variant, or style override to a shared component" "code target leaves shared components to design-system-builder"
+assert_contains "$DESIGN_SCREEN_CODE" "Leave every change uncommitted." "code target does not commit"
+assert_contains "$DESIGN_SCREEN_CODE" "Keep captures outside the repository" "code target captures stay out of the repository"
+assert_contains "$DESIGN_SCREEN" "**Stop when the verdict is 통과 and no axis is below half or \`미확인\`.**" "design-screen loop stops only on a complete pass"
+assert_contains "$DESIGN_SCREEN" "**At most three audits**, the clean-up audit included." "the clean-up audit counts toward the cap"
+assert_contains "$(<"$DESIGN_SCREEN_DIR/references/figma-target.md")" "**Same organization as the library.**" "design-screen checks fonts and organization before drawing"
 assert_contains "$AUDIT" "**대상 파일에도, 다른 어떤 파일에도 쓰지 않는다**" "Figma audit never writes"
 assert_contains "$AUDIT" "라이브러리 검색에 같은 역할의 컴포넌트가 없고" "a proposal name alone does not escape the deduction"
-assert_contains "$(<"$MAP_SRC")" "| Draw or extend a product screen in Figma from the design system library | \`figma-screen\` |" "design skill map routes Figma screens to figma-screen"
-assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "\`/figma-screen\`도 **플러그인 전역 Skill**" "harness-init documents figma-screen"
+assert_contains "$(<"$MAP_SRC")" "| Draw or extend a product screen from the design system, in Figma or in code | \`design-screen\` |" "design skill map routes design system screens to design-screen"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "\`/design-screen\`도 **플러그인 전역 Skill**" "harness-init documents design-screen"
 assert_eq ".agents/skills/design-audit/references/figma-mcp.md" "$(jq -r '.artifacts[] | select(.path==".agents/skills/design-audit/references/figma-mcp.md") | .path' "$ROOT/templates/managed-files.json")" "codex design-audit ships the Figma MCP rules"
 # Agent Skills 규격: description은 1024자 이하.
 for SKILL_FILE in "$ROOT"/skills/*/SKILL.md; do
   DESC_LEN="$(python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8").read().split("---")[1]; m=re.search(r"^description:\s*(.*?)(?=^[A-Za-z_-]+:|\Z)",s,re.S|re.M); d=m.group(1).strip(); d=" ".join(l.strip() for l in d[1:].splitlines()).strip() if d.startswith(">") else d; print(len(d))' "$SKILL_FILE")"
   [ "$DESC_LEN" -le 1024 ] || fail "$SKILL_FILE description is $DESC_LEN characters (max 1024)"
 done
-assert_contains "$FIGMA_SCREEN" "**The audit is independent.**" "figma-screen does not score its own drawing"
-assert_contains "$FIGMA_SCREEN" "the brief's **decision list**" "the independent audit gets decisions, not reasoning"
-assert_contains "$FIGMA_SCREEN" "report it as \`불성립\`" "an unfinished audit round is reported, not hidden"
-assert_contains "$FIGMA_SCREEN" "**Each state frame must be coherent.**" "figma-screen checks actions per state"
+assert_contains "$DESIGN_SCREEN" "**The audit is independent.**" "design-screen does not score its own drawing"
+assert_contains "$DESIGN_SCREEN" "the brief's **decision list**" "the independent audit gets decisions, not reasoning"
+assert_contains "$DESIGN_SCREEN" "report it as \`불성립\`" "an unfinished audit round is reported, not hidden"
+assert_contains "$DESIGN_SCREEN" "**Each state must be coherent.**" "design-screen checks actions per state"
 assert_contains "$(<"$ROOT/skills/design-system-builder/references/extract.md")" "### A Figma design kit as the source" "design-system-builder extracts rules from an existing Figma kit"
-assert_contains "$FIGMA_SCREEN" "Never raise the score by removing what the requirement asked for" "figma-screen does not trade requirements for score"
-assert_contains "$FIGMA_SCREEN" "Do not edit the library file" "figma-screen leaves the library to design-system-builder"
-assert_contains "$(<"$ROOT/README.md")" "| \`/figma-screen\` |" "README lists figma-screen"
+assert_contains "$DESIGN_SCREEN" "Never raise the score by removing what the requirement asked for" "design-screen does not trade requirements for score"
+assert_contains "$DESIGN_SCREEN" "Do not edit the design system" "design-screen leaves the design system to design-system-builder"
+assert_contains "$(<"$ROOT/README.md")" "| \`/design-screen\` |" "README lists design-screen"
 pass "designer Figma flow"
 
 # diagram은 vendor/archify 엔진의 유일한 공개 진입점이다. 엔진 사본은 lock과 바이트 단위로 일치해야 한다.
@@ -4989,6 +5077,108 @@ SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
 
+# 팀 규칙: 개인 config → 저장소 표식 순으로 원본을 찾고, 차이를 보여 준 sha로만 팀 블록을 쓴다. 개인 블록은 유지. (#243)
+SETUP_T="$TEST_TMP/setup-team"
+SETUP_CATALOG="$ROOT/catalog"
+TEAM_SRC="$SETUP_T/team-rules"
+TEAM_REPO="$SETUP_T/repo"
+mkdir -p "$TEAM_SRC/skills" "$TEAM_REPO/.ai-harness" "$TEAM_REPO/src/deep" "$SETUP_T/data/skills"
+printf -- '- 에이전트는 Story를 만들지 않는다\n' >"$TEAM_SRC/skills/jira.md"
+printf 'not a catalog skill\n' >"$TEAM_SRC/skills/notes.md"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0)
+team_cmd() { (cd "${TEAM_CWD:-$TEAM_REPO/src/deep}" && HOME="$SETUP_T/home" setup_cmd team "$@"); }
+assert_eq "null" "$(team_cmd source | jq -r '.source')" "no source without config or repo marker"
+assert_eq "[]" "$(team_cmd list | jq -c '.skills')" "list without a source is empty"
+jq -n '{project_id:"svc", team_rules:{source:"../team-rules"}}' >"$TEAM_REPO/.ai-harness/harness.json"
+TEAM_REAL="$(cd "$TEAM_SRC" && pwd -P)"
+assert_eq "$TEAM_REAL" "$(team_cmd source | jq -r '.source')" "repo marker found from a subdirectory, relative to the repo root"
+assert_contains "$(team_cmd source | jq -r '.from')" ".ai-harness/harness.json" "source names the marker file"
+mkdir -p "$SETUP_T/other/skills"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="$SETUP_T/other")
+assert_eq "config" "$(team_cmd source | jq -r '.from')" "personal config wins over the repo marker"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0)
+TEAM_LIST="$(team_cmd list)"
+assert_eq "jira:new" "$(jq -r '[.skills[] | "\(.name):\(.state)"] | join(" ")' <<<"$TEAM_LIST")" "list shows only catalog skills the source has"
+TEAM_SHA="$(jq -r '.skills[0].sha256' <<<"$TEAM_LIST")"
+printf '# jira 사용자 규칙\n- 기본 프로젝트: NJ\n' >"$SETUP_T/data/skills/jira.md"
+assert_eq "untracked" "$(team_cmd list | jq -r '.skills[0].state')" "a profile without a team block is untracked"
+TEAM_DIFF="$(team_cmd diff jira)"
+assert_contains "$TEAM_DIFF" "+- 에이전트는 Story를 만들지 않는다" "diff shows the team rule to add"
+assert_contains "$TEAM_DIFF" "sha256 $TEAM_SHA" "diff names the sha to apply"
+assert_eq "# jira 사용자 규칙" "$(head -1 "$SETUP_T/data/skills/jira.md")" "diff does not write"
+assert_eq "stale" "$(team_cmd apply jira --sha "$(printf '%064d' 0)" 2>/dev/null | jq -r '.action')" "apply refuses a sha other than the diffed source"
+assert_eq "applied" "$(team_cmd apply jira --sha "$TEAM_SHA" | jq -r '.action')" "apply writes after confirmation"
+TEAM_FILE="$(<"$SETUP_T/data/skills/jira.md")"
+assert_contains "$TEAM_FILE" "sha256=\"$TEAM_SHA\"" "team block records the source sha"
+assert_contains "$TEAM_FILE" "- 기본 프로젝트: NJ" "personal rules kept"
+assert_eq "current" "$(team_cmd list | jq -r '.skills[0].state')" "applied block is current"
+assert_eq "unchanged" "$(team_cmd apply jira --sha "$TEAM_SHA" | jq -r '.action')" "re-apply of the same source is a no-op"
+# 원본이 바뀌면: SessionStart는 알리기만 하고(같은 sha는 한 번), 재적용은 팀 블록만 바꾼다.
+printf -- '- 이슈 타입: 에픽 > Task > SubTask, 에이전트는 Story를 만들지 않는다\n- Drop 상태를 쓰지 않는다\n' >"$TEAM_SRC/skills/jira.md"
+printf '\n- 개인 메모\n' >>"$SETUP_T/data/skills/jira.md"
+setup_cmd 'done' >/dev/null
+TEAM_NOTE="$(printf '{"cwd":"%s"}' "$TEAM_REPO" | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$TEAM_NOTE" "팀 규칙 원본이 갱신됐습니다: jira" "SessionStart notices a changed team source"
+assert_contains "$TEAM_NOTE" "자동으로 덮어쓰지 않습니다" "the notice does not overwrite"
+assert_contains "$(<"$SETUP_T/data/skills/jira.md")" "에이전트는 Story를 만들지 않는다
+<!--" "SessionStart leaves the profile alone"
+assert_eq "" "$(printf '{"cwd":"%s"}' "$TEAM_REPO" | setup_cmd notify)" "the same change is announced once"
+assert_eq "changed" "$(team_cmd list | jq -r '.skills[0].state')" "list shows the source changed"
+TEAM_SHA="$(team_cmd list | jq -r '.skills[0].sha256')"
+team_cmd apply jira --sha "$TEAM_SHA" >/dev/null
+TEAM_FILE="$(<"$SETUP_T/data/skills/jira.md")"
+assert_contains "$TEAM_FILE" "- Drop 상태를 쓰지 않는다" "re-apply updates the team block"
+assert_eq "1" "$(grep -c '에이전트는 Story' "$SETUP_T/data/skills/jira.md")" "old team block replaced, not duplicated"
+assert_contains "$TEAM_FILE" "- 기본 프로젝트: NJ" "re-apply keeps personal rules"
+assert_contains "$TEAM_FILE" "- 개인 메모" "re-apply keeps personal edits"
+# 새 파일은 팀 블록 + 빈 개인 블록으로 만든다.
+printf -- '- 기본 스페이스: ENG\n' >"$TEAM_SRC/skills/confluence.md"
+team_cmd apply confluence --sha "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .sha256')" >/dev/null
+assert_contains "$(<"$SETUP_T/data/skills/confluence.md")" "# confluence 개인 규칙" "new profile gets a personal section"
+# 깨진 마커·마커를 품은 원본은 쓰지 않는다.
+printf '<!-- ai-harness:team-rules:end -->\n' >>"$SETUP_T/data/skills/confluence.md"
+assert_eq "broken" "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .state')" "a profile with broken markers is reported"
+if team_cmd apply confluence --sha "$(team_cmd list | jq -r '.skills[] | select(.name=="confluence") | .sha256')" >/dev/null 2>&1; then fail "apply over broken markers"; fi
+printf '<!-- ai-harness:team-rules:begin source="x" ref="" sha256="%s" -->\n' "$(printf '%064d' 0)" >"$TEAM_SRC/skills/sentry.md"
+if team_cmd diff sentry >/dev/null 2>&1; then fail "a source carrying a marker is accepted"; fi
+if team_cmd diff nope >/dev/null 2>&1; then fail "unknown skill accepted"; fi
+# 저장소 표식이 가리키지만 아직 가져오지 않은 원본은 원본마다 한 번 알린다.
+TEAM_REPO2="$SETUP_T/repo2"
+mkdir -p "$TEAM_REPO2/.ai-harness" "$SETUP_T/team2/skills"
+jq -n --arg s "$SETUP_T/team2" '{team_rules:{source:$s}}' >"$TEAM_REPO2/.ai-harness/workspace.json"
+assert_contains "$(printf '{"cwd":"%s"}' "$TEAM_REPO2" | setup_cmd notify | jq -r '.systemMessage')" "팀 규칙 원본이 지정돼 있습니다" "workspace marker offers the source once"
+assert_eq "" "$(printf '{"cwd":"%s"}' "$TEAM_REPO2" | setup_cmd notify)" "the offer is shown once"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES_HINT=0)
+cp "$TEAM_SRC/skills/jira.md" "$SETUP_T/jira.keep"
+printf -- '- 바뀜\n' >"$TEAM_SRC/skills/jira.md"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "HM_TEAM_RULES_HINT=0 silences team notices"
+mv "$SETUP_T/jira.keep" "$TEAM_SRC/skills/jira.md"
+# git 원본: skills/만 캐시로 받고, ref를 따른다. SessionStart는 네트워크 없이 캐시와 비교한다.
+TEAM_GIT="$SETUP_T/team-git"
+mkdir -p "$TEAM_GIT/skills" "$TEAM_GIT/other"
+printf -- '- git v1\n' >"$TEAM_GIT/skills/datadog.md"
+printf 'secret-ish\n' >"$TEAM_GIT/other/x.txt"
+git -C "$TEAM_GIT" init -q -b main
+git -C "$TEAM_GIT" add -A && git -C "$TEAM_GIT" -c user.name=t -c user.email=t@t commit -qm v1
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="file://$TEAM_GIT" HM_TEAM_RULES_REF=main)
+TEAM_LIST="$(team_cmd list)"
+assert_eq "datadog:new" "$(jq -r '[.skills[] | "\(.name):\(.state)"] | join(" ")' <<<"$TEAM_LIST")" "git source lists its rules"
+[[ -z "$(find "$SETUP_T/data/setup/team" -path '*/src/other' 2>/dev/null)" ]] || fail "git fetch takes only skills/"
+team_cmd apply datadog --sha "$(jq -r '.skills[0].sha256' <<<"$TEAM_LIST")" >/dev/null
+assert_contains "$(<"$SETUP_T/data/skills/datadog.md")" 'ref="main"' "team block records the ref"
+printf -- '- git v2\n' >"$TEAM_GIT/skills/datadog.md"
+git -C "$TEAM_GIT" -c user.name=t -c user.email=t@t commit -qam v2
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "SessionStart does not fetch"
+setup_cmd team refresh
+assert_contains "$(printf '{}' | setup_cmd notify | jq -r '.systemMessage')" "갱신됐습니다: datadog" "refreshed git cache shows the change"
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES="file://$TEAM_GIT" HM_TEAM_RULES_REF="--upload-pack=touch")
+if team_cmd list >/dev/null 2>&1; then fail "an option-like ref is accepted"; fi
+SETUP_ENV=(HM_TEAM_RULES_REFRESH_HOURS=0 HM_TEAM_RULES='ext::sh -c touch% /tmp/pwned')
+assert_eq "config" "$(team_cmd source | jq -r '.from')" "config source is reported"
+if team_cmd list >/dev/null 2>&1; then fail "a non-git, non-directory source is accepted"; fi
+SETUP_ENV=()
+pass "setup imports team rules with diff, confirmation and update notices"
+
 # 외부 디자인 스킬: 사본을 들지 않고 원본 저장소의 고정 커밋에서 스킬 폴더만 받는다. 직접 깐 같은 이름 스킬은 명시 없이 바꾸지 않는다. (#210)
 SETUP_T="$TEST_TMP/setup-design"
 SETUP_CATALOG="$SETUP_T/catalog"
@@ -5159,6 +5349,9 @@ case "$1" in
   */rest/api/3/myself) printf '{"displayName":"Kim"}' ;;
   */rest/api/3/field) printf '[{"id":"customfield_10113","name":"스프린트","schema":{"custom":"com.pyxis.greenhopper.jira:gh-sprint"}},{"id":"customfield_1","name":"x","schema":{"type":"string"}}]' ;;
   */rest/api/3/project/recent*) printf '[{"key":"ABC","name":"Alpha"}]' ;;
+  */rest/api/3/issue/createmeta/*/issuetypes*) printf '{"issueTypes":[{"id":"1","name":"Epic","subtask":false,"hierarchyLevel":1},{"id":"2","name":"Task","subtask":false,"hierarchyLevel":0},{"id":"3","name":"Story","subtask":false,"hierarchyLevel":0},{"id":"4","name":"Sub-task","subtask":true,"hierarchyLevel":-1}]}' ;;
+  */rest/api/3/search/jql*) printf '{"issues":[{"key":"%s-7"}]}' "$(sed -E 's/.*project%3D([A-Z0-9_]+).*/\1/' <<<"$1")" ;;
+  */rest/api/3/issue/*-7/transitions) printf '{"transitions":[{"id":"11","name":"진행","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}},{"id":"31","name":"Drop","to":{"name":"Drop","statusCategory":{"key":"done"}}}]}' ;;
   */api/public/projects) printf '{"data":[{"id":"p1","name":"Demo"}]}' ;;
   *) printf 'HTTP 404\n' >&2; exit 1 ;;
 esac
@@ -5182,6 +5375,11 @@ DETECT="$(setup_cmd detect jira)"
 assert_eq "customfield_10113 gh-sprint" "$(jq -r '.fields[0] | "\(.id) \(.type)"' <<<"$DETECT")" "detect finds sprint field by type"
 assert_eq "1" "$(jq -r '.fields | length' <<<"$DETECT")" "detect ignores other fields"
 assert_eq "ABC" "$(jq -r '.recent_projects[0].key' <<<"$DETECT")" "detect lists recent projects"
+# 이슈 타입 계층·쓰지 않는 상태 질문의 선택지: 기본(최근) 프로젝트의 생성 가능 타입과 대표 이슈의 전환. (#243)
+assert_eq "Epic:1 Task:0 Story:0 Sub-task:-1" "$(jq -r '[.issue_types[] | "\(.name):\(.hierarchy)"] | join(" ")' <<<"$DETECT")" "detect lists creatable issue types with hierarchy"
+assert_eq "ABC-7 Drop:done" "$(jq -r '"\(.transitions.issue) \(.transitions.list[1] | "\(.name):\(.category)")"' <<<"$DETECT")" "detect lists transitions of a representative issue"
+assert_eq "XY-7" "$(setup_cmd detect jira --project XY | jq -r '.transitions.issue')" "detect takes the project to inspect"
+assert_eq "null 0" "$(setup_cmd detect jira --project 'a;b' | jq -r '"\(.project) \(.issue_types | length)"')" "detect ignores an invalid project key"
 printf 'bad-token\n' | setup_cmd set --tool claude ATLASSIAN_API_TOKEN >/dev/null
 assert_eq "false HTTP 401" "$(setup_cmd check jira | jq -r '"\(.ok) \(.error)"')" "check reports rejected credentials"
 assert_eq "CONFLUENCE_BASE_URL" "$(setup_cmd check confluence | jq -r '.missing | join(",")')" "check names the missing base URL"

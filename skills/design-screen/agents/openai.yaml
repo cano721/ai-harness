@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Screen"
+  short_description: "Draw a design-system-only screen in Figma or code and fix it until design-audit passes."
+  default_prompt: "Use $design-screen to draw this screen from the project's design system, in Figma or in code: $ARGUMENTS"

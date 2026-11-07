@@ -1,6 +1,6 @@
 # Figma MCP
 
-How ai-harness skills that write to Figma, score Figma frames, or read a Figma design kit use the Figma MCP. One copy ships with each of them (`design-system-builder`, `figma-screen`, `design-audit`, `landing-page`); they must stay identical. Server behavior below was observed on the remote server in 2026-11; when the server's own instructions say otherwise, follow the server for *how* to call a tool and this file for *what* may be written.
+How ai-harness skills that write to Figma, score Figma frames, or read a Figma design kit use the Figma MCP. One copy ships with each of them (`design-system-builder`, `design-screen`, `design-audit`, `landing-page`); they must stay identical. Server behavior below was observed on the remote server in 2026-11; when the server's own instructions say otherwise, follow the server for *how* to call a tool and this file for *what* may be written.
 
 ## Which server
 

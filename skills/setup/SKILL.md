@@ -1,11 +1,11 @@
 ---
 name: setup
-description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙)을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
+description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙·이슈 타입 계층)을 팀 규칙 원본에서 차이를 확인해 가져오거나 물어서 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
 ---
 
 # /setup — ai-harness 전역 셋업
 
-플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인), 디자인 스킬 상태 요약만, `design`이면 [디자인 스킬](#디자인-스킬-design)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
+플러그인 설치만으로는 아무 스킬도 사용자 전역 폴더에 깔지 않는다. 이 Skill이 사용자가 고른 것만 설치한다. 인자: `$ARGUMENTS` (없으면 대화형 셋업, `update`면 4단계만, `status`면 1단계와 6단계(연결 확인), 디자인 스킬 상태 요약만, `design`이면 [디자인 스킬](#디자인-스킬-design)만, `team`이면 [팀 규칙 가져오기](#7-0-팀-규칙-가져오기)만, `<스킬 이름>`이면 그 스킬의 5~7단계만).
 
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉터리의 두 단계 상위(플러그인 루트).
 
@@ -132,14 +132,54 @@ $ROOT/scripts/setup.sh check <name>
 
 카탈로그 스킬 본문은 범용이다. 회사·팀마다 다른 값은 스킬 파일이 아니라 `list`의 `profile.path`(`~/.ai-harness/skills/<name>.md`)에 적는다 — 스킬 본문을 고치면 그 사본은 `modified`가 되어 자동 갱신이 멈춘다. 카탈로그 스킬은 호출 전에 이 파일을 먼저 읽는다.
 
+### 7-0. 팀 규칙 가져오기
+
+조직이 규칙을 한 곳(팀 규칙 원본 — git 저장소나 공유 폴더의 `skills/<name>.md`)에 두었으면 질문 전에 그것부터 가져온다. 원본은 아래 순서로 찾고, 둘 다 없으면 이 절을 건너뛰고 1번 질문으로 간다.
+
+1. 개인 설정: `~/.ai-harness/config`의 `HM_TEAM_RULES=<git URL 또는 로컬 경로>`(선택 `HM_TEAM_RULES_REF=<브랜치·태그·커밋>`)
+2. 저장소 표식: 현재 위치에서 위로 가장 가까운 `.ai-harness/harness.json`(workspace면 `workspace.json`)의 `"team_rules": {"source": "<git URL 또는 경로>", "ref": "<선택>"}`. 상대 경로는 그 저장소 루트 기준이다. `/harness-init`이 넣는다.
+
+```bash
+$ROOT/scripts/setup.sh team list
+```
+
+`source`(찾은 원본, 없으면 `null`)·`from`(`config` 또는 표식 파일 경로)과 원본에 있는 카탈로그 스킬마다 `name`·`sha256`·`state`가 나온다. git 원본은 `skills/`만 받는다(프롬프트·hook 없이). 원본 내용은 에이전트 지시가 되므로 이 두 곳 말고 다른 데서 찾지 않는다.
+
+| state | 뜻 |
+|---|---|
+| `new` | 사용자 규칙 파일 없음 |
+| `untracked` | 파일은 있는데 팀 블록 없음 — 적용하면 기존 내용은 개인 블록으로 남는다 |
+| `current` | 팀 블록이 원본과 같음 — 건너뛴다 |
+| `changed` | 원본이 바뀜 |
+| `broken` | 마커가 깨짐 — 적용하지 않고 사용자에게 마커를 손으로 고치게 한다 |
+
+`new`·`untracked`·`changed`인 스킬마다:
+
+1. 차이를 보여 준다 — 바로 덮어쓰지 않는다:
+   ```bash
+   $ROOT/scripts/setup.sh team diff <name>
+   ```
+   unified diff를 그대로 보여 주고, 원본 출처(`source`)와 함께 "이 내용이 에이전트 규칙이 된다"고 알린 뒤 적용할지 묻는다.
+2. 확인받은 것만 그 diff의 sha로 쓴다:
+   ```bash
+   $ROOT/scripts/setup.sh team apply <name> --sha <diff에 나온 sha256>
+   ```
+   `stale`이면 원본이 그사이 바뀐 것이다 — diff부터 다시 보여 준다.
+
+파일은 팀 블록(`<!-- ai-harness:team-rules:begin source=… ref=… sha256=… -->` ~ `<!-- ai-harness:team-rules:end -->`)과 그 밖의 개인 블록으로 나뉜다. 다시 적용하면 팀 블록만 바뀌고 개인 블록은 그대로다. 개인 값(기본 프로젝트 등)은 아래 질문으로 개인 블록에 적는다 — 팀 블록이 이미 답한 질문은 건너뛴다. 원본에도 이 파일에도 자격 증명을 두지 않는다.
+
+갱신 알림: 세션 시작 안내가 적용한 팀 블록의 sha와 원본을 비교해 바뀌었으면 "팀 규칙 원본이 갱신됐습니다 — `/ai-harness:setup team`으로 반영"을 한 번 알린다(자동으로 덮어쓰지 않음). git 원본은 세션 시작을 막지 않게 하루 한 번(`HM_TEAM_RULES_REFRESH_HOURS`, 기본 24) 백그라운드로 받아 두고 다음 세션에 비교한다. 저장소 표식이 가리키는 원본을 아직 가져오지 않았으면 그것도 원본마다 한 번 알린다. 끄려면 `HM_TEAM_RULES_HINT=0`.
+
+### 7-1. 질문
+
 1. 연결 확인이 된 스킬은 선택지를 계정에서 읽어 온다:
    ```bash
    $ROOT/scripts/setup.sh detect <name>
    ```
-   Jira는 스프린트·에픽 링크 필드 ID(이름이 아니라 타입으로 찾으므로 언어 설정과 무관)와 최근 프로젝트, Confluence는 스페이스, Datadog은 최근 24시간 에러가 많은 서비스, Sentry는 프로젝트 목록을 준다.
-2. `profile.questions`를 순서대로 묻는다. `detect` 결과가 있는 질문은 선택지로 보여 준다. 필드 ID처럼 자동으로 확정되는 값은 묻지 않고 적는다. 모르는 항목은 비워 둔다.
+   Jira는 스프린트·에픽 링크 필드 ID(이름이 아니라 타입으로 찾으므로 언어 설정과 무관)와 최근 프로젝트, 기본 프로젝트의 생성 가능한 이슈 타입과 계층(`issue_types`), 그 프로젝트 최근 이슈의 전환 목록(`transitions`)을 준다. 기본 프로젝트를 이미 정했으면 `detect jira --project <KEY>`로 그 프로젝트를 본다. Confluence는 스페이스, Datadog은 최근 24시간 에러가 많은 서비스, Sentry는 프로젝트 목록을 준다.
+2. `profile.questions`를 순서대로 묻는다. `detect` 결과가 있는 질문은 선택지로 보여 준다(Jira 이슈 타입은 `issue_types`, 쓰지 않는 상태는 `transitions.list`에서 여러 개 고르게 한다). 필드 ID처럼 자동으로 확정되는 값은 묻지 않고 적는다. 모르는 항목은 비워 둔다.
 3. 같은 이름의 개인 스킬이 `foreign`으로 남아 있으면, 그 SKILL.md를 Read해 회사 전용 값(사이트 주소·필수 필드·커스텀 필드 ID·팀 관례)을 뽑아 초안으로 제안한다. 뽑은 필드 ID가 `detect` 결과와 다르면 `detect` 값을 쓰고 차이를 알린다.
-4. 사용자가 확인한 내용만 Write로 저장한다. 이미 파일이 있으면 Read해 바뀐 줄만 고친다. 형식:
+4. 사용자가 확인한 내용만 Write로 저장한다. 이미 파일이 있으면 Read해 바뀐 줄만 고친다 — 팀 블록(마커 사이)은 고치지 않는다(팀 규칙과 다르게 하고 싶은 값은 개인 블록에 적는다). 형식:
    ```markdown
    # jira 사용자 규칙
    <!-- /ai-harness:setup이 만든 파일. 직접 고쳐도 되고, 다시 setup하면 이 내용을 바탕으로 묻는다. -->
@@ -147,6 +187,9 @@ $ROOT/scripts/setup.sh check <name>
    - 기본 프로젝트: NJ
    - 필드: 스프린트 `customfield_10113`, 에픽 링크 `customfield_10006`
    - 이슈 생성: 상위 에픽·활성 스프린트·수정 버전을 반드시 채운다. 모르면 후보를 조회해 추천하고 확인받는다.
+   - 이슈 타입: 에픽 > Task > SubTask. Story는 기획자만 만든다 — 에이전트는 만들지 않는다.
+   - 쓰지 않는 상태: Drop — 전환할 때 고르지 않는다.
+   - 후속·반영 이슈: 새 Task가 아니라 원 이슈의 SubTask로 만든다.
    - 관례: 요약은 "[모듈] 동사로 끝나는 한 줄"
    ```
    자격 증명 값은 이 파일에 적지 않는다.
@@ -169,6 +212,26 @@ $ROOT/scripts/setup.sh check <name>
 자동 병합 옵션을 고르면 두 가지를 더 알린다.
 - 저장소마다 `.ai-harness/harness.json`에 `"auto_merge": {"sync": true}`(harvest면 `"harvest": true`)가 **기준 브랜치에 병합되어 있어야** 동작한다. 이 설정은 사람이 PR로 넣는다 — 무인 실행의 PR은 이 값을 바꿀 수 없다.
 - 처음에는 sync만 켜고 저장소 한 곳에서 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
+
+### 8-1. 워크플로 자동화 단계 (선택)
+
+워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 저장소 `git_policy`·`merge_policy`를 그대로 따른다.
+
+1. 기본 단계 `HM_DELIVERY_LEVEL`:
+   - `pr` — PR까지. 병합·배포는 사람이 한다 (직접 리뷰하고 싶은 사람)
+   - `merge` — 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
+   - `deploy` — `merge`에 더해 저장소에 있는 배포 확인·스모크 명령까지. 저장소에 그 명령이 없으면 `merge`까지 하고 결과에 밝힌다
+2. 저장소마다 다르게 하고 싶으면 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>,…"`로 덮어쓴다. `project_id`는 저장소 `.ai-harness/harness.json`의 `project_id`(없으면 origin 저장소 이름)이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
+3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 저장소 `merge_policy`의 값(없으면 네 조건 모두·승인 1·squash)을 쓴다.
+   - `HM_MERGE_REQUIRE` — `human_approval`·`remote_ci`·`no_conflict`·`not_draft` 중 쉼표 구분
+   - `HM_MERGE_MIN_APPROVALS` — 1 이상
+   - `HM_MERGE_METHOD` — `squash`·`merge`·`rebase`(Bitbucket은 rebase 불가)
+
+`merge`·`deploy`를 고르면 다음을 함께 알린다.
+- 팀 통제는 PR 호스트의 브랜치 보호다. 러너는 병합 직전에 기준 브랜치의 보호 규칙을 읽고, **필수 승인이 걸려 있지 않거나 읽을 수 없으면 병합하지 않고 사람에게 넘긴다**. GitHub 예전 브랜치 보호와 Bitbucket branch restrictions는 저장소 관리자 권한이 있어야 읽히므로, 권한이 없으면 GitHub 규칙 세트로 보호하거나 직접 병합한다.
+- 호스트의 필수 승인 수·필수 체크는 내 조건보다 우선하는 하한으로 더해진다.
+- 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
+- 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
 
 ## 디자인 스킬 (`design`)
 
