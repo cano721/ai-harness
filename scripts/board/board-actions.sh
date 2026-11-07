@@ -16,7 +16,7 @@ origin_of() {
     [ -f "$ev" ] || ev="$DATA/rollups/${ev##*/}"
     [ -f "$ev" ] || continue
     IFS=$'\t' read -r cwd src <<<"$(jq -r 'select(.kind=="session") | [(.cwd // ""), (.src // "claude")] | @tsv' "$ev" 2>/dev/null | head -n 1)"
-    [ -n "$cwd" ] && [ -d "$cwd" ] || continue
+    if [ -z "$cwd" ] || [ ! -d "$cwd" ]; then continue; fi
     if [ -f "$cwd/.ai-harness/workspace.json" ]; then printf '%s\t%s\n' "$cwd" "$src"; return 0; fi
     root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)
     if [ -n "$root" ] && [ -f "$root/.ai-harness/harness.json" ]; then printf '%s\t%s\n' "$cwd" "$src"; return 0; fi
