@@ -196,7 +196,7 @@ codex plugin add ai-harness@ai-harness
 - 규모: `minimal` 또는 `standard`
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
-- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지, 병합은 사람), 직접 커밋 허용(`direct`), 또는 PR 후 병합(`merge` — 사람이 고른 병합 조건이 모두 맞을 때 러너가 병합하고 병합 후 검증까지. [병합 정책](#merge-policy)). 병합 여부는 사용자마다 [개인 자동화 단계](#delivery-level)로 따로 고를 수 있습니다
+- Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지) 또는 직접 커밋 허용(`direct`). 저장소는 커밋·PR 범위만 정합니다. PR 뒤 병합·배포까지 맡길지는 사용자마다 [개인 자동화 단계](#delivery-level)로 고르고, 고르지 않으면 PR까지입니다([병합](#merge-policy))
 - 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
 - 이슈 상태 전환: 시작 시 진행 중(`issue_policy:"in-progress-on-start"` — 이슈 키·URL로 기능 개발·버그 수정을 시작하면 그 이슈를 먼저 진행 중으로 옮김) 또는 건드리지 않음(기본)
 
@@ -261,7 +261,7 @@ stateDiagram-v2
     repair --> user_decision: 그래프 수리 한도 도달·제품 판단 필요
     publish --> done: git_policy대로 커밋·push·PR (허용 안 되면 건너뜀)
     publish --> user_decision: push·PR 실패
-    publish --> merge: git_policy merge, 원격 CI 통과 뒤
+    publish --> merge: 개인 단계 merge·deploy, 원격 CI 통과 뒤
     merge --> post_merge_verify: 병합 조건 충족·병합
     merge --> user_decision: 변경 요청·충돌·head 이동
     post_merge_verify --> done: 병합 후 검증 통과
@@ -271,7 +271,7 @@ stateDiagram-v2
 1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. `harness.json`의 `approval`이 `auto`면 판단이 갈리는 점을 추천안으로 정해 근거와 함께 Brief·PR 본문의 "결정 사항"에 남기고, 사람만 정할 수 있는 것이 없으면 바로 진행합니다.
 2. **구현** — 승인 후 작업을 작고 검증 가능한 delivery slice로 나눕니다. TDD 강제 프로젝트에서는 Red → Green → Refactor를 지키고, 그 외에는 프로젝트 테스트 정책을 따릅니다.
 3. **검토 루프** — acceptance case와 diff를 검토합니다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재검토로 해소를 확인합니다. 그래프의 수리 한도(`limits.max_repair_attempts`, 기본 10)에 이르거나 제품 결정이 필요하면 추측하지 않고 사용자에게 넘깁니다.
-4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. force push는 어느 정책에서도 하지 않고, 병합은 `merge` 정책에서 러너만 합니다(아래 [병합 정책](#merge-policy)). 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
+4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. force push는 어느 정책에서도 하지 않고, 병합은 [개인 자동화 단계](#delivery-level)가 `merge`·`deploy`일 때 러너만 합니다(아래 [병합](#merge-policy)). 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
 
 같은 대화 안에 승인된 동일 범위의 Brief가 있으면 재승인 없이 구현을 이어갑니다. explorer, test-engineer, developer, reviewer 역할이 설정된 경우에만 독립적인 작업을 위임하며, 작은 작업은 단일 세션에서 동일한 순서를 지킵니다.
 
@@ -316,7 +316,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
 | 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
-| git | `git_policy`가 `pr-only`·`direct`·`merge`면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
+| git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
@@ -325,29 +325,35 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
 
 <a id="merge-policy"></a>
-#### 병합 정책 (`git_policy: "merge"`)
+#### 병합 (개인 단계 `merge`·`deploy`)
 
-병합 조건과 병합 후 검증 범위는 `/harness-init` 인터뷰에서 사람이 고르고 manifest `merge_policy`에 남습니다. 기본값을 가정하지 않습니다.
+러너가 PR 뒤 병합까지 가는 경로는 하나입니다. 저장소에는 "병합까지"라는 설정이 없고, 역할이 넷으로 나뉩니다.
+
+| 무엇 | 어디 | 누가 |
+|---|---|---|
+| 에이전트가 이 저장소에서 커밋·PR을 해도 되는지 | `harness.json` `git_policy`: `pr-only` \| `direct` \| 미설정 | 팀(PR) |
+| 병합·배포에 쓸 저장소 사실: 기준 브랜치, 배포 확인·스모크 명령, 쓸 수 있는 검증 | `harness.json` `merge_policy`(사실만) | 팀(PR) |
+| PR 뒤 어디까지 갈지 + 병합 조건 최소치·방식 | `~/.ai-harness/config` `HM_DELIVERY_LEVEL(_REPOS)`, `HM_MERGE_*` ([개인 자동화 단계](#delivery-level)) | 개인 |
+| 리뷰 없는 병합을 실제로 막는 상한 | 호스트 브랜치 보호 | 팀(호스트) |
 
 ```json
-"git_policy": "merge",
+"git_policy": "pr-only",
 "merge_policy": {
-  "require": ["human_approval", "remote_ci", "no_conflict", "not_draft"],
-  "min_approvals": 1,
-  "method": "squash",
-  "verify": ["target_ci", "deploy", "smoke", "monitor"],
+  "base": "develop",
+  "verify": ["deploy", "smoke", "monitor"],
   "deploy_check_cmd": "scripts/deployed.sh \"$HM_MERGE_COMMIT\"",
   "deploy_timeout_minutes": 60,
-  "smoke_cmd": "curl -fsS https://dv.example.com/health",
-  "base": "develop"
+  "smoke_cmd": "curl -fsS https://dv.example.com/health"
 }
 ```
+
+**예전 설정**: `git_policy:"merge"`는 `pr-only`와 같은 PR 범위로 읽고, `merge_policy`의 `require`·`min_approvals`·`method`는 쓰지 않습니다. 시작은 막지 않고 실행 시작과 결과에 `notice:`로 안내합니다. `/harness-init --sync`가 manifest를 사실만 남기도록 정리를 제안합니다.
 
 | 단계 | 동작 |
 |---|---|
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. `human_approval`은 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 `min_approvals`개(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), `remote_ci`는 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님) |
 | 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
-| 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) `method`대로 병합합니다. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신하고, `rebase`는 지원하지 않습니다 |
+| 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) `HM_MERGE_METHOD`(기본 `squash`)대로 병합합니다. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신하고, `rebase`는 지원하지 않습니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
@@ -356,7 +362,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 <a id="delivery-level"></a>
 #### 개인 자동화 단계 (`HM_DELIVERY_LEVEL`)
 
-에이전트가 어디까지 스스로 진행할지는 사람마다 다릅니다. 사용자 설정 `~/.ai-harness/config`에 자동화 단계를 두면 **병합 여부는 그 값이** 정하고, 저장소 `git_policy`는 커밋·PR 범위만 정합니다. 팀 통제는 하네스가 따로 상한을 두지 않고 **PR 호스트의 브랜치 보호**(필수 승인·필수 체크)에 맡깁니다. `/ai-harness:setup`에서 고르거나 직접 적습니다.
+에이전트가 어디까지 스스로 진행할지는 사람마다 다릅니다. **병합 여부는 사용자 설정 `~/.ai-harness/config`의 자동화 단계만** 정하고, 단계가 없으면 PR까지입니다. 저장소 `git_policy`는 커밋·PR 범위만 정합니다. 팀 통제는 하네스가 따로 상한을 두지 않고 **PR 호스트의 브랜치 보호**(필수 승인·필수 체크)에 맡깁니다. `/ai-harness:setup`에서 고르거나 직접 적습니다.
 
 ```bash
 HM_DELIVERY_LEVEL=pr                               # 기본 단계: pr | merge | deploy
@@ -366,9 +372,9 @@ HM_MERGE_MIN_APPROVALS=1                           # (선택)
 HM_MERGE_METHOD=squash                             # squash | merge | rebase (선택)
 ```
 
-| 단계 | `git_policy` `pr-only`·`merge` | `direct` | 그 밖(커밋 안 함) |
+| 단계 | `git_policy` `pr-only`(예전 `merge` 포함) | `direct` | 그 밖(커밋 안 함) |
 |---|---|---|---|
-| `pr` | PR까지(저장소가 `merge`여도 병합하지 않음) | PR 없이 push | 커밋하지 않음 |
+| 없음·`pr` | PR까지 | PR 없이 push | 커밋하지 않음 |
 | `merge` | PR → 병합 → 병합 커밋의 원격 CI(`target_ci`) | PR 없이 push(병합할 PR 없음 — 결과에 밝힘) | 커밋하지 않음 |
 | `deploy` | `merge`에 더해 저장소에 있는 배포 확인·스모크(·재발 추적)까지. 저장소에 배포·스모크 명령이 없으면 `merge`까지 하고 결과에 밝힘 | 위와 같음 | 커밋하지 않음 |
 
@@ -378,11 +384,11 @@ HM_MERGE_METHOD=squash                             # squash | merge | rebase (�
 | `merge_policy.base`·`deploy_check_cmd`·`deploy_timeout_minutes`·`smoke_cmd`·쓸 수 있는 `verify` | 저장소 `harness.json` (저장소 사실) | PR |
 | 필수 승인 수·필수 체크 | 호스트 브랜치 보호 | 호스트 관리자 |
 
-- **안전장치**: 이 경로의 `merge` 노드는 병합 직전에 호스트에서 기준 브랜치의 보호 규칙을 읽습니다. GitHub는 규칙 세트(`GET /repos/{owner}/{repo}/rules/branches/{branch}`, 읽기 권한으로 보임)와 브랜치 보호(`GET /repos/{owner}/{repo}/branches/{branch}/protection`, 관리자만 읽힘)를, Bitbucket Cloud는 branch restrictions(`require_approvals_to_merge`·`require_default_reviewer_approvals_to_merge`·`require_passing_builds_to_merge`, glob 패턴과 branching model 대상 모두 — 관리자 권한 필요)를 봅니다. **필수 승인이 1 이상**인 보호가 없거나 읽을 수 없으면 병합하지 않고 `user_decision`(exit 20)으로 넘깁니다. 필수 체크만 있는 보호도 리뷰 없는 병합을 막지 못하므로 보호 없음으로 봅니다. 보호가 있으면 호스트의 필수 승인 수와 필수 체크를 병합 조건의 하한으로 더해(`human_approval`·`min_approvals`, `remote_ci`) 러너가 직접 판정합니다.
-- **조건 기본값**: `HM_MERGE_*`가 없으면 저장소 `merge_policy`의 `require`·`min_approvals`·`method`를, 그것도 없으면 네 조건 모두·승인 1·`squash`를 씁니다.
+- **안전장치**: `merge` 노드는 병합 직전에 호스트에서 기준 브랜치의 보호 규칙을 읽습니다. GitHub는 규칙 세트(`GET /repos/{owner}/{repo}/rules/branches/{branch}`, 읽기 권한으로 보임)와 브랜치 보호(`GET /repos/{owner}/{repo}/branches/{branch}/protection`, 관리자만 읽힘)를, Bitbucket Cloud는 branch restrictions(`require_approvals_to_merge`·`require_default_reviewer_approvals_to_merge`·`require_passing_builds_to_merge`, glob 패턴과 branching model 대상 모두 — 관리자 권한 필요)를 봅니다. **필수 승인이 1 이상**인 보호가 없거나 읽을 수 없으면 병합하지 않고 `user_decision`(exit 20)으로 넘깁니다. 필수 체크만 있는 보호도 리뷰 없는 병합을 막지 못하므로 보호 없음으로 봅니다. 보호가 있으면 호스트의 필수 승인 수와 필수 체크를 병합 조건의 하한으로 더해(`human_approval`·`min_approvals`, `remote_ci`) 러너가 직접 판정합니다.
+- **조건 기본값**: `HM_MERGE_*`가 없으면 네 조건 모두·승인 1·`squash`를 씁니다. 저장소 `merge_policy`의 `require`·`min_approvals`·`method`는 읽지 않습니다.
 - **저장소 키**: `HM_DELIVERY_LEVEL_REPOS`의 키는 `/metrics`·`HM_AUTOFIX_REPOS`와 같은 `project_id`입니다(`harness.json`의 `project_id` → origin 저장소 이름).
-- **무인 실행**은 이 경로로도 병합하지 않습니다. 무인 PR의 병합은 지금처럼 [자동 병합](#auto-merge)(`auto_merge` + `HM_*_AUTO_MERGE`)만 합니다.
-- **호환**: 개인 단계가 없으면 위 [병합 정책](#merge-policy)대로 저장소 `git_policy`·`merge_policy`를 따릅니다(기존 저장소 동작 그대로, 보호 규칙 확인 없음).
+- **무인 실행**은 단계와 상관없이 병합하지 않습니다. 무인 PR의 병합은 [자동 병합](#auto-merge)(사용자 설정 `HM_*_AUTO_MERGE`)만 합니다.
+- **단계가 없을 때**: 저장소가 예전 `git_policy:"merge"`여도 PR까지이고 안내만 남깁니다([병합](#merge-policy)의 예전 설정).
 
 한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
@@ -588,7 +594,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 
 ### 자동 병합 (opt-in)
 
-자동 sync·자동 harvest가 연 draft PR을 사람이 매번 검토·병합하지 않아도 되게, **기계적으로 검증되는 PR만** 병합합니다. 두 설정이 모두 켜져야 동작합니다.
+자동 sync·자동 harvest가 연 draft PR을 사람이 매번 검토·병합하지 않아도 되게, **기계적으로 검증되는 PR만** 병합합니다. 켜고 끄는 것은 사용자 설정만 정합니다 — 저장소 PR은 필요 없습니다.
 
 ```bash
 # ~/.ai-harness/config
@@ -596,33 +602,24 @@ HM_SYNC_AUTO_MERGE=1       # 자동 sync PR
 HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 ```
 
-저장소 `.ai-harness/harness.json` — PR이 아니라 기준 브랜치의 값을 읽습니다(PR이 스스로 켜거나 기준을 느슨하게 하지 못합니다).
+조정값도 같은 파일에 둡니다(선택). 저장소 기준 브랜치의 `.ai-harness/harness.json`에 `"auto_merge": {"method": "squash", "require_ci": true, …}`처럼 같은 키가 있으면 함께 읽고, 안전에 걸린 값(`sync_partial`·`require_ci`·`harvest_max_*`)은 **둘 중 안전한 쪽**을 씁니다. 저장소 값은 팀이 정하는 하한일 뿐 자동 병합을 켜는 스위치가 아니며, PR이 바꾼 manifest는 읽지 않습니다(PR이 스스로 기준을 느슨하게 하지 못합니다).
 
-```json
-"auto_merge": {
-  "sync": true, "harvest": false, "method": "squash",
-  "sync_partial": false, "require_ci": true, "wait_hours": 72,
-  "harvest_max_files": 3, "harvest_max_lines": 40
-}
-```
+| 사용자 설정 (manifest 키) | 기본 | 뜻 | 둘 다 있으면 |
+|---|---|---|---|
+| `HM_AUTO_MERGE_METHOD` (`method`) | `default` | `squash`·`merge`·`default`(호스트 기본) | 사용자 값 |
+| `HM_AUTO_MERGE_SYNC_PARTIAL` (`sync_partial`) | `0` | `1`이면 일부 적용 sync PR도 병합 | 한쪽이라도 끄면 끔 |
+| `HM_AUTO_MERGE_REQUIRE_CI` (`require_ci`) | `1` | `0`이면 CI가 없는 저장소도 병합. 실패한 CI·브랜치 보호에 막힌 PR은 어느 설정에서도 병합하지 않음 | 한쪽이라도 요구하면 요구 |
+| `HM_AUTO_MERGE_WAIT_HOURS` (`wait_hours`) | `72` (최대 336) | CI·상태 확인을 기다리는 시간, 넘으면 사람에게 | 사용자 값 |
+| `HM_AUTO_MERGE_HARVEST_MAX_FILES`·`_MAX_LINES` (`harvest_max_files`·`harvest_max_lines`) | `3`·`40` (최대 5·100) | harvest PR 크기 상한 | 작은 값 |
 
-| 키 | 기본 | 뜻 |
-|---|---|---|
-| `sync`·`harvest` | `false` | 그 종류의 무인 PR 자동 병합 허용 |
-| `method` | `default` | `squash`·`merge`·`default`(호스트 기본) |
-| `sync_partial` | `false` | 일부 적용 sync PR도 병합 |
-| `require_ci` | `true` | `false`면 CI가 없는 저장소도 병합. 실패한 CI·브랜치 보호에 막힌 PR은 어느 설정에서도 병합하지 않음 |
-| `wait_hours` | `72` (최대 336) | CI·상태 확인을 기다리는 시간, 넘으면 사람에게 |
-| `harvest_max_files`·`harvest_max_lines` | `3`·`40` (최대 5·100) | harvest PR 크기 상한 |
-
-사용자 설정은 "이 PC에서 자동 병합을 쓸지"만 정하고, 기준은 저장소마다 manifest에 둡니다. 아래 안전 최소 기준은 저장소 설정으로 바꿀 수 없습니다.
+예전 저장소 허용 스위치(`auto_merge.sync`·`auto_merge.harvest`, 또는 `"auto_merge": false`)는 더 이상 읽지 않습니다. `false`로 적혀 있어도 막지 않고, 남아 있는 저장소를 처음 만나면 세션 시작 때 한 번 알립니다. init·sync는 이 필드를 지우지 않고 그대로 둡니다. 아래 안전 최소 기준은 어느 설정으로도 바꿀 수 없습니다.
 
 | 대상 | 병합 조건 (모두 만족) |
 |---|---|
-| sync PR | 결과 `improved`(일부 적용은 `sync_partial: true`일 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
-| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_files`·`harvest_max_lines`) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
+| sync PR | 결과 `improved`(일부 적용은 `sync_partial`이 켜졌을 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
+| harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_*`로 조정, 최대 5개·100줄) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
 | 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
-| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci: false`일 때만 병합) |
+| 공통 (병합 직전, PR 호스트에서 직접 읽음) | 사용자 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci`가 꺼졌을 때만 병합) |
 
 - **흐름**: 무인 실행이 PR을 연 직후 내용 조건을 판정해 대기열(`~/.ai-harness/auto-merge/pending/`)에 넣고, 정기 실행이 매 회차(유휴·한도와 무관, LLM 없음) 호스트 조건을 확인해 draft를 풀고 head를 고정해 병합합니다. Bitbucket은 head를 고정할 수 없어 병합 직전에 다시 읽어 맞춰 봅니다
 - **기록·알림**: `runs.jsonl`에 `auto_merge_queued`·`auto_merged`(병합 커밋)·`auto_merge_skipped`(사유)로 남고, 세션 시작 때 지난 알림 뒤의 병합·사람 확인 필요 건수를 알립니다
@@ -780,16 +777,22 @@ HM_HARVEST_AUTO_AGENT=auto       # auto(claude 우선)|claude|codex
 HM_HARVEST_AUTO_WORKSPACE=1      # 0이면 workspace AGENTS.md 자동 적용 끔
 HM_SYNC_AUTO=0                   # 1이면 하네스가 플러그인보다 뒤처진 저장소에 /harness-init --sync를 백그라운드 실행(draft PR)
 HM_SYNC_AUTO_DAILY_MAX=6         # 하루 자동 sync 상한
-HM_SYNC_AUTO_MERGE=0             # 1이면 검증되는 자동 sync PR을 병합(저장소 harness.json auto_merge.sync도 true여야 함)
-HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병합(auto_merge.harvest도 true여야 함)
+HM_SYNC_AUTO_MERGE=0             # 1이면 검증되는 자동 sync PR을 병합(저장소 설정 불필요)
+HM_HARVEST_AUTO_MERGE=0          # 1이면 검증되는 자동 harvest PR을 병합(저장소 설정 불필요)
 HM_AUTO_MERGE_HINT=1             # 0이면 자동 sync 병합 켜기 안내(조건을 만족한 sync PR이 30일 3건 이상일 때)를 끔
+HM_AUTO_MERGE_METHOD=            # squash|merge|default. 비면 저장소 auto_merge.method, 그것도 없으면 호스트 기본
+HM_AUTO_MERGE_SYNC_PARTIAL=      # 1이면 일부 적용 sync PR도 병합(저장소 sync_partial:false면 끔)
+HM_AUTO_MERGE_REQUIRE_CI=        # 0이면 CI 없는 저장소도 병합(저장소 require_ci:true면 요구). 실패한 CI는 항상 막음
+HM_AUTO_MERGE_WAIT_HOURS=        # CI·상태 확인 대기(기본 72, 최대 336)
+HM_AUTO_MERGE_HARVEST_MAX_FILES= # harvest PR 파일 상한(기본 3, 최대 5, 저장소 값이 있으면 작은 쪽)
+HM_AUTO_MERGE_HARVEST_MAX_LINES= # harvest PR 줄 상한(기본 40, 최대 100, 저장소 값이 있으면 작은 쪽)
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
-HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 저장소 git_policy·merge_policy를 따름
+HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 PR까지
 HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
-HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 저장소 merge_policy.require, 그것도 없으면 네 조건 모두)
-HM_MERGE_MIN_APPROVALS=          # 비면 저장소 값 또는 1
-HM_MERGE_METHOD=                 # squash|merge|rebase. 비면 저장소 값 또는 squash
+HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 네 조건 모두)
+HM_MERGE_MIN_APPROVALS=          # 비면 1
+HM_MERGE_METHOD=                 # squash|merge|rebase. 비면 squash
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
 HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
 HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")

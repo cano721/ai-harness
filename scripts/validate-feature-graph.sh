@@ -61,7 +61,7 @@ if jq -e '.nodes | has("ui_review")' "$graph_path" >/dev/null; then
   }
 fi
 
-# merge는 선택 노드다(git_policy merge). 있으면 원격 CI 통과 뒤에만 닿고, 병합 후 검증을 건너뛰는 경로가 없어야 한다.
+# merge는 선택 노드다(개인 자동화 단계 merge·deploy). 있으면 원격 CI 통과 뒤에만 닿고, 병합 후 검증을 건너뛰는 경로가 없어야 한다.
 if jq -e '.nodes | has("merge")' "$graph_path" >/dev/null; then
   has_transition remote_ci merge remote_ci_passed_and_merge_policy
   has_transition merge post_merge_verify merged

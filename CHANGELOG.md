@@ -6,6 +6,17 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.62.0 (2026-11-07)
+### 동작 변경
+
+- **저장소 병합 설정 제거 — 개인 단계가 없으면 항상 PR까지** — v0.61.0 뒤에도 개인 자동화 단계가 없는 사용자는 저장소 `git_policy:"merge"` + `merge_policy` 조건으로 병합해서, 한 사람이 저장소를 "병합까지"로 올리면 모두의 에이전트가 병합했고 이 경로는 호스트 브랜치 보호도 확인하지 않았습니다. 이제 병합 여부는 개인 설정(`HM_DELIVERY_LEVEL`·`HM_DELIVERY_LEVEL_REPOS`)만 정하고, 없으면 PR까지입니다. 기존 `git_policy:"merge"`는 `pr-only`로 읽고, `merge_policy`의 `require`·`min_approvals`·`method`는 쓰지 않습니다(개인 `HM_MERGE_*` → 네 조건 모두·승인 1·squash). 시작은 막지 않고 실행 시작과 결과에 `notice:`로 알립니다. 병합은 언제나 호스트 브랜치 보호(필수 승인)를 확인한 뒤에만 합니다 — 업데이트 전에 시작해 병합을 기다리던 실행을 `resume`해도 같습니다. `/harness-init`은 git 통제에서 `merge`를 고르지 않고, sync·설정 변경이 예전 병합 설정을 저장소 사실만 남기도록 정리하자고 제안합니다(사람 확인 뒤 적용). 무인 PR 자동 병합(`auto_merge`)은 그대로입니다. (#248)
+- **자동 병합(sync·harvest)을 사용자 설정만으로 켬** — 무인 sync·harvest PR의 자동 병합이 사용자 설정(`HM_SYNC_AUTO_MERGE`·`HM_HARVEST_AUTO_MERGE`)과 저장소 기준 브랜치 `harness.json`의 `auto_merge.sync`·`auto_merge.harvest`가 둘 다 켜져야 동작해서, 사용자가 켜도 저장소마다 팀 PR을 넣기 전에는 한 번도 병합되지 않았습니다. 이제 사용자 설정만 보고, 저장소 허용 스위치는 읽지 않습니다(`false`로 적혀 있어도 막지 않고, 남아 있는 저장소를 처음 만나면 세션 시작 때 한 번 알림). 조정값은 `~/.ai-harness/config`의 `HM_AUTO_MERGE_METHOD`·`HM_AUTO_MERGE_SYNC_PARTIAL`·`HM_AUTO_MERGE_REQUIRE_CI`·`HM_AUTO_MERGE_WAIT_HOURS`·`HM_AUTO_MERGE_HARVEST_MAX_FILES`·`HM_AUTO_MERGE_HARVEST_MAX_LINES`로 정하고, 기준 브랜치 manifest에 같은 키가 있으면 안전한 쪽(작은 상한, 엄격한 쪽 불리언)을 씁니다. 내용 조건(sync: copy 바이트 일치·manifest 해시, harvest: 허용 경로·크기 상한 최대 5파일·100줄·독립 검토)과 병합 직전 호스트 조건(사람 활동 없음·CI 통과·head 고정·대기 최대 336시간)은 그대로입니다. (#250)
+
+### 업데이트 후 해야 할 일
+
+- 저장소가 `git_policy:"merge"`로 병합을 맡기고 있었다면, 병합을 원하는 사람은 각자 `/ai-harness:setup`에서 자동화 단계(`merge`·`deploy`)와 병합 조건(`HM_MERGE_*` — 저장소 `merge_policy`의 `require`·`min_approvals`·`method`를 그대로 옮길 수 있음)을 고르세요. 병합할 기준 브랜치에는 호스트 보호(필수 승인 1 이상)가 있어야 합니다. 하네스 저장소는 `/harness-init --sync`로 러너·어댑터를 받고, 제안되는 manifest 정리(`git_policy` → `pr-only`, `merge_policy`는 사실만)를 확인해 적용하세요.
+- 자동 병합을 쓰려면 `/ai-harness:setup`에서 `HM_SYNC_AUTO_MERGE`(필요하면 `HM_HARVEST_AUTO_MERGE`)만 켜면 됩니다. 저장소 `harness.json`의 `auto_merge.sync`·`harvest`는 지우지 않아도 되지만 더는 쓰이지 않습니다. 이 저장소 스위치로 자동 병합을 막아 두던 팀은 PR 호스트의 브랜치 보호(필수 승인·필수 체크)로 막으세요 — 호스트가 막은 PR은 병합하지 않습니다.
+
 ## v0.61.0 (2026-11-06)
 ### 새 기능
 
