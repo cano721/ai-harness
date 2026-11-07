@@ -6,6 +6,10 @@ TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-tests.XXXXXX")"
 TESTS=0
 
 cleanup() {
+  # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
+  local board_pid
+  board_pid="$(jq -r '.pid // empty' "$TEST_TMP/board/data/board/server.json" 2>/dev/null || true)"
+  [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
   case "$TEST_TMP" in
     */ai-harness-tests.*) find "$TEST_TMP" -depth -delete 2>/dev/null || true ;;
     *) printf 'unexpected test temp path, preserving: %s\n' "$TEST_TMP" >&2 ;;
@@ -6001,5 +6005,179 @@ for c in ko-show-effect ko-before-after ko-report ko-ab-request en-impact ko-tok
   assert_file "$ROOT/evals/harness-impact/$c/prompt.md"
 done
 pass "harness-impact plugin skill"
+
+# Harness Board: 스킬이 필요할 때 띄우는 로컬 서버. 가짜 claude·orca와 임시 데이터·빈 포트로만 돌린다.
+BOARD_T="$TEST_TMP/board"
+BOARD_DATA="$BOARD_T/data"
+mkdir -p "$BOARD_T/bin" "$BOARD_DATA" "$BOARD_T/projects/p"
+BOARD_SID="11111111-2222-3333-4444-555555555555"
+cat >"$BOARD_T/bin/claude" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == agents ]]; then
+  printf '[{"sessionId":"$BOARD_SID","id":"11111111","kind":"background","status":"idle","state":"running","pid":null,"cwd":"$BOARD_T","name":"board task","startedAt":%s000}]\n' "\$(date +%s)"
+  exit 0
+fi
+exit 1
+EOF
+cat >"$BOARD_T/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+echo '{"ok":true,"result":{"runs":[],"workers":[]}}'
+EOF
+chmod +x "$BOARD_T/bin/claude" "$BOARD_T/bin/orca"
+printf '%s\n' '{"type":"user","message":{"content":"hello board"},"timestamp":"2026-11-07T10:00:00Z"}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"timestamp":"2026-11-07T10:00:05Z"}' \
+  >"$BOARD_T/projects/p/$BOARD_SID.jsonl"
+mkdir -p "$BOARD_DATA/harvest-queue/p-svc" "$BOARD_DATA/harvest-auto"
+jq -cn '{project:"svc", has_analysis_batch:true, created_at:"2026-11-07T09:00:00Z", counts:{sessions:10}, reasons:["sessions"], event_files:[]}' \
+  >"$BOARD_DATA/harvest-queue/p-svc/analysis-batch.json"
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg at "$NOW_ISO" '{event:"started", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", repo:"/nonexistent/svc"},
+  {event:"finished", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", result:"improved", artifact:"https://github.com/example/svc/pull/1"}' \
+  >"$BOARD_DATA/harvest-auto/runs.jsonl"
+printf '# keep this comment\nHM_DIGEST=1\nOTHER_TOOL_SETTING=x\n' >"$BOARD_DATA/config"
+chmod 600 "$BOARD_DATA/config"
+free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+BOARD_PORT_T="$(free_port)"
+board_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BOARD_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="${BOARD_PORT_OVERRIDE:-$BOARD_PORT_T}" BOARD_NO_BROWSER=1 \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+assert_eq "false" "$(board_sh status | jq -r '.running')" "board is not running before open"
+BOARD_OPEN="$(board_sh open)"
+assert_eq "false" "$(jq -r '.reused' <<<"$BOARD_OPEN")" "board open starts a server"
+BOARD_URL="$(jq -r '.url' <<<"$BOARD_OPEN")"
+BOARD_TOKEN="${BOARD_URL#*t=}"
+BOARD_BASE="http://127.0.0.1:$BOARD_PORT_T"
+assert_contains "$BOARD_URL" "$BOARD_BASE/?t=" "board url is bound to 127.0.0.1 with a token"
+assert_eq "600" "$(filemode "$BOARD_DATA/board/server.json")" "server.json is private"
+assert_eq "true" "$(board_sh open | jq -r '.reused')" "board open reuses a running server"
+assert_eq "$BOARD_URL" "$(board_sh status | jq -r '.url')" "board status reports the same url"
+case "$(cat "$BOARD_DATA/board/server.log" 2>/dev/null)" in *"$BOARD_TOKEN"*) fail "server log does not carry the url token" ;; esac
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/status.json?t=wrong")" "board rejects a wrong token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/status.json")" "board rejects a missing token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BOARD_PORT_T" "$BOARD_BASE/status.json?t=$BOARD_TOKEN")" "board rejects a foreign Host (DNS rebinding)"
+# JSON 본문은 jq로 만든다 — bash 3.2는 $( ) 안의 \"…,…\"를 중괄호 확장해 요청을 여러 개로 쪼갠다.
+BOARD_SEEN_BODY="$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, ids: []}')"
+assert_eq "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $BOARD_BASE" -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board accepts its own Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board rejects a foreign Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board rejects a POST without Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Board-Hook: wrong' -d '{}' "$BOARD_BASE/hook/permission")" "hook endpoint needs its own token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Board-Hook: $BOARD_TOKEN" -d '{}' "$BOARD_BASE/hook/permission")" "the url token does not open the hook endpoint"
+BOARD_STATUS="$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN")"
+assert_eq "true" "$(jq '(.generated_at | type) == "string" and (.items | type) == "array" and (.jira_base | type) != "number"' <<<"$BOARD_STATUS")" "status.json shape"
+assert_eq "true" "$(jq --arg sid "$BOARD_SID" 'any(.items[]; .section == "work" and .kind == "bg" and .sid == $sid and (.transcript | type) == "string" and (.actions | index("view")) != null and (.id | type) == "string")' <<<"$BOARD_STATUS")" "status.json lists the agent session from claude agents"
+assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .kind == "harvest" and .state == "queued" and (.actions | index("harvest_now")) != null)' <<<"$BOARD_STATUS")" "status.json lists a queued harvest with its action"
+assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .state == "needs_human" and .link == "https://github.com/example/svc/pull/1")' <<<"$BOARD_STATUS")" "status.json lists a draft PR that needs a human"
+BOARD_ITEM_ID="$(jq -r --arg sid "$BOARD_SID" '.items[] | select(.sid == $sid) | .id' <<<"$BOARD_STATUS")"
+BOARD_TRANSCRIPT="$(curl -s "$BOARD_BASE/transcript?t=$BOARD_TOKEN&id=$(jq -rn --arg v "$BOARD_ITEM_ID" '$v | @uri')&offset=0")"
+assert_eq "hello board|done" "$(jq -r '[.messages[].text] | join("|")' <<<"$BOARD_TRANSCRIPT")" "board reads the session transcript"
+BOARD_ACTION="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" --arg i "$BOARD_ITEM_ID" '{t: $t, id: $i, action: "rm -rf"}')" "$BOARD_BASE/action")"
+assert_eq "false" "$(jq -r '.ok' <<<"$BOARD_ACTION")" "board refuses an action the item does not allow"
+BOARD_SET="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, kind: "sync", stage: "merge"}')" "$BOARD_BASE/settings/harness")"
+assert_eq "true" "$(jq -r '.ok' <<<"$BOARD_SET")" "board writes the harness stage"
+assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness stage merge turns on auto merge"
+assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
+# 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
+  | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
+BOARD_HOOK_PID=$!
+BOARD_PERM=""
+for _ in $(seq 100); do
+  BOARD_PERM="$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '[.items[] | .permission.pid // empty][0] // empty')"
+  [[ -n "$BOARD_PERM" ]] && break
+  sleep 0.1
+done
+[[ -n "$BOARD_PERM" ]] || fail "board shows the held permission request"
+BOARD_DECISION="$(jq -cn --arg t "$BOARD_TOKEN" --arg p "$BOARD_PERM" '{t: $t, pid: $p, decision: "allow"}')"
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$BOARD_DECISION" "$BOARD_BASE/permission" | jq -r '.ok')" "board accepts the human decision"
+wait "$BOARD_HOOK_PID"
+assert_eq "PermissionRequest|allow" "$(jq -r '[.hookSpecificOutput.hookEventName, .hookSpecificOutput.decision.behavior] | join("|")' "$BOARD_T/hook.out")" "permission hook returns the board decision"
+assert_eq "" "$(printf '%s' '{"tool_name":"AskUserQuestion"}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook never forwards AskUserQuestion"
+assert_eq "true" "$(board_sh stop | jq -r '.stopped')" "board stop stops the server"
+assert_not_file "$BOARD_DATA/board/server.json"
+assert_eq "false" "$(board_sh status | jq -r '.running')" "board status after stop"
+assert_eq "" "$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook prints nothing without a board"
+printf '{"port": %s, "token": "x", "pid": 999999}' "$BOARD_PORT_T" >"$BOARD_DATA/board/server.json"
+assert_eq "" "$(printf '%s' '{"tool_name":"Bash"}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook prints nothing when the board is gone"
+assert_eq "false" "$(board_sh status | jq -r '.running')" "a stale server.json is not a running board"
+# 포트를 다른 프로세스가 잡고 있으면 이유를 말하고 멈춘다.
+BOARD_BUSY_PORT="$(free_port)"
+python3 -I -c 'import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(30)' "$BOARD_BUSY_PORT" &
+BOARD_BUSY_PID=$!
+for _ in $(seq 50); do python3 -I -c 'import socket, sys; sys.exit(socket.socket().connect_ex(("127.0.0.1", int(sys.argv[1]))))' "$BOARD_BUSY_PORT" && break; sleep 0.1; done
+if BOARD_BUSY_OUT="$(BOARD_PORT_OVERRIDE="$BOARD_BUSY_PORT" board_sh open 2>&1)"; then fail "board open refuses a port held by another process"; fi
+assert_contains "$BOARD_BUSY_OUT" "다른 프로세스" "board open says why it stopped"
+kill "$BOARD_BUSY_PID" 2>/dev/null || true
+wait "$BOARD_BUSY_PID" 2>/dev/null || true
+assert_not_file "$BOARD_DATA/board/server.json"
+pass "harness board server, tokens, status and permission hook"
+
+# 보드 설정 쓰기: 개인 단계·하네스 동작은 ~/.ai-harness/config의 해당 키만 바꾸고 다른 줄·권한은 그대로 둔다.
+BOARD_REPO="$BOARD_T/repos/svc"
+mkdir -p "$BOARD_REPO/.ai-harness"
+git -C "$BOARD_REPO" init -q
+printf '{"project_id":"svc-id","git_policy":"merge"}\n' >"$BOARD_REPO/.ai-harness/harness.json"
+HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert s.set_personal({"scope": "default", "level": "deploy"}, []) is None
+assert s.set_personal({"scope": "default", "level": "bogus"}, []) is not None
+assert s.set_personal({"scope": "repo", "repo": "/not/known", "level": "pr"}, [repo]) is not None
+assert s.set_personal({"scope": "repo", "repo": repo, "level": "merge"}, [repo]) is None
+assert s.set_harness({"kind": "harvest", "stage": "run"}) is None
+assert s.set_harness({"kind": "harvest", "daily_max": 2}) is None
+assert s.set_harness({"kind": "sync", "daily_max": 31}) is not None
+assert s.set_harness({"kind": "sync", "daily_max": 5}) is None
+assert s.set_harness({"kind": "other", "stage": "run"}) is not None
+assert s.set_harness({"kind": "sync", "stage": "sideways"}) is not None
+cfg = s.user_config()
+assert cfg["HM_DELIVERY_LEVEL"] == "deploy" and cfg["HM_DELIVERY_LEVEL_REPOS"] == "svc-id=merge", cfg
+row = s.read_repo(repo)
+eff = s.effective(row, cfg)
+assert eff["source"] == "team" and eff["level"] == "pr", eff  # 이 저장소엔 개인 단계를 읽는 러너가 없다
+assert any("git_policy: merge" in n for n in eff["notes"]), eff
+' "$ROOT/scripts/board" "$BOARD_REPO" || fail "board settings writes validate input"
+BOARD_CFG="$(cat "$BOARD_DATA/config")"
+assert_contains "$BOARD_CFG" "# keep this comment" "config keeps comments"
+assert_contains "$BOARD_CFG" "HM_DIGEST=1" "config keeps other keys"
+assert_contains "$BOARD_CFG" "OTHER_TOOL_SETTING=x" "config keeps unknown lines"
+assert_contains "$BOARD_CFG" 'HM_DELIVERY_LEVEL="deploy"' "personal default level written"
+assert_contains "$BOARD_CFG" 'HM_DELIVERY_LEVEL_REPOS="svc-id=merge"' "personal repo level keyed by project_id"
+assert_contains "$BOARD_CFG" 'HM_HARVEST_AUTO="1"' "harvest auto run written"
+assert_contains "$BOARD_CFG" 'HM_SYNC_AUTO_DAILY_MAX="5"' "sync daily max written"
+case "$BOARD_CFG" in *HM_HARVEST_AUTO_MERGE*) fail "harvest run stage leaves auto merge off" ;; esac
+case "$BOARD_CFG" in *HM_HARVEST_AUTO_DAILY_MAX*) fail "the default daily max removes the line" ;; esac
+assert_eq "1" "$(grep -c '^HM_DELIVERY_LEVEL=' "$BOARD_DATA/config")" "a key is written once"
+assert_eq "600" "$(filemode "$BOARD_DATA/config")" "config keeps its mode"
+assert_eq "deploy" "$(HARNESS_METRICS_DIR="$BOARD_DATA" bash -c 'source "$1/scripts/lib.sh"; printf %s "$HM_DELIVERY_LEVEL"' _ "$ROOT")" "the runner config reader reads what the board wrote"
+pass "harness board settings writes"
+
+# 권한 훅 연결은 setup이 물은 뒤 board.sh hook on|off로만: 백업을 남기고 다른 설정은 그대로 둔다.
+printf '{"env":{"KEEP":"1"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}\n' >"$BOARD_T/settings.json"
+assert_eq "false" "$(board_sh hook status | jq -r '.installed')" "hook not installed by default"
+BOARD_HOOK_ON="$(board_sh hook on)"
+assert_eq "installed" "$(jq -r '.action' <<<"$BOARD_HOOK_ON")" "hook on installs"
+assert_file "$(jq -r '.backup' <<<"$BOARD_HOOK_ON")"
+assert_file "$BOARD_DATA/board/bin/permission-hook.py"
+assert_eq "3600" "$(jq '.hooks.PermissionRequest[0].hooks[0].timeout' "$BOARD_T/settings.json")" "hook timeout covers the board wait"
+assert_eq "1|true" "$(jq -r '[.env.KEEP, (.hooks.PreToolUse | length == 1)] | map(tostring) | join("|")' "$BOARD_T/settings.json")" "hook on keeps other settings"
+assert_eq "unchanged" "$(board_sh hook on | jq -r '.action')" "hook on is idempotent"
+assert_eq "removed" "$(board_sh hook off | jq -r '.action')" "hook off removes"
+assert_eq "null|1" "$(jq -r '[(.hooks.PermissionRequest | tostring), (.hooks.PreToolUse | length | tostring)] | join("|")' "$BOARD_T/settings.json")" "hook off leaves other hooks"
+assert_not_file "$BOARD_DATA/board/bin/permission-hook.py"
+BOARD_SKILL="$(<"$ROOT/skills/board/SKILL.md")"
+assert_file "$ROOT/skills/board/agents/openai.yaml"
+assert_contains "$BOARD_SKILL" "board.sh open" "board skill opens through board.sh"
+assert_contains "$BOARD_SKILL" "몰래 연결하지 않는다" "board skill does not wire the hook itself"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "board.sh hook on" "setup offers the board permission hook"
+assert_contains "$(<"$ROOT/README.md")" "| \`/board\` |" "README lists board"
+if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/scripts/board" "$ROOT/skills/board"; then
+  fail "board code carries no organization URL"
+fi
+pass "harness board skill and hook wiring"
 
 printf '1..%d\n' "$TESTS"
