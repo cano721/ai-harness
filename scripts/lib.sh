@@ -164,12 +164,13 @@ hm_short_key() { # $1=project
   printf '%s\n' "$key"
 }
 
-# mkdir 원자성 기반 디렉토리 lock. 소유 pid가 죽었으면 stale로 회수한다.
+# 디렉토리 lock. 소유는 lock 디렉토리 안 pid 파일의 배타 생성으로 정하고, 소유 pid가 죽었으면 stale로 회수한다.
 hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
   local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner="" lock_mt=""
   while (( attempt < max_attempts )); do
-    if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s\n' "$$" >"$lock_dir/pid"
+    # uutils mkdir(Ubuntu 26.04 기본)는 확인 후 생성이라 동시 호출이 둘 다 성공한다. mkdir 성공만으로
+    # 소유로 보지 않고, pid 파일 배타 생성(noclobber = O_EXCL)을 이긴 쪽만 소유자로 확정한다.
+    if mkdir "$lock_dir" 2>/dev/null && (set -C; printf '%s\n' "$$" >"$lock_dir/pid") 2>/dev/null; then
       return 0
     fi
     if [[ -f "$lock_dir/pid" ]]; then
