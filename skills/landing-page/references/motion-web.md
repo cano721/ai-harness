@@ -158,7 +158,8 @@ Common breakages once it is on (option names from the Lenis README; confirm them
 
 A 3D object or scene the visitor turns, drags, or scrolls through, when an interaction reference calls for it:
 
-- Build with three.js (or a Spline export) at an exact version, approved like any outside script; a model file or texture from another source needs its license and approval. A shape built from primitives in code needs neither.
+- Build with three.js (or a Spline export) at an exact version, approved like any outside script; a model file or texture from another source needs its license and approval.
+- **Primitives are a sketch, not a scene.** A room, a person, or a product built from default boxes and cylinders, or photos stood up as flat cards, reads as programmer art (`verify.md` `craft`). Use primitives only when the direction is deliberately abstract (shapes, particles, type, light). A realistic scene needs a model or Spline scene with its approval — or, when none is approved (an unattended run), drop 3D for that moment and take the next-strongest interaction from the kept references. A well-made 2D moment beats a crude 3D one.
 - The visitor's input drives it (drag to rotate, pointer to tilt, scroll to advance), and keyboard users get the same result from buttons or arrow keys.
 - Load after first paint, only near the viewport; cap the device pixel ratio at 2; pause when offscreen or the tab is hidden; dispose geometry, materials, and the renderer on leave.
 - Measure as `verify.md` Performance says for every moving moment; otherwise simplify or fall back.

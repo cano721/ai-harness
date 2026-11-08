@@ -104,7 +104,7 @@ Look at references before writing candidates — this step is not optional. Havi
    | Awwwards Experimental (`awwwards.com/websites/experimental`) | Whole sites that combine interactions, with the technology each used |
    | Lenis showcase (`lenis.dev/showcase`) | Scroll pacing and transitions |
 
-   Filter by the page's category, a mechanism, or a technology rather than taking the gallery's front page. Use the gallery's own recording when there is one; otherwise record a short clip of the live site yourself. Write one line per reference: what the visitor does, what answers, and with what technology when the source says. A gallery's code is subject to its repository's license and `external-code.md`; a recording is input, never page content.
+   Filter by the page's category, a mechanism, or a technology rather than taking the gallery's front page. In an unattended run keep the whole reference step to about eight minutes: three to five look references and two to four interaction references, captured once. Use the gallery's own recording when there is one; otherwise record a short clip of the live site yourself. Write one line per reference: what the visitor does, what answers, and with what technology when the source says. A gallery's code is subject to its repository's license and `external-code.md`; a recording is input, never page content.
 
 A challenge page ("Just a moment", "Checking your connection") in a script or headless browser is not proof that a site is closed: open it in a real browser tab the session controls (for example an Orca browser tab) before reporting it unreachable.
 

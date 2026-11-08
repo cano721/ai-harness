@@ -46,6 +46,8 @@ bash $ROOT/scripts/landing-run.sh review --work "$WORK" --candidate <id> --file 
 bash $ROOT/scripts/landing-run.sh status --work "$WORK"
 ```
 
+**Time:** the user sees a served draft within 10 minutes of the start and the verified page within 30 (`budget_minutes` in the graph; `status` reports `preview_min`, `finished_min`, and `over_budget`). Measuring and reviewing never hold back the first look. Do not write your own browser scripts for what the measure node measures; spend the time on the page.
+
 Call `next`, do what it names, read only the docs it lists, write its artifacts in `WORK`, and submit. Measure and review outcomes are not yours to submit: the runner runs the measure script and computes the review verdict. Before the graph starts, **read the context**: detect the stack, the design system (docs, token files, component library, Tailwind config, or a named Figma kit), the existing brand identity, and any mockup. Note what is missing instead of guessing it. If a named kit or mockup cannot be read, stop and say so. Without a repository, ask where the page goes, or in an unattended run build `index.html` with its assets in a new folder under the current directory.
 
 | Node | Do | Artifacts in `WORK` |
@@ -55,7 +57,9 @@ Call `next`, do what it names, read only the docs it lists, write its artifacts 
 | `reference_pick` (interactive) | show the board, ask once | `reference-pick.json` — `{kept: [ids], dropped: [ids], user_words: "<quoted>"}` |
 | `direction` | sections 3–6; skip candidates only when a mockup of this page decides the look (`mockup_decides`) | `candidates.json` — `{candidates: [{id, dir, motion_level: calm\|lively\|showpiece, references: [ids], visitor_action}]}` (`dir` relative to `WORK`) |
 | `draft_pick` (interactive) | first-viewport drafts side by side, ask once | `draft-pick.json` — same shape as `reference-pick.json` |
-| `build` (per candidate) | `references/design-handoff.md` (mockup first, if one exists), `layout-type.md`, `motion-web.md`, `external-code.md`; one session or subagent per candidate when there are several | the page in `dir`, `source-facts-<id>.md`, `needs-input-<id>.json` |
+| `draft` (per candidate) | the first viewport finished — real copy, real assets, the signature moment working — and the rest as real but unpolished sections; one session or subagent per candidate when there are several | the page in `dir` |
+| `preview` (per candidate) | serve the draft, capture its first viewport at 1440 and 390, and show the URL and captures to the user now — do not hold them until verification | `preview-<id>.json` — `{url, captures: [paths]}` |
+| `build` (per candidate) | finish the page: `references/design-handoff.md` (mockup first, if one exists), `layout-type.md`, `motion-web.md`, `external-code.md` | the page in `dir`, `source-facts-<id>.md`, `needs-input-<id>.json` |
 | `measure` (runner) | serve the page, run `measure` | `measure-<id>-<n>.json` |
 | `review` (reviewer) | a new `design-reviewer` with the `verify.md` briefing and the required checks; save its JSON | `review-<id>-<round>.json` |
 | `repair` (per candidate) | fix what the measure or review failed; `needs_user` when only the user can fix it | `repair-<id>-<round>.md` |

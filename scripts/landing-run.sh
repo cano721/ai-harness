@@ -84,16 +84,17 @@ move() {
   local at; at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
-      '.candidates[$c].node = $t | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]'
+      '.candidates[$c].node = $t | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
+       | if $t == "build" then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision") then .candidates[$c].finished_at = $at else . end'
   else
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.node = $t | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
   fi
-  # Leaving the shared steps: the candidates listed in candidates.json start their own paths at build.
-  if [[ -z "$CAND" && "$to" == "build" ]]; then
+  # Leaving the shared steps: the candidates listed in candidates.json start their own paths at draft.
+  if [[ -z "$CAND" && "$to" == "draft" ]]; then
     [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing"
     local cands
-    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "build", measures: 0, reviews: 0, verdict: null}}] | from_entries' "$WORK/candidates.json")" \
+    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "draft", measures: 0, reviews: 0, verdict: null}}] | from_entries' "$WORK/candidates.json")" \
       || die 4 "candidates.json must hold {\"candidates\":[{\"id\",\"dir\",\"motion_level\"}]}"
     [[ "$(jq 'length' <<<"$cands")" -ge 1 ]] || die 4 "candidates.json lists no candidate"
     save --argjson cs "$cands" '.candidates = $cs | .node = "candidates"'
@@ -141,8 +142,8 @@ case "$cmd" in
     "$ROOT/scripts/validate-landing-page-graph.sh" "$GRAPH" >/dev/null
     [[ ! -f "$STATE" ]] || die 3 "a run already exists in $RUN"
     mkdir -p "$RUN"
-    jq -n --arg g "$GRAPH" --arg m "$MODE" --arg e "$(jq -r .entry "$GRAPH")" \
-      '{graph: $g, mode: $m, node: $e, candidates: {}, history: []}' >"$STATE"
+    jq -n --arg g "$GRAPH" --arg m "$MODE" --arg e "$(jq -r .entry "$GRAPH")" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{graph: $g, mode: $m, node: $e, started_at: $at, candidates: {}, history: []}' >"$STATE"
     print_next "$(state .node)"
     ;;
   next)
@@ -232,7 +233,17 @@ case "$cmd" in
     ;;
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"
-    jq '{mode, node, candidates: (.candidates | with_entries(.value |= {node, motion_level, measures, measure, reviews, verdict, rounds}))}' "$STATE"
+    GRAPH="$(state .graph)"
+    jq --slurpfile g "$GRAPH" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      def mins($a; $b): if $a == null or $b == null then null else ((($b | fromdateiso8601) - ($a | fromdateiso8601)) / 60 | floor) end;
+      .started_at as $s | ($g[0].budget_minutes // {}) as $bud
+      | {mode, node, elapsed_min: mins($s; $now),
+         candidates: (.candidates | with_entries(.value |= (
+           {node, motion_level, measures, measure, reviews, verdict, rounds,
+            preview_min: mins($s; .previewed_at), finished_min: mins($s; .finished_at)}
+           | .over_budget = ([ (if $bud.preview != null and ((.preview_min // mins($s; $now)) > $bud.preview) and (.preview_min != null or .node == "draft" or .node == "preview") then "preview" else empty end),
+                               (if $bud.done != null and ((.finished_min // mins($s; $now)) > $bud.done) then "done" else empty end) ])
+         )))}' "$STATE"
     ;;
   *) usage ;;
 esac

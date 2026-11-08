@@ -2260,6 +2260,8 @@ assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Degrade
 # landing-page 그래프 러너: 그래프 계약, 전이·산출물·측정·검토 게이트(측정은 스텁), 실제 측정은 Playwright가 있을 때만.
 LP_GRAPH="$ROOT/skills/landing-page/references/landing-page-graph.json"
 "$ROOT/scripts/validate-landing-page-graph.sh" "$LP_GRAPH" >/dev/null || fail "the shipped landing-page graph is valid"
+jq '.transitions += [{"from":"direction","to":"build","when":"mockup_decides"}]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph that builds without a preview is invalid"; fi
 jq '.transitions += [{"from":"repair","to":"done","when":"repaired"}]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
 if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph that reaches done from repair is invalid"; fi
 jq '.nodes.measure.actor = "maker"' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
@@ -2285,7 +2287,12 @@ mkdir -p "$LP_W/site/a" "$LP_W/site/b"
 touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
 lp submit --node direction --outcome direction_ready >/dev/null
-assert_eq "build build" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at build"
+assert_eq "draft draft" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at draft"
+assert_eq preview "$(lp submit --node draft --outcome drafted --candidate a)" "a draft is previewed before it is finished"
+assert_eq 4 "$(lp_rc submit --node preview --outcome previewed --candidate a)" "a preview needs its captures and URL"
+touch "$LP_W/preview-a.json" "$LP_W/preview-b.json"
+assert_eq build "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview the page is finished"
+assert_contains "$(lp status)" '"preview_min"' "status reports minutes to the first preview"
 assert_eq measure "$(lp submit --node build --outcome built --candidate a)" "a built candidate goes to measure"
 assert_eq 3 "$(lp_rc submit --node measure --outcome measured_pass --candidate a)" "the maker cannot submit a measure outcome"
 echo fail >"$LP_STUB_RESULT_FILE"
@@ -2307,6 +2314,7 @@ assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fideli
 touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
 assert_eq "done" "$(lp review --candidate a --file "$(lp_review none 1)")" "only user input left ends at done"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
+lp submit --node draft --outcome drafted --candidate b >/dev/null; lp submit --node preview --outcome previewed --candidate b >/dev/null
 lp submit --node build --outcome built --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
 for r in 1 2 3; do
   out="$(lp review --candidate b --file "$(lp_review flow 0 b)" || true)"
@@ -2337,6 +2345,9 @@ assert_contains "$LANDING_VERIFY" "\`try_it_usability\`: with no instructions" "
 assert_contains "$LANDING_VERIFY" "\`flow\`: read the page from the first viewport to the main action" "landing-page review checks the flow to the action"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "mark them \`data-lenis-prevent\`" "landing-page covers Lenis nested scroll"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`lenis.destroy()\` on unmount" "landing-page covers Lenis cleanup"
+assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
+assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
+assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
 pass "landing-page graph runner and measure gate"
 assert_contains "$(cat agents/design-reviewer.md)" "제품 개념이 독특해도 생김새 판정을 면제하지 않는다" "design-reviewer judges look apart from concept"
 assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"
