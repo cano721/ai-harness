@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.67.0 (2026-11-08)
 ### 새 기능
 
 - **`/autofix setup`이 실제 데이터로 service·env를 고르게 함** — setup이 provider 필수 값(Datadog `query`의 service·env, Sentry project·environment)을 "묻는다"고만 해서 사용자가 문법·이름을 알아야 했고 에이전트가 묻지 않고 정해 버리기 쉬웠습니다. 이제 `scripts/monitor-fetch.sh discover --provider datadog|sentry`가 최근 에러를 Datadog은 service·env별(logs aggregate), Sentry는 project·environment별 건수로 내고(org를 모르면 org 목록), setup은 저장소 흔적(`DD_SERVICE`·`dd.service`·`sentry.properties` 등)을 추천값으로 앞에 두고 표에서 고르게 한 뒤, 만든 설정을 보여 주고 확인받아야만 씁니다. 자격증명 전송처 제한(Datadog 공개 사이트, Sentry `*.sentry.io`)은 그대로 적용됩니다. (#271)
