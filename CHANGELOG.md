@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.65.0 (2026-11-08)
 ### 버그 수정
 
 - **동시에 겹친 하네스 큐 기록·검토가 lock을 함께 잡던 문제 수정** — Ubuntu 26.04처럼 coreutils가 uutils인 Linux에서는 `mkdir`이 원자적이지 않아 동시에 실행된 큐 기록·검토가 lock을 둘 다 잡았고, 큐 상태가 어긋나거나 실패했습니다. 또 bash 5에서는 실패로 끝날 때 종료 처리가 `lock_dir`을 잃어 lock이 남았습니다. 이제 pid 파일을 배타적으로 만든 쪽만 lock 소유자가 되고, 종료 시 lock을 푸는 경로는 거는 시점에 고정해 어떤 경로로 끝나도 lock을 풉니다. (#264)
