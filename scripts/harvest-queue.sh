@@ -98,6 +98,13 @@ release_queue_lock() {
   hm_release_lock "$1"
 }
 
+# EXIT trap 문자열은 종료 시점에 평가된다. bash 5는 set -e로 함수 안에서 끝나면 local을 먼저 지워
+# lock을 못 푼다(lock_dir: unbound variable) — 경로를 trap을 거는 시점에 고정한다.
+release_queue_lock_on_exit() {
+  # shellcheck disable=SC2064  # 경로를 지금 펼쳐 고정하는 것이 목적이다
+  trap "release_queue_lock $(printf '%q' "$1")" EXIT
+}
+
 migrate_legacy_state() {
   local project="$1" qdir="" legacy_file="" batch_file="" tmp=""
   qdir="$(queue_dir "$project")"
@@ -657,7 +664,7 @@ command_record() {
   project="$(printf '%s' "$summary" | jq -r '.project')"
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   migrate_legacy_state "$project"
   record_summary "$summary"
   status="$(evaluate_analysis_batch "$project")"
@@ -673,7 +680,7 @@ command_import() {
   shopt -u nullglob
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   migrate_legacy_state "$project"
   for event_file in "${files[@]}"; do
     record_one "$event_file" "$project"
@@ -687,7 +694,7 @@ command_status() {
   local project="$1" qdir="" lock_dir=""
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   evaluate_analysis_batch "$project"
   release_queue_lock "$lock_dir"
   trap - EXIT
@@ -698,7 +705,7 @@ command_events() {
   qdir="$(queue_dir "$project")"
   batch_file="$qdir/analysis-batch.json"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   migrate_legacy_state "$project"
   if [[ -f "$batch_file" ]]; then
     while IFS= read -r marker; do
@@ -718,7 +725,7 @@ command_history() {
   qdir="$(queue_dir "$project")"
   history_file="$qdir/review-history.jsonl"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 1
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   migrate_legacy_state "$project"
   if [[ -f "$history_file" ]]; then
     jq -c '.' "$history_file"
@@ -737,7 +744,7 @@ command_mark_reviewed() {
     "$DIR/health.sh" failure harvest_queue review_lock_timeout >/dev/null 2>&1 || true
     return 1
   }
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   migrate_legacy_state "$project"
   if [[ ! -f "$batch_file" ]]; then
     evaluate_analysis_batch "$project"
@@ -823,7 +830,7 @@ command_notify() {
 
   qdir="$(queue_dir "$project")"
   lock_dir="$(acquire_queue_lock "$qdir")" || return 0
-  trap 'release_queue_lock "$lock_dir"' EXIT
+  release_queue_lock_on_exit "$lock_dir"
   status="$(evaluate_analysis_batch "$project")"
   if [[ "$(printf '%s' "$status" | jq -r '.has_analysis_batch')" != "true" ]]; then
     release_queue_lock "$lock_dir"

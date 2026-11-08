@@ -8,6 +8,10 @@
 
 ## Unreleased
 
+### 버그 수정
+
+- **동시에 겹친 하네스 큐 기록·검토가 lock을 함께 잡던 문제 수정** — Ubuntu 26.04처럼 coreutils가 uutils인 Linux에서는 `mkdir`이 원자적이지 않아 동시에 실행된 큐 기록·검토가 lock을 둘 다 잡았고, 큐 상태가 어긋나거나 실패했습니다. 또 bash 5에서는 실패로 끝날 때 종료 처리가 `lock_dir`을 잃어 lock이 남았습니다. 이제 pid 파일을 배타적으로 만든 쪽만 lock 소유자가 되고, 종료 시 lock을 푸는 경로는 거는 시점에 고정해 어떤 경로로 끝나도 lock을 풉니다. (#264)
+
 ### 동작 변경
 
 - **`landing-page`가 Lenis를 켤 때 자주 깨지는 지점까지 안내** — 스무스 스크롤 가이드가 켜는 조건과 GSAP 연동만 다뤄서, 안쪽 스크롤 영역이 안 움직이거나 모달 뒤 페이지가 같이 스크롤되거나 앵커가 고정 헤더 아래로 숨거나 SPA에서 인스턴스가 쌓이는 문제를 페이지가 그대로 안고 나왔습니다. 이제 프레임 루프 하나(`autoRaf: false` + GSAP ticker), `lenis.css`, `data-lenis-prevent`, 모달 `stop()`·`start()`, `anchors`·`scrollTo` offset과 포커스 이동, unmount 시 `destroy()`를 함께 짚고, 옵션 이름은 설치한 버전의 문서로 확인하게 합니다. (#261)
