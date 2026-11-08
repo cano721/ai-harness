@@ -57,6 +57,7 @@ Marketing checks the reviewer adds to its own criteria:
 - Squint: the claim and the action stay dominant.
 - Cover the logo: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
 - Template look, judged apart from the content: would a designer glancing at the captures take this for a template or an AI-made page? Name the giveaway — the stock hero formula (small colored label, two-line headline, paragraph, dark button, cards on the right), a row of identical cards, a category gradient, evenly spaced sections with the same rhythm, motion that only plays. A unique product concept does not excuse a stock look; in the first viewport it is a major problem.
+- When several candidates were built, compare what the visitor does on each: the same verb on two of them (pick an option and read a scripted answer on both, for example) is a major problem for the later one.
 - Does every visible action lead somewhere, and does every element that looks interactive respond?
 - Is every claim either evidenced on the page or phrased as a description rather than a claim?
 - Phone: composed, not shrunk.

@@ -12,9 +12,10 @@ At every level, every effect answers the four questions below, and the floors at
 
 ## Try-it demo
 
-Watching an animation is not interaction. On a product page, let the visitor do the product's core action in a few seconds, inside the page:
+Watching an animation is not interaction. On a product page, let the visitor do the product's core action in a few seconds, inside the page. The mechanism comes from a kept interaction reference (`direction.md` section 7), not from a default — dragging, typing their own input, speaking into the microphone, moving the pointer, turning a 3D object, scrolling through a story, or choosing among the product's real options are all candidates:
 
-- Pick from the product's real choices (a plan, a persona, an input) and see the product's response change — not a looping video of someone else doing it.
+- The visitor's action changes what the page shows — not a looping video of someone else doing it. Choosing a prepared option and reading a prepared answer is the weakest form; use it only when the product itself works that way.
+- Input the visitor types, says, or films stays in the browser: no upload, no storage, said in one line next to the control. Microphone or camera access is asked only on the visitor's click, and the demo works without it.
 - Run on fixed example data in the page, labeled as an example. No backend calls, no real model, no claims drawn from the demo.
 - Works by keyboard and touch, announces changes to screen readers (`aria-live="polite"`), and under reduced motion still responds, just without movement.
 - With JavaScript off, show the demo's default state as a static example.
@@ -140,6 +141,16 @@ if (!reduce && !coarse) {
   gsap.ticker.lagSmoothing(0);
 }
 ```
+
+## 3D scenes and objects
+
+A 3D object or scene the visitor turns, drags, or scrolls through, when an interaction reference calls for it:
+
+- Build with three.js (or a Spline export) at an exact version, approved like any outside script; a model file or texture from another source needs its license and approval. A shape built from primitives in code needs neither.
+- The visitor's input drives it (drag to rotate, pointer to tilt, scroll to advance), and keyboard users get the same result from buttons or arrow keys.
+- Load after first paint, only near the viewport; cap the device pixel ratio at 2; pause when offscreen or the tab is hidden; dispose geometry, materials, and the renderer on leave.
+- Measure: at least 50 frames per second on the desktop capture and a usable rate under 4× CPU throttling; otherwise simplify or fall back.
+- Fallback: a still render of the same object, shown when WebGL (or WebGPU) is unavailable, under reduced motion, with JavaScript off, and on small or low-power screens. Text never depends on the 3D layer to be read.
 
 ## WebGL and canvas backgrounds
 
