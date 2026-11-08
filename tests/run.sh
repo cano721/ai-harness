@@ -2811,7 +2811,7 @@ for round in 1 2 3; do
   assert_eq "0" "$NA_RC_1" "nonatomic mkdir round $round first mark-reviewed exit"
   assert_eq "0" "$NA_RC_2" "nonatomic mkdir round $round second mark-reviewed exit"
   assert_eq "1" "$(wc -l < "$NA_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "nonatomic mkdir round $round history once"
-  if grep -q 'cannot stat' "$NA_DATA/err-1" "$NA_DATA/err-2"; then
+  if grep -q 'cannot stat\|No such file' "$NA_DATA/err-1" "$NA_DATA/err-2"; then
     fail "nonatomic mkdir round $round raced into critical section: $(cat "$NA_DATA/err-1" "$NA_DATA/err-2")"
   fi
   [[ ! -e "$NA_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "nonatomic mkdir round $round queue lock left behind"
@@ -2835,7 +2835,9 @@ FAILLOCK_EVENT="$FAILLOCK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbb
 HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" record "$FAILLOCK_EVENT" >/dev/null
 FAILLOCK_RC=0
-PATH="$FAILLOCK_BIN:$PATH" REAL_MV="$(command -v mv)" \
+# 가짜 mv를 PATH 앞에 두기 전에 진짜 경로를 구한다(같은 줄이면 해시 캐시 여부에 따라 가짜를 잡아 무한 재실행).
+FAILLOCK_REAL_MV="$(command -v mv)"
+PATH="$FAILLOCK_BIN:$PATH" REAL_MV="$FAILLOCK_REAL_MV" \
   HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
   "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$FAILLOCK_DATA/err" || FAILLOCK_RC=$?
 if [[ "$FAILLOCK_RC" == "0" ]]; then

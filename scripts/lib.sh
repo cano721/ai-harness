@@ -164,7 +164,7 @@ hm_short_key() { # $1=project
   printf '%s\n' "$key"
 }
 
-# mkdir 원자성 기반 디렉토리 lock. 소유 pid가 죽었으면 stale로 회수한다.
+# 디렉토리 lock. 소유는 lock 디렉토리 안 pid 파일의 배타 생성으로 정하고, 소유 pid가 죽었으면 stale로 회수한다.
 hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
   local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner="" lock_mt=""
   while (( attempt < max_attempts )); do
