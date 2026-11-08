@@ -10,7 +10,7 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉토리의 두 단계 상위(플러그인 루트).
 
 인자: `$ARGUMENTS`
-- `setup` — 현재 저장소에 모니터링 설정을 만든다
+- `setup` — 현재 저장소의 모니터링 설정과 무인 실행 설정(켜기·대상·주기·상한)을 만든다
 - `status [<프로젝트>]` — 시그니처별 진행 상태
 - `verify [<프로젝트>]` — 검증만 지금 돌린다
 - 비었거나 `<프로젝트>` — 후보 에러를 보여 주고 사용자가 고른 것을 이 세션에서 고친다
@@ -18,10 +18,17 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 
 ## 설정 (setup)
 
-설정은 저장소 manifest `.ai-harness/harness.json`의 `monitor` 객체다. 팀이 같은 설정을 쓰도록 저장소에 커밋한다. **자격증명은 절대 여기에 넣지 않는다.**
+설정은 `monitor` 객체 하나다. 두 곳 중 한 곳에 두며, 둘 다 있으면 로컬 파일이 이긴다. **자격증명은 어느 쪽에도 넣지 않는다.**
+
+| 위치 | 언제 | 비고 |
+|---|---|---|
+| 개인 로컬 `~/.ai-harness/autofix/monitors/<project_id>.json` (기본) | 나만 무인 실행을 켤 때 | 파일 내용이 곧 `monitor` 객체. 켜기(`HM_AUTOFIX_*`)·상태(`~/.ai-harness/autofix/`)와 같이 로컬에 있어 팀 저장소에 커밋할 일이 없다. 여러 사람이 같은 설정을 공유해 각자 켜면 같은 에러로 PR이 중복되므로 기본은 로컬이다 |
+| 저장소 manifest `.ai-harness/harness.json`의 `monitor` (선택) | 팀이 같은 설정을 공유해야 할 때 | 기준 브랜치에 커밋된 값을 읽는다. 로컬 파일이 없을 때만 쓰인다 |
+
+`<project_id>`는 manifest의 `project_id`(없으면 origin 저장소 이름 — `HM_AUTOFIX_REPOS`와 같은 키)다. 로컬 파일이 있는데 JSON 객체 하나가 아니거나 `provider`가 없으면 manifest로 넘어가지 않고 거부한다(설정 오류, 무인 실행 대상에서도 빠진다). provider별 규칙(아래 표, `base_url`·`site` 제한, `command` 경로 제한)은 두 위치에 똑같이 적용된다.
 
 ```json
-"monitor": {
+{
   "provider": "sentry",
   "org": "acme", "project": "api-server", "environment": "production",
   "min_events": 10, "window_hours": 24,
@@ -43,12 +50,28 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 - `count <meta-json> <since-iso>` → `{"seen":bool,"count":n,"last_seen"}`
 
 절차:
-1. 저장소에 `.ai-harness/harness.json`이 없으면 `/harness-init`을 먼저 안내하고 멈춘다.
-2. 쓰는 모니터링 도구를 확인한다 — 저장소에서 SDK 흔적(`sentry` 의존성·DSN 설정, `dd-trace`·`datadog` 설정)을 먼저 찾고, 없거나 둘 이상이면 사용자에게 묻는다. 그 밖의 도구면 `command` 어댑터 골격을 만들어 준다.
-3. provider별 필수 값을 물어 `monitor`를 manifest에 쓴다(다른 필드는 건드리지 않는다).
+1. 저장소에 `.ai-harness/harness.json`이 없으면 `/harness-init`을 먼저 안내하고 멈춘다. `project_id`를 확인한다(manifest의 `project_id`, 없으면 origin 저장소 이름).
+2. 쓰는 모니터링 도구를 확인한다 — 저장소에서 SDK 흔적(`sentry` 의존성·DSN 설정, `dd-trace`·`datadog` 설정)을 먼저 찾고, 없거나 둘 이상이면 사용자에게 묻는다. 그 밖의 도구면 `command` 어댑터 골격을 만들어 준다(어댑터 스크립트는 저장소 안에 있어야 한다).
+3. provider별 필수 값을 묻는다. 이미 설정이 있으면(로컬 파일 또는 manifest) 현재 값과 출처를 보여 주고 바꿀지 묻는다. 쓸 위치를 고르게 한다 — 추천은 **개인 로컬 파일**이고, 팀 공유가 필요하다고 할 때만 manifest에 쓴다.
+   - 로컬: `~/.ai-harness/autofix/monitors/<project_id>.json`에 `monitor` 객체만 쓴다(폴더가 없으면 만든다). 저장소 파일은 건드리지 않는다.
+   - manifest: `.ai-harness/harness.json`의 `monitor`만 쓴다(다른 필드는 건드리지 않는다). 커밋해야 정기 실행이 읽는다.
 4. `$ROOT/scripts/monitor-fetch.sh check --root .` 로 접근을 확인하고, 실패하면 메시지대로 자격증명 위치를 안내한다. 이어 `$ROOT/scripts/monitor-fetch.sh list --root .` 상위 5건을 보여 준다.
-   - 단, `check`·`list`는 기준 브랜치의 manifest를 읽는다. 아직 커밋 전이면 작업 트리의 manifest를 읽도록 커밋 뒤 다시 확인하라고 알린다.
-5. 무인 실행을 켜는 법을 알린다: `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 `HM_AUTOFIX_REPOS="<project_id>[,<project_id>…]"`(허용한 저장소만 무인 실행 대상). 검증 명령이 기본 빌드 도구 목록(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo)에 없으면 `HM_AUTOFIX_BASH_ALLOW="./scripts/ci.sh*"`처럼 패턴을 더하게 한다. 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)마다 검증 → 새 에러 1건 수정을 돈다. 상한: `HM_AUTOFIX_DAILY_MAX`(하루 실행 3), `HM_AUTOFIX_MAX_ATTEMPTS`(시그니처당 PR 2), `HM_AUTOFIX_BUDGET_USD`(실행당 $10).
+   - 로컬 파일은 바로 읽힌다. manifest에 썼다면 `check`·`list`는 기준 브랜치의 manifest를 읽으므로, 아직 커밋 전이면 커밋 뒤 다시 확인하라고 알린다.
+5. 무인 실행 설정을 묻고 쓴다. 먼저 `$ROOT/scripts/autofix-auto.sh configure`로 현재 값을 보여 준다(값은 개인 `~/.ai-harness/config`의 전역 설정이라 모든 저장소에 적용된다). 아래를 하나씩 추천값과 함께 묻고, 사용자가 그대로 두겠다고 하면(엔터) 추천값을 쓴다. 이미 값이 있으면 현재 값을 추천값 대신 보여 주고 바꿀지 묻는다.
+
+   | 질문 | 플래그 | 추천값 |
+   |---|---|---|
+   | 무인 실행을 켤까요? | `--auto 1` / `--auto 0` | 켜기 |
+   | 이 저장소를 무인 실행 대상에 넣을까요? (기존 목록은 유지, 중복 없이 추가) | `--add-repo <project_id>` | 넣기 |
+   | sweep 주기(분)? 비워 두면 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돈다 | `--interval-minutes N` / `off` | 비움(정기 실행 주기) |
+   | 하루 실행 상한? | `--daily-max N` | 3 |
+   | 시그니처당 PR 상한? | `--max-attempts N` | 2 |
+   | 실행당 예산(USD)? | `--budget-usd X` | 10 |
+
+   고른 값을 한 번에 쓴다: `$ROOT/scripts/autofix-auto.sh configure --auto 1 --add-repo <project_id> --daily-max 3 --max-attempts 2 --budget-usd 10 [--interval-minutes N]`. 이 명령은 해당 키만 바꾸고 다른 줄·주석·권한은 그대로 두며, 값이 하나라도 틀리면(정수·소수 아님 등) 아무것도 쓰지 않고 exit 2로 끝난다 — 메시지를 보여 주고 다시 묻는다. 출력 JSON(현재 값)을 사용자에게 보여 준다.
+   - 주기를 정했거나(`--interval-minutes N`) 끄면(`off`) 이어서 `$ROOT/scripts/schedule.sh install`을 돌려 sweep 전용 LaunchAgent를 등록(또는 내림)하고, `$ROOT/scripts/schedule.sh status`의 `autofix`(설치 여부·`interval_minutes`)로 확인해 보여 준다. macOS가 아니면 install이 cron 줄을 안내하므로 그대로 전한다.
+   - 검증 명령이 기본 빌드 도구 목록(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo)에 없으면 `HM_AUTOFIX_BASH_ALLOW="./scripts/ci.sh*"`처럼 패턴을 더하게 한다(이 값은 `configure`가 쓰지 않는다 — config에 직접 쓴다).
+   - 주기마다 검증 → 새 에러 1건 수정을 돈다. 전용 주기(`HM_AUTOFIX_INTERVAL_MINUTES`)는 유휴 대기 없이 돌지만 사용량 한도 직후 휴지(`HM_LLM_BACKOFF_HOURS`)와 하루 상한은 지킨다. 정기 실행 경로와 겹치면 늦게 온 sweep은 건너뛴다.
 
 ## 상태 · 검증
 
@@ -77,8 +100,8 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 1. `$ROOT/scripts/autofix-auto.sh candidates --project <id>`로 후보를 보여 준다(프로젝트 ID는 manifest `project_id`). 후보가 없으면 `monitor-fetch.sh list` 전체를 보여 주고 끝낸다.
 2. 사용자가 고른 에러의 상세를 `$ROOT/scripts/monitor-fetch.sh detail --root . --meta '<meta>'`로 가져온다.
 3. 아래 **수정 절차** 1~5를 이 세션에서 하되, 승인 게이트는 프로젝트 정책(`approval`)대로 사람에게 묻는다.
-4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 기준 브랜치 manifest에 `monitor`가 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
-   - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 사용자의 개인 자동화 단계(`HM_DELIVERY_LEVEL`)가 `deploy`이며 manifest `merge_policy.verify`에 `monitor`가 있으면, 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
+4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 `monitor` 설정(로컬 파일 또는 기준 브랜치 manifest)이 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
+   - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 사용자의 개인 자동화 단계(`HM_DELIVERY_LEVEL`)가 `deploy`이며 manifest `merge_policy.verify`에 `monitor`가 있으면(러너도 `monitor` 설정을 로컬 파일 → manifest 순으로 찾는다), 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
 
 ## 수정 절차 (무인·수동 공통)
 

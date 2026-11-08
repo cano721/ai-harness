@@ -1498,8 +1498,8 @@ monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_
   new_driver_repo "$scenario"
   with_policy pr-only auto
   as_host_repo github.com/acme/app
-  jq '.project_id = "acme-app" | .monitor = {provider: "command", command: "bin/errors", window_hours: 168}
-    | .merge_policy = {verify: ["monitor", "target_ci"], base: "main"}' \
+  jq --arg local "${MONITOR_LOCAL:-}" '.project_id = "acme-app" | .monitor = {provider: "command", command: "bin/errors", window_hours: 168}
+    | .merge_policy = {verify: ["monitor", "target_ci"], base: "main"} | if $local == "1" then del(.monitor) else . end' \
     "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config '{"require":["human_approval"],"verify":["monitor"]}'
@@ -1524,6 +1524,17 @@ assert_contains "$DRIVER_OUT" "monitor skipped (no monitoring error was given" "
 monitor_run pm_monitor_fail --monitor-error "$DRIVER_TMP/monitor-error.json"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed registration goes to a person"
 assert_contains "$(run_state '.findings[1]')" "register the error by hand: <ai-harness plugin>/scripts/autofix-auto.sh track --project acme-app --candidate" "the person gets the track command, not rollback advice"
+# 개인 로컬 monitor 설정(~/.ai-harness/autofix/monitors/<project_id>.json)만 있어도 시작하고, 그 관찰 창을 쓴다.
+mkdir -p "$MR_DATA/autofix/monitors"
+printf '%s\n' '{"provider":"command","command":"bin/errors","window_hours":48}' >"$MR_DATA/autofix/monitors/acme-app.json"
+MONITOR_LOCAL=1 monitor_run pm_monitor_local --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a local monitor file satisfies verify monitor"
+assert_contains "$(<"$FAKE_LOG")" "autofix track --project acme-app --candidate {\"window_hours\":48," "the local file's observation window is used"
+printf 'not json\n' >"$MR_DATA/autofix/monitors/acme-app.json"
+monitor_run pm_monitor_local_bad --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "2" "$DRIVER_RC" "a broken local monitor file does not start, even with a manifest monitor"
+assert_contains "$DRIVER_OUT" "autofix/monitors/acme-app.json" "the error names the broken local file"
+find "$MR_DATA/autofix/monitors/acme-app.json" -delete
 unset HM_PLUGIN_ROOT
 printf '%s\n' '{"title":"no signature"}' >"$DRIVER_TMP/bad-error.json"
 monitor_run pm_monitor_bad --monitor-error "$DRIVER_TMP/bad-error.json"
@@ -3599,13 +3610,42 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   find "$SCHED_HOME/.claude" -depth -delete
   assert_contains "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" HM_BACKFILL_INTERVAL_HOURS=0 /bin/bash "$SCHED_DATA/bin/run-due.sh")" " run $ROOT" "shim falls back to the recorded plugin root"
   assert_eq "true" "$(run_schedule status | jq -r '.installed')" "status reports install"
+  SCHED_AF_PLIST="$SCHED_AGENTS/com.ai-harness.autofix.plist"
+  assert_not_file "$SCHED_AF_PLIST"
+  assert_eq "null" "$(run_schedule status | jq -c '.autofix')" "status has no autofix schedule unless it is set"
+  # autofix 전용 주기: 분 단위 LaunchAgent가 따로 sweep만 부른다.
+  HM_AUTOFIX_INTERVAL_MINUTES=15 run_schedule install >/dev/null
+  assert_file "$SCHED_AF_PLIST"
+  if command -v plutil >/dev/null 2>&1; then plutil -lint "$SCHED_AF_PLIST" >/dev/null || fail "autofix plist lint"; fi
+  assert_contains "$(<"$SCHED_AF_PLIST")" "<key>StartInterval</key><integer>900</integer>" "autofix sweep every 15 minutes"
+  assert_contains "$(<"$SCHED_AF_PLIST")" "$SCHED_DATA/bin/run-autofix.sh" "autofix plist points at its own stable shim"
+  assert_file "$SCHED_PLIST"
+  for version in 0.31.0 0.30.0; do
+    mkdir -p "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts"
+    printf '#!/bin/bash\necho "autofix %s $*"\n' "$version" >"$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/autofix-auto.sh"
+    chmod +x "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/autofix-auto.sh"
+  done
+  assert_eq "autofix 0.31.0 sweep" "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" /bin/bash "$SCHED_DATA/bin/run-autofix.sh" | tail -n 1)" "autofix shim runs the newest installed plugin's sweep"
+  assert_eq "true|15" "$(run_schedule status | jq -r '"\(.autofix.installed)|\(.autofix.interval_minutes)"')" "status reports the autofix schedule"
+  # 주기를 지우고 다시 설치하면 전용 LaunchAgent도 내린다.
+  run_schedule install >/dev/null
+  assert_not_file "$SCHED_AF_PLIST"
+  assert_not_file "$SCHED_DATA/bin/run-autofix.sh"
+  SCHED_RC=0
+  HM_AUTOFIX_INTERVAL_MINUTES=abc run_schedule install >/dev/null 2>&1 || SCHED_RC=$?
+  assert_eq "2" "$SCHED_RC" "a non-numeric autofix interval is refused"
+  HM_AUTOFIX_INTERVAL_MINUTES=5 run_schedule install >/dev/null
   run_schedule uninstall >/dev/null
   assert_not_file "$SCHED_PLIST"
+  assert_not_file "$SCHED_AF_PLIST"
   assert_not_file "$SCHED_DATA/bin/run-due.sh"
+  assert_not_file "$SCHED_DATA/bin/run-autofix.sh"
 else
   SCHED_RC=0
-  run_schedule install >/dev/null 2>&1 || SCHED_RC=$?
+  SCHED_ERR="$(HM_AUTOFIX_INTERVAL_MINUTES=10 run_schedule install 2>&1 >/dev/null)" || SCHED_RC=$?
   assert_eq "3" "$SCHED_RC" "launchd install is macOS-only"
+  assert_contains "$SCHED_ERR" "*/10 * * * *" "other OSes get a cron line for the autofix interval"
+  assert_contains "$SCHED_ERR" "autofix-auto.sh sweep" "the cron line runs the autofix sweep"
 fi
 pass "launchd schedule"
 
@@ -5087,6 +5127,104 @@ assert_contains "$AF_ARGS" '--no-session-persistence' "unattended autofix keeps 
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" 'autofix-auto.sh" sweep' "backfill-due runs the autofix sweep"
 assert_contains "$(<"$ROOT/scripts/autofix-auto.sh")" 'harvest-auto/running.lock' "autofix shares the unattended-run lock"
 pass "autofix tracks manual PRs and runs with a restricted agent"
+
+# 로컬 monitor 설정: ~/.ai-harness/autofix/monitors/<project_id>.json이 기준 브랜치 manifest의 monitor보다 앞서고,
+# 같은 검증을 받는다. 켜기·상태가 로컬이므로 설정도 저장소에 커밋하지 않고 둘 수 있어야 한다.
+AFL_DATA="$TEST_TMP/autofix-local-data"
+AFL_REPO="$TEST_TMP/autofix-local-repo"
+mkdir -p "$AFL_REPO/.ai-harness" "$AFL_REPO/tools" "$AFL_DATA/autofix/monitors"
+git -C "$AFL_REPO" init -q
+git -C "$AFL_REPO" config user.email test@example.com
+git -C "$AFL_REPO" config user.name test
+for afl_src in manifest local; do
+  # shellcheck disable=SC2016  # 생성할 어댑터 스크립트의 $1을 문자 그대로 쓴다
+  printf '#!/usr/bin/env bash\n[[ "$1" == list ]] && printf '"'"'{"signature":"src:%s","count":20}\\n'"'"'\nexit 0\n' "$afl_src" >"$AFL_REPO/tools/$afl_src.sh"
+  chmod +x "$AFL_REPO/tools/$afl_src.sh"
+done
+afl_manifest() { # $1=monitor json 또는 null → 커밋
+  jq -n --argjson m "$1" '{project_id:"af-loc",level:"standard"} + (if $m == null then {} else {monitor:$m} end)' >"$AFL_REPO/.ai-harness/harness.json"
+  git -C "$AFL_REPO" add -A && git -C "$AFL_REPO" commit -q -m "manifest"
+}
+afl_local() { printf '%s\n' "$1" >"$AFL_DATA/autofix/monitors/af-loc.json"; }
+afl_list() { # → "rc|signature"
+  local out="" rc=0
+  out="$(HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/monitor-fetch.sh" list --root "$AFL_REPO" 2>/dev/null)" || rc=$?
+  printf '%s|%s\n' "$rc" "$(jq -r '.signature' <<<"$out" 2>/dev/null | paste -sd, -)"
+}
+afl_candidates() {
+  HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="af-loc" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+    "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc 2>/dev/null | jq -r '.signature' | paste -sd, -
+}
+afl_manifest '{"provider":"command","command":"tools/manifest.sh"}'
+assert_eq "0|src:manifest" "$(afl_list)" "without a local file the base-branch manifest monitor is used"
+afl_local '{"provider":"command","command":"tools/local.sh"}'
+assert_eq "0|src:local" "$(afl_list)" "the local monitor file wins over the manifest"
+assert_eq "src:local" "$(afl_candidates)" "autofix candidates use the local monitor file"
+afl_manifest null
+assert_eq "0|src:local" "$(afl_list)" "a local file works without any monitor in the manifest"
+assert_eq "src:local" "$(afl_candidates)" "a repo monitored only locally is an autofix target"
+AFL_RC=0
+HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="af-loc" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" track --project af-loc --candidate '{"signature":"src:local","count":20}' --pr https://github.com/acme/loc/pull/1 || AFL_RC=$?
+assert_eq "0" "$AFL_RC" "a PR of a locally monitored repo can be tracked"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+assert_eq "4|" "$(afl_list)" "no local file and no manifest monitor is a config error"
+assert_eq "" "$(afl_candidates)" "a repo with no monitor settings is not an autofix target"
+afl_manifest '{"provider":"command","command":"tools/manifest.sh"}'
+afl_local 'not json'
+assert_eq "4|" "$(afl_list)" "a broken local file is rejected, not silently replaced by the manifest"
+assert_eq "" "$(afl_candidates)" "a broken local file keeps the repo out of autofix"
+afl_local '{"command":"tools/local.sh"}'
+assert_eq "4|" "$(afl_list)" "a local file without provider is rejected"
+afl_local '{"provider":"command","command":"/bin/sh"}'
+assert_eq "4|" "$(afl_list)" "a local command adapter must also live inside the repo"
+afl_local '{"provider":"command","command":"../x.sh"}'
+assert_eq "4|" "$(afl_list)" "a local command adapter path cannot climb out"
+afl_local '{"provider":"sentry","org":"a","project":"b","base_url":"https://evil.example.com"}'
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" SENTRY_AUTH_TOKEN=t "$ROOT/scripts/monitor-fetch.sh" list --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "4" "$AFL_RC" "a local file cannot send the sentry token to another host either"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+pass "autofix monitor settings: local file first, manifest fallback, same validation"
+
+# 짧은 주기 sweep과 backfill 경로 sweep이 겹치면 늦게 온 쪽은 아무것도 하지 않는다.
+mkdir -p "$AF_DATA/autofix/.sweep.lock"
+printf '%s\n' "$$" >"$AF_DATA/autofix/.sweep.lock/pid"
+af_state 'del(.signatures["sentry:101"])'
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+af_auto sweep
+assert_eq "$AF_BEFORE" "$(<"$AF_STUB/agent-count")" "a sweep already running blocks a second one"
+find "$AF_DATA/autofix/.sweep.lock" -depth -delete
+af_auto sweep
+assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "the next sweep runs once the lock is free"
+pass "autofix sweeps do not overlap"
+
+# /autofix setup의 무인 실행 설정: 개인 config의 해당 키만 바꾸고 다른 줄·주석·권한은 남기며, 틀린 값은 아무것도 쓰지 않는다.
+AFC_DATA="$TEST_TMP/autofix-config-data"
+mkdir -p "$AFC_DATA"
+printf '# 내 설정\nHM_HARVEST_AUTO=1\nHM_AUTOFIX_DAILY_MAX=7\nexport HM_AUTOFIX_REPOS="svc-a svc-b"\n' >"$AFC_DATA/config"
+chmod 640 "$AFC_DATA/config"
+afc() { env -u HM_AUTOFIX_REPOS -u HM_AUTOFIX_AUTO -u HM_AUTOFIX_DAILY_MAX HARNESS_METRICS_DIR="$AFC_DATA" "$ROOT/scripts/autofix-auto.sh" configure "$@"; }
+assert_eq "false|svc-a,svc-b|null|7|2|10" "$(afc | jq -r '[.auto, (.repos | join(",")), .interval_minutes, .daily_max, .max_attempts, .budget_usd] | map(tostring) | join("|")')" "configure without flags shows the current values and defaults"
+afc --auto 1 --add-repo svc-c --interval-minutes 10 --daily-max 4 --max-attempts 3 --budget-usd 2.5 >/dev/null
+AFC_CFG="$(<"$AFC_DATA/config")"
+assert_contains "$AFC_CFG" "# 내 설정" "comments are kept"
+assert_contains "$AFC_CFG" "HM_HARVEST_AUTO=1" "other keys are kept"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_REPOS="svc-a,svc-b,svc-c"' "the repo is added to the existing list"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_INTERVAL_MINUTES="10"' "the sweep interval is written"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_BUDGET_USD="2.5"' "a decimal budget is accepted"
+assert_eq "1" "$(grep -c 'HM_AUTOFIX_DAILY_MAX' "$AFC_DATA/config")" "an existing key is replaced, not duplicated"
+assert_eq "640" "$(filemode "$AFC_DATA/config")" "the config file keeps its permissions"
+afc --add-repo svc-a --interval-minutes off >/dev/null
+assert_eq "svc-a,svc-b,svc-c|0" "$(sed -n 's/^HM_AUTOFIX_REPOS="\(.*\)"$/\1/p' "$AFC_DATA/config")|$(grep -c 'HM_AUTOFIX_INTERVAL_MINUTES' "$AFC_DATA/config")" "an already listed repo is not added twice; off removes the interval"
+AFC_BEFORE="$(<"$AFC_DATA/config")"
+for afc_bad in "--daily-max x" "--max-attempts 0" "--budget-usd 0" "--budget-usd 1e3" "--interval-minutes 1.5" "--auto yes" "--add-repo a,b"; do
+  AFC_RC=0
+  # shellcheck disable=SC2086  # 플래그와 값을 나눠 넘긴다
+  afc --auto 0 $afc_bad >/dev/null 2>&1 || AFC_RC=$?
+  assert_eq "2" "$AFC_RC" "configure rejects $afc_bad"
+done
+assert_eq "$AFC_BEFORE" "$(<"$AFC_DATA/config")" "a rejected value changes nothing, not even the valid flags"
+pass "autofix configure updates only its keys in the personal config"
 # 기본 스킬 카탈로그: 플러그인 스킬이 아니라 선택 설치 원본이며, Codex도 읽을 수 있는 frontmatter만 쓴다.
 CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
 assert_eq "$CATALOG_NAMES" "$(find "$ROOT/catalog" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd' ' -)" "catalog.json lists every catalog skill"

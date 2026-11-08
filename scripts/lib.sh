@@ -164,6 +164,64 @@ hm_short_key() { # $1=project
   printf '%s\n' "$key"
 }
 
+# 개인 설정(~/.ai-harness/config)의 키만 바꾼다: 그 키의 기존 줄을 지우고 끝에 KEY="VALUE"를 단다(빈 값은 지우기만).
+# 다른 줄·주석·권한은 그대로 두고 임시 파일로 바꿔 쓴다 — 보드 settings.py write_user_config와 같은 규칙.
+# 값은 hm_load_config가 그대로 읽을 수 있어야 하므로 큰따옴표·줄바꿈을 받지 않는다.
+hm_config_set() { # KEY VALUE [KEY VALUE ...]
+  local file="$HM_DATA_DIR/config" tmp="" line="" key="" skip="" mode="600" keys=$'\n'
+  local -a pairs=("$@")
+  local i=0
+  (( ${#pairs[@]} > 0 && ${#pairs[@]} % 2 == 0 )) || { echo "hm_config_set: KEY VALUE 쌍이 필요합니다" >&2; return 2; }
+  for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+    [[ "${pairs[i]}" =~ ^(HM|HARNESS)_[A-Z0-9_]+$ ]] || { printf 'hm_config_set: 잘못된 키: %s\n' "${pairs[i]}" >&2; return 2; }
+    [[ "${pairs[i+1]}" != *[\"$'\n']* ]] || { printf 'hm_config_set: %s 값에 큰따옴표·줄바꿈을 쓸 수 없습니다\n' "${pairs[i]}" >&2; return 2; }
+    keys+="${pairs[i]}"$'\n'
+  done
+  mkdir -p "$HM_DATA_DIR"
+  [[ -f "$file" ]] && mode="$(filemode "$file")"
+  tmp="$(mktemp "$HM_DATA_DIR/.config.XXXXXX")" || return 1
+  {
+    if [[ -f "$file" ]]; then
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        skip=""
+        if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)= ]]; then
+          key="${BASH_REMATCH[2]}"
+          [[ "$keys" == *$'\n'"$key"$'\n'* ]] && skip=1
+        fi
+        [[ -n "$skip" ]] || printf '%s\n' "$line"
+      done <"$file"
+    fi
+    for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+      [[ -z "${pairs[i+1]}" ]] || printf '%s="%s"\n' "${pairs[i]}" "${pairs[i+1]}"
+    done
+  } >"$tmp" || { find "$tmp" -delete 2>/dev/null; return 1; }
+  chmod "$mode" "$tmp" 2>/dev/null || true
+  mv "$tmp" "$file"
+}
+
+# /autofix monitor 설정의 개인 로컬 파일. 켜기·상태가 로컬이므로 설정도 저장소에 커밋하지 않고 둘 수 있다.
+# project_id는 경로에 들어가므로 파일 이름으로 안전한 값만 받는다(아니면 빈 출력 — 로컬 파일 없음으로 본다).
+hm_monitor_file() { # $1=project_id
+  [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 0
+  printf '%s/autofix/monitors/%s.json\n' "$HM_DATA_DIR" "$1"
+}
+
+# monitor 설정 해석의 단일 출처: 로컬 파일 > 기준 브랜치 manifest의 monitor. 출력은 monitor 객체 한 줄(없으면 빈 출력).
+# 로컬 파일이 있는데 JSON 객체 하나가 아니거나 provider가 없으면 manifest로 넘어가지 않고 실패한다(rc 1) — 고친 줄 알았던
+# 설정이 조용히 다른 설정으로 바뀌지 않게. provider별 규칙(자격증명 전송처·어댑터 경로)은 출처와 상관없이 monitor-fetch.sh가 본다.
+hm_resolve_monitor() { # $1=project_id $2=manifest json
+  local file="" monitor=""
+  file="$(hm_monitor_file "${1:-}")"
+  if [[ -n "$file" && -e "$file" ]]; then
+    monitor="$(jq -cs 'if length == 1 and (.[0] | type == "object" and (.provider | type == "string" and length > 0))
+      then .[0] else empty end' "$file" 2>/dev/null)"
+    [[ -n "$monitor" ]] || { printf '로컬 monitor 설정이 올바르지 않습니다(JSON 객체 하나, provider 필요): %s\n' "$file" >&2; return 1; }
+    printf '%s\n' "$monitor"
+    return 0
+  fi
+  jq -c '.monitor // empty' <<<"${2:-}" 2>/dev/null || true
+}
+
 # 디렉토리 lock. 소유는 lock 디렉토리 안 pid 파일의 배타 생성으로 정하고, 소유 pid가 죽었으면 stale로 회수한다.
 hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
   local lock_dir="$1" max_attempts="${2:-50}" attempt=0 unowned_attempts=0 owner="" lock_mt=""
