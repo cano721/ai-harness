@@ -209,23 +209,44 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 #sdlg fieldset { border: 0; padding: 0; margin: 0; }
 #sdlg [hidden] { display: none !important; }
 .iwrap { min-width: 0; max-width: 1100px; }
-.iscroll { overflow-x: auto; }
-.irepo { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; max-width: 1100px; margin-bottom: 14px; }
-.irepo .ihead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.isumtop { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.isumtop h2 { font-size: 16px; margin: 0 0 8px; letter-spacing: -.01em; }
+.icounts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.ilist { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.ilist li { display: grid; grid-template-columns: 92px minmax(0, 12em) 1fr; gap: 10px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--line); }
+.ilist li .schip { justify-self: start; }
+.ilist a { color: var(--text); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ilist a:hover { text-decoration: underline; }
+.ilist li > span:last-child { color: var(--muted); min-width: 0; }
+@media (max-width: 760px) { .ilist li { grid-template-columns: auto 1fr; } .ilist li > span:last-child { grid-column: 1 / -1; } }
+.schip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; background: var(--chip); color: var(--muted); }
+.schip.good { background: color-mix(in srgb, var(--done) 14%, transparent); color: var(--done); }
+.schip.bad { background: color-mix(in srgb, var(--human) 14%, transparent); color: var(--human); }
+.schip.mixed { background: color-mix(in srgb, var(--block) 16%, transparent); color: var(--block); }
+.schip.watch { background: color-mix(in srgb, var(--run) 12%, transparent); color: var(--run); }
+.ihint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+.icrit { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.icrit summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.icrit p { margin: 6px 0 0; }
+.irepo { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; max-width: 1100px; margin-bottom: 14px; scroll-margin-top: 12px; }
+.irepo .ihead { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .irepo .ihead b { font-size: 15px; }
-.irepo .ihead .meta { flex: 1; min-width: 0; }
-.irepo .ihead .warn, .imeta .warn { color: var(--human); }
+.irepo .ihead .meta { flex: 1 1 14em; min-width: 0; }
 .irepo .acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .irepo .acts a, .irepo .acts button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 9px; text-decoration: none; cursor: pointer; }
 .irepo .acts button:disabled { opacity: .6; cursor: progress; }
-.isum { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-.isum th, .isum td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.isum th:first-child, .isum td:first-child { text-align: left; white-space: normal; min-width: 9em; }
-.isum th { font-size: 11px; color: var(--muted); font-weight: 600; }
-.isum td.trend { text-align: left; }
-.spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 22px; vertical-align: middle; }
-.spark span { width: 6px; background: var(--run); border-radius: 1px; min-height: 1px; opacity: .85; }
-.spark span.pre { background: var(--muted); opacity: .5; }
+.iline { margin: 6px 0 0; font-size: 13px; }
+.iline.warn { color: var(--human); }
+.itiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 8px; margin-top: 12px; }
+.itile { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.itile .tl { font-size: 11px; color: var(--muted); font-weight: 600; }
+.itile .tv { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin: 4px 0 2px; min-height: 26px; }
+.itile .tw { font-size: 16px; letter-spacing: -.01em; }
+.tw.good { color: var(--done); } .tw.bad { color: var(--human); } .tw.watch { color: var(--text); } .tw.none { color: var(--muted); font-weight: 600; }
+.itile p { margin: 2px 0 0; font-size: 12px; color: var(--text); word-break: break-word; }
+.itile p.dim { color: var(--muted); }
+.spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 24px; flex: none; }
+.spark span { width: 7px; background: var(--run); border-radius: 1px; min-height: 1px; opacity: .85; }
 .spark span.gap { background: transparent; border-bottom: 1px dashed var(--line); }
 .isec { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; }
 .icards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 8px; }
@@ -233,15 +254,19 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 .icard .itop { display: flex; gap: 8px; align-items: flex-start; }
 .icard .itop b { flex: 1; min-width: 0; word-break: break-word; }
 .icard p { margin: 4px 0 0; color: var(--muted); font-size: 12px; word-break: break-word; }
+.icard p.one { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icard p.ifacts { color: var(--text); }
+.icard p.ihint { margin-top: 6px; }
+.icard p.raw { white-space: pre-wrap; color: var(--text); }
 .icard a { color: var(--run); }
 .icard details { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.icard details summary { cursor: pointer; }
 .icard details ul { margin: 4px 0 0; padding-left: 16px; }
-.vbadge { flex: none; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.vbadge { flex: none; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; margin-top: 1px; }
 .vbadge.gone, .vbadge.reduced { color: var(--done); border-color: var(--done); }
 .vbadge.recurred { color: var(--human); border-color: var(--human); }
-.icrit { font-size: 12px; color: var(--muted); max-width: 1100px; margin: 0 0 14px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; }
-.icrit b { color: var(--text); font-weight: 600; }
+.vbadge.hold { color: var(--run); border-color: var(--run); }
+.iquiet > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); margin: 4px 0 12px; }
 #toast { position: fixed; right: 20px; bottom: 20px; max-width: 420px; padding: 10px 14px; border-radius: 10px;
   background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 13px; }
 #toast[data-ok="true"] { border-left: 3px solid var(--done); }
@@ -347,7 +372,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     },
     impact: {
       label: '하네스 효과', sub: '개선과 재발 여부', custom: true,
-      desc: '하네스가 고친 것(/harvest가 반영한 개선)이 그 뒤에 다시 나왔는지와, 설치 전후 사람 교정·프로젝트 사실 부족·가드 차단을 저장소별로 봅니다. 집계는 /ai-harness:harness-impact와 같은 impact.sh compare를 뒤에서 하루 한 번 돌린 결과입니다. 읽기 전용 — 보드는 개선을 되돌리거나 하네스를 고치지 않습니다.',
+      desc: '저장소마다 하네스 효과가 있었는지, 아직 모르는지, 왜 모르는지를 봅니다 — 설치 후 교정·프로젝트 사실 부족의 추세, 하네스가 고친 것(/harvest가 반영한 개선)이 다시 나왔는지, 비교할 수 있을 때만 설치 전후 비교. 집계는 /ai-harness:harness-impact와 같은 impact.sh compare를 뒤에서 하루 한 번 돌린 결과입니다. 읽기 전용 — 보드는 개선을 되돌리거나 하네스를 고치지 않습니다.',
       cols: [],
     },
   };
@@ -1084,15 +1109,35 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   });
 
   // ---- 하네스 효과 ----
-  // 판정 이름과 뜻은 /ai-harness:harness-impact 리포트(skills/harness-impact/report-template.html)와 같은 말을 쓴다.
+  // 판정·비교 가능성·추세·저장소 상태는 impact.sh view(impact-evidence.jq·impact-assess.jq)가 정한 값이다. 화면은 말로 옮기기만 한다.
+  // 개선 판정 이름은 /ai-harness:harness-impact 리포트(skills/harness-impact/report-template.html)와 같은 말을 쓴다.
   const VERDICT = {
-    gone: ['사라짐', '반영 뒤 같은 유형이 다시 나오지 않았어요'],
-    reduced: ['줄어듦', '반영 뒤 같은 유형이 나오는 비율이 줄었어요'],
-    recurred: ['재발', '반영 뒤에도 같은 유형이 비슷하거나 더 자주 나왔어요'],
-    hold: ['판단 보류', '반영 뒤 정리된 세션이 적거나 반영 뒤 목록이 잘려 아직 판단하지 않아요'],
-    no_baseline: ['기준 없음', '근거 세션 정리에서 이 유형을 찾지 못해 비교할 기준이 없어요'],
-    unmatched: ['판정 안 함', '이 개선의 패턴을 아직 맞춰 보지 않았어요 — 그 저장소에서 /ai-harness:harness-impact를 돌리면 채워져요'],
+    gone: ['효과 있음', '사라짐', '반영 뒤 같은 유형이 다시 나오지 않았어요'],
+    reduced: ['효과 있음', '줄어듦', '반영 뒤 같은 유형이 나오는 비율이 줄었어요'],
+    recurred: ['재발', '재발', '반영 뒤에도 같은 유형이 비슷하거나 더 자주 나왔어요'],
+    hold: ['관찰 중', '판단 보류', '반영 뒤 정리된 세션이 적거나 반영 뒤 목록이 잘려 아직 판단하지 않아요'],
+    no_baseline: ['기준 없음', '기준 없음', '근거 세션 정리에서 이 유형을 찾지 못해 비교할 기준이 없어요'],
+    unmatched: ['아직 맞춰 보지 않음', '판정 안 함', '이 개선의 패턴을 반영 뒤 세션과 아직 맞춰 보지 않았어요'],
   };
+  const STATUS = {
+    effective: ['효과 확인', 'good'], mixed: ['엇갈림', 'mixed'], attention: ['재발/악화', 'bad'],
+    watching: ['관찰 중', 'watch'], insufficient: ['데이터 부족', 'none'], no_sessions: ['최근 세션 없음', 'none'],
+    pending: ['계산 중', 'none'], failed: ['계산 실패', 'bad'],
+  };
+  const STATUS_ORDER = ['effective', 'mixed', 'attention', 'watching', 'pending', 'insufficient', 'no_sessions', 'failed'];
+  const METRIC = { corrections_per_session: '교정', missing_context_per_session: '사실 부족', guard_blocks: '가드 차단', rework: '재작업 비율' };
+  const TREND = { down: ['줄고 있음', 'good'], flat: ['비슷함', 'watch'], up: ['늘고 있음', 'bad'], insufficient: ['데이터 부족', 'none'] };
+  const CHANGE_WORD = { down: '줄어듦', flat: '비슷함', up: '늘어남' };
+  const NOT_COMPARABLE = {
+    no_baseline_sessions: '설치 전 세션 기록 없음',
+    no_baseline_digests: '설치 전 기록 없음(세션 정리는 설치 뒤부터 쌓임)',
+    few_digests: '정리된 세션이 적음',
+    few_prs: '정산된 PR이 적음',
+    no_rework: '계산 안 함 — 그 저장소에 git user.email이 필요해요',
+    after_only: '설치 후에만 있는 지표(가드는 하네스와 함께 깔림)',
+    no_value: '값이 없음',
+  };
+  const MATCH_CMD = '/ai-harness:harness-impact 실행';
   const CHANGE = { add: '규칙 추가', remove: '규칙 제거', mixed: '추가·제거' };
   let idata = null, ifetchedAt = 0, ibusy = false;
   async function loadImpact(force) {
@@ -1105,26 +1150,101 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (view === 'impact') { renderSidebar(); renderImpact(); }
   }
   const num = (v, unit) => (v == null ? '–' : `${v}${unit || ''}`);
-  const pct = (v) => (v == null ? '–' : `${Math.round(v * 100) / 100}%`);
-  function spark(weekly, key) {
-    const vals = weekly.map((w) => w[key]);
+  const pct = (v) => (v == null ? '–' : `${Math.round(v * 10) / 10}%`);
+  // 저장소 상태 키. 집계 결과가 없을 때만 화면이 계산 상태로 대신한다.
+  function repoStatus(r) {
+    const s = r.assessment?.status?.key;
+    if (s) return s;
+    if (r.state === 'failed') return 'failed';
+    if (r.state === 'running' || r.state === 'queued' || r.state === 'none') return 'pending';
+    return 'insufficient';
+  }
+  function chip(key) {
+    const [label, tone] = STATUS[key] || STATUS.insufficient;
+    return el('span', `schip ${tone}`, label);
+  }
+  // 상태를 한 줄로: 신호가 있으면 신호, 없으면 왜 모르는지.
+  function statusLine(r) {
+    const st = r.assessment?.status;
+    if (!st) {
+      if (r.state === 'failed') return r.error?.reason || '계산 실패';
+      if (r.view_error) return `결과를 읽지 못함: ${r.view_error}`;
+      return r.state === 'running' ? '계산 중이에요' : r.state === 'queued' ? '계산 대기 중이에요' : '아직 계산하지 않았어요';
+    }
+    const say = (x, good) => {
+      if (x.by === 'improvement') return `개선 ${x.n}건 ${good ? '효과 있음' : '재발'}`;
+      if (x.by === 'trend') return `${METRIC[x.metric]} ${good ? '줄고' : '늘고'} 있음`;
+      return `설치 전보다 ${METRIC[x.metric]} ${good ? '줄어듦' : '늘어남'}`;
+    };
+    const sig = [...st.good.map((x) => say(x, true)), ...st.bad.map((x) => say(x, false))];
+    if (sig.length) return sig.join(' · ');
+    const GAP = {
+      no_recent_sessions: () => `최근 ${r.window_days ?? ''}일 동안 세션이 없어요`,
+      no_baseline: () => '설치 전 기록이 없어 전후 비교 불가',
+      few_recent_digests: () => '설치 후 정리된 세션이 적어 추세를 아직 못 봐요',
+      no_improvements: () => '아직 /harvest가 반영한 개선이 없어요',
+      unmatched_improvements: (g) => `개선 ${g.n}건 아직 맞춰 보지 않음`,
+      few_observed: (g) => `개선 ${g.n}건 반영 뒤 세션이 적어 관찰 중`,
+      no_baseline_improvements: (g) => `개선 ${g.n}건은 근거에서 유형을 찾지 못해 비교 기준 없음`,
+    };
+    return st.gaps.map((g) => (GAP[g.why] ? GAP[g.why](g) : g.why)).join(' · ') || '판단할 신호가 아직 없어요';
+  }
+  function spark(series, label) {
+    const vals = series.map((w) => w.value);
     const max = Math.max(0, ...vals.filter((x) => x != null));
     const s = el('span', 'spark'); s.setAttribute('role', 'img');
-    s.setAttribute('aria-label', weekly.map((w) => `${w.week} ${w[key] ?? '없음'}`).join(', '));
-    for (const w of weekly) {
-      const x = w[key];
-      const bar = el('span', x == null ? 'gap' : w.after_install ? null : 'pre');
-      bar.style.height = x == null ? '22px' : `${max ? Math.max(2, Math.round((x / max) * 22)) : 2}px`;
-      bar.title = `${w.week} 주${w.after_install ? '' : ' (설치 전)'} · ${x ?? '데이터 없음'}`;
+    s.setAttribute('aria-label', `${label} 주별: ` + series.map((w) => `${w.week} ${w.value ?? '정리된 세션 부족'}`).join(', '));
+    for (const w of series) {
+      const x = w.value;
+      const bar = el('span', x == null ? 'gap' : null);
+      bar.style.height = x == null ? '24px' : `${max ? Math.max(2, Math.round((x / max) * 24)) : 2}px`;
+      bar.title = `${w.week} 주 · ${x == null ? `정리된 세션 ${w.n}개라 빼고 봄` : `${x} (정리 ${w.n}세션)`}`;
       s.append(bar);
     }
     return s;
   }
+  // 주 지표: 설치 후 주별 추세가 먼저, 설치 전후 비교는 비교 가능할 때만 숫자로.
+  function trendTile(r, key) {
+    const A = r.assessment || {};
+    const t = A.trends?.[key] || { verdict: 'insufficient', series: [] };
+    const m = A.metrics?.[key] || {};
+    const [word, tone] = TREND[t.verdict] || TREND.insufficient;
+    const box = el('div', 'itile');
+    box.append(el('div', 'tl', `세션당 ${METRIC[key]} · 설치 후 추세`));
+    const row = el('div', 'tv'); row.append(el('b', `tw ${tone}`, word));
+    if ((t.series || []).length) row.append(spark(t.series, METRIC[key]));
+    box.append(row);
+    box.append(el('p', null, t.verdict === 'insufficient'
+      ? `정리된 세션 2개 이상인 주 ${t.weeks ?? 0}개 · ${t.digested ?? 0}세션 (3주·10세션부터 판단)`
+      : `앞 절반 ${t.first} → 뒤 절반 ${t.last} · ${t.weeks}주 ${t.digested}세션`));
+    box.append(m.comparable
+      ? el('p', null, `설치 전후 ${m.before} → ${m.after} (${CHANGE_WORD[m.change]})`)
+      : el('p', 'dim', `설치 전후 비교 불가 — ${NOT_COMPARABLE[m.reason] || m.reason || '기록 없음'}`));
+    return box;
+  }
+  function plainTile(label, value, sub, dim) {
+    const box = el('div', 'itile');
+    const row = el('div', 'tv'); row.append(el('b', dim ? 'tw none' : 'tw', value));
+    box.append(el('div', 'tl', label), row, el('p', dim ? 'dim' : null, sub));
+    return box;
+  }
+  // 카드 제목은 요약의 첫 문장만. 원문은 "자세히"에 둔다.
+  const firstSentence = (s) => {
+    const t = String(s || '').trim();
+    const m = t.match(/^(.+?[.!?。])(\s|$)/);
+    const one = (m ? m[1] : t.split(/\n| — |; /)[0]).trim();
+    return one.length > 90 ? one.slice(0, 88) + '…' : one;
+  };
   function impCard(r, x) {
     const res = x.result || {};
-    const [vl, vt] = VERDICT[res.verdict] || VERDICT.unmatched;
+    const v = res.verdict && VERDICT[res.verdict] ? res.verdict : 'unmatched';
+    const [label, word, text] = VERDICT[v];
     const c = el('div', 'icard');
-    const top = el('div', 'itop'); top.append(el('b', null, res.label || x.summary || '(요약 없음)'), el('span', 'vbadge ' + (res.verdict || 'unmatched'), vl));
+    const top = el('div', 'itop');
+    top.append(el('span', 'vbadge ' + v, label));
+    const full = res.label || x.summary || '(요약 없음)';
+    const title = el('b', null, firstSentence(full)); title.title = full;
+    top.append(title);
     c.append(top);
     const meta = el('p');
     meta.append(`${x.date || ''} 반영 · ${CHANGE[x.change] || x.change}`);
@@ -1134,36 +1254,39 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       else meta.append(x.artifact);
     }
     c.append(meta);
-    if (res.label && x.summary) c.append(el('p', null, x.summary));
-    if (x.expected) c.append(el('p', null, `기대효과: ${x.expected}`));
+    if (x.expected) { const e = el('p', 'one', `기대효과: ${x.expected}`); e.title = x.expected; c.append(e); }
     const judged = res.after_hits != null;
-    const facts = [`반영 뒤 관찰 ${num(x.observed_now)}세션`];
-    if (judged) facts.push(`같은 유형 재발 ${res.after_truncated ? '≥' : ''}${res.after_hits}세션 / ${res.observed}세션`);
-    if (judged) facts.push(`${res.baseline === 'window' ? '반영 전 30일' : '근거 세션'} ${res.baseline === 'window' ? res.window_hits : res.before_hits}세션 / ${res.baseline === 'window' ? x.window_observed : x.before_observed}세션`);
-    c.append(el('p', 'ifacts', facts.join(' · ')));
-    c.append(el('p', null, vt));
-    if (judged && res.as_of) c.append(el('p', null, `${res.as_of}까지 맞춘 결과${res.unjudged > 0 ? ` · 그 뒤 정리된 세션 ${res.unjudged}개는 아직 맞춰 보지 않음` : ''}`));
-    if (judged && res.baseline === 'batch' && x.basis === 'batch') c.append(el('p', null, '근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.'));
-    if (res.note) c.append(el('p', null, res.note));
+    if (judged) c.append(el('p', 'ifacts', `반영 뒤 같은 유형 ${res.after_truncated ? '≥' : ''}${res.after_hits} / ${res.observed}세션 · ${res.baseline === 'window' ? '반영 전 30일' : '근거 세션'} ${res.baseline === 'window' ? res.window_hits : res.before_hits} / ${res.baseline === 'window' ? x.window_observed : x.before_observed}세션`));
+    else if (v === 'unmatched') c.append(el('p', 'ihint', `채우려면 그 저장소에서 ${MATCH_CMD} — LLM 토큰이 드는 선택 동작이라 보드가 돌리지 않아요`));
+    else c.append(el('p', 'ifacts', `반영 뒤 관찰 ${num(x.observed_now)}세션`));
+    const d = el('details'); d.append(el('summary', null, '자세히'));
+    const body = el('div');
+    body.append(el('p', null, `${word} — ${text}`));
+    const raw = res.label && x.summary ? x.summary : full;
+    if (raw !== firstSentence(full)) body.append(el('p', 'raw', raw));
+    if (judged && res.as_of) body.append(el('p', null, `${res.as_of}까지 맞춘 결과${res.unjudged > 0 ? ` · 그 뒤 정리된 세션 ${res.unjudged}개는 아직 맞춰 보지 않음` : ''}`));
+    if (judged && res.baseline === 'batch' && x.basis === 'batch') body.append(el('p', null, '근거 세션만 기준이라 문제로 뽑힌 표본과 비교한 값이에요. 줄어듦은 과장됐을 수 있어요.'));
+    if (res.note) body.append(el('p', null, res.note));
     const ex = [...(res.after_examples || []).map((e) => ['반영 뒤', e]), ...(res.before_examples || []).map((e) => ['근거', e])];
-    if (ex.length) {
-      const d = el('details'); d.append(el('summary', null, `맞춘 사례 ${ex.length}`));
-      const ul = el('ul'); for (const [side, e] of ex) ul.append(el('li', null, `${side} ${e.date} · ${e.summary}`));
-      d.append(ul); c.append(d);
-    }
+    if (ex.length) { const ul = el('ul'); for (const [side, e] of ex) ul.append(el('li', null, `${side} ${e.date} · ${e.summary}`)); body.append(ul); }
+    d.append(body); c.append(d);
     return c;
   }
+  // 같은 이름의 클론이 둘이어도 요약 링크가 제자리로 가게 경로로 앵커를 만든다.
+  const repoAnchor = (r) => 'irepo-' + encodeURIComponent(r.repo || r.name).replace(/%/g, '_');
+  // 지난 결과가 있는데 다시 계산이 실패한 저장소: 지난 값과 함께 실패 이유를 보인다.
+  const staleFail = (r) => r.state === 'failed' && r.error && r.assessment;
   function impactRepo(r) {
-    const box = el('section', 'irepo');
+    const box = el('section', 'irepo'); box.id = repoAnchor(r);
     const head = el('div', 'ihead');
-    head.append(el('b', null, r.name));
+    head.append(chip(repoStatus(r)), el('b', null, r.name));
     const meta = el('span', 'meta');
     const when = r.computed_at ? `${ago(r.computed_at)} 계산 (${r.cache_day})` : '';
     if (r.state === 'running') meta.append(`계산 중 (${ago(r.running_since)} 시작)${when ? ` · 지난 결과: ${when}` : ''}`);
     else if (r.state === 'queued') meta.append(`계산 대기${when ? ` · 지난 결과: ${when}` : ''}`);
     else if (when) meta.append(when);
     else if (r.state === 'none') meta.append('아직 계산하지 않음');
-    if (r.project && r.installed) meta.append(` · 설치 ${r.installed.date} · 비교 각 ${r.window_days}일`);
+    if (r.project && r.installed) meta.append(` · 설치 ${r.installed.date} · 최근 ${r.window_days}일`);
     head.append(meta);
     const acts = el('span', 'acts');
     const rb = el('button', null, r.state === 'running' || r.state === 'queued' ? '계산 중…' : '다시 계산'); rb.type = 'button';
@@ -1173,35 +1296,65 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (r.cache_day) { const a = el('a', null, '전체 리포트 열기'); a.href = `/impact/report?t=${encodeURIComponent(TOKEN)}&repo=${encodeURIComponent(r.repo)}`; a.target = '_blank'; a.rel = 'noopener'; acts.append(a); }
     head.append(acts);
     box.append(head);
-    if (r.error && r.state === 'failed') box.append(el('p', 'warn', `계산 실패 (${r.error.at ? ago(r.error.at) : ''}): ${r.error.reason}`));
-    if (r.view_error) box.append(el('p', 'warn', `결과를 읽지 못함: ${r.view_error}`));
+    box.append(el('p', r.state === 'failed' && !r.assessment ? 'iline warn' : 'iline', statusLine(r)));
+    if (staleFail(r)) box.append(el('p', 'iline warn', `다시 계산 실패 (${r.error.at ? ago(r.error.at) : ''}) — 아래는 ${r.cache_day} 결과예요: ${r.error.reason}`));
+    if (r.view_error && r.assessment) box.append(el('p', 'iline warn', `결과를 읽지 못함: ${r.view_error}`));
     if (!r.project) return box;
-    if ((r.warnings || []).length) box.append(el('p', 'meta', `신뢰도 경고: ${r.warnings.join(', ')} — 뜻은 전체 리포트의 신뢰도 절에 있어요`));
-    const t = el('table', 'isum');
-    const B = r.before || {}, A = r.after || {}, W = r.weekly || [];
-    const hr = el('tr'); for (const h of ['', `설치 전 (${B.since}~)`, `최근 (${A.since}~)`, `주별 (최근 ${W.length}주, 회색=설치 전)`]) hr.append(el('th', null, h));
-    t.append(hr);
-    const row = (label, b, a, key) => {
-      const tr = el('tr'); tr.append(el('td', null, label), el('td', null, b), el('td', null, a));
-      const td = el('td', 'trend'); if (key) td.append(spark(W, key)); tr.append(td); t.append(tr);
-    };
-    row('사람 교정 (세션당)', `${num(B.corrections_per_session)} · ${num(B.corrections)}회`, `${num(A.corrections_per_session)} · ${num(A.corrections)}회`, 'corrections_per_session');
-    row('프로젝트 사실 부족 (세션당)', `${num(B.missing_context_per_session)} · ${num(B.missing_context)}회`, `${num(A.missing_context_per_session)} · ${num(A.missing_context)}회`, 'missing_context_per_session');
-    row('가드 차단', num(B.guard_blocks, '건'), num(A.guard_blocks, '건'), 'guard_blocks');
-    if (r.rework) row('재작업 PR 비율', `${pct(r.rework.before?.ratio)} · PR ${num(r.rework.before?.prs)}`, `${pct(r.rework.after?.ratio)} · PR ${num(r.rework.after?.prs)}`, null);
-    else row('재작업 PR 비율', '–', '–', null);
-    row('LLM 정리된 세션', num(B.digested_sessions), num(A.digested_sessions), 'digested_sessions');
-    const sc = el('div', 'iscroll'); sc.append(t); box.append(sc);
-    if (!r.rework) box.append(el('p', 'meta', '재작업 비율은 그 저장소에 git user.email이 있어야 계산해요.'));
+    if (r.assessment && repoStatus(r) !== 'no_sessions') {
+      const tiles = el('div', 'itiles');
+      tiles.append(trendTile(r, 'corrections_per_session'), trendTile(r, 'missing_context_per_session'));
+      const g = r.assessment.metrics.guard_blocks;
+      tiles.append(plainTile('가드가 막은 수정 (최근)', num(g.after, '건'), NOT_COMPARABLE.after_only, false));
+      const w = r.assessment.metrics.rework;
+      tiles.append(w.comparable
+        ? plainTile('재작업 PR 비율', `${pct(w.before)} → ${pct(w.after)}`, `${CHANGE_WORD[w.change]} · 정산된 PR ${w.before_n} → ${w.after_n}`, false)
+        : plainTile('재작업 PR 비율', '비교 불가', w.reason === 'few_prs' ? `정산된 PR ${w.before_n} → ${w.after_n} — 양쪽 10개 이상일 때 비교` : NOT_COMPARABLE[w.reason] || w.reason, true));
+      box.append(tiles);
+    }
     const imps = r.improvements || [];
     const adds = imps.filter((x) => x.change !== 'remove'), removes = imps.filter((x) => x.change === 'remove');
-    box.append(el('div', 'isec', `하네스가 고친 것 ${adds.length}${r.matched_through ? ` · 매칭 기준일 ${r.matched_through}` : ' · 아직 매칭 없음'}`));
+    box.append(el('div', 'isec', `하네스가 고친 것 ${adds.length}${r.matched_through ? ` · ${r.matched_through}까지 맞춘 결과` : ''}`));
     if (adds.length) { const g = el('div', 'icards'); adds.forEach((x) => g.append(impCard(r, x))); box.append(g); }
     else box.append(el('div', 'empty', '아직 /harvest가 반영한 개선이 없어요'));
     if (removes.length) {
-      box.append(el('div', 'isec', `쓰이지 않던 규칙 제거 ${removes.length} — 실수를 막으려 더한 규칙이 아니라 낡거나 쓰이지 않던 규칙을 걷어 낸 것. 재발은 그 규칙이 맡던 실수가 다시 나왔다는 뜻`));
+      box.append(el('div', 'isec', `쓰이지 않던 규칙 제거 ${removes.length} — 재발은 그 규칙이 맡던 실수가 다시 나왔다는 뜻`));
       const g = el('div', 'icards'); removes.forEach((x) => g.append(impCard(r, x))); box.append(g);
     }
+    return box;
+  }
+  function impactSummary(repos) {
+    const box = el('section', 'isumtop');
+    const by = {};
+    for (const r of repos) (by[repoStatus(r)] ||= []).push(r);
+    const n = (k) => (by[k] || []).length;
+    const ok = n('effective'), bad = n('attention') + n('mixed'), unknown = n('insufficient') + n('no_sessions');
+    let lead;
+    if (!repos.length) lead = '하네스가 깔린 저장소를 찾지 못했어요';
+    else if (bad) lead = `저장소 ${repos.length}곳 중 ${bad}곳에 재발이나 늘어난 지표가 있어요`;
+    else if (ok) lead = `저장소 ${repos.length}곳 중 ${ok}곳에서 효과가 보여요`;
+    else if (unknown === repos.length) lead = `저장소 ${repos.length}곳 모두 아직 판단할 데이터가 부족해요`;
+    else lead = `저장소 ${repos.length}곳 중 뚜렷한 효과는 아직 없어요`;
+    box.append(el('h2', null, lead));
+    const counts = el('div', 'icounts');
+    for (const k of STATUS_ORDER) if (n(k)) { const c = chip(k); c.textContent += ` ${n(k)}`; counts.append(c); }
+    box.append(counts);
+    const list = el('ul', 'ilist');
+    for (const k of STATUS_ORDER) for (const r of by[k] || []) {
+      const li = el('li');
+      const a = el('a', null, r.name); a.href = '#' + repoAnchor(r); a.title = r.repo;
+      a.onclick = (e) => { e.preventDefault(); const t = document.getElementById(repoAnchor(r)); if (t) { const d = t.closest('details'); if (d) d.open = true; t.scrollIntoView({ behavior: 'smooth', block: 'start' }); } };
+      li.append(chip(k), a, el('span', null, (staleFail(r) ? '다시 계산 실패, 지난 결과 · ' : '') + statusLine(r)));
+      list.append(li);
+    }
+    box.append(list);
+    box.append(el('p', 'ihint', `데이터 부족을 채우는 일 — 개선 매칭(${MATCH_CMD})과 설치 전 세션 정리(#213) — 은 LLM 토큰이 드는 선택 동작이라 보드가 자동으로 돌리지 않아요. 보드 계산은 기록 집계(bash·jq)뿐이에요.`));
+    const crit = el('details', 'icrit');
+    crit.append(el('summary', null, '판정 기준 (/harness-impact와 같음)'));
+    crit.append(el('p', null, '저장소 상태: 개선이 사라지거나 줄었거나, 교정·사실 부족이 줄고 있거나, 설치 전보다 줄었으면 효과 확인. 재발·늘어나는 지표만 있으면 재발/악화, 둘 다 있으면 엇갈림. 신호가 없어도 추세·비교 가능한 지표나 관찰 중인 개선이 있으면 관찰 중, 그것도 없으면 데이터 부족.'));
+    crit.append(el('p', null, '추세: 설치 후 최근 8주 중 정리된 세션이 2개 이상인 주가 3개·합계 10세션 이상일 때, 앞 절반과 뒤 절반(각 5세션 이상)의 세션당 비율을 비교해요. 차이가 큰 쪽의 20%(최소 0.05) 안이면 비슷함.'));
+    crit.append(el('p', null, '설치 전후 비교: 양쪽 정리된 세션이 5개 이상(재작업은 정산된 PR 10개 이상)일 때만 숫자를 비교해요. 세션 정리는 harvest 도입 뒤부터 쌓여 설치 전이 0인 저장소가 많아요 — 그때 0 → N은 나빠진 게 아니라 재지 않은 거예요. 가드 차단은 설치 후에만 있어요.'));
+    crit.append(el('p', null, '개선 판정: 근거 세션에 그 유형이 없으면 기준 없음, 반영 뒤 정리된 세션이 5개 미만이고 재발이 없으면 관찰 중(판단 보류 — 성공으로 세지 않음), 반영 뒤 0이면 사라짐(목록이 잘렸으면 판단 보류), 발생 비율이 줄면 줄어듦, 아니면 재발. 비율 기준은 반영 전 30일 매칭이 있으면 그쪽, 없으면 근거 batch. 같은 유형인지 맞추는 일은 /ai-harness:harness-impact가 하고, 보드는 마지막으로 맞춘 결과를 그날까지의 세션에 다시 써요. 맞춰 보지 않은 개선은 반영 뒤 관찰 세션이 5개 미만이면 관찰 중, 아니면 아직 맞춰 보지 않음.'));
+    box.append(crit);
     return box;
   }
   function renderImpact() {
@@ -1216,16 +1369,20 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     const repos = idata.repos.filter((r) => filter === 'all' || r.name === filter);
     const all = idata.repos.flatMap((r) => r.improvements || []);
     const cnt = (k) => all.filter((x) => x.result?.verdict === k).length;
-    document.getElementById('vmeta').textContent = `저장소 ${idata.repos.length} · 개선 ${all.length} · 효과 확인 ${cnt('gone') + cnt('reduced')} · 재발 ${cnt('recurred')}`;
+    document.getElementById('vmeta').textContent = `저장소 ${idata.repos.length} · 개선 ${all.length} · 효과 있음 ${cnt('gone') + cnt('reduced')} · 재발 ${cnt('recurred')}`;
     const wrap = el('div', 'iwrap');
-    const crit = el('div', 'icrit');
-    crit.append(el('b', null, '판정 기준 (/harness-impact와 같음) '),
-      '근거 세션에 그 유형이 없으면 기준 없음, 반영 뒤 정리된 세션이 5개 미만이고 재발이 없으면 판단 보류(성공으로 세지 않음), 반영 뒤 0이면 사라짐(반영 뒤 목록이 잘렸으면 판단 보류), 발생 비율이 줄면 줄어듦, 아니면 재발. ',
-      '비율 기준은 반영 전 30일 매칭이 있으면 그쪽, 없으면 근거 batch입니다. ',
-      '같은 유형인지 맞추는 일은 /ai-harness:harness-impact가 하고, 보드는 그 저장소에서 마지막으로 맞춘 결과를 그날까지의 세션에 다시 씁니다. 맞춰 보지 않은 개선은 반영 뒤 관찰 세션이 5개 미만이면 판단 보류, 아니면 판정 안 함입니다.');
-    wrap.append(crit);
-    for (const r of repos) wrap.append(impactRepo(r));
-    if (!repos.length) wrap.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
+    wrap.append(impactSummary(repos));
+    const rank = (r) => STATUS_ORDER.indexOf(repoStatus(r));
+    const sorted = [...repos].sort((a, b) => rank(a) - rank(b));
+    const quiet = (r) => ['no_sessions', 'failed'].includes(repoStatus(r));
+    for (const r of sorted.filter((x) => !quiet(x))) wrap.append(impactRepo(r));
+    const rest = sorted.filter(quiet);
+    if (rest.length) {
+      const d = el('details', 'iquiet');
+      d.append(el('summary', null, `최근 세션이 없거나 계산하지 못한 저장소 ${rest.length}`));
+      for (const r of rest) d.append(impactRepo(r));
+      wrap.append(d);
+    }
     board.append(wrap);
   }
 
