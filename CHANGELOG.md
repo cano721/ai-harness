@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.66.0 (2026-11-08)
 ### 새 기능
 
 - **`/autofix` monitor 설정을 개인 로컬 파일에 둘 수 있음** — 무인 실행 켜기(`HM_AUTOFIX_AUTO`·`HM_AUTOFIX_REPOS`)와 상태는 로컬인데 `monitor` 설정만 기준 브랜치 manifest에서 읽어, 나만 켜려 해도 팀 저장소에 설정을 커밋해야 했고 공유된 설정을 여러 사람이 켜면 같은 에러로 PR이 중복될 수 있었습니다. 이제 `~/.ai-harness/autofix/monitors/<project_id>.json`(내용이 곧 `monitor` 객체)이 있으면 manifest보다 먼저 쓰고, `/autofix setup`도 기본으로 여기에 씁니다(팀 공유가 필요할 때만 manifest). 로컬 파일은 manifest와 같은 검증(provider별 자격증명 전송처·`command` 어댑터 경로 제한)을 받고, 잘못된 파일은 manifest로 넘어가지 않고 거부됩니다. 감지·검증(`monitor-fetch.sh`·`autofix-auto.sh`)과 워크플로 러너의 `merge_policy.verify` `monitor` 전제 확인이 같은 규칙을 씁니다. manifest의 `monitor`는 그대로 동작합니다. (#267)
