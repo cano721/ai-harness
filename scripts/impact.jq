@@ -22,9 +22,11 @@ def per($a; $b): if $b == 0 then null else ($a / $b | round2) end;
 def has_cov($k): ((.coverage // []) | index($k)) != null;
 # 월요일 시작 주. gmtime[6]은 0=일요일.
 def week_of: (. | ep) as $e | ($e | gmtime[6]) as $wd | ($e - ((($wd + 6) % 7) * 86400)) | todate[0:10];
+# `A and T as $n | B`는 jq 1.7과 1.8(Ubuntu 26.04)이 다르게 묶는다 — as 바인딩을 괄호로 감싸 고정한다.
 def harness_use:
   (.kind == "doc_read" and ((.target // "") | test("^\\.ai-harness/(docs|workflows)/")))
-  or (.kind == "workflow" and ((.target // "") | ltrimstr("ai-harness:")) as $n | harness_workflows | index($n) != null);
+  or (.kind == "workflow"
+    and (((.target // "") | ltrimstr("ai-harness:")) as $n | harness_workflows | index($n) != null));
 
 [inputs] as $all
 | $digests[0] as $D
