@@ -200,6 +200,104 @@ try {
   const unmarked = action.some((a) => !a.marked);
   add("first_action", unmarked ? false : action.every((a) => a.inView), unmarked ? "mark the main action with data-primary-action" : action.map((a) => `${a.width}: ${a.inView ? "in first viewport" : "below the first viewport"}`));
 
+  // Text over a picture layer (canvas, svg, img, video) at any point of a scroll through the page — a scroll scene's
+  // particles running through a paragraph, a 3D layer over a heading. Candidates come from hit-testing (pointer events forced
+  // on, so pointer-events: none layers count; fixed or sticky bars and invisible layers do not); each candidate line is then
+  // judged by pixels: with all text made transparent, the picture behind the line must be calm (a backdrop or scrim), not busy.
+  const covered = new Set();
+  const analyzer = await (await browser.newContext()).newPage();
+  const busy = async (png) =>
+    analyzer.evaluate(async (src) => {
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext("2d");
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const lum = [];
+      for (let i = 0; i < d.length; i += 4) lum.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+      const mean = lum.reduce((x, y) => x + y, 0) / lum.length;
+      const sd = Math.sqrt(lum.reduce((x, y) => x + (y - mean) ** 2, 0) / lum.length);
+      return sd;
+    }, `data:image/png;base64,${png.toString("base64")}`);
+  for (const width of [1440, 390]) {
+    const height = width <= 390 ? 844 : 900;
+    const { ctx, page } = await open({ width, height });
+    await page.goto(args.url, { waitUntil: "load" });
+    await settle(page);
+    for (let i = 0; i < 24; i++) {
+      const style = await page.addStyleTag({ content: "*{pointer-events:auto!important}" });
+      const hits = await page.evaluate(() => {
+        const media = (el) => (el && (el.closest("svg") || ["CANVAS", "IMG", "VIDEO"].includes(el.tagName)) ? el.closest("svg") ?? el : null);
+        const pinnedBar = (el) => {
+          for (let n = el; n && n !== document.body; n = n.parentElement) {
+            const pos = getComputedStyle(n).position;
+            if (pos === "fixed" || pos === "sticky") return n.getBoundingClientRect().height < innerHeight * 0.25;
+          }
+          return false;
+        };
+        const visible = (el) => {
+          for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.visibility === "hidden" || Number(cs.opacity) < 0.05) return false;
+          }
+          return true;
+        };
+        const out = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let t = walker.nextNode(); t && out.length < 12; t = walker.nextNode()) {
+          if (t.textContent.trim().length < 2) continue;
+          const host = t.parentElement;
+          if (!host || host.closest("svg, script, style, noscript, [aria-hidden=true]")) continue;
+          const range = document.createRange();
+          range.selectNodeContents(t);
+          for (const r of range.getClientRects()) {
+            if (r.width < 4 || r.top < 0 || r.bottom > innerHeight) continue;
+            let layer = null;
+            for (const fx of [0.25, 0.5, 0.75]) {
+              const stack = document.elementsFromPoint(r.left + r.width * fx, r.top + r.height / 2);
+              // Text scrolled under an opaque bar or card is not on show; only a picture layer may sit above it.
+              const above = stack.slice(0, stack.findIndex((el) => el === host || host.contains(el)));
+              if (above.some((el) => !media(el))) continue;
+              layer = stack.map(media).find((m) => m && !m.contains(host) && !host.contains(m) && !pinnedBar(m) && visible(m));
+              if (layer) break;
+            }
+            if (!layer) continue;
+            // Judge only where the line and the layer overlap.
+            const lr = layer.getBoundingClientRect();
+            const x = Math.max(r.left, lr.left), y = Math.max(r.top, lr.top);
+            const w = Math.min(r.right, lr.right) - x, h = Math.min(r.bottom, lr.bottom) - y;
+            if (w < 8 || h < 8) continue;
+            out.push({ text: t.textContent.trim().slice(0, 30), tag: layer.tagName.toLowerCase(), x, y, w, h });
+            break;
+          }
+        }
+        return { out, end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+      });
+      await style.evaluate((n) => n.remove());
+      if (hits.out.length) {
+        const hide = await page.addStyleTag({ content: "*{color:transparent!important;text-shadow:none!important;-webkit-text-stroke:0!important;transition:none!important;caret-color:transparent!important}" });
+        await page.waitForTimeout(60);
+        for (const h of hits.out) {
+          const clip = { x: Math.max(0, h.x), y: Math.max(0, h.y), width: Math.min(h.w, width - Math.max(0, h.x)), height: h.h };
+          if (clip.width < 4 || clip.height < 4) continue;
+          const sd = await busy(await page.screenshot({ clip }));
+          if (sd > (cfg.text_backdrop_max_sd ?? 18)) covered.add(`${width}: "${h.text}" over a busy <${h.tag}> (luminance sd ${sd.toFixed(0)})`);
+        }
+        await hide.evaluate((n) => n.remove());
+      }
+      if (hits.end) break;
+      await page.mouse.wheel(0, Math.round(height * 0.6));
+      await page.waitForTimeout(700);
+    }
+    await ctx.close();
+  }
+  await analyzer.context().close();
+  add("text_covered", covered.size === 0, [...covered].slice(0, 15));
+
   // First-run frame rate of each moving moment, operated the way a visitor does.
   const recorder = `window.__frames=[];(function f(t){__frames.push(t);requestAnimationFrame(f)})(performance.now());`;
   const momentResults = [];

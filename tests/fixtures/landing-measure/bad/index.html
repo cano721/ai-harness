@@ -4,6 +4,8 @@
 .faint{color:#ccc}.spacer{height:120vh}.scene{height:150vh;background:#eee}</style></head>
 <body><main><h1>결함 페이지</h1><p class="faint">흐린 글자예요.</p><div class="wide"></div>
 <p>가격: [가격 필요]</p><a href="#">자세히</a>
+<div style="position:relative"><p>입자 사이로 지나가는 설명이에요. 읽기 어려워요.</p><canvas id="dots" width="320" height="40" style="position:absolute;left:24px;top:0;pointer-events:none"></canvas></div>
 <section class="scene" data-moment="scroll" aria-label="무거운 장면"></section>
 <div class="spacer"></div><a href="/start" data-primary-action>시작하기</a></main>
-<script>addEventListener('scroll',()=>{const t=performance.now();while(performance.now()-t<260){}},{passive:true});</script></body></html>
+<script>{const g=document.getElementById("dots").getContext("2d");for(let i=0;i<900;i++){g.fillStyle=i%2?"#c2410c":"#111";g.fillRect(Math.random()*320,Math.random()*40,3,3);}}
+addEventListener('scroll',()=>{const t=performance.now();while(performance.now()-t<260){}},{passive:true});</script></body></html>

@@ -2339,7 +2339,12 @@ assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-fv.json")"
 jq '.checks |= map(if .check == "template_look" then .first_viewport = true else . end)' "$TEST_TMP/lp-review-fv.json" >"$TEST_TMP/lp-review-fv2.json"
 assert_eq repair "$(lp review --candidate a --file "$TEST_TMP/lp-review-fv2.json")" "a template look in the first viewport is major even when written as minor"
 touch "$LP_W/repair-a-2.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
-assert_eq "done" "$(lp review --candidate a --file "$(lp_review none 1)")" "only user input left ends at done"
+jq '.checks |= map(if .check == "template_look" then .carried = 1 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "a first-viewport check is never carried from an earlier round"
+jq '.checks |= map(if .check == "flow" then .carried = 9 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "a check is carried only from a round where it passed"
+jq '.checks |= map(if .check == "flow" then .carried = 2 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq "done" "$(lp review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "only user input left ends at done (a pass carried from the last round counts)"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
 touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
 printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
@@ -2365,7 +2370,7 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   else
     assert_eq pass "$(jq -r '.result' "$TEST_TMP/lp-good.json")" "landing-measure passes a clean page"
     node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
-    assert_eq "contrast_solid destinations first_action moment_frame_rate overflow placeholders" \
+    assert_eq "contrast_solid destinations first_action moment_frame_rate overflow placeholders text_covered" \
       "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
     node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
     assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"
@@ -2382,6 +2387,7 @@ assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`le
 assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
+assert_contains "$LANDING_VERIFY" "**Text over a moving picture**" "landing-page measures text left over a busy picture layer"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "**Nothing may wait for a permission prompt.**" "landing-page unattended runs never stall on a prompt"
 assert_contains "$LANDING_VERIFY" "a distinctive element placed under the stock formula" "a 3D element under the stock hero does not excuse it"
 jq '.first_viewport_major = ["craft"]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"

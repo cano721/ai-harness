@@ -284,6 +284,16 @@ case "$cmd" in
     fvm="$(jq -c '.first_viewport_major // []' "$GRAPH")"
     nofv="$(jq -r --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and (.check as $c | $fvm | index($c)) and ((.first_viewport | type) != "boolean")) | .check] | join(", ")' "$FILE")"
     [[ -z "$nofv" ]] || die 4 "failed checks need \"first_viewport\": true|false: $nofv (not counted)"
+    # A later round may carry a check that passed in an earlier round; never a first-viewport check, never one that did not pass.
+    badcarry="$(jq -r --argjson fvm "$fvm" '[.checks[] | select(.carried != null) | select((.status != "pass") or (.check as $c | $fvm | index($c))) | .check] | join(", ")' "$FILE")"
+    [[ -z "$badcarry" ]] || die 4 "carried checks must be passes outside first_viewport_major: $badcarry (not counted)"
+    while IFS=$'\t' read -r cc cr; do
+      [[ -z "$cc" ]] && continue
+      prev="$WORK/review-$CAND-$cr.json"
+      if [[ ! -f "$prev" ]] || ! jq -e --arg c "$cc" '.checks[] | select(.check == $c and .status == "pass")' "$prev" >/dev/null; then
+        die 4 "check $cc is carried from round $cr, where it did not pass (not counted)"
+      fi
+    done < <(jq -r '.checks[] | select(.carried != null) | [.check, (.carried | tostring)] | @tsv' "$FILE")
     majors="$(jq --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and ((.severity // "major") == "major" or (.first_viewport == true and (.check as $c | $fvm | index($c)))))] | length' "$FILE")"
     unverified="$(jq --argjson req "$req" '[.checks[] | select(.status == "unverified" and (.check as $c | $req | index($c)))] | length' "$FILE")"
     rendered="$(jq -r 'if .rendered == false then "no" else "yes" end' "$FILE")"
