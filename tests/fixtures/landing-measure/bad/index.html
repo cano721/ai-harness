@@ -6,6 +6,7 @@
 <p>가격: [가격 필요]</p><a href="#">자세히</a>
 <div style="position:relative"><p>입자 사이로 지나가는 설명이에요. 읽기 어려워요.</p><canvas id="dots" width="320" height="40" style="position:absolute;left:24px;top:0;pointer-events:none"></canvas></div>
 <div style="font:700 48px/1.2 system-ui">스크롤하면 이 큰 글자가 투명한 머리말 아래로 지나가요. 머리말 메뉴와 겹쳐 읽혀요.</div><div style="font:700 48px/1.2 system-ui;height:900px">긴 설명이 이어지는 큰 글자 단락이에요. 스크롤하면 머리말 아래를 지나가요. 계속 이어지는 글이에요. 계속 이어지는 글이에요.</div>
+<div style="opacity:.2;height:60vh;font-size:20px">장면이 바뀌는 중간에 멈춘 카드예요. 거의 투명하게 남아 유령처럼 보여요.</div>
 <section class="scene" data-moment="scroll" aria-label="무거운 장면"></section>
 <div class="spacer"></div><a href="/start" data-primary-action>시작하기</a></main>
 <script>{const g=document.getElementById("dots").getContext("2d");for(let i=0;i<900;i++){g.fillStyle=i%2?"#c2410c":"#111";g.fillRect(Math.random()*320,Math.random()*40,3,3);}}

@@ -206,6 +206,7 @@ try {
   // judged by pixels: with all text made transparent, the picture behind the line must be calm (a backdrop or scrim), not busy.
   const covered = new Set();
   const barIssues = new Set();
+  const ghostIssues = new Set();
   const analyzer = await (await browser.newContext()).newPage();
   const busy = async (png) =>
     analyzer.evaluate(async (src) => {
@@ -304,9 +305,29 @@ try {
           el.setAttribute("data-lm-bar", "");
           bars.push({ x: br.left, y: br.top, w: br.width, h: br.height });
         }
-        return { out, bars, end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+        // A block of text left nearly transparent where the visitor stopped: the middle of a scrubbed crossfade, a ghost.
+        const ghosts = [];
+        const vpArea = innerWidth * innerHeight;
+        for (const el of document.querySelectorAll("body *")) {
+          if (ghosts.length >= 4) break;
+          const r = el.getBoundingClientRect();
+          const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0), h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+          if (w <= 0 || h <= 0 || (w * h) / vpArea < 0.12) continue;
+          if ((el.innerText ?? "").replace(/\s+/g, "").length < 20) continue;
+          let eff = 1, hidden = false;
+          for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.visibility === "hidden" || cs.display === "none") hidden = true;
+            eff *= Number(cs.opacity);
+          }
+          if (hidden || eff <= 0.02 || eff >= 0.5) continue;
+          if (ghosts.some((g) => g.el.contains(el))) continue;
+          ghosts.push({ el, text: el.innerText.trim().replace(/\s+/g, " ").slice(0, 30), opacity: eff });
+        }
+        return { out, bars, ghosts: ghosts.map(({ text, opacity }) => ({ text, opacity })), end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
       });
       await style.evaluate((n) => n.remove());
+      for (const g of hits.ghosts) ghostIssues.add(`${width}: "${g.text}" left at opacity ${g.opacity.toFixed(2)} at scroll ${await page.evaluate(() => Math.round(scrollY))}px`);
       // Page text under a top bar: compare the bar with the page's text shown and hidden (the bar's own text stays).
       for (const b of hits.bars.slice(0, 1)) {
         const clip = { x: Math.max(0, b.x), y: 0, width: Math.min(b.w, width), height: b.h };
@@ -338,6 +359,7 @@ try {
   await analyzer.context().close();
   add("text_covered", covered.size === 0, [...covered].slice(0, 15));
   add("bar_backdrop", barIssues.size === 0, [...barIssues].slice(0, 10));
+  add("ghost_layer", ghostIssues.size === 0, [...ghostIssues].slice(0, 10));
 
   // First-run frame rate of each moving moment, operated the way a visitor does.
   const recorder = `window.__frames=[];(function f(t){__frames.push(t);requestAnimationFrame(f)})(performance.now());`;

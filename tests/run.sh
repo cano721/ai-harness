@@ -2380,7 +2380,7 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   else
     assert_eq pass "$(jq -r '.result' "$TEST_TMP/lp-good.json")" "landing-measure passes a clean page"
     node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
-    assert_eq "bar_backdrop contrast_solid destinations first_action moment_frame_rate overflow placeholders text_covered" \
+    assert_eq "bar_backdrop contrast_solid destinations first_action ghost_layer moment_frame_rate overflow placeholders text_covered" \
       "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
     node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
     assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"

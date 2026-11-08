@@ -124,6 +124,7 @@ document.fonts.ready.then(() => {
 - Wrap all motion in `gsap.matchMedia()` with a `(prefers-reduced-motion: no-preference)` condition so it reverts cleanly when the preference changes.
 - Use `gsap.quickTo()` for values updated on every pointer move.
 - Scrub: `scrub: true` when smooth scrolling already smooths input; otherwise a small number (≤ 0.5).
+- A visitor stops anywhere in a scrubbed scene, so every stop must read: scrub position and transforms, but switch content (one screen to the next, a light room to a dark one) with `snap` to the states or with a short timed transition fired at a threshold — not a crossfade spread over the scroll, whose middle is two half-transparent screens over a muddy background.
 - Framework setup and ScrollTrigger pitfalls: `external-code.md`.
 
 ## Smooth scrolling (Lenis)
