@@ -134,7 +134,7 @@ move() {
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.candidates[$c].node = $t | .candidates[$c].entered_at = $at | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
-       | if $t == "build" then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision") then .candidates[$c].finished_at = $at else . end'
+       | if $f == "preview" and (.candidates[$c].previewed_at == null) then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision") then .candidates[$c].finished_at = $at else . end'
   else
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.node = $t | .entered_at = $at | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
@@ -160,10 +160,13 @@ print_next() {
         measure) how="Serve the page, then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
         *) how="Terminal: report this candidate (landing-run.sh status)" ;;
       esac ;;
-    reviewer) how="Start a new design-reviewer with the briefing in verify.md, the required checks below, the latest measure JSON, and the capture folder $(jq -r --arg c "$c" '.candidates[$c].captures // "(run landing-run.sh capture)"' "$STATE"); save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>" ;;
+    reviewer) if [[ "$node" == draft_review ]]; then
+        how="Start a new design-reviewer on the draft's first viewport only: the preview captures (preview-$c.json), the served URL, the references with their captures and take-lines, and the required checks below (verify.md, Draft review); three minutes. Save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>"
+      else how="Start a new design-reviewer with the briefing in verify.md, the required checks below, the latest measure JSON, and the capture folder $(jq -r --arg c "$c" '.candidates[$c].captures // "(run landing-run.sh capture)"' "$STATE"); save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>"; fi ;;
   esac
   local checks="[]"
   if [[ "$node" == "review" ]]; then checks="$(required_checks)"; fi
+  if [[ "$node" == "draft_review" ]]; then checks="$(jq -c '.review_checks.draft' "$GRAPH")"; fi
   jq -n --arg node "$node" --arg actor "$actor" --arg c "$c" --argjson outcomes "$outs" --argjson docs "$docs" \
     --argjson artifacts "$arts" --arg how "$how" --argjson checks "$checks" \
     '{node: $node, actor: $actor} + (if $c != "" then {candidate: $c} else {} end)
@@ -271,16 +274,15 @@ case "$cmd" in
     [[ -f "$STATE" && -n "$CAND" && -n "$FILE" ]] || usage
     GRAPH="$(state .graph)"
     lock
-    [[ "$(current)" == review ]] || die 3 "candidate '$CAND' is at '$(current)', not review"
+    rnode="$(current)"
+    [[ "$rnode" == review || "$rnode" == draft_review ]] || die 3 "candidate '$CAND' is at '$rnode', not review or draft_review"
     [[ -f "$FILE" ]] || die 4 "review file not found: $FILE"
     jq -e '(.checks | type) == "array"' "$FILE" >/dev/null 2>&1 || die 4 "review JSON needs a checks array"
-    req="$(required_checks)"
+    if [[ "$rnode" == draft_review ]]; then req="$(jq -c '.review_checks.draft' "$GRAPH")"; else req="$(required_checks)"; fi
     missing="$(jq -r --argjson req "$req" '[$req[] as $id | select(([.checks[] | .check] | index($id)) == null) | $id] | join(", ")' "$FILE")"
     [[ -z "$missing" ]] || die 4 "review is missing required checks: $missing (not counted; brief a new reviewer with every check)"
     bad="$(jq -r '[.checks[] | select((.status | IN("pass","fail","unverified")) | not) | .check] | join(", ")' "$FILE")"
     [[ -z "$bad" ]] || die 4 "checks with a status other than pass|fail|unverified: $bad"
-    r=$(( $(jq -r --arg c "$CAND" '.candidates[$c].reviews' "$STATE") + 1 ))
-    cp "$FILE" "$WORK/review-$CAND-$r.json"
     fvm="$(jq -c '.first_viewport_major // []' "$GRAPH")"
     nofv="$(jq -r --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and (.check as $c | $fvm | index($c)) and ((.first_viewport | type) != "boolean")) | .check] | join(", ")' "$FILE")"
     [[ -z "$nofv" ]] || die 4 "failed checks need \"first_viewport\": true|false: $nofv (not counted)"
@@ -295,6 +297,23 @@ case "$cmd" in
       fi
     done < <(jq -r '.checks[] | select(.carried != null) | [.check, (.carried | tostring)] | @tsv' "$FILE")
     majors="$(jq --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and ((.severity // "major") == "major" or (.first_viewport == true and (.check as $c | $fvm | index($c)))))] | length' "$FILE")"
+    if [[ "$rnode" == draft_review ]]; then
+      # The draft's first viewport: redraw it once when it is weak, rather than finish it for an hour.
+      k=$(( $(jq -r --arg c "$CAND" '.candidates[$c].draft_reviews // 0' "$STATE") + 1 ))
+      cp "$FILE" "$WORK/draft-review-$CAND-$k.json"
+      redos="$(jq -r --arg c "$CAND" '[.candidates[$c].draft_rounds // [] | .[] | select(.outcome == "draft_redo")] | length' "$STATE")"
+      if [[ $majors -eq 0 ]]; then outcome=draft_pass
+      elif [[ $redos -lt "$(graph '.limits.max_draft_redos // 1')" ]]; then outcome=draft_redo
+      else outcome=draft_kept
+      fi
+      save --arg c "$CAND" --argjson k "$k" --arg o "$outcome" --argjson m "$majors" \
+        '.candidates[$c].draft_reviews = $k | .candidates[$c].draft_rounds += [{round: $k, outcome: $o, majors: $m}]'
+      printf '{"draft_round":%s,"outcome":"%s","majors":%s}\n' "$k" "$outcome" "$majors" >&2
+      move draft_review "$outcome"
+      exit 0
+    fi
+    r=$(( $(jq -r --arg c "$CAND" '.candidates[$c].reviews' "$STATE") + 1 ))
+    cp "$FILE" "$WORK/review-$CAND-$r.json"
     unverified="$(jq --argjson req "$req" '[.checks[] | select(.status == "unverified" and (.check as $c | $req | index($c)))] | length' "$FILE")"
     rendered="$(jq -r 'if .rendered == false then "no" else "yes" end' "$FILE")"
     inputs="$(jq '(.needs_input // []) | length' "$FILE")"

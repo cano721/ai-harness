@@ -2283,6 +2283,11 @@ chmod +x "$TEST_TMP/lp-capture-stub.sh"
 export LANDING_MEASURE_CMD="$TEST_TMP/lp-measure-stub.sh" LP_STUB_RESULT_FILE="$TEST_TMP/lp-stub-result" LANDING_CAPTURE_CMD="$TEST_TMP/lp-capture-stub.sh"
 lp() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_W" 2>"$TEST_TMP/lp.err"; }
 lp_rc() { local rc=0; lp "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+lp_review() { # fail_check needs_input [candidate] → review json path
+  jq -n --argjson req "$(lp next --candidate "${3:-a}" | jq '.required_checks')" --arg f "$1" --argjson ni "$2" \
+    '{rendered: true, checks: [$req[] | {check: ., status: (if . == $f then "fail" else "pass" end), severity: "major", first_viewport: false}], needs_input: [range($ni) | "cta"]}' >"$TEST_TMP/lp-review.json"
+  printf '%s' "$TEST_TMP/lp-review.json"
+}
 lp init --mode unattended >/dev/null
 assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run refuses a node whose artifacts are missing"
 touch -t 202001010000 "$LP_W/brief.md"
@@ -2308,8 +2313,13 @@ printf '%s\n' "\$1" >>"$TEST_TMP/lp-previews.log"
 HOOK
 chmod +x "$TEST_TMP/lp-preview-hook.sh"
 export LANDING_PREVIEW_CMD="$TEST_TMP/lp-preview-hook.sh"
-assert_eq build "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview the page is finished"
+assert_eq draft_review "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview a reviewer judges the draft's first viewport"
 assert_eq "http://127.0.0.1:9/a/" "$(cat "$TEST_TMP/lp-previews.log")" "the runner hands the preview URL to the person at once"
+assert_eq '["one_second","cover_logo","template_look","craft","reference_fidelity","copied_composition"]' "$(lp next --candidate a | jq -c '.required_checks')" "the draft review asks only the first-viewport checks"
+assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0)")" "a weak first viewport is redrawn before it is finished"
+touch "$LP_W/site/a/index.html"; lp submit --node draft --outcome drafted --candidate a >/dev/null
+touch "$LP_W/preview-a.json"; lp submit --node preview --outcome previewed --candidate a >/dev/null
+assert_eq build "$(lp review --candidate a --file "$(lp_review craft 0)")" "the draft is redrawn once; then it is finished and the full review judges it"
 touch "$LP_W/site/a/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json"
 assert_contains "$(lp status)" '"preview_min"' "status reports minutes to the first preview"
 assert_eq measure "$(lp submit --node build --outcome built --candidate a)" "a built candidate goes to measure"
@@ -2327,11 +2337,6 @@ assert_contains "$(lp next --candidate a)" '"candidate_overlap"' "several candid
 printf '{"checks":[{"check":"flow","status":"pass"}]}\n' >"$TEST_TMP/lp-review-partial.json"
 assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-partial.json")" "a review missing required checks is refused"
 assert_eq 0 "$(jq -r '.candidates.a.reviews' "$LP_W/.landing-run/state.json")" "a refused review does not count"
-lp_review() { # fail_check needs_input [candidate] → review json path
-  jq -n --argjson req "$(lp next --candidate "${3:-a}" | jq '.required_checks')" --arg f "$1" --argjson ni "$2" \
-    '{rendered: true, checks: [$req[] | {check: ., status: (if . == $f then "fail" else "pass" end), severity: "major", first_viewport: false}], needs_input: [range($ni) | "cta"]}' >"$TEST_TMP/lp-review.json"
-  printf '%s' "$TEST_TMP/lp-review.json"
-}
 assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fidelity 0)")" "a major in review sends the candidate to repair"
 touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
 jq '.checks |= map(if .check == "template_look" then .status = "fail" | .severity = "minor" | del(.first_viewport) else . end)' "$(lp_review none 0)" >"$TEST_TMP/lp-review-fv.json"
@@ -2350,6 +2355,7 @@ touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --cand
 printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
 printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
 lp submit --node preview --outcome previewed --candidate b >/dev/null
+assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a sound first viewport goes on to be finished"
 touch "$LP_W/site/b/index.html" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
 lp submit --node build --outcome built --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
 for r in 1 2 3; do
@@ -2387,6 +2393,7 @@ assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`le
 assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
+assert_contains "$LANDING_VERIFY" "## Draft review" "landing-page reviews the draft's first viewport before finishing it"
 assert_contains "$LANDING_VERIFY" "**A top bar over scrolled text**" "landing-page measures text showing through a top bar"
 assert_contains "$LANDING_VERIFY" "**Text over a moving picture**" "landing-page measures text left over a busy picture layer"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "**Nothing may wait for a permission prompt.**" "landing-page unattended runs never stall on a prompt"

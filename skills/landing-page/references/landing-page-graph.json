@@ -169,6 +169,20 @@
         "previewed"
       ],
       "note": "Serve the draft, capture its first viewport at 1440 and 390, and show the URL and captures to the user now; do not wait for verification."
+    },
+    "draft_review": {
+      "actor": "reviewer",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#draft-review"
+      ],
+      "artifacts": [],
+      "outcomes": [
+        "draft_pass",
+        "draft_redo",
+        "draft_kept"
+      ],
+      "note": "A new design-reviewer judges the draft's first viewport from the preview captures and the references, only the draft checks, within three minutes. A weak first viewport is redrawn before an hour goes into finishing it."
     }
   },
   "transitions": [
@@ -228,8 +242,23 @@
     },
     {
       "from": "preview",
-      "to": "build",
+      "to": "draft_review",
       "when": "previewed"
+    },
+    {
+      "from": "draft_review",
+      "to": "build",
+      "when": "draft_pass"
+    },
+    {
+      "from": "draft_review",
+      "to": "draft",
+      "when": "draft_redo"
+    },
+    {
+      "from": "draft_review",
+      "to": "build",
+      "when": "draft_kept"
     },
     {
       "from": "build",
@@ -294,7 +323,8 @@
   ],
   "limits": {
     "max_reviews": 3,
-    "max_measure_repairs": 5
+    "max_measure_repairs": 5,
+    "max_draft_redos": 1
   },
   "measure": {
     "widths": [
@@ -323,7 +353,13 @@
     "text_backdrop_max_sd": 18,
     "bar_bleed_max": 8
   },
-  "first_viewport_major": ["template_look", "craft", "cover_logo", "copied_composition", "reference_fidelity"],
+  "first_viewport_major": [
+    "template_look",
+    "craft",
+    "cover_logo",
+    "copied_composition",
+    "reference_fidelity"
+  ],
   "review_checks": {
     "public_page": [
       "one_second",
@@ -349,6 +385,14 @@
     ],
     "multi_candidate": [
       "candidate_overlap"
+    ],
+    "draft": [
+      "one_second",
+      "cover_logo",
+      "template_look",
+      "craft",
+      "reference_fidelity",
+      "copied_composition"
     ]
   },
   "invariants": [

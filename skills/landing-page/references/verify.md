@@ -46,6 +46,10 @@ Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the 
 | Assets | Broken images; a fallback face rendering where the intended font was approved and loaded |
 | Size floor | Body under 15px or small text under 13px when the design system has no smaller step for that role (the 16–20px body in `layout-type.md` is a default, not the floor) |
 
+## Draft review
+
+Right after the preview, before the page is finished, a new `design-reviewer` judges the draft's first viewport only. Brief it with the served URL, the preview captures at 1440 and 390, the references the candidate draws on (captures or recordings and take-lines), the candidate's `first_viewport` line, and the draft checks the runner lists (`review_checks.draft`: `one_second`, `cover_logo`, `template_look`, `craft`, `reference_fidelity`, `copied_composition`, each as defined under Independent review, with `first_viewport: true` on every failure). Below the first viewport is unfinished on purpose and not judged. It takes about three minutes and ends with the same per-check JSON; hand it to `landing-run.sh review`. A major problem sends the candidate back to `draft` once to redraw the first viewport — a stronger take on the same references, not a polish of the weak one; the second draft goes on to be finished whatever the result, and the full review judges it again.
+
 ## Independent review
 
 Each review runs in a new reviewer that did not build the page — a new one every round, not a continued one: the `ai-harness:design-reviewer` agent, or a new session. Give it only:
