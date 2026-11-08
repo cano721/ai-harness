@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 동작 변경
+
+- **`landing-page`가 Lenis를 켤 때 자주 깨지는 지점까지 안내** — 스무스 스크롤 가이드가 켜는 조건과 GSAP 연동만 다뤄서, 안쪽 스크롤 영역이 안 움직이거나 모달 뒤 페이지가 같이 스크롤되거나 앵커가 고정 헤더 아래로 숨거나 SPA에서 인스턴스가 쌓이는 문제를 페이지가 그대로 안고 나왔습니다. 이제 프레임 루프 하나(`autoRaf: false` + GSAP ticker), `lenis.css`, `data-lenis-prevent`, 모달 `stop()`·`start()`, `anchors`·`scrollTo` offset과 포커스 이동, unmount 시 `destroy()`를 함께 짚고, 옵션 이름은 설치한 버전의 문서로 확인하게 합니다. (#261)
+
 ## v0.64.0 (2026-11-07)
 ### 새 기능
 
