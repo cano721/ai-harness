@@ -35,13 +35,32 @@ Outside design skills, when installed, help only in the lanes `references/design
 
 ## Procedure
 
-1. **Read the context.** Detect the stack, the design system (docs, token files, component library, Tailwind config, or a named Figma kit), the existing brand identity, and any mockup. Note what is missing instead of guessing it. If a named kit or mockup cannot be read, stop and say so. Without a repository, ask where the page goes, or in an unattended run build `index.html` with its assets in a new folder under the current directory.
-2. **Set the direction** — `references/direction.md`. Brief, visual authority, direction candidates, section plan with evidence for every claim. Skip the candidate step only when a mockup of this page decides the look.
-3. **Mockup first, if one exists** — `references/design-handoff.md` before writing code.
-4. **Lay out and set type** — `references/layout-type.md`. Only fill gaps the design system leaves.
-5. **Add motion** — `references/motion-web.md`. Motion is optional; every effect must answer its four questions.
-6. **Bring in outside code** — `references/external-code.md` for any library, component registry, CDN script, or WebGL background.
-7. **Verify** — `references/verify.md`: a measured self-check, then an independent review loop (at most three reviews) that ends `verified`, `issues`, or `unverified`. In a repository with an ai-harness UI contract, the workflow's `ui_review` is the gate instead. Run the built-in `web-design-guidelines` check after the first review's fixes.
+The steps run as a graph (`references/landing-page-graph.json`) through a runner, so a step cannot be skipped or reported as done without its output. `$ROOT` below is the plugin root, two directories above this file. Work in a folder of its own (`WORK`), outside the folder the page is served from.
+
+```
+bash $ROOT/scripts/landing-run.sh init --work "$WORK" --mode interactive|unattended
+bash $ROOT/scripts/landing-run.sh next --work "$WORK" [--candidate <id>]   # what to do now: node, docs to read, artifacts, allowed outcomes
+bash $ROOT/scripts/landing-run.sh submit --work "$WORK" --node <node> --outcome <outcome> [--candidate <id>]
+bash $ROOT/scripts/landing-run.sh measure --work "$WORK" --candidate <id> --url <served url>
+bash $ROOT/scripts/landing-run.sh review --work "$WORK" --candidate <id> --file <review json>
+bash $ROOT/scripts/landing-run.sh status --work "$WORK"
+```
+
+Call `next`, do what it names, read only the docs it lists, write its artifacts in `WORK`, and submit. Measure and review outcomes are not yours to submit: the runner runs the measure script and computes the review verdict. Before the graph starts, **read the context**: detect the stack, the design system (docs, token files, component library, Tailwind config, or a named Figma kit), the existing brand identity, and any mockup. Note what is missing instead of guessing it. If a named kit or mockup cannot be read, stop and say so. Without a repository, ask where the page goes, or in an unattended run build `index.html` with its assets in a new folder under the current directory.
+
+| Node | Do | Artifacts in `WORK` |
+|---|---|---|
+| `brief` | `references/direction.md` sections 1–2 | `brief.md` |
+| `references` | section 7: look and interaction references with take-lines | `references.json` — `[{id, kind: look\|interaction, title, url, source, take, keep_strength, must_not_shrink_to, captures: [paths]}]` |
+| `reference_pick` (interactive) | show the board, ask once | `reference-pick.json` — `{kept: [ids], dropped: [ids], user_words: "<quoted>"}` |
+| `direction` | sections 3–6; skip candidates only when a mockup of this page decides the look (`mockup_decides`) | `candidates.json` — `{candidates: [{id, dir, motion_level: calm\|lively\|showpiece, references: [ids], visitor_action}]}` (`dir` relative to `WORK`) |
+| `draft_pick` (interactive) | first-viewport drafts side by side, ask once | `draft-pick.json` — same shape as `reference-pick.json` |
+| `build` (per candidate) | `references/design-handoff.md` (mockup first, if one exists), `layout-type.md`, `motion-web.md`, `external-code.md`; one session or subagent per candidate when there are several | the page in `dir`, `source-facts-<id>.md`, `needs-input-<id>.json` |
+| `measure` (runner) | serve the page, run `measure` | `measure-<id>-<n>.json` |
+| `review` (reviewer) | a new `design-reviewer` with the `verify.md` briefing and the required checks; save its JSON | `review-<id>-<round>.json` |
+| `repair` (per candidate) | fix what the measure or review failed; `needs_user` when only the user can fix it | `repair-<id>-<round>.md` |
+
+In a repository with an ai-harness UI contract, build and measure here, then hand the page to that workflow's `ui_review` instead of the review node. Run the built-in `web-design-guidelines` check after the first review's fixes.
 
 ## Non-negotiables
 
@@ -60,4 +79,4 @@ Outside design skills, when installed, help only in the lanes `references/design
 
 ## Report
 
-End with: the verdict and each review round (`references/verify.md`), and the `사용자 입력 필요` list; the direction chosen and why; the references used, as a table — gallery or source, title, URL, what was taken (look, structure, or interaction), and where on the page it shows; design-system values used and any defaults this skill filled in; mockup reconciliation lists (see `references/design-handoff.md`); placeholders that need real content; packages or scripts added; verification evidence per viewport, theme, and reduced-motion/no-JS check; and what stayed unverified. Open decisions go in the pull request description when there is one, otherwise in this report.
+End with: the verdict and each review round (`references/verify.md`; `landing-run.sh status` holds both, with the measure results), and the `사용자 입력 필요` list; the direction chosen and why; the references used, as a table — gallery or source, title, URL, what was taken (look, structure, or interaction), and where on the page it shows; design-system values used and any defaults this skill filled in; mockup reconciliation lists (see `references/design-handoff.md`); placeholders that need real content; packages or scripts added; verification evidence per viewport, theme, and reduced-motion/no-JS check; and what stayed unverified. Open decisions go in the pull request description when there is one, otherwise in this report.

@@ -115,7 +115,8 @@ document.fonts.ready.then(() => {
 - Content that moves, blinks, or scrolls automatically for more than five seconds needs a visible pause control (WCAG 2.2 SC 2.2.2). Nothing flashes more than three times per second (SC 2.3.1).
 - Reduced motion: remove translation, scale, parallax, smooth scrolling, and autoplay; keep opacity and color changes and all content.
 - Visitors' devices are slower than yours, and their browsers busier. Do the expensive work before the moment, not during it: a blur, shadow, or filter over a large area becomes a pre-rendered image; a photo that will be scaled or revealed is decoded first (`img.decode()`); particle counts and canvas sizes scale with the element, capped at a device pixel ratio of 2.
-- **Degrade on a slow device.** A scroll scene, canvas, WebGL, or try-it effect watches its own frame rate while it runs; when it stays under 30 frames per second for about a second, it switches to its simpler form (unpinned scenes, fewer particles, a still image) for the rest of the visit. The simpler form keeps the content and the interaction's result.
+- **Degrade on a slow device.** A scroll scene, canvas, WebGL, or try-it effect watches its own frame rate while it runs; when it stays under 30 frames per second for about a second, it switches to its simpler form (unpinned scenes, fewer particles, a still image) for the rest of the visit and sets `data-motion-tier="lite"` on `<html>`, which the measure node accepts on a throttled phone. The simpler form keeps the content and the interaction's result.
+- Mark each moving moment `data-moment="scroll|pointer|type"` so the measure node finds and operates it (`verify.md`).
 
 ## GSAP and ScrollTrigger
 
@@ -143,6 +144,15 @@ if (!reduce && !coarse) {
   gsap.ticker.lagSmoothing(0);
 }
 ```
+
+Common breakages once it is on (option names from the Lenis README; confirm them in the README of the version you install):
+
+- **Nested scroll areas** (a modal, a menu, a code block) stop responding to the wheel: mark them `data-lenis-prevent` (or `-wheel`, `-touch`), or pass a `prevent` function. `allowNestedScroll: true` also works but checks the DOM on every scroll event.
+- **The page scrolls behind an open modal**: call `lenis.stop()` when it opens and `lenis.start()` when it closes.
+- **Two frame loops**: driving it from the GSAP ticker and also passing `autoRaf: true` runs `raf` twice a frame. Use one.
+- **Missing `lenis.css`**: without the library's stylesheet (`lenis/dist/lenis.css`), `scroll-behavior: smooth` and height rules fight the instance. Load it from the same pinned version.
+- **Anchors land under a sticky header**: anchor clicks are blocked while it scrolls unless `anchors: true`; pass `anchors: { offset: -<header height> }` (or `scrollTo(target, { offset })`) and move focus to the target afterwards.
+- **Instances pile up in a single-page app**: call `lenis.destroy()` on unmount or route change, and remove the GSAP ticker callback with it.
 
 ## 3D scenes and objects
 

@@ -5,11 +5,13 @@ A page is done when it has been looked at, by someone other than its maker, and 
 ## Which loop runs
 
 - **The repository has an ai-harness UI contract** (`.claude/skills/ui-review/` or `.agents/skills/ui-review/`, or the task runs inside a workflow with a `ui_review` node): build and run the self-check below, then hand the page to that contract. Its `ui_review` node is the gate; do not run a second review loop here.
-- **Otherwise** run the loop in this file.
+- **Otherwise** run the loop in this file through the runner (`SKILL.md` Procedure): `landing-run.sh` holds the graph (`landing-page-graph.json`) and picks every transition.
 
 ```
-build → self-check (measured) → independent review → fix majors → independent review   (at most 3 reviews)
+build → measure (script) → independent review (JSON) → repair → measure → review …   (at most 3 reviews)
 ```
+
+The runner refuses an outcome the graph has no edge for, a node whose artifacts are missing, a measure or review outcome the maker tries to submit itself, and a review JSON that leaves out a required check. Measure and review outcomes are computed from their files, not reported.
 
 ## Tools and serving
 
@@ -19,6 +21,14 @@ build → self-check (measured) → independent review → fix majors → indepe
 - **Static checks** need no browser and are never left unverified for lack of one: metadata, `lang`, landmarks, one `h1`, `alt` attributes, link targets, JSON-LD, external hosts referenced.
 
 ## Self-check (measured)
+
+**The measure node measures these itself** (`landing-measure.mjs`, through `landing-run.sh measure`): the page is served (HTTP 200, title), no console, page, or request errors, no fake destinations, no visible placeholders, the main action inside the first viewport at 1440 and 390, no horizontal overflow at every width (JavaScript off too at phone widths), content kept with JavaScript off and under reduced motion, text contrast on solid backgrounds, and the first-run frame rate of every moving moment (Performance). It needs three marks in the page:
+
+- `data-primary-action` on the main action (the `사용자 입력 필요` form of it counts);
+- `data-moment="scroll|pointer|type"` on each moving moment — a scroll scene, a canvas or WebGL effect the pointer drives, a try-it demo the visitor types into (`data-moment-sample` sets the text it types); a page above the Calm motion level with no mark fails;
+- `data-needs-input` on each `사용자 입력 필요` element, as below.
+
+Text over images, video, or gradients goes to the reviewer (`contrast_over_media`), measured by sampling rendered pixels as the table says. The rows the script does not measure — headline lines, assets and fonts, size floor, claims — stay with you.
 
 Viewports 1440, 768, 390, and 320 (reflow, WCAG 2.2 SC 1.4.10); every theme the site supports; after motion settles or with reduced motion on. Measure with `getBoundingClientRect()` and computed styles; do not judge by eye.
 
@@ -45,25 +55,30 @@ Each review runs in a new reviewer that did not build the page — a new one eve
 - where the design evidence is (design system, rule document, token mirror), and **which layers apply**: brand only, or the product UI layer too (and where), per `SKILL.md` precedence — so the reviewer does not score marketing layout against product UI steps;
 - the source facts the page must match, copied into a plain file outside the served folder (the reviewer has no access to design tools such as Figma): every sentence and example value the page shows, each with its source location (a node id, a page and line), plus the source facts the page leaves out — a copy that misses them turns reviews into fact disputes;
 - the references the page was built from: each one's URL, its captures or recording, and its take-line (what is borrowed and the strength to keep) — so the reviewer can put page and reference side by side;
-- the marketing checks below;
+- the required checks — the ids `landing-run.sh next` lists for the review node, each with its line from the table below — and the instruction to end with the per-check JSON (`agents/design-reviewer.md`); save that JSON and hand it to `landing-run.sh review`;
+- the measure result's `contrast_over_media` list and its moment numbers;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
 - the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits — together with the forms such items take below (a disabled main action keeps its look), so the form is not reported as a defect;
 - from the second round, the previous round's findings and what changed since.
 
 Not your direction notes, not your report, not "I fixed it". Serve the page from a folder that holds only the page and its assets, and tell the reviewer which paths are the maker's (logs, notes, drafts) and must not be read. It does not edit files. The reviewer checks each `사용자 입력 필요` item: if it really needs the user it is reported under its own heading and **keeps the verdict at `issues`** — the list never turns a major into a pass; if the reviewer finds it fixable without the user, or the page does not match the list, it becomes an ordinary major. Without a way to start a fresh reviewer (for example a host without subagents), review yourself against the same list and mark the result `자기 검토`; a `자기 검토` result is at best `unverified`, never `verified`.
 
-Marketing checks the reviewer adds to its own criteria:
+Required checks — the reviewer answers every id, `pass`, `fail` (with severity), or `unverified` with a reason:
 
-- One-second view: what is this about, and what kind of product is it — could the imagery suggest a different kind of product than it is? Five-second view: what should I do?
-- Squint: the claim and the action stay dominant.
-- Cover the logo: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
-- Template look, judged apart from the content: would a designer glancing at the captures take this for a template or an AI-made page? Name the giveaway — the stock hero formula (small colored label, two-line headline, paragraph, dark button, cards on the right), a row of identical cards, a category gradient, evenly spaced sections with the same rhythm, motion that only plays. A unique product concept does not excuse a stock look; in the first viewport it is a major problem.
-- Reference fidelity, with each reference's capture or recording next to the page: would someone who saw the reference recognize what was borrowed — the mechanism and its strength, not a nod to it (a pointer that splits a portrait is not a card that opens on hover; a full-bleed photo with one headline is not a photo behind five cards)? A borrowed mechanism or look that cannot be recognized in the first viewport or in the try-it demo is a major problem. The opposite is one too: a first viewport whose composition another company's page could claim as its own (same split, same card, same chips) is a major problem.
-- When several candidates were built, compare what the visitor does on each: the same verb on two of them (pick an option and read a scripted answer on both, for example) is a major problem for the later one.
-- Does every visible action lead somewhere, and does every element that looks interactive respond?
-- Is every claim either evidenced on the page or phrased as a description rather than a claim?
-- Phone: composed, not shrunk.
-- Tells: patterns from the tell lists in `direction.md`, `layout-type.md`, and `motion-web.md` that the direction did not choose.
+- `one_second`: what is this about, and what kind of product is it — could the imagery suggest a different kind of product than it is? `five_second`: what should I do?
+- `squint`: the claim and the action stay dominant.
+- `cover_logo`: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
+- `template_look`: judged apart from the content: would a designer glancing at the captures take this for a template or an AI-made page? Name the giveaway — the stock hero formula (small colored label, two-line headline, paragraph, dark button, cards on the right), a row of identical cards, a category gradient, evenly spaced sections with the same rhythm, motion that only plays. A unique product concept does not excuse a stock look; in the first viewport it is a major problem.
+- `reference_fidelity`, with each reference's capture or recording next to the page: would someone who saw the reference recognize what was borrowed — the mechanism and its strength, not a nod to it (a pointer that splits a portrait is not a card that opens on hover; a full-bleed photo with one headline is not a photo behind five cards)? A borrowed mechanism or look that cannot be recognized in the first viewport or in the try-it demo is a major problem. `copied_composition` is the opposite: a first viewport whose composition another company's page could claim as its own (same split, same card, same chips) is a major problem.
+- `candidate_overlap` (when several candidates were built): compare what the visitor does on each: the same verb on two of them (pick an option and read a scripted answer on both, for example) is a major problem for the later one.
+- `actions_respond`: does every visible action lead somewhere, and does every element that looks interactive respond?
+- `claims`: is every claim either evidenced on the page or phrased as a description rather than a claim?
+- `phone_composed`: phone composed, not shrunk.
+- `tells`: patterns from the tell lists in `direction.md`, `layout-type.md`, and `motion-web.md` that the direction did not choose.
+- `flow`: read the page from the first viewport to the main action as a visitor would. Is there a stretch where the same claim repeats, where the next step is not visible, or a section that dead-ends before the action? A visitor who cannot get from the claim to the action is a major problem.
+- `try_it_usability`: with no instructions, does a first-time visitor know within three seconds what to do in the try-it demo? Feed it what a visitor might: input outside its examples, empty input, very long input. Does it still answer, and does the answer read as what the product actually does (no broken sentences, no result the product could not give)? A demo that goes silent or answers nonsense on ordinary input is a major problem.
+- `keyboard`, `hover_focus`, `js_off`, `reduced_motion`, `forced_colors`: the state checks below, operated.
+- `contrast_over_media`: the measure result's list, sampled from rendered pixels.
 
 ## Verdicts
 
@@ -100,7 +115,7 @@ Spacing and alignment that do not change any of that are minor.
 - After a review with no majors, fix the cheap minors in one pass. Review once more only if those fixes changed the first viewport's content (text, the main action, the hero image) at desktop or phone width — not alignment or spacing tweaks; otherwise stop.
 - **When the only majors left are `사용자 입력 필요` items, stop.** The page ends as `issues (공개 불가: 입력 대기)` with the list; do not spend the remaining reviews on them.
 - Never clear a finding by deleting the section that makes the page's argument, by weakening a claim the brief asked for into nothing, or by changing design-system values. A claim without evidence is rewritten as a description of what the product does, or gets a placeholder and goes to `사용자 입력 필요`.
-- **At most three reviews.** After the third, report what remains with its evidence; fixes made after it are checked by your own measurements only and reported as not independently reviewed. A review that could not finish counts and is reported as such.
+- **At most three reviews** (the runner's `max_reviews`; a third review with a major left sends the candidate to `user_decision`). After the third, report what remains with its evidence; fixes made after it are checked by your own measurements only and reported as not independently reviewed. A review that could not finish counts and is reported as such.
 - **In a harness repository** the `ui_review` gate has no `사용자 입력 필요` class; list those items as product decisions in the brief or pull request; the workflow's repair step hands a product decision to `user_decision` rather than trying to fix it.
 
 ## State checks
@@ -151,7 +166,7 @@ Field targets at the 75th percentile, mobile (Core Web Vitals "good": LCP ≤ 2.
 - Images in AVIF/WebP with `srcset`; dimensions set. Without a local converter, ship optimized JPEG or PNG and list the converter as needing approval.
 - Fonts: WOFF2, subset, at most two families; preload only the first-viewport file.
 - Motion and WebGL code loads after first paint and only where used.
-- **Frame rate of every moving moment** — each scroll scene, canvas or WebGL effect, and try-it demo, operated the way a visitor does (scroll through it, move the pointer across it, type into it). Measure the first run in a fresh browser context, where image decoding and filter work land, not only a warmed-up rerun: at 1440 without throttling, at least 50 frames per second and no frame over 100 ms; at 390 with 4× CPU throttling, at least 30 frames per second and no frame over 200 ms, or the slow-device form (`motion-web.md`) taking over. Report frames per second and the longest frame for each. Below that, the moment is a major problem.
+- **Frame rate of every moving moment** — the measure node operates each `data-moment` element the way a visitor does (scrolls through it, moves the pointer across it, types into it) on the first run in a fresh browser context, where image decoding and filter work land: at 1440 without throttling, at least 50 frames per second and no frame over 100 ms; at 390 with 4× CPU throttling, at least 30 frames per second and no frame over 200 ms, or the slow-device form (`motion-web.md`, `data-motion-tier="lite"` on `<html>`) taking over. The thresholds live in the graph's `measure` block. Below them the measure fails and the runner sends the candidate to repair.
 
 ## Legal and analytics
 

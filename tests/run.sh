@@ -2230,7 +2230,7 @@ LANDING_VERIFY="$(<"$LANDING_DIR/references/verify.md")"
 for VERDICT in "\`verified\`" "\`issues\`" "\`unverified\`"; do
   assert_contains "$LANDING_VERIFY" "$VERDICT" "landing-page verify uses the ui-review verdict $VERDICT"
 done
-assert_contains "$LANDING_VERIFY" "**At most three reviews.**" "landing-page review loop is bounded"
+assert_contains "$LANDING_VERIFY" "**At most three reviews** (the runner's" "landing-page review loop is bounded"
 assert_contains "$LANDING_VERIFY" "**which layers apply**" "the reviewer knows which design-system layers apply"
 assert_contains "$LANDING_VERIFY" "must not be read" "the reviewer is kept out of the maker's files"
 assert_contains "$LANDING_VERIFY" "Each review runs in a new reviewer that did not build the page — a new one every round" "landing-page review is independent"
@@ -2245,7 +2245,7 @@ assert_contains "$(cat skills/landing-page/references/direction.md)" "First-view
 assert_contains "$(cat skills/landing-page/SKILL.md)" "one anchor brand color, and the voice" "landing-page brand layer keeps anchors only"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "## Try-it demo" "landing-page product pages let visitors try the product"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "How much moves is a direction decision, not a fixed budget." "landing-page motion level belongs to the direction"
-assert_contains "$LANDING_VERIFY" "Template look, judged apart from the content" "landing-page review judges a template look"
+assert_contains "$LANDING_VERIFY" "\`template_look\`: judged apart from the content" "landing-page review judges a template look"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "4. Interaction references" "landing-page collects interaction references with recordings"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "before reporting it unreachable" "landing-page retries challenge pages in a real browser"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "**They differ in what the visitor does.**" "landing-page candidates differ in visitor action"
@@ -2253,10 +2253,91 @@ assert_contains "$(cat skills/landing-page/references/direction.md)" "build each
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "## 3D scenes and objects" "landing-page covers 3D scenes"
 assert_contains "$LANDING_VERIFY" "compare what the visitor does on each" "landing-page review compares candidate interactions"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the references used, as a table" "landing-page reports the references used"
-assert_contains "$LANDING_VERIFY" "Reference fidelity, with each reference's capture or recording next to the page" "landing-page review checks borrowed references are recognizable"
+assert_contains "$LANDING_VERIFY" "\`reference_fidelity\`, with each reference's capture or recording next to the page" "landing-page review checks borrowed references are recognizable"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "the weaker version it must not shrink to" "landing-page take-lines keep the borrowed strength"
 assert_contains "$LANDING_VERIFY" "**Frame rate of every moving moment**" "landing-page measures frame rate of every moving moment"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Degrade on a slow device.**" "landing-page effects degrade on slow devices"
+# landing-page 그래프 러너: 그래프 계약, 전이·산출물·측정·검토 게이트(측정은 스텁), 실제 측정은 Playwright가 있을 때만.
+LP_GRAPH="$ROOT/skills/landing-page/references/landing-page-graph.json"
+"$ROOT/scripts/validate-landing-page-graph.sh" "$LP_GRAPH" >/dev/null || fail "the shipped landing-page graph is valid"
+jq '.transitions += [{"from":"repair","to":"done","when":"repaired"}]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph that reaches done from repair is invalid"; fi
+jq '.nodes.measure.actor = "maker"' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph whose measure is not the runner's is invalid"; fi
+LP_W="$TEST_TMP/lp-run"; mkdir -p "$LP_W"
+cat >"$TEST_TMP/lp-measure-stub.sh" <<'EOF'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do case "$1" in --out) o="$2"; shift 2 ;; *) shift ;; esac; done
+r="$(cat "${LP_STUB_RESULT_FILE}")"
+printf '{"result":"%s","checks":[{"id":"overflow","status":"%s"}]}\n' "$r" "$r" >"$o"
+EOF
+chmod +x "$TEST_TMP/lp-measure-stub.sh"
+export LANDING_MEASURE_CMD="$TEST_TMP/lp-measure-stub.sh" LP_STUB_RESULT_FILE="$TEST_TMP/lp-stub-result"
+lp() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_W" 2>"$TEST_TMP/lp.err"; }
+lp_rc() { local rc=0; lp "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+lp init --mode unattended >/dev/null
+assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run refuses a node whose artifacts are missing"
+touch "$LP_W/brief.md" "$LP_W/references.json"
+assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
+assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
+assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
+mkdir -p "$LP_W/site/a" "$LP_W/site/b"
+touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
+printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
+lp submit --node direction --outcome direction_ready >/dev/null
+assert_eq "build build" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at build"
+assert_eq measure "$(lp submit --node build --outcome built --candidate a)" "a built candidate goes to measure"
+assert_eq 3 "$(lp_rc submit --node measure --outcome measured_pass --candidate a)" "the maker cannot submit a measure outcome"
+echo fail >"$LP_STUB_RESULT_FILE"
+assert_eq repair "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a failed measure sends the candidate to repair"
+touch "$LP_W/repair-a-0.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null
+echo pass >"$LP_STUB_RESULT_FILE"
+assert_eq review "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a passing measure goes to review"
+assert_contains "$(lp next --candidate a)" '"try_it_usability"' "the review node lists the required checks"
+assert_contains "$(lp next --candidate a)" '"candidate_overlap"' "several candidates add the overlap check"
+printf '{"checks":[{"check":"flow","status":"pass"}]}\n' >"$TEST_TMP/lp-review-partial.json"
+assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-partial.json")" "a review missing required checks is refused"
+assert_eq 0 "$(jq -r '.candidates.a.reviews' "$LP_W/.landing-run/state.json")" "a refused review does not count"
+lp_review() { # fail_check needs_input [candidate] → review json path
+  jq -n --argjson req "$(lp next --candidate "${3:-a}" | jq '.required_checks')" --arg f "$1" --argjson ni "$2" \
+    '{rendered: true, checks: [$req[] | {check: ., status: (if . == $f then "fail" else "pass" end), severity: "major"}], needs_input: [range($ni) | "cta"]}' >"$TEST_TMP/lp-review.json"
+  printf '%s' "$TEST_TMP/lp-review.json"
+}
+assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fidelity 0)")" "a major in review sends the candidate to repair"
+touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
+assert_eq "done" "$(lp review --candidate a --file "$(lp_review none 1)")" "only user input left ends at done"
+assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
+lp submit --node build --outcome built --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+for r in 1 2 3; do
+  out="$(lp review --candidate b --file "$(lp_review flow 0 b)" || true)"
+  [[ $r -lt 3 ]] && { touch "$LP_W/repair-b-$r.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null; }
+done
+assert_eq user_decision "$out" "a third review with a major left ends at user_decision"
+unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE
+# Real measure on fixed pages, only where a Playwright Chromium can start.
+LP_FIX="$ROOT/tests/fixtures/landing-measure"
+if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  python3 -I -m http.server 8931 --bind 127.0.0.1 --directory "$LP_FIX/good" >/dev/null 2>&1 & LP_SRV1=$!
+  python3 -I -m http.server 8932 --bind 127.0.0.1 --directory "$LP_FIX/bad" >/dev/null 2>&1 & LP_SRV2=$!
+  sleep 1
+  node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-good.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
+  if [[ "$(jq -r '.result' "$TEST_TMP/lp-good.json" 2>/dev/null)" == unverified ]] && jq -e '.checks | length == 0' "$TEST_TMP/lp-good.json" >/dev/null 2>&1; then
+    printf '# skip landing-measure browser checks: %s\n' "$(jq -r '.reason' "$TEST_TMP/lp-good.json")"
+  else
+    assert_eq pass "$(jq -r '.result' "$TEST_TMP/lp-good.json")" "landing-measure passes a clean page"
+    node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
+    assert_eq "contrast_solid destinations first_action moment_frame_rate overflow placeholders" \
+      "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
+  fi
+  kill "$LP_SRV1" "$LP_SRV2" 2>/dev/null || true
+fi
+assert_contains "$(cat skills/landing-page/SKILL.md)" "bash \$ROOT/scripts/landing-run.sh next" "landing-page runs its steps through the runner"
+assert_contains "$(cat agents/design-reviewer.md)" '빠진 항목이 있으면 그 검토는 무효로 처리된다' "design-reviewer answers every required check in JSON"
+assert_contains "$LANDING_VERIFY" "\`try_it_usability\`: with no instructions" "landing-page review checks the try-it demo's usability"
+assert_contains "$LANDING_VERIFY" "\`flow\`: read the page from the first viewport to the main action" "landing-page review checks the flow to the action"
+assert_contains "$(cat skills/landing-page/references/motion-web.md)" "mark them \`data-lenis-prevent\`" "landing-page covers Lenis nested scroll"
+assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`lenis.destroy()\` on unmount" "landing-page covers Lenis cleanup"
+pass "landing-page graph runner and measure gate"
 assert_contains "$(cat agents/design-reviewer.md)" "제품 개념이 독특해도 생김새 판정을 면제하지 않는다" "design-reviewer judges look apart from concept"
 assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"

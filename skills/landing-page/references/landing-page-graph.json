@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "name": "landing-page",
+  "entry": "brief",
+  "terminals": [
+    "done",
+    "user_decision"
+  ],
+  "nodes": {
+    "brief": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#1-brief",
+        "references/direction.md#2-visual-authority"
+      ],
+      "artifacts": [
+        "brief.md"
+      ],
+      "outcomes": [
+        "brief_ready"
+      ]
+    },
+    "references": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#7-references"
+      ],
+      "artifacts": [
+        "references.json"
+      ],
+      "outcomes": [
+        "references_ready",
+        "references_skipped_by_user"
+      ]
+    },
+    "reference_pick": {
+      "actor": "human",
+      "docs": [
+        "references/direction.md#7-references"
+      ],
+      "artifacts": [
+        "reference-pick.json"
+      ],
+      "outcomes": [
+        "picked"
+      ]
+    },
+    "direction": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#3-direction-candidates",
+        "references/direction.md#4-sections",
+        "references/direction.md#5-evidence",
+        "references/direction.md#6-copy"
+      ],
+      "artifacts": [
+        "candidates.json"
+      ],
+      "outcomes": [
+        "direction_ready",
+        "mockup_decides"
+      ]
+    },
+    "draft_pick": {
+      "actor": "human",
+      "docs": [
+        "references/direction.md#3-direction-candidates"
+      ],
+      "artifacts": [
+        "draft-pick.json"
+      ],
+      "outcomes": [
+        "picked"
+      ]
+    },
+    "build": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [
+        "references/design-handoff.md",
+        "references/layout-type.md",
+        "references/motion-web.md",
+        "references/external-code.md"
+      ],
+      "artifacts": [
+        "{dir}/index.html",
+        "source-facts-{c}.md",
+        "needs-input-{c}.json"
+      ],
+      "outcomes": [
+        "built"
+      ]
+    },
+    "measure": {
+      "actor": "runner",
+      "per_candidate": true,
+      "artifacts": [
+        "measure-{c}-{n}.json"
+      ],
+      "outcomes": [
+        "measured_pass",
+        "measured_fail",
+        "measured_unverified",
+        "measure_limit_reached"
+      ]
+    },
+    "review": {
+      "actor": "reviewer",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#independent-review"
+      ],
+      "artifacts": [
+        "review-{c}-{r}.json"
+      ],
+      "outcomes": [
+        "review_verified",
+        "review_input_wait",
+        "review_issues",
+        "review_limit_reached",
+        "review_unverified"
+      ]
+    },
+    "repair": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#fix-loop-and-stopping"
+      ],
+      "artifacts": [
+        "repair-{c}-{r}.md"
+      ],
+      "outcomes": [
+        "repaired",
+        "needs_user"
+      ]
+    },
+    "done": {
+      "actor": "runner",
+      "per_candidate": true
+    },
+    "user_decision": {
+      "actor": "runner",
+      "per_candidate": true
+    }
+  },
+  "transitions": [
+    {
+      "from": "brief",
+      "to": "references",
+      "when": "brief_ready"
+    },
+    {
+      "from": "references",
+      "to": "reference_pick",
+      "when": "references_ready",
+      "mode": "interactive"
+    },
+    {
+      "from": "references",
+      "to": "direction",
+      "when": "references_ready",
+      "mode": "unattended"
+    },
+    {
+      "from": "references",
+      "to": "direction",
+      "when": "references_skipped_by_user"
+    },
+    {
+      "from": "reference_pick",
+      "to": "direction",
+      "when": "picked"
+    },
+    {
+      "from": "direction",
+      "to": "draft_pick",
+      "when": "direction_ready",
+      "mode": "interactive"
+    },
+    {
+      "from": "direction",
+      "to": "build",
+      "when": "direction_ready",
+      "mode": "unattended"
+    },
+    {
+      "from": "direction",
+      "to": "build",
+      "when": "mockup_decides"
+    },
+    {
+      "from": "draft_pick",
+      "to": "build",
+      "when": "picked"
+    },
+    {
+      "from": "build",
+      "to": "measure",
+      "when": "built"
+    },
+    {
+      "from": "measure",
+      "to": "review",
+      "when": "measured_pass"
+    },
+    {
+      "from": "measure",
+      "to": "review",
+      "when": "measured_unverified"
+    },
+    {
+      "from": "measure",
+      "to": "repair",
+      "when": "measured_fail"
+    },
+    {
+      "from": "measure",
+      "to": "user_decision",
+      "when": "measure_limit_reached"
+    },
+    {
+      "from": "review",
+      "to": "done",
+      "when": "review_verified"
+    },
+    {
+      "from": "review",
+      "to": "done",
+      "when": "review_input_wait"
+    },
+    {
+      "from": "review",
+      "to": "repair",
+      "when": "review_issues"
+    },
+    {
+      "from": "review",
+      "to": "user_decision",
+      "when": "review_limit_reached"
+    },
+    {
+      "from": "review",
+      "to": "user_decision",
+      "when": "review_unverified"
+    },
+    {
+      "from": "repair",
+      "to": "measure",
+      "when": "repaired"
+    },
+    {
+      "from": "repair",
+      "to": "user_decision",
+      "when": "needs_user"
+    }
+  ],
+  "limits": {
+    "max_reviews": 3,
+    "max_measure_repairs": 5
+  },
+  "measure": {
+    "widths": [
+      1440,
+      768,
+      390,
+      320
+    ],
+    "moments": {
+      "desktop": {
+        "width": 1440,
+        "cpu_throttle": 1,
+        "min_fps": 50,
+        "max_frame_ms": 100
+      },
+      "phone": {
+        "width": 390,
+        "cpu_throttle": 4,
+        "min_fps": 30,
+        "max_frame_ms": 200,
+        "lite_tier_passes": true
+      }
+    },
+    "js_off_text_ratio": 0.9,
+    "reduced_motion_text_ratio": 0.95
+  },
+  "review_checks": {
+    "public_page": [
+      "one_second",
+      "five_second",
+      "squint",
+      "cover_logo",
+      "template_look",
+      "reference_fidelity",
+      "copied_composition",
+      "actions_respond",
+      "claims",
+      "phone_composed",
+      "tells",
+      "flow",
+      "try_it_usability",
+      "keyboard",
+      "hover_focus",
+      "js_off",
+      "reduced_motion",
+      "forced_colors",
+      "contrast_over_media"
+    ],
+    "multi_candidate": [
+      "candidate_overlap"
+    ]
+  },
+  "invariants": [
+    "The runner, not the model, chooses every transition; an outcome with no declared edge from the current node is refused.",
+    "A node's artifacts must exist before its outcome is accepted.",
+    "Measure outcomes come only from the measure script; a maker cannot submit measured_pass.",
+    "Review outcomes are computed from the review JSON; a review missing any required check is refused and does not count, and a review that could not render the page is review_unverified.",
+    "A candidate reaches done only through review_verified or review_input_wait, never from build, measure, or repair.",
+    "After max_reviews reviews with a major left, the candidate goes to user_decision; later fixes are reported as not independently reviewed.",
+    "Each review is a new reviewer; the briefing carries the take-lines and reference captures, not the maker's notes."
+  ]
+}
