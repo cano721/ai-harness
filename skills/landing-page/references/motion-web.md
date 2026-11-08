@@ -114,6 +114,8 @@ document.fonts.ready.then(() => {
 - Pause loops and canvases when offscreen (IntersectionObserver) and when the tab is hidden (`visibilitychange`).
 - Content that moves, blinks, or scrolls automatically for more than five seconds needs a visible pause control (WCAG 2.2 SC 2.2.2). Nothing flashes more than three times per second (SC 2.3.1).
 - Reduced motion: remove translation, scale, parallax, smooth scrolling, and autoplay; keep opacity and color changes and all content.
+- Visitors' devices are slower than yours, and their browsers busier. Do the expensive work before the moment, not during it: a blur, shadow, or filter over a large area becomes a pre-rendered image; a photo that will be scaled or revealed is decoded first (`img.decode()`); particle counts and canvas sizes scale with the element, capped at a device pixel ratio of 2.
+- **Degrade on a slow device.** A scroll scene, canvas, WebGL, or try-it effect watches its own frame rate while it runs; when it stays under 30 frames per second for about a second, it switches to its simpler form (unpinned scenes, fewer particles, a still image) for the rest of the visit. The simpler form keeps the content and the interaction's result.
 
 ## GSAP and ScrollTrigger
 
@@ -149,7 +151,7 @@ A 3D object or scene the visitor turns, drags, or scrolls through, when an inter
 - Build with three.js (or a Spline export) at an exact version, approved like any outside script; a model file or texture from another source needs its license and approval. A shape built from primitives in code needs neither.
 - The visitor's input drives it (drag to rotate, pointer to tilt, scroll to advance), and keyboard users get the same result from buttons or arrow keys.
 - Load after first paint, only near the viewport; cap the device pixel ratio at 2; pause when offscreen or the tab is hidden; dispose geometry, materials, and the renderer on leave.
-- Measure: at least 50 frames per second on the desktop capture and a usable rate under 4× CPU throttling; otherwise simplify or fall back.
+- Measure as `verify.md` Performance says for every moving moment; otherwise simplify or fall back.
 - Fallback: a still render of the same object, shown when WebGL (or WebGPU) is unavailable, under reduced motion, with JavaScript off, and on small or low-power screens. Text never depends on the 3D layer to be read.
 
 ## WebGL and canvas backgrounds

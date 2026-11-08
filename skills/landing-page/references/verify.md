@@ -80,7 +80,7 @@ A **major problem** (the same definition as the harness `ui-review` contract, re
 - a flow cannot be completed by keyboard, or at a supported viewport or theme;
 - a one-off build where a shared component of the same role exists;
 - a hard-to-undo action without confirmation;
-- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed, or that reads as a template by its look alone, a borrowed reference that cannot be recognized, or a composition copied from another company's page.
+- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed, or that reads as a template by its look alone, a borrowed reference that cannot be recognized, a composition copied from another company's page, or a moving moment below the frame-rate floor in Performance.
 
 Spacing and alignment that do not change any of that are minor.
 
@@ -151,6 +151,7 @@ Field targets at the 75th percentile, mobile (Core Web Vitals "good": LCP ≤ 2.
 - Images in AVIF/WebP with `srcset`; dimensions set. Without a local converter, ship optimized JPEG or PNG and list the converter as needing approval.
 - Fonts: WOFF2, subset, at most two families; preload only the first-viewport file.
 - Motion and WebGL code loads after first paint and only where used.
+- **Frame rate of every moving moment** — each scroll scene, canvas or WebGL effect, and try-it demo, operated the way a visitor does (scroll through it, move the pointer across it, type into it). Measure the first run in a fresh browser context, where image decoding and filter work land, not only a warmed-up rerun: at 1440 without throttling, at least 50 frames per second and no frame over 100 ms; at 390 with 4× CPU throttling, at least 30 frames per second and no frame over 200 ms, or the slow-device form (`motion-web.md`) taking over. Report frames per second and the longest frame for each. Below that, the moment is a major problem.
 
 ## Legal and analytics
 
