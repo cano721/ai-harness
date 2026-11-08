@@ -673,15 +673,17 @@ scripts/board/board.sh stop
 
 자격증명은 환경변수 → `~/.claude/settings.json`의 `env` → `~/.ai-harness/config`(`HM_SENTRY_TOKEN`·`HM_DATADOG_*`) 순으로 찾습니다. 저장소 설정이 자격증명을 보낼 곳을 바꾸지 못하도록 Sentry는 `*.sentry.io`, Datadog은 공개 사이트만 받습니다.
 
+**setup에서 값 고르기**: service·env 같은 값을 문법·이름을 외워 입력하지 않아도 됩니다. setup은 저장소 흔적(`DD_SERVICE`·`dd.service`·`sentry.properties` 등)을 추천값으로 앞에 두고, `scripts/monitor-fetch.sh discover --provider datadog|sentry`로 최근 에러를 Datadog은 service·env별, Sentry는 project·environment별 건수로 보여 줘 고르게 합니다. 만든 `query`·필드를 보여 주고 확인받은 뒤에만 씁니다. 설정이 없는 저장소에서 `/autofix`를 부르면 후보 조회 대신 setup부터 시작합니다.
+
 정기 실행 한 번은 이렇게 돕니다.
 
 1. **검증(LLM 없음)**: 열린 PR의 상태를 보고(`open-pr.sh --status`) 병합되면 `verifying`, 사람이 닫으면 `declined`. 병합 커밋이 `deploy_branch`에 들어간 것을 처음 관찰한 때를 배포 시각으로 잡고(설정이 없으면 병합 시각), `grace_hours` 유예 뒤부터 관찰합니다. 관찰 창은 `quiet_hours`와 "수정 전 빈도라면 3건이 나왔을 시간" 중 긴 쪽(최대 14일)입니다. 창 안에 같은 시그니처가 다시 나오면 `regressed`, 끝까지 없으면 `resolved`입니다.
-2. **수정(무인 에이전트 1건)**: 새 에러, 재발한 에러, 해결 뒤 다시 나타난 에러 중 가장 많이 난 것을 작업 전용 worktree의 headless `claude -p "/ai-harness:autofix --auto …"`에 넘깁니다. 에이전트는 코드 버그인지 분류하고, 재현 테스트를 먼저 만들고, 프로젝트 `fix-bug` 절차로 고쳐 **draft PR**을 엽니다. 재현하지 못하거나 코드 버그가 아니면 PR 없이 `skipped`로 남기고 유예(7일) 뒤 다시 봅니다. 재발 재시도에는 지난 PR과 재발 근거를 같이 넘깁니다.
+2. **수정(무인 에이전트 1건)**: 새 에러, 재발한 에러, 해결 뒤 다시 나타난 에러 중 가장 많이 난 것을 작업 전용 독립 저장소(원본의 로컬 clone)의 headless `claude -p "/ai-harness:autofix --auto …"`에 넘깁니다. 에이전트는 코드 버그인지 분류하고, 재현 테스트를 먼저 만들고, 프로젝트 `fix-bug` 절차로 고쳐 **draft PR**을 엽니다. 재현하지 못하거나 코드 버그가 아니면 PR 없이 `skipped`로 남기고 유예(7일) 뒤 다시 봅니다. 재발 재시도에는 지난 PR과 재발 근거를 같이 넘깁니다.
 
 - **상한**: 하루 `HM_AUTOFIX_DAILY_MAX`(3)회, 시그니처당 PR `HM_AUTOFIX_MAX_ATTEMPTS`(2)개 — 상한까지 재발하면 `gave_up`으로 사람에게 넘깁니다. 실행당 `HM_AUTOFIX_BUDGET_USD`($10), `HM_AUTOFIX_TIMEOUT_MIN`(60분). 무인 실행 lock은 자동 harvest·sync와 공유합니다(동시에 하나)
 - **안전장치**: 에러 본문은 외부 입력이라 비밀값을 가려 넘기고, 에이전트에 데이터로만 읽으라고 지시합니다. Bash는 빌드·테스트 명령(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo 등, `HM_AUTOFIX_BASH_ALLOW`로 추가)과 `fix/` 브랜치 push 같은 좁은 git 명령만 허용하고 나머지는 묻지 않고 거부합니다. 모니터링 자격증명은 에이전트 환경에서 빼고, 자격증명 파일 읽기도 막습니다. 테스트 러너는 저장소 코드를 실행하므로 이 경계가 완전하지는 않습니다 — 신뢰하는 저장소만 `HM_AUTOFIX_REPOS`에 넣으세요. 병합은 언제나 사람이 합니다
 - **상태 보기**: `/autofix status`, `scripts/autofix-auto.sh status|runs`. 기록은 `~/.ai-harness/autofix/`(시그니처별 `state.json`, `runs.jsonl`, 실행 로그)
-- **수동**: `/autofix`로 후보를 골라 이 세션에서 고칠 수 있고, 그렇게 연 PR도 `autofix-auto.sh track`으로 같은 검증에 올립니다
+- **수동**: `/autofix`로 후보를 골라 이 세션에서 고칠 수 있고, 그렇게 연 PR도 `autofix-auto.sh track`으로 같은 검증에 올립니다. 수동 후보 조회(`autofix-auto.sh candidates --project <id> --root .`)는 `HM_AUTOFIX_REPOS`와 무관하게 그 저장소의 `monitor` 설정으로 계산하므로 무인 실행을 켜지 않아도 쓸 수 있습니다(검증 대상 등록 `track`은 목록에 있어야 합니다)
 
 <a id="db-scan-guard"></a>
 
