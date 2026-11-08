@@ -320,7 +320,8 @@
     },
     "js_off_text_ratio": 0.9,
     "reduced_motion_text_ratio": 0.95,
-    "text_backdrop_max_sd": 18
+    "text_backdrop_max_sd": 18,
+    "bar_bleed_max": 8
   },
   "first_viewport_major": ["template_look", "craft", "cover_logo", "copied_composition", "reference_fidelity"],
   "review_checks": {

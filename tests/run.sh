@@ -2370,7 +2370,7 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   else
     assert_eq pass "$(jq -r '.result' "$TEST_TMP/lp-good.json")" "landing-measure passes a clean page"
     node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
-    assert_eq "contrast_solid destinations first_action moment_frame_rate overflow placeholders text_covered" \
+    assert_eq "bar_backdrop contrast_solid destinations first_action moment_frame_rate overflow placeholders text_covered" \
       "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
     node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
     assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"
@@ -2387,6 +2387,7 @@ assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`le
 assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
+assert_contains "$LANDING_VERIFY" "**A top bar over scrolled text**" "landing-page measures text showing through a top bar"
 assert_contains "$LANDING_VERIFY" "**Text over a moving picture**" "landing-page measures text left over a busy picture layer"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "**Nothing may wait for a permission prompt.**" "landing-page unattended runs never stall on a prompt"
 assert_contains "$LANDING_VERIFY" "a distinctive element placed under the stock formula" "a 3D element under the stock hero does not excuse it"

@@ -205,6 +205,7 @@ try {
   // on, so pointer-events: none layers count; fixed or sticky bars and invisible layers do not); each candidate line is then
   // judged by pixels: with all text made transparent, the picture behind the line must be calm (a backdrop or scrim), not busy.
   const covered = new Set();
+  const barIssues = new Set();
   const analyzer = await (await browser.newContext()).newPage();
   const busy = async (png) =>
     analyzer.evaluate(async (src) => {
@@ -223,6 +224,24 @@ try {
       const sd = Math.sqrt(lum.reduce((x, y) => x + (y - mean) ** 2, 0) / lum.length);
       return sd;
     }, `data:image/png;base64,${png.toString("base64")}`);
+  const diff = async (a, b) =>
+    analyzer.evaluate(async ([sa, sb]) => {
+      const load = async (src) => {
+        const img = new Image();
+        img.src = src;
+        await img.decode();
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const g = c.getContext("2d");
+        g.drawImage(img, 0, 0);
+        return g.getImageData(0, 0, c.width, c.height).data;
+      };
+      const [da, db] = [await load(sa), await load(sb)];
+      let sum = 0;
+      for (let i = 0; i < da.length; i += 4) sum += (Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2])) / 3;
+      return sum / (da.length / 4);
+    }, [`data:image/png;base64,${a.toString("base64")}`, `data:image/png;base64,${b.toString("base64")}`]);
   for (const width of [1440, 390]) {
     const height = width <= 390 ? 844 : 900;
     const { ctx, page } = await open({ width, height });
@@ -275,9 +294,30 @@ try {
             break;
           }
         }
-        return { out, end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
+        // Fixed or sticky bars at the top; whether scrolled text shows through them is judged by pixels below.
+        const bars = [];
+        for (const el of document.querySelectorAll("body *")) {
+          const cs = getComputedStyle(el);
+          if (cs.position !== "fixed" && cs.position !== "sticky") continue;
+          const br = el.getBoundingClientRect();
+          if (br.top > 2 || br.height < 24 || br.height > innerHeight * 0.25 || br.width < innerWidth * 0.5) continue;
+          el.setAttribute("data-lm-bar", "");
+          bars.push({ x: br.left, y: br.top, w: br.width, h: br.height });
+        }
+        return { out, bars, end: scrollY + innerHeight >= document.documentElement.scrollHeight - 2 };
       });
       await style.evaluate((n) => n.remove());
+      // Page text under a top bar: compare the bar with the page's text shown and hidden (the bar's own text stays).
+      for (const b of hits.bars.slice(0, 1)) {
+        const clip = { x: Math.max(0, b.x), y: 0, width: Math.min(b.w, width), height: b.h };
+        const shown = await page.screenshot({ clip });
+        const hide = await page.addStyleTag({ content: "body *:not([data-lm-bar]):not([data-lm-bar] *){color:transparent!important;text-shadow:none!important;transition:none!important}" });
+        await page.waitForTimeout(60);
+        const hidden = await page.screenshot({ clip });
+        await hide.evaluate((n) => n.remove());
+        const d = await diff(shown, hidden);
+        if (d > (cfg.bar_bleed_max ?? 8)) barIssues.add(`${width}: page text shows through the top bar at scroll ${await page.evaluate(() => Math.round(scrollY))}px (mean pixel change ${d.toFixed(1)})`);
+      }
       if (hits.out.length) {
         const hide = await page.addStyleTag({ content: "*{color:transparent!important;text-shadow:none!important;-webkit-text-stroke:0!important;transition:none!important;caret-color:transparent!important}" });
         await page.waitForTimeout(60);
@@ -297,6 +337,7 @@ try {
   }
   await analyzer.context().close();
   add("text_covered", covered.size === 0, [...covered].slice(0, 15));
+  add("bar_backdrop", barIssues.size === 0, [...barIssues].slice(0, 10));
 
   // First-run frame rate of each moving moment, operated the way a visitor does.
   const recorder = `window.__frames=[];(function f(t){__frames.push(t);requestAnimationFrame(f)})(performance.now());`;
