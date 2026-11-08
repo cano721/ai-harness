@@ -9,18 +9,25 @@ POST /new     {t, cwd, prompt}   claude --bg 새 세션
 GET  /impact?t=...               하네스 효과: 저장소별 impact.sh compare 캐시 + 판정(계산은 뒤에서, 하루 한 번)
 POST /impact/refresh {t, repo}   그 저장소를 다시 계산하도록 줄 세움
 GET  /impact/report?t&repo       그 저장소의 오프라인 리포트(impact.sh render)를 만들어 보여 줌
+GET  /autofix?t=...              자동 수정: 준비 상태(describe, 요청 없음)·에러별 진행·최근 실행·내 설정. 외부 API는 부르지 않음
+GET  /autofix/log?t&name         autofix 실행 로그(~/.ai-harness/autofix/logs/ 안 파일 이름만)
+POST /autofix/check {t, repo}    monitor-fetch.sh check(외부 API) — 버튼으로만, 결과 캐시
+POST /autofix/candidates {t, repo}  autofix-auto.sh candidates(외부 API) — 버튼으로만, 결과 캐시
+POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정을 씀. 주기를 바꾸면 schedule.sh install-autofix·status
+POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움(보드는 monitor 파일을 쓰지 않음)
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
 상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
-import atexit, json, os, re, secrets, shutil, signal, subprocess, sys, threading, time, webbrowser
+import atexit, json, os, re, secrets, shutil, signal, subprocess, sys, threading, time, unicodedata, webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
+import autofix as hautofix  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import settings as hsettings  # noqa: E402
@@ -303,6 +310,38 @@ def impact_refresh(repo):
         return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
     queued = IMPACT.refresh(repo)
     return {"ok": True, "message": "다시 계산을 시작함 — 저장소에 따라 수십 초 걸림" if queued else "이미 계산 중"}
+
+
+AUTOFIX = hautofix.Store(DATA)
+
+
+def autofix_key(repo):
+    """autofix-auto.sh(project_id_for_cwd)와 같은 키: 폴더 이름에서 온 한글(NFD)도 NFC로 맞춘다."""
+    return unicodedata.normalize("NFC", hsettings.project_key(repo))
+
+
+def autofix_state():
+    return AUTOFIX.view(harness_repos(), autofix_key)
+
+
+def autofix_button(kind, repo):
+    if repo not in harness_repos():
+        return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
+    if kind == "check":
+        res = AUTOFIX.check(repo)
+        return {"ok": True, "message": f"접근 확인: {res['label']}", "check": res}
+    res = AUTOFIX.candidates(repo, autofix_key(repo))
+    msg = res["error"] or f"후보 {len(res['items'])}건"
+    return {"ok": not res["error"], "message": msg, "candidates": res}
+
+
+def autofix_setup(repo):
+    if repo not in harness_repos():
+        return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
+    res = new_bg(repo, "/ai-harness:autofix setup", name=f"자동 수정 설정: {os.path.basename(repo)}")
+    if res["ok"]:
+        res["message"] = "자동 수정 설정 세션을 띄움 — 작업 화면에서 질문에 답하세요"
+    return res
 
 
 def settings_state():
@@ -847,6 +886,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, known_repos())
         if u.path == "/impact":
             return self._send(200, impact_state())
+        if u.path == "/autofix":
+            return self._send(200, autofix_state())
+        if u.path == "/autofix/log":
+            path = AUTOFIX.log_path(q.get("name", [None])[0])
+            if not path:
+                return self._send(404, {"ok": False, "message": "autofix 실행 로그가 아님"})
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return self._send(200, f.read()[-INITIAL_BYTES:], "text/plain; charset=utf-8")
         if u.path == "/impact/report":
             repo = q.get("repo", [None])[0]
             if repo not in harness_repos():
@@ -906,6 +953,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings":
             res = request_facts_change(req)
             log({"action": "settings_facts", "repo": req.get("repo"), **res})
+            return self._send(200, res)
+        if path in ("/autofix/check", "/autofix/candidates"):
+            kind = path.rsplit("/", 1)[1]
+            res = autofix_button(kind, req.get("repo"))
+            log({"action": f"autofix_{kind}", "repo": req.get("repo"), "ok": res["ok"], "message": res["message"]})
+            return self._send(200, res)
+        if path == "/autofix/configure":
+            res = AUTOFIX.configure({k: v for k, v in req.items() if k != "t"})
+            log({"action": "autofix_configure", "keys": sorted(k for k in req if k != "t"), "ok": res["ok"], "message": res["message"]})
+            return self._send(200, res)
+        if path == "/autofix/setup":
+            res = autofix_setup(req.get("repo"))
+            log({"action": "autofix_setup", "repo": req.get("repo"), **res})
             return self._send(200, res)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))

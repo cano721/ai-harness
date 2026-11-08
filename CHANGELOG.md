@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **보드 '자동 수정' 화면** — `/autofix`의 준비 상태·에러별 진행·실행 이력을 보려면 터미널에서 `autofix-auto.sh status|runs`를 직접 쳐야 했고, 무인 실행이 `left_for_user`로 끝나도 아무 화면에 드러나지 않았습니다. 이제 `/ai-harness:board` 사이드바의 "자동 수정"이 저장소마다 monitor 설정 출처(개인 로컬 파일·저장소 manifest·없음)·provider·query 요약·자격증명 유무(값은 싣지 않음)·무인 실행 대상 여부, 에러마다 단계(후보 → 수정 PR → 병합 → 배포 → 확인, 해결·재발·포기)와 PR·감지 건수·마지막 관찰, 넘김(`left_for_user` 등)·실패 이유, 최근 실행(결과·소요·비용·로그)과 오늘 실행 수/하루 상한·누적 비용을 보여 줍니다. 접근 확인(`monitor-fetch.sh check`, 종료 코드를 "자격증명·설정 오류"·"설정 없음"처럼 말로)과 후보 조회는 모니터링 도구 API를 부르므로 버튼을 눌렀을 때만 돌고 결과를 남겨 둡니다. 설정이 없는 저장소는 "설정하기"로 그 저장소에서 `/ai-harness:autofix setup` 세션을 띄웁니다. 하네스 설정의 "자동 수정" 탭에서 무인 실행 켜기·대상 저장소 넣기/빼기·sweep 주기·하루 상한·에러당 PR 상한·실행당 예산을 바꾸며, 쓰기는 모두 `autofix-auto.sh configure`를 거치고 주기를 바꾸면 sweep 전용 정기 실행만 등록·해제하고(새 `schedule.sh install-autofix` — backfill은 그대로, 등록 즉시 sweep을 돌리지 않음) `status` 결과를 보여 줍니다. 보드는 수정 실행을 시작하거나 PR을 병합하지 않습니다. 새로 `monitor-fetch.sh describe`(요청 없이 준비 상태만, 자격증명 값 미출력)와 `autofix-auto.sh configure --remove-repo`·`schedule.sh install-autofix`가 생겼고, `status`가 감지 건수·마지막 관찰 등을 함께 냅니다. (#278)
+
 ## v0.67.0 (2026-11-08)
 ### 새 기능
 

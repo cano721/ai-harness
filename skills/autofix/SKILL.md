@@ -28,7 +28,7 @@ $ROOT/scripts/autofix-auto.sh status [--project <id>]
 $ROOT/scripts/autofix-auto.sh runs --limit 20
 ```
 
-상태를 표로 보여 준다: 시그니처·제목·상태·PR·배포 시각·관찰 종료 예정(`verify_until`)·재발 횟수. 상태 뜻:
+상태를 표로 보여 준다: 시그니처·제목·상태·PR·배포 시각·관찰 종료 예정(`verify_until`)·재발 횟수. 사용자가 계속 지켜보고 싶어 하면 `/ai-harness:board`의 "자동 수정" 화면(준비 상태·에러별 진행·최근 실행, 무인 실행 설정은 하네스 설정의 "자동 수정" 탭)을 알려 준다. 상태 뜻:
 
 | 상태 | 뜻 |
 |---|---|

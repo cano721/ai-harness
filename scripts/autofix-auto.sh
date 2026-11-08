@@ -43,7 +43,7 @@ usage:
   autofix-auto.sh track --project <id> --candidate <json> --pr <url>   # 수동으로 연 PR도 검증 대상에 올린다
   autofix-auto.sh run <project> <repo> <candidate-json-file>   # sweep이 띄우는 detached worker
   autofix-auto.sh runs [--limit N]
-  autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--interval-minutes N|off]
+  autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--remove-repo <project_id>] [--interval-minutes N|off]
                             [--daily-max N] [--max-attempts N] [--budget-usd X]
                                                 # 무인 실행 설정을 ~/.ai-harness/config에 쓴다(인자 없으면 현재 값만 보여 준다)
 EOF
@@ -524,7 +524,8 @@ command_status() {
   (( ${#files[@]} > 0 )) || return 0
   jq -c '.project as $p | .signatures | to_entries[] | {project:$p, signature:.key} + (.value
     | {status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
-       regressions:((.regressions // []) | length), updated_at})' "${files[@]}" 2>/dev/null
+       regressions:((.regressions // []) | length), updated_at,
+       count:(.baseline.count // null), link, provider, first_detected_at, launched_at, skipped_at, last_check_at, manual})' "${files[@]}" 2>/dev/null
 }
 
 command_track() {
@@ -561,14 +562,14 @@ config_show() {
 
 command_configure() {
   local -a set=()
-  local repo="" repos="" i=0
+  local repo="" remove="" repos="" i=0
   while (( $# > 0 )); do
     [[ $# -ge 2 ]] || usage
     case "$1" in
       --auto) [[ "$2" =~ ^[01]$ ]] || { echo "--auto는 0 또는 1입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_AUTO "$([[ "$2" == 1 ]] && echo 1 || true)") ;;
-      --add-repo) [[ "$2" =~ ^[^[:space:],\"\'=]+$ ]] || { echo "--add-repo는 공백·쉼표·따옴표 없는 project_id입니다" >&2; exit 2; }
-        repo="$2" ;;
+      --add-repo|--remove-repo) [[ "$2" =~ ^[^-[:space:],\"\'=][^[:space:],\"\'=]*$ ]] || { echo "$1는 -로 시작하지 않고 공백·쉼표·따옴표 없는 project_id입니다" >&2; exit 2; }
+        if [[ "$1" == --add-repo ]]; then repo="$2"; else remove="$2"; fi ;;
       --interval-minutes)
         if [[ "$2" == off || "$2" == 0 ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "")
         elif [[ "$2" =~ ^[1-9][0-9]*$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
@@ -583,10 +584,13 @@ command_configure() {
     esac
     shift 2
   done
-  if [[ -n "$repo" ]]; then
-    # 기존 목록은 그대로 두고 없을 때만 덧붙인다(구분자는 쉼표로 맞춘다).
-    repos="$(jq -rn --arg cur "${HM_AUTOFIX_REPOS:-}" --arg r "$repo"       '[$cur | splits("[,[:space:]]+") | select(. != "")] | if any(.[]; . == $r) then empty else . + [$r] | join(",") end')"
-    [[ -z "$repos" ]] || set+=(HM_AUTOFIX_REPOS "$repos")
+  if [[ -n "$repo" || -n "$remove" ]]; then
+    # 기존 목록 순서는 그대로 두고, 없을 때만 덧붙이고 있을 때만 뺀다(구분자는 쉼표로 맞춘다). 바뀌지 않으면 쓰지 않는다.
+    repos="$(jq -rn --arg cur "${HM_AUTOFIX_REPOS:-}" --arg add "$repo" --arg rm "$remove" '
+      [$cur | splits("[,[:space:]]+") | select(. != "")] as $old
+      | ($old + (if $add == "" or any($old[]; . == $add) then [] else [$add] end) | map(select(. != $rm))) as $new
+      | if $new == $old then "=" else ($new | join(",")) end')"
+    [[ "$repos" == "=" ]] || set+=(HM_AUTOFIX_REPOS "$repos")
   fi
   if (( ${#set[@]} > 0 )); then
     hm_config_set "${set[@]}" || exit 1
