@@ -44,6 +44,7 @@ Each review runs in a new reviewer that did not build the page — a new one eve
 - the audience and the one action the page exists for;
 - where the design evidence is (design system, rule document, token mirror), and **which layers apply**: brand only, or the product UI layer too (and where), per `SKILL.md` precedence — so the reviewer does not score marketing layout against product UI steps;
 - the source facts the page must match, copied into a plain file outside the served folder (the reviewer has no access to design tools such as Figma): every sentence and example value the page shows, each with its source location (a node id, a page and line), plus the source facts the page leaves out — a copy that misses them turns reviews into fact disputes;
+- the references the page was built from: each one's URL, its captures or recording, and its take-line (what is borrowed and the strength to keep) — so the reviewer can put page and reference side by side;
 - the marketing checks below;
 - the design evidence counts even when it is marked `draft`; the reviewer reads it;
 - the `사용자 입력 필요` list so far — everything the page lacks because only the user can supply it, including things the sources show that were left out for that reason (a close button with no destination, an action with no content) — as facts only — what is missing, the evidence that the user has not supplied it (their words quoted, or "not in the request or sources"), and the `data-needs-input` element where it sits — together with the forms such items take below (a disabled main action keeps its look), so the form is not reported as a defect;
@@ -57,6 +58,7 @@ Marketing checks the reviewer adds to its own criteria:
 - Squint: the claim and the action stay dominant.
 - Cover the logo: could a competitor own this page? When nothing in the first viewport belongs only to this product, that is a major problem; further down, a finding.
 - Template look, judged apart from the content: would a designer glancing at the captures take this for a template or an AI-made page? Name the giveaway — the stock hero formula (small colored label, two-line headline, paragraph, dark button, cards on the right), a row of identical cards, a category gradient, evenly spaced sections with the same rhythm, motion that only plays. A unique product concept does not excuse a stock look; in the first viewport it is a major problem.
+- Reference fidelity, with each reference's capture or recording next to the page: would someone who saw the reference recognize what was borrowed — the mechanism and its strength, not a nod to it (a pointer that splits a portrait is not a card that opens on hover; a full-bleed photo with one headline is not a photo behind five cards)? A borrowed mechanism or look that cannot be recognized in the first viewport or in the try-it demo is a major problem. The opposite is one too: a first viewport whose composition another company's page could claim as its own (same split, same card, same chips) is a major problem.
 - When several candidates were built, compare what the visitor does on each: the same verb on two of them (pick an option and read a scripted answer on both, for example) is a major problem for the later one.
 - Does every visible action lead somewhere, and does every element that looks interactive respond?
 - Is every claim either evidenced on the page or phrased as a description rather than a claim?
@@ -78,7 +80,7 @@ A **major problem** (the same definition as the harness `ui-review` contract, re
 - a flow cannot be completed by keyboard, or at a supported viewport or theme;
 - a one-off build where a shared component of the same role exists;
 - a hard-to-undo action without confirmation;
-- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed, or that reads as a template by its look alone.
+- for a public page, also: an action with no real destination, a placeholder visible to visitors, a claim without evidence, a page that misstates what the product is, a first viewport a competitor could own with only the logo changed, or that reads as a template by its look alone, a borrowed reference that cannot be recognized, or a composition copied from another company's page.
 
 Spacing and alignment that do not change any of that are minor.
 

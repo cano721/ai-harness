@@ -2253,6 +2253,8 @@ assert_contains "$(cat skills/landing-page/references/direction.md)" "build each
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "## 3D scenes and objects" "landing-page covers 3D scenes"
 assert_contains "$LANDING_VERIFY" "compare what the visitor does on each" "landing-page review compares candidate interactions"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the references used, as a table" "landing-page reports the references used"
+assert_contains "$LANDING_VERIFY" "Reference fidelity, with each reference's capture or recording next to the page" "landing-page review checks borrowed references are recognizable"
+assert_contains "$(cat skills/landing-page/references/direction.md)" "the weaker version it must not shrink to" "landing-page take-lines keep the borrowed strength"
 assert_contains "$(cat agents/design-reviewer.md)" "제품 개념이 독특해도 생김새 판정을 면제하지 않는다" "design-reviewer judges look apart from concept"
 assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"
