@@ -400,6 +400,28 @@ prune_logs() {
   for (( i = 0; i < ${#logs[@]} - LOG_KEEP; i++ )); do find "${logs[$i]}" -maxdepth 0 -type f -delete; done
 }
 
+# 에이전트 작업 디렉토리: 기준 커밋을 checkout한 독립 저장소(로컬 clone, 같은 디스크면 객체는 하드링크).
+# git worktree는 .git이 원본 저장소의 .git/worktrees/를 가리키는데, launchd가 띄운 claude의 셸은 macOS 보호 폴더
+# (~/Desktop·~/Documents 등) 접근이 막혀 그 경로를 못 읽는다 — git 명령 전체가 "not a git repository"로 실패한다(#272).
+make_work_dir() { # $1=repo $2=base(origin/<branch> 또는 HEAD) $3=work_dir
+  local repo="$1" base="$2" dir="$3" sha="" url="" ref="" key="" value=""
+  sha="$(git -C "$repo" rev-parse --verify --quiet "$base^{commit}")" || return 1
+  git clone -q --no-checkout "$repo" "$dir" || return 1
+  # clone의 origin/*는 원본의 로컬 브랜치다. 실제 원격 주소와 기준 브랜치만 원본과 같게 맞춘다.
+  while IFS= read -r ref; do [[ -z "$ref" ]] || git -C "$dir" update-ref -d "$ref"; done <<<"$(git -C "$dir" for-each-ref --format='%(refname)' refs/remotes/origin/)"
+  if url="$(git -C "$repo" config --get remote.origin.url 2>/dev/null)"; then
+    git -C "$dir" remote set-url origin "$url"
+  else
+    git -C "$dir" remote remove origin
+  fi
+  [[ "$base" != origin/* ]] || git -C "$dir" update-ref "refs/remotes/$base" "$sha"
+  # 저장소에만 둔 커밋 신원(user.name·user.email 등)은 clone에 따라오지 않는다.
+  while read -r key value; do
+    [[ -z "$key" ]] || git -C "$dir" config "$key" "$value"
+  done <<<"$(git -C "$repo" config --local --get-regexp '^user\.' 2>/dev/null)"
+  git -C "$dir" checkout -q --detach "$sha"
+}
+
 command_run() {
   local project="$1" repo="$2" cand_file="$3" cand="" sig="" base="" work_dir="" log_file="" exit_code=0
   local start_epoch=0 detail="{}" rel=".ai-harness-stage/autofix/error.json" line="" outcome="" artifact="" cost="null" fail_reason=""
@@ -421,8 +443,9 @@ command_run() {
   base="$(hm_resolve_base "$repo")"
   work_dir="$WORK_TREES_DIR/autofix-$(hm_short_key "$project")-$(date +%s)"
   mkdir -p "$WORK_TREES_DIR"
-  if ! git -C "$repo" worktree add -q --detach "$work_dir" "$base" >/dev/null 2>&1; then
-    printf 'worktree 생성 실패: %s (%s)\n' "$repo" "$base" >"$log_file"
+  if ! make_work_dir "$repo" "$base" "$work_dir" >/dev/null 2>&1; then
+    find "$work_dir" -depth -delete 2>/dev/null || true
+    printf '작업 디렉토리 생성 실패: %s (%s)\n' "$repo" "$base" >"$log_file"
     exit_code=70
   else
     detail="$("$DIR/monitor-fetch.sh" detail --root "$repo" --meta "$(jq -c '.meta // {}' <<<"$cand")" 2>/dev/null)"
@@ -436,7 +459,7 @@ command_run() {
     agent_command "$work_dir" "${base#origin/}" "$rel"
     (cd "$work_dir" && hm_run_with_timeout "$((TIMEOUT_MIN * 60))" \
       "${AGENT_ENV[@]}" HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
-    git -C "$repo" worktree remove --force "$work_dir" >/dev/null 2>&1 || find "$work_dir" -depth -delete 2>/dev/null || true
+    find "$work_dir" -depth -delete 2>/dev/null || true
   fi
 
   cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"

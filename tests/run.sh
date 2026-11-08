@@ -5013,6 +5013,7 @@ cat >"$AF_STUB/agent" <<'EOF'
 n=$(( $(cat "$AF_STUB/agent-count" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" >"$AF_STUB/agent-count"
 cp "$1" "$AF_STUB/error-$n.json"
+{ pwd -P; git rev-parse --path-format=absolute --git-common-dir; git remote get-url origin; git rev-parse HEAD; git config user.email; } >"$AF_STUB/git-$n.txt" 2>&1
 printf '%s\n' "${AF_STUB_RESULT:-AI_HARNESS_AUTOFIX_RESULT outcome=pr_opened artifact=https://github.com/acme/svc/pull/$n}"
 EOF
 cat >"$AF_STUB/pr" <<'EOF'
@@ -5039,6 +5040,14 @@ assert_eq "1" "$(<"$AF_STUB/agent-count")" "sweep launches one fix"
 assert_eq "pr_open|https://github.com/acme/svc/pull/1|1" "$(af_sig '"\(.status)|\(.pr)|\(.attempts)"')" "agent PR is recorded"
 assert_eq "new|UserService.java" "$(jq -r '"\(.reason)|\(.detail.exception[0].frames[0].file)"' "$AF_STUB/error-1.json")" "agent gets the error detail"
 if git -C "$AF_REPO" worktree list | grep -q auto-worktrees; then fail "worker removes its worktree"; fi
+# 무인 에이전트(launchd → claude)가 띄운 셸은 macOS 보호 폴더(~/Desktop 등)에 있는 원본 저장소의 .git을 읽지 못한다(#272).
+# 작업 디렉토리는 git 메타데이터를 원본에 기대지 않는 독립 저장소여야 하고, origin·기준 커밋·저장소 user 설정은 원본과 같아야 한다.
+AF_WD="$(sed -n 1p "$AF_STUB/git-1.txt")"
+assert_eq "$AF_WD/.git" "$(sed -n 2p "$AF_STUB/git-1.txt")" "agent work dir has its own git dir, not the source repo's"
+assert_eq "git@github.com:acme/svc.git" "$(sed -n 3p "$AF_STUB/git-1.txt")" "agent work dir keeps the source origin url"
+assert_eq "$(git -C "$AF_REPO" rev-parse origin/develop)" "$(sed -n 4p "$AF_STUB/git-1.txt")" "agent work dir is at the base commit"
+assert_eq "test@example.com" "$(sed -n 5p "$AF_STUB/git-1.txt")" "agent work dir keeps the repo-local git identity"
+[[ ! -e "$AF_WD" ]] || fail "worker removes the agent work dir"
 af_auto sweep
 assert_eq "1" "$(<"$AF_STUB/agent-count")" "a signature with an open PR is not fixed again"
 

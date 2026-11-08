@@ -17,6 +17,10 @@
 - **설정이 없는 저장소에서 `/autofix`를 부르면 setup부터** — 후보가 조용히 비어 나오고 다음 조회가 "monitor 설정 없음"으로 끝나 다음 단계가 모델 재량이었습니다. 이제 수동 실행은 `monitor-fetch.sh check`로 먼저 확인하고, monitor 설정이 없으면(새 종료 코드 5 — 자격증명·설정 오류의 4와 구분) setup으로 넘어갑니다. setup 절차는 `skills/autofix/setup.md`로 분리해 수정 실행 때 함께 읽지 않습니다. (#271)
 - **수동 후보 조회가 무인 실행 대상 목록에 묶이지 않음** — `autofix-auto.sh candidates`가 `HM_AUTOFIX_REPOS`에 든 저장소만 봐서, 무인 실행 없이 수동으로만 쓰면 monitor 설정이 있어도 후보가 비었습니다. 이제 `candidates --project <id> [--root <repo>]`는 목록과 무관하게 그 저장소의 monitor 설정으로 계산합니다(`--root`의 프로젝트와 `--project`가 다르면 거부). 무인 sweep·verify·track의 목록 규칙은 그대로입니다. (#271)
 
+### 버그 수정
+
+- **보호 폴더 저장소에서 무인 `/autofix --auto`가 PR을 열지 못함** — 저장소가 macOS 보호 폴더(`~/Desktop`·`~/Documents` 등)에 있으면 정기 실행(launchd)이 띄운 `claude`의 셸은 그 폴더에 접근할 수 없습니다. 작업용 git worktree의 `.git`이 원본 저장소의 `.git/worktrees/`를 가리키는 탓에 에이전트의 git 명령이 모두 "not a git repository"로 실패했고, `open-pr.sh --check`는 "origin 원격이 없습니다"로 끝나 PR 없이 `left_for_user`가 됐습니다. 이제 작업 디렉토리는 기준 커밋을 checkout한 독립 로컬 clone(같은 디스크면 객체는 하드링크)이고, 원본의 `origin` 주소·기준 브랜치·저장소 전용 `user.*` 설정을 그대로 가져갑니다. (#272)
+
 ## v0.66.0 (2026-11-08)
 ### 새 기능
 
