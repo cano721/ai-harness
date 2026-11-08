@@ -2224,6 +2224,11 @@ assert_contains "$LANDING_SKILL_CONTENT" "prefers-reduced-motion: reduce" "landi
 assert_contains "$LANDING_SKILL_CONTENT" "If a script fails to load or throws, every piece of content must still be visible" "landing-page keeps content visible when scripts fail"
 assert_contains "$LANDING_MOTION" "html.js [data-reveal]" "hidden reveal states sit behind a JavaScript gate"
 assert_contains "$LANDING_MOTION" "window.revealReady" "the reveal gate has a timed fallback"
+# Lenis를 켜면 흔히 깨지는 지점(안쪽 스크롤·모달 잠금·이중 루프·정리)을 함께 안내한다.
+assert_contains "$LANDING_MOTION" "data-lenis-prevent" "lenis guide keeps nested scroll areas native"
+assert_contains "$LANDING_MOTION" "lenis.stop()" "lenis guide locks scrolling behind modals"
+assert_contains "$LANDING_MOTION" "autoRaf: false" "lenis guide avoids a second frame loop under GSAP"
+assert_contains "$LANDING_MOTION" "lenis.destroy()" "lenis guide destroys the instance on unmount"
 assert_contains "$LANDING_SKILL_CONTENT" "Never reproduce third-party component or library code from memory" "landing-page forbids recalled third-party code"
 assert_contains "$LANDING_EXTERNAL" "Never reproduce third-party component or library code from memory" "external-code repeats the fetch rule"
 assert_contains "$LANDING_EXTERNAL" "Do not run an install command without the user's approval" "landing-page installs only after approval"
@@ -2765,6 +2770,84 @@ LOCK_PID_2=$!
 wait "$LOCK_PID_1"
 wait "$LOCK_PID_2"
 assert_eq "1" "$(wc -l < "$LOCK_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "review lock prevents duplicate history"
+
+# mkdir이 확인과 생성을 나눠 처리해도(uutils) lock은 동시 호출을 상호 배제한다.
+NONATOMIC_BIN="$TEST_TMP/nonatomic-mkdir-bin"
+mkdir -p "$NONATOMIC_BIN"
+cat >"$NONATOMIC_BIN/mkdir" <<'FAKE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [[ "$arg" == "-p" ]] && exec "$REAL_MKDIR" "$@"
+done
+for target in "$@"; do
+  if [[ -e "$target" ]]; then
+    echo "mkdir: cannot create directory '$target': File exists" >&2
+    exit 1
+  fi
+  sleep 0.2
+  "$REAL_MKDIR" -p "$target"
+done
+FAKE
+chmod +x "$NONATOMIC_BIN/mkdir"
+REAL_MKDIR_PATH="$(command -v mkdir)"
+for round in 1 2 3; do
+  NA_DATA="$TEST_TMP/nonatomic-lock-data-$round"
+  HARNESS_METRICS_DIR="$NA_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+  NA_EVENT="$NA_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+  HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" record "$NA_EVENT" >/dev/null
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-1" &
+  NA_PID_1=$!
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-2" &
+  NA_PID_2=$!
+  NA_RC_1=0
+  NA_RC_2=0
+  wait "$NA_PID_1" || NA_RC_1=$?
+  wait "$NA_PID_2" || NA_RC_2=$?
+  assert_eq "0" "$NA_RC_1" "nonatomic mkdir round $round first mark-reviewed exit"
+  assert_eq "0" "$NA_RC_2" "nonatomic mkdir round $round second mark-reviewed exit"
+  assert_eq "1" "$(wc -l < "$NA_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "nonatomic mkdir round $round history once"
+  if grep -q 'cannot stat\|No such file' "$NA_DATA/err-1" "$NA_DATA/err-2"; then
+    fail "nonatomic mkdir round $round raced into critical section: $(cat "$NA_DATA/err-1" "$NA_DATA/err-2")"
+  fi
+  [[ ! -e "$NA_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "nonatomic mkdir round $round queue lock left behind"
+done
+pass "queue lock excludes concurrent callers even when mkdir is non-atomic"
+
+# 임계구역 안에서 실패해도 EXIT trap이 lock을 푼다(bash 5에서 local 변수가 사라져도).
+FAILLOCK_DATA="$TEST_TMP/failure-lock-data"
+FAILLOCK_BIN="$TEST_TMP/failing-mv-bin"
+mkdir -p "$FAILLOCK_BIN"
+cat >"$FAILLOCK_BIN/mv" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  */sessions/*) echo "mv: simulated failure for $1" >&2; exit 1 ;;
+esac
+exec "$REAL_MV" "$@"
+FAKE
+chmod +x "$FAILLOCK_BIN/mv"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+FAILLOCK_EVENT="$FAILLOCK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" record "$FAILLOCK_EVENT" >/dev/null
+FAILLOCK_RC=0
+# 가짜 mv를 PATH 앞에 두기 전에 진짜 경로를 구한다(같은 줄이면 해시 캐시 여부에 따라 가짜를 잡아 무한 재실행).
+FAILLOCK_REAL_MV="$(command -v mv)"
+PATH="$FAILLOCK_BIN:$PATH" REAL_MV="$FAILLOCK_REAL_MV" \
+  HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$FAILLOCK_DATA/err" || FAILLOCK_RC=$?
+if [[ "$FAILLOCK_RC" == "0" ]]; then
+  fail "mark-reviewed should fail when moving a session marker fails"
+fi
+if grep -q 'unbound variable' "$FAILLOCK_DATA/err"; then
+  fail "EXIT trap referenced an out-of-scope variable: $(cat "$FAILLOCK_DATA/err")"
+fi
+[[ ! -e "$FAILLOCK_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "queue lock left behind after failure inside critical section"
+pass "queue lock is released when the critical section fails"
 
 # record가 marker 교체 중이어도 mark-reviewed는 같은 프로젝트 lock을 기다려 상태가 갈라지지 않는다.
 ATOMIC_DATA="$TEST_TMP/atomic-data"
@@ -5897,6 +5980,81 @@ HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TM
 assert_eq "[]" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-old.html" | jq -c '.improvements')" "impact render treats missing improvements as none"
 pass "impact render tolerates odd inputs"
 
+# 비교 가능성·추세·저장소 상태는 집계 쪽(impact-assess.jq)이 정한다. 보드와 리포트는 그 값을 그대로 쓴다. (#260)
+# 설치 전 정리된 세션이 없으면 0 → N을 비교하지 않고 이유를 낸다. 표본이 충분할 때만 증감을 낸다.
+assess_q() { jq -rn -L "$ROOT/scripts" --argjson d "$1" "include \"impact-assess\"; \$d | $2"; }
+ASSESS_P='{"periods":{"before":{"sessions":12,"digested_sessions":0,"corrections_per_session":null,"missing_context_per_session":null,"guard_blocks":0},
+  "after":{"sessions":30,"digested_sessions":18,"corrections_per_session":0.8,"missing_context_per_session":6.4,"guard_blocks":4}},"weekly":[],"rework":null}'
+assert_eq "false no_baseline_digests null|false after_only|false no_rework" \
+  "$(assess_q "$ASSESS_P" 'assess.metrics | "\(.corrections_per_session | "\(.comparable) \(.reason) \(.change)")|\(.guard_blocks | "\(.comparable) \(.reason)")|\(.rework | "\(.comparable) \(.reason)")"')" \
+  "impact does not compare a metric whose before window has no digested sessions"
+assert_eq "false no_baseline_sessions" \
+  "$(assess_q "$ASSESS_P" '.periods.before.sessions = 0 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact says the before window had no sessions at all"
+assert_eq "false few_digests" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 3 | .periods.before.corrections_per_session = 0.5 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact does not compare a metric with few digested sessions on either side"
+assert_eq "true null down|true null flat|true null up" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 10 | [.periods.before.corrections_per_session = (1.3, 0.8, 0.3)
+    | assess.metrics.corrections_per_session | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares a metric when both windows have enough digested sessions"
+assert_eq "false few_prs null|true null down" \
+  "$(assess_q "$ASSESS_P" '[.rework = ({before:{rework_ratio:0, settled_prs:3}, after:{rework_ratio:40, settled_prs:20}}, {before:{rework_ratio:40, settled_prs:12}, after:{rework_ratio:10, settled_prs:20}})
+    | assess.metrics.rework | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares rework only with enough settled PRs on both sides"
+
+# 추세: 설치 후 최근 주에서 정리된 세션이 있는 주의 앞 절반과 뒤 절반 비율을 맞댄다. 설치 전 주와 정리 1개뿐인 주는 빼고, 모자라면 데이터 부족.
+assess_week() { jq -cn --arg w "$1" --argjson a "$2" --argjson d "$3" --argjson c "$4" \
+  '{week:$w, after_install:$a, sessions:$d, digested_sessions:$d, corrections:$c, corrections_per_session:(if $d == 0 then null else $c / $d end), missing_context:0, missing_context_per_session:0}'; }
+ASSESS_W="[$(assess_week 2026-09-28 false 4 40),$(assess_week 2026-10-05 true 4 4),$(assess_week 2026-10-12 true 1 9),$(assess_week 2026-10-19 true 4 4),$(assess_week 2026-10-26 true 4 1),$(assess_week 2026-11-02 true 4 0)]"
+assert_eq "down 4 16 1 0.13 2026-10-05" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session | \"\(.verdict) \(.weeks) \(.digested) \(.first) \(.last) \(.series[0].week)\"")" \
+  "impact trend compares the first and last half of digested after-install weeks"
+assert_eq "up flat insufficient" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | [(.weekly | map(.corrections = (if .week >= \"2026-10-26\" then 4 else 1 end))), (.weekly | map(.corrections = 2)), (.weekly | .[0:4])] as \$v
+    | [\$v[] as \$w | .weekly = \$w | assess.trends.corrections_per_session.verdict] | join(\" \")")" \
+  "impact trend says up, flat, or not enough data"
+# 3주(3·3·4세션)면 앞·뒤 절반이 각 1주라 표본이 작다 — 판정하지 않는다. 비율 값이 비면 비교하지 않는다.
+assert_eq "insufficient no_value" "$(assess_q "$ASSESS_P" "(${ASSESS_W}[1:5] | .[1].digested_sessions = 0 | .[0].digested_sessions = 3 | .[2].digested_sessions = 3) as \$w
+  | (.weekly = \$w | assess.trends.corrections_per_session.verdict),
+    (.periods.before.digested_sessions = 10 | assess.metrics.corrections_per_session.reason)" | tr '\n' ' ' | sed 's/ $//')" \
+  "impact trend needs enough sessions in each half, and a metric needs values on both sides"
+assert_eq "5" "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session.series | length")" "impact trend series lists the recent after-install weeks it looked at"
+
+# 저장소 상태: 효과(개선 사라짐·줄어듦, 줄어드는 추세, 비교 가능한 감소)와 나쁜 신호(재발, 느는 추세)로 정하고, 신호가 없으면 왜 모르는지 남긴다.
+assert_eq "effective mixed attention watching insufficient no_sessions" \
+  "$(assess_q "$ASSESS_P" "[
+    (.weekly = $ASSESS_W | .improvements = []),
+    (.weekly = $ASSESS_W | .improvements = [{result:{verdict:\"recurred\"}}]),
+    (.improvements = [{result:{verdict:\"recurred\"}}]),
+    (.weekly = (\$d.weekly + [${ASSESS_W}[] | .corrections = 2]) | .improvements = [{result:{verdict:\"hold\"}}]),
+    (.improvements = [{result:{verdict:\"unmatched\"}}]),
+    (.periods.after.sessions = 0 | .improvements = [])]
+    | map(assess_status.key) | join(\" \")")" \
+  "impact sums each repo into effective, mixed, attention, watching, insufficient, or no recent sessions"
+assert_eq "no_baseline few_recent_digests unmatched_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"unmatched"}}] | assess_status.gaps | map(if .n then "\(.why):\(.n)" else .why end) | join(" ")')" \
+  "impact says why a repo has no answer yet"
+assert_eq "insufficient no_baseline_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"no_baseline"}}] | assess_status | "\(.key) \(.gaps | map(select(.why == "no_baseline_improvements")) | map("\(.why):\(.n)") | join(""))"')" \
+  "impact does not count an improvement without a baseline as being watched"
+
+# compare·render·view가 같은 값을 싣는다. EV는 설치 전 정리된 세션이 없다.
+assert_eq "false no_baseline_sessions false after_only" \
+  "$(jq -r '.assessment.metrics | "\(.corrections_per_session.comparable) \(.corrections_per_session.reason) \(.guard_blocks.comparable) \(.guard_blocks.reason)"' <<<"$EV_JSON")" \
+  "impact compare carries comparability per metric"
+assert_eq "few_digests" "$(jq -r '.assessment.metrics.missing_context_per_session.reason' <<<"$IMPACT_JSON")" "impact compare flags few digested sessions"
+EV_VIEW="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$EV_FILE")"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$(jq -r '.highlights.file' <<<"$EV_VIEW")" --out "$TEST_TMP/impact-assess.html" >/dev/null
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-assess.html" | jq -c '.assessment')" \
+  "impact report and view carry the same assessment"
+assert_eq "effective" "$(jq -r '.assessment.status.key' <<<"$EV_VIEW")" "impact view adds the repo status"
+# 옛 캐시(assessment 없음)도 view가 같은 규칙으로 채운다.
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(jq 'del(.assessment)' "$EV_FILE" >"$TEST_TMP/impact-noassess.json"; HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$TEST_TMP/impact-noassess.json" | jq -c '.assessment')" \
+  "impact view assesses an old compare JSON the same way"
+assert_contains "$(<"$ROOT/skills/harness-impact/report-template.html")" "비교 불가" "impact report says when a metric cannot be compared"
+pass "impact assessment: comparability, after-install trend, repo status"
+
 # digest가 null·깨짐이면 건너뛰고, 세션 0건·이력 없음이어도 compare가 JSON을 낸다.
 ODD_DATA="$TEST_TMP/impact-odd-data"
 mkdir -p "$ODD_DATA/events" "$ODD_DATA/digests"
@@ -6283,6 +6441,10 @@ assert_eq "h4:remove:unmatched h3:add:hold h2:add:recurred h1:add:gone" "$(jq -r
   "impact endpoint lists improvements newest first with the change kind"
 assert_eq "$(jq -c '[.improvements[] | .result.verdict] | reverse' <<<"$BIMP_VIEW")" "$(jq -c '[.improvements[].result.verdict]' <<<"$BIMP_APP")" \
   "board verdicts are the ones impact.sh view computes"
+assert_eq "$(jq -c '.assessment' <<<"$BIMP_VIEW")" "$(jq -c '.assessment' <<<"$BIMP_APP")" \
+  "board carries the comparability, trends, and repo status impact.sh view computes"
+assert_eq "mixed true down" "$(jq -r '.assessment | "\(.status.key) \(.metrics.corrections_per_session.comparable) \(.metrics.corrections_per_session.change)"' <<<"$BIMP_APP")" \
+  "board repo status weighs improvements that held against ones that recurred"
 assert_eq "10 0 6 4" "$(jq -r '.improvements[] | select(.id == "h1") | "\(.observed_now) \(.result.after_hits) \(.result.observed) \(.result.unjudged)"' <<<"$BIMP_APP")" \
   "impact card carries sessions observed now and the judged recurrence"
 case "$BIMP" in *candidates*|*"교정 원문"*) fail "impact endpoint does not ship candidate pools or correction text" ;; esac
@@ -6318,6 +6480,7 @@ assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/rep
 assert_eq "2026-10-25" "$(jq -r '.matched_through' "$BIMP_KEEP")" "a board render does not overwrite the kept matching"
 assert_eq "true" "$(bimp_sh stop | jq -r '.stopped')" "impact board stops"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "판정 기준 (/harness-impact와 같음)" "impact view states the verdict rule"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "다시 계산 실패" "impact view keeps showing a failed recompute next to the last result"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 효과" "board skill documents the impact view"
 pass "harness board impact view: background cache, refresh, failure reason, verdicts from impact"
 

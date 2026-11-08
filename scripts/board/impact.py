@@ -280,6 +280,8 @@ def shape(v):
         "rework": {"before": _rework(rework.get("before")), "after": _rework(rework.get("after"))} if rework else None,
         "weekly": [_pick(w, WEEK_KEYS) for w in (v.get("weekly") or [])][-WEEKS:],
         "warnings": v.get("warnings") or [],
+        # 비교 가능성·추세·저장소 상태는 impact.sh view(impact-assess.jq)가 정한 값을 그대로 싣는다(#260).
+        "assessment": v.get("assessment") if isinstance(v.get("assessment"), dict) else None,
         "improvements": imps,
         "matched_through": (v.get("highlights") or {}).get("matched_through"),
     }

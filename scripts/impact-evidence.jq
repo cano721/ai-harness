@@ -11,6 +11,8 @@
 #     render가 보관해 둔 매칭을 더 새 compare에 다시 쓸 때(보드), 아직 맞춰 보지 않은 뒤 세션이 분모에만 들어가
 #     "사라짐·줄어듦"으로 기울지 않게 한다. 그 뒤 세션 수는 unjudged로 알린다.
 # 후보 목록은 리포트에 싣지 않고, 맞춘 finding 요약 몇 개만 근거로 남긴다.
+# 판정이 붙은 뒤 비교 가능성·추세·저장소 상태(impact-assess.jq)를 다시 계산해 싣는다 — assessment가 없는 옛 캐시도 같은 규칙.
+include "impact-assess";
 
 def min_observed: 5;
 def example_cap: 3;
@@ -67,4 +69,5 @@ def evidence($h):
               before_examples: ($bm | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary})),
               after_examples: ($am | sort_by(.date) | reverse | .[0:example_cap] | map({date, summary}))}
          end) as $r
-      | $x | del(.before.candidates, .before.window.candidates, .after.candidates) | . + {result: $r}));
+      | $x | del(.before.candidates, .before.window.candidates, .after.candidates) | . + {result: $r}))
+  | .assessment = assessment;

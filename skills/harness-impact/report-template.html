@@ -232,6 +232,8 @@ const fmt = (v, d = 1) => v == null ? "–" : (Number.isInteger(v) ? String(v) :
 const B = DATA ? DATA.periods.before : null, A = DATA ? DATA.periods.after : null;
 const warnings = new Set((DATA && DATA.warnings) || []);
 const beforeMissing = warnings.has("before_missing");
+// 비교 가능성·추세·저장소 상태(scripts/impact-assess.jq). 보드 "하네스 효과"와 같은 값.
+const AS = (DATA && DATA.assessment) || { metrics: {}, trends: {} };
 
 // 숫자 옆에 붙는 신뢰도 경고. 아래 "신뢰도와 한계"에 같은 뜻을 길게 쓴다.
 const CHIP = {
@@ -285,11 +287,35 @@ function verdictLine() {
   return p;
 }
 
+// 저장소 상태 한 줄: 신호가 있으면 신호, 없으면 왜 아직 모르는지.
+const STATUS_LABEL = { effective: "효과 확인", mixed: "엇갈림", attention: "재발/악화", watching: "관찰 중", insufficient: "데이터 부족", no_sessions: "최근 세션 없음" };
+function statusLine() {
+  const st = AS.status;
+  if (!st) return null;
+  const M = { corrections_per_session: "교정", missing_context_per_session: "사실 부족", guard_blocks: "가드 차단", rework: "재작업 비율" };
+  const say = (x, good) => x.by === "improvement" ? "개선 " + x.n + "건 " + (good ? "효과 있음" : "재발")
+    : x.by === "trend" ? M[x.metric] + (good ? " 줄고" : " 늘고") + " 있음" : "설치 전보다 " + M[x.metric] + (good ? " 줄어듦" : " 늘어남");
+  const GAP = {
+    no_recent_sessions: () => "최근 구간에 세션이 없어요",
+    no_baseline: () => "설치 전 기록이 없어 전후 비교 불가",
+    few_recent_digests: () => "설치 후 정리된 세션이 적어 추세를 아직 못 봐요",
+    no_improvements: () => "아직 /harvest가 반영한 개선이 없어요",
+    unmatched_improvements: g => "개선 " + g.n + "건 아직 맞춰 보지 않음",
+    few_observed: g => "개선 " + g.n + "건 반영 뒤 세션이 적어 관찰 중",
+    no_baseline_improvements: g => "개선 " + g.n + "건은 근거에서 유형을 찾지 못해 비교 기준 없음",
+  };
+  const sig = [...st.good.map(x => say(x, true)), ...st.bad.map(x => say(x, false))];
+  const text = sig.length ? sig.join(" · ") : st.gaps.map(g => GAP[g.why] ? GAP[g.why](g) : g.why).join(" · ");
+  return el("p", { class: "verdict" }, el("b", {}, STATUS_LABEL[st.key] || st.key), " — ", text || "판단할 신호가 아직 없어요", ".");
+}
+
 function autoHeadline() {
   const ok = vcount("gone") + vcount("reduced");
   if (ok) return "하네스가 고친 실수 " + ok + "가지가 다시 나오지 않거나 줄었어요";
   const cb = B.corrections_per_session, ca = A.corrections_per_session;
-  if (cb != null && ca != null && cb > 0 && ca < cb) return "같은 지적이 " + Math.round((cb - ca) / cb * 100) + "% 줄었어요";
+  const cmp = (AS.metrics || {}).corrections_per_session;
+  if ((AS.trends || {}).corrections_per_session && AS.trends.corrections_per_session.verdict === "down") return "설치 뒤 같은 지적이 줄고 있어요";
+  if ((!cmp || cmp.comparable) && cb != null && ca != null && cb > 0 && ca < cb) return "같은 지적이 " + Math.round((cb - ca) / cb * 100) + "% 줄었어요";
   if (A.guard_blocks > 0) return "위험한 수정 " + A.guard_blocks + "건을 막았어요";
   return "도입 전후 변화를 정리했어요";
 }
@@ -300,24 +326,52 @@ app.append(el("header", {},
   el("div", { class: "meta" }, DATA.project, " · 설치 ", DATA.installed.date,
     " · 설치 전 ", B.since, "~", B.until, " vs 최근 ", A.since, "~", A.until, " (각 ", DATA.window_days, "일, 끝 날짜 미포함)"),
   el("h1", {}, (HIGHLIGHTS && HIGHLIGHTS.headline) || autoHeadline()),
-  verdictLine()));
+  verdictLine(),
+  statusLine()));
 
-// 2. 핵심 카드: 하네스가 직접 겨냥하는 세 가지
-const digestChips = p => [warnings.has("few_digests") ? "few_digests" : null, beforeMissing ? "before_missing" : null];
+// 2. 핵심 카드: 하네스가 직접 겨냥하는 세 가지.
+// 비교 가능성과 추세는 집계(scripts/impact-assess.jq)가 정한 값이다 — 보드와 같은 값을 쓰고, 여기서 새 기준을 만들지 않는다.
+const NOT_COMPARABLE = {
+  no_baseline_sessions: "설치 전 세션 기록 없음",
+  no_baseline_digests: "설치 전 기록 없음(세션 정리는 설치 뒤부터 쌓임)",
+  few_digests: "정리된 세션이 적음 (양쪽 5개 이상일 때 비교)",
+  few_prs: "정산된 PR이 적음 (양쪽 10개 이상일 때 비교)",
+  no_rework: "계산 안 함",
+  after_only: "설치 후에만 있는 지표 (가드는 하네스와 함께 깔림)",
+  no_value: "값이 없음",
+};
+const TREND_WORD = { down: "줄고 있음", flat: "비슷함", up: "늘고 있음", insufficient: "데이터 부족" };
+function trendLine(key) {
+  const t = (AS.trends || {})[key];
+  if (!t) return null;
+  const word = TREND_WORD[t.verdict] || t.verdict;
+  const cls = t.verdict === "down" ? "good" : t.verdict === "up" ? "bad" : "flat";
+  return el("div", { class: "delta " + cls }, "설치 후 추세: ", word,
+    t.verdict === "insufficient" ? " (정리된 세션 2개 이상인 주 " + t.weeks + "개 · " + t.digested + "세션, 3주·10세션부터 판단)"
+      : " (앞 절반 " + fmt(t.first, 2) + " → 뒤 절반 " + fmt(t.last, 2) + " · " + t.weeks + "주 " + t.digested + "세션)");
+}
+// 비교할 수 없는 지표는 0 → N 대신 이유를 쓴다.
+function compareDelta(key, lower, b, a, unit) {
+  const m = (AS.metrics || {})[key];
+  if (m && !m.comparable) return { text: "설치 전후 비교 불가 — " + (NOT_COMPARABLE[m.reason] || m.reason), cls: "flat", off: true };
+  return delta(lower, b, a, unit);
+}
+const digestChips = () => [warnings.has("few_digests") ? "few_digests" : null, beforeMissing ? "before_missing" : null];
 const CARDS = [
-  { label: "같은 지적을 다시 한 횟수 (세션당)", b: B.corrections_per_session, a: A.corrections_per_session, lower: true,
+  { key: "corrections_per_session", label: "같은 지적을 다시 한 횟수 (세션당)", b: B.corrections_per_session, a: A.corrections_per_session, lower: true,
     note: "LLM 세션 정리가 찾은 사용자 교정 · 정리된 세션 " + B.digested_sessions + " → " + A.digested_sessions + "개", chips: digestChips() },
-  { label: "프로젝트 사실을 몰라 생긴 문제 (세션당)", b: B.missing_context_per_session, a: A.missing_context_per_session, lower: true,
+  { key: "missing_context_per_session", label: "프로젝트 사실을 몰라 생긴 문제 (세션당)", b: B.missing_context_per_session, a: A.missing_context_per_session, lower: true,
     note: "에이전트가 프로젝트 규칙·환경을 몰라 틀리거나 물은 일. 하네스 문서가 줄여야 하는 것", chips: digestChips() },
-  { label: "하네스가 막은 위험한 수정", b: B.guard_blocks, a: A.guard_blocks, lower: null, unit: "건",
-    note: "편집 가드가 멈춘 수정. 아래 \"막은 위험\"에 무엇을 막았는지 있어요", chips: [beforeMissing ? "before_missing" : null] },
+  { key: "guard_blocks", label: "하네스가 막은 위험한 수정", b: B.guard_blocks, a: A.guard_blocks, lower: null, unit: "건",
+    note: "편집 가드가 멈춘 수정. 아래 \"막은 위험\"에 무엇을 막았는지 있어요", chips: [] },
 ];
 const kpis = el("section", { class: "kpis", "aria-label": "핵심 지표" });
 for (const c of CARDS) {
-  const d = delta(c.lower, beforeMissing ? null : c.b, c.a, c.unit);
+  const d = compareDelta(c.key, c.lower, beforeMissing ? null : c.b, c.a, c.unit);
   kpis.append(el("div", { class: "card kpi" },
     el("div", { class: "label" }, c.label),
-    el("div", { class: "value" }, beforeMissing ? null : el("span", { class: "from" }, fmt(c.b), " → "), fmt(c.a), c.unit && c.a != null ? el("span", { class: "from" }, c.unit) : null),
+    el("div", { class: "value" }, beforeMissing || d.off ? null : el("span", { class: "from" }, fmt(c.b), " → "), fmt(c.a), c.unit && c.a != null ? el("span", { class: "from" }, c.unit) : null),
+    trendLine(c.key),
     el("div", { class: "delta " + d.cls }, d.text),
     el("div", { class: "note" }, c.note),
     chips(c.chips)));
@@ -537,8 +591,9 @@ app.append(el("p", { class: "lead" }, "턴·시간·토큰은 작업 크기와 �
   });
   if (DATA.rework && DATA.rework.before && DATA.rework.after) {
     const rb = DATA.rework.before.rework_ratio, ra = DATA.rework.after.rework_ratio;
+    const d = compareDelta("rework", true, rb, ra);
     body.push(tr("재작업 PR 비율 (%) · PR " + DATA.rework.before.settled_prs + " → " + DATA.rework.after.settled_prs + "건",
-      fmt(rb), fmt(ra), delta(true, rb, ra), ["rework_split"]));
+      d.off ? "–" : fmt(rb), fmt(ra), d, ["rework_split"]));
   }
   app.append(el("div", { class: "card scroll" }, el("table", {},
     el("thead", {}, el("tr", {}, el("th", {}, "지표"), el("th", {}, "설치 전"), el("th", {}, "최근"), el("th", {}, "변화"))),
