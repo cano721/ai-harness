@@ -2279,19 +2279,30 @@ lp() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_W" 2>"$TEST_TMP/lp.err"; 
 lp_rc() { local rc=0; lp "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
 lp init --mode unattended >/dev/null
 assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run refuses a node whose artifacts are missing"
-touch "$LP_W/brief.md" "$LP_W/references.json"
+touch -t 202001010000 "$LP_W/brief.md"
+assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run refuses artifacts made before the node started"
+touch "$LP_W/brief.md"
 assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
+touch "$LP_W/references.json"
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
 assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
-mkdir -p "$LP_W/site/a" "$LP_W/site/b"
-touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
 lp submit --node direction --outcome direction_ready >/dev/null
 assert_eq "draft draft" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at draft"
+mkdir -p "$LP_W/site/a" "$LP_W/site/b" "$LP_W/caps"; touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html"
 assert_eq preview "$(lp submit --node draft --outcome drafted --candidate a)" "a draft is previewed before it is finished"
-assert_eq 4 "$(lp_rc submit --node preview --outcome previewed --candidate a)" "a preview needs its captures and URL"
-touch "$LP_W/preview-a.json" "$LP_W/preview-b.json"
+printf '{"url":"http://127.0.0.1:9/a/","captures":["caps/a-1440.png","caps/a-390.png"]}\n' >"$LP_W/preview-a.json"
+assert_eq 4 "$(lp_rc submit --node preview --outcome previewed --candidate a)" "a preview needs its capture files"
+printf 'png' >"$LP_W/caps/a-1440.png"; printf 'png' >"$LP_W/caps/a-390.png"
+cat >"$TEST_TMP/lp-preview-hook.sh" <<HOOK
+#!/usr/bin/env bash
+printf '%s\n' "\$1" >>"$TEST_TMP/lp-previews.log"
+HOOK
+chmod +x "$TEST_TMP/lp-preview-hook.sh"
+export LANDING_PREVIEW_CMD="$TEST_TMP/lp-preview-hook.sh"
 assert_eq build "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview the page is finished"
+assert_eq "http://127.0.0.1:9/a/" "$(cat "$TEST_TMP/lp-previews.log")" "the runner hands the preview URL to the person at once"
+touch "$LP_W/site/a/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json"
 assert_contains "$(lp status)" '"preview_min"' "status reports minutes to the first preview"
 assert_eq measure "$(lp submit --node build --outcome built --candidate a)" "a built candidate goes to measure"
 assert_eq 3 "$(lp_rc submit --node measure --outcome measured_pass --candidate a)" "the maker cannot submit a measure outcome"
@@ -2314,14 +2325,18 @@ assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fideli
 touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
 assert_eq "done" "$(lp review --candidate a --file "$(lp_review none 1)")" "only user input left ends at done"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
-lp submit --node draft --outcome drafted --candidate b >/dev/null; lp submit --node preview --outcome previewed --candidate b >/dev/null
+touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
+printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
+printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
+lp submit --node preview --outcome previewed --candidate b >/dev/null
+touch "$LP_W/site/b/index.html" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
 lp submit --node build --outcome built --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
 for r in 1 2 3; do
   out="$(lp review --candidate b --file "$(lp_review flow 0 b)" || true)"
   [[ $r -lt 3 ]] && { touch "$LP_W/repair-b-$r.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null; }
 done
 assert_eq user_decision "$out" "a third review with a major left ends at user_decision"
-unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE
+unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE LANDING_PREVIEW_CMD
 # Real measure on fixed pages, only where a Playwright Chromium can start.
 LP_FIX="$ROOT/tests/fixtures/landing-measure"
 if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then

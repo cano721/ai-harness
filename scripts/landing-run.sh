@@ -75,6 +75,32 @@ edge() {
     'first(.transitions[] | select(.from == $f and .when == $w and ((.mode // $m) == $m)) | .to) // empty' "$GRAPH"
 }
 
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+entered_epoch() {
+  local at
+  if [[ -n "$CAND" ]]; then at="$(jq -r --arg c "$CAND" '.candidates[$c].entered_at // empty' "$STATE")"; else at="$(state '.entered_at // empty')"; fi
+  [[ -n "$at" ]] || { printf '0\n'; return; }
+  jq -rn --arg a "$at" '$a | fromdateiso8601'
+}
+
+# Tell the person a draft is up, whatever channel the run has: LANDING_PREVIEW_CMD (called with the URL and the preview
+# file; "none" turns it off), otherwise open the URL in the default browser and post a desktop notification.
+notify_preview() {
+  local url="$1" file="$2"
+  if [[ -n "${LANDING_PREVIEW_CMD:-}" ]]; then
+    [[ "$LANDING_PREVIEW_CMD" == none ]] && return 0
+    read -r -a hook <<<"$LANDING_PREVIEW_CMD"
+    "${hook[@]}" "$url" "$file" >/dev/null 2>&1 || printf 'landing-run: preview hook failed\n' >&2
+    return 0
+  fi
+  if [[ "$(uname)" == Darwin ]] && command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || true
+    osascript -e "display notification \"$url\" with title \"랜딩 페이지 첫 시안\"" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
+  fi
+}
+
 current() { if [[ -n "$CAND" ]]; then jq -r --arg c "$CAND" '.candidates[$c].node // empty' "$STATE"; else state .node; fi; }
 
 move() {
@@ -84,17 +110,17 @@ move() {
   local at; at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
-      '.candidates[$c].node = $t | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
+      '.candidates[$c].node = $t | .candidates[$c].entered_at = $at | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
        | if $t == "build" then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision") then .candidates[$c].finished_at = $at else . end'
   else
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
-      '.node = $t | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
+      '.node = $t | .entered_at = $at | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
   fi
   # Leaving the shared steps: the candidates listed in candidates.json start their own paths at draft.
   if [[ -z "$CAND" && "$to" == "draft" ]]; then
     [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing"
     local cands
-    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "draft", measures: 0, reviews: 0, verdict: null}}] | from_entries' "$WORK/candidates.json")" \
+    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "draft", entered_at: $at, measures: 0, reviews: 0, verdict: null}}] | from_entries' --arg at "$at" "$WORK/candidates.json")" \
       || die 4 "candidates.json must hold {\"candidates\":[{\"id\",\"dir\",\"motion_level\"}]}"
     [[ "$(jq 'length' <<<"$cands")" -ge 1 ]] || die 4 "candidates.json lists no candidate"
     save --argjson cs "$cands" '.candidates = $cs | .node = "candidates"'
@@ -143,7 +169,7 @@ case "$cmd" in
     [[ ! -f "$STATE" ]] || die 3 "a run already exists in $RUN"
     mkdir -p "$RUN"
     jq -n --arg g "$GRAPH" --arg m "$MODE" --arg e "$(jq -r .entry "$GRAPH")" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{graph: $g, mode: $m, node: $e, started_at: $at, candidates: {}, history: []}' >"$STATE"
+      '{graph: $g, mode: $m, node: $e, started_at: $at, entered_at: $at, candidates: {}, history: []}' >"$STATE"
     print_next "$(state .node)"
     ;;
   next)
@@ -171,7 +197,28 @@ case "$cmd" in
       [[ -z "$a" || -e "$WORK/$a" ]] || absent+=("$a")
     done < <(artifacts "$NODE" "$CAND")
     [[ ${#absent[@]} -eq 0 ]] || die 4 "missing artifacts for $NODE: ${absent[*]}"
+    # Artifacts must be made in this node, not before it: work done ahead and submitted in a burst skips the node's purpose.
+    since="$(entered_epoch)"; stale=()
+    while IFS= read -r a; do
+      [[ -z "$a" ]] && continue
+      [[ "$(mtime "$WORK/$a")" -ge "$since" ]] || stale+=("$a")
+    done < <(artifacts "$NODE" "$CAND")
+    [[ ${#stale[@]} -eq 0 ]] || die 4 "artifacts older than this node (write or update them in $NODE): ${stale[*]}"
+    purl="" pf=""
+    if [[ "$NODE" == preview ]]; then
+      pf="$WORK/preview-$CAND.json"
+      purl="$(jq -r '.url // empty' "$pf" 2>/dev/null || true)"
+      [[ "$purl" =~ ^https?:// ]] || die 4 "preview-$CAND.json needs the served url"
+      caps=0; nocap=()
+      while IFS= read -r cpath; do
+        [[ -z "$cpath" ]] && continue
+        caps=$((caps + 1)); [[ "$cpath" == /* ]] || cpath="$WORK/$cpath"
+        [[ -s "$cpath" ]] || nocap+=("$cpath")
+      done < <(jq -r '.captures // [] | .[]' "$pf")
+      [[ $caps -ge 2 && ${#nocap[@]} -eq 0 ]] || die 4 "preview-$CAND.json needs its 1440 and 390 captures as files: ${nocap[*]:-none listed}"
+    fi
     move "$NODE" "$OUTCOME"
+    if [[ "$NODE" == preview ]]; then notify_preview "$purl" "$pf"; fi
     ;;
   measure)
     [[ -f "$STATE" && -n "$CAND" && -n "$URL" ]] || usage
