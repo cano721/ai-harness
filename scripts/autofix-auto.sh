@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016  # set_sig·state_update에 넘기는 작은따옴표 인자는 jq 식이다($cur·$now는 jq 변수)
 # 모니터링 도구의 에러를 자동으로 고치고, 고친 뒤 그 에러가 더 나오지 않는지까지 확인한다 (opt-in: HM_AUTOFIX_AUTO=1).
-# 저장소 manifest의 `monitor` 설정이 있는 하네스 저장소만 대상이다. 에러 시그니처마다 상태를 남긴다:
+# `monitor` 설정(개인 로컬 파일 또는 기준 브랜치 manifest)이 있는 하네스 저장소만 대상이다. 에러 시그니처마다 상태를 남긴다:
 #   attempting → pr_open → verifying(병합·배포 뒤 관찰) → resolved | regressed(재시도) | gave_up
 #   그 밖: skipped(코드 버그 아님·재현 불가, 유예 뒤 다시 봄) · declined(사람이 PR을 닫음) · failed(일시 실패)
 # 수정은 작업 전용 worktree의 headless 에이전트가 draft PR까지만 만든다. 병합은 사람이 한다.
@@ -18,6 +18,7 @@ RUNS_FILE="$AF_DIR/runs.jsonl"
 LOG_DIR="$AF_DIR/logs"
 # 무인 에이전트는 한 번에 하나다 — 자동 harvest·sync와 같은 lock을 쓴다.
 RUN_LOCK="$HM_DATA_DIR/harvest-auto/running.lock"
+SWEEP_LOCK="$AF_DIR/.sweep.lock"
 WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
 case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
 int_env() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
@@ -41,6 +42,9 @@ usage:
   autofix-auto.sh track --project <id> --candidate <json> --pr <url>   # 수동으로 연 PR도 검증 대상에 올린다
   autofix-auto.sh run <project> <repo> <candidate-json-file>   # sweep이 띄우는 detached worker
   autofix-auto.sh runs [--limit N]
+  autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--interval-minutes N|off]
+                            [--daily-max N] [--max-attempts N] [--budget-usd X]
+                                                # 무인 실행 설정을 ~/.ai-harness/config에 쓴다(인자 없으면 현재 값만 보여 준다)
 EOF
   exit 2
 }
@@ -86,19 +90,26 @@ set_sig() { # $1=project $2=signature $3=jq 객체 식(현재 값은 $cur) [나�
 
 # 대상은 사용자가 config의 HM_AUTOFIX_REPOS(프로젝트 ID, 쉼표·공백 구분)에 적은 저장소뿐이다. 세션 기록에 나온
 # 아무 저장소나 자기 manifest로 무인 실행·자격증명 사용을 일으키지 못하게 한다.
-monitored_repos() { # [$1=project] → JSON lines(repo, project, base, manifest) 중 monitor 설정이 있고 허용된 것
-  local allowed=""
+# monitor 설정은 lib.sh hm_resolve_monitor로 정한다(개인 로컬 파일 > 기준 브랜치 manifest). 로컬 파일이 잘못됐으면 대상에서 뺀다.
+monitored_repos() { # [$1=project] → JSON lines(repo, project, base, manifest, monitor) 중 monitor 설정이 있고 허용된 것
+  local allowed="" rows="" row="" monitor=""
   allowed="$(printf '%s' "${HM_AUTOFIX_REPOS:-}" | jq -Rsc '[splits("[,[:space:]]+")] | map(select(. != ""))')"
   [[ "$allowed" != "[]" ]] || return 0
-  if [[ -n "${HM_AUTOFIX_REPOS_CMD:-}" ]]; then
+  rows="$(if [[ -n "${HM_AUTOFIX_REPOS_CMD:-}" ]]; then
     local -a cmd=(); read -r -a cmd <<<"$HM_AUTOFIX_REPOS_CMD"; "${cmd[@]}"
   else
     "$DIR/sync-auto.sh" repos
   fi | jq -c --arg p "${1:-}" --argjson allowed "$allowed" \
-    'select(.manifest.monitor.provider? and (.project as $x | $allowed | index($x)) and ($p == "" or .project == $p))'
+    'select((.project as $x | $allowed | index($x)) and ($p == "" or .project == $p))')"
+  [[ -n "$rows" ]] || return 0
+  while IFS= read -r row; do
+    monitor="$(hm_resolve_monitor "$(jq -r '.project' <<<"$row")" "$(jq -c '.manifest' <<<"$row")" 2>/dev/null)" || continue
+    [[ -n "$monitor" ]] || continue
+    jq -c --argjson m "$monitor" 'select($m.provider?) | . + {monitor: $m}' <<<"$row"
+  done <<<"$rows"
 }
 
-mcfg() { jq -r --arg k "$2" '.manifest.monitor[$k] // empty | tostring' <<<"$1"; }
+mcfg() { jq -r --arg k "$2" '.monitor[$k] // empty | tostring' <<<"$1"; }
 
 pr_status() { # $1=url
   if [[ -n "${HM_AUTOFIX_PR_STATUS_CMD:-}" ]]; then
@@ -256,8 +267,19 @@ started_today() {
 }
 lock_busy() { [[ -d "$RUN_LOCK" ]] && kill -0 "$(sed -n '1p' "$RUN_LOCK/pid" 2>/dev/null || echo x)" 2>/dev/null; }
 
+# sweep은 backfill 경로(HM_BACKFILL_INTERVAL_HOURS)와 전용 주기(HM_AUTOFIX_INTERVAL_MINUTES) 양쪽에서 불린다.
+# 겹치면 늦게 온 쪽은 넘긴다 — 검증의 상태 전이(재발 기록 등)가 두 번 일어나지 않게.
 command_sweep() {
   [[ "${HM_AUTOFIX_AUTO:-0}" == "1" && -z "${HM_HARVEST_RUNNING:-}" ]] || return 0
+  mkdir -p "$AF_DIR"
+  hm_acquire_lock "$SWEEP_LOCK" 1 || return 0
+  sweep_once
+  local rc=$?
+  hm_release_lock "$SWEEP_LOCK"
+  return "$rc"
+}
+
+sweep_once() {
   local repos="" row="" cand="" project="" repo="" file="" sig=""
   repos="$(monitored_repos)"
   [[ -n "$repos" ]] || return 0
@@ -271,6 +293,8 @@ command_sweep() {
     # 상한·동시 실행 제한은 상태를 바꾸지 않는다 — 다음 sweep에서 같은 후보를 다시 고른다.
     (( $(started_today) < DAILY_MAX )) || { log_event "$project" skipped "$sig" '{"reason":"daily_max"}'; return 0; }
     lock_busy && { log_event "$project" skipped "$sig" '{"reason":"busy"}'; return 0; }
+    # 전용 주기(HM_AUTOFIX_INTERVAL_MINUTES)는 backfill 경로의 LLM 단계 판정을 거치지 않으므로 사용량 한도 휴지를 여기서도 지킨다.
+    hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && { log_event "$project" skipped "$sig" '{"reason":"usage_backoff"}'; return 0; }
     # Codex 샌드박스는 .git이 읽기 전용이라 브랜치·커밋·PR까지 갈 수 없다.
     if [[ -z "${HM_AUTOFIX_CMD:-}" ]] && ! command -v claude >/dev/null 2>&1; then
       log_event "$project" skipped "$sig" '{"reason":"needs_claude"}'
@@ -278,7 +302,7 @@ command_sweep() {
     fi
     mkdir -p "$AF_DIR/pending"
     file="$AF_DIR/pending/$(hm_short_key "$project")-$(date +%s).json"
-    jq -c --argjson h "$(jq -r '.manifest.monitor.window_hours // 24' <<<"$row")" '. + {window_hours:$h}' <<<"$cand" >"$file"
+    jq -c --argjson h "$(jq -r '.monitor.window_hours // 24' <<<"$row")" '. + {window_hours:$h}' <<<"$cand" >"$file"
     if [[ "${HM_AUTOFIX_FOREGROUND:-0}" == "1" ]]; then
       "$DIR/autofix-auto.sh" run "$project" "$repo" "$file"
     else
@@ -469,13 +493,62 @@ command_track() {
   done
   [[ -n "$project" && "$pr" =~ ^https:// ]] || usage
   jq -e '.signature | type == "string"' <<<"$cand" >/dev/null 2>&1 || { echo "--candidate에 signature가 필요합니다" >&2; exit 2; }
-  # 검증은 허용 목록에 있고 기준 브랜치 manifest에 monitor가 있는 저장소만 돈다. 그 밖이면 pr_open에 영영 머무르므로 받지 않는다.
+  # 검증은 허용 목록에 있고 monitor 설정(로컬 파일 또는 기준 브랜치 manifest)이 있는 저장소만 돈다. 그 밖이면 pr_open에 영영 머무르므로 받지 않는다.
   [[ -n "$(monitored_repos "$project")" ]] \
-    || { printf '%s는 검증 대상이 아닙니다: ~/.ai-harness/config의 HM_AUTOFIX_REPOS에 넣고, 기준 브랜치 manifest에 monitor 설정이 있어야 합니다\n' "$project" >&2; exit 3; }
+    || { printf '%s는 검증 대상이 아닙니다: ~/.ai-harness/config의 HM_AUTOFIX_REPOS에 넣고, monitor 설정(~/.ai-harness/autofix/monitors/<project_id>.json 또는 기준 브랜치 manifest)이 있어야 합니다\n' "$project" >&2; exit 3; }
   set_sig "$project" "$(jq -r '.signature' <<<"$cand")" '{status:"pr_open",pr:$u,pr_opened_at:$now,title:$c.title,provider:$c.provider,
       meta:($c.meta // {}),link:$c.link,attempts:(($cur.attempts // 0) + 1),first_detected_at:($cur.first_detected_at // $now),
       baseline:{count:($c.count // 0),window_hours:($c.window_hours // 24)},manual:true}' --arg u "$pr" --argjson c "$cand"
   log_event "$project" tracked "$(jq -r '.signature' <<<"$cand")" "$(jq -cn --arg u "$pr" '{artifact:$u}')"
+}
+
+# 무인 실행 설정(개인 ~/.ai-harness/config). 값을 모두 검증한 뒤에만 쓴다 — 하나라도 틀리면 아무것도 바꾸지 않는다.
+config_show() {
+  jq -cn --arg auto "${HM_AUTOFIX_AUTO:-0}" --arg repos "${HM_AUTOFIX_REPOS:-}" --arg interval "${HM_AUTOFIX_INTERVAL_MINUTES:-}" \
+    --arg daily "${HM_AUTOFIX_DAILY_MAX:-}" --arg attempts "${HM_AUTOFIX_MAX_ATTEMPTS:-}" --arg budget "${HM_AUTOFIX_BUDGET_USD:-}" \
+    --arg config "$HM_DATA_DIR/config" '
+    def num($v; $d): if $v == "" then $d else ($v | tonumber? // $v) end;
+    {auto: ($auto == "1"), repos: [$repos | splits("[,[:space:]]+") | select(. != "")],
+     interval_minutes: (if $interval == "" or $interval == "0" then null else num($interval; null) end),
+     daily_max: num($daily; 3), max_attempts: num($attempts; 2), budget_usd: num($budget; 10), config: $config}'
+}
+
+command_configure() {
+  local -a set=()
+  local repo="" repos="" i=0
+  while (( $# > 0 )); do
+    [[ $# -ge 2 ]] || usage
+    case "$1" in
+      --auto) [[ "$2" =~ ^[01]$ ]] || { echo "--auto는 0 또는 1입니다" >&2; exit 2; }
+        set+=(HM_AUTOFIX_AUTO "$([[ "$2" == 1 ]] && echo 1 || true)") ;;
+      --add-repo) [[ "$2" =~ ^[^[:space:],\"\'=]+$ ]] || { echo "--add-repo는 공백·쉼표·따옴표 없는 project_id입니다" >&2; exit 2; }
+        repo="$2" ;;
+      --interval-minutes)
+        if [[ "$2" == off || "$2" == 0 ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "")
+        elif [[ "$2" =~ ^[1-9][0-9]*$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
+        else echo "--interval-minutes는 1 이상의 정수 또는 off입니다" >&2; exit 2; fi ;;
+      --daily-max) [[ "$2" =~ ^[0-9]+$ ]] || { echo "--daily-max는 0 이상의 정수입니다" >&2; exit 2; }
+        set+=(HM_AUTOFIX_DAILY_MAX "$2") ;;
+      --max-attempts) [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "--max-attempts는 1 이상의 정수입니다" >&2; exit 2; }
+        set+=(HM_AUTOFIX_MAX_ATTEMPTS "$2") ;;
+      --budget-usd) [[ "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ]] || { echo "--budget-usd는 0보다 큰 수입니다(예: 10, 2.5)" >&2; exit 2; }
+        set+=(HM_AUTOFIX_BUDGET_USD "$2") ;;
+      *) usage ;;
+    esac
+    shift 2
+  done
+  if [[ -n "$repo" ]]; then
+    # 기존 목록은 그대로 두고 없을 때만 덧붙인다(구분자는 쉼표로 맞춘다).
+    repos="$(jq -rn --arg cur "${HM_AUTOFIX_REPOS:-}" --arg r "$repo"       '[$cur | splits("[,[:space:]]+") | select(. != "")] | if any(.[]; . == $r) then empty else . + [$r] | join(",") end')"
+    [[ -z "$repos" ]] || set+=(HM_AUTOFIX_REPOS "$repos")
+  fi
+  if (( ${#set[@]} > 0 )); then
+    hm_config_set "${set[@]}" || exit 1
+    hm_load_config "$HM_DATA_DIR/config"
+    # 지운 키는 위 로드가 비우지 않으므로 여기서 비운다.
+    for (( i = 0; i < ${#set[@]}; i += 2 )); do [[ -n "${set[i+1]}" ]] || unset "${set[i]}"; done
+  fi
+  config_show
 }
 
 command_runs() {
@@ -495,5 +568,6 @@ case "$command" in
   track) command_track "$@" ;;
   run) [[ $# -eq 3 ]] || usage; command_run "$@" ;;
   runs) command_runs "$@" ;;
+  configure) command_configure "$@" ;;
   *) usage ;;
 esac

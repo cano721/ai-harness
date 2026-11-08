@@ -654,7 +654,11 @@ scripts/board/board.sh stop
 
 ## 모니터링 기반 자동 수정 (opt-in)
 
-모니터링 도구에 쌓인 운영 에러를 골라 고치고, **고친 뒤 그 에러가 더 나오지 않는 것까지** 확인합니다. 저장소마다 `/autofix setup`으로 `.ai-harness/harness.json`에 `monitor` 설정을 두고(자격증명은 넣지 않습니다), `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 대상 저장소 목록 `HM_AUTOFIX_REPOS="<project_id>,…"`를 두면 정기 실행(`backfill-due.sh`, 사용자가 쉬는 동안)이 돕니다. 목록에 없는 저장소는 manifest에 `monitor`가 있어도 무인 실행하지 않습니다 — 클론만 한 저장소가 자기 설정으로 자격증명을 쓰거나 명령을 실행하게 두지 않기 위해서입니다.
+모니터링 도구에 쌓인 운영 에러를 골라 고치고, **고친 뒤 그 에러가 더 나오지 않는 것까지** 확인합니다. 저장소마다 `/autofix setup`으로 `monitor` 설정을 두고(자격증명은 넣지 않습니다), `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 대상 저장소 목록 `HM_AUTOFIX_REPOS="<project_id>,…"`를 두면 정기 실행(`backfill-due.sh`, 사용자가 쉬는 동안)이 돕니다. setup이 이 무인 실행 설정(켜기·대상·주기·상한)까지 물어 `scripts/autofix-auto.sh configure`로 써 줍니다. 목록에 없는 저장소는 `monitor` 설정이 있어도 무인 실행하지 않습니다 — 클론만 한 저장소가 자기 설정으로 자격증명을 쓰거나 명령을 실행하게 두지 않기 위해서입니다.
+
+`monitor` 설정은 기본으로 개인 로컬 파일 `~/.ai-harness/autofix/monitors/<project_id>.json`(내용이 곧 `monitor` 객체)에 둡니다. 켜기·상태가 로컬이므로 설정도 팀 저장소에 커밋할 필요가 없고, 공유 설정을 여러 사람이 각자 켜서 같은 에러로 PR이 중복되는 일도 없습니다. 팀이 공유해야 하면 `.ai-harness/harness.json`의 `monitor`(기준 브랜치에 커밋된 값)에 둘 수 있고, 둘 다 있으면 로컬 파일이 이깁니다. 로컬 파일이 잘못됐으면 manifest로 넘어가지 않고 거부하며, provider별 제한(아래)은 두 위치에 똑같이 적용됩니다.
+
+**주기**: 기본은 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돕니다. `HM_AUTOFIX_INTERVAL_MINUTES=<분>`을 두고 `scripts/schedule.sh install`을 돌리면 sweep만 그 분 주기로 부르는 LaunchAgent(`com.ai-harness.autofix`)를 따로 등록합니다(macOS가 아니면 cron 줄을 안내). 이 경로는 유휴 대기 없이 돌지만 사용량 한도 직후 휴지와 하루 상한은 지키고, 정기 실행 경로와 겹치면 늦게 온 sweep은 건너뜁니다. 값을 지우고 다시 install하면 전용 LaunchAgent를 내립니다.
 
 ```json
 "monitor": { "provider": "sentry", "org": "acme", "project": "api", "environment": "production",
@@ -818,6 +822,7 @@ HM_MERGE_MIN_APPROVALS=          # 비면 1
 HM_MERGE_METHOD=                 # squash|merge|rebase. 비면 squash
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
 HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
+HM_AUTOFIX_INTERVAL_MINUTES=     # 자동 수정 sweep 전용 주기(분). 비면 정기 backfill 주기에 같이 돎. 바꾸면 schedule.sh install
 HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")
 HM_AUTOFIX_DEPLOY_WAIT_DAYS=14   # 병합 커밋이 deploy_branch에 보이기를 기다리는 상한. 넘으면 gave_up
 HM_AUTOFIX_DAILY_MAX=3           # 하루 자동 수정 실행 상한

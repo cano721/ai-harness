@@ -1472,6 +1472,23 @@ user_config() { # KEY
   fi
   if [[ -n "$found" ]]; then printf '%s' "$value"; else printf '%s' "${!1:-}"; fi
 }
+# /autofix monitor 설정: 개인 로컬 파일(~/.ai-harness/autofix/monitors/<project_id>.json) > manifest의 monitor.
+# 이 러너는 플러그인 밖(대상 저장소)에 복사돼 lib.sh를 source하지 못하므로 hm_resolve_monitor와 같은 규칙을 여기 둔다.
+# 출력은 monitor 객체 한 줄(없으면 빈 출력). 로컬 파일이 있는데 잘못됐으면 manifest로 넘어가지 않고 실패한다.
+monitor_settings() { # $1=project_id
+  local file="" monitor=""
+  if [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    file="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/autofix/monitors/$1.json"
+  fi
+  if [[ -n "$file" && -e "$file" ]]; then
+    monitor="$(jq -cs 'if length == 1 and (.[0] | type == "object" and (.provider | type == "string" and length > 0))
+      then .[0] else empty end' "$file" 2>/dev/null || true)"
+    [[ -n "$monitor" ]] || { printf 'the local monitor settings are invalid (one JSON object with a provider): %s\n' "$file" >&2; return 1; }
+    printf '%s\n' "$monitor"
+    return 0
+  fi
+  jq -c '.monitor // empty' "$REPO/.ai-harness/harness.json" 2>/dev/null || true
+}
 # 저장소별 설정의 키. lib.sh project_id_for_cwd(HM_AUTOFIX_REPOS·/metrics가 쓰는 project_id)와 같은 순서로 정한다.
 project_key() {
   local id common
@@ -1590,8 +1607,12 @@ case "$CMD" in
       # 검증 순서는 고정이다: 병합 커밋의 CI → 배포 → 스모크 → 재발 추적 등록.
       merge_policy="$(jq -c '.verify |= [("target_ci", "deploy", "smoke", "monitor") as $s | select(index($s)) | $s]' <<<"$merge_policy")"
       if jq -e '.verify | index("monitor")' <<<"$merge_policy" >/dev/null; then
-        jq -e '(.monitor.provider | type == "string") and (.project_id | type == "string" and length > 0)' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1 \
-          || { printf 'merge_policy.verify monitor needs the monitor settings (/autofix setup) and project_id in .ai-harness/harness.json\n' >&2; exit 2; }
+        project="$(jq -r '.project_id // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+        monitor="$(monitor_settings "$project")" || exit 2
+        if [[ -z "$project" ]] || ! jq -e '.provider | type == "string"' <<<"${monitor:-null}" >/dev/null 2>&1; then
+          printf 'merge_policy.verify monitor needs the monitor settings (/autofix setup) in ~/.ai-harness/autofix/monitors/<project_id>.json or monitor in .ai-harness/harness.json, and project_id in .ai-harness/harness.json\n' >&2
+          exit 2
+        fi
       fi
       [[ "$(jq -r .method <<<"$merge_policy")" != rebase || "$(git -C "$REPO" config --get remote.origin.url || true)" != *bitbucket.org* ]] \
         || { printf 'HM_MERGE_METHOD rebase is not supported for Bitbucket; choose squash or merge\n' >&2; exit 2; }
@@ -1601,7 +1622,8 @@ case "$CMD" in
       monitor_error="$(jq -cs 'if length == 1 and (.[0] | type == "object" and (.signature | type == "string") and (.signature | length > 0)) then .[0] else empty end' <<<"$MONITOR_ERROR" 2>/dev/null || true)"
       [[ -n "$monitor_error" ]] || { printf -- '--monitor-error needs one monitoring error as a JSON object with a signature (one line of /autofix candidates)\n' >&2; exit 2; }
       # 관찰 창은 수정 전 빈도(창 안 발생 수)로 늘린다 — 정기 실행처럼 그 창의 길이를 같이 넘긴다.
-      monitor_error="$(jq -c --argjson h "$(jq '.monitor.window_hours // 24' "$REPO/.ai-harness/harness.json" 2>/dev/null || echo 24)" '{window_hours: $h} + .' <<<"$monitor_error")"
+      monitor="$(monitor_settings "$(jq -r '.project_id // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)")" || exit 2
+      monitor_error="$(jq -c --argjson h "$(jq '.window_hours // 24' <<<"${monitor:-null}" 2>/dev/null || echo 24)" '{window_hours: $h} + .' <<<"$monitor_error")"
     fi
     mkdir -p "$RUN"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
