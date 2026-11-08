@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 저장소 manifest(.ai-harness/harness.json)의 `monitor` 설정을 읽어 모니터링 도구에서 에러를 가져온다.
+# `monitor` 설정(개인 로컬 ~/.ai-harness/autofix/monitors/<project_id>.json, 없으면 기준 브랜치 manifest)을 읽어
+# 모니터링 도구에서 에러를 가져온다. 어느 출처든 아래 provider별 검증을 똑같이 받는다.
 # 도구마다 다른 응답을 한 형식으로 맞춘다 — 자동 버그 수정(autofix-auto.sh)의 감지·검증 단계가 쓴다.
 #   list:   기준 시간 안에 min_events 이상 발생한 에러 묶음(JSON lines, 많은 순)
 #   detail: 에러 하나의 스택·샘플(비밀값 가림)
@@ -44,8 +45,11 @@ die() { printf '%s\n' "$1" >&2; exit "${2:-3}"; }
 # 사용자 체크아웃이 아니라 하네스가 실제로 들어 있는 기준 브랜치의 설정을 본다(자동 sync와 같은 기준).
 manifest="$(git -C "$ROOT_DIR" show "$(hm_resolve_base "$ROOT_DIR" --no-fetch):.ai-harness/harness.json" 2>/dev/null \
   || cat "$ROOT_DIR/.ai-harness/harness.json" 2>/dev/null)"
-monitor="$(jq -c '.monitor // empty' <<<"$manifest" 2>/dev/null)"
-[[ -n "$monitor" ]] || die "monitor 설정 없음: $ROOT_DIR/.ai-harness/harness.json" 4
+# 로컬 설정 파일의 키는 sync-auto.sh repos(autofix 대상 목록)와 같은 project_id다.
+project_id="$(jq -r '.project_id // empty' <<<"$manifest" 2>/dev/null)"
+[[ -n "$project_id" ]] || project_id="$(project_id_for_cwd "$ROOT_DIR")"
+monitor="$(hm_resolve_monitor "$project_id" "$manifest")" || exit 4
+[[ -n "$monitor" ]] || die "monitor 설정 없음: $(hm_monitor_file "$project_id" || true) 또는 $ROOT_DIR/.ai-harness/harness.json의 monitor" 4
 cfg() { jq -r --arg k "$1" '.[$k] // empty | tostring' <<<"$monitor"; }
 provider="$(cfg provider)"
 [[ -n "$HOURS" ]] || HOURS="$(cfg window_hours)"
