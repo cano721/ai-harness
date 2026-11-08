@@ -5,6 +5,9 @@
 #       설치일: --at → <root>/.ai-harness/harness.json initialized → AGENTS.md 첫 커밋 날짜. 셋 다 없으면 exit 3.
 #   impact.sh render --data <json> [--highlights <json>] [--ab <json>] [--out <html>]
 #       compare JSON과 (에이전트가 교정을 묶은) 하이라이트 JSON을 오프라인 HTML 한 파일로 만든다. 경로를 출력한다.
+#       --data와 하이라이트를 함께 받으면 그 매칭을 프로젝트별로 보관한다(highlights_path). 보드가 같은 판정을 다시 낸다.
+#   impact.sh view --data <json>
+#       compare JSON에 보관된 마지막 매칭으로 개선별 판정을 붙여 낸다(후보 목록은 뺀다). 보드가 쓴다.
 #   impact.sh notify   (SessionStart stdin JSON)
 #       설치 후 HM_IMPACT_HINT_DAYS(기본 30)일이 지난 하네스 프로젝트에서 한 번만 안내한다. HM_IMPACT_HINT=0이면 끈다.
 set -euo pipefail
@@ -14,7 +17,7 @@ ROOT_DIR="$(cd "$DIR/.." && pwd)"
 source "$DIR/lib.sh" || { [[ "${1:-}" == "notify" ]] && exit 0; exit 1; }
 
 usage() {
-  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -46,6 +49,21 @@ rework_json() { # repo author since until(포함) → JSON 또는 null
 }
 
 need_value() { (($# >= 2)) || usage; }
+
+# render가 보관하는 마지막 매칭. 보드(scripts/board/impact.py)도 같은 경로를 읽는다.
+highlights_path() { printf '%s/reports/highlights/%s.json\n' "$HM_DATA_DIR" "$(hm_short_key "$1")"; }
+
+keep_highlights() { # hl_json data_file — 매칭을 그 compare의 --today와 함께 보관한다
+  local keep=""
+  jq -e '(.improvements | type) == "array" and (.project | type) == "string"' "$2" >/dev/null 2>&1 || return 0
+  keep="$(highlights_path "$(jq -r '.project' "$2")")"
+  mkdir -p "${keep%/*}"
+  if jq -c --slurpfile d "$2" '. + {project: $d[0].project, matched_through: ($d[0].today // ($d[0].generated_at // "")[0:10])}' <<<"$1" >"$keep.tmp"; then
+    mv "$keep.tmp" "$keep"
+  else
+    rm -f "$keep.tmp"
+  fi
+}
 
 # 명령마다 임시 디렉토리 하나를 쓰고, 종료 때 한 trap으로 지운다(함수마다 trap을 걸면 앞의 것을 덮는다).
 IMPACT_TMP=""
@@ -151,7 +169,7 @@ command_compare() {
     --arg bs "$before_since" --arg asince "$after_since" --arg au "$after_until" --argjson len "$len" --arg today "$today" \
     --slurpfile digests "$tmp/digests.json" --slurpfile history "$tmp/history.json" --slurpfile applied "$tmp/applied.json" \
     --argjson rb "$rework_before" --argjson ra "$rework_after" \
-    -f "$DIR/impact.jq" "$tmp/events.jsonl"
+    -L "$DIR" -f "$DIR/impact.jq" "$tmp/events.jsonl"
 }
 
 command_render() {
@@ -189,6 +207,11 @@ command_render() {
     impact_tmp
     data_file="$IMPACT_TMP/render.json"
     jq -L "$DIR" --argjson h "$hl_json" 'include "impact-evidence"; evidence($h)' "$data" >"$data_file"
+    # 매칭은 그 compare의 --today까지 본 것이다. 날짜를 붙여 두면 더 새 compare에 다시 써도 그날까지로만 판정한다.
+    # 보드가 보관된 매칭으로 다시 그릴 때(matched_through가 이미 있음)는 덮어쓰지 않는다.
+    if [[ "$hl_json" != "null" ]] && ! jq -e 'has("matched_through")' <<<"$hl_json" >/dev/null; then
+      keep_highlights "$hl_json" "$data"
+    fi
   fi
   # 데이터 속 '<'를 <로 바꿔 </script>·<!-- 가 페이지 구조를 깨지 못하게 한다.
   jq -rn --rawfile t "$ROOT_DIR/skills/harness-impact/report-template.html" \
@@ -198,6 +221,24 @@ command_render() {
        | split("/*__IMPACT_HIGHLIGHTS__*/null") | join($h | safe)
        | split("/*__IMPACT_AB__*/null") | join(($ab[0] // null) | safe)' >"$out"
   printf '%s\n' "$out"
+}
+
+command_view() {
+  local data="" keep="" hl_json="null"
+  while (($#)); do
+    case "$1" in
+      --data) data="${2:-}"; need_value "$@"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [[ -n "$data" && -f "$data" ]] || { echo "데이터 파일 없음: ${data:-(없음)}" >&2; exit 2; }
+  keep="$(highlights_path "$(jq -r '.project // ""' "$data")")"
+  if [[ -f "$keep" ]]; then
+    hl_json="$(jq -c 'if type == "object" then . else null end' "$keep" 2>/dev/null)" || hl_json="null"
+  fi
+  jq -L "$DIR" --argjson h "$hl_json" --arg keep "$keep" '
+    include "impact-evidence";
+    evidence($h) + {highlights: (if $h == null then null else {file: $keep, matched_through: ($h.matched_through // null)} end)}' "$data"
 }
 
 command_notify() {
@@ -229,6 +270,7 @@ shift || true
 case "$cmd" in
   compare) command_compare "$@" ;;
   render) command_render "$@" ;;
+  view) command_view "$@" ;;
   # SessionStart hook: 어떤 실패도 세션을 막거나 오류로 보이지 않게 한다.
   notify) command_notify "$@" 2>/dev/null || true; exit 0 ;;
   *) usage ;;

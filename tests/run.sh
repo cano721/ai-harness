@@ -9,6 +9,12 @@ TESTS=0
 TESTS_FINISHED=0
 
 cleanup() {
+  # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
+  local board_pid conf
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json"; do
+    board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
+    [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
+  done
   case "$TEST_TMP" in
     */ai-harness-tests.*) find "$TEST_TMP" -depth -delete 2>/dev/null || true ;;
     *) printf 'unexpected test temp path, preserving: %s\n' "$TEST_TMP" >&2 ;;
@@ -1357,21 +1363,32 @@ DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status 
 assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
 assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
 
-# git_policy merge: 병합 조건은 manifest merge_policy(init에서 사람이 정함)이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
+# 병합 노드: 병합 조건은 개인 설정(HM_MERGE_*), 기준 브랜치·검증 명령은 저장소 사실이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
 export HM_SMOKE_RETRY_SECONDS=0
 as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 실제 push는 bare 저장소로 보낸다(insteadOf)
   git -C "$DRIVER_REPO" config remote.origin.url "https://$1.git"
   git -C "$DRIVER_REPO" config "url.$DRIVER_TMP/remote-$FAKE_SCENARIO.git.insteadOf" "https://$1.git"
 }
-merge_run() { # scenario merge_policy-json [host/owner/repo] → 저장소·manifest를 만들고 approval auto로 실행한다
-  new_driver_repo "$1"
-  with_policy merge auto
-  as_host_repo "${3:-github.com/acme/app}"
-  jq --argjson m "$2" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" \
-    && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-  git -C "$DRIVER_REPO" commit -qam "merge policy"
-  driver start --runtime codex --request "add feature"
+MR_DATA="$DRIVER_TMP/merge-data"
+mkdir -p "$MR_DATA"
+merge_config() { # merge-settings-json → 개인 config: 검증에 배포·스모크·재발 추적이 있으면 단계 deploy, 아니면 merge. 조건·방식은 HM_MERGE_*
+  jq -r '"HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
+    (if .require then "HM_MERGE_REQUIRE=\"" + (.require | join(" ")) + "\"" else empty end),
+    (if .min_approvals then "HM_MERGE_MIN_APPROVALS=\(.min_approvals)" else empty end),
+    (if .method then "HM_MERGE_METHOD=\(.method)" else empty end)' <<<"$1" >"$MR_DATA/config"
 }
+merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사실은 manifest에, 병합 조건은 개인 config에 두고 approval auto로 실행한다
+  new_driver_repo "$1"
+  with_policy pr-only auto
+  as_host_repo "${3:-github.com/acme/app}"
+  jq --argjson m "$2" '.merge_policy = ($m | del(.require, .min_approvals, .method))' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" \
+    && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" commit -qam "repository facts"
+  merge_config "$2"
+  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+}
+# 병합은 호스트가 필수 승인을 거는 기준 브랜치에만 한다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
+export FAKE_PROTECTION=classic
 MP_BASIC='{"require":["human_approval","remote_ci","no_conflict","not_draft"],"min_approvals":1,"method":"squash","verify":["target_ci"],"base":"main"}'
 merge_run merge_ok "$MP_BASIC"
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "merge policy merges and verifies when every condition holds"
@@ -1419,44 +1436,36 @@ merge_run merge_otherrepo "$MP_BASIC" github.com/acme/other
 assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a pull request outside this repository is never merged"
 assert_contains "$DRIVER_OUT" "is not in this repository" "the repository mismatch is named"
 # Bitbucket: 승인은 마지막 push 뒤의 것만 센다. 자격증명은 stdin으로 넘긴다.
-export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='tok"en'
+export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='tok"en' FAKE_PROTECTION=bb_glob
 merge_run bb_merge "$(jq -c '.verify = [] | .require = ["human_approval","remote_ci","no_conflict"]' <<<"$MP_BASIC")" bitbucket.org/acme/app
 assert_eq "0:done:111111111111" "$DRIVER_RC:$(run_state .status):$(run_state .merge.commit)" "a Bitbucket pull request is merged when its conditions hold"
 assert_contains "$(<"$FAKE_LOG")" "curl POST acme/app/pullrequests/7/merge" "the Bitbucket merge endpoint is called"
 merge_run bb_stale "$(jq -c '.verify = []' <<<"$MP_BASIC")" bitbucket.org/acme/app
 assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "a Bitbucket approval from before the last push does not count"
 unset ATLASSIAN_USER BITBUCKET_API_TOKEN
+export FAKE_PROTECTION=classic
 # 사람이 먼저 병합했으면 그 병합 커밋으로 병합 후 검증을 이어 간다.
 merge_run merge_outside "$MP_BASIC"
 assert_eq "0:done:outside the runner:0" "$DRIVER_RC:$(run_state .status):$(run_state .merge.method):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a pull request merged by a person is verified without merging again"
-# 조건에 없는 항목은 보지 않는다: 승인만 빼면 승인 없이 병합한다(사람이 init에서 고른 정책).
+# 개인 조건에서 승인을 빼도 호스트 보호가 필수 승인을 걸면 그 승인을 기다린다. 방식은 HM_MERGE_METHOD를 따른다.
 merge_run merge_noapproval '{"require":["remote_ci"],"method":"merge","verify":[],"base":"main"}'
-assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "conditions the person did not choose are not required"
-assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows merge_policy.method"
+assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the host's required approval is a floor even when the personal conditions leave approval out"
+assert_contains "$DRIVER_OUT" "human approval: 0 of 1" "the wait names the approval the host requires"
+touch "$FAKE_LOG.approved"
+HARNESS_METRICS_DIR="$MR_DATA" driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "resume merges once the host-required approval arrives"
+assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows HM_MERGE_METHOD"
 # 원격 CI가 없다는 보고는 remote_ci 조건을 채우지 못한다.
 merge_run merge_ci_none "$MP_BASIC"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "require remote_ci needs a passed remote CI, not 'no CI'"
 # 무인 실행은 병합하지 않는다.
-new_driver_repo merge_unattended
-with_policy merge auto
-as_host_repo github.com/acme/app
-jq --argjson m "$MP_BASIC" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-git -C "$DRIVER_REPO" commit -qam "merge policy"
-HM_INTERNAL_SESSION=1 driver start --runtime codex --request "add feature"
+HM_INTERNAL_SESSION=1 merge_run merge_unattended "$MP_BASIC"
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run never merges"
 assert_contains "$DRIVER_OUT" "merge: not done — unattended run" "the outcome says the merge was left to a person"
 # PR 호스트를 읽을 수 없는 URL이면 병합하지 않는다.
 merge_run ok_unknown_host "$MP_BASIC"
 assert_contains "$DRIVER_RC:$DRIVER_OUT" "20:" "an unsupported pull request host is not merged"
 assert_contains "$DRIVER_OUT" "unsupported pull request host" "the reason names the host"
-# 병합 정책이 비었거나 검증 명령이 없으면 시작하지 않는다.
-new_driver_repo merge_invalid
-with_policy merge auto
-driver start --runtime codex --request "add feature"
-assert_eq "2" "$DRIVER_RC" "git_policy merge without merge_policy does not start"
-assert_contains "$DRIVER_OUT" "needs a valid merge_policy" "the error points at merge_policy"
-merge_run merge_invalid2 '{"require":["human_approval"],"verify":["smoke"],"base":"main"}'
-assert_eq "2" "$DRIVER_RC" "a smoke check without smoke_cmd does not start"
 # 병합 후 검증: 타깃 CI → 배포 확인 → 스모크. 실패는 되돌리지 않고 사람에게, 배포 미관측은 기한까지 resume.
 merge_run pm_ci_fail "$MP_BASIC"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed CI on the merge commit goes to a person"
@@ -1490,17 +1499,18 @@ merge_run pm_smoke_fail '{"require":["human_approval"],"verify":["smoke"],"smoke
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a smoke check that fails twice goes to a person"
 assert_contains "$DRIVER_OUT" "the smoke check failed twice" "the smoke failure is named"
 # 모니터링 재발 확인: 관찰 창이 길어 러너는 고친 에러를 /autofix 추적에 올리는 데까지 한다.
-monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_id가 있는 저장소에서 verify monitor로 실행한다
+monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_id가 있는 저장소에서 단계 deploy·verify monitor로 실행한다
   local scenario="$1"
   shift
   new_driver_repo "$scenario"
-  with_policy merge auto
+  with_policy pr-only auto
   as_host_repo github.com/acme/app
-  jq '.project_id = "acme-app" | .monitor = {provider: "command", command: "bin/errors", window_hours: 168}
-    | .merge_policy = {require: ["human_approval"], verify: ["monitor", "target_ci"], base: "main"}' \
+  jq --arg local "${MONITOR_LOCAL:-}" '.project_id = "acme-app" | .monitor = {provider: "command", command: "bin/errors", window_hours: 168}
+    | .merge_policy = {verify: ["monitor", "target_ci"], base: "main"} | if $local == "1" then del(.monitor) else . end' \
     "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-  git -C "$DRIVER_REPO" commit -qam "merge policy"
-  driver start --runtime codex --request "fix the crash" "$@"
+  git -C "$DRIVER_REPO" commit -qam "repository facts"
+  merge_config '{"require":["human_approval"],"verify":["monitor"]}'
+  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
 }
 mkdir -p "$DRIVER_TMP/plugin/scripts"
 cat >"$DRIVER_TMP/plugin/scripts/autofix-auto.sh" <<'EOF'
@@ -1521,6 +1531,17 @@ assert_contains "$DRIVER_OUT" "monitor skipped (no monitoring error was given" "
 monitor_run pm_monitor_fail --monitor-error "$DRIVER_TMP/monitor-error.json"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed registration goes to a person"
 assert_contains "$(run_state '.findings[1]')" "register the error by hand: <ai-harness plugin>/scripts/autofix-auto.sh track --project acme-app --candidate" "the person gets the track command, not rollback advice"
+# 개인 로컬 monitor 설정(~/.ai-harness/autofix/monitors/<project_id>.json)만 있어도 시작하고, 그 관찰 창을 쓴다.
+mkdir -p "$MR_DATA/autofix/monitors"
+printf '%s\n' '{"provider":"command","command":"bin/errors","window_hours":48}' >"$MR_DATA/autofix/monitors/acme-app.json"
+MONITOR_LOCAL=1 monitor_run pm_monitor_local --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a local monitor file satisfies verify monitor"
+assert_contains "$(<"$FAKE_LOG")" "autofix track --project acme-app --candidate {\"window_hours\":48," "the local file's observation window is used"
+printf 'not json\n' >"$MR_DATA/autofix/monitors/acme-app.json"
+monitor_run pm_monitor_local_bad --monitor-error "$DRIVER_TMP/monitor-error.json"
+assert_eq "2" "$DRIVER_RC" "a broken local monitor file does not start, even with a manifest monitor"
+assert_contains "$DRIVER_OUT" "autofix/monitors/acme-app.json" "the error names the broken local file"
+find "$MR_DATA/autofix/monitors/acme-app.json" -delete
 unset HM_PLUGIN_ROOT
 printf '%s\n' '{"title":"no signature"}' >"$DRIVER_TMP/bad-error.json"
 monitor_run pm_monitor_bad --monitor-error "$DRIVER_TMP/bad-error.json"
@@ -1533,17 +1554,20 @@ assert_eq "2" "$DRIVER_RC" "verify monitor without the monitor settings does not
 assert_contains "$DRIVER_OUT" "needs the monitor settings (/autofix setup)" "the error points at /autofix setup"
 # merge 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝낸다.
 new_driver_repo merge_oldgraph
-with_policy merge auto
+with_policy pr-only auto
 as_host_repo github.com/acme/app
-jq --argjson m "$MP_BASIC" '.merge_policy = $m' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
+jq '.merge_policy = {base: "main"}' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
 mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
 jq 'del(.nodes.merge, .nodes.post_merge_verify) | .transitions |= map(select(.from != "merge" and .from != "post_merge_verify" and .to != "merge"))' \
   "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
 git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -qm "old graph"
-driver start --runtime codex --request "add feature"
+merge_config "$MP_BASIC"
+HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "a project graph without the merge node never merges"
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
-pass "merge policy: conditions from the manifest, merge by the runner, post-merge checks"
+rm -f "$MR_DATA/config"
+unset FAKE_PROTECTION
+pass "merge node: personal conditions, repository facts, merge by the runner, post-merge checks"
 
 # 개인 자동화 단계(#242): 병합 여부는 사용자 config의 단계가, 팀 통제는 호스트 브랜치 보호가 정한다. 저장소 merge_policy는 사실만 준다.
 DL_DATA="$DRIVER_TMP/delivery-data"
@@ -1563,13 +1587,15 @@ export FAKE_PROTECTION=classic
 delivery_run dl_pr merge ".merge_policy = $MP_BASIC" 'HM_DELIVERY_LEVEL=pr'
 assert_eq "0:done:0:pr-only" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git)" "level pr stops at the pull request even when the repository says git_policy merge"
 [[ "$(run_state '[.history[].to] | join(",")')" != *merge* ]] || fail "level pr never reaches the merge node"
-assert_contains "$DRIVER_OUT" "delivery level pr: the personal delivery level stops at the pull request" "done says the personal level stopped at the PR"
-delivery_run dl_merge pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL="merge"  # 내 단계'
+assert_contains "$DRIVER_OUT" "notice: the repository git_policy merge is no longer used and is read as pr-only" "done says the repository merge setting is no longer used"
+# 저장소 merge_policy의 병합 조건(require·min_approvals·method)은 개인 경로에 영향이 없다.
+delivery_run dl_merge pr-only "$DL_FACTS"' | .merge_policy += {require: ["remote_ci"], min_approvals: 3, method: "rebase"}' 'HM_DELIVERY_LEVEL="merge"  # 내 단계'
 assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "level merge merges a pr-only repository's pull request"
 assert_eq "target_ci" "$(run_state '.post_merge | keys_unsorted | join(",")')" "level merge verifies up to the target branch CI, not deploy or smoke"
 assert_eq "1:1:main" "$(run_state '"\(.protection.approvals):\(.protection.checks):\(.protection.base)"')" "the merge node read the base branch protection from the host"
 assert_contains "$(<"$FAKE_LOG")" "gh api repos/acme/app/branches/main/protection" "classic branch protection is read for the base branch"
-assert_eq "human_approval,remote_ci,no_conflict,not_draft:1:squash" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.min_approvals):\(.policy.merge.method)"')" "without personal merge settings or repository conditions every condition applies"
+assert_eq "human_approval,remote_ci,no_conflict,not_draft:1:squash" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.min_approvals):\(.policy.merge.method)"')" "without personal merge settings every condition applies, whatever the repository merge_policy says"
+assert_contains "$DRIVER_OUT" "notice: merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used" "the ignored repository merge conditions are named"
 delivery_run dl_deploy pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=deploy'
 assert_eq "0:done:target_ci,deploy,smoke" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy goes on to the repository's deploy and smoke checks"
 delivery_run dl_deploy_nocmd pr-only '.merge_policy = {base: "main"}' 'HM_DELIVERY_LEVEL=deploy'
@@ -1602,8 +1628,23 @@ delivery_run dl_bb_denied pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucke
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "unreadable Bitbucket branch restrictions are not merged over"
 unset ATLASSIAN_USER BITBUCKET_API_TOKEN
 export FAKE_PROTECTION=none
+# 개인 단계가 없으면 항상 PR까지다. 예전 저장소 git_policy merge·merge_policy로는 병합하지 않고 안내만 남긴다.
 delivery_run dl_legacy merge ".merge_policy = $MP_BASIC" ''
-assert_eq "0:done:1:null:0" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery):$(grep -c '^gh api' "$FAKE_LOG" || true)" "without a personal level the repository merge_policy applies as before, without a protection check"
+assert_eq "0:done:0:pr-only:null:0" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git):$(run_state .policy.merge):$(grep -c '^gh api' "$FAKE_LOG" || true)" "without a personal level git_policy merge stops at the pull request"
+[[ "$(run_state '[.history[].to] | join(",")')" != *merge* ]] || fail "without a personal level the merge node is never reached"
+assert_contains "$DRIVER_OUT" "PR: https://github.com/acme/app/pull/7" "the legacy merge setting still opens the pull request"
+assert_contains "$DRIVER_OUT" "notice: the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)" "the result tells how to choose a personal level"
+assert_eq "2" "$(grep -c 'notice: the repository git_policy merge is no longer used' <<<"$DRIVER_OUT")" "the notice is shown at start and in the result"
+delivery_run dl_none_pr pr-only "$DL_FACTS" ''
+assert_eq "0:done:0:[]" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state ".policy.notices | tostring")" "pr-only without a personal level stops at the pull request without a notice"
+[[ "$DRIVER_OUT" != *"notice:"* ]] || fail "repository facts alone raise no notice"
+# 개인 단계가 없던 이전 버전의 병합 대기 실행을 resume해도 호스트 보호 확인을 거친다.
+state_file="$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"
+jq '.node = "merge" | .status = "running" | .policy.git = "merge" | .policy.delivery = null
+  | .policy.merge = {require: ["remote_ci"], min_approvals: 1, method: "squash", verify: [], base: "main"}' "$state_file" >"$DRIVER_TMP/s.json" && mv "$DRIVER_TMP/s.json" "$state_file"
+driver resume
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "a legacy merge run resumed after the update does not merge into an unprotected branch"
+assert_contains "$DRIVER_OUT" "has no host branch protection that requires an approving review" "the resumed legacy run names the missing protection"
 export FAKE_PROTECTION=classic
 HM_INTERNAL_SESSION=1 delivery_run dl_unattended pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run does not merge on a personal level either"
@@ -2209,6 +2250,11 @@ assert_contains "$LANDING_SKILL_CONTENT" "prefers-reduced-motion: reduce" "landi
 assert_contains "$LANDING_SKILL_CONTENT" "If a script fails to load or throws, every piece of content must still be visible" "landing-page keeps content visible when scripts fail"
 assert_contains "$LANDING_MOTION" "html.js [data-reveal]" "hidden reveal states sit behind a JavaScript gate"
 assert_contains "$LANDING_MOTION" "window.revealReady" "the reveal gate has a timed fallback"
+# Lenis를 켜면 흔히 깨지는 지점(안쪽 스크롤·모달 잠금·이중 루프·정리)을 함께 안내한다.
+assert_contains "$LANDING_MOTION" "data-lenis-prevent" "lenis guide keeps nested scroll areas native"
+assert_contains "$LANDING_MOTION" "lenis.stop()" "lenis guide locks scrolling behind modals"
+assert_contains "$LANDING_MOTION" "autoRaf: false" "lenis guide avoids a second frame loop under GSAP"
+assert_contains "$LANDING_MOTION" "lenis.destroy()" "lenis guide destroys the instance on unmount"
 assert_contains "$LANDING_SKILL_CONTENT" "Never reproduce third-party component or library code from memory" "landing-page forbids recalled third-party code"
 assert_contains "$LANDING_EXTERNAL" "Never reproduce third-party component or library code from memory" "external-code repeats the fetch rule"
 assert_contains "$LANDING_EXTERNAL" "Do not run an install command without the user's approval" "landing-page installs only after approval"
@@ -2392,8 +2438,6 @@ assert_contains "$(cat skills/landing-page/SKILL.md)" "bash \$ROOT/scripts/landi
 assert_contains "$(cat agents/design-reviewer.md)" '빠진 항목이 있으면 그 검토는 무효로 처리된다' "design-reviewer answers every required check in JSON"
 assert_contains "$LANDING_VERIFY" "\`try_it_usability\`: with no instructions" "landing-page review checks the try-it demo's usability"
 assert_contains "$LANDING_VERIFY" "\`flow\`: read the page from the first viewport to the main action" "landing-page review checks the flow to the action"
-assert_contains "$(cat skills/landing-page/references/motion-web.md)" "mark them \`data-lenis-prevent\`" "landing-page covers Lenis nested scroll"
-assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`lenis.destroy()\` on unmount" "landing-page covers Lenis cleanup"
 assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
@@ -2966,6 +3010,84 @@ LOCK_PID_2=$!
 wait "$LOCK_PID_1"
 wait "$LOCK_PID_2"
 assert_eq "1" "$(wc -l < "$LOCK_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "review lock prevents duplicate history"
+
+# mkdir이 확인과 생성을 나눠 처리해도(uutils) lock은 동시 호출을 상호 배제한다.
+NONATOMIC_BIN="$TEST_TMP/nonatomic-mkdir-bin"
+mkdir -p "$NONATOMIC_BIN"
+cat >"$NONATOMIC_BIN/mkdir" <<'FAKE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [[ "$arg" == "-p" ]] && exec "$REAL_MKDIR" "$@"
+done
+for target in "$@"; do
+  if [[ -e "$target" ]]; then
+    echo "mkdir: cannot create directory '$target': File exists" >&2
+    exit 1
+  fi
+  sleep 0.2
+  "$REAL_MKDIR" -p "$target"
+done
+FAKE
+chmod +x "$NONATOMIC_BIN/mkdir"
+REAL_MKDIR_PATH="$(command -v mkdir)"
+for round in 1 2 3; do
+  NA_DATA="$TEST_TMP/nonatomic-lock-data-$round"
+  HARNESS_METRICS_DIR="$NA_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+  NA_EVENT="$NA_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+  HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" record "$NA_EVENT" >/dev/null
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-1" &
+  NA_PID_1=$!
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-2" &
+  NA_PID_2=$!
+  NA_RC_1=0
+  NA_RC_2=0
+  wait "$NA_PID_1" || NA_RC_1=$?
+  wait "$NA_PID_2" || NA_RC_2=$?
+  assert_eq "0" "$NA_RC_1" "nonatomic mkdir round $round first mark-reviewed exit"
+  assert_eq "0" "$NA_RC_2" "nonatomic mkdir round $round second mark-reviewed exit"
+  assert_eq "1" "$(wc -l < "$NA_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "nonatomic mkdir round $round history once"
+  if grep -q 'cannot stat\|No such file' "$NA_DATA/err-1" "$NA_DATA/err-2"; then
+    fail "nonatomic mkdir round $round raced into critical section: $(cat "$NA_DATA/err-1" "$NA_DATA/err-2")"
+  fi
+  [[ ! -e "$NA_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "nonatomic mkdir round $round queue lock left behind"
+done
+pass "queue lock excludes concurrent callers even when mkdir is non-atomic"
+
+# 임계구역 안에서 실패해도 EXIT trap이 lock을 푼다(bash 5에서 local 변수가 사라져도).
+FAILLOCK_DATA="$TEST_TMP/failure-lock-data"
+FAILLOCK_BIN="$TEST_TMP/failing-mv-bin"
+mkdir -p "$FAILLOCK_BIN"
+cat >"$FAILLOCK_BIN/mv" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  */sessions/*) echo "mv: simulated failure for $1" >&2; exit 1 ;;
+esac
+exec "$REAL_MV" "$@"
+FAKE
+chmod +x "$FAILLOCK_BIN/mv"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+FAILLOCK_EVENT="$FAILLOCK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" record "$FAILLOCK_EVENT" >/dev/null
+FAILLOCK_RC=0
+# 가짜 mv를 PATH 앞에 두기 전에 진짜 경로를 구한다(같은 줄이면 해시 캐시 여부에 따라 가짜를 잡아 무한 재실행).
+FAILLOCK_REAL_MV="$(command -v mv)"
+PATH="$FAILLOCK_BIN:$PATH" REAL_MV="$FAILLOCK_REAL_MV" \
+  HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$FAILLOCK_DATA/err" || FAILLOCK_RC=$?
+if [[ "$FAILLOCK_RC" == "0" ]]; then
+  fail "mark-reviewed should fail when moving a session marker fails"
+fi
+if grep -q 'unbound variable' "$FAILLOCK_DATA/err"; then
+  fail "EXIT trap referenced an out-of-scope variable: $(cat "$FAILLOCK_DATA/err")"
+fi
+[[ ! -e "$FAILLOCK_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "queue lock left behind after failure inside critical section"
+pass "queue lock is released when the critical section fails"
 
 # record가 marker 교체 중이어도 mark-reviewed는 같은 프로젝트 lock을 기다려 상태가 갈라지지 않는다.
 ATOMIC_DATA="$TEST_TMP/atomic-data"
@@ -3717,13 +3839,42 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   find "$SCHED_HOME/.claude" -depth -delete
   assert_contains "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" HM_BACKFILL_INTERVAL_HOURS=0 /bin/bash "$SCHED_DATA/bin/run-due.sh")" " run $ROOT" "shim falls back to the recorded plugin root"
   assert_eq "true" "$(run_schedule status | jq -r '.installed')" "status reports install"
+  SCHED_AF_PLIST="$SCHED_AGENTS/com.ai-harness.autofix.plist"
+  assert_not_file "$SCHED_AF_PLIST"
+  assert_eq "null" "$(run_schedule status | jq -c '.autofix')" "status has no autofix schedule unless it is set"
+  # autofix 전용 주기: 분 단위 LaunchAgent가 따로 sweep만 부른다.
+  HM_AUTOFIX_INTERVAL_MINUTES=15 run_schedule install >/dev/null
+  assert_file "$SCHED_AF_PLIST"
+  if command -v plutil >/dev/null 2>&1; then plutil -lint "$SCHED_AF_PLIST" >/dev/null || fail "autofix plist lint"; fi
+  assert_contains "$(<"$SCHED_AF_PLIST")" "<key>StartInterval</key><integer>900</integer>" "autofix sweep every 15 minutes"
+  assert_contains "$(<"$SCHED_AF_PLIST")" "$SCHED_DATA/bin/run-autofix.sh" "autofix plist points at its own stable shim"
+  assert_file "$SCHED_PLIST"
+  for version in 0.31.0 0.30.0; do
+    mkdir -p "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts"
+    printf '#!/bin/bash\necho "autofix %s $*"\n' "$version" >"$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/autofix-auto.sh"
+    chmod +x "$SCHED_HOME/.claude/plugins/cache/ai-harness/ai-harness/$version/scripts/autofix-auto.sh"
+  done
+  assert_eq "autofix 0.31.0 sweep" "$(HARNESS_METRICS_DIR="$SCHED_DATA" HM_PLUGIN_SEARCH_HOME="$SCHED_HOME" /bin/bash "$SCHED_DATA/bin/run-autofix.sh" | tail -n 1)" "autofix shim runs the newest installed plugin's sweep"
+  assert_eq "true|15" "$(run_schedule status | jq -r '"\(.autofix.installed)|\(.autofix.interval_minutes)"')" "status reports the autofix schedule"
+  # 주기를 지우고 다시 설치하면 전용 LaunchAgent도 내린다.
+  run_schedule install >/dev/null
+  assert_not_file "$SCHED_AF_PLIST"
+  assert_not_file "$SCHED_DATA/bin/run-autofix.sh"
+  SCHED_RC=0
+  HM_AUTOFIX_INTERVAL_MINUTES=abc run_schedule install >/dev/null 2>&1 || SCHED_RC=$?
+  assert_eq "2" "$SCHED_RC" "a non-numeric autofix interval is refused"
+  HM_AUTOFIX_INTERVAL_MINUTES=5 run_schedule install >/dev/null
   run_schedule uninstall >/dev/null
   assert_not_file "$SCHED_PLIST"
+  assert_not_file "$SCHED_AF_PLIST"
   assert_not_file "$SCHED_DATA/bin/run-due.sh"
+  assert_not_file "$SCHED_DATA/bin/run-autofix.sh"
 else
   SCHED_RC=0
-  run_schedule install >/dev/null 2>&1 || SCHED_RC=$?
+  SCHED_ERR="$(HM_AUTOFIX_INTERVAL_MINUTES=10 run_schedule install 2>&1 >/dev/null)" || SCHED_RC=$?
   assert_eq "3" "$SCHED_RC" "launchd install is macOS-only"
+  assert_contains "$SCHED_ERR" "*/10 * * * *" "other OSes get a cron line for the autofix interval"
+  assert_contains "$SCHED_ERR" "autofix-auto.sh sweep" "the cron line runs the autofix sweep"
 fi
 pass "launchd schedule"
 
@@ -4369,7 +4520,8 @@ AM_REPO="$TEST_TMP/am-repo"
 make_repo "$AM_REPO" https://github.com/acme/am.git
 git -C "$AM_REPO" checkout -q -b develop
 mkdir -p "$AM_REPO/.ai-harness/workflows" "$AM_REPO/.ai-harness/docs"
-jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{},auto_merge:{sync:true,harvest:true,method:"squash"}}' >"$AM_REPO/.ai-harness/harness.json"
+# 저장소 auto_merge 설정 없이 사용자 설정만으로 동작한다(#250).
+jq -n '{project_id:"am-svc",harness_version:"0.1.0",git_policy:"pr-only",managed_files:{}}' >"$AM_REPO/.ai-harness/harness.json"
 printf '# rules\n' >"$AM_REPO/AGENTS.md"
 printf '# testing\n' >"$AM_REPO/.ai-harness/docs/testing.md"
 printf 'x\n' >"$AM_REPO/app.js"
@@ -4420,6 +4572,24 @@ assert_eq "too_many_files:6" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_
 am_base_with lines-bad '.auto_merge.harvest_max_lines = "999"'
 am_on lines-bad h-bad && seq 1 41 >>"$AM_REPO/AGENTS.md"
 assert_eq "too_many_lines:41" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-bad --scope project --head "$(am_commit hbad)" --review "$AM_REVIEW")" "a non-number value falls back to the default"
+# 조정값은 사용자 설정 HM_AUTO_MERGE_*로도 정한다. 저장소 값이 함께 있으면 안전한 쪽(작은 상한·엄격한 불리언)을 쓴다.
+assert_eq "ok" "$(HM_AUTO_MERGE_SYNC_PARTIAL=1 am_check --scope sync --head "$AM_SYNC_OK" --result partial)" "the user setting allows partial sync without a repo setting"
+am_base_with partial-off '.auto_merge.sync_partial = false'
+am_on partial-off s-partial-off
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_PARTIAL_OFF="$(am_commit partialoff)"
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-off --scope sync --head "$AM_PARTIAL_OFF")" "the strict fixture itself passes as a full sync"
+assert_eq "partial_sync" "$(HM_AUTO_MERGE_SYNC_PARTIAL=1 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-off --scope sync --head "$AM_PARTIAL_OFF" --result partial)" "a repo that refuses partial sync stays strict"
+assert_eq "partial_sync" "$(HM_AUTO_MERGE_SYNC_PARTIAL=0 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/partial-on --scope sync --head "$AM_PARTIAL" --result partial)" "a user who refuses partial sync stays strict"
+am_branch h-u60 && seq 1 60 >>"$AM_REPO/AGENTS.md"
+AM_HU60="$(am_commit hu60)"
+assert_eq "ok" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=60 am_check --scope project --head "$AM_HU60" --review "$AM_REVIEW")" "the user setting raises the harvest line cap"
+assert_eq "too_many_lines:60" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=50 "$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/lines-60 --scope project --head "$AM_H60" --review "$AM_REVIEW")" "with both set the smaller cap wins"
+am_branch h-u999 && seq 1 101 >>"$AM_REPO/AGENTS.md"
+assert_eq "too_many_lines:101" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=999 am_check --scope project --head "$(am_commit hu999)" --review "$AM_REVIEW")" "the plugin cap applies to the user setting"
+assert_eq "too_many_lines:60" "$(HM_AUTO_MERGE_HARVEST_MAX_LINES=abc am_check --scope project --head "$AM_HU60" --review "$AM_REVIEW")" "a bad user value falls back to the default"
 am_sync_head s-bytes
 printf '# edited\n' >>"$AM_REPO/$AM_RUNNER"
 am_manifest ".managed_files[\"$AM_RUNNER\"].content_sha256 = \"$(am_sha "$AM_REPO/$AM_RUNNER")\""
@@ -4509,7 +4679,7 @@ am() { HARNESS_METRICS_DIR="$AM_DATA" HM_OPEN_PR_CMD="$TEST_TMP/am-pr" HM_AUTO_M
 am_runs() { jq -sr "$1" "$AM_DATA/harvest-auto/runs.jsonl"; }
 am_pending() { find "$AM_DATA/auto-merge/pending" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 AM_SINCE="2026-11-03T00:00:00Z"
-am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
+am_sync_enqueue() { HM_SYNC_AUTO_MERGE=1 HM_AUTO_MERGE_METHOD=squash am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base "${AM_BASE:-origin/develop}" --head "$AM_SYNC_OK" --pr "$1" --since "$AM_SINCE"; }
 am_harvest_enqueue() { HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/develop --head "$AM_HARVEST_OK" --pr "$1" --since "$AM_SINCE" --review "$AM_REVIEW"; }
 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/1 --since "$AM_SINCE"
 assert_eq "auto_merge_eligible" "$(am_runs 'last | .event')" "with the setting off a passing sync PR is only noted as eligible"
@@ -4527,10 +4697,23 @@ AM_REVIEW_MODE=forged am_harvest_enqueue https://github.com/acme/am/pull/21
 assert_eq "independent_review_failed" "$(am_runs 'last | .reason')" "a verdict without this run's token is not accepted"
 am_harvest_enqueue https://github.com/acme/am/pull/22
 assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a harvest PR passing the independent review is queued"
-git -C "$AM_REPO" checkout -q -B off develop && am_manifest '.auto_merge.harvest = false' && git -C "$AM_REPO" commit -q -am off
-git -C "$AM_REPO" update-ref refs/remotes/origin/off off
-HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OK" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
-assert_eq "repo_opt_out" "$(am_runs 'last | .reason')" "the base branch manifest must allow it"
+assert_eq "0" "$(am_runs '[.[] | select(.event == "auto_merge_legacy_switch")] | length')" "no legacy notice for a repo without auto_merge"
+# 저장소 허용 스위치는 더 이상 막지 않는다(#250): auto_merge.harvest:false·auto_merge:false여도 사용자 설정이 켜져 있으면 대상이다.
+am_base_with off '.auto_merge.harvest = false | .auto_merge.method = "merge"'
+am_on off h-off && printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+AM_HARVEST_OFF="$(am_commit hoff)"
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OFF" --pr https://github.com/acme/am/pull/23 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "a repo switch set to false no longer blocks"
+assert_eq "auto_merge_legacy_switch" "$(am_runs '.[-2].event')" "the old repo switch is recorded for a notice"
+assert_eq "merge" "$(jq -r 'select(.pr == "https://github.com/acme/am/pull/23") | .method' "$AM_DATA"/auto-merge/pending/*.json)" "the repo method is used when the user sets none"
+am_base_with off-all '.auto_merge = false'
+am_on off-all h-offall && printf -- '- 새 규칙\n' >>"$AM_REPO/AGENTS.md"
+HM_HARVEST_AUTO_MERGE=1 HM_AUTO_MERGE_METHOD=squash am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off-all --head "$(am_commit hoffall)" --pr https://github.com/acme/am/pull/24 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "auto_merge: false no longer blocks"
+assert_eq "squash" "$(jq -r 'select(.pr == "https://github.com/acme/am/pull/24") | .method' "$AM_DATA"/auto-merge/pending/*.json)" "the user method comes first"
+rm -f "$AM_DATA"/auto-merge/pending/*.json
+am_sync_enqueue https://github.com/acme/am/pull/1
+am_harvest_enqueue https://github.com/acme/am/pull/22
 # sweep: 호스트 상태 스텁. CI 진행 중이면 기다리고, 통과하면 head를 고정해 병합한다.
 cat >"$TEST_TMP/am-pr" <<'STUB'
 #!/usr/bin/env bash
@@ -4552,12 +4735,19 @@ assert_not_file "$AM_PR_LOG"
 am_state 1
 am_state 22 "$AM_HARVEST_OK"
 HM_SYNC_AUTO_MERGE=1 HM_HARVEST_AUTO_MERGE=1 am sweep
-assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the repo method"
+assert_eq "https://github.com/acme/am/pull/1|$AM_SYNC_OK|squash" "$(sort "$AM_PR_LOG" | sed -n 1p)" "green CI merges with the pinned head and the user method"
+assert_eq "https://github.com/acme/am/pull/22|$AM_HARVEST_OK|default" "$(sort "$AM_PR_LOG" | sed -n 2p)" "without any method setting the host default is used"
 assert_eq "2" "$(wc -l <"$AM_PR_LOG" | tr -d ' ')" "both queued PRs are merged"
 assert_eq "auto_merged" "$(am_runs 'last | .event')" "the merge is recorded"
 assert_eq "0" "$(am_pending)" "merged entries leave the queue"
-assert_contains "$(am notify | jq -r '.systemMessage')" "2건 병합" "SessionStart reports auto merges"
+AM_NOTICE="$(am notify | jq -r '.systemMessage')"
+assert_contains "$AM_NOTICE" "2건 병합" "SessionStart reports auto merges"
+assert_contains "$AM_NOTICE" "auto_merge 허용 스위치(sync·harvest)는 더 이상 쓰지 않습니다" "SessionStart says the repo switch is no longer used"
+assert_contains "$AM_NOTICE" "남아 있는 저장소: am-svc." "the notice names the repo"
 assert_eq "" "$(am notify)" "the notice is shown once"
+HM_HARVEST_AUTO_MERGE=1 am enqueue --project am-svc --scope project --repo "$AM_REPO" --base origin/off --head "$AM_HARVEST_OFF" --pr https://github.com/acme/am/pull/25 --since "$AM_SINCE" --review "$AM_REVIEW"
+assert_eq "auto_merge_queued" "$(am_runs 'last | .event')" "after the notice the old switch is not recorded again"
+rm -f "$AM_DATA"/auto-merge/pending/*.json
 : >"$AM_PR_LOG"
 for AM_CASE in 'head|.head = "0000000000000000"|head_moved' 'short|.head = "'"${AM_SYNC_OK:0:6}"'"|head_moved' 'base|.base = "main"|pr_base_mismatch' \
   'activity|.activity = 1|human_activity' 'ci|.ci = "failure"|ci_failed' 'conflict|.mergeable = "conflicting"|conflict' 'closed|.state = "closed"|closed' \
@@ -4601,7 +4791,7 @@ assert_eq "" "$(HM_SYNC_AUTO_MERGE=1 am notify)" "no hint once auto merge is on"
 AM_HINT="$(am notify | jq -r '.systemMessage')"
 assert_contains "$AM_HINT" "3건" "the hint shows the evidence"
 assert_contains "$AM_HINT" "HM_SYNC_AUTO_MERGE" "the hint names the user setting"
-assert_contains "$AM_HINT" '"auto_merge": {"sync": true}' "the hint names the repo setting"
+[[ "$AM_HINT" != *'auto_merge'* ]] || fail "the hint no longer asks for a repo setting"
 assert_eq "" "$(am notify)" "the hint is shown once per 30 days"
 assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "HM_SYNC_AUTO_MERGE" "setup offers the auto merge options"
 # 대화형 /setup 고르기 단계가 디자인 스킬도 묻는다(#220). 설치는 기존 design install 경로를 쓴다.
@@ -4636,6 +4826,24 @@ HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" 
 am_state 73 "$AM_NOCI" '.ci = "failure" | .base = "noci"'
 HM_SYNC_AUTO_MERGE=1 am sweep
 assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/73")] | last | "\(.event)|\(.reason)"')" "failed CI blocks even without require_ci"
+# require_ci도 사용자 설정으로 끌 수 있지만, 기준 브랜치가 require_ci:true면 그쪽이 이긴다. 실패한 CI는 여전히 막는다.
+rm -f "$AM_DATA"/auto-merge/pending/*.json && : >"$AM_PR_LOG"
+am_base_with ci-on '.auto_merge.require_ci = true'
+am_on ci-on s-cion
+mkdir -p "$AM_REPO/.ai-harness/workflows"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$AM_REPO/$AM_RUNNER" && chmod 755 "$AM_REPO/$AM_RUNNER"
+am_manifest ".harness_version = \"9.9.9\" | .managed_files[\"$AM_RUNNER\"] = {content_sha256:\"$(am_sha "$AM_REPO/$AM_RUNNER")\"}"
+AM_CION="$(am_commit cion)"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/74 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/ci-on --head "$AM_CION" --pr https://github.com/acme/am/pull/75 --since "$AM_SINCE"
+HM_SYNC_AUTO_MERGE=1 am enqueue --project am-svc --scope sync --repo "$AM_REPO" --base origin/develop --head "$AM_SYNC_OK" --pr https://github.com/acme/am/pull/76 --since "$AM_SINCE"
+am_state 74 "$AM_SYNC_OK" '.ci = "none"'
+am_state 75 "$AM_CION" '.ci = "none" | .base = "ci-on"'
+am_state 76 "$AM_SYNC_OK" '.ci = "failure"'
+HM_SYNC_AUTO_MERGE=1 HM_AUTO_MERGE_REQUIRE_CI=0 am sweep
+assert_eq "https://github.com/acme/am/pull/74" "$(cut -d'|' -f1 "$AM_PR_LOG")" "the user setting merges a repo without CI and without a repo value"
+assert_eq "1" "$(am_pending)" "a repo that requires CI keeps waiting despite the user setting"
+assert_eq "auto_merge_skipped|ci_failed" "$(am_runs '[.[] | select(.artifact == "https://github.com/acme/am/pull/76")] | last | "\(.event)|\(.reason)"')" "failed CI blocks with the user setting too"
 pass "opt-in auto merge of verified unattended PRs"
 
 # 실행이 끝나면 다음 sync 후보를 이어서 띄운다(동시 실행은 1개). sweep 주기(6시간)마다 1건씩이 아니다.
@@ -5034,6 +5242,7 @@ cat >"$AF_STUB/agent" <<'EOF'
 n=$(( $(cat "$AF_STUB/agent-count" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" >"$AF_STUB/agent-count"
 cp "$1" "$AF_STUB/error-$n.json"
+{ pwd -P; git rev-parse --path-format=absolute --git-common-dir; git remote get-url origin; git rev-parse HEAD; git config user.email; } >"$AF_STUB/git-$n.txt" 2>&1
 printf '%s\n' "${AF_STUB_RESULT:-AI_HARNESS_AUTOFIX_RESULT outcome=pr_opened artifact=https://github.com/acme/svc/pull/$n}"
 EOF
 cat >"$AF_STUB/pr" <<'EOF'
@@ -5060,6 +5269,14 @@ assert_eq "1" "$(<"$AF_STUB/agent-count")" "sweep launches one fix"
 assert_eq "pr_open|https://github.com/acme/svc/pull/1|1" "$(af_sig '"\(.status)|\(.pr)|\(.attempts)"')" "agent PR is recorded"
 assert_eq "new|UserService.java" "$(jq -r '"\(.reason)|\(.detail.exception[0].frames[0].file)"' "$AF_STUB/error-1.json")" "agent gets the error detail"
 if git -C "$AF_REPO" worktree list | grep -q auto-worktrees; then fail "worker removes its worktree"; fi
+# 무인 에이전트(launchd → claude)가 띄운 셸은 macOS 보호 폴더(~/Desktop 등)에 있는 원본 저장소의 .git을 읽지 못한다(#272).
+# 작업 디렉토리는 git 메타데이터를 원본에 기대지 않는 독립 저장소여야 하고, origin·기준 커밋·저장소 user 설정은 원본과 같아야 한다.
+AF_WD="$(sed -n 1p "$AF_STUB/git-1.txt")"
+assert_eq "$AF_WD/.git" "$(sed -n 2p "$AF_STUB/git-1.txt")" "agent work dir has its own git dir, not the source repo's"
+assert_eq "git@github.com:acme/svc.git" "$(sed -n 3p "$AF_STUB/git-1.txt")" "agent work dir keeps the source origin url"
+assert_eq "$(git -C "$AF_REPO" rev-parse origin/develop)" "$(sed -n 4p "$AF_STUB/git-1.txt")" "agent work dir is at the base commit"
+assert_eq "test@example.com" "$(sed -n 5p "$AF_STUB/git-1.txt")" "agent work dir keeps the repo-local git identity"
+[[ ! -e "$AF_WD" ]] || fail "worker removes the agent work dir"
 af_auto sweep
 assert_eq "1" "$(<"$AF_STUB/agent-count")" "a signature with an open PR is not fixed again"
 
@@ -5148,6 +5365,180 @@ assert_contains "$AF_ARGS" '--no-session-persistence' "unattended autofix keeps 
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" 'autofix-auto.sh" sweep' "backfill-due runs the autofix sweep"
 assert_contains "$(<"$ROOT/scripts/autofix-auto.sh")" 'harvest-auto/running.lock' "autofix shares the unattended-run lock"
 pass "autofix tracks manual PRs and runs with a restricted agent"
+
+# 로컬 monitor 설정: ~/.ai-harness/autofix/monitors/<project_id>.json이 기준 브랜치 manifest의 monitor보다 앞서고,
+# 같은 검증을 받는다. 켜기·상태가 로컬이므로 설정도 저장소에 커밋하지 않고 둘 수 있어야 한다.
+AFL_DATA="$TEST_TMP/autofix-local-data"
+AFL_REPO="$TEST_TMP/autofix-local-repo"
+mkdir -p "$AFL_REPO/.ai-harness" "$AFL_REPO/tools" "$AFL_DATA/autofix/monitors"
+git -C "$AFL_REPO" init -q
+git -C "$AFL_REPO" config user.email test@example.com
+git -C "$AFL_REPO" config user.name test
+for afl_src in manifest local; do
+  # shellcheck disable=SC2016  # 생성할 어댑터 스크립트의 $1을 문자 그대로 쓴다
+  printf '#!/usr/bin/env bash\n[[ "$1" == list ]] && printf '"'"'{"signature":"src:%s","count":20}\\n'"'"'\nexit 0\n' "$afl_src" >"$AFL_REPO/tools/$afl_src.sh"
+  chmod +x "$AFL_REPO/tools/$afl_src.sh"
+done
+afl_manifest() { # $1=monitor json 또는 null → 커밋
+  jq -n --argjson m "$1" '{project_id:"af-loc",level:"standard"} + (if $m == null then {} else {monitor:$m} end)' >"$AFL_REPO/.ai-harness/harness.json"
+  git -C "$AFL_REPO" add -A && git -C "$AFL_REPO" commit -q -m "manifest"
+}
+afl_local() { printf '%s\n' "$1" >"$AFL_DATA/autofix/monitors/af-loc.json"; }
+afl_list() { # → "rc|signature"
+  local out="" rc=0
+  out="$(HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/monitor-fetch.sh" list --root "$AFL_REPO" 2>/dev/null)" || rc=$?
+  printf '%s|%s\n' "$rc" "$(jq -r '.signature' <<<"$out" 2>/dev/null | paste -sd, -)"
+}
+afl_candidates() {
+  HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="af-loc" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+    "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc 2>/dev/null | jq -r '.signature' | paste -sd, -
+}
+afl_manifest '{"provider":"command","command":"tools/manifest.sh"}'
+assert_eq "0|src:manifest" "$(afl_list)" "without a local file the base-branch manifest monitor is used"
+afl_local '{"provider":"command","command":"tools/local.sh"}'
+assert_eq "0|src:local" "$(afl_list)" "the local monitor file wins over the manifest"
+assert_eq "src:local" "$(afl_candidates)" "autofix candidates use the local monitor file"
+afl_manifest null
+assert_eq "0|src:local" "$(afl_list)" "a local file works without any monitor in the manifest"
+assert_eq "src:local" "$(afl_candidates)" "a repo monitored only locally is an autofix target"
+AFL_RC=0
+HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="af-loc" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" track --project af-loc --candidate '{"signature":"src:local","count":20}' --pr https://github.com/acme/loc/pull/1 || AFL_RC=$?
+assert_eq "0" "$AFL_RC" "a PR of a locally monitored repo can be tracked"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+assert_eq "5|" "$(afl_list)" "no local file and no manifest monitor is reported as missing settings"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/monitor-fetch.sh" check --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "5" "$AFL_RC" "check tells missing settings (exit 5) apart so /autofix can route to setup"
+assert_eq "" "$(afl_candidates)" "a repo with no monitor settings is not an autofix target"
+afl_manifest '{"provider":"command","command":"tools/manifest.sh"}'
+afl_local 'not json'
+assert_eq "4|" "$(afl_list)" "a broken local file is rejected, not silently replaced by the manifest"
+assert_eq "" "$(afl_candidates)" "a broken local file keeps the repo out of autofix"
+afl_local '{"command":"tools/local.sh"}'
+assert_eq "4|" "$(afl_list)" "a local file without provider is rejected"
+afl_local '{"provider":"command","command":"/bin/sh"}'
+assert_eq "4|" "$(afl_list)" "a local command adapter must also live inside the repo"
+afl_local '{"provider":"command","command":"../x.sh"}'
+assert_eq "4|" "$(afl_list)" "a local command adapter path cannot climb out"
+afl_local '{"provider":"sentry","org":"a","project":"b","base_url":"https://evil.example.com"}'
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" SENTRY_AUTH_TOKEN=t "$ROOT/scripts/monitor-fetch.sh" list --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "4" "$AFL_RC" "a local file cannot send the sentry token to another host either"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+pass "autofix monitor settings: local file first, manifest fallback, same validation"
+
+# 수동 후보 조회는 무인 실행 허용 목록(HM_AUTOFIX_REPOS)과 무관하게 그 저장소의 monitor 설정으로 계산한다.
+# 무인 실행 없이 수동으로만 쓰는 사람도 후보를 볼 수 있어야 한다. 검증 대상 등록(track)의 허용 목록 규칙은 그대로다.
+# 앞 블록의 track이 src:local을 pr_open으로 올렸으므로 추적되지 않은 시그니처(src:manifest)를 내는 어댑터를 쓴다.
+afl_local '{"provider":"command","command":"tools/manifest.sh"}'
+assert_eq "src:manifest" "$(HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="" \
+  "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc --root "$AFL_REPO" 2>/dev/null | jq -r '.signature')" \
+  "manual candidates work for a repo outside HM_AUTOFIX_REPOS"
+assert_eq "src:manifest" "$(HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="other" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc 2>/dev/null | jq -r '.signature')" \
+  "manual candidates without --root find the repo without the allow-list"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/autofix-auto.sh" candidates --project other-id --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "2" "$AFL_RC" "candidates refuse a --project that does not match the --root repo"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="other" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" track --project af-loc --candidate '{"signature":"src:local","count":20}' --pr https://github.com/acme/loc/pull/2 >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "3" "$AFL_RC" "track still requires the allow-list"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+pass "manual autofix candidates are not bound to the unattended allow-list"
+
+# setup 보조: discover가 실제 데이터(최근 에러의 service·env / project·environment별 건수)를 보여 줘
+# 사용자가 고르게 한다. 저장소 설정 없이 돌고, 자격증명 전송처 제한은 list와 같다.
+AFD_STUB="$TEST_TMP/autofix-discover"
+mkdir -p "$AFD_STUB"
+cat >"$AFD_STUB/http" <<'EOF'
+#!/usr/bin/env bash
+printf '%s %s %s\n' "$1" "$2" "${3:-}" >>"$AFD_STUB/http.log"
+case "$2" in
+  https://api.datadoghq.eu/api/v2/logs/analytics/aggregate)
+    printf '%s\n' '{"data":{"buckets":[{"by":{"service":"api","env":"prod"},"computes":{"c0":120}},{"by":{"service":"web worker","env":"staging"},"computes":{"c0":7}},{"by":{"service":"batch"},"computes":{"c0":3}}]}}' ;;
+  https://sentry.io/api/0/organizations/acme/events/\?*)
+    printf '%s\n' '{"data":[{"project":"api","environment":"production","count()":42,"count_unique(issue)":5},{"project":"web","environment":null,"count()":2,"count_unique(issue)":1}]}' ;;
+  https://sentry.io/api/0/organizations/)
+    printf '%s\n' '[{"slug":"acme","name":"Acme"}]' ;;
+  *) echo "unexpected $2" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$AFD_STUB/http"
+export AFD_STUB
+afd() { HARNESS_METRICS_DIR="$AFL_DATA" HM_MONITOR_HTTP="$AFD_STUB/http" "$ROOT/scripts/monitor-fetch.sh" discover "$@"; }
+AFD_DD="$(afd --provider datadog --site datadoghq.eu --hours 6)"
+assert_eq "3" "$(printf '%s\n' "$AFD_DD" | grep -c .)" "datadog discover prints one line per service/env"
+assert_eq "api|prod|120|service:api env:prod status:error" "$(head -n 1 <<<"$AFD_DD" | jq -r '"\(.service)|\(.env)|\(.count)|\(.query)"')" \
+  "datadog discover counts errors per service and env with a ready query"
+assert_eq 'service:"web worker" env:staging status:error' "$(sed -n 2p <<<"$AFD_DD" | jq -r '.query')" "discover quotes values with spaces"
+assert_eq "|service:batch status:error" "$(sed -n 3p <<<"$AFD_DD" | jq -r '"\(.env)|\(.query)"')" "a service without env gets no env term"
+assert_contains "$(<"$AFD_STUB/http.log")" '"from":"now-6h"' "datadog discover honours --hours"
+assert_contains "$(<"$AFD_STUB/http.log")" '"query":"status:error"' "datadog discover aggregates error logs"
+AFD_SE="$(afd --provider sentry --org acme)"
+assert_eq "acme|api|production|42|5" "$(head -n 1 <<<"$AFD_SE" | jq -r '"\(.org)|\(.project)|\(.environment)|\(.events)|\(.issues)"')" \
+  "sentry discover counts events and issues per project and environment"
+assert_eq "" "$(sed -n 2p <<<"$AFD_SE" | jq -r '.environment')" "sentry discover keeps events without an environment"
+assert_contains "$(grep 'organizations/acme/events' "$AFD_STUB/http.log")" "statsPeriod=24h" "sentry discover defaults to 24 hours"
+assert_eq "acme" "$(afd --provider sentry | jq -r '.org')" "sentry discover without --org lists organizations"
+AFD_RC=0; afd --provider datadog --site evil.example.com >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover cannot send datadog keys to another host"
+AFD_RC=0; afd --provider sentry --org acme --base-url https://evil.example.com >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover cannot send the sentry token to another host"
+AFD_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" HARNESS_CLAUDE_SETTINGS=/nonexistent DATADOG_API_KEY="" DATADOG_APP_KEY="" DD_API_KEY="" DD_APP_KEY="" HM_DATADOG_API_KEY="" HM_DATADOG_APP_KEY="" \
+  "$ROOT/scripts/monitor-fetch.sh" discover --provider datadog >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover without credentials is a config error"
+AFD_RC=0; afd --provider command >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "2" "$AFD_RC" "discover supports only datadog and sentry"
+pass "monitor-fetch discover lists real service/env choices for setup"
+
+# /autofix: 설정이 없으면 setup으로 넘어가고, setup 절차는 별도 파일에 둔다(수정 실행 때 setup 절차를 같이 읽지 않게).
+assert_file "$ROOT/skills/autofix/setup.md"
+AF_SKILL="$(<"$ROOT/skills/autofix/SKILL.md")"
+assert_contains "$AF_SKILL" "setup.md" "autofix SKILL routes to setup.md"
+assert_contains "$AF_SKILL" "exit 5" "autofix manual path checks for missing settings first"
+assert_contains "$AF_SKILL" "candidates --project <id> --root ." "autofix manual candidates use the current repo"
+AF_SETUP="$(<"$ROOT/skills/autofix/setup.md")"
+assert_contains "$AF_SETUP" "monitor-fetch.sh discover" "setup shows discover results"
+assert_contains "$AF_SETUP" "autofix-auto.sh configure" "setup still writes the unattended settings"
+pass "autofix routes missing settings to a separate setup procedure"
+
+# 짧은 주기 sweep과 backfill 경로 sweep이 겹치면 늦게 온 쪽은 아무것도 하지 않는다.
+mkdir -p "$AF_DATA/autofix/.sweep.lock"
+printf '%s\n' "$$" >"$AF_DATA/autofix/.sweep.lock/pid"
+af_state 'del(.signatures["sentry:101"])'
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+af_auto sweep
+assert_eq "$AF_BEFORE" "$(<"$AF_STUB/agent-count")" "a sweep already running blocks a second one"
+find "$AF_DATA/autofix/.sweep.lock" -depth -delete
+af_auto sweep
+assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "the next sweep runs once the lock is free"
+pass "autofix sweeps do not overlap"
+
+# /autofix setup의 무인 실행 설정: 개인 config의 해당 키만 바꾸고 다른 줄·주석·권한은 남기며, 틀린 값은 아무것도 쓰지 않는다.
+AFC_DATA="$TEST_TMP/autofix-config-data"
+mkdir -p "$AFC_DATA"
+printf '# 내 설정\nHM_HARVEST_AUTO=1\nHM_AUTOFIX_DAILY_MAX=7\nexport HM_AUTOFIX_REPOS="svc-a svc-b"\n' >"$AFC_DATA/config"
+chmod 640 "$AFC_DATA/config"
+afc() { env -u HM_AUTOFIX_REPOS -u HM_AUTOFIX_AUTO -u HM_AUTOFIX_DAILY_MAX HARNESS_METRICS_DIR="$AFC_DATA" "$ROOT/scripts/autofix-auto.sh" configure "$@"; }
+assert_eq "false|svc-a,svc-b|null|7|2|10" "$(afc | jq -r '[.auto, (.repos | join(",")), .interval_minutes, .daily_max, .max_attempts, .budget_usd] | map(tostring) | join("|")')" "configure without flags shows the current values and defaults"
+afc --auto 1 --add-repo svc-c --interval-minutes 10 --daily-max 4 --max-attempts 3 --budget-usd 2.5 >/dev/null
+AFC_CFG="$(<"$AFC_DATA/config")"
+assert_contains "$AFC_CFG" "# 내 설정" "comments are kept"
+assert_contains "$AFC_CFG" "HM_HARVEST_AUTO=1" "other keys are kept"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_REPOS="svc-a,svc-b,svc-c"' "the repo is added to the existing list"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_INTERVAL_MINUTES="10"' "the sweep interval is written"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_BUDGET_USD="2.5"' "a decimal budget is accepted"
+assert_eq "1" "$(grep -c 'HM_AUTOFIX_DAILY_MAX' "$AFC_DATA/config")" "an existing key is replaced, not duplicated"
+assert_eq "640" "$(filemode "$AFC_DATA/config")" "the config file keeps its permissions"
+afc --add-repo svc-a --interval-minutes off >/dev/null
+assert_eq "svc-a,svc-b,svc-c|0" "$(sed -n 's/^HM_AUTOFIX_REPOS="\(.*\)"$/\1/p' "$AFC_DATA/config")|$(grep -c 'HM_AUTOFIX_INTERVAL_MINUTES' "$AFC_DATA/config")" "an already listed repo is not added twice; off removes the interval"
+AFC_BEFORE="$(<"$AFC_DATA/config")"
+for afc_bad in "--daily-max x" "--max-attempts 0" "--budget-usd 0" "--budget-usd 1e3" "--interval-minutes 1.5" "--auto yes" "--add-repo a,b"; do
+  AFC_RC=0
+  # shellcheck disable=SC2086  # 플래그와 값을 나눠 넘긴다
+  afc --auto 0 $afc_bad >/dev/null 2>&1 || AFC_RC=$?
+  assert_eq "2" "$AFC_RC" "configure rejects $afc_bad"
+done
+assert_eq "$AFC_BEFORE" "$(<"$AFC_DATA/config")" "a rejected value changes nothing, not even the valid flags"
+pass "autofix configure updates only its keys in the personal config"
 # 기본 스킬 카탈로그: 플러그인 스킬이 아니라 선택 설치 원본이며, Codex도 읽을 수 있는 frontmatter만 쓴다.
 CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
 assert_eq "$CATALOG_NAMES" "$(find "$ROOT/catalog" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd' ' -)" "catalog.json lists every catalog skill"
@@ -5981,8 +6372,11 @@ ev_verdict() { # highlights-json → "verdict before after" per improvement
   HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$TEST_TMP/impact-ev-hl.json" --out "$TEST_TMP/impact-ev.html" >/dev/null
   sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-ev.html" | jq -r '[.improvements[].result | "\(.verdict):\(.before_hits // "-"):\(.after_hits // "-")"] | join(" ")'
 }
-assert_eq "reduced:2:1 unmatched:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
-  "impact verdict counts sessions, ignores unknown ids, and marks unmatched improvements"
+# 맞춰 보지 않은 h2는 반영 뒤 관측 세션이 0이라 "판단 보류"다(5개 이상이면 "판정 안 함").
+assert_eq "reduced:2:1 hold:-:-" "$(ev_verdict '{"improvements":[{"id":"h1","label":"커버리지 게이트","before":["claude-b1#0","claude-b2#0","claude-b1#0","claude-zz#9"],"after":["claude-a5#0"]}]}')" \
+  "impact verdict counts sessions, ignores unknown ids, and holds unmatched improvements with few sessions"
+assert_eq "unmatched hold" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [pending_verdict(5), pending_verdict(4)] | join(" ")')" \
+  "an unmatched improvement is held below the observed minimum and left unjudged above it"
 assert_eq "gone:2:0 no_baseline:0:0" "$(ev_verdict '{"improvements":[{"id":"h1","before":["claude-b1#0","claude-b2#0"],"after":[]},{"id":"h2","before":[],"after":[]}]}')" \
   "impact verdict says gone only with a baseline"
 assert_eq "hold recurred recurred reduced" "$(jq -rn -L "$ROOT/scripts" 'include "impact-evidence"; [verdict(2; 0; 3; 10), verdict(2; 1; 3; 10), verdict(1; 3; 5; 2), verdict(5; 1; 5; 10)] | join(" ")')" \
@@ -6037,6 +6431,81 @@ HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$TEST_TM
   || fail "impact render draws an old compare JSON without improvements"
 assert_eq "[]" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-old.html" | jq -c '.improvements')" "impact render treats missing improvements as none"
 pass "impact render tolerates odd inputs"
+
+# 비교 가능성·추세·저장소 상태는 집계 쪽(impact-assess.jq)이 정한다. 보드와 리포트는 그 값을 그대로 쓴다. (#260)
+# 설치 전 정리된 세션이 없으면 0 → N을 비교하지 않고 이유를 낸다. 표본이 충분할 때만 증감을 낸다.
+assess_q() { jq -rn -L "$ROOT/scripts" --argjson d "$1" "include \"impact-assess\"; \$d | $2"; }
+ASSESS_P='{"periods":{"before":{"sessions":12,"digested_sessions":0,"corrections_per_session":null,"missing_context_per_session":null,"guard_blocks":0},
+  "after":{"sessions":30,"digested_sessions":18,"corrections_per_session":0.8,"missing_context_per_session":6.4,"guard_blocks":4}},"weekly":[],"rework":null}'
+assert_eq "false no_baseline_digests null|false after_only|false no_rework" \
+  "$(assess_q "$ASSESS_P" 'assess.metrics | "\(.corrections_per_session | "\(.comparable) \(.reason) \(.change)")|\(.guard_blocks | "\(.comparable) \(.reason)")|\(.rework | "\(.comparable) \(.reason)")"')" \
+  "impact does not compare a metric whose before window has no digested sessions"
+assert_eq "false no_baseline_sessions" \
+  "$(assess_q "$ASSESS_P" '.periods.before.sessions = 0 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact says the before window had no sessions at all"
+assert_eq "false few_digests" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 3 | .periods.before.corrections_per_session = 0.5 | assess.metrics.corrections_per_session | "\(.comparable) \(.reason)"')" \
+  "impact does not compare a metric with few digested sessions on either side"
+assert_eq "true null down|true null flat|true null up" \
+  "$(assess_q "$ASSESS_P" '.periods.before.digested_sessions = 10 | [.periods.before.corrections_per_session = (1.3, 0.8, 0.3)
+    | assess.metrics.corrections_per_session | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares a metric when both windows have enough digested sessions"
+assert_eq "false few_prs null|true null down" \
+  "$(assess_q "$ASSESS_P" '[.rework = ({before:{rework_ratio:0, settled_prs:3}, after:{rework_ratio:40, settled_prs:20}}, {before:{rework_ratio:40, settled_prs:12}, after:{rework_ratio:10, settled_prs:20}})
+    | assess.metrics.rework | "\(.comparable) \(.reason) \(.change)"] | join("|")')" \
+  "impact compares rework only with enough settled PRs on both sides"
+
+# 추세: 설치 후 최근 주에서 정리된 세션이 있는 주의 앞 절반과 뒤 절반 비율을 맞댄다. 설치 전 주와 정리 1개뿐인 주는 빼고, 모자라면 데이터 부족.
+assess_week() { jq -cn --arg w "$1" --argjson a "$2" --argjson d "$3" --argjson c "$4" \
+  '{week:$w, after_install:$a, sessions:$d, digested_sessions:$d, corrections:$c, corrections_per_session:(if $d == 0 then null else $c / $d end), missing_context:0, missing_context_per_session:0}'; }
+ASSESS_W="[$(assess_week 2026-09-28 false 4 40),$(assess_week 2026-10-05 true 4 4),$(assess_week 2026-10-12 true 1 9),$(assess_week 2026-10-19 true 4 4),$(assess_week 2026-10-26 true 4 1),$(assess_week 2026-11-02 true 4 0)]"
+assert_eq "down 4 16 1 0.13 2026-10-05" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session | \"\(.verdict) \(.weeks) \(.digested) \(.first) \(.last) \(.series[0].week)\"")" \
+  "impact trend compares the first and last half of digested after-install weeks"
+assert_eq "up flat insufficient" \
+  "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | [(.weekly | map(.corrections = (if .week >= \"2026-10-26\" then 4 else 1 end))), (.weekly | map(.corrections = 2)), (.weekly | .[0:4])] as \$v
+    | [\$v[] as \$w | .weekly = \$w | assess.trends.corrections_per_session.verdict] | join(\" \")")" \
+  "impact trend says up, flat, or not enough data"
+# 3주(3·3·4세션)면 앞·뒤 절반이 각 1주라 표본이 작다 — 판정하지 않는다. 비율 값이 비면 비교하지 않는다.
+assert_eq "insufficient no_value" "$(assess_q "$ASSESS_P" "(${ASSESS_W}[1:5] | .[1].digested_sessions = 0 | .[0].digested_sessions = 3 | .[2].digested_sessions = 3) as \$w
+  | (.weekly = \$w | assess.trends.corrections_per_session.verdict),
+    (.periods.before.digested_sessions = 10 | assess.metrics.corrections_per_session.reason)" | tr '\n' ' ' | sed 's/ $//')" \
+  "impact trend needs enough sessions in each half, and a metric needs values on both sides"
+assert_eq "5" "$(assess_q "$ASSESS_P" ".weekly = $ASSESS_W | assess.trends.corrections_per_session.series | length")" "impact trend series lists the recent after-install weeks it looked at"
+
+# 저장소 상태: 효과(개선 사라짐·줄어듦, 줄어드는 추세, 비교 가능한 감소)와 나쁜 신호(재발, 느는 추세)로 정하고, 신호가 없으면 왜 모르는지 남긴다.
+assert_eq "effective mixed attention watching insufficient no_sessions" \
+  "$(assess_q "$ASSESS_P" "[
+    (.weekly = $ASSESS_W | .improvements = []),
+    (.weekly = $ASSESS_W | .improvements = [{result:{verdict:\"recurred\"}}]),
+    (.improvements = [{result:{verdict:\"recurred\"}}]),
+    (.weekly = (\$d.weekly + [${ASSESS_W}[] | .corrections = 2]) | .improvements = [{result:{verdict:\"hold\"}}]),
+    (.improvements = [{result:{verdict:\"unmatched\"}}]),
+    (.periods.after.sessions = 0 | .improvements = [])]
+    | map(assess_status.key) | join(\" \")")" \
+  "impact sums each repo into effective, mixed, attention, watching, insufficient, or no recent sessions"
+assert_eq "no_baseline few_recent_digests unmatched_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"unmatched"}}] | assess_status.gaps | map(if .n then "\(.why):\(.n)" else .why end) | join(" ")')" \
+  "impact says why a repo has no answer yet"
+assert_eq "insufficient no_baseline_improvements:1" \
+  "$(assess_q "$ASSESS_P" '.improvements = [{result:{verdict:"no_baseline"}}] | assess_status | "\(.key) \(.gaps | map(select(.why == "no_baseline_improvements")) | map("\(.why):\(.n)") | join(""))"')" \
+  "impact does not count an improvement without a baseline as being watched"
+
+# compare·render·view가 같은 값을 싣는다. EV는 설치 전 정리된 세션이 없다.
+assert_eq "false no_baseline_sessions false after_only" \
+  "$(jq -r '.assessment.metrics | "\(.corrections_per_session.comparable) \(.corrections_per_session.reason) \(.guard_blocks.comparable) \(.guard_blocks.reason)"' <<<"$EV_JSON")" \
+  "impact compare carries comparability per metric"
+assert_eq "few_digests" "$(jq -r '.assessment.metrics.missing_context_per_session.reason' <<<"$IMPACT_JSON")" "impact compare flags few digested sessions"
+EV_VIEW="$(HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$EV_FILE")"
+HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" render --data "$EV_FILE" --highlights "$(jq -r '.highlights.file' <<<"$EV_VIEW")" --out "$TEST_TMP/impact-assess.html" >/dev/null
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(sed -n 's/^const DATA = \(.*\);$/\1/p' "$TEST_TMP/impact-assess.html" | jq -c '.assessment')" \
+  "impact report and view carry the same assessment"
+assert_eq "effective" "$(jq -r '.assessment.status.key' <<<"$EV_VIEW")" "impact view adds the repo status"
+# 옛 캐시(assessment 없음)도 view가 같은 규칙으로 채운다.
+assert_eq "$(jq -c '.assessment' <<<"$EV_VIEW")" "$(jq 'del(.assessment)' "$EV_FILE" >"$TEST_TMP/impact-noassess.json"; HARNESS_METRICS_DIR="$EV_DATA" "$ROOT/scripts/impact.sh" view --data "$TEST_TMP/impact-noassess.json" | jq -c '.assessment')" \
+  "impact view assesses an old compare JSON the same way"
+assert_contains "$(<"$ROOT/skills/harness-impact/report-template.html")" "비교 불가" "impact report says when a metric cannot be compared"
+pass "impact assessment: comparability, after-install trend, repo status"
 
 # digest가 null·깨짐이면 건너뛰고, 세션 0건·이력 없음이어도 compare가 JSON을 낸다.
 ODD_DATA="$TEST_TMP/impact-odd-data"
@@ -6151,6 +6620,321 @@ for c in ko-show-effect ko-before-after ko-report ko-ab-request en-impact ko-tok
   assert_file "$ROOT/evals/harness-impact/$c/prompt.md"
 done
 pass "harness-impact plugin skill"
+
+# Harness Board: 스킬이 필요할 때 띄우는 로컬 서버. 가짜 claude·orca와 임시 데이터·빈 포트로만 돌린다.
+BOARD_T="$TEST_TMP/board"
+BOARD_DATA="$BOARD_T/data"
+mkdir -p "$BOARD_T/bin" "$BOARD_DATA" "$BOARD_T/projects/p"
+BOARD_SID="11111111-2222-3333-4444-555555555555"
+cat >"$BOARD_T/bin/claude" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == agents ]]; then
+  printf '[{"sessionId":"$BOARD_SID","id":"11111111","kind":"background","status":"idle","state":"running","pid":null,"cwd":"$BOARD_T","name":"board task","startedAt":%s000}]\n' "\$(date +%s)"
+  exit 0
+fi
+exit 1
+EOF
+cat >"$BOARD_T/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+echo '{"ok":true,"result":{"runs":[],"workers":[]}}'
+EOF
+chmod +x "$BOARD_T/bin/claude" "$BOARD_T/bin/orca"
+printf '%s\n' '{"type":"user","message":{"content":"hello board"},"timestamp":"2026-11-07T10:00:00Z"}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"timestamp":"2026-11-07T10:00:05Z"}' \
+  >"$BOARD_T/projects/p/$BOARD_SID.jsonl"
+mkdir -p "$BOARD_DATA/harvest-queue/p-svc" "$BOARD_DATA/harvest-auto"
+jq -cn '{project:"svc", has_analysis_batch:true, created_at:"2026-11-07T09:00:00Z", counts:{sessions:10}, reasons:["sessions"], event_files:[]}' \
+  >"$BOARD_DATA/harvest-queue/p-svc/analysis-batch.json"
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg at "$NOW_ISO" '{event:"started", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", repo:"/nonexistent/svc"},
+  {event:"finished", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", result:"improved", artifact:"https://github.com/example/svc/pull/1"}' \
+  >"$BOARD_DATA/harvest-auto/runs.jsonl"
+printf '# keep this comment\nHM_DIGEST=1\nOTHER_TOOL_SETTING=x\n' >"$BOARD_DATA/config"
+chmod 600 "$BOARD_DATA/config"
+free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+BOARD_PORT_T="$(free_port)"
+board_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BOARD_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="${BOARD_PORT_OVERRIDE:-$BOARD_PORT_T}" BOARD_NO_BROWSER=1 \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+assert_eq "false" "$(board_sh status | jq -r '.running')" "board is not running before open"
+BOARD_OPEN="$(board_sh open)"
+assert_eq "false" "$(jq -r '.reused' <<<"$BOARD_OPEN")" "board open starts a server"
+BOARD_URL="$(jq -r '.url' <<<"$BOARD_OPEN")"
+BOARD_TOKEN="${BOARD_URL#*t=}"
+BOARD_BASE="http://127.0.0.1:$BOARD_PORT_T"
+assert_contains "$BOARD_URL" "$BOARD_BASE/?t=" "board url is bound to 127.0.0.1 with a token"
+assert_eq "600" "$(filemode "$BOARD_DATA/board/server.json")" "server.json is private"
+assert_eq "true" "$(board_sh open | jq -r '.reused')" "board open reuses a running server"
+assert_eq "$BOARD_URL" "$(board_sh status | jq -r '.url')" "board status reports the same url"
+case "$(cat "$BOARD_DATA/board/server.log" 2>/dev/null)" in *"$BOARD_TOKEN"*) fail "server log does not carry the url token" ;; esac
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/status.json?t=wrong")" "board rejects a wrong token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/status.json")" "board rejects a missing token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BOARD_PORT_T" "$BOARD_BASE/status.json?t=$BOARD_TOKEN")" "board rejects a foreign Host (DNS rebinding)"
+# JSON 본문은 jq로 만든다 — bash 3.2는 $( ) 안의 \"…,…\"를 중괄호 확장해 요청을 여러 개로 쪼갠다.
+BOARD_SEEN_BODY="$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, ids: []}')"
+assert_eq "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $BOARD_BASE" -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board accepts its own Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board rejects a foreign Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$BOARD_SEEN_BODY" "$BOARD_BASE/seen")" "board rejects a POST without Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Board-Hook: wrong' -d '{}' "$BOARD_BASE/hook/permission")" "hook endpoint needs its own token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Board-Hook: $BOARD_TOKEN" -d '{}' "$BOARD_BASE/hook/permission")" "the url token does not open the hook endpoint"
+BOARD_STATUS="$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN")"
+assert_eq "true" "$(jq '(.generated_at | type) == "string" and (.items | type) == "array" and (.jira_base | type) != "number"' <<<"$BOARD_STATUS")" "status.json shape"
+assert_eq "true" "$(jq --arg sid "$BOARD_SID" 'any(.items[]; .section == "work" and .kind == "bg" and .sid == $sid and (.transcript | type) == "string" and (.actions | index("view")) != null and (.id | type) == "string")' <<<"$BOARD_STATUS")" "status.json lists the agent session from claude agents"
+assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .kind == "harvest" and .state == "queued" and (.actions | index("harvest_now")) != null)' <<<"$BOARD_STATUS")" "status.json lists a queued harvest with its action"
+assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .state == "needs_human" and .link == "https://github.com/example/svc/pull/1")' <<<"$BOARD_STATUS")" "status.json lists a draft PR that needs a human"
+BOARD_ITEM_ID="$(jq -r --arg sid "$BOARD_SID" '.items[] | select(.sid == $sid) | .id' <<<"$BOARD_STATUS")"
+BOARD_TRANSCRIPT="$(curl -s "$BOARD_BASE/transcript?t=$BOARD_TOKEN&id=$(jq -rn --arg v "$BOARD_ITEM_ID" '$v | @uri')&offset=0")"
+assert_eq "hello board|done" "$(jq -r '[.messages[].text] | join("|")' <<<"$BOARD_TRANSCRIPT")" "board reads the session transcript"
+BOARD_ACTION="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" --arg i "$BOARD_ITEM_ID" '{t: $t, id: $i, action: "rm -rf"}')" "$BOARD_BASE/action")"
+assert_eq "false" "$(jq -r '.ok' <<<"$BOARD_ACTION")" "board refuses an action the item does not allow"
+BOARD_SET="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, kind: "sync", stage: "merge"}')" "$BOARD_BASE/settings/harness")"
+assert_eq "true" "$(jq -r '.ok' <<<"$BOARD_SET")" "board writes the harness stage"
+assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness stage merge turns on auto merge"
+assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
+# 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
+  | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
+BOARD_HOOK_PID=$!
+BOARD_PERM=""
+for _ in $(seq 100); do
+  BOARD_PERM="$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '[.items[] | .permission.pid // empty][0] // empty')"
+  [[ -n "$BOARD_PERM" ]] && break
+  sleep 0.1
+done
+[[ -n "$BOARD_PERM" ]] || fail "board shows the held permission request"
+BOARD_DECISION="$(jq -cn --arg t "$BOARD_TOKEN" --arg p "$BOARD_PERM" '{t: $t, pid: $p, decision: "allow"}')"
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$BOARD_DECISION" "$BOARD_BASE/permission" | jq -r '.ok')" "board accepts the human decision"
+wait "$BOARD_HOOK_PID"
+assert_eq "PermissionRequest|allow" "$(jq -r '[.hookSpecificOutput.hookEventName, .hookSpecificOutput.decision.behavior] | join("|")' "$BOARD_T/hook.out")" "permission hook returns the board decision"
+assert_eq "" "$(printf '%s' '{"tool_name":"AskUserQuestion"}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook never forwards AskUserQuestion"
+assert_eq "true" "$(board_sh stop | jq -r '.stopped')" "board stop stops the server"
+assert_not_file "$BOARD_DATA/board/server.json"
+assert_eq "false" "$(board_sh status | jq -r '.running')" "board status after stop"
+assert_eq "" "$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook prints nothing without a board"
+printf '{"port": %s, "token": "x", "pid": 999999}' "$BOARD_PORT_T" >"$BOARD_DATA/board/server.json"
+assert_eq "" "$(printf '%s' '{"tool_name":"Bash"}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook prints nothing when the board is gone"
+assert_eq "false" "$(board_sh status | jq -r '.running')" "a stale server.json is not a running board"
+# 포트를 다른 프로세스가 잡고 있으면 이유를 말하고 멈춘다.
+BOARD_BUSY_PORT="$(free_port)"
+python3 -I -c 'import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(30)' "$BOARD_BUSY_PORT" &
+BOARD_BUSY_PID=$!
+for _ in $(seq 50); do python3 -I -c 'import socket, sys; sys.exit(socket.socket().connect_ex(("127.0.0.1", int(sys.argv[1]))))' "$BOARD_BUSY_PORT" && break; sleep 0.1; done
+if BOARD_BUSY_OUT="$(BOARD_PORT_OVERRIDE="$BOARD_BUSY_PORT" board_sh open 2>&1)"; then fail "board open refuses a port held by another process"; fi
+assert_contains "$BOARD_BUSY_OUT" "다른 프로세스" "board open says why it stopped"
+kill "$BOARD_BUSY_PID" 2>/dev/null || true
+wait "$BOARD_BUSY_PID" 2>/dev/null || true
+assert_not_file "$BOARD_DATA/board/server.json"
+pass "harness board server, tokens, status and permission hook"
+
+# 보드 설정 쓰기: 개인 단계·하네스 동작은 ~/.ai-harness/config의 해당 키만 바꾸고 다른 줄·권한은 그대로 둔다.
+BOARD_REPO="$BOARD_T/repos/svc"
+mkdir -p "$BOARD_REPO/.ai-harness"
+git -C "$BOARD_REPO" init -q
+printf '{"project_id":"svc-id","git_policy":"merge"}\n' >"$BOARD_REPO/.ai-harness/harness.json"
+HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert s.set_personal({"scope": "default", "level": "deploy"}, []) is None
+assert s.set_personal({"scope": "default", "level": "bogus"}, []) is not None
+assert s.set_personal({"scope": "repo", "repo": "/not/known", "level": "pr"}, [repo]) is not None
+assert s.set_personal({"scope": "repo", "repo": repo, "level": "merge"}, [repo]) is None
+assert s.set_harness({"kind": "harvest", "stage": "run"}) is None
+assert s.set_harness({"kind": "harvest", "daily_max": 2}) is None
+assert s.set_harness({"kind": "sync", "daily_max": 31}) is not None
+assert s.set_harness({"kind": "sync", "daily_max": 5}) is None
+assert s.set_harness({"kind": "other", "stage": "run"}) is not None
+assert s.set_harness({"kind": "sync", "stage": "sideways"}) is not None
+cfg = s.user_config()
+assert cfg["HM_DELIVERY_LEVEL"] == "deploy" and cfg["HM_DELIVERY_LEVEL_REPOS"] == "svc-id=merge", cfg
+row = s.read_repo(repo)
+eff = s.effective(row, cfg)
+assert eff["source"] == "team" and eff["level"] == "pr", eff  # 이 저장소엔 개인 단계를 읽는 러너가 없다
+assert any("git_policy: merge" in n for n in eff["notes"]), eff
+' "$ROOT/scripts/board" "$BOARD_REPO" || fail "board settings writes validate input"
+BOARD_CFG="$(cat "$BOARD_DATA/config")"
+assert_contains "$BOARD_CFG" "# keep this comment" "config keeps comments"
+assert_contains "$BOARD_CFG" "HM_DIGEST=1" "config keeps other keys"
+assert_contains "$BOARD_CFG" "OTHER_TOOL_SETTING=x" "config keeps unknown lines"
+assert_contains "$BOARD_CFG" 'HM_DELIVERY_LEVEL="deploy"' "personal default level written"
+assert_contains "$BOARD_CFG" 'HM_DELIVERY_LEVEL_REPOS="svc-id=merge"' "personal repo level keyed by project_id"
+assert_contains "$BOARD_CFG" 'HM_HARVEST_AUTO="1"' "harvest auto run written"
+assert_contains "$BOARD_CFG" 'HM_SYNC_AUTO_DAILY_MAX="5"' "sync daily max written"
+case "$BOARD_CFG" in *HM_HARVEST_AUTO_MERGE*) fail "harvest run stage leaves auto merge off" ;; esac
+case "$BOARD_CFG" in *HM_HARVEST_AUTO_DAILY_MAX*) fail "the default daily max removes the line" ;; esac
+assert_eq "1" "$(grep -c '^HM_DELIVERY_LEVEL=' "$BOARD_DATA/config")" "a key is written once"
+assert_eq "600" "$(filemode "$BOARD_DATA/config")" "config keeps its mode"
+assert_eq "deploy" "$(HARNESS_METRICS_DIR="$BOARD_DATA" bash -c 'source "$1/scripts/lib.sh"; printf %s "$HM_DELIVERY_LEVEL"' _ "$ROOT")" "the runner config reader reads what the board wrote"
+pass "harness board settings writes"
+
+# 권한 훅 연결은 setup이 물은 뒤 board.sh hook on|off로만: 백업을 남기고 다른 설정은 그대로 둔다.
+printf '{"env":{"KEEP":"1"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}\n' >"$BOARD_T/settings.json"
+assert_eq "false" "$(board_sh hook status | jq -r '.installed')" "hook not installed by default"
+BOARD_HOOK_ON="$(board_sh hook on)"
+assert_eq "installed" "$(jq -r '.action' <<<"$BOARD_HOOK_ON")" "hook on installs"
+assert_file "$(jq -r '.backup' <<<"$BOARD_HOOK_ON")"
+assert_file "$BOARD_DATA/board/bin/permission-hook.py"
+assert_eq "3600" "$(jq '.hooks.PermissionRequest[0].hooks[0].timeout' "$BOARD_T/settings.json")" "hook timeout covers the board wait"
+assert_eq "1|true" "$(jq -r '[.env.KEEP, (.hooks.PreToolUse | length == 1)] | map(tostring) | join("|")' "$BOARD_T/settings.json")" "hook on keeps other settings"
+assert_eq "unchanged" "$(board_sh hook on | jq -r '.action')" "hook on is idempotent"
+assert_eq "removed" "$(board_sh hook off | jq -r '.action')" "hook off removes"
+assert_eq "null|1" "$(jq -r '[(.hooks.PermissionRequest | tostring), (.hooks.PreToolUse | length | tostring)] | join("|")' "$BOARD_T/settings.json")" "hook off leaves other hooks"
+assert_not_file "$BOARD_DATA/board/bin/permission-hook.py"
+BOARD_SKILL="$(<"$ROOT/skills/board/SKILL.md")"
+assert_file "$ROOT/skills/board/agents/openai.yaml"
+assert_contains "$BOARD_SKILL" "board.sh open" "board skill opens through board.sh"
+assert_contains "$BOARD_SKILL" "몰래 연결하지 않는다" "board skill does not wire the hook itself"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "board.sh hook on" "setup offers the board permission hook"
+assert_contains "$(<"$ROOT/README.md")" "| \`/board\` |" "README lists board"
+if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/scripts/board" "$ROOT/skills/board"; then
+  fail "board code carries no organization URL"
+fi
+pass "harness board skill and hook wiring"
+
+# 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
+# compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
+BIMP_T="$BOARD_T/impact"
+BIMP_DATA="$BIMP_T/data"
+mkdir -p "$BIMP_T/repos/app/.ai-harness" "$BIMP_T/repos/noinst/.ai-harness" "$BIMP_DATA/harvest-auto"
+git -C "$BIMP_T/repos/app" init -q
+printf '{"project_id":"app","initialized":"2026-10-01"}\n' >"$BIMP_T/repos/app/.ai-harness/harness.json"
+printf '{"project_id":"noinst"}\n' >"$BIMP_T/repos/noinst/.ai-harness/harness.json"
+jq -cn --arg r "$BIMP_T/repos/app" '{event:"finished", project:"app", scope:"repo", at:"2026-11-01T00:00:00Z", repo:$r, result:"none"}' \
+  >"$BIMP_DATA/harvest-auto/runs.jsonl"
+bimp_fixture() { # today → 가짜 compare JSON
+  jq -n --arg today "$1" '{v:1, project:"app", root:"/x", today:$today, installed:{date:"2026-10-01", source:"harness.json"}, window_days:30,
+    periods:{
+      before:{since:"2026-09-01", until:"2026-10-01", sessions:12, digested_sessions:10, corrections:8, corrections_per_session:0.8,
+              missing_context:5, missing_context_per_session:0.5, guard_blocks:0, turns_median:9},
+      after:{since:"2026-10-05", until:"2026-11-04", sessions:20, digested_sessions:18, corrections:3, corrections_per_session:0.17,
+             missing_context:2, missing_context_per_session:0.11, guard_blocks:4, turns_median:7}},
+    weekly:[{week:"2026-09-28", after_install:false, sessions:3, digested_sessions:3, corrections_per_session:0.7, missing_context_per_session:0.3, guard_blocks:0},
+            {week:"2026-10-05", after_install:true, sessions:5, digested_sessions:4, corrections_per_session:null, missing_context_per_session:0.2, guard_blocks:2}],
+    corrections:{before:{total:1, truncated:false, items:[{date:"2026-09-02", summary:"교정 원문은 보드에 싣지 않음", evidence:"x"}]},
+                 after:{total:0, truncated:false, items:[]}},
+    missing_context:{before:{total:0, truncated:false, items:[]}, after:{total:0, truncated:false, items:[]}},
+    rework:null, warnings:["low_sample"], timeline:[], adoption:{active_sessions:0, harness_sessions:0, top_docs:[]},
+    improvements:[
+      {id:"h1", date:"2026-10-10", summary:"커버리지 게이트 선검증", expected:"재발 0", artifact:"https://example.com/pr/1", change:"add",
+       before:{basis:"batch", batch_sessions:3, observed:3, candidates:{truncated:false, items:[
+         {id:"s-b1#0", date:"2026-10-03", category:"correction", summary:"게이트를 CI에서야 발견"},
+         {id:"s-b2#0", date:"2026-10-04", category:"workflow_gap", summary:"게이트 늦게 확인"}]}},
+       after:{since:"2026-10-10T00:00:00Z", observed:10, observed_by_day:{"2026-10-12":3, "2026-10-20":3, "2026-11-02":4},
+              candidates:{truncated:false, items:[{id:"s-a1#0", date:"2026-10-20", category:"workflow_gap", summary:"다른 일"},
+                                                  {id:"s-a9#0", date:"2026-11-02", category:"correction", summary:"또 게이트"}]}}},
+      {id:"h2", date:"2026-10-15", summary:"배포 순서 규칙", expected:null, artifact:"https://example.com/pr/2", change:"add",
+       before:{basis:"batch", batch_sessions:1, observed:10, candidates:{truncated:false, items:[{id:"s-b3#0", date:"2026-10-14", category:"correction", summary:"배포 순서 틀림"}]}},
+       after:{since:"2026-10-15T00:00:00Z", observed:10, observed_by_day:{"2026-10-16":3, "2026-10-22":3, "2026-11-02":4},
+              candidates:{truncated:false, items:[{id:"s-a2#0", date:"2026-10-22", category:"correction", summary:"배포 순서 또 틀림"}]}}},
+      {id:"h3", date:"2026-10-28", summary:"새 규칙", expected:null, artifact:null, change:"add",
+       before:{basis:"window", observed:2, candidates:{truncated:false, items:[]}},
+       after:{since:"2026-10-28T00:00:00Z", observed:2, observed_by_day:{"2026-11-02":2}, candidates:{truncated:false, items:[]}}},
+      {id:"h4", date:"2026-10-02", summary:"안 쓰는 규칙 제거", expected:null, artifact:null, change:"remove",
+       before:{basis:"window", observed:4, candidates:{truncated:false, items:[]}},
+       after:{since:"2026-10-02T00:00:00Z", observed:9, observed_by_day:{"2026-10-10":9}, candidates:{truncated:false, items:[]}}}]}'
+}
+bimp_fixture 2026-10-25 >"$BIMP_T/old.json"
+bimp_fixture 2026-11-03 >"$BIMP_T/new.json"
+# /harness-impact 3·4단계: 에이전트가 맞춘 하이라이트로 render하면 그 매칭이 compare의 --today와 함께 보관된다.
+printf '%s\n' '{"improvements":[{"id":"h1","before":["s-b1#0","s-b2#0"],"after":[]},{"id":"h2","before":["s-b3#0"],"after":["s-a2#0"]}]}' >"$BIMP_T/hl.json"
+HARNESS_METRICS_DIR="$BIMP_DATA" "$ROOT/scripts/impact.sh" render --data "$BIMP_T/old.json" --highlights "$BIMP_T/hl.json" --out "$BIMP_T/skill.html" >/dev/null
+BIMP_KEEP="$BIMP_DATA/reports/highlights/$(hm_short_key app).json"
+assert_eq "app 2026-10-25 2" "$(jq -r '"\(.project) \(.matched_through) \(.improvements | length)"' "$BIMP_KEEP")" "impact render keeps the matching per project with the day it covers"
+# 보관된 매칭은 그날까지의 세션으로만 판정한다: h1은 10-25까지 6세션 중 재발 0 → 사라짐, 그 뒤 4세션은 아직 맞춰 보지 않음.
+BIMP_VIEW="$(HARNESS_METRICS_DIR="$BIMP_DATA" "$ROOT/scripts/impact.sh" view --data "$BIMP_T/new.json")"
+assert_eq "gone:6:4:2026-10-25 recurred:6:4:2026-10-25 hold unmatched" \
+  "$(jq -r '[.improvements[].result | if .after_hits == null then .verdict else "\(.verdict):\(.observed):\(.unjudged):\(.as_of)" end] | join(" ")' <<<"$BIMP_VIEW")" \
+  "impact view judges kept matches only up to the matched day and holds unmatched improvements with few sessions"
+assert_eq "false" "$(jq '[.. | objects | has("candidates")] | any' <<<"$BIMP_VIEW")" "impact view drops the candidate pools"
+assert_eq "$BIMP_KEEP" "$(jq -r '.highlights.file' <<<"$BIMP_VIEW")" "impact view names the kept matching"
+cat >"$BIMP_T/impact.sh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == compare ]]; then
+  printf '%s\n' "\$3" >>"$BIMP_T/compare.log"
+  case "\$3" in */noinst) echo "설치일을 찾지 못함" >&2; exit 3 ;; esac
+  sleep 0.3
+  cat "$BIMP_T/new.json"
+  exit 0
+fi
+exec bash "$ROOT/scripts/impact.sh" "\$@"
+EOF
+chmod +x "$BIMP_T/impact.sh"
+BIMP_PORT="$(free_port)"
+bimp_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BIMP_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BIMP_PORT" BOARD_NO_BROWSER=1 BOARD_IMPACT_SH="$BIMP_T/impact.sh" \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BIMP_URL="$(bimp_sh open | jq -r '.url')"
+BIMP_TOKEN="${BIMP_URL#*t=}"
+BIMP_BASE="http://127.0.0.1:$BIMP_PORT"
+bimp_get() { curl -s "$BIMP_BASE/impact?t=$BIMP_TOKEN"; }
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact?t=wrong")" "impact endpoint checks the token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BIMP_PORT" "$BIMP_BASE/impact?t=$BIMP_TOKEN")" "impact endpoint checks the Host"
+BIMP_FIRST="$(bimp_get)"
+assert_eq "true" "$(jq '.ok and (.repos | length) == 2 and all(.repos[]; .state == "queued" or .state == "running")' <<<"$BIMP_FIRST")" \
+  "impact endpoint answers at once and computes in the background"
+BIMP=""
+for _ in $(seq 100); do
+  BIMP="$(bimp_get)"
+  jq -e 'all(.repos[]; .state == "ready" or .state == "failed")' <<<"$BIMP" >/dev/null && break
+  sleep 0.1
+done
+BIMP_APP="$(jq -c '.repos[] | select(.name == "app")' <<<"$BIMP")"
+BIMP_NO="$(jq -c '.repos[] | select(.name == "noinst")' <<<"$BIMP")"
+assert_eq "ready" "$(jq -r '.state' <<<"$BIMP_APP")" "impact computes a repo with an install date"
+assert_eq "true" "$(jq '(.computed_at | type) == "string" and .installed.date == "2026-10-01" and .before.corrections == 8 and .after.guard_blocks == 4
+  and (.weekly | length) == 2 and .warnings == ["low_sample"] and .matched_through == "2026-10-25" and .rework == null' <<<"$BIMP_APP")" "impact endpoint shape: periods, weekly, warnings"
+assert_eq "h4:remove:unmatched h3:add:hold h2:add:recurred h1:add:gone" "$(jq -r '[.improvements[] | "\(.id):\(.change):\(.result.verdict)"] | join(" ")' <<<"$BIMP_APP")" \
+  "impact endpoint lists improvements newest first with the change kind"
+assert_eq "$(jq -c '[.improvements[] | .result.verdict] | reverse' <<<"$BIMP_VIEW")" "$(jq -c '[.improvements[].result.verdict]' <<<"$BIMP_APP")" \
+  "board verdicts are the ones impact.sh view computes"
+assert_eq "$(jq -c '.assessment' <<<"$BIMP_VIEW")" "$(jq -c '.assessment' <<<"$BIMP_APP")" \
+  "board carries the comparability, trends, and repo status impact.sh view computes"
+assert_eq "mixed true down" "$(jq -r '.assessment | "\(.status.key) \(.metrics.corrections_per_session.comparable) \(.metrics.corrections_per_session.change)"' <<<"$BIMP_APP")" \
+  "board repo status weighs improvements that held against ones that recurred"
+assert_eq "10 0 6 4" "$(jq -r '.improvements[] | select(.id == "h1") | "\(.observed_now) \(.result.after_hits) \(.result.observed) \(.result.unjudged)"' <<<"$BIMP_APP")" \
+  "impact card carries sessions observed now and the judged recurrence"
+case "$BIMP" in *candidates*|*"교정 원문"*) fail "impact endpoint does not ship candidate pools or correction text" ;; esac
+assert_eq "failed 3" "$(jq -r '"\(.state) \(.error.code)"' <<<"$BIMP_NO")" "impact shows a failed compare"
+assert_contains "$(jq -r '.error.reason' <<<"$BIMP_NO")" "설치일을 찾지 못함" "impact says why the compare failed"
+BIMP_CALLS="$(wc -l <"$BIMP_T/compare.log" | tr -d ' ')"
+assert_eq "2" "$BIMP_CALLS" "impact computes each repo once"
+BIMP_AT="$(jq -r '.computed_at' <<<"$BIMP_APP")"
+bimp_get >/dev/null
+sleep 0.5
+assert_eq "2 $BIMP_AT" "$(wc -l <"$BIMP_T/compare.log" | tr -d ' ') $(bimp_get | jq -r '.repos[] | select(.name == "app") | .computed_at')" \
+  "impact reuses today's cache and does not retry today's failure on its own"
+BIMP_REPO="$(jq -r '.repo' <<<"$BIMP_APP")"
+BIMP_BODY="$(jq -cn --arg t "$BIMP_TOKEN" --arg r "$BIMP_REPO" '{t: $t, repo: $r}')"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$BIMP_BODY" "$BIMP_BASE/impact/refresh")" "impact refresh checks the Origin"
+assert_eq "false" "$(curl -s -X POST -H "Origin: $BIMP_BASE" -d "$(jq -cn --arg t "$BIMP_TOKEN" '{t: $t, repo: "/etc"}')" "$BIMP_BASE/impact/refresh" | jq -r '.ok')" \
+  "impact refresh accepts only harness repos"
+sleep 1  # computed_at은 초 단위
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BIMP_BASE" -d "$BIMP_BODY" "$BIMP_BASE/impact/refresh" | jq -r '.ok')" "impact refresh queues a recompute"
+for _ in $(seq 100); do
+  BIMP_NOW="$(bimp_get | jq -r '.repos[] | select(.name == "app") | "\(.state) \(.computed_at)"')"
+  [[ "$BIMP_NOW" == ready* && "$BIMP_NOW" != "ready $BIMP_AT" ]] && break
+  sleep 0.1
+done
+assert_eq "3" "$(wc -l <"$BIMP_T/compare.log" | tr -d ' ')" "impact refresh runs compare again"
+[[ "$(bimp_get | jq -r '.repos[] | select(.name == "app") | .computed_at')" != "$BIMP_AT" ]] || fail "impact refresh replaces today's cache"
+assert_contains "$(cat "$BIMP_DATA/board/actions.jsonl")" '"action": "impact_refresh"' "impact refresh is logged"
+BIMP_REPORT="$(curl -s "$BIMP_BASE/impact/report?t=$BIMP_TOKEN&repo=$(jq -rn --arg v "$BIMP_REPO" '$v | @uri')")"
+assert_contains "$BIMP_REPORT" "const DATA = " "impact report renders the offline report"
+assert_contains "$BIMP_REPORT" '"as_of":"2026-10-25"' "impact report reuses the kept matching up to its day"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/report?t=$BIMP_TOKEN&repo=%2Fetc")" "impact report accepts only harness repos"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BIMP_BASE/impact/report?t=wrong&repo=x")" "impact report checks the token"
+assert_eq "2026-10-25" "$(jq -r '.matched_through' "$BIMP_KEEP")" "a board render does not overwrite the kept matching"
+assert_eq "true" "$(bimp_sh stop | jq -r '.stopped')" "impact board stops"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "판정 기준 (/harness-impact와 같음)" "impact view states the verdict rule"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "다시 계산 실패" "impact view keeps showing a failed recompute next to the last result"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 효과" "board skill documents the impact view"
+pass "harness board impact view: background cache, refresh, failure reason, verdicts from impact"
 
 printf '1..%d\n' "$TESTS"
 TESTS_FINISHED=1

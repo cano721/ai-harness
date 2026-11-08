@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Board"
+  short_description: "Open, stop, or check the local Harness Board dashboard."
+  default_prompt: "Use $board to open the Harness Board (or stop / status if asked): $ARGUMENTS"

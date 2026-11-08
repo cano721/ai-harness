@@ -134,8 +134,8 @@ PR을 올리기 전에 로컬에서 통과시킨다. CI도 같은 것을 돌린�
 
 ```bash
 bash tests/run.sh
-bash -n scripts/*.sh tests/*.sh
-shellcheck -x scripts/*.sh tests/*.sh     # 미설치 시 npx --yes shellcheck
+bash -n scripts/*.sh scripts/board/*.sh tests/*.sh
+shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh     # 미설치 시 npx --yes shellcheck
 ```
 
 CI의 shellcheck는 **info 레벨도 실패로 다룬다**. 로컬 버전이 CI보다 관대할 수 있으니 경고가 나오면 구조를 바꿔 없앤다 — `# shellcheck disable`은 근거를 주석으로 남길 수 있을 때만 쓴다.

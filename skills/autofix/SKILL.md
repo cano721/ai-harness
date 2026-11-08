@@ -10,7 +10,7 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 경로 표기: 아래 `$ROOT` = 이 SKILL.md가 있는 디렉토리의 두 단계 상위(플러그인 루트).
 
 인자: `$ARGUMENTS`
-- `setup` — 현재 저장소에 모니터링 설정을 만든다
+- `setup` — 현재 저장소의 모니터링 설정과 무인 실행 설정(켜기·대상·주기·상한)을 만든다(`setup.md`)
 - `status [<프로젝트>]` — 시그니처별 진행 상태
 - `verify [<프로젝트>]` — 검증만 지금 돌린다
 - 비었거나 `<프로젝트>` — 후보 에러를 보여 주고 사용자가 고른 것을 이 세션에서 고친다
@@ -18,37 +18,7 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 
 ## 설정 (setup)
 
-설정은 저장소 manifest `.ai-harness/harness.json`의 `monitor` 객체다. 팀이 같은 설정을 쓰도록 저장소에 커밋한다. **자격증명은 절대 여기에 넣지 않는다.**
-
-```json
-"monitor": {
-  "provider": "sentry",
-  "org": "acme", "project": "api-server", "environment": "production",
-  "min_events": 10, "window_hours": 24,
-  "deploy_branch": "main", "grace_hours": 24, "quiet_hours": 72
-}
-```
-
-| provider | 필수 필드 | 자격증명(환경변수 · `~/.claude/settings.json` env · `~/.ai-harness/config`) |
-|---|---|---|
-| `sentry` | `org`, `project` (선택: `environment`, `base_url`은 `*.sentry.io`만) | `SENTRY_AUTH_TOKEN` 또는 `HM_SENTRY_TOKEN`. 자체 호스팅은 config의 `HM_SENTRY_URL` |
-| `datadog` | `query` (예: `service:api env:prod status:error`), 선택 `site` | `DATADOG_API_KEY`·`DATADOG_APP_KEY` (또는 `DD_*`, `HM_DATADOG_*`) |
-| `command` | `command` — 저장소 안 실행 파일의 상대 경로 | 어댑터가 알아서 |
-
-공통 필드: `min_events`(기본 10, 창 안 발생 수가 이보다 적으면 후보 아님), `window_hours`(기본 24), `deploy_branch`(병합 커밋이 이 브랜치에 들어간 것을 관찰한 때를 배포 시각으로 본다. 없으면 병합 시각), `grace_hours`(배포 뒤 롤링·캐시를 기다리는 유예, 기본 24), `quiet_hours`(재발 없음을 지켜볼 최소 시간, 기본 72).
-
-`command` 어댑터는 세 하위 명령을 지원해야 한다(저장소 루트에서 실행, 표준출력 JSON):
-- `list <hours>` → 줄마다 `{"signature","title","count","first_seen","last_seen","link","meta":{}}`
-- `detail <meta-json>` → `{"message","stack",...}`
-- `count <meta-json> <since-iso>` → `{"seen":bool,"count":n,"last_seen"}`
-
-절차:
-1. 저장소에 `.ai-harness/harness.json`이 없으면 `/harness-init`을 먼저 안내하고 멈춘다.
-2. 쓰는 모니터링 도구를 확인한다 — 저장소에서 SDK 흔적(`sentry` 의존성·DSN 설정, `dd-trace`·`datadog` 설정)을 먼저 찾고, 없거나 둘 이상이면 사용자에게 묻는다. 그 밖의 도구면 `command` 어댑터 골격을 만들어 준다.
-3. provider별 필수 값을 물어 `monitor`를 manifest에 쓴다(다른 필드는 건드리지 않는다).
-4. `$ROOT/scripts/monitor-fetch.sh check --root .` 로 접근을 확인하고, 실패하면 메시지대로 자격증명 위치를 안내한다. 이어 `$ROOT/scripts/monitor-fetch.sh list --root .` 상위 5건을 보여 준다.
-   - 단, `check`·`list`는 기준 브랜치의 manifest를 읽는다. 아직 커밋 전이면 작업 트리의 manifest를 읽도록 커밋 뒤 다시 확인하라고 알린다.
-5. 무인 실행을 켜는 법을 알린다: `~/.ai-harness/config`에 `HM_AUTOFIX_AUTO=1`과 `HM_AUTOFIX_REPOS="<project_id>[,<project_id>…]"`(허용한 저장소만 무인 실행 대상). 검증 명령이 기본 빌드 도구 목록(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo)에 없으면 `HM_AUTOFIX_BASH_ALLOW="./scripts/ci.sh*"`처럼 패턴을 더하게 한다. 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)마다 검증 → 새 에러 1건 수정을 돈다. 상한: `HM_AUTOFIX_DAILY_MAX`(하루 실행 3), `HM_AUTOFIX_MAX_ATTEMPTS`(시그니처당 PR 2), `HM_AUTOFIX_BUDGET_USD`(실행당 $10).
+`setup` 인자이거나 수동 수정 0단계에서 설정이 없다고 나오면 같은 디렉토리의 `setup.md`를 Read하고 그 절차를 따른다. 요약: 설정은 `monitor` 객체 하나(provider `sentry`·`datadog`·`command`)이고, 기본은 개인 로컬 파일 `~/.ai-harness/autofix/monitors/<project_id>.json`, 팀 공유가 필요할 때만 manifest `.ai-harness/harness.json`의 `monitor`(둘 다 있으면 로컬 파일이 이긴다). 자격증명은 어느 쪽에도 넣지 않는다. service·env 같은 값은 저장소 흔적과 `monitor-fetch.sh discover` 결과로 사용자가 고르고, 만든 설정을 확인받은 뒤에만 쓴다. 이어 무인 실행 설정(`autofix-auto.sh configure`)을 묻는다.
 
 ## 상태 · 검증
 
@@ -74,11 +44,14 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 
 ## 수동 수정 (`/autofix [<프로젝트>]`)
 
-1. `$ROOT/scripts/autofix-auto.sh candidates --project <id>`로 후보를 보여 준다(프로젝트 ID는 manifest `project_id`). 후보가 없으면 `monitor-fetch.sh list` 전체를 보여 주고 끝낸다.
+0. `$ROOT/scripts/monitor-fetch.sh check --root .`로 설정을 확인한다.
+   - exit 5(monitor 설정 없음)면 후보 조회로 가지 않는다. "이 저장소에 monitor 설정이 없어 setup부터 합니다"라고 알리고 `setup.md`를 Read해 그 절차로 들어간다.
+   - 그 밖의 실패(exit 4 자격증명·설정 오류, exit 3 요청 실패)는 메시지대로 자격증명 위치나 설정을 안내하고 멈춘다.
+1. `$ROOT/scripts/autofix-auto.sh candidates --project <id> --root .`로 후보를 보여 준다(프로젝트 ID는 manifest `project_id`, 없으면 origin 저장소 이름). 수동 조회는 무인 실행 대상 목록(`HM_AUTOFIX_REPOS`)과 무관하게 이 저장소의 monitor 설정으로 계산한다. 후보가 없으면 `monitor-fetch.sh list --root .` 전체를 보여 주고 끝낸다.
 2. 사용자가 고른 에러의 상세를 `$ROOT/scripts/monitor-fetch.sh detail --root . --meta '<meta>'`로 가져온다.
 3. 아래 **수정 절차** 1~5를 이 세션에서 하되, 승인 게이트는 프로젝트 정책(`approval`)대로 사람에게 묻는다.
-4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 기준 브랜치 manifest에 `monitor`가 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
-   - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 manifest가 `git_policy:"merge"`에 `merge_policy.verify`의 `monitor`를 골랐으면, 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
+4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 `monitor` 설정(로컬 파일 또는 기준 브랜치 manifest)이 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
+   - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 사용자의 개인 자동화 단계(`HM_DELIVERY_LEVEL`)가 `deploy`이며 manifest `merge_policy.verify`에 `monitor`가 있으면(러너도 `monitor` 설정을 로컬 파일 → manifest 순으로 찾는다), 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
 
 ## 수정 절차 (무인·수동 공통)
 
@@ -97,7 +70,7 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 
 정기 실행이 띄운 headless 세션이다. 질문에 답할 사람이 없다.
 
-- 현재 디렉토리는 기준 브랜치 최신 커밋의 **작업 전용 worktree**(detached)다. 여기서 `fix/autofix-<짧은-요약>` 브랜치를 만든다 — 무인 실행의 push 권한은 `fix/` 브랜치에만 열려 있다. 프로젝트 규칙에 이슈 키가 필요해도 이슈를 만들지 않는다. 종료 후 worker가 worktree를 지운다.
+- 현재 디렉토리는 기준 브랜치 최신 커밋을 checkout한 **작업 전용 독립 저장소**(원본의 로컬 clone, detached)다. `origin`은 원본과 같은 원격이다. 여기서 `fix/autofix-<짧은-요약>` 브랜치를 만든다 — 무인 실행의 push 권한은 `fix/` 브랜치에만 열려 있다. 프로젝트 규칙에 이슈 키가 필요해도 이슈를 만들지 않는다. 종료 후 worker가 이 디렉토리를 지운다.
 - `--error` 파일(`.ai-harness-stage/autofix/error.json`)에 에러가 있다: `signature`, `title`, `count`, `window_hours`, `first_seen`/`last_seen`, `link`, `detail`(스택·태그, 비밀값 가림), `previous`(지난 PR·재발 기록), `reason`(`new`·`regressed`·`reappeared`…). 이 파일과 `.ai-harness-stage/`는 커밋하지 않는다.
 - 위 **수정 절차**를 따른다. 승인 게이트는 manifest `approval`과 관계없이 **정책 승인**으로 통과한다 — Bug Fix Brief(관찰/기대 동작, 근거, 원인, 재현 테스트, 변경 범위, 판단이 갈린 점의 추천안)를 PR 본문에 싣는 것으로 대신한다. 단 사람만 정할 수 있는 것(제품 동작 변경, 데이터 삭제·마이그레이션, 외부 시스템 쓰기, 공개 API 계약 변경)이 필요하면 고치지 않고 `left_for_user`.
 - 변경을 적용하기 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면 브랜치를 만들거나 push하지 말고 `left_for_user`.

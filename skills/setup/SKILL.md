@@ -209,20 +209,21 @@ $ROOT/scripts/setup.sh team list
 
 자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 draft PR까지만 하고, 병합은 자동 병합 옵션을 켠 경우에만 한다는 점을 함께 알린다.
 
-자동 병합 옵션을 고르면 두 가지를 더 알린다.
-- 저장소마다 `.ai-harness/harness.json`에 `"auto_merge": {"sync": true}`(harvest면 `"harvest": true`)가 **기준 브랜치에 병합되어 있어야** 동작한다. 이 설정은 사람이 PR로 넣는다 — 무인 실행의 PR은 이 값을 바꿀 수 없다.
-- 처음에는 sync만 켜고 저장소 한 곳에서 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
+자동 병합 옵션을 고르면 세 가지를 더 알린다.
+- 이 설정만으로 동작한다. 저장소 `harness.json`에 허용 스위치를 넣는 팀 PR은 필요 없다(예전 `auto_merge.sync`·`harvest`는 읽지 않는다). 내용 조건과 병합 직전 호스트 조건(사람 활동 없음·CI 통과·head 고정)은 그대로 확인한다.
+- 조정값은 같은 파일의 `HM_AUTO_MERGE_METHOD`(`squash`·`merge`·`default`)·`HM_AUTO_MERGE_SYNC_PARTIAL`·`HM_AUTO_MERGE_REQUIRE_CI`·`HM_AUTO_MERGE_WAIT_HOURS`·`HM_AUTO_MERGE_HARVEST_MAX_FILES`·`HM_AUTO_MERGE_HARVEST_MAX_LINES`로 바꿀 수 있다. 묻지 않고 기본값을 두며, 사용자가 원할 때만 적는다. 저장소 기준 브랜치에 같은 키(`auto_merge.<key>`)가 있으면 안전한 쪽을 쓴다(README 자동 병합 절).
+- 처음에는 sync만 켜고 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
 
 ### 8-1. 워크플로 자동화 단계 (선택)
 
-워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 저장소 `git_policy`·`merge_policy`를 그대로 따른다.
+워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 러너는 PR까지만 한다. 병합 여부를 정하는 곳은 이 설정뿐이다(저장소의 예전 `git_policy:"merge"`·`merge_policy` 병합 조건은 더 이상 쓰지 않는다).
 
 1. 기본 단계 `HM_DELIVERY_LEVEL`:
    - `pr` — PR까지. 병합·배포는 사람이 한다 (직접 리뷰하고 싶은 사람)
    - `merge` — 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
    - `deploy` — `merge`에 더해 저장소에 있는 배포 확인·스모크 명령까지. 저장소에 그 명령이 없으면 `merge`까지 하고 결과에 밝힌다
 2. 저장소마다 다르게 하고 싶으면 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>,…"`로 덮어쓴다. `project_id`는 저장소 `.ai-harness/harness.json`의 `project_id`(없으면 origin 저장소 이름)이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
-3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 저장소 `merge_policy`의 값(없으면 네 조건 모두·승인 1·squash)을 쓴다.
+3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 네 조건 모두·승인 1·squash를 쓴다. 현재 저장소 manifest `merge_policy`에 예전 `require`·`min_approvals`·`method`가 남아 있으면 그 값을 보여 주고 옮길지 묻는다 — 러너는 그 값을 읽지 않는다.
    - `HM_MERGE_REQUIRE` — `human_approval`·`remote_ci`·`no_conflict`·`not_draft` 중 쉼표 구분
    - `HM_MERGE_MIN_APPROVALS` — 1 이상
    - `HM_MERGE_METHOD` — `squash`·`merge`·`rebase`(Bitbucket은 rebase 불가)
@@ -232,6 +233,29 @@ $ROOT/scripts/setup.sh team list
 - 호스트의 필수 승인 수·필수 체크는 내 조건보다 우선하는 하한으로 더해진다.
 - 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
 - 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
+
+### 8-2. 보드에서 권한 요청 답하기 (선택)
+
+`/ai-harness:board`(Harness Board)에서 다른 세션의 권한 요청을 허용/거부하려면 Claude Code PermissionRequest 훅이 필요하다. **묻지 않고 연결하지 않는다.** 현재 상태를 먼저 본다:
+
+```bash
+$ROOT/scripts/board/board.sh hook status
+```
+
+`installed`면 연결돼 있다고 알리고 끌지 묻는다. `others`에 다른 경로의 `permission-hook.py`가 있으면(예전에 손으로 둔 보드 훅) 그 줄을 보여 주고, 두 훅이 같은 요청을 함께 받는다는 것을 알린다 — 지울지는 사용자가 정하고, 지운다면 사용자가 직접 `~/.claude/settings.json`에서 뺀다.
+
+물을 때 함께 알린다.
+- 보드가 떠 있고 최근 30분 안에 누군가 보드를 본 경우에만 요청을 보드로 넘긴다. 보드가 꺼져 있으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻는다.
+- 보드는 사람이 누른 허용/거부만 돌려준다. 질문(AskUserQuestion)은 넘기지 않는다.
+- Claude Code 전용이다(Codex에는 같은 훅이 없다).
+
+고르면:
+
+```bash
+$ROOT/scripts/board/board.sh hook on    # 끄기: hook off
+```
+
+훅 파일을 `~/.ai-harness/board/bin/permission-hook.py`에 복사하고 `~/.claude/settings.json`에 PermissionRequest 항목(timeout 3600)을 더한다. 바꾸기 전 백업(`settings.json.bak-board-<시각>`)을 남기고 그 경로를 결과 `backup`으로 준다. `off`는 이 항목만 빼고 다른 훅·설정은 그대로 둔다. 새 세션부터 적용된다고 알린다.
 
 ## 디자인 스킬 (`design`)
 
