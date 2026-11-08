@@ -17,6 +17,7 @@ jq -e '
   and (($g.limits.max_reviews | type) == "number" and $g.limits.max_reviews >= 1)
   and ($g.review_checks.public_page | index("reference_fidelity")) and ($g.review_checks.public_page | index("flow"))
   and ($g.review_checks.public_page | index("try_it_usability")) and ($g.review_checks.public_page | index("craft"))
+  and (($g.first_viewport_major // []) | index("template_look")) and (($g.first_viewport_major // []) | all(. as $c | $g.review_checks.public_page | index($c)))
   and ([$g.transitions[] | select(.to == "build")] | all(.from == "preview"))
   and ($g.invariants | any(startswith("Measure outcomes come only from the measure script")))
   and ($g.invariants | any(startswith("Review outcomes are computed from the review JSON")))

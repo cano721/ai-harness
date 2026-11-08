@@ -321,6 +321,7 @@
     "js_off_text_ratio": 0.9,
     "reduced_motion_text_ratio": 0.95
   },
+  "first_viewport_major": ["template_look", "craft", "cover_logo", "copied_composition", "reference_fidelity"],
   "review_checks": {
     "public_page": [
       "one_second",

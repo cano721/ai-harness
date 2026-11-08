@@ -43,10 +43,13 @@ bash $ROOT/scripts/landing-run.sh next --work "$WORK" [--candidate <id>]   # wha
 bash $ROOT/scripts/landing-run.sh submit --work "$WORK" --node <node> --outcome <outcome> [--candidate <id>]
 bash $ROOT/scripts/landing-run.sh measure --work "$WORK" --candidate <id> --url <served url>
 bash $ROOT/scripts/landing-run.sh review --work "$WORK" --candidate <id> --file <review json>
+bash $ROOT/scripts/landing-run.sh capture --work "$WORK" --candidate <id> --url <served url> [--label <name>]
 bash $ROOT/scripts/landing-run.sh status --work "$WORK"
 ```
 
-**Time:** the user sees a served draft within 10 minutes of the start and the verified page within 30 (`budget_minutes` in the graph; `status` reports `preview_min`, `finished_min`, and `over_budget`). Measuring and reviewing never hold back the first look. Do not write your own browser scripts for what the measure node measures; spend the time on the page.
+**Time:** the user sees a served draft within 10 minutes of the start and the verified page within 30 (`budget_minutes` in the graph; `status` reports `preview_min`, `finished_min`, and `over_budget`). Measuring and reviewing never hold back the first look. Do not write your own browser scripts: `measure` measures, and `capture` takes the scroll tour at 1440 and 390, the reduced-motion and JavaScript-off first viewports, and a contact sheet per width (`measure` runs it itself after a pass, into `captures/<id>-m<n>/`). Look at those and spend the time on the page.
+
+**Nothing may wait for a permission prompt.** An unattended run has no one to approve, and one prompt stalls the whole run (a relative `rm` after a `cd` once held a run for 58 minutes). Delete only by absolute paths inside `WORK`, or overwrite instead of deleting; do not chain `cd` with removal. Start a scripted unattended run with `--permission-mode dontAsk` and the tools it needs allowed, so a command outside them fails at once instead of waiting.
 
 Call `next`, do what it names, read only the docs it lists, write its artifacts in `WORK`, and submit. Artifacts must be written or updated after the node starts — the runner refuses ones older than the node, so work done ahead and submitted in a burst does not pass. Measure and review outcomes are not yours to submit: the runner runs the measure script and computes the review verdict. Before the graph starts, **read the context**: detect the stack, the design system (docs, token files, component library, Tailwind config, or a named Figma kit), the existing brand identity, and any mockup. Note what is missing instead of guessing it. If a named kit or mockup cannot be read, stop and say so. Without a repository, ask where the page goes, or in an unattended run build `index.html` with its assets in a new folder under the current directory.
 
@@ -55,7 +58,7 @@ Call `next`, do what it names, read only the docs it lists, write its artifacts 
 | `brief` | `references/direction.md` sections 1–2 | `brief.md` |
 | `references` | section 7: look and interaction references with take-lines | `references.json` — `[{id, kind: look\|interaction, title, url, source, take, keep_strength, must_not_shrink_to, captures: [paths]}]` |
 | `reference_pick` (interactive) | show the board, ask once | `reference-pick.json` — `{kept: [ids], dropped: [ids], user_words: "<quoted>"}` |
-| `direction` | sections 3–6; skip candidates only when a mockup of this page decides the look (`mockup_decides`) | `candidates.json` — `{candidates: [{id, dir, motion_level: calm\|lively\|showpiece, references: [ids], visitor_action}]}` (`dir` relative to `WORK`) |
+| `direction` | sections 3–6; skip candidates only when a mockup of this page decides the look (`mockup_decides`) | `candidates.json` — `{candidates: [{id, dir, motion_level: calm\|lively\|showpiece, references: [ids], visitor_action, first_viewport}]}` (`dir` relative to `WORK`) |
 | `draft_pick` (interactive) | first-viewport drafts side by side, ask once | `draft-pick.json` — same shape as `reference-pick.json` |
 | `draft` (per candidate) | the first viewport finished — real copy, real assets, the signature moment working — and the rest as real but unpolished sections; one session or subagent per candidate when there are several | the page in `dir` |
 | `preview` (per candidate) | serve the draft, capture its first viewport at 1440 and 390, and show the URL and captures to the user now — do not hold them until verification. On submit the runner opens the URL and posts a desktop notification itself (`LANDING_PREVIEW_CMD` replaces that with a command given the URL and the preview file, `none` turns it off), so an unattended run reaches the person too | `preview-<id>.json` — `{url, captures: [paths]}` |

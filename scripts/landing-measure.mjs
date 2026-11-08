@@ -4,10 +4,8 @@
 // Measured here, not judged by a model: overflow per width (JS on and off), console/request errors, fake destinations,
 // visible placeholders, the main action in the first viewport, content kept with JS off and reduced motion,
 // text contrast on solid backgrounds, and the first-run frame rate of every element marked data-moment.
-import { createRequire } from "node:module";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { launchBrowser } from "./landing-browser.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, v, i, a) => (v.startsWith("--") ? [...acc, [v.slice(2), a[i + 1]]] : acc), []),
@@ -30,47 +28,9 @@ const cfg = graph.measure ?? {
 };
 const level = (args["motion-level"] ?? "calm").toLowerCase();
 
-// Every Playwright install on the machine, in order; the first whose Chromium starts is used.
-function playwrightCandidates() {
-  const tries = [];
-  if (process.env.LANDING_PLAYWRIGHT) tries.push(process.env.LANDING_PLAYWRIGHT);
-  tries.push("playwright");
-  const npx = join(homedir(), ".npm", "_npx");
-  if (existsSync(npx)) {
-    for (const d of readdirSync(npx)) {
-      const p = join(npx, d, "node_modules", "playwright");
-      if (existsSync(join(p, "package.json"))) tries.push(p);
-    }
-  }
-  return tries;
-}
-
-const req = createRequire(import.meta.url);
-let browser;
-const launchErrors = [];
-for (const t of playwrightCandidates()) {
-  let pw;
-  try {
-    pw = req(t);
-  } catch {
-    continue;
-  }
-  try {
-    browser = await pw.chromium.launch();
-    break;
-  } catch (e) {
-    launchErrors.push(`${t}: ${String(e.message).split("\n")[0].slice(0, 160)}`);
-  }
-}
+const { browser, reason, tried } = await launchBrowser();
 if (!browser) {
-  write({
-    result: "unverified",
-    reason: launchErrors.length
-      ? "No Playwright install could start Chromium"
-      : "Playwright not found (set LANDING_PLAYWRIGHT to its module path, or install it with the user's approval)",
-    tried: launchErrors,
-    checks: [],
-  });
+  write({ result: "unverified", reason, tried, checks: [] });
   process.exit(0);
 }
 

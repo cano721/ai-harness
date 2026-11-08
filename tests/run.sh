@@ -2274,7 +2274,13 @@ r="$(cat "${LP_STUB_RESULT_FILE}")"
 printf '{"result":"%s","checks":[{"id":"overflow","status":"%s"}]}\n' "$r" "$r" >"$o"
 EOF
 chmod +x "$TEST_TMP/lp-measure-stub.sh"
-export LANDING_MEASURE_CMD="$TEST_TMP/lp-measure-stub.sh" LP_STUB_RESULT_FILE="$TEST_TMP/lp-stub-result"
+cat >"$TEST_TMP/lp-capture-stub.sh" <<'EOF'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do case "$1" in --out) o="$2"; shift 2 ;; *) shift ;; esac; done
+mkdir -p "$o"; printf '{"result":"done"}\n' >"$o/captures.json"
+EOF
+chmod +x "$TEST_TMP/lp-capture-stub.sh"
+export LANDING_MEASURE_CMD="$TEST_TMP/lp-measure-stub.sh" LP_STUB_RESULT_FILE="$TEST_TMP/lp-stub-result" LANDING_CAPTURE_CMD="$TEST_TMP/lp-capture-stub.sh"
 lp() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_W" 2>"$TEST_TMP/lp.err"; }
 lp_rc() { local rc=0; lp "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
 lp init --mode unattended >/dev/null
@@ -2287,6 +2293,8 @@ touch "$LP_W/references.json"
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
 assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
+assert_eq 4 "$(lp_rc submit --node direction --outcome direction_ready)" "a candidate without its first-viewport composition is refused"
+printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece","first_viewport":"x"},{"id":"b","dir":"site/b","motion_level":"calm","first_viewport":"y"}]}\n' >"$LP_W/candidates.json"
 lp submit --node direction --outcome direction_ready >/dev/null
 assert_eq "draft draft" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at draft"
 mkdir -p "$LP_W/site/a" "$LP_W/site/b" "$LP_W/caps"; touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html"
@@ -2311,6 +2319,9 @@ assert_eq repair "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a fail
 touch "$LP_W/repair-a-0.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null
 echo pass >"$LP_STUB_RESULT_FILE"
 assert_eq review "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a passing measure goes to review"
+assert_file "$LP_W/captures/a-m2/captures.json"
+assert_contains "$(lp next --candidate a)" "captures/a-m2" "the reviewer is pointed at the captures the measure node took"
+assert_contains "$(lp capture --candidate a --url http://127.0.0.1:9/ --label extra)" "/captures/extra" "capture takes a labeled set on demand"
 assert_contains "$(lp next --candidate a)" '"try_it_usability"' "the review node lists the required checks"
 assert_contains "$(lp next --candidate a)" '"candidate_overlap"' "several candidates add the overlap check"
 printf '{"checks":[{"check":"flow","status":"pass"}]}\n' >"$TEST_TMP/lp-review-partial.json"
@@ -2318,11 +2329,16 @@ assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-partial.js
 assert_eq 0 "$(jq -r '.candidates.a.reviews' "$LP_W/.landing-run/state.json")" "a refused review does not count"
 lp_review() { # fail_check needs_input [candidate] → review json path
   jq -n --argjson req "$(lp next --candidate "${3:-a}" | jq '.required_checks')" --arg f "$1" --argjson ni "$2" \
-    '{rendered: true, checks: [$req[] | {check: ., status: (if . == $f then "fail" else "pass" end), severity: "major"}], needs_input: [range($ni) | "cta"]}' >"$TEST_TMP/lp-review.json"
+    '{rendered: true, checks: [$req[] | {check: ., status: (if . == $f then "fail" else "pass" end), severity: "major", first_viewport: false}], needs_input: [range($ni) | "cta"]}' >"$TEST_TMP/lp-review.json"
   printf '%s' "$TEST_TMP/lp-review.json"
 }
 assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fidelity 0)")" "a major in review sends the candidate to repair"
 touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
+jq '.checks |= map(if .check == "template_look" then .status = "fail" | .severity = "minor" | del(.first_viewport) else . end)' "$(lp_review none 0)" >"$TEST_TMP/lp-review-fv.json"
+assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-fv.json")" "a failed first-viewport check must say whether it is in the first viewport"
+jq '.checks |= map(if .check == "template_look" then .first_viewport = true else . end)' "$TEST_TMP/lp-review-fv.json" >"$TEST_TMP/lp-review-fv2.json"
+assert_eq repair "$(lp review --candidate a --file "$TEST_TMP/lp-review-fv2.json")" "a template look in the first viewport is major even when written as minor"
+touch "$LP_W/repair-a-2.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
 assert_eq "done" "$(lp review --candidate a --file "$(lp_review none 1)")" "only user input left ends at done"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
 touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
@@ -2336,7 +2352,7 @@ for r in 1 2 3; do
   [[ $r -lt 3 ]] && { touch "$LP_W/repair-b-$r.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null; }
 done
 assert_eq user_decision "$out" "a third review with a major left ends at user_decision"
-unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE LANDING_PREVIEW_CMD
+unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE LANDING_PREVIEW_CMD LANDING_CAPTURE_CMD
 # Real measure on fixed pages, only where a Playwright Chromium can start.
 LP_FIX="$ROOT/tests/fixtures/landing-measure"
 if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
@@ -2351,6 +2367,9 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
     assert_eq "contrast_solid destinations first_action moment_frame_rate overflow placeholders" \
       "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
+    node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
+    assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"
+    assert_file "$TEST_TMP/lp-caps/sheet-390.png"
   fi
   kill "$LP_SRV1" "$LP_SRV2" 2>/dev/null || true
 fi
@@ -2363,6 +2382,10 @@ assert_contains "$(cat skills/landing-page/references/motion-web.md)" "call \`le
 assert_contains "$LANDING_VERIFY" "\`craft\`: would a designer call the making amateur" "landing-page review judges craft"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Primitives are a sketch, not a scene.**" "landing-page does not ship primitive-built realistic 3D"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served draft within 10 minutes" "landing-page shows a draft before verification"
+assert_contains "$(cat skills/landing-page/SKILL.md)" "**Nothing may wait for a permission prompt.**" "landing-page unattended runs never stall on a prompt"
+assert_contains "$LANDING_VERIFY" "a distinctive element placed under the stock formula" "a 3D element under the stock hero does not excuse it"
+jq '.first_viewport_major = ["craft"]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph must count a first-viewport template look as major"; fi
 pass "landing-page graph runner and measure gate"
 assert_contains "$(cat agents/design-reviewer.md)" "제품 개념이 독특해도 생김새 판정을 면제하지 않는다" "design-reviewer judges look apart from concept"
 assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"

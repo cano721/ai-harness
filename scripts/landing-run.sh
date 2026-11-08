@@ -5,6 +5,8 @@
 #   - submit: 만드는 쪽(maker·human 노드)이 결과를 낸다. 노드 산출물이 없거나, 그래프에 없는 전이면 거부한다.
 #   - measure: 측정 스크립트를 직접 돌려 결과(pass·fail·unverified)로 전이를 고른다. 모델이 measured_pass를 낼 수 없다.
 #   - review: 검토 JSON을 받아 필수 항목이 다 있는지 보고, 판정과 전이를 계산한다. 항목이 빠진 검토는 회차로 세지 않고 거부한다.
+#     첫 화면에서 실패한 first_viewport_major 항목은 검토자가 minor로 적어도 주요로 센다.
+#   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
 
@@ -20,13 +22,14 @@ usage:
   landing-run.sh submit  --work DIR --node NODE --outcome OUTCOME [--candidate ID]
   landing-run.sh measure --work DIR --candidate ID --url URL
   landing-run.sh review  --work DIR --candidate ID --file REVIEW.json
+  landing-run.sh capture --work DIR --candidate ID --url URL [--label NAME]
   landing-run.sh status  --work DIR
 EOF
   exit 2
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE=""
+WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work) WORK="$2"; shift 2 ;;
@@ -37,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --outcome) OUTCOME="$2"; shift 2 ;;
     --url) URL="$2"; shift 2 ;;
     --file) FILE="$2"; shift 2 ;;
+    --label) LABEL="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -101,6 +105,15 @@ notify_preview() {
   fi
 }
 
+# Captures every later step reads: LANDING_CAPTURE_CMD replaces the script ("none" turns it off). Prints the folder, relative to WORK.
+run_capture() {
+  local url="$1" label="$2" dir="captures/$2"
+  [[ "${LANDING_CAPTURE_CMD:-}" == none ]] && return 0
+  read -r -a capture_cmd <<<"${LANDING_CAPTURE_CMD:-node $ROOT/scripts/landing-capture.mjs}"
+  "${capture_cmd[@]}" --url "$url" --out "$WORK/$dir" >&2 || printf 'landing-run: capture failed\n' >&2
+  printf '%s\n' "$dir"
+}
+
 current() { if [[ -n "$CAND" ]]; then jq -r --arg c "$CAND" '.candidates[$c].node // empty' "$STATE"; else state .node; fi; }
 
 move() {
@@ -108,6 +121,16 @@ move() {
   to="$(edge "$from" "$outcome")"
   [[ -n "$to" ]] || die 3 "no edge from '$from' on '$outcome' in $(state .mode) mode"
   local at; at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Leaving the shared steps: the candidates listed in candidates.json start their own paths at draft (checked before anything is saved).
+  local cands=""
+  if [[ -z "$CAND" && "$to" == "draft" ]]; then
+    [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing"
+    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "draft", entered_at: $at, measures: 0, reviews: 0, verdict: null}}] | from_entries' --arg at "$at" "$WORK/candidates.json")" \
+      || die 4 "candidates.json must hold {\"candidates\":[{\"id\",\"dir\",\"motion_level\",\"first_viewport\"}]}"
+    [[ "$(jq 'length' <<<"$cands")" -ge 1 ]] || die 4 "candidates.json lists no candidate"
+    jq -e '[.candidates[] | (.first_viewport // "") | type == "string" and length > 0] | all' "$WORK/candidates.json" >/dev/null \
+      || die 4 "each candidate needs first_viewport: its first-viewport composition in one line (direction.md, Not the stock hero)"
+  fi
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.candidates[$c].node = $t | .candidates[$c].entered_at = $at | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
@@ -116,15 +139,7 @@ move() {
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.node = $t | .entered_at = $at | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
   fi
-  # Leaving the shared steps: the candidates listed in candidates.json start their own paths at draft.
-  if [[ -z "$CAND" && "$to" == "draft" ]]; then
-    [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing"
-    local cands
-    cands="$(jq -c '[.candidates[] | {key: .id, value: {dir: .dir, motion_level: (.motion_level // "calm"), node: "draft", entered_at: $at, measures: 0, reviews: 0, verdict: null}}] | from_entries' --arg at "$at" "$WORK/candidates.json")" \
-      || die 4 "candidates.json must hold {\"candidates\":[{\"id\",\"dir\",\"motion_level\"}]}"
-    [[ "$(jq 'length' <<<"$cands")" -ge 1 ]] || die 4 "candidates.json lists no candidate"
-    save --argjson cs "$cands" '.candidates = $cs | .node = "candidates"'
-  fi
+  [[ -z "$cands" ]] || save --argjson cs "$cands" '.candidates = $cs | .node = "candidates"'
   printf '%s\n' "$to"
 }
 
@@ -145,7 +160,7 @@ print_next() {
         measure) how="Serve the page, then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
         *) how="Terminal: report this candidate (landing-run.sh status)" ;;
       esac ;;
-    reviewer) how="Start a new design-reviewer with the briefing in verify.md and the required checks below; save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>" ;;
+    reviewer) how="Start a new design-reviewer with the briefing in verify.md, the required checks below, the latest measure JSON, and the capture folder $(jq -r --arg c "$c" '.candidates[$c].captures // "(run landing-run.sh capture)"' "$STATE"); save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>" ;;
   esac
   local checks="[]"
   if [[ "$node" == "review" ]]; then checks="$(required_checks)"; fi
@@ -243,6 +258,13 @@ case "$cmd" in
       *) outcome=measured_unverified ;;
     esac
     jq -c '{result, failed: [.checks[]? | select(.status == "fail") | .id]}' "$out" >&2 || true
+    if [[ "$result" == pass ]]; then
+      rmdir "$RUN/lock"; trap - EXIT
+      cdir="$(run_capture "$URL" "$CAND-m$n")"
+      lock
+      [[ -z "$cdir" ]] || save --arg c "$CAND" --arg d "$cdir" '.candidates[$c].captures = $d'
+      [[ -z "$cdir" ]] || printf '{"captures":"%s"}\n' "$WORK/$cdir" >&2
+    fi
     move measure "$outcome"
     ;;
   review)
@@ -259,7 +281,10 @@ case "$cmd" in
     [[ -z "$bad" ]] || die 4 "checks with a status other than pass|fail|unverified: $bad"
     r=$(( $(jq -r --arg c "$CAND" '.candidates[$c].reviews' "$STATE") + 1 ))
     cp "$FILE" "$WORK/review-$CAND-$r.json"
-    majors="$(jq '[.checks[] | select(.status == "fail" and (.severity // "major") == "major")] | length' "$FILE")"
+    fvm="$(jq -c '.first_viewport_major // []' "$GRAPH")"
+    nofv="$(jq -r --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and (.check as $c | $fvm | index($c)) and ((.first_viewport | type) != "boolean")) | .check] | join(", ")' "$FILE")"
+    [[ -z "$nofv" ]] || die 4 "failed checks need \"first_viewport\": true|false: $nofv (not counted)"
+    majors="$(jq --argjson fvm "$fvm" '[.checks[] | select(.status == "fail" and ((.severity // "major") == "major" or (.first_viewport == true and (.check as $c | $fvm | index($c)))))] | length' "$FILE")"
     unverified="$(jq --argjson req "$req" '[.checks[] | select(.status == "unverified" and (.check as $c | $req | index($c)))] | length' "$FILE")"
     rendered="$(jq -r 'if .rendered == false then "no" else "yes" end' "$FILE")"
     inputs="$(jq '(.needs_input // []) | length' "$FILE")"
@@ -277,6 +302,13 @@ case "$cmd" in
       '.candidates[$c].reviews = $r | .candidates[$c].verdict = $v | .candidates[$c].rounds += [{round: $r, verdict: $v, majors: $m}]'
     printf '{"round":%s,"verdict":"%s","majors":%s,"unverified_checks":%s,"needs_input":%s}\n' "$r" "$verdict" "$majors" "$unverified" "$inputs" >&2
     move review "$outcome"
+    ;;
+  capture)
+    [[ -f "$STATE" && -n "$CAND" && -n "$URL" ]] || usage
+    label="${LABEL:-$CAND-$(date +%H%M%S)}"
+    [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die 2 "label may hold letters, digits, dot, dash, underscore"
+    cdir="$(run_capture "$URL" "$label")"
+    printf '%s\n' "${cdir:+$WORK/$cdir}"
     ;;
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"
