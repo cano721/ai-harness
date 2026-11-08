@@ -37,7 +37,8 @@ usage() {
 usage:
   autofix-auto.sh sweep                         # 검증 → 새 에러 1건 수정 실행 (HM_AUTOFIX_AUTO=1일 때)
   autofix-auto.sh verify [--project <id>]       # 검증만: PR 병합·배포 반영·재발 여부를 갱신
-  autofix-auto.sh candidates --project <id>     # 지금 수정 대상이 될 에러(JSON lines)
+  autofix-auto.sh candidates --project <id> [--root <repo>]
+                                                # 지금 수정 대상이 될 에러(JSON lines). 수동 조회라 HM_AUTOFIX_REPOS와 무관
   autofix-auto.sh status [--project <id>]       # 시그니처별 상태
   autofix-auto.sh track --project <id> --candidate <json> --pr <url>   # 수동으로 연 PR도 검증 대상에 올린다
   autofix-auto.sh run <project> <repo> <candidate-json-file>   # sweep이 띄우는 detached worker
@@ -88,6 +89,14 @@ set_sig() { # $1=project $2=signature $3=jq 객체 식(현재 값은 $cur) [나�
   return 1
 }
 
+repo_rows() { # 하네스 저장소 목록(JSON lines: repo, project, base, manifest)
+  if [[ -n "${HM_AUTOFIX_REPOS_CMD:-}" ]]; then
+    local -a cmd=(); read -r -a cmd <<<"$HM_AUTOFIX_REPOS_CMD"; "${cmd[@]}"
+  else
+    "$DIR/sync-auto.sh" repos
+  fi
+}
+
 # 대상은 사용자가 config의 HM_AUTOFIX_REPOS(프로젝트 ID, 쉼표·공백 구분)에 적은 저장소뿐이다. 세션 기록에 나온
 # 아무 저장소나 자기 manifest로 무인 실행·자격증명 사용을 일으키지 못하게 한다.
 # monitor 설정은 lib.sh hm_resolve_monitor로 정한다(개인 로컬 파일 > 기준 브랜치 manifest). 로컬 파일이 잘못됐으면 대상에서 뺀다.
@@ -95,11 +104,7 @@ monitored_repos() { # [$1=project] → JSON lines(repo, project, base, manifest,
   local allowed="" rows="" row="" monitor=""
   allowed="$(printf '%s' "${HM_AUTOFIX_REPOS:-}" | jq -Rsc '[splits("[,[:space:]]+")] | map(select(. != ""))')"
   [[ "$allowed" != "[]" ]] || return 0
-  rows="$(if [[ -n "${HM_AUTOFIX_REPOS_CMD:-}" ]]; then
-    local -a cmd=(); read -r -a cmd <<<"$HM_AUTOFIX_REPOS_CMD"; "${cmd[@]}"
-  else
-    "$DIR/sync-auto.sh" repos
-  fi | jq -c --arg p "${1:-}" --argjson allowed "$allowed" \
+  rows="$(repo_rows | jq -c --arg p "${1:-}" --argjson allowed "$allowed" \
     'select((.project as $x | $allowed | index($x)) and ($p == "" or .project == $p))')"
   [[ -n "$rows" ]] || return 0
   while IFS= read -r row; do
@@ -254,10 +259,28 @@ candidates_for() { # $1=repo json → JSON lines
         else empty end'
 }
 
+# 수동 후보 조회는 사람이 지금 이 저장소를 보고 고르는 것이라 무인 실행 허용 목록(HM_AUTOFIX_REPOS)에 묶지 않는다.
+# 자격증명·명령 실행은 monitor-fetch.sh의 provider별 제한을 똑같이 받는다. sweep·verify·track은 monitored_repos를 쓴다.
 command_candidates() {
-  [[ "${1:-}" == "--project" && -n "${2:-}" ]] || usage
-  local row=""
-  while IFS= read -r row; do candidates_for "$row"; done < <(monitored_repos "$2")
+  local project="" root="" row="" actual=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --project) project="${2:-}"; shift 2 ;;
+      --root) root="${2:-}"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [[ -n "$project" ]] || usage
+  if [[ -n "$root" ]]; then
+    root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || { printf '저장소가 아닙니다: %s\n' "$root" >&2; exit 2; }
+    actual="$(project_id_for_cwd "$root")"
+    # 다른 저장소의 상태(시도 횟수·skipped)로 후보를 거르지 않게 프로젝트 ID가 맞아야 한다.
+    [[ "$actual" == "$project" ]] || { printf -- '--project %s가 %s의 프로젝트(%s)와 다릅니다\n' "$project" "$root" "$actual" >&2; exit 2; }
+    candidates_for "$(jq -cn --arg p "$project" --arg r "$root" '{project:$p, repo:$r}')"
+    return
+  fi
+  row="$(repo_rows | jq -c --arg p "$project" 'select(.project == $p)' | head -n 1)"
+  [[ -z "$row" ]] || candidates_for "$row"
 }
 
 started_today() {

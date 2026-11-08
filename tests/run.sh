@@ -5168,7 +5168,9 @@ HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="af-loc" HM_AUTOFIX_REPOS_CMD="
   "$ROOT/scripts/autofix-auto.sh" track --project af-loc --candidate '{"signature":"src:local","count":20}' --pr https://github.com/acme/loc/pull/1 || AFL_RC=$?
 assert_eq "0" "$AFL_RC" "a PR of a locally monitored repo can be tracked"
 find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
-assert_eq "4|" "$(afl_list)" "no local file and no manifest monitor is a config error"
+assert_eq "5|" "$(afl_list)" "no local file and no manifest monitor is reported as missing settings"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/monitor-fetch.sh" check --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "5" "$AFL_RC" "check tells missing settings (exit 5) apart so /autofix can route to setup"
 assert_eq "" "$(afl_candidates)" "a repo with no monitor settings is not an autofix target"
 afl_manifest '{"provider":"command","command":"tools/manifest.sh"}'
 afl_local 'not json'
@@ -5185,6 +5187,80 @@ AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" SENTRY_AUTH_TOKEN=t "$ROOT/scripts/mon
 assert_eq "4" "$AFL_RC" "a local file cannot send the sentry token to another host either"
 find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
 pass "autofix monitor settings: local file first, manifest fallback, same validation"
+
+# 수동 후보 조회는 무인 실행 허용 목록(HM_AUTOFIX_REPOS)과 무관하게 그 저장소의 monitor 설정으로 계산한다.
+# 무인 실행 없이 수동으로만 쓰는 사람도 후보를 볼 수 있어야 한다. 검증 대상 등록(track)의 허용 목록 규칙은 그대로다.
+# 앞 블록의 track이 src:local을 pr_open으로 올렸으므로 추적되지 않은 시그니처(src:manifest)를 내는 어댑터를 쓴다.
+afl_local '{"provider":"command","command":"tools/manifest.sh"}'
+assert_eq "src:manifest" "$(HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="" \
+  "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc --root "$AFL_REPO" 2>/dev/null | jq -r '.signature')" \
+  "manual candidates work for a repo outside HM_AUTOFIX_REPOS"
+assert_eq "src:manifest" "$(HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="other" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" candidates --project af-loc 2>/dev/null | jq -r '.signature')" \
+  "manual candidates without --root find the repo without the allow-list"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" "$ROOT/scripts/autofix-auto.sh" candidates --project other-id --root "$AFL_REPO" >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "2" "$AFL_RC" "candidates refuse a --project that does not match the --root repo"
+AFL_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" HM_AUTOFIX_REPOS="other" HM_AUTOFIX_REPOS_CMD="$ROOT/scripts/sync-auto.sh repos --root $AFL_REPO" \
+  "$ROOT/scripts/autofix-auto.sh" track --project af-loc --candidate '{"signature":"src:local","count":20}' --pr https://github.com/acme/loc/pull/2 >/dev/null 2>&1 || AFL_RC=$?
+assert_eq "3" "$AFL_RC" "track still requires the allow-list"
+find "$AFL_DATA/autofix/monitors/af-loc.json" -delete
+pass "manual autofix candidates are not bound to the unattended allow-list"
+
+# setup 보조: discover가 실제 데이터(최근 에러의 service·env / project·environment별 건수)를 보여 줘
+# 사용자가 고르게 한다. 저장소 설정 없이 돌고, 자격증명 전송처 제한은 list와 같다.
+AFD_STUB="$TEST_TMP/autofix-discover"
+mkdir -p "$AFD_STUB"
+cat >"$AFD_STUB/http" <<'EOF'
+#!/usr/bin/env bash
+printf '%s %s %s\n' "$1" "$2" "${3:-}" >>"$AFD_STUB/http.log"
+case "$2" in
+  https://api.datadoghq.eu/api/v2/logs/analytics/aggregate)
+    printf '%s\n' '{"data":{"buckets":[{"by":{"service":"api","env":"prod"},"computes":{"c0":120}},{"by":{"service":"web worker","env":"staging"},"computes":{"c0":7}},{"by":{"service":"batch"},"computes":{"c0":3}}]}}' ;;
+  https://sentry.io/api/0/organizations/acme/events/\?*)
+    printf '%s\n' '{"data":[{"project":"api","environment":"production","count()":42,"count_unique(issue)":5},{"project":"web","environment":null,"count()":2,"count_unique(issue)":1}]}' ;;
+  https://sentry.io/api/0/organizations/)
+    printf '%s\n' '[{"slug":"acme","name":"Acme"}]' ;;
+  *) echo "unexpected $2" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$AFD_STUB/http"
+export AFD_STUB
+afd() { HARNESS_METRICS_DIR="$AFL_DATA" HM_MONITOR_HTTP="$AFD_STUB/http" "$ROOT/scripts/monitor-fetch.sh" discover "$@"; }
+AFD_DD="$(afd --provider datadog --site datadoghq.eu --hours 6)"
+assert_eq "3" "$(printf '%s\n' "$AFD_DD" | grep -c .)" "datadog discover prints one line per service/env"
+assert_eq "api|prod|120|service:api env:prod status:error" "$(head -n 1 <<<"$AFD_DD" | jq -r '"\(.service)|\(.env)|\(.count)|\(.query)"')" \
+  "datadog discover counts errors per service and env with a ready query"
+assert_eq 'service:"web worker" env:staging status:error' "$(sed -n 2p <<<"$AFD_DD" | jq -r '.query')" "discover quotes values with spaces"
+assert_eq "|service:batch status:error" "$(sed -n 3p <<<"$AFD_DD" | jq -r '"\(.env)|\(.query)"')" "a service without env gets no env term"
+assert_contains "$(<"$AFD_STUB/http.log")" '"from":"now-6h"' "datadog discover honours --hours"
+assert_contains "$(<"$AFD_STUB/http.log")" '"query":"status:error"' "datadog discover aggregates error logs"
+AFD_SE="$(afd --provider sentry --org acme)"
+assert_eq "acme|api|production|42|5" "$(head -n 1 <<<"$AFD_SE" | jq -r '"\(.org)|\(.project)|\(.environment)|\(.events)|\(.issues)"')" \
+  "sentry discover counts events and issues per project and environment"
+assert_eq "" "$(sed -n 2p <<<"$AFD_SE" | jq -r '.environment')" "sentry discover keeps events without an environment"
+assert_contains "$(grep 'organizations/acme/events' "$AFD_STUB/http.log")" "statsPeriod=24h" "sentry discover defaults to 24 hours"
+assert_eq "acme" "$(afd --provider sentry | jq -r '.org')" "sentry discover without --org lists organizations"
+AFD_RC=0; afd --provider datadog --site evil.example.com >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover cannot send datadog keys to another host"
+AFD_RC=0; afd --provider sentry --org acme --base-url https://evil.example.com >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover cannot send the sentry token to another host"
+AFD_RC=0; HARNESS_METRICS_DIR="$AFL_DATA" HARNESS_CLAUDE_SETTINGS=/nonexistent DATADOG_API_KEY="" DATADOG_APP_KEY="" DD_API_KEY="" DD_APP_KEY="" HM_DATADOG_API_KEY="" HM_DATADOG_APP_KEY="" \
+  "$ROOT/scripts/monitor-fetch.sh" discover --provider datadog >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "4" "$AFD_RC" "discover without credentials is a config error"
+AFD_RC=0; afd --provider command >/dev/null 2>&1 || AFD_RC=$?
+assert_eq "2" "$AFD_RC" "discover supports only datadog and sentry"
+pass "monitor-fetch discover lists real service/env choices for setup"
+
+# /autofix: 설정이 없으면 setup으로 넘어가고, setup 절차는 별도 파일에 둔다(수정 실행 때 setup 절차를 같이 읽지 않게).
+assert_file "$ROOT/skills/autofix/setup.md"
+AF_SKILL="$(<"$ROOT/skills/autofix/SKILL.md")"
+assert_contains "$AF_SKILL" "setup.md" "autofix SKILL routes to setup.md"
+assert_contains "$AF_SKILL" "exit 5" "autofix manual path checks for missing settings first"
+assert_contains "$AF_SKILL" "candidates --project <id> --root ." "autofix manual candidates use the current repo"
+AF_SETUP="$(<"$ROOT/skills/autofix/setup.md")"
+assert_contains "$AF_SETUP" "monitor-fetch.sh discover" "setup shows discover results"
+assert_contains "$AF_SETUP" "autofix-auto.sh configure" "setup still writes the unattended settings"
+pass "autofix routes missing settings to a separate setup procedure"
 
 # 짧은 주기 sweep과 backfill 경로 sweep이 겹치면 늦게 온 쪽은 아무것도 하지 않는다.
 mkdir -p "$AF_DATA/autofix/.sweep.lock"
