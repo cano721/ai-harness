@@ -2771,6 +2771,82 @@ wait "$LOCK_PID_1"
 wait "$LOCK_PID_2"
 assert_eq "1" "$(wc -l < "$LOCK_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "review lock prevents duplicate history"
 
+# mkdir이 확인과 생성을 나눠 처리해도(uutils) lock은 동시 호출을 상호 배제한다.
+NONATOMIC_BIN="$TEST_TMP/nonatomic-mkdir-bin"
+mkdir -p "$NONATOMIC_BIN"
+cat >"$NONATOMIC_BIN/mkdir" <<'FAKE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [[ "$arg" == "-p" ]] && exec "$REAL_MKDIR" "$@"
+done
+for target in "$@"; do
+  if [[ -e "$target" ]]; then
+    echo "mkdir: cannot create directory '$target': File exists" >&2
+    exit 1
+  fi
+  sleep 0.2
+  "$REAL_MKDIR" -p "$target"
+done
+FAKE
+chmod +x "$NONATOMIC_BIN/mkdir"
+REAL_MKDIR_PATH="$(command -v mkdir)"
+for round in 1 2 3; do
+  NA_DATA="$TEST_TMP/nonatomic-lock-data-$round"
+  HARNESS_METRICS_DIR="$NA_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+  NA_EVENT="$NA_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+  HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" record "$NA_EVENT" >/dev/null
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-1" &
+  NA_PID_1=$!
+  PATH="$NONATOMIC_BIN:$PATH" REAL_MKDIR="$REAL_MKDIR_PATH" \
+    HARNESS_METRICS_DIR="$NA_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+    "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$NA_DATA/err-2" &
+  NA_PID_2=$!
+  NA_RC_1=0
+  NA_RC_2=0
+  wait "$NA_PID_1" || NA_RC_1=$?
+  wait "$NA_PID_2" || NA_RC_2=$?
+  assert_eq "0" "$NA_RC_1" "nonatomic mkdir round $round first mark-reviewed exit"
+  assert_eq "0" "$NA_RC_2" "nonatomic mkdir round $round second mark-reviewed exit"
+  assert_eq "1" "$(wc -l < "$NA_DATA/harvest-queue/p-service/review-history.jsonl" | tr -d ' ')" "nonatomic mkdir round $round history once"
+  if grep -q 'cannot stat' "$NA_DATA/err-1" "$NA_DATA/err-2"; then
+    fail "nonatomic mkdir round $round raced into critical section: $(cat "$NA_DATA/err-1" "$NA_DATA/err-2")"
+  fi
+  [[ ! -e "$NA_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "nonatomic mkdir round $round queue lock left behind"
+done
+pass "queue lock excludes concurrent callers even when mkdir is non-atomic"
+
+# 임계구역 안에서 실패해도 EXIT trap이 lock을 푼다(bash 5에서 local 변수가 사라져도).
+FAILLOCK_DATA="$TEST_TMP/failure-lock-data"
+FAILLOCK_BIN="$TEST_TMP/failing-mv-bin"
+mkdir -p "$FAILLOCK_BIN"
+cat >"$FAILLOCK_BIN/mv" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  */sessions/*) echo "mv: simulated failure for $1" >&2; exit 1 ;;
+esac
+exec "$REAL_MV" "$@"
+FAKE
+chmod +x "$FAILLOCK_BIN/mv"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
+FAILLOCK_EVENT="$FAILLOCK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
+HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" record "$FAILLOCK_EVENT" >/dev/null
+FAILLOCK_RC=0
+PATH="$FAILLOCK_BIN:$PATH" REAL_MV="$(command -v mv)" \
+  HARNESS_METRICS_DIR="$FAILLOCK_DATA" HM_HARVEST_SESSION_THRESHOLD=1 \
+  "$ROOT/scripts/harvest-queue.sh" mark-reviewed --project service >/dev/null 2>"$FAILLOCK_DATA/err" || FAILLOCK_RC=$?
+if [[ "$FAILLOCK_RC" == "0" ]]; then
+  fail "mark-reviewed should fail when moving a session marker fails"
+fi
+if grep -q 'unbound variable' "$FAILLOCK_DATA/err"; then
+  fail "EXIT trap referenced an out-of-scope variable: $(cat "$FAILLOCK_DATA/err")"
+fi
+[[ ! -e "$FAILLOCK_DATA/harvest-queue/p-service/.queue-lock" ]] || fail "queue lock left behind after failure inside critical section"
+pass "queue lock is released when the critical section fails"
+
 # record가 marker 교체 중이어도 mark-reviewed는 같은 프로젝트 lock을 기다려 상태가 갈라지지 않는다.
 ATOMIC_DATA="$TEST_TMP/atomic-data"
 HARNESS_METRICS_DIR="$ATOMIC_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
