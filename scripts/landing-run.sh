@@ -23,13 +23,14 @@ usage:
   landing-run.sh measure --work DIR --candidate ID --url URL
   landing-run.sh review  --work DIR --candidate ID --file REVIEW.json
   landing-run.sh capture --work DIR --candidate ID --url URL [--label NAME]
+  landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
   landing-run.sh status  --work DIR
 EOF
   exit 2
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL=""
+WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work) WORK="$2"; shift 2 ;;
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --url) URL="$2"; shift 2 ;;
     --file) FILE="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
+    --width) WIDTH="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -162,7 +164,7 @@ print_next() {
       esac ;;
     reviewer) if [[ "$node" == draft_review ]]; then
         how="Start a new design-reviewer on the draft's first viewport only: the preview captures (preview-$c.json), the served URL, the references with their captures and take-lines, and the required checks below (verify.md, Draft review); three minutes. Save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>"
-      else how="Start a new design-reviewer with the briefing in verify.md, the required checks below, the latest measure JSON, and the capture folder $(jq -r --arg c "$c" '.candidates[$c].captures // "(run landing-run.sh capture)"' "$STATE"); save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>"; fi ;;
+      else how="Start a new design-reviewer with the briefing in verify.md, the required checks below, the latest measure JSON, and the capture folder $(jq -r --arg c "$c" '.candidates[$c].captures // "(run landing-run.sh capture)"' "$STATE"); it operates the page only through landing-run.sh operate (scripts in $WORK/operate/); save its JSON, then: landing-run.sh review --work <dir> --candidate $c --file <review json>"; fi ;;
   esac
   local checks="[]"
   if [[ "$node" == "review" ]]; then checks="$(required_checks)"; fi
@@ -338,6 +340,17 @@ case "$cmd" in
     [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die 2 "label may hold letters, digits, dot, dash, underscore"
     cdir="$(run_capture "$URL" "$label")"
     printf '%s\n' "${cdir:+$WORK/$cdir}"
+    ;;
+  operate)
+    [[ -f "$STATE" && -n "$URL" && -n "$FILE" ]] || usage
+    [[ -f "$FILE" ]] || die 2 "script not found: $FILE"
+    script="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
+    [[ "$script" == "$WORK"/* ]] || die 4 "keep operate scripts inside the work folder ($WORK/operate/); an unattended run cannot write elsewhere"
+    label="${LABEL:-$(basename "$script" .mjs)}"
+    [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die 2 "label may hold letters, digits, dot, dash, underscore"
+    [[ -z "$WIDTH" || "$WIDTH" =~ ^[0-9]+$ ]] || die 2 "width is a number of pixels"
+    read -r -a operate_cmd <<<"${LANDING_OPERATE_CMD:-node $ROOT/scripts/landing-operate.mjs}"
+    "${operate_cmd[@]}" --url "$URL" --script "$script" --out "$WORK/operate/out-$label" ${WIDTH:+--width "$WIDTH"}
     ;;
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"
