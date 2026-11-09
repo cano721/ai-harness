@@ -20,6 +20,11 @@ jq -e '
   and (($g.first_viewport_major // []) | index("template_look")) and (($g.first_viewport_major // []) | all(. as $c | $g.review_checks.public_page | index($c)))
   and ([$g.transitions[] | select(.to == "build")] | all(.from == "draft_review"))
   and $g.nodes.draft_review.actor == "reviewer" and ($g.review_checks.draft | index("template_look")) and ($g.review_checks.draft | index("craft"))
+  and (["interactive", "unattended"] | all(. as $m | $g.references_min[$m] as $r
+        | ($r | type) == "object"
+        and (["tone","component","layout","interaction","competitor"] | all(. as $k | ($r.per_kind[$k] | type) == "number" and $r.per_kind[$k] >= 1))
+        and ($r.interaction_video | type) == "number" and $r.interaction_video <= $r.per_kind.interaction
+        and ($r.competitor_max | type) == "number" and $r.competitor_max >= $r.per_kind.competitor))
   and ($g.invariants | any(startswith("Measure outcomes come only from the measure script")))
   and ($g.invariants | any(startswith("Review outcomes are computed from the review JSON")))
 ' "$graph_path" >/dev/null || { printf 'invalid landing-page graph\n' >&2; exit 1; }

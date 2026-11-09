@@ -194,8 +194,14 @@ REFS_CHECK='
   def str: type == "string" and length > 0;
   ["tone", "component", "layout", "interaction", "competitor"] as $kinds
   | if type != "array" then "must be an array of references" else
-    [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
-      ($kinds[] as $k | if any(.[]; .kind == $k) then empty else "no \($k) reference" end),
+    . as $refs
+    | [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
+      ([.[].id] | group_by(.)[] | select(length > 1) | "id \(.[0]) is used twice (one site in several kinds takes a separate id each)"),
+      ($kinds[] as $k | ($min.per_kind[$k] // 1) as $n | ([$refs[] | select(.kind == $k)] | length) as $have
+         | if $have >= $n then empty else "\($k) has \($have), needs at least \($n)" end),
+      ([.[] | select(.kind == "competitor")] | length) as $c | (if $c > ($min.competitor_max // 4) then "competitor has \($c), at most \($min.competitor_max // 4)" else empty end),
+      ([.[] | select(.kind == "interaction" and (.video | str))] | length) as $v
+         | (if $v >= ($min.interaction_video // 0) then empty else "interaction has \($v) with a video, needs at least \($min.interaction_video)" end),
       (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis.leads_with, .analysis.claim, .analysis.cta, .analysis.gap] | all(str) | not)))
            | "\(.id // "?"): competitor needs analysis {leads_with, claim, cta, gap}"),
       (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0))
@@ -259,10 +265,11 @@ case "$cmd" in
       tone_bad="$(jq -r "$TONE_CHECK" "$WORK/tone.json" 2>/dev/null)" || tone_bad="tone.json is not valid JSON"
       [[ -z "$tone_bad" ]] || die 4 "tone.json: $tone_bad (direction.md, Brief)"
     fi
-    # The board's tabs are drawn from these: every kind present, competitors analysed, interactions recorded. Unattended
-    # runs are held to it too, since the report cites the same data.
+    # The board's tabs are drawn from these: enough of every kind for the mode (references_min in the graph; an interactive
+    # board is looked at, an unattended one only backs the report), competitors analysed, interactions recorded.
     if [[ "$NODE" == references && "$OUTCOME" == references_ready ]]; then
-      refs_bad="$(jq -r "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
+      refs_min="$(jq -c --arg m "$(state .mode)" '.references_min[$m] // {}' "$GRAPH")"
+      refs_bad="$(jq -r --argjson min "$refs_min" "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
       [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
     fi
     if [[ "$NODE" == reference_pick ]]; then

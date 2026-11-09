@@ -2362,7 +2362,7 @@ EOF
 cp "$LP_W/references.json" "$TEST_TMP/lp-refs.json"
 jq '.[0].kind = "look"' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a reference outside the five board kinds is refused"
-assert_contains "$(cat "$TEST_TMP/lp.err")" "no tone reference" "the runner names the board tab left empty"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "tone has 0, needs at least 1" "the runner names the board tab left empty"
 jq 'del(.[4].analysis.gap)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a competitor without its four-part analysis is refused"
 jq 'del(.[3].video)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
@@ -2378,6 +2378,36 @@ if command -v node >/dev/null 2>&1; then
   assert_contains "$(cat "$LP_W/board.html")" "no practice" "the board shows the competitor analysis"
 fi
 assert_eq "--work $(cd "$LP_W" && pwd)" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
+# An interactive board is looked at, so each tab needs enough references (references_min in the graph).
+LP_I="$TEST_TMP/lp-run-i"; mkdir -p "$LP_I"
+lpi() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_I" 2>"$TEST_TMP/lp.err"; }
+lpi_rc() { local rc=0; lpi "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+lpi init --mode interactive >/dev/null
+printf '## Tone and manner\ncalm, precise\n' >"$LP_I/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_I/tone.json"
+lpi submit --node brief --outcome brief_ready >/dev/null
+lp_refs() { # tone component layout interaction videos competitor → references.json
+  jq -n --argjson t "$1" --argjson c "$2" --argjson l "$3" --argjson i "$4" --argjson v "$5" --argjson p "$6" '
+    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://example.com/\($k)/\($n)", source: "search", take: "t", captures: ["refs/x.png"]};
+    [range($t) | ref("tone"; .)] + [range($c) | ref("component"; .)] + [range($l) | ref("layout"; .)]
+    + [range($i) | ref("interaction"; .) + (if . < $v then {video: "https://example.com/v\(.).mp4"} else {} end)]
+    + [range($p) | ref("competitor"; .) + {analysis: {leads_with: "a", claim: "b", cta: "c", gap: "d"}}]' >"$LP_I/references.json"
+}
+lp_refs 1 1 1 1 1 1
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with one reference per tab is refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "tone has 1, needs at least 3" "the runner names the tab that is short"
+lp_refs 3 3 3 4 1 2
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with fewer than two interaction videos is refused"
+lp_refs 3 3 3 4 2 5
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with more than four competitors is refused"
+lp_refs 3 3 3 4 2 2
+jq '.[1].id = .[0].id' "$LP_I/references.json" >"$TEST_TMP/lp-dup.json" && cp "$TEST_TMP/lp-dup.json" "$LP_I/references.json"
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "two references with one id are refused"
+lp_refs 3 3 3 4 2 2
+assert_eq reference_pick "$(lpi submit --node references --outcome references_ready)" "an interactive board with enough references per tab goes to the pick"
+jq '.references_min.interactive.interaction_video = 9' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph asking for more interaction videos than interactions is invalid"; fi
+jq 'del(.references_min.unattended)' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph without unattended reference counts is invalid"; fi
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
 assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
