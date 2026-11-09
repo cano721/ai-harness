@@ -27,7 +27,8 @@
         "references/direction.md#7-references"
       ],
       "artifacts": [
-        "references.json"
+        "references.json",
+        "searches.json"
       ],
       "outcomes": [
         "references_ready",
