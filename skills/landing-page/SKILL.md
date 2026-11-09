@@ -37,6 +37,8 @@ Outside design skills, when installed, help only in the lanes `references/design
 
 The steps run as a graph (`references/landing-page-graph.json`) through a runner, so a step cannot be skipped or reported as done without its output. `$ROOT` below is the plugin root, two directories above this file. Work in a folder of its own (`WORK`), outside the folder the page is served from.
 
+**Mode.** Users do not name a mode; choose it. `interactive` is the default: the person sees the reference board and the first-viewport drafts and picks (two questions in the whole run). Use `unattended` only when the request says not to ask or to carry on alone ("묻지 말고", "알아서 끝까지", "자리 비울게"), or when no one can answer — a scripted run (`claude -p`), a scheduled or background job, or no question tool in the session. Do not ask which mode to use. Once a run starts its mode holds: if the question tool is missing or refused at a pick, ask in plain text, end the turn, and take the next message as the answer. Never move, rename, or delete `.landing-run` — the runner refuses to start over in a folder that held a run.
+
 ```
 bash $ROOT/scripts/landing-run.sh init --work "$WORK" --mode interactive|unattended
 bash $ROOT/scripts/landing-run.sh next --work "$WORK" [--candidate <id>]   # what to do now: node, docs to read, artifacts, allowed outcomes

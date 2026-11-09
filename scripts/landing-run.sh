@@ -187,6 +187,9 @@ case "$cmd" in
     GRAPH="${GRAPH_ARG:-$DEFAULT_GRAPH}"
     "$ROOT/scripts/validate-landing-page-graph.sh" "$GRAPH" >/dev/null
     [[ ! -f "$STATE" ]] || die 3 "a run already exists in $RUN"
+    # A run moved aside or a brief already written means this folder had a run: changing mode or starting over must not be silent.
+    prior="$(find "$WORK" -maxdepth 2 -name state.json -path '*landing-run*' 2>/dev/null | head -1)"
+    [[ -z "$prior" && ! -f "$WORK/brief.md" ]] || die 3 "this folder already holds a run (${prior:-brief.md}); do not move or delete it to start over. In interactive mode without a question tool, ask in plain text and wait for the reply. To start a new run, use a new folder and tell the user why."
     mkdir -p "$RUN"
     jq -n --arg g "$GRAPH" --arg m "$MODE" --arg e "$(jq -r .entry "$GRAPH")" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{graph: $g, mode: $m, node: $e, started_at: $at, entered_at: $at, candidates: {}, history: []}' >"$STATE"
