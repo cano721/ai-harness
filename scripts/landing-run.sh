@@ -6,7 +6,9 @@
 #   - measure: 측정 스크립트를 직접 돌려 결과(pass·fail·unverified)로 전이를 고른다. 모델이 measured_pass를 낼 수 없다.
 #   - review: 검토 JSON을 받아 필수 항목이 다 있는지 보고, 판정과 전이를 계산한다. 항목이 빠진 검토는 회차로 세지 않고 거부한다.
 #     첫 화면에서 실패한 first_viewport_major 항목은 검토자가 minor로 적어도 주요로 센다.
-#   - board: tone.json·references.json으로 레퍼런스 보드(board.html, 탭 5개)를 만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다.
+#   - board: tone.json·references.json으로 레퍼런스 보드(board.html, 탭 5개)를, --kind drafts면 시안 보드(draft-board.html)를
+#     만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다. --serve면 보드 서버를 분리 실행해 보드의 시작 버튼이 고른 결과를 쓴다.
+#   - wait-pick: 고른 결과 파일이 그 노드 시작 뒤에 생길 때까지 기다린다(세션은 이 명령을 백그라운드로 두고 턴을 끝낸다).
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
@@ -25,14 +27,15 @@ usage:
   landing-run.sh review  --work DIR --candidate ID --file REVIEW.json
   landing-run.sh capture --work DIR --candidate ID --url URL [--label NAME]
   landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
-  landing-run.sh board   --work DIR
+  landing-run.sh board   --work DIR [--kind references|drafts] [--port N --serve]
+  landing-run.sh wait-pick --work DIR --node reference_pick|draft_pick [--timeout-min 30]
   landing-run.sh status  --work DIR
 EOF
   exit 2
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH=""
+WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH="" KIND="references" PORT="" SERVE="" TIMEOUT_MIN=30
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work) WORK="$2"; shift 2 ;;
@@ -45,6 +48,10 @@ while [[ $# -gt 0 ]]; do
     --file) FILE="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
     --width) WIDTH="$2"; shift 2 ;;
+    --kind) KIND="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    --serve) SERVE=1; shift ;;
+    --timeout-min) TIMEOUT_MIN="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -194,13 +201,36 @@ REFS_CHECK='
   def str: type == "string" and length > 0;
   ["tone", "component", "layout", "interaction", "competitor"] as $kinds
   | if type != "array" then "must be an array of references" else
-    [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
-      ($kinds[] as $k | if any(.[]; .kind == $k) then empty else "no \($k) reference" end),
+    . as $refs
+    | [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
+      ([.[].id] | group_by(.)[] | select(length > 1) | "id \(.[0]) is used twice (one site in several kinds takes a separate id each)"),
+      ($kinds[] as $k | ($min.per_kind[$k] // 1) as $n | ([$refs[] | select(.kind == $k)] | length) as $have
+         | if $have >= $n then empty else "\($k) has \($have), needs at least \($n)" end),
+      ([.[] | select(.kind == "competitor")] | length) as $c | (if $c > ($min.competitor_max // 4) then "competitor has \($c), at most \($min.competitor_max // 4)" else empty end),
+      ([.[] | select(.kind == "interaction" and (.video | str))] | length) as $v
+         | (if $v >= ($min.interaction_video // 0) then empty else "interaction has \($v) with a video, needs at least \($min.interaction_video)" end),
       (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis.leads_with, .analysis.claim, .analysis.cta, .analysis.gap] | all(str) | not)))
            | "\(.id // "?"): competitor needs analysis {leads_with, claim, cta, gap}"),
       (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0))
            | "\(.id // "?"): interaction needs a video (recording URL or path) or captures")
     ] | join("; ") end'
+
+# The references come from a search, not from memory: a category search and a gallery search at least, and every
+# competitor (unless the user named it) among the results. $refs is references.json.
+SEARCH_CHECK='
+  def str: type == "string" and length > 0;
+  def norm: ascii_downcase | sub("^https?://"; "") | sub("^www\\."; "") | sub("/+$"; "");
+  if type != "array" then "must be an array of searches" else
+    ([.[] | .results // [] | .[] | strings | norm]) as $found
+    | [ (if length >= 2 then empty else "\(length) searches, needs at least 2" end),
+        (.[] | select(((.query | str) and (.engine_or_gallery | str) and ((.results // []) | length) > 0) | not)
+             | "\(.query // "?"): a search needs query, engine_or_gallery, and its results"),
+        (.[] | select((.purpose | IN("category", "gallery")) | not) | "\(.query // "?"): purpose must be category or gallery"),
+        (if any(.[]; .purpose == "category") then empty else "no category search (pages in the same category)" end),
+        (if any(.[]; .purpose == "gallery") then empty else "no gallery search (interaction references)" end),
+        ($refs[0][] | select(.kind == "competitor" and .source != "user" and (((.url // "") | norm) as $u | $found | index($u)) == null)
+             | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named may skip search)")
+      ] | join("; ") end'
 
 required_checks() {
   local multi; multi="$(jq '.candidates | length' "$STATE")"
@@ -259,11 +289,14 @@ case "$cmd" in
       tone_bad="$(jq -r "$TONE_CHECK" "$WORK/tone.json" 2>/dev/null)" || tone_bad="tone.json is not valid JSON"
       [[ -z "$tone_bad" ]] || die 4 "tone.json: $tone_bad (direction.md, Brief)"
     fi
-    # The board's tabs are drawn from these: every kind present, competitors analysed, interactions recorded. Unattended
-    # runs are held to it too, since the report cites the same data.
+    # The board's tabs are drawn from these: enough of every kind for the mode (references_min in the graph; an interactive
+    # board is looked at, an unattended one only backs the report), competitors analysed, interactions recorded.
     if [[ "$NODE" == references && "$OUTCOME" == references_ready ]]; then
-      refs_bad="$(jq -r "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
+      refs_min="$(jq -c --arg m "$(state .mode)" '.references_min[$m] // {}' "$GRAPH")"
+      refs_bad="$(jq -r --argjson min "$refs_min" "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
       [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
+      search_bad="$(jq -r --slurpfile refs "$WORK/references.json" "$SEARCH_CHECK" "$WORK/searches.json" 2>/dev/null)" || search_bad="searches.json is not valid JSON"
+      [[ -z "$search_bad" ]] || die 4 "searches.json: $search_bad (direction.md, References)"
     fi
     if [[ "$NODE" == reference_pick ]]; then
       jq -e '(.tone // "") | type == "string" and length > 0' "$WORK/reference-pick.json" >/dev/null \
@@ -398,9 +431,36 @@ case "$cmd" in
     "${operate_cmd[@]}" --url "$URL" --script "$script" --out "$WORK/operate/out-$label" ${WIDTH:+--width "$WIDTH"}
     ;;
   board)
-    [[ -f "$WORK/references.json" ]] || die 4 "references.json is missing in $WORK"
+    case "$KIND" in
+      references) [[ -f "$WORK/references.json" ]] || die 4 "references.json is missing in $WORK"; page=board.html ;;
+      drafts) [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing in $WORK"; page=draft-board.html ;;
+      *) usage ;;
+    esac
+    [[ -z "$PORT" || "$PORT" =~ ^[0-9]+$ ]] || die 2 "port is a number"
+    [[ -z "$SERVE" || -n "$PORT" ]] || die 2 "--serve needs --port"
     read -r -a board_cmd <<<"${LANDING_BOARD_CMD:-node $ROOT/scripts/landing-board.mjs}"
-    "${board_cmd[@]}" --work "$WORK"
+    if [[ -n "$PORT" ]]; then "${board_cmd[@]}" --work "$WORK" --kind "$KIND" >&2; else "${board_cmd[@]}" --work "$WORK" --kind "$KIND"; fi
+    if [[ -n "$SERVE" ]]; then
+      # Detached, not a background task of the session: a session task keeps a scripted run alive and is stopped later.
+      nohup node "$ROOT/scripts/landing-board-server.mjs" --work "$WORK" --port "$PORT" >"$WORK/board-server.log" 2>&1 </dev/null &
+      for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'board server:' "$WORK/board-server.log" 2>/dev/null && break; sleep 0.3; done
+      grep -q 'board server:' "$WORK/board-server.log" || die 4 "board server did not start: $(tail -3 "$WORK/board-server.log")"
+    fi
+    [[ -z "$PORT" ]] || printf 'http://127.0.0.1:%s/%s\n' "$PORT" "$page"
+    ;;
+  wait-pick)
+    [[ -f "$STATE" ]] || die 4 "no run in $WORK"
+    case "$NODE" in reference_pick) pickf="$WORK/reference-pick.json" ;; draft_pick) pickf="$WORK/draft-pick.json" ;; *) usage ;; esac
+    [[ "$TIMEOUT_MIN" =~ ^[0-9]+$ ]] || die 2 "timeout-min is a number of minutes"
+    [[ "$(state .node)" == "$NODE" ]] || die 3 "current node is '$(state .node)', not '$NODE'"
+    since="$(entered_epoch)"
+    end=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
+    while :; do
+      # A pick from before this node started is an old answer, not this one.
+      if [[ -s "$pickf" && "$(mtime "$pickf")" -ge "$since" ]]; then printf '%s\n' "$pickf"; exit 0; fi
+      [[ "$(date +%s)" -lt "$end" ]] || die 4 "no pick in $TIMEOUT_MIN min; ask the user in plain text and wait for the reply"
+      sleep 2
+    done
     ;;
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"

@@ -2360,14 +2360,27 @@ cat >"$LP_W/references.json" <<'EOF'
   "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}}]
 EOF
 cp "$LP_W/references.json" "$TEST_TMP/lp-refs.json"
+cat >"$TEST_TMP/lp-searches.json" <<'EOF'
+[{"query":"ai interview practice","purpose":"category","engine_or_gallery":"web search","results":["https://example.com/e/","https://example.com/z"],"picked":["R5"]},
+ {"query":"3d scroll","purpose":"gallery","engine_or_gallery":"codrops hub","results":["https://example.com/d"],"picked":["R4"]}]
+EOF
+cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
 jq '.[0].kind = "look"' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a reference outside the five board kinds is refused"
-assert_contains "$(cat "$TEST_TMP/lp.err")" "no tone reference" "the runner names the board tab left empty"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "tone has 0, needs at least 1" "the runner names the board tab left empty"
 jq 'del(.[4].analysis.gap)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a competitor without its four-part analysis is refused"
 jq 'del(.[3].video)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "an interaction reference without a recording is refused"
 cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"
+printf '[]\n' >"$LP_W/searches.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "references without a search are refused"
+jq '[.[0]]' "$TEST_TMP/lp-searches.json" >"$LP_W/searches.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "references without a gallery search are refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "no gallery search" "the runner names the missing search"
+jq '.[0].results = ["https://example.com/z"]' "$TEST_TMP/lp-searches.json" >"$LP_W/searches.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a competitor not among the search results is refused"
+cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
 if command -v node >/dev/null 2>&1; then
   lp board >/dev/null
   assert_file "$LP_W/board.html"
@@ -2376,8 +2389,83 @@ if command -v node >/dev/null 2>&1; then
   done
   assert_contains "$(cat "$LP_W/board.html")" "background:#3366ff" "the board shows the palette as color chips"
   assert_contains "$(cat "$LP_W/board.html")" "no practice" "the board shows the competitor analysis"
+  assert_contains "$(cat "$LP_W/board.html")" 'class="drop" type="button" aria-label="이 레퍼런스 제외" title="이 레퍼런스 제외" data-id="R1"' "each reference has an exclude button"
+  assert_contains "$(cat "$LP_W/board.html")" '>되돌리기</button>' "an excluded reference can be restored"
+  assert_contains "$(cat "$LP_W/board.html")" "이미 시작됐어요" "a board whose pick is made locks instead of sending again"
+  if grep -q '남김\|뺌' "$LP_W/board.html"; then fail "the board no longer says keep/drop (남김·뺌)"; fi
+  assert_contains "$(cat "$LP_W/board.html")" "이 레퍼런스로 시작" "the board has a start button"
+  assert_contains "$(cat "$LP_W/board.html")" "터미널에 답해 주세요" "a statically served board asks for the answer in the terminal"
 fi
-assert_eq "--work $(cd "$LP_W" && pwd)" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
+assert_eq "--work $(cd "$LP_W" && pwd) --kind references" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
+# An interactive board is looked at, so each tab needs enough references (references_min in the graph).
+LP_I="$TEST_TMP/lp-run-i"; mkdir -p "$LP_I"
+lpi() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_I" 2>"$TEST_TMP/lp.err"; }
+lpi_rc() { local rc=0; lpi "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+lpi init --mode interactive >/dev/null
+printf '## Tone and manner\ncalm, precise\n' >"$LP_I/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_I/tone.json"
+lpi submit --node brief --outcome brief_ready >/dev/null
+lp_refs() { # tone component layout interaction videos competitor → references.json
+  jq -n --argjson t "$1" --argjson c "$2" --argjson l "$3" --argjson i "$4" --argjson v "$5" --argjson p "$6" '
+    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://example.com/\($k)/\($n)", source: "search", take: "t", captures: ["refs/x.png"]};
+    [range($t) | ref("tone"; .)] + [range($c) | ref("component"; .)] + [range($l) | ref("layout"; .)]
+    + [range($i) | ref("interaction"; .) + (if . < $v then {video: "https://example.com/v\(.).mp4"} else {} end)]
+    + [range($p) | ref("competitor"; .) + {analysis: {leads_with: "a", claim: "b", cta: "c", gap: "d"}}]' >"$LP_I/references.json"
+}
+jq '.[0].results = [range(5) | "https://example.com/competitor/\(.)"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
+lp_refs 1 1 1 1 1 1
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with one reference per tab is refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "tone has 1, needs at least 3" "the runner names the tab that is short"
+lp_refs 3 3 3 4 1 2
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with fewer than two interaction videos is refused"
+lp_refs 3 3 3 4 2 5
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with more than four competitors is refused"
+lp_refs 3 3 3 4 2 2
+jq '.[1].id = .[0].id' "$LP_I/references.json" >"$TEST_TMP/lp-dup.json" && cp "$TEST_TMP/lp-dup.json" "$LP_I/references.json"
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "two references with one id are refused"
+lp_refs 3 3 3 4 2 2
+jq '.[0].results = ["https://example.com/competitor/0"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
+assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "a competitor found outside search is refused"
+jq 'map(if .id == "competitor-1" then .source = "user" else . end)' "$LP_I/references.json" >"$TEST_TMP/lp-user.json" && cp "$TEST_TMP/lp-user.json" "$LP_I/references.json"
+assert_eq reference_pick "$(lpi submit --node references --outcome references_ready)" "a competitor the user named needs no search result; enough per tab goes to the pick"
+jq '.references_min.interactive.interaction_video = 9' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph asking for more interaction videos than interactions is invalid"; fi
+jq 'del(.references_min.unattended)' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
+if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph without unattended reference counts is invalid"; fi
+# The user picks on the board: wait-pick returns once a pick made after the node started is there.
+printf '{"tone":"old","kept":["tone-0"]}\n' >"$LP_I/reference-pick.json"; touch -t 202001010000 "$LP_I/reference-pick.json"
+assert_eq 4 "$(lpi_rc wait-pick --node reference_pick --timeout-min 0)" "wait-pick ignores a pick from before the node started"
+assert_eq 3 "$(lpi_rc wait-pick --node draft_pick --timeout-min 0)" "wait-pick waits only on the current node"
+if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+  lp_port=$((20000 + RANDOM % 20000))
+  assert_eq "http://127.0.0.1:$lp_port/board.html" "$(lpi board --port "$lp_port" --serve)" "board --serve starts the board server and prints the board URL"
+  lp_post() { curl -s -o /dev/null -w '%{http_code}' -X "${2:-POST}" -H 'content-type: application/json' ${3:+-H "origin: $3"} --data "$1" "http://127.0.0.1:$lp_port${4:-/pick}"; }
+  assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["nope"]}')" "the board server refuses unknown reference ids"
+  assert_eq 400 "$(lp_post 'not json')" "the board server refuses a body that is not JSON"
+  assert_eq 400 "$(lp_post '{"node":"build"}')" "the board server writes only the pick nodes"
+  assert_eq 405 "$(lp_post '{}' POST "" /board.html)" "the board server takes POST only at /pick"
+  assert_eq 405 "$(lp_post '{}' PUT)" "the board server refuses other methods"
+  assert_eq 403 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}' POST "http://evil.example")" "the board server refuses another origin"
+  assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$lp_port/.landing-run/state.json")" "the board server does not serve the run state"
+  assert_eq 200 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$lp_port/board.html")" "the board server serves the board"
+  assert_eq 200 "$(lp_post '{"node":"reference_pick","tone":"바꿀 점: 더 따뜻하게","kept":["tone-0","layout-1"],"dropped":["tone-1"],"add_sites":["https://example.com/x"],"user_words":"더 따뜻하게"}')" "the board server takes a valid pick"
+  assert_eq "바꿀 점: 더 따뜻하게|tone-0,layout-1|더 따뜻하게" "$(jq -r '[.tone, (.kept | join(",")), .user_words] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the user's words as written"
+  assert_eq "$LP_I/reference-pick.json" "$(lpi wait-pick --node reference_pick --timeout-min 1 | sed "s#^$(cd "$LP_I" && pwd)#$LP_I#")" "wait-pick returns once the board writes the pick"
+  lp_state() { curl -s "http://127.0.0.1:$lp_port/state?node=${1:-reference_pick}"; }
+  assert_eq "reference_pick|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state returns the current node and the pick made in it"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a second pick in the same node is refused, not rewritten"
+  assert_eq "바꿀 점: 더 따뜻하게" "$(jq -r .tone "$LP_I/reference-pick.json")" "the refused pick leaves the first one as it was"
+  assert_eq picked "$(lpi submit --node reference_pick --outcome picked >/dev/null; jq -r '.history[-1].outcome' "$LP_I/.landing-run/state.json")" "the board's pick passes the runner's reference_pick check"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a pick after the run moved on is refused"
+  assert_eq "already_started|direction" "$(curl -s -X POST -H 'content-type: application/json' --data '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}' "http://127.0.0.1:$lp_port/pick" | jq -r '[.error, .node] | join("|")')" "the refusal names the run's current node"
+  assert_eq "direction|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state still shows the pick once the run has moved on"
+  assert_eq "direction|null" "$(lp_state draft_pick | jq -r '[.node, (.picked | tostring)] | join("|")')" "GET /state has no draft pick before one is made"
+  pkill -f "landing-board-server.mjs --work $(cd "$LP_I" && pwd) --port $lp_port" 2>/dev/null || true
+  printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"calm","first_viewport":"one scene"},{"id":"b","dir":"site/b","motion_level":"lively","first_viewport":"another"}]}\n' >"$LP_I/candidates.json"
+  printf '{"url":"http://127.0.0.1:9/a/","captures":["caps/a-1440.png","caps/a-390.png"]}\n' >"$LP_I/preview-a.json"
+  lpi board --kind drafts >/dev/null
+  assert_contains "$(cat "$LP_I/draft-board.html")" 'name="draft" value="b"' "the drafts board lets the user go ahead with one candidate"
+  assert_contains "$(cat "$LP_I/draft-board.html")" "caps/a-390.png" "the drafts board shows each candidate's phone capture"
+fi
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
 assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
