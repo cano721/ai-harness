@@ -275,7 +275,13 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 .afwrap .isumtop .acts button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
 .srow.afset { grid-template-columns: minmax(150px, .9fr) auto minmax(180px, 1.2fr); }
 @media (max-width: 1100px) { .srow.afset { grid-template-columns: 1fr; gap: 8px; } }
-.srow.afset > .ladder, .aftargets .ladder { justify-self: start; }
+.srow.afset > .ladder, .srow.afset > .afctl, .aftargets .ladder { justify-self: start; }
+.afctl { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.afcustom { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.afcustom input { width: 6.5em; font: inherit; font-size: 12px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.afcustom button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+.afwarn { margin: 4px 0; font-size: 13px; color: var(--human); }
+.afwarn.strong { font-weight: 600; padding: 8px 12px; border: 1px solid var(--human); border-radius: 8px; background: var(--human-bg); }
 .aftargets { display: grid; grid-template-columns: minmax(0, auto) auto; gap: 6px 12px; align-items: center; font-size: 13px; }
 .aftargets small { display: block; color: var(--muted); font-size: 11px; }
 .afsteps { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 4px; }
@@ -1577,11 +1583,13 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (!adata) { document.getElementById('vmeta').textContent = ''; board.append(el('div', 'empty', '불러오는 중…')); loadAutofix(true); return; }
     loadAutofix(false);
     const C = adata.config || {};
-    document.getElementById('vmeta').textContent = `무인 실행 ${C.auto ? '켬' : '끔'} · 오늘 실행 ${adata.today.started}/${adata.today.daily_max ?? '?'} · 누적 비용 ${usd(adata.cost_usd)}`;
+    document.getElementById('vmeta').textContent = `무인 실행 ${C.auto ? '켬' : '끔'} · 오늘 실행 ${adata.today.started}/${C.daily_unlimited ? '제한 없음' : adata.today.daily_max ?? '?'} · 누적 비용 ${usd(adata.cost_usd)}`;
     const wrap = el('div', 'iwrap afwrap');
     const top = el('div', 'isumtop');
     top.append(el('h2', null, C.auto ? `무인 실행 켬 — 대상 ${(C.repos || []).join(', ') || '없음'}` : '무인 실행 꺼짐 — 수동 /ai-harness:autofix 결과만 쌓임'));
-    top.append(el('p', 'iline', `sweep ${C.interval_minutes ? `${C.interval_minutes}분마다` : '정기 실행(backfill) 주기에'} · 하루 상한 ${C.daily_max ?? '?'}회 · 에러당 PR 상한 ${C.max_attempts ?? '?'}개 · 실행당 예산 ${usd(C.budget_usd)}`));
+    top.append(el('p', 'iline', `sweep ${C.interval_minutes ? `${C.interval_minutes}분마다` : '정기 실행(backfill) 주기에'} · 하루 상한 ${C.daily_unlimited ? '제한 없음' : `${C.daily_max ?? '?'}회`} · 에러당 PR 상한 ${C.max_attempts ?? '?'}개 · 실행당 예산 ${C.budget_usd === 'unlimited' ? '제한 없음' : usd(C.budget_usd)}`));
+    if (C.daily_unlimited && C.budget_usd === 'unlimited') top.append(el('p', 'afwarn strong', '하루 상한·실행당 예산이 모두 제한 없음 — 비용 상한이 없습니다.'));
+    else if (C.daily_unlimited || C.budget_usd === 'unlimited') top.append(el('p', 'afwarn', `${C.daily_unlimited ? '하루 상한' : '실행당 예산'} 제한 없음 — 비용이 커질 수 있습니다.`));
     if (C.error) top.append(el('p', 'iline warn', C.error));
     const go = el('button', null, '내 설정 바꾸기'); go.type = 'button';
     go.onclick = () => { view = 'settings'; stab = 'autofix'; store('hb-view', 'settings'); store('hb-stab', 'autofix'); renderAll(); };
@@ -1613,6 +1621,20 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     const nm = el('div', 'nm'); nm.append(el('b', null, title), el('small', null, keyLabel)); row.append(nm, control);
     const meta = el('div', 'meta'); for (const l of lines) meta.append(typeof l === 'string' ? el('span', null, l) : l);
     row.append(meta); return row;
+  }
+  // 프리셋 + 직접 입력. 입력값 검증은 configure가 한다(틀리면 아무것도 바뀌지 않고 이유를 토스트로).
+  function afPick(cur, presets, onPick, custom) {
+    const box = el('div', 'afctl');
+    box.append(afLadder(cur, presets, onPick));
+    const f = el('form', 'afcustom');
+    const inp = el('input'); inp.type = 'text'; inp.inputMode = custom.mode || 'numeric'; inp.placeholder = custom.placeholder;
+    inp.setAttribute('aria-label', custom.label);
+    if (cur != null && !presets.some(([k]) => k === cur)) inp.value = String(cur);
+    const b = el('button', null, '적용'); b.type = 'submit';
+    f.append(el('span', null, '직접'), inp, el('span', null, custom.unit), b);
+    f.onsubmit = (e) => { e.preventDefault(); const v = inp.value.trim(); if (v) onPick(v); };
+    box.append(f);
+    return box;
   }
   const withCur = (opts, cur, fmt) => (cur == null || opts.some(([k]) => k === cur) ? opts : [...opts, [cur, fmt(cur)]].sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0)));
   function renderAutofixSettings(box) {
@@ -1647,17 +1669,25 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       sched.push(st ? `등록 상태: sweep 전용 ${st.loaded ? '켜짐' : '꺼짐'}${st.interval_minutes ? ` · ${st.interval_minutes}분` : ''}` : '등록 상태: sweep 전용 없음 — backfill 주기에 돕니다');
     }
     box.append(afRow('sweep 주기', 'HM_AUTOFIX_INTERVAL_MINUTES',
-      afLadder(iv, withCur([[null, '정기 실행 주기'], [15, '15분'], [30, '30분'], [60, '1시간']], iv, (n) => `${n}분`), (k) => afConfigure({ interval_minutes: k ?? 'off' })),
-      ['검증과 새 에러 확인 주기입니다. 바꾸면 schedule.sh install-autofix로 sweep 전용 정기 실행만 등록(또는 내림)하고 결과를 여기 보여 줍니다. 등록해도 바로 돌지 않고 주기가 한 번 지난 뒤 첫 sweep이 돕니다.', ...sched]));
+      afPick(iv, [[null, '정기 실행 주기'], [15, '15분'], [30, '30분'], [60, '1시간']], (k) => afConfigure({ interval_minutes: k ?? 'off' }),
+        { placeholder: '예: 5, 90', unit: '분', label: 'sweep 주기(분) 직접 입력' }),
+      ['검증과 새 에러 확인 주기입니다. 직접 입력은 1 이상의 정수(분)이고, 0이나 off는 끔(정기 실행 주기)입니다. 바꾸면 schedule.sh install-autofix로 sweep 전용 정기 실행만 등록(또는 내림)하고 결과를 여기 보여 줍니다. 등록해도 바로 돌지 않고 주기가 한 번 지난 뒤 첫 sweep이 돕니다.', ...sched]));
+    const dcur = C.daily_unlimited ? 'unlimited' : C.daily_max;
+    const bcur = C.budget_usd;
+    if (C.daily_unlimited && bcur === 'unlimited') box.append(el('p', 'afwarn strong', '하루 상한·실행당 예산이 모두 제한 없음 — 비용 상한이 없습니다. 새 에러가 몰리면 그만큼 LLM 수정 실행이 돌고, 각 실행도 끝날 때까지 비용이 쌓입니다.'));
     box.append(afRow('하루 상한', 'HM_AUTOFIX_DAILY_MAX',
-      afLadder(C.daily_max, withCur([[1, '1회'], [3, '3회 (기본)'], [5, '5회'], [10, '10회']], C.daily_max, (n) => `${n}회`), (k) => afConfigure({ daily_max: k })),
-      [`하루에 시작하는 수정 실행 수(전체 저장소 합계). 오늘 ${adata.today.started}회 시작함.`]));
+      afPick(dcur, [[1, '1회'], [3, '3회 (기본)'], [5, '5회'], [10, '10회'], ['unlimited', '제한 없음']], (k) => afConfigure({ daily_max: k }),
+        { placeholder: '예: 20', unit: '회', label: '하루 상한(회) 직접 입력' }),
+      [`하루에 시작하는 수정 실행 수(전체 저장소 합계, 0이면 하루 0회). 오늘 ${adata.today.started}회 시작함.`,
+        ...(C.daily_unlimited ? [el('span', 'warn', '제한 없음 — 새 에러마다 LLM 수정 실행이 돌아 하루 비용이 크게 늘 수 있습니다.')] : [])]));
     box.append(afRow('에러당 PR 상한', 'HM_AUTOFIX_MAX_ATTEMPTS',
       afLadder(C.max_attempts, withCur([[1, '1개'], [2, '2개 (기본)'], [3, '3개'], [5, '5개']], C.max_attempts, (n) => `${n}개`), (k) => afConfigure({ max_attempts: k })),
       ['같은 에러가 고친 뒤 다시 나오면 이 수만큼만 다시 고치고, 넘으면 포기로 남겨 사람에게 넘깁니다.']));
     box.append(afRow('실행당 예산', 'HM_AUTOFIX_BUDGET_USD',
-      afLadder(C.budget_usd, withCur([[2, '$2'], [5, '$5'], [10, '$10 (기본)'], [20, '$20']], C.budget_usd, (n) => `$${n}`), (k) => afConfigure({ budget_usd: k })),
-      [`수정 실행 한 번(에러 1건)의 Claude 비용 상한. 지금까지 누적 ${usd(adata.cost_usd)}.`]));
+      afPick(bcur, [[2, '$2'], [5, '$5'], [10, '$10 (기본)'], [20, '$20'], ['unlimited', '제한 없음']], (k) => afConfigure({ budget_usd: k }),
+        { placeholder: '예: 15, 2.5', unit: '달러', label: '실행당 예산(달러) 직접 입력', mode: 'decimal' }),
+      [`수정 실행 한 번(에러 1건)의 Claude 비용 상한(--max-budget-usd). 지금까지 누적 ${usd(adata.cost_usd)}.`,
+        ...(bcur === 'unlimited' ? [el('span', 'warn', '제한 없음 — 수정 실행에 비용 상한을 넘기지 않아 한 실행이 길어지면 비용이 크게 늘 수 있습니다(시간 제한만 남음).')] : [])]));
   }
 
   function renderAll() { renderSidebar(); renderBoard(); }

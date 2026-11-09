@@ -65,10 +65,12 @@
    |---|---|---|
    | 무인 실행을 켤까요? | `--auto 1` / `--auto 0` | 켜기 |
    | 이 저장소를 무인 실행 대상에 넣을까요? (기존 목록은 유지, 중복 없이 추가) | `--add-repo <project_id>` | 넣기 |
-   | sweep 주기(분)? 비워 두면 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돈다 | `--interval-minutes N` / `off` | 비움(정기 실행 주기) |
-   | 하루 실행 상한? | `--daily-max N` | 3 |
+   | sweep 주기(분, 1 이상의 정수 — 5·90·180 등 아무 값)? 비워 두면 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돈다 | `--interval-minutes N` / `off` | 비움(정기 실행 주기) |
+   | 하루 실행 상한? (0이면 하루 0회, `unlimited`면 제한 없음) | `--daily-max N` / `unlimited` | 3 |
    | 시그니처당 PR 상한? | `--max-attempts N` | 2 |
-   | 실행당 예산(USD)? | `--budget-usd X` | 10 |
+   | 실행당 예산(USD)? (`unlimited`면 수정 실행에 비용 상한을 넘기지 않음) | `--budget-usd X` / `unlimited` | 10 |
+
+   사용자가 하루 상한이나 실행당 예산에 `unlimited`를 고르면 비용이 커질 수 있다고 한 줄로 알리고, 둘 다 `unlimited`면 "비용 상한이 없어진다"고 분명히 말한 뒤 그대로 쓸지 한 번 더 확인한다. `--daily-max unlimited`는 보드의 자동 harvest·sync '제한 없음'과 같은 관례로 `1000`을 쓴다(1000 이상 = 제한 없음 — 1000 이상의 수를 직접 넣어도 제한 없음으로 동작한다).
 
    고른 값을 한 번에 쓴다: `$ROOT/scripts/autofix-auto.sh configure --auto 1 --add-repo <project_id> --daily-max 3 --max-attempts 2 --budget-usd 10 [--interval-minutes N]`. 이 명령은 해당 키만 바꾸고 다른 줄·주석·권한은 그대로 두며, 값이 하나라도 틀리면(정수·소수 아님 등) 아무것도 쓰지 않고 exit 2로 끝난다 — 메시지를 보여 주고 다시 묻는다. 출력 JSON(현재 값)을 사용자에게 보여 준다.
    - 주기를 정했거나(`--interval-minutes N`) 끄면(`off`) 이어서 `$ROOT/scripts/schedule.sh install`을 돌려 sweep 전용 LaunchAgent를 등록(또는 내림)하고, `$ROOT/scripts/schedule.sh status`의 `autofix`(설치 여부·`interval_minutes`)로 확인해 보여 준다. macOS가 아니면 install이 cron 줄을 안내하므로 그대로 전한다.

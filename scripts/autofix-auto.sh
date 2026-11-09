@@ -21,15 +21,24 @@ RUN_LOCK="$HM_DATA_DIR/harvest-auto/running.lock"
 SWEEP_LOCK="$AF_DIR/.sweep.lock"
 WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
 case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
-int_env() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
+# 0으로 시작하는 수(08·01000)는 bash 산술이 8진수로 읽으므로 받지 않는다.
+int_env() { local v="${!1:-}"; [[ "$v" =~ ^(0|[1-9][0-9]*)$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
 DAILY_MAX="$(int_env HM_AUTOFIX_DAILY_MAX 3)"
 MAX_ATTEMPTS="$(int_env HM_AUTOFIX_MAX_ATTEMPTS 2)"
 MAX_FAILS="$(int_env HM_AUTOFIX_MAX_FAILS 3)"
 SKIP_COOLDOWN_DAYS="$(int_env HM_AUTOFIX_SKIP_COOLDOWN_DAYS 7)"
 TIMEOUT_MIN="$(int_env HM_AUTOFIX_TIMEOUT_MIN 60)"
 DEPLOY_WAIT_DAYS="$(int_env HM_AUTOFIX_DEPLOY_WAIT_DAYS 14)"
+# 하루 상한 '제한 없음'은 보드의 harvest·sync와 같은 관례로 1000 이상이다(configure --daily-max unlimited가 1000을 쓴다).
+# 0은 그대로 '하루 0회'다.
+DAILY_UNLIMITED=1000
+# 실행당 예산 'unlimited'면 수정 실행에 --max-budget-usd를 넘기지 않는다(빈 값). 그 밖의 틀린 값은 기본 10.
 BUDGET_USD="${HM_AUTOFIX_BUDGET_USD:-10}"
-[[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=10
+if [[ "$BUDGET_USD" == unlimited ]]; then
+  BUDGET_USD=""
+elif [[ ! "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  BUDGET_USD=10
+fi
 LOG_KEEP=50
 
 usage() {
@@ -44,7 +53,7 @@ usage:
   autofix-auto.sh run <project> <repo> <candidate-json-file>   # sweep이 띄우는 detached worker
   autofix-auto.sh runs [--limit N]
   autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--remove-repo <project_id>] [--interval-minutes N|off]
-                            [--daily-max N] [--max-attempts N] [--budget-usd X]
+                            [--daily-max N|unlimited] [--max-attempts N] [--budget-usd X|unlimited]
                                                 # 무인 실행 설정을 ~/.ai-harness/config에 쓴다(인자 없으면 현재 값만 보여 준다)
 EOF
   exit 2
@@ -314,7 +323,7 @@ sweep_once() {
     [[ -n "$cand" ]] || continue
     sig="$(jq -r '.signature' <<<"$cand")"
     # 상한·동시 실행 제한은 상태를 바꾸지 않는다 — 다음 sweep에서 같은 후보를 다시 고른다.
-    (( $(started_today) < DAILY_MAX )) || { log_event "$project" skipped "$sig" '{"reason":"daily_max"}'; return 0; }
+    (( DAILY_MAX >= DAILY_UNLIMITED || $(started_today) < DAILY_MAX )) || { log_event "$project" skipped "$sig" '{"reason":"daily_max"}'; return 0; }
     lock_busy && { log_event "$project" skipped "$sig" '{"reason":"busy"}'; return 0; }
     # 전용 주기(HM_AUTOFIX_INTERVAL_MINUTES)는 backfill 경로의 LLM 단계 판정을 거치지 않으므로 사용량 한도 휴지를 여기서도 지킨다.
     hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && { log_event "$project" skipped "$sig" '{"reason":"usage_backoff"}'; return 0; }
@@ -352,7 +361,8 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     return
   fi
   local tool="" extra="" name="" scrub="{}"
-  local -a bash_allow=() unset_env=()
+  local -a bash_allow=() unset_env=() budget=()
+  [[ -z "$BUDGET_USD" ]] || budget=(--max-budget-usd "$BUDGET_USD")
   for tool in "${BUILD_TOOLS[@]}"; do bash_allow+=("Bash($tool)"); done
   # 프로젝트 고유 검증 명령은 config의 HM_AUTOFIX_BASH_ALLOW(세미콜론 구분 패턴, 예: "./scripts/ci.sh*")로 더한다.
   while IFS= read -r extra; do [[ -n "$extra" ]] && bash_allow+=("Bash($extra)"); done < <(printf '%s' "${HM_AUTOFIX_BASH_ALLOW:-}" | tr ';' '\n')
@@ -372,7 +382,7 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     "Bash(jq *)" "Bash($ROOT/scripts/open-pr.sh*)"
     --disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)" "Read(/$HM_DATA_DIR/config)"
     "Read(~/.claude/settings.json)" "Read(~/.claude/settings.local.json)" "Read(~/.claude.json)" "Read(~/.ssh/**)" "Read(~/.config/gh/**)"
-    --max-budget-usd "$BUDGET_USD"
+    ${budget[@]+"${budget[@]}"}
     --output-format json)
 }
 
@@ -553,11 +563,13 @@ command_track() {
 config_show() {
   jq -cn --arg auto "${HM_AUTOFIX_AUTO:-0}" --arg repos "${HM_AUTOFIX_REPOS:-}" --arg interval "${HM_AUTOFIX_INTERVAL_MINUTES:-}" \
     --arg daily "${HM_AUTOFIX_DAILY_MAX:-}" --arg attempts "${HM_AUTOFIX_MAX_ATTEMPTS:-}" --arg budget "${HM_AUTOFIX_BUDGET_USD:-}" \
-    --arg config "$HM_DATA_DIR/config" '
+    --arg config "$HM_DATA_DIR/config" --argjson unlimited "$DAILY_UNLIMITED" '
     def num($v; $d): if $v == "" then $d else ($v | tonumber? // $v) end;
-    {auto: ($auto == "1"), repos: [$repos | splits("[,[:space:]]+") | select(. != "")],
+    num($daily; 3) as $dm
+    | {auto: ($auto == "1"), repos: [$repos | splits("[,[:space:]]+") | select(. != "")],
      interval_minutes: (if $interval == "" or $interval == "0" then null else num($interval; null) end),
-     daily_max: num($daily; 3), max_attempts: num($attempts; 2), budget_usd: num($budget; 10), config: $config}'
+     daily_max: $dm, daily_unlimited: ($daily | test("^[1-9][0-9]*$") and ($daily | tonumber) >= $unlimited),
+     max_attempts: num($attempts; 2), budget_usd: num($budget; 10), config: $config}'
 }
 
 command_configure() {
@@ -574,11 +586,14 @@ command_configure() {
         if [[ "$2" == off || "$2" == 0 ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "")
         elif [[ "$2" =~ ^[1-9][0-9]*$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
         else echo "--interval-minutes는 1 이상의 정수 또는 off입니다" >&2; exit 2; fi ;;
-      --daily-max) [[ "$2" =~ ^[0-9]+$ ]] || { echo "--daily-max는 0 이상의 정수입니다" >&2; exit 2; }
-        set+=(HM_AUTOFIX_DAILY_MAX "$2") ;;
+      --daily-max)
+        if [[ "$2" == unlimited ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$DAILY_UNLIMITED")
+        elif [[ "$2" =~ ^(0|[1-9][0-9]*)$ ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$2")
+        else echo "--daily-max는 0 이상의 정수(앞자리 0 없이) 또는 unlimited입니다" >&2; exit 2; fi ;;
       --max-attempts) [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "--max-attempts는 1 이상의 정수입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_MAX_ATTEMPTS "$2") ;;
-      --budget-usd) [[ "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ]] || { echo "--budget-usd는 0보다 큰 수입니다(예: 10, 2.5)" >&2; exit 2; }
+      --budget-usd) [[ "$2" == unlimited || ( "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ) ]] \
+          || { echo "--budget-usd는 0보다 큰 수(예: 10, 2.5) 또는 unlimited입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_BUDGET_USD "$2") ;;
       *) usage ;;
     esac

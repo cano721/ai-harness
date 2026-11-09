@@ -5153,6 +5153,41 @@ assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" 'autofix-auto.sh" sweep' "
 assert_contains "$(<"$ROOT/scripts/autofix-auto.sh")" 'harvest-auto/running.lock' "autofix shares the unattended-run lock"
 pass "autofix tracks manual PRs and runs with a restricted agent"
 
+# 하루 상한 '제한 없음'(1000 이상)은 오늘 실행 수와 상관없이 sweep을 막지 않는다. 그 아래 값은 그대로 막는다.
+AF_SAVED_STATE="$(<"$AF_DATA/autofix/p-af-svc/state.json")"
+cp "$AF_DATA/autofix/runs.jsonl" "$AF_STUB/runs.saved"
+af_state 'del(.signatures["sentry:101"])'
+AF_DAY="$(date -u +%Y-%m-%d)"
+seq 1000 | jq -c --arg d "$AF_DAY" '{at:($d+"T00:00:00Z"), event:"started", project:"af-svc", signature:("old:"+tostring)}' >>"$AF_DATA/autofix/runs.jsonl"
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+HM_AUTOFIX_DAILY_MAX=999 af_auto sweep
+assert_eq "$AF_BEFORE|daily_max" "$(<"$AF_STUB/agent-count")|$(jq -sr 'last | .reason' "$AF_DATA/autofix/runs.jsonl")" "a finite daily cap still stops new fixes"
+HM_AUTOFIX_DAILY_MAX=1000 af_auto sweep
+assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "an unlimited daily cap does not stop the sweep"
+printf '%s\n' "$AF_SAVED_STATE" >"$AF_DATA/autofix/p-af-svc/state.json"
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+# 실행당 예산: 숫자면 --max-budget-usd로 넘기고, unlimited면 넘기지 않는다(claude 경로).
+mkdir -p "$AF_STUB/claude-bin"
+cat >"$AF_STUB/claude-bin/claude" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$AF_STUB/claude-args"
+echo '{"type":"result","result":"AI_HARNESS_AUTOFIX_RESULT outcome=not_code_bug","total_cost_usd":0}'
+EOF
+chmod +x "$AF_STUB/claude-bin/claude"
+af_budget_run() { # $1=HM_AUTOFIX_BUDGET_USD → claude에 넘긴 인자 줄
+  printf '{"signature":"budget:1","title":"budget","count":10,"meta":{},"reason":"new"}\n' >"$AF_STUB/budget-cand.json"
+  : >"$AF_STUB/claude-args"
+  env -u HM_AUTOFIX_CMD PATH="$AF_STUB/claude-bin:$PATH" HARNESS_METRICS_DIR="$AF_DATA" HM_MONITOR_HTTP="$AF_STUB/http" HM_AUTOFIX_BUDGET_USD="$1" \
+    "$ROOT/scripts/autofix-auto.sh" run af-svc "$AF_REPO" "$AF_STUB/budget-cand.json" >/dev/null 2>&1
+  cat "$AF_STUB/claude-args"
+}
+assert_contains "$(af_budget_run 2.5)" "--max-budget-usd 2.5" "a numeric budget caps the fix run"
+case "$(af_budget_run unlimited)" in *--max-budget-usd*) fail "an unlimited budget passes no --max-budget-usd" ;; "") fail "the claude fix run started" ;; esac
+assert_contains "$(af_budget_run bogus)" "--max-budget-usd 10" "an invalid budget falls back to the default"
+af_state 'del(.signatures["budget:1"])'
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+pass "autofix unlimited daily cap and budget"
+
 # 로컬 monitor 설정: ~/.ai-harness/autofix/monitors/<project_id>.json이 기준 브랜치 manifest의 monitor보다 앞서고,
 # 같은 검증을 받는다. 켜기·상태가 로컬이므로 설정도 저장소에 커밋하지 않고 둘 수 있어야 한다.
 AFL_DATA="$TEST_TMP/autofix-local-data"
@@ -5368,6 +5403,25 @@ afc --remove-repo svc-a >/dev/null; afc --remove-repo svc-c >/dev/null
 assert_eq "0" "$(grep -c 'HM_AUTOFIX_REPOS' "$AFC_DATA/config")" "removing the last repo removes the line"
 assert_eq "[]" "$(afc | jq -c '.repos')" "configure shows an empty target list"
 pass "autofix configure removes target repos"
+
+# 제한 없음: 하루 상한은 보드 harvest·sync와 같은 관례(1000 = 제한 없음), 실행당 예산은 명시값 unlimited. 0은 그대로 '하루 0회'.
+afc --daily-max unlimited --budget-usd unlimited --interval-minutes 90 >/dev/null
+AFC_CFG="$(<"$AFC_DATA/config")"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_DAILY_MAX="1000"' "daily max unlimited is written as the board's unlimited value"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_BUDGET_USD="unlimited"' "budget unlimited is written explicitly"
+assert_contains "$AFC_CFG" 'HM_AUTOFIX_INTERVAL_MINUTES="90"' "a custom interval in minutes is written"
+assert_eq "1000|true|unlimited|90" "$(afc | jq -r '"\(.daily_max)|\(.daily_unlimited)|\(.budget_usd)|\(.interval_minutes)"')" "configure shows unlimited values"
+afc --daily-max 0 --budget-usd 3 >/dev/null
+assert_eq "0|false|3" "$(afc | jq -r '"\(.daily_max)|\(.daily_unlimited)|\(.budget_usd)"')" "0 keeps meaning zero runs a day and a number replaces unlimited"
+AFC_BEFORE="$(<"$AFC_DATA/config")"
+for afc_bad in "--daily-max unlimit" "--daily-max -1" "--daily-max 08" "--daily-max 01000""--budget-usd Unlimited" "--budget-usd none" "--interval-minutes 0x5" "--interval-minutes -5"; do
+  AFC_RC=0
+  # shellcheck disable=SC2086  # 플래그와 값을 나눠 넘긴다
+  afc --auto 1 $afc_bad >/dev/null 2>&1 || AFC_RC=$?
+  assert_eq "2" "$AFC_RC" "configure rejects $afc_bad"
+done
+assert_eq "$AFC_BEFORE" "$(<"$AFC_DATA/config")" "a rejected unlimited-like value changes nothing"
+pass "autofix configure accepts unlimited daily max and budget and custom intervals"
 # 기본 스킬 카탈로그: 플러그인 스킬이 아니라 선택 설치 원본이며, Codex도 읽을 수 있는 frontmatter만 쓴다.
 CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
 assert_eq "$CATALOG_NAMES" "$(find "$ROOT/catalog" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | paste -sd' ' -)" "catalog.json lists every catalog skill"
@@ -6903,6 +6957,14 @@ BAF_CFG="$(<"$BAF_DATA/config")"
 assert_contains "$BAF_CFG" 'HM_AUTOFIX_REPOS="shop"' "removing a target repo goes through configure"
 assert_contains "$BAF_CFG" 'HM_AUTOFIX_DAILY_MAX="5"' "daily max goes through configure"
 assert_contains "$BAF_CFG" "# mine" "configure keeps other lines"
+# 제한 없음·직접 입력: configure 규칙 그대로, 틀린 값은 아무것도 바꾸지 않는다.
+BAF_CFG_BEFORE="$(<"$BAF_DATA/config")"
+assert_eq "false" "$(baf_post configure '{"daily_max":"unlimited","budget_usd":"lots"}' | jq -r '.ok')" "a bad budget rejects the whole change"
+assert_eq "false" "$(baf_post configure '{"interval_minutes":"1.5"}' | jq -r '.ok')" "a bad custom interval is rejected"
+assert_eq "$BAF_CFG_BEFORE" "$(<"$BAF_DATA/config")" "rejected unlimited or custom values change nothing"
+assert_eq "true|1000|true|unlimited" "$(baf_post configure '{"daily_max":"unlimited","budget_usd":"unlimited"}' | jq -r '"\(.ok)|\(.config.daily_max)|\(.config.daily_unlimited)|\(.config.budget_usd)"')" \
+  "the board sets unlimited daily max and budget through configure"
+assert_eq "true|7.5" "$(baf_post configure '{"daily_max":5,"budget_usd":"7.5"}' | jq -r '"\(.ok)|\(.config.budget_usd)"')" "a typed budget amount goes through configure"
 [[ ! -e "$BAF_T/schedule.log" ]] || fail "no schedule change without an interval change"
 BAF_S="$(baf_post configure '{"interval_minutes":15}')"
 assert_eq "install-autofix status" "$(paste -sd' ' "$BAF_T/schedule.log")" "an interval change installs only the autofix schedule and reads its status"
@@ -6930,6 +6992,7 @@ assert_contains "$BAF_LOG" '"action": "autofix_configure"' "autofix writes are l
 case "$BAF_LOG$(baf_get)" in *"$BAF_SECRET"*) fail "no credential value in board responses or logs" ;; esac
 assert_eq "true" "$(baf_sh stop | jq -r '.stopped')" "autofix board stops"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "에러마다 LLM 세션" "autofix view states the token boundary next to the settings"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "비용 상한이 없습니다" "choosing unlimited daily max and budget shows a strong cost warning"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
 

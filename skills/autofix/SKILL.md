@@ -18,7 +18,7 @@ description: 모니터링 도구(Sentry·Datadog·사용자 어댑터)에 쌓인
 
 ## 설정 (setup)
 
-`setup` 인자이거나 수동 수정 0단계에서 설정이 없다고 나오면 같은 디렉토리의 `setup.md`를 Read하고 그 절차를 따른다. 요약: 설정은 `monitor` 객체 하나(provider `sentry`·`datadog`·`command`)이고, 기본은 개인 로컬 파일 `~/.ai-harness/autofix/monitors/<project_id>.json`, 팀 공유가 필요할 때만 manifest `.ai-harness/harness.json`의 `monitor`(둘 다 있으면 로컬 파일이 이긴다). 자격증명은 어느 쪽에도 넣지 않는다. service·env 같은 값은 저장소 흔적과 `monitor-fetch.sh discover` 결과로 사용자가 고르고, 만든 설정을 확인받은 뒤에만 쓴다. 이어 무인 실행 설정(`autofix-auto.sh configure`)을 묻는다.
+`setup` 인자이거나 수동 수정 0단계에서 설정이 없다고 나오면 같은 디렉토리의 `setup.md`를 Read하고 그 절차를 따른다. 요약: 설정은 `monitor` 객체 하나(provider `sentry`·`datadog`·`command`)이고, 기본은 개인 로컬 파일 `~/.ai-harness/autofix/monitors/<project_id>.json`, 팀 공유가 필요할 때만 manifest `.ai-harness/harness.json`의 `monitor`(둘 다 있으면 로컬 파일이 이긴다). 자격증명은 어느 쪽에도 넣지 않는다. service·env 같은 값은 저장소 흔적과 `monitor-fetch.sh discover` 결과로 사용자가 고르고, 만든 설정을 확인받은 뒤에만 쓴다. 이어 무인 실행 설정(`autofix-auto.sh configure`)을 묻는다 — sweep 주기는 1 이상의 아무 정수(분), 하루 상한(`--daily-max N|unlimited`, 0은 하루 0회)과 실행당 예산(`--budget-usd X|unlimited`)은 제한 없음도 받으며, 제한 없음을 고르면 비용 경고를 하고(둘 다면 한 번 더 확인) 쓴다.
 
 ## 상태 · 검증
 
