@@ -13,10 +13,13 @@ Collect, from the request, the repository, and existing pages:
 | Proof | What real evidence exists: product UI, numbers, customers, demos | List what is missing; never fill it in |
 | Constraints | Stack, deadline, languages, legal or brand rules | Read from the repository |
 | Identity | Existing logo, colors, type, voice, earlier pages | Decides visual authority below |
+| Tone and manner | How the page should feel, and how it must not | Propose it from the identity and audience; the user confirms it on the reference board |
+
+Write the tone and manner under `## Tone and manner` in `brief.md` (the runner refuses a brief without it): three mood words and the feeling to avoid ("calm, encouraging, precise — not a test, not a hype campaign"), the palette (brand anchor and neutrals from the design system, with hex values), the type (faces and weights for display and body), a sample line in the page's voice, and the imagery (photo, illustration, 3D, product UI). Write the same content to `tone.json`, which the reference board draws: `{mood: [three words], avoid, palette: [{name, hex, role}], type: {display, body, display_sample, body_sample}, voice, imagery}` — the runner refuses it without exactly three mood words or with a palette entry that is not a hex color.
 
 Ambiguity:
 
-- **Interactive session** — ask the open questions together, at most two or three, about intent and audience. Never ask for CSS values; propose them.
+- **Interactive session** — ask the open questions together, at most two or three, about intent and audience. Never ask for CSS values; propose them. Mockup questions (`design-handoff.md`) share one budget with these: at most five for the whole page.
 - **Unattended run** — state your interpretation in one line at the top of the report and proceed.
 - An explicit brief beats every default in this skill.
 
@@ -27,7 +30,8 @@ Decide whose visual language the page speaks before designing anything.
 | Situation | Signal | Rule |
 |---|---|---|
 | Redesign | The user asks for a new look | New identity allowed; keep logo and name unless told otherwise |
-| Established | A design system or a consistent set of live pages exists | Inherit it. Do not introduce new fonts, colors, or component styles |
+| Established brand | A brand or product design system, or a consistent set of live pages, exists | Keep the brand anchors (logo, name, one brand color, voice) and the product's component styles where product UI appears. Display type, extra colors, imagery, layout, composition, and pacing are this page's to direct (see `SKILL.md` precedence) |
+| Established marketing site | Live marketing pages with their own look exist | Inherit them whole, layout included |
 | Incomplete | Some brand assets exist (logo, one color) but no system | Keep what exists, fill the gaps, and list every value you added |
 | None | Nothing exists | A new identity is yours to propose; confirm the direction once |
 
@@ -35,12 +39,17 @@ Adding a section or page to an established site never justifies a new identity.
 
 ## 3. Direction candidates
 
-Skip this step when a mockup or an established identity already decides the look.
+Skip this step only when a mockup of this page or an established marketing site already decides the look. An established brand fixes the anchors of every candidate (logo, name, one brand color, voice); everything else may differ.
 
 1. **Theme inventory** — list 8–12 concrete things the product is about: materials, verbs, places, rituals, artifacts its users handle. Avoid category clichés (circuits for software, leaves for sustainability).
 2. **Idea sentence** — one sentence that states the page's point of view. Test it by substituting a competitor's name; if the sentence still holds, it says nothing.
-3. **Candidates** — propose two or three directions, each with: the idea sentence, type character, color strategy, one signature moment, and what it rules out. Always include one restrained standard option as an exit.
-4. **Pick one.** In an unattended run, pick and give the reason in one line.
+3. **Candidates** — propose two or three directions, built from the references the user kept (section 7), each naming the references it draws on, with: the idea sentence, type character, color strategy, one signature moment, its motion level and what the visitor can do on the page (`motion-web.md`), the outside resources it needs (a display face, video, a motion library — each needing approval), and what it rules out.
+   - **They differ in the first viewport,** not only below it. The signature moment is visible in the first viewport at desktop and phone width. At most one candidate uses the text-left, visual-right hero.
+   - **Not the stock hero.** A small colored label, a centered two-line headline, a paragraph, one or two buttons, and the visual stacked below or set to the right is the formula reviewers read as a template, whatever sits in the visual (a 3D ring under it does not change that). Compose the first viewport around the signature moment: the moment is the subject and fills the frame; the headline sits in it, on it, or beside it as part of one picture, and the action is reachable without the formula's stack. Write the composition for each candidate in one line (`first_viewport` in `candidates.json`), for desktop and phone, naming where the headline sits relative to the moment.
+   - **They differ in what the visitor does.** Each candidate takes its interaction from a different kept interaction reference and names it; two candidates whose visitor action is the same verb (pick an option and read a scripted answer, for example) count as one. No interaction is fixed in advance — the references decide it.
+   - **One bold, one restrained.** One candidate pushes as far as the brand anchors allow — scale, full-bleed imagery or color, an unexpected composition, a showpiece motion level; one is the restrained standard option as an exit.
+   - In an unattended run, use only what the user approved in advance and keep the bold candidate within it.
+4. **First-viewport drafts, then pick one.** In an interactive session, build only the first viewport of each candidate as a quick HTML draft (real copy, real assets, no polish), capture it at 1440 and 390, and show the captures side by side; the user picks, and only the pick is built as a page. Ask for the approvals the picked candidate needs at the same time. In an unattended run, pick and give the reason in one line. When the user asks for more than one candidate built as a full page, build each in its own session or subagent, in its own folder, from the brief, the kept references, and its candidate alone — not from another candidate's files or an earlier round's page — so they do not converge.
 
 Record the chosen direction in the report (idea, audience, action, color strategy, type pair, signature moment). Keep it out of the code.
 
@@ -51,11 +60,27 @@ Record the chosen direction in the report (idea, audience, action, color strateg
 - For software, show real interface fragments at legible size instead of icon grids or abstract illustrations.
 - Remove any section whose claim repeats another.
 
+### Per width
+
+Plan the phone composition with the sections, not after the desktop page is built. One responsive page serves every width; separate desktop and mobile pages only when the user or the site's infrastructure requires them.
+
+- For each section, write what changes at phone width: order, what collapses or drops, how a row of items regroups (a four-across row becomes two-by-two, a horizontal swipe row, or one featured item).
+- The phone's first screen holds the thesis and the primary action; name what moves below it.
+- Images that need a different crop at phone width get one through `<picture>` sources (art direction), not just scaling.
+- A mockup for both widths is followed for each. A desktop-only mockup leaves the phone to this plan; say "no phone mockup" in the report.
+
 ## 5. Evidence
 
-- Never fabricate testimonials, logos, metrics, user counts, ratings, press, or awards. Where real evidence is missing, insert a visibly labeled placeholder (for example `[고객 후기 필요]`) and list each one in the report.
+- Never fabricate testimonials, logos, metrics, user counts, ratings, press, or awards. Where real evidence is missing, insert a visibly labeled placeholder (for example `[고객 후기 필요]`) and list each one in the report. Mark each with `data-needs-input`; a page with one still visible is `issues (공개 불가: 입력 대기)`, not ready to publish.
+- An offer the sources mention without its terms (a free trial, a credit, a discount) is a claim too: until its terms are confirmed, leave it out and list it as `사용자 입력 필요`.
+- Implied claims need evidence too. A heading like "most popular questions" claims popularity; without data, describe instead ("questions people practice for each role").
+- Example data inside a product mockup (a sample report, a score) is labeled as an example on the page and never used as a claim.
+- Say what the product is in the first viewport in plain words. When imagery could suggest a different kind of product (photos of people for an automated service), the headline or lead says what it is.
 - Images: record the source and license of every image or video; generated images are labeled as such in the report.
 - A form with no backend: use `mailto:` or a disabled state and say in the report that it is not connected.
+- An action whose destination is unknown is a `사용자 입력 필요` item in the report. Do not point it at the page itself to make it look like it works.
+- A secondary action whose content does not exist yet (a sample clip, a demo) is left out until it does, rather than opening an empty placeholder.
+- Facts come from the sources the user named. A source that turns out to hold another company's material is a reference for structure only; none of its facts are the product's.
 
 ## 6. Copy
 
@@ -68,4 +93,39 @@ Record the chosen direction in the report (idea, audience, action, color strateg
 
 ## 7. References
 
-Reference sites set mood only — density, pacing, temperature. Do not copy layouts, illustrations, copy, or brand marks from another company. Third-party designs used as input follow the rights check in `design-handoff.md`.
+Look at references before writing candidates — this step is not optional. Having enough product material is not a reason to skip it; references inform composition and pacing, not content. Skip only when the user says so. Use every source below that is available, in this order; one does not replace the next:
+
+1. Sites the user names as references. When `awesome-design` is installed and holds a specification for a named site, read its `design-md/<site>/DESIGN.md` file directly — for how that site handles type, color, and spacing, never as values to import. Do not run that skill's own procedure; it copies the specification into the project. Other companies' material inside a source the user gave for product facts is not this; it counts as structure-only input (section 5).
+2. The curated library of `design-taste-frontend`, when installed (its lane in `design-skills.md`) — craft and composition. Invoke the skill rather than reading its files, so its own procedure picks the entries — and run only its drawing of directions and section blueprints. Its build steps, house rules, font and image hosts do not apply here: the brand layer and the Non-negotiables win, and what it writes to the working folder is not page output.
+3. Three to five live pages for products in the same category, found by web search — how that category orders its argument. Search often returns listings and articles instead of product sites; then open the category's known product sites directly and say they did not come from search. In a session without web access, say so.
+4. Interaction references — what the visitor does and what answers, which a still capture cannot show. Take them from curated galleries that carry recordings, each for its lane:
+
+   | Gallery | Lane |
+   |---|---|
+   | Recent (`recent.design`, Websites by category; Design items tagged by interaction) | Product interactions for the page's own category |
+   | Hoverstat.es (`hoverstat.es`, tags such as `3d`, `mousemove`, `toy`, `scroll`) | Unusual interaction mechanisms — take the mechanism, not the genre |
+   | Codrops Creative Hub (`tympanus.net/codrops/hub`) | 3D, WebGL, and shader demos with live demo and source |
+   | Awwwards Experimental (`awwwards.com/websites/experimental`) | Whole sites that combine interactions, with the technology each used |
+   | Lenis showcase (`lenis.dev/showcase`) | Scroll pacing and transitions |
+
+   Filter by the page's category, a mechanism, or a technology rather than taking the gallery's front page. In an unattended run keep the whole reference step to about eight minutes: at least one reference of each kind below and about ten in all, captured once. Use the gallery's own recording when there is one (its `.mp4` or `.webm` URL); otherwise record a short clip of the live site yourself through `capture` or `operate`. Write one line per reference: what the visitor does, what answers, and with what technology when the source says. A gallery's code is subject to its repository's license and `external-code.md`; a recording is input, never page content.
+
+Record every search in `searches.json` — `[{query, purpose: category|gallery, engine_or_gallery, results: [urls], picked: [ids]}]`. The runner refuses references made from memory, in interactive and unattended runs alike: at least two searches, one for pages in the same category (`category`) and one in an interaction gallery (`gallery`), and every `competitor` URL among the results unless the user named that site (`source: "user"`). Opening sites you already know is not a search; a run once filled its board in two minutes from familiar sites, with "no web search this run" in the source column. When the user skips references, write `[]`.
+
+Sort what you collected into `references.json` by what each one is evidence for — the board shows one tab per `kind`, and the runner counts each tab (`references_min` in the graph). An interactive board is what the user chooses from, so it needs at least three `tone`, three `component`, three `layout`, four `interaction` with at least two of them recorded (`video`), and two to four `competitor` — one per tab is too thin to choose from. An unattended run needs at least one of each kind, since no one looks at its board and the report cites the same data. One site may serve several kinds: give it a separate entry per kind, each with its own `id` and take-line, reusing the captures.
+
+| `kind` | Board tab | What it shows | Required beyond `id, title, url, source, take` |
+|---|---|---|---|
+| `tone` | 톤앤매너 | A page whose feel matches the tone and manner — palette, type, voice, or imagery | `captures`; `tone_part`: the part of the tone it serves |
+| `component` | 구성요소 | One element done well: a hero visual, a try-it widget, a proof block, a pricing card, navigation | `captures` |
+| `layout` | 레이아웃 | The page's order and composition: the first viewport, the argument's sequence, the phone width | `captures` at desktop and phone |
+| `interaction` | 인터랙션 | What the visitor does and what answers | `video` (the recording's URL or path) or `captures` |
+| `competitor` | 경쟁사 분석 | Two to four real services in the same category, as competitors rather than inspiration | `captures`; `analysis: {leads_with, claim, cta, gap}` — what the first viewport leads with, the claim it makes, its primary button, and how it differs from ours |
+
+Every kind but `competitor` also carries `keep_strength` and `must_not_shrink_to` for what is borrowed. A competitor is not borrowed from: its analysis shows what visitors will compare this page with and where this page must not look interchangeable (`template_look`, a cover the logo could swap).
+
+A challenge page ("Just a moment", "Checking your connection") in a script or headless browser is not proof that a site is closed: open it in a real browser tab the session controls (for example an Orca browser tab) before reporting it unreachable.
+
+References set mood and structure only — density, pacing, temperature, how the argument is ordered. Do not copy layouts, illustrations, copy, or brand marks from another company. Record each reference's URL and what you took from it in the report. Look at the pages, not only their text: capture the first viewport at desktop and phone width in a fresh headless browser context (a throwaway profile: no saved logins or cookies), JavaScript on — many sites render nothing without it. A blank or half-drawn capture is not a look at the page: retake it after the page settles, or drop that page and say so. A text-only fetch shows the argument's order but not density or temperature; say which you used. Third-party designs used as input follow the rights check in `design-handoff.md`.
+
+**Reference board — the user's pick comes before the candidates.** People judge real pages far better than described directions, so in an interactive session show what you collected before writing candidates. Do not write the board by hand: `landing-run.sh board --work "$WORK"` draws `board.html` from `tone.json` and `references.json`, with five tabs — 톤앤매너 (the tone and manner shown rather than described: the three mood words, what it must not feel like, the palette as color chips, the type as a set heading and paragraph, the voice as a sample line, then the tone references tagged with the part they serve), 구성요소, 레이아웃, 인터랙션 (recordings playing muted), and 경쟁사 분석 (each competitor's first viewport with its four-line analysis). Each reference shows its captures, URL, source (user, library, search, or opened directly), and its take-line — the mechanism or look to borrow and the strength to keep it at, with the weaker version it must not shrink to ("the pointer really splits the portrait; not a card that opens on hover"). A question dialog cannot show images, so the board is the page the user looks at. Serve the board over http with `landing-run.sh board --port <n> --serve` (the board server on `WORK`, detached, its own port; the user picks and starts on the board — SKILL.md, Picking on the board) and open `http://127.0.0.1:<port>/board.html`, never the file path — a `file://` page loses its images in browsers that block local files, Orca's among them — and look at it once (`capture`) to confirm every image and recording loads before asking. Ask once, as one of the page's questions: whether the tone and manner holds or what to change, which references to keep and which to avoid in each tab, and any site the user wants added — the board takes all of it and its start button records it, and a text answer in the session counts the same. Build the candidates from the kept ones; a reference the user rejected does not come back. The take-lines go into each candidate's build brief unchanged: borrowing means the mechanism at its strength, adapted to this product's content and brand — not a nod to it, and not the other company's composition. Skip the board when the user already named the references and asked for nothing more. In an unattended run, choose yourself and record what you kept, what you dropped, and why.
