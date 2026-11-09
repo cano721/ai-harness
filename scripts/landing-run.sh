@@ -6,6 +6,7 @@
 #   - measure: 측정 스크립트를 직접 돌려 결과(pass·fail·unverified)로 전이를 고른다. 모델이 measured_pass를 낼 수 없다.
 #   - review: 검토 JSON을 받아 필수 항목이 다 있는지 보고, 판정과 전이를 계산한다. 항목이 빠진 검토는 회차로 세지 않고 거부한다.
 #     첫 화면에서 실패한 first_viewport_major 항목은 검토자가 minor로 적어도 주요로 센다.
+#   - board: tone.json·references.json으로 레퍼런스 보드(board.html, 탭 5개)를 만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다.
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
@@ -24,6 +25,7 @@ usage:
   landing-run.sh review  --work DIR --candidate ID --file REVIEW.json
   landing-run.sh capture --work DIR --candidate ID --url URL [--label NAME]
   landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
+  landing-run.sh board   --work DIR
   landing-run.sh status  --work DIR
 EOF
   exit 2
@@ -176,6 +178,30 @@ print_next() {
      + (if ($checks | length) > 0 then {required_checks: $checks} else {} end)'
 }
 
+# Shape checks: each prints the problems found, nothing when the file is good.
+TONE_CHECK='
+  def str: type == "string" and length > 0;
+  [ (if type != "object" then "must be an object" else empty end),
+    (if (.mood | type) == "array" and (.mood | length) == 3 and all(.mood[]; str) then empty else "mood needs exactly three words" end),
+    (if (.palette | type) == "array" and (.palette | length) > 0
+          and all(.palette[]; (.name | str) and (.role | str) and ((.hex // "") | test("^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")))
+       then empty else "palette needs [{name, hex: \"#rrggbb\", role}]" end),
+    (if (.type | type) == "object" and all(.type.display, .type.body, .type.display_sample, .type.body_sample; str) then empty
+       else "type needs display, body, display_sample, body_sample" end),
+    (["avoid", "voice", "imagery"][] as $k | if (.[$k] | str) then empty else "\($k) is missing" end)
+  ] | join("; ")'
+REFS_CHECK='
+  def str: type == "string" and length > 0;
+  ["tone", "component", "layout", "interaction", "competitor"] as $kinds
+  | if type != "array" then "must be an array of references" else
+    [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
+      ($kinds[] as $k | if any(.[]; .kind == $k) then empty else "no \($k) reference" end),
+      (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis.leads_with, .analysis.claim, .analysis.cta, .analysis.gap] | all(str) | not)))
+           | "\(.id // "?"): competitor needs analysis {leads_with, claim, cta, gap}"),
+      (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0))
+           | "\(.id // "?"): interaction needs a video (recording URL or path) or captures")
+    ] | join("; ") end'
+
 required_checks() {
   local multi; multi="$(jq '.candidates | length' "$STATE")"
   jq -c --argjson multi "$multi" '.review_checks.public_page + (if $multi > 1 then .review_checks.multi_candidate else [] end)' "$GRAPH"
@@ -227,6 +253,22 @@ case "$cmd" in
       [[ "$(mtime "$WORK/$a")" -ge "$since" ]] || stale+=("$a")
     done < <(artifacts "$NODE" "$CAND")
     [[ ${#stale[@]} -eq 0 ]] || die 4 "artifacts older than this node (write or update them in $NODE): ${stale[*]}"
+    # The tone and manner is decided in the brief and confirmed with the references, not left implicit.
+    if [[ "$NODE" == brief ]]; then
+      grep -q '^## Tone and manner' "$WORK/brief.md" || die 4 "brief.md needs a '## Tone and manner' section (direction.md, Brief)"
+      tone_bad="$(jq -r "$TONE_CHECK" "$WORK/tone.json" 2>/dev/null)" || tone_bad="tone.json is not valid JSON"
+      [[ -z "$tone_bad" ]] || die 4 "tone.json: $tone_bad (direction.md, Brief)"
+    fi
+    # The board's tabs are drawn from these: every kind present, competitors analysed, interactions recorded. Unattended
+    # runs are held to it too, since the report cites the same data.
+    if [[ "$NODE" == references && "$OUTCOME" == references_ready ]]; then
+      refs_bad="$(jq -r "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
+      [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
+    fi
+    if [[ "$NODE" == reference_pick ]]; then
+      jq -e '(.tone // "") | type == "string" and length > 0' "$WORK/reference-pick.json" >/dev/null \
+        || die 4 "reference-pick.json needs tone: the user's answer on the tone and manner shown at the top of the board"
+    fi
     purl="" pf=""
     if [[ "$NODE" == preview ]]; then
       pf="$WORK/preview-$CAND.json"
@@ -354,6 +396,11 @@ case "$cmd" in
     [[ -z "$WIDTH" || "$WIDTH" =~ ^[0-9]+$ ]] || die 2 "width is a number of pixels"
     read -r -a operate_cmd <<<"${LANDING_OPERATE_CMD:-node $ROOT/scripts/landing-operate.mjs}"
     "${operate_cmd[@]}" --url "$URL" --script "$script" --out "$WORK/operate/out-$label" ${WIDTH:+--width "$WIDTH"}
+    ;;
+  board)
+    [[ -f "$WORK/references.json" ]] || die 4 "references.json is missing in $WORK"
+    read -r -a board_cmd <<<"${LANDING_BOARD_CMD:-node $ROOT/scripts/landing-board.mjs}"
+    "${board_cmd[@]}" --work "$WORK"
     ;;
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"

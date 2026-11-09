@@ -2339,8 +2339,45 @@ assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run re
 touch -t 202001010000 "$LP_W/brief.md"
 assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "landing-run refuses artifacts made before the node started"
 touch "$LP_W/brief.md"
+cat >"$LP_W/tone.json" <<'EOF'
+{"mood":["calm","precise","warm"],"avoid":"a test, a hype campaign","palette":[{"name":"Ink","hex":"#18191b","role":"text"},{"name":"Brand","hex":"#3366ff","role":"primary action"}],
+ "type":{"display":"Sans 800","body":"Sans 400","display_sample":"Practice first","body_sample":"Answer one question."},"voice":"Calm and plain.","imagery":"product UI"}
+EOF
+assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "a brief without its tone and manner is refused"
+printf '## Tone and manner\ncalm, precise\n' >"$LP_W/brief.md"
+cp "$LP_W/tone.json" "$TEST_TMP/lp-tone.json"
+jq '.mood = ["calm"] | .palette[0].hex = "dark"' "$TEST_TMP/lp-tone.json" >"$LP_W/tone.json"
+assert_eq 4 "$(lp_rc submit --node brief --outcome brief_ready)" "a tone.json without three mood words and hex colors is refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "mood needs exactly three words" "the runner says what tone.json lacks"
+cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
 assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
-touch "$LP_W/references.json"
+cat >"$LP_W/references.json" <<'EOF'
+[{"id":"R1","kind":"tone","title":"Tone ref","url":"https://example.com/a","source":"search","take":"t","tone_part":"palette","captures":["refs/r1.png"]},
+ {"id":"R2","kind":"component","title":"Component ref","url":"https://example.com/b","source":"library","take":"t","captures":["refs/r2.png"]},
+ {"id":"R3","kind":"layout","title":"Layout ref","url":"https://example.com/c","source":"user","take":"t","captures":["refs/r3.png"]},
+ {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://example.com/d","source":"gallery","take":"t","video":"refs/r4.mp4"},
+ {"id":"R5","kind":"competitor","title":"Competitor","url":"https://example.com/e","source":"search","captures":["refs/r5.png"],
+  "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}}]
+EOF
+cp "$LP_W/references.json" "$TEST_TMP/lp-refs.json"
+jq '.[0].kind = "look"' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a reference outside the five board kinds is refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "no tone reference" "the runner names the board tab left empty"
+jq 'del(.[4].analysis.gap)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a competitor without its four-part analysis is refused"
+jq 'del(.[3].video)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "an interaction reference without a recording is refused"
+cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"
+if command -v node >/dev/null 2>&1; then
+  lp board >/dev/null
+  assert_file "$LP_W/board.html"
+  for tab in tone component layout interaction competitor; do
+    assert_contains "$(cat "$LP_W/board.html")" "id=\"tab-$tab\"" "the board has the $tab tab"
+  done
+  assert_contains "$(cat "$LP_W/board.html")" "background:#3366ff" "the board shows the palette as color chips"
+  assert_contains "$(cat "$LP_W/board.html")" "no practice" "the board shows the competitor analysis"
+fi
+assert_eq "--work $(cd "$LP_W" && pwd)" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
 assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
@@ -2447,6 +2484,8 @@ assert_contains "$(cat skills/landing-page/SKILL.md)" "the user sees a served dr
 assert_contains "$LANDING_VERIFY" "## Draft review" "landing-page reviews the draft's first viewport before finishing it"
 assert_contains "$LANDING_VERIFY" "landing-run.sh operate" "landing-page reviewers operate the page through the runner"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "Users do not name a mode; choose it." "landing-page picks interactive or unattended itself"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "never the file path" "the reference board is served over http so its images load"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" 'Do not write the board by hand: `landing-run.sh board' "the reference board is drawn by the runner, not by hand"
 assert_contains "$(cat "$ROOT/agents/design-reviewer.md")" "landing-run.sh operate" "the design reviewer keeps landing-page scripts in the work folder"
 assert_contains "$LANDING_VERIFY" "**A top bar over scrolled text**" "landing-page measures text showing through a top bar"
 assert_contains "$LANDING_VERIFY" "**Text over a moving picture**" "landing-page measures text left over a busy picture layer"

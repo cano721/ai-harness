@@ -14,7 +14,8 @@
         "references/direction.md#2-visual-authority"
       ],
       "artifacts": [
-        "brief.md"
+        "brief.md",
+        "tone.json"
       ],
       "outcomes": [
         "brief_ready"

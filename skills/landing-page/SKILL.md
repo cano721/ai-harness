@@ -47,6 +47,7 @@ bash $ROOT/scripts/landing-run.sh measure --work "$WORK" --candidate <id> --url 
 bash $ROOT/scripts/landing-run.sh review --work "$WORK" --candidate <id> --file <review json>
 bash $ROOT/scripts/landing-run.sh capture --work "$WORK" --candidate <id> --url <served url> [--label <name>]
 bash $ROOT/scripts/landing-run.sh operate --work "$WORK" --url <served url> --file "$WORK/operate/<name>.mjs" [--width 390]
+bash $ROOT/scripts/landing-run.sh board --work "$WORK"     # board.html from tone.json and references.json (five tabs)
 bash $ROOT/scripts/landing-run.sh status --work "$WORK"
 ```
 
@@ -58,9 +59,9 @@ Call `next`, do what it names, read only the docs it lists, write its artifacts 
 
 | Node | Do | Artifacts in `WORK` |
 |---|---|---|
-| `brief` | `references/direction.md` sections 1–2 | `brief.md` |
-| `references` | section 7: look and interaction references with take-lines | `references.json` — `[{id, kind: look\|interaction, title, url, source, take, keep_strength, must_not_shrink_to, captures: [paths]}]` |
-| `reference_pick` (interactive) | show the board, ask once | `reference-pick.json` — `{kept: [ids], dropped: [ids], user_words: "<quoted>"}` |
+| `brief` | `references/direction.md` sections 1–2 | `brief.md` with `## Tone and manner`, and the same in `tone.json` — `{mood: [3 words], avoid, palette: [{name, hex, role}], type: {display, body, display_sample, body_sample}, voice, imagery}` |
+| `references` | section 7: references of every kind with take-lines; competitors with their analysis | `references.json` — `[{id, kind: tone\|component\|layout\|interaction\|competitor, title, url, source, take, keep_strength, must_not_shrink_to, captures: [paths], video, tone_part, analysis: {leads_with, claim, cta, gap}}]` (`video` or `captures` for interaction, `analysis` for competitor; at least one of each kind) |
+| `reference_pick` (interactive) | `landing-run.sh board`, serve and look at it, ask once | `reference-pick.json` — `{tone: "<kept, or the change>", kept: [ids], dropped: [ids], user_words: "<quoted>"}` |
 | `direction` | sections 3–6; skip candidates only when a mockup of this page decides the look (`mockup_decides`) | `candidates.json` — `{candidates: [{id, dir, motion_level: calm\|lively\|showpiece, references: [ids], visitor_action, first_viewport}]}` (`dir` relative to `WORK`) |
 | `draft_pick` (interactive) | first-viewport drafts side by side, ask once | `draft-pick.json` — same shape as `reference-pick.json` |
 | `draft` (per candidate) | the first viewport finished — real copy, real assets, the signature moment working — and the rest as real but unpolished sections; one session or subagent per candidate when there are several | the page in `dir` |
