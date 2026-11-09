@@ -59,6 +59,26 @@ def _last_line(*texts):
     return ""
 
 
+STAGE_KO = {"fixing": "수정 중", "pr": "PR 검토 대기", "deploy_wait": "병합됨 · 배포 대기", "observing": "배포됨 · 재발 관찰 중",
+            "resolved": "해결", "regressed": "재발 · 다음 sweep이 다시 고침", "gave_up": "포기 · 사람에게 넘김",
+            "skipped": "건너뜀", "declined": "PR 닫힘", "failed": "실행 실패"}
+OUTCOME_KO = {"left_for_user": "사람 판단 필요", "not_code_bug": "코드 버그 아님", "not_reproducible": "재현 불가",
+              "no_result": "결과 없음", "deploy_unobserved": "배포 확인 못 함"}
+
+
+def board_state(sig):
+    """통합 목록의 열: 사람이 할 일(넘김·포기·실패·PR 검토) → needs_human, 자동으로 진행 중 → running,
+    다음 sweep이 다시 고칠 것 → queued, 끝난 것(해결·PR 닫힘·코드 버그 아님 등으로 건너뜀) → done."""
+    st = sig.get("status")
+    if st in ("gave_up", "failed", "pr_open") or (st == "skipped" and sig.get("outcome") == "left_for_user"):
+        return "needs_human"
+    if st in ("attempting", "verifying"):
+        return "running"
+    if st == "regressed":
+        return "queued"
+    return "done"
+
+
 def stage(sig):
     """화면의 단계: 수정 중 → 수정 PR → 배포 대기(병합됨) → 관찰 중 → 해결/재발/포기. 그 밖의 상태는 이름 그대로."""
     st = sig.get("status")
@@ -161,6 +181,44 @@ class Store:
             recent.append(r)
         return {"ok": True, "config": cfg, "repos": rows, "runs": recent, "cost_usd": round(cost, 4),
                 "today": {"started": started, "daily_max": cfg.get("daily_max")}}
+
+    def items(self, repos_fn, key_of, ttl=10):
+        """보드 통합 목록에 넣을 에러 시그니처 카드. status(상태 파일 + 상태 파일을 잃은 프로젝트의 실행 기록 복구)를 그대로 옮긴다.
+        repos_fn은 저장소 찾기(git 호출)라 캐시가 지났을 때만 부른다."""
+        hit = getattr(self, "_items", None)
+        if hit and time.time() - hit[0] < ttl:
+            return [dict(i) for i in hit[1]]
+        _, out, _ = _run(AUTOFIX_SH, ["status"], 30)
+        sigs = _lines(out)
+        repo_of = {}
+        for r in (repos_fn() if sigs else []):  # 자동 수정을 쓰지 않으면 저장소 찾기(git 호출)를 하지 않는다
+            repo_of.setdefault(key_of(r), r)
+        res = []
+        for s in sigs:
+            sig, project = s.get("signature") or "", s.get("project") or ""
+            st, stg = board_state(s), stage(s)
+            word = STAGE_KO.get(stg, stg)
+            if s.get("status") == "skipped" and s.get("outcome"):
+                word = f"건너뜀 · {OUTCOME_KO.get(s['outcome'], s['outcome'])}"
+            if s.get("status") == "gave_up" and s.get("outcome") == "deploy_unobserved":
+                word = "포기 · 배포 확인 못 함"
+            if s.get("status") == "failed" and s.get("last_reason"):
+                word = f"실행 실패 · {s['last_reason']}"
+            log = os.path.basename(str(s.get("last_log") or ""))
+            pr = s.get("pr") if str(s.get("pr") or "").startswith("https://") else None
+            item = {"id": f"autofix:{project}:{sig}", "section": "autofix", "kind": "autofix", "project": project,
+                    "state": st, "at": s.get("updated_at") or s.get("first_detected_at"), "title": s.get("title") or sig,
+                    "detail": s.get("summary"), "link": pr, "signature": sig, "stage": stg, "stage_label": word,
+                    "count": s.get("count"), "attempts": s.get("attempts"), "regressions": s.get("regressions"),
+                    "verify_until": s.get("verify_until"), "recovered": s.get("recovered"),
+                    "monitor_link": s.get("link") if str(s.get("link") or "").startswith("https://") else None,
+                    "log_name": log if log and self.log_path(log) else None,
+                    "repo": repo_of.get(project), "actions": []}
+            if st == "needs_human" and item["repo"]:
+                item["actions"] = ["open_agent"]
+            res.append(item)
+        self._items = (time.time(), res)
+        return [dict(i) for i in res]
 
     def log_path(self, name):
         """실행 로그는 autofix 로그 디렉토리 안 파일 이름으로만 연다."""

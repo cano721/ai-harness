@@ -77,7 +77,7 @@ state_update() {
   shift 2
   file="$(state_file "$project")"
   lock="${file%/*}/.lock"
-  mkdir -p "${file%/*}"
+  mkdir -p "${file%/*}" 2>/dev/null || { printf 'state 디렉토리를 만들 수 없음: %s\n' "${file%/*}" >&2; return 1; }
   hm_acquire_lock "$lock" 250 || { printf 'state lock 실패: %s\n' "$file" >&2; return 1; }
   { [[ -s "$file" ]] && cat "$file" || jq -cn --arg p "$project" '{project:$p,signatures:{}}'; } \
     | jq --arg now "$(now_iso)" "$@" "$filter" >"$file.tmp" && mv "$file.tmp" "$file"
@@ -134,15 +134,78 @@ pr_status() { # $1=url
 }
 
 # 실행 기록에 PR까지 남았는데 상태가 attempting에 머문 시그니처를 PR 상태로 되돌린다(상태 기록 실패 복구).
+# 실행 기록의 finished 한 줄을 시그니처 상태로 옮기는 규칙(command_run의 결과 분기와 같다). 입력: finished 이벤트.
+FINISHED_TO_STATE='if .outcome == "pr_opened" and ((.artifact // "") | startswith("https://")) then {status:"pr_open", pr:.artifact, pr_opened_at:.at, fails:0}
+  elif .outcome == "failed" or .outcome == null then {status:"failed"}
+  else {status:"skipped", skipped_at:.at, outcome:.outcome} end
+  + {last_log:(.log // null), last_reason:(.reason // null), last_run_at:.at}'
+
+# 마지막 결과 텍스트(에이전트의 원인 분석)에서 결과 줄을 빼고 비밀값·홈 경로를 가린 요약. $1=실행 로그
+log_summary() {
+  [[ -n "${1:-}" && -f "$1" ]] || return 0
+  jq -Rrn -L "$DIR" 'include "redact";
+    [inputs | fromjson? | objects | select(.type == "result") | .result // empty] | last // empty
+    | split("\n") | map(select(test("^AI_HARNESS_") | not)) | join("\n") | redact_path("") | redact
+    | gsub("^\\s+|\\s+$"; "") | .[0:1500]' "$1" 2>/dev/null || true
+}
+
+# 상태 기록 복구(실행 기록 runs.jsonl이 기준이다):
+# - attempting에 머문 시그니처: 시작 뒤 첫 finished의 결과로 옮긴다(결과 기록 실패 복구).
+# - 상태 파일이 통째로 없는 프로젝트: 시그니처마다 마지막 finished로 되살린다(파일 유실 복구). 되살리지 않으면 사람에게
+#   넘긴 에러(left_for_user)가 화면에서 사라지고, 다음 sweep이 같은 에러를 '새 에러'로 다시 고친다.
+# 상태 파일 안에서 시그니처를 일부러 지운 경우(다시 고치게 하기)는 되살리지 않는다.
+orphan_records() { # $1=project → JSON lines {signature, record} (상태에 반영할 값)
+  local project="$1" file=""
+  [[ -f "$RUNS_FILE" ]] || return 0
+  file="$(state_file "$project")"
+  # 비었거나 크기 0인 상태 파일도 유실로 본다(state_update가 -s로 새로 시작하는 것과 같은 기준).
+  jq -Rcn --arg p "$project" --argjson st "$(state_get "$project")" --argjson whole "$([[ -s "$file" ]] && echo false || echo true)" '
+    def to_state: '"$FINISHED_TO_STATE"';
+    # 상태 파일 통째 유실: 마지막 결과(finished·수동 등록 tracked) 위에 그 뒤의 검증 이벤트(병합·배포·해결·재발·포기·PR 닫힘)를 겹친다.
+    # 병합 커밋은 실행 기록에 없으므로 배포 이벤트가 없으면 병합 시각을 배포 시각으로 둔다(배포 브랜치를 정하지 않은 저장소와 같은 규칙).
+    def replay($evs):
+      ([$evs[] | select(.event == "finished" or .event == "tracked")] | max_by(.at)) as $base
+      | select($base != null)
+      | ($base | if .event == "tracked" then {status:"pr_open", pr:.artifact, pr_opened_at:.at, last_run_at:.at} else to_state end) as $s0
+      | reduce ([$evs[] | select(.at > $base.at)] | sort_by(.at))[] as $e ($s0;
+          . + (if $e.event == "merged" then {status:"verifying", merged_at:$e.at, deployed_at:$e.at}
+               elif $e.event == "deployed" then {deployed_at:$e.at}
+               elif $e.event == "resolved" then {status:"resolved", resolved_at:$e.at}
+               elif $e.event == "regressed" then {status:($e.next // "regressed")}
+               elif $e.event == "gave_up" then {status:"gave_up", outcome:($e.reason // null)}
+               elif $e.event == "declined" then {status:"declined"}
+               else {} end));
+    [inputs | fromjson? | objects | select(.project == $p and (.signature | type == "string"))] as $ev
+    | ($ev | map(select(.event == "finished"))) as $fin
+    | ( ($st.signatures // {} | to_entries[] | select(.value.status == "attempting") | .key as $s | (.value.launched_at // "") as $since
+          | ([$fin[] | select(.signature == $s and (.at // "") >= $since)] | min_by(.at)) as $f
+          | select($f != null) | {signature: $s, record: ($f | to_state)}),
+        (if $whole then
+           $ev | map(select(.event | IN("finished", "tracked", "merged", "deployed", "resolved", "regressed", "gave_up", "declined")))
+           | group_by(.signature)[] | . as $g
+           | replay($g) as $rec
+           | {signature: $g[0].signature, record: ($rec + {
+               first_detected_at: ([$ev[] | select(.signature == $g[0].signature) | .at] | min),
+               attempts: ([$g[] | select(.event == "tracked" or .outcome == "pr_opened")] | length),
+               fails: (if $rec.status == "failed" and $rec.last_reason != "usage_limit" then 1 else 0 end),
+               recovered: "runs"})}
+         else empty end) )' "$RUNS_FILE" 2>/dev/null
+}
+
 recover_attempts() { # $1=project
-  local project="$1" sig="" launched="" pr=""
-  while IFS=$'\t' read -r sig launched; do
-    pr="$(jq -Rrn --arg p "$project" --arg s "$sig" --arg since "$launched" '[inputs | fromjson? | select(.event=="finished"
-        and .project==$p and .signature==$s and .outcome=="pr_opened" and (.at // "") >= $since) | .artifact] | last // empty' "$RUNS_FILE" 2>/dev/null)"
-    [[ -n "$pr" ]] || continue
-    set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:($cur.pr_opened_at // $now)}' --arg u "$pr"
-    log_event "$project" recovered "$sig" "$(jq -cn --arg u "$pr" '{artifact:$u}')"
-  done < <(state_get "$project" | jq -r '.signatures | to_entries[] | select(.value.status == "attempting") | [.key, (.value.launched_at // "")] | @tsv')
+  local project="$1" line="" sig="" rec="" summary=""
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    sig="$(jq -r '.signature' <<<"$line")"
+    summary="$(log_summary "$(jq -r '.record.last_log // empty' <<<"$line")")"
+    rec="$(jq -c --arg s "$summary" '.record + (if $s == "" then {} else {summary:$s} end)' <<<"$line")"
+    # attempting에서 옮길 때는 command_run과 같이 PR이 아닌 결과는 시도로 세지 않고, 실패는 실패 횟수에 더한다.
+    set_sig "$project" "$sig" '$r + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
+        elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
+      + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)' \
+      --argjson r "$rec" || continue
+    log_event "$project" recovered "$sig" "$(jq -c '{status, artifact:(.pr // null)}' <<<"$rec")"
+  done <<<"$(orphan_records "$project")"
 }
 
 # ── 검증 ─────────────────────────────────────────────────────────────────────
@@ -444,10 +507,15 @@ command_run() {
 
   start_epoch="$(date +%s)"
   log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(hm_short_key "$project").log"
-  set_sig "$project" "$sig" '{status:"attempting",launched_at:$now,title:$c.title,provider:$c.provider,meta:$c.meta,link:$c.link,
+  # 시작 상태를 남기지 못하면 실행하지 않는다. 남기지 못한 채 고치면 화면에 안 보이고 다음 sweep이 같은 에러를 또 고친다.
+  if ! set_sig "$project" "$sig" '{status:"attempting",launched_at:$now,title:$c.title,provider:$c.provider,meta:$c.meta,link:$c.link,
       attempts:(($cur.attempts // 0) + 1),first_detected_at:($cur.first_detected_at // $now),
       fails:(if $cur.status == "attempting" then ($cur.fails // 0) + 1 else ($cur.fails // 0) end),
-      baseline:{count:$c.count,window_hours:($c.window_hours // 24)}}' --argjson c "$cand"
+      baseline:{count:$c.count,window_hours:($c.window_hours // 24)}}' --argjson c "$cand"; then
+    log_event "$project" state_error "$sig" "$(jq -cn --arg f "$(state_file "$project")" '{reason:"state_write",stage:"start",file:$f}')"
+    "$DIR/health.sh" failure autofix_auto state_write >/dev/null 2>&1 || true
+    return 1
+  fi
   log_event "$project" started "$sig" "$(jq -cn --arg r "$(jq -r '.reason' <<<"$cand")" --arg log "$log_file" '{reason:$r,log:$log}')"
 
   base="$(hm_resolve_base "$repo")"
@@ -484,37 +552,43 @@ command_run() {
   outcome="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
   artifact="$(sed -n 's/.* artifact=\([^[:space:]"]*\).*/\1/p' <<<"$line")"
 
+  local state_ok=1
   if (( exit_code != 0 )) || [[ -z "$outcome" && -n "$fail_reason" ]]; then
     # 사용량 한도는 시도·실패로 세지 않는다.
     if [[ "$fail_reason" == "usage_limit" ]]; then
-      set_sig "$project" "$sig" '{status:"failed",attempts:(($cur.attempts // 1) - 1)}'
+      set_sig "$project" "$sig" '{status:"failed",attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
     else
-      set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}'
+      set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
     fi
     outcome="failed"
   else
     case "$outcome" in
       pr_opened)
         if [[ "$artifact" =~ ^https:// ]] && pr_belongs_to "$repo" "$artifact"; then
-          set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:$now,fails:0}' --arg u "$artifact"
+          set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:$now,fails:0}' --arg u "$artifact" || state_ok=0
         else
-          set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}'
+          set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
           outcome="failed"; fail_reason="missing_pr_url"
         fi
         ;;
       not_code_bug|not_reproducible|left_for_user)
-        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:$o,attempts:(($cur.attempts // 1) - 1)}' --arg o "$outcome"
+        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:$o,attempts:(($cur.attempts // 1) - 1)}' --arg o "$outcome" || state_ok=0
         ;;
       *)
-        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:"no_result",attempts:(($cur.attempts // 1) - 1)}'
+        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:"no_result",attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
         outcome="no_result"
         ;;
     esac
   fi
+  # 원인 분석 요약과 로그 위치를 남긴다(보드 카드·다음 시도 판단에 쓴다). 비밀값·홈 경로는 가린다.
+  set_sig "$project" "$sig" '{last_log:$l, last_reason:(if $r == "" then null else $r end)} + (if $s == "" then {} else {summary:$s} end)' \
+    --arg l "$log_file" --arg r "$fail_reason" --arg s "$(log_summary "$log_file")" || state_ok=0
   log_event "$project" finished "$sig" "$(jq -cn --arg o "$outcome" --arg a "$artifact" --argjson e "$exit_code" \
     --argjson d "$(( $(date +%s) - start_epoch ))" --argjson cost "${cost:-null}" --arg r "$fail_reason" --arg log "$log_file" \
     '{outcome:$o,exit_code:$e,duration_s:$d,cost_usd:$cost,log:$log} + (if $a == "" then {} else {artifact:$a} end)
       + (if $r == "" then {} else {reason:$r} end)')"
+  # 결과 상태를 남기지 못했으면 기록한다 — 다음 검증이 이 finished 기록으로 상태를 되살린다(recover_attempts).
+  (( state_ok )) || log_event "$project" state_error "$sig" "$(jq -cn --arg f "$(state_file "$project")" '{reason:"state_write",stage:"finish",file:$f}')"
   if [[ "$outcome" == "failed" ]]; then
     "$DIR/health.sh" failure autofix_auto "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   else
@@ -523,19 +597,33 @@ command_run() {
   prune_logs
 }
 
+SIG_VIEW='{status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
+  regressions:((.regressions // []) | length), updated_at,
+  count:(.baseline.count // null), link, provider, first_detected_at, launched_at, skipped_at, last_check_at, manual,
+  summary, last_log, last_reason, recovered}'
+
+# 상태 파일이 있는 프로젝트는 그 파일을, 상태 파일이 통째로 없는데 실행 기록만 있는 프로젝트는 실행 기록에서 되살린
+# 시그니처를 보여 준다(recovered:"runs" — 다음 검증이 상태 파일에 남긴다). 사람에게 넘긴 에러가 화면에서 빠지지 않게.
 command_status() {
-  local project="" files=()
+  local project="" files=() p="" line="" summary=""
   [[ "${1:-}" == "--project" ]] && project="${2:-}"
   if [[ -n "$project" ]]; then
     files=("$(state_file "$project")")
   else
     shopt -s nullglob; files=("$AF_DIR"/*/state.json); shopt -u nullglob
   fi
-  (( ${#files[@]} > 0 )) || return 0
-  jq -c '.project as $p | .signatures | to_entries[] | {project:$p, signature:.key} + (.value
-    | {status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
-       regressions:((.regressions // []) | length), updated_at,
-       count:(.baseline.count // null), link, provider, first_detected_at, launched_at, skipped_at, last_check_at, manual})' "${files[@]}" 2>/dev/null
+  (( ${#files[@]} == 0 )) || jq -c '.project as $p | .signatures | to_entries[] | {project:$p, signature:.key} + (.value | '"$SIG_VIEW"')' \
+    "${files[@]}" 2>/dev/null
+  [[ -f "$RUNS_FILE" ]] || return 0
+  while IFS= read -r p; do
+    [[ -n "$p" && ! -s "$(state_file "$p")" ]] || continue
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      summary="$(log_summary "$(jq -r '.record.last_log // empty' <<<"$line")")"
+      jq -c --arg p "$p" --arg s "$summary" '{project:$p, signature} + (.record + {updated_at:.record.last_run_at}
+        + (if $s == "" then {} else {summary:$s} end) | '"$SIG_VIEW"')' <<<"$line"
+    done <<<"$(orphan_records "$p")"
+  done <<<"$(if [[ -n "$project" ]]; then printf '%s\n' "$project"; else jq -Rr 'fromjson? | objects | .project // empty' "$RUNS_FILE" | sort -u; fi)"
 }
 
 command_track() {

@@ -40,7 +40,9 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 | `declined` | 사람이 PR을 닫았다. 다시 시도하지 않는다 |
 | `skipped` | 코드 버그가 아니거나 재현 불가. 유예(`HM_AUTOFIX_SKIP_COOLDOWN_DAYS`, 7일) 뒤 아직 나오면 다시 본다 |
 
-관찰 창은 `quiet_hours`와 "수정 전 빈도로 3건이 나왔을 시간" 중 긴 쪽(최대 14일)이다 — 드문 에러를 짧게 보고 해결로 판정하지 않는다. `gave_up`·`regressed`가 있으면 재발 근거(`regressions`)를 함께 보여 준다.
+관찰 창은 `quiet_hours`와 "수정 전 빈도로 3건이 나왔을 시간" 중 긴 쪽(최대 14일)이다 — 드문 에러를 짧게 보고 해결로 판정하지 않는다. `gave_up`·`regressed`가 있으면 재발 근거(`regressions`)를 함께 보여 준다. 무인 실행이 남긴 원인 분석 요약(`summary`, 비밀값 가림)이 있으면 함께 보여 준다.
+
+상태 기록은 실행 기록(`runs.jsonl`)과 맞춘다: 실행 시작 상태를 남기지 못하면 실행하지 않고(`state_error`), 결과 상태를 남기지 못한 실행과 상태 파일을 통째로 잃은 프로젝트는 다음 검증(`verify`·sweep)이 실행 기록의 `finished`로 되살린다(`recovered`). 그 전까지도 `status`는 실행 기록에서 되살린 시그니처를 `recovered: "runs"`로 보여 준다. 상태 파일 안에서 일부러 지운 시그니처는 되살리지 않는다.
 
 ## 수동 수정 (`/autofix [<프로젝트>]`)
 

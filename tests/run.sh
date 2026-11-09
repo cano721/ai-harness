@@ -5188,6 +5188,63 @@ af_state 'del(.signatures["budget:1"])'
 cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
 pass "autofix unlimited daily cap and budget"
 
+# 상태 기록 실패·유실(#278 2차): 시작 상태를 못 남기면 실행하지 않고, 상태 파일을 잃은 프로젝트는 실행 기록으로 되살린다.
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+cp "$AF_DATA/autofix/runs.jsonl" "$AF_STUB/runs.saved"
+printf 'not a dir\n' >"$AF_DATA/autofix/$(hm_short_key af-broken)"
+printf '{"signature":"broken:1","title":"broken","count":10,"meta":{},"reason":"new"}\n' >"$AF_STUB/broken-cand.json"
+AF_RC=0
+HARNESS_METRICS_DIR="$AF_DATA" HM_AUTOFIX_CMD="$AF_STUB/agent" HM_MONITOR_HTTP="$AF_STUB/http" \
+  "$ROOT/scripts/autofix-auto.sh" run af-broken "$AF_REPO" "$AF_STUB/broken-cand.json" >/dev/null 2>&1 || AF_RC=$?
+assert_eq "1|$AF_BEFORE|state_error:start" "$AF_RC|$(<"$AF_STUB/agent-count")|$(jq -sr 'last | "\(.event):\(.stage)"' "$AF_DATA/autofix/runs.jsonl")" \
+  "a run that cannot record its start does not launch the agent"
+find "$AF_DATA/autofix/$(hm_short_key af-broken)" -delete
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+# 상태 파일 유실: 사람에게 넘긴 실행(left_for_user)이 실행 기록에만 남아도 status에 보이고, 다음 검증이 상태로 되살린다.
+AF_STATE_FILE="$AF_DATA/autofix/p-af-svc/state.json"
+cp "$AF_STATE_FILE" "$AF_STUB/state.saved"
+mkdir -p "$AF_DATA/autofix/logs"
+jq -cn '{type:"result", result:"원인 분석: UserService.load에서 null 검사 누락. 사용한 토큰 token=abcd1234secretvalue5678 은 가림.\nAI_HARNESS_AUTOFIX_RESULT outcome=left_for_user"}' \
+  >"$AF_DATA/autofix/logs/lost-af-svc.log"
+{
+  jq -cn '{at:"2026-11-02T00:00:00Z", event:"started", project:"af-svc", signature:"lost:1", reason:"new", log:"LOG"}'
+  jq -cn '{at:"2026-11-02T00:01:00Z", event:"finished", project:"af-svc", signature:"lost:1", outcome:"left_for_user", exit_code:0, log:"LOG"}'
+} | sed "s|LOG|$AF_DATA/autofix/logs/lost-af-svc.log|" >>"$AF_DATA/autofix/runs.jsonl"
+find "$AF_STATE_FILE" -delete
+AF_LOST="$(HARNESS_METRICS_DIR="$AF_DATA" "$ROOT/scripts/autofix-auto.sh" status --project af-svc | jq -c 'select(.signature == "lost:1")')"
+assert_eq "skipped|left_for_user|runs" "$(jq -r '"\(.status)|\(.outcome)|\(.recovered)"' <<<"$AF_LOST")" "a lost state file still shows the left_for_user run from the run log"
+assert_contains "$(jq -r '.summary' <<<"$AF_LOST")" "UserService.load에서 null 검사 누락" "the card carries the agent's analysis from the log"
+case "$AF_LOST" in *abcd1234secretvalue5678*|*AI_HARNESS_AUTOFIX_RESULT*) fail "the summary hides secrets and the result marker" ;; esac
+af_auto verify --project af-svc
+assert_eq "skipped|left_for_user|runs" "$(jq -r '.signatures["lost:1"] | "\(.status)|\(.outcome)|\(.recovered)"' "$AF_STATE_FILE")" "verify writes the recovered signature back to the state file"
+assert_contains "$(<"$AF_DATA/autofix/runs.jsonl")" '"event":"recovered","project":"af-svc","signature":"lost:1"' "recovery is logged"
+# 상태 파일 안에서 일부러 지운 시그니처(다시 고치게 하기)는 되살리지 않는다.
+af_state 'del(.signatures["lost:1"])'
+af_auto verify --project af-svc
+assert_eq "null" "$(jq -c '.signatures["lost:1"]' "$AF_STATE_FILE")" "a signature removed on purpose is not resurrected"
+# 통째 복구는 마지막 결과 위에 그 뒤의 검증 이벤트를 겹친다(해결된 것이 PR 검토 대기로, 닫힌 수동 PR이 열린 PR로 되살아나지 않게).
+{
+  jq -cn '{at:"2026-11-01T00:00:00Z", event:"finished", project:"replay", signature:"r:1", outcome:"pr_opened", artifact:"https://github.com/acme/r/pull/1"}'
+  jq -cn '{at:"2026-11-02T00:00:00Z", event:"merged", project:"replay", signature:"r:1"}'
+  jq -cn '{at:"2026-11-04T00:00:00Z", event:"resolved", project:"replay", signature:"r:1"}'
+  jq -cn '{at:"2026-11-01T00:00:00Z", event:"tracked", project:"replay", signature:"r:2", artifact:"https://github.com/acme/r/pull/2"}'
+  jq -cn '{at:"2026-11-03T00:00:00Z", event:"declined", project:"replay", signature:"r:2"}'
+  jq -cn '{at:"2026-11-01T00:00:00Z", event:"finished", project:"replay", signature:"r:3", outcome:"failed", reason:"usage_limit"}'
+} >>"$AF_DATA/autofix/runs.jsonl"
+assert_eq "r:1:resolved:1:0 r:2:declined:1:0 r:3:failed:0:0" \
+  "$(HARNESS_METRICS_DIR="$AF_DATA" "$ROOT/scripts/autofix-auto.sh" status --project replay | jq -sr 'map("\(.signature):\(.status):\(.attempts):\(.fails // 0)") | sort | join(" ")')" \
+  "a lost state file is replayed through merge, resolve and decline events, and a usage-limit failure is not a failure"
+# attempting에 머문 시그니처는 시작 뒤 첫 결과로 옮기고, command_run처럼 PR이 아닌 결과는 시도로 세지 않는다.
+af_state '.signatures["att:1"] = {status:"attempting",launched_at:"2026-11-03T00:00:00Z",attempts:1,fails:0} | .signatures["att:2"] = {status:"attempting",launched_at:"2026-11-03T00:00:00Z",attempts:1,fails:0}'
+jq -cn '{at:"2026-11-03T00:05:00Z", event:"finished", project:"af-svc", signature:"att:1", outcome:"failed", reason:"agent_error"},
+  {at:"2026-11-03T00:05:00Z", event:"finished", project:"af-svc", signature:"att:2", outcome:"failed", reason:"usage_limit"}' >>"$AF_DATA/autofix/runs.jsonl"
+af_auto verify --project af-svc
+assert_eq "failed:0:1 failed:0:0" "$(jq -r '[.signatures["att:1"], .signatures["att:2"]] | map("\(.status):\(.attempts):\(.fails)") | join(" ")' "$AF_STATE_FILE")" \
+  "a stuck attempt takes its first result; a usage limit counts neither as an attempt nor as a failure"
+cp "$AF_STUB/state.saved" "$AF_STATE_FILE"
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+pass "autofix state write failures and lost state files"
+
 # 로컬 monitor 설정: ~/.ai-harness/autofix/monitors/<project_id>.json이 기준 브랜치 manifest의 monitor보다 앞서고,
 # 같은 검증을 받는다. 켜기·상태가 로컬이므로 설정도 저장소에 커밋하지 않고 둘 수 있어야 한다.
 AFL_DATA="$TEST_TMP/autofix-local-data"
@@ -6849,7 +6906,13 @@ jq -n --arg d "$BAF_TODAY" '{project:"shop", signatures:{
   "sentry:5":{status:"skipped", title:"Disk full", outcome:"left_for_user", skipped_at:"2026-11-03T00:00:00Z", attempts:0, baseline:{count:12,window_hours:24}, updated_at:"2026-11-03T00:00:00Z"},
   "sentry:6":{status:"failed", title:"Flaky import", fails:2, attempts:0, baseline:{count:7,window_hours:24}, updated_at:"2026-11-04T00:00:00Z"}}}' \
   >"$BAF_DATA/autofix/$(hm_short_key shop)/state.json"
+mkdir -p "$BAF_DATA/autofix/logs"
+jq -cn '{type:"result", result:"원인: 어댑터가 빈 응답을 null로 넘김. api_key=zz99secretvalue88aa 는 가림\nAI_HARNESS_AUTOFIX_RESULT outcome=left_for_user"}' \
+  >"$BAF_DATA/autofix/logs/20261102T000000Z-p-tool.log"
 {
+  # tool은 상태 파일이 없다 — 사람에게 넘긴 실행이 실행 기록에만 남은 경우(상태 유실).
+  jq -cn --arg l "$BAF_DATA/autofix/logs/20261102T000000Z-p-tool.log" '{at:"2026-10-30T00:00:00Z", event:"started", project:"tool", signature:"cmd:7", reason:"new", log:$l}'
+  jq -cn --arg l "$BAF_DATA/autofix/logs/20261102T000000Z-p-tool.log" '{at:"2026-10-30T00:01:00Z", event:"finished", project:"tool", signature:"cmd:7", outcome:"left_for_user", duration_s:60, exit_code:0, log:$l}'
   jq -cn '{at:"2026-10-31T23:00:00Z", event:"started", project:"shop", signature:"sentry:4", reason:"new", log:"/nonexistent/a.log"}'
   jq -cn '{at:"2026-10-31T23:30:00Z", event:"finished", project:"shop", signature:"sentry:4", outcome:"pr_opened", artifact:"https://github.com/acme/shop/pull/10", duration_s:900, cost_usd:2, exit_code:0, log:"/nonexistent/a.log"}'
   jq -cn --arg d "$BAF_TODAY" '{at:($d+"T00:10:00Z"), event:"started", project:"shop", signature:"sentry:5", reason:"new", log:"/nonexistent/b.log"}'
@@ -6921,8 +6984,37 @@ assert_eq "sentry:1:pr:42 sentry:2:deploy_wait:9 sentry:3:observing:5 sentry:4:r
 assert_eq "left_for_user|agent_error|2026-11-03T00:00:00Z" \
   "$(jq -r '[.repos[] | select(.project == "shop") | .signatures[]] | [(.[] | select(.signature == "sentry:5") | .outcome), (.[] | select(.signature == "sentry:6") | .last_run.reason), (.[] | select(.signature == "sentry:3") | .last_check_at)] | join("|")' <<<"$BAF")" \
   "autofix progress carries why an error was left or failed, and the last observation"
-assert_eq "2|3|3.75|6" "$(jq -r '"\(.today.started)|\(.today.daily_max)|\(.cost_usd)|\(.runs | length)"' <<<"$BAF")" "autofix runs: today against the daily cap, total cost, recent runs"
+assert_eq "2|3|3.75|8" "$(jq -r '"\(.today.started)|\(.today.daily_max)|\(.cost_usd)|\(.runs | length)"' <<<"$BAF")" "autofix runs: today against the daily cap, total cost, recent runs"
 assert_eq "finished:failed:120:1.25" "$(jq -r '.runs[0] | "\(.event):\(.outcome):\(.duration_s):\(.cost_usd)"' <<<"$BAF")" "recent runs are newest first"
+# 통합 목록(#278 2차): 에러 시그니처가 작업·하네스 동작과 같은 상태 열로 status.json에 들어간다.
+BAF_STATUS="$(curl -s "$BAF_BASE/status.json?t=$BAF_TOKEN")"
+case "$BAF_STATUS" in *"$BAF_SECRET"*|*zz99secretvalue88aa*) fail "the board list never carries secrets" ;; esac
+BAF_ITEMS="$(jq -c '[.items[] | select(.section == "autofix")]' <<<"$BAF_STATUS")"
+assert_eq "shop:sentry:1:needs_human:pr shop:sentry:2:running:deploy_wait shop:sentry:3:running:observing shop:sentry:4:done:resolved shop:sentry:5:needs_human:skipped shop:sentry:6:needs_human:failed tool:cmd:7:needs_human:skipped" \
+  "$(jq -r '[.[] | "\(.project):\(.signature):\(.state):\(.stage)"] | sort | join(" ")' <<<"$BAF_ITEMS")" \
+  "autofix signatures map to the board's state columns (left_for_user, failed and PR review need a person)"
+assert_eq "autofix|NullPointerException in cart|https://github.com/acme/shop/pull/11|42|open_agent" \
+  "$(jq -r '.[] | select(.signature == "sentry:1") | "\(.kind)|\(.title)|\(.link)|\(.count)|\(.actions | join(","))"' <<<"$BAF_ITEMS")" "an autofix card carries the PR, the event count and the open-agent action"
+BAF_TOOL="$(jq -c '.[] | select(.signature == "cmd:7")' <<<"$BAF_ITEMS")"
+assert_eq "runs|20261102T000000Z-p-tool.log|건너뜀 · 사람 판단 필요" "$(jq -r '"\(.recovered)|\(.log_name)|\(.stage_label)"' <<<"$BAF_TOOL")" \
+  "a left_for_user run found only in the run log becomes a card"
+assert_contains "$(jq -r '.detail' <<<"$BAF_TOOL")" "어댑터가 빈 응답을 null로 넘김" "the card shows the agent's analysis summary"
+assert_eq "4" "$(jq '[.[] | select(.state == "needs_human")] | length' <<<"$BAF_ITEMS")" "the autofix tab badge counts what needs a person"
+python3 -I -B -c '
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import prstate
+u, v, w = ("https://github.com/acme/shop/pull/%d" % n for n in (11, 12, 13))
+now = time.time()
+prstate._cache.update({u: {"state": "MERGED", "at": now}, v: {"state": "CLOSED", "at": now}, w: {"state": "MERGED", "at": now}})
+items = [{"section": "autofix", "state": "needs_human", "stage": "pr", "link": u, "actions": ["open_agent"]},
+         {"section": "autofix", "state": "needs_human", "stage": "pr", "link": v, "actions": ["open_agent"]},
+         {"section": "autofix", "state": "needs_human", "stage": "gave_up", "link": w, "actions": ["open_agent"]},
+         {"section": "harness", "state": "needs_human", "link": u, "title": "t", "actions": ["open_agent"]}]
+prstate.apply(items)
+got = [(i["state"], i.get("stage"), i["actions"]) for i in items]
+assert got == [("running", "deploy_wait", []), ("done", "declined", []), ("needs_human", "gave_up", ["open_agent"]), ("done", None, [])], got
+' "$ROOT/scripts/board" || fail "a merged autofix PR moves to running, a closed one to done, other cards keep their state"
 assert_eq "true|shop,tool|3" "$(jq -r '"\(.config.auto)|\(.config.repos | join(","))|\(.config.daily_max)"' <<<"$BAF")" "autofix view shows the unattended settings"
 assert_eq "null|null" "$(jq -r '[.repos[] | select(.project == "shop") | .check, .candidates] | map(tostring) | join("|")' <<<"$BAF")" \
   "the board does not call the monitoring tool on its own"
@@ -6993,6 +7085,10 @@ case "$BAF_LOG$(baf_get)" in *"$BAF_SECRET"*) fail "no credential value in board
 assert_eq "true" "$(baf_sh stop | jq -r '.stopped')" "autofix board stops"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "에러마다 LLM 세션" "autofix view states the token boundary next to the settings"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "비용 상한이 없습니다" "choosing unlimited daily max and budget shows a strong cost warning"
+BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
+assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
+assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
 
