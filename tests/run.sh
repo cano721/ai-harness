@@ -7089,6 +7089,13 @@ BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
 assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"
+# 3차: 작업 현황은 카드와 한 줄 상황만, 저장소별 연결은 하네스 설정의 '자동 수정' 탭(개인 설정보다 위)으로.
+BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac
+assert_contains "$BOARD_STRIP" "카드에 없는 최근 기록" "the work list keeps only run records the cards do not show"
+BOARD_AFSET="$(sed -n '/function renderAutofixSettings(box)/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_AFSET" "afRepoRow" "the autofix settings tab shows per-repo connections"
+[[ "${BOARD_AFSET%%개인 설정(~/.ai-harness/config)*}" == *"저장소별 연결"* ]] || fail "per-repo connections come before personal settings"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
 

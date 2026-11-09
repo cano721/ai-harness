@@ -277,25 +277,25 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 .src.autofix { border-color: color-mix(in srgb, var(--block) 50%, var(--line)); }
 .card .afmeta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .card .afmeta a { color: var(--run); }
-.afstrip { display: grid; gap: 8px; margin-bottom: 14px; max-width: 1400px; }
-.afstrip .isumtop { margin-bottom: 0; padding: 10px 14px; }
-.afstrip .isumtop h2 { font-size: 14px; margin: 0; }
+.afline { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; color: var(--muted); margin: -4px 0 12px; }
+.afline .afwarn { margin: 0; font-size: 12px; }
+.afline .afwarn.strong { padding: 2px 8px; }
+.aflink { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--run); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.afextra { margin: -6px 0 12px; font-size: 13px; max-width: 1100px; }
+.afextra summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.afconn { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; max-width: 1100px; }
+.afconn .afrepo:first-child { border-top: 0; }
 .afrepo { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12.5px; padding: 6px 0; border-top: 1px solid var(--line); }
 .afrepo b { font-size: 13px; }
 .afrepo .warn { color: var(--human); }
 .afrepo .dim { color: var(--muted); }
 .afrepo .acts { margin-left: auto; display: flex; gap: 6px; }
-.afrepo .acts button, .afstrip summary { font: inherit; font-size: 12px; }
+.afrepo .acts button { font: inherit; font-size: 12px; }
+.afconn .ilist li { grid-template-columns: 92px minmax(0, 1fr) auto; }
+.afconn .ilist b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .afrepo .acts button { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
 .afrepo .acts button:disabled { opacity: .6; cursor: progress; }
 .afcands { width: 100%; }
-.afstrip details summary { cursor: pointer; color: var(--muted); }
-.afwrap { grid-column: 1 / -1; }
-.afwrap .ihead .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.afwrap .ilist li { grid-template-columns: 92px minmax(0, 1fr) auto; }
-.afwrap .ilist b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.afwrap .isumtop .acts, .afstrip .isumtop > .acts { display: flex; gap: 6px; margin-top: 8px; }
-.afwrap .isumtop .acts button, .afstrip .isumtop > .acts button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
 .srow.afset { grid-template-columns: minmax(150px, .9fr) auto minmax(180px, 1.2fr); }
 @media (max-width: 1100px) { .srow.afset { grid-template-columns: 1fr; gap: 8px; } }
 .srow.afset > .ladder, .srow.afset > .afctl, .aftargets .ladder { justify-self: start; }
@@ -1586,21 +1586,32 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (view !== 'list' || tab !== 'autofix' || !SERVER) return;
     if (!adata) { box.append(el('div', 'empty', aerrAt ? '자동 수정 준비 상태를 읽지 못함 — 잠시 뒤 다시 시도' : '자동 수정 준비 상태 불러오는 중…')); loadAutofix(true); return; }
     loadAutofix(false);
+    // 작업 현황에는 카드와 한 줄 상황만 둔다. 저장소별 연결(준비 상태·접근 확인·후보 조회·설정하기)과 개인 설정은 하네스 설정의 '자동 수정' 탭.
     const C = adata.config || {};
-    const strip = el('div', 'afstrip');
-    const top = el('div', 'isumtop');
-    top.append(el('h2', null, `${C.auto ? `무인 실행 켬 — 대상 ${(C.repos || []).join(', ') || '없음'}` : '무인 실행 꺼짐 — 수동 /ai-harness:autofix 결과만 쌓임'}`));
-    top.append(el('p', 'iline', `오늘 실행 ${adata.today.started}/${C.daily_unlimited ? '제한 없음' : `${adata.today.daily_max ?? '?'}회`} · 누적 비용 ${usd(adata.cost_usd)} · sweep ${C.interval_minutes ? `${C.interval_minutes}분마다` : '정기 실행 주기에'} · 실행당 예산 ${C.budget_usd === 'unlimited' ? '제한 없음' : usd(C.budget_usd)}`));
-    if (C.daily_unlimited && C.budget_usd === 'unlimited') top.append(el('p', 'afwarn strong', '하루 상한·실행당 예산이 모두 제한 없음 — 비용 상한이 없습니다.'));
-    else if (C.daily_unlimited || C.budget_usd === 'unlimited') top.append(el('p', 'afwarn', `${C.daily_unlimited ? '하루 상한' : '실행당 예산'} 제한 없음 — 비용이 커질 수 있습니다.`));
-    if (C.error) top.append(el('p', 'iline warn', C.error));
-    const repos = adata.repos.filter((r) => filter === 'all' || r.name === filter || r.project === filter);
-    for (const r of [...repos].sort((a, b) => (a.ready?.source === 'none') - (b.ready?.source === 'none') || a.name.localeCompare(b.name))) top.append(afRepoRow(r));
-    const go = el('button', null, '내 설정(무인 실행·상한·예산) 바꾸기'); go.type = 'button';
+    const runs = (adata.runs || []).filter((e) => filter === 'all' || e.project === filter);
+    const line = el('div', 'afline');
+    const parts = [C.auto ? '무인 실행 켜짐' : '무인 실행 꺼짐',
+      `오늘 ${adata.today.started}/${C.daily_unlimited ? '제한 없음' : `${adata.today.daily_max ?? '?'}회`}`, `누적 ${usd(adata.cost_usd)}`];
+    const last = runs.filter((e) => e.event === 'finished').sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    if (last) parts.push(`최근 실행 ${ago(last.at)} ${last.outcome === 'failed' ? `실패${last.reason ? `(${AF_FAIL[last.reason] || last.reason})` : ''}` : AF_RESULT[last.outcome] || last.outcome}`);
+    line.append(el('span', null, parts.join(' · ')));
+    if (C.daily_unlimited && C.budget_usd === 'unlimited') line.append(el('span', 'afwarn strong', '하루 상한·실행당 예산 모두 제한 없음 — 비용 상한이 없습니다'));
+    else if (C.daily_unlimited || C.budget_usd === 'unlimited') line.append(el('span', 'afwarn', `${C.daily_unlimited ? '하루 상한' : '실행당 예산'} 제한 없음`));
+    if (C.error) line.append(el('span', 'afwarn', C.error));
+    const go = el('button', 'aflink', '설정'); go.type = 'button'; go.title = '하네스 설정 › 자동 수정(저장소별 연결·무인 실행·상한·예산)';
     go.onclick = () => { view = 'settings'; stab = 'autofix'; store('hb-view', 'settings'); store('hb-stab', 'autofix'); renderAll(); };
-    const acts = el('div', 'acts'); acts.append(go); top.append(acts);
-    top.append(afRuns((adata.runs || []).filter((e) => filter === 'all' || e.project === filter)));
-    strip.append(top); box.append(strip);
+    line.append(go);
+    box.append(line);
+    // 최근 실행 중 카드가 이미 말해 주는 것(시그니처 카드의 단계·실패 이유)은 빼고, 카드에 없는 기록만 남긴다:
+    // 실행을 건너뛴 이유(하루 상한·다른 실행 중·사용량 휴지), 상태 기록·검증 오류, 카드가 없는 시그니처의 결과.
+    const carded = new Set(data.items.filter((i) => i.section === 'autofix').map((i) => `${i.project}\u0000${i.signature}`));
+    const extra = runs.filter((e) => ['skipped', 'state_error', 'verify_error'].includes(e.event)
+      || (e.event === 'finished' && !carded.has(`${e.project}\u0000${e.signature}`)));
+    if (extra.length) {
+      const d = afRuns(extra.slice(0, 8));
+      d.querySelector('summary').textContent = `카드에 없는 최근 기록 ${extra.length}건 — 건너뛴 이유·기록 오류`;
+      d.classList.add('afextra'); box.append(d);
+    }
   }
   async function afConfigure(body) {
     const res = await spost('/autofix/configure', body);
@@ -1643,8 +1654,15 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     loadAutofix(false);
     const C = adata.config || {};
     document.getElementById('vmeta').textContent = `자동 수정 무인 실행 ${C.auto ? '켬' : '끔'} · 대상 ${(C.repos || []).length}`;
-    box.append(el('div', 'ssub', '내 설정(~/.ai-harness/config) — 나에게만, 바로 적용. 쓰기는 모두 autofix-auto.sh configure를 거칩니다(값 검증, 틀린 값이면 아무것도 바꾸지 않음).'));
     box.append(el('p', 'afnote', '토큰: 화면 보기·상태·검증(PR 병합·배포 반영·재발 확인)은 LLM 없이 스크립트만 돕니다. 수정 실행은 에러마다 LLM 세션 1개(Claude)라 비용이 듭니다 — 하루 상한·실행당 예산이 그 상한입니다. 보드는 수정 실행을 직접 시작하지 않습니다.'));
+    // 저장소별 연결: 모니터링 설정 출처·provider·query·자격증명 유무와 접근 확인·후보 조회(외부 API — 버튼으로만)·설정하기(setup 세션).
+    box.append(el('div', 'ssub', '저장소별 연결 — 모니터링 설정은 저장소마다 /ai-harness:autofix setup이 만듭니다(보드는 설정 파일을 쓰지 않음). 자격증명은 있음/없음만 보입니다.'));
+    const conn = el('div', 'afconn');
+    const repos = adata.repos.filter((r) => filter === 'all' || r.name === filter || r.project === filter);
+    for (const r of [...repos].sort((a, b) => (a.ready?.source === 'none') - (b.ready?.source === 'none') || a.name.localeCompare(b.name))) conn.append(afRepoRow(r));
+    if (!repos.length) conn.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
+    box.append(conn);
+    box.append(el('div', 'ssub', '개인 설정(~/.ai-harness/config) — 나에게만, 바로 적용. 쓰기는 모두 autofix-auto.sh configure를 거칩니다(값 검증, 틀린 값이면 아무것도 바꾸지 않음).'));
     if (C.error) { box.append(el('div', 'empty', C.error)); return; }
     box.append(afRow('무인 실행', 'HM_AUTOFIX_AUTO', afLadder(!!C.auto, [[false, '끔'], [true, '켬']], (k) => afConfigure({ auto: k })),
       [C.auto ? '대상 저장소의 새 에러를 sweep마다 1건씩 고쳐 draft PR까지 만들고, 병합·배포 뒤 재발을 확인합니다. 병합은 사람이 합니다.' : '꺼져 있어도 이미 연 PR의 검증 기록과 수동 /ai-harness:autofix는 그대로 보입니다.']));
