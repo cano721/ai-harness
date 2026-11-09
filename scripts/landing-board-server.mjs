@@ -4,8 +4,11 @@
 //   node landing-board-server.mjs --work DIR --port N
 //   GET  <path>  a file inside WORK (never a dotfile such as .landing-run)
 //   GET  /pick   {"server": true} — the board uses it to tell a live server from a static one
+//   GET  /state?node=reference_pick|draft_pick  {node: <the run's current node>, picked: <that pick, once made, or null>}
 //   POST /pick   {node: "reference_pick", tone, kept, dropped, add_sites, user_words} → reference-pick.json
 //                {node: "draft_pick", kept: [one id], dropped, user_words}           → draft-pick.json
+// A pick is written only while the run is at that node and has no pick from this node yet (409 already_started
+// otherwise): the session submits the pick as soon as it appears, so a second press must not rewrite what was submitted.
 // Binds 127.0.0.1 only. POST needs Content-Type application/json and, when the browser sends an Origin, this server's
 // own origin, so another page open in the browser cannot write a pick.
 import { createServer } from "node:http";
@@ -60,8 +63,30 @@ function pick(body) {
   return ["node must be reference_pick or draft_pick"];
 }
 
+const PICK_FILE = { reference_pick: "reference-pick.json", draft_pick: "draft-pick.json" };
+// The run's current node and when it started (epoch ms), or null without a run.
+function runNode() {
+  const st = readJson(".landing-run/state.json");
+  if (!st) return null;
+  return { node: st.node, since: Date.parse(st.entered_at ?? "") || 0 };
+}
+// The pick for NODE: made in this node (at it, written after it started), or kept from it once the run has moved on.
+function pickedFor(node, run) {
+  const f = join(work, PICK_FILE[node]);
+  if (!existsSync(f)) return null;
+  if (run?.node === node && Math.floor(statSync(f).mtimeMs / 1000) * 1000 < run.since) return null;
+  return readJson(PICK_FILE[node]);
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
+  if (url.pathname === "/state") {
+    if (req.method !== "GET") return send(res, 405, { error: "method not allowed" });
+    const node = url.searchParams.get("node");
+    if (!PICK_FILE[node]) return send(res, 400, { error: "node must be reference_pick or draft_pick" });
+    const run = runNode();
+    return send(res, 200, { node: run?.node ?? null, picked: pickedFor(node, run) });
+  }
   if (url.pathname === "/pick") {
     if (req.method === "GET") return send(res, 200, { server: true });
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
@@ -80,6 +105,8 @@ const server = createServer((req, res) => {
       try { body = JSON.parse(raw); } catch { return send(res, 400, { error: "body is not JSON" }); }
       const [err, file, data] = pick(body);
       if (err) return send(res, 400, { error: err });
+      const run = runNode();
+      if (run?.node !== body.node || pickedFor(body.node, run)) return send(res, 409, { error: "already_started", node: run?.node ?? null });
       const tmp = join(work, `.${file}.${process.pid}.tmp`);
       writeFileSync(tmp, JSON.stringify({ ...data, at: new Date().toISOString() }, null, 2) + "\n");
       renameSync(tmp, join(work, file));

@@ -2389,7 +2389,10 @@ if command -v node >/dev/null 2>&1; then
   done
   assert_contains "$(cat "$LP_W/board.html")" "background:#3366ff" "the board shows the palette as color chips"
   assert_contains "$(cat "$LP_W/board.html")" "no practice" "the board shows the competitor analysis"
-  assert_contains "$(cat "$LP_W/board.html")" 'class="keep" type="button" aria-pressed="true" data-id="R1"' "each reference has a keep/drop toggle"
+  assert_contains "$(cat "$LP_W/board.html")" 'class="drop" type="button" aria-label="이 레퍼런스 제외" title="이 레퍼런스 제외" data-id="R1"' "each reference has an exclude button"
+  assert_contains "$(cat "$LP_W/board.html")" '>되돌리기</button>' "an excluded reference can be restored"
+  assert_contains "$(cat "$LP_W/board.html")" "이미 시작됐어요" "a board whose pick is made locks instead of sending again"
+  if grep -q '남김\|뺌' "$LP_W/board.html"; then fail "the board no longer says keep/drop (남김·뺌)"; fi
   assert_contains "$(cat "$LP_W/board.html")" "이 레퍼런스로 시작" "the board has a start button"
   assert_contains "$(cat "$LP_W/board.html")" "터미널에 답해 주세요" "a statically served board asks for the answer in the terminal"
 fi
@@ -2447,8 +2450,16 @@ if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   assert_eq 200 "$(lp_post '{"node":"reference_pick","tone":"바꿀 점: 더 따뜻하게","kept":["tone-0","layout-1"],"dropped":["tone-1"],"add_sites":["https://example.com/x"],"user_words":"더 따뜻하게"}')" "the board server takes a valid pick"
   assert_eq "바꿀 점: 더 따뜻하게|tone-0,layout-1|더 따뜻하게" "$(jq -r '[.tone, (.kept | join(",")), .user_words] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the user's words as written"
   assert_eq "$LP_I/reference-pick.json" "$(lpi wait-pick --node reference_pick --timeout-min 1 | sed "s#^$(cd "$LP_I" && pwd)#$LP_I#")" "wait-pick returns once the board writes the pick"
-  pkill -f "landing-board-server.mjs --work $(cd "$LP_I" && pwd) --port $lp_port" 2>/dev/null || true
+  lp_state() { curl -s "http://127.0.0.1:$lp_port/state?node=${1:-reference_pick}"; }
+  assert_eq "reference_pick|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state returns the current node and the pick made in it"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a second pick in the same node is refused, not rewritten"
+  assert_eq "바꿀 점: 더 따뜻하게" "$(jq -r .tone "$LP_I/reference-pick.json")" "the refused pick leaves the first one as it was"
   assert_eq picked "$(lpi submit --node reference_pick --outcome picked >/dev/null; jq -r '.history[-1].outcome' "$LP_I/.landing-run/state.json")" "the board's pick passes the runner's reference_pick check"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a pick after the run moved on is refused"
+  assert_eq "already_started|direction" "$(curl -s -X POST -H 'content-type: application/json' --data '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}' "http://127.0.0.1:$lp_port/pick" | jq -r '[.error, .node] | join("|")')" "the refusal names the run's current node"
+  assert_eq "direction|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state still shows the pick once the run has moved on"
+  assert_eq "direction|null" "$(lp_state draft_pick | jq -r '[.node, (.picked | tostring)] | join("|")')" "GET /state has no draft pick before one is made"
+  pkill -f "landing-board-server.mjs --work $(cd "$LP_I" && pwd) --port $lp_port" 2>/dev/null || true
   printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"calm","first_viewport":"one scene"},{"id":"b","dir":"site/b","motion_level":"lively","first_viewport":"another"}]}\n' >"$LP_I/candidates.json"
   printf '{"url":"http://127.0.0.1:9/a/","captures":["caps/a-1440.png","caps/a-390.png"]}\n' >"$LP_I/preview-a.json"
   lpi board --kind drafts >/dev/null
