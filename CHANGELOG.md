@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 동작 변경
+
+- **`/landing-page` 레퍼런스 캡처를 러너 한 번으로** — 레퍼런스 보드까지 6~9분이 걸렸는데 대부분이 검색 대기·페이지 로딩·사이트별 캡처·녹화였고, 에이전트가 사이트마다 캡처 스크립트를 따로 짰습니다. 이제 러너의 `capture-refs --work DIR --file refs-to-capture.json`이 레퍼런스 전부를 동시 4개로 캡처해 `refs/<id>/w1440-00.png`·`w390-00.png`와 `refs/<id>/capture.json`(`ok`·`challenge`·`failed`, 제목)을 남깁니다. Cloudflare 같은 봇 확인 화면은 `challenge`로 표시돼 실제 브라우저 탭으로 다시 엽니다. `record: true`인 레퍼런스는 스크롤과 포인터 움직임을 약 9초 녹화해 `refs/<id>/rec.webm`에 남기고, `--background`면 녹화를 분리 실행해 끝나면 `refs/record.done`을 씁니다. 검색은 한 턴에 동시에 보내고, 녹화가 도는 동안 take-line과 톤 태그를 써서 대화형 보드까지 5분을 목표로 합니다. 판단을 나누면 톤 일관성·탭 간 중복 판단이 흐트러지고 비용이 늘어 서브에이전트 병렬은 쓰지 않고, 기계 작업만 도구 안에서 병렬로 돕니다.
+- **`/landing-page` 무인 실행은 후보 하나만 완성** — 무인 실행에서 후보 수를 정하지 않아 후보 두 개를 모두 완성했고(27분, $12.8), 그중 하나는 첫 화면 검토에 두 번 걸린(`draft_kept`) 흔한 히어로 공식인데도 끝까지 만들어졌습니다. 이제 무인 모드에서는 모든 후보의 `draft_review`가 끝날 때까지 `draft_choose`에서 기다렸다가, 에이전트가 `draft_pass` 후보(없으면 `draft_kept` 후보) 하나를 이유와 함께 골라 `draft-pick.json`(`via: "agent"`, `reason`)에 남기고, 나머지는 `folded`로 접혀 `status`와 보고서에 이유가 남습니다. 통과한 후보가 있는데 `draft_kept` 후보를 고르면 거부하고, 무인 실행에서 두 번째 후보의 `build` 진입도 거부합니다. 후보가 하나뿐이면 고르지 않고 바로 `build`로 갑니다. 대화형은 지금처럼 사용자가 `draft_pick`에서 고릅니다.
+
 ## v0.68.0 (2026-11-09)
 ### 동작 변경
 

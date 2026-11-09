@@ -2490,19 +2490,45 @@ assert_eq '["one_second","cover_logo","template_look","craft","reference_fidelit
 assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0)")" "a weak first viewport is redrawn before it is finished"
 touch "$LP_W/site/a/index.html"; lp submit --node draft --outcome drafted --candidate a >/dev/null
 touch "$LP_W/preview-a.json"; lp submit --node preview --outcome previewed --candidate a >/dev/null
-assert_eq build "$(lp review --candidate a --file "$(lp_review craft 0)")" "the draft is redrawn once; then it is finished and the full review judges it"
-touch "$LP_W/site/a/index.html" "$LP_W/source-facts-a.md" "$LP_W/needs-input-a.json"
+assert_eq draft_choose "$(lp review --candidate a --file "$(lp_review craft 0)")" "the draft is redrawn once; then, unattended, it waits for the other drafts"
+# An unattended run finishes one candidate: after every draft review the agent chooses one with its reason, the rest fold.
+assert_eq 3 "$(lp_rc submit --node draft_choose --outcome chosen)" "the unattended choice waits until every draft review is done"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "b at draft" "the runner names the candidate still drafting"
+touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
+printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
+printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
+lp submit --node preview --outcome previewed --candidate b >/dev/null
+assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a passing draft also waits for the choice in an unattended run"
+assert_eq draft_choose "$(lp next | jq -r '.node')" "once every draft review is done, next asks for the choice"
+printf '{"kept":["a"],"dropped":["b"],"via":"agent","reason":"a is bolder"}\n' >"$LP_W/draft-pick.json"
+assert_eq 4 "$(lp_rc submit --node draft_choose --outcome chosen)" "a draft kept after its redo is not chosen over one that passed"
+printf '{"kept":["b"],"dropped":["a"],"via":"agent"}\n' >"$LP_W/draft-pick.json"
+assert_eq 4 "$(lp_rc submit --node draft_choose --outcome chosen)" "a choice without its reason is refused"
+printf '{"kept":["a","b"],"via":"agent","reason":"both are good"}\n' >"$LP_W/draft-pick.json"
+assert_eq 4 "$(lp_rc submit --node draft_choose --outcome chosen)" "an unattended run chooses exactly one candidate"
+printf '{"kept":["b"],"dropped":["a"],"via":"agent","reason":"b passed its draft review; a stayed a stock hero after its redo"}\n' >"$LP_W/draft-pick.json"
+assert_eq build "$(lp submit --node draft_choose --outcome chosen)" "the chosen candidate goes on to build"
+assert_eq "folded build" "$(jq -r '[.candidates.a.node, .candidates.b.node] | join(" ")' "$LP_W/.landing-run/state.json")" "the other candidate folds"
+assert_contains "$(lp status)" "a stayed a stock hero" "status carries why a candidate folded"
+assert_eq 3 "$(lp_rc submit --node build --outcome built --candidate a)" "a folded candidate is not built"
+cp "$LP_W/.landing-run/state.json" "$TEST_TMP/lp-state.json"
+jq '.candidates.a.node = "draft_choose"' "$TEST_TMP/lp-state.json" >"$LP_W/.landing-run/state.json"
+printf '{"kept":["a"],"dropped":[],"via":"agent","reason":"a second one"}\n' >"$LP_W/draft-pick.json"
+assert_eq 3 "$(lp_rc submit --node draft_choose --outcome chosen)" "a second candidate entering build in an unattended run is refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "'b' already entered build" "the runner names the candidate already being finished"
+cp "$TEST_TMP/lp-state.json" "$LP_W/.landing-run/state.json"
+touch "$LP_W/site/b/index.html" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
 assert_contains "$(lp status)" '"preview_min"' "status reports minutes to the first preview"
-assert_eq measure "$(lp submit --node build --outcome built --candidate a)" "a built candidate goes to measure"
-assert_eq 3 "$(lp_rc submit --node measure --outcome measured_pass --candidate a)" "the maker cannot submit a measure outcome"
+assert_eq measure "$(lp submit --node build --outcome built --candidate b)" "a built candidate goes to measure"
+assert_eq 3 "$(lp_rc submit --node measure --outcome measured_pass --candidate b)" "the maker cannot submit a measure outcome"
 echo fail >"$LP_STUB_RESULT_FILE"
-assert_eq repair "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a failed measure sends the candidate to repair"
-touch "$LP_W/repair-a-0.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null
+assert_eq repair "$(lp measure --candidate b --url http://127.0.0.1:9/)" "a failed measure sends the candidate to repair"
+touch "$LP_W/repair-b-0.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null
 echo pass >"$LP_STUB_RESULT_FILE"
-assert_eq review "$(lp measure --candidate a --url http://127.0.0.1:9/)" "a passing measure goes to review"
-assert_file "$LP_W/captures/a-m2/captures.json"
-assert_contains "$(lp next --candidate a)" "captures/a-m2" "the reviewer is pointed at the captures the measure node took"
-assert_contains "$(lp capture --candidate a --url http://127.0.0.1:9/ --label extra)" "/captures/extra" "capture takes a labeled set on demand"
+assert_eq review "$(lp measure --candidate b --url http://127.0.0.1:9/)" "a passing measure goes to review"
+assert_file "$LP_W/captures/b-m2/captures.json"
+assert_contains "$(lp next --candidate b)" "captures/b-m2" "the reviewer is pointed at the captures the measure node took"
+assert_contains "$(lp capture --candidate b --url http://127.0.0.1:9/ --label extra)" "/captures/extra" "capture takes a labeled set on demand"
 mkdir -p "$TEST_TMP/lp-moved" && mv "$LP_W/.landing-run" "$TEST_TMP/lp-moved/" && cp -R "$TEST_TMP/lp-moved/.landing-run" "$LP_W/landing-run-aside"
 assert_eq 3 "$(lp_rc init --mode unattended)" "init refuses a folder whose run was moved aside"
 rm -rf "$LP_W/landing-run-aside"; mv "$TEST_TMP/lp-moved/.landing-run" "$LP_W/"
@@ -2510,37 +2536,57 @@ printf 'export default async () => {};\n' >"$TEST_TMP/lp-outside.mjs"
 assert_eq 4 "$(lp_rc operate --url http://127.0.0.1:9/ --file "$TEST_TMP/lp-outside.mjs")" "operate refuses a script outside the work folder"
 mkdir -p "$LP_W/operate"; printf 'export default async () => {};\n' >"$LP_W/operate/drag.mjs"
 assert_contains "$(LANDING_OPERATE_CMD="echo" lp operate --url http://127.0.0.1:9/ --file "$LP_W/operate/drag.mjs" --width 390)" "/operate/out-drag --width 390" "operate runs a work-folder script into operate/out-<name>"
-assert_contains "$(lp next --candidate a)" '"try_it_usability"' "the review node lists the required checks"
-assert_contains "$(lp next --candidate a)" '"candidate_overlap"' "several candidates add the overlap check"
+assert_contains "$(lp next --candidate b)" '"try_it_usability"' "the review node lists the required checks"
+if lp next --candidate b | grep -q '"candidate_overlap"'; then fail "a folded candidate is not compared with the one being finished"; fi
 printf '{"checks":[{"check":"flow","status":"pass"}]}\n' >"$TEST_TMP/lp-review-partial.json"
-assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-partial.json")" "a review missing required checks is refused"
-assert_eq 0 "$(jq -r '.candidates.a.reviews' "$LP_W/.landing-run/state.json")" "a refused review does not count"
-assert_eq repair "$(lp review --candidate a --file "$(lp_review reference_fidelity 0)")" "a major in review sends the candidate to repair"
-touch "$LP_W/repair-a-1.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
-jq '.checks |= map(if .check == "template_look" then .status = "fail" | .severity = "minor" | del(.first_viewport) else . end)' "$(lp_review none 0)" >"$TEST_TMP/lp-review-fv.json"
-assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-fv.json")" "a failed first-viewport check must say whether it is in the first viewport"
+assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-partial.json")" "a review missing required checks is refused"
+assert_eq 0 "$(jq -r '.candidates.b.reviews' "$LP_W/.landing-run/state.json")" "a refused review does not count"
+assert_eq repair "$(lp review --candidate b --file "$(lp_review reference_fidelity 0 b)")" "a major in review sends the candidate to repair"
+touch "$LP_W/repair-b-1.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+jq '.checks |= map(if .check == "template_look" then .status = "fail" | .severity = "minor" | del(.first_viewport) else . end)' "$(lp_review none 0 b)" >"$TEST_TMP/lp-review-fv.json"
+assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-fv.json")" "a failed first-viewport check must say whether it is in the first viewport"
 jq '.checks |= map(if .check == "template_look" then .first_viewport = true else . end)' "$TEST_TMP/lp-review-fv.json" >"$TEST_TMP/lp-review-fv2.json"
-assert_eq repair "$(lp review --candidate a --file "$TEST_TMP/lp-review-fv2.json")" "a template look in the first viewport is major even when written as minor"
-touch "$LP_W/repair-a-2.md"; lp submit --node repair --outcome repaired --candidate a >/dev/null; lp measure --candidate a --url http://127.0.0.1:9/ >/dev/null
-jq '.checks |= map(if .check == "template_look" then .carried = 1 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
-assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "a first-viewport check is never carried from an earlier round"
-jq '.checks |= map(if .check == "flow" then .carried = 9 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
-assert_eq 4 "$(lp_rc review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "a check is carried only from a round where it passed"
-jq '.checks |= map(if .check == "flow" then .carried = 2 else . end)' "$(lp_review none 1)" >"$TEST_TMP/lp-review-carry.json"
-assert_eq "done" "$(lp review --candidate a --file "$TEST_TMP/lp-review-carry.json")" "only user input left ends at done (a pass carried from the last round counts)"
-assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.a.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
-touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
-printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
-printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
-lp submit --node preview --outcome previewed --candidate b >/dev/null
-assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a sound first viewport goes on to be finished"
-touch "$LP_W/site/b/index.html" "$LP_W/source-facts-b.md" "$LP_W/needs-input-b.json"
-lp submit --node build --outcome built --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+assert_eq repair "$(lp review --candidate b --file "$TEST_TMP/lp-review-fv2.json")" "a template look in the first viewport is major even when written as minor"
+touch "$LP_W/repair-b-2.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+jq '.checks |= map(if .check == "template_look" then .carried = 1 else . end)' "$(lp_review none 1 b)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-carry.json")" "a first-viewport check is never carried from an earlier round"
+jq '.checks |= map(if .check == "flow" then .carried = 9 else . end)' "$(lp_review none 1 b)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-carry.json")" "a check is carried only from a round where it passed"
+jq '.checks |= map(if .check == "flow" then .carried = 2 else . end)' "$(lp_review none 1 b)" >"$TEST_TMP/lp-review-carry.json"
+assert_eq "done" "$(lp review --candidate b --file "$TEST_TMP/lp-review-carry.json")" "only user input left ends at done (a pass carried from the last round counts)"
+assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.b.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
+# A lone unattended candidate has nothing to be chosen against: it goes from its draft review straight to build.
+LP_W="$TEST_TMP/lp-run-one"; mkdir -p "$LP_W"
+lp init --mode unattended >/dev/null
+printf '## Tone and manner\ncalm, precise\n' >"$LP_W/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
+lp submit --node brief --outcome brief_ready >/dev/null
+cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"; cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
+lp submit --node references --outcome references_ready >/dev/null
+printf '{"candidates":[{"id":"c","dir":"site/c","motion_level":"calm","first_viewport":"one scene"}]}\n' >"$LP_W/candidates.json"
+lp submit --node direction --outcome direction_ready >/dev/null
+mkdir -p "$LP_W/site/c" "$LP_W/caps"; touch "$LP_W/site/c/index.html"; lp submit --node draft --outcome drafted --candidate c >/dev/null
+printf 'png' >"$LP_W/caps/c-1440.png"; printf 'png' >"$LP_W/caps/c-390.png"
+printf '{"url":"http://127.0.0.1:9/c/","captures":["caps/c-1440.png","caps/c-390.png"]}\n' >"$LP_W/preview-c.json"
+lp submit --node preview --outcome previewed --candidate c >/dev/null
+assert_eq build "$(lp review --candidate c --file "$(lp_review none 0 c)")" "a lone unattended candidate goes on to build without a choice"
+assert_eq runner "$(jq -r '.chosen.via' "$LP_W/.landing-run/state.json")" "the runner records that it chose the only candidate"
+touch "$LP_W/site/c/index.html" "$LP_W/source-facts-c.md" "$LP_W/needs-input-c.json"
+lp submit --node build --outcome built --candidate c >/dev/null; lp measure --candidate c --url http://127.0.0.1:9/ >/dev/null
 for r in 1 2 3; do
-  out="$(lp review --candidate b --file "$(lp_review flow 0 b)" || true)"
-  [[ $r -lt 3 ]] && { touch "$LP_W/repair-b-$r.md"; lp submit --node repair --outcome repaired --candidate b >/dev/null; lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null; }
+  out="$(lp review --candidate c --file "$(lp_review flow 0 c)" || true)"
+  [[ $r -lt 3 ]] && { touch "$LP_W/repair-c-$r.md"; lp submit --node repair --outcome repaired --candidate c >/dev/null; lp measure --candidate c --url http://127.0.0.1:9/ >/dev/null; }
 done
 assert_eq user_decision "$out" "a third review with a major left ends at user_decision"
+# capture-refs: one call for every reference; a bad list is refused before a browser starts.
+LP_R="$TEST_TMP/lp-refs-run"; mkdir -p "$LP_R"
+printf '[{"id":"a","url":"http://127.0.0.1:9/","record":true}]\n' >"$LP_R/refs-to-capture.json"
+assert_contains "$(LANDING_CAPTURE_REFS_CMD="echo" "$ROOT/scripts/landing-run.sh" capture-refs --work "$LP_R" --file "$LP_R/refs-to-capture.json" 2>/dev/null)" "--phase all" "capture-refs captures and records in one call by default"
+assert_contains "$(LANDING_CAPTURE_REFS_CMD="echo" "$ROOT/scripts/landing-run.sh" capture-refs --work "$LP_R" --file "$LP_R/refs-to-capture.json" --background 2>/dev/null)" "--phase stills" "capture-refs --background takes the stills in the foreground"
+if command -v node >/dev/null 2>&1; then
+  printf '[{"id":"../x","url":"file:///etc/passwd"}]\n' >"$LP_R/bad-refs.json"
+  lp_cr_rc=0; node "$ROOT/scripts/landing-capture-refs.mjs" --work "$LP_R" --file "$LP_R/bad-refs.json" >/dev/null 2>&1 || lp_cr_rc=$?
+  assert_eq 2 "$lp_cr_rc" "capture-refs refuses an id that leaves refs/ and a URL that is not http"
+fi
 unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE LANDING_PREVIEW_CMD LANDING_CAPTURE_CMD
 # Real measure on fixed pages, only where a Playwright Chromium can start.
 LP_FIX="$ROOT/tests/fixtures/landing-measure"
@@ -2559,6 +2605,22 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
     assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"
     assert_file "$TEST_TMP/lp-caps/sheet-390.png"
+    # Two local sites captured in one call (four at a time), a recording left in the background, a bot check flagged.
+    python3 -I -m http.server 8933 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/a" >/dev/null 2>&1 & LP_SRV3=$!
+    python3 -I -m http.server 8934 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/b" >/dev/null 2>&1 & LP_SRV4=$!
+    sleep 1
+    printf '[{"id":"a","url":"http://127.0.0.1:8933/","record":true},{"id":"b","url":"http://127.0.0.1:8934/"},{"id":"cf","url":"http://127.0.0.1:8933/challenge/"}]\n' >"$LP_R/refs-to-capture.json"
+    LANDING_RECORD_SECONDS=2 "$ROOT/scripts/landing-run.sh" capture-refs --work "$LP_R" --file "$LP_R/refs-to-capture.json" --background >/dev/null 2>&1 || true
+    assert_eq "ok ok challenge" "$(for i in a b cf; do jq -r '.status' "$LP_R/refs/$i/capture.json"; done | tr '\n' ' ' | sed 's/ $//')" "capture-refs captures both sites and flags the bot check"
+    assert_eq "Reference B" "$(jq -r '.title' "$LP_R/refs/b/capture.json")" "capture-refs records each page's title"
+    assert_file "$LP_R/refs/a/w1440-00.png"; assert_file "$LP_R/refs/b/w390-00.png"
+    assert_eq 4 "$(jq -r '.concurrency' "$LP_R/refs/capture-refs.json")" "capture-refs captures four pages at a time"
+    for _ in $(seq 1 40); do [[ -f "$LP_R/refs/record.done" ]] && break; sleep 0.5; done
+    assert_file "$LP_R/refs/record.done"
+    assert_file "$LP_R/refs/a/rec.webm"
+    assert_eq "refs/a/rec.webm" "$(jq -r '.video' "$LP_R/refs/a/capture.json")" "the recording is listed next to the reference's captures"
+    kill "$LP_SRV3" "$LP_SRV4" 2>/dev/null || true
+    wait "$LP_SRV3" "$LP_SRV4" 2>/dev/null || true
   fi
   kill "$LP_SRV1" "$LP_SRV2" 2>/dev/null || true
 fi
@@ -2574,6 +2636,11 @@ assert_contains "$LANDING_VERIFY" "landing-run.sh operate" "landing-page reviewe
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "Users do not name a mode; choose it." "landing-page picks interactive or unattended itself"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "never the file path" "the reference board is served over http so its images load"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" 'Do not write the board by hand: `landing-run.sh board' "the reference board is drawn by the runner, not by hand"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Send every search in one turn" "landing-page sends its reference searches at once"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Do not write your own browser script for a reference" "landing-page captures references through capture-refs"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "a served interactive board within five minutes" "landing-page aims for the board within five minutes"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "landing-run.sh capture-refs" "landing-page lists capture-refs among the runner commands"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "The runner refuses a second candidate entering \`build\` in an unattended run" "landing-page finishes one candidate in an unattended run"
 assert_contains "$(cat "$ROOT/agents/design-reviewer.md")" "landing-run.sh operate" "the design reviewer keeps landing-page scripts in the work folder"
 assert_contains "$LANDING_VERIFY" "**A top bar over scrolled text**" "landing-page measures text showing through a top bar"
 assert_contains "$LANDING_VERIFY" "**Text over a moving picture**" "landing-page measures text left over a busy picture layer"
