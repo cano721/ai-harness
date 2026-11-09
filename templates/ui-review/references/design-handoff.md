@@ -45,12 +45,12 @@ Layout structure, content order, and user flow follow the mockup. Values reconci
 
 ## 2. No design system
 
-Extract the mockup's values — colors, type sizes, spacing, radii, shadows, durations — into a token draft. Leave out values that are defects (one-pixel inconsistencies, failing contrast pairs). Confirm the draft with the user once. Until confirmed, the draft lives in the report or pull request, not in design-system documentation.
+Extract the mockup's values — colors, type sizes, spacing, radii, shadows, durations — into a token draft. Leave out values that are defects (one-pixel inconsistencies, failing contrast pairs). Confirm the draft with the user once. Until confirmed, the draft lives in the report or pull request, not in design-system documentation. With no design system and no one to confirm, use the mockup's values as page-local variables and keep the draft in the report.
 
 ## 3. Unattended runs
 
 - Proceed on design-system defaults. Do not create new tokens on your own.
-- Record every open decision in the pull request description, each with the default you applied.
+- Record every open decision in the pull request description (or the report when there is no pull request), each with the default you applied.
 - Never act as the human approver. A decision that needs approval stays open.
 
 ## 4. Review against the mockup

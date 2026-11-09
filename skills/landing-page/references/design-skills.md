@@ -19,12 +19,14 @@ This file is the single source. ai-harness keeps byte-identical copies next to e
 | Job | Lead | Supporting (lane) |
 |---|---|---|
 | Data report, metrics dashboard, admin or analytics screen — including a single-file HTML report | `impeccable` | `dataviz` (chart form, stat tiles, chart palette validation) · `ui-ux-pro-max` (palette and type lookup, only when the project has no tokens) |
-| Landing, introduction, marketing, launch page | `landing-page` | `design-taste-frontend` (direction candidates in the direction step only) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
+| Landing, introduction, marketing, launch page | `landing-page` | `design-taste-frontend` (references and direction candidates in the direction step only) · `awesome-design` (the specification of a site the user names as a reference; never values to import) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
 | Draw or extend a product screen from the design system, in Figma or in code | `design-screen` | Figma target: Figma's own MCP skills (`figma-use` and what it requires) for Plugin API patterns only — ai-harness rules decide what is written (`figma-mcp.md`) · code target: `web-design-guidelines` (interface check after the captures) |
 | Create or extend a design system | `design-system-builder` | its own `references/theme-and-components.md` (theme switching and component structure, absorbed from `design-system-patterns`) · `awesome-design` (reference specifications to study, never to copy) |
 | Polish an existing product screen | `impeccable` | `emil-design-eng` (finishing details) · `motion` (Motion library API) |
 | UI change in a repository with an ai-harness UI contract (`ui-review`, `frontend-team`, `design-audit`) | the contract (`ui-review` or the `frontend-team` route) | `impeccable` (critique only during review; fixes go back to the writer) · `web-design-guidelines` (interface and accessibility check) |
 | Independent review of a finished screen or page, with or without a harness | a fresh reviewer session or the `ai-harness:design-reviewer` agent (Claude) | in a fresh reviewer session only: `impeccable` (critique) · `web-design-guidelines` (interface check) — read-only use. The agent cannot load skills; it reviews with its own criteria plus the built-in interface guideline rules file |
+
+A landing page in a repository with an ai-harness UI contract matches two rows; `landing-page` leads the build and the contract's `ui_review` is the only review gate — `landing-page` does not run its own review loop there.
 
 Native apps follow `native-ui`; none of the web skills above lead there.
 

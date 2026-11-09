@@ -1,0 +1,413 @@
+{
+  "version": 1,
+  "name": "landing-page",
+  "entry": "brief",
+  "terminals": [
+    "done",
+    "user_decision"
+  ],
+  "nodes": {
+    "brief": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#1-brief",
+        "references/direction.md#2-visual-authority"
+      ],
+      "artifacts": [
+        "brief.md",
+        "tone.json"
+      ],
+      "outcomes": [
+        "brief_ready"
+      ]
+    },
+    "references": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#7-references"
+      ],
+      "artifacts": [
+        "references.json"
+      ],
+      "outcomes": [
+        "references_ready",
+        "references_skipped_by_user"
+      ]
+    },
+    "reference_pick": {
+      "actor": "human",
+      "docs": [
+        "references/direction.md#7-references"
+      ],
+      "artifacts": [
+        "reference-pick.json"
+      ],
+      "outcomes": [
+        "picked"
+      ]
+    },
+    "direction": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#3-direction-candidates",
+        "references/direction.md#4-sections",
+        "references/direction.md#5-evidence",
+        "references/direction.md#6-copy"
+      ],
+      "artifacts": [
+        "candidates.json"
+      ],
+      "outcomes": [
+        "direction_ready",
+        "mockup_decides"
+      ]
+    },
+    "draft_pick": {
+      "actor": "human",
+      "docs": [
+        "references/direction.md#3-direction-candidates"
+      ],
+      "artifacts": [
+        "draft-pick.json"
+      ],
+      "outcomes": [
+        "picked"
+      ]
+    },
+    "build": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [
+        "references/design-handoff.md",
+        "references/layout-type.md",
+        "references/motion-web.md",
+        "references/external-code.md"
+      ],
+      "artifacts": [
+        "{dir}/index.html",
+        "source-facts-{c}.md",
+        "needs-input-{c}.json"
+      ],
+      "outcomes": [
+        "built"
+      ]
+    },
+    "measure": {
+      "actor": "runner",
+      "per_candidate": true,
+      "artifacts": [
+        "measure-{c}-{n}.json"
+      ],
+      "outcomes": [
+        "measured_pass",
+        "measured_fail",
+        "measured_unverified",
+        "measure_limit_reached"
+      ]
+    },
+    "review": {
+      "actor": "reviewer",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#independent-review"
+      ],
+      "artifacts": [
+        "review-{c}-{r}.json"
+      ],
+      "outcomes": [
+        "review_verified",
+        "review_input_wait",
+        "review_issues",
+        "review_limit_reached",
+        "review_unverified"
+      ]
+    },
+    "repair": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#fix-loop-and-stopping"
+      ],
+      "artifacts": [
+        "repair-{c}-{r}.md"
+      ],
+      "outcomes": [
+        "repaired",
+        "needs_user"
+      ]
+    },
+    "done": {
+      "actor": "runner",
+      "per_candidate": true
+    },
+    "user_decision": {
+      "actor": "runner",
+      "per_candidate": true
+    },
+    "draft": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [
+        "references/layout-type.md",
+        "references/motion-web.md#try-it-demo"
+      ],
+      "artifacts": [
+        "{dir}/index.html"
+      ],
+      "outcomes": [
+        "drafted"
+      ],
+      "note": "The first viewport finished (real copy, real assets, the signature moment working); the rest as real sections, unpolished."
+    },
+    "preview": {
+      "actor": "maker",
+      "per_candidate": true,
+      "docs": [],
+      "artifacts": [
+        "preview-{c}.json"
+      ],
+      "outcomes": [
+        "previewed"
+      ],
+      "note": "Serve the draft, capture its first viewport at 1440 and 390, and show the URL and captures to the user now; do not wait for verification."
+    },
+    "draft_review": {
+      "actor": "reviewer",
+      "per_candidate": true,
+      "docs": [
+        "references/verify.md#draft-review"
+      ],
+      "artifacts": [],
+      "outcomes": [
+        "draft_pass",
+        "draft_redo",
+        "draft_kept"
+      ],
+      "note": "A new design-reviewer judges the draft's first viewport from the preview captures and the references, only the draft checks, within three minutes. A weak first viewport is redrawn before an hour goes into finishing it."
+    }
+  },
+  "transitions": [
+    {
+      "from": "brief",
+      "to": "references",
+      "when": "brief_ready"
+    },
+    {
+      "from": "references",
+      "to": "reference_pick",
+      "when": "references_ready",
+      "mode": "interactive"
+    },
+    {
+      "from": "references",
+      "to": "direction",
+      "when": "references_ready",
+      "mode": "unattended"
+    },
+    {
+      "from": "references",
+      "to": "direction",
+      "when": "references_skipped_by_user"
+    },
+    {
+      "from": "reference_pick",
+      "to": "direction",
+      "when": "picked"
+    },
+    {
+      "from": "direction",
+      "to": "draft_pick",
+      "when": "direction_ready",
+      "mode": "interactive"
+    },
+    {
+      "from": "direction",
+      "to": "draft",
+      "when": "direction_ready",
+      "mode": "unattended"
+    },
+    {
+      "from": "direction",
+      "to": "draft",
+      "when": "mockup_decides"
+    },
+    {
+      "from": "draft_pick",
+      "to": "draft",
+      "when": "picked"
+    },
+    {
+      "from": "draft",
+      "to": "preview",
+      "when": "drafted"
+    },
+    {
+      "from": "preview",
+      "to": "draft_review",
+      "when": "previewed"
+    },
+    {
+      "from": "draft_review",
+      "to": "build",
+      "when": "draft_pass"
+    },
+    {
+      "from": "draft_review",
+      "to": "draft",
+      "when": "draft_redo"
+    },
+    {
+      "from": "draft_review",
+      "to": "build",
+      "when": "draft_kept"
+    },
+    {
+      "from": "build",
+      "to": "measure",
+      "when": "built"
+    },
+    {
+      "from": "measure",
+      "to": "review",
+      "when": "measured_pass"
+    },
+    {
+      "from": "measure",
+      "to": "review",
+      "when": "measured_unverified"
+    },
+    {
+      "from": "measure",
+      "to": "repair",
+      "when": "measured_fail"
+    },
+    {
+      "from": "measure",
+      "to": "user_decision",
+      "when": "measure_limit_reached"
+    },
+    {
+      "from": "review",
+      "to": "done",
+      "when": "review_verified"
+    },
+    {
+      "from": "review",
+      "to": "done",
+      "when": "review_input_wait"
+    },
+    {
+      "from": "review",
+      "to": "repair",
+      "when": "review_issues"
+    },
+    {
+      "from": "review",
+      "to": "user_decision",
+      "when": "review_limit_reached"
+    },
+    {
+      "from": "review",
+      "to": "user_decision",
+      "when": "review_unverified"
+    },
+    {
+      "from": "repair",
+      "to": "measure",
+      "when": "repaired"
+    },
+    {
+      "from": "repair",
+      "to": "user_decision",
+      "when": "needs_user"
+    }
+  ],
+  "limits": {
+    "max_reviews": 3,
+    "max_measure_repairs": 5,
+    "max_draft_redos": 1
+  },
+  "measure": {
+    "widths": [
+      1440,
+      768,
+      390,
+      320
+    ],
+    "moments": {
+      "desktop": {
+        "width": 1440,
+        "cpu_throttle": 1,
+        "min_fps": 50,
+        "max_frame_ms": 100
+      },
+      "phone": {
+        "width": 390,
+        "cpu_throttle": 4,
+        "min_fps": 30,
+        "max_frame_ms": 200,
+        "lite_tier_passes": true
+      }
+    },
+    "js_off_text_ratio": 0.9,
+    "reduced_motion_text_ratio": 0.95,
+    "text_backdrop_max_sd": 18,
+    "bar_bleed_max": 8
+  },
+  "first_viewport_major": [
+    "template_look",
+    "craft",
+    "cover_logo",
+    "copied_composition",
+    "reference_fidelity"
+  ],
+  "review_checks": {
+    "public_page": [
+      "one_second",
+      "five_second",
+      "squint",
+      "cover_logo",
+      "template_look",
+      "craft",
+      "reference_fidelity",
+      "copied_composition",
+      "actions_respond",
+      "claims",
+      "phone_composed",
+      "tells",
+      "flow",
+      "try_it_usability",
+      "keyboard",
+      "hover_focus",
+      "js_off",
+      "reduced_motion",
+      "forced_colors",
+      "contrast_over_media"
+    ],
+    "multi_candidate": [
+      "candidate_overlap"
+    ],
+    "draft": [
+      "one_second",
+      "cover_logo",
+      "template_look",
+      "craft",
+      "reference_fidelity",
+      "copied_composition"
+    ]
+  },
+  "invariants": [
+    "The runner, not the model, chooses every transition; an outcome with no declared edge from the current node is refused.",
+    "A node's artifacts must exist before its outcome is accepted.",
+    "Measure outcomes come only from the measure script; a maker cannot submit measured_pass.",
+    "Review outcomes are computed from the review JSON; a review missing any required check is refused and does not count, and a review that could not render the page is review_unverified.",
+    "A candidate reaches done only through review_verified or review_input_wait, never from build, measure, or repair.",
+    "After max_reviews reviews with a major left, the candidate goes to user_decision; later fixes are reported as not independently reviewed.",
+    "Each review is a new reviewer; the briefing carries the take-lines and reference captures, not the maker's notes.",
+    "The user sees a served draft (preview) before measurement and review start; verification never delays the first look."
+  ],
+  "budget_minutes": {
+    "preview": 10,
+    "done": 30
+  }
+}

@@ -23,10 +23,11 @@ These are defaults for gaps only. Where the repository's design system defines a
 ## Type
 
 - At most two families (one display, one text, or one family in two weights).
-- Five steps when no scale exists: display, h2, h3, body, small. More than nine distinct sizes on one page is a defect.
+- Five steps when no scale exists: display, h2, h3, body, small. More than nine distinct sizes on one page is a smell to justify, unless the design system's steps produce them.
 - Display size tops out around `6rem`; use `clamp()` between a phone and desktop value. Viewport-proportional display type that grows without a cap suits only a direction built around a name or one word.
 - Desktop headlines fit in two lines. Check the actual line count in the browser rather than estimating from character count.
-- Body text 16–20px, line height 1.45–1.6 for Latin text.
+- Body text 16–20px, line height 1.45–1.6 for Latin text. These are defaults for a page with no system; a design system's own steps win.
+- A design system's text styles are fixed steps. Switch styles at breakpoints instead of interpolating between them with `clamp()`.
 - Self-host fonts where the license allows; `font-display: swap`; preload only the one file the first viewport needs.
 
 ### Korean text
