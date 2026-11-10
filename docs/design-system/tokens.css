@@ -3,6 +3,17 @@
    계층: --palette-* (원시 값, 의미 토큰만 참조) → --color-* 등 의미 토큰(화면·부품이 쓰는 이름).
    테마: OS 설정을 따르고, <html data-theme="light|dark"> 가 있으면 그쪽이 이긴다.
    다크 블록 두 개(@media, [data-theme="dark"])는 같은 내용이어야 한다 — design-system.sh contrast 가 검사한다. */
+/* 글꼴: Pretendard (SIL OFL 1.1). 이 PC에 설치돼 있으면 그것을 쓰고, 없으면 버전을 고정한 파일 하나를 받아 쓴다.
+   설치본이 먼저다: 글꼴 묶음의 Pretendard(굵기별 설치본) → "Pretendard Variable"(가변 설치본, 없으면 내려받기).
+   src 에 local("Pretendard") 를 넣지 않는다 — 굵기별 설치본의 한 굵기만 잡혀 굵은 글자가 가짜로 그려진다.
+   화면이 밖으로 보내는 요청은 이 글꼴 파일 하나뿐이다. 받지 못하면(오프라인) 시스템 글꼴로 보이고 화면은 그대로 동작한다. */
+@font-face {
+  font-family: "Pretendard Variable";
+  font-style: normal;
+  font-weight: 45 920;
+  font-display: swap;
+  src: local("Pretendard Variable"), url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2") format("woff2-variations");
+}
 :root {
   color-scheme: light;
 
@@ -110,48 +121,48 @@
   --space-12: 48px;
 
   /* 크기: 조작 요소 높이 사다리, 아이콘, 최소 누름 영역 */
-  --size-control-sm: 24px;
-  --size-control-md: 32px;
+  --size-control-sm: 28px;
+  --size-control-md: 36px;
   --size-icon: 16px;
   --size-icon-sm: 14px;
-  --size-badge: 20px;
+  --size-badge: 22px;
   --size-dot: 8px;
-  --size-row: 40px;
-  --size-column-min: 280px;
+  --size-row: 48px;
+  --size-column-min: 300px;
   --size-target-min: 24px;
-  --size-sidebar: 232px;
-  --size-drawer: 480px;
+  --size-sidebar: 248px;
+  --size-drawer: 520px;
   --size-content-max: 1100px;
   --size-toast-max: 420px;
   --size-viewport-min: 360px;
 
   /* 글자: 역할마다 크기·줄 높이·굵기 한 벌 */
-  --font-family-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-family-sans: Pretendard, "Pretendard Variable", system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
   --font-family-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --font-size-heading: 1.25rem;
+  --font-size-heading: 1.375rem;
   --font-line-heading: 1.35;
   --font-weight-heading: 600;
-  --font-size-title: 0.9375rem;
+  --font-size-title: 1.0625rem;
   --font-line-title: 1.45;
   --font-weight-title: 600;
-  --font-size-body: 0.875rem;
-  --font-line-body: 1.6;
+  --font-size-body: 0.9375rem;
+  --font-line-body: 1.65;
   --font-weight-body: 400;
-  --font-size-label: 0.8125rem;
+  --font-size-label: 0.875rem;
   --font-line-label: 1.4;
   --font-weight-label: 500;
-  --font-size-caption: 0.75rem;
+  --font-size-caption: 0.8125rem;
   --font-line-caption: 1.5;
   --font-weight-caption: 400;
-  --font-size-code: 0.75rem;
+  --font-size-code: 0.8125rem;
   --font-line-code: 1.5;
   --font-weight-code: 400;
   --font-weight-strong: 600;
 
   /* 반경 */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-full: 999px;
 
   /* 그림자: 뜬 면에만 */

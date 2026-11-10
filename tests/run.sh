@@ -6766,7 +6766,9 @@ IMPACT_HTML_CONTENT="$(cat "$IMPACT_HTML")"
 assert_contains "$IMPACT_HTML_CONTENT" "같은 지적이 줄었어요" "report embeds the headline"
 assert_contains "$IMPACT_HTML_CONTENT" '"installed"' "report embeds the compare data"
 case "$IMPACT_HTML_CONTENT" in *"</script><script>alert"*) fail "report escapes </script> inside embedded data" ;; esac
-case "$IMPACT_HTML_CONTENT" in *"https://cdn"*|*"<script src="*|*"<link rel=\"stylesheet\" href=\"http"*) fail "report loads nothing from the network" ;; esac
+# 화면이 밖으로 보내도 되는 요청은 디자인 토큰의 글꼴 파일 하나뿐이다(#287): 버전 고정, 못 받으면 시스템 글꼴.
+DS_FONT_URL='https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2'
+case "${IMPACT_HTML_CONTENT//"$DS_FONT_URL"/}" in *"https://cdn"*|*"<script src="*|*"<link rel=\"stylesheet\" href=\"http"*) fail "report loads nothing from the network except the pinned font" ;; esac
 assert_eq "1" "$(grep -c '__IMPACT_DATA__' "$ROOT/skills/harness-impact/report-template.html")" "template has one data placeholder"
 case "$IMPACT_HTML_CONTENT" in *__IMPACT_DATA__*|*__IMPACT_HIGHLIGHTS__*) fail "report fills every placeholder" ;; esac
 HARNESS_METRICS_DIR="$IMPACT_DATA" "$ROOT/scripts/impact.sh" render --data "$IMPACT_DATA_FILE" --out "$TEST_TMP/impact-nohl.html" >/dev/null
@@ -7693,9 +7695,14 @@ DS_BAD="$(ds_sh contrast --root "$DS_T" 2>&1)" && fail "contrast check fails whe
 assert_contains "$DS_BAD" "--color-text-on-solid" "contrast failure names the token pair"
 pass "design system: computed contrast for every documented pair, light and dark"
 
-# 기준 화면은 오프라인 단일 HTML이다: 외부 자원 없이 부품과 상태를 전부 보여 준다.
+# 기준 화면은 단일 HTML이다: 버전을 고정한 글꼴 파일 하나 말고는 밖에서 아무것도 불러오지 않고, 그 글꼴이 없어도 동작한다.
 DS_REF_HTML="$(<"$DS/reference.html")"
-case "$DS_REF_HTML" in *"http://"*|*"https://"*|*"<link "*|*" src="*|*"@import"*) fail "reference screen loads nothing from outside the file" ;; esac
+case "${DS_REF_HTML//"$DS_FONT_URL"/}" in *"http://"*|*"https://"*|*"<link "*|*" src="*|*"@import"*) fail "reference screen loads nothing from outside the file except the pinned font" ;; esac
+assert_eq "1" "$(grep -c -E 'https?://' "$DS/tokens.css" || true)" "tokens.css names exactly one outside URL"
+assert_contains "$DS_TOKENS" "src: local(\"Pretendard Variable\"), url(\"$DS_FONT_URL\") format(\"woff2-variations\");" "the font prefers the installed copy, then the pinned file"
+assert_contains "$DS_TOKENS" "font-display: swap;" "text shows in the system font while the font loads or when it cannot load"
+assert_contains "$DS_TOKENS" '  --font-family-sans: Pretendard, "Pretendard Variable", system-ui,' "system fonts stay as the fallback"
+assert_eq "0" "$(grep -c -E 'https?://' "$DS/components.css" || true)" "components.css names no outside URL"
 for DS_PART in ds-btn ds-card ds-row ds-badge ds-chip ds-tabs ds-drawer ds-toast ds-empty ds-skeleton ds-error ds-group ds-setting 'aria-expanded' 'role="tablist"' 'data-theme' 'prefers-reduced-motion'; do
   assert_contains "$DS_REF_HTML" "$DS_PART" "reference screen shows $DS_PART"
 done

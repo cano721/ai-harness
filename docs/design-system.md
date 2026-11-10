@@ -1,6 +1,6 @@
 # ai-harness 디자인 규칙
 
-ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하네스 효과 리포트)의 디자인 규칙이다. 값은 여기에 적지 않는다 — 값은 토큰 파일에만 있고, 이 문서는 토큰 이름과 규칙을 말한다. 필수 절 13개의 제목과 순서는 `design-audit`가 채점 입력으로 읽으므로 바꾸지 않는다.
+ai-harness가 사용자에게 보여 주는 단일 HTML 화면(보드, 하네스 효과 리포트 — 서버나 빌드 없이 열리고 오프라인에서도 동작한다)의 디자인 규칙이다. 값은 여기에 적지 않는다 — 값은 토큰 파일에만 있고, 이 문서는 토큰 이름과 규칙을 말한다. 필수 절 13개의 제목과 순서는 `design-audit`가 채점 입력으로 읽으므로 바꾸지 않는다.
 
 ## 메타
 
@@ -10,8 +10,9 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 - 기준 화면: `docs/design-system/reference.html` — 브라우저에서 파일을 바로 연다(서버 없음). `?theme=light|dark`, `?drawer=1`로 상태를 고정해 열 수 있다
 - 테마: light, dark — 전환 방식: OS 설정(`prefers-color-scheme`)을 따르고 `<html data-theme="light|dark">`가 있으면 그쪽이 이긴다
 - 뷰포트: 최소 `--size-viewport-min`, 중단점 `--breakpoint-narrow`·`--breakpoint-wide`
-- 확인 대기: 9 — 목록은 이 문서를 만든 PR #288(이슈 #287) 본문의 "결정 사항"에 있다
+- 확인 대기: 8 — 목록은 이 문서를 만든 PR #288(이슈 #287) 본문의 "결정 사항"에 있다
 - 적용 범위: 보드와 리포트에는 토큰만 이어 두었다(기존 변수 이름 유지). 부품을 공용 부품으로 바꾸고 화면을 재구성하는 일은 다음 단계다
+- 밖으로 나가는 요청: 글꼴 파일 하나(아래 `## 타이포그래피`). 그 밖에는 화면이 밖에서 아무것도 불러오지 않는다 — `tests/run.sh`가 이 URL 하나만 허용한다
 - 사본 규칙: 보드·리포트·기준 화면은 단일 HTML이라 토큰·부품 CSS를 파일 안에 사본으로 싣는다. 원본을 고친 뒤 `scripts/design-system.sh sync`로 맞추고, `check`와 `contrast`는 `tests/run.sh`가 돌린다
 
 ## 원칙
@@ -95,7 +96,11 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 | caption | `--font-size-caption` | `--font-line-caption` | `--font-weight-caption` | 보조 정보(저장소, 시각), 배지·칩 |
 | code | `--font-size-code` | `--font-line-code` | `--font-weight-code` | 로그 원문, 브랜치·경로 (`--font-family-mono`) |
 
-- 글꼴은 시스템 글꼴 묶음(`--font-family-sans`)이다. 오프라인 단일 파일이라 웹폰트를 싣지 않는다.
+- 글꼴은 Pretendard(SIL OFL 1.1)이고 그 뒤에 시스템 글꼴이 대체로 선다(`--font-family-sans`). 이 PC에 설치돼 있으면 설치본을 쓰고, 없으면 버전을 고정한 가변 글꼴 파일 하나를 받아 쓴다(`tokens.css`의 `@font-face`).
+  - 이것이 "밖에서 아무것도 불러오지 않는다"의 하나뿐인 예외다. 이유: 한글 화면의 인상과 가독성이 글꼴에 크게 달려 있고, 파일을 화면마다 넣으면 단일 HTML이 2MB씩 커진다(리포트는 실행마다 새로 만든다).
+  - 범위: 글꼴 파일 하나, 버전 고정 주소. 스크립트·스타일시트·이미지는 여전히 밖에서 불러오지 않는다. 요청에 화면의 데이터는 실리지 않는다(글꼴 제공처는 요청한 IP와 브라우저 정보만 본다).
+  - 실패해도 동작한다: 오프라인이거나 막혀 있으면 시스템 글꼴로 보이고(`font-display: swap`) 배치와 기능은 같다.
+  - 글꼴 버전을 올릴 때는 주소가 실제로 있는지 확인하고 `tests/run.sh`의 허용 주소를 같이 바꾼다.
 - 한국어: `word-break: keep-all` + `overflow-wrap: anywhere`(`.ds-root`가 건다). 본문 줄 높이는 `--font-line-body`. 기울임으로 강조하지 않고 굵기(`--font-weight-strong`)로 한다. 대문자 변환·자간 조정을 쓰지 않는다.
 - 숫자를 세로로 견주는 곳(개수, 시각, 표)은 고정폭 숫자(`.ds-num`)를 쓴다.
 - 제목은 한 줄에 다 못 들어가면 줄 목록에서는 말줄임, 카드에서는 줄바꿈한다. 카드 본문은 두 줄까지 보이고 나머지는 상세에서 본다.
@@ -252,7 +257,10 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 
 ## 결정 기록
 
-확인된 결정이 아직 없다. 이 문서의 값과 규칙은 제안(draft)이고, 근거와 대안은 PR #288(이슈 #287) 본문의 "결정 사항"에 있다. 관리자가 확인한 항목부터 날짜와 함께 여기에 옮긴다.
+- 2026-11-10 — **글꼴은 Pretendard.** 설치본 우선, 없으면 버전 고정 파일 하나를 받는다. 대안: 시스템 글꼴만(밖으로 요청 없음, 플랫폼마다 인상이 다름), 글꼴 파일을 화면에 넣기(요청 없음, 화면마다 2MB). 화면이 밖으로 보내는 요청은 이것 하나로 묶는다.
+- 2026-11-10 — **밀도는 여유 있는 것 하나, 반경은 한 단계 크게, 본문 글자는 한 단계 크게.** 작업 도구이지만 "부드럽고 읽기 편하게"가 우선이다. 대안: 처음 제안한 조밀한 밀도(한 화면에 더 많이 보이지만 빽빽함), 밀도 모드 둘(화면이 둘뿐이라 과함).
+
+그 밖의 값과 규칙은 아직 제안(draft)이고, 근거와 대안은 PR #288(이슈 #287) 본문의 "결정 사항"에 있다. 관리자가 확인한 항목부터 날짜와 함께 여기에 옮긴다.
 
 ## 레퍼런스에서 가져온 것
 
@@ -260,7 +268,7 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 
 | 주제 | 가져온 원칙 | 출처 | 이 문서의 어디 |
 |---|---|---|---|
-| 밀도 | 내용이 많은 화면은 여백을 넉넉히가 아니라 재서 쓴다. 덩어리 안은 촘촘하게, 구분은 간격+그림자가 아니라 선으로 | posthog §5 "Content-dense by design", 카드 안쪽·요소 사이 간격 / supabase §5 "Dense content blocks", "Border-defined space" / raycast §5 "Dense product, sparse marketing" | 밀도 하나, 4px 기준 간격, 카드 그림자 없음 |
+| 밀도 | 구분은 간격+그림자가 아니라 선으로, 간격은 눈대중이 아니라 단계로 재서 쓴다 | posthog §5 "Content-dense by design", 카드 안쪽·요소 사이 간격 / supabase §5 "Dense content blocks", "Border-defined space" / raycast §5 "Dense product, sparse marketing" | 밀도 하나(여유 있는 쪽), 4px 기준 간격, 카드 그림자 없음 |
 | 상태 색 | 색은 기능이고 장식이 아니다. 상태·단계 색은 그 맥락에만 쓴다. 강한 색은 구두점처럼 드물게 | vercel §7 "Apply workflow accent colors only in their workflow context", §9 "Color is functional, never decorative" / linear.app §1·§7 "Success green used only for status indicators", 강조색은 조작 요소에만 / supabase §7 따뜻한 색은 상태용 의미 토큰으로만 / raycast §7 빨강은 "punctuation, not pervasive" | 원칙 1, 상태 표, 빨강은 실패에만 |
 | 상태의 면 | 상태 글자색과 같은 색조의 옅은 면을 짝으로 둔다 | raycast §2 Semantic 색과 같은 색조의 투명 면(위험·정보) / vercel §2 배지의 옅은 바탕 + 진한 글자 짝 | 상태마다 글자 / 옅은 면 / 경계 / 채운 면 |
 | 주 동작 | 주 버튼은 브랜드 색이 아니라 가장 진한 무채색으로 채운다 | vercel §4 Primary Dark / posthog §4 Dark Primary / supabase §4 Primary Pill | 강조 = 무채색, 상태 색 버튼 없음 |
@@ -272,7 +280,7 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 | 목록 / 상세(서랍) | — 여섯 명세에 서랍·목록-상세 배치가 없다 | 명세 아님: 독립 디자인 리뷰 11·12번(포커스 이동 없음, 서랍을 열면 카드가 좁아짐), 768 폭 배경 가림 없음 | 서랍 규칙, 목록 + 서랍 배치 |
 | 빈 · 로딩 상태 | — 여섯 명세에 없다 | 명세 아님: 독립 디자인 리뷰 13번(첫 로드 빈 화면), `design-system-builder`의 모션 규칙(로딩은 잠깐 뒤에) | 빈·로딩·오류 규칙 |
 | 굵기 | 굵기는 세 단계, 역할을 엄격히 | vercel §3 "Three weights, strict roles" / linear.app §3 "Three-tier weight system" / supabase §3 "Weight restraint" | 굵기 토큰 셋 |
-| 반경 | 조작 요소는 작게, 카드는 조금 크게, 큰 반경은 쓰지 않는다 | posthog §7 "Don't apply large border-radius (12px+) on cards" / linear.app §5·vercel §5 반경 단계(조작 요소 < 카드) | 반경 토큰 넷 |
+| 반경 | 조작 요소보다 카드가 한 단계 크다. 알약 반경은 배지에만 | linear.app §5·vercel §5 반경 단계(조작 요소 < 카드) | 반경 토큰 넷 |
 | 숫자 | 견주는 숫자는 고정폭 | vercel §3 `"tnum"` | `.ds-num` |
 
 **가져오지 않은 것과 이유**
@@ -280,7 +288,8 @@ ai-harness가 사용자에게 보여 주는 오프라인 HTML 화면(보드, 하
 - 속삭이듯 옅은 반투명 경계를 조작 요소에(linear.app §7, raycast §7, vercel §7의 0.05–0.1 불투명도 선) — 조작 요소 윤곽 3:1을 못 채운다. 리뷰가 잡은 경계 대비 미달이 바로 이 모양이다. 구획선(`--color-border`)에만 옅은 선을 쓴다.
 - hover를 불투명도로 낮추기(raycast §4, posthog §4) — 글자 대비가 떨어진다. hover는 바탕 면을 바꾼다.
 - 대문자 라벨과 자간(sentry §3, supabase §3) — 한글에는 대소문자가 없다.
-- 음수 자간·전용 글꼴·OpenType 설정(linear.app, vercel) — 오프라인 단일 파일이라 시스템 글꼴을 쓴다.
+- 음수 자간·OpenType 설정과 그 명세들의 전용 글꼴(linear.app, vercel) — 글꼴은 한글 화면에 맞는 Pretendard를 골랐고(명세에서 온 것이 아니다) 자간은 건드리지 않는다.
+- 촘촘한 덩어리와 작은 반경(posthog §5 카드 안쪽 여백, §7 "Don't apply large border-radius (12px+) on cards") — 사용자 확인(2026-11-10, PR #288)에서 "부드럽고 읽기 편하게"가 우선이라 여백·줄 높이·반경을 한 단계씩 키웠다. 작업 도구라 밀도 모드는 여전히 하나다.
 - 눌린 듯한 안쪽 그림자, 유리 효과, 빛 번짐(sentry, raycast) — 장식이고 상태를 말하지 않는다.
-- 어두운 바탕에서 본문 굵기를 한 단계 올리기(raycast §3) — 한글 시스템 글꼴은 중간 굵기가 플랫폼마다 달라 본문은 한 굵기로 둔다.
+- 어두운 바탕에서 본문 굵기를 한 단계 올리기(raycast §3) — 글꼴을 못 받아 시스템 글꼴로 보일 때 중간 굵기가 플랫폼마다 달라 본문은 한 굵기로 둔다.
 - 브랜드 색 전부(각 명세 §2) — 이 시스템의 색은 상태의 뜻에서 정했다.
