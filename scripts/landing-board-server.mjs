@@ -5,7 +5,7 @@
 //   GET  <path>  a file inside WORK (never a dotfile such as .landing-run)
 //   GET  /pick   {"server": true} — the board uses it to tell a live server from a static one
 //   GET  /state?node=reference_pick|draft_pick  {node: <the run's current node>, picked: <that pick, once made, or null>}
-//   POST /pick   {node: "reference_pick", tone, kept, dropped, add_sites, user_words} → reference-pick.json
+//   POST /pick   {node: "reference_pick", tone, kept, dropped, add_sites, primary, user_words} → reference-pick.json
 //                {node: "draft_pick", kept: [one id], dropped, user_words}           → draft-pick.json
 // A pick is written only while the run is at that node and has no pick from this node yet (409 already_started
 // otherwise): the session submits the pick as soon as it appears, so a second press must not rewrite what was submitted.
@@ -37,6 +37,29 @@ const readJson = (f) => {
 const isStr = (v) => typeof v === "string";
 const ids = (v) => Array.isArray(v) && v.every((x) => isStr(x) && x.length > 0 && x.length <= 200);
 
+// The primary references: one layout, one interaction, one component (or none) per section slot, none excluded.
+// The runner checks the same shape when the pick is submitted; this keeps a bad pick from being written at all.
+const SLOT_ID = /^[a-z0-9][a-z0-9_-]*$/;
+function checkPrimary(p, refs, dropped) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return ["primary must be {layout, interaction, components, added_slots}"];
+  const ok = (id, kind) => isStr(id) && refs.some((r) => r.id === id && r.kind === kind) && !dropped.includes(id);
+  if (!ok(p.layout, "layout")) return ["primary.layout must be a layout reference that is not excluded"];
+  if (!ok(p.interaction, "interaction")) return ["primary.interaction must be an interaction reference that is not excluded"];
+  const added = p.added_slots ?? [];
+  if (!Array.isArray(added) || added.length > 20 || !added.every((a) => a && SLOT_ID.test(a.id ?? "") && isStr(a.label) && a.label.trim() && a.label.length <= 80))
+    return ["primary.added_slots must be [{id, label}]"];
+  const base = (readJson("component-slots.json") ?? []).map((s) => s.id);
+  if (added.some((a) => base.includes(a.id))) return ["an added slot reuses an existing slot id"];
+  const slots = [...base, ...added.map((a) => a.id)];
+  const comps = p.components ?? {};
+  if (typeof comps !== "object" || Array.isArray(comps)) return ["primary.components must map slot ids to a component id or null"];
+  for (const [k, v] of Object.entries(comps)) {
+    if (!slots.includes(k)) return [`primary.components: ${k} is not a slot`];
+    if (v !== null && !ok(v, "component")) return [`primary.components.${k} must be a component reference that is not excluded`];
+  }
+  return [null, { layout: p.layout, interaction: p.interaction, components: comps, added_slots: added.map((a) => ({ id: a.id, label: a.label.trim() })) }];
+}
+
 function pick(body) {
   if (!body || typeof body !== "object") return ["body must be a JSON object"];
   const words = body.user_words ?? "";
@@ -44,14 +67,17 @@ function pick(body) {
   if (!ids(body.kept ?? []) || !ids(body.dropped ?? [])) return ["kept and dropped must be lists of ids"];
   const kept = body.kept ?? [], dropped = body.dropped ?? [];
   if (body.node === "reference_pick") {
-    const known = new Set((readJson("references.json") ?? []).map((r) => r.id));
+    const refs = readJson("references.json") ?? [];
+    const known = new Set(refs.map((r) => r.id));
     const unknown = [...kept, ...dropped].filter((i) => !known.has(i));
     if (unknown.length) return [`unknown reference ids: ${unknown.join(", ")}`];
     if (!kept.length) return ["keep at least one reference"];
     if (!isStr(body.tone) || !body.tone.trim() || body.tone.length > 2000) return ["tone must be text: kept, or the change"];
     const sites = body.add_sites ?? [];
     if (!Array.isArray(sites) || !sites.every((u) => isStr(u) && /^https?:\/\/\S+$/i.test(u) && u.length <= 500)) return ["add_sites must be http(s) URLs"];
-    return [null, "reference-pick.json", { tone: body.tone.trim(), kept, dropped, add_sites: sites, user_words: words, via: "board" }];
+    const [perr, primary] = checkPrimary(body.primary, refs, dropped);
+    if (perr) return [perr];
+    return [null, "reference-pick.json", { tone: body.tone.trim(), kept, dropped, add_sites: sites, primary, user_words: words, via: "board" }];
   }
   if (body.node === "draft_pick") {
     const known = new Set((readJson("candidates.json")?.candidates ?? []).map((c) => c.id));

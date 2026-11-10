@@ -10,6 +10,13 @@
 #     만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다. --serve면 보드 서버를 분리 실행해 보드의 시작 버튼이 고른 결과를 쓴다.
 #   - wait-pick: 고른 결과 파일이 그 노드 시작 뒤에 생길 때까지 기다린다(세션은 이 명령을 백그라운드로 두고 턴을 끝낸다).
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
+#   - capture-refs: 레퍼런스 페이지를 한 번에 동시 4개로 캡처한다(봇 확인 화면은 challenge). 녹화는 --background로 분리 실행한다.
+#     사이트마다 에이전트가 캡처 스크립트를 짜던 시간이 레퍼런스 단계의 대부분이었다.
+#   - 대표 고르기: 레이아웃·인터랙션은 대표 하나, 구성요소는 섹션 칸(component-slots.json)마다 대표 하나를 고른다.
+#     에이전트가 references.json의 recommended로 추천을 미리 채우고, reference-pick.json의 primary에 남는다. 후보는
+#     primary_refs로 이끄는 레퍼런스를 밝히고, 적어도 한 후보는 고른 대표를 그대로 쓴다(다 참고하면 후보가 섞인다).
+#   - draft_choose: 무인 실행은 후보 하나만 완성한다. 모든 시안 검토가 끝난 뒤 에이전트가 이유와 함께 하나를 고르고 나머지는
+#     folded로 접는다. 두 번째 후보의 build 진입은 거부한다(둘 다 완성하면 시간·비용이 두 배인데 보고서엔 하나만 쓰인다).
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
 
@@ -26,6 +33,7 @@ usage:
   landing-run.sh measure --work DIR --candidate ID --url URL
   landing-run.sh review  --work DIR --candidate ID --file REVIEW.json
   landing-run.sh capture --work DIR --candidate ID --url URL [--label NAME]
+  landing-run.sh capture-refs --work DIR --file REFS-TO-CAPTURE.json [--background]
   landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
   landing-run.sh board   --work DIR [--kind references|drafts] [--port N --serve]
   landing-run.sh wait-pick --work DIR --node reference_pick|draft_pick [--timeout-min 30]
@@ -35,7 +43,7 @@ EOF
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH="" KIND="references" PORT="" SERVE="" TIMEOUT_MIN=30
+WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH="" KIND="references" PORT="" SERVE="" BACKGROUND="" TIMEOUT_MIN=30
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work) WORK="$2"; shift 2 ;;
@@ -51,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     --kind) KIND="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --serve) SERVE=1; shift ;;
+    --background) BACKGROUND=1; shift ;;
     --timeout-min) TIMEOUT_MIN="$2"; shift 2 ;;
     *) usage ;;
   esac
@@ -142,10 +151,15 @@ move() {
     jq -e '[.candidates[] | (.first_viewport // "") | type == "string" and length > 0] | all' "$WORK/candidates.json" >/dev/null \
       || die 4 "each candidate needs first_viewport: its first-viewport composition in one line (direction.md, Not the stock hero)"
   fi
+  # An unattended run finishes one candidate (limits.unattended_builds): a second one never enters build.
+  if [[ -n "$CAND" && "$to" == build && "$(state .mode)" == unattended ]]; then
+    local built; built="$(jq -r --arg c "$CAND" '[.history[] | select(.to == "build" and .candidate != $c) | .candidate] | unique | join(", ")' "$STATE")"
+    [[ -z "$built" ]] || die 3 "an unattended run finishes one candidate; '$built' already entered build"
+  fi
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.candidates[$c].node = $t | .candidates[$c].entered_at = $at | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
-       | if $f == "preview" and (.candidates[$c].previewed_at == null) then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision") then .candidates[$c].finished_at = $at else . end'
+       | if $f == "preview" and (.candidates[$c].previewed_at == null) then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision" or $t == "folded") then .candidates[$c].finished_at = $at else . end'
   else
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.node = $t | .entered_at = $at | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
@@ -159,16 +173,20 @@ print_next() {
   actor="$(jq -r --arg n "$node" '.nodes[$n].actor // "runner"' "$GRAPH")"
   local outs
   outs="$(jq -c --arg f "$node" --arg m "$(state .mode)" '[.transitions[] | select(.from == $f and ((.mode // $m) == $m)) | .when] | unique' "$GRAPH")"
+  [[ "$node" != draft_choose ]] || outs='["chosen"]'
   local docs
   docs="$(jq -c --arg n "$node" --arg base "$ROOT/skills/landing-page/" '[.nodes[$n].docs // [] | .[] | $base + .]' "$GRAPH")"
   local arts
   arts="$(artifacts "$node" "$c" | jq -R . | jq -sc --arg w "$WORK/" 'map($w + .)')"
   local how
   case "$actor" in
-    maker) how="Do this node's work (read only the docs listed), write the artifacts, then: landing-run.sh submit --work <dir> --node $node --outcome <one of outcomes>${c:+ --candidate $c}" ;;
+    maker) if [[ "$node" == draft_choose ]]; then
+        how="Once every candidate's draft review is done (landing-run.sh next shows each node), choose one candidate to finish — one whose draft passed (draft_pass) when there is one — and write draft-pick.json {kept: [id], dropped: [ids], via: \"agent\", reason}; then: landing-run.sh submit --work <dir> --node draft_choose --outcome chosen (no --candidate). The others fold; put the reason in the report."
+      else how="Do this node's work (read only the docs listed), write the artifacts, then: landing-run.sh submit --work <dir> --node $node --outcome <one of outcomes>${c:+ --candidate $c}"; fi ;;
     human) how="Ask the user (in an interactive session), record their answer in the artifact, then submit with outcome picked${c:+ --candidate $c}" ;;
     runner) case "$node" in
         measure) how="Serve the page, then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
+        folded) how="Not finished: another candidate was chosen at draft_choose (status holds the reason); report it" ;;
         *) how="Terminal: report this candidate (landing-run.sh status)" ;;
       esac ;;
     reviewer) if [[ "$node" == draft_review ]]; then
@@ -232,8 +250,70 @@ SEARCH_CHECK='
              | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named may skip search)")
       ] | join("; ") end'
 
+# The sections that need a reference of their own (component-slots.json): each becomes a column in the components tab.
+SLOTS_CHECK='
+  def str: type == "string" and length > 0;
+  if type != "array" or length == 0 then "must list the sections that need a reference: [{id, label}]" else
+  [ (.[] | select(((.id | str) and (.id | test("^[a-z0-9][a-z0-9_-]*$")) and (.label | str)) | not)
+         | "\(.id // "?"): a slot needs id (lowercase letters, digits, - or _) and label"),
+    ([.[].id] | group_by(.)[] | select(length > 1) | "slot \(.[0]) is listed twice"),
+    (.[] | select(.id == "layout" or .id == "interaction") | "slot id \(.id) is reserved")
+  ] | join("; ") end'
+# The agent's recommendation, starred on the board before the user looks: one layout, one interaction, one component per slot at most.
+RECO_CHECK='
+  ($slots[0] | map(.id)) as $sids
+  | [ (.[] | select(.recommended != null)
+           | select(((.recommended == "layout" and .kind == "layout") or (.recommended == "interaction" and .kind == "interaction")
+                     or (.kind == "component" and (.recommended as $r | $sids | index($r)) != null)) | not)
+           | "\(.id): recommended must be layout (on a layout reference), interaction (on an interaction reference), or a slot id from component-slots.json (on a component reference)"),
+      (if ([.[] | select(.recommended == "layout")] | length) == 1 then empty else "recommend exactly one layout reference (recommended: \"layout\")" end),
+      (if ([.[] | select(.recommended == "interaction")] | length) == 1 then empty else "recommend exactly one interaction reference (recommended: \"interaction\")" end),
+      ([.[] | select(.kind == "component" and .recommended != null) | .recommended] | group_by(.)[] | select(length > 1)
+         | "slot \(.[0]) has more than one recommended component")
+    ] | join("; ")'
+# reference-pick.json primary: the layout and interaction that lead, and one component per slot (or none); never an excluded one.
+PRIMARY_CHECK='
+  def str: type == "string" and length > 0;
+  ($refs[0]) as $all | (.dropped // []) as $out | (.primary // null) as $p
+  | def ok($id; $k): ($id | str) and ($all | any(.id == $id and .kind == $k)) and (($out | index($id)) == null);
+  if ($p | type) != "object" then "primary is missing: {layout, interaction, components: {<slot id>: id|null}, added_slots: [{id, label}]}" else
+    (($p.added_slots // []) | if type == "array" then . else [] end) as $added
+    | (($slots[0] | map(.id)) + [$added[] | .id?]) as $sids
+    | [ (if ok($p.layout; "layout") then empty else "primary.layout must be a layout reference that is not excluded (got \($p.layout // "none"))" end),
+        (if ok($p.interaction; "interaction") then empty else "primary.interaction must be an interaction reference that is not excluded (got \($p.interaction // "none"))" end),
+        (if ($p.components | type) == "object" then empty else "primary.components must map each slot id to a component id or null" end),
+        (($p.components // {}) | objects | to_entries[] | select(.key as $k | ($sids | index($k)) == null) | "primary.components: \(.key) is not a slot"),
+        (($p.components // {}) | objects | to_entries[] | select(.value != null and (ok(.value; "component") | not))
+           | "primary.components.\(.key): \(.value) must be a component reference that is not excluded"),
+        (if (($p.added_slots // []) | type) == "array" and all($added[]; (.id | str) and (.id | test("^[a-z0-9][a-z0-9_-]*$")) and (.label | str)) then empty
+           else "primary.added_slots must be [{id, label}]" end),
+        ($added[] | .id? | select(. as $a | $slots[0] | map(.id) | index($a)) | "added slot \(.) already exists")
+      ] | join("; ") end'
+# Each candidate names the references it leads with; at least one leads with the picked primary as it is.
+CAND_PRIMARY_CHECK='
+  def str: type == "string" and length > 0;
+  def norm: {layout, interaction, components: ((.components // {}) | with_entries(select(.value != null)))};
+  ($pick[0].primary) as $p | ($pick[0].dropped // []) as $out | ($refs[0]) as $all
+  | def ok($id; $k): ($id | str) and ($all | any(.id == $id and .kind == $k)) and (($out | index($id)) == null);
+  [ (.candidates[] | select((.primary_refs | type) != "object") | "\(.id): primary_refs is missing (its layout, interaction, and component per slot)"),
+    (.candidates[] | . as $c | (.primary_refs | objects)
+       | ((if ok(.layout; "layout") then empty else "\($c.id): primary_refs.layout \(.layout // "none") is not a kept layout reference" end),
+          (if ok(.interaction; "interaction") then empty else "\($c.id): primary_refs.interaction \(.interaction // "none") is not a kept interaction reference" end),
+          ((.components // {}) | to_entries[] | select(.value != null and (ok(.value; "component") | not))
+             | "\($c.id): primary_refs.components.\(.key) \(.value) is not a kept component reference"))),
+    (if [.candidates[] | (.primary_refs | objects | norm)] | any(. == ($p | norm)) then empty
+       else "no candidate leads with the picked primary (reference-pick.json primary); at least one must use it as it is" end)
+  ] | join("; ")'
+
+check_primary() {
+  local bad
+  bad="$(jq -r --slurpfile refs "$WORK/references.json" --slurpfile slots "$WORK/component-slots.json" "$PRIMARY_CHECK" "$WORK/reference-pick.json" 2>/dev/null)" \
+    || bad="not valid JSON"
+  [[ -z "$bad" ]] || die 4 "reference-pick.json: $bad (direction.md, Picking the primary references)"
+}
+
 required_checks() {
-  local multi; multi="$(jq '.candidates | length' "$STATE")"
+  local multi; multi="$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")"
   jq -c --argjson multi "$multi" '.review_checks.public_page + (if $multi > 1 then .review_checks.multi_candidate else [] end)' "$GRAPH"
 }
 
@@ -254,7 +334,9 @@ case "$cmd" in
   next)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK (init first)"
     GRAPH="$(state .graph)"
-    if [[ -z "$CAND" && "$(state .node)" == candidates ]]; then
+    if [[ -z "$CAND" && "$(state .node)" == candidates ]] && jq -e '[.candidates[] | select(.node != "folded") | .node] | length > 0 and all(. == "draft_choose")' "$STATE" >/dev/null; then
+      print_next draft_choose
+    elif [[ -z "$CAND" && "$(state .node)" == candidates ]]; then
       jq '{node: "candidates", candidates: (.candidates | with_entries(.value |= {node, measures, reviews, verdict})), how: "Each candidate runs its own path: landing-run.sh next --work <dir> --candidate <id>"}' "$STATE"
     else
       node="$(current)"; [[ -n "$node" ]] || die 4 "unknown candidate '$CAND'"
@@ -265,6 +347,46 @@ case "$cmd" in
     [[ -f "$STATE" && -n "$NODE" && -n "$OUTCOME" ]] || usage
     GRAPH="$(state .graph)"
     lock
+    if [[ "$NODE" == draft_choose ]]; then
+      [[ -z "$CAND" ]] || die 2 "draft_choose is one choice across the candidates; submit it without --candidate"
+      [[ "$(state .mode)" == unattended ]] || die 3 "draft_choose belongs to unattended runs; an interactive run picks at draft_pick"
+      [[ "$OUTCOME" == chosen ]] || die 3 "submit draft_choose with outcome chosen; the runner folds the others"
+      waiting="$(jq -r '[.candidates | to_entries[] | select(.value.node | IN("draft", "preview", "draft_review")) | "\(.key) at \(.value.node)"] | join(", ")' "$STATE")"
+      [[ -z "$waiting" ]] || die 3 "choose once every candidate's draft review is done: $waiting"
+      at_choose="$(jq -r '[.candidates | to_entries[] | select(.value.node == "draft_choose") | .key] | join(" ")' "$STATE")"
+      [[ -n "$at_choose" ]] || die 3 "no candidate is at draft_choose"
+      pickf="$WORK/draft-pick.json"
+      [[ -f "$pickf" ]] || die 4 "missing artifacts for draft_choose: draft-pick.json"
+      since="$(jq '[.candidates[] | select(.node == "draft_choose") | .entered_at | fromdateiso8601] | max' "$STATE")"
+      [[ "$(mtime "$pickf")" -ge "$since" ]] || die 4 "artifacts older than this node (write or update them in draft_choose): draft-pick.json"
+      pick_bad="$(jq -r --arg ids "$at_choose" '
+        def str: type == "string" and length > 0;
+        ($ids | split(" ")) as $ids
+        | [ (if (.kept | type) == "array" and (.kept | length) == 1 then empty else "kept must name exactly one candidate" end),
+            (if .via == "agent" then empty else "via must be \"agent\"" end),
+            (if (.reason | str) then empty else "reason is missing (why this candidate, and why not the others)" end),
+            ((.kept // [])[] | select(($ids | index(.)) == null) | "\(.) is not a candidate at draft_choose")
+          ] | join("; ")' "$pickf" 2>/dev/null)" || pick_bad="not valid JSON"
+      [[ -z "$pick_bad" ]] || die 4 "draft-pick.json: $pick_bad"
+      kept="$(jq -r '.kept[0]' "$pickf")"
+      passed="$(jq -r '[.candidates | to_entries[] | select(.value.node == "draft_choose" and ((.value.draft_rounds // [])[-1].outcome == "draft_pass")) | .key] | join(" ")' "$STATE")"
+      if [[ -n "$passed" && " $passed " != *" $kept "* ]]; then
+        die 4 "draft-pick.json: choose a candidate whose draft passed ($passed); '$kept' was kept after its redo"
+      fi
+      reason="$(jq -r '.reason' "$pickf")"
+      for c in $at_choose; do
+        CAND="$c"
+        if [[ "$c" == "$kept" ]]; then move draft_choose chosen >/dev/null; fi
+      done
+      save --arg k "$kept" --arg r "$reason" '.chosen = {candidate: $k, via: "agent", reason: $r}'
+      for c in $at_choose; do
+        [[ "$c" == "$kept" ]] && continue
+        CAND="$c"; move draft_choose folded >/dev/null
+        save --arg c "$c" --arg k "$kept" --arg r "$reason" '.candidates[$c].folded_reason = "\($k) was chosen: \($r)"'
+      done
+      printf 'build\n'
+      exit 0
+    fi
     node="$(current)"
     [[ "$node" == "$NODE" ]] || die 3 "current node is '${node:-none}', not '$NODE'"
     actor="$(graph ".nodes[\"$NODE\"].actor")"
@@ -297,10 +419,26 @@ case "$cmd" in
       [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
       search_bad="$(jq -r --slurpfile refs "$WORK/references.json" "$SEARCH_CHECK" "$WORK/searches.json" 2>/dev/null)" || search_bad="searches.json is not valid JSON"
       [[ -z "$search_bad" ]] || die 4 "searches.json: $search_bad (direction.md, References)"
+      slots_bad="$(jq -r "$SLOTS_CHECK" "$WORK/component-slots.json" 2>/dev/null)" || slots_bad="component-slots.json is not valid JSON"
+      [[ -z "$slots_bad" ]] || die 4 "component-slots.json: $slots_bad (direction.md, References)"
+      reco_bad="$(jq -r --slurpfile slots "$WORK/component-slots.json" "$RECO_CHECK" "$WORK/references.json")"
+      [[ -z "$reco_bad" ]] || die 4 "references.json: $reco_bad (direction.md, Picking the primary references)"
+      # Unattended: no board, so the agent writes the pick in the same shape.
+      if [[ "$(state .mode)" == unattended ]]; then
+        [[ -f "$WORK/reference-pick.json" ]] || die 4 "reference-pick.json is missing: an unattended run writes its own pick with primary and via: \"agent\""
+        jq -e '.via == "agent"' "$WORK/reference-pick.json" >/dev/null 2>&1 || die 4 "reference-pick.json: an unattended pick says via: \"agent\""
+        check_primary
+      fi
     fi
     if [[ "$NODE" == reference_pick ]]; then
       jq -e '(.tone // "") | type == "string" and length > 0' "$WORK/reference-pick.json" >/dev/null \
         || die 4 "reference-pick.json needs tone: the user's answer on the tone and manner shown at the top of the board"
+      check_primary
+    fi
+    if [[ "$NODE" == direction && "$OUTCOME" == direction_ready && -f "$WORK/reference-pick.json" ]] && jq -e '.primary' "$WORK/reference-pick.json" >/dev/null 2>&1; then
+      cp_bad="$(jq -r --slurpfile pick "$WORK/reference-pick.json" --slurpfile refs "$WORK/references.json" "$CAND_PRIMARY_CHECK" "$WORK/candidates.json" 2>/dev/null)" \
+        || cp_bad="candidates.json is not valid JSON"
+      [[ -z "$cp_bad" ]] || die 4 "candidates.json: $cp_bad (direction.md, Direction candidates)"
     fi
     purl="" pf=""
     if [[ "$NODE" == preview ]]; then
@@ -389,7 +527,13 @@ case "$cmd" in
       save --arg c "$CAND" --argjson k "$k" --arg o "$outcome" --argjson m "$majors" \
         '.candidates[$c].draft_reviews = $k | .candidates[$c].draft_rounds += [{round: $k, outcome: $o, majors: $m}]'
       printf '{"draft_round":%s,"outcome":"%s","majors":%s}\n' "$k" "$outcome" "$majors" >&2
-      move draft_review "$outcome"
+      to="$(move draft_review "$outcome")"
+      # A lone candidate has nothing to be chosen against: it goes on to build without a draft-pick.json.
+      if [[ "$to" == draft_choose && "$(jq '.candidates | length' "$STATE")" -eq 1 ]]; then
+        save --arg c "$CAND" '.chosen = {candidate: $c, via: "runner", reason: "the only candidate"}'
+        to="$(move draft_choose chosen)"
+      fi
+      printf '%s\n' "$to"
       exit 0
     fi
     r=$(( $(jq -r --arg c "$CAND" '.candidates[$c].reviews' "$STATE") + 1 ))
@@ -418,6 +562,23 @@ case "$cmd" in
     [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die 2 "label may hold letters, digits, dot, dash, underscore"
     cdir="$(run_capture "$URL" "$label")"
     printf '%s\n' "${cdir:+$WORK/$cdir}"
+    ;;
+  capture-refs)
+    [[ -n "$FILE" ]] || usage
+    [[ -f "$FILE" ]] || die 2 "refs list not found: $FILE"
+    list="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
+    recs="$(jq '[.[]? | select(.record == true)] | length' "$list" 2>/dev/null)" || die 2 "$FILE is not valid JSON"
+    mkdir -p "$WORK/refs"
+    read -r -a refs_cmd <<<"${LANDING_CAPTURE_REFS_CMD:-node $ROOT/scripts/landing-capture-refs.mjs}"
+    if [[ -n "$BACKGROUND" && "$recs" -gt 0 ]]; then
+      "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase stills
+      # Recording takes about ten seconds a page: detached, so the take-lines and tone tags get written meanwhile.
+      rm -f "$WORK/refs/record.done"
+      nohup "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase record >"$WORK/refs/record.log" 2>&1 </dev/null &
+      printf '{"recording":"background","count":%s,"done_when":"%s"}\n' "$recs" "$WORK/refs/record.done" >&2
+    else
+      "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase all
+    fi
     ;;
   operate)
     [[ -f "$STATE" && -n "$URL" && -n "$FILE" ]] || usage
@@ -468,9 +629,9 @@ case "$cmd" in
     jq --slurpfile g "$GRAPH" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
       def mins($a; $b): if $a == null or $b == null then null else ((($b | fromdateiso8601) - ($a | fromdateiso8601)) / 60 | floor) end;
       .started_at as $s | ($g[0].budget_minutes // {}) as $bud
-      | {mode, node, elapsed_min: mins($s; $now),
+      | {mode, node, elapsed_min: mins($s; $now), chosen,
          candidates: (.candidates | with_entries(.value |= (
-           {node, motion_level, measures, measure, reviews, verdict, rounds,
+           {node, motion_level, measures, measure, reviews, verdict, rounds, folded_reason,
             preview_min: mins($s; .previewed_at), finished_min: mins($s; .finished_at)}
            | .over_budget = ([ (if $bud.preview != null and ((.preview_min // mins($s; $now)) > $bud.preview) and (.preview_min != null or .node == "draft" or .node == "preview") then "preview" else empty end),
                                (if $bud.done != null and ((.finished_min // mins($s; $now)) > $bud.done) then "done" else empty end) ])

@@ -4,7 +4,8 @@
   "entry": "brief",
   "terminals": [
     "done",
-    "user_decision"
+    "user_decision",
+    "folded"
   ],
   "nodes": {
     "brief": {
@@ -28,7 +29,8 @@
       ],
       "artifacts": [
         "references.json",
-        "searches.json"
+        "searches.json",
+        "component-slots.json"
       ],
       "outcomes": [
         "references_ready",
@@ -185,6 +187,25 @@
         "draft_kept"
       ],
       "note": "A new design-reviewer judges the draft's first viewport from the preview captures and the references, only the draft checks, within three minutes. A weak first viewport is redrawn before an hour goes into finishing it."
+    },
+    "draft_choose": {
+      "actor": "maker",
+      "docs": [
+        "references/direction.md#3-direction-candidates"
+      ],
+      "artifacts": [
+        "draft-pick.json"
+      ],
+      "outcomes": [
+        "chosen",
+        "folded"
+      ],
+      "note": "Unattended, several candidates: once every draft review is done, pick one to finish — a draft_pass one when there is one — with the reason in draft-pick.json (via: \"agent\"). The others fold."
+    },
+    "folded": {
+      "actor": "runner",
+      "per_candidate": true,
+      "note": "An unattended candidate not chosen at draft_choose; the report gives the reason."
     }
   },
   "transitions": [
@@ -250,7 +271,14 @@
     {
       "from": "draft_review",
       "to": "build",
-      "when": "draft_pass"
+      "when": "draft_pass",
+      "mode": "interactive"
+    },
+    {
+      "from": "draft_review",
+      "to": "draft_choose",
+      "when": "draft_pass",
+      "mode": "unattended"
     },
     {
       "from": "draft_review",
@@ -260,7 +288,24 @@
     {
       "from": "draft_review",
       "to": "build",
-      "when": "draft_kept"
+      "when": "draft_kept",
+      "mode": "interactive"
+    },
+    {
+      "from": "draft_review",
+      "to": "draft_choose",
+      "when": "draft_kept",
+      "mode": "unattended"
+    },
+    {
+      "from": "draft_choose",
+      "to": "build",
+      "when": "chosen"
+    },
+    {
+      "from": "draft_choose",
+      "to": "folded",
+      "when": "folded"
     },
     {
       "from": "build",
@@ -326,7 +371,8 @@
   "limits": {
     "max_reviews": 3,
     "max_measure_repairs": 5,
-    "max_draft_redos": 1
+    "max_draft_redos": 1,
+    "unattended_builds": 1
   },
   "references_min": {
     "interactive": {
@@ -429,7 +475,9 @@
     "A candidate reaches done only through review_verified or review_input_wait, never from build, measure, or repair.",
     "After max_reviews reviews with a major left, the candidate goes to user_decision; later fixes are reported as not independently reviewed.",
     "Each review is a new reviewer; the briefing carries the take-lines and reference captures, not the maker's notes.",
-    "The user sees a served draft (preview) before measurement and review start; verification never delays the first look."
+    "The user sees a served draft (preview) before measurement and review start; verification never delays the first look.",
+    "An unattended run finishes one candidate: after every draft review the agent chooses one (draft-pick.json, via agent, with its reason), the rest fold, and a second candidate entering build is refused.",
+    "The reference pick names the primary references: one layout, one interaction, and one component per section slot (or none), none of them excluded; at least one candidate leads with that primary as it is."
   ],
   "budget_minutes": {
     "preview": 10,
