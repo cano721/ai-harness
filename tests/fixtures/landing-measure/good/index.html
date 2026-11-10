@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>측정 고정 페이지 — 정상</title>
+<style>body{margin:0;font:16px/1.6 system-ui;background:#fff;color:#111}main{max-width:960px;margin:0 auto;padding:24px}
+.cta{display:inline-block;padding:12px 20px;background:#111;color:#fff;border-radius:8px;text-decoration:none}
+.scene{height:150vh;background:#f2f2f2;position:relative}.dot{position:sticky;top:40%;width:40px;height:40px;border-radius:50%;background:#333;margin:0 auto}</style></head>
+<body><main><h1>정상 페이지</h1><p>설명 문장이에요.</p><a class="cta" href="#start" data-primary-action>시작하기</a>
+<section class="scene" data-moment="scroll" aria-label="장면"><div class="dot"></div></section>
+<section id="start"><h2>시작</h2><p>끝까지 읽을 수 있는 내용이에요.</p></section></main>
+<script>const d=document.querySelector('.dot');addEventListener('scroll',()=>{d.style.transform='translateX('+(scrollY%200-100)+'px)'},{passive:true});</script></body></html>

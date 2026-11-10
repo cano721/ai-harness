@@ -1,6 +1,25 @@
 # Motion for Marketing Pages
 
-Motion is optional. A page with one well-placed effect beats a page where everything moves. There is no minimum count: a typical budget is one signature moment, entrance reveals, interaction feedback, and at most one extra.
+How much moves is a direction decision, not a fixed budget. Each direction candidate names one **motion level**:
+
+| Level | What it holds | Fits |
+|---|---|---|
+| Calm | One signature moment, entrance reveals, interaction feedback, at most one extra | The restrained candidate; dense or serious content |
+| Lively | Several moments tied to the argument, a try-it demo, hover and pointer response on the evidence | Most product pages |
+| Showpiece | Pinned scroll scenes, a scrubbed story, a try-it demo at the center, a WebGL or canvas moment | The bold candidate, launches, campaigns |
+
+At every level, every effect answers the four questions below, and the floors at the end of this file hold. A higher level is not more decoration: each extra moment explains something or lets the visitor do something.
+
+## Try-it demo
+
+Watching an animation is not interaction. On a product page, let the visitor do the product's core action in a few seconds, inside the page. The mechanism comes from a kept interaction reference (`direction.md` section 7), not from a default — dragging, typing their own input, speaking into the microphone, moving the pointer, turning a 3D object, scrolling through a story, or choosing among the product's real options are all candidates:
+
+- The visitor's action changes what the page shows — not a looping video of someone else doing it. Choosing a prepared option and reading a prepared answer is the weakest form; use it only when the product itself works that way.
+- Input the visitor types, says, or films stays in the browser: no upload, no storage, said in one line next to the control. Microphone or camera access is asked only on the visitor's click, and the demo works without it.
+- Run on fixed example data in the page, labeled as an example. No backend calls, no real model, no claims drawn from the demo.
+- Works by keyboard and touch, announces changes to screen readers (`aria-live="polite"`), and under reduced motion still responds, just without movement.
+- With JavaScript off, show the demo's default state as a static example.
+- One per page is usually enough; it is often the signature moment.
 
 ## Four questions before any effect
 
@@ -34,6 +53,8 @@ Use the design system's motion tokens when they exist. Otherwise:
 - First-load sequence: at most 1.2s total, at most four elements. No preloader screens.
 - Reveal once; trigger when the element's top reaches 85% of the viewport height. Travel 12–32px. Blur up to 8px, display type only.
 - Items whose top sits in the last 15% of the page's scroll range never cross that line: leave them static, or use `start: "clamp(top 85%)"` in ScrollTrigger.
+- Never put a reveal on the first-viewport LCP candidate; a late script would hide it for the fallback's whole delay.
+- Code in this file shows patterns. Check every library API against the installed version's docs or types before using it.
 - Hidden starting states live only under a JavaScript class and `prefers-reduced-motion: no-preference`, with a timed fallback that shows everything if the reveal script has not started:
 
 ```html
@@ -67,13 +88,16 @@ const io = new IntersectionObserver((entries) => {
     io.unobserve(entry.target);
   }
 }, { rootMargin: "0px 0px -15% 0px" });
-const lastReachable = document.documentElement.scrollHeight - innerHeight * 0.15;
-document.querySelectorAll("[data-reveal]").forEach((el) => {
-  // Items that can never reach the 85% line are shown immediately.
-  if (el.getBoundingClientRect().top + scrollY > lastReachable) el.classList.add("is-in");
-  else io.observe(el);
-});
+const items = document.querySelectorAll("[data-reveal]");
+items.forEach((el) => io.observe(el));
 window.revealReady = true;
+// After fonts load the page height is final: show items that can never reach the 85% line.
+document.fonts.ready.then(() => {
+  const lastReachable = document.documentElement.scrollHeight - innerHeight * 0.15;
+  items.forEach((el) => {
+    if (el.getBoundingClientRect().top + scrollY > lastReachable) el.classList.add("is-in");
+  });
+});
 ```
 
 ## Scroll scenes
@@ -90,13 +114,17 @@ window.revealReady = true;
 - Pause loops and canvases when offscreen (IntersectionObserver) and when the tab is hidden (`visibilitychange`).
 - Content that moves, blinks, or scrolls automatically for more than five seconds needs a visible pause control (WCAG 2.2 SC 2.2.2). Nothing flashes more than three times per second (SC 2.3.1).
 - Reduced motion: remove translation, scale, parallax, smooth scrolling, and autoplay; keep opacity and color changes and all content.
+- Visitors' devices are slower than yours, and their browsers busier. Do the expensive work before the moment, not during it: a blur, shadow, or filter over a large area becomes a pre-rendered image; a photo that will be scaled or revealed is decoded first (`img.decode()`); particle counts and canvas sizes scale with the element, capped at a device pixel ratio of 2.
+- **Degrade on a slow device.** A scroll scene, canvas, WebGL, or try-it effect watches its own frame rate while it runs; when it stays under 30 frames per second for about a second, it switches to its simpler form (unpinned scenes, fewer particles, a still image) for the rest of the visit and sets `data-motion-tier="lite"` on `<html>`, which the measure node accepts on a throttled phone. The simpler form keeps the content and the interaction's result.
+- Mark each moving moment `data-moment="scroll|pointer|type"` so the measure node finds and operates it (`verify.md`).
 
 ## GSAP and ScrollTrigger
 
-- Choose GSAP only when the plan needs timelines, scrubbed scenes, or pinning; CSS and IntersectionObserver cover simple reveals. Reuse an animation library the project already has.
+- Choose GSAP only when the plan needs timelines, scrubbed scenes, or pinning; CSS and IntersectionObserver cover simple reveals. Reuse an animation library the project already has. A direction whose signature moment is a scroll scene (walking from one place to the next, a story told by scrolling) needs pinning and scrub: propose the library with the candidate and ask for approval then, rather than faking the scene with reveals.
 - Wrap all motion in `gsap.matchMedia()` with a `(prefers-reduced-motion: no-preference)` condition so it reverts cleanly when the preference changes.
 - Use `gsap.quickTo()` for values updated on every pointer move.
 - Scrub: `scrub: true` when smooth scrolling already smooths input; otherwise a small number (≤ 0.5).
+- A visitor stops anywhere in a scrubbed scene, so every stop must read: scrub position and transforms, but switch content (one screen to the next, a light room to a dark one) with `snap` to the states or with a short timed transition fired at a threshold — not a crossfade spread over the scroll, whose middle is two half-transparent screens over a muddy background.
 - Framework setup and ScrollTrigger pitfalls: `external-code.md`.
 
 ## Smooth scrolling (Lenis)
@@ -128,6 +156,17 @@ Where it usually breaks:
 - **Cleanup.** `lenis.destroy()` and `gsap.ticker.remove()` on unmount or route change; a single-page app otherwise keeps one instance per visited page.
 
 Option names change between Lenis versions; check the installed version's README before relying on one (see `external-code.md`).
+
+## 3D scenes and objects
+
+A 3D object or scene the visitor turns, drags, or scrolls through, when an interaction reference calls for it:
+
+- Build with three.js (or a Spline export) at an exact version, approved like any outside script; a model file or texture from another source needs its license and approval.
+- **Primitives are a sketch, not a scene.** A room, a person, or a product built from default boxes and cylinders, or photos stood up as flat cards, reads as programmer art (`verify.md` `craft`). Use primitives only when the direction is deliberately abstract (shapes, particles, type, light). A realistic scene needs a model or Spline scene with its approval — or, when none is approved (an unattended run), drop 3D for that moment and take the next-strongest interaction from the kept references. A well-made 2D moment beats a crude 3D one.
+- The visitor's input drives it (drag to rotate, pointer to tilt, scroll to advance), and keyboard users get the same result from buttons or arrow keys.
+- Load after first paint, only near the viewport; cap the device pixel ratio at 2; pause when offscreen or the tab is hidden; dispose geometry, materials, and the renderer on leave.
+- Measure as `verify.md` Performance says for every moving moment; otherwise simplify or fall back.
+- Fallback: a still render of the same object, shown when WebGL (or WebGPU) is unavailable, under reduced motion, with JavaScript off, and on small or low-power screens. Text never depends on the 3D layer to be read.
 
 ## WebGL and canvas backgrounds
 
