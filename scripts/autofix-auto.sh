@@ -179,7 +179,7 @@ orphan_records() { # $1=project → JSON lines {signature, record} (상태에 �
     | ($ev | map(select(.event == "finished"))) as $fin
     | ( ($st.signatures // {} | to_entries[] | select(.value.status == "attempting") | .key as $s | (.value.launched_at // "") as $since
           | ([$fin[] | select(.signature == $s and (.at // "") >= $since)] | min_by(.at)) as $f
-          | select($f != null) | {signature: $s, record: ($f | to_state)}),
+          | select($f != null) | {signature: $s, launched: $since, record: ($f | to_state)}),
         (if $whole then
            $ev | map(select(.event | IN("finished", "tracked", "merged", "deployed", "resolved", "regressed", "gave_up", "declined")))
            | group_by(.signature)[] | . as $g
@@ -195,7 +195,7 @@ orphan_records() { # $1=project → JSON lines {signature, record} (상태에 �
 }
 
 recover_attempts() { # $1=project
-  local project="$1" line="" sig="" rec="" summary=""
+  local project="$1" line="" sig="" rec="" summary="" token=""
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     sig="$(jq -r '.signature' <<<"$line")"
@@ -205,16 +205,18 @@ recover_attempts() { # $1=project
     # attempting(통째 복구는 아직 없는 시그니처)일 때만 옮긴다 — 시도·실패 횟수가 두 번 반영되지 않게.
     [[ -z "${HM_AUTOFIX_TEST_RECOVER_HOOK:-}" ]] || "$HM_AUTOFIX_TEST_RECOVER_HOOK" "$project" "$sig"
     # attempting에서 옮길 때는 command_run과 같이 PR이 아닌 결과는 시도로 세지 않고, 실패는 실패 횟수에 더한다.
+    # 같은 시그니처로 새 시도가 시작됐으면(launched_at이 스냅샷과 다름) 지난 결과로 덮지 않는다.
+    token="$$-$RANDOM-$(date +%s)"
     state_update "$project" '.signatures[$sig] as $cur
-      | if (if $r.recovered == null then ($cur.status? == "attempting") else ($cur == null) end) | not then .
+      | if (if $r.recovered == null then ($cur.status? == "attempting" and ($cur.launched_at // "") == $launched) else ($cur == null) end) | not then .
         else .signatures[$sig] = (($cur // {}) + $r
           + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
              elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
           + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)
-          + {updated_at:$now, recovered_at:$now}) end' --arg sig "$sig" --argjson r "$rec" || continue
-    # 실제로 옮겼을 때만 남긴다(다른 쪽이 먼저 썼으면 recovered_at이 이번 기록과 다르다).
-    jq -e --arg s "$sig" --arg at "$(jq -r '.last_run_at // empty' <<<"$rec")" \
-      '.signatures[$s] | .recovered_at != null and .last_run_at == $at' <<<"$(state_get "$project")" >/dev/null 2>&1 || continue
+          + {updated_at:$now, recovered_at:$now, recovered_by:$token}) end' \
+      --arg sig "$sig" --argjson r "$rec" --arg launched "$(jq -r '.launched // ""' <<<"$line")" --arg token "$token" || continue
+    # 이번 쓰기가 실제로 옮겼을 때만 남긴다 — 다른 쪽이 먼저 옮겼으면 recovered_by가 이번 토큰과 다르다.
+    jq -e --arg s "$sig" --arg t "$token" '.signatures[$s].recovered_by == $t' <<<"$(state_get "$project")" >/dev/null 2>&1 || continue
     log_event "$project" recovered "$sig" "$(jq -c '{status, artifact:(.pr // null)}' <<<"$rec")"
   done <<<"$(orphan_records "$project")"
 }

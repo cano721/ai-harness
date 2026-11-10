@@ -127,8 +127,9 @@ class Store:
         hit = self._out.get(key)
         if hit and hit[0] == fp:
             return hit[1]
-        _, out, _ = _run(AUTOFIX_SH, args, 30)
-        self._out[key] = (fp, out)
+        rc, out, _ = _run(AUTOFIX_SH, args, 30)
+        if rc == 0:  # 실패(시간 초과 등)는 남기지 않는다 — 파일이 바뀔 때까지 빈 화면에 머물지 않게
+            self._out[key] = (fp, out)
         return out
 
     def _file(self, name):

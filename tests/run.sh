@@ -7407,7 +7407,7 @@ printf '{"project_id":"blog"}\n' >"$BAF_T/repos/blog/.ai-harness/harness.json"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$BAF_T/repos/tool/tools/errors.sh"; chmod +x "$BAF_T/repos/tool/tools/errors.sh"
 printf '{"provider":"command","command":"tools/errors.sh"}\n' >"$BAF_DATA/autofix/monitors/tool.json"
 jq -cn --arg r "$BAF_T/repos/shop" '{event:"finished", project:"shop", scope:"repo", at:"2026-11-01T00:00:00Z", repo:$r, result:"none"}' >"$BAF_DATA/harvest-auto/runs.jsonl"
-printf '# mine\nHM_AUTOFIX_AUTO="1"\nHM_AUTOFIX_REPOS="shop,tool"\nHM_AUTOFIX_DAILY_MAX="3"\nHM_DELIVERY_LEVEL="merge"\n' >"$BAF_DATA/config"
+printf '# mine\nHM_AUTOFIX_AUTO="1"\nHM_AUTOFIX_REPOS="shop,tool"\nHM_AUTOFIX_DAILY_MAX="3"\nHM_DELIVERY_LEVEL="merge"\nHM_AUTOFIX_BUDGET_USD="7"\n' >"$BAF_DATA/config"
 chmod 600 "$BAF_DATA/config"
 BAF_TODAY="$(date -u +%Y-%m-%d)"
 mkdir -p "$BAF_DATA/autofix/$(hm_short_key shop)"
@@ -7578,10 +7578,13 @@ assert_contains "$(jq -r '.schedule.install' <<<"$BAF_S")" "15분마다" "the co
 assert_eq "true|false" "$(baf_post configure '{"add_repo":"blog","auto":false}' | jq -r '"\(.ok)|\(.config.auto)"')" "turning unattended runs off goes through configure"
 assert_contains "$(<"$BAF_DATA/config")" 'HM_AUTOFIX_REPOS="shop,blog"' "adding a target repo goes through configure"
 # 보드는 config 값을 띄운 시점의 환경으로 들고 있지 않는다: config에서 지운 키는 다음 조회부터 사라진다.
-assert_eq "false|shop,blog" "$(baf_get | jq -r '"\(.config.auto)|\(.config.repos | join(","))"')" "a key removed from config is not shown from the board's startup environment"
+assert_eq "false|shop,blog" "$(baf_get | jq -r '"\(.config.auto)|\(.config.repos | join(","))"')" "turning unattended runs off shows on the next read"
 assert_eq '"merge"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_DELIVERY_LEVEL')" "settings read the personal level from config"
 grep -v '^HM_DELIVERY_LEVEL=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
 assert_eq "null" "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_DELIVERY_LEVEL')" "settings do not fall back to a value the board was started with"
+# 보드를 띄울 때 config에 있던 autofix 키(예산 7)를 지우면 기본값(10)으로 보인다 — 띄운 시점의 환경 값이 남지 않는다.
+grep -v '^HM_AUTOFIX_BUDGET_USD=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
+assert_eq "10" "$(baf_get | jq -r '.config.budget_usd')" "an autofix key removed from config falls back to its default, not the board's startup value"
 # 세션으로 열기 프롬프트: 외부 데이터(제목·시그니처·요약)는 잘라서 인용 블록 안에만 둔다.
 HARNESS_METRICS_DIR="$BAF_DATA" python3 -I -B -c '
 import importlib.util, sys

@@ -103,8 +103,14 @@ def status(max_age=3):
                         and i.get("status") != "waiting" and "send" not in i.get("actions", [])):
                     i["actions"] = i.get("actions", []) + ["send"]
             data["items"] = classify_work(data["items"])
-            # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다
-            data["items"] += af if af is not None else []
+            # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다.
+            # lock 밖 판정 뒤에 다른 요청이 캐시를 비웠으면 여기서 모은다(Store 캐시라 대개 즉시 돌아온다).
+            if af is None:
+                try:
+                    af = AUTOFIX.items(harness_repos, autofix_key)
+                except Exception as e:
+                    print("autofix items:", e, file=sys.stderr, flush=True)
+            data["items"] += af or []
             prstate.apply(data["items"])
             daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
             for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게

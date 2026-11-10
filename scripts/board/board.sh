@@ -104,12 +104,12 @@ command_open() {
   fi
   # lib.sh가 ~/.ai-harness/config의 HM_·HARNESS_ 키를 이 셸에 export했다. 그대로 물려주면 오래 떠 있는 서버와 그 자식
   # (autofix-auto.sh·status.sh·새 세션)이 띄운 시점의 값을 계속 보고, config에서 키를 지워도 반영되지 않는다.
-  # 서버와 자식은 config를 직접 읽으므로 config에서 온 키는 빼고 띄운다(HARNESS_METRICS_DIR은 위치라 남긴다).
+  # 설정값(HM_*)은 서버와 자식이 config를 직접 읽으므로 config에서 온 HM_ 키는 빼고 띄운다. HARNESS_* 는 위치(데이터·세션 경로)라 그대로 둔다.
   local -a unset_cfg=()
   local key=""
   while IFS= read -r key; do
-    [[ -n "$key" && "$key" != HARNESS_METRICS_DIR ]] && unset_cfg+=(-u "$key")
-  done <<<"$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?((HM|HARNESS)_[A-Z0-9_]*)=.*/\2/p' "$HM_DATA_DIR/config" 2>/dev/null | sort -u)"
+    [[ -n "$key" ]] && unset_cfg+=(-u "$key")
+  done <<<"$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?(HM_[A-Z0-9_]*)=.*/\2/p' "$HM_DATA_DIR/config" 2>/dev/null | sort -u)"
   # 새 세션으로 떼어 띄운다: 이 명령을 부른 셸·에이전트 턴이 끝나도 서버는 남는다.
   env ${unset_cfg[@]+"${unset_cfg[@]}"} BOARD_PORT="$PORT" HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I -c 'import subprocess, sys
 log = open(sys.argv[2], "ab")
