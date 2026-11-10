@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // /landing-page board: render the boards the user picks from, so no agent writes their HTML.
 //   node landing-board.mjs --work DIR [--kind references]  → DIR/board.html: five tabs (tone and manner, components,
-//        layout, interaction, competitors) from tone.json and references.json, an exclude (×) and restore button per reference
+//        layout, interaction, competitors) from tone.json and references.json, an exclude (×) and restore button per reference,
+//        a primary (★) per layout and interaction tab and one per section slot (component-slots.json) in the components tab,
+//        starred in advance from each reference's `recommended`; the user may move a star, empty a slot, or add a slot
 //   node landing-board.mjs --work DIR --kind drafts        → DIR/draft-board.html: each candidate's first viewport at
 //        1440 and 390 (preview-<id>.json) with its first_viewport line, one to go ahead with
 // Served by landing-board-server.mjs, the start button writes reference-pick.json or draft-pick.json; served statically,
@@ -75,6 +77,16 @@ footer.pick label{font-size:13px;color:var(--sub);display:grid;gap:4px}
 .more{display:none;white-space:nowrap;font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer}
 .start{font:inherit;font-weight:700;border:0;background:var(--accent);color:#fff;border-radius:10px;padding:12px 20px;cursor:pointer;white-space:nowrap}
 .start:disabled{opacity:.5;cursor:default}
+.star{font:inherit;font-size:14px;font-weight:600;border:1px solid var(--line);background:#fff;color:var(--sub);border-radius:999px;padding:5px 14px;cursor:pointer;margin:0 0 12px}
+.star[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}.star:disabled{opacity:.35;cursor:default}
+article.primary{border:2px solid var(--accent)}
+.slot-pick{display:flex;gap:8px;align-items:center;margin:0 0 12px;font-size:14px;color:var(--sub)}.slot-pick select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 8px;background:#fff;color:var(--ink)}
+.hint{color:var(--sub);font-size:14px;margin:0 0 14px}
+.slots{background:var(--card);border-radius:14px;padding:18px 20px;border:1px solid var(--line);margin-bottom:18px}
+.slots ul{list-style:none;padding:0;margin:0 0 12px;display:grid;gap:6px}.slots li{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.slots li b{min-width:110px}.slots li span{color:var(--sub)}.slots li span.on{color:var(--ink);font-weight:600}
+.slots li button,.add-slot button{font:inherit;font-size:13px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:3px 12px;cursor:pointer}
+.add-slot{display:flex;gap:8px;max-width:520px}.add-slot input{flex:1}
 .static{display:grid;gap:6px;margin-top:10px}.static[hidden]{display:none}.static b{color:var(--accent)}
 .done{font-weight:700;color:#1d7a3a;margin:8px 0 0}.err{color:#a12a2a;margin:8px 0 0}
 @media (max-width:700px){.shots img,.shots video{height:220px}.analysis{grid-template-columns:1fr}.analysis dd{margin-bottom:6px}
@@ -89,7 +101,7 @@ let locked=false;
 const bar=document.querySelector('footer.pick'),btn=bar.querySelector('.start'),stat=bar.querySelector('.static'),out=bar.querySelector('.summary');
 const say=(cls,t)=>{bar.querySelectorAll('.done,.err').forEach(e=>e.remove());const p=document.createElement('p');p.className=cls;p.textContent=t;bar.append(p);};
 const refresh=()=>{if(locked)return;const s=summary();out.value=s.text;bar.querySelector('.count').textContent=s.count;btn.disabled=!s.ready;};
-const lock=(label)=>{locked=true;document.querySelectorAll('main button,main input,main textarea,footer.pick .fields textarea,footer.pick .fields input').forEach(e=>e.disabled=true);btn.disabled=true;if(label)btn.textContent=label;};
+const lock=(label)=>{locked=true;document.querySelectorAll('main button,main input,main textarea,main select,footer.pick .fields textarea,footer.pick .fields input').forEach(e=>e.disabled=true);btn.disabled=true;if(label)btn.textContent=label;};
 const showStarted=(p,node)=>{if(p)applyPicked(p);lock('이미 시작됐어요');bar.querySelector('.count').textContent=p?'이미 시작됐어요 · '+pickedText(p):'이미 지난 단계예요 (지금 '+node+')';};
 fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server))throw 0;btn.hidden=false;
   fetch('state?node='+BOARD_NODE,{cache:'no-store'}).then(r=>r.json()).then(st=>{if(st.picked||(st.node&&st.node!==BOARD_NODE))showStarted(st.picked,st.node);}).catch(()=>{});
@@ -116,6 +128,7 @@ ${body}
 
 function referencesBoard() {
   const tone = existsSync(join(work, "tone.json")) ? read("tone.json") : {};
+  const slots = existsSync(join(work, "component-slots.json")) ? read("component-slots.json") : [];
   const refs = read("references.json");
   if (!Array.isArray(refs)) {
     console.error("references.json must be an array");
@@ -133,10 +146,16 @@ function referencesBoard() {
       r.keep_strength && `<p><b>지킬 강도</b> ${esc(r.keep_strength)}</p>`,
       r.must_not_shrink_to && `<p><b>이렇게 줄이지 않기</b> ${esc(r.must_not_shrink_to)}</p>`,
     ].filter(Boolean);
+    const primary =
+      r.kind === "layout" || r.kind === "interaction"
+        ? `<button class="star" type="button" data-group="${r.kind}" data-id="${esc(r.id)}" aria-pressed="false">★ 대표로</button>`
+        : r.kind === "component"
+          ? `<label class="slot-pick">대표로 쓸 섹션 <select data-id="${esc(r.id)}" aria-label="${esc(r.title ?? r.id)}를 대표로 쓸 섹션"></select></label>`
+          : "";
     return `<article id="${esc(r.id)}"><header><span class="id">${esc(r.id)}</span><h3>${esc(r.title)}</h3>
 ${link(r.url)}<span class="src">${esc(r.source)}</span><span class="badge" hidden>제외됨</span>
 <button class="drop" type="button" aria-label="이 레퍼런스 제외" title="이 레퍼런스 제외" data-id="${esc(r.id)}">×</button><button class="restore" type="button" aria-label="이 레퍼런스 되돌리기" hidden>되돌리기</button></header>
-${shots(r)}${analysis}${lines.join("")}</article>`;
+${primary}${shots(r)}${analysis}${lines.join("")}</article>`;
   };
   const toneHead = () => {
     if (!tone.mood) return `<p class="missing">tone.json이 없어요. brief의 Tone and manner를 tone.json으로도 내 주세요.</p>`;
@@ -158,11 +177,20 @@ ${tone.avoid ? `<p class="avoid"><b>피할 느낌</b> ${esc(tone.avoid)}</p>` : 
   const of = (k) => refs.filter((r) => r.kind === k);
   const panels = TABS.map(([k]) => {
     const cards = of(k).map(card).join("");
-    const body = (k === "tone" ? toneHead() : "") + (cards || `<p class="missing">이 탭의 레퍼런스가 없어요.</p>`);
+    const head =
+      k === "tone"
+        ? toneHead()
+        : k === "layout" || k === "interaction"
+          ? `<p class="hint">★ 대표 하나가 페이지를 이끌어요. 나머지는 참고로 남아요.</p>`
+          : k === "component"
+            ? `<section class="slots" aria-label="섹션별 대표"><h4>섹션마다 대표 하나</h4><ul id="slot-list"></ul>
+<div class="add-slot"><input id="new-slot" type="text" maxlength="40" placeholder="섹션 이름 (예: 연동)" aria-label="추가할 섹션 이름"><button id="add-slot" type="button">+ 섹션 추가</button></div></section>`
+            : "";
+    const body = head + (cards || `<p class="missing">이 탭의 레퍼런스가 없어요.</p>`);
     return `<section class="panel" id="tab-${k}" role="tabpanel" hidden>${body}</section>`;
   }).join("");
   const nav = TABS.map(([k, label]) => `<button role="tab" data-tab="${k}" aria-controls="tab-${k}">${label}<small>${of(k).length || ""}</small></button>`).join("");
-  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">모두 쓰는 게 기본이에요. 빼고 싶은 레퍼런스는 오른쪽 위 ×로 제외하고(되돌릴 수 있어요), 톤앤매너는 이대로 갈지 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</p>
+  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 대표 하나예요. 추천이 미리 ★로 찍혀 있어 그대로 시작해도 돼요. ★가 아닌 레퍼런스는 참고로 남고, 절대 쓰지 않을 것만 오른쪽 위 ×로 제외해요(되돌릴 수 있어요). 톤앤매너를 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</p>
 <nav role="tablist">${nav}</nav></header><main>${panels}</main>
 ${pickBar("이 레퍼런스로 시작", `<label>추가로 볼 사이트 (URL, 여러 개면 줄바꿈)<textarea id="add-sites" rows="1" placeholder="https://"></textarea></label>
 <label>하고 싶은 말<textarea id="memo" rows="1" placeholder="예: 3D는 과하지 않게"></textarea></label>`)}`;
@@ -172,18 +200,48 @@ const show=(k)=>{if(!keys.includes(k))k=keys[0];document.querySelectorAll('.pane
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{show(b.dataset.tab);history.replaceState(null,'','#'+b.dataset.tab);});
 addEventListener('hashchange',()=>show(location.hash.slice(1)));show(location.hash.slice(1));
 const BOARD_NODE='reference_pick';
+const TITLES=${JSON.stringify(Object.fromEntries(refs.map((r) => [r.id, r.title ?? r.id])))};
+const BASE_SLOTS=${JSON.stringify(slots.map((x) => ({ id: x.id, label: x.label })))};
+let added=[];const star={layout:null,interaction:null};const comp={};
+${JSON.stringify(refs.filter((r) => r.recommended != null).map((r) => [r.kind, r.id, r.recommended]))}.forEach(([k,id,rec])=>{if(k==='component')comp[rec]=id;else star[k]=id;});
+BASE_SLOTS.forEach(x=>{if(!(x.id in comp))comp[x.id]=null;});
+const allSlots=()=>BASE_SLOTS.concat(added);
+const isOut=(id)=>document.getElementById(id)?.classList.contains('excluded');
+const renderPrimary=()=>{
+  document.querySelectorAll('.star').forEach(b=>{const on=star[b.dataset.group]===b.dataset.id;b.setAttribute('aria-pressed',String(on));b.textContent=on?'★ 대표':'★ 대표로';b.disabled=locked||isOut(b.dataset.id);b.closest('article').classList.toggle('primary',on);});
+  document.querySelectorAll('.slot-pick select').forEach(sel=>{const id=sel.dataset.id;const mine=allSlots().find(x=>comp[x.id]===id);
+    sel.innerHTML='<option value="">참고</option>'+allSlots().map(x=>'<option value="'+x.id+'">'+x.label.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c])+'</option>').join('');
+    sel.value=mine?mine.id:'';sel.disabled=locked||isOut(id);sel.closest('article').classList.toggle('primary',!!mine);});
+  const ul=document.getElementById('slot-list');if(ul){ul.innerHTML='';allSlots().forEach(x=>{const li=document.createElement('li');const b=document.createElement('b');b.textContent=x.label;
+    const sp=document.createElement('span');sp.textContent=comp[x.id]?'★ '+comp[x.id]+' '+(TITLES[comp[x.id]]||''):'비어 있음';sp.className=comp[x.id]?'on':'';li.append(b,sp);
+    if(comp[x.id]&&!locked){const c=document.createElement('button');c.type='button';c.textContent='비우기';c.onclick=()=>{comp[x.id]=null;renderPrimary();refresh();};li.append(c);}ul.append(li);});}
+};
+document.querySelectorAll('.star').forEach(b=>b.onclick=()=>{if(isOut(b.dataset.id))return;star[b.dataset.group]=b.dataset.id;renderPrimary();refresh();});
+document.addEventListener('change',e=>{const sel=e.target.closest?.('.slot-pick select');if(!sel)return;const id=sel.dataset.id;allSlots().forEach(x=>{if(comp[x.id]===id)comp[x.id]=null;});if(sel.value)comp[sel.value]=id;renderPrimary();});
+const addSlot=()=>{const inp=document.getElementById('new-slot');const label=(inp.value||'').trim();if(!label)return;let n=added.length+1;while(allSlots().some(x=>x.id==='extra-'+n))n++;
+  added.push({id:'extra-'+n,label});comp['extra-'+n]=null;inp.value='';renderPrimary();refresh();};
+document.getElementById('add-slot')?.addEventListener('click',addSlot);
+document.getElementById('new-slot')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addSlot();}});
+setTimeout(renderPrimary);
+const unstar=(id)=>{['layout','interaction'].forEach(k=>{if(star[k]===id)star[k]=null;});allSlots().forEach(x=>{if(comp[x.id]===id)comp[x.id]=null;});};
 const setOut=(a,out,quiet)=>{a.classList.toggle('excluded',out);a.querySelector('.badge').hidden=!out;a.querySelector('.drop').hidden=out;a.querySelector('.restore').hidden=!out;if(!quiet)(out?a.querySelector('.restore'):a.querySelector('.drop')).focus();
-document.querySelectorAll('nav button').forEach(b=>{const n=document.querySelectorAll('#tab-'+b.dataset.tab+' article:not(.excluded)').length;b.querySelector('small').textContent=n||'';});refresh();};
+document.querySelectorAll('nav button').forEach(b=>{const n=document.querySelectorAll('#tab-'+b.dataset.tab+' article:not(.excluded)').length;b.querySelector('small').textContent=n||'';});
+if(out)unstar(a.id);if(typeof renderPrimary==='function')renderPrimary();refresh();};
 document.querySelectorAll('article .drop').forEach(b=>b.onclick=()=>setOut(b.closest('article'),true));
 document.querySelectorAll('article .restore').forEach(b=>b.onclick=()=>setOut(b.closest('article'),false));
 const val=(id)=>(document.getElementById(id)?.value||'').trim();
 const payload=()=>{const kept=[],dropped=[];document.querySelectorAll('article .drop').forEach(b=>(b.closest('article').classList.contains('excluded')?dropped:kept).push(b.dataset.id));
 const change=document.querySelector('input[name=tone][value=change]')?.checked;const tc=val('tone-change');
-return {node:'reference_pick',tone:change&&tc?'바꿀 점: '+tc:'이대로',kept,dropped,add_sites:val('add-sites').split(/\\s+/).filter(u=>/^https?:\\/\\//i.test(u)),user_words:[change?tc:'',val('memo')].filter(Boolean).join('\\n')};};
-const pickedText=(p)=>(p.kept||[]).length+'개 사용 · '+(p.dropped||[]).length+'개 제외'+((p.dropped||[]).length?' ('+p.dropped.join(', ')+')':'');
-const applyPicked=(p)=>(p.dropped||[]).forEach(id=>{const a=document.getElementById(id);if(a)setOut(a,true,true);});
-const summary=()=>{const p=payload();return {ready:p.kept.length>0,count:p.kept.length+'개 사용 · '+p.dropped.length+'개 제외',
-text:'톤앤매너: '+p.tone+'\\n사용: '+(p.kept.join(', ')||'없음')+'\\n제외: '+(p.dropped.join(', ')||'없음')+(p.add_sites.length?'\\n추가로 볼 사이트: '+p.add_sites.join(' '):'')+(val('memo')?'\\n하고 싶은 말: '+val('memo'):'')};};`;
+return {node:'reference_pick',tone:change&&tc?'바꿀 점: '+tc:'이대로',kept,dropped,add_sites:val('add-sites').split(/\\s+/).filter(u=>/^https?:\\/\\//i.test(u)),
+primary:{layout:star.layout,interaction:star.interaction,components:Object.fromEntries(allSlots().map(x=>[x.id,comp[x.id]||null])),added_slots:added.map(x=>({id:x.id,label:x.label}))},
+user_words:[change?tc:'',val('memo')].filter(Boolean).join('\\n')};};
+const pickedText=(p)=>(p.primary?'대표 '+[p.primary.layout,p.primary.interaction].join(' · ')+' · ':'')+(p.dropped||[]).length+'개 제외'+((p.dropped||[]).length?' ('+p.dropped.join(', ')+')':'');
+const applyPicked=(p)=>{(p.dropped||[]).forEach(id=>{const a=document.getElementById(id);if(a)setOut(a,true,true);});const pr=p.primary;if(!pr)return;
+added=(pr.added_slots||[]).slice();star.layout=pr.layout||null;star.interaction=pr.interaction||null;Object.keys(comp).forEach(k=>delete comp[k]);
+allSlots().forEach(x=>comp[x.id]=(pr.components||{})[x.id]||null);renderPrimary();};
+const summary=()=>{const p=payload(),pr=p.primary,filled=Object.values(pr.components).filter(Boolean).length,total=allSlots().length;
+return {ready:p.kept.length>0&&!!pr.layout&&!!pr.interaction,count:(pr.layout&&pr.interaction?'대표 레이아웃 '+pr.layout+' · 인터랙션 '+pr.interaction:'레이아웃·인터랙션 대표를 ★로 골라 주세요')+' · 구성요소 '+filled+'/'+total+'칸 · '+p.dropped.length+'개 제외',
+text:'톤앤매너: '+p.tone+'\\n대표 레이아웃: '+(pr.layout||'미정')+'\\n대표 인터랙션: '+(pr.interaction||'미정')+'\\n구성요소: '+(allSlots().map(x=>x.label+'='+(pr.components[x.id]||'없음')).join(', ')||'없음')+'\\n제외: '+(p.dropped.join(', ')||'없음')+(p.add_sites.length?'\\n추가로 볼 사이트: '+p.add_sites.join(' '):'')+(val('memo')?'\\n하고 싶은 말: '+val('memo'):'')};};`;
   return ["board.html", page("레퍼런스 보드", "", body, script)];
 }
 

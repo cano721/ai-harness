@@ -6,8 +6,8 @@ graph_path="${1:-}"
 jq -e '
   . as $g
   | $g.name == "landing-page" and $g.entry == "brief"
-  and ($g.terminals | index("done")) and ($g.terminals | index("user_decision"))
-  and (["brief","references","reference_pick","direction","draft_pick","draft","preview","draft_review","build","measure","review","repair","done","user_decision"]
+  and ($g.terminals | index("done")) and ($g.terminals | index("user_decision")) and ($g.terminals | index("folded"))
+  and (["brief","references","reference_pick","direction","draft_pick","draft","preview","draft_review","build","measure","review","repair","done","user_decision","draft_choose","folded"]
        | all(.[]; . as $n | $g.nodes | has($n)))
   and $g.nodes.measure.actor == "runner" and $g.nodes.review.actor == "reviewer"
   and $g.nodes.reference_pick.actor == "human" and $g.nodes.draft_pick.actor == "human"
@@ -18,7 +18,9 @@ jq -e '
   and ($g.review_checks.public_page | index("reference_fidelity")) and ($g.review_checks.public_page | index("flow"))
   and ($g.review_checks.public_page | index("try_it_usability")) and ($g.review_checks.public_page | index("craft"))
   and (($g.first_viewport_major // []) | index("template_look")) and (($g.first_viewport_major // []) | all(. as $c | $g.review_checks.public_page | index($c)))
-  and ([$g.transitions[] | select(.to == "build")] | all(.from == "draft_review"))
+  and ([$g.transitions[] | select(.to == "build")] | all((.from == "draft_review" and .mode == "interactive") or .from == "draft_choose"))
+  and ([$g.transitions[] | select(.from == "draft_review" and (.when == "draft_pass" or .when == "draft_kept") and .mode == "unattended")] | length == 2 and all(.to == "draft_choose"))
+  and $g.nodes.draft_choose.actor == "maker" and $g.limits.unattended_builds == 1
   and $g.nodes.draft_review.actor == "reviewer" and ($g.review_checks.draft | index("template_look")) and ($g.review_checks.draft | index("craft"))
   and (["interactive", "unattended"] | all(. as $m | $g.references_min[$m] as $r
         | ($r | type) == "object"
@@ -28,7 +30,7 @@ jq -e '
   and ($g.invariants | any(startswith("Measure outcomes come only from the measure script")))
   and ($g.invariants | any(startswith("Review outcomes are computed from the review JSON")))
 ' "$graph_path" >/dev/null || { printf 'invalid landing-page graph\n' >&2; exit 1; }
-for edge in 'brief references brief_ready' 'draft preview drafted' 'preview draft_review previewed' 'draft_review build draft_pass' 'draft_review draft draft_redo' 'build measure built' 'measure review measured_pass' 'measure repair measured_fail' \
+for edge in 'brief references brief_ready' 'draft preview drafted' 'preview draft_review previewed' 'draft_review build draft_pass' 'draft_review draft draft_redo' 'draft_choose build chosen' 'draft_choose folded folded' 'build measure built' 'measure review measured_pass' 'measure repair measured_fail' \
   'review repair review_issues' 'review user_decision review_limit_reached' 'review user_decision review_unverified' 'repair measure repaired'; do
   read -r from to when <<<"$edge"
   jq -e --arg from "$from" --arg to "$to" --arg when "$when" \
