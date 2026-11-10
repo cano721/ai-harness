@@ -21,15 +21,24 @@ RUN_LOCK="$HM_DATA_DIR/harvest-auto/running.lock"
 SWEEP_LOCK="$AF_DIR/.sweep.lock"
 WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
 case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
-int_env() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
+# 0으로 시작하는 수(08·01000)는 bash 산술이 8진수로 읽으므로 받지 않는다.
+int_env() { local v="${!1:-}"; [[ "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
 DAILY_MAX="$(int_env HM_AUTOFIX_DAILY_MAX 3)"
 MAX_ATTEMPTS="$(int_env HM_AUTOFIX_MAX_ATTEMPTS 2)"
 MAX_FAILS="$(int_env HM_AUTOFIX_MAX_FAILS 3)"
 SKIP_COOLDOWN_DAYS="$(int_env HM_AUTOFIX_SKIP_COOLDOWN_DAYS 7)"
 TIMEOUT_MIN="$(int_env HM_AUTOFIX_TIMEOUT_MIN 60)"
 DEPLOY_WAIT_DAYS="$(int_env HM_AUTOFIX_DEPLOY_WAIT_DAYS 14)"
+# 하루 상한 '제한 없음'은 보드의 harvest·sync와 같은 관례로 1000 이상이다(configure --daily-max unlimited가 1000을 쓴다).
+# 0은 그대로 '하루 0회'다.
+DAILY_UNLIMITED=1000
+# 실행당 예산 'unlimited'면 수정 실행에 --max-budget-usd를 넘기지 않는다(빈 값). 그 밖의 틀린 값은 기본 10.
 BUDGET_USD="${HM_AUTOFIX_BUDGET_USD:-10}"
-[[ "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || BUDGET_USD=10
+if [[ "$BUDGET_USD" == unlimited ]]; then
+  BUDGET_USD=""
+elif [[ ! "$BUDGET_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  BUDGET_USD=10
+fi
 LOG_KEEP=50
 
 usage() {
@@ -43,8 +52,8 @@ usage:
   autofix-auto.sh track --project <id> --candidate <json> --pr <url>   # 수동으로 연 PR도 검증 대상에 올린다
   autofix-auto.sh run <project> <repo> <candidate-json-file>   # sweep이 띄우는 detached worker
   autofix-auto.sh runs [--limit N]
-  autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--interval-minutes N|off]
-                            [--daily-max N] [--max-attempts N] [--budget-usd X]
+  autofix-auto.sh configure [--auto 0|1] [--add-repo <project_id>] [--remove-repo <project_id>] [--interval-minutes N|off]
+                            [--daily-max N|unlimited] [--max-attempts N] [--budget-usd X|unlimited]
                                                 # 무인 실행 설정을 ~/.ai-harness/config에 쓴다(인자 없으면 현재 값만 보여 준다)
 EOF
   exit 2
@@ -68,7 +77,7 @@ state_update() {
   shift 2
   file="$(state_file "$project")"
   lock="${file%/*}/.lock"
-  mkdir -p "${file%/*}"
+  mkdir -p "${file%/*}" 2>/dev/null || { printf 'state 디렉토리를 만들 수 없음: %s\n' "${file%/*}" >&2; return 1; }
   hm_acquire_lock "$lock" 250 || { printf 'state lock 실패: %s\n' "$file" >&2; return 1; }
   { [[ -s "$file" ]] && cat "$file" || jq -cn --arg p "$project" '{project:$p,signatures:{}}'; } \
     | jq --arg now "$(now_iso)" "$@" "$filter" >"$file.tmp" && mv "$file.tmp" "$file"
@@ -125,15 +134,91 @@ pr_status() { # $1=url
 }
 
 # 실행 기록에 PR까지 남았는데 상태가 attempting에 머문 시그니처를 PR 상태로 되돌린다(상태 기록 실패 복구).
+# 실행 기록의 finished 한 줄을 시그니처 상태로 옮기는 규칙(command_run의 결과 분기와 같다). 입력: finished 이벤트.
+FINISHED_TO_STATE='if .outcome == "pr_opened" and ((.artifact // "") | startswith("https://")) then {status:"pr_open", pr:.artifact, pr_opened_at:.at, fails:0}
+  elif .outcome == "failed" or .outcome == null then {status:"failed"}
+  else {status:"skipped", skipped_at:.at, outcome:.outcome} end
+  + {last_log:(.log // null), last_reason:(.reason // null), last_run_at:.at}'
+
+# 마지막 결과 텍스트(에이전트의 원인 분석)에서 결과 줄을 빼고 비밀값·홈 경로를 가린 요약. $1=실행 로그
+log_summary() {
+  [[ -n "${1:-}" && -f "$1" ]] || return 0
+  jq -Rrn -L "$DIR" 'include "redact";
+    [inputs | fromjson? | objects | select(.type == "result") | .result // empty] | last // empty
+    | split("\n") | map(select(test("^AI_HARNESS_") | not)) | join("\n") | redact_path("") | redact
+    | gsub("^\\s+|\\s+$"; "") | .[0:1500]' "$1" 2>/dev/null || true
+}
+
+# 상태 기록 복구(실행 기록 runs.jsonl이 기준이다):
+# - attempting에 머문 시그니처: 시작 뒤 첫 finished의 결과로 옮긴다(결과 기록 실패 복구).
+# - 상태 파일이 통째로 없는 프로젝트: 시그니처마다 마지막 finished로 되살린다(파일 유실 복구). 되살리지 않으면 사람에게
+#   넘긴 에러(left_for_user)가 화면에서 사라지고, 다음 sweep이 같은 에러를 '새 에러'로 다시 고친다.
+# 상태 파일 안에서 시그니처를 일부러 지운 경우(다시 고치게 하기)는 되살리지 않는다.
+orphan_records() { # $1=project → JSON lines {signature, record} (상태에 반영할 값)
+  local project="$1" file=""
+  [[ -f "$RUNS_FILE" ]] || return 0
+  file="$(state_file "$project")"
+  # 비었거나 크기 0인 상태 파일도 유실로 본다(state_update가 -s로 새로 시작하는 것과 같은 기준).
+  jq -Rcn --arg p "$project" --argjson st "$(state_get "$project")" --argjson whole "$([[ -s "$file" ]] && echo false || echo true)" '
+    def to_state: '"$FINISHED_TO_STATE"';
+    # 상태 파일 통째 유실: 마지막 결과(finished·수동 등록 tracked) 위에 그 뒤의 검증 이벤트(병합·배포·해결·재발·포기·PR 닫힘)를 겹친다.
+    # 병합 커밋은 실행 기록에 없으므로 배포 이벤트가 없으면 병합 시각을 배포 시각으로 둔다(배포 브랜치를 정하지 않은 저장소와 같은 규칙).
+    def replay($evs):
+      ([$evs[] | select(.event == "finished" or .event == "tracked")] | max_by(.at)) as $base
+      | select($base != null)
+      | ($base | if .event == "tracked" then {status:"pr_open", pr:.artifact, pr_opened_at:.at, last_run_at:.at} else to_state end) as $s0
+      | reduce ([$evs[] | select(.at > $base.at)] | sort_by(.at))[] as $e ($s0;
+          . + (if $e.event == "merged" then {status:"verifying", merged_at:$e.at, deployed_at:$e.at}
+               elif $e.event == "deployed" then {deployed_at:$e.at}
+               elif $e.event == "resolved" then {status:"resolved", resolved_at:$e.at}
+               elif $e.event == "regressed" then {status:($e.next // "regressed")}
+               elif $e.event == "gave_up" then {status:"gave_up", outcome:($e.reason // null)}
+               elif $e.event == "declined" then {status:"declined"}
+               else {} end));
+    [inputs | fromjson? | objects | select(.project == $p and (.signature | type == "string"))] as $ev
+    | ($ev | map(select(.event == "finished"))) as $fin
+    | ( ($st.signatures // {} | to_entries[] | select(.value.status == "attempting") | .key as $s | (.value.launched_at // "") as $since
+          | ([$fin[] | select(.signature == $s and (.at // "") >= $since)] | min_by(.at)) as $f
+          | select($f != null) | {signature: $s, launched: $since, record: ($f | to_state)}),
+        (if $whole then
+           $ev | map(select(.event | IN("finished", "tracked", "merged", "deployed", "resolved", "regressed", "gave_up", "declined")))
+           | group_by(.signature)[] | . as $g
+           | replay($g) as $rec
+           | {signature: $g[0].signature, record: ($rec + {
+               first_detected_at: ([$ev[] | select(.signature == $g[0].signature) | .at] | min),
+               attempts: ([$g[] | select(.event == "tracked" or .outcome == "pr_opened")] | length),
+               # 실패 횟수: 마지막으로 PR을 열었거나 해결된 뒤의 실패 실행 수(사용량 한도 제외) — command_run이 세는 것과 같다.
+               fails: ((([$g[] | select(.outcome == "pr_opened" or .event == "resolved") | .at] | max) // "") as $reset
+                 | [$g[] | select(.event == "finished" and .outcome == "failed" and .reason != "usage_limit" and .at > $reset)] | length),
+               recovered: "runs"})}
+         else empty end) )' "$RUNS_FILE" 2>/dev/null
+}
+
 recover_attempts() { # $1=project
-  local project="$1" sig="" launched="" pr=""
-  while IFS=$'\t' read -r sig launched; do
-    pr="$(jq -Rrn --arg p "$project" --arg s "$sig" --arg since "$launched" '[inputs | fromjson? | select(.event=="finished"
-        and .project==$p and .signature==$s and .outcome=="pr_opened" and (.at // "") >= $since) | .artifact] | last // empty' "$RUNS_FILE" 2>/dev/null)"
-    [[ -n "$pr" ]] || continue
-    set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:($cur.pr_opened_at // $now)}' --arg u "$pr"
-    log_event "$project" recovered "$sig" "$(jq -cn --arg u "$pr" '{artifact:$u}')"
-  done < <(state_get "$project" | jq -r '.signatures | to_entries[] | select(.value.status == "attempting") | [.key, (.value.launched_at // "")] | @tsv')
+  local project="$1" line="" sig="" rec="" summary="" token=""
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    sig="$(jq -r '.signature' <<<"$line")"
+    summary="$(log_summary "$(jq -r '.record.last_log // empty' <<<"$line")")"
+    rec="$(jq -c --arg s "$summary" '.record + (if $s == "" then {} else {summary:$s} end)' <<<"$line")"
+    # 스냅샷(orphan_records)과 쓰기 사이에 worker가 끝나 스스로 결과를 남겼을 수 있다. lock 안의 현재 값으로 다시 확인해
+    # attempting(통째 복구는 아직 없는 시그니처)일 때만 옮긴다 — 시도·실패 횟수가 두 번 반영되지 않게.
+    [[ -z "${HM_AUTOFIX_TEST_RECOVER_HOOK:-}" ]] || "$HM_AUTOFIX_TEST_RECOVER_HOOK" "$project" "$sig"
+    # attempting에서 옮길 때는 command_run과 같이 PR이 아닌 결과는 시도로 세지 않고, 실패는 실패 횟수에 더한다.
+    # 같은 시그니처로 새 시도가 시작됐으면(launched_at이 스냅샷과 다름) 지난 결과로 덮지 않는다.
+    token="$$-$RANDOM-$(date +%s)"
+    state_update "$project" '.signatures[$sig] as $cur
+      | if (if $r.recovered == null then ($cur.status? == "attempting" and ($cur.launched_at // "") == $launched) else ($cur == null) end) | not then .
+        else .signatures[$sig] = (($cur // {}) + $r
+          + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
+             elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
+          + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)
+          + {updated_at:$now, recovered_at:$now, recovered_by:$token}) end' \
+      --arg sig "$sig" --argjson r "$rec" --arg launched "$(jq -r '.launched // ""' <<<"$line")" --arg token "$token" || continue
+    # 이번 쓰기가 실제로 옮겼을 때만 남긴다 — 다른 쪽이 먼저 옮겼으면 recovered_by가 이번 토큰과 다르다.
+    jq -e --arg s "$sig" --arg t "$token" '.signatures[$s].recovered_by == $t' <<<"$(state_get "$project")" >/dev/null 2>&1 || continue
+    log_event "$project" recovered "$sig" "$(jq -c '{status, artifact:(.pr // null)}' <<<"$rec")"
+  done <<<"$(orphan_records "$project")"
 }
 
 # ── 검증 ─────────────────────────────────────────────────────────────────────
@@ -314,7 +399,7 @@ sweep_once() {
     [[ -n "$cand" ]] || continue
     sig="$(jq -r '.signature' <<<"$cand")"
     # 상한·동시 실행 제한은 상태를 바꾸지 않는다 — 다음 sweep에서 같은 후보를 다시 고른다.
-    (( $(started_today) < DAILY_MAX )) || { log_event "$project" skipped "$sig" '{"reason":"daily_max"}'; return 0; }
+    (( DAILY_MAX >= DAILY_UNLIMITED || $(started_today) < DAILY_MAX )) || { log_event "$project" skipped "$sig" '{"reason":"daily_max"}'; return 0; }
     lock_busy && { log_event "$project" skipped "$sig" '{"reason":"busy"}'; return 0; }
     # 전용 주기(HM_AUTOFIX_INTERVAL_MINUTES)는 backfill 경로의 LLM 단계 판정을 거치지 않으므로 사용량 한도 휴지를 여기서도 지킨다.
     hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && { log_event "$project" skipped "$sig" '{"reason":"usage_backoff"}'; return 0; }
@@ -352,7 +437,8 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     return
   fi
   local tool="" extra="" name="" scrub="{}"
-  local -a bash_allow=() unset_env=()
+  local -a bash_allow=() unset_env=() budget=()
+  [[ -z "$BUDGET_USD" ]] || budget=(--max-budget-usd "$BUDGET_USD")
   for tool in "${BUILD_TOOLS[@]}"; do bash_allow+=("Bash($tool)"); done
   # 프로젝트 고유 검증 명령은 config의 HM_AUTOFIX_BASH_ALLOW(세미콜론 구분 패턴, 예: "./scripts/ci.sh*")로 더한다.
   while IFS= read -r extra; do [[ -n "$extra" ]] && bash_allow+=("Bash($extra)"); done < <(printf '%s' "${HM_AUTOFIX_BASH_ALLOW:-}" | tr ';' '\n')
@@ -372,7 +458,7 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     "Bash(jq *)" "Bash($ROOT/scripts/open-pr.sh*)"
     --disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)" "Read(/$HM_DATA_DIR/config)"
     "Read(~/.claude/settings.json)" "Read(~/.claude/settings.local.json)" "Read(~/.claude.json)" "Read(~/.ssh/**)" "Read(~/.config/gh/**)"
-    --max-budget-usd "$BUDGET_USD"
+    ${budget[@]+"${budget[@]}"}
     --output-format json)
 }
 
@@ -434,10 +520,15 @@ command_run() {
 
   start_epoch="$(date +%s)"
   log_file="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$(hm_short_key "$project").log"
-  set_sig "$project" "$sig" '{status:"attempting",launched_at:$now,title:$c.title,provider:$c.provider,meta:$c.meta,link:$c.link,
+  # 시작 상태를 남기지 못하면 실행하지 않는다. 남기지 못한 채 고치면 화면에 안 보이고 다음 sweep이 같은 에러를 또 고친다.
+  if ! set_sig "$project" "$sig" '{status:"attempting",launched_at:$now,title:$c.title,provider:$c.provider,meta:$c.meta,link:$c.link,
       attempts:(($cur.attempts // 0) + 1),first_detected_at:($cur.first_detected_at // $now),
       fails:(if $cur.status == "attempting" then ($cur.fails // 0) + 1 else ($cur.fails // 0) end),
-      baseline:{count:$c.count,window_hours:($c.window_hours // 24)}}' --argjson c "$cand"
+      baseline:{count:$c.count,window_hours:($c.window_hours // 24)}}' --argjson c "$cand"; then
+    log_event "$project" state_error "$sig" "$(jq -cn --arg f "$(state_file "$project")" '{reason:"state_write",stage:"start",file:$f}')"
+    "$DIR/health.sh" failure autofix_auto state_write >/dev/null 2>&1 || true
+    return 1
+  fi
   log_event "$project" started "$sig" "$(jq -cn --arg r "$(jq -r '.reason' <<<"$cand")" --arg log "$log_file" '{reason:$r,log:$log}')"
 
   base="$(hm_resolve_base "$repo")"
@@ -474,37 +565,43 @@ command_run() {
   outcome="$(sed -n 's/.*outcome=\([a-z_-]*\).*/\1/p' <<<"$line")"
   artifact="$(sed -n 's/.* artifact=\([^[:space:]"]*\).*/\1/p' <<<"$line")"
 
+  local state_ok=1
   if (( exit_code != 0 )) || [[ -z "$outcome" && -n "$fail_reason" ]]; then
     # 사용량 한도는 시도·실패로 세지 않는다.
     if [[ "$fail_reason" == "usage_limit" ]]; then
-      set_sig "$project" "$sig" '{status:"failed",attempts:(($cur.attempts // 1) - 1)}'
+      set_sig "$project" "$sig" '{status:"failed",attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
     else
-      set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}'
+      set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
     fi
     outcome="failed"
   else
     case "$outcome" in
       pr_opened)
         if [[ "$artifact" =~ ^https:// ]] && pr_belongs_to "$repo" "$artifact"; then
-          set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:$now,fails:0}' --arg u "$artifact"
+          set_sig "$project" "$sig" '{status:"pr_open",pr:$u,pr_opened_at:$now,fails:0}' --arg u "$artifact" || state_ok=0
         else
-          set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}'
+          set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
           outcome="failed"; fail_reason="missing_pr_url"
         fi
         ;;
       not_code_bug|not_reproducible|left_for_user)
-        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:$o,attempts:(($cur.attempts // 1) - 1)}' --arg o "$outcome"
+        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:$o,attempts:(($cur.attempts // 1) - 1)}' --arg o "$outcome" || state_ok=0
         ;;
       *)
-        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:"no_result",attempts:(($cur.attempts // 1) - 1)}'
+        set_sig "$project" "$sig" '{status:"skipped",skipped_at:$now,outcome:"no_result",attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
         outcome="no_result"
         ;;
     esac
   fi
+  # 원인 분석 요약과 로그 위치를 남긴다(보드 카드·다음 시도 판단에 쓴다). 비밀값·홈 경로는 가린다.
+  set_sig "$project" "$sig" '{last_log:$l, last_reason:(if $r == "" then null else $r end)} + (if $s == "" then {} else {summary:$s} end)' \
+    --arg l "$log_file" --arg r "$fail_reason" --arg s "$(log_summary "$log_file")" || state_ok=0
   log_event "$project" finished "$sig" "$(jq -cn --arg o "$outcome" --arg a "$artifact" --argjson e "$exit_code" \
     --argjson d "$(( $(date +%s) - start_epoch ))" --argjson cost "${cost:-null}" --arg r "$fail_reason" --arg log "$log_file" \
     '{outcome:$o,exit_code:$e,duration_s:$d,cost_usd:$cost,log:$log} + (if $a == "" then {} else {artifact:$a} end)
       + (if $r == "" then {} else {reason:$r} end)')"
+  # 결과 상태를 남기지 못했으면 기록한다 — 다음 검증이 이 finished 기록으로 상태를 되살린다(recover_attempts).
+  (( state_ok )) || log_event "$project" state_error "$sig" "$(jq -cn --arg f "$(state_file "$project")" '{reason:"state_write",stage:"finish",file:$f}')"
   if [[ "$outcome" == "failed" ]]; then
     "$DIR/health.sh" failure autofix_auto "${fail_reason:-exit_$exit_code}" >/dev/null 2>&1 || true
   else
@@ -513,18 +610,33 @@ command_run() {
   prune_logs
 }
 
+SIG_VIEW='{status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
+  regressions:((.regressions // []) | length), updated_at,
+  count:(.baseline.count // null), link, provider, first_detected_at, launched_at, skipped_at, last_check_at, manual,
+  summary, last_log, last_reason, recovered}'
+
+# 상태 파일이 있는 프로젝트는 그 파일을, 상태 파일이 통째로 없는데 실행 기록만 있는 프로젝트는 실행 기록에서 되살린
+# 시그니처를 보여 준다(recovered:"runs" — 다음 검증이 상태 파일에 남긴다). 사람에게 넘긴 에러가 화면에서 빠지지 않게.
 command_status() {
-  local project="" files=()
+  local project="" files=() p="" line="" summary=""
   [[ "${1:-}" == "--project" ]] && project="${2:-}"
   if [[ -n "$project" ]]; then
     files=("$(state_file "$project")")
   else
     shopt -s nullglob; files=("$AF_DIR"/*/state.json); shopt -u nullglob
   fi
-  (( ${#files[@]} > 0 )) || return 0
-  jq -c '.project as $p | .signatures | to_entries[] | {project:$p, signature:.key} + (.value
-    | {status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
-       regressions:((.regressions // []) | length), updated_at})' "${files[@]}" 2>/dev/null
+  (( ${#files[@]} == 0 )) || jq -c '.project as $p | .signatures | to_entries[] | {project:$p, signature:.key} + (.value | '"$SIG_VIEW"')' \
+    "${files[@]}" 2>/dev/null
+  [[ -f "$RUNS_FILE" ]] || return 0
+  while IFS= read -r p; do
+    [[ -n "$p" && ! -s "$(state_file "$p")" ]] || continue
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      summary="$(log_summary "$(jq -r '.record.last_log // empty' <<<"$line")")"
+      jq -c --arg p "$p" --arg s "$summary" '{project:$p, signature} + (.record + {updated_at:.record.last_run_at}
+        + (if $s == "" then {} else {summary:$s} end) | '"$SIG_VIEW"')' <<<"$line"
+    done <<<"$(orphan_records "$p")"
+  done <<<"$(if [[ -n "$project" ]]; then printf '%s\n' "$project"; else jq -Rr 'fromjson? | objects | .project // empty' "$RUNS_FILE" | sort -u; fi)"
 }
 
 command_track() {
@@ -552,41 +664,49 @@ command_track() {
 config_show() {
   jq -cn --arg auto "${HM_AUTOFIX_AUTO:-0}" --arg repos "${HM_AUTOFIX_REPOS:-}" --arg interval "${HM_AUTOFIX_INTERVAL_MINUTES:-}" \
     --arg daily "${HM_AUTOFIX_DAILY_MAX:-}" --arg attempts "${HM_AUTOFIX_MAX_ATTEMPTS:-}" --arg budget "${HM_AUTOFIX_BUDGET_USD:-}" \
-    --arg config "$HM_DATA_DIR/config" '
+    --arg config "$HM_DATA_DIR/config" --argjson unlimited "$DAILY_UNLIMITED" '
     def num($v; $d): if $v == "" then $d else ($v | tonumber? // $v) end;
-    {auto: ($auto == "1"), repos: [$repos | splits("[,[:space:]]+") | select(. != "")],
+    num($daily; 3) as $dm
+    | {auto: ($auto == "1"), repos: [$repos | splits("[,[:space:]]+") | select(. != "")],
      interval_minutes: (if $interval == "" or $interval == "0" then null else num($interval; null) end),
-     daily_max: num($daily; 3), max_attempts: num($attempts; 2), budget_usd: num($budget; 10), config: $config}'
+     daily_max: $dm, daily_unlimited: ($daily | test("^[1-9][0-9]*$") and ($daily | tonumber) >= $unlimited),
+     max_attempts: num($attempts; 2), budget_usd: num($budget; 10), config: $config}'
 }
 
 command_configure() {
   local -a set=()
-  local repo="" repos="" i=0
+  local repo="" remove="" repos="" i=0
   while (( $# > 0 )); do
     [[ $# -ge 2 ]] || usage
     case "$1" in
       --auto) [[ "$2" =~ ^[01]$ ]] || { echo "--auto는 0 또는 1입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_AUTO "$([[ "$2" == 1 ]] && echo 1 || true)") ;;
-      --add-repo) [[ "$2" =~ ^[^[:space:],\"\'=]+$ ]] || { echo "--add-repo는 공백·쉼표·따옴표 없는 project_id입니다" >&2; exit 2; }
-        repo="$2" ;;
+      --add-repo|--remove-repo) [[ "$2" =~ ^[^-[:space:],\"\'=][^[:space:],\"\'=]*$ ]] || { echo "$1는 -로 시작하지 않고 공백·쉼표·따옴표 없는 project_id입니다" >&2; exit 2; }
+        if [[ "$1" == --add-repo ]]; then repo="$2"; else remove="$2"; fi ;;
       --interval-minutes)
         if [[ "$2" == off || "$2" == 0 ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "")
-        elif [[ "$2" =~ ^[1-9][0-9]*$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
-        else echo "--interval-minutes는 1 이상의 정수 또는 off입니다" >&2; exit 2; fi ;;
-      --daily-max) [[ "$2" =~ ^[0-9]+$ ]] || { echo "--daily-max는 0 이상의 정수입니다" >&2; exit 2; }
-        set+=(HM_AUTOFIX_DAILY_MAX "$2") ;;
-      --max-attempts) [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "--max-attempts는 1 이상의 정수입니다" >&2; exit 2; }
+        elif [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
+        else echo "--interval-minutes는 1~999999 정수(분) 또는 off입니다" >&2; exit 2; fi ;;
+      --daily-max)
+        if [[ "$2" == unlimited ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$DAILY_UNLIMITED")
+        elif [[ "$2" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$2")
+        else echo "--daily-max는 0~999999 정수(앞자리 0 없이) 또는 unlimited입니다" >&2; exit 2; fi ;;
+      --max-attempts) [[ "$2" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "--max-attempts는 1~9999 정수입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_MAX_ATTEMPTS "$2") ;;
-      --budget-usd) [[ "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ]] || { echo "--budget-usd는 0보다 큰 수입니다(예: 10, 2.5)" >&2; exit 2; }
+      --budget-usd) [[ "$2" == unlimited || ( "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ) ]] \
+          || { echo "--budget-usd는 0보다 큰 수(예: 10, 2.5) 또는 unlimited입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_BUDGET_USD "$2") ;;
       *) usage ;;
     esac
     shift 2
   done
-  if [[ -n "$repo" ]]; then
-    # 기존 목록은 그대로 두고 없을 때만 덧붙인다(구분자는 쉼표로 맞춘다).
-    repos="$(jq -rn --arg cur "${HM_AUTOFIX_REPOS:-}" --arg r "$repo"       '[$cur | splits("[,[:space:]]+") | select(. != "")] | if any(.[]; . == $r) then empty else . + [$r] | join(",") end')"
-    [[ -z "$repos" ]] || set+=(HM_AUTOFIX_REPOS "$repos")
+  if [[ -n "$repo" || -n "$remove" ]]; then
+    # 기존 목록 순서는 그대로 두고, 없을 때만 덧붙이고 있을 때만 뺀다(구분자는 쉼표로 맞춘다). 바뀌지 않으면 쓰지 않는다.
+    repos="$(jq -rn --arg cur "${HM_AUTOFIX_REPOS:-}" --arg add "$repo" --arg rm "$remove" '
+      [$cur | splits("[,[:space:]]+") | select(. != "")] as $old
+      | ($old + (if $add == "" or any($old[]; . == $add) then [] else [$add] end) | map(select(. != $rm))) as $new
+      | if $new == $old then "=" else ($new | join(",")) end')"
+    [[ "$repos" == "=" ]] || set+=(HM_AUTOFIX_REPOS "$repos")
   fi
   if (( ${#set[@]} > 0 )); then
     hm_config_set "${set[@]}" || exit 1

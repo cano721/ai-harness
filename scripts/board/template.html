@@ -267,6 +267,54 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 .vbadge.recurred { color: var(--human); border-color: var(--human); }
 .vbadge.hold { color: var(--run); border-color: var(--run); }
 .iquiet > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); margin: 4px 0 12px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin: 8px 0 10px; }
+.tabs[hidden] { display: none; }
+.tab { font: inherit; font-size: 13px; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 6px 12px;
+  color: var(--muted); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.tab:hover { color: var(--text); }
+.tab[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--run); font-weight: 600; }
+.src { font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.src.autofix { border-color: color-mix(in srgb, var(--block) 50%, var(--line)); }
+.card .afmeta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.card .afmeta a { color: var(--run); }
+.afline { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; color: var(--muted); margin: -4px 0 12px; }
+.afline .afwarn { margin: 0; font-size: 12px; }
+.afline .afwarn.strong { padding: 2px 8px; }
+.aflink { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--run); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.afextra { margin: -6px 0 12px; font-size: 13px; max-width: 1100px; }
+.afextra summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.afconn { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; max-width: 1100px; }
+.afconn .afrepo:first-child { border-top: 0; }
+.afrepo { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12.5px; padding: 6px 0; border-top: 1px solid var(--line); }
+.afrepo b { font-size: 13px; }
+.afrepo .warn { color: var(--human); }
+.afrepo .dim { color: var(--muted); }
+.afrepo .acts { margin-left: auto; display: flex; gap: 6px; }
+.afrepo .acts button { font: inherit; font-size: 12px; }
+.afconn .ilist li { grid-template-columns: 92px minmax(0, 1fr) auto; }
+.afconn .ilist b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.afrepo .acts button { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.afrepo .acts button:disabled { opacity: .6; cursor: progress; }
+.afcands { width: 100%; }
+.srow.afset { grid-template-columns: minmax(150px, .9fr) auto minmax(180px, 1.2fr); }
+@media (max-width: 1100px) { .srow.afset { grid-template-columns: 1fr; gap: 8px; } }
+.srow.afset > .ladder, .srow.afset > .afctl, .aftargets .ladder { justify-self: start; }
+.afctl { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.afcustom { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.afcustom input { width: 6.5em; font: inherit; font-size: 12px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.afcustom button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+.afwarn { margin: 4px 0; font-size: 13px; color: var(--human); }
+.afwarn.strong { font-weight: 600; padding: 8px 12px; border: 1px solid var(--human); border-radius: 8px; background: var(--human-bg); }
+.aftargets { display: grid; grid-template-columns: minmax(0, auto) auto; gap: 6px 12px; align-items: center; font-size: 13px; }
+.aftargets small { display: block; color: var(--muted); font-size: 11px; }
+.afsteps { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.afsteps span.on { color: var(--text); font-weight: 600; }
+.afsteps span.sep { opacity: .5; }
+.afrun { display: grid; grid-template-columns: 7.5em minmax(0, 8em) minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.afrun > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.afrun .dim, .afnote { color: var(--muted); font-size: 12px; }
+.afrun a { color: var(--run); }
+@media (max-width: 760px) { .afrun { grid-template-columns: auto 1fr; } .afrun > span:nth-child(n+3) { grid-column: 1 / -1; } }
 #toast { position: fixed; right: 20px; bottom: 20px; max-width: 420px; padding: 10px 14px; border-radius: 10px;
   background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 13px; }
 #toast[data-ok="true"] { border-left: 3px solid var(--done); }
@@ -283,7 +331,9 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   </aside>
   <main>
     <div class="head"><h1 id="vtitle"></h1><span class="meta" id="vmeta"></span><button class="newbtn" id="newbtn" hidden>+ 새 세션</button></div>
+    <div class="tabs" id="tabs" role="toolbar" aria-label="출처" hidden></div>
     <p class="desc" id="vdesc"></p>
+    <div id="strip"></div>
     <div class="board" id="board"></div>
   </main>
 </div>
@@ -344,25 +394,15 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   const TOKEN = new URLSearchParams(location.search).get('t');
   const SERVER = data === null && !!TOKEN;
 
+  // 메인 목록: 작업(세션)·하네스 동작(harvest·sync·규칙·스케줄)·자동 수정(에러 시그니처)을 같은 상태 열로 본다.
   const VIEWS = {
-    work: {
-      label: '작업', sub: '내가 시킨 에이전트 세션',
-      desc: '이 맥에서 돌고 있는 Claude 세션 전체(어느 터미널이든). 카드를 누르면 대화가 실시간으로 보이고, 백그라운드 세션은 여기서 이어서 지시할 수 있음.',
+    list: {
+      label: '작업 현황', sub: '작업 · 하네스 동작 · 자동 수정',
       cols: [
-        { label: '내 차례', parts: [{ state: 'needs_human', label: '답해야 함' }, { state: 'review', label: '결과 확인' }] },
-        { state: 'running', label: '작업 중' },
-        { state: 'idle', label: '쉬는 중', collapsible: true },
-      ],
-    },
-    harness: {
-      label: '하네스 동작', sub: '자동 개선 · 동기화 · 스케줄',
-      desc: '하네스가 스스로 돌리는 harvest·sync·규칙 적용과 정기 실행. 사람 필요는 PR 검토나 직접 마무리가 필요한 것.',
-      cols: [
-        { state: 'needs_human', label: '사람 필요' },
-        { state: 'queued', label: '대기' },
+        { label: '사람 필요', parts: [{ state: 'needs_human', label: '답·검토가 필요함' }, { state: 'review', label: '결과 확인' }] },
         { state: 'running', label: '진행 중' },
-        { state: 'blocked', label: '막힘' },
-        { state: 'done', label: '완료' },
+        { label: '대기', parts: [{ state: 'queued', label: '대기' }, { state: 'blocked', label: '막힘' }] },
+        { label: '완료·쉬는 중', parts: [{ state: 'done', label: '완료' }, { state: 'idle', label: '쉬는 중' }], collapsible: true },
       ],
     },
     settings: {
@@ -376,7 +416,14 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       cols: [],
     },
   };
-  const KIND = { harvest: 'harvest', 'harvest-global': 'harvest 전역', sync: 'sync', runner: '워크플로', rule: '규칙', schedule: '스케줄', agent: '대화형', bg: '백그라운드' };
+  const TABS = [
+    ['all', '전체', '작업 세션·하네스 동작·자동 수정을 한 목록으로. 카드의 출처 칩으로 구분합니다. 사람 필요 열이 지금 내가 할 일입니다.'],
+    ['work', '작업', '이 맥에서 돌고 있는 Claude 세션 전체(어느 터미널이든). 카드를 누르면 대화가 실시간으로 보이고, 백그라운드 세션은 여기서 이어서 지시할 수 있음.'],
+    ['harness', '하네스 동작', '하네스가 스스로 돌리는 harvest·sync·규칙 적용과 정기 실행. 사람 필요는 PR 검토나 직접 마무리가 필요한 것.'],
+    ['autofix', '자동 수정', '/ai-harness:autofix가 고치거나 사람에게 넘긴 운영 에러(시그니처마다 한 장). 사람 필요는 넘김·포기·실패·PR 검토 대기, 진행 중은 수정·배포·재발 관찰, 완료는 해결·PR 닫힘·건너뜀. 화면은 LLM 없이 로컬 기록만 읽고, 보드는 수정 실행을 시작하거나 PR을 병합하지 않습니다.'],
+  ];
+  const SRC = { work: '작업', harness: '하네스', autofix: '자동 수정' };
+  const KIND = { harvest: 'harvest', 'harvest-global': 'harvest 전역', sync: 'sync', runner: '워크플로', rule: '규칙', schedule: '스케줄', agent: '대화형', bg: '백그라운드', autofix: '에러' };
   const DRAWER_ACTIONS = ['view', 'send', 'cleanup'];
   const ACTION_LABEL = { harvest_now: 'harvest 지금 돌리기', open_agent: '세션으로 열기' };
   const CAUSE = {
@@ -388,7 +435,11 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   };
 
   const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } };
-  let view = ['harness', 'settings', 'impact'].includes(store('hb-view')) ? store('hb-view') : 'work';
+  // 예전 보기(work·harness·autofix)는 목록의 탭으로 옮긴다.
+  const savedView = store('hb-view');
+  let view = ['settings', 'impact'].includes(savedView) ? savedView : 'list';
+  let tab = ['work', 'harness', 'autofix'].includes(savedView) ? savedView : (TABS.some(([k]) => k === store('hb-tab')) ? store('hb-tab') : 'all');
+  if (['work', 'harness', 'autofix'].includes(savedView)) { store('hb-view', 'list'); store('hb-tab', tab); }
   let filter = 'all';
   let openIdle = store('hb-idle') === '1';
 
@@ -411,7 +462,9 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     return b;
   };
   const prLabel = (url) => { const m = url && url.match(/pull-requests\/(\d+)|pull\/(\d+)/); return m ? `PR #${m[1] || m[2]}` : 'PR'; };
-  const inView = (v) => data.items.filter((i) => (i.section || 'harness') === v);
+  const srcOf = (i) => i.section || 'harness';
+  const inTab = (t) => data.items.filter((i) => t === 'all' || srcOf(i) === t);
+  const humanCount = (list) => list.filter((i) => i.state === 'needs_human' || i.state === 'review').length;
 
   async function act(it, action, btn) {
     btn.disabled = true; const label = btn.textContent; btn.textContent = '실행 중…';
@@ -507,9 +560,11 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
   function card(it) {
     const c = el('article', 'card'); c.dataset.state = it.state;
     const top = el('div', 'top');
-    top.append(el('span', 'kind', KIND[it.kind] || it.kind), el('span', 'proj', it.project), el('span', 'ago', ago(it.at)));
+    if (view === 'list' && tab === 'all') top.append(el('span', `src ${srcOf(it)}`, SRC[srcOf(it)] || srcOf(it)));
+    top.append(el('span', 'kind', it.kind === 'autofix' ? (it.stage_label || '에러') : (KIND[it.kind] || it.kind)), el('span', 'proj', it.project), el('span', 'ago', ago(it.at)));
     const tt = el('p', 'title', it.title); if (it.term && it.term !== it.title) tt.title = '터미널: ' + it.term;
     c.append(top, tt);
+    if (it.kind === 'autofix') c.append(afCardMeta(it));
     if (it.detail) {
       const d = el('p', 'detail clamp', it.detail.replace(/\*\*/g, '').replace(/\\n/g, '\n'));
       c.append(d);
@@ -815,7 +870,8 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 
   function renderSidebar() {
     const views = document.getElementById('views'); views.replaceChildren();
-    for (const [key, v] of Object.entries(VIEWS)) {
+    for (const key of ['list', 'impact', 'settings']) {
+      const v = VIEWS[key];
       if (key === 'settings') {
         const pend = (sdata?.repos || []).filter((r) => r.change && r.change.state !== 'gone').length;
         const b = el('button', 'nav'); b.setAttribute('aria-current', String(key === view));
@@ -834,8 +890,8 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
         b.onclick = () => { view = key; filter = 'all'; store('hb-view', key); renderAll(); };
         views.append(b); continue;
       }
-      const items = inView(key);
-      const human = items.filter((i) => i.state === 'needs_human' || i.state === 'review').length;
+      const items = inTab('all');
+      const human = humanCount(items);
       const active = items.filter((i) => !['done', 'idle'].includes(i.state)).length;
       const b = el('button', 'nav'); b.setAttribute('aria-current', String(key === view));
       const lab = el('span', 'label', v.label); lab.append(el('span', 'sub', v.sub));
@@ -856,10 +912,10 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       document.getElementById('foot').textContent = `갱신 ${new Date(data.generated_at).toLocaleTimeString('ko-KR')}${SERVER ? ' · 5초마다' : ' · 정적 파일'}`;
       return;
     }
-    const items = inView(view);
+    const items = view === 'list' ? inTab(tab) : [];
     const counts = {};
     items.forEach((i) => { counts[i.project] = (counts[i.project] || 0) + (['done', 'idle'].includes(i.state) ? 0 : 1); });
-    const projects = [...new Set(items.map((i) => i.project))].sort((x, y) => (counts[y] - counts[x]) || x.localeCompare(y));
+    const projects = [...new Set(items.map((i) => i.project))].sort((x, y) => (counts[y] - counts[x]) || String(x || '').localeCompare(String(y || '')));
     for (const p of ['all', ...projects]) {
       const b = el('button', 'nav proj'); b.setAttribute('aria-current', String(p === filter));
       b.append(el('span', 'label', p === 'all' ? '전체' : p), el('span', 'badge', String(p === 'all' ? items.filter((i) => !['done', 'idle'].includes(i.state)).length : counts[p])));
@@ -869,25 +925,39 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     document.getElementById('foot').textContent = `갱신 ${new Date(data.generated_at).toLocaleTimeString('ko-KR')}${SERVER ? ' · 5초마다' : ' · 정적 파일'}`;
   }
 
+  function renderTabs() {
+    const box = document.getElementById('tabs'); box.replaceChildren(); box.hidden = view !== 'list';
+    if (view !== 'list') return;
+    for (const [k, label] of TABS) {
+      const list = inTab(k), n = humanCount(list);
+      const b = el('button', 'tab'); b.type = 'button'; b.setAttribute('aria-pressed', String(tab === k));
+      b.append(el('span', null, label), el('span', list.some((i) => i.state === 'needs_human') ? 'badge alert' : 'badge', String(n)));
+      b.title = `사람 필요 ${n}건`;
+      b.onclick = () => { if (tab === k) return; tab = k; filter = 'all'; store('hb-tab', k); renderAll(); if (k === 'autofix') loadAutofix(true); };
+      box.append(b);
+    }
+  }
   function renderBoard() {
     const v = VIEWS[view];
+    if (view !== 'list') { document.getElementById('tabs').hidden = true; document.getElementById('strip').replaceChildren(); }
     if (view === 'impact') return renderImpact();
     if (v.custom) return renderSettings();
-    const items = inView(view).filter((it) => filter === 'all' || it.project === filter);
+    const items = inTab(tab).filter((it) => filter === 'all' || it.project === filter);
     document.getElementById('vtitle').textContent = v.label;
-    document.getElementById('newbtn').hidden = !(SERVER && view === 'work');
-    document.getElementById('vdesc').textContent = v.desc;
+    document.getElementById('newbtn').hidden = !(SERVER && ['all', 'work'].includes(tab));
+    document.getElementById('vdesc').textContent = TABS.find(([k]) => k === tab)[2];
+    renderTabs();
+    renderStrip();
     const partsOf = (c) => c.parts || [c];
-    const allParts = v.cols.flatMap(partsOf);
-    document.getElementById('vmeta').textContent = allParts.map((c) => `${c.label} ${items.filter((i) => i.state === c.state).length}`).join(' · ');
+    document.getElementById('vmeta').textContent = v.cols.map((c) => `${c.label} ${partsOf(c).reduce((n, p) => n + items.filter((i) => i.state === p.state).length, 0)}`).join(' · ');
     const board = document.getElementById('board'); board.replaceChildren();
     board.style.gridTemplateColumns = v.cols.map((c, i) => (i === 0 ? '1.2fr' : '1fr')).join(' ');
     const wgroups = {};
-    if (view === 'work') for (const it of items) if (it.group) (wgroups[it.group.id] ||= []).push(it);
+    for (const it of items) if (srcOf(it) === 'work' && it.group) (wgroups[it.group.id] ||= []).push(it);
     const fill = (sec, state) => {
       const mine = items.filter((i) => i.state === state);
       const gl = Object.values(wgroups).filter((l) => groupState(l) === state);
-      const singles = mine.filter((i) => !(view === 'work' && i.group));
+      const singles = mine.filter((i) => !(srcOf(i) === 'work' && i.group));
       if (!singles.length && !gl.length) { sec.append(el('div', 'empty', state === 'needs_human' ? '확인할 것 없음' : '없음')); return; }
       for (const list of gl) sec.append(workGroupCard(list));
       const grouped = {};
@@ -901,9 +971,12 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
         sec.querySelector(`[data-slot="${cause}"]`).replaceWith(list.length > 1 ? groupCard(cause, list) : card(list[0]));
       }
     };
+    // 열·칸에 실제로 그려질 카드 수: 묶이지 않은 카드 + 그 상태로 판정된 작업 묶음(묶음 상태는 groupState가 다시 정한다).
+    const shown = (st) => items.filter((i) => i.state === st && !(srcOf(i) === 'work' && i.group)).length
+      + Object.values(wgroups).filter((l) => groupState(l) === st).length;
     for (const col of v.cols) {
       const sec = el('section', 'col');
-      const total = partsOf(col).reduce((n, p) => n + items.filter((i) => i.state === p.state).length, 0);
+      const total = partsOf(col).reduce((n, p) => n + shown(p.state), 0);
       const h = el('h2'); h.append(el('span', 'dot ' + (col.state || col.parts[0].state)), el('span', null, col.label), el('span', 'n', String(total)));
       sec.append(h);
       if (col.collapsible && !openIdle) {
@@ -912,9 +985,11 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
         board.append(sec); continue;
       }
       if (col.collapsible) { const b = el('button', 'colbtn', '접기'); b.onclick = () => { openIdle = false; store('hb-idle', ''); renderBoard(); }; sec.append(b); }
-      if (col.parts) for (const part of col.parts) {
+      if (col.parts && !total) sec.append(el('div', 'empty', col.parts[0].state === 'needs_human' ? '확인할 것 없음' : '없음'));
+      else if (col.parts) for (const part of col.parts) {
         const n = items.filter((i) => i.state === part.state);
-        const ph = el('div', 'part'); ph.append(el('span', 'dot sm ' + part.state), el('span', null, part.label), el('span', 'n', String(n.length)));
+        if (!shown(part.state)) continue;
+        const ph = el('div', 'part'); ph.append(el('span', 'dot sm ' + part.state), el('span', null, part.label), el('span', 'n', String(shown(part.state))));
         if (part.state === 'review' && n.length > 1 && SERVER) { const b = el('button', null, '모두 읽음'); b.onclick = () => markSeen(n.map((i) => i.id)); ph.append(b); }
         sec.append(ph); fill(sec, part.state);
       } else fill(sec, col.state);
@@ -969,13 +1044,14 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
       LEVELS.map(([k, l]) => `${l} ${sdata.repos.filter((r) => r.effective?.level === k).length}`).join(' · ');
     const box = el('div', 'srows');
     const tabs = el('div', 'ladder stabs');
-    for (const [k, label] of [['work', '작업 — 내가 시킨 워크플로'], ['harness', '하네스 동작 — 자동 harvest·sync']]) {
+    for (const [k, label] of [['work', '작업 — 내가 시킨 워크플로'], ['harness', '하네스 동작 — 자동 harvest·sync'], ['autofix', '자동 수정 — 무인 실행']]) {
       const b = el('button', null, label); b.type = 'button'; b.setAttribute('aria-pressed', String(stab === k));
       b.onclick = () => { stab = k; store('hb-stab', k); renderSettings(); };
       tabs.append(b);
     }
     box.append(tabs);
     if (stab === 'harness') { renderHarnessSettings(box, P, repos); board.append(box); return; }
+    if (stab === 'autofix') { renderAutofixSettings(box); board.append(box); return; }
 
     // 내 기본 단계
     const me = el('div', 'srow mine');
@@ -1038,7 +1114,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     if (!repos.length) box.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
     board.append(box);
   }
-  let stab = store('hb-stab') === 'harness' ? 'harness' : 'work';
+  let stab = ['harness', 'autofix'].includes(store('hb-stab')) ? store('hb-stab') : 'work';
   const HSTAGES = [['off', '끔'], ['run', '자동 실행 (draft PR까지)'], ['merge', '자동 실행 + 자동 병합']];
   function renderHarnessSettings(box, P, repos) {
     document.getElementById('vmeta').textContent = ['harvest', 'sync'].map((k) => `${k} ${P[`HM_${k.toUpperCase()}_AUTO`] === '1' ? (P[`HM_${k.toUpperCase()}_AUTO_MERGE`] === '1' ? '자동 병합' : '자동 실행') : '끔'}`).join(' · ');
@@ -1386,10 +1462,258 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     board.append(wrap);
   }
 
+  // ---- 자동 수정 ----
+  // 상태 전이·판정은 autofix-auto.sh가 정한 값이다. 화면은 말로 옮기기만 한다. 외부 API(접근 확인·후보 조회)는 버튼으로만 부른다.
+  const AF_STEPS = ['후보', '수정 PR', '병합', '배포', '확인'];
+  const AF_STEP_AT = { fixing: 1, pr: 1, deploy_wait: 2, observing: 3, resolved: 4, regressed: 4, gave_up: 4, skipped: 0, failed: 0, declined: 1 };
+  const AF_RESULT = { pr_opened: 'PR 염', left_for_user: '사람 판단 필요', not_code_bug: '코드 버그 아님', not_reproducible: '재현 불가', no_result: '결과 없음' };
+  const AF_FAIL = { usage_limit: '사용량 한도', missing_pr_url: '이 저장소 PR 주소를 남기지 않음', agent_error: '에이전트 오류' };
+  const AF_REASON = { new: '새 에러', regressed: '재발', reappeared: '해결 뒤 다시 나옴', retry: '일시 실패 재시도', stale_attempt: '멈춘 시도 재시도', cooldown_over: '넘긴 지 유예 끝남' };
+  const AF_SOURCE = { local: '개인 로컬 파일', manifest: '저장소 manifest', none: '없음', unknown: '읽지 못함' };
+  const AF_CREDS = { present: '있음', missing: '없음', not_needed: '필요 없음', unknown: '모름' };
+  const AF_EVENT = {
+    started: '시작', finished: '끝남', merged: 'PR 병합됨', deployed: '배포 확인', resolved: '해결 확인', regressed: '재발 확인', gave_up: '포기',
+    declined: 'PR 닫힘', skipped: '건너뜀', tracked: '수동 PR 등록', recovered: '상태 복구', verify_error: '검증 오류', state_error: '상태 기록 실패',
+  };
+  const AF_SKIP = { daily_max: '하루 상한', busy: '다른 무인 실행 중', usage_backoff: '사용량 한도 휴지', needs_claude: 'claude CLI 없음' };
+  const usd = (v) => (typeof v === 'number' ? `$${v < 10 ? v.toFixed(2) : Math.round(v)}` : '–');
+  const dur = (s) => (typeof s === 'number' ? (s < 90 ? `${s}초` : `${Math.round(s / 60)}분`) : '');
+  // 어댑터·모니터링 응답에서 온 주소는 http(s)만 링크로 만든다(그 밖은 글자만).
+  const link = (text, href) => {
+    if (!/^https?:\/\//.test(href || '') && !String(href || '').startsWith('/autofix/log?')) return el('span', null, text);
+    const a = el('a', null, text); a.href = href; a.target = '_blank'; a.rel = 'noopener'; return a;
+  };
+  let adata = null, afetchedAt = 0, abusy = false, aschedule = null, aerrAt = 0;
+  async function loadAutofix(force) {
+    if (!SERVER || abusy) return;
+    if (!force && adata && Date.now() - afetchedAt < 15000) return;
+    if (aerrAt && Date.now() - aerrAt < 15000) return;  // 실패 뒤에는 잠시 쉰다 — 화면 그리기가 다시 부르는 고리를 끊는다
+    abusy = true;
+    try {
+      const r = await fetch('/autofix?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      adata = await r.json(); afetchedAt = Date.now(); aerrAt = 0;
+    } catch (e) { aerrAt = Date.now(); }
+    abusy = false;
+    if (view === 'list' && tab === 'autofix') renderStrip();
+    if (view === 'settings' && stab === 'autofix') renderSettings();
+  }
+  function afButton(label, busyLabel, run) {
+    const b = el('button', null, label); b.type = 'button';
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = busyLabel;
+      try { const res = await run(); toast(res.message, res.ok); } catch (e) { toast('요청 실패: ' + e.message, false); }
+      await loadAutofix(true);
+    };
+    return b;
+  }
+  // 목록 카드(에러 시그니처)의 단계·건수·링크. 단계·상태는 서버(autofix.py board_state·stage)가 정한 값이다.
+  function afCardMeta(it) {
+    const box = el('div');
+    const steps = el('div', 'afsteps'); const at = AF_STEP_AT[it.stage] ?? 0;
+    AF_STEPS.forEach((name, i) => { if (i) steps.append(el('span', 'sep', '→')); steps.append(el('span', i <= at ? 'on' : null, name)); });
+    box.append(steps);
+    const m = el('div', 'afmeta');
+    if (it.count != null) m.append(el('span', null, `감지 때 ${it.count}건`));
+    if (it.attempts) m.append(el('span', null, `시도 ${it.attempts}회`));
+    if (it.regressions) m.append(el('span', null, `재발 ${it.regressions}회`));
+    if (it.stage === 'observing' && it.verify_until) m.append(el('span', null, `관찰 ~ ${new Date(it.verify_until).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`));
+    if (it.recovered) m.append(el('span', null, '실행 기록에서 복구'));
+    if (it.monitor_link) m.append(link('모니터링에서 보기', it.monitor_link));
+    if (it.log_name && SERVER) m.append(link('로그 열기', '/autofix/log?t=' + encodeURIComponent(TOKEN) + '&name=' + encodeURIComponent(it.log_name)));
+    if (it.title !== it.signature) m.append(el('span', null, it.signature));
+    box.append(m);
+    return box;
+  }
+  // '자동 수정' 탭 상단 요약 띠: 무인 실행·오늘 실행·비용, 저장소별 준비 상태와 버튼(접근 확인·후보 조회·설정하기), 최근 실행.
+  function afRepoRow(r) {
+    const row = el('div', 'afrepo');
+    const rd = r.ready;
+    row.append(el('b', null, r.name), el('span', r.targeted ? 'schip watch' : 'schip', r.targeted ? '무인 실행 대상' : '대상 아님'));
+    if (!rd) row.append(el('span', 'dim', '이 맥에서 저장소를 찾지 못함'));
+    else if (rd.source === 'none') row.append(el('span', 'dim', '모니터링 설정 없음'));
+    else {
+      row.append(el('span', null, `${AF_SOURCE[rd.source] || rd.source} · ${rd.provider || '?'}${rd.summary ? ` · ${rd.summary}` : ''}`));
+      row.append(el('span', rd.credentials === 'missing' ? 'warn' : 'dim', `자격증명 ${AF_CREDS[rd.credentials] || rd.credentials}`));
+    }
+    if (rd?.problem) row.append(el('span', 'warn', rd.problem));
+    if (r.check) row.append(el('span', r.check.code === 0 ? 'dim' : 'warn', `접근 확인 ${ago(r.check.at)}: ${r.check.label}${r.check.message ? ` — ${r.check.message}` : ''}`));
+    const acts = el('div', 'acts');
+    if (r.repo && rd && rd.source !== 'none') acts.append(afButton(r.check ? '다시 접근 확인' : '접근 확인', '확인 중…', () => spost('/autofix/check', { repo: r.repo })));
+    if (r.repo && rd && rd.source !== 'none') acts.append(afButton(r.candidates ? '후보 다시 조회' : '후보 조회', '조회 중…', () => spost('/autofix/candidates', { repo: r.repo })));
+    if (r.repo && rd && (rd.source === 'none' || rd.code === 4)) acts.append(afButton(rd.source === 'none' ? '설정하기' : '설정 고치기', '띄우는 중…', () => spost('/autofix/setup', { repo: r.repo })));
+    row.append(acts);
+    if (r.candidates) {
+      const cd = r.candidates, wrap = el('div', 'afcands');
+      wrap.append(el('div', 'dim', `후보 (${ago(cd.at)} 조회${cd.error ? '' : ` · ${cd.items.length}건`})`));
+      if (cd.error) wrap.append(el('div', 'warn', cd.error));
+      else if (cd.items.length) {
+        const ul = el('ul', 'ilist');
+        for (const c of cd.items) {
+          const li = el('li'); li.append(el('span', 'schip', AF_REASON[c.reason] || c.reason || '후보'));
+          li.append(c.link ? link(c.title || c.signature, c.link) : el('b', null, c.title || c.signature));
+          li.append(el('span', null, `${c.count ?? '?'}건`)); ul.append(li);
+        }
+        wrap.append(ul);
+      }
+      row.append(wrap);
+    }
+    return row;
+  }
+  function afRuns(runs) {
+    const d = el('details');
+    d.append(el('summary', null, `최근 실행 ${runs.length}건 — 결과·소요·비용·로그`));
+    for (const e of runs) {
+      const row = el('div', 'afrun');
+      row.append(el('span', 'dim', new Date(e.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })));
+      row.append(el('span', null, AF_EVENT[e.event] || e.event));
+      const what = el('span');
+      what.append(`${e.project}${e.title ? ` · ${e.title}` : e.signature ? ` · ${e.signature}` : ''}`);
+      if (e.event === 'finished') what.append(` — ${e.outcome === 'failed' ? `실패${e.reason ? `(${AF_FAIL[e.reason] || e.reason})` : ''}` : AF_RESULT[e.outcome] || e.outcome}`);
+      else if (e.event === 'skipped' && e.reason) what.append(` — ${AF_SKIP[e.reason] || e.reason}`);
+      else if (e.event === 'started' && e.reason) what.append(` — ${AF_REASON[e.reason] || e.reason}`);
+      what.title = what.textContent; row.append(what);
+      const tail = el('span', 'dim');
+      if (e.event === 'finished') tail.append([dur(e.duration_s), usd(e.cost_usd)].filter(Boolean).join(' · '), ' ');
+      if (e.artifact) tail.append(link(prLabel(e.artifact), e.artifact), ' ');
+      if (e.log) tail.append(link('로그', '/autofix/log?t=' + encodeURIComponent(TOKEN) + '&name=' + encodeURIComponent(e.log)));
+      row.append(tail); d.append(row);
+    }
+    return d;
+  }
+  function renderStrip() {
+    const box = document.getElementById('strip'); box.replaceChildren();
+    if (view !== 'list' || tab !== 'autofix' || !SERVER) return;
+    if (!adata) { box.append(el('div', 'empty', aerrAt ? '자동 수정 준비 상태를 읽지 못함 — 잠시 뒤 다시 시도' : '자동 수정 준비 상태 불러오는 중…')); loadAutofix(true); return; }
+    loadAutofix(false);
+    // 작업 현황에는 카드와 한 줄 상황만 둔다. 저장소별 연결(준비 상태·접근 확인·후보 조회·설정하기)과 개인 설정은 하네스 설정의 '자동 수정' 탭.
+    const C = adata.config || {};
+    const runs = (adata.runs || []).filter((e) => filter === 'all' || e.project === filter);
+    const line = el('div', 'afline');
+    const parts = [C.auto ? '무인 실행 켜짐' : '무인 실행 꺼짐',
+      `오늘 ${adata.today.started}/${C.daily_unlimited ? '제한 없음' : `${adata.today.daily_max ?? '?'}회`}`, `누적 ${usd(adata.cost_usd)}`];
+    const last = runs.filter((e) => e.event === 'finished').sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    if (last) parts.push(`최근 실행 ${ago(last.at)} ${last.outcome === 'failed' ? `실패${last.reason ? `(${AF_FAIL[last.reason] || last.reason})` : ''}` : AF_RESULT[last.outcome] || last.outcome}`);
+    line.append(el('span', null, parts.join(' · ')));
+    if (C.daily_unlimited && C.budget_usd === 'unlimited') line.append(el('span', 'afwarn strong', '하루 상한·실행당 예산 모두 제한 없음 — 비용 상한이 없습니다'));
+    else if (C.daily_unlimited || C.budget_usd === 'unlimited') line.append(el('span', 'afwarn', `${C.daily_unlimited ? '하루 상한' : '실행당 예산'} 제한 없음`));
+    if (C.error) line.append(el('span', 'afwarn', C.error));
+    const go = el('button', 'aflink', '설정'); go.type = 'button'; go.title = '하네스 설정 › 자동 수정(저장소별 연결·무인 실행·상한·예산)';
+    go.onclick = () => { view = 'settings'; stab = 'autofix'; store('hb-view', 'settings'); store('hb-stab', 'autofix'); renderAll(); };
+    line.append(go);
+    box.append(line);
+    // 최근 실행 중 카드가 이미 말해 주는 것(시그니처 카드의 단계·실패 이유)은 빼고, 카드에 없는 기록만 남긴다:
+    // 실행을 건너뛴 이유(하루 상한·다른 실행 중·사용량 휴지), 상태 기록·검증 오류, 카드가 없는 시그니처의 결과.
+    const carded = new Set(data.items.filter((i) => i.section === 'autofix').map((i) => `${i.project}\u0000${i.signature}`));
+    const extra = runs.filter((e) => ['skipped', 'state_error', 'verify_error'].includes(e.event)
+      || (e.event === 'finished' && !carded.has(`${e.project}\u0000${e.signature}`)));
+    if (extra.length) {
+      const d = afRuns(extra.slice(0, 8));
+      d.querySelector('summary').textContent = `카드에 없는 최근 기록 ${extra.length}건 — 건너뛴 이유·기록 오류`;
+      d.classList.add('afextra'); box.append(d);
+    }
+  }
+  async function afConfigure(body) {
+    const res = await spost('/autofix/configure', body);
+    toast(res.message, res.ok);
+    if (res.schedule) aschedule = res.schedule;
+    await loadAutofix(true);
+  }
+  function afLadder(cur, options, onPick, cls) {
+    const lad = el('div', cls || 'ladder');
+    for (const [k, label] of options) {
+      const b = el('button', null, label); b.type = 'button'; b.setAttribute('aria-pressed', String(cur === k));
+      b.onclick = () => { if (cur !== k) onPick(k); };
+      lad.append(b);
+    }
+    return lad;
+  }
+  function afRow(title, keyLabel, control, lines) {
+    const row = el('div', 'srow mine afset');
+    const nm = el('div', 'nm'); nm.append(el('b', null, title), el('small', null, keyLabel)); row.append(nm, control);
+    const meta = el('div', 'meta'); for (const l of lines) meta.append(typeof l === 'string' ? el('span', null, l) : l);
+    row.append(meta); return row;
+  }
+  // 프리셋 + 직접 입력. 입력값 검증은 configure가 한다(틀리면 아무것도 바뀌지 않고 이유를 토스트로).
+  function afPick(cur, presets, onPick, custom) {
+    const box = el('div', 'afctl');
+    box.append(afLadder(cur, presets, onPick));
+    const f = el('form', 'afcustom');
+    const inp = el('input'); inp.type = 'text'; inp.inputMode = custom.mode || 'numeric'; inp.placeholder = custom.placeholder;
+    inp.setAttribute('aria-label', custom.label);
+    if (cur != null && !presets.some(([k]) => k === cur)) inp.value = String(cur);
+    const b = el('button', null, '적용'); b.type = 'submit';
+    f.append(el('span', null, '직접'), inp, el('span', null, custom.unit), b);
+    f.onsubmit = (e) => { e.preventDefault(); const v = inp.value.trim(); if (v) onPick(v); };
+    box.append(f);
+    return box;
+  }
+  const withCur = (opts, cur, fmt) => (cur == null || opts.some(([k]) => k === cur) ? opts : [...opts, [cur, fmt(cur)]].sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0)));
+  function renderAutofixSettings(box) {
+    if (!adata) { box.append(el('div', 'empty', '불러오는 중…')); loadAutofix(true); return; }
+    loadAutofix(false);
+    const C = adata.config || {};
+    document.getElementById('vmeta').textContent = `자동 수정 무인 실행 ${C.auto ? '켬' : '끔'} · 대상 ${(C.repos || []).length}`;
+    box.append(el('p', 'afnote', '토큰: 화면 보기·상태·검증(PR 병합·배포 반영·재발 확인)은 LLM 없이 스크립트만 돕니다. 수정 실행은 에러마다 LLM 세션 1개(Claude)라 비용이 듭니다 — 하루 상한·실행당 예산이 그 상한입니다. 보드는 수정 실행을 직접 시작하지 않습니다.'));
+    // 저장소별 연결: 모니터링 설정 출처·provider·query·자격증명 유무와 접근 확인·후보 조회(외부 API — 버튼으로만)·설정하기(setup 세션).
+    box.append(el('div', 'ssub', '저장소별 연결 — 모니터링 설정은 저장소마다 /ai-harness:autofix setup이 만듭니다(보드는 설정 파일을 쓰지 않음). 자격증명은 있음/없음만 보입니다.'));
+    const conn = el('div', 'afconn');
+    const repos = adata.repos.filter((r) => filter === 'all' || r.name === filter || r.project === filter);
+    for (const r of [...repos].sort((a, b) => (a.ready?.source === 'none') - (b.ready?.source === 'none') || String(a.name || '').localeCompare(String(b.name || '')))) conn.append(afRepoRow(r));
+    if (!repos.length) conn.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
+    box.append(conn);
+    box.append(el('div', 'ssub', '개인 설정(~/.ai-harness/config) — 나에게만, 바로 적용. 쓰기는 모두 autofix-auto.sh configure를 거칩니다(값 검증, 틀린 값이면 아무것도 바꾸지 않음).'));
+    if (C.error) { box.append(el('div', 'empty', C.error)); return; }
+    box.append(afRow('무인 실행', 'HM_AUTOFIX_AUTO', afLadder(!!C.auto, [[false, '끔'], [true, '켬']], (k) => afConfigure({ auto: k })),
+      [C.auto ? '대상 저장소의 새 에러를 sweep마다 1건씩 고쳐 draft PR까지 만들고, 병합·배포 뒤 재발을 확인합니다. 병합은 사람이 합니다.' : '꺼져 있어도 이미 연 PR의 검증 기록과 수동 /ai-harness:autofix는 그대로 보입니다.']));
+    const targets = C.repos || [];
+    const tl = el('div', 'aftargets');
+    const known = adata.repos.filter((r) => r.repo);
+    const target = (id, name, note) => {
+      const on = targets.includes(id);
+      const lab = el('span', null, name); lab.append(el('small', null, note));
+      tl.append(lab, afLadder(on, [[true, '대상'], [false, '제외']], (k) => afConfigure(k ? { add_repo: id } : { remove_repo: id }), 'ladder mini'));
+    };
+    for (const r of known) {
+      target(r.project, r.name + (r.project !== r.name ? ` (id ${r.project})` : ''),
+        r.ready?.source === 'none' ? '모니터링 설정 없음' : r.ready?.code === 4 ? '설정·자격증명 문제' : `${AF_SOURCE[r.ready?.source] || '설정'} · ${r.ready?.provider || '?'}`);
+    }
+    for (const id of targets.filter((t) => !known.some((r) => r.project === t))) target(id, id, '이 맥에서 저장소를 찾지 못함');
+    box.append(afRow('대상 저장소', 'HM_AUTOFIX_REPOS', tl, ['무인 실행은 여기 넣은 저장소만 봅니다. 모니터링 설정이 없는 저장소는 넣어도 건너뜁니다.']));
+    const iv = C.interval_minutes ?? null;
+    const sched = [];
+    if (aschedule) {
+      const st = aschedule.status?.autofix;
+      sched.push(el('span', aschedule.install_rc === 0 ? 'ok' : 'warn', `정기 실행 등록: ${aschedule.install || '(출력 없음)'}`));
+      sched.push(st ? `등록 상태: sweep 전용 ${st.loaded ? '켜짐' : '꺼짐'}${st.interval_minutes ? ` · ${st.interval_minutes}분` : ''}` : '등록 상태: sweep 전용 없음 — backfill 주기에 돕니다');
+    }
+    box.append(afRow('sweep 주기', 'HM_AUTOFIX_INTERVAL_MINUTES',
+      afPick(iv, [[null, '정기 실행 주기'], [15, '15분'], [30, '30분'], [60, '1시간']], (k) => afConfigure({ interval_minutes: k ?? 'off' }),
+        { placeholder: '예: 5, 90', unit: '분', label: 'sweep 주기(분) 직접 입력' }),
+      ['검증과 새 에러 확인 주기입니다. 직접 입력은 1 이상의 정수(분)이고, 0이나 off는 끔(정기 실행 주기)입니다. 바꾸면 schedule.sh install-autofix로 sweep 전용 정기 실행만 등록(또는 내림)하고 결과를 여기 보여 줍니다. 등록해도 바로 돌지 않고 주기가 한 번 지난 뒤 첫 sweep이 돕니다.', ...sched]));
+    const dcur = C.daily_unlimited ? 'unlimited' : C.daily_max;
+    const bcur = C.budget_usd;
+    if (C.daily_unlimited && bcur === 'unlimited') box.append(el('p', 'afwarn strong', '하루 상한·실행당 예산이 모두 제한 없음 — 비용 상한이 없습니다. 새 에러가 몰리면 그만큼 LLM 수정 실행이 돌고, 각 실행도 끝날 때까지 비용이 쌓입니다.'));
+    box.append(afRow('하루 상한', 'HM_AUTOFIX_DAILY_MAX',
+      afPick(dcur, [[1, '1회'], [3, '3회 (기본)'], [5, '5회'], [10, '10회'], ['unlimited', '제한 없음']], (k) => afConfigure({ daily_max: k }),
+        { placeholder: '예: 20', unit: '회', label: '하루 상한(회) 직접 입력' }),
+      [`하루에 시작하는 수정 실행 수(전체 저장소 합계, 0이면 하루 0회). 오늘 ${adata.today.started}회 시작함.`,
+        ...(C.daily_unlimited ? [el('span', 'warn', '제한 없음 — 새 에러마다 LLM 수정 실행이 돌아 하루 비용이 크게 늘 수 있습니다.')] : [])]));
+    box.append(afRow('에러당 PR 상한', 'HM_AUTOFIX_MAX_ATTEMPTS',
+      afLadder(C.max_attempts, withCur([[1, '1개'], [2, '2개 (기본)'], [3, '3개'], [5, '5개']], C.max_attempts, (n) => `${n}개`), (k) => afConfigure({ max_attempts: k })),
+      ['같은 에러가 고친 뒤 다시 나오면 이 수만큼만 다시 고치고, 넘으면 포기로 남겨 사람에게 넘깁니다.']));
+    box.append(afRow('실행당 예산', 'HM_AUTOFIX_BUDGET_USD',
+      afPick(bcur, [[2, '$2'], [5, '$5'], [10, '$10 (기본)'], [20, '$20'], ['unlimited', '제한 없음']], (k) => afConfigure({ budget_usd: k }),
+        { placeholder: '예: 15, 2.5', unit: '달러', label: '실행당 예산(달러) 직접 입력', mode: 'decimal' }),
+      [`수정 실행 한 번(에러 1건)의 Claude 비용 상한(--max-budget-usd). 지금까지 누적 ${usd(adata.cost_usd)}.`,
+        ...(bcur === 'unlimited' ? [el('span', 'warn', '제한 없음 — 수정 실행에 비용 상한을 넘기지 않아 한 실행이 길어지면 비용이 크게 늘 수 있습니다(시간 제한만 남음).')] : [])]));
+  }
+
   function renderAll() { renderSidebar(); renderBoard(); }
 
   if (SERVER) {
-    refresh().then(() => loadSettings(true)).catch((e) => toast('상태를 읽지 못함: ' + e.message, false)); setInterval(() => refresh().catch(() => {}), 5000);
+    setInterval(() => { if (((view === 'list' && tab === 'autofix') || (view === 'settings' && stab === 'autofix')) && !document.hidden) loadAutofix(false); }, 15000);
+    refresh().then(() => { loadSettings(true); loadAutofix(true); }).catch((e) => toast('상태를 읽지 못함: ' + e.message, false)); setInterval(() => refresh().catch(() => {}), 5000);
     setInterval(() => { if (view === 'impact' && !document.hidden) loadImpact(false); }, 4000);
     // 뒤에 있던 탭으로 돌아오면 바로 새로 읽는다(뒤 탭 타이머는 브라우저가 늦춰서 화면이 낡아 있을 수 있음)
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh().catch(() => {}); });

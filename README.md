@@ -63,7 +63,7 @@ flowchart LR
 | `/harness-update` | 설치 버전을 확인하거나 최신 버전을 적용할 때 | `--check`으로 확인하고, `--apply`가 명시된 경우에만 현재 호스트의 플러그인을 업데이트합니다. | 사용자 실행 |
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
-| `/board` | 작업 세션·하네스 자동 실행·개인 자동화 설정을 한 화면에서 보고 답하고 싶을 때 ("보드 열어줘") | [Harness Board](#board)를 필요할 때 띄워 브라우저로 엽니다. 이미 떠 있으면 그 주소를 다시 열고, `stop`·`status`로 끄거나 확인합니다. 세션 대화 보기·입력 보내기·질문과 권한 요청 답하기·끝난 세션 정리, 자동 harvest·sync 결과와 대기 harvest 실행, `~/.ai-harness/config` 개인 설정 변경, 저장소별 하네스 효과(반영한 개선의 재발 여부·설치 전후 지표) 보기를 합니다. 데몬 없이 `127.0.0.1`에만 뜹니다. Python 3(표준 라이브러리)이 필요합니다. | 사용자 실행 |
+| `/board` | 작업 세션·하네스 자동 실행·개인 자동화 설정을 한 화면에서 보고 답하고 싶을 때 ("보드 열어줘") | [Harness Board](#board)를 필요할 때 띄워 브라우저로 엽니다. 이미 떠 있으면 그 주소를 다시 열고, `stop`·`status`로 끄거나 확인합니다. 세션 대화 보기·입력 보내기·질문과 권한 요청 답하기·끝난 세션 정리, 자동 harvest·sync 결과와 대기 harvest 실행, `~/.ai-harness/config` 개인 설정 변경, 저장소별 하네스 효과(반영한 개선의 재발 여부·설치 전후 지표)와 `/autofix` 진행·실행 이력 보기를 합니다. 데몬 없이 `127.0.0.1`에만 뜹니다. Python 3(표준 라이브러리)이 필요합니다. | 사용자 실행 |
 | `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
@@ -641,14 +641,17 @@ scripts/board/board.sh status    # running · url
 scripts/board/board.sh stop
 ```
 
+사이드바는 **작업 현황**·하네스 효과·하네스 설정 셋입니다. 작업 현황은 한 목록 화면이고, 위쪽 탭 `전체 | 작업 | 하네스 동작 | 자동 수정`(탭마다 사람 필요 수 배지)으로 출처를 고릅니다. 세 출처의 항목은 같은 상태 열 — 사람 필요(답·검토, 결과 확인) → 진행 중 → 대기(대기·막힘) → 완료·쉬는 중(접힘) — 에 놓이고, 전체 탭에서는 카드마다 출처 칩(작업·하네스·자동 수정)이 붙습니다.
+
 - **작업**: `claude agents --json --all`과 세션 대화 기록으로 상태(사람 필요·진행 중·결과 확인·쉬는 중)를 보입니다. 대화 보기, 입력 보내기(백그라운드 세션은 멈춘 뒤 같은 ID로 이어 가고, Orca 터미널의 대화형 세션은 그 터미널에 입력), 질문 답 버튼, 권한 요청 허용/거부, 끝난 세션 정리(worktree는 변경·원격에 없는 커밋·다른 살아 있는 세션이 없을 때만, 강제 삭제 없음, 대화 기록은 지우지 않음).
 - **하네스 동작**: 자동 harvest·sync 실행 결과, 대기 중인 harvest(지금 돌리기), 정기 실행, 워크플로 러너, 자동 적용 규칙. 검토가 필요한 PR이 호스트에서 병합·거절되면 완료로 내립니다.
 - **하네스 설정**: 개인 자동화 단계(`HM_DELIVERY_LEVEL`·`HM_DELIVERY_LEVEL_REPOS`), 자동 harvest·sync의 실행/병합(`HM_*_AUTO`·`HM_*_AUTO_MERGE`)과 하루 상한을 `~/.ai-harness/config`에 바로 씁니다(다른 줄·권한 보존, 원자적 쓰기). 저장소 사실(기준 브랜치·배포·스모크 명령)은 `harness.json`을 직접 고치지 않고 그 저장소에서 `/harness-init` 설정 변경 세션을 띄워 draft PR로 냅니다.
 - **하네스 효과**: 저장소마다 `/harness-impact`와 같은 `impact.sh compare`를 뒤에서 하루 한 번 돌려(`~/.ai-harness/board/impact/`, 한 번에 한 저장소) 맨 위에 저장소별 한 줄 상태(효과 확인·엇갈림·재발/악화·관찰 중·데이터 부족, 모르면 왜 모르는지)를 두고, 세션당 교정·사실 부족의 설치 후 주별 추세를 주 지표로 보입니다. 설치 전후 비교는 표본이 충분할 때만 숫자로 보이고, 아니면 "비교 불가 — 설치 전 기록 없음"처럼 이유를 씁니다(상태·추세·비교 가능성은 리포트와 같은 `scripts/impact-assess.jq` 값). 그 아래 가드 차단·재작업 비율과 개선 카드(판정 배지·무엇을 고쳤는지·기대효과·PR·반영 뒤 관찰 세션·같은 유형 재발, 규칙 제거는 따로)를 보입니다. 판정은 `/harness-impact`가 마지막으로 맞춘 매칭(`~/.ai-harness/reports/highlights/`)을 그날까지의 세션에 다시 쓴 값이라 리포트와 같고, 매칭이 없는 개선은 관찰 세션 5개 미만이면 판단 보류, 아니면 판정 안 함입니다. "다시 계산", 실패 이유(설치일 모름 등), "전체 리포트 열기"(`impact.sh render`)가 있습니다. 읽기 전용입니다.
+- **자동 수정**: [`/autofix`](#autofix)의 에러 시그니처마다 카드 한 장 — 단계(수정 중·PR 검토 대기·병합 뒤 배포 대기·재발 관찰·해결·재발·포기·건너뜀)와 PR·감지 건수·에이전트가 남긴 원인 분석 요약(실행 로그의 결과 텍스트, 비밀값·홈 경로 가림)·로그 열기. 넘김(`left_for_user`)·포기·실패·PR 검토 대기는 사람 필요, 수정 중·검증 중은 진행 중, 재발(다음 sweep이 다시 고침)은 대기, 해결·PR 닫힘·코드 버그 아님 등은 완료 열입니다. PR이 호스트에서 병합되면 진행 중(배포·재발 확인 대기), 닫히면 완료로 옮깁니다. 사람 필요 카드의 "세션으로 열기"는 그 저장소에서 원인 요약을 넘긴 세션을 띄웁니다. 상태 파일을 잃은 프로젝트의 실행(실행 기록 `runs.jsonl`에만 남은 `left_for_user` 등)도 카드로 보이고, 다음 검증이 상태 파일로 되살립니다. 자동 수정 탭 위에는 한 줄 상황(무인 실행 켜짐/꺼짐 · 오늘 실행 수/하루 상한 · 누적 비용 · 최근 실행 결과, 제한 없음 경고)과 하네스 설정으로 가는 "설정" 버튼만 있고, 카드가 보여 주지 않는 최근 기록(실행을 건너뛴 이유·상태 기록·검증 오류)만 접어서 둡니다. 저장소별 연결(monitor 설정 출처 — 개인 로컬 파일·저장소 manifest·없음 — 와 provider·query 요약, 자격증명 있음/없음, 무인 실행 대상 여부, 접근 확인·후보 조회·설정하기)은 하네스 설정의 "자동 수정" 탭 맨 위에 있습니다. 준비 상태는 `monitor-fetch.sh describe`가 요청 없이 내고 자격증명 값은 어디에도 싣지 않습니다. 접근 확인(`monitor-fetch.sh check` — 종료 코드를 "자격증명·설정 오류"·"설정 없음"처럼 말로)과 후보 조회는 모니터링 도구 API를 부르므로 버튼으로만 돌고 결과를 `~/.ai-harness/board/autofix/`에 남깁니다. 설정이 없는 저장소는 "설정하기"로 그 저장소에서 `/autofix setup` 세션을 띄웁니다. 개인 설정은 하네스 설정의 "자동 수정" 탭(무인 실행·대상 저장소·sweep 주기·하루 상한·에러당 PR 상한·실행당 예산 — 주기·하루 상한·예산은 프리셋 외에 직접 입력, 하루 상한·예산은 "제한 없음"도 고를 수 있고 고르면 비용 경고가 뜸)에서 바꾸고, 쓰기는 모두 `autofix-auto.sh configure`를 거칩니다(주기를 바꾸면 `schedule.sh install-autofix`로 sweep 전용 정기 실행만 등록·해제하고 — backfill은 그대로, 등록 즉시 sweep을 돌리지 않음 — `status` 결과를 보임). 화면은 LLM 토큰을 쓰지 않고, 보드는 수정 실행을 시작하거나 PR을 병합하지 않습니다.
 - **보안**: `127.0.0.1`에만 묶이고, 실행마다 새 URL 토큰·Host(DNS rebinding)·Origin을 검사합니다. 브라우저에서 명령 문자열을 받지 않고 항목별로 허용된 작업만 서버가 인자를 만들어 실행합니다. 보드는 다른 세션의 질문·권한에 사람 없이 답하지 않습니다.
 - **권한 요청 훅 (선택)**: 보드에서 권한 요청에 답하려면 `/setup`의 자동화 옵션에서 PermissionRequest 훅을 연결합니다(`board.sh hook on|off`, `~/.claude/settings.json` 백업 후 추가·제거). 보드가 꺼져 있거나 30분 넘게 아무도 보지 않으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻습니다. 훅 전용 토큰과 주소는 `~/.ai-harness/board/server.json`(0600, 종료 시 삭제)에만 있습니다.
 - **선택 의존**: Orca가 없으면 세션 묶음과 대화형 터미널 입력만 빠집니다. Jira 키 링크는 `BOARD_JIRA_URL`·`JIRA_BASE_URL` 또는 사용자 규칙 파일에 적힌 주소가 있을 때만 붙습니다. Bitbucket PR 상태·브랜치 보호는 `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`, GitHub는 `gh`로 읽습니다.
-- **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
+- **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`·`autofix/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
 
 <a id="autofix"></a>
 
@@ -680,9 +683,9 @@ scripts/board/board.sh stop
 1. **검증(LLM 없음)**: 열린 PR의 상태를 보고(`open-pr.sh --status`) 병합되면 `verifying`, 사람이 닫으면 `declined`. 병합 커밋이 `deploy_branch`에 들어간 것을 처음 관찰한 때를 배포 시각으로 잡고(설정이 없으면 병합 시각), `grace_hours` 유예 뒤부터 관찰합니다. 관찰 창은 `quiet_hours`와 "수정 전 빈도라면 3건이 나왔을 시간" 중 긴 쪽(최대 14일)입니다. 창 안에 같은 시그니처가 다시 나오면 `regressed`, 끝까지 없으면 `resolved`입니다.
 2. **수정(무인 에이전트 1건)**: 새 에러, 재발한 에러, 해결 뒤 다시 나타난 에러 중 가장 많이 난 것을 작업 전용 독립 저장소(원본의 로컬 clone)의 headless `claude -p "/ai-harness:autofix --auto …"`에 넘깁니다. 에이전트는 코드 버그인지 분류하고, 재현 테스트를 먼저 만들고, 프로젝트 `fix-bug` 절차로 고쳐 **draft PR**을 엽니다. 재현하지 못하거나 코드 버그가 아니면 PR 없이 `skipped`로 남기고 유예(7일) 뒤 다시 봅니다. 재발 재시도에는 지난 PR과 재발 근거를 같이 넘깁니다.
 
-- **상한**: 하루 `HM_AUTOFIX_DAILY_MAX`(3)회, 시그니처당 PR `HM_AUTOFIX_MAX_ATTEMPTS`(2)개 — 상한까지 재발하면 `gave_up`으로 사람에게 넘깁니다. 실행당 `HM_AUTOFIX_BUDGET_USD`($10), `HM_AUTOFIX_TIMEOUT_MIN`(60분). 무인 실행 lock은 자동 harvest·sync와 공유합니다(동시에 하나)
+- **상한**: 하루 `HM_AUTOFIX_DAILY_MAX`(3)회, 시그니처당 PR `HM_AUTOFIX_MAX_ATTEMPTS`(2)개 — 상한까지 재발하면 `gave_up`으로 사람에게 넘깁니다. 실행당 `HM_AUTOFIX_BUDGET_USD`($10), `HM_AUTOFIX_TIMEOUT_MIN`(60분). 하루 상한 `1000` 이상(`configure --daily-max unlimited`, 보드의 '제한 없음')은 하루 실행 수를 세지 않고, 예산 `unlimited`(`configure --budget-usd unlimited`)는 수정 실행에 `--max-budget-usd`를 넘기지 않습니다 — 둘 다 비용 상한이 사라지므로 시간 제한만 남습니다. 하루 상한 `0`은 하루 0회입니다. 무인 실행 lock은 자동 harvest·sync와 공유합니다(동시에 하나)
 - **안전장치**: 에러 본문은 외부 입력이라 비밀값을 가려 넘기고, 에이전트에 데이터로만 읽으라고 지시합니다. Bash는 빌드·테스트 명령(gradle·maven·npm/pnpm/yarn·go·pytest·make·cargo 등, `HM_AUTOFIX_BASH_ALLOW`로 추가)과 `fix/` 브랜치 push 같은 좁은 git 명령만 허용하고 나머지는 묻지 않고 거부합니다. 모니터링 자격증명은 에이전트 환경에서 빼고, 자격증명 파일 읽기도 막습니다. 테스트 러너는 저장소 코드를 실행하므로 이 경계가 완전하지는 않습니다 — 신뢰하는 저장소만 `HM_AUTOFIX_REPOS`에 넣으세요. 병합은 언제나 사람이 합니다
-- **상태 보기**: `/autofix status`, `scripts/autofix-auto.sh status|runs`. 기록은 `~/.ai-harness/autofix/`(시그니처별 `state.json`, `runs.jsonl`, 실행 로그)
+- **상태 보기**: `/autofix status`, `scripts/autofix-auto.sh status|runs`, 또는 [Harness Board](#board)의 "자동 수정" 화면. 기록은 `~/.ai-harness/autofix/`(시그니처별 `state.json`, `runs.jsonl`, 실행 로그)
 - **수동**: `/autofix`로 후보를 골라 이 세션에서 고칠 수 있고, 그렇게 연 PR도 `autofix-auto.sh track`으로 같은 검증에 올립니다. 수동 후보 조회(`autofix-auto.sh candidates --project <id> --root .`)는 `HM_AUTOFIX_REPOS`와 무관하게 그 저장소의 `monitor` 설정으로 계산하므로 무인 실행을 켜지 않아도 쓸 수 있습니다(검증 대상 등록 `track`은 목록에 있어야 합니다)
 
 <a id="db-scan-guard"></a>
@@ -827,10 +830,10 @@ HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(
 HM_AUTOFIX_INTERVAL_MINUTES=     # 자동 수정 sweep 전용 주기(분). 비면 정기 backfill 주기에 같이 돎. 바꾸면 schedule.sh install
 HM_AUTOFIX_BASH_ALLOW=           # 무인 에이전트에 더 허용할 검증 명령 패턴(세미콜론 구분, 예: "./scripts/ci.sh*")
 HM_AUTOFIX_DEPLOY_WAIT_DAYS=14   # 병합 커밋이 deploy_branch에 보이기를 기다리는 상한. 넘으면 gave_up
-HM_AUTOFIX_DAILY_MAX=3           # 하루 자동 수정 실행 상한
+HM_AUTOFIX_DAILY_MAX=3           # 하루 자동 수정 실행 상한. 0 = 하루 0회, 1000 이상 = 제한 없음
 HM_AUTOFIX_MAX_ATTEMPTS=2        # 시그니처당 PR 상한. 넘어서 재발하면 gave_up
 HM_AUTOFIX_SKIP_COOLDOWN_DAYS=7  # 코드 버그 아님·재현 불가로 넘긴 에러를 다시 볼 때까지
-HM_AUTOFIX_BUDGET_USD=10         # 자동 수정 1회 비용 상한
+HM_AUTOFIX_BUDGET_USD=10         # 자동 수정 1회 비용 상한. unlimited = 상한 없음(--max-budget-usd 생략)
 HM_AUTOFIX_TIMEOUT_MIN=60
 HM_SENTRY_URL=                   # 자체 호스팅 Sentry 주소(저장소 설정의 base_url은 *.sentry.io만)
 HM_EVENT_RETENTION_DAYS=180      # 0이면 일반 이벤트 자동 정리 비활성화

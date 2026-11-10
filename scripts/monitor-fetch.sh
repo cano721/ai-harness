@@ -5,6 +5,7 @@
 #   list:   기준 시간 안에 min_events 이상 발생한 에러 묶음(JSON lines, 많은 순)
 #   detail: 에러 하나의 스택·샘플(비밀값 가림)
 #   count:  기준 시각 이후 같은 에러가 다시 나왔는지 — 수정 검증용
+#   describe: 보드 준비 상태 — 설정 출처(로컬·manifest·없음)·요약·자격증명 유무. 요청을 보내지 않고 값을 내지 않는다
 #   discover: setup 보조 — 저장소 설정 없이 최근 에러를 Datadog service·env / Sentry project·environment별 건수로 보여 준다
 # 종료 코드: 2 인자 오류, 3 요청 실패, 4 설정·자격증명 오류, 5 monitor 설정 없음(/autofix가 setup으로 넘어가는 신호).
 # 자격증명은 저장소 설정에 두지 않는다: 환경변수 → ~/.ai-harness/config → ~/.claude/settings.json env 순으로 찾는다.
@@ -18,6 +19,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   monitor-fetch.sh check  --root <repo>                                  # 설정·자격증명·접근 확인
+  monitor-fetch.sh describe --root <repo>                                # 설정 출처·요약·자격증명 유무(요청 없음, 값 미출력, JSON)
   monitor-fetch.sh list   --root <repo> [--hours N]                       # 후보 에러(JSON lines)
   monitor-fetch.sh detail --root <repo> --meta <json>                     # 스택·샘플(JSON)
   monitor-fetch.sh count  --root <repo> --meta <json> --since <iso>       # {seen,count,last_seen}
@@ -54,13 +56,19 @@ monitor="{}"
 cfg() { jq -r --arg k "$1" '.[$k] // empty | tostring' <<<"$monitor"; }
 
 # 사용자 체크아웃이 아니라 하네스가 실제로 들어 있는 기준 브랜치의 설정을 본다(자동 sync와 같은 기준).
-load_monitor() {
-  local manifest="" project_id=""
-  manifest="$(git -C "$ROOT_DIR" show "$(hm_resolve_base "$ROOT_DIR" --no-fetch):.ai-harness/harness.json" 2>/dev/null \
+MANIFEST=""; PROJECT_ID=""
+read_manifest() {
+  MANIFEST="$(git -C "$ROOT_DIR" show "$(hm_resolve_base "$ROOT_DIR" --no-fetch):.ai-harness/harness.json" 2>/dev/null \
     || cat "$ROOT_DIR/.ai-harness/harness.json" 2>/dev/null)"
   # 로컬 설정 파일의 키는 sync-auto.sh repos(autofix 대상 목록)와 같은 project_id다.
-  project_id="$(jq -r '.project_id // empty' <<<"$manifest" 2>/dev/null)"
-  [[ -n "$project_id" ]] || project_id="$(project_id_for_cwd "$ROOT_DIR")"
+  PROJECT_ID="$(jq -r '.project_id // empty' <<<"$MANIFEST" 2>/dev/null)"
+  [[ -n "$PROJECT_ID" ]] || PROJECT_ID="$(project_id_for_cwd "$ROOT_DIR")"
+}
+
+load_monitor() {
+  local project_id="" manifest=""
+  read_manifest
+  project_id="$PROJECT_ID"; manifest="$MANIFEST"
   monitor="$(hm_resolve_monitor "$project_id" "$manifest")" || exit 4
   [[ -n "$monitor" ]] || die "monitor 설정 없음: $(hm_monitor_file "$project_id" || true) 또는 $ROOT_DIR/.ai-harness/harness.json의 monitor — /autofix setup으로 만드세요" 5
 }
@@ -320,7 +328,52 @@ if [[ "$action" == discover ]]; then
   exit $?
 fi
 
+# describe: 보드 '자동 수정' 화면의 준비 상태. 네트워크 없이 설정 출처·provider·요약·자격증명 유무만 낸다 — 값은 내지 않는다.
+# code는 check와 같은 뜻(0 준비됨, 4 설정·자격증명 문제, 5 설정 없음)이고, 답이 출력에 있으므로 종료 코드는 0이다.
+command_describe() {
+  local file="" source="none" code=0 problem="" provider="" summary="" creds="not_needed"
+  read_manifest
+  file="$(hm_monitor_file "$PROJECT_ID")"
+  if [[ -n "$file" && -e "$file" ]]; then
+    source="local"
+  elif jq -e '.monitor | type == "object"' <<<"$MANIFEST" >/dev/null 2>&1; then
+    source="manifest"
+  fi
+  if [[ "$source" == none ]]; then
+    code=5
+  elif ! monitor="$(hm_resolve_monitor "$PROJECT_ID" "$MANIFEST" 2>/dev/null)"; then
+    code=4; problem="로컬 monitor 설정이 올바르지 않습니다(JSON 객체 하나, provider 필요): $file"
+  else
+    provider="$(cfg provider)"
+    case "$provider" in
+      sentry)
+        summary="$(cfg org)/$(cfg project)"; [[ -z "$(cfg environment)" ]] || summary="$summary ($(cfg environment))"
+        creds="missing"; [[ -z "$(secret HM_SENTRY_TOKEN SENTRY_AUTH_TOKEN)" ]] || creds="present" ;;
+      datadog)
+        summary="$(cfg query)"; [[ -z "$(cfg site)" ]] || summary="$summary · $(cfg site)"
+        creds="missing"
+        [[ -z "$(secret HM_DATADOG_API_KEY DATADOG_API_KEY DD_API_KEY)" || -z "$(secret HM_DATADOG_APP_KEY DATADOG_APP_KEY DD_APP_KEY)" ]] || creds="present" ;;
+      command) summary="$(cfg command)" ;;
+    esac
+    # provider별 검증(전송처·어댑터 경로·자격증명)은 실제 실행과 같은 함수로 본다. 요청은 보내지 않는다.
+    case "$provider" in
+      sentry|datadog|command) problem="$( ( HM_MONITOR_HTTP=""; "${provider}_setup" ) 2>&1 >/dev/null)" || code=4 ;;
+      "") code=4; problem="monitor.provider가 필요합니다 (sentry | datadog | command)" ;;
+      *) code=4; problem="지원하지 않는 monitor.provider: $provider" ;;
+    esac
+    (( code == 4 )) || problem=""
+  fi
+  jq -cn --arg p "$PROJECT_ID" --arg s "$source" --arg f "$file" --arg pv "$provider" --arg sum "$summary" --arg c "$creds" \
+    --argjson code "$code" --arg pr "$problem" \
+    '{project:$p, source:$s, file:(if $s == "local" then $f else null end), provider:$pv, summary:$sum, credentials:$c,
+      code:$code, problem:(if $pr == "" then null else $pr end)}'
+}
+
 [[ -n "$ROOT_DIR" && -d "$ROOT_DIR" ]] || usage
+if [[ "$action" == describe ]]; then
+  command_describe
+  exit 0
+fi
 load_monitor
 provider="$(cfg provider)"
 [[ -n "$HOURS" ]] || HOURS="$(cfg window_hours)"
