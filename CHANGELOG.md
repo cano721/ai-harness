@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.69.0 (2026-11-10)
 ### 동작 변경
 
 - **`/landing-page` 레퍼런스 캡처를 러너 한 번으로** — 레퍼런스 보드까지 6~9분이 걸렸는데 대부분이 검색 대기·페이지 로딩·사이트별 캡처·녹화였고, 에이전트가 사이트마다 캡처 스크립트를 따로 짰습니다. 이제 러너의 `capture-refs --work DIR --file refs-to-capture.json`이 레퍼런스 전부를 동시 4개로 캡처해 `refs/<id>/w1440-00.png`·`w390-00.png`와 `refs/<id>/capture.json`(`ok`·`challenge`·`failed`, 제목)을 남깁니다. Cloudflare 같은 봇 확인 화면은 `challenge`로 표시돼 실제 브라우저 탭으로 다시 엽니다. `record: true`인 레퍼런스는 스크롤과 포인터 움직임을 약 9초 녹화해 `refs/<id>/rec.webm`에 남기고, `--background`면 녹화를 분리 실행해 끝나면 `refs/record.done`을 씁니다. 검색은 한 턴에 동시에 보내고, 녹화가 도는 동안 take-line과 톤 태그를 써서 대화형 보드까지 5분을 목표로 합니다. 판단을 나누면 톤 일관성·탭 간 중복 판단이 흐트러지고 비용이 늘어 서브에이전트 병렬은 쓰지 않고, 기계 작업만 도구 안에서 병렬로 돕니다.
