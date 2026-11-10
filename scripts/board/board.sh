@@ -102,8 +102,16 @@ command_open() {
     holder="$(port_holder "$PORT")"
     die "포트 ${PORT}을 다른 프로세스${holder:+($holder)}가 쓰고 있어 띄우지 않았습니다. 그 프로세스를 끄거나 BOARD_PORT로 다른 포트를 정하세요."
   fi
+  # lib.sh가 ~/.ai-harness/config의 HM_·HARNESS_ 키를 이 셸에 export했다. 그대로 물려주면 오래 떠 있는 서버와 그 자식
+  # (autofix-auto.sh·status.sh·새 세션)이 띄운 시점의 값을 계속 보고, config에서 키를 지워도 반영되지 않는다.
+  # 서버와 자식은 config를 직접 읽으므로 config에서 온 키는 빼고 띄운다(HARNESS_METRICS_DIR은 위치라 남긴다).
+  local -a unset_cfg=()
+  local key=""
+  while IFS= read -r key; do
+    [[ -n "$key" && "$key" != HARNESS_METRICS_DIR ]] && unset_cfg+=(-u "$key")
+  done <<<"$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?((HM|HARNESS)_[A-Z0-9_]*)=.*/\2/p' "$HM_DATA_DIR/config" 2>/dev/null | sort -u)"
   # 새 세션으로 떼어 띄운다: 이 명령을 부른 셸·에이전트 턴이 끝나도 서버는 남는다.
-  BOARD_PORT="$PORT" HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I -c 'import subprocess, sys
+  env ${unset_cfg[@]+"${unset_cfg[@]}"} BOARD_PORT="$PORT" HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I -c 'import subprocess, sys
 log = open(sys.argv[2], "ab")
 subprocess.Popen([sys.executable, "-B", sys.argv[1], "--no-open"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                  start_new_session=True, close_fds=True)' "$DIR/board-server.py" "$BOARD_DIR/server.log"

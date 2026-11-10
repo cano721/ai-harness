@@ -8,7 +8,7 @@
   돌린다(sweep 전용 에이전트만, 등록 즉시 실행 없음).
 - 보드는 수정 실행(sweep·run)을 시작하지 않고 PR을 병합하지 않으며 monitor 설정 파일을 쓰지 않는다.
 """
-import json, os, subprocess, threading, time
+import glob, json, os, subprocess, threading, time
 from datetime import datetime, timezone
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,10 +30,19 @@ def _utc():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _child_env(extra=None):
+    """autofix 설정(HM_AUTOFIX_*)은 자식이 ~/.ai-harness/config에서 다시 읽는다. 서버 환경에 남은 값을 넘기면 config에서
+    지운 키가 되살아난다(config를 읽어도 지운 키는 덮어쓰지 못한다). board.sh도 config에서 온 키를 빼고 띄우지만, 다른 방법으로
+    띄운 서버에서도 같게 여기서 한 번 더 뺀다."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HM_AUTOFIX_")}
+    env.update(extra or {})
+    return env
+
+
 def _run(script, args, timeout, env=None):
     try:
         out = subprocess.run(["bash", script, *args], capture_output=True, text=True, timeout=timeout,
-                             env={**os.environ, **(env or {})})
+                             env=_child_env(env))
     except subprocess.TimeoutExpired:
         return "timeout", "", f"{timeout}초 안에 끝나지 않아 멈춤"
     return out.returncode, out.stdout, out.stderr
@@ -98,6 +107,29 @@ class Store:
         self.logs = os.path.join(data, "autofix", "logs")
         self._lock = threading.Lock()
         self._ready = {}  # repo -> (at, describe)
+        self._out = {}  # 명령 -> (파일 지문, 출력)
+
+    def _fingerprint(self):
+        """status·runs 출력이 기대는 파일(실행 기록·상태 파일)의 크기·수정 시각. 바뀌지 않았으면 다시 돌리지 않는다 —
+        sweep마다 건너뜀 기록이 쌓여 runs.jsonl이 커져도 보드가 몇 초마다 전체를 다시 훑지 않게."""
+        af = os.path.join(self.data, "autofix")
+        parts = []
+        for p in [os.path.join(af, "runs.jsonl")] + sorted(glob.glob(os.path.join(af, "*", "state.json"))):
+            try:
+                st = os.stat(p)
+                parts.append((p, st.st_size, st.st_mtime_ns))
+            except OSError:
+                parts.append((p, None, None))
+        return tuple(parts)
+
+    def _cached(self, args):
+        fp, key = self._fingerprint(), " ".join(args)
+        hit = self._out.get(key)
+        if hit and hit[0] == fp:
+            return hit[1]
+        _, out, _ = _run(AUTOFIX_SH, args, 30)
+        self._out[key] = (fp, out)
+        return out
 
     def _file(self, name):
         return os.path.join(self.dir, name)
@@ -141,9 +173,9 @@ class Store:
         """repos: 하네스 저장소 경로 목록, key_of: 경로 → project_id."""
         cfg = self.config()
         targets = set(cfg.get("repos") or [])
-        _, out, _ = _run(AUTOFIX_SH, ["status"], 30)
+        out = self._cached(["status"])
         sigs = _lines(out)
-        _, out, _ = _run(AUTOFIX_SH, ["runs", "--limit", str(RUNS_WINDOW)], 30)
+        out = self._cached(["runs", "--limit", str(RUNS_WINDOW)])
         events = _lines(out)
         last_run = {}
         for e in events:
@@ -165,7 +197,7 @@ class Store:
                          "targeted": pid in targets, "signatures": by_project.get(pid, []),
                          "check": checks.get(repo), "candidates": cands.get(repo)})
         for pid, lst in by_project.items():  # 상태는 있는데 이 맥에서 저장소를 찾지 못한 프로젝트
-            if pid not in seen:
+            if pid and pid not in seen:  # project가 없는 기록은 어느 저장소에도 붙일 수 없어 뺀다
                 rows.append({"repo": None, "name": pid, "project": pid, "ready": None, "targeted": pid in targets,
                              "signatures": lst, "check": None, "candidates": None})
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -188,7 +220,7 @@ class Store:
         hit = getattr(self, "_items", None)
         if hit and time.time() - hit[0] < ttl:
             return [dict(i) for i in hit[1]]
-        _, out, _ = _run(AUTOFIX_SH, ["status"], 30)
+        out = self._cached(["status"])
         sigs = _lines(out)
         repo_of = {}
         for r in (repos_fn() if sigs else []):  # 자동 수정을 쓰지 않으면 저장소 찾기(git 호출)를 하지 않는다
@@ -196,6 +228,8 @@ class Store:
         res = []
         for s in sigs:
             sig, project = s.get("signature") or "", s.get("project") or ""
+            if not sig or not project:  # 어느 저장소·에러인지 모르는 기록은 카드로 만들지 않는다
+                continue
             st, stg = board_state(s), stage(s)
             word = STAGE_KO.get(stg, stg)
             if s.get("status") == "skipped" and s.get("outcome"):

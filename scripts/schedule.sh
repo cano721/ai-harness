@@ -129,11 +129,20 @@ remove_autofix_agent() {
   find "$AF_PLIST" "$AF_SHIM" -maxdepth 0 -type f -delete 2>/dev/null || true
 }
 
+# cron의 */N은 시·분 경계에서 다시 시작하므로 N이 60(분)·24(시)를 나누어떨어뜨릴 때만 정확히 N분 간격이다.
+# 그 밖의 주기(45분, 90분 등)는 한 줄로 정확히 쓸 수 없어 systemd 타이머 예시를 안내한다.
 autofix_cron_hint() { # $1=분
-  local cron=""
-  [[ -n "$1" ]] || return 0
-  if (( $1 < 60 )); then cron="*/$1 * * * *"; else cron="0 */$(( $1 / 60 )) * * *"; fi
-  echo "  $cron $DIR/autofix-auto.sh sweep" >&2
+  local cron="" m="${1:-}"
+  [[ -n "$m" ]] || return 0
+  if (( m < 60 && 60 % m == 0 )); then cron="*/$m * * * *"
+  elif (( m % 60 == 0 && 24 % (m / 60) == 0 )); then cron="0 */$(( m / 60 )) * * *"
+  fi
+  if [[ -n "$cron" ]]; then
+    echo "  $cron $DIR/autofix-auto.sh sweep" >&2
+  else
+    echo "  (${m}분 주기는 cron 한 줄로 정확히 쓸 수 없습니다 — 60을 나누는 분(5·10·15·20·30)이나 24를 나누는 시간으로 고르거나," >&2
+    echo "   systemd 타이머를 쓰세요: OnUnitActiveSec=${m}min, ExecStart=$DIR/autofix-auto.sh sweep)" >&2
+  fi
 }
 
 # autofix 전용 에이전트를 주기에 맞춰 등록하거나(주기 있음) 내린다(주기 없음). $1=분(빈 값 = 없음) $2=RunAtLoad true|false

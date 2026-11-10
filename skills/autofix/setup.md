@@ -65,7 +65,7 @@
    |---|---|---|
    | 무인 실행을 켤까요? | `--auto 1` / `--auto 0` | 켜기 |
    | 이 저장소를 무인 실행 대상에 넣을까요? (기존 목록은 유지, 중복 없이 추가) | `--add-repo <project_id>` | 넣기 |
-   | sweep 주기(분, 1 이상의 정수 — 5·90·180 등 아무 값)? 비워 두면 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돈다 | `--interval-minutes N` / `off` | 비움(정기 실행 주기) |
+   | sweep 주기(분, 1~999999 정수 — 5·90·180 등 아무 값. macOS가 아니면 60·24를 나누지 않는 주기는 cron 한 줄로 못 써 systemd 타이머를 안내한다)? 비워 두면 정기 실행 주기(`HM_BACKFILL_INTERVAL_HOURS`, 기본 6시간)에 같이 돈다 | `--interval-minutes N` / `off` | 비움(정기 실행 주기) |
    | 하루 실행 상한? (0이면 하루 0회, `unlimited`면 제한 없음) | `--daily-max N` / `unlimited` | 3 |
    | 시그니처당 PR 상한? | `--max-attempts N` | 2 |
    | 실행당 예산(USD)? (`unlimited`면 수정 실행에 비용 상한을 넘기지 않음) | `--budget-usd X` / `unlimited` | 10 |

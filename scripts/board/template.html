@@ -915,7 +915,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     const items = view === 'list' ? inTab(tab) : [];
     const counts = {};
     items.forEach((i) => { counts[i.project] = (counts[i.project] || 0) + (['done', 'idle'].includes(i.state) ? 0 : 1); });
-    const projects = [...new Set(items.map((i) => i.project))].sort((x, y) => (counts[y] - counts[x]) || x.localeCompare(y));
+    const projects = [...new Set(items.map((i) => i.project))].sort((x, y) => (counts[y] - counts[x]) || String(x || '').localeCompare(String(y || '')));
     for (const p of ['all', ...projects]) {
       const b = el('button', 'nav proj'); b.setAttribute('aria-current', String(p === filter));
       b.append(el('span', 'label', p === 'all' ? '전체' : p), el('span', 'badge', String(p === 'all' ? items.filter((i) => !['done', 'idle'].includes(i.state)).length : counts[p])));
@@ -1659,7 +1659,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
     box.append(el('div', 'ssub', '저장소별 연결 — 모니터링 설정은 저장소마다 /ai-harness:autofix setup이 만듭니다(보드는 설정 파일을 쓰지 않음). 자격증명은 있음/없음만 보입니다.'));
     const conn = el('div', 'afconn');
     const repos = adata.repos.filter((r) => filter === 'all' || r.name === filter || r.project === filter);
-    for (const r of [...repos].sort((a, b) => (a.ready?.source === 'none') - (b.ready?.source === 'none') || a.name.localeCompare(b.name))) conn.append(afRepoRow(r));
+    for (const r of [...repos].sort((a, b) => (a.ready?.source === 'none') - (b.ready?.source === 'none') || String(a.name || '').localeCompare(String(b.name || '')))) conn.append(afRepoRow(r));
     if (!repos.length) conn.append(el('div', 'empty', '하네스가 깔린 저장소를 찾지 못함'));
     box.append(conn);
     box.append(el('div', 'ssub', '개인 설정(~/.ai-harness/config) — 나에게만, 바로 적용. 쓰기는 모두 autofix-auto.sh configure를 거칩니다(값 검증, 틀린 값이면 아무것도 바꾸지 않음).'));

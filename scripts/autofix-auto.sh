@@ -22,7 +22,7 @@ SWEEP_LOCK="$AF_DIR/.sweep.lock"
 WORK_TREES_DIR="${HM_AUTO_WORKTREE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees}"
 case "$WORK_TREES_DIR/" in "$HM_DATA_DIR"/*) WORK_TREES_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ai-harness/worktrees" ;; esac
 # 0으로 시작하는 수(08·01000)는 bash 산술이 8진수로 읽으므로 받지 않는다.
-int_env() { local v="${!1:-}"; [[ "$v" =~ ^(0|[1-9][0-9]*)$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
+int_env() { local v="${!1:-}"; [[ "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] && printf '%s\n' "$v" || printf '%s\n' "$2"; }
 DAILY_MAX="$(int_env HM_AUTOFIX_DAILY_MAX 3)"
 MAX_ATTEMPTS="$(int_env HM_AUTOFIX_MAX_ATTEMPTS 2)"
 MAX_FAILS="$(int_env HM_AUTOFIX_MAX_FAILS 3)"
@@ -187,7 +187,9 @@ orphan_records() { # $1=project → JSON lines {signature, record} (상태에 �
            | {signature: $g[0].signature, record: ($rec + {
                first_detected_at: ([$ev[] | select(.signature == $g[0].signature) | .at] | min),
                attempts: ([$g[] | select(.event == "tracked" or .outcome == "pr_opened")] | length),
-               fails: (if $rec.status == "failed" and $rec.last_reason != "usage_limit" then 1 else 0 end),
+               # 실패 횟수: 마지막으로 PR을 열었거나 해결된 뒤의 실패 실행 수(사용량 한도 제외) — command_run이 세는 것과 같다.
+               fails: ((([$g[] | select(.outcome == "pr_opened" or .event == "resolved") | .at] | max) // "") as $reset
+                 | [$g[] | select(.event == "finished" and .outcome == "failed" and .reason != "usage_limit" and .at > $reset)] | length),
                recovered: "runs"})}
          else empty end) )' "$RUNS_FILE" 2>/dev/null
 }
@@ -199,11 +201,20 @@ recover_attempts() { # $1=project
     sig="$(jq -r '.signature' <<<"$line")"
     summary="$(log_summary "$(jq -r '.record.last_log // empty' <<<"$line")")"
     rec="$(jq -c --arg s "$summary" '.record + (if $s == "" then {} else {summary:$s} end)' <<<"$line")"
+    # 스냅샷(orphan_records)과 쓰기 사이에 worker가 끝나 스스로 결과를 남겼을 수 있다. lock 안의 현재 값으로 다시 확인해
+    # attempting(통째 복구는 아직 없는 시그니처)일 때만 옮긴다 — 시도·실패 횟수가 두 번 반영되지 않게.
+    [[ -z "${HM_AUTOFIX_TEST_RECOVER_HOOK:-}" ]] || "$HM_AUTOFIX_TEST_RECOVER_HOOK" "$project" "$sig"
     # attempting에서 옮길 때는 command_run과 같이 PR이 아닌 결과는 시도로 세지 않고, 실패는 실패 횟수에 더한다.
-    set_sig "$project" "$sig" '$r + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
-        elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
-      + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)' \
-      --argjson r "$rec" || continue
+    state_update "$project" '.signatures[$sig] as $cur
+      | if (if $r.recovered == null then ($cur.status? == "attempting") else ($cur == null) end) | not then .
+        else .signatures[$sig] = (($cur // {}) + $r
+          + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
+             elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
+          + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)
+          + {updated_at:$now, recovered_at:$now}) end' --arg sig "$sig" --argjson r "$rec" || continue
+    # 실제로 옮겼을 때만 남긴다(다른 쪽이 먼저 썼으면 recovered_at이 이번 기록과 다르다).
+    jq -e --arg s "$sig" --arg at "$(jq -r '.last_run_at // empty' <<<"$rec")" \
+      '.signatures[$s] | .recovered_at != null and .last_run_at == $at' <<<"$(state_get "$project")" >/dev/null 2>&1 || continue
     log_event "$project" recovered "$sig" "$(jq -c '{status, artifact:(.pr // null)}' <<<"$rec")"
   done <<<"$(orphan_records "$project")"
 }
@@ -672,13 +683,13 @@ command_configure() {
         if [[ "$1" == --add-repo ]]; then repo="$2"; else remove="$2"; fi ;;
       --interval-minutes)
         if [[ "$2" == off || "$2" == 0 ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "")
-        elif [[ "$2" =~ ^[1-9][0-9]*$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
-        else echo "--interval-minutes는 1 이상의 정수 또는 off입니다" >&2; exit 2; fi ;;
+        elif [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]]; then set+=(HM_AUTOFIX_INTERVAL_MINUTES "$2")
+        else echo "--interval-minutes는 1~999999 정수(분) 또는 off입니다" >&2; exit 2; fi ;;
       --daily-max)
         if [[ "$2" == unlimited ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$DAILY_UNLIMITED")
-        elif [[ "$2" =~ ^(0|[1-9][0-9]*)$ ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$2")
-        else echo "--daily-max는 0 이상의 정수(앞자리 0 없이) 또는 unlimited입니다" >&2; exit 2; fi ;;
-      --max-attempts) [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "--max-attempts는 1 이상의 정수입니다" >&2; exit 2; }
+        elif [[ "$2" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then set+=(HM_AUTOFIX_DAILY_MAX "$2")
+        else echo "--daily-max는 0~999999 정수(앞자리 0 없이) 또는 unlimited입니다" >&2; exit 2; fi ;;
+      --max-attempts) [[ "$2" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "--max-attempts는 1~9999 정수입니다" >&2; exit 2; }
         set+=(HM_AUTOFIX_MAX_ATTEMPTS "$2") ;;
       --budget-usd) [[ "$2" == unlimited || ( "$2" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$2" =~ ^0+(\.0+)?$ ) ]] \
           || { echo "--budget-usd는 0보다 큰 수(예: 10, 2.5) 또는 unlimited입니다" >&2; exit 2; }
