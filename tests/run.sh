@@ -2353,13 +2353,15 @@ cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
 assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
 cat >"$LP_W/references.json" <<'EOF'
 [{"id":"R1","kind":"tone","title":"Tone ref","url":"https://example.com/a","source":"search","take":"t","tone_part":"palette","captures":["refs/r1.png"]},
- {"id":"R2","kind":"component","title":"Component ref","url":"https://example.com/b","source":"library","take":"t","captures":["refs/r2.png"]},
- {"id":"R3","kind":"layout","title":"Layout ref","url":"https://example.com/c","source":"user","take":"t","captures":["refs/r3.png"]},
- {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://example.com/d","source":"gallery","take":"t","video":"refs/r4.mp4"},
+ {"id":"R2","kind":"component","title":"Component ref","url":"https://example.com/b","source":"library","take":"t","captures":["refs/r2.png"],"recommended":"hero"},
+ {"id":"R3","kind":"layout","title":"Layout ref","url":"https://example.com/c","source":"user","take":"t","captures":["refs/r3.png"],"recommended":"layout"},
+ {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://example.com/d","source":"gallery","take":"t","video":"refs/r4.mp4","recommended":"interaction"},
  {"id":"R5","kind":"competitor","title":"Competitor","url":"https://example.com/e","source":"search","captures":["refs/r5.png"],
   "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}}]
 EOF
 cp "$LP_W/references.json" "$TEST_TMP/lp-refs.json"
+printf '[{"id":"hero","label":"첫 화면"},{"id":"proof","label":"증거"}]\n' >"$TEST_TMP/lp-slots.json"; cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"
+printf '%s\n' '{"tone":"이대로","kept":["R1","R2","R3","R4","R5"],"dropped":[],"via":"agent","primary":{"layout":"R3","interaction":"R4","components":{"hero":"R2","proof":null,"faq":null},"added_slots":[{"id":"faq","label":"FAQ"}]}}' >"$TEST_TMP/lp-agent-pick.json"
 cat >"$TEST_TMP/lp-searches.json" <<'EOF'
 [{"query":"ai interview practice","purpose":"category","engine_or_gallery":"web search","results":["https://example.com/e/","https://example.com/z"],"picked":["R5"]},
  {"query":"3d scroll","purpose":"gallery","engine_or_gallery":"codrops hub","results":["https://example.com/d"],"picked":["R4"]}]
@@ -2404,9 +2406,11 @@ lpi_rc() { local rc=0; lpi "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
 lpi init --mode interactive >/dev/null
 printf '## Tone and manner\ncalm, precise\n' >"$LP_I/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_I/tone.json"
 lpi submit --node brief --outcome brief_ready >/dev/null
+cp "$TEST_TMP/lp-slots.json" "$LP_I/component-slots.json"
 lp_refs() { # tone component layout interaction videos competitor → references.json
   jq -n --argjson t "$1" --argjson c "$2" --argjson l "$3" --argjson i "$4" --argjson v "$5" --argjson p "$6" '
-    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://example.com/\($k)/\($n)", source: "search", take: "t", captures: ["refs/x.png"]};
+    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://example.com/\($k)/\($n)", source: "search", take: "t", captures: ["refs/x.png"]}
+      + (if $n == 0 and ($k == "layout" or $k == "interaction") then {recommended: $k} elif $n == 0 and $k == "component" then {recommended: "hero"} else {} end);
     [range($t) | ref("tone"; .)] + [range($c) | ref("component"; .)] + [range($l) | ref("layout"; .)]
     + [range($i) | ref("interaction"; .) + (if . < $v then {video: "https://example.com/v\(.).mp4"} else {} end)]
     + [range($p) | ref("competitor"; .) + {analysis: {leads_with: "a", claim: "b", cta: "c", gap: "d"}}]' >"$LP_I/references.json"
@@ -2447,16 +2451,21 @@ if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   assert_eq 403 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}' POST "http://evil.example")" "the board server refuses another origin"
   assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$lp_port/.landing-run/state.json")" "the board server does not serve the run state"
   assert_eq 200 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$lp_port/board.html")" "the board server serves the board"
-  assert_eq 200 "$(lp_post '{"node":"reference_pick","tone":"바꿀 점: 더 따뜻하게","kept":["tone-0","layout-1"],"dropped":["tone-1"],"add_sites":["https://example.com/x"],"user_words":"더 따뜻하게"}')" "the board server takes a valid pick"
+  LP_PRIM='"primary":{"layout":"layout-1","interaction":"interaction-0","components":{"hero":"component-2","proof":null,"extra-1":"component-0"},"added_slots":[{"id":"extra-1","label":"연동"}]}'
+  assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"],"dropped":["layout-1"],'"$LP_PRIM"'}')" "the board server refuses an excluded reference as a primary"
+  assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"],"primary":{"layout":"layout-1","interaction":"interaction-0","components":{"pricing":"component-0"}}}')" "the board server refuses a component for a slot that does not exist"
+  assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "the board server refuses a pick without its primary references"
+  assert_eq 200 "$(lp_post '{"node":"reference_pick","tone":"바꿀 점: 더 따뜻하게","kept":["tone-0","layout-1"],"dropped":["tone-1"],"add_sites":["https://example.com/x"],"user_words":"더 따뜻하게",'"$LP_PRIM"'}')" "the board server takes a valid pick"
+  assert_eq "layout-1|component-0|연동" "$(jq -r '[.primary.layout, .primary.components["extra-1"], .primary.added_slots[0].label] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the primary references and the added slot"
   assert_eq "바꿀 점: 더 따뜻하게|tone-0,layout-1|더 따뜻하게" "$(jq -r '[.tone, (.kept | join(",")), .user_words] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the user's words as written"
   assert_eq "$LP_I/reference-pick.json" "$(lpi wait-pick --node reference_pick --timeout-min 1 | sed "s#^$(cd "$LP_I" && pwd)#$LP_I#")" "wait-pick returns once the board writes the pick"
   lp_state() { curl -s "http://127.0.0.1:$lp_port/state?node=${1:-reference_pick}"; }
   assert_eq "reference_pick|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state returns the current node and the pick made in it"
-  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a second pick in the same node is refused, not rewritten"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"],'"$LP_PRIM"'}')" "a second pick in the same node is refused, not rewritten"
   assert_eq "바꿀 점: 더 따뜻하게" "$(jq -r .tone "$LP_I/reference-pick.json")" "the refused pick leaves the first one as it was"
   assert_eq picked "$(lpi submit --node reference_pick --outcome picked >/dev/null; jq -r '.history[-1].outcome' "$LP_I/.landing-run/state.json")" "the board's pick passes the runner's reference_pick check"
-  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "a pick after the run moved on is refused"
-  assert_eq "already_started|direction" "$(curl -s -X POST -H 'content-type: application/json' --data '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}' "http://127.0.0.1:$lp_port/pick" | jq -r '[.error, .node] | join("|")')" "the refusal names the run's current node"
+  assert_eq 409 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"],'"$LP_PRIM"'}')" "a pick after the run moved on is refused"
+  assert_eq "already_started|direction" "$(curl -s -X POST -H 'content-type: application/json' --data '{"node":"reference_pick","tone":"이대로","kept":["tone-0"],'"$LP_PRIM"'}' "http://127.0.0.1:$lp_port/pick" | jq -r '[.error, .node] | join("|")')" "the refusal names the run's current node"
   assert_eq "direction|바꿀 점: 더 따뜻하게" "$(lp_state | jq -r '[.node, .picked.tone] | join("|")')" "GET /state still shows the pick once the run has moved on"
   assert_eq "direction|null" "$(lp_state draft_pick | jq -r '[.node, (.picked | tostring)] | join("|")')" "GET /state has no draft pick before one is made"
   pkill -f "landing-board-server.mjs --work $(cd "$LP_I" && pwd) --port $lp_port" 2>/dev/null || true
@@ -2467,10 +2476,39 @@ if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   assert_contains "$(cat "$LP_I/draft-board.html")" "caps/a-390.png" "the drafts board shows each candidate's phone capture"
 fi
 assert_eq 3 "$(lp_rc submit --node references --outcome picked)" "landing-run refuses an outcome with no edge"
-assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick"
+rm -f "$LP_W/component-slots.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "references without their section slots are refused"
+printf '[{"id":"hero","label":"첫 화면"},{"id":"hero","label":"다시"}]\n' >"$LP_W/component-slots.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a slot listed twice is refused"
+cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"
+jq 'map(del(.recommended))' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "references without the agent's recommended primary are refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "recommend exactly one layout reference" "the runner names the missing recommendation"
+jq 'map(if .id == "R2" then .recommended = "pricing" else . end)' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a component recommended for a slot that does not exist is refused"
+cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "an unattended run without its own pick is refused"
+jq '.via = "board"' "$TEST_TMP/lp-agent-pick.json" >"$LP_W/reference-pick.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "an unattended pick says it was the agent's"
+jq '.primary.layout = "R9"' "$TEST_TMP/lp-agent-pick.json" >"$LP_W/reference-pick.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a primary that names no reference is refused"
+jq '.dropped = ["R4"]' "$TEST_TMP/lp-agent-pick.json" >"$LP_W/reference-pick.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "an excluded reference cannot be a primary"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "primary.interaction must be an interaction reference that is not excluded" "the runner names the excluded primary"
+jq '.primary.components.pricing = "R2"' "$TEST_TMP/lp-agent-pick.json" >"$LP_W/reference-pick.json"
+assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a component for a slot that is neither listed nor added is refused"
+cp "$TEST_TMP/lp-agent-pick.json" "$LP_W/reference-pick.json"
+assert_eq direction "$(lp submit --node references --outcome references_ready)" "unattended runs skip the human reference pick (the agent's pick, with an added slot, passes)"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece"},{"id":"b","dir":"site/b","motion_level":"calm"}]}\n' >"$LP_W/candidates.json"
 assert_eq 4 "$(lp_rc submit --node direction --outcome direction_ready)" "a candidate without its first-viewport composition is refused"
 printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"showpiece","first_viewport":"x"},{"id":"b","dir":"site/b","motion_level":"calm","first_viewport":"y"}]}\n' >"$LP_W/candidates.json"
+assert_eq 4 "$(lp_rc submit --node direction --outcome direction_ready)" "a candidate without its primary_refs is refused"
+jq '.candidates |= map(.primary_refs = {layout: "R3", interaction: "R4", components: {hero: "R1"}})' "$LP_W/candidates.json" >"$TEST_TMP/lp-cands.json" && cp "$TEST_TMP/lp-cands.json" "$LP_W/candidates.json"
+assert_eq 4 "$(lp_rc submit --node direction --outcome direction_ready)" "a primary_refs component that is not a component reference is refused"
+jq '.candidates |= map(.primary_refs.components = {proof: "R2"})' "$LP_W/candidates.json" >"$TEST_TMP/lp-cands.json" && cp "$TEST_TMP/lp-cands.json" "$LP_W/candidates.json"
+assert_eq 4 "$(lp_rc submit --node direction --outcome direction_ready)" "candidates that all differ from the picked primary are refused"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "no candidate leads with the picked primary" "the runner says no candidate uses the pick"
+jq '.candidates[0].primary_refs.components = {hero: "R2", faq: null}' "$LP_W/candidates.json" >"$TEST_TMP/lp-cands.json" && cp "$TEST_TMP/lp-cands.json" "$LP_W/candidates.json"
 lp submit --node direction --outcome direction_ready >/dev/null
 assert_eq "draft draft" "$(jq -r '[.candidates[].node] | join(" ")' "$LP_W/.landing-run/state.json")" "each candidate starts its own path at draft"
 mkdir -p "$LP_W/site/a" "$LP_W/site/b" "$LP_W/caps"; touch "$LP_W/site/a/index.html" "$LP_W/site/b/index.html"
@@ -2561,8 +2599,9 @@ lp init --mode unattended >/dev/null
 printf '## Tone and manner\ncalm, precise\n' >"$LP_W/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
 lp submit --node brief --outcome brief_ready >/dev/null
 cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"; cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
+cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"; cp "$TEST_TMP/lp-agent-pick.json" "$LP_W/reference-pick.json"
 lp submit --node references --outcome references_ready >/dev/null
-printf '{"candidates":[{"id":"c","dir":"site/c","motion_level":"calm","first_viewport":"one scene"}]}\n' >"$LP_W/candidates.json"
+printf '{"candidates":[{"id":"c","dir":"site/c","motion_level":"calm","first_viewport":"one scene","primary_refs":{"layout":"R3","interaction":"R4","components":{"hero":"R2"}}}]}\n' >"$LP_W/candidates.json"
 lp submit --node direction --outcome direction_ready >/dev/null
 mkdir -p "$LP_W/site/c" "$LP_W/caps"; touch "$LP_W/site/c/index.html"; lp submit --node draft --outcome drafted --candidate c >/dev/null
 printf 'png' >"$LP_W/caps/c-1440.png"; printf 'png' >"$LP_W/caps/c-390.png"
@@ -2619,6 +2658,23 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     assert_file "$LP_R/refs/record.done"
     assert_file "$LP_R/refs/a/rec.webm"
     assert_eq "refs/a/rec.webm" "$(jq -r '.video' "$LP_R/refs/a/capture.json")" "the recording is listed next to the reference's captures"
+    # The reference board in a browser: the layout star moved, a section slot added and given a component, then start.
+    LP_B="$TEST_TMP/lp-run-board"; mkdir -p "$LP_B"
+    lpb() { "$ROOT/scripts/landing-run.sh" "$@" --work "$LP_B" 2>"$TEST_TMP/lp.err"; }
+    lpb init --mode interactive >/dev/null
+    for f in brief.md tone.json; do cp "$LP_I/$f" "$LP_B/$f"; done
+    lpb submit --node brief --outcome brief_ready >/dev/null
+    for f in references.json searches.json component-slots.json; do cp "$LP_I/$f" "$LP_B/$f"; done
+    lpb submit --node references --outcome references_ready >/dev/null
+    lp_port=$((20000 + RANDOM % 20000))
+    lp_e2e="$(node "$ROOT/tests/fixtures/landing-board/primary-e2e.mjs" --url "$(lpb board --port "$lp_port" --serve)" --shots "$TEST_TMP/lp-board-shots")"
+    assert_eq "done" "$(jq -r '.result' <<<"$lp_e2e")" "the board takes a moved star and an added slot in a browser"
+    assert_eq "$(jq -r '.layout' <<<"$lp_e2e")|interaction-0|component-0|$(jq -r '.component' <<<"$lp_e2e")|연동" \
+      "$(jq -r '[.primary.layout, .primary.interaction, .primary.components.hero, .primary.components["extra-1"], .primary.added_slots[0].label] | join("|")' "$LP_B/reference-pick.json")" \
+      "the pick records the moved star, the kept recommendations, and the added slot"
+    assert_eq direction "$(lpb submit --node reference_pick --outcome picked)" "the board's primary passes the runner's check"
+    assert_file "$TEST_TMP/lp-board-shots/primary-4-started.png"
+    pkill -f "landing-board-server.mjs --work $(cd "$LP_B" && pwd) --port $lp_port" 2>/dev/null || true
     kill "$LP_SRV3" "$LP_SRV4" 2>/dev/null || true
     wait "$LP_SRV3" "$LP_SRV4" 2>/dev/null || true
   fi
@@ -2640,6 +2696,9 @@ assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Se
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Do not write your own browser script for a reference" "landing-page captures references through capture-refs"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "a served interactive board within five minutes" "landing-page aims for the board within five minutes"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "landing-run.sh capture-refs" "landing-page lists capture-refs among the runner commands"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "**Picking the primary references.**" "landing-page asks for one primary per tab and per section slot"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Every section the user named in the request becomes a slot." "landing-page makes a slot for each section the user named"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "primary_refs: {layout, interaction, components}" "landing-page candidates name the references they lead with"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "The runner refuses a second candidate entering \`build\` in an unattended run" "landing-page finishes one candidate in an unattended run"
 assert_contains "$(cat "$ROOT/agents/design-reviewer.md")" "landing-run.sh operate" "the design reviewer keeps landing-page scripts in the work folder"
 assert_contains "$LANDING_VERIFY" "**A top bar over scrolled text**" "landing-page measures text showing through a top bar"
@@ -6837,9 +6896,10 @@ cat >"$BOARD_T/bin/orca" <<'EOF'
 echo '{"ok":true,"result":{"runs":[],"workers":[]}}'
 EOF
 chmod +x "$BOARD_T/bin/claude" "$BOARD_T/bin/orca"
-printf '%s\n' '{"type":"user","message":{"content":"hello board"},"timestamp":"2026-11-07T10:00:00Z"}' \
-  '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]},"timestamp":"2026-11-07T10:00:05Z"}' \
-  >"$BOARD_T/projects/p/$BOARD_SID.jsonl"
+# Timestamped now: work.sh drops an ended session older than BOARD_DONE_HOURS (48h), so a fixed date stops matching later.
+BOARD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg t "$BOARD_TS" '{type:"user",message:{content:"hello board"},timestamp:$t},
+  {type:"assistant",message:{content:[{type:"text",text:"done"}]},timestamp:$t}' >"$BOARD_T/projects/p/$BOARD_SID.jsonl"
 mkdir -p "$BOARD_DATA/harvest-queue/p-svc" "$BOARD_DATA/harvest-auto"
 jq -cn '{project:"svc", has_analysis_batch:true, created_at:"2026-11-07T09:00:00Z", counts:{sessions:10}, reasons:["sessions"], event_files:[]}' \
   >"$BOARD_DATA/harvest-queue/p-svc/analysis-batch.json"

@@ -12,6 +12,9 @@
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
 #   - capture-refs: 레퍼런스 페이지를 한 번에 동시 4개로 캡처한다(봇 확인 화면은 challenge). 녹화는 --background로 분리 실행한다.
 #     사이트마다 에이전트가 캡처 스크립트를 짜던 시간이 레퍼런스 단계의 대부분이었다.
+#   - 대표 고르기: 레이아웃·인터랙션은 대표 하나, 구성요소는 섹션 칸(component-slots.json)마다 대표 하나를 고른다.
+#     에이전트가 references.json의 recommended로 추천을 미리 채우고, reference-pick.json의 primary에 남는다. 후보는
+#     primary_refs로 이끄는 레퍼런스를 밝히고, 적어도 한 후보는 고른 대표를 그대로 쓴다(다 참고하면 후보가 섞인다).
 #   - draft_choose: 무인 실행은 후보 하나만 완성한다. 모든 시안 검토가 끝난 뒤 에이전트가 이유와 함께 하나를 고르고 나머지는
 #     folded로 접는다. 두 번째 후보의 build 진입은 거부한다(둘 다 완성하면 시간·비용이 두 배인데 보고서엔 하나만 쓰인다).
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
@@ -247,6 +250,68 @@ SEARCH_CHECK='
              | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named may skip search)")
       ] | join("; ") end'
 
+# The sections that need a reference of their own (component-slots.json): each becomes a column in the components tab.
+SLOTS_CHECK='
+  def str: type == "string" and length > 0;
+  if type != "array" or length == 0 then "must list the sections that need a reference: [{id, label}]" else
+  [ (.[] | select(((.id | str) and (.id | test("^[a-z0-9][a-z0-9_-]*$")) and (.label | str)) | not)
+         | "\(.id // "?"): a slot needs id (lowercase letters, digits, - or _) and label"),
+    ([.[].id] | group_by(.)[] | select(length > 1) | "slot \(.[0]) is listed twice"),
+    (.[] | select(.id == "layout" or .id == "interaction") | "slot id \(.id) is reserved")
+  ] | join("; ") end'
+# The agent's recommendation, starred on the board before the user looks: one layout, one interaction, one component per slot at most.
+RECO_CHECK='
+  ($slots[0] | map(.id)) as $sids
+  | [ (.[] | select(.recommended != null)
+           | select(((.recommended == "layout" and .kind == "layout") or (.recommended == "interaction" and .kind == "interaction")
+                     or (.kind == "component" and (.recommended as $r | $sids | index($r)) != null)) | not)
+           | "\(.id): recommended must be layout (on a layout reference), interaction (on an interaction reference), or a slot id from component-slots.json (on a component reference)"),
+      (if ([.[] | select(.recommended == "layout")] | length) == 1 then empty else "recommend exactly one layout reference (recommended: \"layout\")" end),
+      (if ([.[] | select(.recommended == "interaction")] | length) == 1 then empty else "recommend exactly one interaction reference (recommended: \"interaction\")" end),
+      ([.[] | select(.kind == "component" and .recommended != null) | .recommended] | group_by(.)[] | select(length > 1)
+         | "slot \(.[0]) has more than one recommended component")
+    ] | join("; ")'
+# reference-pick.json primary: the layout and interaction that lead, and one component per slot (or none); never an excluded one.
+PRIMARY_CHECK='
+  def str: type == "string" and length > 0;
+  ($refs[0]) as $all | (.dropped // []) as $out | (.primary // null) as $p
+  | def ok($id; $k): ($id | str) and ($all | any(.id == $id and .kind == $k)) and (($out | index($id)) == null);
+  if ($p | type) != "object" then "primary is missing: {layout, interaction, components: {<slot id>: id|null}, added_slots: [{id, label}]}" else
+    (($p.added_slots // []) | if type == "array" then . else [] end) as $added
+    | (($slots[0] | map(.id)) + [$added[] | .id?]) as $sids
+    | [ (if ok($p.layout; "layout") then empty else "primary.layout must be a layout reference that is not excluded (got \($p.layout // "none"))" end),
+        (if ok($p.interaction; "interaction") then empty else "primary.interaction must be an interaction reference that is not excluded (got \($p.interaction // "none"))" end),
+        (if ($p.components | type) == "object" then empty else "primary.components must map each slot id to a component id or null" end),
+        (($p.components // {}) | objects | to_entries[] | select(.key as $k | ($sids | index($k)) == null) | "primary.components: \(.key) is not a slot"),
+        (($p.components // {}) | objects | to_entries[] | select(.value != null and (ok(.value; "component") | not))
+           | "primary.components.\(.key): \(.value) must be a component reference that is not excluded"),
+        (if (($p.added_slots // []) | type) == "array" and all($added[]; (.id | str) and (.id | test("^[a-z0-9][a-z0-9_-]*$")) and (.label | str)) then empty
+           else "primary.added_slots must be [{id, label}]" end),
+        ($added[] | .id? | select(. as $a | $slots[0] | map(.id) | index($a)) | "added slot \(.) already exists")
+      ] | join("; ") end'
+# Each candidate names the references it leads with; at least one leads with the picked primary as it is.
+CAND_PRIMARY_CHECK='
+  def str: type == "string" and length > 0;
+  def norm: {layout, interaction, components: ((.components // {}) | with_entries(select(.value != null)))};
+  ($pick[0].primary) as $p | ($pick[0].dropped // []) as $out | ($refs[0]) as $all
+  | def ok($id; $k): ($id | str) and ($all | any(.id == $id and .kind == $k)) and (($out | index($id)) == null);
+  [ (.candidates[] | select((.primary_refs | type) != "object") | "\(.id): primary_refs is missing (its layout, interaction, and component per slot)"),
+    (.candidates[] | . as $c | (.primary_refs | objects)
+       | ((if ok(.layout; "layout") then empty else "\($c.id): primary_refs.layout \(.layout // "none") is not a kept layout reference" end),
+          (if ok(.interaction; "interaction") then empty else "\($c.id): primary_refs.interaction \(.interaction // "none") is not a kept interaction reference" end),
+          ((.components // {}) | to_entries[] | select(.value != null and (ok(.value; "component") | not))
+             | "\($c.id): primary_refs.components.\(.key) \(.value) is not a kept component reference"))),
+    (if [.candidates[] | (.primary_refs | objects | norm)] | any(. == ($p | norm)) then empty
+       else "no candidate leads with the picked primary (reference-pick.json primary); at least one must use it as it is" end)
+  ] | join("; ")'
+
+check_primary() {
+  local bad
+  bad="$(jq -r --slurpfile refs "$WORK/references.json" --slurpfile slots "$WORK/component-slots.json" "$PRIMARY_CHECK" "$WORK/reference-pick.json" 2>/dev/null)" \
+    || bad="not valid JSON"
+  [[ -z "$bad" ]] || die 4 "reference-pick.json: $bad (direction.md, Picking the primary references)"
+}
+
 required_checks() {
   local multi; multi="$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")"
   jq -c --argjson multi "$multi" '.review_checks.public_page + (if $multi > 1 then .review_checks.multi_candidate else [] end)' "$GRAPH"
@@ -354,10 +419,26 @@ case "$cmd" in
       [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
       search_bad="$(jq -r --slurpfile refs "$WORK/references.json" "$SEARCH_CHECK" "$WORK/searches.json" 2>/dev/null)" || search_bad="searches.json is not valid JSON"
       [[ -z "$search_bad" ]] || die 4 "searches.json: $search_bad (direction.md, References)"
+      slots_bad="$(jq -r "$SLOTS_CHECK" "$WORK/component-slots.json" 2>/dev/null)" || slots_bad="component-slots.json is not valid JSON"
+      [[ -z "$slots_bad" ]] || die 4 "component-slots.json: $slots_bad (direction.md, References)"
+      reco_bad="$(jq -r --slurpfile slots "$WORK/component-slots.json" "$RECO_CHECK" "$WORK/references.json")"
+      [[ -z "$reco_bad" ]] || die 4 "references.json: $reco_bad (direction.md, Picking the primary references)"
+      # Unattended: no board, so the agent writes the pick in the same shape.
+      if [[ "$(state .mode)" == unattended ]]; then
+        [[ -f "$WORK/reference-pick.json" ]] || die 4 "reference-pick.json is missing: an unattended run writes its own pick with primary and via: \"agent\""
+        jq -e '.via == "agent"' "$WORK/reference-pick.json" >/dev/null 2>&1 || die 4 "reference-pick.json: an unattended pick says via: \"agent\""
+        check_primary
+      fi
     fi
     if [[ "$NODE" == reference_pick ]]; then
       jq -e '(.tone // "") | type == "string" and length > 0' "$WORK/reference-pick.json" >/dev/null \
         || die 4 "reference-pick.json needs tone: the user's answer on the tone and manner shown at the top of the board"
+      check_primary
+    fi
+    if [[ "$NODE" == direction && "$OUTCOME" == direction_ready && -f "$WORK/reference-pick.json" ]] && jq -e '.primary' "$WORK/reference-pick.json" >/dev/null 2>&1; then
+      cp_bad="$(jq -r --slurpfile pick "$WORK/reference-pick.json" --slurpfile refs "$WORK/references.json" "$CAND_PRIMARY_CHECK" "$WORK/candidates.json" 2>/dev/null)" \
+        || cp_bad="candidates.json is not valid JSON"
+      [[ -z "$cp_bad" ]] || die 4 "candidates.json: $cp_bad (direction.md, Direction candidates)"
     fi
     purl="" pf=""
     if [[ "$NODE" == preview ]]; then

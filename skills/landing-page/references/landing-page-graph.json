@@ -29,7 +29,8 @@
       ],
       "artifacts": [
         "references.json",
-        "searches.json"
+        "searches.json",
+        "component-slots.json"
       ],
       "outcomes": [
         "references_ready",
@@ -475,7 +476,8 @@
     "After max_reviews reviews with a major left, the candidate goes to user_decision; later fixes are reported as not independently reviewed.",
     "Each review is a new reviewer; the briefing carries the take-lines and reference captures, not the maker's notes.",
     "The user sees a served draft (preview) before measurement and review start; verification never delays the first look.",
-    "An unattended run finishes one candidate: after every draft review the agent chooses one (draft-pick.json, via agent, with its reason), the rest fold, and a second candidate entering build is refused."
+    "An unattended run finishes one candidate: after every draft review the agent chooses one (draft-pick.json, via agent, with its reason), the rest fold, and a second candidate entering build is refused.",
+    "The reference pick names the primary references: one layout, one interaction, and one component per section slot (or none), none of them excluded; at least one candidate leads with that primary as it is."
   ],
   "budget_minutes": {
     "preview": 10,
