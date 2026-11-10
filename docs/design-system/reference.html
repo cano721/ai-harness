@@ -1,0 +1,1297 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-harness 디자인 시스템 — 기준 화면</title>
+<script>
+// 첫 칠 전에 테마를 정한다: 주소의 ?theme=light|dark → 저장된 선택 → 없으면 OS 설정(속성 없음).
+(function () {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (!t) { try { t = localStorage.getItem("ds-theme"); } catch (e) { t = null; } }
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
+<style>
+/* ds:tokens:start — docs/design-system/tokens.css 사본. 직접 고치지 말고 scripts/design-system.sh sync 로 맞춘다. */
+/* ai-harness 디자인 토큰 — 값의 단일 출처. 규칙은 docs/design-system.md 에 있다.
+   단일 HTML 화면(보드·리포트·기준 화면)에는 scripts/design-system.sh sync 가 이 파일을 그대로 넣는다.
+   계층: --palette-* (원시 값, 의미 토큰만 참조) → --color-* 등 의미 토큰(화면·부품이 쓰는 이름).
+   테마: OS 설정을 따르고, <html data-theme="light|dark"> 가 있으면 그쪽이 이긴다.
+   다크 블록 두 개(@media, [data-theme="dark"])는 같은 내용이어야 한다 — design-system.sh contrast 가 검사한다. */
+:root {
+  color-scheme: light;
+
+  /* 원시 값: 중립 16단(밝음 0 → 어두움 15), 상태 색상 5개 × 5단(1 옅은 면, 3 어두운 바탕용 글자, 5 경계, 7 밝은 바탕용 글자, 9 어두운 면) */
+  --palette-gray-0: #ffffff;
+  --palette-gray-1: #f5f7f9;
+  --palette-gray-2: #edf0f4;
+  --palette-gray-3: #e3e6eb;
+  --palette-gray-4: #d6d9de;
+  --palette-gray-5: #b9bec4;
+  --palette-gray-6: #8d939a;
+  --palette-gray-7: #7b8188;
+  --palette-gray-8: #5e646b;
+  --palette-gray-9: #484e55;
+  --palette-gray-10: #33383f;
+  --palette-gray-11: #23282e;
+  --palette-gray-12: #1a1e24;
+  --palette-gray-13: #13161b;
+  --palette-gray-14: #0b0f13;
+  --palette-gray-15: #06080b;
+  --palette-orange-1: #ffefe7;
+  --palette-orange-3: #eeac8b;
+  --palette-orange-5: #cc6526;
+  --palette-orange-7: #a44000;
+  --palette-orange-9: #3a1e0f;
+  --palette-blue-1: #eaf5ff;
+  --palette-blue-3: #97c1f7;
+  --palette-blue-5: #4087de;
+  --palette-blue-7: #1762b6;
+  --palette-blue-9: #15273e;
+  --palette-violet-1: #f4f1ff;
+  --palette-violet-3: #c1b3f2;
+  --palette-violet-5: #8e71d6;
+  --palette-violet-7: #6b4cae;
+  --palette-violet-9: #28213c;
+  --palette-green-1: #eaf8ec;
+  --palette-green-3: #94cf9f;
+  --palette-green-5: #2e9e52;
+  --palette-green-7: #007329;
+  --palette-green-9: #122d19;
+  --palette-red-1: #ffeeec;
+  --palette-red-3: #f2a7a1;
+  --palette-red-5: #d15c56;
+  --palette-red-7: #a83634;
+  --palette-red-9: #3b1c1a;
+
+  /* 면 */
+  --color-surface-page: var(--palette-gray-1);
+  --color-surface-sunken: var(--palette-gray-2);
+  --color-surface: var(--palette-gray-0);
+  --color-surface-overlay: var(--palette-gray-0);
+  --color-surface-hover: var(--palette-gray-3);
+  --color-surface-selected: var(--palette-gray-3);
+  --color-backdrop: rgba(6, 8, 11, 0.45);
+
+  /* 글자 */
+  --color-text: var(--palette-gray-14);
+  --color-text-muted: var(--palette-gray-8);
+  --color-text-on-accent: var(--palette-gray-0);
+  --color-text-on-solid: var(--palette-gray-0);
+
+  /* 경계: border 는 구획용(대비 요구 없음), border-control 은 조작 요소의 윤곽(3:1) */
+  --color-border: var(--palette-gray-4);
+  --color-border-control: var(--palette-gray-7);
+
+  /* 강조(주 동작·선택 표시)와 포커스 — 색이 아니라 명도로 구분한다 */
+  --color-accent: var(--palette-gray-14);
+  --color-accent-hover: var(--palette-gray-10);
+  --color-focus: var(--palette-gray-14);
+
+  /* 상태: 색 하나에 뜻 하나. 글자·아이콘 / 옅은 면 / 경계 / 채운 면 */
+  --color-attention: var(--palette-orange-7);
+  --color-attention-subtle: var(--palette-orange-1);
+  --color-attention-border: var(--palette-orange-5);
+  --color-attention-solid: var(--palette-orange-7);
+  --color-progress: var(--palette-blue-7);
+  --color-progress-subtle: var(--palette-blue-1);
+  --color-progress-border: var(--palette-blue-5);
+  --color-progress-solid: var(--palette-blue-7);
+  --color-waiting: var(--palette-violet-7);
+  --color-waiting-subtle: var(--palette-violet-1);
+  --color-waiting-border: var(--palette-violet-5);
+  --color-waiting-solid: var(--palette-violet-7);
+  --color-success: var(--palette-green-7);
+  --color-success-subtle: var(--palette-green-1);
+  --color-success-border: var(--palette-green-5);
+  --color-success-solid: var(--palette-green-7);
+  --color-danger: var(--palette-red-7);
+  --color-danger-subtle: var(--palette-red-1);
+  --color-danger-border: var(--palette-red-5);
+  --color-danger-solid: var(--palette-red-7);
+  --color-info: var(--palette-gray-8);
+  --color-info-subtle: var(--palette-gray-2);
+  --color-info-border: var(--palette-gray-7);
+  --color-info-solid: var(--palette-gray-8);
+
+  /* 간격: 4px 기준 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* 크기: 조작 요소 높이 사다리, 아이콘, 최소 누름 영역 */
+  --size-control-sm: 24px;
+  --size-control-md: 32px;
+  --size-icon: 16px;
+  --size-icon-sm: 14px;
+  --size-badge: 20px;
+  --size-dot: 8px;
+  --size-row: 40px;
+  --size-column-min: 280px;
+  --size-target-min: 24px;
+  --size-sidebar: 232px;
+  --size-drawer: 480px;
+  --size-content-max: 1100px;
+  --size-toast-max: 420px;
+  --size-viewport-min: 360px;
+
+  /* 글자: 역할마다 크기·줄 높이·굵기 한 벌 */
+  --font-family-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-family-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-size-heading: 1.25rem;
+  --font-line-heading: 1.35;
+  --font-weight-heading: 600;
+  --font-size-title: 0.9375rem;
+  --font-line-title: 1.45;
+  --font-weight-title: 600;
+  --font-size-body: 0.875rem;
+  --font-line-body: 1.6;
+  --font-weight-body: 400;
+  --font-size-label: 0.8125rem;
+  --font-line-label: 1.4;
+  --font-weight-label: 500;
+  --font-size-caption: 0.75rem;
+  --font-line-caption: 1.5;
+  --font-weight-caption: 400;
+  --font-size-code: 0.75rem;
+  --font-line-code: 1.5;
+  --font-weight-code: 400;
+  --font-weight-strong: 600;
+
+  /* 반경 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+
+  /* 그림자: 뜬 면에만 */
+  --shadow-overlay: 0 8px 28px rgba(6, 8, 11, 0.18);
+
+  /* 층 */
+  --z-sticky: 10;
+  --z-drawer: 30;
+  --z-popover: 40;
+  --z-toast: 50;
+
+  /* 모션 */
+  --motion-duration-short: 120ms;
+  --motion-duration-medium: 200ms;
+  --motion-duration-long: 280ms;
+  --motion-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-duration-loop: 1400ms;
+  --motion-delay-loading: 300ms;
+
+  /* 중단점: 미디어 쿼리는 변수를 못 쓰므로 components.css 가 같은 값을 직접 적는다 */
+  --breakpoint-narrow: 760px;
+  --breakpoint-wide: 1024px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-surface-page: var(--palette-gray-14);
+    --color-surface-sunken: var(--palette-gray-15);
+    --color-surface: var(--palette-gray-13);
+    --color-surface-overlay: var(--palette-gray-12);
+    --color-surface-hover: var(--palette-gray-11);
+    --color-surface-selected: var(--palette-gray-11);
+    --color-backdrop: rgba(0, 0, 0, 0.6);
+    --color-text: var(--palette-gray-2);
+    --color-text-muted: var(--palette-gray-5);
+    --color-text-on-accent: var(--palette-gray-15);
+    --color-text-on-solid: var(--palette-gray-15);
+    --color-border: var(--palette-gray-9);
+    --color-border-control: var(--palette-gray-7);
+    --color-accent: var(--palette-gray-2);
+    --color-accent-hover: var(--palette-gray-0);
+    --color-focus: var(--palette-gray-0);
+    --color-attention: var(--palette-orange-3);
+    --color-attention-subtle: var(--palette-orange-9);
+    --color-attention-border: var(--palette-orange-5);
+    --color-attention-solid: var(--palette-orange-3);
+    --color-progress: var(--palette-blue-3);
+    --color-progress-subtle: var(--palette-blue-9);
+    --color-progress-border: var(--palette-blue-5);
+    --color-progress-solid: var(--palette-blue-3);
+    --color-waiting: var(--palette-violet-3);
+    --color-waiting-subtle: var(--palette-violet-9);
+    --color-waiting-border: var(--palette-violet-5);
+    --color-waiting-solid: var(--palette-violet-3);
+    --color-success: var(--palette-green-3);
+    --color-success-subtle: var(--palette-green-9);
+    --color-success-border: var(--palette-green-5);
+    --color-success-solid: var(--palette-green-3);
+    --color-danger: var(--palette-red-3);
+    --color-danger-subtle: var(--palette-red-9);
+    --color-danger-border: var(--palette-red-5);
+    --color-danger-solid: var(--palette-red-3);
+    --color-info: var(--palette-gray-5);
+    --color-info-subtle: var(--palette-gray-11);
+    --color-info-border: var(--palette-gray-7);
+    --color-info-solid: var(--palette-gray-5);
+    --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-surface-page: var(--palette-gray-14);
+  --color-surface-sunken: var(--palette-gray-15);
+  --color-surface: var(--palette-gray-13);
+  --color-surface-overlay: var(--palette-gray-12);
+  --color-surface-hover: var(--palette-gray-11);
+  --color-surface-selected: var(--palette-gray-11);
+  --color-backdrop: rgba(0, 0, 0, 0.6);
+  --color-text: var(--palette-gray-2);
+  --color-text-muted: var(--palette-gray-5);
+  --color-text-on-accent: var(--palette-gray-15);
+  --color-text-on-solid: var(--palette-gray-15);
+  --color-border: var(--palette-gray-9);
+  --color-border-control: var(--palette-gray-7);
+  --color-accent: var(--palette-gray-2);
+  --color-accent-hover: var(--palette-gray-0);
+  --color-focus: var(--palette-gray-0);
+  --color-attention: var(--palette-orange-3);
+  --color-attention-subtle: var(--palette-orange-9);
+  --color-attention-border: var(--palette-orange-5);
+  --color-attention-solid: var(--palette-orange-3);
+  --color-progress: var(--palette-blue-3);
+  --color-progress-subtle: var(--palette-blue-9);
+  --color-progress-border: var(--palette-blue-5);
+  --color-progress-solid: var(--palette-blue-3);
+  --color-waiting: var(--palette-violet-3);
+  --color-waiting-subtle: var(--palette-violet-9);
+  --color-waiting-border: var(--palette-violet-5);
+  --color-waiting-solid: var(--palette-violet-3);
+  --color-success: var(--palette-green-3);
+  --color-success-subtle: var(--palette-green-9);
+  --color-success-border: var(--palette-green-5);
+  --color-success-solid: var(--palette-green-3);
+  --color-danger: var(--palette-red-3);
+  --color-danger-subtle: var(--palette-red-9);
+  --color-danger-border: var(--palette-red-5);
+  --color-danger-solid: var(--palette-red-3);
+  --color-info: var(--palette-gray-5);
+  --color-info-subtle: var(--palette-gray-11);
+  --color-info-border: var(--palette-gray-7);
+  --color-info-solid: var(--palette-gray-5);
+  --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+/* ds:tokens:end */
+/* ds:components:start — docs/design-system/components.css 사본. 직접 고치지 말고 scripts/design-system.sh sync 로 맞춘다. */
+/* ai-harness 공용 부품 — 규칙은 docs/design-system.md `## 컴포넌트`. 값은 전부 tokens.css 의 의미 토큰이다.
+   이름은 ds- 로 시작한다(기존 화면의 .card·.badge 와 겹치지 않게). 화면 뿌리에 .ds-root 를 둔다.
+   미디어 쿼리의 760px·1024px 는 --breakpoint-narrow·--breakpoint-wide 와 같은 값이다(CSS 변수는 미디어 쿼리에 못 쓴다). */
+
+/* ── 바탕 ─────────────────────────────────────────────── */
+.ds-root {
+  margin: 0;
+  background: var(--color-surface-page);
+  color: var(--color-text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body);
+  line-height: var(--font-line-body);
+  font-weight: var(--font-weight-body);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  -webkit-text-size-adjust: 100%;
+}
+.ds-root *, .ds-root *::before, .ds-root *::after { box-sizing: border-box; }
+.ds-root [hidden] { display: none !important; }
+.ds-root :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.ds-root a:not(.ds-btn) { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.ds-root code, .ds-root pre, .ds-mono { font-family: var(--font-family-mono); font-size: var(--font-size-code); line-height: var(--font-line-code); }
+.ds-num { font-variant-numeric: tabular-nums; }
+.ds-muted { color: var(--color-text-muted); }
+.ds-icon { width: var(--size-icon); height: var(--size-icon); flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ds-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* 글자 역할 */
+.ds-heading { font-size: var(--font-size-heading); line-height: var(--font-line-heading); font-weight: var(--font-weight-heading); margin: 0; }
+.ds-title { font-size: var(--font-size-title); line-height: var(--font-line-title); font-weight: var(--font-weight-title); margin: 0; }
+.ds-label { margin: 0; font-size: var(--font-size-label); line-height: var(--font-line-label); font-weight: var(--font-weight-label); }
+.ds-caption { font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-caption); color: var(--color-text-muted); }
+
+/* ── 배치 ─────────────────────────────────────────────── */
+.ds-app { display: grid; grid-template-columns: var(--size-sidebar) minmax(0, 1fr); min-height: 100vh; }
+.ds-sidebar { background: var(--color-surface-sunken); border-right: 1px solid var(--color-border); padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.ds-main { min-width: 0; padding: var(--space-5) var(--space-6) var(--space-12); }
+.ds-pagehead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-4); }
+.ds-pagehead > .ds-heading { flex: 1 1 auto; min-width: 0; }
+.ds-stack { display: grid; gap: var(--space-2); min-width: 0; }
+.ds-cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.ds-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(var(--size-column-min), 100%), 1fr)); gap: var(--space-4); align-items: start; }
+/* 목록 + 서랍: 넓은 폭에서는 서랍이 자리를 차지하고 목록은 한 줄로 접힌다. 좁은 폭에서는 서랍이 목록 위에 뜬다. */
+.ds-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr) var(--size-drawer); }
+.ds-split[data-drawer="open"] .ds-columns { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1023px) {
+  .ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .ds-app { grid-template-columns: minmax(0, 1fr); }
+  .ds-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .ds-main { padding: var(--space-4) var(--space-4) var(--space-8); }
+}
+
+/* ── 버튼 ─────────────────────────────────────────────── */
+.ds-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1);
+  min-height: var(--size-control-md); padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-control); border-radius: var(--radius-md);
+  background: var(--color-surface); color: var(--color-text);
+  font: inherit; font-size: var(--font-size-label); line-height: var(--font-line-label); font-weight: var(--font-weight-label);
+  white-space: nowrap; text-decoration: none; cursor: pointer;
+  transition: background-color var(--motion-duration-short) var(--motion-ease-standard), border-color var(--motion-duration-short) var(--motion-ease-standard);
+}
+.ds-btn:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-surface-hover); }
+.ds-btn:not(:disabled):not([aria-disabled="true"]):active { background: var(--color-surface-selected); }
+.ds-btn--sm { min-height: var(--size-control-sm); padding: 0 var(--space-2); font-size: var(--font-size-caption); }
+.ds-btn--primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
+.ds-btn--primary:not(:disabled):not([aria-disabled="true"]):hover, .ds-btn--primary:not(:disabled):not([aria-disabled="true"]):active { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.ds-btn--ghost { border-color: transparent; background: transparent; }
+.ds-btn--danger { border-color: var(--color-danger-border); color: var(--color-danger); }
+.ds-btn--danger:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-danger-subtle); }
+.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+/* 진행 중인 버튼은 흐리게 하지 않는다 — 진행형 글자가 읽혀야 한다. */
+.ds-btn[aria-busy="true"] { cursor: progress; opacity: 1; }
+.ds-btn[aria-busy="true"]::before { content: ""; width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-full); border: 2px solid currentColor; border-right-color: transparent; animation: ds-spin var(--motion-duration-loop) linear infinite; }
+.ds-btn--icon { padding: 0; width: var(--size-control-md); flex: none; }
+.ds-btn--icon.ds-btn--sm { width: var(--size-control-sm); }
+
+/* ── 입력 ─────────────────────────────────────────────── */
+.ds-input {
+  min-height: var(--size-control-md); padding: 0 var(--space-2); width: 100%;
+  border: 1px solid var(--color-border-control); border-radius: var(--radius-md);
+  background: var(--color-surface); color: var(--color-text); font: inherit;
+}
+.ds-input::placeholder { color: var(--color-text-muted); }
+.ds-input[aria-invalid="true"] { border-color: var(--color-danger-border); }
+.ds-field { display: grid; gap: var(--space-1); }
+.ds-field__error { display: flex; align-items: center; gap: var(--space-1); color: var(--color-danger); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
+
+/* ── 배지(상태) · 칩(분류) · 개수 ─────────────────────── */
+/* 배지 = 상태 하나. 모양이 다른 아이콘 + 글자가 항상 같이 온다(색만으로 구분하지 않는다). */
+.ds-badge {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-1); min-height: var(--size-badge); border-radius: var(--radius-full);
+  background: var(--color-info-subtle); color: var(--color-info);
+  font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-label); white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.ds-badge[data-status] { box-shadow: none; }
+.ds-badge .ds-icon { width: var(--size-icon-sm); height: var(--size-icon-sm); }
+.ds-badge[data-status="attention"] { background: var(--color-attention-subtle); color: var(--color-attention); }
+.ds-badge[data-status="progress"] { background: var(--color-progress-subtle); color: var(--color-progress); }
+.ds-badge[data-status="waiting"] { background: var(--color-waiting-subtle); color: var(--color-waiting); }
+.ds-badge[data-status="success"] { background: var(--color-success-subtle); color: var(--color-success); }
+.ds-badge[data-status="danger"] { background: var(--color-danger-subtle); color: var(--color-danger); }
+/* 칩 = 분류·출처 같은 중립 정보. 상태 색을 쓰지 않는다. button.ds-chip 은 켜고 끄는 필터다. */
+.ds-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0 var(--space-2); min-height: var(--size-badge); border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border); background: transparent; color: var(--color-text-muted);
+  font: inherit; font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap;
+}
+button.ds-chip { min-height: var(--size-control-sm); border-color: var(--color-border-control); color: var(--color-text); cursor: pointer; }
+button.ds-chip:hover { background: var(--color-surface-hover); }
+button.ds-chip:active { background: var(--color-surface-selected); }
+button.ds-chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
+.ds-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: var(--size-badge); height: var(--size-badge); padding: 0 var(--space-1);
+  border-radius: var(--radius-full); background: var(--color-info-subtle); color: var(--color-text-muted);
+  font-size: var(--font-size-caption); line-height: 1; font-weight: var(--font-weight-label); font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.ds-count[data-status="attention"] { background: var(--color-attention-solid); color: var(--color-text-on-solid); box-shadow: none; }
+.ds-dot { width: var(--size-dot); height: var(--size-dot); border-radius: var(--radius-full); flex: none; background: var(--color-info-solid); }
+.ds-dot[data-status="attention"] { background: var(--color-attention-solid); }
+.ds-dot[data-status="progress"] { background: var(--color-progress-solid); }
+.ds-dot[data-status="waiting"] { background: var(--color-waiting-solid); }
+.ds-dot[data-status="success"] { background: var(--color-success-solid); }
+.ds-dot[data-status="danger"] { background: var(--color-danger-solid); }
+
+/* ── 카드 ─────────────────────────────────────────────── */
+/* 눌리는 카드(.ds-card--interactive)는 제목이 button(.ds-card__open)이고 그 ::after 가 카드 전체를 덮는다 — 마우스는 카드 어디든, 키보드는 제목 하나.
+   카드 안의 다른 버튼·링크는 .ds-card__actions 안에 두면 덮개 위로 올라온다. 눌리지 않는 카드에는 hover 가 없다. */
+.ds-card { position: relative; display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); font-size: var(--font-size-caption); line-height: var(--font-line-caption); color: var(--color-text-muted); }
+.ds-card__meta > .ds-card__when { margin-left: auto; }
+.ds-card__title { font-size: var(--font-size-title); line-height: var(--font-line-title); font-weight: var(--font-weight-title); margin: 0; }
+.ds-card__open { all: unset; cursor: pointer; display: block; width: 100%; }
+.ds-card__open::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius-lg); }
+.ds-card__open:focus-visible { outline: none; }
+.ds-card__open:focus-visible::after { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.ds-card--interactive { border-color: var(--color-border-control); transition: background-color var(--motion-duration-short) var(--motion-ease-standard); }
+.ds-card--interactive:hover { background: var(--color-surface-hover); }
+.ds-card--interactive:active { background: var(--color-surface-selected); }
+.ds-card[data-selected="true"] { background: var(--color-surface-selected); box-shadow: inset 0 0 0 1px var(--color-accent); border-color: var(--color-accent); }
+.ds-card__body { margin: 0; color: var(--color-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ds-card__actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+/* ── 목록 줄 ───────────────────────────────────────────── */
+/* 펼쳐지는 줄은 머리가 button[aria-expanded] 다. 펼쳐지지 않는 줄은 그냥 글자다(hover·손가락 커서 없음). */
+.ds-rows { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-row { border-top: 1px solid var(--color-border); min-width: 0; }
+.ds-row:first-child { border-top: 0; }
+.ds-row__head { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--size-row); padding: var(--space-2) var(--space-4); text-align: left; min-width: 0; }
+button.ds-row__head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--size-row); padding: var(--space-2) var(--space-4); cursor: pointer; }
+button.ds-row__head:hover { background: var(--color-surface-hover); }
+button.ds-row__head:active { background: var(--color-surface-selected); }
+/* 펼칠 수 없는 줄도 제목이 화살표 자리만큼 들어가 같은 선에서 시작한다. */
+div.ds-row__head { padding-left: calc(var(--space-4) + var(--size-icon) + var(--space-2)); }
+button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.ds-row:first-child > .ds-row__head { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.ds-row:last-child > .ds-row__head[aria-expanded="false"], .ds-row:last-child > div.ds-row__head { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.ds-row__chevron { transition: transform var(--motion-duration-medium) var(--motion-ease-standard); color: var(--color-text-muted); }
+.ds-row__head[aria-expanded="true"] .ds-row__chevron { transform: rotate(90deg); }
+.ds-row__title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--font-weight-label); }
+.ds-row__side { flex: none; display: flex; align-items: center; gap: var(--space-2); color: var(--color-text-muted); font-size: var(--font-size-caption); }
+.ds-row__detail { padding: var(--space-1) var(--space-4) var(--space-4) calc(var(--space-4) + var(--size-icon) + var(--space-2)); display: grid; gap: var(--space-2); }
+.ds-pre { margin: 0; padding: var(--space-2) var(--space-3); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: auto; white-space: pre-wrap; }
+@media (max-width: 760px) {
+  /* 좁은 폭: 제목을 자르지 않고 줄바꿈하고, 곁 정보는 제목 아래로 내린다. */
+  .ds-row__head, button.ds-row__head { flex-wrap: wrap; }
+  .ds-row__title { flex-basis: calc(100% - var(--size-icon) - var(--space-2)); white-space: normal; }
+  div.ds-row__head > .ds-row__title { flex-basis: 100%; }
+  button.ds-row__head > .ds-row__side { margin-left: calc(var(--size-icon) + var(--space-2)); }
+}
+.ds-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; }
+.ds-kv dt { color: var(--color-text-muted); }
+.ds-kv dd { margin: 0; min-width: 0; }
+
+/* ── 묶음: 같은 원인으로 반복되는 항목은 한 줄로 접는다 ──── */
+.ds-group { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-group > .ds-row__head { border-radius: var(--radius-lg); }
+.ds-group > .ds-row__head[aria-expanded="true"] { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.ds-group__members { border-top: 1px solid var(--color-border); padding: var(--space-2) var(--space-4) var(--space-3) calc(var(--space-4) + var(--size-icon) + var(--space-2)); display: grid; gap: var(--space-1); }
+.ds-group__members > li { display: flex; gap: var(--space-2); align-items: baseline; }
+.ds-group__members { list-style: none; margin: 0; }
+.ds-group__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + var(--size-icon) + var(--space-2)); }
+
+/* ── 탭 ───────────────────────────────────────────────── */
+.ds-tabs { display: flex; gap: var(--space-1); box-shadow: inset 0 -1px 0 var(--color-border); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ds-tab {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: var(--space-2);
+  min-height: var(--size-control-md); padding: 0 var(--space-3); border-bottom: 2px solid transparent; flex: none;
+  color: var(--color-text-muted); font-size: var(--font-size-label); font-weight: var(--font-weight-label); white-space: nowrap; cursor: pointer;
+}
+.ds-tab:hover { color: var(--color-text); }
+.ds-tab[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); font-weight: var(--font-weight-strong); }
+.ds-tab:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; border-radius: var(--radius-sm); }
+.ds-tabpanel { padding-top: var(--space-4); }
+@media (max-width: 760px) {
+  .ds-tab { padding: 0 var(--space-2); gap: var(--space-1); }
+}
+
+/* ── 선택 사다리(여러 값 중 하나) ───────────────────────── */
+.ds-segment { display: inline-flex; width: fit-content; max-width: 100%; border: 1px solid var(--color-border-control); border-radius: var(--radius-md); overflow: hidden; }
+.ds-segment > button {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; min-height: calc(var(--size-control-md) - 2px); padding: 0 var(--space-3);
+  border-left: 1px solid var(--color-border-control); color: var(--color-text); font-size: var(--font-size-label); white-space: nowrap; cursor: pointer;
+}
+.ds-segment > button:first-child { border-left: 0; }
+.ds-segment > button:hover { background: var(--color-surface-hover); }
+.ds-segment > button:active { background: var(--color-surface-selected); }
+.ds-segment > button[aria-checked="true"] { background: var(--color-surface-selected); font-weight: var(--font-weight-strong); box-shadow: inset 0 -2px 0 var(--color-accent); }
+.ds-segment > button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+
+/* ── 설정 행: 기본값이면 조용히, 기본값과 다를 때만 표시가 붙는다 ── */
+.ds-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2) var(--space-4); align-items: center; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); }
+.ds-setting:first-child { border-top: 0; }
+.ds-setting__name { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-weight: var(--font-weight-label); }
+.ds-setting__desc { margin: 0; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
+.ds-setting__changed { display: none; }
+.ds-setting[data-changed="true"] .ds-setting__changed { display: inline-flex; }
+.ds-setting__control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+@media (max-width: 760px) {
+  .ds-setting { grid-template-columns: minmax(0, 1fr); }
+  .ds-setting__control { justify-content: flex-start; }
+}
+
+/* ── 알림 줄: 화면에 한 번, 원인과 할 일 ─────────────────── */
+.ds-notice { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-info-subtle); color: var(--color-text); }
+.ds-notice > .ds-icon { margin-top: calc((var(--font-line-body) * 1em - var(--size-icon)) / 2); color: var(--color-info); }
+.ds-notice > p { margin: 0; flex: 1 1 auto; min-width: 0; }
+.ds-notice[data-status="attention"] { border-color: var(--color-attention-border); background: var(--color-attention-subtle); }
+.ds-notice[data-status="attention"] > .ds-icon { color: var(--color-attention); }
+.ds-notice[data-status="danger"] { border-color: var(--color-danger-border); background: var(--color-danger-subtle); }
+.ds-notice[data-status="danger"] > .ds-icon { color: var(--color-danger); }
+
+/* ── 서랍(상세) ────────────────────────────────────────── */
+/* 열면 포커스가 서랍 제목으로, 닫으면 연 곳으로 돌아간다. Esc 로 닫힌다. 좁은 폭에서는 배경을 가리고 목록 위에 뜬다. */
+.ds-drawer { display: flex; flex-direction: column; min-width: 0; background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-lg); position: sticky; top: var(--space-4); max-height: calc(100vh - var(--space-8)); }
+.ds-drawer__head { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
+.ds-drawer__head > div { flex: 1 1 auto; min-width: 0; display: grid; gap: var(--space-1); }
+.ds-drawer__title { justify-self: start; }
+.ds-drawer__title:focus-visible { outline-offset: var(--space-1); border-radius: var(--radius-sm); }
+.ds-drawer__body { flex: 1 1 auto; overflow: auto; padding: var(--space-4); display: grid; gap: var(--space-4); align-content: start; }
+.ds-drawer__body p { margin: 0; }
+.ds-drawer__foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); }
+.ds-backdrop { display: none; }
+@media (max-width: 1023px) {
+  .ds-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--size-drawer), 100vw); max-height: none; border-radius: 0; border-width: 0 0 0 1px; box-shadow: var(--shadow-overlay); z-index: var(--z-drawer); animation: ds-slide-in var(--motion-duration-long) var(--motion-ease-enter); }
+  .ds-split[data-drawer="open"] > .ds-backdrop { display: block; position: fixed; inset: 0; background: var(--color-backdrop); z-index: calc(var(--z-drawer) - 1); animation: ds-fade-in var(--motion-duration-medium) var(--motion-ease-enter); }
+}
+
+/* ── 토스트 ────────────────────────────────────────────── */
+.ds-toasts { position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: var(--z-toast); display: grid; gap: var(--space-2); width: min(var(--size-toast-max), calc(100vw - var(--space-8))); }
+/* 서랍이 열려 있으면 토스트를 서랍 바닥(주 동작) 위로 올린다. */
+.ds-root:has(.ds-split[data-drawer="open"]) .ds-toasts { bottom: calc(var(--size-control-md) + var(--space-3) * 2 + var(--space-4)); }
+.ds-toast { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-3); background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-overlay); animation: ds-rise-in var(--motion-duration-medium) var(--motion-ease-enter); }
+.ds-toast > p { margin: 0; flex: 1 1 auto; min-width: 0; }
+.ds-toast > .ds-icon { margin-top: calc((var(--font-line-body) * 1em - var(--size-icon)) / 2); }
+.ds-toast[data-status="success"] > .ds-icon { color: var(--color-success); }
+.ds-toast[data-status="danger"] > .ds-icon { color: var(--color-danger); }
+
+/* ── 빈 · 로딩 · 오류 ──────────────────────────────────── */
+.ds-empty, .ds-error { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4); border: 1px dashed var(--color-border); border-radius: var(--radius-lg); }
+.ds-empty > p, .ds-error > p { margin: 0; }
+.ds-error { border-style: solid; border-color: var(--color-danger-border); background: var(--color-danger-subtle); }
+.ds-error__title { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--font-weight-strong); }
+.ds-error__title > .ds-icon { color: var(--color-danger); }
+/* 로딩은 빠른 응답에서 깜빡이지 않게 --motion-delay-loading 뒤에 나타난다. 자리 표시는 실제 내용과 같은 뼈대를 쓴다. */
+.ds-skeleton { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); opacity: 0; animation: ds-fade-in var(--motion-duration-medium) var(--motion-ease-enter) var(--motion-delay-loading) forwards; }
+.ds-skeleton__line { height: var(--space-3); border-radius: var(--radius-sm); background: var(--color-surface-selected); animation: ds-pulse var(--motion-duration-loop) var(--motion-ease-standard) infinite; }
+.ds-skeleton__line--short { width: 40%; }
+.ds-skeleton__line--title { height: var(--space-4); width: 70%; }
+
+/* 좁은 폭에서 서랍이 떠 있는 동안 뒤 화면은 스크롤되지 않는다. 테마를 바꾸는 순간에는 전환을 끈다. */
+.ds-root.ds-lock { overflow: hidden; }
+.ds-theme-switching *, .ds-theme-switching *::before, .ds-theme-switching *::after { transition: none !important; }
+
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+@keyframes ds-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ds-rise-in { from { opacity: 0; transform: translateY(var(--space-2)); } to { opacity: 1; transform: none; } }
+@keyframes ds-slide-in { from { transform: translateX(var(--space-6)); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ds-pulse { 50% { opacity: 0.5; } }
+
+/* 움직임 줄이기: 이동·회전·반복을 없애고 같은 끝 상태에 바로 닿는다. 뜻이 있는 변화는 색·불투명도로만 남긴다. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-root *, .ds-root *::before, .ds-root *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }
+  .ds-btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: 0.5; }
+}
+/* 강제 색(고대비) 모드: 배경색만으로 구분하던 경계를 선으로 보이게 한다. */
+@media (forced-colors: active) {
+  .ds-badge, .ds-count, .ds-card[data-selected="true"], .ds-segment > button[aria-checked="true"], button.ds-chip[aria-pressed="true"] { border: 1px solid CanvasText; }
+  .ds-tab[aria-selected="true"] { border-bottom-color: CanvasText; }
+}
+/* ds:components:end */
+
+/* 이 아래는 기준 화면 전용 틀(g-)이다. 제품 화면이 가져다 쓰는 것이 아니다. */
+.g-brand { font-size: var(--font-size-title); font-weight: var(--font-weight-title); padding: 0 var(--space-2); }
+.g-nav { display: grid; gap: var(--space-1); }
+.ds-root .g-nav a { display: block; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); text-decoration: none; font-size: var(--font-size-label); }
+.g-nav a:hover { background: var(--color-surface-hover); }
+.g-navtitle { margin: var(--space-3) var(--space-2) 0; }
+.g-navtitle:first-child { margin-top: 0; }
+.g-section { margin-top: var(--space-12); scroll-margin-top: var(--space-4); max-width: var(--size-content-max); }
+.g-section:first-of-type { margin-top: var(--space-6); }
+.g-section > h2 { margin-bottom: var(--space-1); }
+.g-section > p { margin: 0 0 var(--space-4); color: var(--color-text-muted); max-width: 70ch; }
+.g-demo { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface-page); margin-bottom: var(--space-3); min-width: 0; }
+.g-demo > h3 { margin: 0; }
+.g-demo > .ds-btn { justify-self: start; }
+.g-section--wide { max-width: none; }
+@media (max-width: 760px) {
+  .g-nav { display: flex; flex-wrap: wrap; gap: 0 var(--space-1); }
+  .g-navtitle { display: none; }
+}
+.g-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--space-3); align-items: start; }
+.g-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: var(--space-2); }
+.g-swatch { display: grid; grid-template-columns: var(--size-control-md) minmax(0, 1fr); gap: var(--space-2); align-items: center; }
+.g-swatch > i { height: var(--size-control-md); border-radius: var(--radius-md); border: 1px solid var(--color-border-control); }
+.g-swatch > span { display: grid; min-width: 0; }
+.g-statusgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: var(--space-2); }
+.g-status { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); border: 1px solid; }
+.g-status > b { display: flex; align-items: center; gap: var(--space-1); }
+.g-solid { display: inline-flex; align-items: center; justify-content: center; min-height: var(--size-control-sm); padding: 0 var(--space-2); border-radius: var(--radius-md); font-size: var(--font-size-caption); font-weight: var(--font-weight-label); color: var(--color-text-on-solid); }
+.g-type > div { display: grid; grid-template-columns: minmax(0, 8em) minmax(0, 1fr); gap: var(--space-4); align-items: baseline; padding: var(--space-2) 0; border-top: 1px solid var(--color-border); }
+.g-type > div:first-child { border-top: 0; }
+.g-bars { display: grid; gap: var(--space-1); }
+.g-bars > div { display: flex; align-items: center; gap: var(--space-2); }
+.g-bars i { display: block; height: var(--space-3); background: var(--color-accent); border-radius: var(--radius-sm); }
+.g-radii { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+.g-radii > div { display: grid; gap: var(--space-1); justify-items: center; }
+.g-radii i { display: block; width: var(--space-12); height: var(--space-12); border: 1px solid var(--color-border-control); background: var(--color-surface); }
+</style>
+</head>
+<body class="ds-root">
+<svg hidden>
+  <symbol id="i-attention" viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3L4 11Z"/><path d="M6.5 14.5h3"/></symbol>
+  <symbol id="i-progress" viewBox="0 0 16 16"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5"/><path d="M8 0.5l2 2-2 2"/></symbol>
+  <symbol id="i-waiting" viewBox="0 0 16 16"><path d="M4 2.5h8M4 13.5h8"/><path d="M5 2.5c0 3 6 3.2 6 5.5s-6 2.5-6 5.5"/><path d="M11 2.5c0 3-6 3.2-6 5.5s6 2.5 6 5.5"/></symbol>
+  <symbol id="i-success" viewBox="0 0 16 16"><path d="M3 8.5l3.2 3.2L13 4.5"/></symbol>
+  <symbol id="i-danger" viewBox="0 0 16 16"><path d="M8 2.5l6 11H2l6-11Z"/><path d="M8 6.8v3.2M8 11.9v.1"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3M8 5.2v.1"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+</svg>
+
+<div class="ds-app">
+  <aside class="ds-sidebar">
+    <div class="g-brand">ai-harness 디자인 시스템</div>
+    <nav class="g-nav" aria-label="기준 화면 목차">
+      <p class="ds-caption g-navtitle">토큰</p>
+      <a href="#color">색과 상태</a>
+      <a href="#type">글자 · 간격 · 반경</a>
+      <p class="ds-caption g-navtitle">부품</p>
+      <a href="#button">버튼 · 입력</a>
+      <a href="#badge">배지 · 칩 · 개수</a>
+      <a href="#card">카드</a>
+      <a href="#row">목록 줄 · 묶음</a>
+      <a href="#tabs">탭</a>
+      <a href="#setting">설정 행 · 알림 줄</a>
+      <a href="#state">빈 · 로딩 · 오류</a>
+      <a href="#toast">토스트</a>
+      <p class="ds-caption g-navtitle">배치</p>
+      <a href="#layout">목록 + 서랍</a>
+    </nav>
+    <div class="ds-stack">
+      <span class="ds-caption" id="theme-label">테마</span>
+      <div class="ds-segment" role="radiogroup" aria-labelledby="theme-label" id="theme">
+        <button type="button" role="radio" aria-checked="true" data-value="system">시스템</button>
+        <button type="button" role="radio" aria-checked="false" data-value="light">라이트</button>
+        <button type="button" role="radio" aria-checked="false" data-value="dark">다크</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="ds-main">
+    <header class="ds-pagehead">
+      <h1 class="ds-heading">기준 화면</h1>
+      <span class="ds-caption">규칙: docs/design-system.md · 값: docs/design-system/tokens.css · 예시 데이터는 전부 가짜입니다</span>
+    </header>
+
+    <section class="g-section" id="color">
+      <h2 class="ds-title">색과 상태</h2>
+      <p>색 하나에 뜻 하나입니다. 상태는 색만으로 알리지 않고 모양이 다른 아이콘과 글자가 항상 같이 옵니다. 값은 지금 테마에서 계산된 값입니다.</p>
+      <div class="g-demo">
+        <h3 class="ds-label">면 · 글자 · 경계 · 강조</h3>
+        <div class="g-swatches" id="swatches"></div>
+      </div>
+      <div class="g-demo">
+        <h3 class="ds-label">상태 6가지 — 글자 / 옅은 면 / 경계 / 채운 면</h3>
+        <div class="g-statusgrid" id="statuses"></div>
+      </div>
+    </section>
+
+    <section class="g-section" id="type">
+      <h2 class="ds-title">글자 · 간격 · 반경</h2>
+      <p>글자는 역할 여섯 가지이고 화면 폭에 따라 바뀌지 않습니다. 간격은 4px 기준입니다.</p>
+      <div class="g-two">
+        <div class="g-demo g-type">
+          <div><span class="ds-caption">heading</span><span class="ds-heading">작업 현황</span></div>
+          <div><span class="ds-caption">title</span><span class="ds-title">결제 승인 응답이 30초 넘게 없음</span></div>
+          <div><span class="ds-caption">body</span><span>원인을 찾았고 수정 PR을 열었습니다. 검토가 필요합니다.</span></div>
+          <div><span class="ds-caption">label</span><span class="ds-label">PR 검토하기</span></div>
+          <div><span class="ds-caption">caption</span><span class="ds-caption">acme/shop · 12분 전</span></div>
+          <div><span class="ds-caption">code</span><code>TimeoutError: upstream did not respond</code></div>
+        </div>
+        <div class="g-demo">
+          <h3 class="ds-label">간격</h3>
+          <div class="g-bars" id="spaces"></div>
+          <h3 class="ds-label">반경</h3>
+          <div class="g-radii" id="radii"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="button">
+      <h2 class="ds-title">버튼 · 입력</h2>
+      <p>주 버튼은 한 영역에 하나입니다. 상태 색으로 칠한 버튼은 없고, 되돌릴 수 없는 동작만 위험 버튼을 씁니다.</p>
+      <div class="g-demo">
+        <h3 class="ds-label">종류와 크기</h3>
+        <div class="ds-cluster">
+          <button type="button" class="ds-btn ds-btn--primary">PR 검토하기</button>
+          <button type="button" class="ds-btn">로그 열기</button>
+          <button type="button" class="ds-btn ds-btn--ghost">건너뛰기</button>
+          <button type="button" class="ds-btn ds-btn--danger">세션 끝내기</button>
+          <button type="button" class="ds-btn ds-btn--icon" aria-label="닫기"><svg class="ds-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="ds-cluster">
+          <button type="button" class="ds-btn ds-btn--sm ds-btn--primary">답하기</button>
+          <button type="button" class="ds-btn ds-btn--sm">로그 열기</button>
+          <button type="button" class="ds-btn ds-btn--sm ds-btn--ghost">건너뛰기</button>
+        </div>
+        <h3 class="ds-label">상태</h3>
+        <div class="ds-cluster">
+          <button type="button" class="ds-btn ds-btn--primary" disabled>저장</button>
+          <button type="button" class="ds-btn" disabled>로그 열기</button>
+          <button type="button" class="ds-btn ds-btn--primary" aria-busy="true" aria-disabled="true">저장하는 중</button>
+          <button type="button" class="ds-btn" aria-busy="true" aria-disabled="true">접근 확인하는 중</button>
+        </div>
+        <span class="ds-caption">못 누르는 버튼 옆에는 이유를 적습니다: 바꾼 값이 없어 저장할 것이 없습니다.</span>
+      </div>
+      <div class="g-demo">
+        <h3 class="ds-label">입력</h3>
+        <div class="g-two">
+          <div class="ds-field">
+            <label class="ds-label" for="in-ok">하루 실행 상한</label>
+            <input class="ds-input ds-num" id="in-ok" inputmode="numeric" value="5" aria-describedby="in-ok-help">
+            <span class="ds-caption" id="in-ok-help">0이면 실행하지 않습니다.</span>
+          </div>
+          <div class="ds-field">
+            <label class="ds-label" for="in-bad">실행당 예산 (USD)</label>
+            <input class="ds-input ds-num" id="in-bad" value="-3" aria-invalid="true" aria-describedby="in-bad-err">
+            <span class="ds-field__error" id="in-bad-err"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg>0보다 큰 숫자여야 합니다. 예: 2.5</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="badge">
+      <h2 class="ds-title">배지 · 칩 · 개수</h2>
+      <p>배지는 상태, 칩은 분류입니다. 한 항목에 배지는 하나만 답니다. 칩은 상태 색을 쓰지 않습니다.</p>
+      <div class="g-demo">
+        <h3 class="ds-label">배지 — 상태</h3>
+        <div class="ds-cluster">
+          <span class="ds-badge" data-status="attention"><svg class="ds-icon" aria-hidden="true"><use href="#i-attention"/></svg>사람 필요</span>
+          <span class="ds-badge" data-status="progress"><svg class="ds-icon" aria-hidden="true"><use href="#i-progress"/></svg>진행 중</span>
+          <span class="ds-badge" data-status="waiting"><svg class="ds-icon" aria-hidden="true"><use href="#i-waiting"/></svg>대기</span>
+          <span class="ds-badge" data-status="success"><svg class="ds-icon" aria-hidden="true"><use href="#i-success"/></svg>완료</span>
+          <span class="ds-badge" data-status="danger"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg>실패</span>
+          <span class="ds-badge"><svg class="ds-icon" aria-hidden="true"><use href="#i-info"/></svg>건너뜀</span>
+        </div>
+        <h3 class="ds-label">칩 — 분류 · 필터</h3>
+        <div class="ds-cluster">
+          <span class="ds-chip">자동 수정</span>
+          <span class="ds-chip">작업 세션</span>
+          <span class="ds-chip ds-mono">acme/shop</span>
+          <button type="button" class="ds-chip" aria-pressed="true">acme/shop</button>
+          <button type="button" class="ds-chip" aria-pressed="false">acme/billing-api</button>
+          <button type="button" class="ds-chip" aria-pressed="false">acme/docs</button>
+        </div>
+        <h3 class="ds-label">개수 · 상태 점</h3>
+        <div class="ds-cluster">
+          <span class="ds-count" data-status="attention">3<span class="ds-sr">건, 사람 필요</span></span>
+          <span class="ds-count">12<span class="ds-sr">건</span></span>
+          <span class="ds-cluster"><span class="ds-dot" data-status="attention"></span><span class="ds-dot" data-status="progress"></span><span class="ds-dot" data-status="waiting"></span><span class="ds-dot" data-status="success"></span><span class="ds-dot" data-status="danger"></span><span class="ds-dot"></span></span>
+          <span class="ds-caption">점은 배지나 열 제목 옆에서만 씁니다(혼자 상태를 알리지 않습니다).</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="card">
+      <h2 class="ds-title">카드</h2>
+      <p>눌리는 카드는 카드 전체가 눌리고 키보드로는 제목에서 엽니다. 눌리지 않는 카드는 hover가 없습니다. 상태는 배지 하나로만 보입니다.</p>
+      <div class="g-two">
+        <div class="g-demo">
+          <h3 class="ds-label">눌리는 카드 (기본 · 선택됨)</h3>
+          <article class="ds-card ds-card--interactive">
+            <div class="ds-card__meta"><span class="ds-badge" data-status="attention"><svg class="ds-icon" aria-hidden="true"><use href="#i-attention"/></svg>사람 필요</span><span class="ds-chip">자동 수정</span><span>acme/shop</span><span class="ds-card__when">12분 전</span></div>
+            <h4 class="ds-card__title"><button type="button" class="ds-card__open">결제 승인 응답이 30초 넘게 없음</button></h4>
+            <p class="ds-card__body">원인을 찾았고 수정 PR을 열었습니다. 병합 전에 검토가 필요합니다.</p>
+            <div class="ds-card__actions"><a class="ds-btn ds-btn--sm ds-btn--primary" href="#card">PR 검토하기</a><button type="button" class="ds-btn ds-btn--sm">로그 열기</button></div>
+          </article>
+          <article class="ds-card ds-card--interactive" data-selected="true">
+            <div class="ds-card__meta"><span class="ds-badge" data-status="progress"><svg class="ds-icon" aria-hidden="true"><use href="#i-progress"/></svg>진행 중</span><span class="ds-chip">작업 세션</span><span>acme/billing-api</span><span class="ds-card__when">방금</span></div>
+            <h4 class="ds-card__title"><button type="button" class="ds-card__open" aria-current="true">환불 금액 계산을 소수점 둘째 자리로 맞추기</button></h4>
+            <p class="ds-card__body">테스트 12개 중 9개 통과. 남은 3개를 고치는 중입니다.</p>
+          </article>
+        </div>
+        <div class="g-demo">
+          <h3 class="ds-label">눌리지 않는 카드</h3>
+          <article class="ds-card">
+            <div class="ds-card__meta"><span class="ds-badge" data-status="success"><svg class="ds-icon" aria-hidden="true"><use href="#i-success"/></svg>완료</span><span>acme/docs</span><span class="ds-card__when">어제</span></div>
+            <h4 class="ds-card__title">설치 안내 문서의 깨진 링크 4개 고침</h4>
+            <p class="ds-card__body">PR #128이 병합됐습니다.</p>
+          </article>
+          <article class="ds-card">
+            <div class="ds-card__meta"><span class="ds-badge" data-status="danger"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg>실패</span><span>acme/shop</span><span class="ds-card__when">3시간 전</span></div>
+            <h4 class="ds-card__title">장바구니 합계가 음수로 표시됨</h4>
+            <p class="ds-card__body">수정 실행이 예산 상한에서 멈췄습니다. 상한을 올리거나 직접 고쳐야 합니다.</p>
+            <div class="ds-card__actions"><button type="button" class="ds-btn ds-btn--sm">로그 열기</button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="row">
+      <h2 class="ds-title">목록 줄 · 묶음</h2>
+      <p>펼쳐지는 줄은 머리 전체가 버튼이고 화살표가 붙습니다. 펼칠 것이 없는 줄에는 화살표도 hover도 없습니다. 같은 원인으로 반복되는 항목은 한 줄로 묶습니다.</p>
+      <div class="g-two">
+        <div class="g-demo">
+          <h3 class="ds-label">목록 줄</h3>
+          <div class="ds-rows">
+            <div class="ds-row">
+              <button type="button" class="ds-row__head" aria-expanded="true" aria-controls="row-1">
+                <svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+                <span class="ds-row__title">주문 조회가 가끔 빈 목록을 돌려줌</span>
+                <span class="ds-row__side"><span class="ds-num">감지 41건</span><span class="ds-badge" data-status="waiting"><svg class="ds-icon" aria-hidden="true"><use href="#i-waiting"/></svg>후보</span></span>
+              </button>
+              <div class="ds-row__detail" id="row-1">
+                <dl class="ds-kv"><dt>저장소</dt><dd>acme/shop</dd><dt>처음 본 때</dt><dd class="ds-num">2026-11-08 14:02</dd><dt>관련 세션</dt><dd>없음</dd></dl>
+                <pre class="ds-pre">EmptyResultError: orders query returned 0 rows for an active customer</pre>
+                <div class="ds-cluster"><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">수정 시작</button><button type="button" class="ds-btn ds-btn--sm">원문 열기</button></div>
+              </div>
+            </div>
+            <div class="ds-row">
+              <button type="button" class="ds-row__head" aria-expanded="false" aria-controls="row-2">
+                <svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+                <span class="ds-row__title">로그인 직후 프로필 사진이 안 보임</span>
+                <span class="ds-row__side"><span class="ds-num">감지 7건</span><span class="ds-badge" data-status="progress"><svg class="ds-icon" aria-hidden="true"><use href="#i-progress"/></svg>수정 중</span></span>
+              </button>
+              <div class="ds-row__detail" id="row-2" hidden>
+                <dl class="ds-kv"><dt>저장소</dt><dd>acme/shop</dd><dt>관련 세션</dt><dd><a href="#row">프로필 사진 캐시 고치기</a></dd></dl>
+              </div>
+            </div>
+            <div class="ds-row">
+              <div class="ds-row__head">
+                <span class="ds-row__title">검색어에 이모지를 넣으면 500 오류</span>
+                <span class="ds-row__side"><span>PR #131 병합됨</span><span class="ds-badge" data-status="success"><svg class="ds-icon" aria-hidden="true"><use href="#i-success"/></svg>해결</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="g-demo">
+          <h3 class="ds-label">묶음 — 같은 원인 9건</h3>
+          <div class="ds-group">
+            <button type="button" class="ds-row__head" aria-expanded="false" aria-controls="group-1">
+              <svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+              <span class="ds-row__title">PR 상태를 확인할 수 없어 멈춤</span>
+              <span class="ds-row__side"><span class="ds-count">9<span class="ds-sr">건</span></span><span class="ds-badge" data-status="waiting"><svg class="ds-icon" aria-hidden="true"><use href="#i-waiting"/></svg>막힘</span></span>
+            </button>
+            <ul class="ds-group__members" id="group-1" hidden>
+              <li><span>acme/shop</span><span class="ds-caption">세션 4개</span></li>
+              <li><span>acme/billing-api</span><span class="ds-caption">세션 3개</span></li>
+              <li><span>acme/docs</span><span class="ds-caption">세션 2개</span></li>
+            </ul>
+            <div class="ds-group__bar"><span class="ds-caption">저장소 호스트에 로그인돼 있지 않습니다. 로그인하면 9건이 함께 풀립니다.</span><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">로그인 방법 보기</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="tabs">
+      <h2 class="ds-title">탭</h2>
+      <p>탭은 같은 목록을 거르는 필터입니다. 좌우 화살표 키로 옮기고, 개수는 그 탭에서 사람이 할 일의 수만 셉니다.</p>
+      <div class="g-demo">
+        <div class="ds-tabs" role="tablist" aria-label="출처">
+          <button type="button" class="ds-tab" role="tab" id="tab-all" aria-selected="true" aria-controls="panel-all">전체 <span class="ds-count" data-status="attention">3<span class="ds-sr">건, 사람 필요</span></span></button>
+          <button type="button" class="ds-tab" role="tab" id="tab-work" aria-selected="false" aria-controls="panel-work" tabindex="-1">작업 <span class="ds-count" data-status="attention">2<span class="ds-sr">건, 사람 필요</span></span></button>
+          <button type="button" class="ds-tab" role="tab" id="tab-harness" aria-selected="false" aria-controls="panel-harness" tabindex="-1">하네스 동작</button>
+          <button type="button" class="ds-tab" role="tab" id="tab-autofix" aria-selected="false" aria-controls="panel-autofix" tabindex="-1">자동 수정 <span class="ds-count" data-status="attention">1<span class="ds-sr">건, 사람 필요</span></span></button>
+        </div>
+        <div class="ds-tabpanel" role="tabpanel" id="panel-all" aria-labelledby="tab-all" tabindex="0">전체: 사람이 할 일 3건, 진행 중 4건.</div>
+        <div class="ds-tabpanel" role="tabpanel" id="panel-work" aria-labelledby="tab-work" tabindex="0" hidden>작업: 답을 기다리는 세션 2개.</div>
+        <div class="ds-tabpanel" role="tabpanel" id="panel-harness" aria-labelledby="tab-harness" tabindex="0" hidden>
+          <div class="ds-empty"><p>지금 도는 하네스 동작이 없습니다.</p><p class="ds-caption">자동 개선과 동기화는 정해진 주기에만 돕니다.</p></div>
+        </div>
+        <div class="ds-tabpanel" role="tabpanel" id="panel-autofix" aria-labelledby="tab-autofix" tabindex="0" hidden>자동 수정: 검토할 PR 1건.</div>
+      </div>
+    </section>
+
+    <section class="g-section" id="setting">
+      <h2 class="ds-title">설정 행 · 알림 줄</h2>
+      <p>값을 바꾸면 "기본값과 다름" 표시가 붙고, 기본값으로 돌리면 사라집니다. 같은 경고는 행마다 되풀이하지 않고 화면 위에 한 줄로 둡니다.</p>
+      <div class="g-demo">
+        <div class="ds-notice" data-status="attention" role="status" id="limit-notice">
+          <svg class="ds-icon" aria-hidden="true"><use href="#i-attention"/></svg>
+          <p>하루 상한과 실행당 예산이 모두 "제한 없음"입니다. 비용 상한이 없으니 둘 중 하나는 정해 두세요.</p>
+        </div>
+        <div class="ds-rows">
+          <div class="ds-setting" data-default="off">
+            <div><div class="ds-setting__name"><span id="set-1">무인 실행</span><span class="ds-badge ds-setting__changed"><svg class="ds-icon" aria-hidden="true"><use href="#i-info"/></svg>기본값과 다름</span></div><p class="ds-setting__desc">정해진 주기마다 새 에러를 찾아 수정 PR을 엽니다.</p></div>
+            <div class="ds-setting__control"><div class="ds-segment" role="radiogroup" aria-labelledby="set-1"><button type="button" role="radio" aria-checked="true" data-value="off">끔</button><button type="button" role="radio" aria-checked="false" data-value="on">켬</button></div></div>
+          </div>
+          <div class="ds-setting" data-default="5" data-changed="true" id="set-daily">
+            <div><div class="ds-setting__name"><span id="set-2">하루 실행 상한</span><span class="ds-badge ds-setting__changed"><svg class="ds-icon" aria-hidden="true"><use href="#i-info"/></svg>기본값과 다름</span></div><p class="ds-setting__desc">하루에 시작할 수 있는 수정 실행 수입니다. 기본값 5.</p></div>
+            <div class="ds-setting__control"><div class="ds-segment" role="radiogroup" aria-labelledby="set-2"><button type="button" role="radio" aria-checked="false" data-value="3">3</button><button type="button" role="radio" aria-checked="false" data-value="5">5</button><button type="button" role="radio" aria-checked="false" data-value="10">10</button><button type="button" role="radio" aria-checked="true" data-value="unlimited">제한 없음</button></div></div>
+          </div>
+          <div class="ds-setting" data-default="2" data-changed="true" id="set-budget">
+            <div><div class="ds-setting__name"><span id="set-3">실행당 예산</span><span class="ds-badge ds-setting__changed"><svg class="ds-icon" aria-hidden="true"><use href="#i-info"/></svg>기본값과 다름</span></div><p class="ds-setting__desc">수정 실행 한 번이 쓸 수 있는 금액(USD)입니다. 기본값 2.</p></div>
+            <div class="ds-setting__control"><div class="ds-segment" role="radiogroup" aria-labelledby="set-3"><button type="button" role="radio" aria-checked="false" data-value="1">1</button><button type="button" role="radio" aria-checked="false" data-value="2">2</button><button type="button" role="radio" aria-checked="false" data-value="5">5</button><button type="button" role="radio" aria-checked="true" data-value="unlimited">제한 없음</button></div></div>
+          </div>
+        </div>
+        <div class="ds-notice" role="status"><svg class="ds-icon" aria-hidden="true"><use href="#i-info"/></svg><p>정보 알림 줄: 설정은 이 컴퓨터에만 저장됩니다.</p></div>
+        <div class="ds-notice" data-status="danger" role="alert"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg><p>설정을 저장하지 못했습니다. 설정 파일에 쓸 권한이 없습니다. 권한을 확인한 뒤 다시 저장하세요.</p></div>
+      </div>
+    </section>
+
+    <section class="g-section" id="state">
+      <h2 class="ds-title">빈 · 로딩 · 오류</h2>
+      <p>빈 화면은 왜 비었는지와 다음에 할 일을 말합니다. 로딩은 실제 내용과 같은 뼈대로, 잠깐 뒤에 나타납니다. 오류는 원인 다음에 할 수 있는 일을 말합니다.</p>
+      <div class="g-two">
+        <div class="g-demo">
+          <h3 class="ds-label">빈 상태</h3>
+          <div class="ds-empty"><p>지금 할 일이 없습니다.</p><p class="ds-caption">권한 요청이나 답을 기다리는 세션이 생기면 여기에 뜹니다.</p></div>
+          <div class="ds-empty"><p>아직 자동 수정 대상 저장소가 없습니다.</p><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">저장소 연결하기</button></div>
+        </div>
+        <div class="g-demo">
+          <h3 class="ds-label">로딩 (뼈대)</h3>
+          <span class="ds-sr" role="status" id="loading-status">불러오는 중</span>
+          <div id="loading-demo" class="ds-stack" aria-busy="true">
+            <div class="ds-skeleton" aria-hidden="true"><span class="ds-skeleton__line ds-skeleton__line--short"></span><span class="ds-skeleton__line ds-skeleton__line--title"></span><span class="ds-skeleton__line"></span></div>
+            <div class="ds-skeleton" aria-hidden="true"><span class="ds-skeleton__line ds-skeleton__line--short"></span><span class="ds-skeleton__line ds-skeleton__line--title"></span><span class="ds-skeleton__line"></span></div>
+          </div>
+          <button type="button" class="ds-btn ds-btn--sm" id="loading-toggle">불러오기 끝난 모습 보기</button>
+        </div>
+        <div class="g-demo">
+          <h3 class="ds-label">오류</h3>
+          <div class="ds-error" role="alert">
+            <p class="ds-error__title"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg>작업 목록을 불러오지 못했습니다</p>
+            <p>보드 서버가 응답하지 않습니다. 서버가 꺼졌을 수 있습니다.</p>
+            <div class="ds-cluster"><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">다시 불러오기</button><span class="ds-caption">계속 안 되면 터미널에서 보드를 다시 여세요.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="g-section" id="toast">
+      <h2 class="ds-title">토스트</h2>
+      <p>방금 한 동작의 결과를 알립니다. 성공은 5초 뒤 사라지고, 실패는 닫을 때까지 남습니다.</p>
+      <div class="g-demo">
+        <div class="ds-cluster">
+          <button type="button" class="ds-btn" data-toast="success">성공 토스트 띄우기</button>
+          <button type="button" class="ds-btn" data-toast="danger">실패 토스트 띄우기</button>
+        </div>
+        <div class="ds-toast" data-status="success"><svg class="ds-icon" aria-hidden="true"><use href="#i-success"/></svg><p>하루 실행 상한을 10으로 바꿨습니다.</p><button type="button" class="ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon" aria-label="알림 닫기"><svg class="ds-icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+        <div class="ds-toast" data-status="danger"><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg><p>세션에 답을 보내지 못했습니다. 세션이 이미 끝났습니다.</p><button type="button" class="ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon" aria-label="알림 닫기"><svg class="ds-icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+      </div>
+    </section>
+
+    <section class="g-section g-section--wide" id="layout">
+      <h2 class="ds-title">목록 + 서랍</h2>
+      <p>카드를 열면 서랍이 옆에 서고 목록은 한 줄로 접힙니다(카드가 좁아지지 않습니다). 좁은 화면에서는 서랍이 배경을 가리고 위에 뜹니다. 포커스는 서랍 제목으로 갔다가, 닫으면 연 카드로 돌아옵니다. Esc로 닫습니다.</p>
+      <div class="ds-split" id="split" data-drawer="closed">
+        <div class="ds-stack">
+          <div class="ds-columns">
+            <section class="ds-stack" aria-labelledby="col-1">
+              <h3 class="ds-label ds-cluster" id="col-1"><span class="ds-dot" data-status="attention"></span>지금 할 일 <span class="ds-count" data-status="attention">2<span class="ds-sr">건</span></span></h3>
+              <article class="ds-card ds-card--interactive">
+                <div class="ds-card__meta"><span class="ds-badge" data-status="attention"><svg class="ds-icon" aria-hidden="true"><use href="#i-attention"/></svg>권한 요청</span><span class="ds-chip">작업 세션</span><span>acme/shop</span><span class="ds-card__when">2분 전</span></div>
+                <h4 class="ds-card__title"><button type="button" class="ds-card__open" data-drawer-title="배포 스크립트 실행 허용 여부" data-drawer-sub="acme/shop · 작업 세션 · 2분 전">배포 스크립트 실행 허용 여부</button></h4>
+                <p class="ds-card__body">세션이 스테이징 배포 명령을 실행하려고 합니다.</p>
+                <div class="ds-card__actions"><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">허용</button><button type="button" class="ds-btn ds-btn--sm">거부</button></div>
+              </article>
+              <article class="ds-card ds-card--interactive">
+                <div class="ds-card__meta"><span class="ds-badge" data-status="attention"><svg class="ds-icon" aria-hidden="true"><use href="#i-attention"/></svg>PR 검토</span><span class="ds-chip">자동 수정</span><span>acme/shop</span><span class="ds-card__when">12분 전</span></div>
+                <h4 class="ds-card__title"><button type="button" class="ds-card__open" data-drawer-title="결제 승인 응답이 30초 넘게 없음" data-drawer-sub="acme/shop · 자동 수정 · 12분 전" data-drawer-raw="TimeoutError: upstream did not respond within 30000ms&#10;  at approvePayment (payment/approve.ts:88)">결제 승인 응답이 30초 넘게 없음</button></h4>
+                <p class="ds-card__body">수정 PR #132가 열렸습니다. 병합 전에 검토가 필요합니다.</p>
+                <div class="ds-card__actions"><a class="ds-btn ds-btn--sm ds-btn--primary" href="#layout">PR 검토하기</a></div>
+              </article>
+            </section>
+            <section class="ds-stack" aria-labelledby="col-2">
+              <h3 class="ds-label ds-cluster" id="col-2"><span class="ds-dot" data-status="progress"></span>진행 중 <span class="ds-count">2<span class="ds-sr">건</span></span></h3>
+              <article class="ds-card ds-card--interactive">
+                <div class="ds-card__meta"><span class="ds-badge" data-status="progress"><svg class="ds-icon" aria-hidden="true"><use href="#i-progress"/></svg>진행 중</span><span class="ds-chip">작업 세션</span><span>acme/billing-api</span><span class="ds-card__when">방금</span></div>
+                <h4 class="ds-card__title"><button type="button" class="ds-card__open" data-drawer-title="환불 금액 계산을 소수점 둘째 자리로 맞추기" data-drawer-sub="acme/billing-api · 작업 세션 · 방금">환불 금액 계산을 소수점 둘째 자리로 맞추기</button></h4>
+                <p class="ds-card__body">테스트 12개 중 9개 통과. 남은 3개를 고치는 중입니다.</p>
+              </article>
+              <article class="ds-card ds-card--interactive">
+                <div class="ds-card__meta"><span class="ds-badge" data-status="progress"><svg class="ds-icon" aria-hidden="true"><use href="#i-progress"/></svg>수정 중</span><span class="ds-chip">자동 수정</span><span>acme/shop</span><span class="ds-card__when">5분 전</span></div>
+                <h4 class="ds-card__title"><button type="button" class="ds-card__open" data-drawer-title="로그인 직후 프로필 사진이 안 보임" data-drawer-sub="acme/shop · 자동 수정 · 5분 전">로그인 직후 프로필 사진이 안 보임</button></h4>
+                <p class="ds-card__body">원인을 찾는 중입니다. 감지 7건.</p>
+              </article>
+            </section>
+            <section class="ds-stack" aria-labelledby="col-3">
+              <h3 class="ds-label ds-cluster" id="col-3"><span class="ds-dot" data-status="waiting"></span>대기 · 막힘 <span class="ds-count">10<span class="ds-sr">건</span></span></h3>
+              <div class="ds-group">
+                <button type="button" class="ds-row__head" aria-expanded="false" aria-controls="group-2">
+                  <svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+                  <span class="ds-row__title">PR 상태를 확인할 수 없어 멈춤</span>
+                  <span class="ds-row__side"><span class="ds-count">9<span class="ds-sr">건</span></span><span class="ds-badge" data-status="waiting"><svg class="ds-icon" aria-hidden="true"><use href="#i-waiting"/></svg>막힘</span></span>
+                </button>
+                <ul class="ds-group__members" id="group-2" hidden>
+                  <li><span>acme/shop</span><span class="ds-caption">세션 4개</span></li>
+                  <li><span>acme/billing-api</span><span class="ds-caption">세션 3개</span></li>
+                  <li><span>acme/docs</span><span class="ds-caption">세션 2개</span></li>
+                </ul>
+                <div class="ds-group__bar"><span class="ds-caption">저장소 호스트 로그인이 필요합니다.</span><button type="button" class="ds-btn ds-btn--sm ds-btn--primary">로그인 방법 보기</button></div>
+              </div>
+              <article class="ds-card ds-card--interactive">
+                <div class="ds-card__meta"><span class="ds-badge" data-status="waiting"><svg class="ds-icon" aria-hidden="true"><use href="#i-waiting"/></svg>대기</span><span class="ds-chip">하네스 동작</span><span>acme/docs</span><span class="ds-card__when">1시간 전</span></div>
+                <h4 class="ds-card__title"><button type="button" class="ds-card__open" data-drawer-title="자동 개선 다음 실행 대기" data-drawer-sub="acme/docs · 하네스 동작 · 1시간 전">자동 개선 다음 실행 대기</button></h4>
+                <p class="ds-card__body">다음 실행은 오늘 18:00입니다.</p>
+              </article>
+            </section>
+            <section class="ds-stack" aria-labelledby="col-4">
+              <h3 class="ds-label ds-cluster" id="col-4"><span class="ds-dot" data-status="success"></span>완료 <span class="ds-count">3<span class="ds-sr">건</span></span></h3>
+              <div class="ds-group">
+                <button type="button" class="ds-row__head" aria-expanded="false" aria-controls="group-3">
+                  <svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+                  <span class="ds-row__title">끝난 일 3건</span>
+                </button>
+                <ul class="ds-group__members" id="group-3" hidden>
+                  <li><span>설치 안내 문서의 깨진 링크 4개 고침</span><span class="ds-caption">acme/docs · 어제</span></li>
+                  <li><span>검색어에 이모지를 넣으면 500 오류</span><span class="ds-caption">acme/shop · 어제</span></li>
+                  <li><span>장바구니 수량 0 허용</span><span class="ds-caption">acme/shop · 2일 전</span></li>
+                </ul>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="ds-backdrop" id="backdrop"></div>
+        <div class="ds-drawer" id="drawer" role="dialog" aria-labelledby="drawer-title" hidden>
+          <div class="ds-drawer__head">
+            <div><h3 class="ds-title ds-drawer__title" id="drawer-title" tabindex="-1">제목</h3><span class="ds-caption" id="drawer-sub"></span></div>
+            <button type="button" class="ds-btn ds-btn--sm ds-btn--icon" id="drawer-close" aria-label="상세 닫기"><svg class="ds-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+          </div>
+          <div class="ds-drawer__body">
+            <dl class="ds-kv"><dt>상태</dt><dd id="drawer-status"></dd><dt>저장소</dt><dd id="drawer-repo"></dd><dt>출처</dt><dd id="drawer-source"></dd></dl>
+            <div class="ds-stack">
+              <h4 class="ds-label">요약</h4>
+              <p id="drawer-summary"></p>
+            </div>
+            <div class="ds-stack" id="drawer-raw-box">
+              <h4 class="ds-label">원문</h4>
+              <pre class="ds-pre"><code id="drawer-raw"></code></pre>
+            </div>
+          </div>
+          <div class="ds-drawer__foot"><button type="button" class="ds-btn">로그 열기</button><button type="button" class="ds-btn ds-btn--primary">세션으로 열기</button></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="ds-toasts" id="toasts"></div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var $ = function (id) { return document.getElementById(id); };
+  var css = function (name) { return getComputedStyle(root).getPropertyValue(name).trim(); };
+  var el = function (tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  var icon = function (id) { var s = document.createElementNS($("split").querySelector("svg").namespaceURI, "svg"); s.setAttribute("class", "ds-icon"); s.setAttribute("aria-hidden", "true"); var u = document.createElementNS(s.namespaceURI, "use"); u.setAttribute("href", "#" + id); s.appendChild(u); return s; };
+
+  // 토큰 견본: 이름은 고정, 값은 지금 테마에서 계산된 값을 읽어 보여 준다(값을 여기에 다시 적지 않는다).
+  var swatchNames = ["--color-surface-page", "--color-surface-sunken", "--color-surface", "--color-surface-overlay", "--color-surface-hover", "--color-surface-selected",
+    "--color-text", "--color-text-muted", "--color-border", "--color-border-control", "--color-accent", "--color-accent-hover", "--color-focus"];
+  var statuses = [["attention", "사람 필요"], ["progress", "진행"], ["waiting", "대기"], ["success", "완료"], ["danger", "실패"], ["info", "정보"]];
+  var spaces = ["--space-1", "--space-2", "--space-3", "--space-4", "--space-5", "--space-6", "--space-8", "--space-12"];
+  var radii = ["--radius-sm", "--radius-md", "--radius-lg", "--radius-full"];
+  function paint() {
+    var box = $("swatches"); box.textContent = "";
+    swatchNames.forEach(function (name) {
+      var w = el("div", "g-swatch"), chip = el("i"), txt = el("span");
+      chip.style.background = "var(" + name + ")";
+      txt.append(el("code", null, name), el("span", "ds-caption ds-mono", css(name)));
+      w.append(chip, txt); box.append(w);
+    });
+    var sb = $("statuses"); sb.textContent = "";
+    statuses.forEach(function (s) {
+      var k = "--color-" + s[0], card = el("div", "g-status"), head = el("b");
+      card.style.background = "var(" + k + "-subtle)"; card.style.borderColor = "var(" + k + "-border)"; card.style.color = "var(--color-text)";
+      head.style.color = "var(" + k + ")"; head.append(icon("i-" + s[0]), s[1]);
+      var solid = el("span", "g-solid", "채운 면 12"); solid.style.background = "var(" + k + "-solid)";
+      card.append(head, el("code", null, k), el("span", "ds-caption ds-mono", css(k) + " / " + css(k + "-subtle")), solid); sb.append(card);
+    });
+    var sp = $("spaces"); sp.textContent = "";
+    spaces.forEach(function (name) { var r = el("div"), bar = el("i"); bar.style.width = "var(" + name + ")"; r.append(bar, el("code", null, name), el("span", "ds-caption", css(name))); sp.append(r); });
+    var rd = $("radii"); rd.textContent = "";
+    radii.forEach(function (name) { var r = el("div"), box2 = el("i"); box2.style.borderRadius = "var(" + name + ")"; r.append(box2, el("code", null, name)); rd.append(r); });
+  }
+
+  // 여러 값 중 하나(radiogroup): 누르거나 화살표 키로 고른다. 포커스는 고른 값 하나에만 선다.
+  function setupSegment(group, onChange) {
+    var items = Array.prototype.slice.call(group.querySelectorAll('[role="radio"]'));
+    function select(item, focus) {
+      items.forEach(function (i) { var on = i === item; i.setAttribute("aria-checked", String(on)); i.tabIndex = on ? 0 : -1; });
+      if (focus) item.focus();
+      if (onChange) onChange(item.getAttribute("data-value"));
+    }
+    items.forEach(function (item, index) {
+      item.tabIndex = item.getAttribute("aria-checked") === "true" ? 0 : -1;
+      item.addEventListener("click", function () { select(item, false); });
+      item.addEventListener("keydown", function (e) {
+        var next = e.key === "ArrowRight" || e.key === "ArrowDown" ? index + 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? index - 1
+          : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : null;
+        if (next === null) return;
+        e.preventDefault();
+        select(items[(next + items.length) % items.length], true);
+      });
+    });
+    return select.bind(null);
+  }
+
+  // 테마: 시스템 / 라이트 / 다크. 고른 값을 저장하고(시스템이면 지운다) 뿌리 속성으로 적용한다.
+  var themeGroup = $("theme");
+  var current = root.getAttribute("data-theme") || "system";
+  Array.prototype.forEach.call(themeGroup.querySelectorAll('[role="radio"]'), function (b) { b.setAttribute("aria-checked", String(b.getAttribute("data-value") === current)); });
+  setupSegment(themeGroup, function (value) {
+    // 테마를 바꾸는 순간에는 전환을 꺼서 면마다 색이 따로 번지지 않게 한다.
+    root.classList.add("ds-theme-switching");
+    if (value === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", value);
+    void root.offsetWidth;
+    requestAnimationFrame(function () { root.classList.remove("ds-theme-switching"); });
+    try { if (value === "system") localStorage.removeItem("ds-theme"); else localStorage.setItem("ds-theme", value); } catch (e) { /* 저장 못 해도 이번 화면에는 적용된다 */ }
+    paint();
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", paint);
+  }
+  paint();
+
+  // 설정 행: 고른 값이 기본값과 다를 때만 표시를 붙인다.
+  Array.prototype.forEach.call(document.querySelectorAll(".ds-setting"), function (row) {
+    setupSegment(row.querySelector('[role="radiogroup"]'), function (value) {
+      row.setAttribute("data-changed", String(value !== row.getAttribute("data-default")));
+      syncLimitNotice();
+    });
+  });
+  // 알림 줄은 실제 값과 같아야 한다: 두 상한이 모두 "제한 없음"일 때만 보인다.
+  function syncLimitNotice() {
+    var unlimited = function (id) { return $(id).querySelector('[aria-checked="true"]').getAttribute("data-value") === "unlimited"; };
+    $("limit-notice").hidden = !(unlimited("set-daily") && unlimited("set-budget"));
+  }
+  syncLimitNotice();
+
+  // 펼치기: button[aria-expanded][aria-controls] 하나로 줄·묶음을 다 다룬다.
+  document.addEventListener("click", function (e) {
+    var head = e.target.closest("button[aria-expanded][aria-controls]");
+    if (!head) return;
+    var open = head.getAttribute("aria-expanded") !== "true";
+    head.setAttribute("aria-expanded", String(open));
+    $(head.getAttribute("aria-controls")).hidden = !open;
+  });
+
+  // 필터 칩
+  document.addEventListener("click", function (e) {
+    var chip = e.target.closest("button.ds-chip[aria-pressed]");
+    if (chip) chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+  });
+
+  // 탭: 좌우 화살표·Home·End 로 옮기고, 고른 탭만 Tab 순서에 든다.
+  Array.prototype.forEach.call(document.querySelectorAll('[role="tablist"]'), function (list) {
+    var tabs = Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));
+    function select(tab, focus) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", String(on)); t.tabIndex = on ? 0 : -1;
+        $(t.getAttribute("aria-controls")).hidden = !on;
+      });
+      if (focus) tab.focus();
+    }
+    tabs.forEach(function (tab, index) {
+      tab.addEventListener("click", function () { select(tab, false); });
+      tab.addEventListener("keydown", function (e) {
+        var next = e.key === "ArrowRight" ? index + 1 : e.key === "ArrowLeft" ? index - 1 : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : null;
+        if (next === null) return;
+        e.preventDefault();
+        select(tabs[(next + tabs.length) % tabs.length], true);
+      });
+    });
+  });
+
+  // 서랍: 열면 제목으로 포커스, 닫으면 연 카드로. Esc 로 닫는다. 좁은 폭(배경 가림)에서는 Tab 이 서랍 안에서 돈다.
+  var split = $("split"), drawer = $("drawer"), opener = null;
+  var narrowQuery = window.matchMedia ? window.matchMedia("(max-width: 1023px)") : null;
+  var narrow = function () { return !!narrowQuery && narrowQuery.matches; };
+  function syncModal() {
+    var modal = !drawer.hidden && narrow();
+    drawer.setAttribute("aria-modal", String(modal));
+    document.body.classList.toggle("ds-lock", modal);
+  }
+  function unmark(button) {
+    button.closest(".ds-card").removeAttribute("data-selected");
+    button.removeAttribute("aria-current");
+  }
+  function openDrawer(button) {
+    if (opener) unmark(opener);
+    opener = button;
+    var card = button.closest(".ds-card");
+    card.setAttribute("data-selected", "true");
+    button.setAttribute("aria-current", "true");
+    var sub = button.getAttribute("data-drawer-sub").split(" · ");
+    $("drawer-title").textContent = button.getAttribute("data-drawer-title");
+    $("drawer-sub").textContent = button.getAttribute("data-drawer-sub");
+    $("drawer-status").textContent = "";
+    $("drawer-status").append(card.querySelector(".ds-badge").cloneNode(true));
+    $("drawer-repo").textContent = sub[0];
+    $("drawer-source").textContent = sub[1];
+    $("drawer-summary").textContent = card.querySelector(".ds-card__body").textContent;
+    var raw = button.getAttribute("data-drawer-raw");
+    $("drawer-raw-box").hidden = !raw;
+    $("drawer-raw").textContent = raw || "";
+    drawer.hidden = false;
+    split.setAttribute("data-drawer", "open");
+    syncModal();
+    $("drawer-title").focus();
+  }
+  function closeDrawer() {
+    if (drawer.hidden) return;
+    drawer.hidden = true;
+    split.setAttribute("data-drawer", "closed");
+    syncModal();
+    if (opener) { unmark(opener); opener.focus(); opener = null; }
+  }
+  if (narrowQuery && narrowQuery.addEventListener) narrowQuery.addEventListener("change", syncModal);
+  split.addEventListener("click", function (e) {
+    var button = e.target.closest(".ds-card__open[data-drawer-title]");
+    if (button) openDrawer(button);
+  });
+  $("drawer-close").addEventListener("click", closeDrawer);
+  $("backdrop").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { closeDrawer(); return; }
+    if (e.key !== "Tab" || drawer.hidden || !narrow()) return;
+    // 배경을 가린 동안 Tab 은 서랍과 토스트 안에서만 돈다(토스트는 서랍 위에 떠 있어 닫을 수 있어야 한다).
+    var focusable = Array.prototype.slice.call(drawer.querySelectorAll("a[href], button:not([disabled])"))
+      .concat(Array.prototype.slice.call($("toasts").querySelectorAll("button")));
+    var first = focusable[0], last = focusable[focusable.length - 1], active = document.activeElement;
+    if (focusable.indexOf(active) < 0 && active !== $("drawer-title")) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && (active === first || active === $("drawer-title"))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+  });
+
+  // 토스트: 성공은 5초 뒤 사라지고, 실패는 닫을 때까지 남는다(role=alert 로 바로 읽힌다).
+  function toast(status, text) {
+    var t = el("div", "ds-toast"), close = el("button", "ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon");
+    var origin = document.activeElement, timer = null;
+    function dismiss() { var had = t.contains(document.activeElement); t.remove(); if (had && origin && origin.focus) origin.focus(); }
+    function arm() { if (status !== "danger") timer = setTimeout(dismiss, 5000); }
+    function hold() { clearTimeout(timer); }
+    t.setAttribute("data-status", status); t.setAttribute("role", status === "danger" ? "alert" : "status");
+    close.type = "button"; close.setAttribute("aria-label", "알림 닫기"); close.append(icon("i-close"));
+    close.addEventListener("click", dismiss);
+    // 읽는 동안(마우스를 올리거나 포커스가 있는 동안)에는 사라지지 않는다.
+    t.addEventListener("mouseenter", hold); t.addEventListener("focusin", hold);
+    t.addEventListener("mouseleave", arm); t.addEventListener("focusout", arm);
+    t.append(icon(status === "danger" ? "i-danger" : "i-success"), el("p", null, text), close);
+    $("toasts").append(t);
+    arm();
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-toast]");
+    if (!b) return;
+    if (b.getAttribute("data-toast") === "danger") toast("danger", "세션에 답을 보내지 못했습니다. 세션이 이미 끝났습니다.");
+    else toast("success", "하루 실행 상한을 10으로 바꿨습니다.");
+  });
+  document.addEventListener("click", function (e) {
+    var close = e.target.closest('.g-demo > .ds-toast [aria-label="알림 닫기"]');
+    if (close) close.closest(".ds-toast").hidden = true;
+  });
+
+  // 로딩 → 내용: 뼈대와 실제 카드가 같은 자리·같은 뼈대를 쓴다.
+  $("loading-toggle").addEventListener("click", function () {
+    var box = $("loading-demo");
+    box.setAttribute("aria-busy", "false");
+    $("loading-status").textContent = "불러왔습니다";
+    box.textContent = "";
+    ["설치 안내 문서의 깨진 링크 4개 고침", "검색어에 이모지를 넣으면 500 오류"].forEach(function (title) {
+      var card = el("article", "ds-card"), meta = el("div", "ds-card__meta"), badge = el("span", "ds-badge");
+      badge.setAttribute("data-status", "success"); badge.append(icon("i-success"), "완료");
+      meta.append(badge, el("span", null, "acme/docs"));
+      card.append(meta, el("h4", "ds-card__title", title), el("p", "ds-card__body", "PR이 병합됐습니다."));
+      box.append(card);
+    });
+    this.disabled = true;
+  });
+
+  // 캡처·검토용: ?drawer=1 이면 두 번째 카드의 서랍을 연 채로 시작한다.
+  if (new URLSearchParams(location.search).get("drawer")) {
+    var second = split.querySelectorAll(".ds-card__open[data-drawer-title]")[1];
+    if (second) openDrawer(second);
+  }
+})();
+</script>
+</body>
+</html>

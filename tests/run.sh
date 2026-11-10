@@ -7631,5 +7631,79 @@ assert_contains "$BOARD_AFSET" "afRepoRow" "the autofix settings tab shows per-r
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
 
+# 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
+# 규칙 문서·토큰·공용 부품·기준 화면이 있고, design-audit가 읽는 고정 섹션 순서를 지킨다.
+DS="$ROOT/docs/design-system"
+DS_DOC="$ROOT/docs/design-system.md"
+assert_file "$DS_DOC"
+for DS_F in tokens.css components.css contrast-pairs.tsv reference.html; do assert_file "$DS/$DS_F"; done
+assert_eq "## 메타|## 원칙|## 레이아웃|## 색과 상태|## 타이포그래피|## 컴포넌트|## 형제 목록|## 문구|## 모션|## 접근성|## 반응형|## 토큰 변경 규칙|## 결정 기록|" \
+  "$(grep -E '^## ' "$DS_DOC" | sed -E 's/ \(.*\)$//' | head -13 | tr '\n' '|')" "design rule document keeps the fixed sections in order"
+# 값은 토큰 파일에만 둔다: 문서에는 색 값이 없고, 문서가 부르는 토큰은 전부 토큰 파일에 있다.
+assert_eq "0" "$(grep -c -E '#[0-9a-fA-F]{6}([^0-9a-zA-Z]|$)' "$DS_DOC" || true)" "design rule document carries no color literal"
+DS_TOKENS="$(<"$DS/tokens.css")"
+DS_TICK="$(printf '\140')"
+DS_DOC_TOKENS="$(grep -o -E "${DS_TICK}--[a-z0-9-]+${DS_TICK}" "$DS_DOC" | tr -d "$DS_TICK" | sort -u)"
+[[ -n "$DS_DOC_TOKENS" ]] || fail "design rule document names tokens"
+while IFS= read -r DS_TOK; do
+  assert_contains "$DS_TOKENS" "  $DS_TOK: " "token named in the rule document exists in tokens.css"
+done <<<"$DS_DOC_TOKENS"
+# 레퍼런스에서 가져온 것은 출처와 함께 적는다.
+for DS_REF in linear.app sentry vercel posthog raycast supabase; do
+  assert_contains "$(<"$DS_DOC")" "$DS_REF" "design rule document records the $DS_REF reference"
+done
+pass "design system: rule document sections, token names, references"
+
+# 단일 HTML에 넣은 토큰·부품 사본은 원본과 바이트가 같아야 한다. 원본만 고치면 check가 잡고 sync가 맞춘다.
+ds_sh() { bash "$ROOT/scripts/design-system.sh" "$@"; }
+ds_sh check >/dev/null || fail "inlined design tokens and components match their sources"
+for DS_CONSUMER in docs/design-system/reference.html scripts/board/template.html skills/harness-impact/report-template.html; do
+  assert_contains "$(<"$ROOT/$DS_CONSUMER")" "ds:tokens:start" "$DS_CONSUMER carries the shared tokens"
+done
+assert_contains "$(<"$DS/reference.html")" "ds:components:start" "reference screen carries the shared components"
+DS_T="$TEST_TMP/design-system"
+mkdir -p "$DS_T/docs/design-system" "$DS_T/scripts/board" "$DS_T/skills/harness-impact"
+cp "$DS/tokens.css" "$DS/components.css" "$DS/contrast-pairs.tsv" "$DS/reference.html" "$DS_T/docs/design-system/"
+cp "$ROOT/scripts/board/template.html" "$DS_T/scripts/board/"
+cp "$ROOT/skills/harness-impact/report-template.html" "$DS_T/skills/harness-impact/"
+printf ':root {\n  --space-99: 1px;\n}\n' >>"$DS_T/docs/design-system/tokens.css"
+if ds_sh check --root "$DS_T" >/dev/null 2>&1; then fail "check fails when a source changed but the copies did not"; fi
+ds_sh sync --root "$DS_T" >/dev/null
+ds_sh check --root "$DS_T" >/dev/null || fail "sync brings the copies back in line"
+assert_contains "$(<"$DS_T/scripts/board/template.html")" "--space-99: 1px;" "sync writes the changed tokens into the board template"
+assert_contains "$(<"$DS_T/scripts/board/template.html")" "Harness Board" "sync keeps the rest of the board template"
+if ds_sh frob >/dev/null 2>&1; then fail "design-system.sh rejects an unknown command"; fi
+pass "design system: inlined copies stay byte-identical to tokens.css and components.css"
+
+# 대비는 눈대중이 아니라 계산으로 지킨다(WCAG 2.2 AA: 글자 4.5:1, UI 경계·포커스 3:1), 라이트·다크 따로.
+DS_CONTRAST="$(ds_sh contrast)" || fail "documented color pairs meet WCAG AA in every theme: $DS_CONTRAST"
+assert_contains "$DS_CONTRAST" "light" "contrast report covers the light theme"
+assert_contains "$DS_CONTRAST" "dark" "contrast report covers the dark theme"
+# 리뷰가 잡은 두 가지(채운 면 위 글자, 조작 요소 경계)는 검사 쌍에서 빠지면 안 된다.
+DS_PAIRS="$(<"$DS/contrast-pairs.tsv")"
+for DS_STATUS in attention progress waiting success danger info; do
+  assert_contains "$DS_PAIRS" "--color-text-on-solid	--color-$DS_STATUS-solid	4.5" "text on a filled $DS_STATUS surface is checked at 4.5:1"
+  assert_contains "$DS_PAIRS" "--color-$DS_STATUS	--color-$DS_STATUS-subtle	4.5" "$DS_STATUS text on its subtle background is checked at 4.5:1"
+done
+assert_contains "$DS_PAIRS" "--color-border-control	--color-surface	3" "control boundaries are checked at 3:1"
+assert_contains "$DS_PAIRS" "--color-focus	--color-surface	3" "the focus indicator is checked at 3:1"
+# 다크에서 채운 면 위 글자를 흰색으로 되돌리면(리뷰의 1.74:1 사례) 검사가 실패하고 토큰을 짚는다.
+sed 's/^\(  *--color-text-on-solid: \).*/\1#ffffff;/' "$DS/tokens.css" >"$DS_T/docs/design-system/tokens.css"
+DS_BAD="$(ds_sh contrast --root "$DS_T" 2>&1)" && fail "contrast check fails when text on a filled surface drops below 4.5:1"
+assert_contains "$DS_BAD" "--color-text-on-solid" "contrast failure names the token pair"
+pass "design system: computed contrast for every documented pair, light and dark"
+
+# 기준 화면은 오프라인 단일 HTML이다: 외부 자원 없이 부품과 상태를 전부 보여 준다.
+DS_REF_HTML="$(<"$DS/reference.html")"
+case "$DS_REF_HTML" in *"http://"*|*"https://"*|*"<link "*|*" src="*|*"@import"*) fail "reference screen loads nothing from outside the file" ;; esac
+for DS_PART in ds-btn ds-card ds-row ds-badge ds-chip ds-tabs ds-drawer ds-toast ds-empty ds-skeleton ds-error ds-group ds-setting 'aria-expanded' 'role="tablist"' 'data-theme' 'prefers-reduced-motion'; do
+  assert_contains "$DS_REF_HTML" "$DS_PART" "reference screen shows $DS_PART"
+done
+# 공개 저장소: 예시 데이터에 조직·개인 식별자를 넣지 않는다.
+if grep -rqiE 'midas|jobda|khb1122' "$DS" "$DS_DOC"; then fail "design system files carry organization-specific values"; fi
+# 토큰 적용: 보드의 채운 면 위 글자는 테마마다 대비가 맞는 토큰을 쓴다(흰색 고정 금지).
+case "$(<"$ROOT/scripts/board/template.html")" in *"color: #fff"*) fail "board filled surfaces use --color-text-on-solid, not fixed white" ;; esac
+pass "design system: offline reference screen with every shared part, no identifiers"
+
 printf '1..%d\n' "$TESTS"
 TESTS_FINISHED=1

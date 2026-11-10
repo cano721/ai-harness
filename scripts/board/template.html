@@ -6,17 +6,284 @@
 <title>Harness Board</title>
 <script>if (!new URLSearchParams(location.search).get("t")) { const m = document.createElement("meta"); m.httpEquiv = "refresh"; m.content = "60"; document.head.appendChild(m); }</script>
 <style>
+/* ds:tokens:start — docs/design-system/tokens.css 사본. 직접 고치지 말고 scripts/design-system.sh sync 로 맞춘다. */
+/* ai-harness 디자인 토큰 — 값의 단일 출처. 규칙은 docs/design-system.md 에 있다.
+   단일 HTML 화면(보드·리포트·기준 화면)에는 scripts/design-system.sh sync 가 이 파일을 그대로 넣는다.
+   계층: --palette-* (원시 값, 의미 토큰만 참조) → --color-* 등 의미 토큰(화면·부품이 쓰는 이름).
+   테마: OS 설정을 따르고, <html data-theme="light|dark"> 가 있으면 그쪽이 이긴다.
+   다크 블록 두 개(@media, [data-theme="dark"])는 같은 내용이어야 한다 — design-system.sh contrast 가 검사한다. */
 :root {
-  --bg: #f6f7f9; --side: #eef0f3; --panel: #ffffff; --line: #e3e6eb; --text: #1b1f24; --muted: #646d78;
-  --human: #c2410c; --human-bg: #fff4ec; --run: #2563eb; --queue: #7c3aed;
-  --block: #a16207; --done: #15803d; --chip: #eef0f3; --hover: #e4e7ec; --shadow: 0 1px 2px rgba(16,24,40,.06);
+  color-scheme: light;
+
+  /* 원시 값: 중립 16단(밝음 0 → 어두움 15), 상태 색상 5개 × 5단(1 옅은 면, 3 어두운 바탕용 글자, 5 경계, 7 밝은 바탕용 글자, 9 어두운 면) */
+  --palette-gray-0: #ffffff;
+  --palette-gray-1: #f5f7f9;
+  --palette-gray-2: #edf0f4;
+  --palette-gray-3: #e3e6eb;
+  --palette-gray-4: #d6d9de;
+  --palette-gray-5: #b9bec4;
+  --palette-gray-6: #8d939a;
+  --palette-gray-7: #7b8188;
+  --palette-gray-8: #5e646b;
+  --palette-gray-9: #484e55;
+  --palette-gray-10: #33383f;
+  --palette-gray-11: #23282e;
+  --palette-gray-12: #1a1e24;
+  --palette-gray-13: #13161b;
+  --palette-gray-14: #0b0f13;
+  --palette-gray-15: #06080b;
+  --palette-orange-1: #ffefe7;
+  --palette-orange-3: #eeac8b;
+  --palette-orange-5: #cc6526;
+  --palette-orange-7: #a44000;
+  --palette-orange-9: #3a1e0f;
+  --palette-blue-1: #eaf5ff;
+  --palette-blue-3: #97c1f7;
+  --palette-blue-5: #4087de;
+  --palette-blue-7: #1762b6;
+  --palette-blue-9: #15273e;
+  --palette-violet-1: #f4f1ff;
+  --palette-violet-3: #c1b3f2;
+  --palette-violet-5: #8e71d6;
+  --palette-violet-7: #6b4cae;
+  --palette-violet-9: #28213c;
+  --palette-green-1: #eaf8ec;
+  --palette-green-3: #94cf9f;
+  --palette-green-5: #2e9e52;
+  --palette-green-7: #007329;
+  --palette-green-9: #122d19;
+  --palette-red-1: #ffeeec;
+  --palette-red-3: #f2a7a1;
+  --palette-red-5: #d15c56;
+  --palette-red-7: #a83634;
+  --palette-red-9: #3b1c1a;
+
+  /* 면 */
+  --color-surface-page: var(--palette-gray-1);
+  --color-surface-sunken: var(--palette-gray-2);
+  --color-surface: var(--palette-gray-0);
+  --color-surface-overlay: var(--palette-gray-0);
+  --color-surface-hover: var(--palette-gray-3);
+  --color-surface-selected: var(--palette-gray-3);
+  --color-backdrop: rgba(6, 8, 11, 0.45);
+
+  /* 글자 */
+  --color-text: var(--palette-gray-14);
+  --color-text-muted: var(--palette-gray-8);
+  --color-text-on-accent: var(--palette-gray-0);
+  --color-text-on-solid: var(--palette-gray-0);
+
+  /* 경계: border 는 구획용(대비 요구 없음), border-control 은 조작 요소의 윤곽(3:1) */
+  --color-border: var(--palette-gray-4);
+  --color-border-control: var(--palette-gray-7);
+
+  /* 강조(주 동작·선택 표시)와 포커스 — 색이 아니라 명도로 구분한다 */
+  --color-accent: var(--palette-gray-14);
+  --color-accent-hover: var(--palette-gray-10);
+  --color-focus: var(--palette-gray-14);
+
+  /* 상태: 색 하나에 뜻 하나. 글자·아이콘 / 옅은 면 / 경계 / 채운 면 */
+  --color-attention: var(--palette-orange-7);
+  --color-attention-subtle: var(--palette-orange-1);
+  --color-attention-border: var(--palette-orange-5);
+  --color-attention-solid: var(--palette-orange-7);
+  --color-progress: var(--palette-blue-7);
+  --color-progress-subtle: var(--palette-blue-1);
+  --color-progress-border: var(--palette-blue-5);
+  --color-progress-solid: var(--palette-blue-7);
+  --color-waiting: var(--palette-violet-7);
+  --color-waiting-subtle: var(--palette-violet-1);
+  --color-waiting-border: var(--palette-violet-5);
+  --color-waiting-solid: var(--palette-violet-7);
+  --color-success: var(--palette-green-7);
+  --color-success-subtle: var(--palette-green-1);
+  --color-success-border: var(--palette-green-5);
+  --color-success-solid: var(--palette-green-7);
+  --color-danger: var(--palette-red-7);
+  --color-danger-subtle: var(--palette-red-1);
+  --color-danger-border: var(--palette-red-5);
+  --color-danger-solid: var(--palette-red-7);
+  --color-info: var(--palette-gray-8);
+  --color-info-subtle: var(--palette-gray-2);
+  --color-info-border: var(--palette-gray-7);
+  --color-info-solid: var(--palette-gray-8);
+
+  /* 간격: 4px 기준 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* 크기: 조작 요소 높이 사다리, 아이콘, 최소 누름 영역 */
+  --size-control-sm: 24px;
+  --size-control-md: 32px;
+  --size-icon: 16px;
+  --size-icon-sm: 14px;
+  --size-badge: 20px;
+  --size-dot: 8px;
+  --size-row: 40px;
+  --size-column-min: 280px;
+  --size-target-min: 24px;
+  --size-sidebar: 232px;
+  --size-drawer: 480px;
+  --size-content-max: 1100px;
+  --size-toast-max: 420px;
+  --size-viewport-min: 360px;
+
+  /* 글자: 역할마다 크기·줄 높이·굵기 한 벌 */
+  --font-family-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-family-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-size-heading: 1.25rem;
+  --font-line-heading: 1.35;
+  --font-weight-heading: 600;
+  --font-size-title: 0.9375rem;
+  --font-line-title: 1.45;
+  --font-weight-title: 600;
+  --font-size-body: 0.875rem;
+  --font-line-body: 1.6;
+  --font-weight-body: 400;
+  --font-size-label: 0.8125rem;
+  --font-line-label: 1.4;
+  --font-weight-label: 500;
+  --font-size-caption: 0.75rem;
+  --font-line-caption: 1.5;
+  --font-weight-caption: 400;
+  --font-size-code: 0.75rem;
+  --font-line-code: 1.5;
+  --font-weight-code: 400;
+  --font-weight-strong: 600;
+
+  /* 반경 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+
+  /* 그림자: 뜬 면에만 */
+  --shadow-overlay: 0 8px 28px rgba(6, 8, 11, 0.18);
+
+  /* 층 */
+  --z-sticky: 10;
+  --z-drawer: 30;
+  --z-popover: 40;
+  --z-toast: 50;
+
+  /* 모션 */
+  --motion-duration-short: 120ms;
+  --motion-duration-medium: 200ms;
+  --motion-duration-long: 280ms;
+  --motion-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-duration-loop: 1400ms;
+  --motion-delay-loading: 300ms;
+
+  /* 중단점: 미디어 쿼리는 변수를 못 쓰므로 components.css 가 같은 값을 직접 적는다 */
+  --breakpoint-narrow: 760px;
+  --breakpoint-wide: 1024px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0f1216; --side: #0b0d10; --panel: #171b21; --line: #272d36; --text: #e6e9ee; --muted: #9aa3ae;
-    --human: #fb923c; --human-bg: #2a1a10; --run: #60a5fa; --queue: #a78bfa;
-    --block: #facc15; --done: #4ade80; --chip: #222831; --hover: #1b2028; --shadow: none;
+    color-scheme: dark;
+    --color-surface-page: var(--palette-gray-14);
+    --color-surface-sunken: var(--palette-gray-15);
+    --color-surface: var(--palette-gray-13);
+    --color-surface-overlay: var(--palette-gray-12);
+    --color-surface-hover: var(--palette-gray-11);
+    --color-surface-selected: var(--palette-gray-11);
+    --color-backdrop: rgba(0, 0, 0, 0.6);
+    --color-text: var(--palette-gray-2);
+    --color-text-muted: var(--palette-gray-5);
+    --color-text-on-accent: var(--palette-gray-15);
+    --color-text-on-solid: var(--palette-gray-15);
+    --color-border: var(--palette-gray-9);
+    --color-border-control: var(--palette-gray-7);
+    --color-accent: var(--palette-gray-2);
+    --color-accent-hover: var(--palette-gray-0);
+    --color-focus: var(--palette-gray-0);
+    --color-attention: var(--palette-orange-3);
+    --color-attention-subtle: var(--palette-orange-9);
+    --color-attention-border: var(--palette-orange-5);
+    --color-attention-solid: var(--palette-orange-3);
+    --color-progress: var(--palette-blue-3);
+    --color-progress-subtle: var(--palette-blue-9);
+    --color-progress-border: var(--palette-blue-5);
+    --color-progress-solid: var(--palette-blue-3);
+    --color-waiting: var(--palette-violet-3);
+    --color-waiting-subtle: var(--palette-violet-9);
+    --color-waiting-border: var(--palette-violet-5);
+    --color-waiting-solid: var(--palette-violet-3);
+    --color-success: var(--palette-green-3);
+    --color-success-subtle: var(--palette-green-9);
+    --color-success-border: var(--palette-green-5);
+    --color-success-solid: var(--palette-green-3);
+    --color-danger: var(--palette-red-3);
+    --color-danger-subtle: var(--palette-red-9);
+    --color-danger-border: var(--palette-red-5);
+    --color-danger-solid: var(--palette-red-3);
+    --color-info: var(--palette-gray-5);
+    --color-info-subtle: var(--palette-gray-11);
+    --color-info-border: var(--palette-gray-7);
+    --color-info-solid: var(--palette-gray-5);
+    --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.5);
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-surface-page: var(--palette-gray-14);
+  --color-surface-sunken: var(--palette-gray-15);
+  --color-surface: var(--palette-gray-13);
+  --color-surface-overlay: var(--palette-gray-12);
+  --color-surface-hover: var(--palette-gray-11);
+  --color-surface-selected: var(--palette-gray-11);
+  --color-backdrop: rgba(0, 0, 0, 0.6);
+  --color-text: var(--palette-gray-2);
+  --color-text-muted: var(--palette-gray-5);
+  --color-text-on-accent: var(--palette-gray-15);
+  --color-text-on-solid: var(--palette-gray-15);
+  --color-border: var(--palette-gray-9);
+  --color-border-control: var(--palette-gray-7);
+  --color-accent: var(--palette-gray-2);
+  --color-accent-hover: var(--palette-gray-0);
+  --color-focus: var(--palette-gray-0);
+  --color-attention: var(--palette-orange-3);
+  --color-attention-subtle: var(--palette-orange-9);
+  --color-attention-border: var(--palette-orange-5);
+  --color-attention-solid: var(--palette-orange-3);
+  --color-progress: var(--palette-blue-3);
+  --color-progress-subtle: var(--palette-blue-9);
+  --color-progress-border: var(--palette-blue-5);
+  --color-progress-solid: var(--palette-blue-3);
+  --color-waiting: var(--palette-violet-3);
+  --color-waiting-subtle: var(--palette-violet-9);
+  --color-waiting-border: var(--palette-violet-5);
+  --color-waiting-solid: var(--palette-violet-3);
+  --color-success: var(--palette-green-3);
+  --color-success-subtle: var(--palette-green-9);
+  --color-success-border: var(--palette-green-5);
+  --color-success-solid: var(--palette-green-3);
+  --color-danger: var(--palette-red-3);
+  --color-danger-subtle: var(--palette-red-9);
+  --color-danger-border: var(--palette-red-5);
+  --color-danger-solid: var(--palette-red-3);
+  --color-info: var(--palette-gray-5);
+  --color-info-subtle: var(--palette-gray-11);
+  --color-info-border: var(--palette-gray-7);
+  --color-info-solid: var(--palette-gray-5);
+  --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+/* ds:tokens:end */
+/* 이 화면의 기존 변수는 이름을 그대로 두고 값만 디자인 토큰에 잇는다(#287). 테마는 토큰이 바꾼다.
+   부품을 docs/design-system/components.css 로 바꾸는 일은 보드 재구성 때 한다. */
+:root {
+  --bg: var(--color-surface-page); --side: var(--color-surface-sunken); --panel: var(--color-surface); --line: var(--color-border);
+  --text: var(--color-text); --muted: var(--color-text-muted);
+  --human: var(--color-attention); --human-bg: var(--color-attention-subtle); --run: var(--color-progress); --queue: var(--color-waiting);
+  --block: var(--color-waiting); --done: var(--color-success); --chip: var(--color-info-subtle); --hover: var(--color-surface-hover); --shadow: none;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
@@ -32,7 +299,7 @@ aside { background: var(--side); border-right: 1px solid var(--line); padding: 1
 .nav .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 .badge { font-size: 11px; min-width: 20px; text-align: center; padding: 0 6px; border-radius: 999px; background: var(--chip); color: var(--muted); }
-.badge.alert { background: var(--human); color: #fff; }
+.badge.alert { background: var(--human); color: var(--color-text-on-solid); }
 .nav.proj { padding: 4px 8px; font-size: 13px; }
 .sidefoot { margin-top: auto; font-size: 11px; color: var(--muted); padding: 0 8px; }
 main { min-width: 0; padding: 20px 24px 32px; }
@@ -95,7 +362,7 @@ h1 { font-size: 19px; margin: 0; letter-spacing: -.01em; }
 .actions a, .actions button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent;
   color: var(--text); border-radius: 6px; padding: 3px 9px; text-decoration: none; cursor: pointer; }
 .actions a.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
-.actions button.run { background: var(--run); color: #fff; border-color: var(--run); }
+.actions button.run { background: var(--run); color: var(--color-text-on-solid); border-color: var(--run); }
 .card[data-state="queued"] .actions button.run { background: var(--queue); border-color: var(--queue); }
 .card[data-state="needs_human"] .actions button.run { background: var(--human); border-color: var(--human); }
 .actions button:disabled { opacity: .6; cursor: progress; }
@@ -127,14 +394,14 @@ body.drawer-open main { margin-right: min(640px, 100vw); }
 .dhead button { font: inherit; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .chat { flex: 1; overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
 .msg { max-width: 92%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
-.msg.user { align-self: flex-end; background: var(--run); color: #fff; border-bottom-right-radius: 3px; }
+.msg.user { align-self: flex-end; background: var(--run); color: var(--color-text-on-solid); border-bottom-right-radius: 3px; }
 .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
 .msg.tool { align-self: flex-start; font: 11.5px ui-monospace, Menlo, monospace; color: var(--muted); padding: 2px 4px; }
 .chatedge { text-align: center; font-size: 11px; color: var(--muted); padding: 6px 0; }
 .msg.tool::before { content: "⚙ "; }
 .chatnote { font-size: 12px; color: var(--muted); padding: 8px 16px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .chatnote button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
-.newbtn { margin-left: auto; font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 5px 12px; background: var(--run); color: #fff; cursor: pointer; }
+.newbtn { margin-left: auto; font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 5px 12px; background: var(--run); color: var(--color-text-on-solid); cursor: pointer; }
 dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 18px; width: min(560px, 92vw); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
 dialog h3 { margin: 0 0 10px; font-size: 15px; }
@@ -143,11 +410,11 @@ dialog input, dialog textarea { width: 100%; font: inherit; font-size: 13px; pad
 dialog textarea { height: 90px; resize: vertical; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 dialog .row button { font: inherit; font-size: 13px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 7px; padding: 5px 12px; cursor: pointer; }
-dialog .row button.primary { background: var(--run); border-color: var(--run); color: #fff; }
+dialog .row button.primary { background: var(--run); border-color: var(--run); color: var(--color-text-on-solid); }
 .compose { display: flex; gap: 8px; padding: 8px 16px 14px; }
 .compose textarea { flex: 1; resize: none; height: 64px; font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--bg); color: var(--text); }
-.compose button { font: inherit; border: 0; border-radius: 8px; padding: 0 16px; background: var(--run); color: #fff; cursor: pointer; }
+.compose button { font: inherit; border: 0; border-radius: 8px; padding: 0 16px; background: var(--run); color: var(--color-text-on-solid); cursor: pointer; }
 .compose button:disabled { opacity: .5; }
 .qbox { margin: 8px 16px 0; padding: 10px 12px; border: 1px solid var(--human); border-radius: 10px; font-size: 13px; }
 .qbox .q { margin: 8px 0 6px; font-weight: 600; }
@@ -158,7 +425,7 @@ dialog .row button.primary { background: var(--run); border-color: var(--run); c
 .qbox .opts button small { display: block; color: var(--muted); font-size: 11px; }
 .qbox .opts button[aria-pressed="true"] { border-color: var(--run); outline: 1px solid var(--run); }
 .qbox .qfoot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: 12px; }
-.qbox .qfoot button { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 5px 12px; background: var(--run); color: #fff; cursor: pointer; }
+.qbox .qfoot button { font: inherit; font-size: 13px; border: 0; border-radius: 7px; padding: 5px 12px; background: var(--run); color: var(--color-text-on-solid); cursor: pointer; }
 .qbox .qfoot button:disabled { opacity: .5; }
 .perm { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--human); border-radius: 8px; font-size: 12px; }
 .perm b { display: block; margin-bottom: 4px; }
@@ -166,7 +433,7 @@ dialog .row button.primary { background: var(--run); border-color: var(--run); c
   background: var(--bg); padding: 6px 8px; border-radius: 6px; }
 .perm .row { display: flex; gap: 6px; }
 .perm button { font: inherit; font-size: 12px; border-radius: 6px; padding: 4px 12px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--text); }
-.perm button.allow { background: var(--done); border-color: var(--done); color: #fff; }
+.perm button.allow { background: var(--done); border-color: var(--done); color: var(--color-text-on-solid); }
 #dperm { margin: 8px 16px 0; }
 #dperm .perm { margin: 0; }
 .acwrap { position: relative; flex: 1; display: flex; }
@@ -186,7 +453,7 @@ dialog .acwrap .ac { bottom: auto; top: calc(100% + 4px); }
 .ladder { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .ladder button { font: inherit; font-size: 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); padding: 6px 12px; cursor: pointer; white-space: nowrap; }
 .ladder button:last-child { border-right: 0; }
-.ladder button[aria-pressed="true"] { background: var(--run); color: #fff; }
+.ladder button[aria-pressed="true"] { background: var(--run); color: var(--color-text-on-solid); }
 .ladder button:hover:not([aria-pressed="true"]) { background: var(--hover); color: var(--text); }
 .srow .meta { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
 .srow .meta .chg { color: var(--run); cursor: pointer; }
