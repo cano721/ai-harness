@@ -7148,7 +7148,7 @@ assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness 
 assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
-  | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
+  | env -u AI_HARNESS_HEADLESS CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
 BOARD_HOOK_PID=$!
 BOARD_PERM=""
 for _ in $(seq 100); do
@@ -7162,6 +7162,36 @@ assert_eq "true" "$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$BOARD_DECISION
 wait "$BOARD_HOOK_PID"
 assert_eq "PermissionRequest|allow" "$(jq -r '[.hookSpecificOutput.hookEventName, .hookSpecificOutput.decision.behavior] | join("|")' "$BOARD_T/hook.out")" "permission hook returns the board decision"
 assert_eq "" "$(printf '%s' '{"tool_name":"AskUserQuestion"}' | HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py")" "permission hook never forwards AskUserQuestion"
+# headless(claude -p) 세션에는 답할 사람이 없다. 보는 사람이 있는 보드가 붙잡으면 러너가 멈추므로 훅이 서버를 부르지 않고 조용히 끝난다.
+board_hook_headless() { # 이름 env... — 훅이 5초 안에 빈 출력으로 끝나고 보드에 요청이 남지 않아야 한다
+  local name="$1" pid i
+  shift
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s-headless","cwd":"/tmp"}' \
+    | env -u AI_HARNESS_HEADLESS -u CLAUDE_CODE_ENTRYPOINT "$@" HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook-headless.out" &
+  pid=$!
+  for i in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    fail "permission hook does not forward a headless request ($name): $(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -c '[.items[] | .permission // empty]')"
+  fi
+  wait "$pid"
+  assert_eq "" "$(cat "$BOARD_T/hook-headless.out")" "permission hook prints nothing for a headless session ($name)"
+}
+board_hook_headless "runner env" AI_HARNESS_HEADLESS=1 CLAUDE_CODE_ENTRYPOINT=cli
+board_hook_headless "claude -p entrypoint" CLAUDE_CODE_ENTRYPOINT=sdk-cli
+# 예전 훅 사본이 넘겨도 서버가 붙잡지 않는다: 훅이 실어 보낸 값, 없으면 대화 기록의 최근 entrypoint.
+BOARD_HOOK_TOKEN="$(jq -r '.token' "$BOARD_DATA/board/server.json")"
+board_hold() { curl -s -m 2 -X POST -H "X-Board-Hook: $BOARD_HOOK_TOKEN" -d "$1" "$BOARD_BASE/hook/permission" || printf 'held'; }
+assert_eq "{}" "$(board_hold '{"tool_name":"Bash","session_id":"s-headless","headless":true}')" "board does not hold a request marked headless"
+assert_eq "{}" "$(board_hold '{"tool_name":"Bash","session_id":"s-headless","entrypoint":"sdk-cli"}')" "board does not hold a claude -p request"
+printf '%s\n' '{"type":"user","entrypoint":"cli"}' '{"type":"assistant","entrypoint":"sdk-cli"}' >"$BOARD_T/headless.jsonl"
+assert_eq "{}" "$(board_hold "$(jq -cn --arg p "$BOARD_T/headless.jsonl" '{tool_name: "Bash", session_id: "s-headless", transcript_path: $p}')")" "board reads the entrypoint from the transcript when the hook copy is old"
+printf '%s\n' '{"type":"user","entrypoint":"sdk-cli"}' '{"type":"assistant","entrypoint":"cli"}' >"$BOARD_T/attended.jsonl"
+assert_eq "held" "$(board_hold "$(jq -cn --arg p "$BOARD_T/attended.jsonl" '{tool_name: "Bash", session_id: "s-attended", transcript_path: $p}')")" "board still holds a request from an interactive session"
+# claude -p 를 띄우는 곳은 모두 신호를 넘긴다(SDK 세션 안에서 띄우면 entrypoint 가 부모 값이라 훅이 구분하지 못한다).
+for f in scripts/autofix-auto.sh scripts/harvest-auto.sh scripts/auto-merge.sh scripts/digest.sh scripts/ab.sh templates/workflow-driver/workflow-driver.sh; do
+  assert_contains "$(cat "$ROOT/$f")" "AI_HARNESS_HEADLESS=1" "$f marks its unattended claude session as headless"
+done
 assert_eq "true" "$(board_sh stop | jq -r '.stopped')" "board stop stops the server"
 assert_not_file "$BOARD_DATA/board/server.json"
 assert_eq "false" "$(board_sh status | jq -r '.running')" "board status after stop"

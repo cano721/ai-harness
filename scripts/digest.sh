@@ -106,7 +106,7 @@ run_model() { # stdin=입력 → structured_output JSON
     return
   fi
   # 우리 hook이 이 내부 세션을 수집·알림하지 않게 표시하고, transcript도 남기지 않는다.
-  (cd "$DIGEST_DIR" && hm_run_with_timeout 300 env HM_INTERNAL_SESSION=1 claude -p "아래 세션 기록에서 findings를 뽑아라." \
+  (cd "$DIGEST_DIR" && hm_run_with_timeout 300 env HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 claude -p "아래 세션 기록에서 findings를 뽑아라." \
     --model "$MODEL" --no-session-persistence --tools "" \
     --system-prompt "$SYSTEM_PROMPT" --json-schema "$SCHEMA" \
     --max-budget-usd "$BUDGET_USD" --output-format json) \

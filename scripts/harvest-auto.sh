@@ -576,7 +576,7 @@ command_run() {
       agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
       # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
       (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
-        env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+        env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
       # 에이전트가 PR로 올린 커밋. 자동 병합 판정은 이 커밋을 기준으로 하고, 병합할 때 head가 같은지 다시 본다.
       head_sha="$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || true)"
     fi

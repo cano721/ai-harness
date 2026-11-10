@@ -549,7 +549,7 @@ command_run() {
     AGENT_ENV=(env)
     agent_command "$work_dir" "${base#origin/}" "$rel"
     (cd "$work_dir" && hm_run_with_timeout "$((TIMEOUT_MIN * 60))" \
-      "${AGENT_ENV[@]}" HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+      "${AGENT_ENV[@]}" HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
     find "$work_dir" -depth -delete 2>/dev/null || true
   fi
 

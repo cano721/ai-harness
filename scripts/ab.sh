@@ -85,7 +85,7 @@ run_agent() { # ws task_file out_json
       "Read(~/.claude/plugins/**)" "Glob(~/.claude/plugins/**)" "Grep(~/.claude/plugins/**)"
       --allowedTools "Read" "Edit" "Write" "Glob" "Grep" "Bash(python3 -m unittest:*)" "Bash(git diff:*)" "Bash(git status:*)")
   fi
-  (cd "$ws" && HM_INTERNAL_SESSION=1 hm_run_with_timeout "$TIMEOUT" "${agent_cmd[@]}" </dev/null >"$out" 2>"$out.err") || rc=$?
+  (cd "$ws" && HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 hm_run_with_timeout "$TIMEOUT" "${agent_cmd[@]}" </dev/null >"$out" 2>"$out.err") || rc=$?
   return "$rc"
 }
 
