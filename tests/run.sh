@@ -7148,7 +7148,7 @@ assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness 
 assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
-  | env -u AI_HARNESS_HEADLESS CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
+  | env -u AI_HARNESS_HEADLESS -u CLAUDE_PID CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
 BOARD_HOOK_PID=$!
 BOARD_PERM=""
 for _ in $(seq 100); do
@@ -7167,7 +7167,7 @@ board_hook_headless() { # 이름 env... — 훅이 5초 안에 빈 출력으로 
   local name="$1" pid i
   shift
   printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s-headless","cwd":"/tmp"}' \
-    | env -u AI_HARNESS_HEADLESS -u CLAUDE_CODE_ENTRYPOINT "$@" HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook-headless.out" &
+    | env -u AI_HARNESS_HEADLESS -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_PID "$@" HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook-headless.out" &
   pid=$!
   for i in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then
@@ -7179,6 +7179,31 @@ board_hook_headless() { # 이름 env... — 훅이 5초 안에 빈 출력으로 
 }
 board_hook_headless "runner env" AI_HARNESS_HEADLESS=1 CLAUDE_CODE_ENTRYPOINT=cli
 board_hook_headless "claude -p entrypoint" CLAUDE_CODE_ENTRYPOINT=sdk-cli
+# SDK 세션 안에서 띄운 claude -p 는 entrypoint 가 부모 값(sdk-ts)이다. 신호를 넘기지 않는 예전 러너는 세션 프로세스 인자(-p)로 가린다.
+mkdir -p "$BOARD_T/fake"
+printf '#!/bin/sh\nsleep 30\n' >"$BOARD_T/fake/claude"
+chmod +x "$BOARD_T/fake/claude"
+"$BOARD_T/fake/claude" -p --permission-mode acceptEdits &
+BOARD_FAKE_HEADLESS=$!
+"$BOARD_T/fake/claude" --input-format stream-json --permission-prompt-tool stdio -p &
+BOARD_FAKE_HOSTED=$!
+board_hook_headless "claude -p process under an SDK session" CLAUDE_CODE_ENTRYPOINT=sdk-ts CLAUDE_PID="$BOARD_FAKE_HEADLESS"
+# 권한을 대신 받는 호스트(SDK)가 붙은 세션은 사람이 답할 수 있으므로 그대로 보드에 넘긴다.
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s-hosted","cwd":"/tmp"}' \
+  | env -u AI_HARNESS_HEADLESS CLAUDE_CODE_ENTRYPOINT=sdk-ts CLAUDE_PID="$BOARD_FAKE_HOSTED" HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook-hosted.out" &
+BOARD_HOOK_PID=$!
+BOARD_PERM=""
+for _ in $(seq 100); do
+  BOARD_PERM="$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '[.items[] | .permission.pid // empty][0] // empty')"
+  [[ -n "$BOARD_PERM" ]] && break
+  sleep 0.1
+done
+[[ -n "$BOARD_PERM" ]] || fail "permission hook still forwards a host-attended SDK session"
+curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" --arg p "$BOARD_PERM" '{t: $t, pid: $p, decision: "deny"}')" "$BOARD_BASE/permission" >/dev/null
+wait "$BOARD_HOOK_PID"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.decision.behavior' "$BOARD_T/hook-hosted.out")" "permission hook returns the board decision for a host-attended SDK session"
+kill "$BOARD_FAKE_HEADLESS" "$BOARD_FAKE_HOSTED" 2>/dev/null || true
+wait "$BOARD_FAKE_HEADLESS" "$BOARD_FAKE_HOSTED" 2>/dev/null || true
 # 예전 훅 사본이 넘겨도 서버가 붙잡지 않는다: 훅이 실어 보낸 값, 없으면 대화 기록의 최근 entrypoint.
 BOARD_HOOK_TOKEN="$(jq -r '.token' "$BOARD_DATA/board/server.json")"
 board_hold() { curl -s -m 2 -X POST -H "X-Board-Hook: $BOARD_HOOK_TOKEN" -d "$1" "$BOARD_BASE/hook/permission" || printf 'held'; }
