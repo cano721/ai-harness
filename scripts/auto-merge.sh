@@ -251,7 +251,7 @@ EOF
     out="$(cd "$repo" && printf '%s' "$prompt" | hm_run_with_timeout 600 "${cmd[@]}" 2>/dev/null)" || return 1
   else
     command -v claude >/dev/null 2>&1 || return 1
-    out="$(cd "$repo" && hm_run_with_timeout 600 env HM_INTERNAL_SESSION=1 HM_HARVEST_RUNNING=1 \
+    out="$(cd "$repo" && hm_run_with_timeout 600 env HM_INTERNAL_SESSION=1 HM_HARVEST_RUNNING=1 AI_HARNESS_HEADLESS=1 \
       claude -p "$prompt" --no-session-persistence --permission-mode dontAsk \
         --allowedTools "Read" "Grep" "Glob" --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash" "WebFetch" "WebSearch" \
         --max-budget-usd "${HM_AUTO_MERGE_REVIEW_BUDGET_USD:-1}" --output-format json </dev/null 2>/dev/null)" || return 1

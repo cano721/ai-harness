@@ -586,9 +586,26 @@ def _perm_summary(tool, inp):
     return json.dumps(inp, ensure_ascii=False)[:2000]
 
 
+def headless_request(req):
+    """`claude -p` 세션(러너·자동 실행)의 요청인가. 답할 사람이 없어 붙잡으면 그 실행이 PERM_WAIT 동안 멈춘다.
+    훅이 걸러 보내지만 예전 훅 사본도 막도록 서버가 다시 본다: 훅이 실어 보낸 값, 없으면 대화 기록에 남는 entrypoint(최근 것)."""
+    if req.get("headless") is True or req.get("entrypoint") == "sdk-cli":
+        return True
+    tpath = req.get("transcript_path")
+    if req.get("entrypoint") or not isinstance(tpath, str):
+        return False
+    try:
+        with open(tpath, "rb") as f:
+            f.seek(max(0, os.path.getsize(tpath) - (256 << 10)))
+            found = re.findall(rb'"entrypoint":\s*"([^"]*)"', f.read())
+    except OSError:
+        return False
+    return bool(found) and found[-1] == b"sdk-cli"
+
+
 def hold_permission(req):
     """훅 요청을 붙잡고 보드에서 허용/거부할 때까지 기다린다. 보는 사람이 없으면 바로 터미널로 넘긴다."""
-    if time.time() - _viewer["at"] > VIEWER_GONE or req.get("tool_name") == "AskUserQuestion":
+    if time.time() - _viewer["at"] > VIEWER_GONE or req.get("tool_name") == "AskUserQuestion" or headless_request(req):
         return {}
     pid = secrets.token_hex(8)
     ev = threading.Event()
