@@ -30,6 +30,8 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
                   and ((.message.content | text | sub("^\\s+"; "")) | test("^(<(command|local-command|system)|Base directory for this skill|Caveat:|<task-notification|This session is being continued|You have [0-9]+ new orchestration message|Another Claude session sent a message)") | not))) | last) as $u
       | (map(select(.type == "assistant" and (.message.content | any(.type? == "text")))) | last) as $r
       | {prompt: ($u.message.content | text? // null), reply: ($r.message.content | text? // null),
+         # 사람이 마지막 답 뒤에 아직 말하지 않았을 때만 그 답의 끝부분을 싣는다 — 보드가 본문으로 묻는 질문을 찾는다(asks.py).
+         reply_tail: (if $r and (($r.timestamp // "") > ($u.timestamp // "")) then ($r.message.content | text? // "" | .[-400:]) else null end),
          last: (map(.timestamp // empty) | max // null)}' 2>/dev/null || echo '{}')
   fi
   jq -c --argjson s "$summary" --argjson ti "$titles" --arg path "${t:-}" --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
@@ -50,6 +52,7 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
                  elif .pid == null then "세션 종료됨\n" else "" end)
                 + (if $s.prompt then "요청: " + ($s.prompt | clip(140)) else "" end)
                 + (if $s.reply then "\n— " + ($s.reply | clip(220)) else "" end)),
+       reply_tail: ($s.reply_tail // null),
        agent: "claude", sid: .sessionId, short_id: (.id // .sessionId[0:8]), pid, cwd,
        transcript: (if $path == "" then null else $path end),
        live: (.pid != null), status: .status, bg_state: .state,

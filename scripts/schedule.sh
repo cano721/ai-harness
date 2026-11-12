@@ -21,9 +21,11 @@ AF_LOG_FILE="$HM_DATA_DIR/logs/launchd-autofix.log"
 
 usage() {
   cat >&2 <<'EOF'
-usage: schedule.sh install | uninstall | status | run
+usage: schedule.sh install | install-autofix | uninstall | status | run
   install    shim과 LaunchAgent를 만들고 등록한다 (매시간 확인, 실제 실행 주기는 HM_BACKFILL_INTERVAL_HOURS)
              HM_AUTOFIX_INTERVAL_MINUTES가 있으면 /autofix sweep 전용 LaunchAgent도 그 분 주기로 등록하고, 없으면 내린다
+  install-autofix  autofix sweep 전용 LaunchAgent만 HM_AUTOFIX_INTERVAL_MINUTES에 맞춰 등록·해제한다
+             (backfill은 그대로, 등록 즉시 실행하지 않음 — 보드 설정 변경용)
   uninstall  등록을 해제하고 파일을 지운다 (autofix 전용 포함)
   status     등록 상태와 마지막 backfill 시각, autofix 전용 주기
   run        지금 한 번 실행한다 (주기 판정은 그대로 적용)
@@ -65,8 +67,9 @@ SHIM
   chmod 755 "$1"
 }
 
-write_plist() { # $1=plist $2=label $3=shim $4=StartInterval(초) $5=로그 [$6=추가 환경변수 XML]
-  local data_env=""
+write_plist() { # $1=plist $2=label $3=shim $4=StartInterval(초) $5=로그 [$6=추가 환경변수 XML] [$7=RunAtLoad true|false]
+  local data_env="" run_at_load="  <key>RunAtLoad</key><true/>"
+  [[ "${7:-true}" == true ]] || run_at_load=""
   mkdir -p "$AGENTS_DIR"
   if [[ -n "${HARNESS_METRICS_DIR:-}" ]]; then
     data_env="    <key>HARNESS_METRICS_DIR</key><string>$(xml_escape "$HARNESS_METRICS_DIR")</string>"
@@ -80,7 +83,7 @@ write_plist() { # $1=plist $2=label $3=shim $4=StartInterval(초) $5=로그 [$6=
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>$(xml_escape "$3")</string></array>
   <key>StartInterval</key><integer>$4</integer>
-  <key>RunAtLoad</key><true/>
+$run_at_load
   <!-- ProcessType=Background는 macOS가 CPU·IO를 크게 묶어 첫 전체 재추출이 1시간을 넘겼다. Nice·LowPriorityIO로 충분하다. -->
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
@@ -126,16 +129,44 @@ remove_autofix_agent() {
   find "$AF_PLIST" "$AF_SHIM" -maxdepth 0 -type f -delete 2>/dev/null || true
 }
 
+# cron의 */N은 시·분 경계에서 다시 시작하므로 N이 60(분)·24(시)를 나누어떨어뜨릴 때만 정확히 N분 간격이다.
+# 그 밖의 주기(45분, 90분 등)는 한 줄로 정확히 쓸 수 없어 systemd 타이머 예시를 안내한다.
+autofix_cron_hint() { # $1=분
+  local cron="" m="${1:-}"
+  [[ -n "$m" ]] || return 0
+  if (( m < 60 && 60 % m == 0 )); then cron="*/$m * * * *"
+  elif (( m % 60 == 0 && 24 % (m / 60) == 0 )); then cron="0 */$(( m / 60 )) * * *"
+  fi
+  if [[ -n "$cron" ]]; then
+    echo "  $cron $DIR/autofix-auto.sh sweep" >&2
+  else
+    echo "  (${m}분 주기는 cron 한 줄로 정확히 쓸 수 없습니다 — 60을 나누는 분(5·10·15·20·30)이나 24를 나누는 시간으로 고르거나," >&2
+    echo "   systemd 타이머를 쓰세요: OnUnitActiveSec=${m}min, ExecStart=$DIR/autofix-auto.sh sweep)" >&2
+  fi
+}
+
+# autofix 전용 에이전트를 주기에 맞춰 등록하거나(주기 있음) 내린다(주기 없음). $1=분(빈 값 = 없음) $2=RunAtLoad true|false
+sync_autofix_agent() {
+  if [[ -n "$1" ]]; then
+    write_shim "$AF_SHIM" autofix-auto.sh "${AF_LOG_FILE##*/}" sweep
+    write_plist "$AF_PLIST" "$AF_LABEL" "$AF_SHIM" "$(( $1 * 60 ))" "$AF_LOG_FILE" "" "$2"
+    load_agent "$AF_LABEL" "$AF_PLIST"
+    echo "설치: $AF_PLIST (/autofix sweep ${1}분마다, 로그 $AF_LOG_FILE)"
+  elif [[ -f "$AF_PLIST" || -f "$AF_SHIM" ]]; then
+    remove_autofix_agent
+    echo "해제: $AF_LABEL (HM_AUTOFIX_INTERVAL_MINUTES 없음 — sweep은 backfill 주기에 돈다)"
+  else
+    echo "변경 없음: sweep 전용 주기 없음 — sweep은 backfill 주기에 돈다"
+  fi
+}
+
 command_install() {
-  local af_minutes="" cron=""
+  local af_minutes=""
   af_minutes="$(autofix_interval)" || exit 2
   if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "launchd는 macOS 전용입니다. 다른 OS에서는 SessionStart 경로가 같은 주기로 돌고, 필요하면 cron에 다음을 등록하세요:" >&2
     echo "  0 * * * * HM_BACKFILL_FOREGROUND=1 $DIR/backfill-due.sh" >&2
-    if [[ -n "$af_minutes" ]]; then
-      if (( af_minutes < 60 )); then cron="*/$af_minutes * * * *"; else cron="0 */$(( af_minutes / 60 )) * * *"; fi
-      echo "  $cron $DIR/autofix-auto.sh sweep" >&2
-    fi
+    autofix_cron_hint "$af_minutes"
     exit 3
   fi
   write_shim "$SHIM" backfill-due.sh "${LOG_FILE##*/}"
@@ -143,14 +174,27 @@ command_install() {
   load_agent "$LABEL" "$PLIST"
   echo "설치: $PLIST (매시간 확인, 실행 주기 ${HM_BACKFILL_INTERVAL_HOURS:-6}시간, 로그 $LOG_FILE)"
   if [[ -n "$af_minutes" ]]; then
-    write_shim "$AF_SHIM" autofix-auto.sh "${AF_LOG_FILE##*/}" sweep
-    write_plist "$AF_PLIST" "$AF_LABEL" "$AF_SHIM" "$(( af_minutes * 60 ))" "$AF_LOG_FILE"
-    load_agent "$AF_LABEL" "$AF_PLIST"
-    echo "설치: $AF_PLIST (/autofix sweep ${af_minutes}분마다, 로그 $AF_LOG_FILE)"
+    sync_autofix_agent "$af_minutes" true
   elif [[ -f "$AF_PLIST" || -f "$AF_SHIM" ]]; then
-    remove_autofix_agent
-    echo "해제: $AF_LABEL (HM_AUTOFIX_INTERVAL_MINUTES 없음 — sweep은 backfill 주기에 돈다)"
+    sync_autofix_agent "" true
   fi
+}
+
+# 보드가 sweep 주기만 바꿀 때: autofix 전용 에이전트만 다루고(backfill 에이전트는 설치·재등록하지 않는다),
+# 등록하자마자 sweep이 돌지 않게 RunAtLoad 없이 둔다 — 첫 sweep은 주기가 한 번 지난 뒤다.
+command_install_autofix() {
+  local af_minutes=""
+  af_minutes="$(autofix_interval)" || exit 2
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    if [[ -n "$af_minutes" ]]; then
+      echo "launchd는 macOS 전용입니다. 다른 OS에서는 cron에 다음을 등록하세요:" >&2
+      autofix_cron_hint "$af_minutes"
+    else
+      echo "launchd는 macOS 전용입니다. 다른 OS에서는 cron에 둔 autofix-auto.sh sweep 줄을 지우세요" >&2
+    fi
+    exit 3
+  fi
+  sync_autofix_agent "$af_minutes" false
 }
 
 command_uninstall() {
@@ -187,6 +231,7 @@ command_run() {
 
 case "${1:-}" in
   install) command_install ;;
+  install-autofix) command_install_autofix ;;
   uninstall) command_uninstall ;;
   status) command_status ;;
   run) command_run ;;

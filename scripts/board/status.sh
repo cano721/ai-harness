@@ -66,11 +66,14 @@ if [ -f "$runs" ]; then
   # 최근 2일 skip 이유를 프로젝트별 1건으로 묶는다.
   jq -c 'fromjson? // empty' -R "$runs" | jq -cs --argjson now "$now_e" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
-    ({"daily_max": "하루 실행 상한 도달", "no_harness_repo": "하네스 저장소를 찾지 못함", "sessions_only": "세션 기록만 있고 저장소 없음"}) as $why
+    ({"daily_max": "하루 실행 상한 도달", "no_harness_repo": "하네스 저장소를 찾지 못함", "sessions_only": "세션 기록만 있고 저장소 없음",
+      "sync_pr_status_unknown": "지난 동기화 PR 상태를 확인할 수 없어 멈춤", "sync_pr_in_review": "지난 동기화 PR을 사람이 검토 중이라 기다림",
+      "busy": "다른 무인 실행이 돌고 있어 미룸", "needs_claude": "claude CLI를 찾지 못함", "marker_unwritable": "진행 표시 파일을 쓸 수 없음",
+      "gave_up": "같은 근거로 여러 번 실패해 멈춤", "runs_unreadable": "실행 기록을 읽지 못해 멈춤"}) as $why
     | [ .[] | select(.event == "skipped" and ($now - (.at | epoch)) < 172800) ]
     | group_by([.project, .reason])
     | map(max_by(.at) as $last | {kind: "schedule", project: $last.project, state: "blocked", at: $last.at,
-        title: ($why[$last.reason] // $last.reason), detail: "최근 2일 \(length)회 건너뜀", link: null, log: null, cmd: null})' > "$tmp/skips.json"
+        title: ($why[$last.reason] // "무인 실행을 건너뜀"), detail: "최근 2일 \(length)회 건너뜀", reason: $last.reason, link: null, log: null, cmd: null})' > "$tmp/skips.json"
 else
   echo '[]' > "$tmp/runs2.json"; echo '[]' > "$tmp/skips.json"
 fi
@@ -79,7 +82,7 @@ fi
 sched="$DATA/logs/schedule.jsonl"
 if [ -f "$sched" ]; then
   tail -n 1 "$sched" | jq -c '
-    ({"never_idle": "열린 세션이 계속 활동 중이라 LLM 단계(정리·harvest·sync)를 미룸", "usage_limit": "사용량 한도 휴지 중", "running": "이전 실행이 아직 진행 중"}) as $why
+    ({"never_idle": "열린 세션이 계속 활동 중이라 정기 실행의 LLM 단계(세션 정리·자동 개선·동기화)를 미뤘습니다.", "usage_limit": "사용량 한도에 닿아 쉬는 중입니다.", "running": "이전 실행이 아직 진행 중입니다."}) as $why
     | [ if .llm == "skipped" then
           {kind: "schedule", project: "스케줄", state: "blocked", at, title: "정기 실행 LLM 단계 건너뜀",
            detail: ($why[.reason] // .reason), link: null, log: null, cmd: null}
@@ -101,18 +104,18 @@ for s in "$DATA"/runs/*/*/state.json; do
     | (if $issue != null and ($title0 | startswith($issue) | not) then "\($issue) \($title0)" else $title0 end) as $title
     | if .status == "done" then
         if (.finished_at // .started_at) >= $since then
-          {kind: "runner", project: $proj, state: "done", at: (.finished_at // .started_at), title: $title,
+          {kind: "runner", project: $proj, cwd: .repo, state: "done", at: (.finished_at // .started_at), title: $title,
            detail: "워크플로 완료 · 정책 \(.policy.git // "?")", link: (.publish.pr_url? // null), log: $path, cmd: null}
         else empty end
       elif (.needs_user_decision // false) or (.node | tostring | test("^await")) then
-        {kind: "runner", project: $proj, state: "needs_human", at: (.presented_at // .started_at), title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.presented_at // .started_at), title: $title,
          detail: "노드 \(.node)에서 사람 결정을 기다림", link: null, log: $path,
          cmd: "workflow-driver.sh approve --run \(.run_id)"}
       elif .status == "failed" then
-        {kind: "runner", project: $proj, state: "needs_human", at: (.finished_at // .started_at), title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}
       else
-        {kind: "runner", project: $proj, state: "running", at: .started_at, title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "running", at: .started_at, title: $title,
          detail: "현재 노드: \(.node)", link: null, log: $path, cmd: null}
       end' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
 done

@@ -1,0 +1,106 @@
+# 대비 검사 쌍 — scripts/design-system.sh contrast 가 tokens.css 의 라이트·다크 값으로 전부 계산한다.
+# 열(탭 구분): 전경 토큰, 배경 토큰, 최소 대비, 용도. 기준은 WCAG 2.2 AA: 글자 4.5, UI 경계·상태 표시·포커스 3.
+# 규칙 문서(docs/design-system.md)에 새 전경/배경 조합을 허용하면 여기에 줄을 더한다.
+--color-text	--color-surface-page	4.5	본문 글자 / 페이지
+--color-text	--color-surface-sunken	4.5	본문 글자 / 사이드바·가라앉은 면
+--color-text	--color-surface	4.5	본문 글자 / 카드·패널
+--color-text	--color-surface-overlay	4.5	본문 글자 / 서랍·토스트·팝오버
+--color-text	--color-surface-hover	4.5	본문 글자 / hover 면
+--color-text	--color-surface-selected	4.5	본문 글자 / 선택된 면
+--color-text-muted	--color-surface-page	4.5	보조 글자 / 페이지
+--color-text-muted	--color-surface-sunken	4.5	보조 글자 / 사이드바·가라앉은 면
+--color-text-muted	--color-surface	4.5	보조 글자 / 카드·패널
+--color-text-muted	--color-surface-overlay	4.5	보조 글자 / 서랍·토스트·팝오버
+--color-text-muted	--color-surface-hover	4.5	보조 글자 / hover 면
+--color-text-muted	--color-surface-selected	4.5	보조 글자 / 선택된 면
+--color-text-on-accent	--color-accent	4.5	주 버튼 글자
+--color-text-on-accent	--color-accent-hover	4.5	주 버튼 글자 (hover)
+--color-accent	--color-surface-page	3	선택 표시(탭 밑줄·선택 막대) / 페이지
+--color-accent	--color-surface-sunken	3	선택 표시(탭 밑줄·선택 막대) / 사이드바·가라앉은 면
+--color-accent	--color-surface	3	선택 표시(탭 밑줄·선택 막대) / 카드·패널
+--color-accent	--color-surface-overlay	3	선택 표시(탭 밑줄·선택 막대) / 서랍·토스트·팝오버
+--color-border-control	--color-surface-page	3	조작 요소 윤곽 / 페이지
+--color-border-control	--color-surface-sunken	3	조작 요소 윤곽 / 사이드바·가라앉은 면
+--color-border-control	--color-surface	3	조작 요소 윤곽 / 카드·패널
+--color-border-control	--color-surface-overlay	3	조작 요소 윤곽 / 서랍·토스트·팝오버
+--color-border-control	--color-surface-hover	3	조작 요소 윤곽 / hover 면
+--color-border-control	--color-surface-selected	3	조작 요소 윤곽 / 선택된 면
+--color-focus	--color-surface-page	3	포커스 표시 / 페이지
+--color-focus	--color-surface-sunken	3	포커스 표시 / 사이드바·가라앉은 면
+--color-focus	--color-surface	3	포커스 표시 / 카드·패널
+--color-focus	--color-surface-overlay	3	포커스 표시 / 서랍·토스트·팝오버
+--color-focus	--color-surface-hover	3	포커스 표시 / hover 면
+--color-focus	--color-surface-selected	3	포커스 표시 / 선택된 면
+--color-attention	--color-surface-page	4.5	사람 필요 글자·아이콘 / 페이지
+--color-attention	--color-surface-sunken	4.5	사람 필요 글자·아이콘 / 사이드바·가라앉은 면
+--color-attention	--color-surface	4.5	사람 필요 글자·아이콘 / 카드·패널
+--color-attention	--color-surface-overlay	4.5	사람 필요 글자·아이콘 / 서랍·토스트·팝오버
+--color-attention	--color-surface-hover	4.5	사람 필요 글자·아이콘 / hover 면
+--color-attention	--color-attention-subtle	4.5	사람 필요 글자 / 자기 옅은 면(배지)
+--color-text	--color-attention-subtle	4.5	본문 글자 / 사람 필요 옅은 면(알림 줄)
+--color-attention-border	--color-surface	3	사람 필요 경계 / 카드·패널(윤곽 배지)
+--color-attention-border	--color-surface-overlay	3	사람 필요 경계 / 서랍(윤곽 배지)
+--color-attention-border	--color-attention-subtle	3	사람 필요 경계 / 자기 옅은 면
+--color-text-on-solid	--color-attention-solid	4.5	사람 필요 채운 면 위 글자(개수 표시)
+--color-attention-solid	--color-surface	3	사람 필요 상태 점 / 카드·패널
+--color-attention-solid	--color-surface-sunken	3	사람 필요 상태 점 / 사이드바
+--color-progress	--color-surface-page	4.5	진행 글자·아이콘 / 페이지
+--color-progress	--color-surface-sunken	4.5	진행 글자·아이콘 / 사이드바·가라앉은 면
+--color-progress	--color-surface	4.5	진행 글자·아이콘 / 카드·패널
+--color-progress	--color-surface-overlay	4.5	진행 글자·아이콘 / 서랍·토스트·팝오버
+--color-progress	--color-surface-hover	4.5	진행 글자·아이콘 / hover 면
+--color-progress	--color-progress-subtle	4.5	진행 글자 / 자기 옅은 면(배지)
+--color-text	--color-progress-subtle	4.5	본문 글자 / 진행 옅은 면(알림 줄)
+--color-progress-border	--color-surface	3	진행 경계 / 카드·패널
+--color-progress-border	--color-progress-subtle	3	진행 경계 / 자기 옅은 면
+--color-text-on-solid	--color-progress-solid	4.5	진행 채운 면 위 글자(개수 표시)
+--color-progress-solid	--color-surface	3	진행 상태 점 / 카드·패널
+--color-progress-solid	--color-surface-sunken	3	진행 상태 점 / 사이드바
+--color-waiting	--color-surface-page	4.5	대기 글자·아이콘 / 페이지
+--color-waiting	--color-surface-sunken	4.5	대기 글자·아이콘 / 사이드바·가라앉은 면
+--color-waiting	--color-surface	4.5	대기 글자·아이콘 / 카드·패널
+--color-waiting	--color-surface-overlay	4.5	대기 글자·아이콘 / 서랍·토스트·팝오버
+--color-waiting	--color-surface-hover	4.5	대기 글자·아이콘 / hover 면
+--color-waiting	--color-waiting-subtle	4.5	대기 글자 / 자기 옅은 면(배지)
+--color-text	--color-waiting-subtle	4.5	본문 글자 / 대기 옅은 면(알림 줄)
+--color-waiting-border	--color-surface	3	대기 경계 / 카드·패널
+--color-waiting-border	--color-waiting-subtle	3	대기 경계 / 자기 옅은 면
+--color-text-on-solid	--color-waiting-solid	4.5	대기 채운 면 위 글자(개수 표시)
+--color-waiting-solid	--color-surface	3	대기 상태 점 / 카드·패널
+--color-waiting-solid	--color-surface-sunken	3	대기 상태 점 / 사이드바
+--color-success	--color-surface-page	4.5	완료 글자·아이콘 / 페이지
+--color-success	--color-surface-sunken	4.5	완료 글자·아이콘 / 사이드바·가라앉은 면
+--color-success	--color-surface	4.5	완료 글자·아이콘 / 카드·패널
+--color-success	--color-surface-overlay	4.5	완료 글자·아이콘 / 서랍·토스트·팝오버
+--color-success	--color-surface-hover	4.5	완료 글자·아이콘 / hover 면
+--color-success	--color-success-subtle	4.5	완료 글자 / 자기 옅은 면(배지)
+--color-text	--color-success-subtle	4.5	본문 글자 / 완료 옅은 면(알림 줄)
+--color-success-border	--color-surface	3	완료 경계 / 카드·패널
+--color-success-border	--color-success-subtle	3	완료 경계 / 자기 옅은 면
+--color-text-on-solid	--color-success-solid	4.5	완료 채운 면 위 글자(개수 표시)
+--color-success-solid	--color-surface	3	완료 상태 점 / 카드·패널
+--color-success-solid	--color-surface-sunken	3	완료 상태 점 / 사이드바
+--color-danger	--color-surface-page	4.5	실패 글자·아이콘 / 페이지
+--color-danger	--color-surface-sunken	4.5	실패 글자·아이콘 / 사이드바·가라앉은 면
+--color-danger	--color-surface	4.5	실패 글자·아이콘 / 카드·패널
+--color-danger	--color-surface-overlay	4.5	실패 글자·아이콘 / 서랍·토스트·팝오버
+--color-danger	--color-surface-hover	4.5	실패 글자·아이콘 / hover 면
+--color-danger	--color-danger-subtle	4.5	실패 글자 / 자기 옅은 면(배지)
+--color-text	--color-danger-subtle	4.5	본문 글자 / 실패 옅은 면(알림 줄)
+--color-danger-border	--color-surface	3	실패 경계 / 카드·패널
+--color-danger-border	--color-danger-subtle	3	실패 경계 / 자기 옅은 면
+--color-text-on-solid	--color-danger-solid	4.5	실패 채운 면 위 글자(개수 표시)
+--color-danger-solid	--color-surface	3	실패 상태 점 / 카드·패널
+--color-danger-solid	--color-surface-sunken	3	실패 상태 점 / 사이드바
+--color-info	--color-surface-page	4.5	정보 글자·아이콘 / 페이지
+--color-info	--color-surface-sunken	4.5	정보 글자·아이콘 / 사이드바·가라앉은 면
+--color-info	--color-surface	4.5	정보 글자·아이콘 / 카드·패널
+--color-info	--color-surface-overlay	4.5	정보 글자·아이콘 / 서랍·토스트·팝오버
+--color-info	--color-surface-hover	4.5	정보 글자·아이콘 / hover 면
+--color-info	--color-info-subtle	4.5	정보 글자 / 자기 옅은 면(배지)
+--color-text	--color-info-subtle	4.5	본문 글자 / 정보 옅은 면(알림 줄)
+--color-info-border	--color-surface	3	정보 경계 / 카드·패널
+--color-info-border	--color-info-subtle	3	정보 경계 / 자기 옅은 면
+--color-text-on-solid	--color-info-solid	4.5	정보 채운 면 위 글자(개수 표시)
+--color-info-solid	--color-surface	3	정보 상태 점 / 카드·패널
+--color-info-solid	--color-surface-sunken	3	정보 상태 점 / 사이드바

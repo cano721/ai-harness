@@ -1,0 +1,313 @@
+/* ai-harness 공용 부품 — 규칙은 docs/design-system.md `## 컴포넌트`. 값은 전부 tokens.css 의 의미 토큰이다.
+   이름은 ds- 로 시작한다(기존 화면의 .card·.badge 와 겹치지 않게). 화면 뿌리에 .ds-root 를 둔다.
+   미디어 쿼리의 760px·1024px 는 --breakpoint-narrow·--breakpoint-wide 와 같은 값이다(CSS 변수는 미디어 쿼리에 못 쓴다). */
+
+/* ── 바탕 ─────────────────────────────────────────────── */
+.ds-root {
+  margin: 0;
+  background: var(--color-surface-page);
+  color: var(--color-text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body);
+  line-height: var(--font-line-body);
+  font-weight: var(--font-weight-body);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  -webkit-text-size-adjust: 100%;
+}
+.ds-root *, .ds-root *::before, .ds-root *::after { box-sizing: border-box; }
+.ds-root [hidden] { display: none !important; }
+.ds-root :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.ds-root a:not(.ds-btn) { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.ds-root code, .ds-root pre, .ds-mono { font-family: var(--font-family-mono); font-size: var(--font-size-code); line-height: var(--font-line-code); }
+.ds-num { font-variant-numeric: tabular-nums; }
+.ds-muted { color: var(--color-text-muted); }
+.ds-icon { width: var(--size-icon); height: var(--size-icon); flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ds-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* 글자 역할 */
+.ds-heading { font-size: var(--font-size-heading); line-height: var(--font-line-heading); font-weight: var(--font-weight-heading); margin: 0; }
+.ds-title { font-size: var(--font-size-title); line-height: var(--font-line-title); font-weight: var(--font-weight-title); margin: 0; }
+.ds-label { margin: 0; font-size: var(--font-size-label); line-height: var(--font-line-label); font-weight: var(--font-weight-label); }
+.ds-caption { font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-caption); color: var(--color-text-muted); }
+
+/* ── 배치 ─────────────────────────────────────────────── */
+.ds-app { display: grid; grid-template-columns: var(--size-sidebar) minmax(0, 1fr); min-height: 100vh; }
+.ds-sidebar { background: var(--color-surface-sunken); border-right: 1px solid var(--color-border); padding: var(--space-4) var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.ds-main { min-width: 0; padding: var(--space-6) var(--space-8) var(--space-12); }
+.ds-pagehead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-5); }
+.ds-pagehead > .ds-heading { flex: 1 1 auto; min-width: 0; }
+.ds-stack { display: grid; gap: var(--space-3); min-width: 0; }
+.ds-cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+/* auto-fill: 항목이 적어도 빈 칸을 남겨 카드 폭이 개수에 따라 늘어나지 않는다(탭마다 같은 카드가 같은 폭). */
+.ds-columns { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--size-column-min), 100%), 1fr)); gap: var(--space-5); align-items: start; }
+/* 같은 종류 카드만 늘어선 칸(예: 지금 할 일): 같은 줄 카드의 높이를 맞추고 동작 줄을 카드 바닥에 둔다. */
+.ds-columns--even { align-items: stretch; }
+.ds-columns--even > .ds-card { display: flex; flex-direction: column; }
+.ds-columns--even > .ds-card > .ds-card__actions { margin-top: auto; }
+/* 같은 칸에 놓인 묶음은 늘리지 않는다 — 내용 높이만큼만(빈 상자가 커지지 않게). */
+.ds-columns--even > .ds-group { align-self: start; }
+/* 목록 + 서랍: 넓은 폭에서는 서랍이 자리를 차지하고 목록은 한 줄로 접힌다. 좁은 폭에서는 서랍이 목록 위에 뜬다. */
+.ds-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr) var(--size-drawer); }
+.ds-split[data-drawer="open"] .ds-columns { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1023px) {
+  .ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr); }
+}
+/* 사이드바가 본문 폭의 1/3을 넘게 차지하는 폭(--breakpoint-wide 미만)에서는 사이드바를 본문 위로 접는다. */
+@media (max-width: 1023px) {
+  .ds-app { grid-template-columns: minmax(0, 1fr); }
+  .ds-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--color-border); }
+}
+@media (max-width: 760px) {
+  .ds-main { padding: var(--space-4) var(--space-4) var(--space-8); }
+}
+
+/* ── 버튼 ─────────────────────────────────────────────── */
+.ds-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1);
+  min-height: var(--size-control-md); padding: 0 var(--space-4);
+  border: 1px solid var(--color-border-control); border-radius: var(--radius-md);
+  background: var(--color-surface); color: var(--color-text);
+  font: inherit; font-size: var(--font-size-label); line-height: var(--font-line-label); font-weight: var(--font-weight-label);
+  white-space: nowrap; text-decoration: none; cursor: pointer;
+  transition: background-color var(--motion-duration-short) var(--motion-ease-standard), border-color var(--motion-duration-short) var(--motion-ease-standard);
+}
+.ds-btn:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-surface-hover); }
+.ds-btn:not(:disabled):not([aria-disabled="true"]):active { background: var(--color-surface-selected); }
+.ds-btn--sm { min-height: var(--size-control-sm); padding: 0 var(--space-3); font-size: var(--font-size-caption); }
+.ds-btn--primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
+.ds-btn--primary:not(:disabled):not([aria-disabled="true"]):hover, .ds-btn--primary:not(:disabled):not([aria-disabled="true"]):active { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.ds-btn--ghost { border-color: transparent; background: transparent; }
+.ds-btn--danger { border-color: var(--color-danger-border); color: var(--color-danger); }
+.ds-btn--danger:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-danger-subtle); }
+.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+/* 진행 중인 버튼은 흐리게 하지 않는다 — 진행형 글자가 읽혀야 한다. */
+.ds-btn[aria-busy="true"] { cursor: progress; opacity: 1; }
+.ds-btn[aria-busy="true"]::before { content: ""; width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-full); border: 2px solid currentColor; border-right-color: transparent; animation: ds-spin var(--motion-duration-loop) linear infinite; }
+.ds-btn--icon { padding: 0; width: var(--size-control-md); flex: none; }
+.ds-btn--icon.ds-btn--sm { width: var(--size-control-sm); }
+
+/* ── 입력 ─────────────────────────────────────────────── */
+.ds-input {
+  min-height: var(--size-control-md); padding: 0 var(--space-3); width: 100%;
+  border: 1px solid var(--color-border-control); border-radius: var(--radius-md);
+  background: var(--color-surface); color: var(--color-text); font: inherit;
+}
+.ds-input::placeholder { color: var(--color-text-muted); }
+.ds-input[aria-invalid="true"] { border-color: var(--color-danger-border); }
+.ds-field { display: grid; gap: var(--space-1); }
+.ds-field__error { display: flex; align-items: center; gap: var(--space-1); color: var(--color-danger); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
+
+/* ── 배지(상태) · 칩(분류) · 개수 ─────────────────────── */
+/* 배지 = 상태 하나. 모양이 다른 아이콘 + 글자가 항상 같이 온다(색만으로 구분하지 않는다). */
+.ds-badge {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0 var(--space-2) 0 var(--space-1); min-height: var(--size-badge); border-radius: var(--radius-full);
+  background: var(--color-info-subtle); color: var(--color-info);
+  font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-label); white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.ds-badge[data-status] { box-shadow: none; }
+.ds-badge .ds-icon { width: var(--size-icon-sm); height: var(--size-icon-sm); }
+.ds-badge[data-status="attention"] { background: var(--color-attention-subtle); color: var(--color-attention); }
+/* 사람 필요 중 에이전트를 막고 있지 않은 것(사람 판단)은 한 단계 약하게: 면 없이 윤곽만. 막고 있는 것(권한·답)이 기본 배지다. */
+.ds-badge[data-status="attention"][data-weight="soft"] { background: transparent; box-shadow: inset 0 0 0 1px var(--color-attention-border); }
+.ds-badge[data-status="progress"] { background: var(--color-progress-subtle); color: var(--color-progress); }
+.ds-badge[data-status="waiting"] { background: var(--color-waiting-subtle); color: var(--color-waiting); }
+.ds-badge[data-status="success"] { background: var(--color-success-subtle); color: var(--color-success); }
+.ds-badge[data-status="danger"] { background: var(--color-danger-subtle); color: var(--color-danger); }
+/* 칩 = 분류·출처 같은 중립 정보. 상태 색을 쓰지 않는다. button.ds-chip 은 켜고 끄는 필터다. */
+.ds-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0 var(--space-2); min-height: var(--size-badge); border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border); background: transparent; color: var(--color-text-muted);
+  font: inherit; font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap;
+}
+button.ds-chip { min-height: var(--size-control-sm); border-color: var(--color-border-control); color: var(--color-text); cursor: pointer; }
+button.ds-chip:hover { background: var(--color-surface-hover); }
+button.ds-chip:active { background: var(--color-surface-selected); }
+button.ds-chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
+.ds-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: var(--size-badge); height: var(--size-badge); padding: 0 var(--space-1);
+  border-radius: var(--radius-full); background: var(--color-info-subtle); color: var(--color-text-muted);
+  font-size: var(--font-size-caption); line-height: 1; font-weight: var(--font-weight-label); font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.ds-count[data-status="attention"] { background: var(--color-attention-solid); color: var(--color-text-on-solid); box-shadow: none; }
+.ds-dot { width: var(--size-dot); height: var(--size-dot); border-radius: var(--radius-full); flex: none; background: var(--color-info-solid); }
+.ds-dot[data-status="attention"] { background: var(--color-attention-solid); }
+.ds-dot[data-status="progress"] { background: var(--color-progress-solid); }
+.ds-dot[data-status="waiting"] { background: var(--color-waiting-solid); }
+.ds-dot[data-status="success"] { background: var(--color-success-solid); }
+.ds-dot[data-status="danger"] { background: var(--color-danger-solid); }
+
+/* ── 카드 ─────────────────────────────────────────────── */
+/* 눌리는 카드(.ds-card--interactive)는 제목이 button(.ds-card__open)이고 그 ::after 가 카드 전체를 덮는다 — 마우스는 카드 어디든, 키보드는 제목 하나.
+   카드 안의 다른 버튼·링크는 .ds-card__actions 안에 두면 덮개 위로 올라온다. 눌리지 않는 카드에는 hover 가 없다. */
+.ds-card { position: relative; display: grid; gap: var(--space-2); padding: var(--space-4) var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); font-size: var(--font-size-caption); line-height: var(--font-line-caption); color: var(--color-text-muted); }
+.ds-card__meta > .ds-card__when { margin-left: auto; }
+.ds-card__title { font-size: var(--font-size-title); line-height: var(--font-line-title); font-weight: var(--font-weight-title); margin: 0; }
+/* 카드 제목은 두 줄까지, 넘치면 말줄임(전체 문장은 title 툴팁과 서랍). */
+.ds-card__open { all: unset; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; }
+.ds-card__open::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius-lg); }
+.ds-card__open:focus-visible { outline: none; }
+.ds-card__open:focus-visible::after { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.ds-card--interactive { border-color: var(--color-border-control); transition: background-color var(--motion-duration-short) var(--motion-ease-standard); }
+.ds-card--interactive:hover { background: var(--color-surface-hover); }
+.ds-card--interactive:active { background: var(--color-surface-selected); }
+.ds-card[data-selected="true"] { background: var(--color-surface-selected); box-shadow: inset 0 0 0 1px var(--color-accent); border-color: var(--color-accent); }
+.ds-card__body { margin: 0; color: var(--color-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ds-card__actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+/* ── 목록 줄 ───────────────────────────────────────────── */
+/* 펼쳐지는 줄은 머리가 button[aria-expanded] 다. 펼쳐지지 않는 줄은 그냥 글자다(hover·손가락 커서 없음). */
+.ds-rows { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-row { border-top: 1px solid var(--color-border); min-width: 0; }
+.ds-row:first-child { border-top: 0; }
+.ds-row__head { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--size-row); padding: var(--space-3) var(--space-5); text-align: left; min-width: 0; }
+button.ds-row__head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--size-row); padding: var(--space-3) var(--space-5); cursor: pointer; }
+button.ds-row__head:hover { background: var(--color-surface-hover); }
+button.ds-row__head:active { background: var(--color-surface-selected); }
+/* 펼칠 수 없는 줄도 제목이 화살표 자리만큼 들어가 같은 선에서 시작한다. */
+div.ds-row__head { padding-left: calc(var(--space-5) + var(--size-icon) + var(--space-2)); }
+button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.ds-row:first-child > .ds-row__head { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.ds-row:last-child > .ds-row__head[aria-expanded="false"], .ds-row:last-child > div.ds-row__head { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.ds-row__chevron { transition: transform var(--motion-duration-medium) var(--motion-ease-standard); color: var(--color-text-muted); }
+.ds-row__head[aria-expanded="true"] .ds-row__chevron { transform: rotate(90deg); }
+.ds-row__title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--font-weight-label); }
+.ds-row__side { flex: none; display: flex; align-items: center; gap: var(--space-2); color: var(--color-text-muted); font-size: var(--font-size-caption); }
+.ds-row__detail { padding: var(--space-1) var(--space-5) var(--space-5) calc(var(--space-5) + var(--size-icon) + var(--space-2)); display: grid; gap: var(--space-2); }
+.ds-pre { margin: 0; padding: var(--space-2) var(--space-3); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: auto; white-space: pre-wrap; }
+@media (max-width: 760px) {
+  /* 좁은 폭: 제목을 자르지 않고 줄바꿈하고, 곁 정보는 제목 아래로 내린다. */
+  .ds-row__head, button.ds-row__head { flex-wrap: wrap; }
+  .ds-row__title { flex-basis: calc(100% - var(--size-icon) - var(--space-2)); white-space: normal; }
+  div.ds-row__head > .ds-row__title { flex-basis: 100%; }
+  button.ds-row__head > .ds-row__side { margin-left: calc(var(--size-icon) + var(--space-2)); }
+}
+.ds-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; }
+.ds-kv dt { color: var(--color-text-muted); }
+.ds-kv dd { margin: 0; min-width: 0; }
+
+/* ── 묶음: 같은 원인으로 반복되는 항목은 한 줄로 접는다 ──── */
+.ds-group { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); min-width: 0; }
+.ds-group > .ds-row__head { border-radius: var(--radius-lg); }
+.ds-group > .ds-row__head[aria-expanded="true"] { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.ds-group__members { border-top: 1px solid var(--color-border); padding: var(--space-3) var(--space-5) var(--space-4) calc(var(--space-5) + var(--size-icon) + var(--space-2)); display: grid; gap: var(--space-1); }
+.ds-group__members > li { display: flex; gap: var(--space-2); align-items: baseline; }
+.ds-group__members { list-style: none; margin: 0; }
+.ds-group__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + var(--size-icon) + var(--space-2)); }
+
+/* ── 탭 ───────────────────────────────────────────────── */
+.ds-tabs { display: flex; gap: var(--space-1); box-shadow: inset 0 -1px 0 var(--color-border); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ds-tab {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: var(--space-2);
+  min-height: var(--size-control-md); padding: 0 var(--space-4); border-bottom: 2px solid transparent; flex: none;
+  color: var(--color-text-muted); font-size: var(--font-size-label); font-weight: var(--font-weight-label); white-space: nowrap; cursor: pointer;
+}
+.ds-tab:hover { color: var(--color-text); }
+.ds-tab[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); font-weight: var(--font-weight-strong); }
+.ds-tab:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; border-radius: var(--radius-sm); }
+.ds-tabpanel { padding-top: var(--space-4); }
+@media (max-width: 760px) {
+  .ds-tab { padding: 0 var(--space-2); gap: var(--space-1); }
+}
+
+/* ── 선택 사다리(여러 값 중 하나) ───────────────────────── */
+/* 폭이 모자라면 선택지가 다음 줄로 넘어간다 — 잘려서 안 보이는 선택지가 없게. */
+.ds-segment { display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; border: 1px solid var(--color-border-control); border-radius: var(--radius-md); overflow: hidden; }
+.ds-segment > button {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; min-height: calc(var(--size-control-md) - 2px); padding: 0 var(--space-4);
+  border-left: 1px solid var(--color-border-control); color: var(--color-text); font-size: var(--font-size-label); white-space: nowrap; cursor: pointer;
+}
+.ds-segment > button:first-child { border-left: 0; }
+.ds-segment > button:hover { background: var(--color-surface-hover); }
+.ds-segment > button:active { background: var(--color-surface-selected); }
+.ds-segment > button[aria-checked="true"] { background: var(--color-surface-selected); font-weight: var(--font-weight-strong); box-shadow: inset 0 -2px 0 var(--color-accent); }
+.ds-segment > button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+
+/* ── 설정 행: 기본값이면 조용히, 기본값과 다를 때만 표시가 붙는다 ── */
+/* 값 열은 넓어도 행의 60%까지만 — 선택 사다리가 길면 값 칸 안에서 줄바꿈하고 이름·설명 열을 밀어내지 않는다. */
+.ds-setting { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(60%); gap: var(--space-2) var(--space-4); align-items: center; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
+.ds-setting:first-child { border-top: 0; }
+.ds-setting__name { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-weight: var(--font-weight-label); }
+.ds-setting__desc { margin: 0; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
+.ds-setting__changed { display: none; }
+.ds-setting[data-changed="true"] .ds-setting__changed { display: inline-flex; }
+.ds-setting__control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+/* 사이드바가 옆에 있는 중간 폭에서는 선택 사다리가 이름 열을 밀어내므로, --breakpoint-wide 미만에서 값이 이름 아래로 내려간다. */
+@media (max-width: 1023px) {
+  .ds-setting { grid-template-columns: minmax(0, 1fr); }
+  .ds-setting__control { justify-content: flex-start; }
+}
+
+/* ── 알림 줄: 화면에 한 번, 원인과 할 일 ─────────────────── */
+.ds-notice { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-info-subtle); color: var(--color-text); }
+.ds-notice > .ds-icon { margin-top: calc((var(--font-line-body) * 1em - var(--size-icon)) / 2); color: var(--color-info); }
+.ds-notice > p { margin: 0; flex: 1 1 auto; min-width: 0; }
+.ds-notice[data-status="attention"] { border-color: var(--color-attention-border); background: var(--color-attention-subtle); }
+.ds-notice[data-status="attention"] > .ds-icon { color: var(--color-attention); }
+.ds-notice[data-status="danger"] { border-color: var(--color-danger-border); background: var(--color-danger-subtle); }
+.ds-notice[data-status="danger"] > .ds-icon { color: var(--color-danger); }
+
+/* ── 서랍(상세) ────────────────────────────────────────── */
+/* 열면 포커스가 서랍 제목으로, 닫으면 연 곳으로 돌아간다. Esc 로 닫힌다. 좁은 폭에서는 배경을 가리고 목록 위에 뜬다. */
+.ds-drawer { display: flex; flex-direction: column; min-width: 0; background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-lg); position: sticky; top: var(--space-4); max-height: calc(100vh - var(--space-8)); }
+.ds-drawer__head { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); }
+.ds-drawer__head > div { flex: 1 1 auto; min-width: 0; display: grid; gap: var(--space-1); }
+.ds-drawer__title { justify-self: start; }
+.ds-drawer__title:focus-visible { outline-offset: var(--space-1); border-radius: var(--radius-sm); }
+.ds-drawer__body { flex: 1 1 auto; overflow: auto; padding: var(--space-5); display: grid; gap: var(--space-5); align-content: start; }
+.ds-drawer__body p { margin: 0; }
+.ds-drawer__foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
+.ds-backdrop { display: none; }
+@media (max-width: 1023px) {
+  .ds-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--size-drawer), 100vw); max-height: none; border-radius: 0; border-width: 0 0 0 1px; box-shadow: var(--shadow-overlay); z-index: var(--z-drawer); animation: ds-slide-in var(--motion-duration-long) var(--motion-ease-enter); }
+  .ds-split[data-drawer="open"] > .ds-backdrop { display: block; position: fixed; inset: 0; background: var(--color-backdrop); z-index: calc(var(--z-drawer) - 1); animation: ds-fade-in var(--motion-duration-medium) var(--motion-ease-enter); }
+}
+
+/* ── 토스트 ────────────────────────────────────────────── */
+.ds-toasts { position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: var(--z-toast); display: grid; gap: var(--space-2); width: min(var(--size-toast-max), calc(100vw - var(--space-8))); }
+/* 서랍이 열려 있으면 토스트를 서랍 바닥(주 동작) 위로 올린다. */
+.ds-root:has(.ds-split[data-drawer="open"]) .ds-toasts { bottom: calc(var(--size-control-md) + var(--space-4) * 2 + var(--space-4)); }
+.ds-toast { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-overlay); animation: ds-rise-in var(--motion-duration-medium) var(--motion-ease-enter); }
+.ds-toast > p { margin: 0; flex: 1 1 auto; min-width: 0; }
+.ds-toast > .ds-icon { margin-top: calc((var(--font-line-body) * 1em - var(--size-icon)) / 2); }
+.ds-toast[data-status="success"] > .ds-icon { color: var(--color-success); }
+.ds-toast[data-status="danger"] > .ds-icon { color: var(--color-danger); }
+
+/* ── 빈 · 로딩 · 오류 ──────────────────────────────────── */
+.ds-empty, .ds-error { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-5); border: 1px dashed var(--color-border); border-radius: var(--radius-lg); }
+.ds-empty > p, .ds-error > p { margin: 0; }
+.ds-error { border-style: solid; border-color: var(--color-danger-border); background: var(--color-danger-subtle); }
+.ds-error__title { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--font-weight-strong); }
+.ds-error__title > .ds-icon { color: var(--color-danger); }
+/* 로딩은 빠른 응답에서 깜빡이지 않게 --motion-delay-loading 뒤에 나타난다. 자리 표시는 실제 내용과 같은 뼈대를 쓴다. */
+.ds-skeleton { display: grid; gap: var(--space-2); padding: var(--space-4) var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); opacity: 0; animation: ds-fade-in var(--motion-duration-medium) var(--motion-ease-enter) var(--motion-delay-loading) forwards; }
+.ds-skeleton__line { height: var(--space-3); border-radius: var(--radius-sm); background: var(--color-surface-selected); animation: ds-pulse var(--motion-duration-loop) var(--motion-ease-standard) infinite; }
+.ds-skeleton__line--short { width: 40%; }
+.ds-skeleton__line--title { height: var(--space-4); width: 70%; }
+
+/* 좁은 폭에서 서랍이 떠 있는 동안 뒤 화면은 스크롤되지 않는다. 테마를 바꾸는 순간에는 전환을 끈다. */
+.ds-root.ds-lock { overflow: hidden; }
+.ds-theme-switching *, .ds-theme-switching *::before, .ds-theme-switching *::after { transition: none !important; }
+
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+@keyframes ds-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ds-rise-in { from { opacity: 0; transform: translateY(var(--space-2)); } to { opacity: 1; transform: none; } }
+@keyframes ds-slide-in { from { transform: translateX(var(--space-6)); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ds-pulse { 50% { opacity: 0.5; } }
+
+/* 움직임 줄이기: 이동·회전·반복을 없애고 같은 끝 상태에 바로 닿는다. 뜻이 있는 변화는 색·불투명도로만 남긴다. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-root *, .ds-root *::before, .ds-root *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: 0.01ms !important; }
+  .ds-btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: 0.5; }
+}
+/* 강제 색(고대비) 모드: 배경색만으로 구분하던 경계를 선으로 보이게 한다. */
+@media (forced-colors: active) {
+  .ds-badge, .ds-count, .ds-card[data-selected="true"], .ds-segment > button[aria-checked="true"], button.ds-chip[aria-pressed="true"] { border: 1px solid CanvasText; }
+  .ds-tab[aria-selected="true"] { border-bottom-color: CanvasText; }
+}
