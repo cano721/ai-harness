@@ -8,9 +8,10 @@
 #   - 상태: 노드마다 state.json에 체크포인트를 남겨 resume이 멈춘 노드부터 이어 간다.
 #   - 승인: 사용자가 대화에 직접 입력한 "승인"(Claude·Codex 트랜스크립트의 사용자 메시지) 또는 터미널의 approve.
 #     모델이 쓰는 도구 출력·자기 메시지는 사용자 메시지가 아니므로 승인이 되지 않는다.
-#     .ai-harness/harness.json의 approval이 auto면 Brief가 열린 질문 대신 decisions(추천안과 근거)를 내고, 사람만 정할 수 있는 것
+#     저장소별 HM_APPROVAL_REPOS > HM_APPROVAL > 기본 human 순으로 결정한다. 기존 manifest approval은 무시하고 한 번 안내한다.
+#     auto면 Brief가 열린 질문 대신 decisions(추천안과 근거)를 내고, 사람만 정할 수 있는 것
 #     (needs_human)이 비어 있을 때 그래프의 auto_approved_by_policy 엣지로 통과한다. decisions는 brief.md와 PR 본문에 남는다.
-#     review 그래프에는 승인 노드가 없다. blocking finding을 고치는 repair는 같은 승인(또는 approval: auto)을 받은 뒤에만 시작한다.
+#     review 그래프에는 승인 노드가 없다. blocking finding을 고치는 repair는 같은 승인(또는 HM_APPROVAL=auto)을 받은 뒤에만 시작한다.
 #   - 검증: Brief(review는 수리 범위)에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
 #   - git: harness.json의 git_policy가 pr-only·direct면 쓰기 노드 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
 #     커밋·일반 push·PR을 맡는다. 그 밖의 값이면 커밋하지 않는다. review는 publish 노드가 없어 수리를 커밋하지 않고 남긴다.
@@ -51,7 +52,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)이다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
 
-  정책: .ai-harness/harness.json의 approval(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
+  정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
   자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)만 병합 여부를 정한다. 없으면 PR까지다.
 
@@ -374,12 +375,12 @@ print_brief() {
   jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
     if [[ "$WORKFLOW" == review ]]; then
-      printf '\n== 정책 승인 (approval: auto) ==\n수리 범위는 %s에 남는다. 수리는 커밋하지 않고 작업 트리에 남긴다.\n' "$RUN/brief.md"
+      printf '\n== 정책 승인 (HM_APPROVAL=auto) ==\n수리 범위는 %s에 남는다. 수리는 커밋하지 않고 작업 트리에 남긴다.\n' "$RUN/brief.md"
     # direct는 PR 없이 push까지 가므로 "병합 전에 뒤집는다"가 성립하지 않는다.
     elif [[ "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" == direct ]]; then
-      printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s와 마지막 커밋 메시지에 남는다. git_policy direct라 PR 없이 push되므로, 결정을 뒤집으려면 이후 커밋으로 되돌린다.\n' "$RUN/brief.md"
+      printf '\n== 정책 승인 (HM_APPROVAL=auto) ==\nBrief와 결정 사항은 %s와 마지막 커밋 메시지에 남는다. git_policy direct라 PR 없이 push되므로, 결정을 뒤집으려면 이후 커밋으로 되돌린다.\n' "$RUN/brief.md"
     else
-      printf '\n== 정책 승인 (approval: auto) ==\nBrief와 결정 사항은 %s에 남고 PR 본문에 들어간다. 사람은 병합 전에 PR에서 결정을 뒤집을 수 있다.\n' "$RUN/brief.md"
+      printf '\n== 정책 승인 (HM_APPROVAL=auto) ==\nBrief와 결정 사항은 %s에 남고 PR 본문에 들어간다. 사람은 병합 전에 PR에서 결정을 뒤집을 수 있다.\n' "$RUN/brief.md"
     fi
     return
   fi
@@ -447,7 +448,7 @@ record_approval() { # evidence-json
 }
 
 # review: 승인 노드가 없는 그래프에서 repair(쓰기)로 가기 전에 사람의 동의를 받는다. 동의는 보여 준 수리 범위(finding·검증 명령)에 묶인다.
-# 다시 검토해 범위 밖의 새 finding이 나오면 그 finding을 보여 주고 다시 동의를 받는다. approval: auto면 정책이 동의한다.
+# 다시 검토해 범위 밖의 새 finding이 나오면 그 finding을 보여 주고 다시 동의를 받는다. HM_APPROVAL=auto면 정책이 동의한다.
 # 기다리는 동안 노드와 갈 엣지를 상태에 남겨, resume이 같은 노드를 다시 실행하지 않고 이어 가게 한다.
 repair_covered() { # 현재 finding이 동의받은 수리 범위 안인가
   [[ -f "$RUN/brief.json" && -n "$(state '.brief_hash // ""')" && "$(state '.approval.brief_hash // ""')" == "$(state '.brief_hash // ""')" ]] \
@@ -1185,6 +1186,7 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
           then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end
           + if (.ui_scenarios // [] | length) > 0
           then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
+        printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state .policy.approval)" "$(state .policy.approval_source)" >>"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
           | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
@@ -1339,7 +1341,7 @@ $(brief_context)" "$INSPECT_SCHEMA"
         go inspect ""
         ;;
       classify)
-        # 분류는 inspect가 낸 finding으로 이 스크립트가 정한다. 수리는 사람이 동의(또는 approval: auto)해야 시작한다.
+        # 분류는 inspect가 낸 finding으로 이 스크립트가 정한다. 수리는 사람이 동의(또는 HM_APPROVAL=auto)해야 시작한다.
         route_review classify
         ;;
       re_review)
@@ -1504,21 +1506,33 @@ project_key() {
   fi
   printf '%s' "${id:-${REPO##*/}}"
 }
-# 개인 자동화 단계: HM_DELIVERY_LEVEL_REPOS의 "<project_id>=<단계>"(쉼표·공백 구분)가 이 저장소를 가리키면 그것, 아니면 HM_DELIVERY_LEVEL.
-# 출력: "<단계> <출처>" 또는 빈 문자열(설정 없음 — PR까지).
-delivery_level() {
-  local key entry level="" source="" entries=()
+# 저장소별 개인 설정 파서: 저장소별 값은 "<project_id>=<값>"(쉼표·공백 구분), 같은 키가 여러 번 나오면 마지막 값.
+repository_setting() { # $1=repo setting key → "<value> <setting-key>:<project_id>" 또는 빈값
+  local key entry value="" entries=()
   key="$(project_key)"
-  IFS=$', \t' read -r -a entries <<<"$(user_config HM_DELIVERY_LEVEL_REPOS)"
+  IFS=$', \t' read -r -a entries <<<"$(user_config "$1")"
   for entry in "${entries[@]+"${entries[@]}"}"; do
     [[ "$entry" == *=* && "${entry%%=*}" == "$key" ]] || continue
-    level="${entry#*=}" source="HM_DELIVERY_LEVEL_REPOS:$key"
+    value="${entry#*=}"
   done
-  if [[ -z "$level" ]]; then
-    level="$(user_config HM_DELIVERY_LEVEL)"
-    [[ -z "$level" ]] || source=HM_DELIVERY_LEVEL
-  fi
+  [[ -z "$value" ]] || printf '%s %s:%s' "$value" "$1" "$key"
+}
+# 개인 자동화 단계: 저장소별 값 > HM_DELIVERY_LEVEL.
+# 출력: "<단계> <출처>" 또는 빈 문자열(설정 없음 — PR까지).
+delivery_level() {
+  local setting="" level="" source=""
+  setting="$(repository_setting HM_DELIVERY_LEVEL_REPOS)"
+  if [[ -n "$setting" ]]; then read -r level source <<<"$setting"; else level="$(user_config HM_DELIVERY_LEVEL)"; [[ -z "$level" ]] || source=HM_DELIVERY_LEVEL; fi
   [[ -z "$level" ]] || printf '%s %s' "$level" "$source"
+}
+# 개인 승인 모드: 저장소별 설정 > 전체 설정 > human 기본값.
+approval_mode() {
+  local setting="" mode="" source=""
+  setting="$(repository_setting HM_APPROVAL_REPOS)"
+  if [[ -n "$setting" ]]; then read -r mode source <<<"$setting"; else mode="$(user_config HM_APPROVAL)"; fi
+  if [[ -z "$source" ]]; then if [[ -n "$mode" ]]; then source=HM_APPROVAL; else mode=human; source=default; fi; fi
+  [[ "$mode" =~ ^(human|auto)$ ]] || { printf '%s in ~/.ai-harness/config is "%s"; approval must be human or auto\n' "$source" "$mode" >&2; return 2; }
+  printf '%s %s' "$mode" "$source"
 }
 
 case "$CMD" in
@@ -1533,13 +1547,18 @@ case "$CMD" in
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다. 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
+    if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
+      notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
+    fi
     if [[ "$git_policy" == merge ]]; then
       git_policy="pr-only"
-      notices='["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]'
+      notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
     if [[ "$WORKFLOW" != review ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; set personal merge conditions with HM_MERGE_* (/ai-harness:setup)"]' <<<"$notices")"
     fi
+    approval_setting="$(approval_mode)" || exit 2
+    read -r approval approval_source <<<"$approval_setting"
     # 병합 여부는 개인 자동화 단계만 정한다. 없으면 PR까지다. 저장소 git_policy는 커밋·PR 범위만 정한다:
     # pr-only → PR(단계가 merge·deploy면 러너가 병합), direct → PR 없이 push(병합할 PR이 없다), 그 밖 → 커밋하지 않는다.
     delivery=null
@@ -1632,10 +1651,10 @@ case "$CMD" in
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
-      --arg appr "$(jq -r '.approval // "human"' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf human)" \
+      --arg appr "$approval" --arg appr_source "$approval_source" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
-        policy:{git:$git, approval:(if $appr == "auto" then "auto" else "human" end), commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
+        policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
         monitor_error:$mon, status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
@@ -1716,7 +1735,7 @@ EOF
 
 case "$CMD" in
   status)
-    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "default")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
     exit 0
     ;;

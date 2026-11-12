@@ -6,6 +6,16 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 동작 변경
+
+- **승인 모드를 개인 설정으로 이동** — 워크플로 러너의 Brief 승인 게이트(human·auto)를 저장소 manifest의 `approval`이 정해서, 한 사람이 auto로 올리면 그 저장소를 쓰는 모두의 에이전트가 사람 승인 없이 PR까지 갔습니다. 이제 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(`<project_id>=<human|auto>`, 저장소별) → `HM_APPROVAL`(전체) → 기본 `human` 순으로 정합니다. manifest의 `approval`은 더 읽지 않고, 값이 남아 있으면 러너가 개인 설정으로 옮기라는 안내를 남깁니다. 러너는 start 때 정한 승인 모드와 출처를 실행 상태·`brief.md`·`status`에 남깁니다. `/ai-harness:setup`에서 고를 수 있습니다. (#294)
+
+### 업데이트 후 해야 할 일
+
+- manifest `approval: "auto"`로 무인 실행을 쓰던 사람은 `/ai-harness:setup`에서 `HM_APPROVAL=auto`(또는 저장소별 `HM_APPROVAL_REPOS`)를 설정하세요. 설정하지 않으면 사람 승인을 기다립니다. manifest의 `approval` 키는 지워도 됩니다. (#294)
+
 ## v0.71.0 (2026-11-12)
 ### 새 기능
 
