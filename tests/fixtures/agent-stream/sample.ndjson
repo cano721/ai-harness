@@ -1,0 +1,16 @@
+{"type":"system","subtype":"init","cwd":"/work/acme/shop","session_id":"00000000-0000-4000-8000-000000000001","tools":["Bash","Read","Write","Edit","Grep","Agent"]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"MODEL_SENTENCE_ONE 먼저 설정 파일을 읽어 보겠습니다."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"MODEL_SENTENCE_TWO 이어서 파일을 확인합니다."},{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file_path":"/work/acme/shop/config/app.yml"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"FILE_CONTENT_SECRET_LINE api_key: FAKE_KEY_0000"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"curl -H 'Authorization: Bearer FAKE_TOKEN_123' https://example.com/health","description":"예시 서버 상태 확인"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_03","name":"Bash","input":{"command":"FOO=1 /usr/local/bin/gh pr create --title FAKE_TITLE_ARG --body FAKE_BODY_ARG"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_04","name":"Write","input":{"file_path":"/work/acme/shop/notes.md","content":"WRITE_BODY_SECRET 이 본문은 디스크에 남기지 않는다"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_05","name":"Edit","input":{"file_path":"/work/acme/shop/src/cart.py","old_string":"EDIT_OLD_SECRET","new_string":"EDIT_NEW_SECRET"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_06","name":"Grep","input":{"pattern":"GREPPAT_0123456789012345678901234567890123456789012345678901234567890123456789","path":"/work/acme/shop/src"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_07","name":"Agent","input":{"description":"예시 하위 분석","prompt":"AGENT_PROMPT_SECRET 이 지시문도 남기지 않는다"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_08","name":"Read","input":{"file_path":"/work/acme/shop/long-directory-segment-01/long-directory-segment-02/long-directory-segment-03/long-directory-segment-04/long-directory-segment-05/long-directory-segment-06/long-directory-segment-07/long-directory-segment-08/long-directory-segment-09/file.txt"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_08","content":"FILE_CONTENT_SECRET_TWO"}]}}
+Ignoring 19 permissions.allow entries: workspace not trusted
+STDERR_LONG_NOTICE word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word STDERR_TAIL_MARK
+{not valid json at all
+{"type":"result","subtype":"success","is_error":false,"result":"AI_HARNESS_SYNC_RESULT outcome=no-change","total_cost_usd":0.34,"duration_ms":1200,"session_id":"00000000-0000-4000-8000-000000000001"}
