@@ -315,8 +315,9 @@ prior_sync_prs() { # $1=project [$2=제외할 URL]
 }
 
 # 새 sync를 띄우지 않을 이유. 사람이 코멘트·리뷰·승인을 남긴 열린 sync PR이 있으면 그 PR을 기준으로 이야기가
-# 진행 중이고, 같은 파일을 고치는 두 PR은 함께 병합할 수 없다. 상태를 못 읽으면 PR이 다시 쌓이지 않게 기다린다
-# (그 경우 PR 생성도 같은 자격증명이 필요해 어차피 실패한다).
+# 진행 중이고, 같은 파일을 고치는 두 PR은 함께 병합할 수 없다. 상태를 못 읽으면 PR이 다시 쌓이지 않게 기다린다.
+# open-pr.sh는 셸에 없는 Bitbucket 자격증명을 Claude settings.json env에서 찾는다. 그래도 없으면(종료 코드 4) 로그인
+# 풀림·권한과 원인이 달라 이유를 가른다 — 보드가 고칠 곳(자격증명 설정)을 보인다.
 sync_blocked_reason() { # $1=project
   local url="" st="" rc=0
   while IFS= read -r url; do
@@ -324,7 +325,7 @@ sync_blocked_reason() { # $1=project
     rc=0
     st="$(pr_cmd --status "$url" 2>/dev/null)" || rc=$?
     # 2·3: 형식이 아니거나 지원하지 않는 호스트 — 이 경로로는 끝내 읽을 수 없으니 관리 대상에서 뺀다.
-    case "$rc" in 2|3) continue ;; esac
+    case "$rc" in 2|3) continue ;; 4) printf 'sync_pr_no_credentials\n'; return 0 ;; esac
     if (( rc != 0 )) || ! jq -e '.state | type == "string"' <<<"$st" >/dev/null 2>&1; then
       printf 'sync_pr_status_unknown\n'; return 0
     fi

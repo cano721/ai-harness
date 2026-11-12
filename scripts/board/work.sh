@@ -107,11 +107,20 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
       | {prompt: ($u.message.content | text? // null), reply: ($r.message.content | text? // null),
          # 사람이 마지막 답 뒤에 아직 말하지 않았을 때만 그 답의 끝부분을 싣는다 — 보드가 본문으로 묻는 질문을 찾는다(asks.py).
          reply_tail: (if $r and (($r.timestamp // "") > ($u.timestamp // "")) then ($r.message.content | text? // "" | .[-400:]) else null end),
+         # 마지막 기록이 API 오류 메시지면(응답이 끊김) 세션은 더 진행하지 않는다 — 사람이 다시 시작해야 한다.
+         api_error: ((map(select(.type == "user" or .type == "assistant")) | last) as $z
+           | ($z.type == "assistant" and ($z.isApiErrorMessage == true or ($z.message.content | text? // "" | startswith("API Error:"))))),
          last: (map(.timestamp // empty) | max // null)}' 2>/dev/null || echo '{}')
   fi
   jq -c --argjson s "$summary" --argjson ti "$titles" --arg path "${t:-}" --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
     def clip($n): if . == null then null else gsub("\\s+"; " ") | if length > $n then .[0:$n] + "…" else . end end;
-    (if .status == "waiting" then "needs_human"
+    # 멈춘 세션: API 오류로 끊김(api_error) · 작업 중인데 프로세스가 없음(no_process). 작업 중으로 남기지 않는다.
+    (if .status == "waiting" then null
+     elif $s.api_error == true then "api_error"
+     elif .status == "busy" and .pid == null then "no_process"
+     else null end) as $stall
+    | (if $stall != null then "blocked"
+     elif .status == "waiting" then "needs_human"
      elif .status == "busy" then "running"
      elif .state == "failed" then "needs_human"
      else "done" end) as $st
@@ -122,7 +131,10 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
        at: $at,
        title: ($ti.custom // (if (.name // "" | test("-[0-9a-f]{2}$")) then $ti.ai else null end) // .name // $ti.ai // .sessionId[0:8]),
        term: .name,
+       stall: $stall,
        detail: ((if .status == "waiting" then "에이전트가 응답·권한을 기다림\n"
+                 elif $stall == "api_error" then "API 오류로 응답이 끊김 — 다시 시작해야 이어짐\n"
+                 elif $stall == "no_process" then "작업 중으로 남았지만 세션 프로세스가 없음\n"
                  elif .state == "failed" then "백그라운드 세션이 실패함\n"
                  elif .pid == null then "세션 종료됨\n" else "" end)
                 + (if $s.prompt then "요청: " + ($s.prompt | clip(140)) else "" end)
