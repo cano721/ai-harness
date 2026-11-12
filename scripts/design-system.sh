@@ -35,7 +35,7 @@ DS="$ROOT/docs/design-system"
 targets() {
   printf '%s\n' \
     'docs/design-system/reference.html tokens components' \
-    'scripts/board/template.html tokens' \
+    'scripts/board/template.html tokens components' \
     'skills/harness-impact/report-template.html tokens'
 }
 

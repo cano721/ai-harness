@@ -221,18 +221,18 @@ def effective(row, cfg):
     src = "repo" if repo_levels(cfg).get(row["key"]) else "default" if personal else "team"
     notes = []
     if personal and row["runner"] != "personal":
-        notes.append(("이 저장소엔 워크플로 러너가 아직 없음" if row["runner"] == "none" else "이 저장소 러너가 옛 버전이라 내 단계를 읽지 못함")
-                     + f" — 고른 단계({LEVEL_KO[personal]})는 /harness-init --sync 뒤부터 적용, 그 전엔 저장소 설정을 따름")
+        notes.append(("이 저장소에는 워크플로 러너가 아직 없어" if row["runner"] == "none" else "이 저장소의 러너가 옛 버전이라")
+                     + f" 고른 단계({LEVEL_KO[personal]})는 하네스를 동기화한 뒤부터 적용되고, 그 전에는 저장소 설정을 따릅니다.")
         personal, src = None, "team"
     level = personal or ("pr" if row["level"] in LEVELS else None)
     gp = row.get("git_policy")
     if gp == "merge":  # 러너는 예전 git_policy:"merge"를 pr-only로 읽는다(#248)
-        notes.append("저장소 harness.json의 병합 설정(git_policy: merge)은 더 이상 쓰이지 않아 PR까지로 읽힘 — /harness-init --sync가 정리를 제안")
+        notes.append("저장소 하네스 설정의 예전 병합 설정은 더 이상 쓰이지 않아 PR까지로 읽힙니다. 하네스를 동기화하면 정리를 제안합니다.")
     if personal and personal != "pr" and gp not in ("pr-only", "merge"):
-        notes.append("저장소가 PR을 만들지 않는 설정(" + (gp or "미설정") + ")이라 병합할 PR이 없음")
+        notes.append("저장소가 PR을 만들지 않는 설정이라 병합할 PR이 없습니다.")
     mp = row.get("merge_policy") or {}
     if level == "deploy" and src != "team" and not (mp.get("deploy_check_cmd") or mp.get("smoke_cmd")):
-        notes.append("저장소에 배포 확인·스모크 명령이 없어 병합까지만 함 — 아래에서 저장소 사실을 추가할 수 있음")
+        notes.append("저장소에 배포 확인·스모크 명령이 없어 병합까지만 합니다. 저장소 사실 고치기로 더할 수 있습니다.")
     return {"level": level, "source": src, "notes": notes}
 
 

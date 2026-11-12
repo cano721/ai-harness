@@ -13,6 +13,7 @@ GET  /autofix?t=...              자동 수정: 준비 상태(describe, 요청 �
 GET  /autofix/log?t&name         autofix 실행 로그(~/.ai-harness/autofix/logs/ 안 파일 이름만)
 POST /autofix/check {t, repo}    monitor-fetch.sh check(외부 API) — 버튼으로만, 결과 캐시
 POST /autofix/candidates {t, repo}  autofix-auto.sh candidates(외부 API) — 버튼으로만, 결과 캐시
+POST /autofix/detail {t, repo, signature}  monitor-fetch.sh detail(외부 API, 비밀값 가림) — 줄을 펼친 뒤 버튼으로만, 결과 캐시
 POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정을 씀. 주기를 바꾸면 schedule.sh install-autofix·status
 POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움(보드는 monitor 파일을 쓰지 않음)
 
@@ -111,6 +112,7 @@ def status(max_age=3):
                 except Exception as e:
                     print("autofix items:", e, file=sys.stderr, flush=True)
             data["items"] += af or []
+            link_autofix_sessions(data["items"])
             prstate.apply(data["items"])
             daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
             for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
@@ -349,6 +351,29 @@ def autofix_button(kind, repo):
     res = AUTOFIX.candidates(repo, autofix_key(repo))
     msg = res["error"] or f"후보 {len(res['items'])}건"
     return {"ok": not res["error"], "message": msg, "candidates": res}
+
+
+def autofix_detail(repo, signature):
+    if repo not in harness_repos():
+        return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
+    if not isinstance(signature, str) or not signature or len(signature) > 200:
+        return {"ok": False, "message": "에러 시그니처가 올바르지 않음"}
+    res = AUTOFIX.detail(repo, autofix_key(repo), signature)
+    return {"ok": not res["error"], "message": res["error"] or "원문을 불러옴", "detail": res}
+
+
+def link_autofix_sessions(items):
+    """보드가 띄운 '세션으로 열기' 세션(이름: '<project> <에러 제목>')과 그 에러 카드를 잇는다. 한 사건이 두 카드로 갈라지지 않게
+    화면은 세션 카드를 에러 카드 안에 합친다. 이름이나 요청에 시그니처가 있어도 같은 사건으로 본다."""
+    work = [i for i in items if i.get("section") == "work"]
+    for af in (i for i in items if i.get("kind") == "autofix"):
+        sig, name = af.get("signature") or "", f"{af.get('project')} {af.get('title')}"
+        for w in work:
+            text = f"{w.get('title') or ''}\n{w.get('detail') or ''}"
+            if w.get("project") == af.get("project") and (w.get("title") == name or (sig and sig in text)):
+                af["session_id"] = w.get("id")
+                w["autofix_id"] = af.get("id")
+                break
 
 
 def autofix_setup(repo):
@@ -1002,6 +1027,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings":
             res = request_facts_change(req)
             log({"action": "settings_facts", "repo": req.get("repo"), **res})
+            return self._send(200, res)
+        if path == "/autofix/detail":
+            res = autofix_detail(req.get("repo"), req.get("signature"))
+            log({"action": "autofix_detail", "repo": req.get("repo"), "ok": res["ok"], "message": res["message"]})
             return self._send(200, res)
         if path in ("/autofix/check", "/autofix/candidates"):
             kind = path.rsplit("/", 1)[1]

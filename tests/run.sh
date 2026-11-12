@@ -7102,7 +7102,9 @@ jq -cn '{project:"svc", has_analysis_batch:true, created_at:"2026-11-07T09:00:00
   >"$BOARD_DATA/harvest-queue/p-svc/analysis-batch.json"
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 jq -cn --arg at "$NOW_ISO" '{event:"started", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", repo:"/nonexistent/svc"},
-  {event:"finished", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", result:"improved", artifact:"https://github.com/example/svc/pull/1"}' \
+  {event:"finished", project:"svc", scope:"repo", at:$at, log:"/nonexistent/run.log", result:"improved", artifact:"https://github.com/example/svc/pull/1"},
+  {event:"skipped", project:"svc", batch:"sync-1", at:$at, reason:"sync_pr_status_unknown"},
+  {event:"skipped", project:"svc", batch:"sync-1", at:$at, reason:"brand_new_code"}' \
   >"$BOARD_DATA/harvest-auto/runs.jsonl"
 printf '# keep this comment\nHM_DIGEST=1\nOTHER_TOOL_SETTING=x\n' >"$BOARD_DATA/config"
 chmod 600 "$BOARD_DATA/config"
@@ -7139,6 +7141,10 @@ assert_eq "true" "$(jq '(.generated_at | type) == "string" and (.items | type) =
 assert_eq "true" "$(jq --arg sid "$BOARD_SID" 'any(.items[]; .section == "work" and .kind == "bg" and .sid == $sid and (.transcript | type) == "string" and (.actions | index("view")) != null and (.id | type) == "string")' <<<"$BOARD_STATUS")" "status.json lists the agent session from claude agents"
 assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .kind == "harvest" and .state == "queued" and (.actions | index("harvest_now")) != null)' <<<"$BOARD_STATUS")" "status.json lists a queued harvest with its action"
 assert_eq "true" "$(jq 'any(.items[]; .section == "harness" and .state == "needs_human" and .link == "https://github.com/example/svc/pull/1")' <<<"$BOARD_STATUS")" "status.json lists a draft PR that needs a human"
+# 건너뛴 이유는 내부 코드가 아니라 사람 말로 보이고, 화면이 같은 원인끼리 묶도록 이유 코드는 따로 실린다(#291).
+assert_eq "지난 동기화 PR 상태를 확인할 수 없어 멈춤|sync_pr_status_unknown 무인 실행을 건너뜀|brand_new_code" \
+  "$(jq -r '[.items[] | select(.kind == "schedule" and .state == "blocked" and .project == "svc") | "\(.title)|\(.reason)"] | sort | reverse | join(" ")' <<<"$BOARD_STATUS")" \
+  "a skipped run shows a readable title and keeps its reason code for grouping"
 BOARD_ITEM_ID="$(jq -r --arg sid "$BOARD_SID" '.items[] | select(.sid == $sid) | .id' <<<"$BOARD_STATUS")"
 BOARD_TRANSCRIPT="$(curl -s "$BOARD_BASE/transcript?t=$BOARD_TOKEN&id=$(jq -rn --arg v "$BOARD_ITEM_ID" '$v | @uri')&offset=0")"
 assert_eq "hello board|done" "$(jq -r '[.messages[].text] | join("|")' <<<"$BOARD_TRANSCRIPT")" "board reads the session transcript"
@@ -7264,7 +7270,8 @@ assert cfg["HM_DELIVERY_LEVEL"] == "deploy" and cfg["HM_DELIVERY_LEVEL_REPOS"] =
 row = s.read_repo(repo)
 eff = s.effective(row, cfg)
 assert eff["source"] == "team" and eff["level"] == "pr", eff  # 이 저장소엔 개인 단계를 읽는 러너가 없다
-assert any("git_policy: merge" in n for n in eff["notes"]), eff
+assert any("예전 병합 설정" in n for n in eff["notes"]), eff  # 설정 키 이름이 아니라 사람 말로(#291)
+assert not any("git_policy" in n or "harness.json" in n for n in eff["notes"]), eff
 ' "$ROOT/scripts/board" "$BOARD_REPO" || fail "board settings writes validate input"
 BOARD_CFG="$(cat "$BOARD_DATA/config")"
 assert_contains "$BOARD_CFG" "# keep this comment" "config keeps comments"
@@ -7501,13 +7508,18 @@ if [[ "\$1" == check ]]; then
     *) echo "ok command"; exit 0 ;;
   esac
 fi
+if [[ "\$1" == detail ]]; then
+  printf '%s\n' "\$*" >>"$BAF_T/detail.log"
+  printf '%s\n' '{"message":"TypeError: cart is undefined","exception":[{"type":"TypeError","value":"cart is undefined","frames":[{"file":"cart.js","function":"total","line":12,"in_app":true}]}]}'
+  exit 0
+fi
 exec "$ROOT/scripts/monitor-fetch.sh" "\$@"
 EOF
 cat >"$BAF_T/autofix-auto.sh" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == candidates ]]; then
   printf '%s\n' "\$*" >>"$BAF_T/candidates.log"
-  printf '%s\n' '{"signature":"sentry:9","title":"New crash","count":31,"reason":"new","link":"https://acme.sentry.io/issues/9/"}'
+  printf '%s\n' '{"signature":"sentry:9","title":"New crash","count":31,"reason":"new","link":"https://acme.sentry.io/issues/9/","culprit":"cart.js","first_seen":"2026-11-01T00:00:00Z","meta":{"id":"9"}}'
   exit 0
 fi
 exec "$ROOT/scripts/autofix-auto.sh" "\$@"
@@ -7607,6 +7619,17 @@ assert_eq "true|sentry:9|31" "$(jq -r '"\(.ok)|\(.candidates.items[0].signature)
 assert_contains "$(<"$BAF_T/candidates.log")" "candidates --project shop --root $BAF_SHOP" "candidates are asked for the repo's own project id"
 assert_eq "sentry:9" "$(baf_get | jq -r '.repos[] | select(.project == "shop") | .candidates.items[0].signature')" "candidates are cached for the view"
 assert_eq "1" "$(wc -l <"$BAF_T/candidates.log" | tr -d ' ')" "the view reuses cached candidates instead of calling again"
+assert_eq "cart.js|9" "$(baf_get | jq -r '.repos[] | select(.project == "shop") | .candidates.items[0] | "\(.culprit)|\(.meta.id)"')" "candidates keep where the error came from and how to look it up again"
+# 후보 줄을 펼친 뒤의 원문(#291): 외부 API라 버튼으로만, 저장한 조회 정보(meta)로 다시 찾고 결과는 캐시한다.
+[[ ! -e "$BAF_T/detail.log" ]] || fail "listing candidates does not fetch their stack traces"
+assert_eq "false" "$(baf_post detail '{"repo":"/etc","signature":"sentry:9"}' | jq -r '.ok')" "candidate detail accepts only harness repos"
+assert_eq "false" "$(baf_post detail "$(jq -cn --arg r "$BAF_SHOP" '{repo:$r}')" | jq -r '.ok')" "candidate detail needs a signature"
+BAF_D="$(baf_post detail "$(jq -cn --arg r "$BAF_SHOP" '{repo:$r, signature:"sentry:9"}')")"
+assert_eq "true|TypeError" "$(jq -r '"\(.ok)|\(.detail.detail.exception[0].type)"' <<<"$BAF_D")" "candidate detail fetches the stack on request"
+assert_contains "$(<"$BAF_T/detail.log")" '--meta {"id":"9"}' "candidate detail looks the error up by its saved meta"
+assert_eq "TypeError: cart is undefined" "$(baf_get | jq -r '.repos[] | select(.project == "shop") | .details["sentry:9"].detail.message')" "candidate detail is cached for the view"
+assert_eq "false" "$(baf_post detail "$(jq -cn --arg r "$BAF_SHOP" '{repo:$r, signature:"sentry:404"}')" | jq -r '.ok')" "an error with no saved lookup asks to fetch candidates again"
+assert_eq "1" "$(wc -l <"$BAF_T/detail.log" | tr -d ' ')" "only the button press calls the monitoring tool for a stack"
 # 설정 쓰기: configure만 거친다. 틀린 값은 아무것도 바꾸지 않는다.
 BAF_CFG_BEFORE="$(<"$BAF_DATA/config")"
 assert_eq "false" "$(baf_post configure '{"daily_max":"x","auto":false}' | jq -r '.ok')" "configure rejects a bad value"
@@ -7674,7 +7697,34 @@ case "$BAF_LOG$(baf_get)" in *"$BAF_SECRET"*) fail "no credential value in board
 assert_eq "true" "$(baf_sh stop | jq -r '.stopped')" "autofix board stops"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "에러마다 LLM 세션" "autofix view states the token boundary next to the settings"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "비용 상한이 없습니다" "choosing unlimited daily max and budget shows a strong cost warning"
+# 한 사건은 한 카드(#291): 보드가 띄운 '세션으로 열기' 세션은 그 에러 카드와 이어진다.
+HARNESS_METRICS_DIR="$BAF_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+af = {"id": "autofix:shop:sentry:9", "kind": "autofix", "section": "autofix", "project": "shop", "signature": "sentry:9", "title": "New crash"}
+named = {"id": "w1", "section": "work", "project": "shop", "title": "shop New crash", "detail": ""}
+other = {"id": "w2", "section": "work", "project": "shop", "title": "other work", "detail": "요청: 무관한 일"}
+elsewhere = {"id": "w3", "section": "work", "project": "blog", "title": "shop New crash", "detail": ""}
+af2 = {"id": "autofix:shop:sentry:8", "kind": "autofix", "section": "autofix", "project": "shop", "signature": "sentry:8", "title": "sentry:8"}
+quoted = {"id": "w4", "section": "work", "project": "shop", "title": "따로 붙인 이름", "detail": "요청: … (시그니처 sentry:8, 상태: 포기)"}
+items = [af, named, other, elsewhere, af2, quoted]
+bs.link_autofix_sessions(items)
+assert af.get("session_id") == "w1" and named.get("autofix_id") == af["id"], items
+assert "autofix_id" not in other and "autofix_id" not in elsewhere, items
+assert af2.get("session_id") == "w4" and quoted.get("autofix_id") == af2["id"], items
+' "$ROOT/scripts/board/board-server.py" || fail "the board links an autofix card to the session opened for it (by name or signature in the request)"
 BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
+# 보드는 디자인 시스템 부품으로 그린다(#291): 부품 사본을 싣고, 예전 변수 이름과 색 리터럴이 없다.
+assert_contains "$BOARD_TPL" "ds:components:start" "the board carries the shared components"
+BOARD_OWN="$(awk '/ds:tokens:start/{skip=1} /ds:components:end/{skip=0; next} !skip' "$ROOT/scripts/board/template.html")"
+case "$BOARD_OWN" in *"var(--human"*|*"var(--run)"*|*"var(--panel)"*|*"var(--line)"*|*"var(--muted)"*|*"var(--bg)"*) fail "the board drops the old variable names" ;; esac
+[[ -z "$(grep -oE '#[0-9a-fA-F]{3,8}\b|rgba?\(' <<<"$BOARD_OWN" || true)" ]] || fail "the board's own styles and script carry no color literal"
+for BOARD_PART in 'ds-card--interactive' 'ds-card__open' 'ds-row__head' 'ds-group' 'ds-tabs' "'role', 'tab'" 'ds-drawer' 'aria-modal' "setAttribute('inert'" 'ds-skeleton' 'ds-error' 'ds-empty' 'ds-setting' 'ds-segment' 'ds-toast' '/autofix/detail' 'humanTitle'; do
+  assert_contains "$BOARD_TPL" "$BOARD_PART" "the board uses $BOARD_PART"
+done
+# 가짜 데이터 미리보기(디자인 검토·스크린샷용)는 조직·개인 식별자를 싣지 않는다.
+if grep -qiE 'midas|jobda|khb1122' "$ROOT/tests/fixtures/board-preview/serve.py"; then fail "the board preview fixture carries no identifiers"; fi
+python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server parses"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
 assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"
@@ -7682,7 +7732,7 @@ assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])"
 BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac
 assert_contains "$BOARD_STRIP" "카드에 없는 최근 기록" "the work list keeps only run records the cards do not show"
-BOARD_AFSET="$(sed -n '/function renderAutofixSettings(box)/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+BOARD_AFSET="$(sed -n '/function renderAutofixSettings()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_AFSET" "afRepoRow" "the autofix settings tab shows per-repo connections"
 [[ "${BOARD_AFSET%%개인 설정(~/.ai-harness/config)*}" == *"저장소별 연결"* ]] || fail "per-repo connections come before personal settings"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"

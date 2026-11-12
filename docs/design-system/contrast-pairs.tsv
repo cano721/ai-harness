@@ -38,7 +38,8 @@
 --color-attention	--color-surface-hover	4.5	사람 필요 글자·아이콘 / hover 면
 --color-attention	--color-attention-subtle	4.5	사람 필요 글자 / 자기 옅은 면(배지)
 --color-text	--color-attention-subtle	4.5	본문 글자 / 사람 필요 옅은 면(알림 줄)
---color-attention-border	--color-surface	3	사람 필요 경계 / 카드·패널
+--color-attention-border	--color-surface	3	사람 필요 경계 / 카드·패널(윤곽 배지)
+--color-attention-border	--color-surface-overlay	3	사람 필요 경계 / 서랍(윤곽 배지)
 --color-attention-border	--color-attention-subtle	3	사람 필요 경계 / 자기 옅은 면
 --color-text-on-solid	--color-attention-solid	4.5	사람 필요 채운 면 위 글자(개수 표시)
 --color-attention-solid	--color-surface	3	사람 필요 상태 점 / 카드·패널
