@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.71.0 (2026-11-12)
 ### 새 기능
 
 - 보드가 다른 Claude 설정 폴더(Orca 프로필 등, `BOARD_CLAUDE_CONFIG_DIRS`로 추가)에서 도는 세션도 모아 보이고, 입력·재개·정리 때 같은 설정 폴더를 쓴다 (#296)
