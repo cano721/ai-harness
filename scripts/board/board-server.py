@@ -190,9 +190,12 @@ def classify_work(items):
                 continue
             sid = i["sid"]
             if sid in hidden:
-                if not i.get("live"):
+                h = hidden[sid]
+                hidden_at = str((h.get("at") if isinstance(h, dict) else h) or "")
+                # 닫는 중이라 아직 살아 있는 세션은 숨김 유지 — 숨긴 뒤 새 활동이 있을 때만 다시 보인다
+                if not i.get("live") or str(i.get("at") or "") <= hidden_at:
                     continue
-                hidden.pop(sid)  # 다시 살아난 세션은 다시 보인다
+                hidden.pop(sid)
                 unhide = True
             # 저장소 판정은 한 곳(repo_info): git 저장소 여부, worktree면 원래 저장소 이름으로 묶고 worktree 이름은 보조 정보로.
             apply_repo(i)
@@ -302,7 +305,7 @@ def can_close(item):
 def end_session(item):
     """세션을 끝낸다: bg는 claude stop, 대화형은 그 Orca 터미널을 닫는다. 대화 기록은 남아서 나중에 --resume 가능."""
     if item.get("kind") == "bg":
-        claude(["stop", item["short_id"]], item["cwd"], timeout=30)
+        claude(["stop", item["short_id"]], item["cwd"], timeout=30, config_dir=item.get("config_dir"))
     else:
         handle = item.get("orca_handle") or ""
         if not re.fullmatch(r"term_[0-9a-f-]{36}", handle):
@@ -355,7 +358,9 @@ def cleanup(item, with_worktree):
         if not wt["removable"]:
             return {"ok": False, "message": "worktree를 지우지 않음 — " + wt.get("reason", "")}
     if item.get("live"):
+        hide_items([item])  # 닫는 동안 목록에 되살아나지 않게 먼저 숨긴다
         if not end_session(item):
+            unhide_keys([_hide_key(item)])
             return {"ok": False, "message": "세션을 끝내지 못함 — 터미널에서 직접 닫아 주세요"}
         msg.append("세션 종료")
     if with_worktree:
@@ -373,6 +378,7 @@ def cleanup(item, with_worktree):
             out = subprocess.run(["git", "-C", os.path.dirname(common), "worktree", "remove", wt["path"]],
                                  capture_output=True, text=True, timeout=60)
             if out.returncode != 0:
+                unhide_keys([_hide_key(item)])
                 return {"ok": False, "message": "worktree 삭제 실패: " + (out.stderr or out.stdout)[-200:]}
         msg.append(f"worktree 삭제({wt.get('branch')})")
     hide_items([item])
@@ -393,6 +399,13 @@ def hide_items(items):
             hidden[_hide_key(i)] = {"at": utc(), "item_at": i.get("at"), "title": i.get("title"), "project": i.get("project"),
                                     "section": i.get("section"), "kind": i.get("kind")}
         _save(HIDDEN, hidden)
+
+
+def unhide_keys(keys):
+    with _marks_lock:
+        hidden = _load(HIDDEN) or {}
+        if any([hidden.pop(k, None) is not None for k in keys]):
+            _save(HIDDEN, hidden)
 
 
 def drop_hidden(items):
@@ -471,6 +484,29 @@ def bulk_plan(items, older_days=0):
     return rows
 
 
+def bulk_left(items, older_days=0):
+    """정리 대상이 아니라 남는 항목(작업 현황·하네스 동작·자동 수정)을 이유별로 센다: [{reason, count, label}], 0건인 이유는 뺀다."""
+    target_ids = {id(i) for i in bulk_targets(items, older_days)}
+    count = {"too_recent": 0, "in_use": 0, "waiting": 0, "unseen": 0, "unfinished": 0}
+    for i in items:
+        if id(i) in target_ids or i.get("section") not in ("work", "harness", "autofix"):
+            continue
+        if i.get("state") == "needs_human" or i.get("ask") or i.get("permission"):
+            count["waiting"] += 1
+        elif i.get("state") == "running" or (_is_session(i) and i.get("live") and not can_close(i)):
+            count["in_use"] += 1
+        elif i.get("state") in DONE_STATES:
+            count["too_recent"] += 1
+        elif i.get("state") == "review":
+            count["unseen"] += 1
+        else:
+            count["unfinished"] += 1
+    span = "하루" if older_days == 1 else "일주일" if older_days == 7 else f"{older_days:g}일"
+    label = {"too_recent": f"{span} 안 된 {{n}}건은 남겨 둠", "in_use": "지금 쓰는 세션 {n}건 제외",
+             "waiting": "답·확인을 기다리는 {n}건 제외", "unseen": "아직 확인하지 않은 결과 {n}건 제외", "unfinished": "아직 끝나지 않은 {n}건 제외"}
+    return [{"reason": r, "count": n, "label": label[r].format(n=n)} for r, n in count.items() if n]
+
+
 def bulk_cleanup(req, items=None):
     """끝난 일을 한꺼번에 정리한다. 기본은 목록에서 숨기기 + 쉬는 세션 닫기, worktree는 req.worktree일 때 지울 수 있는 것만."""
     if not _bulk_lock.acquire(blocking=False):
@@ -480,7 +516,7 @@ def bulk_cleanup(req, items=None):
         older = req.get("older_days")
         older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
         if req.get("dry_run"):
-            return {"ok": True, "plan": bulk_plan(items, older)}
+            return {"ok": True, "plan": bulk_plan(items, older), "left": bulk_left(items, older)}
         targets = bulk_targets(items, older)
         if isinstance(req.get("ids"), list):
             want = set(req["ids"])
@@ -515,7 +551,9 @@ def bulk_cleanup(req, items=None):
             parts.append(f"worktree {n['worktrees']}개 삭제")
         if n["skipped"]:
             parts.append(f"건너뜀 {n['skipped']}개")
-        return {"ok": True, "message": " · ".join(parts) if results else "정리할 끝난 일이 없습니다", "results": results, "counts": n}
+        left = bulk_left(items, older)
+        message = " · ".join(parts) if results else "정리할 끝난 일이 없습니다"
+        return {"ok": True, "message": message + "".join(" · " + l["label"] for l in left), "results": results, "left": left, "counts": n}
     finally:
         _bulk_lock.release()
 
@@ -941,9 +979,14 @@ def remove_hook_conf():
 
 
 # ---- 세션 작업 ----
-def claude(args, cwd, timeout=60):
+def claude(args, cwd, timeout=60, config_dir=None):
+    """claude CLI 호출. config_dir은 status 항목에서 온 값만(브라우저 입력 아님) — 없으면 CLAUDE_CONFIG_DIR을 빼 기본 폴더로 부른다."""
     env = {**os.environ}
     env.pop("CLAUDECODE", None)
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
     return subprocess.run(["claude", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
 
 
@@ -974,10 +1017,10 @@ def send_to_bg(item, text):
     if item.get("status") == "busy":
         return {"ok": False, "message": "작업 중인 세션 — 끝난 뒤 보내세요"}
     if item.get("live"):
-        claude(["stop", item["short_id"]], item["cwd"], timeout=30)
+        claude(["stop", item["short_id"]], item["cwd"], timeout=30, config_dir=item.get("config_dir"))
         if not wait_stopped(item):  # 덜 멈춘 채 깨우면 복사본이 생긴다
             return {"ok": False, "message": "세션이 멈추지 않음 — 잠시 뒤 다시 보내세요"}
-    out = claude(["--bg", "--resume", item["sid"], text], item["cwd"])
+    out = claude(["--bg", "--resume", item["sid"], text], item["cwd"], config_dir=item.get("config_dir"))
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "copy" not in msg:
         return {"ok": True, "message": "보냄 — 세션이 이어서 작업함"}
@@ -988,7 +1031,7 @@ def wait_stopped(item, seconds=20):
     end = time.time() + seconds
     while time.time() < end:
         try:
-            agents = json.loads(claude(["agents", "--json", "--all"], item["cwd"], timeout=15).stdout)
+            agents = json.loads(claude(["agents", "--json", "--all"], item["cwd"], timeout=15, config_dir=item.get("config_dir")).stdout)
             a = next((x for x in agents if x.get("sessionId") == item["sid"]), None)
             if a is None or a.get("pid") is None:
                 return True
@@ -1066,7 +1109,7 @@ def new_bg(cwd, prompt, name=None):
         return {"ok": False, "message": "작업 경로가 없거나 절대 경로가 아님"}
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8000:
         return {"ok": False, "message": "첫 지시가 비었거나 너무 김"}
-    args = ["--bg"] + (["--name", name[:80]] if name else []) + [prompt]
+    args = ["--bg"] + (["--name", name[:160]] if name else []) + [prompt]  # 이름 끝의 시그니처가 잘리면 카드와 이어지지 않는다
     out = claude(args, cwd)
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "backgrounded" in msg:
@@ -1132,7 +1175,10 @@ def run_action(item, action, req):
         res = cleanup(item, bool(req.get("worktree")))
         return res
     if action == "open_agent":
-        return new_bg(item["repo"], prompt_for(item), name=f"{item['project']} {item['title']}")
+        # 자동 수정 카드는 원문 로그 제목 대신 시그니처로 이름을 붙인다(원문이 세션 이름으로 새지 않고, 시그니처로 카드와 이어진다)
+        name = (f"{item['project']} 에러 이어 보기 {item['signature']}" if item.get("kind") == "autofix" and item.get("signature")
+                else f"{item['project']} {item['title']}")
+        return new_bg(item["repo"], prompt_for(item), name=name)
     if action == "harvest_now":
         out = subprocess.run(["bash", os.path.join(DIR, "board-actions.sh"), "harvest-now", item["project"]],
                              capture_output=True, text=True, timeout=120)

@@ -473,7 +473,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
           "${deny_args[@]}"
           --max-budget-usd "$BUDGET_USD"
-          --output-format json)
+          --output-format stream-json --verbose)
       else
         # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
         AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
@@ -484,7 +484,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
           --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash(git *)"
           --max-budget-usd "$BUDGET_USD"
-          --output-format json)
+          --output-format stream-json --verbose)
       fi
       ;;
   esac
@@ -575,8 +575,20 @@ command_run() {
     else
       agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"
       # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
-      (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
-        env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+      if [[ -z "${HM_HARVEST_AUTO_CMD:-}" && "$agent" == "claude" ]]; then
+        # stream-json 출력은 도구 호출 진행 줄과 result만 남겨 로그에 쓴다(파일 내용·모델 문장은 디스크에 두지 않는다).
+        # pipefail이라 종료 코드는 에이전트 쪽이 남는다. 에이전트를 끝내도 그 자식이 출력을 물고 살아 있으면 필터가
+        # 끝나지 않아 실행 lock을 계속 쥐므로, 필터에도 시간 제한(에이전트 + 20초)을 둔다.
+        (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
+          env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}" 2>&1 \
+          | hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60 + 20))" \
+            jq -R -c --unbuffered -f "$DIR/agent-progress.jq") </dev/null >"$log_file" 2>&1 || exit_code=$?
+        # 아무것도 남기지 못한 실행의 0바이트 로그는 지운다(finished 기록의 log 경로는 그대로 둔다).
+        find "$log_file" -maxdepth 0 -type f -empty -delete 2>/dev/null || true
+      else
+        (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
+          env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}") </dev/null >"$log_file" 2>&1 || exit_code=$?
+      fi
       # 에이전트가 PR로 올린 커밋. 자동 병합 판정은 이 커밋을 기준으로 하고, 병합할 때 head가 같은지 다시 본다.
       head_sha="$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || true)"
     fi
@@ -588,7 +600,8 @@ command_run() {
   fi
 
   [[ "$scope" == "sync" ]] || review="$(last_review_after "$project" "$started_at")"
-  if [[ "$agent" == "claude" ]] && (( ran_agent == 1 )); then
+  # 빈 로그는 위에서 지워졌을 수 있다(없는 파일을 읽으면 jq가 null을 찍고도 실패해 값이 두 줄이 된다).
+  if [[ "$agent" == "claude" ]] && (( ran_agent == 1 )) && [[ -f "$log_file" ]]; then
     # stderr 안내 줄(예: 신뢰되지 않은 작업 공간)이 앞에 섞일 수 있어 JSON 줄만 읽는다.
     cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
   fi

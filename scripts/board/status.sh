@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Harness Board 상태: ~/.ai-harness 데이터와 작업 세션(work.sh)을 칸반 항목 JSON으로 바꾼다.
-# 출력: {generated_at, window_days, items:[{section, kind, project, state, at, title, detail, link, log, cmd, id, actions}]}
+# 출력: {generated_at, window_days, quiet_runs:[{kind, count, last_at}], items:[{section, kind, project, state, at, title, detail, link, log, cmd, id, actions}]}
 # state: queued | running | needs_human | blocked | done
 set -euo pipefail
 
@@ -17,6 +17,13 @@ result_excerpt() {
     grep -v '^AI_HARNESS_' | grep -v '^[[:space:]]*$' | head -6 | cut -c1-240
 }
 
+last_progress() {
+  local log=$1 line
+  [ -s "$log" ] || return 0
+  line=$(jq -R -r 'fromjson? | select(type == "object" and .type == "progress") | "\(.tool) \(.target // "")"' "$log" 2>/dev/null | tail -n 1)
+  [ -z "$line" ] || printf '끊기기 전 마지막 진행: %s\n' "$line"
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -26,8 +33,20 @@ if [ -f "$runs" ]; then
   jq -c 'fromjson? // empty' -R "$runs" | jq -cs --arg since "$since" --argjson now "$now_e" --argjson stale "$STALE_HOURS" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     def kind: if .scope == "sync" then "sync" elif .scope == "global" then "harvest-global" else "harvest" end;
+    def failed: .event == "finished" and (.result == "failed" or ((.exit_code // 0) != 0));
+    def rkey: .reason // "exit_\(.exit_code // "?")";
+    def human_reason:
+      if .exit_code == 143 then (if .duration_s != null then "\((.duration_s / 60) | round)분 시간 제한으로 중단됨" else "시간 제한으로 중단됨" end)
+      elif .exit_code == 137 then "강제 종료됨"
+      elif .reason == "usage_limit" then "사용량 한도에 닿음"
+      elif .reason != null then "에이전트 오류 (\(.reason))"
+      elif .exit_code == 70 then "작업 worktree를 만들지 못함"
+      elif .exit_code == 71 then "동기화 계획을 세우지 못함"
+      else "exit \(.exit_code // "?")" end;
     (map(select(.event == "started" and .log != null and .repo != null) | {(.log): .repo}) | add // {}) as $repos
-    |    (map(select(.event == "finished" or .event == "failed")) | group_by([.project, .scope]) | map(max_by(.at)) | map(.log)) as $latest
+    | (map(select(.event == "finished" or .event == "failed")) | group_by([.project, (.scope // "")])
+       | map({key: "\(.[0].project)|\(.[0].scope // "")", value: (sort_by(.at) | reverse)}) | from_entries) as $byg
+    | (map(select(.event == "finished" or .event == "failed")) | group_by([.project, .scope]) | map(max_by(.at)) | map(.log)) as $latest
     | (map(select(.event == "finished" or .event == "failed") | .log)) as $closed
     | [ .[] |
         if .event == "started" and ((.log as $l | $closed | index($l)) | not) then
@@ -39,6 +58,16 @@ if [ -f "$runs" ]; then
         elif .event == "failed" and (.log as $l | $latest | index($l)) then
           {kind: kind, project, state: "needs_human", at, title: "실행 실패 (\(.reason // "exit \(.exit_code // "?")"))",
            detail: null, link: null, log: .log, cmd: null}
+        elif .event == "finished" and .result == "no-change" then empty
+        elif failed and ((.log as $l | $latest | index($l)) | not) then empty
+        elif failed and .at >= $since then
+          rkey as $k | $byg["\(.project)|\(.scope // "")"] as $g
+          | ($g | map(failed and rkey == $k) | index(false) // length) as $streak
+          | human_reason as $why
+          | {kind: kind, project, state: "needs_human", at,
+             title: ("실행 실패 (\($why))" + (if $streak >= 2 then " · \($streak)번 연속" else "" end)),
+             detail: null, fail_reason: $why, streak: $streak, exit_code: (.exit_code // null),
+             link: .artifact, log: .log, cost: .cost_usd, duration_s: .duration_s, result: .result, cmd: null}
         elif .event == "finished" and .at >= $since then
           (.log as $l | $latest | index($l)) as $is_latest
           | (if ($is_latest and (.result == "left_for_user" or .result == "partial" or (.artifact != null and .result == "improved"))) then "needs_human" else "done" end) as $st
@@ -51,17 +80,32 @@ if [ -f "$runs" ]; then
              cmd: (if .result == "left_for_user" and .scope == "sync" then "/ai-harness:harness-init --sync --apply" else null end)}
         else empty end ] | map(. + {repo: ($repos[.log // ""] // null)})' > "$tmp/runs.json"
 
-  # 사람 필요·실패 항목에는 로그의 마지막 보고를 붙인다.
+  # 로그가 없거나 비었으면 log는 null(실패 카드는 이유를 단다). 사람 필요·실패 항목에는 로그의 마지막 보고를 붙이고,
+  # 보고(result)가 없으면 끊기기 전 마지막 진행 줄을 붙인다.
   jq -c '.[]' "$tmp/runs.json" | while IFS= read -r item; do
-    st=$(jq -r '.state' <<<"$item")
-    if [ "$st" = needs_human ]; then
-      log=$(jq -r '.log // empty' <<<"$item")
+    log=$(jq -r '.log // empty' <<<"$item")
+    if [ -n "$log" ] && [ ! -s "$log" ] && [ "$(jq -r '.state' <<<"$item")" != running ]; then
+      item=$(jq -c '.log = null' <<<"$item")
+      log=""
+    fi
+    if [ "$(jq -r '.state' <<<"$item")" = needs_human ]; then
       ex=$(result_excerpt "$log" || true)
-      jq -c --arg ex "$ex" '.detail = (if $ex == "" then .detail else $ex end)' <<<"$item"
+      [ -n "$ex" ] || ex=$(last_progress "$log" || true)
+      item=$(jq -c --arg ex "$ex" '.detail = (if $ex == "" then .detail else $ex end)' <<<"$item")
+    fi
+    if [ -z "$log" ]; then
+      jq -c 'if .fail_reason != null then .log_note = "중간에 끊겨 로그가 남지 않았습니다" else . end' <<<"$item"
     else
       printf '%s\n' "$item"
     fi
   done | jq -s . > "$tmp/runs2.json"
+
+  # 최근 24시간 변경 없이 끝난 실행은 카드 대신 종류별 횟수로만 센다.
+  jq -c 'fromjson? // empty' -R "$runs" | jq -cs --argjson now "$now_e" '
+    def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+    def kind: if .scope == "sync" then "sync" elif .scope == "global" then "harvest-global" else "harvest" end;
+    [ .[] | select(.event == "finished" and .result == "no-change" and ($now - (.at | epoch)) < 86400) ]
+    | group_by(kind) | map({kind: (.[0] | kind), count: length, last_at: (map(.at) | max)})' > "$tmp/quiet.json"
 
   # 최근 2일 skip 이유를 프로젝트별 1건으로 묶는다.
   jq -c 'fromjson? // empty' -R "$runs" | jq -cs --argjson now "$now_e" '
@@ -75,7 +119,7 @@ if [ -f "$runs" ]; then
     | map(max_by(.at) as $last | {kind: "schedule", project: $last.project, state: "blocked", at: $last.at,
         title: ($why[$last.reason] // "무인 실행을 건너뜀"), detail: "최근 2일 \(length)회 건너뜀", reason: $last.reason, link: null, log: null, cmd: null})' > "$tmp/skips.json"
 else
-  echo '[]' > "$tmp/runs2.json"; echo '[]' > "$tmp/skips.json"
+  echo '[]' > "$tmp/runs2.json"; echo '[]' > "$tmp/skips.json"; echo '[]' > "$tmp/quiet.json"
 fi
 
 # 2) 스케줄 회차: 마지막 회차가 skip이면 막힘으로.
@@ -148,8 +192,8 @@ jq -s . "$tmp/queue.jsonl" > "$tmp/queue.json"
 bash "$(dirname "$0")/work.sh" > "$tmp/work.json" 2>/dev/null || echo '[]' > "$tmp/work.json"
 jq -e 'type == "array"' "$tmp/work.json" >/dev/null 2>&1 || echo '[]' > "$tmp/work.json"
 
-jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpfile work "$tmp/work.json" \
-  '{generated_at: $gen, window_days: $days, items: ((add | map(
+jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpfile work "$tmp/work.json" --slurpfile quiet "$tmp/quiet.json" \
+  '{generated_at: $gen, window_days: $days, quiet_runs: $quiet[0], items: ((add | map(
      .section = (if .kind == "runner" then "work" else "harness" end)
      | .id = "\(.kind)|\(.project)|\(.at)"
      | .actions = ([ (select(.state == "queued" and (.kind | startswith("harvest"))) | "harvest_now"),
