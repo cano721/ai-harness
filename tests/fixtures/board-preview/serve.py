@@ -91,6 +91,15 @@ def status(scenario):
                "at": ago(300 + i), "title": t, "actions": ["view", "send", "cleanup"], "detail": "세션 종료됨\n— 끝났습니다.",
                "group": {"id": "og1", "title": "검색 색인 개편", "role": role, "source": "orca"}}
               for i, (t, role) in enumerate([("검색 색인 개편 조율", "coord"), ("색인 스크립트 작업자", "worker")], 1)],
+            # 작업자가 별도 worktree에서 도는 묶음(서버가 원래 저장소 이름으로 묶고 worktree 이름은 보조 정보로 싣는다)
+            *[{"id": f"gw{i}", "section": "work", "kind": "bg", "project": "search", "worktree": wt, "state": st, "status": "idle", "live": False,
+               "in_repo": True, "at": ago(310 + i), "title": t, "actions": ["view", "send", "cleanup"], "detail": "세션 종료됨\n— 끝났습니다.",
+               "group": {"id": "og1", "title": "검색 색인 개편", "role": "worker", "source": "orca"}}
+              for i, (t, wt, st) in enumerate([("검색 결과 정렬 작업자", "search-wt-a", "review"), ("동의어 사전 작업자", "search-wt-b", "idle")], 1)],
+            # 작업자가 없는 묶음(조율 세션만) — "작업자 0명" 줄이 없어야 한다
+            {"id": "g9", "section": "work", "kind": "bg", "project": "docs", "state": "idle", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(400), "title": "문서 개편 계획", "actions": ["view", "send", "cleanup"], "detail": "— 계획만 세웠습니다.",
+             "group": {"id": "og2", "title": "문서 개편", "role": "coord", "source": "orca"}},
             # 쉬는 중 · 완료
             {"id": "w5", "section": "work", "kind": "bg", "project": "shop", "state": "idle", "status": "idle", "live": True, "at": ago(30), "in_repo": True,
              "title": "shop datadog:5b1c0d2e9f8a7b6c", "actions": ["view", "send"], "autofix_id": "af1", "autofix_sig": "datadog:5b1c0d2e9f8a7b6c",

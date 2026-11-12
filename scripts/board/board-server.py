@@ -192,7 +192,13 @@ def classify_work(items):
                     continue
                 hidden.pop(sid)  # 다시 살아난 세션은 다시 보인다
                 unhide = True
-            i["in_repo"] = in_repo(i.get("cwd"))
+            # 저장소 판정은 한 곳(repo_info): git 저장소 여부, worktree면 원래 저장소 이름으로 묶고 worktree 이름은 보조 정보로.
+            info = repo_info(i.get("cwd"))
+            i["in_repo"] = info["in_repo"]
+            if info.get("repo"):
+                i["project"] = info["repo"]
+            if info.get("worktree"):
+                i["worktree"] = info["worktree"]
             # 본문으로 묻고 쉬는 세션: 마지막 문장이 질문이고 사람이 아직 답하지 않았으면 '답 대기'(지금 할 일).
             # 답할 수 있는 세션만 — 살아 있거나, 백그라운드라 같은 대화로 다시 깨울 수 있는 것.
             ask = hasks.pending_ask(i.pop("reply_tail", None)) if i.get("state") == "done" else None
@@ -218,17 +224,36 @@ def classify_work(items):
 _repo_cache = {}
 
 
-def in_repo(cwd):
-    """작업 폴더가 git 저장소 안인지(사이드바에서 저장소와 '기타' 폴더를 나눈다). 폴더마다 한 번만 확인한다."""
+def repo_info(cwd):
+    """작업 폴더의 저장소 판정(폴더마다 한 번만 git을 부르고 캐시).
+    {in_repo, repo, worktree}: git 저장소가 아니면 in_repo False. git worktree면 repo는 원래 저장소 이름
+    (--git-common-dir의 상위 폴더), worktree는 그 worktree 폴더 이름. 원본 체크아웃이면 worktree 없음."""
     if not cwd:
-        return False
+        return {"in_repo": False}
     if cwd not in _repo_cache:
+        info = {"in_repo": False}
         try:
             rc, out = _git(cwd, "rev-parse", "--is-inside-work-tree")
-            _repo_cache[cwd] = rc == 0 and out == "true"
+            if rc == 0 and out == "true":
+                info["in_repo"] = True
+                _, top = _git(cwd, "rev-parse", "--show-toplevel")
+                _, common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+                _, gdir = _git(cwd, "rev-parse", "--path-format=absolute", "--git-dir")
+                if common:
+                    base = os.path.basename(common.rstrip("/"))
+                    root = os.path.dirname(common.rstrip("/")) if base == ".git" else common.rstrip("/")
+                    name = os.path.basename(root)
+                    info["repo"] = name[:-4] if name.endswith(".git") else name
+                if top and gdir and common and os.path.realpath(gdir) != os.path.realpath(common):
+                    info["worktree"] = os.path.basename(top)
         except Exception:
-            _repo_cache[cwd] = False
+            info = {"in_repo": False}
+        _repo_cache[cwd] = info
     return _repo_cache[cwd]
+
+
+def in_repo(cwd):
+    return repo_info(cwd)["in_repo"]
 
 
 def _git(path, *args):

@@ -969,7 +969,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   // ---- 목록 모델: 한 사건은 한 카드, 한 항목에 상태는 한 번 ----
   // 자동 수정 카드와 그 에러를 이어 보는 세션은 한 카드로 합친다(서버가 session_id·autofix_id로 잇는다).
   function model(tabKey, proj) {
-    let items = itemsAll().filter((i) => tabKey === 'all' || srcOf(i) === tabKey).filter((i) => !proj || proj === 'all' || i.project === proj);
+    // 저장소로 거를 때 Orca 작업 묶음은 묶음 단위로: 구성원 하나라도 그 저장소면 조율 세션과 작업자를 함께 보인다.
+    const inProj = (i) => !proj || proj === 'all' || i.project === proj;
+    const groupHit = new Set(itemsAll().filter((i) => i.group && inProj(i)).map((i) => i.group.id));
+    let items = itemsAll().filter((i) => tabKey === 'all' || srcOf(i) === tabKey).filter((i) => inProj(i) || (i.group && groupHit.has(i.group.id)));
     const af = new Set(items.filter((i) => i.kind === 'autofix').map((i) => i.id));
     items = items.filter((i) => !(i.autofix_id && af.has(i.autofix_id)));
     const byId = Object.fromEntries(itemsAll().map((i) => [i.id, i]));
@@ -1146,6 +1149,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const s = it.session_id && itemsAll().find((x) => x.id === it.session_id);
     const facts = [];
     if (it.kind === 'autofix' && it.count != null) facts.push(`감지 ${it.count}건`);
+    if (it.worktree) facts.push(`worktree ${it.worktree}`);
     if (s) facts.push(`이어 보는 세션 ${statusOf(s)[1]}${s.live === false ? ' · 끝난 세션' : ''}`);
     if (facts.length) c.append(el('p', 'ds-caption b-line ds-num', facts.join(' · ')));
     if (it.subagents) c.append(el('p', 'ds-caption b-line', subsLabel(it.subagents)));
@@ -1193,7 +1197,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (openable(it)) {
         const b = el('button', 'b-member'); b.type = 'button'; b.dataset.open = it.id; b.dataset.key = 'm:' + it.id;
         if (selected === it.id) b.setAttribute('aria-current', 'true');
-        b.append(el('b', null, titleOf(it)), el('span', 'ds-caption', [it.project, ago(it.at), bodyOf(it) && firstSentence(bodyOf(it), 70)].filter(Boolean).join(' · ')));
+        b.append(el('b', null, titleOf(it)), el('span', 'ds-caption', [it.worktree ? `${it.project} · worktree ${it.worktree}` : it.project, statusOf(it)[1], ago(it.at), bodyOf(it) && firstSentence(bodyOf(it), 70)].filter(Boolean).join(' · ')));
         b.onclick = () => openItem(it);
         li.append(b);
       } else {
@@ -1262,9 +1266,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const n = (s) => workers.filter((i) => i.state === s).length;
     const sum = [`작업자 ${workers.length}명`]; if (n('needs_human')) sum.push(`답 대기 ${n('needs_human')}`); if (n('running')) sum.push(`작업 중 ${n('running')}`);
     // 묶음 머리는 카드 덮개(.ds-card__open::after) 위에 있어야 눌린다 — 덮개 위로 올라오는 .ds-card__actions 안에 둔다.
-    const grp = group('wg:' + g.id, sum.join(' · '), [], memberList(workers), null); grp.classList.add('b-full');
-    const wrap = el('div', 'ds-card__actions'); wrap.append(grp);
-    c.insertBefore(wrap, c.querySelector('.ds-card__actions'));
+    if (workers.length) {  // 작업자가 없는 묶음에는 "작업자 0명" 줄을 두지 않는다
+      const grp = group('wg:' + g.id, sum.join(' · '), [], memberList(workers), null); grp.classList.add('b-full');
+      const wrap = el('div', 'ds-card__actions'); wrap.append(grp);
+      c.insertBefore(wrap, c.querySelector('.ds-card__actions'));
+    }
     return c;
   }
   function laneCards(list, lane) {

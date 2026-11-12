@@ -7794,6 +7794,34 @@ assert bs.bulk_cleanup({}, items)["ok"] is False, "a second cleanup while one ru
 bs._bulk_lock.release()
 ' "$ROOT/scripts/board/board-server.py" "$BAF_T/kept.jsonl" || fail "finished work can be cleaned up in bulk: only finished items, worktrees only when chosen and removable, transcripts kept, reversible"
 assert_contains "$(<"$ROOT/scripts/board/board-server.py")" 'path == "/cleanup-bulk"' "the board serves bulk cleanup"
+# worktree에서 도는 세션(#291 4차): 폴더 이름이 아니라 원래 저장소로 묶고, worktree 이름은 보조 정보. 폴더마다 git은 한 번만.
+BWT="$BAF_T/wt"; mkdir -p "$BWT/shopper"
+git -C "$BWT/shopper" init -q
+git -C "$BWT/shopper" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
+git -C "$BWT/shopper" worktree add -q "$BWT/shopper-wt-a" -b wt-a
+mkdir -p "$BWT/shopper-wt-a/sub" "$BWT/plain"
+HARNESS_METRICS_DIR="$BAF_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+w = sys.argv[2]
+assert bs.repo_info(w + "/shopper-wt-a") == {"in_repo": True, "repo": "shopper", "worktree": "shopper-wt-a"}, bs.repo_info(w + "/shopper-wt-a")
+assert bs.repo_info(w + "/shopper-wt-a/sub")["repo"] == "shopper"
+main = bs.repo_info(w + "/shopper")
+assert main["repo"] == "shopper" and "worktree" not in main, main
+assert bs.repo_info(w + "/plain") == {"in_repo": False}
+real = bs._git
+bs._git = lambda *a: (_ for _ in ()).throw(AssertionError("git called again for a cached folder"))
+bs.repo_info(w + "/shopper-wt-a")
+bs._git = real
+items = [{"section": "work", "sid": "c1", "id": "claude|c1", "kind": "bg", "state": "running", "live": True, "project": "shopper", "cwd": w + "/shopper"},
+         {"section": "work", "sid": "c2", "id": "claude|c2", "kind": "bg", "state": "running", "live": True, "project": "shopper-wt-a", "cwd": w + "/shopper-wt-a"}]
+out = {i["sid"]: i for i in bs.classify_work(items)}
+assert out["c2"]["project"] == "shopper" and out["c2"]["worktree"] == "shopper-wt-a", out["c2"]
+assert "worktree" not in out["c1"], out["c1"]
+' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions in a git worktree count under the original repository, with the worktree name kept as a detail"
+BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
+assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"
 BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
 # 보드는 디자인 시스템 부품으로 그린다(#291): 부품 사본을 싣고, 예전 변수 이름과 색 리터럴이 없다.
 assert_contains "$BOARD_TPL" "ds:components:start" "the board carries the shared components"
