@@ -108,6 +108,13 @@ def status(scenario):
                "title": t, "link": None, "actions": []}
               for i, (k, p, t) in enumerate([("sync", "docs", "PR 생성 (improved)"), ("harvest", "search", "변경 없음"),
                                              ("rule", "shop", "규칙 2개 적용"), ("sync", "billing-api", "변경 없음")], 1)],
+            # 전역 범위의 끝난 일(저장소가 아님) — 요약에서 저장소처럼 섞이지 않아야 한다
+            *[{"id": f"dg{i}", "section": "harness", "kind": "harvest-global", "project": p, "state": "done", "at": ago(900 * i),
+               "title": "변경 없음", "link": None, "actions": []} for i, p in enumerate(["_global", "global"], 1)],
+            # 같은 PR 검토가 여러 저장소에 — 지금 할 일의 묶음(설명·동작이 있어야 빈 상자가 아니다)
+            *[{"id": f"sp{i}", "section": "harness", "kind": "sync", "project": p, "state": "needs_human", "at": ago(180 + 10 * i),
+               "title": "일부 적용 — draft PR 검토", "link": f"https://example.com/acme/{p}/pull/{200 + i}", "actions": ["open_agent"]}
+              for i, p in enumerate(["search", "billing-api", "docs"], 1)],
             {"id": "af4", "section": "autofix", "kind": "autofix", "project": "search", "state": "done", "status": "resolved", "at": ago(2880),
              "signature": "sentry:4409000", "title": "검색어에 이모지를 넣으면 500 오류", "stage": "resolved", "stage_label": "해결",
              "count": 19, "attempts": 1, "regressions": 0, "link": "https://example.com/acme/search/pull/131", "actions": []},
@@ -122,7 +129,37 @@ def status(scenario):
             for a in items:
                 if a["id"] == i["autofix_id"]:
                     a["session_id"] = i["id"]
-    return {"generated_at": ago(0), "window_days": 7, "items": items, "jira_base": None}
+    return {"generated_at": ago(0), "window_days": 7, "items": items, "jira_base": None, "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
+
+
+HIDDEN = [{"key": "s-old-1", "title": "로그인 화면 문구 다듬기", "project": "shop", "at": ago(1440)},
+          {"key": "item:sync|docs|2026-11-01T00:00:00Z", "title": "변경 없음", "project": "docs", "at": ago(2880)},
+          {"key": "s-old-2", "at": ago(4320)}]
+
+
+def bulk(scenario, req):
+    """끝난 일 정리 흉내: 미리보기는 실제 서버처럼 끝난 일만, 실행은 아무것도 바꾸지 않고 결과만 돌려준다."""
+    done = [i for i in status(scenario)["items"] if i["state"] in ("done", "idle") and not i.get("ask")]
+    older = req.get("older_days") or 0
+    if older:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older)
+        done = [i for i in done if datetime.strptime(i["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) < cutoff]
+    plan = []
+    for n, i in enumerate(done):
+        row = {"id": i["id"], "title": i["title"], "project": i["project"], "at": i["at"], "session": i["section"] == "work",
+               "close": i["section"] == "work" and bool(i.get("live"))}
+        if row["session"]:
+            row["worktree"] = {"removable": n % 2 == 0, "reason": None if n % 2 == 0 else "커밋 안 한 변경 2개", "branch": f"feat/x-{n}"}
+        plan.append(row)
+    if req.get("dry_run"):
+        return {"ok": True, "plan": plan}
+    wt = bool(req.get("worktree"))
+    results = [{"id": r["id"], "title": r["title"], "ok": True, "hidden": True, "closed": r["close"],
+                "worktree_removed": wt and bool(r.get("worktree") and r["worktree"]["removable"]),
+                **({"worktree_kept": r["worktree"]["reason"]} if wt and r.get("worktree") and not r["worktree"]["removable"] else {})} for r in plan]
+    n = len(results); c = sum(1 for r in results if r["closed"]); w = sum(1 for r in results if r["worktree_removed"]); s = sum(1 for r in results if r.get("worktree_kept"))
+    msg = " · ".join([f"{n}개 정리"] + ([f"세션 {c}개 닫음"] if c else []) + ([f"worktree {w}개 삭제"] if w else []) + ([f"건너뜀 {s}개"] if s else []))
+    return {"ok": True, "message": f"미리보기: {msg}(아무것도 바꾸지 않음)", "results": results, "counts": {"done": n, "closed": c, "worktrees": w, "skipped": s}}
 
 
 def many():
@@ -290,6 +327,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, transcript(q.get("id")))
         if u.path in ("/commands", "/repos"):
             return self._json(200, [] if u.path == "/commands" else REPOS)
+        if u.path == "/hidden":
+            return self._json(200, {"ok": True, "items": HIDDEN})
         if u.path == "/cleanup-preview":
             return self._json(200, {"worktree": {"path": "/work/acme/shop", "branch": "fix/cart-total", "removable": True}})
         return self._json(404, {"error": "not found"})
@@ -300,6 +339,8 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             req = {}
+        if self.path == "/cleanup-bulk":
+            return self._json(200, bulk(req.get("t") or "demo", req))
         if self.path == "/autofix/detail":
             d = autofix()["repos"][0]["details"]["datadog:9d8e7f6a5b4c3d2e"]
             return self._json(200, {"ok": True, "message": "원문을 불러옴", "detail": d})

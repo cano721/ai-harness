@@ -343,6 +343,8 @@
 .ds-columns--even { align-items: stretch; }
 .ds-columns--even > .ds-card { display: flex; flex-direction: column; }
 .ds-columns--even > .ds-card > .ds-card__actions { margin-top: auto; }
+/* 같은 칸에 놓인 묶음은 늘리지 않는다 — 내용 높이만큼만(빈 상자가 커지지 않게). */
+.ds-columns--even > .ds-group { align-self: start; }
 /* 목록 + 서랍: 넓은 폭에서는 서랍이 자리를 차지하고 목록은 한 줄로 접힌다. 좁은 폭에서는 서랍이 목록 위에 뜬다. */
 .ds-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 .ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr) var(--size-drawer); }

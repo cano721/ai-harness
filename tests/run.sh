@@ -7745,13 +7745,62 @@ assert af.get("session_id") == "w9" and w.get("autofix_title") == "Cart total is
 assert lone.get("autofix_sig") == "datadog:abcdef0123456789" and "autofix_id" not in lone, lone
 ' "$ROOT/scripts/board/board-server.py" "$ROOT/scripts/board" "$BOARD_NOGIT" || fail "the board lifts sessions that ask in plain text, links autofix sessions by signature, and tells repos from other folders"
 assert_contains "$(<"$ROOT/scripts/board/work.sh")" "reply_tail" "work.sh ships the last reply only while the person has not answered"
+# 끝난 일 한꺼번에 정리(#291 3차): 작업 중·답 대기·권한 대기는 대상이 아니고, worktree는 고른 때만·지울 수 있는 것만,
+# 대화 기록 파일은 남고, 숨긴 항목은 다시 보이게 할 수 있다. 같은 정리가 동시에 두 번 돌지 않는다.
+BCL_DATA="$BAF_T/cleanup-data"; mkdir -p "$BCL_DATA"
+printf '{"type":"user"}\n' >"$BAF_T/kept.jsonl"
+HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, sys, os
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+tr = sys.argv[2]
+old = "2026-01-01T00:00:00Z"
+S = lambda sid, **k: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": sid,
+                      "project": "shop", "at": old, "transcript": tr, **k}
+items = [S("busy", state="running", status="busy", live=True), S("asking", state="needs_human", status="idle", live=True, ask="할까요?"),
+         S("perm", state="needs_human", status="waiting", live=True, permission={"pid": "p"}),
+         S("idle", state="idle", status="idle", live=True), S("ended", state="idle", status="idle", live=False),
+         S("fresh", state="idle", status="idle", live=False, at=bs.utc()),
+         {"section": "harness", "id": "sync|docs|" + old, "kind": "sync", "state": "done", "at": old, "title": "변경 없음", "project": "docs"},
+         {"section": "autofix", "id": "autofix:shop:sentry:1", "kind": "autofix", "state": "done", "at": old, "title": "e", "project": "shop"}]
+closed, checked = [], []
+bs.end_session = lambda i: closed.append(i["sid"]) or True
+bs.worktree_check = lambda i: checked.append(i["sid"]) or {"removable": i["sid"] == "idle", "reason": None if i["sid"] == "idle" else "커밋 안 한 변경 2개", "path": "/nope"}
+plan = bs.bulk_cleanup({"dry_run": True, "older_days": 1}, items)["plan"]
+assert sorted(r["id"] for r in plan) == sorted(["claude|idle", "claude|ended", "sync|docs|" + old, "autofix:shop:sentry:1"]), plan
+assert [r for r in plan if r["id"] == "claude|idle"][0]["close"] is True
+checked.clear()
+res = bs.bulk_cleanup({"older_days": 1, "worktree": False}, items)
+assert res["ok"] and res["counts"] == {"done": 4, "closed": 1, "worktrees": 0, "skipped": 0}, res
+assert closed == ["idle"] and checked == [], (closed, checked)  # worktree를 고르지 않으면 확인도 삭제도 하지 않는다
+assert res["message"] == "4개 정리 · 세션 1개 닫음", res["message"]
+assert os.path.exists(tr), "transcripts are kept"
+hidden = bs._load(bs.HIDDEN)
+assert {"idle", "ended", "item:sync|docs|" + old, "item:autofix:shop:sentry:1"} <= set(hidden), hidden
+assert hidden["idle"]["title"] == "idle"
+kept = bs.drop_hidden(items)
+assert all(i["id"] not in ("sync|docs|" + old, "autofix:shop:sentry:1") for i in kept), "hidden harness and autofix items leave the list"
+again = dict(items[6], at="2026-02-01T00:00:00Z")
+assert bs.drop_hidden([again]) == [again], "a new event on a hidden item shows again"
+# worktree를 고르면 지울 수 있는 것만 지우고, 나머지는 이유와 함께 세션만 정리한다
+calls = []
+bs.cleanup = lambda i, wt: calls.append((i["sid"], wt)) or {"ok": True, "message": "정리함"}
+res = bs.bulk_cleanup({"older_days": 1, "worktree": True}, items)
+assert sorted(calls) == [("ended", False), ("idle", True)], calls
+assert res["counts"]["worktrees"] == 1 and res["counts"]["skipped"] == 1, res
+assert [r for r in res["results"] if r["id"] == "claude|ended"][0]["worktree_kept"] == "커밋 안 한 변경 2개"
+assert bs.restore_hidden("all")["restored"] >= 4 and not bs._load(bs.HIDDEN)
+bs._bulk_lock.acquire()
+assert bs.bulk_cleanup({}, items)["ok"] is False, "a second cleanup while one runs is refused"
+bs._bulk_lock.release()
+' "$ROOT/scripts/board/board-server.py" "$BAF_T/kept.jsonl" || fail "finished work can be cleaned up in bulk: only finished items, worktrees only when chosen and removable, transcripts kept, reversible"
+assert_contains "$(<"$ROOT/scripts/board/board-server.py")" 'path == "/cleanup-bulk"' "the board serves bulk cleanup"
 BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
 # 보드는 디자인 시스템 부품으로 그린다(#291): 부품 사본을 싣고, 예전 변수 이름과 색 리터럴이 없다.
 assert_contains "$BOARD_TPL" "ds:components:start" "the board carries the shared components"
 BOARD_OWN="$(awk '/ds:tokens:start/{skip=1} /ds:components:end/{skip=0; next} !skip' "$ROOT/scripts/board/template.html")"
 case "$BOARD_OWN" in *"var(--human"*|*"var(--run)"*|*"var(--panel)"*|*"var(--line)"*|*"var(--muted)"*|*"var(--bg)"*) fail "the board drops the old variable names" ;; esac
 [[ -z "$(grep -oE '#[0-9a-fA-F]{3,8}\b|rgba?\(' <<<"$BOARD_OWN" || true)" ]] || fail "the board's own styles and script carry no color literal"
-for BOARD_PART in 'todoSummary' 'nonRepoSet' 'LANE_MAX' 'side:more' 'shortTitle' '묻는 말' 'ds-card--interactive' 'ds-card__open' 'ds-row__head' 'ds-group' 'ds-tabs' "'role', 'tab'" 'ds-drawer' 'aria-modal' "setAttribute('inert'" 'ds-skeleton' 'ds-error' 'ds-empty' 'ds-setting' 'ds-segment' 'ds-toast' '/autofix/detail' 'humanTitle'; do
+for BOARD_PART in '끝난 일 정리…' "openTool('hidden')" '/cleanup-bulk' '/hidden/restore' '펼쳐서 하나씩 보기' 'todoSummary' 'nonRepoSet' 'LANE_MAX' 'side:more' 'shortTitle' '묻는 말' 'ds-card--interactive' 'ds-card__open' 'ds-row__head' 'ds-group' 'ds-tabs' "'role', 'tab'" 'ds-drawer' 'aria-modal' "setAttribute('inert'" 'ds-skeleton' 'ds-error' 'ds-empty' 'ds-setting' 'ds-segment' 'ds-toast' '/autofix/detail' 'humanTitle'; do
   assert_contains "$BOARD_TPL" "$BOARD_PART" "the board uses $BOARD_PART"
 done
 # 가짜 데이터 미리보기(디자인 검토·스크린샷용)는 조직·개인 식별자를 싣지 않는다.

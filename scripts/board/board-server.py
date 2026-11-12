@@ -6,6 +6,8 @@ GET  /status.json?t=...          status.sh 결과(작업 = claude agents, 하네
 GET  /transcript?t&id&offset     세션 대화를 offset 이후만 읽어 돌려줌(파일 tail)
 POST /action  {t, id, action}    미리 정한 작업만 실행. send는 {text}
 POST /new     {t, cwd, prompt}   claude --bg 새 세션
+POST /cleanup-bulk {t, older_days?, worktree?, dry_run?, ids?}  끝난 일 한꺼번에 정리(숨김 + 쉬는 세션 닫기, worktree는 선택·지울 수 있는 것만)
+GET  /hidden?t=...               숨긴(정리한) 항목 목록 · POST /hidden/restore {t, keys|"all"} 다시 보이기
 GET  /impact?t=...               하네스 효과: 저장소별 impact.sh compare 캐시 + 판정(계산은 뒤에서, 하루 한 번)
 POST /impact/refresh {t, repo}   그 저장소를 다시 계산하도록 줄 세움
 GET  /impact/report?t&repo       그 저장소의 오프라인 리포트(impact.sh render)를 만들어 보여 줌
@@ -114,6 +116,8 @@ def status(max_age=3):
                     print("autofix items:", e, file=sys.stderr, flush=True)
             data["items"] += af or []
             link_autofix_sessions(data["items"])
+            data["items"] = drop_hidden(data["items"])
+            data["hidden_count"] = len(_load(HIDDEN) or {})
             prstate.apply(data["items"])
             daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
             for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
@@ -315,12 +319,149 @@ def cleanup(item, with_worktree):
             if out.returncode != 0:
                 return {"ok": False, "message": "worktree 삭제 실패: " + (out.stderr or out.stdout)[-200:]}
         msg.append(f"worktree 삭제({wt.get('branch')})")
-    with _marks_lock:
-        hidden = _load(HIDDEN) or {}
-        hidden[item["sid"]] = utc()
-        _save(HIDDEN, hidden)
+    hide_items([item])
     _cache["data"] = None
     return {"ok": True, "message": "정리함" + (" — " + ", ".join(msg) if msg else " — 보드에서 숨김(대화 기록은 남음)")}
+
+
+# ---- 숨김(정리) 기록: 세션은 sid, 그 밖의 항목은 "item:<id>" ----
+def _hide_key(item):
+    return item["sid"] if item.get("section") == "work" and item.get("sid") else "item:" + str(item.get("id"))
+
+
+def hide_items(items):
+    """목록에서 숨긴다. 대화 기록 파일은 건드리지 않는다. 다시 보이기를 위해 제목·저장소를 함께 남긴다."""
+    with _marks_lock:
+        hidden = _load(HIDDEN) or {}
+        for i in items:
+            hidden[_hide_key(i)] = {"at": utc(), "item_at": i.get("at"), "title": i.get("title"), "project": i.get("project"),
+                                    "section": i.get("section"), "kind": i.get("kind")}
+        _save(HIDDEN, hidden)
+
+
+def drop_hidden(items):
+    """세션이 아닌 항목(하네스 동작·자동 수정)의 숨김을 적용한다. 같은 항목이라도 그 뒤 새 일이 생기면(시각이 바뀌거나
+    끝난 상태가 아니게 되면) 다시 보인다."""
+    hidden = _load(HIDDEN) or {}
+    out = []
+    for i in items:
+        h = hidden.get("item:" + str(i.get("id")))
+        if h and i.get("state") in DONE_STATES and (not isinstance(h, dict) or h.get("item_at") == i.get("at")):
+            continue
+        out.append(i)
+    return out
+
+
+def hidden_list():
+    hidden = _load(HIDDEN) or {}
+    rows = [{"key": k, **(v if isinstance(v, dict) else {"at": v})} for k, v in hidden.items()]
+    return sorted(rows, key=lambda r: str(r.get("at") or ""), reverse=True)
+
+
+def restore_hidden(keys):
+    """숨긴 항목을 다시 보이게 한다. keys == "all"이면 전부."""
+    with _marks_lock:
+        hidden = _load(HIDDEN) or {}
+        if keys == "all":
+            n, hidden = len(hidden), {}
+        else:
+            keys = [k for k in (keys or []) if isinstance(k, str)]
+            n = sum(1 for k in keys if hidden.pop(k, None) is not None)
+        _save(HIDDEN, hidden)
+    _cache["data"] = None
+    return {"ok": True, "message": f"{n}개를 다시 보이게 했습니다" if n else "다시 보일 항목이 없습니다", "restored": n}
+
+
+# ---- 끝난 일 한꺼번에 정리 ----
+DONE_STATES = ("done", "idle")
+_bulk_lock = threading.Lock()
+
+
+def _epoch(iso):
+    try:
+        return datetime.strptime(re.sub(r"\.\d+Z$", "Z", str(iso)), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return 0.0  # 시각을 모르면 오래된 것으로 본다
+
+
+def bulk_targets(items, older_days=0):
+    """'끝난 일' 칸의 항목만. 작업 중·답 대기·권한 대기 세션은 절대 넣지 않는다."""
+    cutoff = time.time() - older_days * 86400 if older_days else None
+    out = []
+    for i in items:
+        if i.get("state") not in DONE_STATES or i.get("permission") or i.get("ask"):
+            continue
+        if i.get("section") == "work" and i.get("sid") and i.get("live") and not can_close(i):
+            continue
+        if cutoff is not None and _epoch(i.get("at")) > cutoff:
+            continue
+        out.append(i)
+    return out
+
+
+def _is_session(i):
+    return i.get("section") == "work" and bool(i.get("sid"))
+
+
+def bulk_plan(items, older_days=0):
+    rows = []
+    for i in bulk_targets(items, older_days):
+        row = {"id": i.get("id"), "title": i.get("title"), "project": i.get("project"), "at": i.get("at"),
+               "session": _is_session(i), "close": bool(_is_session(i) and i.get("live"))}
+        if _is_session(i):
+            wt = worktree_check(i)
+            row["worktree"] = {"removable": bool(wt.get("removable")), "reason": wt.get("reason"), "branch": wt.get("branch")}
+        rows.append(row)
+    return rows
+
+
+def bulk_cleanup(req, items=None):
+    """끝난 일을 한꺼번에 정리한다. 기본은 목록에서 숨기기 + 쉬는 세션 닫기, worktree는 req.worktree일 때 지울 수 있는 것만."""
+    if not _bulk_lock.acquire(blocking=False):
+        return {"ok": False, "message": "이미 정리하는 중입니다. 끝나면 다시 눌러 주세요."}
+    try:
+        items = status()["items"] if items is None else items
+        older = req.get("older_days")
+        older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
+        if req.get("dry_run"):
+            return {"ok": True, "plan": bulk_plan(items, older)}
+        targets = bulk_targets(items, older)
+        if isinstance(req.get("ids"), list):
+            want = set(req["ids"])
+            targets = [i for i in targets if i.get("id") in want]
+        want_wt = bool(req.get("worktree"))
+        results, others = [], []
+        for i in targets:
+            if not _is_session(i):
+                others.append(i)
+                results.append({"id": i.get("id"), "title": i.get("title"), "ok": True, "hidden": True})
+                continue
+            wt = worktree_check(i) if want_wt else None
+            use_wt = bool(wt and wt.get("removable"))
+            res = cleanup(i, use_wt)
+            r = {"id": i.get("id"), "title": i.get("title"), "ok": res["ok"], "hidden": res["ok"],
+                 "closed": bool(res["ok"] and i.get("live")), "worktree_removed": bool(res["ok"] and use_wt)}
+            if not res["ok"]:
+                r["reason"] = res["message"]
+            elif want_wt and not use_wt:
+                r["worktree_kept"] = (wt or {}).get("reason") or "지울 수 없는 worktree"
+            results.append(r)
+        if others:
+            hide_items(others)
+        _cache["data"] = None
+        n = {"done": sum(1 for r in results if r["ok"]), "closed": sum(1 for r in results if r.get("closed")),
+             "worktrees": sum(1 for r in results if r.get("worktree_removed")),
+             "skipped": sum(1 for r in results if not r["ok"] or r.get("worktree_kept"))}
+        parts = [f"{n['done']}개 정리"]
+        if n["closed"]:
+            parts.append(f"세션 {n['closed']}개 닫음")
+        if n["worktrees"]:
+            parts.append(f"worktree {n['worktrees']}개 삭제")
+        if n["skipped"]:
+            parts.append(f"건너뜀 {n['skipped']}개")
+        return {"ok": True, "message": " · ".join(parts) if results else "정리할 끝난 일이 없습니다", "results": results, "counts": n}
+    finally:
+        _bulk_lock.release()
 
 
 # ---- 하네스 설정(자동화 수준) ----
@@ -980,6 +1121,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, status_with_permissions())
         if u.path == "/commands":
             return self._send(200, list_commands(q.get("cwd", [None])[0]))
+        if u.path == "/hidden":
+            return self._send(200, {"ok": True, "items": hidden_list()})
         if u.path == "/cleanup-preview":
             item = find_item(q.get("id", [None])[0])
             if not item or "cleanup" not in item.get("actions", []):
@@ -1079,6 +1222,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))
             log({"action": "impact_refresh", "repo": req.get("repo"), **res})
+            return self._send(200, res)
+        if path == "/cleanup-bulk":
+            res = bulk_cleanup(req)
+            if not req.get("dry_run"):
+                log({"action": "cleanup_bulk", "worktree": bool(req.get("worktree")), "older_days": req.get("older_days"),
+                     "ok": res["ok"], "message": res["message"]})
+            return self._send(200, res)
+        if path == "/hidden/restore":
+            res = restore_hidden(req.get("keys"))
+            log({"action": "hidden_restore", **{k: res[k] for k in ("ok", "restored")}})
             return self._send(200, res)
         if path == "/seen":
             ids = set(req.get("ids") or [])
