@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- 보드 '세션 정리'가 느리던 문제 — 확인 대화상자의 worktree 판정은 최근 목록에서 바로 나오고, 확인하면 카드가 즉시 빠지며 세션 닫기·worktree 삭제는 뒤에서 한다(실패하면 카드가 돌아오고 이유를 알린다). 작업 중·답 대기 여부와 worktree 판정은 정리 직전에 다시 확인한다. 상태 수집은 바뀌지 않은 대화 기록을 다시 읽지 않는다(`~/.ai-harness/board/work-cache.json`, 대화 기록은 읽기만) (#305)
+
 ## v0.71.0 (2026-11-12)
 ### 새 기능
 

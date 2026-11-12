@@ -131,9 +131,69 @@ def status(max_age=3):
 
 
 def find_item(item_id, fresh=False):
+    """항목 찾기. 기본은 최근 캐시에서(나이 무관) — status.sh 전체를 다시 돌리지 않는다. 캐시에 없을 때만 새로 모은다."""
     if fresh:
         _cache["data"] = None
+    cached = _cache["data"]
+    if cached is not None:
+        hit = next((i for i in cached.get("items", []) if i.get("id") == item_id), None)
+        if hit is not None:
+            return hit
     return next((i for i in status()["items"] if i.get("id") == item_id), None)
+
+
+def live_agents(item, config_dir=None):
+    """정리 직전 확인: 그 설정 폴더에서 claude agents 목록을 새로 받는다(status.sh 전체 대신 이것만). 실패하면 None."""
+    cwd = item.get("cwd") if item.get("cwd") and os.path.isdir(item["cwd"]) else os.path.expanduser("~")
+    try:
+        agents = json.loads(claude(["agents", "--json", "--all"], cwd, timeout=15, config_dir=config_dir).stdout)
+    except Exception:
+        return None
+    return agents if isinstance(agents, list) else None
+
+
+def action_item(item_id, action):
+    """작업 대상 항목 → (item, 오류 메시지). 정리는 캐시 항목을 쓰되 세션의 프로세스 상태만 바로 다시 확인한다
+    (그 사이 일을 시작했거나 답을 기다리면 can_close가 거절한다). 다른 작업은 예전처럼 새로 모은 목록에서 찾는다."""
+    if action != "cleanup":
+        item = find_item(item_id, fresh=True)
+        return (item, None) if item else (None, "항목이 이미 바뀌었음 — 다시 시도")
+    cached = find_item(item_id)
+    if cached is None:
+        return None, "항목이 이미 바뀌었음 — 다시 시도"
+    item = dict(cached)
+    if not _is_session(item):
+        return item, None
+    own_dir = item.get("config_dir") or None
+    agents = live_agents(item, own_dir)
+    if agents is None:
+        return None, "세션 상태를 확인하지 못함 — 잠시 뒤 다시 시도"
+    a = next((x for x in agents if isinstance(x, dict) and x.get("sessionId") == item["sid"]), None)
+    # worktree를 쓰는 다른 세션은 설정 폴더가 달라도 찾는다: 목록에 나온 폴더 전부 + 기본 폴더를 한 번씩 다시 부른다.
+    # 받지 못한 폴더는 _others_unchecked로 남겨 worktree 삭제만 막는다(세션 정리는 자기 폴더 확인으로 충분).
+    folders = [None] + sorted({i.get("config_dir") for i in (_cache["data"] or {}).get("items", [])
+                               if _is_session(i) and i.get("config_dir")})
+    others, unchecked = [x for x in agents if isinstance(x, dict)], []
+    for d in folders:
+        if d == own_dir:
+            continue
+        more = live_agents(item, d)
+        if more is None:
+            unchecked.append(d or "기본 폴더")
+        else:
+            others += [x for x in more if isinstance(x, dict)]
+    item["_others_unchecked"] = unchecked
+    if a is None or a.get("pid") is None:
+        item["live"] = False
+    else:
+        item["live"], item["status"] = True, a.get("status")
+        if a.get("status") == "busy":
+            item["state"] = "running"
+        elif a.get("status") != "idle":
+            item["state"] = "needs_human"
+    item["_live_others"] = [{"cwd": x.get("cwd") or "", "title": x.get("name") or str(x.get("sessionId") or "")[:8]}
+                            for x in others if x.get("pid") is not None and x.get("sessionId") != item["sid"]]
+    return item, None
 
 
 # ---- 읽음 표시 · 정리(숨김) ----
@@ -345,28 +405,90 @@ def worktree_check(item):
     others = [i.get("title") for i in (_cache["data"] or {}).get("items", [])
               if i.get("section") == "work" and i.get("live") and i.get("sid") != item.get("sid")
               and (i.get("cwd", "") + "/").startswith(top + "/")]
+    others += [o.get("title") for o in item.get("_live_others") or []  # 정리 직전에 새로 확인한 살아 있는 세션
+               if (str(o.get("cwd") or "") + "/").startswith(top + "/") and o.get("title") not in others]
     if others:
         info["reason"] = "아직 이 폴더에서 돌고 있는 세션: " + ", ".join(others[:3])
+        return info
+    if item.get("_others_unchecked"):
+        info["reason"] = "다른 설정 폴더의 세션을 확인하지 못함(" + ", ".join(item["_others_unchecked"][:3]) + ")"
         return info
     info["removable"] = True
     return info
 
 
-def cleanup(item, with_worktree):
+_cleanup_failed = []  # 뒤에서 하던 정리가 실패한 기록 [{id, title, message, at, t}] — status.json으로 화면에 알린다
+CLEANUP_FAILED_KEEP = 600  # 초
+
+
+_cleaning = set()  # 뒤에서 정리하는 중인 항목 id — 같은 항목을 두 번 정리하지 않는다(두 탭·연속 클릭)
+
+
+def _note_cleanup_result(item, message=None):
+    """뒤에서 한 정리의 결과를 남긴다. 실패(message)면 알림을 바꿔 달고, 성공이면 그 항목의 지난 실패 알림을 지운다."""
+    now = time.time()
+    with _marks_lock:
+        _cleanup_failed[:] = [f for f in _cleanup_failed if now - f["t"] < CLEANUP_FAILED_KEEP and f["id"] != item.get("id")]
+        if message:
+            _cleanup_failed.append({"id": item.get("id"), "title": item.get("title"), "message": message, "at": utc(), "t": now})
+
+
+def recent_cleanup_failed():
+    now = time.time()
+    with _marks_lock:
+        return [{k: v for k, v in f.items() if k != "t"} for f in _cleanup_failed if now - f["t"] < CLEANUP_FAILED_KEEP]
+
+
+def cleanup(item, with_worktree, background=False):
+    """정리. 안전 확인(can_close·worktree 판정)은 항상 먼저 동기로 한다. background면 숨긴 뒤 바로 돌려주고
+    세션 닫기(정지 대기 포함)·worktree 삭제는 뒤에서 한다 — 실패하면 숨김을 되돌리고 cleanup_failed로 알린다."""
     if item.get("live") and not can_close(item):
         return {"ok": False, "message": "작업 중이거나 답을 기다리는 세션은 정리하지 않음"}
-    msg, wt = [], None
+    wt = None
     if with_worktree:  # 세션을 닫기 전에 먼저 확인 — 지울 수 없으면 세션도 그대로 둔다
         wt = worktree_check(item)
         if not wt["removable"]:
             return {"ok": False, "message": "worktree를 지우지 않음 — " + wt.get("reason", "")}
+    if not background or not (item.get("live") or with_worktree):
+        return _finish_cleanup(item, wt)
+    with _marks_lock:
+        if item.get("id") in _cleaning:
+            return {"ok": False, "message": "이미 정리하는 중입니다 — 끝나면 목록에서 빠집니다"}
+        _cleaning.add(item.get("id"))
+    hide_items([item])  # 닫는 동안 목록에 되살아나지 않게 먼저 숨긴다
+
+    def run():
+        try:
+            res = _finish_cleanup(item, wt)
+        except Exception as e:
+            unhide_keys([_hide_key(item)])
+            res = {"ok": False, "message": f"정리하지 못함: {e}"}
+        _note_cleanup_result(item, None if res["ok"] else res["message"])
+        with _marks_lock:
+            _cleaning.discard(item.get("id"))
+        _cache["data"] = None
+        log({"id": item.get("id"), "action": "cleanup_done", **res})
+
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except RuntimeError as e:  # 스레드를 못 띄우면 숨김·진행 중 표시를 되돌린다
+        unhide_keys([_hide_key(item)])
+        with _marks_lock:
+            _cleaning.discard(item.get("id"))
+        return {"ok": False, "message": f"정리를 시작하지 못함: {e}"}
+    return {"ok": True, "pending": True,
+            "message": "정리하는 중 — " + ("세션을 닫고 " if item.get("live") else "") + ("worktree를 지우는 중" if with_worktree else "보드에서 숨김")}
+
+
+def _finish_cleanup(item, wt):
+    msg = []
     if item.get("live"):
         hide_items([item])  # 닫는 동안 목록에 되살아나지 않게 먼저 숨긴다
         if not end_session(item):
             unhide_keys([_hide_key(item)])
             return {"ok": False, "message": "세션을 끝내지 못함 — 터미널에서 직접 닫아 주세요"}
         msg.append("세션 종료")
-    if with_worktree:
+    if wt:
         if shutil.which("orca"):
             out = subprocess.run(["orca", "worktree", "rm", "--worktree", "path:" + wt["path"], "--json"],
                                  capture_output=True, text=True, timeout=60)
@@ -945,6 +1067,9 @@ def decide_permission(pid, decision):
 
 def status_with_permissions():
     data = status()
+    failed = recent_cleanup_failed()
+    if failed:  # 캐시 원본은 그대로 두고 응답에만 싣는다
+        data = {**data, "cleanup_failed": failed}
     pend = [p["info"] for p in list(_perms.values())]
     if not pend:
         return data
@@ -1175,8 +1300,7 @@ def run_action(item, action, req):
     if action == "send":
         return send_to_bg(item, req.get("text"))
     if action == "cleanup":
-        res = cleanup(item, bool(req.get("worktree")))
-        return res
+        return cleanup(item, bool(req.get("worktree")), background=True)
     if action == "open_agent":
         # 자동 수정 카드는 원문 로그 제목 대신 시그니처로 이름을 붙인다(원문이 세션 이름으로 새지 않고, 시그니처로 카드와 이어진다)
         name = (f"{item['project']} 에러 이어 보기 {item['signature']}" if item.get("kind") == "autofix" and item.get("signature")
@@ -1350,8 +1474,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path != "/action":
             return self._send(404, {"error": "not found"})
-        item = find_item(req.get("id"), fresh=True)
-        res = {"ok": False, "message": "항목이 이미 바뀌었음 — 다시 시도"} if item is None else run_action(item, req.get("action"), req)
+        item, err = action_item(req.get("id"), req.get("action"))
+        res = {"ok": False, "message": err} if item is None else run_action(item, req.get("action"), req)
         _cache["data"] = None
         log({"id": req.get("id"), "action": req.get("action"), "chars": len(req.get("text") or ""), **res})
         self._send(200, res)

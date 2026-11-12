@@ -8017,6 +8017,368 @@ assert "s-bad" not in bs._load(bs.HIDDEN) and {"s-ok", "keep"} <= set(bs._load(b
 ' "$ROOT/scripts/board/board-server.py" || fail "cleanup records the hiding before it closes the session and takes it back only when closing fails"
 pass "board cleanup hides before closing and undoes the hiding when closing fails"
 
+# 정리 속도(#305) A: 항목 조회는 캐시가 아무리 오래됐어도 캐시에서 한다(status.sh 재수집 없이). 캐시에 없을 때만 한 번 수집하고, fresh=True는 예전처럼 다시 모은다.
+FI_DATA="$TEST_TMP/board-find-cached"
+mkdir -p "$FI_DATA"
+HARNESS_METRICS_DIR="$FI_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": sid,
+                  "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle", "actions": ["cleanup"]}
+calls = []
+def fake_status(*a, **k):
+    calls.append(1)
+    return {"items": [mk("s-other")]}
+bs.status = fake_status
+bs._cache["data"] = {"items": [mk("s-cached")]}
+bs._cache["at"] = 0  # 아주 오래된 캐시
+got = bs.find_item("claude|s-cached")
+assert got and got["id"] == "claude|s-cached" and calls == [], (got, calls)  # 캐시에서 찾고 수집하지 않는다
+got = bs.find_item("claude|s-other")
+assert got and got["id"] == "claude|s-other" and len(calls) == 1, (got, calls)  # 캐시에 없으면 한 번 수집
+calls.clear()
+bs._cache["data"] = {"items": [mk("s-cached")]}
+bs.find_item("claude|s-cached", fresh=True)
+assert len(calls) == 1, calls  # fresh는 다시 모은다
+' "$ROOT/scripts/board/board-server.py" || fail "find_item answers from the cache however old it is and recollects only when the id is missing or fresh is asked"
+pass "board find_item uses the cached list without recollecting status"
+
+# 정리 속도(#305) B: 정리는 캐시 항목을 쓰되 닫기 직전에 claude agents로 세션을 다시 확인한다. 그 사이 일을 시작했으면 정리하지 않고, 확인하지 못하면 멈춘다.
+AI_T="$TEST_TMP/board-action-item"
+mkdir -p "$AI_T/bin" "$AI_T/data" "$AI_T/cwd"
+cat >"$AI_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 0
+[[ -f "$FAKE_AGENTS_FILE.exit1" ]] && exit 1
+cat "$FAKE_AGENTS_FILE"
+FAKE
+chmod +x "$AI_T/bin/claude"
+HARNESS_METRICS_DIR="$AI_T/data" FAKE_AGENTS_FILE="$AI_T/agents.json" python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, cwd, agents_file = sys.argv[2], sys.argv[3], os.environ["FAKE_AGENTS_FILE"]
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+mk = lambda sid, **k: dict({"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid[:8], "cwd": cwd, "title": sid,
+                            "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle", "actions": ["cleanup", "send"]}, **k)
+def agents(*rows):
+    with open(agents_file, "w") as f:
+        f.write(rows[0] if rows and isinstance(rows[0], str) else json.dumps(list(rows)))
+ag = lambda sid, status, pid=100, **k: dict({"sessionId": sid, "id": sid[:8], "kind": "background", "status": status, "pid": pid, "cwd": cwd, "name": "n-" + sid}, **k)
+st_calls = []
+def fake_status(*a, **k):
+    st_calls.append(1)
+    return {"items": [mk("s-send")]}
+bs.status = fake_status
+def prime(*items):
+    bs._cache["data"] = {"items": list(items)}
+    bs._cache["at"] = 0
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+
+# 캐시에는 쉬는 세션인데 지금은 작업 중 -> 정리하지 않는다
+prime(mk("s-busy"))
+agents(ag("s-busy", "busy"), ag("s-peer", "idle", cwd="/x/wt", name="peer task"), ag("s-dead", "idle", pid=None, cwd="/x/dead"))
+item, err = bs.action_item("claude|s-busy", "cleanup")
+assert err is None and item is not None and st_calls == [], (item, err, st_calls)
+assert item["live"] is True and item["status"] == "busy" and item["state"] == "running" and not bs.can_close(item), item
+assert [o["cwd"] for o in item["_live_others"]] == ["/x/wt"], item.get("_live_others")  # 다른 살아 있는 세션만(pid 없는 것·자기 자신 제외)
+res = bs.cleanup(item, False)
+assert res["ok"] is False and ended == [], (res, ended)
+assert bs._cache["data"]["items"][0]["status"] == "idle", "the cached item itself is not modified"  # 돌려주는 것은 복사본
+
+# 지금은 응답·권한을 기다림 -> needs_human
+prime(mk("s-wait"))
+agents(ag("s-wait", "waiting"))
+item, err = bs.action_item("claude|s-wait", "cleanup")
+assert err is None and item["state"] == "needs_human" and not bs.can_close(item), (item, err)
+
+# 그대로 쉬는 중 -> 정리할 수 있다
+prime(mk("s-idle"))
+agents(ag("s-idle", "idle"))
+item, err = bs.action_item("claude|s-idle", "cleanup")
+assert err is None and item["live"] is True and bs.can_close(item), (item, err)
+assert bs.cleanup(item, False)["ok"] is True and ended == ["s-idle"], ended
+
+# 목록에 없거나 pid가 없음 -> 이미 끝난 세션
+for rows in ([ag("s-gone2", "idle")], [ag("s-gone", "idle", pid=None)]):
+    prime(mk("s-gone"))
+    agents(*rows)
+    item, err = bs.action_item("claude|s-gone", "cleanup")
+    assert err is None and item["live"] is False, (item, err)
+
+# 확인하지 못하면(claude 실패·이상한 출력) 정리하지 않는다
+prime(mk("s-fail"))
+agents("not json at all")
+item, err = bs.action_item("claude|s-fail", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+agents(ag("s-fail", "idle"))
+open(agents_file + ".exit1", "w").close()
+item, err = bs.action_item("claude|s-fail", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+os.remove(agents_file + ".exit1")
+
+# 세션이 아닌 항목(sid 없음)은 다시 확인하지 않는다
+prime({"section": "harvest", "id": "harvest|p1", "kind": "harvest", "title": "p1", "project": "p1", "actions": ["cleanup"]})
+open(agents_file + ".exit1", "w").close()
+item, err = bs.action_item("harvest|p1", "cleanup")
+assert err is None and item["id"] == "harvest|p1", (item, err)
+os.remove(agents_file + ".exit1")
+
+# 정리가 아닌 작업은 예전처럼 다시 수집한다
+del st_calls[:]
+bs._cache["data"] = {"items": [mk("s-stale")]}
+item, err = bs.action_item("claude|s-send", "send")
+assert err is None and item["id"] == "claude|s-send" and len(st_calls) == 1, (item, err, st_calls)
+
+# 모르는 id
+prime(mk("s-known"))
+del st_calls[:]
+bs.status = lambda *a, **k: st_calls.append(1) or {"items": []}
+item, err = bs.action_item("claude|nope", "cleanup")
+assert item is None and err, (item, err)
+' "$ROOT/scripts/board/board-server.py" "$AI_T/bin" "$AI_T/cwd" || fail "action_item re-checks the session right before cleanup (busy, waiting, gone, unreadable) and recollects for other actions"
+pass "board action_item re-checks a session's live state before cleanup and refuses when it cannot"
+
+# 정리 속도(#305) C: 이 보드가 닫기 직전에 확인한 다른 살아 있는 세션(_live_others)도 worktree 사용 중으로 본다(캐시가 비어 있어도).
+WL_T="$(mkdir -p "$TEST_TMP/board-wt-live" && cd "$TEST_TMP/board-wt-live" && pwd -P)"
+git init -q --bare "$WL_T/remote.git"
+git init -q -b main "$WL_T/repo"
+git -C "$WL_T/repo" config user.email test@example.com
+git -C "$WL_T/repo" config user.name tester
+git -C "$WL_T/repo" config commit.gpgsign false
+git -C "$WL_T/repo" commit -q --allow-empty -m init
+git -C "$WL_T/repo" remote add origin "$WL_T/remote.git"
+git -C "$WL_T/repo" push -q origin main
+git -C "$WL_T/repo" worktree add -q -b feat/example "$WL_T/wt"
+git -C "$WL_T/wt" push -q -u origin feat/example
+mkdir -p "$WL_T/data"
+HARNESS_METRICS_DIR="$WL_T/data" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+wt = sys.argv[2]
+bs._cache["data"] = None
+item = {"section": "work", "sid": "s-mine", "id": "claude|s-mine", "kind": "bg", "cwd": wt, "title": "mine", "live": True, "status": "idle", "state": "idle"}
+base = bs.worktree_check(item)
+assert base["removable"] is True, base  # 다른 세션이 없으면 지울 수 있다
+outside = bs.worktree_check(dict(item, _live_others=[{"cwd": "/somewhere/else", "title": "far"}]))
+assert outside["removable"] is True, outside
+inside = bs.worktree_check(dict(item, _live_others=[{"cwd": wt + "/sub", "title": "other"}]))
+assert inside["removable"] is False and "세션" in inside["reason"] and "other" in inside["reason"], inside
+' "$ROOT/scripts/board/board-server.py" "$WL_T/wt" || fail "worktree_check counts the live sessions found right before cleanup (_live_others) as users of the folder"
+pass "board worktree_check refuses a worktree another live session found at cleanup time still uses"
+
+# 정리 직전 확인은 설정 폴더가 여럿이어도 모든 폴더를 본다(#305): 다른 폴더에서 같은 worktree를 쓰는 세션도 막고, 다른 폴더를 확인하지 못하면 worktree는 지우지 않는다.
+AO_T="$(mkdir -p "$TEST_TMP/board-action-folders" && cd "$TEST_TMP/board-action-folders" && pwd -P)"
+mkdir -p "$AO_T/bin" "$AO_T/data" "$AO_T/lists"
+git init -q --bare "$AO_T/remote.git"
+git init -q -b main "$AO_T/repo"
+git -C "$AO_T/repo" config user.email test@example.com
+git -C "$AO_T/repo" config user.name tester
+git -C "$AO_T/repo" config commit.gpgsign false
+git -C "$AO_T/repo" commit -q --allow-empty -m init
+git -C "$AO_T/repo" remote add origin "$AO_T/remote.git"
+git -C "$AO_T/repo" push -q origin main
+git -C "$AO_T/repo" worktree add -q -b feat/example "$AO_T/wt"
+git -C "$AO_T/wt" push -q -u origin feat/example
+cat >"$AO_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+cfg="${CLAUDE_CONFIG_DIR-UNSET}"
+printf '%s\n' "$cfg" >>"$FAKE_CLAUDE_CALLS"
+[[ "$1" == agents ]] || exit 0
+f="$FAKE_LISTS/agents-$(printf '%s' "$cfg" | tr '/' '_').json"
+[[ -f "$f.exit1" ]] && exit 1
+cat "$f" 2>/dev/null || echo '[]'
+FAKE
+chmod +x "$AO_T/bin/claude"
+HARNESS_METRICS_DIR="$AO_T/data" FAKE_LISTS="$AO_T/lists" FAKE_CLAUDE_CALLS="$AO_T/calls.log" python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, wt, lists, calls_log = sys.argv[2], sys.argv[3], os.environ["FAKE_LISTS"], os.environ["FAKE_CLAUDE_CALLS"]
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+os.environ.pop("CLAUDE_CONFIG_DIR", None)
+def lst(cfg, *rows):
+    with open(os.path.join(lists, "agents-" + cfg.replace("/", "_") + ".json"), "w") as f:
+        json.dump(list(rows), f)
+def calls():
+    try:
+        with open(calls_log) as f:
+            got = f.read().split()
+    except OSError:
+        got = []
+    open(calls_log, "w").close()
+    return sorted(got)
+ag = lambda sid, status, pid, cwd, name: {"sessionId": sid, "id": sid[:8], "kind": "background", "status": status, "pid": pid, "cwd": cwd, "name": name}
+mk = lambda sid, cfg: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": wt if sid == "s-a" else "/elsewhere",
+                       "title": sid, "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle",
+                       "config_dir": cfg, "actions": ["cleanup"]}
+def prime():
+    bs._cache["data"] = {"items": [mk("s-a", "/cfg/a"), mk("s-b", "/cfg/b")]}
+    bs._cache["at"] = 0
+bs.status = lambda *a, **k: (_ for _ in ()).throw(AssertionError("status must not be recollected for cleanup"))
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+lst("UNSET")
+lst("/cfg/a", ag("s-a", "idle", 1, wt, "target"))
+lst("/cfg/b", ag("s-a", "busy", 2, wt, "stale copy"), ag("s-peer", "idle", 5, wt + "/sub", "peer"), ag("s-gone", "idle", None, wt, "ended"))
+calls()
+
+# 폴더마다 한 번씩(기본 폴더 포함), 자기 상태는 자기 폴더 것을 쓴다. 다른 폴더의 살아 있는 세션이 worktree를 쓰면 지우지 않는다.
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert err is None and item is not None, (item, err)
+assert calls() == ["/cfg/a", "/cfg/b", "UNSET"], "one agents call per distinct folder of the cached session items, plus the default folder"
+assert item["live"] is True and item["status"] == "idle" and bs.can_close(item), item
+assert [o["cwd"] for o in item["_live_others"]] == [wt + "/sub"], item["_live_others"]
+wc = bs.worktree_check(item)
+assert wc["removable"] is False and "세션" in wc["reason"], wc
+
+# 다른 폴더를 확인하지 못하면: 항목은 돌려주되 worktree는 지우지 않고(확인하지 못함), 세션만 정리하는 것은 허용
+open(os.path.join(lists, "agents-_cfg_b.json.exit1"), "w").close()
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert err is None and item is not None, (item, err)
+assert "/cfg/b" in (item.get("_others_unchecked") or []), item.get("_others_unchecked")
+wc = bs.worktree_check(item)
+assert wc["removable"] is False and "확인하지 못함" in wc["reason"], wc
+assert bs.can_close(item) and bs.cleanup(item, False)["ok"] is True and ended == ["s-a"], ended
+os.remove(os.path.join(lists, "agents-_cfg_b.json.exit1"))
+
+# 자기 폴더를 확인하지 못하면 정리하지 않는다
+open(os.path.join(lists, "agents-_cfg_a.json.exit1"), "w").close()
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+os.remove(os.path.join(lists, "agents-_cfg_a.json.exit1"))
+' "$ROOT/scripts/board/board-server.py" "$AO_T/bin" "$AO_T/wt" || fail "action_item checks every settings folder: peers in other folders block the worktree, an unreadable other folder keeps the worktree but not the session cleanup"
+pass "board action_item re-checks every settings folder before cleanup"
+
+# 정리 속도(#305) D: background=True 정리는 안전 확인까지만 동기로 하고 숨긴 뒤 바로 돌려준다. 세션 닫기·worktree 삭제는 뒤에서 하고, 실패하면 숨김을 되돌리고 cleanup_failed로 알린다.
+BG_DATA="$TEST_TMP/board-cleanup-bg"
+mkdir -p "$BG_DATA"
+HARNESS_METRICS_DIR="$BG_DATA" python3 -I -B -c '
+import importlib.util, sys, threading, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid, **k: dict({"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": "title " + sid,
+                            "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle"}, **k)
+hidden = lambda: set(bs._load(bs.HIDDEN) or {})
+bs.status = lambda *a, **k: {"items": []}
+def failed_ids():
+    return [f["id"] for f in (bs.status_with_permissions().get("cleanup_failed") or [])]
+
+# 안전 확인은 동기: 작업 중이면 바로 거절하고 숨기지 않는다
+res = bs.cleanup(mk("s-busy", status="busy", state="running"), False, background=True)
+assert res["ok"] is False and "s-busy" not in hidden(), (res, hidden())
+
+# 실패 사례: 닫기가 오래 걸려도 바로 돌려주고, 끝내 실패하면 숨김을 되돌리고 알린다
+gate, entered = threading.Event(), threading.Event()
+def slow_fail(i):
+    entered.set()
+    gate.wait(10)
+    return False
+bs.end_session = slow_fail
+t0 = time.time()
+res = bs.cleanup(mk("s-fail"), False, background=True)
+took = time.time() - t0
+assert took < 1 and res["ok"] is True and res.get("pending") is True, (took, res)
+assert "s-fail" in hidden(), hidden()  # 닫는 동안은 숨겨져 있다
+assert entered.wait(5), "the closing runs in the background"
+assert "claude|s-fail" not in failed_ids()  # 아직 실패 아님
+gate.set()
+deadline = time.time() + 5
+while time.time() < deadline and "claude|s-fail" not in failed_ids():
+    time.sleep(0.05)
+assert "claude|s-fail" in failed_ids(), failed_ids()
+note = next(f for f in bs.status_with_permissions()["cleanup_failed"] if f["id"] == "claude|s-fail")
+assert note["title"] == "title s-fail" and note["message"] and note["at"], note
+assert "s-fail" not in hidden(), hidden()  # 숨김을 되돌렸다
+
+# 성공 사례: 실패 알림 없이 숨김 유지
+done = threading.Event()
+def ok_end(i):
+    done.set()
+    return True
+bs.end_session = ok_end
+res = bs.cleanup(mk("s-ok"), False, background=True)
+assert res["ok"] is True and res.get("pending") is True, res
+assert done.wait(5)
+time.sleep(0.5)
+assert "claude|s-ok" not in failed_ids() and "s-ok" in hidden(), (failed_ids(), hidden())
+' "$ROOT/scripts/board/board-server.py" || fail "background cleanup checks safety first, returns at once after hiding, and reports a failed closing while undoing the hiding"
+pass "board background cleanup returns at once and reports a failed closing through cleanup_failed"
+
+# 뒤에서 하는 정리의 기록(#305): 실패로 알린 항목을 같은 항목이 나중에 정리되면 실패 목록에서 지운다. 이미 정리하는 중인 항목은 다시 받지 않는다.
+BK_DATA="$TEST_TMP/board-cleanup-bookkeeping"
+mkdir -p "$BK_DATA"
+HARNESS_METRICS_DIR="$BK_DATA" python3 -I -B -c '
+import importlib.util, sys, threading, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": "title " + sid,
+                  "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle"}
+bs.status = lambda *a, **k: {"items": []}
+failed_ids = lambda: [f["id"] for f in (bs.status_with_permissions().get("cleanup_failed") or [])]
+def wait_for(cond, secs=5):
+    end = time.time() + secs
+    while time.time() < end and not cond():
+        time.sleep(0.05)
+    return cond()
+
+# (a) 실패로 알린 뒤 같은 항목의 정리가 성공하면 실패 알림이 사라진다
+bs.end_session = lambda i: False
+assert bs.cleanup(mk("s-x"), False, background=True)["ok"] is True
+assert wait_for(lambda: "claude|s-x" in failed_ids()), failed_ids()
+bs.end_session = lambda i: True
+assert bs.cleanup(mk("s-x"), False, background=True)["ok"] is True
+assert wait_for(lambda: "claude|s-x" not in failed_ids()), failed_ids()
+
+# (b) 정리하는 중인 항목은 다시 받지 않고, 끝난 뒤에는 다시 받는다
+gate, calls = threading.Event(), []
+def blocked_end(i):
+    calls.append(i["sid"])
+    gate.wait(10)
+    return True
+bs.end_session = blocked_end
+assert bs.cleanup(mk("s-y"), False, background=True)["ok"] is True
+assert wait_for(lambda: calls == ["s-y"]), calls
+res = bs.cleanup(mk("s-y"), False, background=True)
+assert res["ok"] is False and "이미 정리하는 중" in res["message"], res
+assert calls == ["s-y"], calls  # 두 번째는 세션을 다시 닫으러 가지 않는다
+gate.set()
+accepted = []
+def again():
+    r = bs.cleanup(mk("s-y"), False, background=True)
+    if r["ok"]:
+        accepted.append(r)
+    return bool(accepted)
+assert wait_for(again), "a new cleanup of the same item is accepted once the first has finished"
+' "$ROOT/scripts/board/board-server.py" || fail "a later successful background cleanup clears the failure notice, and an item being cleaned up is not accepted twice"
+pass "board background cleanup clears old failure notices and rejects a duplicate while one is running"
+
+# 정리 속도(#305) E: 핸들러 연결 — 단건 정리는 캐시 항목+직전 확인(action_item)·background 정리, 미리보기는 캐시 조회.
+BH_SRC="$(<"$ROOT/scripts/board/board-server.py")"
+BH_POST="$(sed -n '/if path != "\/action":/,/self._send(200, res)/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_POST" "action_item(" "the action handler looks the item up through action_item"
+case "$BH_POST" in *'find_item(req.get("id"), fresh=True)'*) fail "the action handler no longer recollects status for every action" ;; esac
+BH_RUN="$(sed -n '/^def run_action(/,/^    if action == "open_agent"/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_RUN" "cleanup(item, bool(req.get(\"worktree\")), background=True)" "a single cleanup runs in the background"
+BH_PREV="$(sed -n '/if u.path == "\/cleanup-preview":/,/worktree_check/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_PREV" "find_item(" "the cleanup preview looks the item up"
+case "$BH_PREV" in *fresh=True*) fail "the cleanup preview reads the cached list" ;; esac
+case "$BH_SRC" in *"def action_item("*) ;; *) fail "board-server defines action_item" ;; esac
+pass "board server wires the cleanup handlers to the cached lookup and background cleanup"
+
+# 정리 속도(#305) UI: 정리 대화상자는 서버 응답을 기다리지 않고 목록에서 먼저 뺀다(실패하면 되돌림). refresh()는 서버가 알린 cleanup_failed를 토스트로 알리고 되돌린다.
+BOARD_CDLG="$(sed -n "/\$('cdlg').addEventListener('close'/,/^  });\$/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_CDLG" "hiding.add(" "the cleanup dialog removes the item from the list first"
+assert_contains "$BOARD_CDLG" "hiding.delete(" "the cleanup dialog puts the item back when cleanup fails"
+BOARD_CDLG_ADD="${BOARD_CDLG%%hiding.add(*}"
+BOARD_CDLG_POST="${BOARD_CDLG%%"post('/action'"*}"
+[[ ${#BOARD_CDLG_ADD} -lt ${#BOARD_CDLG_POST} ]] || fail "the item leaves the list before the cleanup request is sent"
+BOARD_REFRESH="$(sed -n '/async function refresh()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_REFRESH" "cleanup_failed" "refresh handles cleanup failures reported by the server"
+assert_contains "$BOARD_REFRESH" "hiding.delete(" "refresh puts a failed cleanup back in the list"
+assert_contains "$BOARD_REFRESH" "toast(" "refresh tells the person a cleanup failed"
+pass "board UI hides on cleanup first and refresh restores and reports failed cleanups"
+
 # 남은 이유 안내(#296): '끝난 일 정리' 미리보기·결과가 정리 대상이 아닌 항목을 이유별 개수와 한 줄 안내(label)로 알린다. 0건인 이유는 없다.
 BL_DATA="$TEST_TMP/board-cleanup-left"
 mkdir -p "$BL_DATA"
@@ -8177,7 +8539,7 @@ for WK_TR in "$WK_T/default-projects/p/$WK_SID_D.jsonl" "$WK_T/profiles/p1/home/
 done
 wk_work() { # 덧붙일 환경변수는 인자로
   : >"$WK_T/calls.log"
-  env -u CLAUDE_CONFIG_DIR PATH="$WK_T/bin:$PATH" FAKE_CLAUDE_CALLS="$WK_T/calls.log" FAKE_CLAUDE_DIR="$WK_T" \
+  env -u CLAUDE_CONFIG_DIR PATH="$WK_T/bin:$PATH" FAKE_CLAUDE_CALLS="$WK_T/calls.log" FAKE_CLAUDE_DIR="$WK_T" HARNESS_METRICS_DIR="$WK_T/metrics" \
     HARNESS_CLAUDE_PROJECTS_DIR="$WK_T/default-projects" BOARD_CLAUDE_PROFILE_GLOBS="$WK_T/profiles/*/home" \
     BOARD_CLAUDE_CONFIG_DIRS="$WK_T/custom:$WK_T/missing" "$@" bash "$ROOT/scripts/board/work.sh"
 }
@@ -8205,6 +8567,70 @@ assert_eq "1|1" "$(grep -c -F "$WK_T/envdir|" "$WK_T/calls.log" | tr -d ' ')|$(g
 assert_eq "$WK_T/envdir|$WK_T/envdir/projects/p/$WK_SID_E.jsonl" "$(jq -r --arg s "$WK_SID_E" '.[] | select(.sid == $s) | "\(.config_dir)|\(.transcript)"' <<<"$WK_OUT_ENV")" "a session from the server environment's folder is listed with that folder"
 pass "work.sh also reads the folder from the server's CLAUDE_CONFIG_DIR and de-duplicates by real path"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "BOARD_CLAUDE_CONFIG_DIRS" "the board skill documents how to add settings folders"
+
+# transcript 파싱 캐시(#305): work.sh가 transcript마다 파싱 결과(제목·요약)를 크기:수정시각 키로 work-cache.json에 남겨 변하지 않은 파일은 다시 파싱하지 않는다.
+# 이번 실행에 나온 세션의 transcript만 남기고, 출력은 캐시가 있든 없든 같으며, transcript 파일은 건드리지 않는다.
+WKC_T="$(mkdir -p "$TEST_TMP/work-cache" && cd "$TEST_TMP/work-cache" && pwd -P)"
+mkdir -p "$WKC_T/bin" "$WKC_T/cwd" "$WKC_T/projects/p" "$WKC_T/metrics"
+cat >"$WKC_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_AGENTS"
+FAKE
+chmod +x "$WKC_T/bin/claude"
+WKC_SID_1="bbbbbbbb-0000-4000-8000-000000000001"
+WKC_SID_2="bbbbbbbb-0000-4000-8000-000000000002"
+WKC_TR1="$WKC_T/projects/p/$WKC_SID_1.jsonl"
+WKC_TR2="$WKC_T/projects/p/$WKC_SID_2.jsonl"
+WKC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+wkc_agent() { # $1=sessionId
+  jq -cn --arg sid "$1" --arg cwd "$WKC_T/cwd" --argjson t "$(($(date +%s) * 1000))" \
+    '{sessionId: $sid, id: $sid[0:8], kind: "background", status: "idle", state: "running", pid: 4242, cwd: $cwd, name: ("task " + $sid[-1:]), startedAt: $t}'
+}
+{ wkc_agent "$WKC_SID_1"; wkc_agent "$WKC_SID_2"; } | jq -s . >"$WKC_T/agents-both.json"
+wkc_agent "$WKC_SID_1" | jq -s . >"$WKC_T/agents-one.json"
+for WKC_TR in "$WKC_TR1" "$WKC_TR2"; do
+  { jq -cn --arg t "$WKC_NOW" '{type: "user", message: {content: "hello"}, timestamp: $t}'
+    jq -cn '{type: "ai-title", aiTitle: "Example summary title"}'
+  } >"$WKC_TR"
+done
+wkc_work() { # $1=agents 목록 파일
+  env -u CLAUDE_CONFIG_DIR PATH="$WKC_T/bin:$PATH" FAKE_AGENTS="$1" HARNESS_METRICS_DIR="$WKC_T/metrics" HARNESS_CLAUDE_PROJECTS_DIR="$WKC_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$WKC_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh"
+}
+WKC_CACHE="$WKC_T/metrics/board/work-cache.json"
+WKC_COLD="$(wkc_work "$WKC_T/agents-both.json")"
+assert_file "$WKC_CACHE"
+assert_eq "600" "$(stat -f %Lp "$WKC_CACHE" 2>/dev/null || stat -c %a "$WKC_CACHE")" "the work cache is readable only by its owner"
+assert_eq "true|true" "$(jq -r --arg a "$WKC_TR1" --arg b "$WKC_TR2" '"\(.[$a] | has("key") and has("titles") and has("summary"))|\(.[$b] | has("key") and has("titles") and has("summary"))"' "$WKC_CACHE")" \
+  "the cache keeps the parse result of every transcript listed in this run, keyed by path"
+WKC_SUM="$(shasum "$WKC_TR1" "$WKC_TR2")"
+WKC_WARM="$(wkc_work "$WKC_T/agents-both.json")"
+assert_eq "$WKC_COLD" "$WKC_WARM" "work.sh prints the same list on a cold run and a warm run"
+assert_eq "$WKC_SUM" "$(shasum "$WKC_TR1" "$WKC_TR2")" "work.sh never changes a transcript"
+# 캐시가 쓰였는지: 항목을 바꿔 두면 그 값이 그대로 나온다(파일이 그대로면 다시 파싱하지 않는다).
+jq --arg p "$WKC_TR1" '.[$p].titles.custom = "CACHED"' "$WKC_CACHE" >"$WKC_T/tampered.json" && mv "$WKC_T/tampered.json" "$WKC_CACHE"
+assert_eq "CACHED" "$(wkc_work "$WKC_T/agents-both.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title')" "an unchanged transcript is not parsed again"
+# 파일이 바뀌면(크기가 달라지면) 다시 파싱한다.
+jq -cn '{type: "custom-title", customTitle: "Renamed by person"}' >>"$WKC_TR1"
+assert_eq "Renamed by person" "$(wkc_work "$WKC_T/agents-both.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title')" "a transcript that grew is parsed again"
+assert_eq "true" "$(jq -r --arg p "$WKC_TR1" '.[$p].titles.custom == "Renamed by person"' "$WKC_CACHE")" "the cache entry follows the re-parsed transcript"
+# 이번 목록에 없는 세션의 transcript는 캐시에서 뺀다.
+wkc_work "$WKC_T/agents-one.json" >/dev/null
+assert_eq "$WKC_TR1" "$(jq -r 'keys | join(",")' "$WKC_CACHE")" "transcripts of sessions no longer listed are pruned from the cache"
+pass "work.sh caches transcript parse results by size and mtime, prunes unlisted ones and prints the same output"
+
+# 캐시가 JSON으로는 맞지만 모양이 틀려도(값이 문자열·숫자·누락) work.sh는 멈추지 않고 실제 제목으로 목록을 낸다. 틀린 항목은 지우고 다시 쓴다.
+WKC_REAL_KEY="$(stat -f '%z:%m' "$WKC_TR1" 2>/dev/null || stat -c '%s:%Y' "$WKC_TR1")"
+wkc_title() { wkc_work "$WKC_T/agents-one.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title'; }
+jq -cn --arg p "$WKC_TR1" '{($p): "garbage", "/x/other.jsonl": {key: 1}}' >"$WKC_CACHE"
+assert_eq "Renamed by person" "$(wkc_title)" "a cache whose entries are the wrong shape does not break the list"
+assert_eq "object|string" "$(jq -r --arg p "$WKC_TR1" '"\(.[$p] | type)|\(.[$p].key | type)"' "$WKC_CACHE")" "a malformed cache entry is replaced by a parsed one"
+assert_eq "false" "$(jq -r 'has("/x/other.jsonl")' "$WKC_CACHE")" "a malformed entry for an unlisted path is gone"
+jq -cn --arg p "$WKC_TR1" --arg k "$WKC_REAL_KEY" '{($p): {key: $k, titles: "x", summary: 3}}' >"$WKC_CACHE"
+WKC_BAD_OUT="$(wkc_work "$WKC_T/agents-one.json")"
+assert_eq "Renamed by person" "$(jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title' <<<"$WKC_BAD_OUT")" "an entry with the right key but wrong value types still gives the real title"
+pass "work.sh survives a cache with wrong-shaped entries and writes a well-formed one back"
 
 # 보드 서버는 항목의 설정 폴더로 claude를 부른다(#296): 입력·재개(send_to_bg)·정리(end_session)·정지 확인(wait_stopped)이 같은 폴더를 쓰고, 없으면 환경에서 뺀다.
 BS_T="$TEST_TMP/board-cfg-env"
@@ -8387,7 +8813,7 @@ jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timest
 jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timestamp: $t}, {type: "assistant", message: {content: [{type: "text", text: "고치는 중입니다"}]}, timestamp: $t}' \
   >"$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl"
 cp "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl" "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000003.jsonl"
-BA_WORK="$(env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
+BA_WORK="$(env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
   BOARD_CLAUDE_PROFILE_GLOBS="$BA_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
 assert_eq "1:blocked|api_error 2:blocked|no_process 3:running|null" \
   "$(jq -r '[sort_by(.sid)[] | "\(.sid[-1:]):\(.state)|\(.stall)"] | join(" ")' <<<"$BA_WORK")" \

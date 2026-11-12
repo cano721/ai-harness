@@ -967,6 +967,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const expanded = new Set();  // 펼친 줄·묶음(다시 그려도 유지)
   const srcOf = (i) => (i.section === 'work' && (i.autofix_id || i.autofix_sig) ? 'autofix' : i.section || 'harness');
   const hiding = new Set();  // '정리'를 누른 순간 목록에서 먼저 뺀 id — 서버 응답에서 실패한 것만 되돌리고, 서버 목록에서 사라지면 갱신 때 지운다
+  const cleanupNoted = new Set();  // 이미 알린 정리 실패(id|at) — 같은 실패를 갱신마다 다시 띄우지 않는다
   const itemsAll = () => ((data && data.items) || []).filter((i) => !hiding.has(i.id));
 
   // ---- 목록 모델: 한 사건은 한 카드, 한 항목에 상태는 한 번 ----
@@ -2031,10 +2032,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   $('cdlg').addEventListener('close', async () => {
     if ($('cdlg').returnValue !== 'ok' || !cleaning) { cleaning = null; return; }
-    let res; try { res = await post('/action', { id: cleaning.id, action: 'cleanup', worktree: $('cwtbox').checked }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    const it = cleaning; cleaning = null;
+    hiding.add(it.id); if (selected === it.id) closeDrawer(); renderAll();  // 응답을 기다리지 않고 목록에서 먼저 뺀다
+    let res; try { res = await post('/action', { id: it.id, action: 'cleanup', worktree: $('cwtbox').checked }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    if (!res.ok) { hiding.delete(it.id); renderAll(); }  // 거절·실패하면 카드가 돌아온다(뒤에서 하던 정리의 실패는 refresh가 cleanup_failed로 알린다)
     toast(res.message, res.ok);
-    if (res.ok) { if (selected === cleaning.id) closeDrawer(); lastSig = ''; refresh(); }
-    cleaning = null;
+    lastSig = ''; refresh().catch(() => {});
   });
 
   // ---- 사이드바 · 탭 ----
@@ -2189,6 +2192,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.server = true; throw e; }
     const next = await r.json();
     for (const id of [...hiding]) if (!(next.items || []).some((x) => x.id === id)) hiding.delete(id);  // 서버 목록에서 사라진 것은 숨김 기록도 지운다
+    for (const f of next.cleanup_failed || []) {  // 뒤에서 하던 정리가 실패함: 카드를 되돌리고 이유를 한 번 알린다
+      const key = `${f.id}|${f.at}`;
+      if (cleanupNoted.has(key)) continue;
+      cleanupNoted.add(key); hiding.delete(f.id); lastSig = '';
+      toast(`"${shortTitle(f.title || '') || '세션'}" 정리하지 못함 — ${f.message}`, false);
+    }
     const sig = JSON.stringify([next.items, next.quiet_runs]);
     loadError = null;
     if (sig === lastSig) return;
