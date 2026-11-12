@@ -124,6 +124,19 @@ def status(scenario):
             *[{"id": f"sp{i}", "section": "harness", "kind": "sync", "project": p, "state": "needs_human", "at": ago(180 + 10 * i),
                "title": "일부 적용 — draft PR 검토", "link": f"https://example.com/acme/{p}/pull/{200 + i}", "actions": ["open_agent"]}
               for i, p in enumerate(["search", "billing-api", "docs"], 1)],
+            # 실패는 완료가 아니다(#296): 같은 이유로 3번 연속 시간 제한에 걸린 동기화. 중간에 끊겨 로그 파일이 없다.
+            {"id": "hf1", "section": "harness", "kind": "sync", "project": "orders", "state": "needs_human", "at": ago(40),
+             "title": "실행 실패 (45분 시간 제한으로 중단됨) · 3번 연속", "result": "failed", "exit_code": 143, "duration_s": 2700,
+             "fail_reason": "45분 시간 제한으로 중단됨", "streak": 3, "detail": None, "link": None, "log": None,
+             "log_note": "중간에 끊겨 로그가 남지 않았습니다", "actions": ["open_agent"], "repo": "/work/acme/orders"},
+            # 자동 수정 제목: Spring Boot 로그 머리(시각·수준·pid·스레드·로거)가 붙은 원문은 사람 말로 걷어 낸다
+            {"id": "af5", "section": "autofix", "kind": "autofix", "project": "orders", "state": "needs_human", "status": "skipped",
+             "outcome": "left_for_user", "at": ago(75), "signature": "datadog:7c1e5a9b3d2f4e60",
+             "title": "2026-11-11 23:59:04.078 ERROR 12345 --- [nio-8080-exec-1] c.a.s.FooService : 주문 저장 실패",
+             "detail": "재고 차감과 주문 저장이 한 트랜잭션에 묶여 있지 않습니다. 무인 실행은 고치지 않고 넘겼습니다.",
+             "stage": "skipped", "stage_label": "건너뜀 · 사람 판단 필요", "count": 7, "attempts": 1, "regressions": 0,
+             "monitor_link": "https://example.com/monitor/7c1e", "log_name": "20261111T235930Z-orders.log", "repo": "/work/acme/orders",
+             "actions": ["open_agent"]},
             {"id": "af4", "section": "autofix", "kind": "autofix", "project": "search", "state": "done", "status": "resolved", "at": ago(2880),
              "signature": "sentry:4409000", "title": "검색어에 이모지를 넣으면 500 오류", "stage": "resolved", "stage_label": "해결",
              "count": 19, "attempts": 1, "regressions": 0, "link": "https://example.com/acme/search/pull/131", "actions": []},
@@ -138,7 +151,10 @@ def status(scenario):
             for a in items:
                 if a["id"] == i["autofix_id"]:
                     a["session_id"] = i["id"]
-    return {"generated_at": ago(0), "window_days": 7, "items": items, "jira_base": None, "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
+    # 변경 없이 끝난 무인 실행은 카드가 아니라 종류별 한 줄 요약(최근 24시간)
+    quiet = [] if scenario == "empty" else [{"kind": "sync", "count": 4, "last_at": ago(30)}, {"kind": "harvest", "count": 1, "last_at": ago(300)}]
+    return {"generated_at": ago(0), "window_days": 7, "items": items, "quiet_runs": quiet, "jira_base": None,
+            "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
 
 
 HIDDEN = [{"key": "s-old-1", "title": "로그인 화면 문구 다듬기", "project": "shop", "at": ago(1440)},
@@ -146,9 +162,30 @@ HIDDEN = [{"key": "s-old-1", "title": "로그인 화면 문구 다듬기", "proj
           {"key": "s-old-2", "at": ago(4320)}]
 
 
+def left_reasons(items, plan_ids, older):
+    """정리 대상이 아니라 남는 항목을 이유별로 센다(실제 서버의 left와 같은 모양: [{reason, count, label}])."""
+    count = {"too_recent": 0, "in_use": 0, "waiting": 0, "unfinished": 0}
+    for i in items:
+        if i["id"] in plan_ids:
+            continue
+        if i["state"] == "needs_human" or i.get("ask") or i.get("permission"):
+            count["waiting"] += 1
+        elif i["state"] in ("done", "idle"):
+            count["in_use" if i.get("live") and older == 0 else "too_recent"] += 1
+        elif i["state"] == "running":
+            count["in_use"] += 1
+        else:
+            count["unfinished"] += 1
+    span = "하루" if older == 1 else "일주일" if older == 7 else f"{older:g}일"
+    label = {"too_recent": f"{span} 안 된 {{n}}건은 남겨 둠", "in_use": "지금 쓰는 세션 {n}건 제외",
+             "waiting": "답·확인을 기다리는 {n}건 제외", "unfinished": "아직 끝나지 않은 {n}건 제외"}
+    return [{"reason": r, "count": n, "label": label[r].format(n=n)} for r, n in count.items() if n]
+
+
 def bulk(scenario, req):
     """끝난 일 정리 흉내: 미리보기는 실제 서버처럼 끝난 일만, 실행은 아무것도 바꾸지 않고 결과만 돌려준다."""
-    done = [i for i in status(scenario)["items"] if i["state"] in ("done", "idle") and not i.get("ask")]
+    everything = status(scenario)["items"]
+    done = [i for i in everything if i["state"] in ("done", "idle") and not i.get("ask")]
     older = req.get("older_days") or 0
     if older:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older)
@@ -160,15 +197,18 @@ def bulk(scenario, req):
         if row["session"]:
             row["worktree"] = {"removable": n % 2 == 0, "reason": None if n % 2 == 0 else "커밋 안 한 변경 2개", "branch": f"feat/x-{n}"}
         plan.append(row)
+    left = left_reasons(everything, {r["id"] for r in plan}, older)
     if req.get("dry_run"):
-        return {"ok": True, "plan": plan}
+        return {"ok": True, "plan": plan, "left": left}
     wt = bool(req.get("worktree"))
     results = [{"id": r["id"], "title": r["title"], "ok": True, "hidden": True, "closed": r["close"],
                 "worktree_removed": wt and bool(r.get("worktree") and r["worktree"]["removable"]),
                 **({"worktree_kept": r["worktree"]["reason"]} if wt and r.get("worktree") and not r["worktree"]["removable"] else {})} for r in plan]
     n = len(results); c = sum(1 for r in results if r["closed"]); w = sum(1 for r in results if r["worktree_removed"]); s = sum(1 for r in results if r.get("worktree_kept"))
     msg = " · ".join([f"{n}개 정리"] + ([f"세션 {c}개 닫음"] if c else []) + ([f"worktree {w}개 삭제"] if w else []) + ([f"건너뜀 {s}개"] if s else []))
-    return {"ok": True, "message": f"미리보기: {msg}(아무것도 바꾸지 않음)", "results": results, "counts": {"done": n, "closed": c, "worktrees": w, "skipped": s}}
+    msg = " · ".join([msg] + [l["label"] for l in left])
+    return {"ok": True, "message": f"미리보기: {msg}(아무것도 바꾸지 않음)", "results": results, "left": left,
+            "counts": {"done": n, "closed": c, "worktrees": w, "skipped": s}}
 
 
 def many():
