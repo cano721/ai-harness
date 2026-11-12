@@ -8601,7 +8601,7 @@ wkc_work() { # $1=agents 목록 파일
 WKC_CACHE="$WKC_T/metrics/board/work-cache.json"
 WKC_COLD="$(wkc_work "$WKC_T/agents-both.json")"
 assert_file "$WKC_CACHE"
-assert_eq "600" "$(stat -f %Lp "$WKC_CACHE" 2>/dev/null || stat -c %a "$WKC_CACHE")" "the work cache is readable only by its owner"
+assert_eq "600" "$(filemode "$WKC_CACHE")" "the work cache is readable only by its owner"
 assert_eq "true|true" "$(jq -r --arg a "$WKC_TR1" --arg b "$WKC_TR2" '"\(.[$a] | has("key") and has("titles") and has("summary"))|\(.[$b] | has("key") and has("titles") and has("summary"))"' "$WKC_CACHE")" \
   "the cache keeps the parse result of every transcript listed in this run, keyed by path"
 WKC_SUM="$(shasum "$WKC_TR1" "$WKC_TR2")"
@@ -8621,7 +8621,7 @@ assert_eq "$WKC_TR1" "$(jq -r 'keys | join(",")' "$WKC_CACHE")" "transcripts of 
 pass "work.sh caches transcript parse results by size and mtime, prunes unlisted ones and prints the same output"
 
 # 캐시가 JSON으로는 맞지만 모양이 틀려도(값이 문자열·숫자·누락) work.sh는 멈추지 않고 실제 제목으로 목록을 낸다. 틀린 항목은 지우고 다시 쓴다.
-WKC_REAL_KEY="$(stat -f '%z:%m' "$WKC_TR1" 2>/dev/null || stat -c '%s:%Y' "$WKC_TR1")"
+WKC_REAL_KEY="$(stat -c '%s:%Y' "$WKC_TR1" 2>/dev/null || stat -f '%z:%m' "$WKC_TR1")"
 wkc_title() { wkc_work "$WKC_T/agents-one.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title'; }
 jq -cn --arg p "$WKC_TR1" '{($p): "garbage", "/x/other.jsonl": {key: 1}}' >"$WKC_CACHE"
 assert_eq "Renamed by person" "$(wkc_title)" "a cache whose entries are the wrong shape does not break the list"
