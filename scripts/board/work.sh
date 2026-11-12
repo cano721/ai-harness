@@ -39,11 +39,14 @@ glob_dirs() { # $1=glob 패턴 → 일치하는 폴더를 줄마다 하나씩
   return 0
 }
 # 응답 없는 폴더(로그인 안 된 프로필 등) 하나가 상태 전체를 멈추지 않게 폴더마다 시간 제한을 둔다.
-with_timeout() {
+# 출력은 파이프($(...))가 아니라 파일로 받는다 — 끝낸 명령의 자식이 출력을 물고 남아 있으면 $(...)는 그 자식까지 기다린다.
+AGENTS_OUT=$(mktemp)
+trap 'rm -f "$AGENTS_OUT"' EXIT
+with_timeout() { # 출력 → $AGENTS_OUT
   local pid watchdog rc=0
-  "$@" &
+  "$@" >"$AGENTS_OUT" 2>/dev/null &
   pid=$!
-  ( sleep "${BOARD_AGENTS_TIMEOUT:-20}"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "${BOARD_AGENTS_TIMEOUT:-20}"; kill -TERM "$pid" 2>/dev/null; sleep 3; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watchdog=$!
   wait "$pid" || rc=$?
   kill "$watchdog" 2>/dev/null || true
@@ -67,12 +70,13 @@ agents='[]'
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   if [ "$d" = "@default" ]; then
-    got=$(with_timeout env -u CLAUDE_CONFIG_DIR claude agents --json --all 2>/dev/null) || continue
+    with_timeout env -u CLAUDE_CONFIG_DIR claude agents --json --all || continue
     cfg_json=null
   else
-    got=$(CLAUDE_CONFIG_DIR="$d" with_timeout claude agents --json --all 2>/dev/null) || continue
+    CLAUDE_CONFIG_DIR="$d" with_timeout claude agents --json --all || continue
     cfg_json=$(jq -Rn --arg d "$d" '$d')
   fi
+  got=$(<"$AGENTS_OUT")
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$got" || continue
   agents=$(jq -c --argjson cfg "$cfg_json" --argjson more "$got" '. + ($more | map(. + {config_dir: $cfg}))' <<<"$agents")
 done <<<"$cfg_dirs"
