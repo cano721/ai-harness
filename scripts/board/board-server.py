@@ -28,6 +28,7 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
+import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
@@ -187,6 +188,12 @@ def classify_work(items):
                     continue
                 hidden.pop(sid)  # 다시 살아난 세션은 다시 보인다
                 unhide = True
+            i["in_repo"] = in_repo(i.get("cwd"))
+            # 본문으로 묻고 쉬는 세션: 마지막 문장이 질문이고 사람이 아직 답하지 않았으면 '답 대기'(지금 할 일).
+            # 답할 수 있는 세션만 — 살아 있거나, 백그라운드라 같은 대화로 다시 깨울 수 있는 것.
+            ask = hasks.pending_ask(i.pop("reply_tail", None)) if i.get("state") == "done" else None
+            if ask and (i.get("live") or i.get("kind") == "bg"):
+                i["state"], i["ask"] = "needs_human", ask
             if i.get("state") == "done":
                 if first:
                     seen[sid] = i.get("at")
@@ -202,6 +209,22 @@ def classify_work(items):
         if unhide:
             _save(HIDDEN, hidden)
         return out
+
+
+_repo_cache = {}
+
+
+def in_repo(cwd):
+    """작업 폴더가 git 저장소 안인지(사이드바에서 저장소와 '기타' 폴더를 나눈다). 폴더마다 한 번만 확인한다."""
+    if not cwd:
+        return False
+    if cwd not in _repo_cache:
+        try:
+            rc, out = _git(cwd, "rev-parse", "--is-inside-work-tree")
+            _repo_cache[cwd] = rc == 0 and out == "true"
+        except Exception:
+            _repo_cache[cwd] = False
+    return _repo_cache[cwd]
 
 
 def _git(path, *args):
@@ -366,14 +389,22 @@ def link_autofix_sessions(items):
     """보드가 띄운 '세션으로 열기' 세션(이름: '<project> <에러 제목>')과 그 에러 카드를 잇는다. 한 사건이 두 카드로 갈라지지 않게
     화면은 세션 카드를 에러 카드 안에 합친다. 이름이나 요청에 시그니처가 있어도 같은 사건으로 본다."""
     work = [i for i in items if i.get("section") == "work"]
+    for w in work:  # 이름·요청에 시그니처가 있으면 자동 수정 세션이다(카드가 없어도 제목을 사람 말로 바꿀 수 있게)
+        m = SIG_RE.search(f"{w.get('title') or ''}\n{w.get('detail') or ''}")
+        if m:
+            w["autofix_sig"] = m.group(0)
     for af in (i for i in items if i.get("kind") == "autofix"):
         sig, name = af.get("signature") or "", f"{af.get('project')} {af.get('title')}"
         for w in work:
-            text = f"{w.get('title') or ''}\n{w.get('detail') or ''}"
-            if w.get("project") == af.get("project") and (w.get("title") == name or (sig and sig in text)):
+            # 시그니처는 저장소마다 유일해서 폴더 이름(project)이 프로젝트 id와 달라도 같은 사건이다. 이름 일치는 같은 저장소일 때만.
+            if (sig and w.get("autofix_sig") == sig) or (w.get("project") == af.get("project") and w.get("title") == name):
                 af["session_id"] = w.get("id")
                 w["autofix_id"] = af.get("id")
+                w["autofix_title"] = af.get("title")
                 break
+
+
+SIG_RE = re.compile(r"\b(?:datadog|sentry|command):[0-9A-Za-z_-]+")
 
 
 def autofix_setup(repo):

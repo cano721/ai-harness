@@ -7713,18 +7713,56 @@ assert af.get("session_id") == "w1" and named.get("autofix_id") == af["id"], ite
 assert "autofix_id" not in other and "autofix_id" not in elsewhere, items
 assert af2.get("session_id") == "w4" and quoted.get("autofix_id") == af2["id"], items
 ' "$ROOT/scripts/board/board-server.py" || fail "the board links an autofix card to the session opened for it (by name or signature in the request)"
+# 실사용 피드백(#291 2차): 본문으로 묻고 쉬는 세션은 '답 대기', 시그니처로 잇는 자동 수정 세션은 폴더 이름이 달라도 이어진다,
+# git 저장소가 아닌 작업 폴더는 저장소로 세지 않는다.
+BOARD_NOGIT="$BAF_T/not-a-repo"; mkdir -p "$BOARD_NOGIT"
+HARNESS_METRICS_DIR="$BAF_DATA" python3 -I -B -c '
+import importlib.util, sys
+sys.path.insert(0, sys.argv[2])
+import asks
+for text, want in [("정리했습니다.\n\n다음으로 **배포**까지 진행할까요?", "다음으로 배포까지 진행할까요?"),
+                   ("- 원인: x\n- 해결: y\n\n어떻게 할지 알려 주세요.", "어떻게 할지 알려 주세요."),
+                   ("Done. Should I open the PR?", "Should I open the PR?"),
+                   ("질문이 있나요? 아니면 끝입니다.", None), ("끝났습니다. 테스트도 통과했습니다.", None),
+                   ("## 정리\nPR: https://example.com/pull/1", None), ("", None), (None, None)]:
+    assert asks.pending_ask(text) == want, (text, asks.pending_ask(text))
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+base = {"section": "work", "state": "done", "at": "2026-11-01T00:00:00Z", "actions": [], "cwd": sys.argv[3]}
+asking = dict(base, sid="s-ask", kind="bg", live=True, reply_tail="정리했습니다. 이대로 PR을 올릴까요?")
+closed = dict(base, sid="s-closed", kind="agent", live=False, reply_tail="이대로 PR을 올릴까요?")
+plain = dict(base, sid="s-plain", kind="bg", live=True, reply_tail=None)
+out = {i["sid"]: i for i in bs.classify_work([asking, closed, plain])}
+assert out["s-ask"]["state"] == "needs_human" and out["s-ask"]["ask"] == "이대로 PR을 올릴까요?", out["s-ask"]
+assert out["s-closed"]["state"] != "needs_human" and "ask" not in out["s-closed"], out["s-closed"]  # 답할 수 없는 끝난 대화형 세션
+assert out["s-plain"]["state"] != "needs_human", out["s-plain"]
+assert "reply_tail" not in out["s-ask"], "the reply excerpt is not shipped to the browser"
+assert out["s-ask"]["in_repo"] is False, out["s-ask"]  # git 저장소가 아닌 작업 폴더
+af = {"id": "autofix:shop:sentry:77", "kind": "autofix", "section": "autofix", "project": "shop", "signature": "sentry:77", "title": "Cart total is negative"}
+w = {"id": "w9", "section": "work", "project": "shop-web", "title": "shop-web sentry:77", "detail": ""}
+lone = {"id": "w10", "section": "work", "project": "x", "title": "x datadog:abcdef0123456789", "detail": ""}
+bs.link_autofix_sessions([af, w, lone])
+assert af.get("session_id") == "w9" and w.get("autofix_title") == "Cart total is negative", (af, w)
+assert lone.get("autofix_sig") == "datadog:abcdef0123456789" and "autofix_id" not in lone, lone
+' "$ROOT/scripts/board/board-server.py" "$ROOT/scripts/board" "$BOARD_NOGIT" || fail "the board lifts sessions that ask in plain text, links autofix sessions by signature, and tells repos from other folders"
+assert_contains "$(<"$ROOT/scripts/board/work.sh")" "reply_tail" "work.sh ships the last reply only while the person has not answered"
 BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
 # 보드는 디자인 시스템 부품으로 그린다(#291): 부품 사본을 싣고, 예전 변수 이름과 색 리터럴이 없다.
 assert_contains "$BOARD_TPL" "ds:components:start" "the board carries the shared components"
 BOARD_OWN="$(awk '/ds:tokens:start/{skip=1} /ds:components:end/{skip=0; next} !skip' "$ROOT/scripts/board/template.html")"
 case "$BOARD_OWN" in *"var(--human"*|*"var(--run)"*|*"var(--panel)"*|*"var(--line)"*|*"var(--muted)"*|*"var(--bg)"*) fail "the board drops the old variable names" ;; esac
 [[ -z "$(grep -oE '#[0-9a-fA-F]{3,8}\b|rgba?\(' <<<"$BOARD_OWN" || true)" ]] || fail "the board's own styles and script carry no color literal"
-for BOARD_PART in 'ds-card--interactive' 'ds-card__open' 'ds-row__head' 'ds-group' 'ds-tabs' "'role', 'tab'" 'ds-drawer' 'aria-modal' "setAttribute('inert'" 'ds-skeleton' 'ds-error' 'ds-empty' 'ds-setting' 'ds-segment' 'ds-toast' '/autofix/detail' 'humanTitle'; do
+for BOARD_PART in 'todoSummary' 'nonRepoSet' 'LANE_MAX' 'side:more' 'shortTitle' '묻는 말' 'ds-card--interactive' 'ds-card__open' 'ds-row__head' 'ds-group' 'ds-tabs' "'role', 'tab'" 'ds-drawer' 'aria-modal' "setAttribute('inert'" 'ds-skeleton' 'ds-error' 'ds-empty' 'ds-setting' 'ds-segment' 'ds-toast' '/autofix/detail' 'humanTitle'; do
   assert_contains "$BOARD_TPL" "$BOARD_PART" "the board uses $BOARD_PART"
 done
 # 가짜 데이터 미리보기(디자인 검토·스크린샷용)는 조직·개인 식별자를 싣지 않는다.
 if grep -qiE 'midas|jobda|khb1122' "$ROOT/tests/fixtures/board-preview/serve.py"; then fail "the board preview fixture carries no identifiers"; fi
-python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server parses"
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pv", sys.argv[1]); pv = importlib.util.module_from_spec(spec); spec.loader.exec_module(pv)
+items = pv.status("many")["items"]
+assert len({i["project"] for i in items}) >= 40 and sum(1 for i in items if i["section"] == "work") >= 50, len(items)
+assert any(i.get("ask") for i in items) and any(i.get("in_repo") is False for i in items), "the preview reproduces plain-text questions and non-repo folders"
+' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has a real-scale scenario"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
 assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"

@@ -6,6 +6,7 @@
     → http://127.0.0.1:8765/?t=demo            기본(할 일·진행·대기·결과가 다 있는 상태)
       ?t=empty   할 일·작업이 하나도 없음      ?t=slow   첫 응답이 3초 늦음(로딩 뼈대)
       ?t=error   상태를 읽지 못함(오류)        &theme=light|dark  테마 고정
+      ?t=many    실사용 규모(세션 수십 개, 저장소·폴더 40여 개, 본문으로 묻는 세션 여럿)
 
 데이터는 전부 지어낸 예시다(acme/* 저장소, 가짜 에러). 실제 사용자 데이터를 여기에 넣지 않는다.
 """
@@ -76,10 +77,33 @@ def status(scenario):
               for i, (p, t, d) in enumerate([("shop", "주문 목록 정렬 고치기", "정렬 기준을 주문일 내림차순으로 고쳤습니다."),
                                              ("docs", "API 문서 예제 갱신", "예제 6개를 새 응답 형식으로 바꿨습니다."),
                                              ("search", "색인 재구축 스크립트 정리", "중복 단계를 지웠습니다.")], 1)],
+            # 긴 첫 지시문이 통째로 제목이 된 세션(서버 그대로), 저장소가 아닌 폴더의 세션(in_repo false)
+            {"id": "r4", "section": "work", "kind": "agent", "project": "billing-api", "state": "review", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(200), "actions": ["view", "cleanup"],
+             "title": "ACME-1234 환불 정산 배치가 월말에 두 번 도는 문제를 확인하고, 원인이 스케줄러 중복 등록이면 등록 코드를 고치고 재현 테스트를 붙인 뒤 PR까지 올려줘. 운영 로그는 지난주 것만 보고, 배치 설정 파일은 건드리지 마.",
+             "detail": "세션 종료됨\n— ## 원인 확인\n- 스케줄러가 **두 번** 등록됩니다.\n- 수정 PR을 올렸습니다."},
+            *[{"id": f"x{i}", "section": "work", "kind": "agent", "project": p, "state": "review", "status": "idle", "live": True, "in_repo": False,
+               "at": ago(1500 + 60 * i), "title": t, "actions": ["view", "cleanup"], "detail": f"세션 종료됨\n— {d}"}
+              for i, (p, t, d) in enumerate([("Desktop", "회의 메모 정리", "메모를 세 줄로 줄였습니다."),
+                                             ("_global", "전역 설정 점검", "바꿀 것이 없습니다.")], 1)],
+            # Orca 작업 묶음(조율 세션 + 작업자): 칸 제목과 묶음 줄이 같은 수를 센다
+            *[{"id": f"g{i}", "section": "work", "kind": "bg", "project": "search", "state": "review", "status": "idle", "live": False, "in_repo": True,
+               "at": ago(300 + i), "title": t, "actions": ["view", "send", "cleanup"], "detail": "세션 종료됨\n— 끝났습니다.",
+               "group": {"id": "og1", "title": "검색 색인 개편", "role": role, "source": "orca"}}
+              for i, (t, role) in enumerate([("검색 색인 개편 조율", "coord"), ("색인 스크립트 작업자", "worker")], 1)],
             # 쉬는 중 · 완료
-            {"id": "w5", "section": "work", "kind": "bg", "project": "shop", "state": "idle", "status": "idle", "live": True, "at": ago(30),
-             "title": "shop 장바구니 합계 계산에 실패했습니다", "actions": ["view", "send"], "autofix_id": "af1",
-             "detail": "요청: 자동 수정이 사람에게 넘긴 운영 에러를 이어서 본다.\n— 쿠폰 두 개가 겹칠 때 할인 순서를 정해야 합니다."},
+            {"id": "w5", "section": "work", "kind": "bg", "project": "shop", "state": "idle", "status": "idle", "live": True, "at": ago(30), "in_repo": True,
+             "title": "shop datadog:5b1c0d2e9f8a7b6c", "actions": ["view", "send"], "autofix_id": "af1", "autofix_sig": "datadog:5b1c0d2e9f8a7b6c",
+             "autofix_title": "2026-11-10 09:14:15.264 ERROR trace_id:4af2c9e1b7d84a0f9c3e span_id:2694346509131183652 - CartController:88: 장바구니 합계 계산에 실패했습니다. cartSn: 1042",
+             "detail": "요청: 자동 수정이 사람에게 넘긴 운영 에러를 이어서 본다. 에러: datadog:5b1c0d2e9f8a7b6c\n— ## 원인 확인 무인 실행이 남긴 분석은 맞습니다. 쿠폰 두 개가 겹칠 때 할인 순서를 정해야 합니다."},
+            # 본문으로 묻고 쉬는 세션(서버가 마지막 문장을 질문으로 보고 '답 대기'로 올림)
+            {"id": "w6", "section": "work", "kind": "bg", "project": "docs", "state": "needs_human", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(14), "title": "설치 안내 개정", "actions": ["view", "send"], "ask": "다음으로 영어 문서까지 같은 구조로 바꿀까요?",
+             "detail": "요청: 설치 안내를 단계별로 나눠줘\n— 한국어 설치 안내를 5단계로 나눴습니다. 다음으로 영어 문서까지 같은 구조로 바꿀까요?"},
+            # 프로젝트 id와 폴더 이름이 다른 자동 수정 세션(시그니처로 이어짐)
+            {"id": "w7", "section": "work", "kind": "bg", "project": "billing-api-service", "state": "idle", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(50), "title": "billing-api-service sentry:4410293", "actions": ["view", "send"], "autofix_id": "af2", "autofix_sig": "sentry:4410293",
+             "autofix_title": "TimeoutError: upstream did not respond within 30000ms", "detail": "— PR 검토를 이어서 봅니다."},
             *[{"id": f"d{i}", "section": "harness", "kind": k, "project": p, "state": "done", "at": ago(600 * i),
                "title": t, "link": None, "actions": []}
               for i, (k, p, t) in enumerate([("sync", "docs", "PR 생성 (improved)"), ("harvest", "search", "변경 없음"),
@@ -88,7 +112,37 @@ def status(scenario):
              "signature": "sentry:4409000", "title": "검색어에 이모지를 넣으면 500 오류", "stage": "resolved", "stage_label": "해결",
              "count": 19, "attempts": 1, "regressions": 0, "link": "https://example.com/acme/search/pull/131", "actions": []},
         ]
+        for i in items:
+            if i["section"] == "work":
+                i.setdefault("in_repo", True)
+        if scenario == "many":
+            items += many()
+    for i in items:  # 짝을 맞춘다: 세션이 이어진 자동 수정 카드
+        if i.get("autofix_id"):
+            for a in items:
+                if a["id"] == i["autofix_id"]:
+                    a["session_id"] = i["id"]
     return {"generated_at": ago(0), "window_days": 7, "items": items, "jira_base": None}
+
+
+def many():
+    """실사용 규모: 세션 수십 개, 저장소·폴더 40여 개, 며칠 지난 세션. 이름은 전부 지어낸 것."""
+    repos = [f"svc-{n:02d}" for n in range(1, 31)]
+    folders = ["Desktop", "_global", "projects", "repo", "notes", "scratch", "tmp-work", "downloads", "home", "codex"]
+    out = []
+    for n in range(48):
+        p = repos[n % len(repos)] if n % 5 else folders[(n // 5) % len(folders)]
+        st = ["review", "idle", "idle", "review", "idle", "running"][n % 6]
+        out.append({"id": f"m{n}", "section": "work", "kind": "bg" if n % 2 else "agent", "project": p, "state": st,
+                    "status": "busy" if st == "running" else "idle", "live": n % 3 != 0, "in_repo": p in repos,
+                    "at": ago(60 * (n + 1) * 7), "title": f"{p} 작업 {n + 1} — 로그 정리와 테스트 보강",
+                    "actions": ["view", "send", "cleanup"], "detail": f"세션 종료됨\n— 작업 {n + 1}을 마쳤습니다."})
+    for n in range(4):
+        out.append({"id": f"mq{n}", "section": "work", "kind": "bg", "project": repos[n * 7], "state": "needs_human", "status": "idle",
+                    "live": True, "in_repo": True, "at": ago(20 + n * 90), "title": f"{repos[n * 7]} 배포 준비 {n + 1}",
+                    "ask": ["스테이징에 먼저 올려 볼까요?", "마이그레이션을 오늘 돌릴지 정해 주세요.", "Should I open the PR now?", "어느 쪽으로 할지 알려 주세요."][n],
+                    "actions": ["view", "send"], "detail": "— 준비를 마쳤습니다."})
+    return out
 
 
 REPOS = ["/work/acme/shop", "/work/acme/billing-api", "/work/acme/search", "/work/acme/docs"]

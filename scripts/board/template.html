@@ -445,7 +445,8 @@ button.ds-chip[aria-pressed="true"] { background: var(--color-accent); border-co
 .ds-card__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); font-size: var(--font-size-caption); line-height: var(--font-line-caption); color: var(--color-text-muted); }
 .ds-card__meta > .ds-card__when { margin-left: auto; }
 .ds-card__title { font-size: var(--font-size-title); line-height: var(--font-line-title); font-weight: var(--font-weight-title); margin: 0; }
-.ds-card__open { all: unset; cursor: pointer; display: block; width: 100%; }
+/* 카드 제목은 두 줄까지, 넘치면 말줄임(전체 문장은 title 툴팁과 서랍). */
+.ds-card__open { all: unset; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; }
 .ds-card__open::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius-lg); }
 .ds-card__open:focus-visible { outline: none; }
 .ds-card__open:focus-visible::after { outline: 2px solid var(--color-focus); outline-offset: 2px; }
@@ -627,6 +628,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-navitem > .b-navlabel { flex: 1 1 auto; min-width: 0; display: grid; }
 .b-navlabel > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .b-navlabel > .ds-caption { font-weight: var(--font-weight-caption); }
+.b-navitem[aria-expanded="true"] > .ds-row__chevron { transform: rotate(90deg); }
 .b-sidefoot { margin: auto 0 0; padding: 0 var(--space-2); }
 .b-desc { margin: 0 0 var(--space-4); color: var(--color-text-muted); }
 .b-sections { display: grid; gap: var(--space-8); min-width: 0; }
@@ -867,7 +869,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const prLabel = (url) => { const m = url && url.match(/pull-requests\/(\d+)|pull\/(\d+)/); return m ? `PR #${m[1] || m[2]}` : 'PR'; };
   const usd = (v) => (typeof v === 'number' ? `${v < 10 ? v.toFixed(2) : Math.round(v)} USD` : '–');
   const dur = (s) => (typeof s === 'number' ? (s < 90 ? `${s}초` : `${Math.round(s / 60)}분`) : '');
-  const plain = (s) => String(s || '').replace(/\\n/g, '\n').replace(/\*\*|__|`/g, '').replace(/^#+\s*/gm, '');
+  const plain = (s) => String(s || '').replace(/\\n/g, '\n').replace(/\*\*|__|`/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(^|\s)#{1,6}\s+/g, '$1').replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '').replace(SIG_RE, '').replace(/[ \t]{2,}/g, ' ');
+  const SIG_RE = /\b(?:datadog|sentry|command):[0-9A-Za-z_-]+/g;
   const firstSentence = (s, max) => {
     const t = plain(s).trim();
     const m = t.match(/^(.+?[.!?。])(\s|$)/);
@@ -957,7 +961,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   let stab = ['harness', 'autofix'].includes(store('hb-stab')) ? store('hb-stab') : 'work';
   let filter = 'all';
   const expanded = new Set();  // 펼친 줄·묶음(다시 그려도 유지)
-  const srcOf = (i) => i.section || 'harness';
+  const srcOf = (i) => (i.section === 'work' && (i.autofix_id || i.autofix_sig) ? 'autofix' : i.section || 'harness');
   const itemsAll = () => (data && data.items) || [];
 
   // ---- 목록 모델: 한 사건은 한 카드, 한 항목에 상태는 한 번 ----
@@ -1045,7 +1049,19 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (/^PR 생성/.test(t)) return `${k} PR을 열었음`;
       if (t === '변경 없음') return `${k}: 바꿀 것 없음`;
     }
-    return t || '(제목 없음)';
+    if (i.section === 'work' && (i.autofix_id || i.autofix_sig)) {
+      const e = i.autofix_title && (humanTitle(i.autofix_title) || fallbackTitle(i.autofix_title, i.project));
+      return e ? `에러 이어 보기: ${e}` : `${i.project}의 운영 에러 이어 보기`;
+    }
+    return shortTitle(t) || '(제목 없음)';
+  }
+  // 첫 지시문이 통째로 제목이 된 세션: 이슈 키 + 첫 문장만(전체는 툴팁·서랍).
+  function shortTitle(t) {
+    const one = plain(t).replace(/\s+/g, ' ').trim();
+    if (one.length <= 60) return one;
+    const key = one.match(/\b[A-Z][A-Z0-9]+-\d+\b/);
+    const rest = firstSentence(key ? one.replace(key[0], '').replace(/^[\s:·—-]+/, '') : one, 56);
+    return key ? `${key[0]} ${rest}` : rest;
   }
   const AF_BODY = {
     pr: '수정 PR이 열렸습니다. 병합 전에 검토하세요.', fixing: '원인을 찾아 고치는 중입니다.', deploy_wait: 'PR이 병합됐습니다. 배포를 기다립니다.',
@@ -1060,11 +1076,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       return AF_BODY[i.stage] || AF_BODY[i.status] || (i.detail ? firstSentence(i.detail, 140) : '');
     }
     if (i.permission) return `${i.permission.tool} 실행 허용을 기다립니다: ${firstSentence(i.permission.input, 80)}`;
+    if (i.ask) return `묻는 말: ${i.ask}`;
     if (srcOf(i) === 'harness' && i.state === 'running' && !i.detail) return `${i.project} 저장소에서 ${ago(i.at) || '방금'} 시작해 도는 중입니다.`;
     const lines = plain(i.detail).split('\n').map((x) => x.trim()).filter(Boolean);
     const said = lines.find((x) => x.startsWith('— '));
     const asked = lines.find((x) => x.startsWith('요청:'));
-    const pick = said ? said.slice(2) : asked ? asked : lines.find((x) => x !== '세션 종료됨') || '';
+    const pick = (said ? said.slice(2) : asked ? asked : lines.find((x) => x !== '세션 종료됨') || '').trim();
     const why = pick.match(/^근거: (.*)$/);
     if (why) { const R = { sessions: '쌓인 세션', corrections: '교정', errors: '오류', insights: '인사이트', permission_denials: '권한 거부' }; return `근거: ${why[1].split(/,\s*/).map((x) => R[x] || '기타').join('·')}`; }
     const ex = pick.match(/^실행 실패 \((.*)\)$/);
@@ -1116,7 +1133,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const title = titleOf(it);
     if (openable(it)) {
       c.classList.add('ds-card--interactive');
-      const o = el('button', 'ds-card__open', title); o.type = 'button'; o.dataset.open = it.id;
+      const o = el('button', 'ds-card__open', title); o.type = 'button'; o.dataset.open = it.id; o.title = it.kind === 'autofix' || srcOf(it) === 'harness' ? title : plain(it.title || title);
       if (selected && (selected === it.id || selected === it.session_id)) { c.dataset.selected = 'true'; o.setAttribute('aria-current', 'true'); }
       o.onclick = () => openItem(it);
       h.append(o);
@@ -1254,6 +1271,20 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const e = el('div', 'ds-empty'); e.append(el('p', null, text)); if (sub) e.append(el('p', 'ds-caption', sub)); if (action) e.append(action); return e;
   }
 
+  // 지금 할 일 한 줄 요약: 무엇이 몇 건인지 급한 순으로.
+  const LANE_MAX = 5;  // 진행 중·대기 칸에 카드로 보일 최대 수(나머지는 접힘)
+  function todoSummary(list) {
+    const n = [0, 0, 0, 0]; for (const i of list) n[urgency(i)]++;
+    const parts = [[n[0], '권한 요청'], [n[1], '답할 것'], [n[2], '판단할 것'], [n[3], '검토할 것']].filter(([k]) => k).map(([k, w]) => `${w} ${k}`);
+    return parts.length ? el('span', 'ds-caption', parts.join(' · ')) : null;
+  }
+  // 저장소가 아닌 범위: 정기 실행 같은 고정 범위와, git 저장소가 아닌 작업 폴더(세션의 in_repo가 false).
+  function nonRepoSet() {
+    const all = itemsAll(), out = new Set(Object.keys(NON_REPO));
+    const byP = {}; for (const i of all) (byP[i.project] ||= []).push(i);
+    for (const [p, l] of Object.entries(byP)) if (l.every((i) => i.section === 'work' && i.in_repo === false)) out.add(p);
+    return out;
+  }
   // ---- 작업 현황 ----
   function renderList() {
     const board = $('board');
@@ -1262,7 +1293,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const nodes = [];
     // 지금 할 일 — 모든 탭에서 맨 위
     const todo = el('section', 'ds-stack'); todo.setAttribute('aria-labelledby', 'sec-todo');
-    const th = sectionHead('attention', '지금 할 일', units(M.todo)); th.id = 'sec-todo'; todo.append(th);
+    const th = sectionHead('attention', '지금 할 일', units(M.todo), null, todoSummary(M.todo)); th.id = 'sec-todo'; todo.append(th);
     if (M.todo.length) { const cols = el('div', 'ds-columns ds-columns--even'); cols.append(...laneCards(M.todo, 'todo')); todo.append(cols); }
     else todo.append(empty('지금 할 일이 없습니다.', tab === 'autofix' ? '사람 판단이 필요한 에러나 검토할 수정 PR이 생기면 여기에 뜹니다.' : '권한 요청, 답을 기다리는 세션, 검토할 PR이 생기면 여기에 뜹니다.'));
     if (total || tab === 'autofix') nodes.push(todo);
@@ -1274,21 +1305,31 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
           null));
     } else {
       const cols = el('div', 'ds-columns');
-      const what = (list) => { const ps = [...new Set(list.map((i) => scopeName(i.project)))]; return `${ps.slice(0, 3).join(', ')}${ps.length > 3 ? ` 외 ${ps.length - 3}곳` : ''}`; };
+      const nr = nonRepoSet();
+      const what = (list) => {
+        const ps = [...new Set(list.filter((i) => !nr.has(i.project)).map((i) => i.project))].sort();
+        const other = units(list.filter((i) => nr.has(i.project)));
+        const repo = ps.length ? `${ps.slice(0, 3).join(', ')}${ps.length > 3 ? ` 외 ${ps.length - 3}곳` : ''}` : '';
+        return [repo, other ? `저장소 밖 ${other}건` : ''].filter(Boolean).join(' · ');
+      };
       const sec = (key, dot, label, list, collapsed, bar) => {
         const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'sec-' + key);
         const h = sectionHead(dot, label, units(list)); h.id = 'sec-' + key; s.append(h);
         if (!list.length) return null;
         if (collapsed) s.append(group(`${key}:all`, collapsed, [], memberList(list), bar));
-        else s.append(...laneCards(list, key));
+        else if (list.length > LANE_MAX + 1) {
+          // 칸이 길어지면 최근 것만 카드로, 나머지는 접힌 한 줄로 — 한 칸이 화면을 다 차지하지 않게.
+          const head = list.slice(0, LANE_MAX), tail = list.slice(LANE_MAX);
+          s.append(...laneCards(head, key), group(`${key}:more`, `${units(tail)}건 더 · ${what(tail)}`, [], memberList(tail), null));
+        } else s.append(...laneCards(list, key));
         return s;
       };
       const add = (x) => { if (x) cols.append(x); };
       add(sec('running', 'progress', '진행 중', M.running));
       add(sec('waiting', 'waiting', '대기 · 막힘', M.waiting));
-      add(sec('unread', null, '읽지 않은 결과', M.unread, `읽지 않은 결과 ${M.unread.length}건 · ${what(M.unread)}`,
+      add(sec('unread', null, '읽지 않은 결과', M.unread, `${units(M.unread)}건 · ${what(M.unread)}`,
         SERVER && M.unread.length ? groupBar('결과를 확인했으면 읽음으로 두세요. 끝난 일로 옮겨집니다.', btn('모두 읽음', 'ds-btn--sm', () => markSeen(M.unread.map((i) => i.id)))) : null));
-      const doneSec = sec('done', 'success', '끝난 일', M.done, `끝난 일 ${M.done.length}건 · ${what(M.done)}`);
+      const doneSec = sec('done', 'success', '끝난 일', M.done, `${units(M.done)}건 · ${what(M.done)}`);
       if (cols.childNodes.length) nodes.push(cols);
       // 자동 수정 탭의 후보는 진행 칸 다음, 전체 폭 구획(칸 그리드 안에 넣으면 진행 칸이 1/3로 남는다).
       if (tab === 'autofix') nodes.push(candidatesSection());
@@ -1829,11 +1870,28 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       names = [...new Set(Object.values(model('all', 'all')).flat().map((i) => i.project))].sort((x, y) => String(x || '').localeCompare(String(y || '')));
     } else names = ((sdata && sdata.repos) || []).map((r) => r.name);
     $('projbox').hidden = view === 'settings' || !names.length;
-    const repos = names.filter((p) => !NON_REPO[p]), scopes = names.filter((p) => NON_REPO[p]);
-    const item = (p) => navItem(p === 'all' ? '전체 보기' : scopeName(p), null, p === filter ? 'true' : null, () => { filter = p; renderAll(); },
-      view === 'list' && p !== 'all' && counts[p] ? count(counts[p], 'attention', '건, 지금 할 일') : null);
-    for (const p of ['all', ...repos]) box.append(item(p));
-    const sbox = $('scopes'); sbox.replaceChildren(...scopes.map(item)); $('scopebox').hidden = !scopes.length || view === 'settings';
+    const nr = nonRepoSet(), run = {};
+    if (view === 'list') for (const i of model(tab, 'all').running) run[i.project] = (run[i.project] || 0) + 1;
+    if (view === 'impact') for (const r of (idata && idata.repos) || []) if (!QUIET.includes(repoStatus(r))) run[r.name] = 1;
+    const hot = (p) => (counts[p] || 0) * 1000 + (run[p] || 0);
+    const repos = names.filter((p) => !nr.has(p));
+    const active = repos.filter((p) => hot(p)).sort((a, b) => hot(b) - hot(a) || String(a).localeCompare(String(b)));
+    const rest = repos.filter((p) => !hot(p)), others = names.filter((p) => nr.has(p)).sort();
+    const badgeFor = (p) => (view !== 'list' || p === 'all' ? null : counts[p] ? count(counts[p], 'attention', '건, 지금 할 일') : run[p] ? count(run[p], null, '건 진행 중') : null);
+    const item = (p) => navItem(p === 'all' ? '전체 보기' : scopeName(p), null, p === filter ? 'true' : null, () => { filter = p; renderAll(); }, badgeFor(p));
+    box.append(item('all'), ...active.map(item));
+    const folded = rest.length + others.length;
+    if (folded) {
+      const key = 'side:more', open = expanded.has(key) || rest.includes(filter) || others.includes(filter);
+      const t = el('button', 'b-navitem'); t.type = 'button'; t.dataset.key = key; t.setAttribute('aria-expanded', String(open)); t.setAttribute('aria-controls', 'side-more');
+      const lab = el('span', 'b-navlabel'); lab.append(el('span', null, `${active.length ? '그 외' : '저장소'} ${folded}개`)); t.append(icon('chevron', 'ds-row__chevron'), lab);
+      t.onclick = () => { if (expanded.has(key)) expanded.delete(key); else expanded.add(key); renderSidebar(); };
+      const more = el('div', 'b-nav'); more.id = 'side-more'; more.hidden = !open;
+      more.append(...rest.map(item));
+      if (others.length) { const h = el('p', 'ds-caption b-navtitle', '저장소 밖 · 기타 폴더'); more.append(h, ...others.map(item)); }
+      box.append(t, more);
+    }
+    $('scopebox').hidden = true;
     $('foot').textContent = data ? `${new Date(data.generated_at).toLocaleTimeString('ko-KR')} 갱신${SERVER ? ' · 5초마다' : ' · 정적 파일'}` : '';
   }
   function tabs(listEl, defs, cur, onPick, countOf) {
