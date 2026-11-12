@@ -29,11 +29,11 @@ def status(scenario):
         items = [
             # 지금 할 일: 권한 요청 · 답 대기 · 자동 수정 사람 판단 · PR 검토
             {"id": "w1", "section": "work", "kind": "agent", "project": "shop", "state": "needs_human", "status": "waiting", "live": True,
-             "at": ago(2), "title": "배송비 계산을 지역별 요금표로 바꾸기", "actions": ["view"],
+             "at": ago(2), "title": "배송비 계산을 지역별 요금표로 바꾸기", "actions": ["view", "cleanup"],
              "detail": "요청: 배송비를 지역별 요금표에서 읽게 바꿔줘\n— 스테이징 배포 스크립트를 실행하려고 합니다.",
              "permission": {"pid": "p1", "tool": "Bash", "input": "scripts/deploy.sh --env staging"}, "cwd": "/work/acme/shop"},
             {"id": "w2", "section": "work", "kind": "bg", "project": "billing-api", "state": "needs_human", "status": "waiting", "live": True,
-             "at": ago(9), "title": "환불 금액 반올림 규칙 정하기", "actions": ["view", "send"],
+             "at": ago(9), "title": "환불 금액 반올림 규칙 정하기", "actions": ["view", "send", "cleanup"],
              "detail": "요청: 부분 환불 금액이 1원씩 어긋나는 문제 확인\n— 반올림을 **은행가 방식**으로 할지 사사오입으로 할지 정해 주세요.", "cwd": "/work/acme/billing-api"},
             {"id": "af1", "section": "autofix", "kind": "autofix", "project": "shop", "state": "needs_human", "status": "skipped",
              "outcome": "left_for_user", "at": ago(35), "signature": "datadog:5b1c0d2e9f8a7b6c",
@@ -53,7 +53,7 @@ def status(scenario):
              "link": "https://example.com/acme/docs/pull/77", "actions": ["open_agent"], "repo": "/work/acme/docs"},
             # 진행 중
             {"id": "w3", "section": "work", "kind": "bg", "project": "search", "state": "running", "status": "busy", "live": True,
-             "at": ago(1), "title": "검색어 자동완성 지연 줄이기", "actions": ["view"],
+             "at": ago(1), "title": "검색어 자동완성 지연 줄이기", "actions": ["view", "cleanup"],
              "detail": "요청: 자동완성 응답을 200ms 안으로\n— 캐시 키를 바꾸고 테스트 12개 중 9개 통과. 남은 3개를 고치는 중입니다.",
              "subagents": {"total": 3, "active": 1}, "cwd": "/work/acme/search"},
             {"id": "af3", "section": "autofix", "kind": "autofix", "project": "shop", "state": "running", "status": "verifying",
@@ -126,7 +126,7 @@ def status(scenario):
              "detail": "요청: 자동 수정이 사람에게 넘긴 운영 에러를 이어서 본다. 에러: datadog:5b1c0d2e9f8a7b6c\n— ## 원인 확인 무인 실행이 남긴 분석은 맞습니다. 쿠폰 두 개가 겹칠 때 할인 순서를 정해야 합니다."},
             # 본문으로 묻고 쉬는 세션(서버가 마지막 문장을 질문으로 보고 '답 대기'로 올림)
             {"id": "w6", "section": "work", "kind": "bg", "project": "docs", "state": "needs_human", "status": "idle", "live": True, "in_repo": True,
-             "at": ago(14), "title": "설치 안내 개정", "actions": ["view", "send"], "ask": "다음으로 영어 문서까지 같은 구조로 바꿀까요?",
+             "at": ago(14), "title": "설치 안내 개정", "actions": ["view", "send", "cleanup"], "ask": "다음으로 영어 문서까지 같은 구조로 바꿀까요?",
              "detail": "요청: 설치 안내를 단계별로 나눠줘\n— 한국어 설치 안내를 5단계로 나눴습니다. 다음으로 영어 문서까지 같은 구조로 바꿀까요?"},
             # 프로젝트 id와 폴더 이름이 다른 자동 수정 세션(시그니처로 이어짐)
             {"id": "w7", "section": "work", "kind": "bg", "project": "billing-api-service", "state": "idle", "status": "idle", "live": True, "in_repo": True,
@@ -402,8 +402,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, [] if u.path == "/commands" else REPOS)
         if u.path == "/hidden":
             return self._json(200, {"ok": True, "items": HIDDEN})
-        if u.path == "/cleanup-preview":
-            return self._json(200, {"worktree": {"path": "/work/acme/shop", "branch": "fix/cart-total", "removable": True}})
+        if u.path == "/cleanup-preview":  # 실제 서버의 close_level과 같은 규칙으로 확인 수준을 싣는다(#306)
+            it = next((i for i in status(scenario)["items"] if i.get("id") == q.get("id")), {})
+            level = ("idle" if not it.get("live") else "busy" if it.get("status") == "busy" or it.get("state") == "running"
+                     else "waiting" if it.get("status") != "idle" or it.get("permission") else "ask" if it.get("ask") else "idle")
+            wt = ({"path": "/work/acme/shop", "removable": False, "reason": "작업 중인 세션은 파일이 바뀔 수 있어 지우지 않음"} if level == "busy"
+                  else {"path": "/work/acme/shop", "branch": "fix/cart-total", "removable": True})
+            return self._json(200, {"ok": True, "level": level, "worktree": wt})
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -417,6 +422,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/autofix/detail":
             d = autofix()["repos"][0]["details"]["datadog:9d8e7f6a5b4c3d2e"]
             return self._json(200, {"ok": True, "message": "원문을 불러옴", "detail": d})
+        if self.path == "/action" and req.get("action") == "cleanup" and req.get("id") == "w6" and req.get("confirm") != "busy":
+            # 확인창을 연 사이 답 대기 세션이 일을 시작한 경우(#306): 서버가 더 무거운 수준을 돌려주고 화면은 다시 묻는다
+            return self._json(200, {"ok": False, "confirm": "busy", "message": "세션 상태가 바뀌었음 — 다시 확인해 주세요"})
         return self._json(200, {"ok": True, "message": f"미리보기: '{req.get('action') or self.path}' 요청을 받았습니다(아무것도 바꾸지 않음)"})
 
 

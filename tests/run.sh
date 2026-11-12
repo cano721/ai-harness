@@ -7895,6 +7895,11 @@ res = bs.bulk_cleanup({"older_days": 1, "worktree": True}, items)
 assert sorted(calls) == [("ended", False), ("idle", True)], calls
 assert res["counts"]["worktrees"] == 1 and res["counts"]["skipped"] == 1, res
 assert [r for r in res["results"] if r["id"] == "claude|ended"][0]["worktree_kept"] == "커밋 안 한 변경 2개"
+# 세션을 닫은 뒤 다시 본 판정으로 worktree를 남기면(#306) 삭제로 세지 않고 이유를 싣는다
+bs.cleanup = lambda i, wt: {"ok": True, "message": "정리함", **({"worktree_kept": "커밋 안 한 변경 1개"} if wt else {})}
+res = bs.bulk_cleanup({"older_days": 1, "worktree": True}, items)
+assert res["counts"]["worktrees"] == 0 and res["counts"]["skipped"] == 2, res
+assert [r for r in res["results"] if r["id"] == "claude|idle"][0]["worktree_kept"] == "커밋 안 한 변경 1개", res
 assert bs.restore_hidden("all")["restored"] >= 4 and not bs._load(bs.HIDDEN)
 bs._bulk_lock.acquire()
 assert bs.bulk_cleanup({}, items)["ok"] is False, "a second cleanup while one runs is refused"
@@ -8359,7 +8364,7 @@ BH_POST="$(sed -n '/if path != "\/action":/,/self._send(200, res)/p' "$ROOT/scri
 assert_contains "$BH_POST" "action_item(" "the action handler looks the item up through action_item"
 case "$BH_POST" in *'find_item(req.get("id"), fresh=True)'*) fail "the action handler no longer recollects status for every action" ;; esac
 BH_RUN="$(sed -n '/^def run_action(/,/^    if action == "open_agent"/p' "$ROOT/scripts/board/board-server.py")"
-assert_contains "$BH_RUN" "cleanup(item, bool(req.get(\"worktree\")), background=True)" "a single cleanup runs in the background"
+assert_contains "$BH_RUN" "cleanup(item, bool(req.get(\"worktree\")), background=True" "a single cleanup runs in the background"
 BH_PREV="$(sed -n '/if u.path == "\/cleanup-preview":/,/worktree_check/p' "$ROOT/scripts/board/board-server.py")"
 assert_contains "$BH_PREV" "find_item(" "the cleanup preview looks the item up"
 case "$BH_PREV" in *fresh=True*) fail "the cleanup preview reads the cached list" ;; esac
@@ -8378,6 +8383,90 @@ assert_contains "$BOARD_REFRESH" "cleanup_failed" "refresh handles cleanup failu
 assert_contains "$BOARD_REFRESH" "hiding.delete(" "refresh puts a failed cleanup back in the list"
 assert_contains "$BOARD_REFRESH" "toast(" "refresh tells the person a cleanup failed"
 pass "board UI hides on cleanup first and refresh restores and reports failed cleanups"
+
+# 언제나 정리(#306): 세션 정리는 상태와 관계없이 노출된다. 상태는 확인 수준(close_level)만 정하고, 서버는 화면이 보낸 확인 수준(confirm)보다
+# 실제 상태가 무거우면 거부하며 새 수준을 돌려준다. 작업 중 세션은 worktree를 지우지 않는다. 대화 기록 파일은 읽기만 한다.
+CA_T="$TEST_TMP/board-cleanup-always"
+mkdir -p "$CA_T/data"
+printf '{"type":"user","message":{"content":"가상 요청"}}\n' >"$CA_T/session.jsonl"
+HARNESS_METRICS_DIR="$CA_T/data" python3 -I -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+transcript = sys.argv[2]
+before = open(transcript, "rb").read()
+term = "term_00000000-0000-0000-0000-000000000000"
+base = {"section": "work", "kind": "bg", "state": "done", "status": "idle", "live": True, "cwd": "/nope", "project": "shop",
+        "at": "2026-01-01T00:00:00Z", "actions": ["view"], "transcript": transcript}
+mk = lambda sid, **k: dict(base, sid=sid, id="claude|" + sid, short_id=sid, title=sid, **k)
+bs._save(bs.SEEN, {})
+items = [mk("s-idle"),
+         mk("s-ask", reply_tail="고칠 범위를 정했습니다. 진행할까요?"),
+         mk("s-wait", state="needs_human", status="waiting"),
+         mk("s-busy", state="running", status="busy"),
+         mk("s-term", kind="agent", state="running", status="busy", orca_handle=term),
+         mk("s-noterm", kind="agent"),
+         mk("s-ended", kind="agent", live=False, status=None)]
+out = {i["sid"]: i for i in bs.classify_work(items)}
+exposed = {s for s, i in out.items() if "cleanup" in i["actions"]}
+assert exposed == {"s-idle", "s-ask", "s-wait", "s-busy", "s-term", "s-ended"}, exposed  # 닫을 방법이 없는 대화형 세션만 빠진다
+levels = {s: bs.close_level(out[s]) for s in ("s-idle", "s-ask", "s-wait", "s-busy", "s-term", "s-ended")}
+assert levels == {"s-idle": "idle", "s-ask": "ask", "s-wait": "waiting", "s-busy": "busy", "s-term": "busy", "s-ended": "idle"}, levels
+assert not bs.can_close(out["s-busy"]) and not bs.can_close(out["s-ask"]), "bulk cleanup still takes only resting sessions"
+
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+bs.status = lambda *a, **k: {"items": []}
+# 확인 수준 없이(또는 더 가벼운 수준으로) 보내면 거부하고 실제 수준을 돌려준다 — 세션을 닫지도 숨기지도 않는다
+for sid, confirm, want in (("s-busy", None, "busy"), ("s-busy", "waiting", "busy"), ("s-wait", "ask", "waiting"), ("s-ask", None, "ask")):
+    res = bs.cleanup(dict(out[sid]), False, confirm=confirm)
+    assert res["ok"] is False and res.get("confirm") == want and res.get("message"), (sid, confirm, res)
+res = bs.cleanup(dict(out["s-busy"]), False, background=True)
+assert res["ok"] is False and res.get("confirm") == "busy", res
+assert ended == [] and not (bs._load(bs.HIDDEN) or {}), (ended, bs._load(bs.HIDDEN))
+# 맞는 수준이나 더 무거운 수준이면 정리한다
+assert bs.cleanup(dict(out["s-busy"]), False, confirm="busy")["ok"] is True
+assert bs.cleanup(dict(out["s-wait"]), False, confirm="waiting")["ok"] is True
+assert bs.cleanup(dict(out["s-ask"]), False, confirm="ask")["ok"] is True
+assert bs.cleanup(dict(out["s-idle"]), False, confirm="busy")["ok"] is True
+assert bs.cleanup(dict(out["s-ended"]), False)["ok"] is True
+assert ended == ["s-busy", "s-wait", "s-ask", "s-idle"], ended
+# 작업 중 세션은 확인해도 worktree를 지우지 않는다(세션도 그대로)
+bs.worktree_check = lambda i: {"path": "/nope", "removable": True, "branch": "feat/x"}
+res = bs.cleanup(dict(out["s-term"]), True, confirm="busy")
+assert res["ok"] is False and "worktree" in res["message"] and "s-term" not in ended, res
+# 닫을 방법이 없는 살아 있는 세션은 확인 수준과 관계없이 거부
+assert bs.cleanup(dict(out["s-noterm"]), False, confirm="busy")["ok"] is False
+# 확인과 닫기 사이에 세션이 파일을 바꿨으면(닫은 뒤 다시 본 판정이 지울 수 없음) worktree는 남기고 세션 정리만 끝낸다
+checks = iter([{"path": "/nope", "removable": True, "branch": "feat/x"}, {"path": "/nope", "removable": False, "reason": "커밋 안 한 변경 1개"}])
+bs.worktree_check = lambda i: next(checks)
+res = bs.cleanup(dict(out["s-wait"], sid="s-wait2", id="claude|s-wait2"), True, confirm="waiting")
+assert res["ok"] is True and "남김" in res["message"] and res.get("worktree_kept") == "커밋 안 한 변경 1개" and ended[-1] == "s-wait2", res
+assert open(transcript, "rb").read() == before, "the transcript file is left as it was"
+' "$ROOT/scripts/board/board-server.py" "$CA_T/session.jsonl" || fail "session cleanup is offered in every state and the confirmation level must cover the actual state"
+assert_file "$CA_T/session.jsonl"
+CA_RUN="$(sed -n '/^def run_action(/,/^    if action == "open_agent"/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$CA_RUN" 'confirm=req.get("confirm")' "a single cleanup passes the confirmation level the screen sent"
+CA_PREV="$(sed -n '/if u.path == "\/cleanup-preview":/,/self._send(200/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$CA_PREV" "close_level(" "the cleanup preview tells the screen the confirmation level"
+pass "board cleanup is offered in every state and refuses when the confirmation level is lighter than the state"
+
+# 언제나 정리(#306) UI: 확인창 문구·무게는 수준별, 작업 중은 취소에 기본 포커스, 서버가 더 무거운 수준을 돌려주면 새 경고로 다시 묻는다.
+CA_OPEN="$(sed -n "/let cleaning = null/,/\$('cdlg').addEventListener('close'/p" "$ROOT/scripts/board/template.html")"
+for CA_TEXT in '질문을 남기고 쉬는 중입니다. 답하지 않고 닫습니다.' '답을 기다리는 중입니다. 닫으면 그 요청은 거절된 것으로 끝납니다.' '작업 중입니다. 지금 닫으면 진행 중인 작업이 중간에 끊깁니다.'; do
+  assert_contains "$CA_OPEN" "$CA_TEXT" "the cleanup dialog explains the state"
+done
+assert_contains "$CA_OPEN" "focus()" "the cleanup dialog moves focus for a running session"
+# Esc로 닫으면 returnValue가 그대로라, 열 때마다 비우지 않으면 다시 연 창에서 Esc가 지난 '정리'를 다시 실행한다
+CA_OPENFN="$(sed -n '/async function openCleanup(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$CA_OPENFN" "\$('cdlg').returnValue = ''" "opening the cleanup dialog forgets the previous choice"
+CA_RESET="${CA_OPENFN%%"returnValue = ''"*}"
+CA_SHOW="${CA_OPENFN%%"showModal()"*}"
+[[ ${#CA_RESET} -lt ${#CA_SHOW} ]] || fail "the previous choice is cleared before the dialog opens"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" 'aria-describedby="cwarn cdesc"' "the cleanup dialog reads its warning when it opens"
+CA_CLOSE="$(sed -n "/\$('cdlg').addEventListener('close'/,/^  });\$/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$CA_CLOSE" "confirm:" "the cleanup request carries the confirmation level"
+assert_contains "$CA_CLOSE" "res.confirm" "a refused cleanup asks again with the new level"
+pass "board cleanup dialog warns by state and asks again when the state got heavier"
 
 # 남은 이유 안내(#296): '끝난 일 정리' 미리보기·결과가 정리 대상이 아닌 항목을 이유별 개수와 한 줄 안내(label)로 알린다. 0건인 이유는 없다.
 BL_DATA="$TEST_TMP/board-cleanup-left"
