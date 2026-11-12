@@ -1,7 +1,8 @@
 """하네스 보드 '자동 수정' 화면 데이터 (#278). 판정·상태 전이는 scripts/autofix-auto.sh가 하고, 여기서는 읽어서 모으기만 한다.
 
 - 준비 상태는 monitor-fetch.sh describe(요청 없음, 자격증명 값 미출력)로 본다. 30초 캐시.
-- 접근 확인(monitor-fetch.sh check)과 후보 조회(autofix-auto.sh candidates)는 모니터링 도구 API를 부르므로 버튼으로만 돌리고,
+- 접근 확인(monitor-fetch.sh check)·후보 조회(autofix-auto.sh candidates)·원문 조회(monitor-fetch.sh detail)는 모니터링 도구 API를
+  부르므로 버튼으로만 돌리고,
   결과를 $HARNESS_METRICS_DIR/board/autofix/에 둔다. 화면을 열거나 새로 고쳐도 다시 부르지 않는다.
 - 진행·이력은 autofix-auto.sh status·runs, 개인 설정은 autofix-auto.sh configure(인자 없음 = 현재 값)를 그대로 쓴다.
 - 쓰기는 autofix-auto.sh configure만 거친다(값 검증·원자적 쓰기의 단일 작성자). 주기를 바꾸면 schedule.sh install-autofix·status를
@@ -20,7 +21,8 @@ RECENT_RUNS = 20
 RUNS_WINDOW = 100000  # 비용 합계·마지막 실행을 볼 이벤트 수. runs.jsonl은 이벤트 몇 줄씩만 늘어 사실상 전체다
 READY_TTL = 30
 CHECK_LABEL = {0: "접근됨", 3: "요청 실패", 4: "자격증명·설정 오류", 5: "설정 없음"}
-CANDIDATE_KEYS = ("signature", "title", "count", "reason", "link", "provider")
+CANDIDATE_KEYS = ("signature", "title", "culprit", "count", "first_seen", "last_seen", "reason", "link", "provider", "meta")
+DETAIL_MAX = 8000  # 펼친 줄에 보일 원문(스택·샘플) 길이 상한
 RUN_KEYS = ("at", "event", "project", "signature", "reason", "outcome", "artifact", "duration_s", "cost_usd", "exit_code", "next")
 CONFIG_FLAGS = (("add_repo", "--add-repo"), ("remove_repo", "--remove-repo"), ("interval_minutes", "--interval-minutes"),
                 ("daily_max", "--daily-max"), ("max_attempts", "--max-attempts"), ("budget_usd", "--budget-usd"))
@@ -189,18 +191,19 @@ class Store:
             by_project.setdefault(s.get("project"), []).append(s)
         for lst in by_project.values():
             lst.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
-        checks, cands = self._load("checks.json"), self._load("candidates.json")
+        checks, cands, details = self._load("checks.json"), self._load("candidates.json"), self._load("details.json")
         rows, seen = [], set()
         for repo in repos:
             pid = key_of(repo)
             seen.add(pid)
             rows.append({"repo": repo, "name": os.path.basename(repo), "project": pid, "ready": self.readiness(repo),
                          "targeted": pid in targets, "signatures": by_project.get(pid, []),
-                         "check": checks.get(repo), "candidates": cands.get(repo)})
+                         "check": checks.get(repo), "candidates": cands.get(repo),
+                         "details": {k.split("\u0000", 1)[1]: v for k, v in details.items() if k.startswith(repo + "\u0000")}})
         for pid, lst in by_project.items():  # 상태는 있는데 이 맥에서 저장소를 찾지 못한 프로젝트
             if pid and pid not in seen:  # project가 없는 기록은 어느 저장소에도 붙일 수 없어 뺀다
                 rows.append({"repo": None, "name": pid, "project": pid, "ready": None, "targeted": pid in targets,
-                             "signatures": lst, "check": None, "candidates": None})
+                             "signatures": lst, "check": None, "candidates": None, "details": {}})
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         started = sum(1 for e in events if e.get("event") == "started" and str(e.get("at") or "").startswith(today))
         cost = sum(e["cost_usd"] for e in events if e.get("event") == "finished" and isinstance(e.get("cost_usd"), (int, float)))
@@ -226,6 +229,11 @@ class Store:
         repo_of = {}
         for r in (repos_fn() if sigs else []):  # 자동 수정을 쓰지 않으면 저장소 찾기(git 호출)를 하지 않는다
             repo_of.setdefault(key_of(r), r)
+        cand_title = {}  # 상태 파일에 제목이 없는 시그니처(수동 track·복구)는 마지막 후보 조회의 제목을 빌린다
+        for r, c in self._load("candidates.json").items():
+            for it in (c or {}).get("items") or []:
+                if it.get("signature") and it.get("title"):
+                    cand_title.setdefault(it["signature"], it["title"])
         res = []
         for s in sigs:
             sig, project = s.get("signature") or "", s.get("project") or ""
@@ -242,7 +250,8 @@ class Store:
             log = os.path.basename(str(s.get("last_log") or ""))
             pr = s.get("pr") if str(s.get("pr") or "").startswith("https://") else None
             item = {"id": f"autofix:{project}:{sig}", "section": "autofix", "kind": "autofix", "project": project,
-                    "state": st, "at": s.get("updated_at") or s.get("first_detected_at"), "title": s.get("title") or sig,
+                    "state": st, "at": s.get("updated_at") or s.get("first_detected_at"),
+                    "title": s.get("title") or cand_title.get(sig) or sig, "status": s.get("status"), "outcome": s.get("outcome"),
                     "detail": s.get("summary"), "link": pr, "signature": sig, "stage": stg, "stage_label": word,
                     "count": s.get("count"), "attempts": s.get("attempts"), "regressions": s.get("regressions"),
                     "verify_until": s.get("verify_until"), "recovered": s.get("recovered"),
@@ -280,6 +289,26 @@ class Store:
         else:
             res = {"at": _utc(), "items": [{k: c.get(k) for k in CANDIDATE_KEYS} for c in _lines(out)][:30], "error": None}
         self._put("candidates.json", repo, res)
+        return res
+
+    def detail(self, repo, project, signature):
+        """에러 하나의 원문(스택·샘플). 조회 정보(meta)는 마지막 후보 조회나 상태 파일에서 찾는다. 비밀값은 monitor-fetch.sh가 가린다."""
+        meta = next((c.get("meta") for c in (self._load("candidates.json").get(repo) or {}).get("items") or []
+                     if c.get("signature") == signature), None)
+        if not isinstance(meta, dict):
+            meta = next((s.get("meta") for s in _lines(self._cached(["status"]))
+                         if s.get("project") == project and s.get("signature") == signature), None)
+        if not isinstance(meta, dict):
+            res = {"at": _utc(), "detail": None, "error": "이 에러를 다시 찾을 조회 정보가 없습니다. 후보를 다시 조회한 뒤 열어 보세요."}
+        else:
+            rc, out, err = _run(MONITOR_SH, ["detail", "--root", repo, "--meta", json.dumps(meta, separators=(",", ":"))], 90)
+            rows = _lines(out)
+            if rc == 0 and rows:
+                text = json.dumps(rows[-1], ensure_ascii=False)
+                res = {"at": _utc(), "detail": rows[-1] if len(text) <= DETAIL_MAX else {"truncated": text[:DETAIL_MAX]}, "error": None}
+            else:
+                res = {"at": _utc(), "detail": None, "error": _last_line(err, out) or f"원문을 불러오지 못함(exit {rc})"}
+        self._put("details.json", f"{repo}\u0000{signature}", res)
         return res
 
     def configure(self, req):

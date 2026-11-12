@@ -612,7 +612,7 @@ command_run() {
 
 SIG_VIEW='{status, title, attempts, fails, pr, merged_at, deployed_at, verify_until, resolved_at, outcome,
   regressions:((.regressions // []) | length), updated_at,
-  count:(.baseline.count // null), link, provider, first_detected_at, launched_at, skipped_at, last_check_at, manual,
+  count:(.baseline.count // null), link, provider, meta, first_detected_at, launched_at, skipped_at, last_check_at, manual,
   summary, last_log, last_reason, recovered}'
 
 # 상태 파일이 있는 프로젝트는 그 파일을, 상태 파일이 통째로 없는데 실행 기록만 있는 프로젝트는 실행 기록에서 되살린
