@@ -577,10 +577,12 @@ command_run() {
       # 응답 없는 에이전트가 실행 lock을 영원히 쥐지 않게 시간 제한을 둔다(기본 45분).
       if [[ -z "${HM_HARVEST_AUTO_CMD:-}" && "$agent" == "claude" ]]; then
         # stream-json 출력은 도구 호출 진행 줄과 result만 남겨 로그에 쓴다(파일 내용·모델 문장은 디스크에 두지 않는다).
-        # pipefail이라 종료 코드는 에이전트 쪽이 남는다.
+        # pipefail이라 종료 코드는 에이전트 쪽이 남는다. 에이전트를 끝내도 그 자식이 출력을 물고 살아 있으면 필터가
+        # 끝나지 않아 실행 lock을 계속 쥐므로, 필터에도 시간 제한(에이전트 + 20초)을 둔다.
         (cd "$work_dir" && hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60))" \
           env HM_HARVEST_RUNNING=1 HM_INTERNAL_SESSION=1 AI_HARNESS_HEADLESS=1 "${AGENT_CMD[@]}" 2>&1 \
-          | jq -R -c --unbuffered -f "$DIR/agent-progress.jq") </dev/null >"$log_file" 2>&1 || exit_code=$?
+          | hm_run_with_timeout "$((${HM_HARVEST_AUTO_TIMEOUT_MIN:-45} * 60 + 20))" \
+            jq -R -c --unbuffered -f "$DIR/agent-progress.jq") </dev/null >"$log_file" 2>&1 || exit_code=$?
         # 아무것도 남기지 못한 실행의 0바이트 로그는 지운다(finished 기록의 log 경로는 그대로 둔다).
         find "$log_file" -maxdepth 0 -type f -empty -delete 2>/dev/null || true
       else

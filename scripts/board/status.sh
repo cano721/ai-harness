@@ -84,7 +84,7 @@ if [ -f "$runs" ]; then
   # 보고(result)가 없으면 끊기기 전 마지막 진행 줄을 붙인다.
   jq -c '.[]' "$tmp/runs.json" | while IFS= read -r item; do
     log=$(jq -r '.log // empty' <<<"$item")
-    if [ -n "$log" ] && [ ! -s "$log" ]; then
+    if [ -n "$log" ] && [ ! -s "$log" ] && [ "$(jq -r '.state' <<<"$item")" != running ]; then
       item=$(jq -c '.log = null' <<<"$item")
       log=""
     fi

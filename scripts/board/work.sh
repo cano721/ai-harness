@@ -38,6 +38,18 @@ glob_dirs() { # $1=glob 패턴 → 일치하는 폴더를 줄마다 하나씩
   for d in $1; do [ -d "$d" ] && printf '%s\n' "$d"; done
   return 0
 }
+# 응답 없는 폴더(로그인 안 된 프로필 등) 하나가 상태 전체를 멈추지 않게 폴더마다 시간 제한을 둔다.
+with_timeout() {
+  local pid watchdog rc=0
+  "$@" &
+  pid=$!
+  ( sleep "${BOARD_AGENTS_TIMEOUT:-20}"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
 add_cfg_dir "@default"
 [ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_cfg_dir "$CLAUDE_CONFIG_DIR"
 while IFS= read -r pattern; do
@@ -55,10 +67,10 @@ agents='[]'
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   if [ "$d" = "@default" ]; then
-    got=$(env -u CLAUDE_CONFIG_DIR claude agents --json --all 2>/dev/null) || continue
+    got=$(with_timeout env -u CLAUDE_CONFIG_DIR claude agents --json --all 2>/dev/null) || continue
     cfg_json=null
   else
-    got=$(CLAUDE_CONFIG_DIR="$d" claude agents --json --all 2>/dev/null) || continue
+    got=$(CLAUDE_CONFIG_DIR="$d" with_timeout claude agents --json --all 2>/dev/null) || continue
     cfg_json=$(jq -Rn --arg d "$d" '$d')
   fi
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$got" || continue

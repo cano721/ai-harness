@@ -3898,6 +3898,11 @@ for AGENT_STREAM_SECRET in MODEL_SENTENCE_ONE MODEL_SENTENCE_TWO FILE_CONTENT_SE
   WRITE_BODY_SECRET EDIT_OLD_SECRET EDIT_NEW_SECRET AGENT_PROMPT_SECRET STDERR_TAIL_MARK; do
   case "$AGENT_STREAM_OUT" in *"$AGENT_STREAM_SECRET"*) fail "the filter drops $AGENT_STREAM_SECRET (file contents, model sentences, command arguments, bodies, prompts)" ;; esac
 done
+# 이상한 도구 입력(문자열이 아닌 command)이 있어도 원문 줄을 stderr 줄로 흘리지 않는다(jq 1.6 try/catch가 뒤쪽 오류까지 잡는 문제).
+AGENT_STREAM_ODD='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"a.txt","content":"ODD_WRITE_SECRET"}},{"type":"tool_use","name":"Bash","input":{"command":["ODD_ARG_SECRET"]}}]}}'
+AGENT_STREAM_ODD_OUT="$(jq -R -c -f "$ROOT/scripts/agent-progress.jq" <<<"$AGENT_STREAM_ODD" 2>/dev/null || true)"
+case "$AGENT_STREAM_ODD_OUT" in *ODD_WRITE_SECRET*|*ODD_ARG_SECRET*|*'"type":"stderr"'*) fail "an odd tool input does not leak the raw event as a stderr line" ;; esac
+assert_eq "Write" "$(jq -sr '[.[] | select(.type == "progress") | .tool] | first // empty' <<<"$AGENT_STREAM_ODD_OUT")" "an odd tool input still leaves the progress lines before it"
 pass "agent-progress.jq keeps tool calls and the result, and drops contents, sentences and arguments"
 
 # 가짜 claude로 무인 실행을 한 번 돌린다: 로그에 progress·result 줄이 남고 비용 파싱이 그대로이며, 끊겨도 종료 코드가 남고, 빈 로그는 지운다.
@@ -8255,7 +8260,8 @@ pass "board names the session opened from an autofix card by signature, not by t
 
 # 보드 화면(#296, 정적): 정리 즉시 반영·남은 이유·실패 카드·빈 로그·무변경 요약·자동 수정 제목이 template.html에 들어갔다.
 BOARD_TPL2="$(<"$ROOT/scripts/board/template.html")"
-for BOARD_PART2 in "hiding.has(" "hiding.add(" "hiding.delete(" "quiet_runs" "log_note" "fail_reason" "streak"; do
+# 정리 응답 뒤에는 정리된 것(ok)만 숨김에 남는다 — 그 사이 다시 돌기 시작해 서버가 뺀 세션도 바로 되돌아온다.
+for BOARD_PART2 in "hiding.has(" "hiding.add(" "hiding.delete(" "res.results.filter((x) => x.ok)" "quiet_runs" "log_note" "fail_reason" "streak"; do
   assert_contains "$BOARD_TPL2" "$BOARD_PART2" "the board screen uses $BOARD_PART2"
 done
 [[ "$(grep -c -E '\.left\b' <<<"$BOARD_TPL2" || true)" -ge 2 ]] || fail "the cleanup plan screen and the result screen both show the reasons items were left"
@@ -8265,8 +8271,9 @@ if command -v node >/dev/null 2>&1; then
   printf '%s\n' 'console.log(JSON.stringify([
     humanTitle("2026-11-11 23:59:04.078 ERROR 12345 --- [nio-8080-exec-1] c.a.s.FooService : 주문 저장 실패"),
     humanTitle("2026-11-11 23:59:04.078  WARN 4242 --- [           main] c.a.OrderService : 결제 승인 실패"),
+    humanTitle("2026-11-11 23:59:04.078 ERROR 12345 --- [shop] [nio-8080-exec-1] c.a.s.PayService : 환불 처리 실패"),
     humanTitle("2026-11-10 09:14:15.264 ERROR trace_id:4af2c9e1b7d84a0f9c3e - CartController:88: 장바구니 합계 계산에 실패했습니다. cartSn: 1042")]))' >>"$TEST_TMP/human-title.js"
-  assert_eq '["주문 저장 실패","결제 승인 실패","장바구니 합계 계산에 실패했습니다"]' "$(node "$TEST_TMP/human-title.js")" "a Spring Boot log head is stripped to the human message, other log heads still are"
+  assert_eq '["주문 저장 실패","결제 승인 실패","환불 처리 실패","장바구니 합계 계산에 실패했습니다"]' "$(node "$TEST_TMP/human-title.js")" "a Spring Boot log head is stripped to the human message, other log heads still are"
 fi
 pass "board screen carries instant hiding, left reasons, failure cards, quiet runs and Spring Boot title cleanup"
 

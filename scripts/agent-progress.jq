@@ -5,23 +5,30 @@
 # - result 이벤트는 그대로(비용·결과 파싱이 그대로 동작한다)
 # - JSON이 아닌 줄(stderr 안내)은 {"type":"stderr","text":앞 300자}
 # - 그 밖(system·user·tool_result·assistant 문장)은 버린다.
+# 도구 입력은 문자열 값만 쓴다 — 배열·객체 값을 문자열로 바꾸면 명령 인자가 그대로 남는다.
+def str: if type == "string" then . else "" end;
+def first_str(f): [f | str | select(. != "")] | .[0] // "";
 . as $line
-| (try ($line | fromjson) catch null) as $ev
+# try/catch는 jq 1.6에서 뒤쪽 오류까지 잡아 원문 줄을 stderr 줄로 흘린다 — 파싱만 배열로 감싼다.
+| ([$line | fromjson?] | .[0]) as $ev
 | if ($ev | type) == "object" then
     if $ev.type == "assistant" then
       ($ev.message.content // [] | if type == "array" then .[] else empty end)
-      | select(type == "object" and .type == "tool_use") | (.input // {}) as $in
-      | {type: "progress", at: (now | todate), tool: .name,
+      | select(type == "object" and .type == "tool_use") | (.input | if type == "object" then . else {} end) as $in
+      | (.name | str) as $name
+      | {type: "progress", at: (now | todate), tool: $name,
          target: ((
-           if .name == "Bash" then
-             ($in.description // ($in.command // "" | [scan("\\S+")]
-               | map(select(test("^[A-Za-z_][A-Za-z0-9_]*=") | not)) | .[0] // "" | split("/") | last))
-           elif .name == "Grep" or .name == "Glob" then
-             (($in.pattern // "" | tostring | .[:60]) as $pat
-              | ($in.path // "" | tostring) as $p
+           if $name == "Bash" then
+             (($in.description | str) as $d
+              | if $d != "" then $d
+                else [$in.command | str | scan("\\S+") | select(test("^[A-Za-z_][A-Za-z0-9_]*=") | not)] | (.[0] // "") | split("/") | last // ""
+                end)
+           elif $name == "Grep" or $name == "Glob" then
+             (($in.pattern | str | .[:60]) as $pat
+              | ($in.path | str) as $p
               | if $p == "" then $pat else $pat + " in " + $p end)
-           else ($in.file_path // $in.path // $in.description // "" | tostring)
-           end | tostring | gsub("[\t\n]"; " ")) | .[:160])}
+           else first_str($in.file_path, $in.path, $in.description)
+           end) | gsub("[\t\n]"; " ") | .[:160])}
     elif $ev.type == "result" then $ev
     else empty end
   elif ($line | length) > 0 then

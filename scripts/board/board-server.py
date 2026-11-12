@@ -1109,7 +1109,7 @@ def new_bg(cwd, prompt, name=None):
         return {"ok": False, "message": "작업 경로가 없거나 절대 경로가 아님"}
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8000:
         return {"ok": False, "message": "첫 지시가 비었거나 너무 김"}
-    args = ["--bg"] + (["--name", name[:80]] if name else []) + [prompt]
+    args = ["--bg"] + (["--name", name[:160]] if name else []) + [prompt]  # 이름 끝의 시그니처가 잘리면 카드와 이어지지 않는다
     out = claude(args, cwd)
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "backgrounded" in msg:
