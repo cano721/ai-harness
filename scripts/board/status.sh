@@ -111,7 +111,7 @@ if [ -f "$runs" ]; then
   jq -c 'fromjson? // empty' -R "$runs" | jq -cs --argjson now "$now_e" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     ({"daily_max": "하루 실행 상한 도달", "no_harness_repo": "하네스 저장소를 찾지 못함", "sessions_only": "세션 기록만 있고 저장소 없음",
-      "sync_pr_status_unknown": "지난 동기화 PR 상태를 확인할 수 없어 멈춤", "sync_pr_in_review": "지난 동기화 PR을 사람이 검토 중이라 기다림",
+      "sync_pr_status_unknown": "지난 동기화 PR 상태를 확인할 수 없어 멈춤", "sync_pr_no_credentials": "PR 호스트 자격증명이 없어 동기화를 멈춤","sync_pr_in_review": "지난 동기화 PR을 사람이 검토 중이라 기다림",
       "busy": "다른 무인 실행이 돌고 있어 미룸", "needs_claude": "claude CLI를 찾지 못함", "marker_unwritable": "진행 표시 파일을 쓸 수 없음",
       "gave_up": "같은 근거로 여러 번 실패해 멈춤", "runs_unreadable": "실행 기록을 읽지 못해 멈춤"}) as $why
     | [ .[] | select(.event == "skipped" and ($now - (.at | epoch)) < 172800) ]
@@ -137,11 +137,20 @@ else
   echo '[]' > "$tmp/sched.json"
 fi
 
-# 3) 워크플로 러너: state.json 상태로 판정.
+# 3) 워크플로 러너: state.json 상태로 판정. state.json에는 프로세스 기록(pid)이 없어, 실행 폴더에 최근
+# RUNNER_STALE_MIN분 안에 바뀐 파일이 있는지로 살아 있는지 본다(노드 로그·progress.log가 도구 호출마다 쌓인다).
+# running인데 그 사이 기록이 없거나, 러너가 중간에 끝낸 incomplete는 '중단됨'(stall)이고 resume으로 이어 간다.
+RUNNER_STALE_MIN="${BOARD_RUNNER_STALE_MIN:-60}"
+case "$RUNNER_STALE_MIN" in ''|*[!0-9]*) RUNNER_STALE_MIN=60 ;; esac
 : > "$tmp/runner.jsonl"
 for s in "$DATA"/runs/*/*/state.json; do
   [ -f "$s" ] || continue
-  jq -c --arg since "$since" --arg path "$s" '
+  quiet=false
+  if [ "$(jq -r '.status // ""' "$s" 2>/dev/null)" = running ] \
+    && [ -z "$(find "${s%/*}" -maxdepth 1 -type f -mmin "-$RUNNER_STALE_MIN" 2>/dev/null | head -n 1)" ]; then
+    quiet=true
+  fi
+  jq -c --arg since "$since" --arg path "$s" --argjson quiet "$quiet" --arg stale_min "$RUNNER_STALE_MIN" '
     (.repo | split("/") | map(select(. != "")) | .[-1]) as $proj
     | ((.repo | capture("worktrees/(?<k>[A-Z]+-[0-9]+)/") | .k)? // null) as $issue
     | (.request // "" | split("\n")[0] | sub("^#+ *"; "")) as $title0
@@ -158,6 +167,12 @@ for s in "$DATA"/runs/*/*/state.json; do
       elif .status == "failed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}
+      elif .status == "incomplete" or (.status == "running" and $quiet) then
+        (if .status == "incomplete" then "incomplete" else "no_activity" end) as $why
+        | {kind: "runner", project: $proj, cwd: .repo, state: "blocked", stall: $why, at: (.finished_at // .started_at), title: $title,
+           detail: (if $why == "incomplete" then "노드 \(.node)에서 중단됨: \(.message // "이유 기록 없음")"
+                    else "노드 \(.node)에서 \($stale_min)분 넘게 기록이 없음 — 러너 프로세스가 끝난 것으로 보임" end),
+           link: null, log: $path, cmd: "workflow-driver.sh resume --workflow \(.workflow // "feature")"}
       else
         {kind: "runner", project: $proj, cwd: .repo, state: "running", at: .started_at, title: $title,
          detail: "현재 노드: \(.node)", link: null, log: $path, cmd: null}
@@ -178,22 +193,42 @@ else
 fi
 
 # 5) harvest 대기: analysis batch가 쌓였지만 아직 돌지 않은 프로젝트. '지금 돌리기'는 이 항목에만 붙는다.
+# 무인 실행(harvest-auto.sh)은 batch 옆에 시도 표시(auto-attempted-batch)를 남긴다. 같은 batch가 이미 하네스 없음·
+# 세션 수만·포기·실행됨으로 끝났으면 다음 실행에서 돌지 않으므로 카드 대신 이유별 수(queue_hidden)로만 센다.
+# 하네스 없음(no_harness)은 매 실행 다시 확인되지만, 그 폴더에 하네스가 생기기 전에는 돌지 않는다.
+# 표시가 없거나 다른(이전) batch를 가리키거나 일시 실패(failed)면 다음 실행 대상이다. batch 파일은 건드리지 않는다.
 : > "$tmp/queue.jsonl"
+: > "$tmp/queue_hidden.jsonl"
 for b in "$DATA"/harvest-queue/*/analysis-batch.json; do
   [ -f "$b" ] || continue
-  jq -c 'select(.has_analysis_batch != false and .project != null) |
-    {kind: "harvest", project, state: "queued", at: (.created_at // null),
-     title: "harvest 대기 (세션 \(.counts.sessions // "?")개)",
-     detail: (if (.reasons // []) == [] then null else "근거: " + (.reasons | join(", ")) end),
-     link: null, log: null, cmd: "/ai-harness:harvest"}' "$b" >> "$tmp/queue.jsonl" 2>/dev/null || true
+  m="${b%/*}/auto-attempted-batch"
+  mark='{}'
+  [ ! -f "$m" ] || mark=$(jq -c 'if type == "object" then . else {} end' "$m" 2>/dev/null || echo '{}')
+  jq -c --argjson m "$mark" 'select(.has_analysis_batch != false and .project != null) |
+    if ($m.batch_id != null and $m.batch_id == (.batch_id // .created_at)
+        and ($m.result | IN("no_harness", "sessions_only", "gave_up", "launched"))) then
+      {hidden: $m.result, project}
+    else
+      {kind: "harvest", project, state: "queued", at: (.created_at // null),
+       title: "harvest 대기 (세션 \(.counts.sessions // "?")개)",
+       detail: (if (.reasons // []) == [] then null else "근거: " + (.reasons | join(", ")) end),
+       link: null, log: null, cmd: "/ai-harness:harvest"}
+    end' "$b" 2>/dev/null || true
+done | while IFS= read -r q; do
+  case "$q" in
+    '{"hidden":'*) printf '%s\n' "$q" >> "$tmp/queue_hidden.jsonl" ;;
+    *) printf '%s\n' "$q" >> "$tmp/queue.jsonl" ;;
+  esac
 done
 jq -s . "$tmp/queue.jsonl" > "$tmp/queue.json"
+jq -s 'group_by(.hidden) | map({reason: .[0].hidden, count: length})' "$tmp/queue_hidden.jsonl" > "$tmp/queue_hidden.json"
 
 bash "$(dirname "$0")/work.sh" > "$tmp/work.json" 2>/dev/null || echo '[]' > "$tmp/work.json"
 jq -e 'type == "array"' "$tmp/work.json" >/dev/null 2>&1 || echo '[]' > "$tmp/work.json"
 
 jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpfile work "$tmp/work.json" --slurpfile quiet "$tmp/quiet.json" \
-  '{generated_at: $gen, window_days: $days, quiet_runs: $quiet[0], items: ((add | map(
+  --slurpfile qhidden "$tmp/queue_hidden.json" \
+  '{generated_at: $gen, window_days: $days, quiet_runs: $quiet[0], queue_hidden: $qhidden[0], items: ((add | map(
      .section = (if .kind == "runner" then "work" else "harness" end)
      | .id = "\(.kind)|\(.project)|\(.at)"
      | .actions = ([ (select(.state == "queued" and (.kind | startswith("harvest"))) | "harvest_now"),

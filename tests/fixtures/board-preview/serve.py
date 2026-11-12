@@ -65,9 +65,24 @@ def status(scenario):
             *[{"id": f"q{i}", "section": "harness", "kind": "harvest", "project": p, "state": "queued", "at": ago(60 * i),
                "title": f"harvest 대기 (세션 {n}개)", "detail": "근거: sessions", "actions": ["harvest_now"]}
               for i, (p, n) in enumerate([("shop", 12), ("billing-api", 8), ("search", 5), ("docs", 3)], 1)],
+            # 같은 원인(자격증명 없음)의 건너뜀이 저장소마다 — 화면은 한 묶음으로 접는다(#299)
             *[{"id": f"b{i}", "section": "harness", "kind": "schedule", "project": p, "state": "blocked", "at": ago(30 * i),
-               "title": "지난 동기화 PR 상태를 확인할 수 없어 멈춤", "reason": "sync_pr_status_unknown", "detail": "최근 2일 2회 건너뜀", "actions": []}
+               "title": "PR 호스트 자격증명이 없어 동기화를 멈춤", "reason": "sync_pr_no_credentials", "detail": "최근 2일 2회 건너뜀", "actions": []}
               for i, p in enumerate(["shop", "billing-api", "search"], 1)],
+            # 멈춘 작업(#299): API 오류로 끊긴 세션, 작업 중인데 프로세스가 없는 세션, 기록이 끊긴 워크플로 러너
+            {"id": "s1", "section": "work", "kind": "bg", "project": "orders", "state": "blocked", "stall": "api_error", "status": "busy", "live": True,
+             "in_repo": True, "at": ago(70), "title": "주문 취소 환불 금액 맞추기", "actions": ["view", "send"],
+             "detail": "API 오류로 응답이 끊김 — 다시 시작해야 이어짐\n요청: 주문 취소 시 환불 금액을 맞춰줘\n— API Error: The response stopped arriving."},
+            {"id": "s2", "section": "work", "kind": "bg", "project": "search", "state": "blocked", "stall": "no_process", "status": "busy", "live": False,
+             "in_repo": True, "at": ago(400), "title": "검색 로그 보존 기간 줄이기", "actions": ["view", "send", "cleanup"],
+             "detail": "작업 중으로 남았지만 세션 프로세스가 없음\n요청: 검색 로그를 30일만 남겨줘"},
+            {"id": "s3", "section": "work", "kind": "runner", "project": "docs", "state": "blocked", "stall": "no_activity", "at": ago(2900),
+             "cwd": "/work/acme/docs", "in_repo": True, "title": "설치 안내 자동 점검 추가", "actions": [],
+             "detail": "노드 publish에서 1520분째 기록이 없음 — 러너 프로세스가 끝난 것으로 보임", "cmd": "workflow-driver.sh resume --workflow feature"},
+            # 자동 수정 카드와 이어지지 않은 세션의 내부 식별자 제목 — 화면은 사람 말로 바꾼다
+            {"id": "w8", "section": "work", "kind": "bg", "project": "orders", "state": "review", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(130), "title": "orders datadog:9a8b7c6d5e4f3a2b", "actions": ["view", "send"],
+             "detail": "— 재고 차감 순서를 바꿔야 합니다. 수정 PR을 열지 정해 주세요."},
             {"id": "b9", "section": "harness", "kind": "schedule", "project": "스케줄", "state": "blocked", "at": ago(15),
              "title": "정기 실행 LLM 단계 건너뜀", "detail": "열린 세션이 계속 활동 중이라 정기 실행의 LLM 단계(세션 정리·자동 개선·동기화)를 미뤘습니다.", "actions": []},
             # 읽지 않은 결과
@@ -96,6 +111,10 @@ def status(scenario):
                "in_repo": True, "at": ago(310 + i), "title": t, "actions": ["view", "send", "cleanup"], "detail": "세션 종료됨\n— 끝났습니다.",
                "group": {"id": "og1", "title": "검색 색인 개편", "role": "worker", "source": "orca"}}
               for i, (t, wt, st) in enumerate([("검색 결과 정렬 작업자", "search-wt-a", "review"), ("동의어 사전 작업자", "search-wt-b", "idle")], 1)],
+            # 묶음 안 작업자가 묻는 중(#299): '지금 할 일' 수는 묶음 하나로 세고, 작업자 질문은 따로 보인다
+            {"id": "gw3", "section": "work", "kind": "bg", "project": "search", "worktree": "search-wt-c", "state": "needs_human", "status": "idle", "live": True,
+             "in_repo": True, "at": ago(25), "title": "형태소 분석기 작업자", "actions": ["view", "send"], "ask": "사전 갱신을 주 1회로 할까요?",
+             "detail": "— 사전 갱신을 주 1회로 할까요?", "group": {"id": "og1", "title": "검색 색인 개편", "role": "worker", "source": "orca"}},
             # 작업자가 없는 묶음(조율 세션만) — "작업자 0명" 줄이 없어야 한다
             {"id": "g9", "section": "work", "kind": "bg", "project": "docs", "state": "idle", "status": "idle", "live": True, "in_repo": True,
              "at": ago(400), "title": "문서 개편 계획", "actions": ["view", "send", "cleanup"], "detail": "— 계획만 세웠습니다.",
@@ -153,7 +172,12 @@ def status(scenario):
                     a["session_id"] = i["id"]
     # 변경 없이 끝난 무인 실행은 카드가 아니라 종류별 한 줄 요약(최근 24시간)
     quiet = [] if scenario == "empty" else [{"kind": "sync", "count": 4, "last_at": ago(30)}, {"kind": "harvest", "count": 1, "last_at": ago(300)}]
-    return {"generated_at": ago(0), "window_days": 7, "items": items, "quiet_runs": quiet, "jira_base": None,
+    for i in items:  # 묶음 조율 세션이 하위 에이전트도 돌리는 중 — '세션 안 하위 에이전트'와 '작업자 세션'이 한 카드에 함께 보인다
+        if i["id"] == "g1":
+            i["subagents"] = {"total": 2, "active": 1}
+    # 다음 무인 실행에서 돌지 않아 카드 대신 이유별 수로만 세는 harvest 대기열(#299)
+    qhidden = [] if scenario == "empty" else [{"reason": "no_harness", "count": 12}, {"reason": "sessions_only", "count": 12}, {"reason": "gave_up", "count": 1}]
+    return {"generated_at": ago(0), "window_days": 7, "items": items, "quiet_runs": quiet, "queue_hidden": qhidden, "jira_base": None,
             "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
 
 

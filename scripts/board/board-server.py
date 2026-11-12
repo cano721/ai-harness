@@ -138,6 +138,7 @@ def find_item(item_id, fresh=False):
 
 # ---- 읽음 표시 · 정리(숨김) ----
 SEEN = os.path.join(DATA, "board", "seen.json")  # sid -> 내가 마지막으로 본 시점의 활동 시각(item.at)
+UNREAD_MAX_AGE = 86400  # 살아 있지 않은 백그라운드 세션의 결과가 '읽지 않은 결과'에 머무는 최대 시간(초)
 HIDDEN = os.path.join(DATA, "board", "hidden.json")  # sid -> 정리한 시각. 대화 기록 파일은 지우지 않는다(harvest가 쓴다)
 _marks_lock = threading.Lock()
 
@@ -207,7 +208,9 @@ def classify_work(items):
             if i.get("state") == "done":
                 if first:
                     seen[sid] = i.get("at")
-                if (not i.get("live") and i.get("kind") == "agent") or (seen.get(sid) and seen[sid] >= (i.get("at") or "")):
+                # 끝난 대화형 세션, 이미 본 결과, 살아 있지 않은 백그라운드 세션의 하루 넘은 결과는 '끝난 일'로.
+                stale_bg = not i.get("live") and i.get("kind") == "bg" and time.time() - _epoch(i.get("at")) > UNREAD_MAX_AGE
+                if (not i.get("live") and i.get("kind") == "agent") or stale_bg or (seen.get(sid) and seen[sid] >= (i.get("at") or "")):
                     i["state"] = "idle"
                 else:
                     i["state"] = "review"

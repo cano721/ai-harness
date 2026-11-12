@@ -39,6 +39,14 @@ done
   || [[ -n "$title" && -f "$body_file" ]] || usage
 case "$method" in squash|merge|default) ;; *) usage ;; esac
 
+# Bitbucket 자격증명: 환경변수 → ~/.claude/settings.json의 env(monitor-fetch.sh와 같은 순서). launchd로 도는 무인 실행
+# (sync 차단 판정·옛 PR 정리·자동 병합)에는 셸 환경변수가 없어, settings.json env에만 둔 사용자는 PR 상태를 읽지 못해 멈췄다(#299).
+for cred in ATLASSIAN_USER BITBUCKET_API_TOKEN; do
+  [[ -z "${!cred:-}" ]] || continue
+  value="$(jq -r --arg k "$cred" '.env[$k] // empty' "${HARNESS_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" 2>/dev/null || true)"
+  [[ -z "$value" ]] || printf -v "$cred" '%s' "$value"
+done
+
 # 자격증명은 프로세스 인자(ps에 보임) 대신 stdin 설정으로 넘기고, 응답 없는 네트워크에 묶이지 않게 30초로 제한한다.
 bb_curl() {
   printf 'user = "%s:%s"\n' "$ATLASSIAN_USER" "$BITBUCKET_API_TOKEN" \

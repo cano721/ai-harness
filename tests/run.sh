@@ -4035,10 +4035,10 @@ if (cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t -
 fi
 git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
 PR_NOAUTH_RC=0
-(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
 assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
 PR_CHECK_RC=0
-(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
 assert_eq "4" "$PR_CHECK_RC" "pre-push check fails without credentials"
 git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
 PR_CHECK_RC=0
@@ -4814,7 +4814,7 @@ mkdir -p "$PRS_STUB_DIR"
 cat >"$PRS_STUB_DIR/pr" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
-  --status) id="${2##*/}"; [[ ! -f "$PRS_STUB_DIR/down" ]] || exit 5; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
+  --status) id="${2##*/}"; [[ -z "${PRS_STUB_NOCREDS:-}" ]] || exit 4; [[ ! -f "$PRS_STUB_DIR/down" ]] || exit 5; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
   --decline) printf '%s|%s\n' "$2" "$4" >>"$PRS_STUB_DIR/declined" ;;
   *) exit 2 ;;
 esac
@@ -4849,6 +4849,10 @@ SYNC_STUB_PR=12 prs_sweep
 assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "unknown PR state holds the sync"
 assert_eq "sync_pr_status_unknown" "$(sync_runs 'last | .reason')" "the hold names the reason"
 rm -f "$PRS_STUB_DIR/down"
+# 자격증명이 끝내 없어(open-pr.sh 종료 코드 4) 못 읽은 것은 로그인 풀림과 다른 이유로 남긴다(#299) — 보드가 원인과 고칠 곳을 가른다.
+SYNC_STUB_PR=12 PRS_STUB_NOCREDS=1 prs_sweep
+assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "missing PR host credentials still hold the sync"
+assert_eq "sync_pr_no_credentials" "$(sync_runs 'last | .reason')" "the hold says the credentials are missing"
 # 지원하지 않는 호스트의 PR은 읽을 수 없을 뿐 일시 장애가 아니다 — 막지 않는다(위 sync 테스트의 example.com PR이 그 경우).
 # 새 PR이 열려 있지 않으면(에이전트가 적은 URL이 틀림) 옛 PR을 닫지 않는다. 다른 저장소의 PR도 닫지 않는다.
 printf '%s\n' '{"state":"closed","activity":0}' >"$PRS_STUB_DIR/state-13.json"
@@ -4874,6 +4878,22 @@ STUB
 chmod +x "$PRS_BIN/gh" "$PRS_BIN/curl"
 assert_eq "open|1" "$(PATH="$PRS_BIN:$PATH" "$ROOT/scripts/open-pr.sh" --status https://github.com/acme/svc/pull/3 | jq -r '"\(.state)|\(.activity)"')" "GitHub activity ignores bots"
 assert_eq "open|3" "$(PATH="$PRS_BIN:$PATH" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 | jq -r '"\(.state)|\(.activity)"')" "Bitbucket activity counts comments and reviewing participants"
+# 무인 실행(launchd)에는 셸 환경변수가 없다. Claude Code settings.json env에 둔 Bitbucket 자격증명으로 조회한다(#299).
+mkdir -p "$TEST_TMP/prs-settings-bin"
+cat >"$TEST_TMP/prs-settings-bin/curl" <<'STUB'
+#!/usr/bin/env bash
+cat >"$PRS_CURL_CFG"
+printf '%s\n200' '{"state":"OPEN","comment_count":0,"participants":[]}'
+STUB
+chmod +x "$TEST_TMP/prs-settings-bin/curl"
+jq -cn '{env: {ATLASSIAN_USER: "bot@example.com", BITBUCKET_API_TOKEN: "settings-token"}}' >"$TEST_TMP/prs-settings.json"
+assert_eq "open" "$(env -u ATLASSIAN_USER -u BITBUCKET_API_TOKEN PATH="$TEST_TMP/prs-settings-bin:$PATH" PRS_CURL_CFG="$TEST_TMP/prs-curl.cfg" \
+  HARNESS_CLAUDE_SETTINGS="$TEST_TMP/prs-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 | jq -r '.state')" \
+  "Bitbucket status reads credentials from Claude settings env when the shell has none"
+assert_eq 'user = "bot@example.com:settings-token"' "$(cat "$TEST_TMP/prs-curl.cfg")" "the settings credentials go to curl on stdin"
+assert_eq 'user = "u:t"' "$(env PATH="$TEST_TMP/prs-settings-bin:$PATH" PRS_CURL_CFG="$TEST_TMP/prs-curl.cfg" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t \
+  HARNESS_CLAUDE_SETTINGS="$TEST_TMP/prs-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 >/dev/null; cat "$TEST_TMP/prs-curl.cfg")" \
+  "shell environment credentials win over Claude settings"
 # PR 호스트 요청 형태(dry-run): GitHub close, Bitbucket decline + 메시지.
 assert_eq "github|https://github.com/acme/svc/pull/3|x" \
   "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://github.com/acme/svc/pull/3 --comment x | jq -r '"\(.provider)|\(.decline)|\(.comment)"')" "GitHub decline request"
@@ -5597,7 +5617,7 @@ assert_eq "true" "$(af_fetch count --root "$AF_BAD" --meta '{}' --since 2026-10-
 pass "monitor-fetch runs a repo-local command adapter"
 
 # open-pr.sh --status: PR URL만으로 상태를 본다.
-AF_RC=0; ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/3 >/dev/null 2>&1 || AF_RC=$?
+AF_RC=0; ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/3 >/dev/null 2>&1 || AF_RC=$?
 assert_eq "4" "$AF_RC" "bitbucket status needs credentials"
 AF_RC=0; "$ROOT/scripts/open-pr.sh" --status https://example.com/pr/1 >/dev/null 2>&1 || AF_RC=$?
 assert_eq "3" "$AF_RC" "unknown PR host is rejected"
@@ -7914,7 +7934,7 @@ assert (r1["project"], r1.get("worktree")) == ("shopper", "shopper-wt-a"), r1  #
 assert (r2["project"], r2.get("worktree"), r2["in_repo"]) == ("acme", "ACME-12", True), r2  # 지워진 worktree는 경로 모양으로
 assert r3["project"] == "plain-folder" and r3["in_repo"] is False, r3  # 추정할 수 없으면 저장소 밖
 ' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions and workflow runners in a git worktree count under the original repository, with the worktree name kept as a detail"
-assert_eq "4" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
+assert_eq "5" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
 BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
 assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"
@@ -8293,6 +8313,136 @@ for req in ({"dry_run": True, "older_days": 1}, {"older_days": 1}):
 assert pv.status("empty")["quiet_runs"] == []
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has the failure streak card, quiet runs, cleanup reasons and a Spring Boot style title"
 pass "board preview fixture reproduces the #296 screens with fake data"
+
+# 보드 정확도(#299) — harvest 대기열: 무인 실행이 batch마다 남긴 시도 표시로 다음 실행에서 실제로 돌 batch만 카드로 낸다.
+# 같은 batch가 이미 하네스 없음·세션 수만·포기·실행됨으로 끝났으면 카드 대신 이유별 수(queue_hidden)로만 센다. batch 파일은 그대로 둔다.
+BA_T="$TEST_TMP/board-accuracy"
+BA_DATA="$BA_T/data"
+mkdir -p "$BA_T/bin" "$BA_DATA"
+ba_batch() { # $1=폴더 $2=project $3=batch_id $4=시도 표시 batch_id(없으면 -) $5=시도 결과
+  mkdir -p "$BA_DATA/harvest-queue/$1"
+  jq -cn --arg p "$2" --arg b "$3" '{project: $p, batch_id: $b, has_analysis_batch: true, created_at: "2026-11-01T00:00:00Z", counts: {sessions: 4}, reasons: ["errors"]}' \
+    >"$BA_DATA/harvest-queue/$1/analysis-batch.json"
+  [[ "$4" == - ]] || jq -cn --arg b "$4" --arg r "$5" '{batch_id: $b, at: "2026-11-02T00:00:00Z", result: $r, fails: 0}' >"$BA_DATA/harvest-queue/$1/auto-attempted-batch"
+}
+ba_batch p-home home b1 b1 no_harness
+ba_batch p-notes notes b2 b2 sessions_only
+ba_batch p-ran ran b3 b3 launched
+ba_batch p-gone gone b4 b4 gave_up
+ba_batch p-old2 old2 b5 b5 no_harness
+ba_batch p-next next b6 b0 launched
+ba_batch p-new new b7 - -
+ba_batch p-retry retry b8 b8 failed
+cat >"$BA_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == agents ]]; then cat "$BA_AGENTS" 2>/dev/null || echo "[]"; exit 0; fi
+exit 1
+FAKE
+chmod +x "$BA_T/bin/claude"
+# 워크플로 러너: incomplete로 멈춘 것, running인데 실행 폴더에 오래 기록이 없는 것, 방금 기록이 있는 running.
+ba_run() { # $1=run 폴더 $2=status $3=node
+  mkdir -p "$BA_DATA/runs/$1"
+  jq -cn --arg s "$2" --arg n "$3" --arg r "$BA_T/repo-$1" '{run_id: "r1", workflow: "feature", status: $s, node: $n, repo: $r, request: "가짜 요청", started_at: "2026-11-01T00:00:00Z"}' \
+    >"$BA_DATA/runs/$1/state.json"
+  printf 'x\n' >"$BA_DATA/runs/$1/progress.log"
+}
+ba_run a/1 incomplete publish
+ba_run b/1 running discover
+ba_run c/1 running repair
+touch -t 202601010000 "$BA_DATA/runs/b/1/state.json" "$BA_DATA/runs/b/1/progress.log"
+ba_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$BA_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= "$@" bash "$ROOT/scripts/board/status.sh"
+}
+BA_OUT="$(ba_status)"
+assert_eq "new,next,retry" "$(jq -r '[.items[] | select(.kind == "harvest" and .state == "queued") | .project] | sort | join(",")' <<<"$BA_OUT")" \
+  "only batches the next unattended run will take are queued cards"
+assert_eq "gave_up:1|launched:1|no_harness:2|sessions_only:1" "$(jq -r '[.queue_hidden[] | "\(.reason):\(.count)"] | sort | join("|")' <<<"$BA_OUT")" \
+  "batches that will not run are counted by reason instead of shown"
+assert_file "$BA_DATA/harvest-queue/p-home/analysis-batch.json"
+pass "board status queues only the harvest batches the next run takes and counts the rest by reason"
+
+# 러너: 프로세스 기록(pid)이 없어 실행 폴더의 마지막 기록 시각을 본다. 중단(incomplete)·오래 조용한 running은 '중단됨'과 이어 가는 명령.
+assert_eq "blocked|incomplete|workflow-driver.sh resume --workflow feature" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-a/1"))) | "\(.state)|\(.stall)|\(.cmd)"' <<<"$BA_OUT")" \
+  "an incomplete runner is stopped, not working"
+assert_eq "blocked|no_activity" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
+  "a running runner with no record for a long time is stopped"
+assert_eq "running|null" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-c/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
+  "a runner that just wrote its record is still working"
+assert_eq "running" "$(ba_status BOARD_RUNNER_STALE_MIN=99999999 | jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | .state')" \
+  "BOARD_RUNNER_STALE_MIN sets how long a quiet runner still counts as working"
+pass "board status shows a dead or incomplete workflow runner as stopped"
+
+# 세션: 마지막 답이 API 오류인 세션은 '멈춤 — 다시 시작 필요', 작업 중인데 프로세스가 없는 세션은 '중단됨'. 정상 작업 중은 그대로.
+mkdir -p "$BA_T/projects/p"
+BA_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+ba_agent() { # $1=sessionId $2=status $3=pid
+  jq -cn --arg sid "$1" --arg st "$2" --argjson pid "$3" --arg cwd "$BA_T" --argjson t "$(($(date +%s) * 1000))" \
+    '{sessionId: $sid, id: $sid[0:8], kind: "background", status: $st, state: "running", pid: $pid, cwd: $cwd, name: ("task " + $sid[-1:]), startedAt: $t}'
+}
+{ ba_agent aaaaaaaa-0000-4000-8000-000000000001 busy 4101; ba_agent aaaaaaaa-0000-4000-8000-000000000002 busy null; ba_agent aaaaaaaa-0000-4000-8000-000000000003 busy 4103; } | jq -s . >"$BA_T/agents.json"
+jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timestamp: $t},
+  {type: "assistant", isApiErrorMessage: true, message: {content: [{type: "text", text: "API Error: The response stopped arriving. The response above may be incomplete."}]}, timestamp: $t}' \
+  >"$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000001.jsonl"
+jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timestamp: $t}, {type: "assistant", message: {content: [{type: "text", text: "고치는 중입니다"}]}, timestamp: $t}' \
+  >"$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl"
+cp "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl" "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000003.jsonl"
+BA_WORK="$(env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$BA_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
+assert_eq "1:blocked|api_error 2:blocked|no_process 3:running|null" \
+  "$(jq -r '[sort_by(.sid)[] | "\(.sid[-1:]):\(.state)|\(.stall)"] | join(" ")' <<<"$BA_WORK")" \
+  "an API-error session must be restarted, a working session without a process stopped, a live one keeps working"
+pass "board work list shows sessions cut off by an API error or without a process as stopped"
+
+# 읽지 않은 결과: 살아 있지 않은 백그라운드 세션의 결과는 하루가 지나면 끝난 일(idle)로 넘긴다. 최근 결과·살아 있는 세션은 그대로.
+mkdir -p "$BA_T/srv/board"
+printf '{}' >"$BA_T/srv/board/seen.json"
+HARNESS_METRICS_DIR="$BA_T/srv" python3 -I -B -c '
+import importlib.util, sys
+from datetime import datetime, timedelta, timezone
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+iso = lambda h: (datetime.now(timezone.utc) - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+items = [{"section": "work", "kind": "bg", "sid": "old", "live": False, "state": "done", "at": iso(30)},
+         {"section": "work", "kind": "bg", "sid": "new", "live": False, "state": "done", "at": iso(2)},
+         {"section": "work", "kind": "bg", "sid": "alive", "live": True, "state": "done", "at": iso(30)}]
+got = {i["sid"]: i["state"] for i in bs.classify_work(items)}
+assert got == {"old": "idle", "new": "review", "alive": "review"}, got
+' "$ROOT/scripts/board/board-server.py" || fail "a finished background result older than a day moves to done; recent and live ones stay unread"
+pass "board moves day-old results of ended background sessions out of unread"
+
+# 화면(#299): 숫자는 칸 제목과 같은 단위로, 내부 식별자 제목은 사람 말로, 같은 이유 건너뜀·대기열은 묶은 뒤 자른다. 함수만 잘라 node로 실행.
+BOARD_TPL3="$(<"$ROOT/scripts/board/template.html")"
+for BOARD_PART3 in "queue_hidden" "i.stall" "sync_pr_no_credentials" "작업 묶음 안 작업자 질문" "세션 안 하위 에이전트" "작업자 세션"; do
+  assert_contains "$BOARD_TPL3" "$BOARD_PART3" "the board screen uses $BOARD_PART3"
+done
+if command -v node >/dev/null 2>&1; then
+  { sed -n '/function todoTally(units) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    sed -n '/function sigTitle(t, project) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    sed -n '/function headKeys(keys, max) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    printf '%s\n' 'console.log(JSON.stringify([
+      todoTally([{u: 1, asks: 0}, {u: 1, asks: 4}, {u: 3, asks: 0}]),
+      sigTitle("shop datadog:5b1c0d2e9f8a7b6c", "shop"), sigTitle("billing sentry:4410293", "billing"), sigTitle("주문 목록 정렬 고치기", "shop"),
+      [...headKeys(["r:a", "r:a", "q:harvest", "r:a", "t:1", "t:2", "q:harvest"], 2)]]))'
+  } >"$TEST_TMP/board-299.js"
+  assert_eq '[{"total":3,"parts":["답할 것 2","검토할 것 1"],"asks":4},"shop 운영 에러 이어 보기 (Datadog)","billing 운영 에러 이어 보기 (Sentry)",null,["r:a","q:harvest"]]' \
+    "$(node "$TEST_TMP/board-299.js")" "todo summary counts cards like the lane title and shows worker asks apart; internal titles become words; lanes cut after grouping"
+fi
+pass "board screen counts todo like its title, names internal titles and groups before cutting a lane"
+
+# 미리보기 서버(#299): 위 상황을 가짜 데이터로 재현한다.
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pv", sys.argv[1]); pv = importlib.util.module_from_spec(spec); spec.loader.exec_module(pv)
+s = pv.status("demo"); items = s["items"]
+assert s["queue_hidden"] and all({"reason", "count"} <= set(q) for q in s["queue_hidden"]), s.get("queue_hidden")
+assert {"api_error", "no_process", "no_activity"} <= {i.get("stall") for i in items}, [i.get("stall") for i in items]
+assert any(i["section"] == "work" and not i.get("autofix_id") and " datadog:" in i["title"] for i in items), "an unlinked internal-id session title"
+assert any(i.get("group") and i["group"]["role"] == "worker" and i["state"] == "needs_human" for i in items), "a worker asking inside a group"
+assert any(i.get("group") and i.get("subagents") for i in items), "a group card with subagents"
+assert sum(1 for i in items if i.get("reason") == "sync_pr_no_credentials") >= 2, "repeated skips with one cause"
+assert pv.status("empty")["queue_hidden"] == []
+' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server reproduces the #299 situations"
+pass "board preview fixture reproduces the #299 screens with fake data"
 
 # 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
 # 규칙 문서·토큰·공용 부품·기준 화면이 있고, design-audit가 읽는 고정 섹션 순서를 지킨다.
