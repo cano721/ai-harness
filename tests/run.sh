@@ -7818,7 +7818,16 @@ items = [{"section": "work", "sid": "c1", "id": "claude|c1", "kind": "bg", "stat
 out = {i["sid"]: i for i in bs.classify_work(items)}
 assert out["c2"]["project"] == "shopper" and out["c2"]["worktree"] == "shopper-wt-a", out["c2"]
 assert "worktree" not in out["c1"], out["c1"]
-' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions in a git worktree count under the original repository, with the worktree name kept as a detail"
+runner = lambda cwd: {"section": "work", "kind": "runner", "state": "running", "project": cwd.rstrip("/").split("/")[-1], "cwd": cwd, "id": "runner|" + cwd}
+r1, r2, r3 = runner(w + "/shopper-wt-a"), runner("/gone/acme/.claude/worktrees/ACME-12"), runner("/gone/plain-folder")
+r4 = runner("/gone/workspace/worktrees/ACME-9/shop")
+bs.classify_work([r1, r2, r3, r4])
+assert (r4["project"], r4.get("worktree")) == ("shop", "ACME-9"), r4  # 워크스페이스 모드: <작업 폴더>/worktrees/<이슈>/<저장소>
+assert (r1["project"], r1.get("worktree")) == ("shopper", "shopper-wt-a"), r1  # 워크플로 러너도 원래 저장소로
+assert (r2["project"], r2.get("worktree"), r2["in_repo"]) == ("acme", "ACME-12", True), r2  # 지워진 worktree는 경로 모양으로
+assert r3["project"] == "plain-folder" and r3["in_repo"] is False, r3  # 추정할 수 없으면 저장소 밖
+' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions and workflow runners in a git worktree count under the original repository, with the worktree name kept as a detail"
+assert_eq "4" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
 BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
 assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"

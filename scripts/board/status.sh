@@ -104,18 +104,18 @@ for s in "$DATA"/runs/*/*/state.json; do
     | (if $issue != null and ($title0 | startswith($issue) | not) then "\($issue) \($title0)" else $title0 end) as $title
     | if .status == "done" then
         if (.finished_at // .started_at) >= $since then
-          {kind: "runner", project: $proj, state: "done", at: (.finished_at // .started_at), title: $title,
+          {kind: "runner", project: $proj, cwd: .repo, state: "done", at: (.finished_at // .started_at), title: $title,
            detail: "워크플로 완료 · 정책 \(.policy.git // "?")", link: (.publish.pr_url? // null), log: $path, cmd: null}
         else empty end
       elif (.needs_user_decision // false) or (.node | tostring | test("^await")) then
-        {kind: "runner", project: $proj, state: "needs_human", at: (.presented_at // .started_at), title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.presented_at // .started_at), title: $title,
          detail: "노드 \(.node)에서 사람 결정을 기다림", link: null, log: $path,
          cmd: "workflow-driver.sh approve --run \(.run_id)"}
       elif .status == "failed" then
-        {kind: "runner", project: $proj, state: "needs_human", at: (.finished_at // .started_at), title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}
       else
-        {kind: "runner", project: $proj, state: "running", at: .started_at, title: $title,
+        {kind: "runner", project: $proj, cwd: .repo, state: "running", at: .started_at, title: $title,
          detail: "현재 노드: \(.node)", link: null, log: $path, cmd: null}
       end' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
 done

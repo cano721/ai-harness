@@ -182,6 +182,8 @@ def classify_work(items):
         out, unhide = [], False
         for i in items:
             if i.get("section") != "work" or not i.get("sid"):
+                if i.get("section") == "work" and i.get("cwd"):
+                    apply_repo(i)  # 워크플로 러너: 작업 경로(worktree)로 원래 저장소를 찾는다
                 if i.get("section") == "work" and i.get("state") == "done":
                     i["state"] = "idle"  # 워크플로 실행기 등 세션이 아닌 작업: 끝난 것은 쉬는 중
                 out.append(i)
@@ -193,12 +195,7 @@ def classify_work(items):
                 hidden.pop(sid)  # 다시 살아난 세션은 다시 보인다
                 unhide = True
             # 저장소 판정은 한 곳(repo_info): git 저장소 여부, worktree면 원래 저장소 이름으로 묶고 worktree 이름은 보조 정보로.
-            info = repo_info(i.get("cwd"))
-            i["in_repo"] = info["in_repo"]
-            if info.get("repo"):
-                i["project"] = info["repo"]
-            if info.get("worktree"):
-                i["worktree"] = info["worktree"]
+            apply_repo(i)
             # 본문으로 묻고 쉬는 세션: 마지막 문장이 질문이고 사람이 아직 답하지 않았으면 '답 대기'(지금 할 일).
             # 답할 수 있는 세션만 — 살아 있거나, 백그라운드라 같은 대화로 다시 깨울 수 있는 것.
             ask = hasks.pending_ask(i.pop("reply_tail", None)) if i.get("state") == "done" else None
@@ -231,6 +228,9 @@ def repo_info(cwd):
     if not cwd:
         return {"in_repo": False}
     if cwd not in _repo_cache:
+        if not os.path.isdir(cwd):  # 지워진 worktree: 경로 모양으로만 추정(없으면 저장소 밖)
+            _repo_cache[cwd] = repo_from_path(cwd) or {"in_repo": False}
+            return _repo_cache[cwd]
         info = {"in_repo": False}
         try:
             rc, out = _git(cwd, "rev-parse", "--is-inside-work-tree")
@@ -245,7 +245,9 @@ def repo_info(cwd):
                     name = os.path.basename(root)
                     info["repo"] = name[:-4] if name.endswith(".git") else name
                 if top and gdir and common and os.path.realpath(gdir) != os.path.realpath(common):
-                    info["worktree"] = os.path.basename(top)
+                    # worktree 폴더 이름이 저장소 이름과 같으면(워크스페이스의 <이슈>/<저장소>) 그 위 폴더(이슈)가 구분 이름이다.
+                    wt = os.path.basename(top)
+                    info["worktree"] = os.path.basename(os.path.dirname(top)) if wt == info.get("repo") else wt
         except Exception:
             info = {"in_repo": False}
         _repo_cache[cwd] = info
@@ -254,6 +256,35 @@ def repo_info(cwd):
 
 def in_repo(cwd):
     return repo_info(cwd)["in_repo"]
+
+
+def apply_repo(i):
+    """항목의 저장소를 한 기준으로: 원래 저장소 이름을 project로, worktree 폴더 이름은 보조 정보로."""
+    info = repo_info(i.get("cwd"))
+    i["in_repo"] = info["in_repo"]
+    if info.get("repo"):
+        i["project"] = info["repo"]
+    if info.get("worktree"):
+        i["worktree"] = info["worktree"]
+
+
+WT_DIRS = ("worktrees", ".worktrees")
+SKIP_DIRS = (".claude", ".codex", ".git")
+
+
+def repo_from_path(cwd):
+    """이미 지워진 worktree 경로에서 원래 저장소를 경로 모양으로 추정한다(<repo>/.claude/worktrees/<name>, <repo>/.worktrees/<name>)."""
+    parts = [p for p in str(cwd).split("/") if p]
+    for n in range(len(parts) - 2, 0, -1):
+        if parts[n] in WT_DIRS:
+            if len(parts) > n + 2:  # 워크스페이스 모드: <작업 폴더>/.claude/worktrees/<이슈>/<저장소>
+                return {"in_repo": True, "repo": parts[-1], "worktree": parts[n + 1]}
+            k = n - 1
+            while k >= 0 and parts[k] in SKIP_DIRS:
+                k -= 1
+            if k >= 0:
+                return {"in_repo": True, "repo": parts[k], "worktree": parts[n + 1]}
+    return None
 
 
 def _git(path, *args):
