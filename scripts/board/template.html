@@ -782,13 +782,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" value="ok">세션 띄우기</button></div>
   </form>
 </dialog>
-<dialog class="b-dialog" id="cdlg" aria-labelledby="cdlg-title">
+<dialog class="b-dialog" id="cdlg" aria-labelledby="cdlg-title" aria-describedby="cwarn cdesc">
   <form method="dialog">
     <h2 class="ds-title" id="cdlg-title">세션 정리</h2>
+    <div id="cwarn"></div>
     <p class="b-line" id="cdesc"></p>
     <pre class="ds-pre b-raw" id="cwt"></pre>
     <label class="b-check"><input type="checkbox" id="cwtbox"><span id="cwtlabel">worktree도 삭제</span></label>
-    <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" value="ok">세션 정리</button></div>
+    <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="ccancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" id="cok" value="ok">세션 정리</button></div>
   </form>
 </dialog>
 <dialog class="b-dialog" id="sdlg" aria-labelledby="stitle">
@@ -2014,19 +2015,42 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (res.ok) { $('fprompt').value = ''; $('fname').value = ''; setTimeout(refresh, 2500); }
     $('newbtn').focus();
   });
-  let cleaning = null;
-  async function openCleanup(it) {
-    cleaning = it;
+  let cleaning = null, cleanLevel = 'idle', cleanSeq = 0;
+  // 정리 확인 수준(서버 close_level과 같은 순서). 상태는 정리를 막지 않고 확인창의 문구·무게만 바꾼다.
+  const CLEAN_LEVELS = ['idle', 'ask', 'waiting', 'busy'];
+  const CLEAN_WARN = {
+    ask: ['attention', '질문을 남기고 쉬는 중입니다. 답하지 않고 닫습니다.', '답하지 않고 정리'],
+    waiting: ['danger', '답을 기다리는 중입니다. 닫으면 그 요청은 거절된 것으로 끝납니다.', '거절하고 정리'],
+    busy: ['danger', '작업 중입니다. 지금 닫으면 진행 중인 작업이 중간에 끊깁니다.', '작업 끊고 정리'],
+  };
+  const heavier = (a, b) => (CLEAN_LEVELS.indexOf(a) >= CLEAN_LEVELS.indexOf(b) ? a : b);
+  function showCleanLevel(level, changed) {
+    cleanLevel = CLEAN_LEVELS.includes(level) ? level : 'idle';
+    const w = CLEAN_WARN[cleanLevel];
+    $('cwarn').replaceChildren(...(w ? [notice(w[0], (changed ? '상태가 바뀌었습니다. ' : '') + w[1])] : []));
+    $('cok').textContent = w ? w[2] : '세션 정리';
+    if (cleanLevel === 'busy') { const box = $('cwtbox'); box.checked = false; box.disabled = true; $('cwtlabel').textContent = 'worktree는 지우지 않음 — 작업 중인 세션은 파일이 바뀔 수 있음'; $('ccancel').focus(); }
+  }
+  async function openCleanup(it, level) {
+    cleaning = it; const seq = ++cleanSeq;  // 다시 열면 앞서 연 창의 늦은 미리보기 응답은 버린다
     $('cdesc').textContent = (it.live ? (it.kind === 'bg' ? '백그라운드 세션을 멈추고 ' : 'Orca 터미널을 닫아 세션을 끝내고 ') : '')
       + `"${it.title}"을 보드에서 숨깁니다. 대화 기록은 남아서 나중에 claude --resume으로 다시 열 수 있습니다.`;
     const wt = $('cwt'), box = $('cwtbox');
-    wt.textContent = 'worktree를 확인하는 중'; box.checked = false; box.disabled = true;
+    wt.textContent = 'worktree를 확인하는 중'; box.checked = false; box.disabled = true; $('cwtlabel').textContent = 'worktree도 삭제';
+    // 카드의 상태로 먼저 고르고(작업 중이면 열자마자 취소에 포커스), 미리보기의 수준으로 더 무거워지면 바꾼다
+    const guess = it.live ? (it.status === 'busy' || it.state === 'running' ? 'busy' : it.status !== 'idle' || it.permission ? 'waiting' : it.ask ? 'ask' : 'idle') : 'idle';
+    showCleanLevel(heavier(level || 'idle', guess), Boolean(level));
+    $('cdlg').returnValue = '';  // Esc로 닫으면 returnValue가 그대로라 지난 '정리'가 다시 실행되지 않게 비운다
     $('cdlg').showModal();
+    if (cleanLevel === 'busy') $('ccancel').focus();
     try {
       const res = await (await fetch(`/cleanup-preview?t=${encodeURIComponent(TOKEN)}&id=${encodeURIComponent(it.id)}`)).json();
+      if (cleaning !== it || seq !== cleanSeq) return;
       const w = res.worktree || {};
       wt.textContent = [w.path || it.cwd || '경로 모름', w.branch ? `브랜치 ${w.branch}` : '', ...(w.dirty || [])].filter(Boolean).join('\n');
-      if (w.removable) { box.disabled = false; $('cwtlabel').textContent = 'worktree도 삭제 (변경·미푸시 커밋 없음 확인함)'; }
+      if (res.level && heavier(res.level, cleanLevel) !== cleanLevel) showCleanLevel(res.level, Boolean(level));
+      if (cleanLevel === 'busy') { /* showCleanLevel이 이미 worktree 삭제를 막고 이유를 적었다 */ }
+      else if (w.removable) { box.disabled = false; $('cwtlabel').textContent = 'worktree도 삭제 (변경·미푸시 커밋 없음 확인함)'; }
       else $('cwtlabel').textContent = 'worktree는 지우지 않음 — ' + (w.reason || '확인하지 못함');
     } catch (e) { wt.textContent = 'worktree를 확인하지 못했습니다. 세션만 정리할 수 있습니다.'; }
   }
@@ -2034,8 +2058,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if ($('cdlg').returnValue !== 'ok' || !cleaning) { cleaning = null; return; }
     const it = cleaning; cleaning = null;
     hiding.add(it.id); if (selected === it.id) closeDrawer(); renderAll();  // 응답을 기다리지 않고 목록에서 먼저 뺀다
-    let res; try { res = await post('/action', { id: it.id, action: 'cleanup', worktree: $('cwtbox').checked }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    let res; try { res = await post('/action', { id: it.id, action: 'cleanup', worktree: $('cwtbox').checked, confirm: cleanLevel }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
     if (!res.ok) { hiding.delete(it.id); renderAll(); }  // 거절·실패하면 카드가 돌아온다(뒤에서 하던 정리의 실패는 refresh가 cleanup_failed로 알린다)
+    if (!res.ok && res.confirm) { openCleanup(it, res.confirm); return; }  // 확인창을 연 뒤 상태가 더 무거워짐: 새 경고로 다시 묻는다
     toast(res.message, res.ok);
     lastSig = ''; refresh().catch(() => {});
   });
