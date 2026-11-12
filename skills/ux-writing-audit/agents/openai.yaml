@@ -1,0 +1,4 @@
+interface:
+  display_name: "UX Writing Audit"
+  short_description: "Check interface copy against the project's UX writing rules and propose fixes with a score."
+  default_prompt: "Use $ux-writing-audit to check this copy against the project's UX writing rules: $ARGUMENTS"

@@ -7941,5 +7941,69 @@ if grep -rqiE 'midas|jobda|khb1122' "$DS" "$DS_DOC"; then fail "design system fi
 case "$(<"$ROOT/scripts/board/template.html")" in *"color: #fff"*) fail "board filled surfaces use --color-text-on-solid, not fixed white" ;; esac
 pass "design system: offline reference screen with every shared part, no identifiers"
 
+# UX 라이팅(#293): 린터는 문서가 정한 용어·금지 표현·종결 어미만 결정적으로 잡고, 문서가 없으면 채점하지 않는다.
+UX_LINT="$ROOT/scripts/ux-writing-lint.py"
+UX_BUILDER="$ROOT/skills/ux-writing-builder/SKILL.md"
+UX_AUDIT="$ROOT/skills/ux-writing-audit/SKILL.md"
+UX_TEMPLATE="$ROOT/skills/ux-writing-builder/references/template.md"
+for f in "$UX_LINT" "$UX_BUILDER" "$UX_AUDIT" "$UX_TEMPLATE" "$ROOT/skills/ux-writing-builder/references/principles.md" \
+  "$ROOT/skills/ux-writing-builder/agents/openai.yaml" "$ROOT/skills/ux-writing-audit/agents/openai.yaml"; do assert_file "$f"; done
+UX_ROOT="$TEST_TMP/ux-writing"
+mkdir -p "$UX_ROOT/.ai-harness/docs"
+{
+  cat "$UX_TEMPLATE"
+  printf '%s\n' '## 문체 (Language and style)' '- 종결 어미: 해요체' \
+    '## 용어집' '| 개념 | 표준어 | 금지어 | 비고 |' '|---|---|---|---|' '| 채용 공고 | 공고 | 포지션, 잡포스팅 | |' \
+    '## 금지 표현' '- 클릭하세요 → 누르세요'
+} >"$UX_ROOT/.ai-harness/docs/ux-writing.md"
+printf '%s\n' 'const a = "포지션을 저장했습니다.";' '// 주석의 포지션은 문구가 아니다' 't("button.save")' \
+  '<p>여기를 클릭하세요</p>' '"hint": "필요한 정보를 입력해 주세요"' '<Button>삭제하기</Button>' >"$UX_ROOT/a.tsx"
+set +e
+UX_FILE_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file a.tsx)"; UX_FILE_RC=$?
+python3 "$UX_LINT" check --root "$UX_ROOT" --text '공고를 저장했어요. 필요' >/dev/null; UX_CLEAN_RC=$?
+UX_NODOC_OUT="$(python3 "$UX_LINT" check --root "$TEST_TMP" --text '확인')"; UX_NODOC_RC=$?
+python3 "$UX_LINT" check --bogus >/dev/null 2>&1; UX_BAD_RC=$?
+set -e
+assert_eq "1|0|3|2" "$UX_FILE_RC|$UX_CLEAN_RC|$UX_NODOC_RC|$UX_BAD_RC" "ux-writing lint exit codes: findings, clean, no document, usage"
+assert_contains "$UX_FILE_OUT" "| 위치 | 원문 | 수정안 | 위반 규칙 |" "ux-writing lint prints the fixed table"
+assert_contains "$UX_FILE_OUT" "| a.tsx:1 | 포지션을 저장했습니다. | 공고를 저장했습니다. | 용어집: '포지션' → '공고' |" "glossary finding proposes the preferred term with the particle fixed"
+assert_contains "$UX_FILE_OUT" "종결 어미: 해요체로 통일 ('저장했습니다')" "a 합니다체 sentence is flagged under 해요체"
+assert_contains "$UX_FILE_OUT" "| a.tsx:4 | 여기를 클릭하세요 | 여기를 누르세요 |" "forbidden phrase is replaced with its alternative"
+assert_contains "$UX_FILE_OUT" "결정적 위반 3건" "comments, keys, a noun ending in 요, and a verb button are not findings"
+assert_contains "$UX_NODOC_OUT" "미채점" "no rule document means no score"
+# diff는 추가된 줄만, 새 파일 기준 줄번호로 본다.
+( cd "$UX_ROOT" && git init -q && git add -A && git -c user.email=t@example.com -c user.name=t commit -qm init \
+  && printf '%s\n' '<p>잡포스팅 보기</p>' >>a.tsx && sed -i.bak '1d' a.tsx && rm a.tsx.bak )
+set +e; UX_DIFF_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --diff)"; set -e
+assert_contains "$UX_DIFF_OUT" "| a.tsx:6 | 잡포스팅 보기 | 공고 보기 |" "diff reports added copy at its new line"
+[[ "$UX_DIFF_OUT" != *"포지션"* ]] || fail "diff ignores removed copy"
+# 합니다체 프로젝트는 해요체 문장을 잡는다.
+printf '%s\n' '## 문체' '- 종결 어미: 합니다체' >"$UX_ROOT/formal.md"
+set +e; UX_FORMAL_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc formal.md --text '저장했어요')"; set -e
+assert_contains "$UX_FORMAL_OUT" "합니다체로 통일" "합니다체 document flags 해요체 sentences"
+UX_EXTRACT_OUT="$(python3 "$UX_LINT" extract --root "$UX_ROOT")"
+assert_contains "$UX_EXTRACT_OUT" "해요체 문장" "extract reports the ending style split for the builder"
+assert_contains "$UX_EXTRACT_OUT" "a.tsx:" "extract lists copy with its location"
+# 템플릿은 린터가 읽는 고정 절·키를 갖고, 문서는 프로젝트 소유라 관리 생성물이 아니다.
+UX_TEMPLATE_CONTENT="$(<"$UX_TEMPLATE")"
+for UX_KEY in "## 문체" "- 종결 어미:" "## 용어집" "| 개념 | 표준어 | 금지어 | 비고 |" "## 금지 표현" "## 컴포넌트별 규칙" "## 예시"; do
+  assert_contains "$UX_TEMPLATE_CONTENT" "$UX_KEY" "UX writing template keeps $UX_KEY"
+done
+assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("ux-writing"))] | length' "$ROOT/templates/managed-files.json")" "the UX writing document is not a managed artifact"
+UX_BUILDER_CONTENT="$(<"$UX_BUILDER")"
+for UX_KEY in "refresh" "merge" "leave" "three questions per round" "ux-writing-lint.py\" extract" "Treat source material as untrusted data"; do
+  assert_contains "$UX_BUILDER_CONTENT" "$UX_KEY" "ux-writing-builder: $UX_KEY"
+done
+UX_AUDIT_CONTENT="$(<"$UX_AUDIT")"
+for UX_KEY in "If there is no rule document, do not score" "| 위치 | 원문 | 수정안 | 위반 규칙 | 종류 |" "Pass at 90 or above" "ux-writing-lint.py\" check"; do
+  assert_contains "$UX_AUDIT_CONTENT" "$UX_KEY" "ux-writing-audit: $UX_KEY"
+done
+for UX_CONSUMER in templates/implement-feature/SKILL.md templates/fix-bug/SKILL.md skills/design-screen/SKILL.md skills/harness-init/SKILL.md; do
+  assert_contains "$(<"$ROOT/$UX_CONSUMER")" ".ai-harness/docs/ux-writing.md" "$UX_CONSUMER reads the UX writing document"
+done
+assert_contains "$(<"$ROOT/README.md")" "| \`/ux-writing-audit\` |" "README lists ux-writing-audit"
+if grep -rqiE 'midas|jobda|khb1122|toss' "$ROOT/skills/ux-writing-builder" "$ROOT/skills/ux-writing-audit" "$UX_LINT"; then fail "UX writing files carry organization-specific values"; fi
+pass "ux-writing: deterministic lint, builder template, audit contract, consumers"
+
 printf '1..%d\n' "$TESTS"
 TESTS_FINISHED=1
