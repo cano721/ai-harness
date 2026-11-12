@@ -7854,7 +7854,7 @@ checked.clear()
 res = bs.bulk_cleanup({"older_days": 1, "worktree": False}, items)
 assert res["ok"] and res["counts"] == {"done": 4, "closed": 1, "worktrees": 0, "skipped": 0}, res
 assert closed == ["idle"] and checked == [], (closed, checked)  # worktree를 고르지 않으면 확인도 삭제도 하지 않는다
-assert res["message"] == "4개 정리 · 세션 1개 닫음", res["message"]
+assert res["message"].startswith("4개 정리 · 세션 1개 닫음"), res["message"]
 assert os.path.exists(tr), "transcripts are kept"
 hidden = bs._load(bs.HIDDEN)
 assert {"idle", "ended", "item:sync|docs|" + old, "item:autofix:shop:sentry:1"} <= set(hidden), hidden
@@ -8169,7 +8169,7 @@ pass "work.sh merges sessions from the default, auto-detected and custom Claude 
 # 폴더마다 한 번만 부르고, 기본 폴더는 CLAUDE_CONFIG_DIR 없이(설정해 버리면 다른 설정 파일을 읽는다) 부른다. 없는 폴더는 건너뛴다.
 WK_CALLS="$(<"$WK_T/calls.log")"
 assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "the default folder is asked first and without CLAUDE_CONFIG_DIR"
-assert_eq "UNSET,$WK_T/custom,$WK_T/profiles/p1/home,$WK_T/profiles/p2/home" "$(cut -d'|' -f1 "$WK_T/calls.log" | sort | paste -sd, -)" "every existing folder is asked exactly once"
+assert_eq "$WK_T/custom,$WK_T/profiles/p1/home,$WK_T/profiles/p2/home,UNSET" "$(cut -d'|' -f1 "$WK_T/calls.log" | LC_ALL=C sort | paste -sd, -)" "every existing folder is asked exactly once"
 case "$WK_CALLS" in *"$WK_T/missing"*) fail "a folder that does not exist is not asked" ;; esac
 pass "work.sh asks each existing settings folder once and the default one without CLAUDE_CONFIG_DIR"
 

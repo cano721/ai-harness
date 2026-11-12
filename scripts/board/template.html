@@ -885,6 +885,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     let t = String(raw || '').replace(/\s+/g, ' ').trim();
     t = t.replace(/^\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}([.,]\d+)?)?(Z|[+-]\d{2}:?\d{2})?\]?\s*/, '')
       .replace(/^(ERROR|ERR|WARN(ING)?|INFO|DEBUG|FATAL|CRITICAL)\b[:\s]*/i, '')
+      .replace(/^\d+\s+---\s+\[[^\]]*\]\s+\S+\s*:\s*/, '')
       .replace(/\b(dd\.)?(trace_?id|span_?id|traceId|spanId|request_?id|requestId)\s*[:=]\s*\S*/gi, '')
       .replace(/^[\s\-–|]+/, '')
       .replace(/^\[?[\w.$-]+\]?:\d+:\s*/, '')
@@ -964,7 +965,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   let filter = 'all';
   const expanded = new Set();  // 펼친 줄·묶음(다시 그려도 유지)
   const srcOf = (i) => (i.section === 'work' && (i.autofix_id || i.autofix_sig) ? 'autofix' : i.section || 'harness');
-  const itemsAll = () => (data && data.items) || [];
+  const hiding = new Set();  // '정리'를 누른 순간 목록에서 먼저 뺀 id — 서버 응답에서 실패한 것만 되돌리고, 서버 목록에서 사라지면 갱신 때 지운다
+  const itemsAll = () => ((data && data.items) || []).filter((i) => !hiding.has(i.id));
 
   // ---- 목록 모델: 한 사건은 한 카드, 한 항목에 상태는 한 번 ----
   // 자동 수정 카드와 그 에러를 이어 보는 세션은 한 카드로 합친다(서버가 session_id·autofix_id로 잇는다).
@@ -1042,6 +1044,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (i.kind === 'autofix') return humanTitle(i.title) || fallbackTitle(i.title, i.project);
     const t = String(i.title || ''), k = KIND[i.kind] || '하네스 동작';
     if (srcOf(i) === 'harness') {
+      if (i.fail_reason) return `${k} 실행 실패 — ${i.fail_reason}${i.streak >= 2 ? ` · ${i.streak}번 연속` : ''}`;
       if (CODE_KO[t]) return CODE_KO[t];
       let m;
       if ((m = t.match(/^harvest 대기 \(세션 (\d+)개\)/))) return `자동 개선 대기 — 세션 ${m[1]}개`;
@@ -1311,6 +1314,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const b = btn('끝난 일 정리…', 'ds-btn--sm'); b.dataset.key = 'cleanup-open'; b.onclick = () => openTool('cleanup'); box.append(b);
     return box;
   }
+  // 변경 없이 끝난 무인 실행은 카드가 아니라 종류별 횟수 한 줄(서버가 최근 24시간 분량을 센다)
+  function quietSummary() {
+    const q = (data && data.quiet_runs || []).filter((x) => x.count > 0);
+    if (!q.length) return null;
+    const order = ['sync', 'harvest', 'harvest-global'];
+    q.sort((a, b) => (order.indexOf(a.kind) + 1 || 9) - (order.indexOf(b.kind) + 1 || 9));
+    return el('p', 'ds-caption b-line', `최근 하루 ${q.map((x) => `${KIND[x.kind] || x.kind} ${x.count}회`).join(' · ')} · 모두 변경 없음`);
+  }
   // ---- 작업 현황 ----
   function renderList() {
     const board = $('board');
@@ -1363,6 +1374,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (doneSec) nodes.push(doneSec);  // 끝난 일은 칸 아래 전체 폭 한 줄로 접는다(칸 하나에만 붙어 균형이 깨지지 않게)
     }
     if (tab === 'autofix') { const x = renderStrip(); if (x) nodes.push(x); }
+    if (tab === 'harness' && filter === 'all') { const q = quietSummary(); if (q) nodes.push(q); }
     board.replaceChildren(...nodes);
   }
 
@@ -1545,7 +1557,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const toolDone = () => { toolRev++; if (mode === 'cleanup' || mode === 'hidden') { keepFocus(() => renderDrawer()); drawerSig = drawerKey(); } };
   async function loadPlan() {
     tool.plan = null; tool.err = null; toolDone();
-    try { const res = await post('/cleanup-bulk', { dry_run: true, older_days: tool.older }); tool.plan = res.plan || []; if (!res.ok) tool.err = res.message; }
+    try { const res = await post('/cleanup-bulk', { dry_run: true, older_days: tool.older }); tool.plan = res.plan || []; tool.left = res.left || []; if (!res.ok) tool.err = res.message; }
     catch (e) { tool.err = '정리할 항목을 불러오지 못했습니다. 보드 서버에 닿지 못했습니다.'; }
     toolDone();
   }
@@ -1555,6 +1567,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     catch (e) { tool.err = '숨긴 항목을 불러오지 못했습니다. 보드 서버에 닿지 못했습니다.'; tool.rows = []; }
     toolDone();
   }
+  // 정리 대상이 아니라 남는 항목이 왜 남았는지(서버가 이유별 한 줄 label을 준다)
+  const leftNote = (left) => el('p', 'ds-caption b-line', left.map((l) => l.label).join(' · '));
   function renderCleanup() {
     $('dtitle').textContent = '끝난 일 정리';
     $('dsub').textContent = '목록에서 숨기고 쉬는 세션을 닫습니다. 대화 기록은 남고, 숨긴 항목은 다시 보이게 할 수 있습니다.';
@@ -1565,7 +1579,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     parts.push(range);
     if (tool.results) {
       const r = tool.results, skipped = (r.results || []).filter((x) => !x.ok || x.worktree_kept);
-      parts.push(notice(r.ok ? 'info' : 'danger', r.message || '정리하지 못했습니다.'));
+      const left = r.left || [];
+      parts.push(notice(r.ok ? 'info' : 'danger', left.reduce((m, l) => m.replace(' · ' + l.label, ''), r.message || '정리하지 못했습니다.')));
+      if (left.length) parts.push(leftNote(left));
       if (skipped.length) { const rows = el('div', 'ds-rows'); for (const x of skipped) { const d = el('div', 'ds-row'), h = el('div', 'ds-row__head'); h.append(el('span', 'ds-row__title', shortTitle(x.title || '') || '(제목 없음)'), el('span', 'ds-row__side', x.reason || `worktree 유지: ${x.worktree_kept}`)); d.append(h); rows.append(d); } parts.push(block(`건너뛴 것 ${skipped.length}개와 이유`, rows)); }
       body.replaceChildren(...parts);
       foot.append(btn('닫기', '', closeDrawer));
@@ -1573,7 +1589,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (tool.err) parts.push(notice('danger', tool.err));
     if (!tool.plan) { const sr = el('p', 'ds-sr', '정리할 항목을 확인하는 중'); sr.setAttribute('role', 'status'); parts.push(sr, skeleton(2)); body.replaceChildren(...parts); return; }
-    const plan = tool.plan, sessions = plan.filter((x) => x.session), closing = plan.filter((x) => x.close).length;
+    const plan = tool.plan, left = tool.left || [], sessions = plan.filter((x) => x.session), closing = plan.filter((x) => x.close).length;
     const can = sessions.filter((x) => x.worktree && x.worktree.removable).length, cannot = sessions.length - can;
     if (!plan.length) parts.push(empty('정리할 끝난 일이 없습니다.', tool.older ? '범위를 넓히면 더 최근에 끝난 일도 정리할 수 있습니다.' : '작업 중·답 대기 세션은 정리하지 않습니다.'));
     else {
@@ -1592,14 +1608,19 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       }
       parts.push(rows);
     }
+    if (left.length) parts.push(leftNote(left));
     body.replaceChildren(...parts);
-    const go = btn(plan.length ? `${plan.length}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
+    const go =btn(plan.length ? `${plan.length}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
     if (!plan.length) go.setAttribute('aria-disabled', 'true');
     go.onclick = async () => {
       if (!plan.length || go.getAttribute('aria-busy') === 'true') return;
       busy(go, '정리하는 중');
-      let res; try { res = await post('/cleanup-bulk', { older_days: tool.older, worktree: tool.worktree, ids: plan.map((x) => x.id) }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-      tool.results = res; toast(res.message, res.ok); lastSig = ''; refresh().catch(() => {}); toolDone();
+      const ids = plan.map((x) => x.id);
+      ids.forEach((id) => hiding.add(id)); renderAll();  // 응답을 기다리지 않고 목록에서 먼저 뺀다
+      let res; try { res = await post('/cleanup-bulk', { older_days: tool.older, worktree: tool.worktree, ids }); } catch (e) { res = { ok: false, message: '정리하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+      if (!res.ok || !Array.isArray(res.results)) ids.forEach((id) => hiding.delete(id));
+      else res.results.forEach((x) => { if (!x.ok) hiding.delete(x.id); });  // 정리하지 못한 것만 되돌아온다
+      tool.results = res; toast(res.message, res.ok); lastSig = ''; renderAll(); refresh().catch(() => {}); toolDone();
     };
     foot.append(btn('취소', '', closeDrawer), go);
   }
@@ -1722,6 +1743,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (it.reason && FIX[it.reason]) parts.push(block('풀 방법', el('p', null, FIX[it.reason].text)));
       if (it.cmd) { const c = el('div', 'ds-cluster'); c.append(el('code', null, it.cmd), copyBtn('명령 복사', it.cmd)); parts.push(block('명령', c)); }
       if (it.log) { const c = el('div', 'ds-cluster'); c.append(el('code', 'b-raw', it.log), copyBtn('경로 복사', it.log)); parts.push(block('로그', c)); }
+      else if (it.log_note) parts.push(block('로그', el('p', null, it.log_note)));
       body.replaceChildren(...parts);
       if (it.link) foot.append(linkBtn(it.state === 'needs_human' ? 'PR 검토하기' : prLabel(it.link) + ' 열기', it.link, it.state === 'needs_human' ? 'ds-btn--primary' : ''));
       if (SERVER) (it.actions || []).filter((x) => ACTION_LABEL[x]).forEach((a, n) => { const b = btn(ACTION_LABEL[a], it.link || n ? '' : 'ds-btn--primary'); b.onclick = () => act(it, a, b); foot.append(b); });
@@ -2114,7 +2136,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const r = await fetch('/status.json?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
     if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.server = true; throw e; }
     const next = await r.json();
-    const sig = JSON.stringify(next.items);
+    for (const id of [...hiding]) if (!(next.items || []).some((x) => x.id === id)) hiding.delete(id);  // 서버 목록에서 사라진 것은 숨김 기록도 지운다
+    const sig = JSON.stringify([next.items, next.quiet_runs]);
     loadError = null;
     if (sig === lastSig) return;
     lastSig = sig; data = next; flush();
