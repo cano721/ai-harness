@@ -2301,9 +2301,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const e = r.effective || {}, mp = r.merge_policy || {};
     const src = { repo: '이 저장소 내 설정', default: '내 기본', team: '저장소 기본' }[e.source] || '';
     const descs = [`적용: ${e.level ? LVL[e.level] : r.level === 'direct' ? '직접 커밋(PR 없음)' : '커밋·PR 안 함(설정 없음)'} (${src}) · 기준 ${mp.base || (r.suggest && r.suggest.base) || '모름'} · ${mp.deploy_check_cmd ? '배포 확인 있음' : '배포 확인 없음'} · ${mp.smoke_cmd ? '스모크 있음' : '스모크 없음'}`];
-    const asrc = { repo: '이 저장소 내 설정', default: '내 기본', none: '기본값' }[r.approval_source] || '';
+    const asrc = { repo: '이 저장소 내 설정', default: '내 기본', none: '기본값', legacy: '저장소 기본' }[r.approval_source] || '';
     descs.push(`승인: ${APPR[r.approval] || r.approval || '사람 확인'} (${asrc})`);
-    if (r.approval && !APPR[r.approval]) descs.push(badApproval(r.approval));
+    if (r.approval_source === 'legacy') descs.push(descLine('이 저장소의 러너가 옛 버전이라 승인 모드는 하네스를 동기화하기 전까지 저장소 설정을 따릅니다. 여기서 고른 승인은 동기화 뒤부터 적용됩니다.', 'info'));
+    else if (r.approval && !APPR[r.approval]) descs.push(badApproval(r.approval));
     for (const note of (e.notes || []).filter((n) => !commonNotes.has(n))) descs.push(descLine(note, 'info'));
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const p = r.protection;
@@ -2320,7 +2321,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     const ctl = [segment(id, [['', '기본 따름'], ...LEVELS], r.mine || '', (k) => setLevel({ scope: 'repo', repo: r.repo, level: k }))];
     const aid = id + '-approval', alabel = el('span', 'ds-caption', '승인'); alabel.id = aid;
-    ctl.push(alabel, segment(aid, [['', '기본 따름'], ...APPROVALS], r.approval_mine || '', (k) => setApproval({ scope: 'repo', repo: r.repo, mode: k })));
+    const ag = segment(aid, [['', '기본 따름'], ...APPROVALS], r.approval_mine || '', (k) => setApproval({ scope: 'repo', repo: r.repo, mode: k }));
+    ag.setAttribute('aria-labelledby', `${id} ${aid}`); // 스크린리더가 어느 저장소의 승인인지 함께 읽는다
+    ctl.push(alabel, ag);
     const acts = el('div', 'ds-cluster');
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const b = btn(r.protection ? '보호 다시 확인' : '브랜치 보호 확인', 'ds-btn--sm');
@@ -2352,7 +2355,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const adescs = [`${APPROVAL_DESC[appr] || ''} 기본값 사람 확인.`.trim()];
     if (!APPR[appr]) adescs.push(badApproval(appr));
     if (appr === 'auto') adescs.push(descLine('내 모든 저장소에 적용됩니다. 신뢰하지 않는 저장소에서도 저장소가 정한 검증 명령이 사람 확인 없이 돕니다 — 신뢰하는 저장소만 저장소별로 켜기를 권합니다.', 'attention'));
-    mine.append(settingRow('set-approval', '내 기본 승인', adescs, segment('set-approval', APPROVALS, appr, (k) => setApproval({ scope: 'default', mode: k === 'human' ? '' : k })), appr !== 'human'));
+    mine.append(settingRow('set-approval', '내 기본 승인', adescs, segment('set-approval', APPROVALS, appr, (k) => setApproval({ scope: 'default', mode: k })), appr !== 'human'));
     out.push(mine);
     const special = repos.filter((r) => r.error || r.mine || r.approval_mine || r.change || ((r.effective && r.effective.notes) || []).some((n) => !commonNotes.has(n)));
     const rest = repos.filter((r) => !special.includes(r));

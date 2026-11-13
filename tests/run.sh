@@ -7507,7 +7507,20 @@ assert s.set_approval({"scope": "default", "mode": ""}, []) is None
 row = s.read_repo(repo)
 assert (row["approval"], row["approval_source"], row["approval_mine"]) == ("human", "none", None), row
 assert "HM_APPROVAL" not in s.user_config() and "HM_APPROVAL_REPOS" not in s.user_config()
+# 러너 repository_setting과 같은 규칙: 같은 키는 마지막 값, 빈 값은 다음 단계(전체 설정)로 넘어간다.
+assert s.approval_of("appr-id", {"HM_APPROVAL_REPOS": "appr-id=auto,appr-id=human"})["approval"] == "human"
+assert s.approval_of("appr-id", {"HM_APPROVAL_REPOS": "appr-id=", "HM_APPROVAL": "auto"})["approval_source"] == "default"
 ' "$ROOT/scripts/board" "$BOARD_APPR_REPO" || fail "board approval mode follows the personal settings"
+# 아직 동기화하지 않은 저장소(#294 이전 러너)는 manifest approval을 읽는다 — 보드도 그 값을 legacy로 보인다.
+mkdir -p "$BOARD_APPR_REPO/.ai-harness/workflows"
+printf '#!/usr/bin/env bash\n# HM_DELIVERY_LEVEL only\n' >"$BOARD_APPR_REPO/.ai-harness/workflows/workflow-driver.sh"
+HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+row = s.read_repo(sys.argv[2])
+assert (row["approval"], row["approval_source"]) == ("auto", "legacy"), row
+' "$ROOT/scripts/board" "$BOARD_APPR_REPO" || fail "board shows the manifest approval for a runner that predates personal approval"
 assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "approval writes keep other config lines"
 pass "harness board approval mode follows personal settings"
 

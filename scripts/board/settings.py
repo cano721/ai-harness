@@ -83,7 +83,7 @@ def read_repo(repo):
         "repo": repo, "name": os.path.basename(repo),
         "branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
         "level": level_of(m), "git_policy": m.get("git_policy"), "merge_policy": m.get("merge_policy"),
-        **approval_of(project_key(repo), user_config()),
+        **repo_approval(repo, m),
         "monitor_ready": bool(m.get("monitor") and m.get("project_id")),
         "suggest": suggest(repo),
         "key": project_key(repo), "runner": runner_state(repo),
@@ -175,6 +175,15 @@ def approval_of(key, cfg):
     return {"approval": "human", "approval_source": "none", "approval_mine": None}
 
 
+def repo_approval(repo, manifest):
+    """이 저장소 러너가 실제로 쓸 승인 모드. #294 이전 러너(HM_APPROVAL을 모름)는 아직 manifest approval을 읽으므로
+    동기화 전까지는 그 값을 출처 legacy로 보인다 — 개인 설정으로 계산하면 auto 저장소가 사람 확인으로 잘못 보인다."""
+    personal = approval_of(project_key(repo), user_config())
+    if runner_approval(repo) == "old":
+        return {**personal, "approval": manifest.get("approval") or "human", "approval_source": "legacy"}
+    return personal
+
+
 def set_approval(req, known):
     """{scope: "default"} 또는 {scope: "repo", repo}, mode: human|auto|"" (""=설정 지움)."""
     mode = req.get("mode") or ""
@@ -255,6 +264,15 @@ def runner_state(repo):
         return "none"
     with open(p, errors="replace") as f:
         return "personal" if "HM_DELIVERY_LEVEL" in f.read() else "old"
+
+
+def runner_approval(repo):
+    """러너가 개인 승인 모드(HM_APPROVAL)를 읽는지: personal | old(manifest approval을 읽음) | none."""
+    p = os.path.join(repo, ".ai-harness", "workflows", "workflow-driver.sh")
+    if not os.path.isfile(p):
+        return "none"
+    with open(p, errors="replace") as f:
+        return "personal" if "HM_APPROVAL" in f.read() else "old"
 
 
 def effective(row, cfg):
