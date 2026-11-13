@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.72.0 (2026-11-13)
 ### 새 기능
 
 - **UX 라이팅: 규칙 만들기·작업 중 적용·검토** — 화면 문구를 제품 규칙에 맞게 쓰고 검사할 수단이 없었습니다. `/ux-writing-builder`는 기존 코드 문구를 실측해(`scripts/ux-writing-lint.py extract` — 종결 어미 분포·문구 위치) 질문 라운드로 `.ai-harness/docs/ux-writing.md`(말투·종결 어미·원칙·용어집·컴포넌트별 규칙·전/후 예시)를 만듭니다. `/ux-writing-audit`는 용어집 금지어·금지 표현·종결 어미를 스크립트로 결정적으로 잡고(표준어로 바꾼 수정안, 조사 보정), 맥락은 문서 규칙으로 판단해 `위치·원문·수정안·위반 규칙` 표와 점수를 냅니다. 문서가 없으면 채점하지 않습니다. 생성되는 `implement-feature`·`fix-bug` 진입점과 `/design-screen`은 문서가 있을 때 UI 문구를 쓰기 전에 읽고, PR 전에 diff를 감사합니다. 문서는 프로젝트 소유라 관리 생성물이 아닙니다(sync가 덮어쓰지 않음). 기존 생성물에 반영하려면 `/ai-harness:harness-init` sync. (#293)
