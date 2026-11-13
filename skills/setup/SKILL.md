@@ -214,6 +214,14 @@ $ROOT/scripts/setup.sh team list
 - 조정값은 같은 파일의 `HM_AUTO_MERGE_METHOD`(`squash`·`merge`·`default`)·`HM_AUTO_MERGE_SYNC_PARTIAL`·`HM_AUTO_MERGE_REQUIRE_CI`·`HM_AUTO_MERGE_WAIT_HOURS`·`HM_AUTO_MERGE_HARVEST_MAX_FILES`·`HM_AUTO_MERGE_HARVEST_MAX_LINES`로 바꿀 수 있다. 묻지 않고 기본값을 두며, 사용자가 원할 때만 적는다. 저장소 기준 브랜치에 같은 키(`auto_merge.<key>`)가 있으면 안전한 쪽을 쓴다(README 자동 병합 절).
 - 처음에는 sync만 켜고 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
 
+### 8-0. 워크플로 승인 모드 (선택)
+
+승인 게이트를 사용자 개인 설정으로 고른다. `~/.ai-harness/config`를 읽어 현재 값을 보여 주고 선택한 키만 기록한다. 기본은 `human`이며, 저장소 manifest의 기존 `approval`은 더 이상 적용되지 않는다.
+
+1. 전체 설정 `HM_APPROVAL=human|auto`를 고른다. `auto`는 Brief에 추천 결정과 근거를 남기고, 사람이 정할 사항이 없을 때 승인 게이트를 통과한다.
+2. 저장소별 예외가 있으면 `HM_APPROVAL_REPOS="<project_id>=<human|auto>,…"`로 지정한다. 일치하는 저장소별 항목이 전체 설정보다 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이다.
+3. 설정 파일의 다른 줄·주석·권한을 보존한다. 기존 manifest에 `approval`이 있으면 자동 삭제하지 말고 사용자에게 개인 설정으로 옮기도록 안내한다.
+
 ### 8-1. 워크플로 자동화 단계 (선택)
 
 워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 러너는 PR까지만 한다. 병합 여부를 정하는 곳은 이 설정뿐이다(저장소의 예전 `git_policy:"merge"`·`merge_policy` 병합 조건은 더 이상 쓰지 않는다).

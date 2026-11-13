@@ -201,7 +201,7 @@ codex plugin add ai-harness@ai-harness
 - 사용할 도구: Codex / Claude / 둘 다 / 통합 파일 없음
 - 테스트 정책: TDD 강제 / 테스트 필수 / 권장 / 없음
 - Git 통제: PR 필수(`git_policy:"pr-only"` — 에이전트가 커밋·push·PR까지) 또는 직접 커밋 허용(`direct`). 저장소는 커밋·PR 범위만 정합니다. PR 뒤 병합·배포까지 맡길지는 사용자마다 [개인 자동화 단계](#delivery-level)로 고르고, 고르지 않으면 PR까지입니다([병합](#merge-policy))
-- 승인 게이트: 사람 승인(`approval:"human"`, 기본) 또는 정책 승인(`auto` — Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
+- 승인 게이트: 사람 승인(`human`, 기본) 또는 정책 승인(`auto` — 개인 설정 `HM_APPROVAL`·`HM_APPROVAL_REPOS`, Brief를 PR 본문에 남기고 진행). PR 필수와 함께 고르면 이슈를 맡겼을 때 PR까지 사람 질문 없이 갑니다. auto에서는 판단이 갈리는 점을 에이전트가 추천안으로 정하고 근거를 PR 본문 "결정 사항"에 남깁니다(병합 전에 뒤집을 수 있음). 범위를 바꾸는 제품 판단·되돌리기 어려운 선택·외부 시스템 쓰기와 수리 한도 초과는 auto에서도 사람에게 갑니다
 - 이슈 상태 전환: 시작 시 진행 중(`issue_policy:"in-progress-on-start"` — 이슈 키·URL로 기능 개발·버그 수정을 시작하면 그 이슈를 먼저 진행 중으로 옮김) 또는 건드리지 않음(기본)
 
 **이미 팀 에이전트가 있는 저장소** — `.claude/agents`·라우터 스킬·`CLAUDE.md`가 있으면 초기화가 먼저 `scripts/existing-assets.sh scan`으로 인벤토리를 만들고, 하네스 역할(developer·reviewer 등)을 기존 에이전트에 맡길지 슬롯별로 묻습니다. 맡긴 슬롯은 하네스 페르소나를 만들지 않고 워크플로가 기존 에이전트(또는 라우터가 정한 담당)를 부릅니다. 같은 이름 스킬은 기존 것을 유지하며, 기존 자산의 낡은 서술·중복·선언되지 않은 플러그인 참조는 점검표로만 보입니다.
@@ -257,7 +257,7 @@ stateDiagram-v2
     discover --> brief
     brief --> approval
     approval --> brief: 범위 변경 또는 미승인
-    approval --> deliver: 명시적 승인 또는 approval auto
+    approval --> deliver: 명시적 승인 또는 HM_APPROVAL auto
     deliver --> review
     review --> publish: blocking finding 없음
     review --> repair: blocking finding 있음
@@ -272,7 +272,7 @@ stateDiagram-v2
     post_merge_verify --> user_decision: 병합 후 검증 실패 (되돌리지 않음)
 ```
 
-1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. `harness.json`의 `approval`이 `auto`면 판단이 갈리는 점을 추천안으로 정해 근거와 함께 Brief·PR 본문의 "결정 사항"에 남기고, 사람만 정할 수 있는 것이 없으면 바로 진행합니다.
+1. **계획** — 범위·비범위·검증 케이스·예상 변경 파일·검증 계획을 `Implementation Brief`로 제시합니다. 명시 승인 전에는 코드나 테스트 파일을 수정하지 않습니다. 개인 설정이 `HM_APPROVAL=auto`면 판단이 갈리는 점을 추천안으로 정해 근거와 함께 Brief·PR 본문의 "결정 사항"에 남기고, 사람만 정할 수 있는 것이 없으면 바로 진행합니다.
 2. **구현** — 승인 후 작업을 작고 검증 가능한 delivery slice로 나눕니다. TDD 강제 프로젝트에서는 Red → Green → Refactor를 지키고, 그 외에는 프로젝트 테스트 정책을 따릅니다.
 3. **검토 루프** — acceptance case와 diff를 검토합니다. blocking finding은 원인별 수정 → targeted/전체 검증 → 재검토로 해소를 확인합니다. 그래프의 수리 한도(`limits.max_repair_attempts`, 기본 10)에 이르거나 제품 결정이 필요하면 추측하지 않고 사용자에게 넘깁니다.
 4. **PR** — `git_policy`가 `pr-only`면 커밋·일반 push·PR 생성까지 하고(PR 도구·검토자는 프로젝트 워크플로의 기본 규칙), `direct`면 커밋·일반 push까지 합니다. force push는 어느 정책에서도 하지 않고, 병합은 [개인 자동화 단계](#delivery-level)가 `merge`·`deploy`일 때 러너만 합니다(아래 [병합](#merge-policy)). 정책이 없으면 이전처럼 커밋하지 않고 끝납니다.
@@ -285,7 +285,7 @@ stateDiagram-v2
 
 | 도구 | 실행 방식 |
 |---|---|
-| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다(`approval: auto`면 `start` 한 번으로 PR까지). 기능 개발·버그 수정·변경 검토가 같은 러너와 같은 게이트를 씁니다. 아래 [그래프 러너](#feature-driver)를 보세요. |
+| 그래프 러너 (Codex·Claude 공통) | 러너가 있으면 진입점이 대화 안에서 `start` → `revise` → 사용자가 `승인` 입력 → `resume`으로 그래프를 실행합니다(`HM_APPROVAL=auto`면 `start` 한 번으로 PR까지). 기능 개발·버그 수정·변경 검토가 같은 러너와 같은 게이트를 씁니다. 아래 [그래프 러너](#feature-driver)를 보세요. |
 | 러너가 없을 때 | skill/command와 역할 agent(또는 단일 세션의 단계 경계)가 현재 세션에서 같은 그래프 계약을 따릅니다. |
 
 예전에 Claude용으로 생성하던 Dynamic Workflow 사본(`.claude/workflows/*.js`)은 러너와 다른 게이트로 같은 그래프를 실행해 더 만들지 않습니다. `/harness-init --sync`가 정리 대상(`retired`)으로 안내합니다.
@@ -306,20 +306,20 @@ Brief·검증 명령을 보여 줌  ◀──────────           
                                                (remote_ci 실패 → repair → … → publish로 다시 push)
 ```
 
-`approval: auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
+`HM_APPROVAL=auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
 
 | 워크플로 | 러너가 실행하는 흐름 |
 |---|---|
 | `feature` | discover → brief → approval → deliver → review(러너가 검증 명령 실행) ⇄ repair → ui_review → publish → remote_ci |
 | `bug-fix` | triage → reproduce → brief → approval → regression → fix → verify(러너가 검증 명령 실행) → review ⇄ repair → ui_review → publish → remote_ci. reproduce는 명령을 실행할 수 있지만 작업 트리를 바꾸면 멈추고, 메모·로그는 실행 디렉터리의 `reproduce/`에 남깁니다. 재현도 안전한 관측 계획도 없으면(근거 없는 "재현됨" 포함) 승인 전에 사람에게 넘깁니다 |
-| `review` | scope(검토 기준 커밋·검증 명령) → inspect → classify → done. blocking finding이 있으면 수리 범위(finding·검증 명령)를 보여 주고 멈춥니다(exit 10). 사용자가 대화에 `승인`을 입력하면(또는 `approval: auto`) repair → verify → re_review ⇄ repair로 이어 가고, 수리는 커밋하지 않고 작업 트리에 남깁니다. 동의는 보여 준 finding에 묶여, 재검토·화면 검증에서 범위 밖 finding이 나오면 그 finding을 보여 주고 다시 묻습니다. 제품 판단이 필요한 finding은 바로 `user_decision` |
+| `review` | scope(검토 기준 커밋·검증 명령) → inspect → classify → done. blocking finding이 있으면 수리 범위(finding·검증 명령)를 보여 주고 멈춥니다(exit 10). 사용자가 대화에 `승인`을 입력하면(또는 `HM_APPROVAL=auto`) repair → verify → re_review ⇄ repair로 이어 가고, 수리는 커밋하지 않고 작업 트리에 남깁니다. 동의는 보여 준 finding에 묶여, 재검토·화면 검증에서 범위 밖 finding이 나오면 그 finding을 보여 주고 다시 묻습니다. 제품 판단이 필요한 finding은 바로 `user_decision` |
 
 | 그래프 개념 | 러너가 하는 일 |
 |---|---|
 | 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
-| 정책 승인 | `harness.json`의 `approval`이 `auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 manifest만 정하며 러너 옵션으로 바꿀 수 없습니다 |
+| 정책 승인 | 개인 설정이 `HM_APPROVAL=auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human`으로 정하고, run state의 출처를 실행 끝까지 유지합니다. manifest의 기존 `approval`은 무시하며 러너가 개인 설정으로 옮기라는 notice를 남깁니다 |
 | git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다 |
@@ -394,7 +394,7 @@ HM_MERGE_METHOD=squash                             # squash | merge | rebase (�
 - **무인 실행**은 단계와 상관없이 병합하지 않습니다. 무인 PR의 병합은 [자동 병합](#auto-merge)(사용자 설정 `HM_*_AUTO_MERGE`)만 합니다.
 - **단계가 없을 때**: 저장소가 예전 `git_policy:"merge"`여도 PR까지이고 안내만 남깁니다([병합](#merge-policy)의 예전 설정).
 
-한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `approval: auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
+한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `HM_APPROVAL=auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
 러너는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.ai-harness/workflows/`에 생성하며, 하네스가 없는 저장소에는 존재하지 않으므로 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
@@ -434,7 +434,7 @@ stateDiagram-v2
     reproduce --> user_decision: 재현 불가·관측 계획 없음
     brief --> approval
     approval --> brief: 범위 변경 또는 미승인
-    approval --> regression: 명시적 승인 또는 approval auto
+    approval --> regression: 명시적 승인 또는 HM_APPROVAL auto
     regression --> fix
     fix --> verify
     verify --> review: 필수 검증 통과
@@ -591,7 +591,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **적용 범위**: `add`와 수정되지 않은(`unchanged`) 관리 생성물 `refresh`만. 승인 필요·보호 파일(AGENTS.md·docs·워크플로 본문)·삭제·계약 drift는 고치지 않고 PR 본문의 "사람 확인 필요" 표로 넘깁니다. workspace 루트(매니페스트·라우팅 AGENTS.md)는 대상이 아니며 알림만 합니다
 - **비용**: 적용할 관리 생성물이 없으면 에이전트를 띄우지 않고 `no-change`로 끝냅니다(LLM 비용 0). 저장소·플러그인 버전 조합당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`회(기본 6, 자동 harvest와 별도), 실행 lock·시간 제한·실행당 예산·실패 3회 포기·사용량 한도 휴지는 자동 harvest와 공유합니다. 동시에는 하나만 돌고 sweep에서는 harvest가 먼저입니다. 실행이 끝나면 같은 worker가 sweep과 같은 순서(harvest batch → sync)로 다음 실행을 이어서 띄워 상한까지 처리합니다 — 사용량 한도로 끝났거나 한도 휴지 중이거나 사용자가 다시 작업 중(`HM_IDLE_MINUTES`)이면 멈추고 다음 sweep이 이어받습니다. 무인 실행이 도는 동안의 정기 실행은 LLM 단계를 건너뜁니다
 - **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
-- **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다. 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
+- **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다(Bitbucket 자격증명은 셸 환경변수 → `~/.claude/settings.json`의 `env` 순으로 찾고, 끝내 없으면 `sync_pr_no_credentials`). 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
 <a id="auto-merge"></a>
@@ -822,6 +822,8 @@ HM_AUTO_MERGE_HARVEST_MAX_FILES= # harvest PR 파일 상한(기본 3, 최대 5, 
 HM_AUTO_MERGE_HARVEST_MAX_LINES= # harvest PR 줄 상한(기본 40, 최대 100, 저장소 값이 있으면 작은 쪽)
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
+HM_APPROVAL=human               # 승인 게이트: human|auto (기본 human)
+HM_APPROVAL_REPOS=               # 저장소별 승인 모드(<project_id>=human|auto, 쉼표 구분)
 HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 PR까지
 HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
 HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 네 조건 모두)

@@ -3,7 +3,6 @@
   "level": "standard",
   "test_policy": "tdd",
   "git_policy": "pr-only",
-  "approval": "auto",
   "merge_policy": {
     "base": "develop"
   },
@@ -17,11 +16,11 @@
   "harness_version": "0.64.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
-      "content_sha256": "acfcda7293ed9fe741113f5011c9d2b27f1245c9c07443e8e8d4dabaea0246f1",
+      "content_sha256": "1e1d6c0aacf90a9b901d2f523fe4b31ac88051e8d177de12ddecbc683079e9c8",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "16536ae8586576fb97e9260b73df2f90a8cdd5198605dffdeb7be59134e3b386",
+      "content_sha256": "1125595509c30c268c5b8b9b57abd30992d6b3c46878173b931edcc251496496",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -29,7 +28,7 @@
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
-      "content_sha256": "04c3e686a754a87d6ab0d3fe6e963cd5cf70c0bc3a3799a2114c08c388aea5dd",
+      "content_sha256": "ad054fa3f9c9c73836301665d2a0727b46bcc2b3d15dc8a9a3cce0639e5ac632",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/review-graph.json": {

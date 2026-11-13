@@ -20,4 +20,4 @@
 
 ## 수리
 
-blocking finding의 수리는 사람이 동의한 뒤(또는 `approval:auto` 정책)만 시작한다. 테스트는 test-engineer, 제품 코드는 developer 범위를 지킨다. 수리 뒤 위 검증 명령과 재검토를 거친다. 수리는 PR의 작업 브랜치에 일반 push로 올리고, 새 PR을 열거나 병합하지 않는다.
+blocking finding의 수리는 사람이 동의한 뒤(또는 개인 설정 `HM_APPROVAL=auto` 정책)만 시작한다. 테스트는 test-engineer, 제품 코드는 developer 범위를 지킨다. 수리 뒤 위 검증 명령과 재검토를 거친다. 수리는 PR의 작업 브랜치에 일반 push로 올리고, 새 PR을 열거나 병합하지 않는다.

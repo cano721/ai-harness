@@ -7,23 +7,122 @@ DONE_HOURS="${BOARD_DONE_HOURS:-48}"
 PROJECTS="${HARNESS_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 command -v claude >/dev/null 2>&1 || { echo '[]'; exit 0; }
-agents=$(claude agents --json --all 2>/dev/null) || { echo '[]'; exit 0; }
-jq -e 'type == "array"' >/dev/null 2>&1 <<<"$agents" || { echo '[]'; exit 0; }
+
+# Claude 설정 폴더 목록: 기본(CLAUDE_CONFIG_DIR 없이 = ~/.claude) → 서버 환경의 $CLAUDE_CONFIG_DIR → 프로필 자동 감지 → 사용자 지정.
+# 실경로 기준으로 중복을 빼고 존재하는 폴더만 쓴다. 경로에 공백이 있을 수 있어 줄바꿈으로만 나눈다(':' 구분은 목록 사이만).
+PROFILE_GLOBS="${BOARD_CLAUDE_PROFILE_GLOBS-$HOME/Library/Application Support/orca/claude-profiles/*/home}"
+seen_dirs=""
+cfg_dirs=""   # 줄바꿈 구분. "@default" = 기본 폴더
+add_cfg_dir() { # $1=폴더 경로 또는 @default
+  local real
+  if [ "$1" = "@default" ]; then
+    real=$(cd "$HOME/.claude" 2>/dev/null && pwd -P) || real="$HOME/.claude"
+  else
+    [ -d "$1" ] || return 0
+    real=$(cd "$1" 2>/dev/null && pwd -P) || return 0
+  fi
+  case "
+$seen_dirs
+" in *"
+$real
+"*) return 0 ;; esac
+  seen_dirs="$seen_dirs
+$real"
+  cfg_dirs="$cfg_dirs$1
+"
+}
+colon_split() { printf '%s' "$1" | tr ':' '\n'; }
+glob_dirs() { # $1=glob 패턴 → 일치하는 폴더를 줄마다 하나씩
+  local IFS='
+' d
+  for d in $1; do [ -d "$d" ] && printf '%s\n' "$d"; done
+  return 0
+}
+# 응답 없는 폴더(로그인 안 된 프로필 등) 하나가 상태 전체를 멈추지 않게 폴더마다 시간 제한을 둔다.
+# 출력은 파이프($(...))가 아니라 파일로 받는다 — 끝낸 명령의 자식이 출력을 물고 남아 있으면 $(...)는 그 자식까지 기다린다.
+AGENTS_OUT=$(mktemp)
+trap 'rm -f "$AGENTS_OUT"' EXIT
+with_timeout() { # 출력 → $AGENTS_OUT
+  local pid watchdog rc=0
+  "$@" >"$AGENTS_OUT" 2>/dev/null &
+  pid=$!
+  ( sleep "${BOARD_AGENTS_TIMEOUT:-20}"; kill -TERM "$pid" 2>/dev/null; sleep 3; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
+add_cfg_dir "@default"
+[ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_cfg_dir "$CLAUDE_CONFIG_DIR"
+while IFS= read -r pattern; do
+  [ -n "$pattern" ] || continue
+  while IFS= read -r d; do
+    [ -n "$d" ] && add_cfg_dir "$d"
+  done <<<"$(glob_dirs "$pattern")"
+done <<<"$(colon_split "$PROFILE_GLOBS")"
+while IFS= read -r d; do
+  [ -n "$d" ] && add_cfg_dir "$d"
+done <<<"$(colon_split "${BOARD_CLAUDE_CONFIG_DIRS:-}")"
+
+# 폴더마다 목록을 받아 항목에 config_dir(기본 폴더는 null)을 달고, sessionId가 같으면 pid 있는 쪽(없으면 먼저 나온 쪽)만 남긴다.
+agents='[]'
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  if [ "$d" = "@default" ]; then
+    with_timeout env -u CLAUDE_CONFIG_DIR claude agents --json --all || continue
+    cfg_json=null
+  else
+    CLAUDE_CONFIG_DIR="$d" with_timeout claude agents --json --all || continue
+    cfg_json=$(jq -Rn --arg d "$d" '$d')
+  fi
+  got=$(<"$AGENTS_OUT")
+  jq -e 'type == "array"' >/dev/null 2>&1 <<<"$got" || continue
+  agents=$(jq -c --argjson cfg "$cfg_json" --argjson more "$got" '. + ($more | map(. + {config_dir: $cfg}))' <<<"$agents")
+done <<<"$cfg_dirs"
+agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
 
 now_ms=$(( $(date +%s) * 1000 ))
-jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
-  sid=$(jq -r '.sessionId // empty' <<<"$a")
+
+# transcript마다 제목·요약을 뽑는 일(전체 grep + tail|jq)이 상태 수집에서 가장 비싸다. 경로·크기·수정 시각이 같으면
+# 지난 결과를 쓴다(캐시: $DATA/board/work-cache.json, 이번 목록의 세션만 남김). transcript는 읽기만 한다.
+CACHE_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/board"
+CACHE="$CACHE_DIR/work-cache.json"
+WORK_TMP=$(mktemp -d)
+trap 'rm -f "$AGENTS_OUT"; rm -rf "$WORK_TMP"' EXIT
+if stat -c %s /dev/null >/dev/null 2>&1; then
+  file_key() { stat -c '%s:%Y' "$1" 2>/dev/null; } # GNU
+else
+  file_key() { stat -f '%z:%m' "$1" 2>/dev/null; } # BSD(macOS)
+fi
+# 모양이 틀린 항목(옛 형식·손상)은 버린다 — 남겨 두면 jq가 죽어 작업 칸 전체가 빈다
+jq -c 'if type == "object" then with_entries(select((.value | type) == "object" and (.value.key | type) == "string"
+  and (.value.titles | type) == "object" and (.value.summary | type) == "object")) else {} end' "$CACHE" >"$WORK_TMP/old" 2>/dev/null \
+  || echo '{}' >"$WORK_TMP/old"
+
+# 세션마다 transcript 경로와 키(크기:수정 시각)
+: >"$WORK_TMP/cur.tsv"
+while IFS=$'\t' read -r sid cfg; do
   [ -n "$sid" ] || continue
-  t=""
-  for f in "$PROJECTS"/*/"$sid".jsonl; do [ -f "$f" ] && t=$f && break; done
-  summary='{}'
-  titles='{}'
-  if [ -n "$t" ]; then
-    # Claude가 붙인 요약 제목(ai-title)과 사람이 바꾼 제목(custom-title, /rename)
-    titles=$({ grep -hE '"type":"(ai-title|custom-title)"' "$t" || true; } | jq -cs '{ai: (map(select(.type == "ai-title") | .aiTitle) | last),
-      custom: (map(select(.type == "custom-title") | .customTitle) | last)}' 2>/dev/null || echo '{}')
-    # 긴 transcript는 끝부분만 본다. 사람 요청(tool_result 제외)과 마지막 답변, 마지막 기록 시각.
-    summary=$(tail -n 600 "$t" | jq -cs '
+  proj="$PROJECTS"
+  [ -z "$cfg" ] || proj="$cfg/projects"
+  for f in "$proj"/*/"$sid".jsonl; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\t%s\n' "$sid" "$f" "$(file_key "$f")" >>"$WORK_TMP/cur.tsv"
+    break
+  done
+done <<<"$(jq -r '.[] | [.sessionId, (.config_dir // "")] | @tsv' <<<"$agents")"
+jq -Rn '[inputs | split("\t") | {sid: .[0], path: .[1], key: (.[2] // "")}]' <"$WORK_TMP/cur.tsv" >"$WORK_TMP/cur.json"
+
+# 바뀐(또는 처음 보는) transcript만 파싱한다
+: >"$WORK_TMP/new"
+while IFS=$'\t' read -r t key; do
+  [ -n "$t" ] || continue
+  # Claude가 붙인 요약 제목(ai-title)과 사람이 바꾼 제목(custom-title, /rename)
+  titles=$({ grep -hE '"type":"(ai-title|custom-title)"' "$t" || true; } | jq -cs '{ai: (map(select(.type == "ai-title") | .aiTitle) | last),
+    custom: (map(select(.type == "custom-title") | .customTitle) | last)}' 2>/dev/null || echo '{}')
+  # 긴 transcript는 끝부분만 본다. 사람 요청(tool_result 제외)과 마지막 답변, 마지막 기록 시각.
+  summary=$(tail -n 600 "$t" | jq -cs '
       def text: if type == "string" then . else (map(select(.type? == "text") | .text) | join(" ")) end;
       (map(select(.type == "user" and ((.message.content | type) == "string" or (.message.content | any(.type? == "text")))
                   and (.isMeta != true)
@@ -32,11 +131,41 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
       | {prompt: ($u.message.content | text? // null), reply: ($r.message.content | text? // null),
          # 사람이 마지막 답 뒤에 아직 말하지 않았을 때만 그 답의 끝부분을 싣는다 — 보드가 본문으로 묻는 질문을 찾는다(asks.py).
          reply_tail: (if $r and (($r.timestamp // "") > ($u.timestamp // "")) then ($r.message.content | text? // "" | .[-400:]) else null end),
+         # 마지막 기록이 API 오류 메시지면(응답이 끊김) 세션은 더 진행하지 않는다 — 사람이 다시 시작해야 한다.
+         api_error: ((map(select(.type == "user" or .type == "assistant")) | last) as $z
+           | ($z.type == "assistant" and ($z.isApiErrorMessage == true or ($z.message.content | text? // "" | startswith("API Error:"))))),
          last: (map(.timestamp // empty) | max // null)}' 2>/dev/null || echo '{}')
+  jq -cn --arg p "$t" --arg k "$key" --argjson ti "$titles" --argjson s "$summary" '{path: $p, key: $k, titles: $ti, summary: $s}' >>"$WORK_TMP/new"
+done <<<"$(jq -r --slurpfile old "$WORK_TMP/old" '.[] | select(.key == "" or $old[0][.path].key != .key) | [.path, .key] | @tsv' "$WORK_TMP/cur.json")"
+
+# 새 캐시: 이번 목록의 transcript만. 키를 모르면(stat 실패) 남기지 않는다.
+jq -c --slurpfile old "$WORK_TMP/old" --slurpfile new "$WORK_TMP/new" '
+  ($new | map({(.path): {key, titles, summary}}) | add // {}) as $n
+  | map(select(.key != "") | .path as $p | {($p): ($n[$p] // $old[0][$p])}) | add // {} | with_entries(select(.value != null))' \
+  "$WORK_TMP/cur.json" >"$WORK_TMP/cache" 2>/dev/null || echo '{}' >"$WORK_TMP/cache"
+if ! cmp -s "$WORK_TMP/cache" "$CACHE" && mkdir -p "$CACHE_DIR" 2>/dev/null; then
+  cache_tmp=$(mktemp "$CACHE.XXXXXX" 2>/dev/null) || cache_tmp=""
+  if [ -n "$cache_tmp" ]; then
+    chmod 600 "$cache_tmp"
+    if ! { cat "$WORK_TMP/cache" >"$cache_tmp" && mv -f "$cache_tmp" "$CACHE"; }; then rm -f "$cache_tmp"; fi
   fi
-  jq -c --argjson s "$summary" --argjson ti "$titles" --arg path "${t:-}" --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
-    def clip($n): if . == null then null else gsub("\\s+"; " ") | if length > $n then .[0:$n] + "…" else . end end;
-    (if .status == "waiting" then "needs_human"
+fi
+
+# 바뀐 transcript는 새로 뽑은 결과(cache에 있음)를, 키가 없던 것은 이번 결과(new)를 쓴다
+jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile cur "$WORK_TMP/cur.json" \
+  --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
+  def clip($n): if . == null then null else gsub("\\s+"; " ") | if length > $n then .[0:$n] + "…" else . end end;
+  ($cur[0] | map({(.sid): .path}) | add // {}) as $paths
+  | (($new | map({(.path): .}) | add // {}) + ($c[0] // {})) as $parsed
+  | [ .[] | ($paths[.sessionId] // "") as $path | ($parsed[$path] // {}) as $e
+    | ($e.summary // {}) as $s | ($e.titles // {}) as $ti
+    # 멈춘 세션: API 오류로 끊김(api_error) · 작업 중인데 프로세스가 없음(no_process). 작업 중으로 남기지 않는다.
+    | (if .status == "waiting" then null
+     elif $s.api_error == true then "api_error"
+     elif .status == "busy" and .pid == null then "no_process"
+     else null end) as $stall
+    | (if $stall != null then "blocked"
+     elif .status == "waiting" then "needs_human"
      elif .status == "busy" then "running"
      elif .state == "failed" then "needs_human"
      else "done" end) as $st
@@ -47,17 +176,20 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
        at: $at,
        title: ($ti.custom // (if (.name // "" | test("-[0-9a-f]{2}$")) then $ti.ai else null end) // .name // $ti.ai // .sessionId[0:8]),
        term: .name,
+       stall: $stall,
        detail: ((if .status == "waiting" then "에이전트가 응답·권한을 기다림\n"
+                 elif $stall == "api_error" then "API 오류로 응답이 끊김 — 다시 시작해야 이어짐\n"
+                 elif $stall == "no_process" then "작업 중으로 남았지만 세션 프로세스가 없음\n"
                  elif .state == "failed" then "백그라운드 세션이 실패함\n"
                  elif .pid == null then "세션 종료됨\n" else "" end)
                 + (if $s.prompt then "요청: " + ($s.prompt | clip(140)) else "" end)
                 + (if $s.reply then "\n— " + ($s.reply | clip(220)) else "" end)),
        reply_tail: ($s.reply_tail // null),
        agent: "claude", sid: .sessionId, short_id: (.id // .sessionId[0:8]), pid, cwd,
+       config_dir: (.config_dir // null),
        transcript: (if $path == "" then null else $path end),
        live: (.pid != null), status: .status, bg_state: .state,
        link: null, log: null, cmd: (if .kind == "background" then "claude attach \(.id // .sessionId[0:8])" else null end),
        id: "claude|\(.sessionId)"}
     | .actions = ((if .transcript then ["view"] else [] end)
-                  + (if .kind == "bg" and (.status == "idle" or .status == "waiting" or .pid == null) then ["send"] else [] end))' <<<"$a"
-done | jq -s .
+                  + (if .kind == "bg" and (.status == "idle" or .status == "waiting" or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"

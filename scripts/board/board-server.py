@@ -131,13 +131,74 @@ def status(max_age=3):
 
 
 def find_item(item_id, fresh=False):
+    """항목 찾기. 기본은 최근 캐시에서(나이 무관) — status.sh 전체를 다시 돌리지 않는다. 캐시에 없을 때만 새로 모은다."""
     if fresh:
         _cache["data"] = None
+    cached = _cache["data"]
+    if cached is not None:
+        hit = next((i for i in cached.get("items", []) if i.get("id") == item_id), None)
+        if hit is not None:
+            return hit
     return next((i for i in status()["items"] if i.get("id") == item_id), None)
+
+
+def live_agents(item, config_dir=None):
+    """정리 직전 확인: 그 설정 폴더에서 claude agents 목록을 새로 받는다(status.sh 전체 대신 이것만). 실패하면 None."""
+    cwd = item.get("cwd") if item.get("cwd") and os.path.isdir(item["cwd"]) else os.path.expanduser("~")
+    try:
+        agents = json.loads(claude(["agents", "--json", "--all"], cwd, timeout=15, config_dir=config_dir).stdout)
+    except Exception:
+        return None
+    return agents if isinstance(agents, list) else None
+
+
+def action_item(item_id, action):
+    """작업 대상 항목 → (item, 오류 메시지). 정리는 캐시 항목을 쓰되 세션의 프로세스 상태만 바로 다시 확인한다
+    (그 사이 상태가 화면이 확인한 수준보다 무거워졌으면 cleanup이 close_level·confirm 비교로 거절한다). 다른 작업은 예전처럼 새로 모은 목록에서 찾는다."""
+    if action != "cleanup":
+        item = find_item(item_id, fresh=True)
+        return (item, None) if item else (None, "항목이 이미 바뀌었음 — 다시 시도")
+    cached = find_item(item_id)
+    if cached is None:
+        return None, "항목이 이미 바뀌었음 — 다시 시도"
+    item = dict(cached)
+    if not _is_session(item):
+        return item, None
+    own_dir = item.get("config_dir") or None
+    agents = live_agents(item, own_dir)
+    if agents is None:
+        return None, "세션 상태를 확인하지 못함 — 잠시 뒤 다시 시도"
+    a = next((x for x in agents if isinstance(x, dict) and x.get("sessionId") == item["sid"]), None)
+    # worktree를 쓰는 다른 세션은 설정 폴더가 달라도 찾는다: 목록에 나온 폴더 전부 + 기본 폴더를 한 번씩 다시 부른다.
+    # 받지 못한 폴더는 _others_unchecked로 남겨 worktree 삭제만 막는다(세션 정리는 자기 폴더 확인으로 충분).
+    folders = [None] + sorted({i.get("config_dir") for i in (_cache["data"] or {}).get("items", [])
+                               if _is_session(i) and i.get("config_dir")})
+    others, unchecked = [x for x in agents if isinstance(x, dict)], []
+    for d in folders:
+        if d == own_dir:
+            continue
+        more = live_agents(item, d)
+        if more is None:
+            unchecked.append(d or "기본 폴더")
+        else:
+            others += [x for x in more if isinstance(x, dict)]
+    item["_others_unchecked"] = unchecked
+    if a is None or a.get("pid") is None:
+        item["live"] = False
+    else:
+        item["live"], item["status"] = True, a.get("status")
+        if a.get("status") == "busy":
+            item["state"] = "running"
+        elif a.get("status") != "idle":
+            item["state"] = "needs_human"
+    item["_live_others"] = [{"cwd": x.get("cwd") or "", "title": x.get("name") or str(x.get("sessionId") or "")[:8]}
+                            for x in others if x.get("pid") is not None and x.get("sessionId") != item["sid"]]
+    return item, None
 
 
 # ---- 읽음 표시 · 정리(숨김) ----
 SEEN = os.path.join(DATA, "board", "seen.json")  # sid -> 내가 마지막으로 본 시점의 활동 시각(item.at)
+UNREAD_MAX_AGE = 86400  # 살아 있지 않은 백그라운드 세션의 결과가 '읽지 않은 결과'에 머무는 최대 시간(초)
 HIDDEN = os.path.join(DATA, "board", "hidden.json")  # sid -> 정리한 시각. 대화 기록 파일은 지우지 않는다(harvest가 쓴다)
 _marks_lock = threading.Lock()
 
@@ -190,9 +251,12 @@ def classify_work(items):
                 continue
             sid = i["sid"]
             if sid in hidden:
-                if not i.get("live"):
+                h = hidden[sid]
+                hidden_at = str((h.get("at") if isinstance(h, dict) else h) or "")
+                # 닫는 중이라 아직 살아 있는 세션은 숨김 유지 — 숨긴 뒤 새 활동이 있을 때만 다시 보인다
+                if not i.get("live") or str(i.get("at") or "") <= hidden_at:
                     continue
-                hidden.pop(sid)  # 다시 살아난 세션은 다시 보인다
+                hidden.pop(sid)
                 unhide = True
             # 저장소 판정은 한 곳(repo_info): git 저장소 여부, worktree면 원래 저장소 이름으로 묶고 worktree 이름은 보조 정보로.
             apply_repo(i)
@@ -204,11 +268,13 @@ def classify_work(items):
             if i.get("state") == "done":
                 if first:
                     seen[sid] = i.get("at")
-                if (not i.get("live") and i.get("kind") == "agent") or (seen.get(sid) and seen[sid] >= (i.get("at") or "")):
+                # 끝난 대화형 세션, 이미 본 결과, 살아 있지 않은 백그라운드 세션의 하루 넘은 결과는 '끝난 일'로.
+                stale_bg = not i.get("live") and i.get("kind") == "bg" and time.time() - _epoch(i.get("at")) > UNREAD_MAX_AGE
+                if (not i.get("live") and i.get("kind") == "agent") or stale_bg or (seen.get(sid) and seen[sid] >= (i.get("at") or "")):
                     i["state"] = "idle"
                 else:
                     i["state"] = "review"
-            if can_close(i) or not i.get("live"):
+            if closable(i) or not i.get("live"):  # 상태와 관계없이 — 상태는 확인 수준(close_level)만 정한다
                 i["actions"] = i.get("actions", []) + ["cleanup"]
             out.append(i)
         if first:
@@ -292,17 +358,38 @@ def _git(path, *args):
     return out.returncode, out.stdout.strip()
 
 
+def closable(item):
+    """살아 있는 세션을 보드가 닫을 수 있는가(상태 무관): bg는 claude stop, 대화형은 그 Orca 터미널이 있어야 한다."""
+    return bool(item.get("live")) and (item.get("kind") == "bg" or bool(item.get("orca_handle")))
+
+
 def can_close(item):
-    """살아 있어도 쉬는 세션(응답을 끝내고 입력을 기다림)은 닫고 정리할 수 있다. 작업 중·질문 중은 안 됨."""
-    if not item.get("live") or item.get("status") != "idle" or item.get("state") not in ("idle", "review"):
-        return False
-    return item.get("kind") == "bg" or bool(item.get("orca_handle"))
+    """쉬는 세션(응답을 끝내고 입력을 기다림)인가 — 한꺼번에 정리는 이것만 대상으로 한다. 작업 중·답 대기는 아님."""
+    return closable(item) and item.get("status") == "idle" and item.get("state") in ("idle", "review")
+
+
+CLOSE_LEVELS = ("idle", "ask", "waiting", "busy")  # 가벼운 순. 화면은 이 수준으로 확인창을 고르고 정리 요청에 confirm으로 싣는다
+
+
+def close_level(item):
+    """정리 확인 수준: idle 쉬는 중·결과 확인 · ask 본문 질문 답 대기(프로세스 idle) · waiting 질문 도구·권한 요청 대기 · busy 작업 중."""
+    if not item.get("live"):
+        return "idle"
+    if item.get("status") == "busy" or item.get("state") == "running":
+        return "busy"
+    if item.get("status") != "idle" or item.get("permission"):
+        return "waiting"
+    return "ask" if item.get("ask") else "idle"
+
+
+def _level_rank(level):
+    return CLOSE_LEVELS.index(level) if level in CLOSE_LEVELS else 0
 
 
 def end_session(item):
     """세션을 끝낸다: bg는 claude stop, 대화형은 그 Orca 터미널을 닫는다. 대화 기록은 남아서 나중에 --resume 가능."""
     if item.get("kind") == "bg":
-        claude(["stop", item["short_id"]], item["cwd"], timeout=30)
+        claude(["stop", item["short_id"]], item["cwd"], timeout=30, config_dir=item.get("config_dir"))
     else:
         handle = item.get("orca_handle") or ""
         if not re.fullmatch(r"term_[0-9a-f-]{36}", handle):
@@ -339,26 +426,102 @@ def worktree_check(item):
     others = [i.get("title") for i in (_cache["data"] or {}).get("items", [])
               if i.get("section") == "work" and i.get("live") and i.get("sid") != item.get("sid")
               and (i.get("cwd", "") + "/").startswith(top + "/")]
+    others += [o.get("title") for o in item.get("_live_others") or []  # 정리 직전에 새로 확인한 살아 있는 세션
+               if (str(o.get("cwd") or "") + "/").startswith(top + "/") and o.get("title") not in others]
     if others:
         info["reason"] = "아직 이 폴더에서 돌고 있는 세션: " + ", ".join(others[:3])
+        return info
+    if item.get("_others_unchecked"):
+        info["reason"] = "다른 설정 폴더의 세션을 확인하지 못함(" + ", ".join(item["_others_unchecked"][:3]) + ")"
         return info
     info["removable"] = True
     return info
 
 
-def cleanup(item, with_worktree):
-    if item.get("live") and not can_close(item):
-        return {"ok": False, "message": "작업 중이거나 답을 기다리는 세션은 정리하지 않음"}
-    msg, wt = [], None
+_cleanup_failed = []  # 뒤에서 하던 정리가 실패한 기록 [{id, title, message, at, t}] — status.json으로 화면에 알린다
+CLEANUP_FAILED_KEEP = 600  # 초
+
+
+_cleaning = set()  # 뒤에서 정리하는 중인 항목 id — 같은 항목을 두 번 정리하지 않는다(두 탭·연속 클릭)
+
+
+def _note_cleanup_result(item, message=None):
+    """뒤에서 한 정리의 결과를 남긴다. 실패(message)면 알림을 바꿔 달고, 성공이면 그 항목의 지난 실패 알림을 지운다."""
+    now = time.time()
+    with _marks_lock:
+        _cleanup_failed[:] = [f for f in _cleanup_failed if now - f["t"] < CLEANUP_FAILED_KEEP and f["id"] != item.get("id")]
+        if message:
+            _cleanup_failed.append({"id": item.get("id"), "title": item.get("title"), "message": message, "at": utc(), "t": now})
+
+
+def recent_cleanup_failed():
+    now = time.time()
+    with _marks_lock:
+        return [{k: v for k, v in f.items() if k != "t"} for f in _cleanup_failed if now - f["t"] < CLEANUP_FAILED_KEEP]
+
+
+def cleanup(item, with_worktree, background=False, confirm=None):
+    """정리. 안전 확인(닫을 수 있는가·확인 수준·worktree 판정)은 항상 먼저 동기로 한다. 상태 때문에 거부하지 않고,
+    화면이 확인한 수준(confirm, 없으면 idle)보다 실제 상태가 무거울 때만 거부하며 그 수준을 돌려준다(화면이 새 경고로 다시 묻는다).
+    background면 숨긴 뒤 바로 돌려주고 세션 닫기(정지 대기 포함)·worktree 삭제는 뒤에서 한다 — 실패하면 숨김을 되돌리고 cleanup_failed로 알린다."""
+    if item.get("live") and not closable(item):
+        return {"ok": False, "message": "보드가 닫을 수 없는 세션 — 터미널에서 직접 닫아 주세요"}
+    level = close_level(item)
+    if _level_rank(level) > _level_rank(confirm):
+        return {"ok": False, "confirm": level, "message": "세션 상태가 바뀌었음 — 다시 확인해 주세요"}
+    if with_worktree and level == "busy":
+        return {"ok": False, "message": "worktree를 지우지 않음 — 작업 중인 세션은 파일이 바뀔 수 있음"}
+    wt = None
     if with_worktree:  # 세션을 닫기 전에 먼저 확인 — 지울 수 없으면 세션도 그대로 둔다
         wt = worktree_check(item)
         if not wt["removable"]:
             return {"ok": False, "message": "worktree를 지우지 않음 — " + wt.get("reason", "")}
+    if not background or not (item.get("live") or with_worktree):
+        return _finish_cleanup(item, wt)
+    with _marks_lock:
+        if item.get("id") in _cleaning:
+            return {"ok": False, "message": "이미 정리하는 중입니다 — 끝나면 목록에서 빠집니다"}
+        _cleaning.add(item.get("id"))
+    hide_items([item])  # 닫는 동안 목록에 되살아나지 않게 먼저 숨긴다
+
+    def run():
+        try:
+            res = _finish_cleanup(item, wt)
+        except Exception as e:
+            unhide_keys([_hide_key(item)])
+            res = {"ok": False, "message": f"정리하지 못함: {e}"}
+        _note_cleanup_result(item, None if res["ok"] else res["message"])
+        with _marks_lock:
+            _cleaning.discard(item.get("id"))
+        _cache["data"] = None
+        log({"id": item.get("id"), "action": "cleanup_done", **res})
+
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except RuntimeError as e:  # 스레드를 못 띄우면 숨김·진행 중 표시를 되돌린다
+        unhide_keys([_hide_key(item)])
+        with _marks_lock:
+            _cleaning.discard(item.get("id"))
+        return {"ok": False, "message": f"정리를 시작하지 못함: {e}"}
+    return {"ok": True, "pending": True,
+            "message": "정리하는 중 — " + ("세션을 닫고 " if item.get("live") else "") + ("worktree를 지우는 중" if with_worktree else "보드에서 숨김")}
+
+
+def _finish_cleanup(item, wt):
+    msg, kept = [], None
     if item.get("live"):
+        hide_items([item])  # 닫는 동안 목록에 되살아나지 않게 먼저 숨긴다
         if not end_session(item):
+            unhide_keys([_hide_key(item)])
             return {"ok": False, "message": "세션을 끝내지 못함 — 터미널에서 직접 닫아 주세요"}
         msg.append("세션 종료")
-    if with_worktree:
+        if wt:  # 확인한 뒤 닫히기 전까지 세션이 파일을 바꿨을 수 있다 — 닫은 뒤 다시 보고, 지울 수 없으면 남긴다
+            again = worktree_check(item)
+            if not again.get("removable"):
+                kept = again.get("reason") or "다시 확인하지 못함"
+                msg.append("worktree는 남김 — " + kept)
+                wt = None
+    if wt:
         if shutil.which("orca"):
             out = subprocess.run(["orca", "worktree", "rm", "--worktree", "path:" + wt["path"], "--json"],
                                  capture_output=True, text=True, timeout=60)
@@ -373,11 +536,15 @@ def cleanup(item, with_worktree):
             out = subprocess.run(["git", "-C", os.path.dirname(common), "worktree", "remove", wt["path"]],
                                  capture_output=True, text=True, timeout=60)
             if out.returncode != 0:
+                unhide_keys([_hide_key(item)])
                 return {"ok": False, "message": "worktree 삭제 실패: " + (out.stderr or out.stdout)[-200:]}
         msg.append(f"worktree 삭제({wt.get('branch')})")
     hide_items([item])
     _cache["data"] = None
-    return {"ok": True, "message": "정리함" + (" — " + ", ".join(msg) if msg else " — 보드에서 숨김(대화 기록은 남음)")}
+    res = {"ok": True, "message": "정리함" + (" — " + ", ".join(msg) if msg else " — 보드에서 숨김(대화 기록은 남음)")}
+    if kept:
+        res["worktree_kept"] = kept
+    return res
 
 
 # ---- 숨김(정리) 기록: 세션은 sid, 그 밖의 항목은 "item:<id>" ----
@@ -393,6 +560,13 @@ def hide_items(items):
             hidden[_hide_key(i)] = {"at": utc(), "item_at": i.get("at"), "title": i.get("title"), "project": i.get("project"),
                                     "section": i.get("section"), "kind": i.get("kind")}
         _save(HIDDEN, hidden)
+
+
+def unhide_keys(keys):
+    with _marks_lock:
+        hidden = _load(HIDDEN) or {}
+        if any([hidden.pop(k, None) is not None for k in keys]):
+            _save(HIDDEN, hidden)
 
 
 def drop_hidden(items):
@@ -471,6 +645,29 @@ def bulk_plan(items, older_days=0):
     return rows
 
 
+def bulk_left(items, older_days=0):
+    """정리 대상이 아니라 남는 항목(작업 현황·하네스 동작·자동 수정)을 이유별로 센다: [{reason, count, label}], 0건인 이유는 뺀다."""
+    target_ids = {id(i) for i in bulk_targets(items, older_days)}
+    count = {"too_recent": 0, "in_use": 0, "waiting": 0, "unseen": 0, "unfinished": 0}
+    for i in items:
+        if id(i) in target_ids or i.get("section") not in ("work", "harness", "autofix"):
+            continue
+        if i.get("state") == "needs_human" or i.get("ask") or i.get("permission"):
+            count["waiting"] += 1
+        elif i.get("state") == "running" or (_is_session(i) and i.get("live") and not can_close(i)):
+            count["in_use"] += 1
+        elif i.get("state") in DONE_STATES:
+            count["too_recent"] += 1
+        elif i.get("state") == "review":
+            count["unseen"] += 1
+        else:
+            count["unfinished"] += 1
+    span = "하루" if older_days == 1 else "일주일" if older_days == 7 else f"{older_days:g}일"
+    label = {"too_recent": f"{span} 안 된 {{n}}건은 남겨 둠", "in_use": "지금 쓰는 세션 {n}건 제외",
+             "waiting": "답·확인을 기다리는 {n}건 제외", "unseen": "아직 확인하지 않은 결과 {n}건 제외", "unfinished": "아직 끝나지 않은 {n}건 제외"}
+    return [{"reason": r, "count": n, "label": label[r].format(n=n)} for r, n in count.items() if n]
+
+
 def bulk_cleanup(req, items=None):
     """끝난 일을 한꺼번에 정리한다. 기본은 목록에서 숨기기 + 쉬는 세션 닫기, worktree는 req.worktree일 때 지울 수 있는 것만."""
     if not _bulk_lock.acquire(blocking=False):
@@ -480,7 +677,7 @@ def bulk_cleanup(req, items=None):
         older = req.get("older_days")
         older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
         if req.get("dry_run"):
-            return {"ok": True, "plan": bulk_plan(items, older)}
+            return {"ok": True, "plan": bulk_plan(items, older), "left": bulk_left(items, older)}
         targets = bulk_targets(items, older)
         if isinstance(req.get("ids"), list):
             want = set(req["ids"])
@@ -496,11 +693,13 @@ def bulk_cleanup(req, items=None):
             use_wt = bool(wt and wt.get("removable"))
             res = cleanup(i, use_wt)
             r = {"id": i.get("id"), "title": i.get("title"), "ok": res["ok"], "hidden": res["ok"],
-                 "closed": bool(res["ok"] and i.get("live")), "worktree_removed": bool(res["ok"] and use_wt)}
+                 "closed": bool(res["ok"] and i.get("live")), "worktree_removed": bool(res["ok"] and use_wt and not res.get("worktree_kept"))}
             if not res["ok"]:
                 r["reason"] = res["message"]
             elif want_wt and not use_wt:
                 r["worktree_kept"] = (wt or {}).get("reason") or "지울 수 없는 worktree"
+            elif res.get("worktree_kept"):
+                r["worktree_kept"] = res["worktree_kept"]
             results.append(r)
         if others:
             hide_items(others)
@@ -515,7 +714,9 @@ def bulk_cleanup(req, items=None):
             parts.append(f"worktree {n['worktrees']}개 삭제")
         if n["skipped"]:
             parts.append(f"건너뜀 {n['skipped']}개")
-        return {"ok": True, "message": " · ".join(parts) if results else "정리할 끝난 일이 없습니다", "results": results, "counts": n}
+        left = bulk_left(items, older)
+        message = " · ".join(parts) if results else "정리할 끝난 일이 없습니다"
+        return {"ok": True, "message": message + "".join(" · " + l["label"] for l in left), "results": results, "left": left, "counts": n}
     finally:
         _bulk_lock.release()
 
@@ -904,6 +1105,9 @@ def decide_permission(pid, decision):
 
 def status_with_permissions():
     data = status()
+    failed = recent_cleanup_failed()
+    if failed:  # 캐시 원본은 그대로 두고 응답에만 싣는다
+        data = {**data, "cleanup_failed": failed}
     pend = [p["info"] for p in list(_perms.values())]
     if not pend:
         return data
@@ -941,9 +1145,14 @@ def remove_hook_conf():
 
 
 # ---- 세션 작업 ----
-def claude(args, cwd, timeout=60):
+def claude(args, cwd, timeout=60, config_dir=None):
+    """claude CLI 호출. config_dir은 status 항목에서 온 값만(브라우저 입력 아님) — 없으면 CLAUDE_CONFIG_DIR을 빼 기본 폴더로 부른다."""
     env = {**os.environ}
     env.pop("CLAUDECODE", None)
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
     return subprocess.run(["claude", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
 
 
@@ -974,10 +1183,10 @@ def send_to_bg(item, text):
     if item.get("status") == "busy":
         return {"ok": False, "message": "작업 중인 세션 — 끝난 뒤 보내세요"}
     if item.get("live"):
-        claude(["stop", item["short_id"]], item["cwd"], timeout=30)
+        claude(["stop", item["short_id"]], item["cwd"], timeout=30, config_dir=item.get("config_dir"))
         if not wait_stopped(item):  # 덜 멈춘 채 깨우면 복사본이 생긴다
             return {"ok": False, "message": "세션이 멈추지 않음 — 잠시 뒤 다시 보내세요"}
-    out = claude(["--bg", "--resume", item["sid"], text], item["cwd"])
+    out = claude(["--bg", "--resume", item["sid"], text], item["cwd"], config_dir=item.get("config_dir"))
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "copy" not in msg:
         return {"ok": True, "message": "보냄 — 세션이 이어서 작업함"}
@@ -988,7 +1197,7 @@ def wait_stopped(item, seconds=20):
     end = time.time() + seconds
     while time.time() < end:
         try:
-            agents = json.loads(claude(["agents", "--json", "--all"], item["cwd"], timeout=15).stdout)
+            agents = json.loads(claude(["agents", "--json", "--all"], item["cwd"], timeout=15, config_dir=item.get("config_dir")).stdout)
             a = next((x for x in agents if x.get("sessionId") == item["sid"]), None)
             if a is None or a.get("pid") is None:
                 return True
@@ -1066,7 +1275,7 @@ def new_bg(cwd, prompt, name=None):
         return {"ok": False, "message": "작업 경로가 없거나 절대 경로가 아님"}
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8000:
         return {"ok": False, "message": "첫 지시가 비었거나 너무 김"}
-    args = ["--bg"] + (["--name", name[:80]] if name else []) + [prompt]
+    args = ["--bg"] + (["--name", name[:160]] if name else []) + [prompt]  # 이름 끝의 시그니처가 잘리면 카드와 이어지지 않는다
     out = claude(args, cwd)
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "backgrounded" in msg:
@@ -1129,10 +1338,12 @@ def run_action(item, action, req):
     if action == "send":
         return send_to_bg(item, req.get("text"))
     if action == "cleanup":
-        res = cleanup(item, bool(req.get("worktree")))
-        return res
+        return cleanup(item, bool(req.get("worktree")), background=True, confirm=req.get("confirm"))
     if action == "open_agent":
-        return new_bg(item["repo"], prompt_for(item), name=f"{item['project']} {item['title']}")
+        # 자동 수정 카드는 원문 로그 제목 대신 시그니처로 이름을 붙인다(원문이 세션 이름으로 새지 않고, 시그니처로 카드와 이어진다)
+        name = (f"{item['project']} 에러 이어 보기 {item['signature']}" if item.get("kind") == "autofix" and item.get("signature")
+                else f"{item['project']} {item['title']}")
+        return new_bg(item["repo"], prompt_for(item), name=name)
     if action == "harvest_now":
         out = subprocess.run(["bash", os.path.join(DIR, "board-actions.sh"), "harvest-now", item["project"]],
                              capture_output=True, text=True, timeout=120)
@@ -1183,7 +1394,10 @@ class Handler(BaseHTTPRequestHandler):
             item = find_item(q.get("id", [None])[0])
             if not item or "cleanup" not in item.get("actions", []):
                 return self._send(404, {"ok": False, "message": "정리할 수 있는 세션이 아님"})
-            return self._send(200, {"ok": True, "worktree": worktree_check(item)})
+            level = close_level(item)
+            wt = (worktree_check(item) if level != "busy" else
+                  {"path": item.get("cwd"), "removable": False, "reason": "작업 중인 세션은 파일이 바뀔 수 있어 지우지 않음"})
+            return self._send(200, {"ok": True, "level": level, "worktree": wt})
         if u.path == "/settings":
             return self._send(200, settings_state())
         if u.path == "/repos":
@@ -1301,8 +1515,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path != "/action":
             return self._send(404, {"error": "not found"})
-        item = find_item(req.get("id"), fresh=True)
-        res = {"ok": False, "message": "항목이 이미 바뀌었음 — 다시 시도"} if item is None else run_action(item, req.get("action"), req)
+        item, err = action_item(req.get("id"), req.get("action"))
+        res = {"ok": False, "message": err} if item is None else run_action(item, req.get("action"), req)
         _cache["data"] = None
         log({"id": req.get("id"), "action": req.get("action"), "chars": len(req.get("text") or ""), **res})
         self._send(200, res)

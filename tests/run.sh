@@ -831,7 +831,7 @@ assert_contains "$FEATURE_SKILL_CONTENT" "Do not edit before explicit approval" 
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
-# 커밋·push·PR과 승인 대기는 어댑터 문구가 아니라 manifest의 git_policy·approval이 정한다.
+# 커밋·push·PR은 manifest의 git_policy, 승인 대기는 개인 설정이 정한다.
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 for adapter in implement-feature fix-bug review; do
   ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
@@ -849,11 +849,12 @@ for adapter in implement-feature fix-bug; do
   assert_contains "$ADAPTER_CONTENT" "Missing or any other value — leave issue status alone" "$adapter adapter leaves issues alone without issue_policy"
 done
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
-assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
-assert_contains "$HARNESS_INIT_CONTENT" '"approval": "human"' "manifest records the approval mode"
+assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors personal approval auto"
+assert_contains "$HARNESS_INIT_CONTENT" 'HM_APPROVAL' "harness init documents personal approval settings"
+assert_contains "$HARNESS_INIT_CONTENT" 'HM_APPROVAL_REPOS' "harness init documents repository-specific approval settings"
+[[ "$HARNESS_INIT_CONTENT" != *'"approval": "human"'* ]] || fail "harness init does not write approval to the manifest"
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$HARNESS_INIT_CONTENT" '`approval`이 없으면 `human`으로 본다' "a manifest without approval keeps the human gate"
+assert_contains "$HARNESS_INIT_CONTENT" '기존 `approval` 값은 보존' "harness init preserves legacy approval fields and asks for review"
 assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
 
@@ -920,7 +921,9 @@ DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
 driver() { # args... → DRIVER_RC, DRIVER_OUT
   DRIVER_RC=0
-  DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+  DRIVER_DATA="${DRIVER_DATA_OVERRIDE:-$DRIVER_TMP/data}"
+  mkdir -p "$DRIVER_DATA"
+  DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_DATA" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
     FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK="${FAKE_CHECK:-true}" PATH="$ROOT/tests/fixtures/driver:$PATH" \
     bash "$DRIVER" "$@" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
 }
@@ -928,6 +931,8 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   FAKE_SCENARIO="$1"
   DRIVER_REPO="$DRIVER_TMP/repo-$1"
   FAKE_LOG="$DRIVER_TMP/$1.log"
+  mkdir -p "$DRIVER_TMP/data"
+  : >"$DRIVER_TMP/data/config"
   mkdir -p "$DRIVER_REPO"
   git -C "$DRIVER_REPO" init -q
   git -C "$DRIVER_REPO" config user.email t@t
@@ -1110,12 +1115,13 @@ assert_eq "40" "$DRIVER_RC" "an edge missing from the project graph cannot be ta
 assert_contains "$DRIVER_OUT" "graph declares no transition from 'review'" "the runner names the undeclared edge"
 
 # harness.json의 approval·git_policy가 사람 대기와 git 단계를 정한다.
-with_policy() { # git_policy approval → 저장소에 manifest를 커밋하고 bare remote를 붙인다
+with_policy() { # git_policy 개인 승인 모드 → 저장소 manifest와 개인 설정을 준비한다
   mkdir -p "$DRIVER_REPO/.ai-harness"
-  jq -n --arg g "$1" --arg a "$2" '{level:"standard", git_policy:$g} + (if $a == "" then {} else {approval:$a} end)' >"$DRIVER_REPO/.ai-harness/harness.json"
+  jq -n --arg g "$1" --arg id "$(basename "$DRIVER_REPO")" '{project_id:$id, level:"standard", git_policy:$g}' >"$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m manifest
   git init -q --bare "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
   git -C "$DRIVER_REPO" remote add origin "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+  if [[ -n "$2" ]]; then printf 'HM_APPROVAL=%s\n' "$2" >"$DRIVER_TMP/data/config"; else : >"$DRIVER_TMP/data/config"; fi
 }
 new_driver_repo auto_pr
 with_policy pr-only auto
@@ -1123,6 +1129,9 @@ driver start --runtime codex --request "add feature"
 assert_eq "0:done:auto-policy" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "approval auto passes the gate without a person and reaches done"
 assert_contains "$(run_state '[.history[].outcome] | join(",")')" "auto_approved_by_policy" "auto approval follows the declared graph edge"
 assert_file "$(run_state .approval.brief)"
+assert_eq "HM_APPROVAL" "$(run_state .policy.approval_source)" "the selected approval source stays in run state"
+APPROVAL_BRIEF="$(run_state .approval.brief)"
+assert_contains "$(<"$APPROVAL_BRIEF")" "승인 모드: auto (출처: HM_APPROVAL)" "brief.md records the approval mode and source for the PR body"
 assert_eq "https://example.test/pr/7" "$(run_state .publish.pr_url)" "pr-only opens a PR in the publish node"
 assert_contains "$DRIVER_OUT" "PR: https://example.test/pr/7" "done reports the PR"
 assert_eq "publish workspace-write schema=yes net=yes;remote_ci workspace-write schema=yes net=yes" "$(tail -n 2 "$FAKE_LOG" | paste -sd ';' -)" "publish writes with network access, then remote_ci reads CI with network access and a schema"
@@ -1221,6 +1230,7 @@ assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "## �
 assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "which plan tier? → free tier only — smallest scope that meets the request" "brief.md records question, choice, and rationale"
 assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "free tier only" "deliver implements the brief with its decisions"
 assert_contains "$(<"$FAKE_LOG.publish.prompt")" "which plan tier? → free tier only" "publish receives the decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "승인 모드: auto (출처: HM_APPROVAL)" "PR instructions carry the resolved approval mode and source"
 assert_contains "$(<"$FAKE_LOG.publish.prompt")" '"결정 사항"' "publish is told to copy decisions into the PR body section"
 
 new_driver_repo auto_needs_human
@@ -1245,10 +1255,40 @@ assert_eq "10" "$DRIVER_RC" "a project graph without the auto edge keeps the hum
 new_driver_repo human_pr
 with_policy pr-only ""
 FAKE_CHECK="grep -q fixed feature.txt" driver start --runtime codex --request "add feature"
-assert_eq "10:human" "$DRIVER_RC:$(run_state .policy.approval)" "approval defaults to human when the manifest has no approval field"
+assert_eq "10:human:default" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "approval defaults to human and records the default source"
 say_in_claude "승인"
 driver resume
 assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state '.checkpoints | length')" "a human-approved pr-only run checkpoints deliver and each repair, then opens a PR"
+
+new_driver_repo approval_repo
+with_policy pr-only ""
+printf 'HM_APPROVAL=auto\nHM_APPROVAL_REPOS="repo-approval_repo=human,elsewhere=auto"\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "10:human:HM_APPROVAL_REPOS:repo-approval_repo" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "a matching repository approval setting overrides the global setting"
+
+new_driver_repo approval_global
+with_policy pr-only ""
+printf 'HM_APPROVAL=auto\nHM_APPROVAL_REPOS="another=human"\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "0:auto:HM_APPROVAL" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "the global approval setting applies without a matching repository entry"
+
+new_driver_repo manifest_approval
+with_policy pr-only ""
+jq '.approval = "auto"' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/manifest.json" && mv "$DRIVER_REPO/manifest.json" "$DRIVER_REPO/.ai-harness/harness.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m legacy-approval
+: >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "10:human:default" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "a legacy manifest approval value is ignored"
+assert_eq "1" "$(grep -c 'notice: .ai-harness/harness.json approval is ignored' <<<"$DRIVER_OUT")" "a legacy manifest approval value produces one migration notice"
+
+# 승인 모드 오타를 human으로 조용히 읽지 않는다 — 시작하지 않고 고칠 키를 알린다.
+new_driver_repo approval_invalid
+with_policy pr-only ""
+printf 'HM_APPROVAL=yes\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "an invalid personal approval value stops the start"
+assert_contains "$DRIVER_OUT" "approval must be human or auto" "the invalid approval value is named"
+: >"$DRIVER_TMP/data/config"
 
 new_driver_repo publish_unpushed
 with_policy pr-only auto
@@ -1372,7 +1412,7 @@ as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 
 MR_DATA="$DRIVER_TMP/merge-data"
 mkdir -p "$MR_DATA"
 merge_config() { # merge-settings-json → 개인 config: 검증에 배포·스모크·재발 추적이 있으면 단계 deploy, 아니면 merge. 조건·방식은 HM_MERGE_*
-  jq -r '"HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
+  jq -r '"HM_APPROVAL=auto", "HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
     (if .require then "HM_MERGE_REQUIRE=\"" + (.require | join(" ")) + "\"" else empty end),
     (if .min_approvals then "HM_MERGE_MIN_APPROVALS=\(.min_approvals)" else empty end),
     (if .method then "HM_MERGE_METHOD=\(.method)" else empty end)' <<<"$1" >"$MR_DATA/config"
@@ -1385,7 +1425,8 @@ merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사
     && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config "$2"
-  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+  cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 }
 # 병합은 호스트가 필수 승인을 거는 기준 브랜치에만 한다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
 export FAKE_PROTECTION=classic
@@ -1452,7 +1493,7 @@ merge_run merge_noapproval '{"require":["remote_ci"],"method":"merge","verify":[
 assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the host's required approval is a floor even when the personal conditions leave approval out"
 assert_contains "$DRIVER_OUT" "human approval: 0 of 1" "the wait names the approval the host requires"
 touch "$FAKE_LOG.approved"
-HARNESS_METRICS_DIR="$MR_DATA" driver resume
+DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver resume
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "resume merges once the host-required approval arrives"
 assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows HM_MERGE_METHOD"
 # 원격 CI가 없다는 보고는 remote_ci 조건을 채우지 못한다.
@@ -1510,7 +1551,8 @@ monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_
     "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config '{"require":["human_approval"],"verify":["monitor"]}'
-  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
+  cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
 }
 mkdir -p "$DRIVER_TMP/plugin/scripts"
 cat >"$DRIVER_TMP/plugin/scripts/autofix-auto.sh" <<'EOF'
@@ -1562,7 +1604,8 @@ jq 'del(.nodes.merge, .nodes.post_merge_verify) | .transitions |= map(select(.fr
   "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
 git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -qm "old graph"
 merge_config "$MP_BASIC"
-HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "a project graph without the merge node never merges"
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
 rm -f "$MR_DATA/config"
@@ -1578,8 +1621,9 @@ delivery_run() { # scenario git_policy harness-jq-filter config-text [host/owner
   as_host_repo "${5:-github.com/acme/app}"
   jq "$3" "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
-  printf '%s\n' "$4" >"$DL_DATA/config"
-  HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
+  printf 'HM_APPROVAL=auto\n%s\n' "$4" >"$DL_DATA/config"
+  cp "$DL_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$DL_DATA" HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
 }
 DL_FACTS='.project_id = "acme-app" | .merge_policy = {base: "main", deploy_check_cmd: "true", smoke_cmd: "true"}'
 gh_merges() { grep -c '^gh merge' "$FAKE_LOG" || true; }
@@ -3840,7 +3884,7 @@ assert_eq "exit_3" "$(jq -r '.components.harvest_auto.last_error' "$AUTO_DATA/he
 assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
 # 실제 claude 실행 인자: 허용 목록의 스크립트 경로와 로드되는 플러그인이 같은 설치본이어야 한다.
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
-AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/scripts/harvest-auto.sh")"
+AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh")"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '--plugin-dir "$ROOT"' "agent loads the same plugin copy it is allowed to run"
 # shellcheck disable=SC2016
@@ -3867,6 +3911,93 @@ assert_contains "$(sed -n '/    codex)$/,/;;/p' "$ROOT/scripts/harvest-auto.sh")
 HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=9 HM_HARVEST_AUTO_AGENT=claude AUTO_STUB_MODE=cost \
   auto_trigger "$(auto_status auto-svc b-cost)" "$AUTO_REPO"
 assert_eq "0.12" "$(auto_runs '[.[] | select(.event=="finished")] | last | .cost_usd')" "cost is read past stderr notices"
+# 진행 기록(#296): 시간 제한으로 끊겨도 어디까지 갔는지 보이려면 claude 실행이 stream-json이어야 하고, 출력은 필터를 거쳐 로그에 남는다.
+HARVEST_AUTO_SRC="$(<"$ROOT/scripts/harvest-auto.sh")"
+assert_file "$ROOT/scripts/agent-progress.jq"
+assert_eq "0" "$(grep -c -e '--output-format json)' "$ROOT/scripts/harvest-auto.sh" || true)" "no claude run keeps the single-result json output format"
+[[ "$(grep -c -e '--output-format stream-json --verbose)' "$ROOT/scripts/harvest-auto.sh" || true)" -ge 2 ]] \
+  || fail "project/sync and global claude runs use stream-json with --verbose"
+assert_contains "$HARVEST_AUTO_SRC" "agent-progress.jq" "the agent output goes through the progress filter before it reaches the log"
+pass "harvest-auto claude runs stream their progress through the filter"
+
+# 필터 단위: 도구 호출은 progress 줄, result는 그대로, JSON이 아닌 줄은 stderr 줄. 파일 내용·모델 문장·명령 인자·본문은 디스크에 남기지 않는다.
+AGENT_STREAM_FIX="$ROOT/tests/fixtures/agent-stream/sample.ndjson"
+AGENT_STREAM_OUT="$(jq -R -c -f "$ROOT/scripts/agent-progress.jq" "$AGENT_STREAM_FIX")"
+assert_eq "progress,result,stderr" "$(jq -sr '[.[].type] | unique | join(",")' <<<"$AGENT_STREAM_OUT")" "the filter emits only progress, result and stderr lines"
+assert_eq "Read,Bash,Bash,Write,Edit,Grep,Agent,Read" "$(jq -sr '[.[] | select(.type == "progress") | .tool] | join(",")' <<<"$AGENT_STREAM_OUT")" "one progress line per tool call, in order"
+assert_eq "true" "$(jq -sr '[.[] | select(.type == "progress") | .at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")] | all' <<<"$AGENT_STREAM_OUT")" "progress lines carry an ISO time"
+AGENT_STREAM_TARGETS="$(jq -sr '[.[] | select(.type == "progress") | .target] | @json' <<<"$AGENT_STREAM_OUT")"
+assert_eq "예시 서버 상태 확인" "$(jq -r '.[1]' <<<"$AGENT_STREAM_TARGETS")" "a Bash call shows its description"
+assert_eq "gh" "$(jq -r '.[2]' <<<"$AGENT_STREAM_TARGETS")" "a Bash call without a description shows only the command name"
+assert_eq "true" "$(jq -r '(.[0] | endswith("config/app.yml")) and (.[3] | endswith("notes.md")) and (.[4] | endswith("src/cart.py"))' <<<"$AGENT_STREAM_TARGETS")" "file tools show the file path"
+AGENT_STREAM_PAT="$(jq -R -r 'fromjson? | select(.message.content[0].name? == "Grep") | .message.content[0].input.pattern' "$AGENT_STREAM_FIX")"
+assert_contains "$(jq -r '.[5]' <<<"$AGENT_STREAM_TARGETS")" "${AGENT_STREAM_PAT:0:60}" "a Grep call shows the start of its pattern"
+[[ "$(jq -r '.[5]' <<<"$AGENT_STREAM_TARGETS")" != *"${AGENT_STREAM_PAT:0:61}"* ]] || fail "a Grep pattern is cut at 60 characters"
+assert_eq "true" "$(jq -r 'all(.[]; length <= 160)' <<<"$AGENT_STREAM_TARGETS")" "targets are cut at 160 characters"
+assert_eq "$(jq -R -c 'fromjson? | select(.type == "result")' "$AGENT_STREAM_FIX")" "$(jq -c 'select(.type == "result")' <<<"$AGENT_STREAM_OUT")" "the result event passes through unchanged"
+assert_eq "3" "$(jq -s '[.[] | select(.type == "stderr")] | length' <<<"$AGENT_STREAM_OUT")" "each non-JSON line becomes a stderr line"
+assert_eq "Ignoring 19 permissions.allow entries: workspace not trusted" "$(jq -sr '[.[] | select(.type == "stderr")] | .[0].text' <<<"$AGENT_STREAM_OUT")" "a stderr notice keeps its text"
+assert_eq "true" "$(jq -sr '[.[] | select(.type == "stderr") | .text | length] | all(. <= 300)' <<<"$AGENT_STREAM_OUT")" "stderr text is cut at 300 characters"
+for AGENT_STREAM_SECRET in MODEL_SENTENCE_ONE MODEL_SENTENCE_TWO FILE_CONTENT_SECRET FAKE_KEY_0000 FAKE_TOKEN_123 FAKE_TITLE_ARG FAKE_BODY_ARG \
+  WRITE_BODY_SECRET EDIT_OLD_SECRET EDIT_NEW_SECRET AGENT_PROMPT_SECRET STDERR_TAIL_MARK; do
+  case "$AGENT_STREAM_OUT" in *"$AGENT_STREAM_SECRET"*) fail "the filter drops $AGENT_STREAM_SECRET (file contents, model sentences, command arguments, bodies, prompts)" ;; esac
+done
+# 이상한 도구 입력(문자열이 아닌 command)이 있어도 원문 줄을 stderr 줄로 흘리지 않는다(jq 1.6 try/catch가 뒤쪽 오류까지 잡는 문제).
+AGENT_STREAM_ODD='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"a.txt","content":"ODD_WRITE_SECRET"}},{"type":"tool_use","name":"Bash","input":{"command":["ODD_ARG_SECRET"]}}]}}'
+AGENT_STREAM_ODD_OUT="$(jq -R -c -f "$ROOT/scripts/agent-progress.jq" <<<"$AGENT_STREAM_ODD" 2>/dev/null || true)"
+case "$AGENT_STREAM_ODD_OUT" in *ODD_WRITE_SECRET*|*ODD_ARG_SECRET*|*'"type":"stderr"'*) fail "an odd tool input does not leak the raw event as a stderr line" ;; esac
+assert_eq "Write" "$(jq -sr '[.[] | select(.type == "progress") | .tool] | first // empty' <<<"$AGENT_STREAM_ODD_OUT")" "an odd tool input still leaves the progress lines before it"
+pass "agent-progress.jq keeps tool calls and the result, and drops contents, sentences and arguments"
+
+# 가짜 claude로 무인 실행을 한 번 돌린다: 로그에 progress·result 줄이 남고 비용 파싱이 그대로이며, 끊겨도 종료 코드가 남고, 빈 로그는 지운다.
+AUTO_FAKE="$TEST_TMP/auto-fake-claude"
+AUTO_FAKE_DATA="$AUTO_FAKE/data"
+mkdir -p "$AUTO_FAKE/bin"
+cat >"$AUTO_FAKE/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_CLAUDE_ARGS"
+case "${FAKE_CLAUDE_MODE:-stream}" in
+  silent) exit 0 ;;
+  fail) echo "stderr notice from the agent" >&2; head -n 6 "$FAKE_CLAUDE_STREAM"; exit 3 ;;
+  *) echo "stderr notice from the agent" >&2; cat "$FAKE_CLAUDE_STREAM" ;;
+esac
+FAKE
+chmod +x "$AUTO_FAKE/bin/claude"
+auto_fake_run() { # $1=batch $2=mode
+  PATH="$AUTO_FAKE/bin:$PATH" HARNESS_METRICS_DIR="$AUTO_FAKE_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1 \
+    HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_AUTO_DAILY_MAX=9 FAKE_CLAUDE_MODE="$2" FAKE_CLAUDE_ARGS="$AUTO_FAKE/args.log" \
+    FAKE_CLAUDE_STREAM="$AGENT_STREAM_FIX" "$ROOT/scripts/harvest-auto.sh" trigger "$(auto_status auto-svc "$1")" "$AUTO_REPO" claude
+}
+auto_fake_finished() { jq -sr "[.[] | select(.event==\"finished\")] | last | $1" "$AUTO_FAKE_DATA/harvest-auto/runs.jsonl"; }
+auto_fake_run b-stream stream
+AUTO_FAKE_LOG="$(auto_fake_finished '.log')"
+assert_file "$AUTO_FAKE_LOG"
+assert_contains "$(<"$AUTO_FAKE/args.log")" "--output-format stream-json" "the agent is asked for a stream"
+assert_contains "$(<"$AUTO_FAKE/args.log")" "--verbose" "stream-json needs --verbose"
+assert_eq "8" "$(jq -R -c 'fromjson? | select(.type == "progress")' "$AUTO_FAKE_LOG" | wc -l | tr -d ' ')" "the log keeps one progress line per tool call"
+assert_eq "1" "$(jq -R -c 'fromjson? | select(.type == "result")' "$AUTO_FAKE_LOG" | wc -l | tr -d ' ')" "the log keeps the result line"
+assert_contains "$(<"$AUTO_FAKE_LOG")" '"text":"stderr notice from the agent"' "a stderr notice is kept as a stderr line"
+case "$(<"$AUTO_FAKE_LOG")" in *FILE_CONTENT_SECRET*|*MODEL_SENTENCE*|*FAKE_TOKEN*) fail "the run log carries no file contents, model sentences or command arguments" ;; esac
+assert_eq "0.34" "$(auto_fake_finished '.cost_usd')" "the cost is still read from the result line"
+assert_eq "0" "$(auto_fake_finished '.exit_code')" "a streamed run ends with the agent's exit code"
+pass "harvest-auto run with a streaming agent leaves progress and result lines and keeps the cost"
+
+# 끊긴 실행: 에이전트가 비정상 종료해도(pipefail) 종료 코드가 남고, 그때까지의 진행 줄은 로그에 있다.
+auto_fake_run b-fail fail
+assert_eq "failed|3" "$(auto_fake_finished '"\(.result)|\(.exit_code)"')" "the agent's exit code survives the progress filter"
+assert_contains "$(<"$(auto_fake_finished '.log')")" '"type":"progress"' "progress made before the agent died is in the log"
+pass "harvest-auto keeps the agent exit code and the progress so far when the agent dies"
+
+# 아무것도 못 남긴 실행의 0바이트 로그는 지운다(보드가 빈 로그 서랍을 열지 않게).
+auto_fake_run b-silent silent
+assert_not_file "$(auto_fake_finished '.log')"
+pass "harvest-auto removes an empty log after the run"
+
+# 사용자·테스트 실행기(HM_HARVEST_AUTO_CMD)는 필터를 거치지 않는다: 출력이 그대로 로그에 남는다.
+AUTO_RAW_LOG="$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"  # 바로 앞 b-cost 실행
+assert_contains "$(<"$AUTO_RAW_LOG")" "Ignoring 19 permissions.allow entries: workspace not trusted" "a custom runner's output is logged as is"
+case "$(<"$AUTO_RAW_LOG")" in *'"type":"stderr"'*) fail "a custom runner's output does not go through the progress filter" ;; esac
+pass "harvest-auto custom runner bypasses the progress filter"
 # 기준 브랜치: origin/HEAD(master)에는 하네스가 없고 develop에만 있으면 develop에서 작업한다.
 BASE_ORIGIN="$TEST_TMP/base-origin.git"
 BASE_REPO="$TEST_TMP/base-repo"
@@ -3948,10 +4079,10 @@ if (cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t -
 fi
 git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
 PR_NOAUTH_RC=0
-(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
 assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
 PR_CHECK_RC=0
-(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
+(cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --check >/dev/null 2>&1) || PR_CHECK_RC=$?
 assert_eq "4" "$PR_CHECK_RC" "pre-push check fails without credentials"
 git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
 PR_CHECK_RC=0
@@ -4256,7 +4387,7 @@ HARNESS_METRICS_DIR="$SCOPE_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1
   "$ROOT/scripts/harvest-auto.sh" trigger "$(auto_status ws b-ws errors)" "$APPLY_HOME/ws"
 assert_eq "ws|1|$(cd "$APPLY_HOME/ws" && pwd -P)" "$(cat "$TEST_TMP/scope-stub.out")" "workspace batch runs in the workspace root"
 # shellcheck disable=SC2016
-SCOPED_ARGS="$(sed -n '/--scope $scope"/,/--output-format json)/p' "$ROOT/scripts/harvest-auto.sh")"
+SCOPED_ARGS="$(sed -n '/--scope $scope"/,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh")"
 assert_contains "$SCOPED_ARGS" '--permission-mode dontAsk' "scoped runs deny anything not pre-approved"
 assert_contains "$SCOPED_ARGS" '--disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit"' "scoped runs cannot edit files directly"
 # 전역 실행은 주기(기본 7일)마다 한 번, 다른 실행이 없을 때만.
@@ -4329,7 +4460,7 @@ HARD_ARGS="$(sed -n '/local deny_args=/,/done < <(codex_session_roots)/p' "$ROOT
 assert_contains "$HARD_ARGS" '"Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)"' "data dir (config, shim) is not writable by the agent"
 assert_contains "$HARD_ARGS" '"Bash(git -C *)" "Bash(git reset*)" "Bash(git clean*)"' "destructive git is denied"
 # shellcheck disable=SC2016
-if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/,/--output-format json)/p' "$ROOT/scripts/harvest-auto.sh"); then
+if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh"); then
   fail "project runs must not get blanket git access"
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
@@ -4727,7 +4858,7 @@ mkdir -p "$PRS_STUB_DIR"
 cat >"$PRS_STUB_DIR/pr" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
-  --status) id="${2##*/}"; [[ ! -f "$PRS_STUB_DIR/down" ]] || exit 5; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
+  --status) id="${2##*/}"; [[ -z "${PRS_STUB_NOCREDS:-}" ]] || exit 4; [[ ! -f "$PRS_STUB_DIR/down" ]] || exit 5; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
   --decline) printf '%s|%s\n' "$2" "$4" >>"$PRS_STUB_DIR/declined" ;;
   *) exit 2 ;;
 esac
@@ -4762,6 +4893,10 @@ SYNC_STUB_PR=12 prs_sweep
 assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "unknown PR state holds the sync"
 assert_eq "sync_pr_status_unknown" "$(sync_runs 'last | .reason')" "the hold names the reason"
 rm -f "$PRS_STUB_DIR/down"
+# 자격증명이 끝내 없어(open-pr.sh 종료 코드 4) 못 읽은 것은 로그인 풀림과 다른 이유로 남긴다(#299) — 보드가 원인과 고칠 곳을 가른다.
+SYNC_STUB_PR=12 PRS_STUB_NOCREDS=1 prs_sweep
+assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "missing PR host credentials still hold the sync"
+assert_eq "sync_pr_no_credentials" "$(sync_runs 'last | .reason')" "the hold says the credentials are missing"
 # 지원하지 않는 호스트의 PR은 읽을 수 없을 뿐 일시 장애가 아니다 — 막지 않는다(위 sync 테스트의 example.com PR이 그 경우).
 # 새 PR이 열려 있지 않으면(에이전트가 적은 URL이 틀림) 옛 PR을 닫지 않는다. 다른 저장소의 PR도 닫지 않는다.
 printf '%s\n' '{"state":"closed","activity":0}' >"$PRS_STUB_DIR/state-13.json"
@@ -4787,6 +4922,22 @@ STUB
 chmod +x "$PRS_BIN/gh" "$PRS_BIN/curl"
 assert_eq "open|1" "$(PATH="$PRS_BIN:$PATH" "$ROOT/scripts/open-pr.sh" --status https://github.com/acme/svc/pull/3 | jq -r '"\(.state)|\(.activity)"')" "GitHub activity ignores bots"
 assert_eq "open|3" "$(PATH="$PRS_BIN:$PATH" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 | jq -r '"\(.state)|\(.activity)"')" "Bitbucket activity counts comments and reviewing participants"
+# 무인 실행(launchd)에는 셸 환경변수가 없다. Claude Code settings.json env에 둔 Bitbucket 자격증명으로 조회한다(#299).
+mkdir -p "$TEST_TMP/prs-settings-bin"
+cat >"$TEST_TMP/prs-settings-bin/curl" <<'STUB'
+#!/usr/bin/env bash
+cat >"$PRS_CURL_CFG"
+printf '%s\n200' '{"state":"OPEN","comment_count":0,"participants":[]}'
+STUB
+chmod +x "$TEST_TMP/prs-settings-bin/curl"
+jq -cn '{env: {ATLASSIAN_USER: "bot@example.com", BITBUCKET_API_TOKEN: "settings-token"}}' >"$TEST_TMP/prs-settings.json"
+assert_eq "open" "$(env -u ATLASSIAN_USER -u BITBUCKET_API_TOKEN PATH="$TEST_TMP/prs-settings-bin:$PATH" PRS_CURL_CFG="$TEST_TMP/prs-curl.cfg" \
+  HARNESS_CLAUDE_SETTINGS="$TEST_TMP/prs-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 | jq -r '.state')" \
+  "Bitbucket status reads credentials from Claude settings env when the shell has none"
+assert_eq 'user = "bot@example.com:settings-token"' "$(cat "$TEST_TMP/prs-curl.cfg")" "the settings credentials go to curl on stdin"
+assert_eq 'user = "u:t"' "$(env PATH="$TEST_TMP/prs-settings-bin:$PATH" PRS_CURL_CFG="$TEST_TMP/prs-curl.cfg" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t \
+  HARNESS_CLAUDE_SETTINGS="$TEST_TMP/prs-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/4 >/dev/null; cat "$TEST_TMP/prs-curl.cfg")" \
+  "shell environment credentials win over Claude settings"
 # PR 호스트 요청 형태(dry-run): GitHub close, Bitbucket decline + 메시지.
 assert_eq "github|https://github.com/acme/svc/pull/3|x" \
   "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://github.com/acme/svc/pull/3 --comment x | jq -r '"\(.provider)|\(.decline)|\(.comment)"')" "GitHub decline request"
@@ -5510,7 +5661,7 @@ assert_eq "true" "$(af_fetch count --root "$AF_BAD" --meta '{}' --since 2026-10-
 pass "monitor-fetch runs a repo-local command adapter"
 
 # open-pr.sh --status: PR URL만으로 상태를 본다.
-AF_RC=0; ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/3 >/dev/null 2>&1 || AF_RC=$?
+AF_RC=0; ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --status https://bitbucket.org/ws/repo/pull-requests/3 >/dev/null 2>&1 || AF_RC=$?
 assert_eq "4" "$AF_RC" "bitbucket status needs credentials"
 AF_RC=0; "$ROOT/scripts/open-pr.sh" --status https://example.com/pr/1 >/dev/null 2>&1 || AF_RC=$?
 assert_eq "3" "$AF_RC" "unknown PR host is rejected"
@@ -7772,7 +7923,7 @@ checked.clear()
 res = bs.bulk_cleanup({"older_days": 1, "worktree": False}, items)
 assert res["ok"] and res["counts"] == {"done": 4, "closed": 1, "worktrees": 0, "skipped": 0}, res
 assert closed == ["idle"] and checked == [], (closed, checked)  # worktree를 고르지 않으면 확인도 삭제도 하지 않는다
-assert res["message"] == "4개 정리 · 세션 1개 닫음", res["message"]
+assert res["message"].startswith("4개 정리 · 세션 1개 닫음"), res["message"]
 assert os.path.exists(tr), "transcripts are kept"
 hidden = bs._load(bs.HIDDEN)
 assert {"idle", "ended", "item:sync|docs|" + old, "item:autofix:shop:sentry:1"} <= set(hidden), hidden
@@ -7788,6 +7939,11 @@ res = bs.bulk_cleanup({"older_days": 1, "worktree": True}, items)
 assert sorted(calls) == [("ended", False), ("idle", True)], calls
 assert res["counts"]["worktrees"] == 1 and res["counts"]["skipped"] == 1, res
 assert [r for r in res["results"] if r["id"] == "claude|ended"][0]["worktree_kept"] == "커밋 안 한 변경 2개"
+# 세션을 닫은 뒤 다시 본 판정으로 worktree를 남기면(#306) 삭제로 세지 않고 이유를 싣는다
+bs.cleanup = lambda i, wt: {"ok": True, "message": "정리함", **({"worktree_kept": "커밋 안 한 변경 1개"} if wt else {})}
+res = bs.bulk_cleanup({"older_days": 1, "worktree": True}, items)
+assert res["counts"]["worktrees"] == 0 and res["counts"]["skipped"] == 2, res
+assert [r for r in res["results"] if r["id"] == "claude|idle"][0]["worktree_kept"] == "커밋 안 한 변경 1개", res
 assert bs.restore_hidden("all")["restored"] >= 4 and not bs._load(bs.HIDDEN)
 bs._bulk_lock.acquire()
 assert bs.bulk_cleanup({}, items)["ok"] is False, "a second cleanup while one runs is refused"
@@ -7827,7 +7983,7 @@ assert (r1["project"], r1.get("worktree")) == ("shopper", "shopper-wt-a"), r1  #
 assert (r2["project"], r2.get("worktree"), r2["in_repo"]) == ("acme", "ACME-12", True), r2  # 지워진 worktree는 경로 모양으로
 assert r3["project"] == "plain-folder" and r3["in_repo"] is False, r3  # 추정할 수 없으면 저장소 밖
 ' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions and workflow runners in a git worktree count under the original repository, with the worktree name kept as a detail"
-assert_eq "4" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
+assert_eq "5" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
 BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
 assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"
@@ -7861,6 +8017,991 @@ assert_contains "$BOARD_AFSET" "afRepoRow" "the autofix settings tab shows per-r
 [[ "${BOARD_AFSET%%개인 설정(~/.ai-harness/config)*}" == *"저장소별 연결"* ]] || fail "per-repo connections come before personal settings"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
+
+# 정리 중 되살아남 방지(#296): 숨긴 세션은 '숨긴 뒤 새 활동'이 있을 때만 다시 보인다. 닫는 중이라 아직 살아 있는 세션이 되살아나면 안 된다.
+BH_DATA="$TEST_TMP/board-hidden-data"
+mkdir -p "$BH_DATA/board"
+jq -cn '{"s-old": {at: "2026-11-10T00:00:00Z", title: "a"}, "s-new": {at: "2026-11-10T00:00:00Z", title: "b"},
+  "s-legacy-old": "2026-11-10T00:00:00Z", "s-legacy-new": "2026-11-10T00:00:00Z", "s-ended": {at: "2026-11-10T00:00:00Z"}}' >"$BH_DATA/board/hidden.json"
+HARNESS_METRICS_DIR="$BH_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+base = {"section": "work", "kind": "bg", "state": "done", "status": "idle", "live": True, "cwd": "/nope", "project": "shop", "actions": []}
+mk = lambda sid, at, **k: dict(base, sid=sid, id="claude|" + sid, short_id=sid, title=sid, at=at, **k)
+items = [mk("s-old", "2026-11-09T00:00:00Z"), mk("s-new", "2026-11-11T00:00:00Z"),
+         mk("s-legacy-old", "2026-11-09T00:00:00Z"), mk("s-legacy-new", "2026-11-11T00:00:00Z"),
+         mk("s-ended", "2026-11-11T00:00:00Z", live=False)]
+before = bs._load(bs.HIDDEN)
+shown = {i["sid"] for i in bs.classify_work(items)}
+assert shown == {"s-new", "s-legacy-new"}, shown  # 살아 있어도 숨긴 뒤 새 활동이 없으면 숨김 유지, 있으면 다시 보인다(구형 문자열 기록도 같은 규칙)
+after = bs._load(bs.HIDDEN)
+assert set(after) == {"s-old", "s-legacy-old", "s-ended"}, after  # 풀린 것만 hidden에서 빠진다
+assert all(after[k] == before[k] for k in after), after  # 남긴 기록은 그대로
+' "$ROOT/scripts/board/board-server.py" || fail "a hidden live session stays hidden until it has activity after it was hidden (old string records follow the same rule)"
+pass "board keeps a hidden live session hidden until new activity after the cleanup"
+
+# 정리는 세션을 닫기 전에 숨김을 기록한다(닫는 동안 목록에 되살아나지 않게). 닫기가 실패하면 그 숨김만 되돌린다.
+BC_DATA="$TEST_TMP/board-cleanup-order"
+mkdir -p "$BC_DATA"
+HARNESS_METRICS_DIR="$BC_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": sid,
+                  "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle"}
+bs.hide_items([dict(mk("keep"), live=False)])
+seen = {}
+def closing(ok):
+    def end(i):
+        seen[i["sid"]] = i["sid"] in (bs._load(bs.HIDDEN) or {})  # 닫는 시점에 이미 숨겨져 있는가
+        return ok
+    return end
+bs.end_session = closing(True)
+res = bs.cleanup(mk("s-ok"), False)
+assert res["ok"] and seen == {"s-ok": True}, (res, seen)
+assert {"s-ok", "keep"} <= set(bs._load(bs.HIDDEN)), bs._load(bs.HIDDEN)
+bs.end_session = closing(False)
+res = bs.cleanup(mk("s-bad"), False)
+assert res["ok"] is False and seen["s-bad"] is True, (res, seen)
+assert "s-bad" not in bs._load(bs.HIDDEN) and {"s-ok", "keep"} <= set(bs._load(bs.HIDDEN)), bs._load(bs.HIDDEN)  # 실패한 키만 지운다
+' "$ROOT/scripts/board/board-server.py" || fail "cleanup records the hiding before it closes the session and takes it back only when closing fails"
+pass "board cleanup hides before closing and undoes the hiding when closing fails"
+
+# 정리 속도(#305) A: 항목 조회는 캐시가 아무리 오래됐어도 캐시에서 한다(status.sh 재수집 없이). 캐시에 없을 때만 한 번 수집하고, fresh=True는 예전처럼 다시 모은다.
+FI_DATA="$TEST_TMP/board-find-cached"
+mkdir -p "$FI_DATA"
+HARNESS_METRICS_DIR="$FI_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": sid,
+                  "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle", "actions": ["cleanup"]}
+calls = []
+def fake_status(*a, **k):
+    calls.append(1)
+    return {"items": [mk("s-other")]}
+bs.status = fake_status
+bs._cache["data"] = {"items": [mk("s-cached")]}
+bs._cache["at"] = 0  # 아주 오래된 캐시
+got = bs.find_item("claude|s-cached")
+assert got and got["id"] == "claude|s-cached" and calls == [], (got, calls)  # 캐시에서 찾고 수집하지 않는다
+got = bs.find_item("claude|s-other")
+assert got and got["id"] == "claude|s-other" and len(calls) == 1, (got, calls)  # 캐시에 없으면 한 번 수집
+calls.clear()
+bs._cache["data"] = {"items": [mk("s-cached")]}
+bs.find_item("claude|s-cached", fresh=True)
+assert len(calls) == 1, calls  # fresh는 다시 모은다
+' "$ROOT/scripts/board/board-server.py" || fail "find_item answers from the cache however old it is and recollects only when the id is missing or fresh is asked"
+pass "board find_item uses the cached list without recollecting status"
+
+# 정리 속도(#305) B: 정리는 캐시 항목을 쓰되 닫기 직전에 claude agents로 세션을 다시 확인한다. 그 사이 일을 시작했으면 정리하지 않고, 확인하지 못하면 멈춘다.
+AI_T="$TEST_TMP/board-action-item"
+mkdir -p "$AI_T/bin" "$AI_T/data" "$AI_T/cwd"
+cat >"$AI_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 0
+[[ -f "$FAKE_AGENTS_FILE.exit1" ]] && exit 1
+cat "$FAKE_AGENTS_FILE"
+FAKE
+chmod +x "$AI_T/bin/claude"
+HARNESS_METRICS_DIR="$AI_T/data" FAKE_AGENTS_FILE="$AI_T/agents.json" python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, cwd, agents_file = sys.argv[2], sys.argv[3], os.environ["FAKE_AGENTS_FILE"]
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+mk = lambda sid, **k: dict({"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid[:8], "cwd": cwd, "title": sid,
+                            "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle", "actions": ["cleanup", "send"]}, **k)
+def agents(*rows):
+    with open(agents_file, "w") as f:
+        f.write(rows[0] if rows and isinstance(rows[0], str) else json.dumps(list(rows)))
+ag = lambda sid, status, pid=100, **k: dict({"sessionId": sid, "id": sid[:8], "kind": "background", "status": status, "pid": pid, "cwd": cwd, "name": "n-" + sid}, **k)
+st_calls = []
+def fake_status(*a, **k):
+    st_calls.append(1)
+    return {"items": [mk("s-send")]}
+bs.status = fake_status
+def prime(*items):
+    bs._cache["data"] = {"items": list(items)}
+    bs._cache["at"] = 0
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+
+# 캐시에는 쉬는 세션인데 지금은 작업 중 -> 정리하지 않는다
+prime(mk("s-busy"))
+agents(ag("s-busy", "busy"), ag("s-peer", "idle", cwd="/x/wt", name="peer task"), ag("s-dead", "idle", pid=None, cwd="/x/dead"))
+item, err = bs.action_item("claude|s-busy", "cleanup")
+assert err is None and item is not None and st_calls == [], (item, err, st_calls)
+assert item["live"] is True and item["status"] == "busy" and item["state"] == "running" and not bs.can_close(item), item
+assert [o["cwd"] for o in item["_live_others"]] == ["/x/wt"], item.get("_live_others")  # 다른 살아 있는 세션만(pid 없는 것·자기 자신 제외)
+res = bs.cleanup(item, False)
+assert res["ok"] is False and ended == [], (res, ended)
+assert bs._cache["data"]["items"][0]["status"] == "idle", "the cached item itself is not modified"  # 돌려주는 것은 복사본
+
+# 지금은 응답·권한을 기다림 -> needs_human
+prime(mk("s-wait"))
+agents(ag("s-wait", "waiting"))
+item, err = bs.action_item("claude|s-wait", "cleanup")
+assert err is None and item["state"] == "needs_human" and not bs.can_close(item), (item, err)
+
+# 그대로 쉬는 중 -> 정리할 수 있다
+prime(mk("s-idle"))
+agents(ag("s-idle", "idle"))
+item, err = bs.action_item("claude|s-idle", "cleanup")
+assert err is None and item["live"] is True and bs.can_close(item), (item, err)
+assert bs.cleanup(item, False)["ok"] is True and ended == ["s-idle"], ended
+
+# 목록에 없거나 pid가 없음 -> 이미 끝난 세션
+for rows in ([ag("s-gone2", "idle")], [ag("s-gone", "idle", pid=None)]):
+    prime(mk("s-gone"))
+    agents(*rows)
+    item, err = bs.action_item("claude|s-gone", "cleanup")
+    assert err is None and item["live"] is False, (item, err)
+
+# 확인하지 못하면(claude 실패·이상한 출력) 정리하지 않는다
+prime(mk("s-fail"))
+agents("not json at all")
+item, err = bs.action_item("claude|s-fail", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+agents(ag("s-fail", "idle"))
+open(agents_file + ".exit1", "w").close()
+item, err = bs.action_item("claude|s-fail", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+os.remove(agents_file + ".exit1")
+
+# 세션이 아닌 항목(sid 없음)은 다시 확인하지 않는다
+prime({"section": "harvest", "id": "harvest|p1", "kind": "harvest", "title": "p1", "project": "p1", "actions": ["cleanup"]})
+open(agents_file + ".exit1", "w").close()
+item, err = bs.action_item("harvest|p1", "cleanup")
+assert err is None and item["id"] == "harvest|p1", (item, err)
+os.remove(agents_file + ".exit1")
+
+# 정리가 아닌 작업은 예전처럼 다시 수집한다
+del st_calls[:]
+bs._cache["data"] = {"items": [mk("s-stale")]}
+item, err = bs.action_item("claude|s-send", "send")
+assert err is None and item["id"] == "claude|s-send" and len(st_calls) == 1, (item, err, st_calls)
+
+# 모르는 id
+prime(mk("s-known"))
+del st_calls[:]
+bs.status = lambda *a, **k: st_calls.append(1) or {"items": []}
+item, err = bs.action_item("claude|nope", "cleanup")
+assert item is None and err, (item, err)
+' "$ROOT/scripts/board/board-server.py" "$AI_T/bin" "$AI_T/cwd" || fail "action_item re-checks the session right before cleanup (busy, waiting, gone, unreadable) and recollects for other actions"
+pass "board action_item re-checks a session's live state before cleanup and refuses when it cannot"
+
+# 정리 속도(#305) C: 이 보드가 닫기 직전에 확인한 다른 살아 있는 세션(_live_others)도 worktree 사용 중으로 본다(캐시가 비어 있어도).
+WL_T="$(mkdir -p "$TEST_TMP/board-wt-live" && cd "$TEST_TMP/board-wt-live" && pwd -P)"
+git init -q --bare "$WL_T/remote.git"
+git init -q -b main "$WL_T/repo"
+git -C "$WL_T/repo" config user.email test@example.com
+git -C "$WL_T/repo" config user.name tester
+git -C "$WL_T/repo" config commit.gpgsign false
+git -C "$WL_T/repo" commit -q --allow-empty -m init
+git -C "$WL_T/repo" remote add origin "$WL_T/remote.git"
+git -C "$WL_T/repo" push -q origin main
+git -C "$WL_T/repo" worktree add -q -b feat/example "$WL_T/wt"
+git -C "$WL_T/wt" push -q -u origin feat/example
+mkdir -p "$WL_T/data"
+HARNESS_METRICS_DIR="$WL_T/data" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+wt = sys.argv[2]
+bs._cache["data"] = None
+item = {"section": "work", "sid": "s-mine", "id": "claude|s-mine", "kind": "bg", "cwd": wt, "title": "mine", "live": True, "status": "idle", "state": "idle"}
+base = bs.worktree_check(item)
+assert base["removable"] is True, base  # 다른 세션이 없으면 지울 수 있다
+outside = bs.worktree_check(dict(item, _live_others=[{"cwd": "/somewhere/else", "title": "far"}]))
+assert outside["removable"] is True, outside
+inside = bs.worktree_check(dict(item, _live_others=[{"cwd": wt + "/sub", "title": "other"}]))
+assert inside["removable"] is False and "세션" in inside["reason"] and "other" in inside["reason"], inside
+' "$ROOT/scripts/board/board-server.py" "$WL_T/wt" || fail "worktree_check counts the live sessions found right before cleanup (_live_others) as users of the folder"
+pass "board worktree_check refuses a worktree another live session found at cleanup time still uses"
+
+# 정리 직전 확인은 설정 폴더가 여럿이어도 모든 폴더를 본다(#305): 다른 폴더에서 같은 worktree를 쓰는 세션도 막고, 다른 폴더를 확인하지 못하면 worktree는 지우지 않는다.
+AO_T="$(mkdir -p "$TEST_TMP/board-action-folders" && cd "$TEST_TMP/board-action-folders" && pwd -P)"
+mkdir -p "$AO_T/bin" "$AO_T/data" "$AO_T/lists"
+git init -q --bare "$AO_T/remote.git"
+git init -q -b main "$AO_T/repo"
+git -C "$AO_T/repo" config user.email test@example.com
+git -C "$AO_T/repo" config user.name tester
+git -C "$AO_T/repo" config commit.gpgsign false
+git -C "$AO_T/repo" commit -q --allow-empty -m init
+git -C "$AO_T/repo" remote add origin "$AO_T/remote.git"
+git -C "$AO_T/repo" push -q origin main
+git -C "$AO_T/repo" worktree add -q -b feat/example "$AO_T/wt"
+git -C "$AO_T/wt" push -q -u origin feat/example
+cat >"$AO_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+cfg="${CLAUDE_CONFIG_DIR-UNSET}"
+printf '%s\n' "$cfg" >>"$FAKE_CLAUDE_CALLS"
+[[ "$1" == agents ]] || exit 0
+f="$FAKE_LISTS/agents-$(printf '%s' "$cfg" | tr '/' '_').json"
+[[ -f "$f.exit1" ]] && exit 1
+cat "$f" 2>/dev/null || echo '[]'
+FAKE
+chmod +x "$AO_T/bin/claude"
+HARNESS_METRICS_DIR="$AO_T/data" FAKE_LISTS="$AO_T/lists" FAKE_CLAUDE_CALLS="$AO_T/calls.log" python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, wt, lists, calls_log = sys.argv[2], sys.argv[3], os.environ["FAKE_LISTS"], os.environ["FAKE_CLAUDE_CALLS"]
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+os.environ.pop("CLAUDE_CONFIG_DIR", None)
+def lst(cfg, *rows):
+    with open(os.path.join(lists, "agents-" + cfg.replace("/", "_") + ".json"), "w") as f:
+        json.dump(list(rows), f)
+def calls():
+    try:
+        with open(calls_log) as f:
+            got = f.read().split()
+    except OSError:
+        got = []
+    open(calls_log, "w").close()
+    return sorted(got)
+ag = lambda sid, status, pid, cwd, name: {"sessionId": sid, "id": sid[:8], "kind": "background", "status": status, "pid": pid, "cwd": cwd, "name": name}
+mk = lambda sid, cfg: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": wt if sid == "s-a" else "/elsewhere",
+                       "title": sid, "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle",
+                       "config_dir": cfg, "actions": ["cleanup"]}
+def prime():
+    bs._cache["data"] = {"items": [mk("s-a", "/cfg/a"), mk("s-b", "/cfg/b")]}
+    bs._cache["at"] = 0
+bs.status = lambda *a, **k: (_ for _ in ()).throw(AssertionError("status must not be recollected for cleanup"))
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+lst("UNSET")
+lst("/cfg/a", ag("s-a", "idle", 1, wt, "target"))
+lst("/cfg/b", ag("s-a", "busy", 2, wt, "stale copy"), ag("s-peer", "idle", 5, wt + "/sub", "peer"), ag("s-gone", "idle", None, wt, "ended"))
+calls()
+
+# 폴더마다 한 번씩(기본 폴더 포함), 자기 상태는 자기 폴더 것을 쓴다. 다른 폴더의 살아 있는 세션이 worktree를 쓰면 지우지 않는다.
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert err is None and item is not None, (item, err)
+assert calls() == ["/cfg/a", "/cfg/b", "UNSET"], "one agents call per distinct folder of the cached session items, plus the default folder"
+assert item["live"] is True and item["status"] == "idle" and bs.can_close(item), item
+assert [o["cwd"] for o in item["_live_others"]] == [wt + "/sub"], item["_live_others"]
+wc = bs.worktree_check(item)
+assert wc["removable"] is False and "세션" in wc["reason"], wc
+
+# 다른 폴더를 확인하지 못하면: 항목은 돌려주되 worktree는 지우지 않고(확인하지 못함), 세션만 정리하는 것은 허용
+open(os.path.join(lists, "agents-_cfg_b.json.exit1"), "w").close()
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert err is None and item is not None, (item, err)
+assert "/cfg/b" in (item.get("_others_unchecked") or []), item.get("_others_unchecked")
+wc = bs.worktree_check(item)
+assert wc["removable"] is False and "확인하지 못함" in wc["reason"], wc
+assert bs.can_close(item) and bs.cleanup(item, False)["ok"] is True and ended == ["s-a"], ended
+os.remove(os.path.join(lists, "agents-_cfg_b.json.exit1"))
+
+# 자기 폴더를 확인하지 못하면 정리하지 않는다
+open(os.path.join(lists, "agents-_cfg_a.json.exit1"), "w").close()
+prime()
+item, err = bs.action_item("claude|s-a", "cleanup")
+assert item is None and "확인하지 못함" in err, (item, err)
+os.remove(os.path.join(lists, "agents-_cfg_a.json.exit1"))
+' "$ROOT/scripts/board/board-server.py" "$AO_T/bin" "$AO_T/wt" || fail "action_item checks every settings folder: peers in other folders block the worktree, an unreadable other folder keeps the worktree but not the session cleanup"
+pass "board action_item re-checks every settings folder before cleanup"
+
+# 정리 속도(#305) D: background=True 정리는 안전 확인까지만 동기로 하고 숨긴 뒤 바로 돌려준다. 세션 닫기·worktree 삭제는 뒤에서 하고, 실패하면 숨김을 되돌리고 cleanup_failed로 알린다.
+BG_DATA="$TEST_TMP/board-cleanup-bg"
+mkdir -p "$BG_DATA"
+HARNESS_METRICS_DIR="$BG_DATA" python3 -I -B -c '
+import importlib.util, sys, threading, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid, **k: dict({"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": "title " + sid,
+                            "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle"}, **k)
+hidden = lambda: set(bs._load(bs.HIDDEN) or {})
+bs.status = lambda *a, **k: {"items": []}
+def failed_ids():
+    return [f["id"] for f in (bs.status_with_permissions().get("cleanup_failed") or [])]
+
+# 안전 확인은 동기: 작업 중이면 바로 거절하고 숨기지 않는다
+res = bs.cleanup(mk("s-busy", status="busy", state="running"), False, background=True)
+assert res["ok"] is False and "s-busy" not in hidden(), (res, hidden())
+
+# 실패 사례: 닫기가 오래 걸려도 바로 돌려주고, 끝내 실패하면 숨김을 되돌리고 알린다
+gate, entered = threading.Event(), threading.Event()
+def slow_fail(i):
+    entered.set()
+    gate.wait(10)
+    return False
+bs.end_session = slow_fail
+t0 = time.time()
+res = bs.cleanup(mk("s-fail"), False, background=True)
+took = time.time() - t0
+assert took < 1 and res["ok"] is True and res.get("pending") is True, (took, res)
+assert "s-fail" in hidden(), hidden()  # 닫는 동안은 숨겨져 있다
+assert entered.wait(5), "the closing runs in the background"
+assert "claude|s-fail" not in failed_ids()  # 아직 실패 아님
+gate.set()
+deadline = time.time() + 5
+while time.time() < deadline and "claude|s-fail" not in failed_ids():
+    time.sleep(0.05)
+assert "claude|s-fail" in failed_ids(), failed_ids()
+note = next(f for f in bs.status_with_permissions()["cleanup_failed"] if f["id"] == "claude|s-fail")
+assert note["title"] == "title s-fail" and note["message"] and note["at"], note
+assert "s-fail" not in hidden(), hidden()  # 숨김을 되돌렸다
+
+# 성공 사례: 실패 알림 없이 숨김 유지
+done = threading.Event()
+def ok_end(i):
+    done.set()
+    return True
+bs.end_session = ok_end
+res = bs.cleanup(mk("s-ok"), False, background=True)
+assert res["ok"] is True and res.get("pending") is True, res
+assert done.wait(5)
+time.sleep(0.5)
+assert "claude|s-ok" not in failed_ids() and "s-ok" in hidden(), (failed_ids(), hidden())
+' "$ROOT/scripts/board/board-server.py" || fail "background cleanup checks safety first, returns at once after hiding, and reports a failed closing while undoing the hiding"
+pass "board background cleanup returns at once and reports a failed closing through cleanup_failed"
+
+# 뒤에서 하는 정리의 기록(#305): 실패로 알린 항목을 같은 항목이 나중에 정리되면 실패 목록에서 지운다. 이미 정리하는 중인 항목은 다시 받지 않는다.
+BK_DATA="$TEST_TMP/board-cleanup-bookkeeping"
+mkdir -p "$BK_DATA"
+HARNESS_METRICS_DIR="$BK_DATA" python3 -I -B -c '
+import importlib.util, sys, threading, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+mk = lambda sid: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": "title " + sid,
+                  "project": "shop", "at": "2026-01-01T00:00:00Z", "live": True, "status": "idle", "state": "idle"}
+bs.status = lambda *a, **k: {"items": []}
+failed_ids = lambda: [f["id"] for f in (bs.status_with_permissions().get("cleanup_failed") or [])]
+def wait_for(cond, secs=5):
+    end = time.time() + secs
+    while time.time() < end and not cond():
+        time.sleep(0.05)
+    return cond()
+
+# (a) 실패로 알린 뒤 같은 항목의 정리가 성공하면 실패 알림이 사라진다
+bs.end_session = lambda i: False
+assert bs.cleanup(mk("s-x"), False, background=True)["ok"] is True
+assert wait_for(lambda: "claude|s-x" in failed_ids()), failed_ids()
+bs.end_session = lambda i: True
+assert bs.cleanup(mk("s-x"), False, background=True)["ok"] is True
+assert wait_for(lambda: "claude|s-x" not in failed_ids()), failed_ids()
+
+# (b) 정리하는 중인 항목은 다시 받지 않고, 끝난 뒤에는 다시 받는다
+gate, calls = threading.Event(), []
+def blocked_end(i):
+    calls.append(i["sid"])
+    gate.wait(10)
+    return True
+bs.end_session = blocked_end
+assert bs.cleanup(mk("s-y"), False, background=True)["ok"] is True
+assert wait_for(lambda: calls == ["s-y"]), calls
+res = bs.cleanup(mk("s-y"), False, background=True)
+assert res["ok"] is False and "이미 정리하는 중" in res["message"], res
+assert calls == ["s-y"], calls  # 두 번째는 세션을 다시 닫으러 가지 않는다
+gate.set()
+accepted = []
+def again():
+    r = bs.cleanup(mk("s-y"), False, background=True)
+    if r["ok"]:
+        accepted.append(r)
+    return bool(accepted)
+assert wait_for(again), "a new cleanup of the same item is accepted once the first has finished"
+' "$ROOT/scripts/board/board-server.py" || fail "a later successful background cleanup clears the failure notice, and an item being cleaned up is not accepted twice"
+pass "board background cleanup clears old failure notices and rejects a duplicate while one is running"
+
+# 정리 속도(#305) E: 핸들러 연결 — 단건 정리는 캐시 항목+직전 확인(action_item)·background 정리, 미리보기는 캐시 조회.
+BH_SRC="$(<"$ROOT/scripts/board/board-server.py")"
+BH_POST="$(sed -n '/if path != "\/action":/,/self._send(200, res)/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_POST" "action_item(" "the action handler looks the item up through action_item"
+case "$BH_POST" in *'find_item(req.get("id"), fresh=True)'*) fail "the action handler no longer recollects status for every action" ;; esac
+BH_RUN="$(sed -n '/^def run_action(/,/^    if action == "open_agent"/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_RUN" "cleanup(item, bool(req.get(\"worktree\")), background=True" "a single cleanup runs in the background"
+BH_PREV="$(sed -n '/if u.path == "\/cleanup-preview":/,/worktree_check/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$BH_PREV" "find_item(" "the cleanup preview looks the item up"
+case "$BH_PREV" in *fresh=True*) fail "the cleanup preview reads the cached list" ;; esac
+case "$BH_SRC" in *"def action_item("*) ;; *) fail "board-server defines action_item" ;; esac
+pass "board server wires the cleanup handlers to the cached lookup and background cleanup"
+
+# 정리 속도(#305) UI: 정리 대화상자는 서버 응답을 기다리지 않고 목록에서 먼저 뺀다(실패하면 되돌림). refresh()는 서버가 알린 cleanup_failed를 토스트로 알리고 되돌린다.
+BOARD_CDLG="$(sed -n "/\$('cdlg').addEventListener('close'/,/^  });\$/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_CDLG" "hiding.add(" "the cleanup dialog removes the item from the list first"
+assert_contains "$BOARD_CDLG" "hiding.delete(" "the cleanup dialog puts the item back when cleanup fails"
+BOARD_CDLG_ADD="${BOARD_CDLG%%hiding.add(*}"
+BOARD_CDLG_POST="${BOARD_CDLG%%"post('/action'"*}"
+[[ ${#BOARD_CDLG_ADD} -lt ${#BOARD_CDLG_POST} ]] || fail "the item leaves the list before the cleanup request is sent"
+BOARD_REFRESH="$(sed -n '/async function refresh()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BOARD_REFRESH" "cleanup_failed" "refresh handles cleanup failures reported by the server"
+assert_contains "$BOARD_REFRESH" "hiding.delete(" "refresh puts a failed cleanup back in the list"
+assert_contains "$BOARD_REFRESH" "toast(" "refresh tells the person a cleanup failed"
+pass "board UI hides on cleanup first and refresh restores and reports failed cleanups"
+
+# 언제나 정리(#306): 세션 정리는 상태와 관계없이 노출된다. 상태는 확인 수준(close_level)만 정하고, 서버는 화면이 보낸 확인 수준(confirm)보다
+# 실제 상태가 무거우면 거부하며 새 수준을 돌려준다. 작업 중 세션은 worktree를 지우지 않는다. 대화 기록 파일은 읽기만 한다.
+CA_T="$TEST_TMP/board-cleanup-always"
+mkdir -p "$CA_T/data"
+printf '{"type":"user","message":{"content":"가상 요청"}}\n' >"$CA_T/session.jsonl"
+HARNESS_METRICS_DIR="$CA_T/data" python3 -I -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+transcript = sys.argv[2]
+before = open(transcript, "rb").read()
+term = "term_00000000-0000-0000-0000-000000000000"
+base = {"section": "work", "kind": "bg", "state": "done", "status": "idle", "live": True, "cwd": "/nope", "project": "shop",
+        "at": "2026-01-01T00:00:00Z", "actions": ["view"], "transcript": transcript}
+mk = lambda sid, **k: dict(base, sid=sid, id="claude|" + sid, short_id=sid, title=sid, **k)
+bs._save(bs.SEEN, {})
+items = [mk("s-idle"),
+         mk("s-ask", reply_tail="고칠 범위를 정했습니다. 진행할까요?"),
+         mk("s-wait", state="needs_human", status="waiting"),
+         mk("s-busy", state="running", status="busy"),
+         mk("s-term", kind="agent", state="running", status="busy", orca_handle=term),
+         mk("s-noterm", kind="agent"),
+         mk("s-ended", kind="agent", live=False, status=None)]
+out = {i["sid"]: i for i in bs.classify_work(items)}
+exposed = {s for s, i in out.items() if "cleanup" in i["actions"]}
+assert exposed == {"s-idle", "s-ask", "s-wait", "s-busy", "s-term", "s-ended"}, exposed  # 닫을 방법이 없는 대화형 세션만 빠진다
+levels = {s: bs.close_level(out[s]) for s in ("s-idle", "s-ask", "s-wait", "s-busy", "s-term", "s-ended")}
+assert levels == {"s-idle": "idle", "s-ask": "ask", "s-wait": "waiting", "s-busy": "busy", "s-term": "busy", "s-ended": "idle"}, levels
+assert not bs.can_close(out["s-busy"]) and not bs.can_close(out["s-ask"]), "bulk cleanup still takes only resting sessions"
+
+ended = []
+bs.end_session = lambda i: ended.append(i["sid"]) or True
+bs.status = lambda *a, **k: {"items": []}
+# 확인 수준 없이(또는 더 가벼운 수준으로) 보내면 거부하고 실제 수준을 돌려준다 — 세션을 닫지도 숨기지도 않는다
+for sid, confirm, want in (("s-busy", None, "busy"), ("s-busy", "waiting", "busy"), ("s-wait", "ask", "waiting"), ("s-ask", None, "ask")):
+    res = bs.cleanup(dict(out[sid]), False, confirm=confirm)
+    assert res["ok"] is False and res.get("confirm") == want and res.get("message"), (sid, confirm, res)
+res = bs.cleanup(dict(out["s-busy"]), False, background=True)
+assert res["ok"] is False and res.get("confirm") == "busy", res
+assert ended == [] and not (bs._load(bs.HIDDEN) or {}), (ended, bs._load(bs.HIDDEN))
+# 맞는 수준이나 더 무거운 수준이면 정리한다
+assert bs.cleanup(dict(out["s-busy"]), False, confirm="busy")["ok"] is True
+assert bs.cleanup(dict(out["s-wait"]), False, confirm="waiting")["ok"] is True
+assert bs.cleanup(dict(out["s-ask"]), False, confirm="ask")["ok"] is True
+assert bs.cleanup(dict(out["s-idle"]), False, confirm="busy")["ok"] is True
+assert bs.cleanup(dict(out["s-ended"]), False)["ok"] is True
+assert ended == ["s-busy", "s-wait", "s-ask", "s-idle"], ended
+# 작업 중 세션은 확인해도 worktree를 지우지 않는다(세션도 그대로)
+bs.worktree_check = lambda i: {"path": "/nope", "removable": True, "branch": "feat/x"}
+res = bs.cleanup(dict(out["s-term"]), True, confirm="busy")
+assert res["ok"] is False and "worktree" in res["message"] and "s-term" not in ended, res
+# 닫을 방법이 없는 살아 있는 세션은 확인 수준과 관계없이 거부
+assert bs.cleanup(dict(out["s-noterm"]), False, confirm="busy")["ok"] is False
+# 확인과 닫기 사이에 세션이 파일을 바꿨으면(닫은 뒤 다시 본 판정이 지울 수 없음) worktree는 남기고 세션 정리만 끝낸다
+checks = iter([{"path": "/nope", "removable": True, "branch": "feat/x"}, {"path": "/nope", "removable": False, "reason": "커밋 안 한 변경 1개"}])
+bs.worktree_check = lambda i: next(checks)
+res = bs.cleanup(dict(out["s-wait"], sid="s-wait2", id="claude|s-wait2"), True, confirm="waiting")
+assert res["ok"] is True and "남김" in res["message"] and res.get("worktree_kept") == "커밋 안 한 변경 1개" and ended[-1] == "s-wait2", res
+assert open(transcript, "rb").read() == before, "the transcript file is left as it was"
+' "$ROOT/scripts/board/board-server.py" "$CA_T/session.jsonl" || fail "session cleanup is offered in every state and the confirmation level must cover the actual state"
+assert_file "$CA_T/session.jsonl"
+CA_RUN="$(sed -n '/^def run_action(/,/^    if action == "open_agent"/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$CA_RUN" 'confirm=req.get("confirm")' "a single cleanup passes the confirmation level the screen sent"
+CA_PREV="$(sed -n '/if u.path == "\/cleanup-preview":/,/self._send(200/p' "$ROOT/scripts/board/board-server.py")"
+assert_contains "$CA_PREV" "close_level(" "the cleanup preview tells the screen the confirmation level"
+pass "board cleanup is offered in every state and refuses when the confirmation level is lighter than the state"
+
+# 언제나 정리(#306) UI: 확인창 문구·무게는 수준별, 작업 중은 취소에 기본 포커스, 서버가 더 무거운 수준을 돌려주면 새 경고로 다시 묻는다.
+CA_OPEN="$(sed -n "/let cleaning = null/,/\$('cdlg').addEventListener('close'/p" "$ROOT/scripts/board/template.html")"
+for CA_TEXT in '질문을 남기고 쉬는 중입니다. 답하지 않고 닫습니다.' '답을 기다리는 중입니다. 닫으면 그 요청은 거절된 것으로 끝납니다.' '작업 중입니다. 지금 닫으면 진행 중인 작업이 중간에 끊깁니다.'; do
+  assert_contains "$CA_OPEN" "$CA_TEXT" "the cleanup dialog explains the state"
+done
+assert_contains "$CA_OPEN" "focus()" "the cleanup dialog moves focus for a running session"
+# Esc로 닫으면 returnValue가 그대로라, 열 때마다 비우지 않으면 다시 연 창에서 Esc가 지난 '정리'를 다시 실행한다
+CA_OPENFN="$(sed -n '/async function openCleanup(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$CA_OPENFN" "\$('cdlg').returnValue = ''" "opening the cleanup dialog forgets the previous choice"
+CA_RESET="${CA_OPENFN%%"returnValue = ''"*}"
+CA_SHOW="${CA_OPENFN%%"showModal()"*}"
+[[ ${#CA_RESET} -lt ${#CA_SHOW} ]] || fail "the previous choice is cleared before the dialog opens"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" 'aria-describedby="cwarn cdesc"' "the cleanup dialog reads its warning when it opens"
+CA_CLOSE="$(sed -n "/\$('cdlg').addEventListener('close'/,/^  });\$/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$CA_CLOSE" "confirm:" "the cleanup request carries the confirmation level"
+assert_contains "$CA_CLOSE" "res.confirm" "a refused cleanup asks again with the new level"
+pass "board cleanup dialog warns by state and asks again when the state got heavier"
+
+# 남은 이유 안내(#296): '끝난 일 정리' 미리보기·결과가 정리 대상이 아닌 항목을 이유별 개수와 한 줄 안내(label)로 알린다. 0건인 이유는 없다.
+BL_DATA="$TEST_TMP/board-cleanup-left"
+mkdir -p "$BL_DATA"
+HARNESS_METRICS_DIR="$BL_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+old, now = "2026-01-01T00:00:00Z", bs.utc()
+S = lambda sid, **k: {"section": "work", "sid": sid, "id": "claude|" + sid, "kind": "bg", "short_id": sid, "cwd": "/nope", "title": sid,
+                      "project": "shop", "at": old, **k}
+items = [S("idle", state="idle", status="idle", live=True),
+         S("recent", state="idle", status="idle", live=False, at=now),
+         S("busy", state="running", status="busy", live=True), S("busy2", state="running", status="busy", live=True),
+         S("agent-live", state="idle", status="idle", live=True, kind="agent"),
+         S("asking", state="needs_human", status="idle", live=True, ask="할까요?"),
+         S("perm", state="needs_human", status="waiting", live=True, permission={"pid": "p"}),
+         {"section": "harness", "id": "sync|docs|" + now, "kind": "sync", "state": "done", "at": now, "title": "변경 없음", "project": "docs"},
+         {"section": "harness", "id": "schedule|x|" + old, "kind": "schedule", "state": "blocked", "at": old, "title": "건너뜀", "project": "스케줄"}]
+bs.worktree_check = lambda i: {"removable": False, "reason": "x", "path": "/nope"}
+bs.end_session = lambda i: True
+by = lambda left: {l["reason"]: l for l in left}
+left = by(bs.bulk_cleanup({"dry_run": True, "older_days": 1}, items)["left"])
+assert set(left) == {"too_recent", "in_use", "waiting", "unfinished"}, left
+assert [left[r]["count"] for r in ("too_recent", "in_use", "waiting", "unfinished")] == [2, 3, 2, 1], left
+assert left["too_recent"]["label"] == "하루 안 된 2건은 남겨 둠", left
+assert left["in_use"]["label"] == "지금 쓰는 세션 3건 제외", left
+assert left["waiting"]["label"] == "답·확인을 기다리는 2건 제외", left
+assert left["unfinished"]["label"] == "아직 끝나지 않은 1건 제외", left
+assert by(bs.bulk_cleanup({"dry_run": True, "older_days": 7}, items)["left"])["too_recent"]["label"] == "일주일 안 된 2건은 남겨 둠"
+assert by(bs.bulk_cleanup({"dry_run": True, "older_days": 3}, items)["left"])["too_recent"]["label"] == "3일 안 된 2건은 남겨 둠"
+assert "too_recent" not in by(bs.bulk_cleanup({"dry_run": True}, items)["left"]), "nothing is too recent when no age limit is set"
+res = bs.bulk_cleanup({"older_days": 1, "worktree": False}, items)
+assert by(res["left"]) == left, res["left"]
+assert res["message"].startswith("1개 정리 · 세션 1개 닫음"), res["message"]
+assert all(" · " + l["label"] in res["message"] for l in res["left"]), res["message"]
+' "$ROOT/scripts/board/board-server.py" || fail "bulk cleanup preview and result report what stays and why (too_recent, in_use, waiting, unfinished) with labels"
+pass "board bulk cleanup explains why items were left"
+
+# 무인 실행 기록 → 카드(#296): status.sh를 가짜 runs.jsonl로 돌린다. work.sh는 가짜 claude(빈 목록)로, HOME의 실제 프로필은 보지 않는다.
+ST_T="$TEST_TMP/board-status"
+ST_DATA="$ST_T/data"
+mkdir -p "$ST_T/bin" "$ST_T/logs" "$ST_DATA/harvest-auto"
+cat >"$ST_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == agents ]]; then echo "[]"; exit 0; fi
+exit 1
+FAKE
+chmod +x "$ST_T/bin/claude"
+st_ago() { jq -rn --argjson m "$1" '(now - $m * 60) | floor | todate'; } # 분 전 ISO 시각
+st_fin() { # $1=분 전 $2=project $3=scope $4=result $5=exit_code $6=log $7=덧붙일 JSON 객체
+  local extra="${7:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg at "$(st_ago "$1")" --arg project "$2" --arg scope "$3" --arg result "$4" --argjson exit "$5" --arg log "$6" --argjson extra "$extra" \
+    '{at: $at, event: "finished", project: $project, batch: "b", scope: $scope, result: $result, exit_code: $exit, artifact: null, log: $log} + $extra'
+}
+jq -cn --arg at "$(st_ago 12)" '{type: "progress", at: $at, tool: "Read", target: "src/a.py"}, {type: "progress", at: $at, tool: "Bash", target: "테스트 실행"}' >"$ST_T/logs/ops.log"
+jq -cn --arg at "$(st_ago 52)" '{type: "progress", at: $at, tool: "Read", target: "src/a.py"}, {type: "result", is_error: true, api_error: "usage_limit_reached", result: "사용량 한도 안내 문장"}' >"$ST_T/logs/api.log"
+: >"$ST_T/logs/empty.log"
+{
+  st_fin 30 docs sync no-change 0 "$ST_T/logs/q1.log" '{"no_agent": true}'
+  st_fin 90 web2 sync no-change 0 "$ST_T/logs/q2.log" '{"no_agent": true}'
+  st_fin 120 svc project no-change 0 "$ST_T/logs/q3.log"
+  st_fin 1800 oldq sync no-change 0 "$ST_T/logs/q4.log" '{"no_agent": true}'
+  st_fin 400 web sync failed 1 "$ST_T/logs/none-0.log"
+  st_fin 300 web sync failed 143 "$ST_T/logs/none-1.log" '{"duration_s": 2700}'
+  st_fin 200 web sync failed 143 "$ST_T/logs/none-2.log" '{"duration_s": 2700}'
+  st_fin 100 web sync failed 143 "$ST_T/logs/none-3.log" '{"duration_s": 2700}'
+  st_fin 50 api project failed 1 "$ST_T/logs/api.log" '{"reason": "usage_limit"}'
+  st_fin 400 blog sync failed 143 "$ST_T/logs/none-b.log" '{"duration_s": 2700}'
+  st_fin 100 blog sync improved 0 "$ST_T/logs/blog-new.log" '{"artifact": "https://example.com/acme/blog/pull/1"}'
+  st_fin 20 ops global failed 143 "$ST_T/logs/ops.log" '{"duration_s": 600}'
+  st_fin 15 hollow project failed 143 "$ST_T/logs/empty.log" '{"duration_s": 3000}'
+  st_fin 14 p137 project failed 137 "$ST_T/logs/none-137.log" '{"duration_s": 100}'
+  st_fin 13 p70 sync failed 70 "$ST_T/logs/none-70.log"
+  st_fin 12 p71 sync failed 71 "$ST_T/logs/none-71.log"
+  st_fin 11 perr project failed 1 "$ST_T/logs/none-err.log" '{"reason": "agent_error"}'
+  st_fin 10 pexit2 project failed 2 "$ST_T/logs/none-2x.log"
+  st_fin 9 pnodur project failed 143 "$ST_T/logs/none-nd.log"
+} >"$ST_DATA/harvest-auto/runs.jsonl"
+st_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh"
+}
+ST_OUT="$(st_status)"
+st_item() { jq -c --arg p "$1" '[.items[] | select(.project == $p)]' <<<"$ST_OUT"; }
+
+# 변경 없이 끝난 실행은 카드가 아니다: items에서 빠지고, 최근 24시간 분량이 종류별로 quiet_runs에 모인다(24시간 넘은 것은 세지 않는다).
+assert_eq "0" "$(jq '[.items[] | select(.project | IN("docs", "web2", "svc", "oldq"))] | length' <<<"$ST_OUT")" "a run that changed nothing is not a card (sync no_agent included)"
+assert_eq "harvest:1|sync:2" "$(jq -r '[.quiet_runs[] | "\(.kind):\(.count)"] | sort | join("|")' <<<"$ST_OUT")" "quiet runs are counted per kind over the last day"
+assert_eq "$(jq -sr '[.[] | select(.project == "docs") | .at] | max' "$ST_DATA/harvest-auto/runs.jsonl")" "$(jq -r '.quiet_runs[] | select(.kind == "sync") | .last_at' <<<"$ST_OUT")" "a quiet run kind carries the time of its latest run"
+pass "board status folds unchanged runs into quiet_runs instead of cards"
+
+# 실패는 완료가 아니다: 같은 project+scope의 최신 실패는 사람 확인 카드이고, 같은 이유가 이어진 횟수가 제목에 붙는다.
+assert_eq "1" "$(st_item web | jq 'length')" "a failing target is one card, not one per failed run"
+assert_eq "needs_human|sync|실행 실패 (45분 시간 제한으로 중단됨) · 3번 연속|45분 시간 제한으로 중단됨|3" \
+  "$(st_item web | jq -r '.[0] | "\(.state)|\(.kind)|\(.title)|\(.fail_reason)|\(.streak)"')" "a time-limit failure streak is a needs_human card with its reason and run count"
+assert_eq "실행 실패 (사용량 한도에 닿음)|사용량 한도에 닿음|1" "$(st_item api | jq -r '.[0] | "\(.title)|\(.fail_reason)|\(.streak)"')" "a usage limit is said in plain words and a single failure carries no run count"
+pass "board status turns the latest failed run into a needs_human card with a plain reason and streak"
+
+# 실패 이유 사람 말(종료 코드·reason 매핑).
+assert_eq "실행 실패 (10분 시간 제한으로 중단됨)" "$(st_item ops | jq -r '.[0].title')" "exit 143 names the minutes from the run duration"
+assert_eq "실행 실패 (시간 제한으로 중단됨)" "$(st_item pnodur | jq -r '.[0].title')" "exit 143 without a duration still says time limit"
+assert_eq "실행 실패 (강제 종료됨)" "$(st_item p137 | jq -r '.[0].title')" "exit 137 is a forced kill"
+assert_eq "실행 실패 (작업 worktree를 만들지 못함)" "$(st_item p70 | jq -r '.[0].title')" "exit 70 is a worktree failure"
+assert_eq "실행 실패 (동기화 계획을 세우지 못함)" "$(st_item p71 | jq -r '.[0].title')" "exit 71 is a sync plan failure"
+assert_eq "실행 실패 (에이전트 오류 (agent_error))" "$(st_item perr | jq -r '.[0].title')" "an agent reason is shown after a plain label"
+assert_eq "실행 실패 (exit 2)" "$(st_item pexit2 | jq -r '.[0].title')" "an unknown exit code is shown as is"
+pass "board status explains failure reasons in plain words"
+
+# 같은 project+scope의 최신이 아닌 실패는 카드로 만들지 않는다(최신 결과가 대신 보인다).
+assert_eq "0" "$(st_item blog | jq '[.[] | select(.title | startswith("실행 실패"))] | length')" "an older failure behind a newer run is not a card"
+assert_eq "1" "$(st_item blog | jq 'length')" "only the newest run of that target is a card"
+pass "board status shows only the newest run per target, so an old failure does not linger"
+
+# 빈 로그: 로그 파일이 없거나 비었으면 log는 null이고 실패 카드는 이유(log_note)를 단다. 내용이 있는 로그는 그대로 연다.
+assert_eq "null|중간에 끊겨 로그가 남지 않았습니다" "$(st_item web | jq -r '.[0] | "\(.log)|\(.log_note)"')" "a failure whose log file never appeared says why"
+assert_eq "null|중간에 끊겨 로그가 남지 않았습니다" "$(st_item hollow | jq -r '.[0] | "\(.log)|\(.log_note)"')" "a failure with a zero-byte log says why"
+assert_eq "$ST_T/logs/api.log|null" "$(st_item api | jq -r '.[0] | "\(.log)|\(.log_note // null)"')" "a log with content stays openable and needs no note"
+pass "board status drops missing and empty logs and notes why on failure cards"
+
+# 진행 기록: 끝맺음(result)이 없는 실패 로그에서는 마지막 진행 줄을 detail로 보인다. result가 있으면 그 보고가 우선이다.
+assert_contains "$(st_item ops | jq -r '.[0].detail')" "끊기기 전 마지막 진행: Bash 테스트 실행" "a cut-off run shows the last progress line"
+assert_contains "$(st_item api | jq -r '.[0].detail')" "사용량 한도 안내 문장" "a run with a result shows its report"
+[[ "$(st_item api | jq -r '.[0].detail')" != *"끊기기 전 마지막 진행"* ]] || fail "a run with a result does not show the last progress line"
+pass "board status shows the last progress of a run that was cut off"
+
+# 여러 Claude 설정 폴더(#296): work.sh가 기본 폴더·서버 환경의 폴더·프로필 자동 감지·사용자 지정 폴더마다 claude agents를 불러 sessionId로 합친다.
+# HOME을 바꾸지 않고 환경변수로만 격리한다(서버 환경에 CLAUDE_CONFIG_DIR이 있을 수 있어 명시적으로 빼거나 지정한다).
+WK_T="$(mkdir -p "$TEST_TMP/work-cfg" && cd "$TEST_TMP/work-cfg" && pwd -P)"
+mkdir -p "$WK_T/bin" "$WK_T/cwd" "$WK_T/default-projects/p" "$WK_T/profiles/p1/home/projects/p" "$WK_T/profiles/p2/home/projects/p" \
+  "$WK_T/custom/projects/p" "$WK_T/envdir/projects/p"
+cat >"$WK_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+cfg="${CLAUDE_CONFIG_DIR-UNSET}"
+printf '%s|%s\n' "$cfg" "$*" >>"$FAKE_CLAUDE_CALLS"
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_CLAUDE_DIR/agents-$(printf '%s' "$cfg" | tr '/' '_').json" 2>/dev/null || echo '[]'
+FAKE
+chmod +x "$WK_T/bin/claude"
+WK_SID_D="aaaaaaaa-0000-4000-8000-000000000001"
+WK_SID_S="aaaaaaaa-0000-4000-8000-000000000002"
+WK_SID_P="aaaaaaaa-0000-4000-8000-000000000003"
+WK_SID_C="aaaaaaaa-0000-4000-8000-000000000004"
+WK_SID_E="aaaaaaaa-0000-4000-8000-000000000005"
+wk_agent() { # $1=sessionId $2=pid(숫자 또는 null)
+  jq -cn --arg sid "$1" --argjson pid "$2" --arg cwd "$WK_T/cwd" --argjson t "$(($(date +%s) * 1000))" \
+    '{sessionId: $sid, id: $sid[0:8], kind: "background", status: "idle", state: "running", pid: $pid, cwd: $cwd, name: ("task " + $sid[-1:]), startedAt: $t}'
+}
+wk_list() { jq -s . >"$WK_T/agents-$(printf '%s' "$1" | tr '/' '_').json"; } # stdin의 줄들을 그 설정 폴더의 목록으로
+{ wk_agent "$WK_SID_D" null; wk_agent "$WK_SID_S" null; } | wk_list UNSET
+{ wk_agent "$WK_SID_P" 4242; wk_agent "$WK_SID_S" 4243; } | wk_list "$WK_T/profiles/p1/home"
+printf '' | wk_list "$WK_T/profiles/p2/home"
+wk_agent "$WK_SID_C" null | wk_list "$WK_T/custom"
+wk_agent "$WK_SID_E" null | wk_list "$WK_T/envdir"
+WK_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+for WK_TR in "$WK_T/default-projects/p/$WK_SID_D.jsonl" "$WK_T/profiles/p1/home/projects/p/$WK_SID_S.jsonl" "$WK_T/profiles/p1/home/projects/p/$WK_SID_P.jsonl" \
+  "$WK_T/custom/projects/p/$WK_SID_C.jsonl" "$WK_T/envdir/projects/p/$WK_SID_E.jsonl"; do
+  jq -cn --arg t "$WK_NOW" '{type: "user", message: {content: "hello"}, timestamp: $t}' >"$WK_TR"
+done
+wk_work() { # 덧붙일 환경변수는 인자로
+  : >"$WK_T/calls.log"
+  env -u CLAUDE_CONFIG_DIR PATH="$WK_T/bin:$PATH" FAKE_CLAUDE_CALLS="$WK_T/calls.log" FAKE_CLAUDE_DIR="$WK_T" HARNESS_METRICS_DIR="$WK_T/metrics" \
+    HARNESS_CLAUDE_PROJECTS_DIR="$WK_T/default-projects" BOARD_CLAUDE_PROFILE_GLOBS="$WK_T/profiles/*/home" \
+    BOARD_CLAUDE_CONFIG_DIRS="$WK_T/custom:$WK_T/missing" "$@" bash "$ROOT/scripts/board/work.sh"
+}
+WK_OUT="$(wk_work)"
+assert_eq "$WK_SID_D,$WK_SID_S,$WK_SID_P,$WK_SID_C" "$(jq -r '[.[].sid] | sort | join(",")' <<<"$WK_OUT")" "sessions from every settings folder are listed once per sessionId"
+assert_eq "$(jq -cnS --arg d "$WK_SID_D" --arg s "$WK_SID_S" --arg p "$WK_SID_P" --arg c "$WK_SID_C" --arg p1 "$WK_T/profiles/p1/home" --arg cu "$WK_T/custom" \
+  '{($d): null, ($s): $p1, ($p): $p1, ($c): $cu}')" "$(jq -cS 'map({(.sid): .config_dir}) | add' <<<"$WK_OUT")" \
+  "each item records its settings folder (null for the default one); a shared sessionId goes to the folder where it is alive"
+assert_eq "$(jq -cnS --arg d "$WK_SID_D" --arg s "$WK_SID_S" --arg p "$WK_SID_P" --arg c "$WK_SID_C" --arg r "$WK_T" \
+  '{($d): "\($r)/default-projects/p/\($d).jsonl", ($s): "\($r)/profiles/p1/home/projects/p/\($s).jsonl", ($p): "\($r)/profiles/p1/home/projects/p/\($p).jsonl", ($c): "\($r)/custom/projects/p/\($c).jsonl"}')" \
+  "$(jq -cS 'map({(.sid): .transcript}) | add' <<<"$WK_OUT")" "a transcript is found under its own settings folder (the default one keeps HARNESS_CLAUDE_PROJECTS_DIR)"
+pass "work.sh merges sessions from the default, auto-detected and custom Claude settings folders"
+
+# 폴더마다 한 번만 부르고, 기본 폴더는 CLAUDE_CONFIG_DIR 없이(설정해 버리면 다른 설정 파일을 읽는다) 부른다. 없는 폴더는 건너뛴다.
+WK_CALLS="$(<"$WK_T/calls.log")"
+assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "the default folder is asked first and without CLAUDE_CONFIG_DIR"
+assert_eq "$WK_T/custom,$WK_T/profiles/p1/home,$WK_T/profiles/p2/home,UNSET" "$(cut -d'|' -f1 "$WK_T/calls.log" | LC_ALL=C sort | paste -sd, -)" "every existing folder is asked exactly once"
+case "$WK_CALLS" in *"$WK_T/missing"*) fail "a folder that does not exist is not asked" ;; esac
+pass "work.sh asks each existing settings folder once and the default one without CLAUDE_CONFIG_DIR"
+
+# 서버 환경에 CLAUDE_CONFIG_DIR이 있으면 그 폴더도 본다(기본 폴더는 여전히 그 변수 없이). 같은 실경로는 한 번만.
+WK_OUT_ENV="$(wk_work CLAUDE_CONFIG_DIR="$WK_T/envdir" BOARD_CLAUDE_CONFIG_DIRS="$WK_T/envdir:$WK_T/profiles/p1/home")"
+assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "even then the default folder is asked without the variable"
+assert_eq "1|1" "$(grep -c -F "$WK_T/envdir|" "$WK_T/calls.log" | tr -d ' ')|$(grep -c -F "$WK_T/profiles/p1/home|" "$WK_T/calls.log" | tr -d ' ')" "a folder named by several sources is asked once"
+assert_eq "$WK_T/envdir|$WK_T/envdir/projects/p/$WK_SID_E.jsonl" "$(jq -r --arg s "$WK_SID_E" '.[] | select(.sid == $s) | "\(.config_dir)|\(.transcript)"' <<<"$WK_OUT_ENV")" "a session from the server environment's folder is listed with that folder"
+pass "work.sh also reads the folder from the server's CLAUDE_CONFIG_DIR and de-duplicates by real path"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "BOARD_CLAUDE_CONFIG_DIRS" "the board skill documents how to add settings folders"
+
+# transcript 파싱 캐시(#305): work.sh가 transcript마다 파싱 결과(제목·요약)를 크기:수정시각 키로 work-cache.json에 남겨 변하지 않은 파일은 다시 파싱하지 않는다.
+# 이번 실행에 나온 세션의 transcript만 남기고, 출력은 캐시가 있든 없든 같으며, transcript 파일은 건드리지 않는다.
+WKC_T="$(mkdir -p "$TEST_TMP/work-cache" && cd "$TEST_TMP/work-cache" && pwd -P)"
+mkdir -p "$WKC_T/bin" "$WKC_T/cwd" "$WKC_T/projects/p" "$WKC_T/metrics"
+cat >"$WKC_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_AGENTS"
+FAKE
+chmod +x "$WKC_T/bin/claude"
+WKC_SID_1="bbbbbbbb-0000-4000-8000-000000000001"
+WKC_SID_2="bbbbbbbb-0000-4000-8000-000000000002"
+WKC_TR1="$WKC_T/projects/p/$WKC_SID_1.jsonl"
+WKC_TR2="$WKC_T/projects/p/$WKC_SID_2.jsonl"
+WKC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+wkc_agent() { # $1=sessionId
+  jq -cn --arg sid "$1" --arg cwd "$WKC_T/cwd" --argjson t "$(($(date +%s) * 1000))" \
+    '{sessionId: $sid, id: $sid[0:8], kind: "background", status: "idle", state: "running", pid: 4242, cwd: $cwd, name: ("task " + $sid[-1:]), startedAt: $t}'
+}
+{ wkc_agent "$WKC_SID_1"; wkc_agent "$WKC_SID_2"; } | jq -s . >"$WKC_T/agents-both.json"
+wkc_agent "$WKC_SID_1" | jq -s . >"$WKC_T/agents-one.json"
+for WKC_TR in "$WKC_TR1" "$WKC_TR2"; do
+  { jq -cn --arg t "$WKC_NOW" '{type: "user", message: {content: "hello"}, timestamp: $t}'
+    jq -cn '{type: "ai-title", aiTitle: "Example summary title"}'
+  } >"$WKC_TR"
+done
+wkc_work() { # $1=agents 목록 파일
+  env -u CLAUDE_CONFIG_DIR PATH="$WKC_T/bin:$PATH" FAKE_AGENTS="$1" HARNESS_METRICS_DIR="$WKC_T/metrics" HARNESS_CLAUDE_PROJECTS_DIR="$WKC_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$WKC_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh"
+}
+WKC_CACHE="$WKC_T/metrics/board/work-cache.json"
+WKC_COLD="$(wkc_work "$WKC_T/agents-both.json")"
+assert_file "$WKC_CACHE"
+assert_eq "600" "$(filemode "$WKC_CACHE")" "the work cache is readable only by its owner"
+assert_eq "true|true" "$(jq -r --arg a "$WKC_TR1" --arg b "$WKC_TR2" '"\(.[$a] | has("key") and has("titles") and has("summary"))|\(.[$b] | has("key") and has("titles") and has("summary"))"' "$WKC_CACHE")" \
+  "the cache keeps the parse result of every transcript listed in this run, keyed by path"
+WKC_SUM="$(shasum "$WKC_TR1" "$WKC_TR2")"
+WKC_WARM="$(wkc_work "$WKC_T/agents-both.json")"
+assert_eq "$WKC_COLD" "$WKC_WARM" "work.sh prints the same list on a cold run and a warm run"
+assert_eq "$WKC_SUM" "$(shasum "$WKC_TR1" "$WKC_TR2")" "work.sh never changes a transcript"
+# 캐시가 쓰였는지: 항목을 바꿔 두면 그 값이 그대로 나온다(파일이 그대로면 다시 파싱하지 않는다).
+jq --arg p "$WKC_TR1" '.[$p].titles.custom = "CACHED"' "$WKC_CACHE" >"$WKC_T/tampered.json" && mv "$WKC_T/tampered.json" "$WKC_CACHE"
+assert_eq "CACHED" "$(wkc_work "$WKC_T/agents-both.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title')" "an unchanged transcript is not parsed again"
+# 파일이 바뀌면(크기가 달라지면) 다시 파싱한다.
+jq -cn '{type: "custom-title", customTitle: "Renamed by person"}' >>"$WKC_TR1"
+assert_eq "Renamed by person" "$(wkc_work "$WKC_T/agents-both.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title')" "a transcript that grew is parsed again"
+assert_eq "true" "$(jq -r --arg p "$WKC_TR1" '.[$p].titles.custom == "Renamed by person"' "$WKC_CACHE")" "the cache entry follows the re-parsed transcript"
+# 이번 목록에 없는 세션의 transcript는 캐시에서 뺀다.
+wkc_work "$WKC_T/agents-one.json" >/dev/null
+assert_eq "$WKC_TR1" "$(jq -r 'keys | join(",")' "$WKC_CACHE")" "transcripts of sessions no longer listed are pruned from the cache"
+pass "work.sh caches transcript parse results by size and mtime, prunes unlisted ones and prints the same output"
+
+# 캐시가 JSON으로는 맞지만 모양이 틀려도(값이 문자열·숫자·누락) work.sh는 멈추지 않고 실제 제목으로 목록을 낸다. 틀린 항목은 지우고 다시 쓴다.
+WKC_REAL_KEY="$(stat -c '%s:%Y' "$WKC_TR1" 2>/dev/null || stat -f '%z:%m' "$WKC_TR1")"
+wkc_title() { wkc_work "$WKC_T/agents-one.json" | jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title'; }
+jq -cn --arg p "$WKC_TR1" '{($p): "garbage", "/x/other.jsonl": {key: 1}}' >"$WKC_CACHE"
+assert_eq "Renamed by person" "$(wkc_title)" "a cache whose entries are the wrong shape does not break the list"
+assert_eq "object|string" "$(jq -r --arg p "$WKC_TR1" '"\(.[$p] | type)|\(.[$p].key | type)"' "$WKC_CACHE")" "a malformed cache entry is replaced by a parsed one"
+assert_eq "false" "$(jq -r 'has("/x/other.jsonl")' "$WKC_CACHE")" "a malformed entry for an unlisted path is gone"
+jq -cn --arg p "$WKC_TR1" --arg k "$WKC_REAL_KEY" '{($p): {key: $k, titles: "x", summary: 3}}' >"$WKC_CACHE"
+WKC_BAD_OUT="$(wkc_work "$WKC_T/agents-one.json")"
+assert_eq "Renamed by person" "$(jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title' <<<"$WKC_BAD_OUT")" "an entry with the right key but wrong value types still gives the real title"
+pass "work.sh survives a cache with wrong-shaped entries and writes a well-formed one back"
+
+# 보드 서버는 항목의 설정 폴더로 claude를 부른다(#296): 입력·재개(send_to_bg)·정리(end_session)·정지 확인(wait_stopped)이 같은 폴더를 쓰고, 없으면 환경에서 뺀다.
+BS_T="$TEST_TMP/board-cfg-env"
+mkdir -p "$BS_T/bin" "$BS_T/data" "$BS_T/cwd"
+cat >"$BS_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s|%s\n' "${CLAUDE_CONFIG_DIR-UNSET}" "$*" >>"$FAKE_CLAUDE_CALLS"
+case "$1" in
+  agents) echo '[]' ;;
+  --bg) echo 'backgrounded' ;;
+esac
+FAKE
+chmod +x "$BS_T/bin/claude"
+HARNESS_METRICS_DIR="$BS_T/data" FAKE_CLAUDE_CALLS="$BS_T/calls.log" python3 -I -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, cwd, calls_log = sys.argv[2], sys.argv[3], os.environ["FAKE_CLAUDE_CALLS"]
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+os.environ["CLAUDE_CONFIG_DIR"] = "/server/env/dir"  # 서버 환경에 있어도 항목에 폴더가 없으면 넘기지 않는다
+def calls():
+    with open(calls_log) as f:
+        lines = f.read().splitlines()
+    open(calls_log, "w").close()
+    return lines
+item = {"kind": "bg", "short_id": "abcd1234", "sid": "sid-1", "cwd": cwd, "live": True, "status": "idle", "state": "idle"}
+with_cfg = dict(item, config_dir="/cfg/work")
+res = bs.send_to_bg(with_cfg, "이어서 해줘")
+c = calls()
+assert res["ok"], res
+assert [l.split("|", 1)[1].split()[0] for l in c] == ["stop", "agents", "--bg"], c  # 멈추고, 멈췄는지 보고, 같은 ID로 깨운다
+assert all(l.startswith("/cfg/work|") for l in c), c
+assert bs.end_session(with_cfg) is True
+c = calls()
+assert [l.split("|", 1)[1].split()[0] for l in c] == ["stop", "agents"] and all(l.startswith("/cfg/work|") for l in c), c
+for plain in (item, dict(item, config_dir=None)):
+    bs.send_to_bg(plain, "다시")
+    bs.end_session(plain)
+    c = calls()
+    assert c and all(l.startswith("UNSET|") for l in c), c  # 기본 폴더는 서버 환경의 CLAUDE_CONFIG_DIR이 있어도 빼고 부른다
+bs.new_bg(cwd, "새 일")
+c = calls()
+assert c and all(l.startswith("UNSET|") for l in c), c  # 새 세션은 기본 환경
+bs.claude(["agents", "--json", "--all"], cwd, 5, config_dir="/cfg/direct")
+assert calls() == ["/cfg/direct|agents --json --all"]
+bs.claude(["agents", "--json", "--all"], cwd, 5)
+assert calls() == ["UNSET|agents --json --all"]
+' "$ROOT/scripts/board/board-server.py" "$BS_T/bin" "$BS_T/cwd" || fail "the board calls claude with the item's own settings folder for send, stop and the stopped check, and without the variable otherwise"
+pass "board server passes an item's settings folder to claude and drops CLAUDE_CONFIG_DIR when it has none"
+
+# '세션으로 열기'가 띄우는 세션 이름은 원문 로그 제목이 아니라 시그니처다(#296): 원문 로그가 세션 이름·카드 제목으로 새지 않고, 시그니처로 에러 카드와 이어진다.
+BO_DATA="$TEST_TMP/board-open-agent"
+mkdir -p "$BO_DATA"
+HARNESS_METRICS_DIR="$BO_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+got = {}
+bs.new_bg = lambda cwd, prompt, name=None: got.update(cwd=cwd, name=name) or {"ok": True, "message": "ok"}
+raw = "2026-11-11 23:59:04.078 ERROR 12345 --- [nio-8080-exec-1] c.a.s.FooService : 주문 저장 실패"
+af = {"id": "autofix:orders:datadog:7c1e5a9b3d2f4e60", "kind": "autofix", "section": "autofix", "project": "orders", "signature": "datadog:7c1e5a9b3d2f4e60",
+      "title": raw, "repo": "/work/acme/orders", "actions": ["open_agent"], "stage": "skipped", "stage_label": "건너뜀", "link": None, "detail": "요약"}
+bs.run_action(af, "open_agent", {})
+assert got["name"] == "orders 에러 이어 보기 datadog:7c1e5a9b3d2f4e60", got
+assert "FooService" not in got["name"] and "12345" not in got["name"], got
+named = {"id": "w1", "section": "work", "project": "orders", "title": got["name"], "detail": ""}
+bs.link_autofix_sessions([af, named])
+assert af.get("session_id") == "w1" and named.get("autofix_id") == af["id"], (af, named)
+harness = {"id": "harvest|docs|t", "kind": "harvest", "section": "harness", "project": "docs", "title": "개선 — draft PR 검토", "repo": "/work/acme/docs",
+           "actions": ["open_agent"], "link": "https://example.com/acme/docs/pull/77"}
+bs.run_action(harness, "open_agent", {})
+assert got["name"] == "docs 개선 — draft PR 검토", got  # 하네스 카드의 세션 이름은 그대로
+' "$ROOT/scripts/board/board-server.py" || fail "open_agent names an autofix session by project and signature, not by the raw error title, and the card still links to it"
+pass "board names the session opened from an autofix card by signature, not by the raw log title"
+
+# 보드 화면(#296, 정적): 정리 즉시 반영·남은 이유·실패 카드·빈 로그·무변경 요약·자동 수정 제목이 template.html에 들어갔다.
+BOARD_TPL2="$(<"$ROOT/scripts/board/template.html")"
+# 정리 응답 뒤에는 정리된 것(ok)만 숨김에 남는다 — 그 사이 다시 돌기 시작해 서버가 뺀 세션도 바로 되돌아온다.
+for BOARD_PART2 in "hiding.has(" "hiding.add(" "hiding.delete(" "res.results.filter((x) => x.ok)" "quiet_runs" "log_note" "fail_reason" "streak"; do
+  assert_contains "$BOARD_TPL2" "$BOARD_PART2" "the board screen uses $BOARD_PART2"
+done
+[[ "$(grep -c -E '\.left\b' <<<"$BOARD_TPL2" || true)" -ge 2 ]] || fail "the cleanup plan screen and the result screen both show the reasons items were left"
+if command -v node >/dev/null 2>&1; then
+  # 자동 수정 제목: Spring Boot 로그 머리(pid --- [thread] logger :)도 걷어 낸다. 함수 본문만 잘라 실행한다.
+  sed -n '/function humanTitle(raw) {/,/^  }$/p' "$ROOT/scripts/board/template.html" >"$TEST_TMP/human-title.js"
+  printf '%s\n' 'console.log(JSON.stringify([
+    humanTitle("2026-11-11 23:59:04.078 ERROR 12345 --- [nio-8080-exec-1] c.a.s.FooService : 주문 저장 실패"),
+    humanTitle("2026-11-11 23:59:04.078  WARN 4242 --- [           main] c.a.OrderService : 결제 승인 실패"),
+    humanTitle("2026-11-11 23:59:04.078 ERROR 12345 --- [shop] [nio-8080-exec-1] c.a.s.PayService : 환불 처리 실패"),
+    humanTitle("2026-11-10 09:14:15.264 ERROR trace_id:4af2c9e1b7d84a0f9c3e - CartController:88: 장바구니 합계 계산에 실패했습니다. cartSn: 1042")]))' >>"$TEST_TMP/human-title.js"
+  assert_eq '["주문 저장 실패","결제 승인 실패","환불 처리 실패","장바구니 합계 계산에 실패했습니다"]' "$(node "$TEST_TMP/human-title.js")" "a Spring Boot log head is stripped to the human message, other log heads still are"
+fi
+pass "board screen carries instant hiding, left reasons, failure cards, quiet runs and Spring Boot title cleanup"
+
+# 화면 확인용 가짜 데이터(#296): 실패 streak 카드·quiet_runs·정리 left·Spring Boot 형식 제목이 있어 브라우저로 볼 수 있다. 가짜 값만.
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pv", sys.argv[1]); pv = importlib.util.module_from_spec(spec); spec.loader.exec_module(pv)
+s = pv.status("demo")
+fail = [i for i in s["items"] if i.get("fail_reason")]
+assert len(fail) == 1 and fail[0]["kind"] == "sync" and fail[0]["state"] == "needs_human" and fail[0]["streak"] == 3, fail
+assert fail[0]["log"] is None and fail[0]["log_note"] and fail[0]["fail_reason"] == "45분 시간 제한으로 중단됨" and fail[0]["exit_code"] == 143, fail
+assert s["quiet_runs"] and all({"kind", "count", "last_at"} <= set(q) for q in s["quiet_runs"]), s.get("quiet_runs")
+assert any(i["kind"] == "autofix" and " --- [" in i["title"] and "ERROR" in i["title"] for i in s["items"]), "a Spring Boot style autofix title"
+for req in ({"dry_run": True, "older_days": 1}, {"older_days": 1}):
+    r = pv.bulk("demo", dict(req, t="demo"))
+    assert r["left"] and all({"reason", "count", "label"} <= set(l) and l["count"] > 0 for l in r["left"]), r
+assert pv.status("empty")["quiet_runs"] == []
+' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has the failure streak card, quiet runs, cleanup reasons and a Spring Boot style title"
+pass "board preview fixture reproduces the #296 screens with fake data"
+
+# 보드 정확도(#299) — harvest 대기열: 무인 실행이 batch마다 남긴 시도 표시로 다음 실행에서 실제로 돌 batch만 카드로 낸다.
+# 같은 batch가 이미 하네스 없음·세션 수만·포기·실행됨으로 끝났으면 카드 대신 이유별 수(queue_hidden)로만 센다. batch 파일은 그대로 둔다.
+BA_T="$TEST_TMP/board-accuracy"
+BA_DATA="$BA_T/data"
+mkdir -p "$BA_T/bin" "$BA_DATA"
+ba_batch() { # $1=폴더 $2=project $3=batch_id $4=시도 표시 batch_id(없으면 -) $5=시도 결과
+  mkdir -p "$BA_DATA/harvest-queue/$1"
+  jq -cn --arg p "$2" --arg b "$3" '{project: $p, batch_id: $b, has_analysis_batch: true, created_at: "2026-11-01T00:00:00Z", counts: {sessions: 4}, reasons: ["errors"]}' \
+    >"$BA_DATA/harvest-queue/$1/analysis-batch.json"
+  [[ "$4" == - ]] || jq -cn --arg b "$4" --arg r "$5" '{batch_id: $b, at: "2026-11-02T00:00:00Z", result: $r, fails: 0}' >"$BA_DATA/harvest-queue/$1/auto-attempted-batch"
+}
+ba_batch p-home home b1 b1 no_harness
+ba_batch p-notes notes b2 b2 sessions_only
+ba_batch p-ran ran b3 b3 launched
+ba_batch p-gone gone b4 b4 gave_up
+ba_batch p-old2 old2 b5 b5 no_harness
+ba_batch p-next next b6 b0 launched
+ba_batch p-new new b7 - -
+ba_batch p-retry retry b8 b8 failed
+cat >"$BA_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == agents ]]; then cat "$BA_AGENTS" 2>/dev/null || echo "[]"; exit 0; fi
+exit 1
+FAKE
+chmod +x "$BA_T/bin/claude"
+# 워크플로 러너: incomplete로 멈춘 것, running인데 실행 폴더에 오래 기록이 없는 것, 방금 기록이 있는 running.
+ba_run() { # $1=run 폴더 $2=status $3=node
+  mkdir -p "$BA_DATA/runs/$1"
+  jq -cn --arg s "$2" --arg n "$3" --arg r "$BA_T/repo-$1" '{run_id: "r1", workflow: "feature", status: $s, node: $n, repo: $r, request: "가짜 요청", started_at: "2026-11-01T00:00:00Z"}' \
+    >"$BA_DATA/runs/$1/state.json"
+  printf 'x\n' >"$BA_DATA/runs/$1/progress.log"
+}
+ba_run a/1 incomplete publish
+ba_run b/1 running discover
+ba_run c/1 running repair
+touch -t 202601010000 "$BA_DATA/runs/b/1/state.json" "$BA_DATA/runs/b/1/progress.log"
+ba_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$BA_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= "$@" bash "$ROOT/scripts/board/status.sh"
+}
+BA_OUT="$(ba_status)"
+assert_eq "new,next,retry" "$(jq -r '[.items[] | select(.kind == "harvest" and .state == "queued") | .project] | sort | join(",")' <<<"$BA_OUT")" \
+  "only batches the next unattended run will take are queued cards"
+assert_eq "gave_up:1|launched:1|no_harness:2|sessions_only:1" "$(jq -r '[.queue_hidden[] | "\(.reason):\(.count)"] | sort | join("|")' <<<"$BA_OUT")" \
+  "batches that will not run are counted by reason instead of shown"
+assert_file "$BA_DATA/harvest-queue/p-home/analysis-batch.json"
+pass "board status queues only the harvest batches the next run takes and counts the rest by reason"
+
+# 러너: 프로세스 기록(pid)이 없어 실행 폴더의 마지막 기록 시각을 본다. 중단(incomplete)·오래 조용한 running은 '중단됨'과 이어 가는 명령.
+assert_eq "blocked|incomplete|workflow-driver.sh resume --workflow feature" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-a/1"))) | "\(.state)|\(.stall)|\(.cmd)"' <<<"$BA_OUT")" \
+  "an incomplete runner is stopped, not working"
+assert_eq "blocked|no_activity" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
+  "a running runner with no record for a long time is stopped"
+assert_eq "running|null" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-c/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
+  "a runner that just wrote its record is still working"
+assert_eq "running" "$(ba_status BOARD_RUNNER_STALE_MIN=99999999 | jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | .state')" \
+  "BOARD_RUNNER_STALE_MIN sets how long a quiet runner still counts as working"
+pass "board status shows a dead or incomplete workflow runner as stopped"
+
+# 세션: 마지막 답이 API 오류인 세션은 '멈춤 — 다시 시작 필요', 작업 중인데 프로세스가 없는 세션은 '중단됨'. 정상 작업 중은 그대로.
+mkdir -p "$BA_T/projects/p"
+BA_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+ba_agent() { # $1=sessionId $2=status $3=pid
+  jq -cn --arg sid "$1" --arg st "$2" --argjson pid "$3" --arg cwd "$BA_T" --argjson t "$(($(date +%s) * 1000))" \
+    '{sessionId: $sid, id: $sid[0:8], kind: "background", status: $st, state: "running", pid: $pid, cwd: $cwd, name: ("task " + $sid[-1:]), startedAt: $t}'
+}
+{ ba_agent aaaaaaaa-0000-4000-8000-000000000001 busy 4101; ba_agent aaaaaaaa-0000-4000-8000-000000000002 busy null; ba_agent aaaaaaaa-0000-4000-8000-000000000003 busy 4103; } | jq -s . >"$BA_T/agents.json"
+jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timestamp: $t},
+  {type: "assistant", isApiErrorMessage: true, message: {content: [{type: "text", text: "API Error: The response stopped arriving. The response above may be incomplete."}]}, timestamp: $t}' \
+  >"$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000001.jsonl"
+jq -cn --arg t "$BA_NOW" '{type: "user", message: {content: "고쳐줘"}, timestamp: $t}, {type: "assistant", message: {content: [{type: "text", text: "고치는 중입니다"}]}, timestamp: $t}' \
+  >"$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl"
+cp "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000002.jsonl" "$BA_T/projects/p/aaaaaaaa-0000-4000-8000-000000000003.jsonl"
+BA_WORK="$(env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$BA_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
+assert_eq "1:blocked|api_error 2:blocked|no_process 3:running|null" \
+  "$(jq -r '[sort_by(.sid)[] | "\(.sid[-1:]):\(.state)|\(.stall)"] | join(" ")' <<<"$BA_WORK")" \
+  "an API-error session must be restarted, a working session without a process stopped, a live one keeps working"
+pass "board work list shows sessions cut off by an API error or without a process as stopped"
+
+# 읽지 않은 결과: 살아 있지 않은 백그라운드 세션의 결과는 하루가 지나면 끝난 일(idle)로 넘긴다. 최근 결과·살아 있는 세션은 그대로.
+mkdir -p "$BA_T/srv/board"
+printf '{}' >"$BA_T/srv/board/seen.json"
+HARNESS_METRICS_DIR="$BA_T/srv" python3 -I -B -c '
+import importlib.util, sys
+from datetime import datetime, timedelta, timezone
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+iso = lambda h: (datetime.now(timezone.utc) - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+items = [{"section": "work", "kind": "bg", "sid": "old", "live": False, "state": "done", "at": iso(30)},
+         {"section": "work", "kind": "bg", "sid": "new", "live": False, "state": "done", "at": iso(2)},
+         {"section": "work", "kind": "bg", "sid": "alive", "live": True, "state": "done", "at": iso(30)}]
+got = {i["sid"]: i["state"] for i in bs.classify_work(items)}
+assert got == {"old": "idle", "new": "review", "alive": "review"}, got
+' "$ROOT/scripts/board/board-server.py" || fail "a finished background result older than a day moves to done; recent and live ones stay unread"
+pass "board moves day-old results of ended background sessions out of unread"
+
+# 화면(#299): 숫자는 칸 제목과 같은 단위로, 내부 식별자 제목은 사람 말로, 같은 이유 건너뜀·대기열은 묶은 뒤 자른다. 함수만 잘라 node로 실행.
+BOARD_TPL3="$(<"$ROOT/scripts/board/template.html")"
+for BOARD_PART3 in "queue_hidden" "i.stall" "sync_pr_no_credentials" "작업 묶음 안 작업자 질문" "세션 안 하위 에이전트" "작업자 세션"; do
+  assert_contains "$BOARD_TPL3" "$BOARD_PART3" "the board screen uses $BOARD_PART3"
+done
+if command -v node >/dev/null 2>&1; then
+  { sed -n '/function todoTally(units) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    sed -n '/function sigTitle(t, project) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    sed -n '/function headKeys(keys, max) {/,/^  }$/p' "$ROOT/scripts/board/template.html"
+    printf '%s\n' 'console.log(JSON.stringify([
+      todoTally([{u: 1, asks: 0}, {u: 1, asks: 4}, {u: 3, asks: 0}]),
+      sigTitle("shop datadog:5b1c0d2e9f8a7b6c", "shop"), sigTitle("billing sentry:4410293", "billing"), sigTitle("주문 목록 정렬 고치기", "shop"),
+      [...headKeys(["r:a", "r:a", "q:harvest", "r:a", "t:1", "t:2", "q:harvest"], 2)]]))'
+  } >"$TEST_TMP/board-299.js"
+  assert_eq '[{"total":3,"parts":["답할 것 2","검토할 것 1"],"asks":4},"shop 운영 에러 이어 보기 (Datadog)","billing 운영 에러 이어 보기 (Sentry)",null,["r:a","q:harvest"]]' \
+    "$(node "$TEST_TMP/board-299.js")" "todo summary counts cards like the lane title and shows worker asks apart; internal titles become words; lanes cut after grouping"
+fi
+pass "board screen counts todo like its title, names internal titles and groups before cutting a lane"
+
+# 미리보기 서버(#299): 위 상황을 가짜 데이터로 재현한다.
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("pv", sys.argv[1]); pv = importlib.util.module_from_spec(spec); spec.loader.exec_module(pv)
+s = pv.status("demo"); items = s["items"]
+assert s["queue_hidden"] and all({"reason", "count"} <= set(q) for q in s["queue_hidden"]), s.get("queue_hidden")
+assert {"api_error", "no_process", "no_activity"} <= {i.get("stall") for i in items}, [i.get("stall") for i in items]
+assert any(i["section"] == "work" and not i.get("autofix_id") and " datadog:" in i["title"] for i in items), "an unlinked internal-id session title"
+assert any(i.get("group") and i["group"]["role"] == "worker" and i["state"] == "needs_human" for i in items), "a worker asking inside a group"
+assert any(i.get("group") and i.get("subagents") for i in items), "a group card with subagents"
+assert sum(1 for i in items if i.get("reason") == "sync_pr_no_credentials") >= 2, "repeated skips with one cause"
+assert pv.status("empty")["queue_hidden"] == []
+' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server reproduces the #299 situations"
+pass "board preview fixture reproduces the #299 screens with fake data"
 
 # 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
 # 규칙 문서·토큰·공용 부품·기준 화면이 있고, design-audit가 읽는 고정 섹션 순서를 지킨다.

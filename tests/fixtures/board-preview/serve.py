@@ -29,11 +29,11 @@ def status(scenario):
         items = [
             # 지금 할 일: 권한 요청 · 답 대기 · 자동 수정 사람 판단 · PR 검토
             {"id": "w1", "section": "work", "kind": "agent", "project": "shop", "state": "needs_human", "status": "waiting", "live": True,
-             "at": ago(2), "title": "배송비 계산을 지역별 요금표로 바꾸기", "actions": ["view"],
+             "at": ago(2), "title": "배송비 계산을 지역별 요금표로 바꾸기", "actions": ["view", "cleanup"],
              "detail": "요청: 배송비를 지역별 요금표에서 읽게 바꿔줘\n— 스테이징 배포 스크립트를 실행하려고 합니다.",
              "permission": {"pid": "p1", "tool": "Bash", "input": "scripts/deploy.sh --env staging"}, "cwd": "/work/acme/shop"},
             {"id": "w2", "section": "work", "kind": "bg", "project": "billing-api", "state": "needs_human", "status": "waiting", "live": True,
-             "at": ago(9), "title": "환불 금액 반올림 규칙 정하기", "actions": ["view", "send"],
+             "at": ago(9), "title": "환불 금액 반올림 규칙 정하기", "actions": ["view", "send", "cleanup"],
              "detail": "요청: 부분 환불 금액이 1원씩 어긋나는 문제 확인\n— 반올림을 **은행가 방식**으로 할지 사사오입으로 할지 정해 주세요.", "cwd": "/work/acme/billing-api"},
             {"id": "af1", "section": "autofix", "kind": "autofix", "project": "shop", "state": "needs_human", "status": "skipped",
              "outcome": "left_for_user", "at": ago(35), "signature": "datadog:5b1c0d2e9f8a7b6c",
@@ -53,7 +53,7 @@ def status(scenario):
              "link": "https://example.com/acme/docs/pull/77", "actions": ["open_agent"], "repo": "/work/acme/docs"},
             # 진행 중
             {"id": "w3", "section": "work", "kind": "bg", "project": "search", "state": "running", "status": "busy", "live": True,
-             "at": ago(1), "title": "검색어 자동완성 지연 줄이기", "actions": ["view"],
+             "at": ago(1), "title": "검색어 자동완성 지연 줄이기", "actions": ["view", "cleanup"],
              "detail": "요청: 자동완성 응답을 200ms 안으로\n— 캐시 키를 바꾸고 테스트 12개 중 9개 통과. 남은 3개를 고치는 중입니다.",
              "subagents": {"total": 3, "active": 1}, "cwd": "/work/acme/search"},
             {"id": "af3", "section": "autofix", "kind": "autofix", "project": "shop", "state": "running", "status": "verifying",
@@ -65,9 +65,24 @@ def status(scenario):
             *[{"id": f"q{i}", "section": "harness", "kind": "harvest", "project": p, "state": "queued", "at": ago(60 * i),
                "title": f"harvest 대기 (세션 {n}개)", "detail": "근거: sessions", "actions": ["harvest_now"]}
               for i, (p, n) in enumerate([("shop", 12), ("billing-api", 8), ("search", 5), ("docs", 3)], 1)],
+            # 같은 원인(자격증명 없음)의 건너뜀이 저장소마다 — 화면은 한 묶음으로 접는다(#299)
             *[{"id": f"b{i}", "section": "harness", "kind": "schedule", "project": p, "state": "blocked", "at": ago(30 * i),
-               "title": "지난 동기화 PR 상태를 확인할 수 없어 멈춤", "reason": "sync_pr_status_unknown", "detail": "최근 2일 2회 건너뜀", "actions": []}
+               "title": "PR 호스트 자격증명이 없어 동기화를 멈춤", "reason": "sync_pr_no_credentials", "detail": "최근 2일 2회 건너뜀", "actions": []}
               for i, p in enumerate(["shop", "billing-api", "search"], 1)],
+            # 멈춘 작업(#299): API 오류로 끊긴 세션, 작업 중인데 프로세스가 없는 세션, 기록이 끊긴 워크플로 러너
+            {"id": "s1", "section": "work", "kind": "bg", "project": "orders", "state": "blocked", "stall": "api_error", "status": "busy", "live": True,
+             "in_repo": True, "at": ago(70), "title": "주문 취소 환불 금액 맞추기", "actions": ["view", "send"],
+             "detail": "API 오류로 응답이 끊김 — 다시 시작해야 이어짐\n요청: 주문 취소 시 환불 금액을 맞춰줘\n— API Error: The response stopped arriving."},
+            {"id": "s2", "section": "work", "kind": "bg", "project": "search", "state": "blocked", "stall": "no_process", "status": "busy", "live": False,
+             "in_repo": True, "at": ago(400), "title": "검색 로그 보존 기간 줄이기", "actions": ["view", "send", "cleanup"],
+             "detail": "작업 중으로 남았지만 세션 프로세스가 없음\n요청: 검색 로그를 30일만 남겨줘"},
+            {"id": "s3", "section": "work", "kind": "runner", "project": "docs", "state": "blocked", "stall": "no_activity", "at": ago(2900),
+             "cwd": "/work/acme/docs", "in_repo": True, "title": "설치 안내 자동 점검 추가", "actions": [],
+             "detail": "노드 publish에서 1520분째 기록이 없음 — 러너 프로세스가 끝난 것으로 보임", "cmd": "workflow-driver.sh resume --workflow feature"},
+            # 자동 수정 카드와 이어지지 않은 세션의 내부 식별자 제목 — 화면은 사람 말로 바꾼다
+            {"id": "w8", "section": "work", "kind": "bg", "project": "orders", "state": "review", "status": "idle", "live": True, "in_repo": True,
+             "at": ago(130), "title": "orders datadog:9a8b7c6d5e4f3a2b", "actions": ["view", "send"],
+             "detail": "— 재고 차감 순서를 바꿔야 합니다. 수정 PR을 열지 정해 주세요."},
             {"id": "b9", "section": "harness", "kind": "schedule", "project": "스케줄", "state": "blocked", "at": ago(15),
              "title": "정기 실행 LLM 단계 건너뜀", "detail": "열린 세션이 계속 활동 중이라 정기 실행의 LLM 단계(세션 정리·자동 개선·동기화)를 미뤘습니다.", "actions": []},
             # 읽지 않은 결과
@@ -96,6 +111,10 @@ def status(scenario):
                "in_repo": True, "at": ago(310 + i), "title": t, "actions": ["view", "send", "cleanup"], "detail": "세션 종료됨\n— 끝났습니다.",
                "group": {"id": "og1", "title": "검색 색인 개편", "role": "worker", "source": "orca"}}
               for i, (t, wt, st) in enumerate([("검색 결과 정렬 작업자", "search-wt-a", "review"), ("동의어 사전 작업자", "search-wt-b", "idle")], 1)],
+            # 묶음 안 작업자가 묻는 중(#299): '지금 할 일' 수는 묶음 하나로 세고, 작업자 질문은 따로 보인다
+            {"id": "gw3", "section": "work", "kind": "bg", "project": "search", "worktree": "search-wt-c", "state": "needs_human", "status": "idle", "live": True,
+             "in_repo": True, "at": ago(25), "title": "형태소 분석기 작업자", "actions": ["view", "send"], "ask": "사전 갱신을 주 1회로 할까요?",
+             "detail": "— 사전 갱신을 주 1회로 할까요?", "group": {"id": "og1", "title": "검색 색인 개편", "role": "worker", "source": "orca"}},
             # 작업자가 없는 묶음(조율 세션만) — "작업자 0명" 줄이 없어야 한다
             {"id": "g9", "section": "work", "kind": "bg", "project": "docs", "state": "idle", "status": "idle", "live": True, "in_repo": True,
              "at": ago(400), "title": "문서 개편 계획", "actions": ["view", "send", "cleanup"], "detail": "— 계획만 세웠습니다.",
@@ -107,7 +126,7 @@ def status(scenario):
              "detail": "요청: 자동 수정이 사람에게 넘긴 운영 에러를 이어서 본다. 에러: datadog:5b1c0d2e9f8a7b6c\n— ## 원인 확인 무인 실행이 남긴 분석은 맞습니다. 쿠폰 두 개가 겹칠 때 할인 순서를 정해야 합니다."},
             # 본문으로 묻고 쉬는 세션(서버가 마지막 문장을 질문으로 보고 '답 대기'로 올림)
             {"id": "w6", "section": "work", "kind": "bg", "project": "docs", "state": "needs_human", "status": "idle", "live": True, "in_repo": True,
-             "at": ago(14), "title": "설치 안내 개정", "actions": ["view", "send"], "ask": "다음으로 영어 문서까지 같은 구조로 바꿀까요?",
+             "at": ago(14), "title": "설치 안내 개정", "actions": ["view", "send", "cleanup"], "ask": "다음으로 영어 문서까지 같은 구조로 바꿀까요?",
              "detail": "요청: 설치 안내를 단계별로 나눠줘\n— 한국어 설치 안내를 5단계로 나눴습니다. 다음으로 영어 문서까지 같은 구조로 바꿀까요?"},
             # 프로젝트 id와 폴더 이름이 다른 자동 수정 세션(시그니처로 이어짐)
             {"id": "w7", "section": "work", "kind": "bg", "project": "billing-api-service", "state": "idle", "status": "idle", "live": True, "in_repo": True,
@@ -124,6 +143,19 @@ def status(scenario):
             *[{"id": f"sp{i}", "section": "harness", "kind": "sync", "project": p, "state": "needs_human", "at": ago(180 + 10 * i),
                "title": "일부 적용 — draft PR 검토", "link": f"https://example.com/acme/{p}/pull/{200 + i}", "actions": ["open_agent"]}
               for i, p in enumerate(["search", "billing-api", "docs"], 1)],
+            # 실패는 완료가 아니다(#296): 같은 이유로 3번 연속 시간 제한에 걸린 동기화. 중간에 끊겨 로그 파일이 없다.
+            {"id": "hf1", "section": "harness", "kind": "sync", "project": "orders", "state": "needs_human", "at": ago(40),
+             "title": "실행 실패 (45분 시간 제한으로 중단됨) · 3번 연속", "result": "failed", "exit_code": 143, "duration_s": 2700,
+             "fail_reason": "45분 시간 제한으로 중단됨", "streak": 3, "detail": None, "link": None, "log": None,
+             "log_note": "중간에 끊겨 로그가 남지 않았습니다", "actions": ["open_agent"], "repo": "/work/acme/orders"},
+            # 자동 수정 제목: Spring Boot 로그 머리(시각·수준·pid·스레드·로거)가 붙은 원문은 사람 말로 걷어 낸다
+            {"id": "af5", "section": "autofix", "kind": "autofix", "project": "orders", "state": "needs_human", "status": "skipped",
+             "outcome": "left_for_user", "at": ago(75), "signature": "datadog:7c1e5a9b3d2f4e60",
+             "title": "2026-11-11 23:59:04.078 ERROR 12345 --- [nio-8080-exec-1] c.a.s.FooService : 주문 저장 실패",
+             "detail": "재고 차감과 주문 저장이 한 트랜잭션에 묶여 있지 않습니다. 무인 실행은 고치지 않고 넘겼습니다.",
+             "stage": "skipped", "stage_label": "건너뜀 · 사람 판단 필요", "count": 7, "attempts": 1, "regressions": 0,
+             "monitor_link": "https://example.com/monitor/7c1e", "log_name": "20261111T235930Z-orders.log", "repo": "/work/acme/orders",
+             "actions": ["open_agent"]},
             {"id": "af4", "section": "autofix", "kind": "autofix", "project": "search", "state": "done", "status": "resolved", "at": ago(2880),
              "signature": "sentry:4409000", "title": "검색어에 이모지를 넣으면 500 오류", "stage": "resolved", "stage_label": "해결",
              "count": 19, "attempts": 1, "regressions": 0, "link": "https://example.com/acme/search/pull/131", "actions": []},
@@ -138,7 +170,15 @@ def status(scenario):
             for a in items:
                 if a["id"] == i["autofix_id"]:
                     a["session_id"] = i["id"]
-    return {"generated_at": ago(0), "window_days": 7, "items": items, "jira_base": None, "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
+    # 변경 없이 끝난 무인 실행은 카드가 아니라 종류별 한 줄 요약(최근 24시간)
+    quiet = [] if scenario == "empty" else [{"kind": "sync", "count": 4, "last_at": ago(30)}, {"kind": "harvest", "count": 1, "last_at": ago(300)}]
+    for i in items:  # 묶음 조율 세션이 하위 에이전트도 돌리는 중 — '세션 안 하위 에이전트'와 '작업자 세션'이 한 카드에 함께 보인다
+        if i["id"] == "g1":
+            i["subagents"] = {"total": 2, "active": 1}
+    # 다음 무인 실행에서 돌지 않아 카드 대신 이유별 수로만 세는 harvest 대기열(#299)
+    qhidden = [] if scenario == "empty" else [{"reason": "no_harness", "count": 12}, {"reason": "sessions_only", "count": 12}, {"reason": "gave_up", "count": 1}]
+    return {"generated_at": ago(0), "window_days": 7, "items": items, "quiet_runs": quiet, "queue_hidden": qhidden, "jira_base": None,
+            "hidden_count": 0 if scenario == "empty" else len(HIDDEN)}
 
 
 HIDDEN = [{"key": "s-old-1", "title": "로그인 화면 문구 다듬기", "project": "shop", "at": ago(1440)},
@@ -146,9 +186,30 @@ HIDDEN = [{"key": "s-old-1", "title": "로그인 화면 문구 다듬기", "proj
           {"key": "s-old-2", "at": ago(4320)}]
 
 
+def left_reasons(items, plan_ids, older):
+    """정리 대상이 아니라 남는 항목을 이유별로 센다(실제 서버의 left와 같은 모양: [{reason, count, label}])."""
+    count = {"too_recent": 0, "in_use": 0, "waiting": 0, "unfinished": 0}
+    for i in items:
+        if i["id"] in plan_ids:
+            continue
+        if i["state"] == "needs_human" or i.get("ask") or i.get("permission"):
+            count["waiting"] += 1
+        elif i["state"] in ("done", "idle"):
+            count["in_use" if i.get("live") and older == 0 else "too_recent"] += 1
+        elif i["state"] == "running":
+            count["in_use"] += 1
+        else:
+            count["unfinished"] += 1
+    span = "하루" if older == 1 else "일주일" if older == 7 else f"{older:g}일"
+    label = {"too_recent": f"{span} 안 된 {{n}}건은 남겨 둠", "in_use": "지금 쓰는 세션 {n}건 제외",
+             "waiting": "답·확인을 기다리는 {n}건 제외", "unfinished": "아직 끝나지 않은 {n}건 제외"}
+    return [{"reason": r, "count": n, "label": label[r].format(n=n)} for r, n in count.items() if n]
+
+
 def bulk(scenario, req):
     """끝난 일 정리 흉내: 미리보기는 실제 서버처럼 끝난 일만, 실행은 아무것도 바꾸지 않고 결과만 돌려준다."""
-    done = [i for i in status(scenario)["items"] if i["state"] in ("done", "idle") and not i.get("ask")]
+    everything = status(scenario)["items"]
+    done = [i for i in everything if i["state"] in ("done", "idle") and not i.get("ask")]
     older = req.get("older_days") or 0
     if older:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older)
@@ -160,15 +221,18 @@ def bulk(scenario, req):
         if row["session"]:
             row["worktree"] = {"removable": n % 2 == 0, "reason": None if n % 2 == 0 else "커밋 안 한 변경 2개", "branch": f"feat/x-{n}"}
         plan.append(row)
+    left = left_reasons(everything, {r["id"] for r in plan}, older)
     if req.get("dry_run"):
-        return {"ok": True, "plan": plan}
+        return {"ok": True, "plan": plan, "left": left}
     wt = bool(req.get("worktree"))
     results = [{"id": r["id"], "title": r["title"], "ok": True, "hidden": True, "closed": r["close"],
                 "worktree_removed": wt and bool(r.get("worktree") and r["worktree"]["removable"]),
                 **({"worktree_kept": r["worktree"]["reason"]} if wt and r.get("worktree") and not r["worktree"]["removable"] else {})} for r in plan]
     n = len(results); c = sum(1 for r in results if r["closed"]); w = sum(1 for r in results if r["worktree_removed"]); s = sum(1 for r in results if r.get("worktree_kept"))
     msg = " · ".join([f"{n}개 정리"] + ([f"세션 {c}개 닫음"] if c else []) + ([f"worktree {w}개 삭제"] if w else []) + ([f"건너뜀 {s}개"] if s else []))
-    return {"ok": True, "message": f"미리보기: {msg}(아무것도 바꾸지 않음)", "results": results, "counts": {"done": n, "closed": c, "worktrees": w, "skipped": s}}
+    msg = " · ".join([msg] + [l["label"] for l in left])
+    return {"ok": True, "message": f"미리보기: {msg}(아무것도 바꾸지 않음)", "results": results, "left": left,
+            "counts": {"done": n, "closed": c, "worktrees": w, "skipped": s}}
 
 
 def many():
@@ -338,8 +402,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, [] if u.path == "/commands" else REPOS)
         if u.path == "/hidden":
             return self._json(200, {"ok": True, "items": HIDDEN})
-        if u.path == "/cleanup-preview":
-            return self._json(200, {"worktree": {"path": "/work/acme/shop", "branch": "fix/cart-total", "removable": True}})
+        if u.path == "/cleanup-preview":  # 실제 서버의 close_level과 같은 규칙으로 확인 수준을 싣는다(#306)
+            it = next((i for i in status(scenario)["items"] if i.get("id") == q.get("id")), {})
+            level = ("idle" if not it.get("live") else "busy" if it.get("status") == "busy" or it.get("state") == "running"
+                     else "waiting" if it.get("status") != "idle" or it.get("permission") else "ask" if it.get("ask") else "idle")
+            wt = ({"path": "/work/acme/shop", "removable": False, "reason": "작업 중인 세션은 파일이 바뀔 수 있어 지우지 않음"} if level == "busy"
+                  else {"path": "/work/acme/shop", "branch": "fix/cart-total", "removable": True})
+            return self._json(200, {"ok": True, "level": level, "worktree": wt})
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -353,6 +422,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/autofix/detail":
             d = autofix()["repos"][0]["details"]["datadog:9d8e7f6a5b4c3d2e"]
             return self._json(200, {"ok": True, "message": "원문을 불러옴", "detail": d})
+        if self.path == "/action" and req.get("action") == "cleanup" and req.get("id") == "w6" and req.get("confirm") != "busy":
+            # 확인창을 연 사이 답 대기 세션이 일을 시작한 경우(#306): 서버가 더 무거운 수준을 돌려주고 화면은 다시 묻는다
+            return self._json(200, {"ok": False, "confirm": "busy", "message": "세션 상태가 바뀌었음 — 다시 확인해 주세요"})
         return self._json(200, {"ok": True, "message": f"미리보기: '{req.get('action') or self.path}' 요청을 받았습니다(아무것도 바꾸지 않음)"})
 
 
