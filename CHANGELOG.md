@@ -6,6 +6,26 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.72.0 (2026-11-13)
+### 새 기능
+
+- **UX 라이팅: 규칙 만들기·작업 중 적용·검토** — 화면 문구를 제품 규칙에 맞게 쓰고 검사할 수단이 없었습니다. `/ux-writing-builder`는 기존 코드 문구를 실측해(`scripts/ux-writing-lint.py extract` — 종결 어미 분포·문구 위치) 질문 라운드로 `.ai-harness/docs/ux-writing.md`(말투·종결 어미·원칙·용어집·컴포넌트별 규칙·전/후 예시)를 만듭니다. `/ux-writing-audit`는 용어집 금지어·금지 표현·종결 어미를 스크립트로 결정적으로 잡고(표준어로 바꾼 수정안, 조사 보정), 맥락은 문서 규칙으로 판단해 `위치·원문·수정안·위반 규칙` 표와 점수를 냅니다. 문서가 없으면 채점하지 않습니다. 생성되는 `implement-feature`·`fix-bug` 진입점과 `/design-screen`은 문서가 있을 때 UI 문구를 쓰기 전에 읽고, PR 전에 diff를 감사합니다. 문서는 프로젝트 소유라 관리 생성물이 아닙니다(sync가 덮어쓰지 않음). 기존 생성물에 반영하려면 `/ai-harness:harness-init` sync. (#293)
+
+### 동작 변경
+
+- **승인 모드를 개인 설정으로 이동** — 워크플로 러너의 Brief 승인 게이트(human·auto)를 저장소 manifest의 `approval`이 정해서, 한 사람이 auto로 올리면 그 저장소를 쓰는 모두의 에이전트가 사람 승인 없이 PR까지 갔습니다. 이제 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(`<project_id>=<human|auto>`, 저장소별) → `HM_APPROVAL`(전체) → 기본 `human` 순으로 정합니다. manifest의 `approval`은 더 읽지 않고, 값이 남아 있으면 러너가 개인 설정으로 옮기라는 안내를 남깁니다. 러너는 start 때 정한 승인 모드와 출처를 실행 상태·`brief.md`·`status`에 남깁니다. `/ai-harness:setup`에서 고를 수 있습니다. (#294)
+
+- 보드 '세션 정리'를 세션 상태와 관계없이 언제나 쓸 수 있다 — 답 대기·권한 요청 대기·작업 중 세션도 확인창 문구와 무게만 달라지고(작업 중은 취소에 기본 포커스), 확인창을 연 뒤 상태가 더 무거워지면 새 경고로 다시 묻는다. 작업 중 세션은 worktree를 지우지 않고, 일괄 '끝난 일 정리'는 여전히 쉬는 세션만 대상이다 (#306)
+
+### 버그 수정
+
+- 보드 '세션 정리'가 느리던 문제 — 확인 대화상자의 worktree 판정은 최근 목록에서 바로 나오고, 확인하면 카드가 즉시 빠지며 세션 닫기·worktree 삭제는 뒤에서 한다(실패하면 카드가 돌아오고 이유를 알린다). 작업 중·답 대기 여부와 worktree 판정은 정리 직전에 다시 확인한다. 상태 수집은 바뀌지 않은 대화 기록을 다시 읽지 않는다(`~/.ai-harness/board/work-cache.json`, 대화 기록은 읽기만) (#305)
+- 승인 모드 개인 설정 이전(#294)의 남은 곳 — `/ai-harness:autofix` 수동 수정이 manifest에 남은 `approval: "auto"`를 따라 사람 승인 없이 넘어갈 수 있던 것을 개인 설정(`HM_APPROVAL_REPOS` > `HM_APPROVAL` > `human`)으로 고쳤다. 보드 '하네스 설정'은 manifest가 아니라 개인 설정에서 계산한 승인 모드를 보이고, 기본 승인과 저장소별 승인을 고를 수 있다. 러너 `status`는 업그레이드 전에 시작된 실행의 출처를 `legacy`로 보이고, 잘못된 승인 값이 환경변수에서 왔으면 그렇게 말한다. `/ai-harness:setup`은 전체 `HM_APPROVAL=auto`가 모든 저장소에 적용된다고 경고하고 저장소별 `HM_APPROVAL_REPOS`를 권한다. `/ai-harness:harness-init`이 새로 만드는 workflow 본문도 개인 설정 기준으로 적는다 (#310)
+
+### 업데이트 후 해야 할 일
+
+- manifest `approval: "auto"`로 무인 실행을 쓰던 사람은 `/ai-harness:setup`에서 `HM_APPROVAL=auto`(또는 저장소별 `HM_APPROVAL_REPOS`)를 설정하세요. 설정하지 않으면 사람 승인을 기다립니다. manifest의 `approval` 키는 지워도 됩니다. (#294)
+
 ## v0.71.0 (2026-11-12)
 ### 새 기능
 

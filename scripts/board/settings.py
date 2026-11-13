@@ -2,6 +2,7 @@
 
 자동화 단계(PR까지/병합까지/배포·검증까지)는 사람마다 다르므로 ~/.ai-harness/config의
 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS에 둔다(#242). 병합 여부는 이 개인 설정만 정한다(#248). 보드가 바로 쓴다.
+워크플로 승인 모드도 같은 파일의 HM_APPROVAL·HM_APPROVAL_REPOS만 정한다(#294) — manifest approval은 보지 않는다.
 기준 브랜치·배포 확인·스모크 명령은 저장소 사실이라 harness.json에 있고, 보드는 직접 고치지 않는다 —
 그 저장소에서 /ai-harness:harness-init 설정 변경을 돌려 draft PR로 낸다.
 """
@@ -82,7 +83,7 @@ def read_repo(repo):
         "repo": repo, "name": os.path.basename(repo),
         "branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
         "level": level_of(m), "git_policy": m.get("git_policy"), "merge_policy": m.get("merge_policy"),
-        "approval": m.get("approval") or "human",
+        **repo_approval(repo, m),
         "monitor_ready": bool(m.get("monitor") and m.get("project_id")),
         "suggest": suggest(repo),
         "key": project_key(repo), "runner": runner_state(repo),
@@ -95,6 +96,7 @@ LEVEL_KO = {"pr": "PR까지", "merge": "병합까지", "deploy": "배포·검증
 # ---- 개인 설정(~/.ai-harness/config) ----
 CONFIG = os.path.join(os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness"), "config")
 PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS", "HM_MERGE_REQUIRE", "HM_MERGE_MIN_APPROVALS", "HM_MERGE_METHOD",
+                 "HM_APPROVAL", "HM_APPROVAL_REPOS",
                  "HM_HARVEST_AUTO", "HM_SYNC_AUTO", "HM_HARVEST_AUTO_MERGE", "HM_SYNC_AUTO_MERGE",
                  "HM_HARVEST_AUTO_DAILY_MAX", "HM_SYNC_AUTO_DAILY_MAX")
 DAILY_DEFAULT = {"harvest": 2, "sync": 6}  # harvest-auto.sh 기본값
@@ -145,13 +147,62 @@ def write_user_config(updates):
         os.replace(tmp, CONFIG)
 
 
-def repo_levels(cfg):
+def repo_map(cfg, key):
+    """러너 repository_setting과 같은 규칙: "<project_id>=<값>"(쉼표·공백 구분), 같은 키는 마지막 값."""
     out = {}
-    for e in re.split(r"[,\s]+", cfg.get("HM_DELIVERY_LEVEL_REPOS", "")):
+    for e in re.split(r"[,\s]+", cfg.get(key, "")):
         if "=" in e:
             k, v = e.split("=", 1)
             out[k] = v
     return out
+
+
+def repo_levels(cfg):
+    return repo_map(cfg, "HM_DELIVERY_LEVEL_REPOS")
+
+
+APPROVALS = ("human", "auto")
+
+
+def approval_of(key, cfg):
+    """러너 approval_mode와 같은 순서: HM_APPROVAL_REPOS(이 저장소) > HM_APPROVAL > human. manifest approval은 보지 않는다(#294).
+    source: repo | default(내 기본) | none(설정 없음). 값이 human·auto가 아니면 러너는 시작하지 않으므로 그대로 보여 준다."""
+    mine = repo_map(cfg, "HM_APPROVAL_REPOS").get(key) or None
+    if mine:
+        return {"approval": mine, "approval_source": "repo", "approval_mine": mine}
+    if cfg.get("HM_APPROVAL"):
+        return {"approval": cfg["HM_APPROVAL"], "approval_source": "default", "approval_mine": None}
+    return {"approval": "human", "approval_source": "none", "approval_mine": None}
+
+
+def repo_approval(repo, manifest):
+    """이 저장소 러너가 실제로 쓸 승인 모드. #294 이전 러너(HM_APPROVAL을 모름)는 아직 manifest approval을 읽으므로
+    동기화 전까지는 그 값을 출처 legacy로 보인다 — 개인 설정으로 계산하면 auto 저장소가 사람 확인으로 잘못 보인다."""
+    personal = approval_of(project_key(repo), user_config())
+    if runner_approval(repo) == "old":
+        return {**personal, "approval": manifest.get("approval") or "human", "approval_source": "legacy"}
+    return personal
+
+
+def set_approval(req, known):
+    """{scope: "default"} 또는 {scope: "repo", repo}, mode: human|auto|"" (""=설정 지움)."""
+    mode = req.get("mode") or ""
+    if mode and mode not in APPROVALS:
+        return "알 수 없는 승인 모드"
+    if req.get("scope") == "default":
+        write_user_config({"HM_APPROVAL": mode})
+        return None
+    if req.get("repo") not in known:
+        return "하네스 저장소 목록에 없는 경로"
+    key = project_key(req["repo"])
+    if not re.fullmatch(r"[\w.-]+", key):
+        return f"이 저장소의 project_id({key})는 설정 키로 쓸 수 없음"
+    modes = repo_map(user_config(), "HM_APPROVAL_REPOS")
+    modes.pop(key, None)
+    if mode:
+        modes[key] = mode
+    write_user_config({"HM_APPROVAL_REPOS": ",".join(f"{k}={v}" for k, v in modes.items())})
+    return None
 
 
 def set_harness(req):
@@ -213,6 +264,15 @@ def runner_state(repo):
         return "none"
     with open(p, errors="replace") as f:
         return "personal" if "HM_DELIVERY_LEVEL" in f.read() else "old"
+
+
+def runner_approval(repo):
+    """러너가 개인 승인 모드(HM_APPROVAL)를 읽는지: personal | old(manifest approval을 읽음) | none."""
+    p = os.path.join(repo, ".ai-harness", "workflows", "workflow-driver.sh")
+    if not os.path.isfile(p):
+        return "none"
+    with open(p, errors="replace") as f:
+        return "personal" if "HM_APPROVAL" in f.read() else "old"
 
 
 def effective(row, cfg):

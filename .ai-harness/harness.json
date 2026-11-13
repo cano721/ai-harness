@@ -3,7 +3,6 @@
   "level": "standard",
   "test_policy": "tdd",
   "git_policy": "pr-only",
-  "approval": "auto",
   "merge_policy": {
     "base": "develop"
   },
@@ -17,11 +16,11 @@
   "harness_version": "0.64.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
-      "content_sha256": "acfcda7293ed9fe741113f5011c9d2b27f1245c9c07443e8e8d4dabaea0246f1",
+      "content_sha256": "1e1d6c0aacf90a9b901d2f523fe4b31ac88051e8d177de12ddecbc683079e9c8",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "16536ae8586576fb97e9260b73df2f90a8cdd5198605dffdeb7be59134e3b386",
+      "content_sha256": "0e7338264f34eaa3a1736bde70a00acb06a60d1f5819a0d4193f3761569a1961",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -29,7 +28,7 @@
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
-      "content_sha256": "04c3e686a754a87d6ab0d3fe6e963cd5cf70c0bc3a3799a2114c08c388aea5dd",
+      "content_sha256": "ad054fa3f9c9c73836301665d2a0727b46bcc2b3d15dc8a9a3cce0639e5ac632",
       "template_version": "0.64.0"
     },
     ".ai-harness/workflows/review-graph.json": {
@@ -37,27 +36,27 @@
       "template_version": "0.64.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "f17b31d928f422e4a383556e80186151a8bac791befb76258ca0c7c450e6c093",
+      "content_sha256": "c7706e3b0fee83e85025bb325d4c1cf055f239915722e2ee3a44f02a623c6ab5",
       "template_version": "0.64.0"
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "1d1c2b32b0da2a954ab3b96bd41dbc45d2da18dd48b4d85473c43c1ce6ebf2d0",
+      "content_sha256": "a406f93602f179f79e49031526673490ffe452b3fe57203ebc8341b600c8fd81",
       "template_version": "0.64.0"
     },
     ".agents/skills/review/SKILL.md": {
-      "content_sha256": "b079d01a38e183fd572c16544daf77407060b30ddff3cd61f8ad2559cf9db115",
+      "content_sha256": "26d8ad2f47661b66d807101b94aed8cef3d8f4dc377c604d12a21a9eb969dad4",
       "template_version": "0.64.0"
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "9bbd5df82d9298d1da2e6a7dcebfe3bb4aea268a855f4104cc8478150c5ce0e8",
+      "content_sha256": "a5d611a71e50c7ed1c61e4ea3c805b5f226f53f3124aa6a6d09a8327aca7ad3e",
       "template_version": "0.64.0"
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "89ef9d2e102b2adf5a136f39ff5da8614626ab37edb20430e75f20b0e1e95373",
+      "content_sha256": "a0d769cc3ad00ed795b83ef347814890534e147b9549005cf78c236e1108fedc",
       "template_version": "0.64.0"
     },
     ".claude/commands/review.md": {
-      "content_sha256": "cf1647ded0799b4e47ea4ce8decd463fcf0087661d41311780ce657757a13753",
+      "content_sha256": "54780daf3c0540888d9d4ecf1a8d985319982157444cd53a7557c53b1201f512",
       "template_version": "0.64.0"
     }
   }

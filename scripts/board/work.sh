@@ -83,22 +83,46 @@ done <<<"$cfg_dirs"
 agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
 
 now_ms=$(( $(date +%s) * 1000 ))
-jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
-  sid=$(jq -r '.sessionId // empty' <<<"$a")
+
+# transcript마다 제목·요약을 뽑는 일(전체 grep + tail|jq)이 상태 수집에서 가장 비싸다. 경로·크기·수정 시각이 같으면
+# 지난 결과를 쓴다(캐시: $DATA/board/work-cache.json, 이번 목록의 세션만 남김). transcript는 읽기만 한다.
+CACHE_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/board"
+CACHE="$CACHE_DIR/work-cache.json"
+WORK_TMP=$(mktemp -d)
+trap 'rm -f "$AGENTS_OUT"; rm -rf "$WORK_TMP"' EXIT
+if stat -c %s /dev/null >/dev/null 2>&1; then
+  file_key() { stat -c '%s:%Y' "$1" 2>/dev/null; } # GNU
+else
+  file_key() { stat -f '%z:%m' "$1" 2>/dev/null; } # BSD(macOS)
+fi
+# 모양이 틀린 항목(옛 형식·손상)은 버린다 — 남겨 두면 jq가 죽어 작업 칸 전체가 빈다
+jq -c 'if type == "object" then with_entries(select((.value | type) == "object" and (.value.key | type) == "string"
+  and (.value.titles | type) == "object" and (.value.summary | type) == "object")) else {} end' "$CACHE" >"$WORK_TMP/old" 2>/dev/null \
+  || echo '{}' >"$WORK_TMP/old"
+
+# 세션마다 transcript 경로와 키(크기:수정 시각)
+: >"$WORK_TMP/cur.tsv"
+while IFS=$'\t' read -r sid cfg; do
   [ -n "$sid" ] || continue
-  t=""
-  cfg=$(jq -r '.config_dir // empty' <<<"$a")
   proj="$PROJECTS"
   [ -z "$cfg" ] || proj="$cfg/projects"
-  for f in "$proj"/*/"$sid".jsonl; do [ -f "$f" ] && t=$f && break; done
-  summary='{}'
-  titles='{}'
-  if [ -n "$t" ]; then
-    # Claude가 붙인 요약 제목(ai-title)과 사람이 바꾼 제목(custom-title, /rename)
-    titles=$({ grep -hE '"type":"(ai-title|custom-title)"' "$t" || true; } | jq -cs '{ai: (map(select(.type == "ai-title") | .aiTitle) | last),
-      custom: (map(select(.type == "custom-title") | .customTitle) | last)}' 2>/dev/null || echo '{}')
-    # 긴 transcript는 끝부분만 본다. 사람 요청(tool_result 제외)과 마지막 답변, 마지막 기록 시각.
-    summary=$(tail -n 600 "$t" | jq -cs '
+  for f in "$proj"/*/"$sid".jsonl; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\t%s\n' "$sid" "$f" "$(file_key "$f")" >>"$WORK_TMP/cur.tsv"
+    break
+  done
+done <<<"$(jq -r '.[] | [.sessionId, (.config_dir // "")] | @tsv' <<<"$agents")"
+jq -Rn '[inputs | split("\t") | {sid: .[0], path: .[1], key: (.[2] // "")}]' <"$WORK_TMP/cur.tsv" >"$WORK_TMP/cur.json"
+
+# 바뀐(또는 처음 보는) transcript만 파싱한다
+: >"$WORK_TMP/new"
+while IFS=$'\t' read -r t key; do
+  [ -n "$t" ] || continue
+  # Claude가 붙인 요약 제목(ai-title)과 사람이 바꾼 제목(custom-title, /rename)
+  titles=$({ grep -hE '"type":"(ai-title|custom-title)"' "$t" || true; } | jq -cs '{ai: (map(select(.type == "ai-title") | .aiTitle) | last),
+    custom: (map(select(.type == "custom-title") | .customTitle) | last)}' 2>/dev/null || echo '{}')
+  # 긴 transcript는 끝부분만 본다. 사람 요청(tool_result 제외)과 마지막 답변, 마지막 기록 시각.
+  summary=$(tail -n 600 "$t" | jq -cs '
       def text: if type == "string" then . else (map(select(.type? == "text") | .text) | join(" ")) end;
       (map(select(.type == "user" and ((.message.content | type) == "string" or (.message.content | any(.type? == "text")))
                   and (.isMeta != true)
@@ -111,11 +135,32 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
          api_error: ((map(select(.type == "user" or .type == "assistant")) | last) as $z
            | ($z.type == "assistant" and ($z.isApiErrorMessage == true or ($z.message.content | text? // "" | startswith("API Error:"))))),
          last: (map(.timestamp // empty) | max // null)}' 2>/dev/null || echo '{}')
+  jq -cn --arg p "$t" --arg k "$key" --argjson ti "$titles" --argjson s "$summary" '{path: $p, key: $k, titles: $ti, summary: $s}' >>"$WORK_TMP/new"
+done <<<"$(jq -r --slurpfile old "$WORK_TMP/old" '.[] | select(.key == "" or $old[0][.path].key != .key) | [.path, .key] | @tsv' "$WORK_TMP/cur.json")"
+
+# 새 캐시: 이번 목록의 transcript만. 키를 모르면(stat 실패) 남기지 않는다.
+jq -c --slurpfile old "$WORK_TMP/old" --slurpfile new "$WORK_TMP/new" '
+  ($new | map({(.path): {key, titles, summary}}) | add // {}) as $n
+  | map(select(.key != "") | .path as $p | {($p): ($n[$p] // $old[0][$p])}) | add // {} | with_entries(select(.value != null))' \
+  "$WORK_TMP/cur.json" >"$WORK_TMP/cache" 2>/dev/null || echo '{}' >"$WORK_TMP/cache"
+if ! cmp -s "$WORK_TMP/cache" "$CACHE" && mkdir -p "$CACHE_DIR" 2>/dev/null; then
+  cache_tmp=$(mktemp "$CACHE.XXXXXX" 2>/dev/null) || cache_tmp=""
+  if [ -n "$cache_tmp" ]; then
+    chmod 600 "$cache_tmp"
+    if ! { cat "$WORK_TMP/cache" >"$cache_tmp" && mv -f "$cache_tmp" "$CACHE"; }; then rm -f "$cache_tmp"; fi
   fi
-  jq -c --argjson s "$summary" --argjson ti "$titles" --arg path "${t:-}" --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
-    def clip($n): if . == null then null else gsub("\\s+"; " ") | if length > $n then .[0:$n] + "…" else . end end;
+fi
+
+# 바뀐 transcript는 새로 뽑은 결과(cache에 있음)를, 키가 없던 것은 이번 결과(new)를 쓴다
+jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile cur "$WORK_TMP/cur.json" \
+  --argjson now "$now_ms" --argjson hours "$DONE_HOURS" '
+  def clip($n): if . == null then null else gsub("\\s+"; " ") | if length > $n then .[0:$n] + "…" else . end end;
+  ($cur[0] | map({(.sid): .path}) | add // {}) as $paths
+  | (($new | map({(.path): .}) | add // {}) + ($c[0] // {})) as $parsed
+  | [ .[] | ($paths[.sessionId] // "") as $path | ($parsed[$path] // {}) as $e
+    | ($e.summary // {}) as $s | ($e.titles // {}) as $ti
     # 멈춘 세션: API 오류로 끊김(api_error) · 작업 중인데 프로세스가 없음(no_process). 작업 중으로 남기지 않는다.
-    (if .status == "waiting" then null
+    | (if .status == "waiting" then null
      elif $s.api_error == true then "api_error"
      elif .status == "busy" and .pid == null then "no_process"
      else null end) as $stall
@@ -147,5 +192,4 @@ jq -c '.[]' <<<"$agents" | while IFS= read -r a; do
        link: null, log: null, cmd: (if .kind == "background" then "claude attach \(.id // .sessionId[0:8])" else null end),
        id: "claude|\(.sessionId)"}
     | .actions = ((if .transcript then ["view"] else [] end)
-                  + (if .kind == "bg" and (.status == "idle" or .status == "waiting" or .pid == null) then ["send"] else [] end))' <<<"$a"
-done | jq -s .
+                  + (if .kind == "bg" and (.status == "idle" or .status == "waiting" or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"
