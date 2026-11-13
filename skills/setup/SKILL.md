@@ -218,8 +218,8 @@ $ROOT/scripts/setup.sh team list
 
 승인 게이트를 사용자 개인 설정으로 고른다. `~/.ai-harness/config`를 읽어 현재 값을 보여 주고 선택한 키만 기록한다. 기본은 `human`이며, 저장소 manifest의 기존 `approval`은 더 이상 적용되지 않는다.
 
-1. 전체 설정 `HM_APPROVAL=human|auto`를 고른다. `auto`는 Brief에 추천 결정과 근거를 남기고, 사람이 정할 사항이 없을 때 승인 게이트를 통과한다.
-2. 저장소별 예외가 있으면 `HM_APPROVAL_REPOS="<project_id>=<human|auto>,…"`로 지정한다. 일치하는 저장소별 항목이 전체 설정보다 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이다.
+1. 먼저 위험을 알린다: `auto`는 Brief에 추천 결정과 근거를 남기고, 사람이 정할 사항이 없을 때 승인 게이트를 통과한다. 그래서 Brief의 검증 명령과 쓰기 단계가 사람 확인 없이 돈다. 전체 설정 `HM_APPROVAL=auto`는 이 사용자의 **모든 저장소**에 적용되므로, 신뢰하지 않는 저장소(외부 기여 브랜치, 처음 받은 저장소)에서도 저장소가 정한 명령이 확인 없이 실행된다(README "한계" 절).
+2. 그래서 전체 설정은 `HM_APPROVAL=human`(기본, 줄 없음과 같다)으로 두고, 신뢰하는 저장소만 `HM_APPROVAL_REPOS="<project_id>=auto,…"`로 골라 켜기를 권한다. 일치하는 저장소별 항목이 전체 설정보다 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다. 사용자가 그래도 전체 `auto`를 고르면 위 위험을 다시 확인받은 뒤 기록하고, 예외로 둘 저장소는 `HM_APPROVAL_REPOS`에 `=human`으로 남긴다.
 3. 설정 파일의 다른 줄·주석·권한을 보존한다. 기존 manifest에 `approval`이 있으면 자동 삭제하지 말고 사용자에게 개인 설정으로 옮기도록 안내한다.
 
 ### 8-1. 워크플로 자동화 단계 (선택)

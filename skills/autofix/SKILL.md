@@ -51,7 +51,7 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
    - 그 밖의 실패(exit 4 자격증명·설정 오류, exit 3 요청 실패)는 메시지대로 자격증명 위치나 설정을 안내하고 멈춘다.
 1. `$ROOT/scripts/autofix-auto.sh candidates --project <id> --root .`로 후보를 보여 준다(프로젝트 ID는 manifest `project_id`, 없으면 origin 저장소 이름). 수동 조회는 무인 실행 대상 목록(`HM_AUTOFIX_REPOS`)과 무관하게 이 저장소의 monitor 설정으로 계산한다. 후보가 없으면 `monitor-fetch.sh list --root .` 전체를 보여 주고 끝낸다.
 2. 사용자가 고른 에러의 상세를 `$ROOT/scripts/monitor-fetch.sh detail --root . --meta '<meta>'`로 가져온다.
-3. 아래 **수정 절차** 1~5를 이 세션에서 하되, 승인 게이트는 프로젝트 정책(`approval`)대로 사람에게 묻는다.
+3. 아래 **수정 절차** 1~5를 이 세션에서 하되, 승인 게이트는 사용자 개인 승인 모드대로 한다. `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(이 저장소 항목) > `HM_APPROVAL` > 기본 `human` 순으로 정한다. `human`이면 Bug Fix Brief를 보이고 사람의 승인을 받은 뒤 고친다. `auto`면 Brief를 PR 본문에 남기고 사람만 정할 것이 없을 때 진행한다. manifest에 남은 예전 `approval`은 따르지 않는다(`auto`여도 사람에게 묻는다).
 4. PR을 열었으면 검증 대상에 올린다: `$ROOT/scripts/autofix-auto.sh track --project <id> --candidate '<1단계의 후보 JSON 한 줄>' --pr <PR URL>`. 이후 정기 실행(`HM_AUTOFIX_AUTO=1`)이나 `/autofix verify`가 병합·배포·재발을 확인한다. 검증은 `HM_AUTOFIX_REPOS`에 있고 `monitor` 설정(로컬 파일 또는 기준 브랜치 manifest)이 있는 저장소만 돌므로, 그 밖의 프로젝트면 track이 받지 않는다(exit 3).
    - 프로젝트 러너(`.ai-harness/workflows/workflow-driver.sh --workflow bug-fix`)로 고치고 사용자의 개인 자동화 단계(`HM_DELIVERY_LEVEL`)가 `deploy`이며 manifest `merge_policy.verify`에 `monitor`가 있으면(러너도 `monitor` 설정을 로컬 파일 → manifest 순으로 찾는다), 1단계의 후보 JSON을 파일로 저장해 `start --monitor-error <파일>`로 넘긴다. 러너가 병합 뒤 직접 추적에 올리므로 이 track은 하지 않는다(두 번 올리면 시도 횟수가 두 번 센다).
 
@@ -74,7 +74,7 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 
 - 현재 디렉토리는 기준 브랜치 최신 커밋을 checkout한 **작업 전용 독립 저장소**(원본의 로컬 clone, detached)다. `origin`은 원본과 같은 원격이다. 여기서 `fix/autofix-<짧은-요약>` 브랜치를 만든다 — 무인 실행의 push 권한은 `fix/` 브랜치에만 열려 있다. 프로젝트 규칙에 이슈 키가 필요해도 이슈를 만들지 않는다. 종료 후 worker가 이 디렉토리를 지운다.
 - `--error` 파일(`.ai-harness-stage/autofix/error.json`)에 에러가 있다: `signature`, `title`, `count`, `window_hours`, `first_seen`/`last_seen`, `link`, `detail`(스택·태그, 비밀값 가림), `previous`(지난 PR·재발 기록), `reason`(`new`·`regressed`·`reappeared`…). 이 파일과 `.ai-harness-stage/`는 커밋하지 않는다.
-- 위 **수정 절차**를 따른다. 승인 게이트는 manifest `approval`과 관계없이 **정책 승인**으로 통과한다 — Bug Fix Brief(관찰/기대 동작, 근거, 원인, 재현 테스트, 변경 범위, 판단이 갈린 점의 추천안)를 PR 본문에 싣는 것으로 대신한다. 단 사람만 정할 수 있는 것(제품 동작 변경, 데이터 삭제·마이그레이션, 외부 시스템 쓰기, 공개 API 계약 변경)이 필요하면 고치지 않고 `left_for_user`.
+- 위 **수정 절차**를 따른다. 승인 게이트는 개인 승인 모드(`HM_APPROVAL`·`HM_APPROVAL_REPOS`)와 관계없이 **정책 승인**으로 통과한다 — Bug Fix Brief(관찰/기대 동작, 근거, 원인, 재현 테스트, 변경 범위, 판단이 갈린 점의 추천안)를 PR 본문에 싣는 것으로 대신한다. 단 사람만 정할 수 있는 것(제품 동작 변경, 데이터 삭제·마이그레이션, 외부 시스템 쓰기, 공개 API 계약 변경)이 필요하면 고치지 않고 `left_for_user`.
 - 변경을 적용하기 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면 브랜치를 만들거나 push하지 말고 `left_for_user`.
 - PR: 커밋 → `git push -u origin <branch>` → `$ROOT/scripts/open-pr.sh --base <--base 값> --title "<제목>" --body-file .ai-harness-stage/autofix/pr.md`. 본문 첫 줄에 `자동 수정(/autofix --auto) 결과 — 병합 전 검토 필요`를 밝히고, 이어서:
   - 모니터링 근거: 시그니처, 제목, 창 안 발생 수, 처음/마지막 발생, 링크

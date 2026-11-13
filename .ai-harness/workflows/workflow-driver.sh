@@ -1186,7 +1186,7 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
           then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end
           + if (.ui_scenarios // [] | length) > 0
           then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
-        printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state .policy.approval)" "$(state .policy.approval_source)" >>"$RUN/brief.md"
+        printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
           | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
@@ -1475,6 +1475,18 @@ user_config() { # KEY
   fi
   if [[ -n "$found" ]]; then printf '%s' "$value"; else printf '%s' "${!1:-}"; fi
 }
+# user_config가 KEY 값을 어디서 읽었는지: config 파일에 줄이 있으면 그 파일, 없으면 환경변수.
+config_origin() { # KEY
+  local file="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/config" line
+  if [[ -f "$file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)= && "${BASH_REMATCH[2]}" == "$1" ]] || continue
+      printf 'in %s' "$file"
+      return 0
+    done <"$file"
+  fi
+  printf 'in the environment'
+}
 # /autofix monitor 설정: 개인 로컬 파일(~/.ai-harness/autofix/monitors/<project_id>.json) > manifest의 monitor.
 # 이 러너는 플러그인 밖(대상 저장소)에 복사돼 lib.sh를 source하지 못하므로 hm_resolve_monitor와 같은 규칙을 여기 둔다.
 # 출력은 monitor 객체 한 줄(없으면 빈 출력). 로컬 파일이 있는데 잘못됐으면 manifest로 넘어가지 않고 실패한다.
@@ -1531,7 +1543,7 @@ approval_mode() {
   setting="$(repository_setting HM_APPROVAL_REPOS)"
   if [[ -n "$setting" ]]; then read -r mode source <<<"$setting"; else mode="$(user_config HM_APPROVAL)"; fi
   if [[ -z "$source" ]]; then if [[ -n "$mode" ]]; then source=HM_APPROVAL; else mode=human; source=default; fi; fi
-  [[ "$mode" =~ ^(human|auto)$ ]] || { printf '%s in ~/.ai-harness/config is "%s"; approval must be human or auto\n' "$source" "$mode" >&2; return 2; }
+  [[ "$mode" =~ ^(human|auto)$ ]] || { printf '%s %s is "%s"; approval must be human or auto\n' "$source" "$(config_origin "${source%%:*}")" "$mode" >&2; return 2; }
   printf '%s %s' "$mode" "$source"
 }
 
@@ -1735,7 +1747,7 @@ EOF
 
 case "$CMD" in
   status)
-    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "default")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
     exit 0
     ;;
