@@ -22,7 +22,7 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 | `/ai-harness:understand-change` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | `.ai-harness/workflows/understand-change.md` (선택 정책) |
 | `/ai-harness:explain-for` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | — |
 
-그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review --request "<요청>"`. 승인 정책은 `.ai-harness/harness.json`의 `approval`(이 저장소는 `auto` — Brief와 `결정 사항`을 PR 본문에 남기고 진행, 사람만 정할 수 있는 것만 멈춤).
+그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review --request "<요청>"`. 승인 모드는 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human` 순으로 정한다. manifest의 기존 `approval`은 무시하며, 값이 있으면 러너가 개인 설정으로 옮기라는 안내를 남긴다.
 
 ## 페르소나
 

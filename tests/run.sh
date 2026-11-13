@@ -831,7 +831,7 @@ assert_contains "$FEATURE_SKILL_CONTENT" "Do not edit before explicit approval" 
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/implement-feature/" "harness init uses the local feature template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/feature-delivery-graph.json" "harness init copies the local feature graph"
-# 커밋·push·PR과 승인 대기는 어댑터 문구가 아니라 manifest의 git_policy·approval이 정한다.
+# 커밋·push·PR은 manifest의 git_policy, 승인 대기는 개인 설정이 정한다.
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
 for adapter in implement-feature fix-bug review; do
   ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
@@ -849,11 +849,12 @@ for adapter in implement-feature fix-bug; do
   assert_contains "$ADAPTER_CONTENT" "Missing or any other value — leave issue status alone" "$adapter adapter leaves issues alone without issue_policy"
 done
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors approval auto"
-assert_contains "$HARNESS_INIT_CONTENT" '8. **승인 게이트**' "harness init asks for the approval mode"
-assert_contains "$HARNESS_INIT_CONTENT" '"approval": "human"' "manifest records the approval mode"
+assert_contains "$FEATURE_SKILL_CONTENT" '`auto` — present the brief' "feature adapter honors personal approval auto"
+assert_contains "$HARNESS_INIT_CONTENT" 'HM_APPROVAL' "harness init documents personal approval settings"
+assert_contains "$HARNESS_INIT_CONTENT" 'HM_APPROVAL_REPOS' "harness init documents repository-specific approval settings"
+[[ "$HARNESS_INIT_CONTENT" != *'"approval": "human"'* ]] || fail "harness init does not write approval to the manifest"
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$HARNESS_INIT_CONTENT" '`approval`이 없으면 `human`으로 본다' "a manifest without approval keeps the human gate"
+assert_contains "$HARNESS_INIT_CONTENT" '기존 `approval` 값은 보존' "harness init preserves legacy approval fields and asks for review"
 assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
 
@@ -920,7 +921,9 @@ DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
 driver() { # args... → DRIVER_RC, DRIVER_OUT
   DRIVER_RC=0
-  DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+  DRIVER_DATA="${DRIVER_DATA_OVERRIDE:-$DRIVER_TMP/data}"
+  mkdir -p "$DRIVER_DATA"
+  DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_DATA" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
     FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK="${FAKE_CHECK:-true}" PATH="$ROOT/tests/fixtures/driver:$PATH" \
     bash "$DRIVER" "$@" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
 }
@@ -928,6 +931,8 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   FAKE_SCENARIO="$1"
   DRIVER_REPO="$DRIVER_TMP/repo-$1"
   FAKE_LOG="$DRIVER_TMP/$1.log"
+  mkdir -p "$DRIVER_TMP/data"
+  : >"$DRIVER_TMP/data/config"
   mkdir -p "$DRIVER_REPO"
   git -C "$DRIVER_REPO" init -q
   git -C "$DRIVER_REPO" config user.email t@t
@@ -1110,12 +1115,13 @@ assert_eq "40" "$DRIVER_RC" "an edge missing from the project graph cannot be ta
 assert_contains "$DRIVER_OUT" "graph declares no transition from 'review'" "the runner names the undeclared edge"
 
 # harness.json의 approval·git_policy가 사람 대기와 git 단계를 정한다.
-with_policy() { # git_policy approval → 저장소에 manifest를 커밋하고 bare remote를 붙인다
+with_policy() { # git_policy 개인 승인 모드 → 저장소 manifest와 개인 설정을 준비한다
   mkdir -p "$DRIVER_REPO/.ai-harness"
-  jq -n --arg g "$1" --arg a "$2" '{level:"standard", git_policy:$g} + (if $a == "" then {} else {approval:$a} end)' >"$DRIVER_REPO/.ai-harness/harness.json"
+  jq -n --arg g "$1" --arg id "$(basename "$DRIVER_REPO")" '{project_id:$id, level:"standard", git_policy:$g}' >"$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m manifest
   git init -q --bare "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
   git -C "$DRIVER_REPO" remote add origin "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+  if [[ -n "$2" ]]; then printf 'HM_APPROVAL=%s\n' "$2" >"$DRIVER_TMP/data/config"; else : >"$DRIVER_TMP/data/config"; fi
 }
 new_driver_repo auto_pr
 with_policy pr-only auto
@@ -1123,6 +1129,9 @@ driver start --runtime codex --request "add feature"
 assert_eq "0:done:auto-policy" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "approval auto passes the gate without a person and reaches done"
 assert_contains "$(run_state '[.history[].outcome] | join(",")')" "auto_approved_by_policy" "auto approval follows the declared graph edge"
 assert_file "$(run_state .approval.brief)"
+assert_eq "HM_APPROVAL" "$(run_state .policy.approval_source)" "the selected approval source stays in run state"
+APPROVAL_BRIEF="$(run_state .approval.brief)"
+assert_contains "$(<"$APPROVAL_BRIEF")" "승인 모드: auto (출처: HM_APPROVAL)" "brief.md records the approval mode and source for the PR body"
 assert_eq "https://example.test/pr/7" "$(run_state .publish.pr_url)" "pr-only opens a PR in the publish node"
 assert_contains "$DRIVER_OUT" "PR: https://example.test/pr/7" "done reports the PR"
 assert_eq "publish workspace-write schema=yes net=yes;remote_ci workspace-write schema=yes net=yes" "$(tail -n 2 "$FAKE_LOG" | paste -sd ';' -)" "publish writes with network access, then remote_ci reads CI with network access and a schema"
@@ -1221,6 +1230,7 @@ assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "## �
 assert_contains "$(<"$(dirname "$(run_state .approval.brief)")/brief.md")" "which plan tier? → free tier only — smallest scope that meets the request" "brief.md records question, choice, and rationale"
 assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "free tier only" "deliver implements the brief with its decisions"
 assert_contains "$(<"$FAKE_LOG.publish.prompt")" "which plan tier? → free tier only" "publish receives the decisions"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "승인 모드: auto (출처: HM_APPROVAL)" "PR instructions carry the resolved approval mode and source"
 assert_contains "$(<"$FAKE_LOG.publish.prompt")" '"결정 사항"' "publish is told to copy decisions into the PR body section"
 
 new_driver_repo auto_needs_human
@@ -1245,10 +1255,40 @@ assert_eq "10" "$DRIVER_RC" "a project graph without the auto edge keeps the hum
 new_driver_repo human_pr
 with_policy pr-only ""
 FAKE_CHECK="grep -q fixed feature.txt" driver start --runtime codex --request "add feature"
-assert_eq "10:human" "$DRIVER_RC:$(run_state .policy.approval)" "approval defaults to human when the manifest has no approval field"
+assert_eq "10:human:default" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "approval defaults to human and records the default source"
 say_in_claude "승인"
 driver resume
 assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state '.checkpoints | length')" "a human-approved pr-only run checkpoints deliver and each repair, then opens a PR"
+
+new_driver_repo approval_repo
+with_policy pr-only ""
+printf 'HM_APPROVAL=auto\nHM_APPROVAL_REPOS="repo-approval_repo=human,elsewhere=auto"\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "10:human:HM_APPROVAL_REPOS:repo-approval_repo" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "a matching repository approval setting overrides the global setting"
+
+new_driver_repo approval_global
+with_policy pr-only ""
+printf 'HM_APPROVAL=auto\nHM_APPROVAL_REPOS="another=human"\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "0:auto:HM_APPROVAL" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "the global approval setting applies without a matching repository entry"
+
+new_driver_repo manifest_approval
+with_policy pr-only ""
+jq '.approval = "auto"' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/manifest.json" && mv "$DRIVER_REPO/manifest.json" "$DRIVER_REPO/.ai-harness/harness.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m legacy-approval
+: >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "10:human:default" "$DRIVER_RC:$(run_state .policy.approval):$(run_state .policy.approval_source)" "a legacy manifest approval value is ignored"
+assert_eq "1" "$(grep -c 'notice: .ai-harness/harness.json approval is ignored' <<<"$DRIVER_OUT")" "a legacy manifest approval value produces one migration notice"
+
+# 승인 모드 오타를 human으로 조용히 읽지 않는다 — 시작하지 않고 고칠 키를 알린다.
+new_driver_repo approval_invalid
+with_policy pr-only ""
+printf 'HM_APPROVAL=yes\n' >"$DRIVER_TMP/data/config"
+driver start --runtime codex --request "add feature"
+assert_eq "2" "$DRIVER_RC" "an invalid personal approval value stops the start"
+assert_contains "$DRIVER_OUT" "approval must be human or auto" "the invalid approval value is named"
+: >"$DRIVER_TMP/data/config"
 
 new_driver_repo publish_unpushed
 with_policy pr-only auto
@@ -1372,7 +1412,7 @@ as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 
 MR_DATA="$DRIVER_TMP/merge-data"
 mkdir -p "$MR_DATA"
 merge_config() { # merge-settings-json → 개인 config: 검증에 배포·스모크·재발 추적이 있으면 단계 deploy, 아니면 merge. 조건·방식은 HM_MERGE_*
-  jq -r '"HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
+  jq -r '"HM_APPROVAL=auto", "HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
     (if .require then "HM_MERGE_REQUIRE=\"" + (.require | join(" ")) + "\"" else empty end),
     (if .min_approvals then "HM_MERGE_MIN_APPROVALS=\(.min_approvals)" else empty end),
     (if .method then "HM_MERGE_METHOD=\(.method)" else empty end)' <<<"$1" >"$MR_DATA/config"
@@ -1385,7 +1425,8 @@ merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사
     && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config "$2"
-  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+  cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 }
 # 병합은 호스트가 필수 승인을 거는 기준 브랜치에만 한다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
 export FAKE_PROTECTION=classic
@@ -1452,7 +1493,7 @@ merge_run merge_noapproval '{"require":["remote_ci"],"method":"merge","verify":[
 assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the host's required approval is a floor even when the personal conditions leave approval out"
 assert_contains "$DRIVER_OUT" "human approval: 0 of 1" "the wait names the approval the host requires"
 touch "$FAKE_LOG.approved"
-HARNESS_METRICS_DIR="$MR_DATA" driver resume
+DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver resume
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "resume merges once the host-required approval arrives"
 assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows HM_MERGE_METHOD"
 # 원격 CI가 없다는 보고는 remote_ci 조건을 채우지 못한다.
@@ -1510,7 +1551,8 @@ monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_
     "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config '{"require":["human_approval"],"verify":["monitor"]}'
-  HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
+  cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
 }
 mkdir -p "$DRIVER_TMP/plugin/scripts"
 cat >"$DRIVER_TMP/plugin/scripts/autofix-auto.sh" <<'EOF'
@@ -1562,7 +1604,8 @@ jq 'del(.nodes.merge, .nodes.post_merge_verify) | .transitions |= map(select(.fr
   "$FEATURE_GRAPH" >"$DRIVER_REPO/.ai-harness/workflows/feature-delivery-graph.json"
 git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -qm "old graph"
 merge_config "$MP_BASIC"
-HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
+DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "a project graph without the merge node never merges"
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
 rm -f "$MR_DATA/config"
@@ -1578,8 +1621,9 @@ delivery_run() { # scenario git_policy harness-jq-filter config-text [host/owner
   as_host_repo "${5:-github.com/acme/app}"
   jq "$3" "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
-  printf '%s\n' "$4" >"$DL_DATA/config"
-  HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
+  printf 'HM_APPROVAL=auto\n%s\n' "$4" >"$DL_DATA/config"
+  cp "$DL_DATA/config" "$DRIVER_TMP/data/config"
+  DRIVER_DATA_OVERRIDE="$DL_DATA" HARNESS_METRICS_DIR="$DL_DATA" driver start --runtime codex --request "add feature"
 }
 DL_FACTS='.project_id = "acme-app" | .merge_policy = {base: "main", deploy_check_cmd: "true", smoke_cmd: "true"}'
 gh_merges() { grep -c '^gh merge' "$FAKE_LOG" || true; }
