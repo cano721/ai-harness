@@ -858,6 +858,26 @@ assert_contains "$HARNESS_INIT_CONTENT" '기존 `approval` 값은 보존' "harne
 assert_contains "$HARNESS_INIT_CONTENT" "다시 묻지 않고" "sync --apply applies add and refresh without asking again"
 pass "project implementation planning gate"
 
+# 승인 모드는 개인 설정(HM_APPROVAL_REPOS > HM_APPROVAL > human)만 정한다(#294). manifest에 approval:"auto"가 남은
+# 저장소에서 옛 문구를 따르는 경로(autofix 수동 수정·생성될 workflow 본문·이 저장소 어댑터)가 사람 승인을 건너뛰지 않게 한다(#310).
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+{
+  AUTOFIX_SKILL_CONTENT="$(<"$ROOT/skills/autofix/SKILL.md")"
+  [[ "$AUTOFIX_SKILL_CONTENT" != *'프로젝트 정책(`approval`)'* ]] || fail "autofix manual fixes do not follow the legacy manifest approval"
+  [[ "$AUTOFIX_SKILL_CONTENT" != *'manifest `approval`과 관계없이'* ]] || fail "autofix unattended runs name the personal approval setting"
+  assert_contains "$AUTOFIX_SKILL_CONTENT" '`HM_APPROVAL_REPOS`' "autofix manual fixes resolve approval from the personal settings"
+  [[ "$HARNESS_INIT_CONTENT" != *'manifest가 정하므로'* ]] || fail "harness init does not say the manifest decides the approval gate"
+  SETUP_APPROVAL="$(awk '/^### 8-0\./{f=1; next} /^### /{f=0} f' "$ROOT/skills/setup/SKILL.md")"
+  assert_contains "$SETUP_APPROVAL" '모든 저장소' "setup warns that a global auto approval applies to every repository"
+  assert_contains "$SETUP_APPROVAL" '신뢰하지 않는 저장소' "setup warns about untrusted repositories under auto approval"
+  for generated in .claude/commands/implement-feature.md .claude/commands/fix-bug.md .claude/commands/review.md \
+    .agents/skills/implement-feature/SKILL.md .agents/skills/fix-bug/SKILL.md .agents/skills/review/SKILL.md; do
+    GENERATED_CONTENT="$(<"$ROOT/$generated")"
+    [[ "$GENERATED_CONTENT" != *'Read `approval`'* && "$GENERATED_CONTENT" != *'`approval: auto`'* ]] || fail "$generated is re-rendered with the personal approval wording"
+  done
+}
+pass "approval follows personal settings in skills and generated adapters"
+
 # 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
 FEATURE_GRAPH="$ROOT/templates/implement-feature/references/feature-delivery-graph.json"
 assert_file "$FEATURE_GRAPH"
@@ -1288,7 +1308,26 @@ printf 'HM_APPROVAL=yes\n' >"$DRIVER_TMP/data/config"
 driver start --runtime codex --request "add feature"
 assert_eq "2" "$DRIVER_RC" "an invalid personal approval value stops the start"
 assert_contains "$DRIVER_OUT" "approval must be human or auto" "the invalid approval value is named"
+assert_contains "$DRIVER_OUT" "HM_APPROVAL in $DRIVER_TMP/data/config" "the invalid approval names the config file it came from"
 : >"$DRIVER_TMP/data/config"
+# 값이 환경변수에서 왔으면 config 파일이 아니라 환경변수라고 말한다(#310).
+DRIVER_RC=0
+DRIVER_OUT="$(HM_APPROVAL=yes HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+  FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" PATH="$ROOT/tests/fixtures/driver:$PATH" \
+  bash "$DRIVER" start --runtime codex --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+assert_eq "2" "$DRIVER_RC" "an invalid approval from the environment stops the start"
+assert_contains "$DRIVER_OUT" "HM_APPROVAL in the environment" "the invalid approval names the environment as its source"
+[[ "$DRIVER_OUT" != *"config is"* ]] || fail "an environment value is not reported as a config file value"
+
+# 업그레이드 전에 시작된 실행에는 approval_source가 없다 — 기본값(default)이 아니라 legacy로 보인다(#310).
+new_driver_repo approval_legacy_status
+with_policy pr-only ""
+driver start --runtime codex --request "add feature"
+LEGACY_STATE="$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"
+jq 'del(.policy.approval_source)' "$LEGACY_STATE" >"$LEGACY_STATE.tmp" && mv "$LEGACY_STATE.tmp" "$LEGACY_STATE"
+driver status --workflow feature --run "$(run_state .run_id)"
+assert_contains "$DRIVER_OUT" "approval human (legacy)" "a run without a recorded approval source shows legacy"
+[[ "$DRIVER_OUT" != *"(default)"* ]] || fail "a legacy run is not shown as using the default approval"
 
 new_driver_repo publish_unpushed
 with_policy pr-only auto
@@ -7439,6 +7478,39 @@ assert_eq "600" "$(filemode "$BOARD_DATA/config")" "config keeps its mode"
 assert_eq "deploy" "$(HARNESS_METRICS_DIR="$BOARD_DATA" bash -c 'source "$1/scripts/lib.sh"; printf %s "$HM_DELIVERY_LEVEL"' _ "$ROOT")" "the runner config reader reads what the board wrote"
 pass "harness board settings writes"
 
+# 보드의 승인 모드는 러너와 같은 개인 설정(HM_APPROVAL_REPOS > HM_APPROVAL > human)에서 계산한다.
+# manifest에 남은 approval:"auto"는 보이지도 쓰이지도 않는다(#310).
+BOARD_APPR_REPO="$BOARD_T/repos/appr"
+mkdir -p "$BOARD_APPR_REPO/.ai-harness"
+git -C "$BOARD_APPR_REPO" init -q
+printf '{"project_id":"appr-id","git_policy":"pr-only","approval":"auto"}\n' >"$BOARD_APPR_REPO/.ai-harness/harness.json"
+HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert "HM_APPROVAL" in s.PERSONAL_KEYS and "HM_APPROVAL_REPOS" in s.PERSONAL_KEYS, s.PERSONAL_KEYS
+row = s.read_repo(repo)
+assert (row["approval"], row["approval_source"]) == ("human", "none"), row  # manifest approval:auto는 무시
+assert s.set_approval({"scope": "default", "mode": "auto"}, []) is None
+row = s.read_repo(repo)
+assert (row["approval"], row["approval_source"]) == ("auto", "default"), row
+assert s.set_approval({"scope": "repo", "repo": repo, "mode": "human"}, [repo]) is None
+row = s.read_repo(repo)
+assert (row["approval"], row["approval_source"], row["approval_mine"]) == ("human", "repo", "human"), row
+assert s.set_approval({"scope": "default", "mode": "sometimes"}, []) is not None
+assert s.set_approval({"scope": "repo", "repo": "/not/known", "mode": "auto"}, [repo]) is not None
+cfg = s.user_config()
+assert cfg["HM_APPROVAL"] == "auto" and cfg["HM_APPROVAL_REPOS"] == "appr-id=human", cfg
+assert s.set_approval({"scope": "repo", "repo": repo, "mode": ""}, [repo]) is None
+assert s.set_approval({"scope": "default", "mode": ""}, []) is None
+row = s.read_repo(repo)
+assert (row["approval"], row["approval_source"], row["approval_mine"]) == ("human", "none", None), row
+assert "HM_APPROVAL" not in s.user_config() and "HM_APPROVAL_REPOS" not in s.user_config()
+' "$ROOT/scripts/board" "$BOARD_APPR_REPO" || fail "board approval mode follows the personal settings"
+assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "approval writes keep other config lines"
+pass "harness board approval mode follows personal settings"
+
 # 권한 훅 연결은 setup이 물은 뒤 board.sh hook on|off로만: 백업을 남기고 다른 설정은 그대로 둔다.
 printf '{"env":{"KEEP":"1"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}\n' >"$BOARD_T/settings.json"
 assert_eq "false" "$(board_sh hook status | jq -r '.installed')" "hook not installed by default"
@@ -7813,6 +7885,10 @@ assert_eq "false|shop,blog" "$(baf_get | jq -r '"\(.config.auto)|\(.config.repos
 assert_eq '"merge"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_DELIVERY_LEVEL')" "settings read the personal level from config"
 grep -v '^HM_DELIVERY_LEVEL=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
 assert_eq "null" "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_DELIVERY_LEVEL')" "settings do not fall back to a value the board was started with"
+# 승인 모드도 개인 자동화 단계 화면에서 보고 바꾼다: 기존 개인 설정 쓰기 경로로 config에 남는다(#310).
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", mode: "auto"}')" "$BAF_BASE/settings/approval" | jq -r '.ok')" "the board sets the personal approval mode"
+assert_eq '"auto"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_APPROVAL')" "settings show the personal approval mode from config"
+assert_contains "$(<"$BAF_DATA/config")" 'HM_APPROVAL="auto"' "the approval mode is written to the personal config"
 # 보드를 띄울 때 config에 있던 autofix 키(예산 7)를 지우면 기본값(10)으로 보인다 — 띄운 시점의 환경 값이 남지 않는다.
 grep -v '^HM_AUTOFIX_BUDGET_USD=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
 assert_eq "10" "$(baf_get | jq -r '.config.budget_usd')" "an autofix key removed from config falls back to its default, not the board's startup value"

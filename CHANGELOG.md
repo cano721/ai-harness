@@ -17,6 +17,7 @@
 ### 버그 수정
 
 - 보드 '세션 정리'가 느리던 문제 — 확인 대화상자의 worktree 판정은 최근 목록에서 바로 나오고, 확인하면 카드가 즉시 빠지며 세션 닫기·worktree 삭제는 뒤에서 한다(실패하면 카드가 돌아오고 이유를 알린다). 작업 중·답 대기 여부와 worktree 판정은 정리 직전에 다시 확인한다. 상태 수집은 바뀌지 않은 대화 기록을 다시 읽지 않는다(`~/.ai-harness/board/work-cache.json`, 대화 기록은 읽기만) (#305)
+- 승인 모드 개인 설정 이전(#294)의 남은 곳 — `/ai-harness:autofix` 수동 수정이 manifest에 남은 `approval: "auto"`를 따라 사람 승인 없이 넘어갈 수 있던 것을 개인 설정(`HM_APPROVAL_REPOS` > `HM_APPROVAL` > `human`)으로 고쳤다. 보드 '하네스 설정'은 manifest가 아니라 개인 설정에서 계산한 승인 모드를 보이고, 기본 승인과 저장소별 승인을 고를 수 있다. 러너 `status`는 업그레이드 전에 시작된 실행의 출처를 `legacy`로 보이고, 잘못된 승인 값이 환경변수에서 왔으면 그렇게 말한다. `/ai-harness:setup`은 전체 `HM_APPROVAL=auto`가 모든 저장소에 적용된다고 경고하고 저장소별 `HM_APPROVAL_REPOS`를 권한다. `/ai-harness:harness-init`이 새로 만드는 workflow 본문도 개인 설정 기준으로 적는다 (#310)
 
 ### 업데이트 후 해야 할 일
 

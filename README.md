@@ -392,7 +392,7 @@ HM_MERGE_METHOD=squash                             # squash | merge | rebase (�
 - **무인 실행**은 단계와 상관없이 병합하지 않습니다. 무인 PR의 병합은 [자동 병합](#auto-merge)(사용자 설정 `HM_*_AUTO_MERGE`)만 합니다.
 - **단계가 없을 때**: 저장소가 예전 `git_policy:"merge"`여도 PR까지이고 안내만 남깁니다([병합](#merge-policy)의 예전 설정).
 
-한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `HM_APPROVAL=auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
+한계: `.gitignore` 대상 파일의 변경은 지문에 들어가지 않습니다. "같은 원인"인지는 판정하지 않고 횟수로 멈춥니다. Claude의 쓰기 노드는 OS 샌드박스가 아니라 도구 허용(`acceptEdits` + `Bash`)에 기댑니다. 승인 확인은 모델의 실수를 막는 장치이며, 트랜스크립트 파일을 직접 조작하는 것까지 막지는 않습니다. publish의 PR URL은 세션 보고를 그대로 기록합니다(PR 도구가 프로젝트마다 달라 존재 여부를 조회하지 않습니다). `HM_APPROVAL=auto`에서는 Brief의 검증 명령도 사람 확인 없이 실행됩니다 — 쓰기 노드가 이미 Bash를 쓰므로 새 권한은 아니지만, 신뢰하지 않는 저장소에는 auto를 쓰지 않습니다. 전체 `HM_APPROVAL=auto`는 모든 저장소에 적용되므로, 신뢰하는 저장소만 `HM_APPROVAL_REPOS`로 골라 켭니다. `git_policy`가 커밋을 허용하면 러너는 변경이 남은 작업 트리에서, `pr-only`면 기준 브랜치(`origin/HEAD`)에서 시작하지 않습니다. bug-fix의 reproduce와 review의 ui_review는 사람의 승인 전에 프로젝트 코드(테스트·앱 서버·브라우저)를 실행합니다. 작업 트리 지문은 저장소 안 변경만 막고, `.gitignore` 대상·저장소 밖 경로·원격 작업은 보지 못하며, Claude 세션의 Bash는 OS 샌드박스 없이 도구 허용으로만 열립니다 — 신뢰하지 않는 브랜치를 검토할 때는 격리된 환경에서 러너를 실행합니다.
 
 러너는 **플러그인이 아니라 프로젝트에 설치됩니다.** `/harness-init`이 `.ai-harness/workflows/`에 생성하며, 하네스가 없는 저장소에는 존재하지 않으므로 프로젝트 규칙 없이 코드를 바꾸는 진입점이 노출되지 않습니다.
 
@@ -820,8 +820,8 @@ HM_AUTO_MERGE_HARVEST_MAX_FILES= # harvest PR 파일 상한(기본 3, 최대 5, 
 HM_AUTO_MERGE_HARVEST_MAX_LINES= # harvest PR 줄 상한(기본 40, 최대 100, 저장소 값이 있으면 작은 쪽)
 HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
-HM_APPROVAL=human               # 승인 게이트: human|auto (기본 human)
-HM_APPROVAL_REPOS=               # 저장소별 승인 모드(<project_id>=human|auto, 쉼표 구분)
+HM_APPROVAL=human               # 승인 게이트: human|auto (기본 human). auto는 모든 저장소에 적용 — 신뢰하는 저장소만 아래 줄로 켜기를 권장
+HM_APPROVAL_REPOS=               # 저장소별 승인 모드(<project_id>=human|auto, 쉼표 구분). 전체 설정보다 우선
 HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 PR까지
 HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
 HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 네 조건 모두)
