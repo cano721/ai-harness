@@ -102,7 +102,8 @@ def parse_doc(path):
 
 
 # 개발자만 보는 문자열: 로그·예외·단언. 사용자 화면 문구가 아니다.
-DEV_ONLY = re.compile(r"\b(console|logger|log|Log|warn|debug)\s*[.(]|\bthrow\b|\bassert\w*\s*\(|\bnew\s+\w*Error\s*\(")
+# toast.warn("…")처럼 사용자에게 보이는 호출은 남도록 console·logger 뒤의 호출만 맞춘다.
+DEV_ONLY = re.compile(r"\b(console|logger|log)\.\w+\s*\(|\bthrow\b|\bassert\w*\s*\(|\bnew\s+\w*Error\s*\(")
 # 상수·클래스 이름(FOO_BAR, FooBar_Baz)이 들어간 조각은 개발자 설명이다.
 IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]+_[A-Z0-9_]+\b|\b[a-z]+[A-Z]\w*\s*[:=(]")
 
@@ -171,9 +172,27 @@ def fix_josa(word, josa):
     return josa
 
 
+def fix_copula(word, rest):
+    """서술격 조사 '이(다)' 뒤 어미를 받침에 맞춘다(공고이에요 → 공고예요)."""
+    if has_batchim(word):
+        return "이" + ("에요" if rest == "예요" else rest)
+    return "예요" if rest in ("에요", "예요") else rest
+
+
 def replace_term(seg, bad, good):
-    pattern = re.compile(re.escape(bad) + r"(?:(으로|이랑|을|를|이|가|은|는|과|와|랑|로)(?![가-힣]))?", re.I)
-    return pattern.sub(lambda m: good + (fix_josa(good, m.group(1)) if m.group(1) else ""), seg)
+    pattern = re.compile(
+        re.escape(bad)
+        + r"(?:이?(에요|예요)|이(야|다|고|라)(?![가-힣])|(으로|이랑|을|를|이|가|은|는|과|와|랑|로)(?![가-힣]))?",
+        re.I,
+    )
+
+    def sub(m):
+        copula = m.group(1) or m.group(2)
+        if copula:
+            return good + fix_copula(good, copula)
+        return good + (fix_josa(good, m.group(3)) if m.group(3) else "")
+
+    return pattern.sub(sub, seg)
 
 
 def check_segment(seg, rules):
@@ -194,8 +213,22 @@ def check_segment(seg, rules):
     return found
 
 
-def iter_lines(args, root):
-    """(위치, 확장자, 줄) 을 낸다. diff는 추가된 줄만 새 파일 기준 줄번호로."""
+def git_ok(root, *args):
+    return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=30).returncode == 0
+
+
+def is_ui_path(rel, doc_rel=None):
+    """화면 문구가 들어 있을 만한 파일인가. 문서·테스트·빌드 산출물과 규칙 문서 자체는 뺀다."""
+    low = rel.lower()
+    if doc_rel and os.path.normpath(rel) == os.path.normpath(doc_rel):
+        return False
+    if os.path.splitext(low)[1] not in UI_EXTS or any(d in low for d in SKIP_DIRS):
+        return False
+    return not any(p in part for part in low.split("/") for p in SKIP_PARTS)
+
+
+def iter_lines(args, root, doc_rel=None):
+    """(위치, 확장자, 줄) 을 낸다. diff는 추가된 줄만 새 파일 기준 줄번호로, untracked 파일은 전체를."""
     if args.text is not None:
         for i, line in enumerate(args.text.splitlines(), 1):
             yield f"text:{i}", "", line
@@ -208,18 +241,23 @@ def iter_lines(args, root):
             for i, line in enumerate(fh, 1):
                 yield f"{rel}:{i}", ext, line.rstrip("\n")
         return
+    untracked = []
     if args.diff_file:
         with open(args.diff_file, encoding="utf-8", errors="replace") as fh:
             diff = fh.read()
     else:
+        # BASE가 없으면 HEAD 대비 — stage한 변경도 포함한다. untracked 새 파일은 git diff에 안 나오므로 따로 붙인다.
+        base = args.diff or ("HEAD" if git_ok(root, "rev-parse", "--verify", "-q", "HEAD") else "")
         cmd = ["git", "-C", root, "diff", "--no-ext-diff", "--no-color", "--unified=0"]
-        if args.diff:
-            cmd.append(args.diff)
+        cmd += [base] if base else ["--cached"]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if res.returncode != 0:
             sys.stderr.write(res.stderr)
             sys.exit(2)
         diff = res.stdout
+        others = subprocess.run(["git", "-C", root, "ls-files", "--others", "--exclude-standard"],
+                                capture_output=True, text=True, timeout=60)
+        untracked = others.stdout.splitlines()
     path, lineno = "", 0
     for line in diff.splitlines():
         if line.startswith("+++ "):
@@ -230,9 +268,18 @@ def iter_lines(args, root):
         if m:
             lineno = int(m.group(1))
             continue
-        if line.startswith("+") and path and path != "/dev/null":
+        if line.startswith("+") and path and path != "/dev/null" and is_ui_path(path, doc_rel):
             yield f"{path}:{lineno}", os.path.splitext(path)[1].lower(), line[1:]
             lineno += 1
+    for rel in untracked:
+        if not is_ui_path(rel, doc_rel):
+            continue
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh, 1):
+                    yield f"{rel}:{i}", os.path.splitext(rel)[1].lower(), line.rstrip("\n")
+        except OSError:
+            continue
 
 
 def cell(text):
@@ -248,7 +295,7 @@ def cmd_check(args):
         return 3
     rules = parse_doc(doc)
     findings = []
-    for where, ext, line in iter_lines(args, root):
+    for where, ext, line in iter_lines(args, root, os.path.relpath(doc, root)):
         for seg in segments(line, ext):
             for fix, rule in check_segment(seg, rules):
                 findings.append({"where": where, "text": seg, "fix": fix, "rule": rule})
@@ -271,12 +318,8 @@ def ui_files(root, paths):
     else:
         res = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True, text=True, timeout=60)
     for rel in res.stdout.splitlines():
-        low = rel.lower()
-        if os.path.splitext(low)[1] not in UI_EXTS or any(d in low for d in SKIP_DIRS):
-            continue
-        if any(p in part for part in low.split("/") for p in SKIP_PARTS):
-            continue
-        yield rel
+        if is_ui_path(rel):
+            yield rel
 
 
 def cmd_extract(args):
