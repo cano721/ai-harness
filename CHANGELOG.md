@@ -8,6 +8,10 @@
 
 ## Unreleased
 
+### 새 기능
+
+- **UX 라이팅: 규칙 만들기·작업 중 적용·검토** — 화면 문구를 제품 규칙에 맞게 쓰고 검사할 수단이 없었습니다. `/ux-writing-builder`는 기존 코드 문구를 실측해(`scripts/ux-writing-lint.py extract` — 종결 어미 분포·문구 위치) 질문 라운드로 `.ai-harness/docs/ux-writing.md`(말투·종결 어미·원칙·용어집·컴포넌트별 규칙·전/후 예시)를 만듭니다. `/ux-writing-audit`는 용어집 금지어·금지 표현·종결 어미를 스크립트로 결정적으로 잡고(표준어로 바꾼 수정안, 조사 보정), 맥락은 문서 규칙으로 판단해 `위치·원문·수정안·위반 규칙` 표와 점수를 냅니다. 문서가 없으면 채점하지 않습니다. 생성되는 `implement-feature`·`fix-bug` 진입점과 `/design-screen`은 문서가 있을 때 UI 문구를 쓰기 전에 읽고, PR 전에 diff를 감사합니다. 문서는 프로젝트 소유라 관리 생성물이 아닙니다(sync가 덮어쓰지 않음). 기존 생성물에 반영하려면 `/ai-harness:harness-init` sync. (#293)
+
 ### 동작 변경
 
 - **승인 모드를 개인 설정으로 이동** — 워크플로 러너의 Brief 승인 게이트(human·auto)를 저장소 manifest의 `approval`이 정해서, 한 사람이 auto로 올리면 그 저장소를 쓰는 모두의 에이전트가 사람 승인 없이 PR까지 갔습니다. 이제 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(`<project_id>=<human|auto>`, 저장소별) → `HM_APPROVAL`(전체) → 기본 `human` 순으로 정합니다. manifest의 `approval`은 더 읽지 않고, 값이 남아 있으면 러너가 개인 설정으로 옮기라는 안내를 남깁니다. 러너는 start 때 정한 승인 모드와 출처를 실행 상태·`brief.md`·`status`에 남깁니다. `/ai-harness:setup`에서 고를 수 있습니다. (#294)

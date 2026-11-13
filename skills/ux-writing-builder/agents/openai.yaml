@@ -1,0 +1,4 @@
+interface:
+  display_name: "UX Writing Builder"
+  short_description: "Create or update the project's UX writing rule document and glossary from its existing copy."
+  default_prompt: "Use $ux-writing-builder to create or update this project's UX writing rules: $ARGUMENTS"
