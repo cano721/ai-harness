@@ -10,8 +10,8 @@
 #     만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다. --serve면 보드 서버를 분리 실행해 보드의 시작 버튼이 고른 결과를 쓴다.
 #   - wait-pick: 고른 결과 파일이 그 노드 시작 뒤에 생길 때까지 기다린다(세션은 이 명령을 백그라운드로 두고 턴을 끝낸다).
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
-#   - capture-refs: 레퍼런스 페이지를 한 번에 동시 4개로 캡처한다(봇 확인 화면은 challenge). 녹화는 --background로 분리 실행한다.
-#     사이트마다 에이전트가 캡처 스크립트를 짜던 시간이 레퍼런스 단계의 대부분이었다.
+#   - capture-refs·board·레퍼런스 검사: /design-references의 공용 스크립트(design-refs.sh)에 넘긴다. 혼자 부른 스킬과
+#     랜딩 실행이 같은 캡처·검사·보드를 쓴다.
 #   - 대표 고르기: 레이아웃·인터랙션은 대표 하나, 구성요소는 섹션 칸(component-slots.json)마다 대표 하나를 고른다.
 #     에이전트가 references.json의 recommended로 추천을 미리 채우고, reference-pick.json의 primary에 남는다. 후보는
 #     primary_refs로 이끄는 레퍼런스를 밝히고, 적어도 한 후보는 고른 대표를 그대로 쓴다(다 참고하면 후보가 섞인다).
@@ -215,62 +215,8 @@ TONE_CHECK='
        else "type needs display, body, display_sample, body_sample" end),
     (["avoid", "voice", "imagery"][] as $k | if (.[$k] | str) then empty else "\($k) is missing" end)
   ] | join("; ")'
-REFS_CHECK='
-  def str: type == "string" and length > 0;
-  ["tone", "component", "layout", "interaction", "competitor"] as $kinds
-  | if type != "array" then "must be an array of references" else
-    . as $refs
-    | [ (.[] | select((.kind as $k | $kinds | index($k)) == null) | "\(.id // "?"): kind must be one of \($kinds | join("|")) (got \(.kind // "none"))"),
-      ([.[].id] | group_by(.)[] | select(length > 1) | "id \(.[0]) is used twice (one site in several kinds takes a separate id each)"),
-      ($kinds[] as $k | ($min.per_kind[$k] // 1) as $n | ([$refs[] | select(.kind == $k)] | length) as $have
-         | if $have >= $n then empty else "\($k) has \($have), needs at least \($n)" end),
-      ([.[] | select(.kind == "competitor")] | length) as $c | (if $c > ($min.competitor_max // 4) then "competitor has \($c), at most \($min.competitor_max // 4)" else empty end),
-      ([.[] | select(.kind == "interaction" and (.video | str))] | length) as $v
-         | (if $v >= ($min.interaction_video // 0) then empty else "interaction has \($v) with a video, needs at least \($min.interaction_video)" end),
-      (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis.leads_with, .analysis.claim, .analysis.cta, .analysis.gap] | all(str) | not)))
-           | "\(.id // "?"): competitor needs analysis {leads_with, claim, cta, gap}"),
-      (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0))
-           | "\(.id // "?"): interaction needs a video (recording URL or path) or captures")
-    ] | join("; ") end'
-
-# The references come from a search, not from memory: a category search and a gallery search at least, and every
-# competitor (unless the user named it) among the results. $refs is references.json.
-SEARCH_CHECK='
-  def str: type == "string" and length > 0;
-  def norm: ascii_downcase | sub("^https?://"; "") | sub("^www\\."; "") | sub("/+$"; "");
-  if type != "array" then "must be an array of searches" else
-    ([.[] | .results // [] | .[] | strings | norm]) as $found
-    | [ (if length >= 2 then empty else "\(length) searches, needs at least 2" end),
-        (.[] | select(((.query | str) and (.engine_or_gallery | str) and ((.results // []) | length) > 0) | not)
-             | "\(.query // "?"): a search needs query, engine_or_gallery, and its results"),
-        (.[] | select((.purpose | IN("category", "gallery")) | not) | "\(.query // "?"): purpose must be category or gallery"),
-        (if any(.[]; .purpose == "category") then empty else "no category search (pages in the same category)" end),
-        (if any(.[]; .purpose == "gallery") then empty else "no gallery search (interaction references)" end),
-        ($refs[0][] | select(.kind == "competitor" and .source != "user" and (((.url // "") | norm) as $u | $found | index($u)) == null)
-             | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named may skip search)")
-      ] | join("; ") end'
-
-# The sections that need a reference of their own (component-slots.json): each becomes a column in the components tab.
-SLOTS_CHECK='
-  def str: type == "string" and length > 0;
-  if type != "array" or length == 0 then "must list the sections that need a reference: [{id, label}]" else
-  [ (.[] | select(((.id | str) and (.id | test("^[a-z0-9][a-z0-9_-]*$")) and (.label | str)) | not)
-         | "\(.id // "?"): a slot needs id (lowercase letters, digits, - or _) and label"),
-    ([.[].id] | group_by(.)[] | select(length > 1) | "slot \(.[0]) is listed twice"),
-    (.[] | select(.id == "layout" or .id == "interaction") | "slot id \(.id) is reserved")
-  ] | join("; ") end'
-# The agent's recommendation, starred on the board before the user looks: one layout, one interaction, one component per slot at most.
-RECO_CHECK='
-  ($slots[0] | map(.id)) as $sids
-  | [ (.[] | select(.recommended != null)
-           | select(((.recommended == "layout" and .kind == "layout") or (.recommended == "interaction" and .kind == "interaction")
-                     or (.kind == "component" and (.recommended as $r | $sids | index($r)) != null)) | not)
-           | "\(.id): recommended must be layout (on a layout reference), interaction (on an interaction reference), or a slot id from component-slots.json (on a component reference)"),
-      (if ([.[] | select(.recommended == "layout")] | length) == 1 then empty else "recommend exactly one layout reference (recommended: \"layout\")" end),
-      (if ([.[] | select(.recommended == "interaction")] | length) == 1 then empty else "recommend exactly one interaction reference (recommended: \"interaction\")" end),
-      ([.[] | select(.kind == "component" and .recommended != null) | .recommended] | group_by(.)[] | select(length > 1)
-         | "slot \(.[0]) has more than one recommended component")
-    ] | join("; ")'
+# The reference set itself (counts per kind, search evidence, domains, capture status, slots, recommendation) is checked by
+# design-refs.sh check — the same command /design-references runs on its own, so both reach the same board.
 # reference-pick.json primary: the layout and interaction that lead, and one component per slot (or none); never an excluded one.
 PRIMARY_CHECK='
   def str: type == "string" and length > 0;
@@ -411,18 +357,11 @@ case "$cmd" in
       tone_bad="$(jq -r "$TONE_CHECK" "$WORK/tone.json" 2>/dev/null)" || tone_bad="tone.json is not valid JSON"
       [[ -z "$tone_bad" ]] || die 4 "tone.json: $tone_bad (direction.md, Brief)"
     fi
-    # The board's tabs are drawn from these: enough of every kind for the mode (references_min in the graph; an interactive
-    # board is looked at, an unattended one only backs the report), competitors analysed, interactions recorded.
+    # The board's tabs are drawn from these: enough of every kind for the mode (refs-rules.json of design-references; an
+    # interactive board is looked at, an unattended one only backs the report), distinct sites, no bot check left standing.
     if [[ "$NODE" == references && "$OUTCOME" == references_ready ]]; then
-      refs_min="$(jq -c --arg m "$(state .mode)" '.references_min[$m] // {}' "$GRAPH")"
-      refs_bad="$(jq -r --argjson min "$refs_min" "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || refs_bad="references.json is not valid JSON"
-      [[ -z "$refs_bad" ]] || die 4 "references.json: $refs_bad (direction.md, References)"
-      search_bad="$(jq -r --slurpfile refs "$WORK/references.json" "$SEARCH_CHECK" "$WORK/searches.json" 2>/dev/null)" || search_bad="searches.json is not valid JSON"
-      [[ -z "$search_bad" ]] || die 4 "searches.json: $search_bad (direction.md, References)"
-      slots_bad="$(jq -r "$SLOTS_CHECK" "$WORK/component-slots.json" 2>/dev/null)" || slots_bad="component-slots.json is not valid JSON"
-      [[ -z "$slots_bad" ]] || die 4 "component-slots.json: $slots_bad (direction.md, References)"
-      reco_bad="$(jq -r --slurpfile slots "$WORK/component-slots.json" "$RECO_CHECK" "$WORK/references.json")"
-      [[ -z "$reco_bad" ]] || die 4 "references.json: $reco_bad (direction.md, Picking the primary references)"
+      refs_bad="$("$ROOT/scripts/design-refs.sh" check --work "$WORK" --mode "$(state .mode)" 2>&1 >/dev/null)" \
+        || die 4 "$(printf '%s' "$refs_bad" | sed 's/^design-refs: //' | paste -sd ';' - | sed 's/;/; /g') (design-references SKILL.md; direction.md, References)"
       # Unattended: no board, so the agent writes the pick in the same shape.
       if [[ "$(state .mode)" == unattended ]]; then
         [[ -f "$WORK/reference-pick.json" ]] || die 4 "reference-pick.json is missing: an unattended run writes its own pick with primary and via: \"agent\""
@@ -565,20 +504,7 @@ case "$cmd" in
     ;;
   capture-refs)
     [[ -n "$FILE" ]] || usage
-    [[ -f "$FILE" ]] || die 2 "refs list not found: $FILE"
-    list="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
-    recs="$(jq '[.[]? | select(.record == true)] | length' "$list" 2>/dev/null)" || die 2 "$FILE is not valid JSON"
-    mkdir -p "$WORK/refs"
-    read -r -a refs_cmd <<<"${LANDING_CAPTURE_REFS_CMD:-node $ROOT/scripts/landing-capture-refs.mjs}"
-    if [[ -n "$BACKGROUND" && "$recs" -gt 0 ]]; then
-      "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase stills
-      # Recording takes about ten seconds a page: detached, so the take-lines and tone tags get written meanwhile.
-      rm -f "$WORK/refs/record.done"
-      nohup "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase record >"$WORK/refs/record.log" 2>&1 </dev/null &
-      printf '{"recording":"background","count":%s,"done_when":"%s"}\n' "$recs" "$WORK/refs/record.done" >&2
-    else
-      "${refs_cmd[@]}" --work "$WORK" --file "$list" --phase all
-    fi
+    exec "$ROOT/scripts/design-refs.sh" capture --work "$WORK" --file "$FILE" ${BACKGROUND:+--background}
     ;;
   operate)
     [[ -f "$STATE" && -n "$URL" && -n "$FILE" ]] || usage
@@ -592,22 +518,7 @@ case "$cmd" in
     "${operate_cmd[@]}" --url "$URL" --script "$script" --out "$WORK/operate/out-$label" ${WIDTH:+--width "$WIDTH"}
     ;;
   board)
-    case "$KIND" in
-      references) [[ -f "$WORK/references.json" ]] || die 4 "references.json is missing in $WORK"; page=board.html ;;
-      drafts) [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing in $WORK"; page=draft-board.html ;;
-      *) usage ;;
-    esac
-    [[ -z "$PORT" || "$PORT" =~ ^[0-9]+$ ]] || die 2 "port is a number"
-    [[ -z "$SERVE" || -n "$PORT" ]] || die 2 "--serve needs --port"
-    read -r -a board_cmd <<<"${LANDING_BOARD_CMD:-node $ROOT/scripts/landing-board.mjs}"
-    if [[ -n "$PORT" ]]; then "${board_cmd[@]}" --work "$WORK" --kind "$KIND" >&2; else "${board_cmd[@]}" --work "$WORK" --kind "$KIND"; fi
-    if [[ -n "$SERVE" ]]; then
-      # Detached, not a background task of the session: a session task keeps a scripted run alive and is stopped later.
-      nohup node "$ROOT/scripts/landing-board-server.mjs" --work "$WORK" --port "$PORT" >"$WORK/board-server.log" 2>&1 </dev/null &
-      for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q 'board server:' "$WORK/board-server.log" 2>/dev/null && break; sleep 0.3; done
-      grep -q 'board server:' "$WORK/board-server.log" || die 4 "board server did not start: $(tail -3 "$WORK/board-server.log")"
-    fi
-    [[ -z "$PORT" ]] || printf 'http://127.0.0.1:%s/%s\n' "$PORT" "$page"
+    exec "$ROOT/scripts/design-refs.sh" board --work "$WORK" --kind "$KIND" ${PORT:+--port "$PORT"} ${SERVE:+--serve}
     ;;
   wait-pick)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"

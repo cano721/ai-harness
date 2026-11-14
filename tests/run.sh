@@ -1024,6 +1024,30 @@ mkdir -p "$DRIVER_TMP/codex/sessions/2999"
 driver resume
 assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
 
+# workspace가 인계한 멤버 세션의 승인은 사용자가 workspace 대화에서 멤버 이름을 붙여 친 "승인 <멤버>"로도 받는다(#331).
+# 조율 세션이 보낸 세션 간 메시지(isMeta·origin peer)는 승인이 아니다 — 에이전트가 사람 승인을 대신할 수 없다.
+WS_ROOT="$DRIVER_TMP/ws"
+mkdir -p "$WS_ROOT/.ai-harness"
+printf '{"workspace_id":"ws","members":[{"path":"repo-ws_member","project_id":"ws_member"}]}\n' >"$WS_ROOT/.ai-harness/workspace.json"
+FAKE_SCENARIO=ok FAKE_LOG="$DRIVER_TMP/ws_member.log"
+DRIVER_REPO="$WS_ROOT/repo-ws_member"
+mkdir -p "$DRIVER_REPO" && git -C "$DRIVER_REPO" init -q && git -C "$DRIVER_REPO" config user.email t@t && git -C "$DRIVER_REPO" config user.name t
+git -C "$DRIVER_REPO" commit -q --allow-empty -m init
+DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)" WS_ROOT="$(cd "$WS_ROOT" && pwd -P)"
+: >"$FAKE_LOG"
+driver start --runtime codex --request "add feature"
+assert_contains "$DRIVER_OUT" "승인 repo-ws_member" "a member run inside a workspace says how to approve from the workspace conversation"
+say_in_claude "승인" "$WS_ROOT"
+say_in_claude "승인 repo-other" "$WS_ROOT"
+mkdir -p "$DRIVER_TMP/claude/projects/p"
+jq -nc --arg c "$DRIVER_REPO" '{type:"user", isMeta:true, cwd:$c, timestamp:"2999-01-01T00:00:00Z", origin:{kind:"peer"}, message:{role:"user", content:"승인"}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+jq -nc --arg c "$DRIVER_REPO" '{type:"user", cwd:$c, timestamp:"2999-01-01T00:00:00Z", origin:{kind:"coordinator"}, message:{role:"user", content:"승인"}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+driver resume
+assert_eq "10" "$DRIVER_RC" "a bare or other-member approval in the workspace and messages from other sessions do not approve"
+say_in_claude "승인 repo-ws_member" "$WS_ROOT"
+driver resume
+assert_eq "0:done:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "the person's named approval in the workspace conversation approves the member run"
+
 # Claude 세션은 stream-json으로 돌려 도구 호출을 실시간 진행 줄로 보인다. 원본 스트림(파일 내용·명령 인자·모델 문장)은 디스크에 남기지 않는다.
 new_driver_repo claude_stream
 driver start --runtime claude --request "add feature"
@@ -2369,9 +2393,9 @@ assert_contains "$LANDING_VERIFY" "must not be read" "the reviewer is kept out o
 assert_contains "$LANDING_VERIFY" "Each review runs in a new reviewer that did not build the page — a new one every round" "landing-page review is independent"
 assert_contains "$LANDING_VERIFY" "It drops its hover and pressed changes" "landing-page disabled primary action does not react"
 assert_contains "$LANDING_VERIFY" "reported as not independently reviewed" "landing-page fixes after the last review are labeled"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "one does not replace the next" "landing-page reference sources are cumulative"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "Look at the pages, not only their text" "landing-page references are seen, not only read"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "JavaScript on — many sites render nothing without it" "landing-page reference captures render the page"
+assert_contains "$(cat skills/design-references/SKILL.md)" "one does not replace the next" "landing-page reference sources are cumulative"
+assert_contains "$(cat skills/design-references/SKILL.md)" "Look at the pages, not only their text" "landing-page references are seen, not only read"
+assert_contains "$(cat skills/design-references/SKILL.md)" "JavaScript on — many sites render nothing without it" "landing-page reference captures render the page"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "Reference board — the user's pick comes before the candidates." "landing-page asks the user to pick references before candidates"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "They differ in the first viewport," "landing-page candidates differ above the fold"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "First-viewport drafts, then pick one." "landing-page shows first-viewport drafts before building"
@@ -2379,15 +2403,15 @@ assert_contains "$(cat skills/landing-page/SKILL.md)" "one anchor brand color, a
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "## Try-it demo" "landing-page product pages let visitors try the product"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "How much moves is a direction decision, not a fixed budget." "landing-page motion level belongs to the direction"
 assert_contains "$LANDING_VERIFY" "\`template_look\`: judged apart from the content" "landing-page review judges a template look"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "4. Interaction references" "landing-page collects interaction references with recordings"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "before reporting it unreachable" "landing-page retries challenge pages in a real browser"
+assert_contains "$(cat skills/design-references/SKILL.md)" "4. Interaction references" "landing-page collects interaction references with recordings"
+assert_contains "$(cat skills/design-references/SKILL.md)" "before reporting it unreachable" "landing-page retries challenge pages in a real browser"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "**They differ in what the visitor does.**" "landing-page candidates differ in visitor action"
 assert_contains "$(cat skills/landing-page/references/direction.md)" "build each in its own session or subagent" "landing-page builds full candidates separately"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "## 3D scenes and objects" "landing-page covers 3D scenes"
 assert_contains "$LANDING_VERIFY" "compare what the visitor does on each" "landing-page review compares candidate interactions"
 assert_contains "$(cat skills/landing-page/SKILL.md)" "the references used, as a table" "landing-page reports the references used"
 assert_contains "$LANDING_VERIFY" "\`reference_fidelity\`, with each reference's capture or recording next to the page" "landing-page review checks borrowed references are recognizable"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "the weaker version it must not shrink to" "landing-page take-lines keep the borrowed strength"
+assert_contains "$(cat skills/design-references/SKILL.md)" "the weaker version it must not shrink to" "landing-page take-lines keep the borrowed strength"
 assert_contains "$LANDING_VERIFY" "**Frame rate of every moving moment**" "landing-page measures frame rate of every moving moment"
 assert_contains "$(cat skills/landing-page/references/motion-web.md)" "**Degrade on a slow device.**" "landing-page effects degrade on slow devices"
 # landing-page 그래프 러너: 그래프 계약, 전이·산출물·측정·검토 게이트(측정은 스텁), 실제 측정은 Playwright가 있을 때만.
@@ -2439,19 +2463,21 @@ assert_contains "$(cat "$TEST_TMP/lp.err")" "mood needs exactly three words" "th
 cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
 assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
 cat >"$LP_W/references.json" <<'EOF'
-[{"id":"R1","kind":"tone","title":"Tone ref","url":"https://example.com/a","source":"search","take":"t","tone_part":"palette","captures":["refs/r1.png"]},
- {"id":"R2","kind":"component","title":"Component ref","url":"https://example.com/b","source":"library","take":"t","captures":["refs/r2.png"],"recommended":"hero"},
- {"id":"R3","kind":"layout","title":"Layout ref","url":"https://example.com/c","source":"user","take":"t","captures":["refs/r3.png"],"recommended":"layout"},
- {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://example.com/d","source":"gallery","take":"t","video":"refs/r4.mp4","recommended":"interaction"},
- {"id":"R5","kind":"competitor","title":"Competitor","url":"https://example.com/e","source":"search","captures":["refs/r5.png"],
-  "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}}]
+[{"id":"R1","kind":"tone","title":"Tone ref","url":"https://tone-a.example/","source":"search","take":"t","tone_part":"palette","captures":["refs/r1.png"]},
+ {"id":"R2","kind":"component","title":"Component ref","url":"https://comp-b.example/","source":"library","take":"t","captures":["refs/r2.png"],"recommended":"hero"},
+ {"id":"R3","kind":"layout","title":"Layout ref","url":"https://layout-c.example/","source":"user","take":"t","captures":["refs/r3.png"],"recommended":"layout"},
+ {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://motion-d.example/","source":"gallery","take":"t","video":"refs/r4.mp4","recommended":"interaction"},
+ {"id":"R5","kind":"competitor","title":"Competitor","url":"https://rival-e.example/","source":"search","captures":["refs/r5.png"],
+  "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}},
+ {"id":"R6","kind":"competitor","title":"Competitor 2","url":"https://www.rival-f.example/pricing","source":"search","captures":["refs/r6.png"],
+  "analysis":{"leads_with":"a price","claim":"cheap","cta":"Buy","gap":"no feedback"}}]
 EOF
 cp "$LP_W/references.json" "$TEST_TMP/lp-refs.json"
 printf '[{"id":"hero","label":"첫 화면"},{"id":"proof","label":"증거"}]\n' >"$TEST_TMP/lp-slots.json"; cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"
 printf '%s\n' '{"tone":"이대로","kept":["R1","R2","R3","R4","R5"],"dropped":[],"via":"agent","primary":{"layout":"R3","interaction":"R4","components":{"hero":"R2","proof":null,"faq":null},"added_slots":[{"id":"faq","label":"FAQ"}]}}' >"$TEST_TMP/lp-agent-pick.json"
 cat >"$TEST_TMP/lp-searches.json" <<'EOF'
-[{"query":"ai interview practice","purpose":"category","engine_or_gallery":"web search","results":["https://example.com/e/","https://example.com/z"],"picked":["R5"]},
- {"query":"3d scroll","purpose":"gallery","engine_or_gallery":"codrops hub","results":["https://example.com/d"],"picked":["R4"]}]
+[{"query":"ai interview practice","purpose":"category","engine_or_gallery":"web search","results":["https://rival-e.example/","https://rival-f.example/pricing","https://z.example/"],"picked":["R5","R6"]},
+ {"query":"3d scroll","purpose":"gallery","engine_or_gallery":"codrops hub","results":["https://motion-d.example/"],"picked":["R4"]}]
 EOF
 cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
 jq '.[0].kind = "look"' "$TEST_TMP/lp-refs.json" >"$LP_W/references.json"
@@ -2467,7 +2493,7 @@ assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "refe
 jq '[.[0]]' "$TEST_TMP/lp-searches.json" >"$LP_W/searches.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "references without a gallery search are refused"
 assert_contains "$(cat "$TEST_TMP/lp.err")" "no gallery search" "the runner names the missing search"
-jq '.[0].results = ["https://example.com/z"]' "$TEST_TMP/lp-searches.json" >"$LP_W/searches.json"
+jq '.[0].results = ["https://z.example/"]' "$TEST_TMP/lp-searches.json" >"$LP_W/searches.json"
 assert_eq 4 "$(lp_rc submit --node references --outcome references_ready)" "a competitor not among the search results is refused"
 cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
 if command -v node >/dev/null 2>&1; then
@@ -2496,13 +2522,13 @@ lpi submit --node brief --outcome brief_ready >/dev/null
 cp "$TEST_TMP/lp-slots.json" "$LP_I/component-slots.json"
 lp_refs() { # tone component layout interaction videos competitor → references.json
   jq -n --argjson t "$1" --argjson c "$2" --argjson l "$3" --argjson i "$4" --argjson v "$5" --argjson p "$6" '
-    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://example.com/\($k)/\($n)", source: "search", take: "t", captures: ["refs/x.png"]}
+    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://\($k)-\($n).example/", source: "search", take: "t", captures: ["refs/x.png"]}
       + (if $n == 0 and ($k == "layout" or $k == "interaction") then {recommended: $k} elif $n == 0 and $k == "component" then {recommended: "hero"} else {} end);
     [range($t) | ref("tone"; .)] + [range($c) | ref("component"; .)] + [range($l) | ref("layout"; .)]
     + [range($i) | ref("interaction"; .) + (if . < $v then {video: "https://example.com/v\(.).mp4"} else {} end)]
     + [range($p) | ref("competitor"; .) + {analysis: {leads_with: "a", claim: "b", cta: "c", gap: "d"}}]' >"$LP_I/references.json"
 }
-jq '.[0].results = [range(5) | "https://example.com/competitor/\(.)"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
+jq '.[0].results = [range(5) | "https://competitor-\(.).example/"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
 lp_refs 1 1 1 1 1 1
 assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "an interactive board with one reference per tab is refused"
 assert_contains "$(cat "$TEST_TMP/lp.err")" "tone has 1, needs at least 3" "the runner names the tab that is short"
@@ -2514,14 +2540,17 @@ lp_refs 3 3 3 4 2 2
 jq '.[1].id = .[0].id' "$LP_I/references.json" >"$TEST_TMP/lp-dup.json" && cp "$TEST_TMP/lp-dup.json" "$LP_I/references.json"
 assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "two references with one id are refused"
 lp_refs 3 3 3 4 2 2
-jq '.[0].results = ["https://example.com/competitor/0"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
+jq '.[0].results = ["https://competitor-0.example/"]' "$TEST_TMP/lp-searches.json" >"$LP_I/searches.json"
 assert_eq 4 "$(lpi_rc submit --node references --outcome references_ready)" "a competitor found outside search is refused"
 jq 'map(if .id == "competitor-1" then .source = "user" else . end)' "$LP_I/references.json" >"$TEST_TMP/lp-user.json" && cp "$TEST_TMP/lp-user.json" "$LP_I/references.json"
 assert_eq reference_pick "$(lpi submit --node references --outcome references_ready)" "a competitor the user named needs no search result; enough per tab goes to the pick"
-jq '.references_min.interactive.interaction_video = 9' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
-if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph asking for more interaction videos than interactions is invalid"; fi
-jq 'del(.references_min.unattended)' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
-if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a graph without unattended reference counts is invalid"; fi
+DR_RULES="$ROOT/skills/design-references/references/refs-rules.json"
+jq '.interactive.interaction_video = 9' "$DR_RULES" >"$TEST_TMP/dr-bad-rules.json"
+assert_eq 2 "$(rc=0; DESIGN_REFS_RULES="$TEST_TMP/dr-bad-rules.json" "$ROOT/scripts/design-refs.sh" check --work "$LP_I" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc")" "rules asking for more interaction videos than interactions are invalid"
+jq 'del(.unattended)' "$DR_RULES" >"$TEST_TMP/dr-bad-rules.json"
+assert_eq 2 "$(rc=0; DESIGN_REFS_RULES="$TEST_TMP/dr-bad-rules.json" "$ROOT/scripts/design-refs.sh" check --work "$LP_I" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc")" "rules without unattended reference counts are invalid"
+jq '.unattended.competitor_domains = 1' "$DR_RULES" >"$TEST_TMP/dr-bad-rules.json"
+assert_eq 2 "$(rc=0; DESIGN_REFS_RULES="$TEST_TMP/dr-bad-rules.json" "$ROOT/scripts/design-refs.sh" check --work "$LP_I" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc")" "rules allowing a single competitor site are invalid"
 # The user picks on the board: wait-pick returns once a pick made after the node started is there.
 printf '{"tone":"old","kept":["tone-0"]}\n' >"$LP_I/reference-pick.json"; touch -t 202001010000 "$LP_I/reference-pick.json"
 assert_eq 4 "$(lpi_rc wait-pick --node reference_pick --timeout-min 0)" "wait-pick ignores a pick from before the node started"
@@ -2544,6 +2573,7 @@ if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["tone-0"]}')" "the board server refuses a pick without its primary references"
   assert_eq 200 "$(lp_post '{"node":"reference_pick","tone":"바꿀 점: 더 따뜻하게","kept":["tone-0","layout-1"],"dropped":["tone-1"],"add_sites":["https://example.com/x"],"user_words":"더 따뜻하게",'"$LP_PRIM"'}')" "the board server takes a valid pick"
   assert_eq "layout-1|component-0|연동" "$(jq -r '[.primary.layout, .primary.components["extra-1"], .primary.added_slots[0].label] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the primary references and the added slot"
+  assert_eq picked "$(jq -r '.status' "$HARNESS_METRICS_DIR/board/references/$("$ROOT/scripts/design-refs.sh" run-id --work "$LP_I").json")" "a pick on the board marks the reference board's run record picked"
   assert_eq "바꿀 점: 더 따뜻하게|tone-0,layout-1|더 따뜻하게" "$(jq -r '[.tone, (.kept | join(",")), .user_words] | join("|")' "$LP_I/reference-pick.json")" "the pick keeps the user's words as written"
   assert_eq "$LP_I/reference-pick.json" "$(lpi wait-pick --node reference_pick --timeout-min 1 | sed "s#^$(cd "$LP_I" && pwd)#$LP_I#")" "wait-pick returns once the board writes the pick"
   lp_state() { curl -s "http://127.0.0.1:$lp_port/state?node=${1:-reference_pick}"; }
@@ -2735,10 +2765,11 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     python3 -I -m http.server 8933 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/a" >/dev/null 2>&1 & LP_SRV3=$!
     python3 -I -m http.server 8934 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/b" >/dev/null 2>&1 & LP_SRV4=$!
     sleep 1
-    printf '[{"id":"a","url":"http://127.0.0.1:8933/","record":true},{"id":"b","url":"http://127.0.0.1:8934/"},{"id":"cf","url":"http://127.0.0.1:8933/challenge/"}]\n' >"$LP_R/refs-to-capture.json"
+    printf '[{"id":"a","url":"http://127.0.0.1:8933/","record":true},{"id":"b","url":"http://127.0.0.1:8934/"},{"id":"cf","url":"http://127.0.0.1:8933/challenge/"},{"id":"w","url":"http://127.0.0.1:8933/widget/"}]\n' >"$LP_R/refs-to-capture.json"
     LANDING_RECORD_SECONDS=2 "$ROOT/scripts/landing-run.sh" capture-refs --work "$LP_R" --file "$LP_R/refs-to-capture.json" --background >/dev/null 2>&1 || true
     assert_eq "ok ok challenge" "$(for i in a b cf; do jq -r '.status' "$LP_R/refs/$i/capture.json"; done | tr '\n' ' ' | sed 's/ $//')" "capture-refs captures both sites and flags the bot check"
     assert_eq "Reference B" "$(jq -r '.title' "$LP_R/refs/b/capture.json")" "capture-refs records each page's title"
+    assert_eq ok "$(jq -r '.status' "$LP_R/refs/w/capture.json")" "a page that drew its content is not a bot check for carrying a captcha widget"
     assert_file "$LP_R/refs/a/w1440-00.png"; assert_file "$LP_R/refs/b/w390-00.png"
     assert_eq 4 "$(jq -r '.concurrency' "$LP_R/refs/capture-refs.json")" "capture-refs captures four pages at a time"
     for _ in $(seq 1 40); do [[ -f "$LP_R/refs/record.done" ]] && break; sleep 0.5; done
@@ -2779,9 +2810,9 @@ assert_contains "$LANDING_VERIFY" "landing-run.sh operate" "landing-page reviewe
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "Users do not name a mode; choose it." "landing-page picks interactive or unattended itself"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "never the file path" "the reference board is served over http so its images load"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" 'Do not write the board by hand: `landing-run.sh board' "the reference board is drawn by the runner, not by hand"
-assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Send every search in one turn" "landing-page sends its reference searches at once"
+assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "Send every search in one turn" "landing-page sends its reference searches at once"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Do not write your own browser script for a reference" "landing-page captures references through capture-refs"
-assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "a served interactive board within five minutes" "landing-page aims for the board within five minutes"
+assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "served interactive board within five minutes" "landing-page aims for the board within five minutes"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "landing-run.sh capture-refs" "landing-page lists capture-refs among the runner commands"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "**Picking the primary references.**" "landing-page asks for one primary per tab and per section slot"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Every section the user named in the request becomes a slot." "landing-page makes a slot for each section the user named"
@@ -2795,9 +2826,85 @@ assert_contains "$LANDING_VERIFY" "a distinctive element placed under the stock 
 jq '.first_viewport_major = ["craft"]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
 if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph must count a first-viewport template look as major"; fi
 pass "landing-page graph runner and measure gate"
+# design-references: the reference step on its own (no landing run) — the same check the landing runner uses, the same
+# board, and a run record a dashboard can list. Competitors on two domains, one domain per kind, no bot check left standing.
+DR_W="$TEST_TMP/dr-run"; mkdir -p "$DR_W/refs/r5"
+dr() { "$ROOT/scripts/design-refs.sh" "$@" --work "$DR_W" 2>"$TEST_TMP/dr.err"; }
+dr_rc() { local rc=0; dr "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+jq 'map(if .id == "R5" then .captures = ["refs/r5/w1440-00.png"] else . end)' "$TEST_TMP/lp-refs.json" >"$TEST_TMP/dr-refs.json"
+cp "$TEST_TMP/dr-refs.json" "$DR_W/references.json"; cp "$TEST_TMP/lp-searches.json" "$DR_W/searches.json"; cp "$TEST_TMP/lp-slots.json" "$DR_W/component-slots.json"
+printf '{"id":"r5","url":"https://rival-e.example/","status":"ok"}\n' >"$DR_W/refs/r5/capture.json"
+assert_eq ok "$(dr check --mode unattended)" "a reference set gathered on its own passes the same check"
+jq 'map(select(.id != "R6"))' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_eq 4 "$(dr_rc check --mode unattended)" "a single competitor is refused"
+assert_contains "$(cat "$TEST_TMP/dr.err")" "competitor covers 1 site(s), needs at least 2 different domains" "the check names the missing competitor site"
+jq 'map(if .id == "R6" then .url = "https://rival-e.example/pricing" | .source = "user" else . end)' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_eq 4 "$(dr_rc check --mode unattended)" "two competitors on one domain count as one"
+assert_contains "$(cat "$TEST_TMP/dr.err")" "competitor covers 1 site(s)" "two pages of one competitor are one site"
+jq 'map(if .id == "R3" then .url = "https://www.comp-b.example/about" else . end)' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_eq 4 "$(dr_rc check --mode unattended)" "one domain reused across kinds is refused"
+assert_contains "$(cat "$TEST_TMP/dr.err")" "comp-b.example is used in component and layout (R2, R3)" "the check names the reused domain and its references"
+jq 'map(if .id == "R1" then .url = "https://tone.acme.co.kr/" elif .id == "R3" then .url = "https://acme.co.kr/" else . end)' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_eq 4 "$(dr_rc check --mode unattended)" "a subdomain of the same site under a co.kr-style suffix is the same domain"
+jq 'map(if .id == "R1" then .url = "https://one-app.vercel.app/" elif .id == "R3" then .url = "https://other-app.vercel.app/" else . end)' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_eq ok "$(dr check --mode unattended)" "two apps on one hosting suffix are two sites"
+cp "$TEST_TMP/dr-refs.json" "$DR_W/references.json"
+printf '{"id":"r5","url":"https://rival-e.example/","status":"challenge","reason":"bot check"}\n' >"$DR_W/refs/r5/capture.json"
+assert_eq 4 "$(dr_rc check --mode unattended)" "a reference whose capture hit a bot check is refused"
+assert_contains "$(cat "$TEST_TMP/dr.err")" "R5: refs/r5 is challenge" "the check names the reference left on a bot check"
+mkdir -p "$DR_W/refs/r4"; printf '{"id":"r4","status":"failed"}\n' >"$DR_W/refs/r4/capture.json"
+jq 'map(if .id == "R4" then .video = "refs/r4/rec.webm" else . end)' "$TEST_TMP/dr-refs.json" >"$DR_W/references.json"
+assert_contains "$(dr_rc check --mode unattended; cat "$TEST_TMP/dr.err")" "R4: refs/r4 is failed" "a failed capture behind a recording is refused too"
+cp "$TEST_TMP/dr-refs.json" "$DR_W/references.json"
+printf 'not a png' >"$TEST_TMP/dr-fake.png"
+assert_eq 4 "$(dr_rc retake --id r5 --shot "1440:$TEST_TMP/dr-fake.png")" "a retake needs a real PNG from the browser"
+printf '\211PNG\r\n\032\n0000' >"$TEST_TMP/dr-shot.png"
+dr retake --id r5 --shot "1440:$TEST_TMP/dr-shot.png" >/dev/null
+assert_eq "ok|challenge|browser|refs/r5/w1440-00.png" "$(jq -r '[.status, .retaken.from, .retaken.via, .captures[0]] | join("|")' "$DR_W/refs/r5/capture.json")" "a retake replaces the capture and keeps what it replaced"
+assert_eq ok "$(dr check --mode unattended)" "a retaken capture passes"
+# The landing runner refuses the same set with the same message: it runs this check, not a copy of it.
+DR_L="$TEST_TMP/dr-landing"; mkdir -p "$DR_L/refs/r5"
+"$ROOT/scripts/landing-run.sh" init --work "$DR_L" --mode unattended >/dev/null
+printf '## Tone and manner\ncalm\n' >"$DR_L/brief.md"; cp "$TEST_TMP/lp-tone.json" "$DR_L/tone.json"
+"$ROOT/scripts/landing-run.sh" submit --work "$DR_L" --node brief --outcome brief_ready >/dev/null
+for f in references.json searches.json component-slots.json; do cp "$DR_W/$f" "$DR_L/$f"; done
+cp "$TEST_TMP/lp-agent-pick.json" "$DR_L/reference-pick.json"
+printf '{"id":"r5","status":"challenge"}\n' >"$DR_L/refs/r5/capture.json"
+dr_l_rc=0; "$ROOT/scripts/landing-run.sh" submit --work "$DR_L" --node references --outcome references_ready >/dev/null 2>"$TEST_TMP/dr.err" || dr_l_rc=$?
+assert_eq 4 "$dr_l_rc" "the landing runner refuses a reference left on a bot check"
+assert_contains "$(cat "$TEST_TMP/dr.err")" "R5: refs/r5 is challenge" "the landing runner says what design-references check says"
+printf '{"id":"r5","status":"ok"}\n' >"$DR_L/refs/r5/capture.json"
+assert_eq direction "$("$ROOT/scripts/landing-run.sh" submit --work "$DR_L" --node references --outcome references_ready 2>/dev/null)" "the landing runner passes the set design-references passes"
+if command -v node >/dev/null 2>&1; then
+  dr board --topic "AI interview practice" >/dev/null
+  assert_file "$DR_W/board.html"
+  DR_REC="$HARNESS_METRICS_DIR/board/references/$(dr run-id).json"
+  assert_eq "$(cd "$DR_W" && pwd)|AI interview practice|ready|$(cd "$DR_W" && pwd)/references.json" \
+    "$(jq -r '[.work, .topic, .status, .references] | join("|")' "$DR_REC")" "drawing the board leaves a run record with the work folder, topic, status, and references"
+  dr_created="$(jq -r '.created_at' "$DR_REC")"
+  assert_contains "$dr_created" "T" "the run record keeps when the board was made"
+  dr board >/dev/null
+  assert_eq "$dr_created|AI interview practice|1" "$(jq -r '[.created_at, .topic] | join("|")' "$DR_REC")|$(find "$HARNESS_METRICS_DIR/board/references" -name '*.json' -exec grep -l "$(cd "$DR_W" && pwd)\"" {} + | wc -l | tr -d ' ')" "drawing again updates the same record"
+  if command -v curl >/dev/null 2>&1; then
+    dr_port=$((20000 + RANDOM % 20000))
+    assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "design-references serves the board over http"
+    assert_eq "true|false" "$(curl -s "http://127.0.0.1:$dr_port/pick" | jq -r '[.server, .run] | join("|")')" "a board served without a landing run is for looking; picks go through the terminal"
+    assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "serving again on the same port reuses the running server"
+    assert_eq 1 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" | wc -l | tr -d ' ')" "one board server per folder and port"
+    pkill -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" 2>/dev/null || true
+  fi
+fi
+DR_SKILL="$ROOT/skills/design-references/SKILL.md"
+assert_file "$DR_SKILL"
+assert_file "$ROOT/skills/design-references/agents/openai.yaml"
+assert_contains "$(cat "$DR_SKILL")" "design-refs.sh check" "design-references verifies with the shared check"
+assert_contains "$(cat "$DR_SKILL")" "board/references/<run-id>.json" "design-references documents the run record"
+assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "design-references" "landing-page's reference step follows design-references"
+assert_contains "$(cat "$ROOT/README.md")" "| \`/design-references\` |" "README lists design-references"
+pass "design-references standalone check, retake, board, and run record"
 assert_contains "$(cat agents/design-reviewer.md)" "제품 개념이 독특해도 생김새 판정을 면제하지 않는다" "design-reviewer judges look apart from concept"
 assert_contains "$LANDING_VERIFY" "every sentence and example value the page shows, each with its source location" "landing-page reviewer gets complete source facts"
-assert_contains "$(cat skills/landing-page/references/direction.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"
+assert_contains "$(cat skills/design-references/SKILL.md)" "Do not run that skill's own procedure; it copies the specification into the project" "landing-page reads awesome-design specs without importing them"
 assert_contains "$LANDING_VERIFY" "**Needs the user**" "landing-page stops looping on what only the user can supply"
 assert_contains "$LANDING_VERIFY" "**When the only majors left are \`사용자 입력 필요\` items, stop.**" "the loop stops when only user input remains"
 assert_contains "$LANDING_VERIFY" "the \`사용자 입력 필요\` list so far" "the reviewer gets the user-input list"
@@ -4624,6 +4731,48 @@ assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$G
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
 pass "member edit guard"
+
+# 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.
+WD="$TEST_TMP/wait-delegation"
+mkdir -p "$WD/bin"
+cat >"$WD/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+[[ -f "$WD_DIR/fail" ]] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }
+jq -Rsc --arg s "$(cat "$WD_DIR/status" 2>/dev/null || echo running)" '{ok:true, result:{terminal:{status:$s, tail:(split("\n"))}}}' "$WD_DIR/screen"
+EOF
+chmod +x "$WD/bin/orca"
+WD_HANDLE="term_3d258b5b-850f-4f77-a851-3013191cd199"
+wait_delegation() { # 인자는 그대로 넘긴다. 출력 뒤에 exit=<code>
+  local rc=0 out
+  out="$(PATH="$WD/bin:$PATH" WD_DIR="$WD" "$ROOT/scripts/wait-delegation.sh" --interval 0 "$@" 2>"$WD/err")" || rc=$?
+  printf '%s\nexit=%s' "$out" "$rc"
+}
+printf 'done\n' >"$WD/finished.md"
+WD_OUT="$(wait_delegation --done "$WD/finished.md" --terminal "$WD_HANDLE")"
+assert_contains "$WD_OUT" "reason=done" "an existing completion file ends the wait as done"
+assert_contains "$WD_OUT" "exit=0" "done exits 0"
+printf '구현 계획 brief 입니다.\n승인할까요?\n\n❯ \n⏵⏵ bypass permissions on\n' >"$WD/screen"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)"
+assert_contains "$WD_OUT" "reason=awaiting_input" "a member waiting on a free-text approval question ends the wait"
+assert_contains "$WD_OUT" "승인할까요?" "the last screen lines come with the reason"
+assert_contains "$WD_OUT" "exit=10" "awaiting_input exits 10"
+printf 'Which approach?\n❯ 1. A\n  2. B\nEnter to select · ↑/↓ to navigate\n' >"$WD/screen"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)" "reason=awaiting_input" "a question with choices ends the wait"
+printf '✻ Running tests\n' >"$WD/screen"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0 --stall 0)"
+assert_contains "$WD_OUT" "reason=stalled" "an unchanged screen without a question ends the wait as stalled"
+assert_contains "$WD_OUT" "exit=11" "stalled exits 11"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --timeout 1 --interval 1)" "reason=timeout" "a working screen waits until the timeout"
+echo exited >"$WD/status"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE")" "reason=exited" "an exited member terminal ends the wait"
+rm -f "$WD/status"; : >"$WD/fail"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal term_3d258b5b)"
+assert_contains "$WD_OUT" "reason=terminal_unavailable" "an unreadable terminal handle ends the wait instead of hanging"
+assert_contains "$(<"$WD/err")" "short handles go stale" "a short terminal handle is warned about"
+rm -f "$WD/fail"
+assert_contains "$(wait_delegation --done "$WD/none.md" --timeout 1 --interval 1)" "reason=timeout" "without a terminal the wait watches the file only"
+assert_contains "$(wait_delegation --terminal "$WD_HANDLE")" "exit=2" "the completion file is required"
+pass "delegation wait reports input gates"
 
 # 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
 assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"

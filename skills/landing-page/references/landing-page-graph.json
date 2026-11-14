@@ -374,30 +374,6 @@
     "max_draft_redos": 1,
     "unattended_builds": 1
   },
-  "references_min": {
-    "interactive": {
-      "per_kind": {
-        "tone": 3,
-        "component": 3,
-        "layout": 3,
-        "interaction": 4,
-        "competitor": 2
-      },
-      "interaction_video": 2,
-      "competitor_max": 4
-    },
-    "unattended": {
-      "per_kind": {
-        "tone": 1,
-        "component": 1,
-        "layout": 1,
-        "interaction": 1,
-        "competitor": 1
-      },
-      "interaction_video": 0,
-      "competitor_max": 4
-    }
-  },
   "measure": {
     "widths": [
       1440,

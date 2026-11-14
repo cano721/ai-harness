@@ -3,7 +3,8 @@
 // the page and start without typing the answer into the terminal.
 //   node landing-board-server.mjs --work DIR --port N
 //   GET  <path>  a file inside WORK (never a dotfile such as .landing-run)
-//   GET  /pick   {"server": true} — the board uses it to tell a live server from a static one
+//   GET  /pick   {"server": true, "run": <a landing run is in WORK>} — the board takes picks only with a run; a board that
+//                /design-references serves alone is for looking, and its pick bar shows the summary to paste instead
 //   GET  /state?node=reference_pick|draft_pick  {node: <the run's current node>, picked: <that pick, once made, or null>}
 //   POST /pick   {node: "reference_pick", tone, kept, dropped, add_sites, primary, user_words} → reference-pick.json
 //                {node: "draft_pick", kept: [one id], dropped, user_words}           → draft-pick.json
@@ -14,6 +15,8 @@
 import { createServer } from "node:http";
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync, createReadStream } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 
 const argv = process.argv.slice(2);
 const opt = (k) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : "");
@@ -104,6 +107,21 @@ function pickedFor(node, run) {
   return readJson(PICK_FILE[node]);
 }
 
+// The reference board's run record (design-refs.sh board writes it; the id is the work folder's hash): picked once the
+// user starts from the board, so a dashboard listing reference boards can tell which still wait for a pick.
+function markPicked() {
+  const id = createHash("sha256").update(work).digest("hex").slice(0, 12);
+  const f = join(process.env.HARNESS_METRICS_DIR || join(homedir(), ".ai-harness"), "board", "references", `${id}.json`);
+  try {
+    const rec = JSON.parse(readFileSync(f, "utf8"));
+    const tmp = `${f}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ ...rec, status: "picked", updated_at: new Date().toISOString() }, null, 2) + "\n");
+    renameSync(tmp, f);
+  } catch {
+    // No record (a board drawn before records existed): nothing to mark.
+  }
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   if (url.pathname === "/state") {
@@ -114,7 +132,7 @@ const server = createServer((req, res) => {
     return send(res, 200, { node: run?.node ?? null, picked: pickedFor(node, run) });
   }
   if (url.pathname === "/pick") {
-    if (req.method === "GET") return send(res, 200, { server: true });
+    if (req.method === "GET") return send(res, 200, { server: true, run: runNode() !== null });
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
     const origin = req.headers.origin;
     if (origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return send(res, 403, { error: "foreign origin" });
@@ -137,6 +155,7 @@ const server = createServer((req, res) => {
       writeFileSync(tmp, JSON.stringify({ ...data, at: new Date().toISOString() }, null, 2) + "\n");
       renameSync(tmp, join(work, file));
       console.log(`pick written: ${file}`);
+      if (body.node === "reference_pick") markPicked();
       return send(res, 200, { ok: true, file });
     });
     return;

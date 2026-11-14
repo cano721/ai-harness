@@ -6,8 +6,24 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.74.0 (2026-11-14)
+### 새 기능
+
+- **레퍼런스 수집을 독립 스킬 `/design-references`로 분리** — 레퍼런스만 확인하려 해도 `/landing-page`를 처음부터 40분 돌려야 했고, 화면·디자인 시스템 작업도 레퍼런스가 필요했습니다. 이제 "AI 면접 서비스 경쟁사랑 레퍼런스 모아줘"처럼 따로 불러 검색(한 턴에 동시) → 일괄 캡처 → 봇 확인 화면 처리 → `references.json`·`searches.json` → 탭 5개 보드 서빙까지 합니다. `/landing-page`의 references 단계도 같은 절차·같은 스크립트(`scripts/design-refs.sh`)를 쓰고, 대표 고르기와 시작은 그대로 `/landing-page`에 남습니다. 보드를 만들 때마다 `~/.ai-harness/board/references/<run-id>.json`에 실행 기록(작업 폴더·주제·상태·만든 시각·references.json 경로)을 남깁니다. (#314)
+
+### 동작 변경
+
+- **레퍼런스 검사 강화** — 무인 실행이 봇 확인(`challenge`)·실패한 캡처를 다시 열지 않고 빼고, 같은 사이트를 여러 탭에 돌려 써서 실제 사이트 4곳으로 "다섯 종류 각 1개" 검사를 통과했습니다. 이제 경쟁사는 서로 다른 도메인 2곳 이상(무인 실행도), 한 도메인은 한 종류에만(자사 사이트도 톤 레퍼런스로만), `refs/<id>/capture.json`이 `challenge`·`failed`인 레퍼런스가 남아 있으면 거부합니다. 실제 브라우저로 다시 찍은 화면은 `design-refs.sh retake`로 바꿉니다. 러너 submit과 `design-refs.sh check`가 같은 검사를 씁니다. 종류별 개수는 랜딩 그래프의 `references_min`에서 `skills/design-references/references/refs-rules.json`으로 옮겼습니다. (#314)
+
+### 버그 수정
+
+- 레퍼런스 캡처가 내용을 다 그린 페이지를 로그인용 reCAPTCHA 위젯이나 "captcha" 문구만 보고 봇 확인(`challenge`)으로 판정하던 문제 — 이런 표시는 본문이 거의 없는 페이지에서만 봇 확인으로 셉니다(Cloudflare 확인 화면·제목은 그대로). (#314)
+
 ## v0.73.0 (2026-11-14)
 ### 새 기능
+
+- **workspace 인계 대기가 멤버의 승인·질문 정체를 알립니다** — 완료 파일만 기다리면 멤버 세션이 brief 승인 게이트나 질문에서 멈춰도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 새 `scripts/wait-delegation.sh --done <완료 파일> --terminal <멤버 터미널 handle>`은 완료 파일이 생기거나, 멤버 화면이 입력을 기다리거나(`awaiting_input`), 화면이 오래 그대로거나(`stalled`), 터미널이 끝나거나, handle 을 못 읽으면 바로 끝나고 이유와 마지막 화면을 찍습니다. workspace AGENTS.md Preflight ③의 완료 파일 방식은 이 헬퍼로 기다리고, handle 은 전체 ID 를 쓰도록 안내합니다. 승인은 기본으로 workspace 대화에서 받습니다: 러너는 workspace 안 멤버 실행이면 Brief 를 조율 세션에 보내라고 안내하고, 사용자가 workspace 대화에 직접 친 `승인 <멤버 폴더 이름>`도 승인으로 인정합니다(이름 없는 "승인"·세션 간 메시지·다른 세션이 보낸 메시지는 인정하지 않습니다 — 조율 에이전트가 대신 승인할 수 없습니다). 승인 없이 끝까지 돌리려면 Harness Board 설정에서 멤버 저장소의 승인을 "자동 통과"로 고릅니다. 기존 workspace 는 `/harness-init` 재동기화, 멤버 러너는 sync 로 반영됩니다. (#331)
+
 
 - **재작업 비율: 후속 PR 판정 파일로 보정값** — `scripts/rework.sh`는 머지 뒤 같은 이슈 키로 시작한 PR을 모두 재작업으로 세서, 합의로 늘어난 범위·기존 코드 결함을 뺀 보고 값과 갈렸습니다. 이제 결과의 원본·후속 PR에 제목(`title`, 머지 커밋 본문 첫 줄)이 붙고, `--judgments <파일>`(TSV `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, verdict는 `defect`·`scope`·`preexisting`·`planned`)을 주면 결함 수정만 재작업으로 센 `judged_rework_prs`·`judged_ratio`와 판정 없는 후속 목록 `unjudged`를 함께 냅니다. 판정 없는 후속은 재작업으로 남고, 기존 `rework_ratio`는 그대로입니다. (#325)
 

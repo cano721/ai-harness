@@ -22,11 +22,6 @@ jq -e '
   and ([$g.transitions[] | select(.from == "draft_review" and (.when == "draft_pass" or .when == "draft_kept") and .mode == "unattended")] | length == 2 and all(.to == "draft_choose"))
   and $g.nodes.draft_choose.actor == "maker" and $g.limits.unattended_builds == 1
   and $g.nodes.draft_review.actor == "reviewer" and ($g.review_checks.draft | index("template_look")) and ($g.review_checks.draft | index("craft"))
-  and (["interactive", "unattended"] | all(. as $m | $g.references_min[$m] as $r
-        | ($r | type) == "object"
-        and (["tone","component","layout","interaction","competitor"] | all(. as $k | ($r.per_kind[$k] | type) == "number" and $r.per_kind[$k] >= 1))
-        and ($r.interaction_video | type) == "number" and $r.interaction_video <= $r.per_kind.interaction
-        and ($r.competitor_max | type) == "number" and $r.competitor_max >= $r.per_kind.competitor))
   and ($g.invariants | any(startswith("Measure outcomes come only from the measure script")))
   and ($g.invariants | any(startswith("Review outcomes are computed from the review JSON")))
 ' "$graph_path" >/dev/null || { printf 'invalid landing-page graph\n' >&2; exit 1; }
