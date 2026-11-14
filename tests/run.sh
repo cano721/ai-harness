@@ -5141,6 +5141,46 @@ assert_eq "manifest_policy_changed" "$(am_check --scope sync --head "$(am_commit
 am_sync_head s-render
 mkdir -p "$AM_REPO/.claude/commands" && printf 'x\n' >"$AM_REPO/.claude/commands/review.md"
 assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit render)")" "a render artifact needs a person"
+# render 파일도 스크립트 결과와 바이트 같으면 기계적으로 검증된다(#316). 한 글자라도 다르면 지금처럼 사람에게.
+am_sync_head s-render-ok
+mkdir -p "$AM_REPO/.claude/commands"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
+assert_eq "render_unmarked:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderunmarked)")" "a new render must be recorded with the renderer mark"
+am_manifest ".managed_files[\".claude/commands/review.md\"].renderer = 1"
+assert_eq "ok" "$(am_check --scope sync --head "$(am_commit renderok)")" "a render artifact equal to the render script passes"
+am_sync_head s-render-edit
+mkdir -p "$AM_REPO/.claude/commands"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+printf ' ' >>"$AM_REPO/.claude/commands/review.md"
+am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
+assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderedit)")" "a render artifact one byte off needs a person"
+# 예전 손 렌더(저장소 맞춤 포함)가 기록된 저장소: 해시가 맞아도 base manifest에 renderer 표시가 없으면 첫 결정적
+# render PR은 사람이 본다. 표시는 base(대상 브랜치) 것만 믿는다 — head에 표시를 넣어도 통과하지 않는다.
+am_render_base() { # name renderer-mark(0|1) → origin/<name>: 옛 진입점이 기록된 기준 브랜치
+  git -C "$AM_REPO" checkout -q -B "$1" develop
+  mkdir -p "$AM_REPO/.claude/commands"
+  # shellcheck disable=SC2016  # $ARGUMENTS는 옛 진입점의 자리표시자 문자열이다
+  printf -- '---\ndescription: old\n---\n\n- team routing line\n\n요청: $ARGUMENTS\n' >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"} + (if $2 == 1 then {renderer: 1} else {} end)"
+  git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m "$1"
+  git -C "$AM_REPO" update-ref "refs/remotes/origin/$1" "$1"
+}
+am_render_head() { # base branch → 옛 진입점을 스크립트 결과로 바꾼 sync 커밋
+  am_on "$1" "$2"
+  "$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".harness_version = \"9.9.9\" | .managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\", renderer: 1}"
+  am_commit "$2"
+}
+am_render_base render-unmarked 0
+assert_eq "render_first:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-unmarked --scope sync --head "$(am_render_head render-unmarked s-render-first)")" "the first deterministic render over an unmarked hand render needs a person"
+am_render_base render-marked 1
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-marked --scope sync --head "$(am_render_head render-marked s-render-next)")" "a render over a marked deterministic render passes"
+# 표시가 있어도 base 파일을 사람이 고치고 다시 기록하지 않았으면 사람이 본다.
+am_render_base render-drift 1
+printf -- '- edited later\n' >>"$AM_REPO/.claude/commands/review.md"
+git -C "$AM_REPO" commit -q -am render-drift-edit && git -C "$AM_REPO" update-ref refs/remotes/origin/render-drift render-drift
+assert_eq "render_modified:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-drift --scope sync --head "$(am_render_head render-drift s-render-drift)")" "a marked render a person edited after recording needs a person"
 am_sync_head s-del
 git -C "$AM_REPO" rm -q app.js
 assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
@@ -5696,17 +5736,15 @@ assert_eq "edited by a person" "$(<"$MF_ROOT/$MF_RUNNER")" "a modified managed f
 printf 'mine\n' >"$MF_ROOT/$MF_SKILL"
 mf_refuse "untracked" "$MF_ROOT" "$MF_SKILL"
 assert_eq "mine" "$(<"$MF_ROOT/$MF_SKILL")" "an unrecorded existing file is not overwritten"
-MF_RENDER="$(jq -r 'first(.artifacts[] | select(.mode == "render") | .path)' "$ROOT/templates/managed-files.json")"
-mf_refuse "not a copy artifact" "$MF_ROOT" "$MF_RENDER"
-mf_refuse "not a copy artifact" "$MF_ROOT" .claude/settings.json
-mf_refuse "not a copy artifact" "$MF_ROOT" AGENTS.md
+mf_refuse "not a managed artifact" "$MF_ROOT" .claude/settings.json
+mf_refuse "not a managed artifact" "$MF_ROOT" AGENTS.md
 for bad in ../outside.sh /etc/passwd .ai-harness/workflows/../../x.sh; do
   mf_refuse "invalid path" "$MF_ROOT" "$bad"
 done
 assert_not_file "$MF_ROOT/AGENTS.md"
 MF_FRESH="$TEST_TMP/managed-place-fresh"
 mkdir -p "$MF_FRESH"
-mf_refuse "not a copy artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
+mf_refuse "not a managed artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
 assert_not_file "$MF_FRESH/$MF_RUNNER"
 [[ ! -d "$MF_FRESH/.ai-harness" ]] || fail "a rejected call creates no directories"
 mkdir -p "$TEST_TMP/mf-escape" "$MF_FRESH/.claude"
@@ -5721,6 +5759,79 @@ rm -f "$MF_FRESH/$MF_RUNNER" && mkdir -p "$MF_FRESH/$MF_RUNNER"
 mf_refuse "is a directory" "$MF_FRESH" "$MF_RUNNER"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "place-managed-file.sh --root . --path" "unattended sync copies copy artifacts with the placer"
 pass "unattended sync places copy artifacts byte for byte"
+
+# 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
+# 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
+RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
+assert_eq "6" "$(grep -c . <<<"$RD_PATHS")" "six workflow entry points are render artifacts"
+while IFS= read -r rd_path; do
+  "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
+  "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"
+  cmp -s "$TEST_TMP/render-1" "$TEST_TMP/render-2" || fail "render is deterministic: $rd_path"
+  cmp -s "$TEST_TMP/render-1" "$ROOT/$rd_path" || fail "generated $rd_path matches the render script"
+done <<<"$RD_PATHS"
+"$ROOT/scripts/render-managed-file.sh" --path .agents/skills/review/SKILL.md >"$TEST_TMP/render-codex"
+cmp -s "$ROOT/templates/review/SKILL.md" "$TEST_TMP/render-codex" || fail "the Codex skill is the template as is"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$TEST_TMP/render-claude"
+RD_CLAUDE="$(<"$TEST_TMP/render-claude")"
+assert_eq "---" "$(sed -n 1p "$TEST_TMP/render-claude")" "the command keeps its frontmatter"
+assert_eq "$(sed -n 's/^description: //p' "$ROOT/templates/review/SKILL.md")" "$(sed -n 's/^description: //p' "$TEST_TMP/render-claude")" "the command keeps the template description"
+assert_eq '0' "$(grep -c '^name:' "$TEST_TMP/render-claude" || true)" "the command drops the skill name"
+assert_eq 'argument-hint: "<PR 번호, 브랜치, 또는 diff>"' "$(sed -n 3p "$TEST_TMP/render-claude")" "the command takes its argument hint from the catalog"
+assert_eq "---" "$(sed -n 4p "$TEST_TMP/render-claude")" "the hint closes the frontmatter"
+assert_contains "$RD_CLAUDE" $'1. @AGENTS.md\n2. @.ai-harness/workflows/review.md\n3. @.ai-harness/workflows/review-graph.json' "startup reads are imported with @"
+# shellcheck disable=SC2016  # $ARGUMENTS는 Claude 커맨드 자리표시자다
+assert_eq $'\n## Request\n\n$ARGUMENTS' "$(tail -n 4 "$TEST_TMP/render-claude")" "the command ends with the request"
+for rd_bad in .ai-harness/workflows/workflow-driver.sh AGENTS.md ../x.md; do
+  if "$ROOT/scripts/render-managed-file.sh" --path "$rd_bad" >/dev/null 2>&1; then fail "render refuses $rd_bad"; fi
+done
+# 배치도 같은 스크립트로 한다. 사람이 고친 render 파일은 지금처럼 덮어쓰지 않는다.
+RD_ROOT="$TEST_TMP/render-place"
+mkdir -p "$RD_ROOT"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md --path .agents/skills/review/SKILL.md >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "the placer writes the rendered command"
+cmp -s "$TEST_TMP/render-codex" "$RD_ROOT/.agents/skills/review/SKILL.md" || fail "the placer writes the rendered Codex skill"
+[[ ! -x "$RD_ROOT/.claude/commands/review.md" ]] || fail "a rendered file is not executable"
+# render와 copy를 한 호출에 섞어도(순서와 상관없이) 각 파일이 제 내용을 받는다.
+for rd_order in render-first copy-first; do
+  RD_MIX="$TEST_TMP/render-mix-$rd_order"
+  mkdir -p "$RD_MIX"
+  if [[ "$rd_order" == render-first ]]; then
+    "$ROOT/scripts/place-managed-file.sh" --root "$RD_MIX" --path .claude/commands/review.md --path .ai-harness/workflows/review-graph.json >/dev/null
+  else
+    "$ROOT/scripts/place-managed-file.sh" --root "$RD_MIX" --path .ai-harness/workflows/review-graph.json --path .claude/commands/review.md >/dev/null
+  fi
+  cmp -s "$TEST_TMP/render-claude" "$RD_MIX/.claude/commands/review.md" || fail "mixed placement ($rd_order) writes the rendered command"
+  cmp -s "$ROOT/templates/review/references/review-graph.json" "$RD_MIX/.ai-harness/workflows/review-graph.json" || fail "mixed placement ($rd_order) copies the graph"
+  [[ -z "$(find "$RD_MIX" -name '.place.*')" ]] || fail "mixed placement ($rd_order) leaves no temporary files"
+done
+printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
+mkdir -p "$RD_ROOT/.ai-harness"
+jq -n --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '{managed_files: {".claude/commands/review.md": {content_sha256: $h}}}' >"$RD_ROOT/.ai-harness/harness.json"
+# 표시 없는 기록(예전 손 렌더)은 해시가 맞아도 저장소 맞춤이 있을 수 있어 사람이 본 뒤(--first-render)에만 바꾼다(#316).
+mf_refuse "first deterministic render needs a person" "$RD_ROOT" .claude/commands/review.md
+assert_eq "old" "$(<"$RD_ROOT/.claude/commands/review.md")" "an unmarked hand render is not overwritten without review"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md --first-render >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "a reviewed first render replaces the hand render"
+# record는 스크립트 결과와 같은 render에만 표시를 남기고, 표시가 있으면 다음 sync는 그냥 갱신한다.
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "1" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record marks a deterministic render"
+printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "null" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record does not mark a render that differs from the script"
+jq --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '.managed_files[".claude/commands/review.md"] = {content_sha256: $h, renderer: 1}' "$RD_ROOT/.ai-harness/harness.json" >"$RD_ROOT/.ai-harness/h2" && mv "$RD_ROOT/.ai-harness/h2" "$RD_ROOT/.ai-harness/harness.json"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "an unchanged marked render is refreshed"
+rd_rc=0; "$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "place-managed-file exits 2 on --path without a value"
+rd_rc=0; "$ROOT/scripts/render-managed-file.sh" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "render-managed-file exits 2 on --path without a value"
+printf 'team wording\n' >>"$RD_ROOT/.claude/commands/review.md"
+mf_refuse "modified since it was recorded" "$RD_ROOT" .claude/commands/review.md
+assert_contains "$(<"$RD_ROOT/.claude/commands/review.md")" "team wording" "a render a person changed is not overwritten"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+[[ "$(<"$ROOT/skills/harness-init/SKILL.md")" != *'`mode:"render"` 항목만 직접 쓴다'* ]] || fail "harness init no longer writes render artifacts by hand"
+pass "workflow entry points render deterministically"
 
 # monitor-fetch.sh: 모니터링 도구 응답을 한 형식으로 맞추고, 자격증명을 보낼 곳을 저장소 설정이 정하지 못하게 한다.
 AF_DATA="$TEST_TMP/autofix-data"

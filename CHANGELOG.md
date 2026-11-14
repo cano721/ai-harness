@@ -21,7 +21,13 @@
 
 ### 동작 변경
 
+- **워크플로 진입점을 스크립트가 만들고 sync 자동 병합이 검증** — `/implement-feature`·`/fix-bug`·`/review` 진입점 6개(`.claude/commands/*.md`·`.agents/skills/*/SKILL.md`)를 에이전트가 손으로 써서 결과가 흔들렸고(템플릿 줄이 빠진 채 남기도 했다), 자동 병합은 이 파일이 든 sync PR을 모두 `render_file:` 사유로 사람에게 넘겼습니다. 이제 `scripts/render-managed-file.sh`가 템플릿에서 결정적으로 만들고 `/ai-harness:harness-init`(최초 생성·sync·무인 sync)은 `place-managed-file.sh`로 씁니다. 스크립트로 만든 진입점은 manifest에 `renderer` 표시가 남고, 자동 병합은 기준 브랜치에 이 표시가 있는 진입점이 스크립트 결과와 바이트 같을 때만 통과시킵니다. 예전에 손으로 렌더한 진입점(표시 없음)을 처음 바꾸는 sync는 저장소 맞춤 줄이 지워질 수 있어 사람이 diff를 본 뒤에만 적용·병합되고(`render_first:`), 사람이 고친 진입점은 지금처럼 덮어쓰지 않습니다. (#316)
+
 - **workspace 인계 프롬프트가 멤버 워크플로 파일부터 읽게 합니다** — 인계에 워크플로 이름만 적으면, 범위·결정이 다 주어진 인계를 받은 멤버 세션이 Preflight의 워크플로 선택을 건너뛰고 워크플로 본문·그래프를 읽지 않았습니다. 이제 workspace Preflight ③은 인계 프롬프트의 첫 지시로 멤버 워크플로 파일(`.ai-harness/workflows/<name>.md`)을 Read 하고 그 그래프대로 진행하라고 쓰게 하고, 멤버에 러너가 있으면 러너 시작 명령도 적게 합니다. 멤버 편집 가드의 차단 메시지도 같은 내용을 안내합니다. 기존 workspace AGENTS.md에 반영하려면 `/ai-harness:harness-init` sync (#324)
+
+### 업데이트 후 해야 할 일
+
+- 업데이트 후 첫 sync는 예전에 손으로 렌더한 워크플로 진입점을 템플릿에서 다시 만들고 사람 확인으로 넘깁니다. 진입점에 넣어 둔 저장소별 줄(예: 특정 경로를 다른 스킬로 보내는 라우팅)은 diff에서 확인해 `.ai-harness/workflows/<워크플로>.md`로 옮기세요 — 진입점은 이후 sync마다 템플릿에서 다시 만들어집니다. (#316)
 
 ## v0.72.0 (2026-11-13)
 ### 새 기능
