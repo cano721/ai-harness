@@ -7,14 +7,17 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
-
 ### 동작 변경
 
-- **워크플로 진입점을 스크립트가 만들고 sync 자동 병합이 검증** — `/implement-feature`·`/fix-bug`·`/review` 진입점 6개(`.claude/commands/*.md`·`.agents/skills/*/SKILL.md`)를 에이전트가 손으로 써서 결과가 흔들렸고(템플릿 줄이 빠진 채 남기도 했다), 자동 병합은 이 파일이 든 sync PR을 모두 `render_file:` 사유로 사람에게 넘겼습니다. 이제 `scripts/render-managed-file.sh`가 템플릿에서 결정적으로 만들고 `/ai-harness:harness-init`(최초 생성·sync·무인 sync)은 `place-managed-file.sh`로 씁니다. 자동 병합은 스크립트 결과와 바이트 같은 진입점을 통과시키고, 사람이 고친 진입점은 지금처럼 덮어쓰지 않고 사람 확인으로 넘깁니다. (#316)
+- **워크플로 진입점을 스크립트가 만들고 sync 자동 병합이 검증** — `/implement-feature`·`/fix-bug`·`/review` 진입점 6개(`.claude/commands/*.md`·`.agents/skills/*/SKILL.md`)를 에이전트가 손으로 써서 결과가 흔들렸고(템플릿 줄이 빠진 채 남기도 했다), 자동 병합은 이 파일이 든 sync PR을 모두 `render_file:` 사유로 사람에게 넘겼습니다. 이제 `scripts/render-managed-file.sh`가 템플릿에서 결정적으로 만들고 `/ai-harness:harness-init`(최초 생성·sync·무인 sync)은 `place-managed-file.sh`로 씁니다. 스크립트로 만든 진입점은 manifest에 `renderer` 표시가 남고, 자동 병합은 기준 브랜치에 이 표시가 있는 진입점이 스크립트 결과와 바이트 같을 때만 통과시킵니다. 예전에 손으로 렌더한 진입점(표시 없음)을 처음 바꾸는 sync는 저장소 맞춤 줄이 지워질 수 있어 사람이 diff를 본 뒤에만 적용·병합되고(`render_first:`), 사람이 고친 진입점은 지금처럼 덮어쓰지 않습니다. (#316)
+
+### 버그 수정
+
+- 무인 실행 로그인 만료를 따로 분류·알림 — 자동 sync·harvest·autofix가 띄운 `claude -p`가 로그인 만료로 실패하면 `agent_error`로 기록돼 실패 횟수에 들어가 3번 만에 그 저장소를 포기했고, 같은 sweep의 남은 저장소도 모두 같은 이유로 실패했으며, 보드를 열기 전에는 알 수 없었다. 이제 인증 실패 결과 줄(`Failed to authenticate`·`claude auth login`·`setup-token`·401 등)을 `auth_expired`로 분류해 실패 횟수에 넣지 않고, 같은 sweep·같은 정기 회차의 남은 LLM 실행을 띄우지 않는다(다음 회차가 다시 한 건으로 확인). 보드는 같은 원인의 실패를 "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token" 카드 한 장으로 묶고, 세션 시작은 같은 실패에 한 번 안내한다. 다시 로그인한 뒤 실행이 정상으로 돌면 카드와 안내가 사라진다. 이전 버전에서 로그인 만료로 쌓인 실패 횟수는 로그로 판정해 한 번 빼므로 포기된 저장소·에러가 다시 시도된다(로그가 이미 정리돼 판정할 수 없는 실패는 그대로 센다) (#315)
 
 ### 업데이트 후 해야 할 일
 
-- 다음 sync는 기록된 해시와 같은 진입점을 템플릿에서 다시 만듭니다. 에이전트가 예전에 진입점에 넣어 둔 프로젝트별 문구가 있다면 `.ai-harness/workflows/<워크플로>.md`로 옮기세요. (#316)
+- 업데이트 후 첫 sync는 예전에 손으로 렌더한 워크플로 진입점을 템플릿에서 다시 만들고 사람 확인으로 넘깁니다. 진입점에 넣어 둔 저장소별 줄(예: 특정 경로를 다른 스킬로 보내는 라우팅)은 diff에서 확인해 `.ai-harness/workflows/<워크플로>.md`로 옮기세요 — 진입점은 이후 sync마다 템플릿에서 다시 만들어집니다. (#316)
 
 ## v0.72.0 (2026-11-13)
 ### 새 기능

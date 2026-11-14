@@ -1050,6 +1050,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (i.kind === 'autofix') return humanTitle(i.title) || fallbackTitle(i.title, i.project);
     const t = String(i.title || ''), k = KIND[i.kind] || '하네스 동작';
     if (srcOf(i) === 'harness') {
+      if (i.reason === 'auth_expired') return t;  // 여러 무인 실행을 묶은 로그인 만료 카드: 제목이 곧 할 일이다
       if (i.fail_reason) return `${k} 실행 실패 — ${i.fail_reason}${i.streak >= 2 ? ` · ${i.streak}번 연속` : ''}`;
       if (CODE_KO[t]) return CODE_KO[t];
       let m;
@@ -1432,7 +1433,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
 
   // ---- 자동 수정 탭: 한 줄 상황 + 후보 ----
-  const AF_FAIL = { usage_limit: '사용량 한도', missing_pr_url: '이 저장소 PR 주소를 남기지 않음', agent_error: '에이전트 오류' };
+  const AF_FAIL = { usage_limit: '사용량 한도', auth_expired: '로그인 만료 — claude auth login 또는 claude setup-token', missing_pr_url: '이 저장소 PR 주소를 남기지 않음', agent_error: '에이전트 오류' };
   const AF_RESULT = { pr_opened: 'PR을 열었음', left_for_user: '사람 판단 필요', not_code_bug: '코드 버그 아님', not_reproducible: '재현 불가', no_result: '결과 없음' };
   const AF_REASON = { new: ['waiting', '후보'], regressed: ['danger', '재발'], reappeared: ['danger', '다시 나옴'], retry: ['waiting', '다시 시도 대기'], stale_attempt: ['waiting', '멈춘 시도 다시 대기'], cooldown_over: ['waiting', '넘긴 지 유예 끝남'] };
   const AF_REASON_TEXT = { new: '처음 보는 에러입니다.', regressed: '고친 뒤 다시 나왔습니다.', reappeared: '해결된 뒤 다시 목록에 올랐습니다.', retry: '지난 실행이 일시적으로 실패해 다시 시도합니다.', stale_attempt: '지난 시도가 끝나지 않아 다시 시도합니다.', cooldown_over: '사람에게 넘긴 뒤 유예 기간이 끝났습니다.' };

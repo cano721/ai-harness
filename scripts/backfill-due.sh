@@ -75,6 +75,8 @@ if [[ "${1:-}" == "--worker" ]]; then
     schedule_log off
   elif llm_steps_ready; then
     schedule_log ran
+    # 이 회차에서 무인 실행이 로그인 만료로 실패하면 뒤 단계(자동 수정)는 띄우지 않는다(#315).
+    export HM_LLM_TICK_STARTED_AT="$WORKER_STARTED_AT"
     [[ "${HM_DIGEST:-0}" == "1" ]] && { nice -n 10 "$DIR/digest.sh" run >/dev/null 2>&1 || true; }
     "$DIR/harvest-auto.sh" sweep >/dev/null 2>&1 || true
     # 모니터링 기반 자동 수정: 검증(LLM 없음) 뒤, 무인 실행이 비어 있으면 새 에러 1건을 고친다.
