@@ -36,6 +36,13 @@
       "mode": "copy"
     },
     {
+      "path": ".ai-harness/workflows/investigate-graph.json",
+      "level": "standard",
+      "workflow": "investigate",
+      "source": "templates/investigate/references/investigate-graph.json",
+      "mode": "copy"
+    },
+    {
       "path": ".agents/skills/implement-feature/SKILL.md",
       "level": "standard",
       "integration": "codex",
@@ -57,6 +64,14 @@
       "integration": "codex",
       "workflow": "review",
       "source": "templates/review/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".agents/skills/investigate/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "investigate",
+      "source": "templates/investigate/SKILL.md",
       "mode": "render"
     },
     {
@@ -85,6 +100,15 @@
       "source": "templates/review/SKILL.md",
       "mode": "render",
       "argument_hint": "<PR 번호, 브랜치, 또는 diff>"
+    },
+    {
+      "path": ".claude/commands/investigate.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "investigate",
+      "source": "templates/investigate/SKILL.md",
+      "mode": "render",
+      "argument_hint": "<증상 설명 또는 이슈 번호>"
     },
     {
       "path": ".agents/skills/declarative-code/SKILL.md",

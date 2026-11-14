@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "project-template",
+  "name": "investigate",
+  "entry": "triage",
+  "terminals": ["done", "user_decision"],
+  "nodes": {
+    "triage": {"write": false, "output": "bug_facts"},
+    "baseline": {"write": false, "network": true, "output": "code_baseline"},
+    "domain_docs": {"write": false, "output": "domain_facts"},
+    "reproduce": {"write": false, "commands": true, "output": "reproduction_evidence"},
+    "report": {"write": false, "output": "investigation_report"},
+    "handoff": {"write": false, "output": "fix_bug_handoff"},
+    "done": {"write": false, "output": "investigation_handoff"},
+    "user_decision": {"write": false, "output": "blocker_report"}
+  },
+  "transitions": [
+    {"from": "triage", "to": "baseline"},
+    {"from": "baseline", "to": "domain_docs"},
+    {"from": "domain_docs", "to": "reproduce"},
+    {"from": "reproduce", "to": "report", "when": "reproduced_or_evidence_sufficient"},
+    {"from": "reproduce", "to": "user_decision", "when": "cannot_reproduce_and_no_observation_plan"},
+    {"from": "report", "to": "done", "when": "no_code_fix_needed"},
+    {"from": "report", "to": "handoff", "when": "code_fix_needed"},
+    {"from": "handoff", "to": "done"}
+  ],
+  "invariants": [
+    "The investigation never edits code: no node writes, creates, or deletes a file in the repository, changes the index, or moves a branch; scratch scripts, logs, the report, and drafts live outside the working tree.",
+    "Code is read at the remote base branch: baseline fetches origin and, when the local checkout is behind origin/<base>, reads files with git show origin/<base>:<path> instead of the working tree; the report names the commit it read.",
+    "A cause is not reported without reproduction or explicit equivalent evidence (logs, data, or a falsifiable hypothesis with a safe observation plan); otherwise the run ends at user_decision with what a person must provide.",
+    "Writes to external systems (issue comments, tracker transitions, chat messages) are drafts saved next to the report; a person posts them.",
+    "A needed code fix is handed to fix-bug with the report path; fix-bug then starts from its brief instead of repeating triage and reproduce."
+  ]
+}

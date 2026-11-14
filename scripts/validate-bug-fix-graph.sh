@@ -32,6 +32,11 @@ has_transition() {
 has_transition triage reproduce
 has_transition reproduce brief reproduced_or_evidence_sufficient
 has_transition reproduce user_decision cannot_reproduce_and_no_observation_plan
+# 재현을 건너뛰는 전이는 조사 보고(/investigate)를 받았을 때만 있다. 옛 그래프에는 없어도 된다.
+jq -e '[.transitions[] | select(.from == "triage" and .to != "reproduce")] | all(.to == "brief" and .when == "investigation_report_provided")' "$graph_path" >/dev/null || {
+  printf 'triage may skip reproduce only with an investigation report\n' >&2
+  exit 1
+}
 has_transition brief approval
 has_transition approval regression user_explicitly_approved
 has_transition approval regression auto_approved_by_policy

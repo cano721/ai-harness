@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investigate"
+  short_description: "Find and explain a bug's root cause without changing code."
+  default_prompt: "Use the generated $investigate entrypoint to find the root cause of this problem with evidence, without changing code, and write the investigation report: $ARGUMENTS"
