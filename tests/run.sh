@@ -518,6 +518,10 @@ assert_contains "$HARNESS_INIT_CONTENT" 'notify_when_idle: true' "workspace hand
 assert_contains "$HARNESS_INIT_CONTENT" '알림은 worker 가 **턴을 끝낼 때마다** 한 번 오며 완료를 뜻하지 않는다' "a turn-end notice is not treated as completion"
 assert_contains "$HARNESS_INIT_CONTENT" '권한 모드는 조율 세션과 맞춘다' "the background worker matches the coordinator's permission mode so messages are not held"
 assert_contains "$HARNESS_INIT_CONTENT" 'claude respawn <id>' "a background session stuck without a transcript restarts only that session"
+assert_contains "$HARNESS_INIT_CONTENT" "진행 방식의 **첫 지시**는 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라는 것이다" "workspace handoff opens with reading the member workflow file, not just its name"
+assert_contains "$HARNESS_INIT_CONTENT" '러너 시작 명령(`bash .ai-harness/workflows/workflow-driver.sh start' "workspace handoff names the runner start command when the member has one"
+assert_contains "$HARNESS_INIT_CONTENT" 'Preflight 의 워크플로 선택을 건너뛴다' "workspace handoff explains why a workflow name alone is not enough"
+assert_contains "$HARNESS_INIT_CONTENT" '③ 인계 프롬프트에 멤버 워크플로 파일 Read 지시가 없음' "workspace sync flags a Preflight whose handoff omits the workflow file read"
 [[ "$HARNESS_INIT_CONTENT" != *'respawn --all 후'* ]] || fail "handoff does not restart every background session"
 assert_contains "$HARNESS_INIT_CONTENT" '메시지 없이 — 구독만 하고 worker 를 방해하지 않는다' "the turn-end subscription sends no message to the worker"
 assert_contains "$HARNESS_INIT_CONTENT" '사용자가 Orca 감독을 요청했거나 재시도·의존 관계 관리가 필요하면' "Orca supervision is an opt-in path, not the default"
@@ -3730,6 +3734,47 @@ case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project exc
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
 pass "session ratio metrics"
 
+# 워크플로 대상 세션 경유: 조회·CI 설정·문서만 고친 세션은 기능·버그 워크플로 대상이 아니므로 분모에서 뺀다.
+# 대상 = 워크플로 경유 또는 구현 페르소나(developer·*implementer·test-engineer) 위임 또는 코드 파일 편집.
+TARGET_DATA="$TEST_TMP/target-ratio-data"
+mkdir -p "$TARGET_DATA/events"
+target_session() { # sid [events-json...] — 프로젝트는 TARGET_PROJECT(기본 svc)
+  local sid="$1" project="${TARGET_PROJECT:-svc}"; shift
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+      ended:"2026-10-10T01:00:00Z", turns:6, coverage:["workflow","doc_read","persona","file_edit"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$TARGET_DATA/events/claude-$sid.jsonl"
+}
+target_session t1 '{"kind":"doc_read","target":".ai-harness/workflows/fix-bug.md"}'
+target_session t2 '{"kind":"persona","target":"developer"}'
+target_session t3 '{"kind":"file_edit","target":"/repo/src/main/App.java"}'
+target_session t4 '{"kind":"persona","target":"fe-implementer"}'
+target_session t5 '{"kind":"file_edit","target":"/repo/bitbucket-pipelines.yml"}' \
+  '{"kind":"file_edit","target":"/repo/build.gradle.kts"}' '{"kind":"file_edit","target":"/repo/.ai-harness/docs/domain.md"}' \
+  '{"kind":"file_edit","target":"/repo/Dockerfile"}' '{"kind":"file_edit","target":"/repo/.claude/settings.json"}'
+target_session t6 '{"kind":"persona","target":"explorer"}' \
+  '{"kind":"file_edit","target":"/tmp/claude-1/scratchpad/plan.py"}' '{"kind":"file_edit","target":"/repo/handoffs/next.md"}' \
+  '{"kind":"file_edit","target":"/home/u/.claude/projects/x/memory/note.ts"}'
+target_session t7
+# Claude Code worktree 안의 코드 편집은 하네스 설정(.claude/) 편집이 아니다.
+target_session t8 '{"kind":"file_edit","target":".claude/worktrees/w1/src/Main.kt"}'
+# 파일 이름이 없는 target(Codex patch 경로가 디렉토리에서 잘림)·대체값은 코드 편집 근거가 아니다.
+target_session t9 '{"kind":"file_edit","target":"/repo/docs/"}' '{"kind":"file_edit","target":"apply_patch"}' '{"kind":"file_edit"}' \
+  '{"kind":"file_edit","target":".claude/worktrees/w2/README.md"}'
+target_session t10 '{"kind":"file_edit","target":"/repo/dockerfile"}' '{"kind":"file_edit","target":"/repo/deploy/app.Dockerfile"}'
+# 대상 세션이 없는 하네스 프로젝트는 대상 경유를 `-`로 낸다.
+TARGET_PROJECT=web target_session w1 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}'
+TARGET_STATS="$(HARNESS_METRICS_DIR="$TARGET_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$TARGET_STATS" "| 워크플로 경유 세션 | 9% (1/11) |" "overall workflow ratio keeps every harness-project active session"
+assert_contains "$TARGET_STATS" "| 워크플로 대상 세션 경유 | 20% (1/5) |" "target ratio counts only implementation sessions"
+assert_contains "$TARGET_STATS" "| 프로젝트 | 워크플로 경유 | 대상 경유 |" "per-project table has a target column"
+assert_contains "$TARGET_STATS" "| svc | 10% (1/10) | 20% (1/5) |" "per-project target ratio"
+assert_contains "$TARGET_STATS" "| web | 0% (0/1) | - |" "project without target sessions shows no target ratio"
+pass "workflow target session ratio"
+
 # 날짜 구간 필터: 설치일 전후처럼 특정 날짜로 자른다. until은 그 날을 포함하지 않는다.
 RANGE_DATA="$TEST_TMP/range-data"
 mkdir -p "$RANGE_DATA/events"
@@ -4087,6 +4132,8 @@ assert_eq "1|true" "$(jq -sr --arg b "$AUTO_LEGACY_KEY" '[.[] | select(.event=="
 # 분류는 API 오류로 끝난 결과 줄만 문구로 본다 — 작업 실패 보고에 같은 문구가 섞여도 로그인 만료가 아니다.
 af_reason() { printf '%s\n' "$1" | jq -Rrn -L "$ROOT/scripts" 'include "fail-reason"; log_fail_reason'; }
 assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"api_error_status":401,"result":"x"}')" "a 401 is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth session expired and could not be refreshed"}')" "an expired OAuth session without the authenticate prefix is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth token has expired"}')" "an expired OAuth token is still an expired login"
 assert_eq "agent_error" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"max_turns","result":"setup-token 문서를 고치다 실패"}')" "a work failure mentioning setup-token is not an expired login"
 assert_eq "" "$(af_reason '{"type":"result","is_error":false,"result":"claude auth login 안내를 추가함"}')" "a successful run is not a failure"
 pass "a harvest batch given up for expired logins is retried and the classifier ignores work reports"
@@ -4554,6 +4601,7 @@ assert_contains "$(<"$GW/err")" 'cd jobda && claude --bg -n <인계 이름> "<�
 assert_contains "$(<"$GW/err")" 'notify_when_idle: true' "block message waits on the background session's turn-end notice"
 assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message keeps Orca supervision as an option when the user wants it"
 assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
+assert_contains "$(<"$GW/err")" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "block message tells the handoff to open by reading the member workflow file"
 [[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
@@ -5568,17 +5616,19 @@ rw_commit() { # file author epoch
     GIT_COMMITTER_NAME="$2" GIT_COMMITTER_EMAIL="$2@example.com" GIT_COMMITTER_DATE="@$3" \
     git -C "$RW_REPO" commit -q -m "$1"
 }
-rw_merge() { # branch pr epoch
+rw_merge() { # branch pr epoch [title]
+  local body=()
+  [[ -n "${4:-}" ]] && body=(-m "$4")
   GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.com GIT_AUTHOR_DATE="@$3" \
     GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.com GIT_COMMITTER_DATE="@$3" \
-    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)"
+    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)" ${body[@]+"${body[@]}"}
 }
 DAY=86400
 T0=1790000000
 rw_commit base me "$T0"
 # PR #1 (NJ-1): 내 PR, 머지 T0+1d. PR #2: 같은 키를 머지 하루 뒤에 시작 → 재작업.
-git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY))
-git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY)) "Add login form"
+git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY)) "Fix login validation"
 # PR #3 (NJ-2)와 #4: #4는 #3 머지 전에 시작한 분할 PR → 재작업 아님.
 git -C "$RW_REPO" switch -q -c feature/NJ-2-b; rw_commit c me $((T0 + 3 * DAY)); git -C "$RW_REPO" switch -q develop
 git -C "$RW_REPO" switch -q -c feature/NJ-2; rw_commit d me $((T0 + 3 * DAY + 100)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-2 3 $((T0 + 4 * DAY))
@@ -5602,6 +5652,25 @@ assert_eq "20" "$(jq -r '.rework_ratio' <<<"$RW")" "rework ratio is rework over 
 RW_WIDE="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)))"
 assert_eq "1:2,6:7" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW_WIDE")" "a wider window catches the late follow-up"
 pass "rework ratio from merge history"
+
+# 재작업 판정: 후속 PR에 제목을 붙이고, 판정 파일(TSV)로 결함 수정(defect)만 재작업으로 센 보정값을 낸다. 판정 없는 후속은 재작업으로 둔다.
+assert_eq "Add login form|Fix login validation|Merged in feature/NJ-4 (pull request #6)" \
+  "$(jq -r '[.rework[0].title, .rework[0].followups[0].title, .rework[1].title] | join("|")' <<<"$RW_WIDE")" "rework titles come from the merge body first line, else the subject"
+assert_eq "false" "$(jq -r 'has("judged_ratio") or has("judged_rework_prs") or has("unjudged")' <<<"$RW_WIDE")" "without --judgments no judged keys appear"
+RW_J="$TEST_TMP/rework-judgments.tsv"
+printf '# repo\torig\tfollowup\tverdict\tnote\n\nrework-repo\t1\t2\tscope\tagreed extra field\n' >"$RW_J"
+RW_JUDGED="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J")"
+assert_eq "28.6|1|14.3|rework-repo:6:7" \
+  "$(jq -r '"\(.rework_ratio)|\(.judged_rework_prs)|\(.judged_ratio)|\([.unjudged[] | "\(.repo):\(.pr):\(.followup)"] | join(","))"' <<<"$RW_JUDGED")" "non-defect follow-ups leave judged rework, unjudged ones stay"
+assert_eq "scope:agreed extra field|null" "$(jq -r '"\(.rework[0].followups[0].verdict):\(.rework[0].followups[0].note)|\(.rework[1].followups[0].verdict)"' <<<"$RW_JUDGED")" "follow-ups carry their verdict"
+printf 'rework-repo\t1\t2\tdefect\nrework-repo\t06\t7\tplanned\n' >"$RW_J"
+assert_eq "1|14.3|0" "$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J" | jq -r '"\(.judged_rework_prs)|\(.judged_ratio)|\(.unjudged | length)"')" "a defect follow-up keeps the rework"
+printf 'rework-repo\t1\t2\tbug\n' >"$RW_J"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$RW_J" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "an unknown verdict is a usage error"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$TEST_TMP/no-such.tsv" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "a missing judgments file is a usage error"
+pass "rework judgments"
 
 # 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
 PLACE_ROOT="$TEST_TMP/place-project"
@@ -8955,6 +9024,48 @@ ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$
 assert_eq "0" "$(jq '[.items[] | select(.reason == "auth_expired" or .project == "a1" or .project == "a2")] | length' <<<"$ST_OUT")" "a run that worked afterwards clears the expired-login card"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "i.reason === 'auth_expired'" "the board shows the expired-login title as is"
 pass "board status folds expired-login failures into one card that clears after a working run"
+
+# 로그인 만료 후속(#326): 자동 수정만 쓰는 사용자도 묶음 카드를 받고, 세션 안내와 보드는 같은 기준(마지막 성공 실행 이후인가)으로 판정한다.
+# 로그인 만료 뒤 에이전트를 띄우지 못한 실패(exit 70)는 성공이 아니므로 안내도 카드도 남는다.
+ST_AF="$ST_T/af-data"
+mkdir -p "$ST_AF/autofix"
+st_af_fin() { # $1=분 전 $2=project $3=outcome $4=exit_code $5=log $6=덧붙일 JSON 객체
+  local extra="${6:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg at "$(st_ago "$1")" --arg p "$2" --arg o "$3" --argjson e "$4" --arg log "$5" --argjson x "$extra" \
+    '{at: $at, event: "finished", project: $p, signature: "sig-1", outcome: $o, exit_code: $e, log: $log} + $x'
+}
+{
+  st_af_fin 30 af-svc failed 1 "$ST_T/logs/auth-1.log" '{"reason": "auth_expired"}'
+  st_af_fin 20 af-svc failed 70 "$ST_T/logs/none-af70.log"
+} >"$ST_AF/autofix/runs.jsonl"
+st_af_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AF" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh"
+}
+st_af_notify() { HARNESS_METRICS_DIR="$ST_AF" "$ROOT/scripts/harvest-auto.sh" notify; }
+ST_AF_CARD="$(st_af_status | jq -c '[.items[] | select(.reason == "auth_expired")]')"
+assert_eq "1|needs_human" "$(jq -r 'length' <<<"$ST_AF_CARD")|$(jq -r '.[0].state // ""' <<<"$ST_AF_CARD")" "an expired login in an autofix run is the same bundled card, without any harvest run"
+assert_contains "$(jq -r '.[0].detail // ""' <<<"$ST_AF_CARD")" "af-svc(autofix)" "the card names the stopped autofix target"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a failure that launched no agent after the expired login keeps the session notice, like the board"
+assert_eq "" "$(st_af_notify)" "the notice is still shown once per failure"
+st_af_fin 10 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | length')" "an autofix run that worked afterwards clears the card"
+st_af_fin 5 af-svc failed 1 "$ST_T/logs/auth-2.log" '{"reason": "auth_expired"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer expired login after a working run is told again"
+st_af_fin 1 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "" "$(st_af_notify)" "a working run after the expired login clears the notice"
+# 이전 버전이 agent_error로 남긴 자동 수정 실패는 로그로 판정한다: 인증 실패 로그면 카드·안내에 넣고, 다른 실패 로그는 건너뛰어 그 전의 로그인 만료를 찾는다.
+st_af_fin 0 af-old failed 1 "$ST_T/logs/auth-1.log" '{"reason": "agent_error"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_status | jq -r '[.items[] | select(.reason == "auth_expired")] | .[0].detail // ""')" "af-old(autofix)" "a legacy autofix failure whose log is an expired login joins the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "and is told at session start"
+jq -cn --arg at "$(st_ago 0)" --arg log "$ST_T/logs/auth-other.log" \
+  '{at: $at, event: "finished", project: "af-other", signature: "sig-2", outcome: "failed", exit_code: 1, reason: "agent_error", log: $log}' >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | .[0].detail // "" | test("af-other") | if . then 1 else 0 end')" "a legacy failure with another log stays out of the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer unrelated failure does not hide the earlier expired login"
+pass "the session notice and the board agree on expired logins, autofix included"
 
 # 여러 Claude 설정 폴더(#296): work.sh가 기본 폴더·서버 환경의 폴더·프로필 자동 감지·사용자 지정 폴더마다 claude agents를 불러 sessionId로 합친다.
 # HOME을 바꾸지 않고 환경변수로만 격리한다(서버 환경에 CLAUDE_CONFIG_DIR이 있을 수 있어 명시적으로 빼거나 지정한다).
