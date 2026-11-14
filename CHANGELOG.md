@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 동작 변경
+
+- **workspace 인계 프롬프트가 멤버 워크플로 파일부터 읽게 합니다** — 인계에 워크플로 이름만 적으면, 범위·결정이 다 주어진 인계를 받은 멤버 세션이 Preflight의 워크플로 선택을 건너뛰고 워크플로 본문·그래프를 읽지 않았습니다. 이제 workspace Preflight ③은 인계 프롬프트의 첫 지시로 멤버 워크플로 파일(`.ai-harness/workflows/<name>.md`)을 Read 하고 그 그래프대로 진행하라고 쓰게 하고, 멤버에 러너가 있으면 러너 시작 명령도 적게 합니다. 멤버 편집 가드의 차단 메시지도 같은 내용을 안내합니다. 기존 workspace AGENTS.md에 반영하려면 `/ai-harness:harness-init` sync (#324)
+
 ## v0.72.0 (2026-11-13)
 ### 새 기능
 
