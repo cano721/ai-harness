@@ -518,6 +518,10 @@ assert_contains "$HARNESS_INIT_CONTENT" 'notify_when_idle: true' "workspace hand
 assert_contains "$HARNESS_INIT_CONTENT" '알림은 worker 가 **턴을 끝낼 때마다** 한 번 오며 완료를 뜻하지 않는다' "a turn-end notice is not treated as completion"
 assert_contains "$HARNESS_INIT_CONTENT" '권한 모드는 조율 세션과 맞춘다' "the background worker matches the coordinator's permission mode so messages are not held"
 assert_contains "$HARNESS_INIT_CONTENT" 'claude respawn <id>' "a background session stuck without a transcript restarts only that session"
+assert_contains "$HARNESS_INIT_CONTENT" "진행 방식의 **첫 지시**는 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라는 것이다" "workspace handoff opens with reading the member workflow file, not just its name"
+assert_contains "$HARNESS_INIT_CONTENT" '러너 시작 명령(`bash .ai-harness/workflows/workflow-driver.sh start' "workspace handoff names the runner start command when the member has one"
+assert_contains "$HARNESS_INIT_CONTENT" 'Preflight 의 워크플로 선택을 건너뛴다' "workspace handoff explains why a workflow name alone is not enough"
+assert_contains "$HARNESS_INIT_CONTENT" '③ 인계 프롬프트에 멤버 워크플로 파일 Read 지시가 없음' "workspace sync flags a Preflight whose handoff omits the workflow file read"
 [[ "$HARNESS_INIT_CONTENT" != *'respawn --all 후'* ]] || fail "handoff does not restart every background session"
 assert_contains "$HARNESS_INIT_CONTENT" '메시지 없이 — 구독만 하고 worker 를 방해하지 않는다' "the turn-end subscription sends no message to the worker"
 assert_contains "$HARNESS_INIT_CONTENT" '사용자가 Orca 감독을 요청했거나 재시도·의존 관계 관리가 필요하면' "Orca supervision is an opt-in path, not the default"
@@ -3730,6 +3734,47 @@ case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project exc
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
 pass "session ratio metrics"
 
+# 워크플로 대상 세션 경유: 조회·CI 설정·문서만 고친 세션은 기능·버그 워크플로 대상이 아니므로 분모에서 뺀다.
+# 대상 = 워크플로 경유 또는 구현 페르소나(developer·*implementer·test-engineer) 위임 또는 코드 파일 편집.
+TARGET_DATA="$TEST_TMP/target-ratio-data"
+mkdir -p "$TARGET_DATA/events"
+target_session() { # sid [events-json...] — 프로젝트는 TARGET_PROJECT(기본 svc)
+  local sid="$1" project="${TARGET_PROJECT:-svc}"; shift
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+      ended:"2026-10-10T01:00:00Z", turns:6, coverage:["workflow","doc_read","persona","file_edit"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$TARGET_DATA/events/claude-$sid.jsonl"
+}
+target_session t1 '{"kind":"doc_read","target":".ai-harness/workflows/fix-bug.md"}'
+target_session t2 '{"kind":"persona","target":"developer"}'
+target_session t3 '{"kind":"file_edit","target":"/repo/src/main/App.java"}'
+target_session t4 '{"kind":"persona","target":"fe-implementer"}'
+target_session t5 '{"kind":"file_edit","target":"/repo/bitbucket-pipelines.yml"}' \
+  '{"kind":"file_edit","target":"/repo/build.gradle.kts"}' '{"kind":"file_edit","target":"/repo/.ai-harness/docs/domain.md"}' \
+  '{"kind":"file_edit","target":"/repo/Dockerfile"}' '{"kind":"file_edit","target":"/repo/.claude/settings.json"}'
+target_session t6 '{"kind":"persona","target":"explorer"}' \
+  '{"kind":"file_edit","target":"/tmp/claude-1/scratchpad/plan.py"}' '{"kind":"file_edit","target":"/repo/handoffs/next.md"}' \
+  '{"kind":"file_edit","target":"/home/u/.claude/projects/x/memory/note.ts"}'
+target_session t7
+# Claude Code worktree 안의 코드 편집은 하네스 설정(.claude/) 편집이 아니다.
+target_session t8 '{"kind":"file_edit","target":".claude/worktrees/w1/src/Main.kt"}'
+# 파일 이름이 없는 target(Codex patch 경로가 디렉토리에서 잘림)·대체값은 코드 편집 근거가 아니다.
+target_session t9 '{"kind":"file_edit","target":"/repo/docs/"}' '{"kind":"file_edit","target":"apply_patch"}' '{"kind":"file_edit"}' \
+  '{"kind":"file_edit","target":".claude/worktrees/w2/README.md"}'
+target_session t10 '{"kind":"file_edit","target":"/repo/dockerfile"}' '{"kind":"file_edit","target":"/repo/deploy/app.Dockerfile"}'
+# 대상 세션이 없는 하네스 프로젝트는 대상 경유를 `-`로 낸다.
+TARGET_PROJECT=web target_session w1 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}'
+TARGET_STATS="$(HARNESS_METRICS_DIR="$TARGET_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$TARGET_STATS" "| 워크플로 경유 세션 | 9% (1/11) |" "overall workflow ratio keeps every harness-project active session"
+assert_contains "$TARGET_STATS" "| 워크플로 대상 세션 경유 | 20% (1/5) |" "target ratio counts only implementation sessions"
+assert_contains "$TARGET_STATS" "| 프로젝트 | 워크플로 경유 | 대상 경유 |" "per-project table has a target column"
+assert_contains "$TARGET_STATS" "| svc | 10% (1/10) | 20% (1/5) |" "per-project target ratio"
+assert_contains "$TARGET_STATS" "| web | 0% (0/1) | - |" "project without target sessions shows no target ratio"
+pass "workflow target session ratio"
+
 # 날짜 구간 필터: 설치일 전후처럼 특정 날짜로 자른다. until은 그 날을 포함하지 않는다.
 RANGE_DATA="$TEST_TMP/range-data"
 mkdir -p "$RANGE_DATA/events"
@@ -4073,6 +4118,25 @@ done
 assert_eq "3" "$(auto_runs '(map(select(.event=="started")) | last | .batch) as $b | [.[] | select(.event=="finished" and .batch==$b)] | length')" "a failing batch runs at most three times"
 assert_eq "gave_up" "$(auto_runs 'last | .reason')" "then it is given up"
 assert_eq "gave_up" "$(jq -r '.result' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "and stays given up"
+# 로그인 만료(#315): 이전 버전이 인증 실패를 세어 포기한 batch는 로그로 판정해 다시 시도한다.
+printf '%s\n' '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate. Run claude auth login"}' >"$TEST_TMP/auto-legacy-auth.log"
+jq -cn '{batch_id:"b-legacy",at:"2026-01-01T00:00:00Z",result:"gave_up",fails:3}' >"$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch"
+for _ in 1 2 3; do
+  jq -cn --arg b "$(printf '%s' b-legacy | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)" --arg l "$TEST_TMP/auto-legacy-auth.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"auto-svc",batch:$b,scope:"project",result:"failed",exit_code:1,reason:"agent_error",log:$l}' \
+    >>"$AUTO_DATA/harvest-auto/runs.jsonl"
+done
+AUTO_LEGACY_KEY="$(printf '%s' b-legacy | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=99 HM_HARVEST_AUTO_AGENT=claude auto_trigger "$(auto_status auto-svc b-legacy)" "$AUTO_REPO"
+assert_eq "1|true" "$(jq -sr --arg b "$AUTO_LEGACY_KEY" '[.[] | select(.event=="started" and .batch==$b)] | length' "$AUTO_DATA/harvest-auto/runs.jsonl")|$(jq -r '.auth_checked' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "a batch given up only for expired logins runs again"
+# 분류는 API 오류로 끝난 결과 줄만 문구로 본다 — 작업 실패 보고에 같은 문구가 섞여도 로그인 만료가 아니다.
+af_reason() { printf '%s\n' "$1" | jq -Rrn -L "$ROOT/scripts" 'include "fail-reason"; log_fail_reason'; }
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"api_error_status":401,"result":"x"}')" "a 401 is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth session expired and could not be refreshed"}')" "an expired OAuth session without the authenticate prefix is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth token has expired"}')" "an expired OAuth token is still an expired login"
+assert_eq "agent_error" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"max_turns","result":"setup-token 문서를 고치다 실패"}')" "a work failure mentioning setup-token is not an expired login"
+assert_eq "" "$(af_reason '{"type":"result","is_error":false,"result":"claude auth login 안내를 추가함"}')" "a successful run is not a failure"
+pass "a harvest batch given up for expired logins is retried and the classifier ignores work reports"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
@@ -4537,6 +4601,7 @@ assert_contains "$(<"$GW/err")" 'cd jobda && claude --bg -n <인계 이름> "<�
 assert_contains "$(<"$GW/err")" 'notify_when_idle: true' "block message waits on the background session's turn-end notice"
 assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message keeps Orca supervision as an option when the user wants it"
 assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
+assert_contains "$(<"$GW/err")" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "block message tells the handoff to open by reading the member workflow file"
 [[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
 assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
@@ -5076,6 +5141,46 @@ assert_eq "manifest_policy_changed" "$(am_check --scope sync --head "$(am_commit
 am_sync_head s-render
 mkdir -p "$AM_REPO/.claude/commands" && printf 'x\n' >"$AM_REPO/.claude/commands/review.md"
 assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit render)")" "a render artifact needs a person"
+# render 파일도 스크립트 결과와 바이트 같으면 기계적으로 검증된다(#316). 한 글자라도 다르면 지금처럼 사람에게.
+am_sync_head s-render-ok
+mkdir -p "$AM_REPO/.claude/commands"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
+assert_eq "render_unmarked:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderunmarked)")" "a new render must be recorded with the renderer mark"
+am_manifest ".managed_files[\".claude/commands/review.md\"].renderer = 1"
+assert_eq "ok" "$(am_check --scope sync --head "$(am_commit renderok)")" "a render artifact equal to the render script passes"
+am_sync_head s-render-edit
+mkdir -p "$AM_REPO/.claude/commands"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+printf ' ' >>"$AM_REPO/.claude/commands/review.md"
+am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
+assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderedit)")" "a render artifact one byte off needs a person"
+# 예전 손 렌더(저장소 맞춤 포함)가 기록된 저장소: 해시가 맞아도 base manifest에 renderer 표시가 없으면 첫 결정적
+# render PR은 사람이 본다. 표시는 base(대상 브랜치) 것만 믿는다 — head에 표시를 넣어도 통과하지 않는다.
+am_render_base() { # name renderer-mark(0|1) → origin/<name>: 옛 진입점이 기록된 기준 브랜치
+  git -C "$AM_REPO" checkout -q -B "$1" develop
+  mkdir -p "$AM_REPO/.claude/commands"
+  # shellcheck disable=SC2016  # $ARGUMENTS는 옛 진입점의 자리표시자 문자열이다
+  printf -- '---\ndescription: old\n---\n\n- team routing line\n\n요청: $ARGUMENTS\n' >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"} + (if $2 == 1 then {renderer: 1} else {} end)"
+  git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m "$1"
+  git -C "$AM_REPO" update-ref "refs/remotes/origin/$1" "$1"
+}
+am_render_head() { # base branch → 옛 진입점을 스크립트 결과로 바꾼 sync 커밋
+  am_on "$1" "$2"
+  "$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".harness_version = \"9.9.9\" | .managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\", renderer: 1}"
+  am_commit "$2"
+}
+am_render_base render-unmarked 0
+assert_eq "render_first:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-unmarked --scope sync --head "$(am_render_head render-unmarked s-render-first)")" "the first deterministic render over an unmarked hand render needs a person"
+am_render_base render-marked 1
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-marked --scope sync --head "$(am_render_head render-marked s-render-next)")" "a render over a marked deterministic render passes"
+# 표시가 있어도 base 파일을 사람이 고치고 다시 기록하지 않았으면 사람이 본다.
+am_render_base render-drift 1
+printf -- '- edited later\n' >>"$AM_REPO/.claude/commands/review.md"
+git -C "$AM_REPO" commit -q -am render-drift-edit && git -C "$AM_REPO" update-ref refs/remotes/origin/render-drift render-drift
+assert_eq "render_modified:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-drift --scope sync --head "$(am_render_head render-drift s-render-drift)")" "a marked render a person edited after recording needs a person"
 am_sync_head s-del
 git -C "$AM_REPO" rm -q app.js
 assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
@@ -5350,6 +5455,54 @@ HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_HA
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" \
   HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" "$ROOT/scripts/harvest-auto.sh" sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/chain-limit.out" | tr -d ' ')" "a usage-limited run does not chain the next one"
+# 로그인 만료(#315): 인증 실패 결과 줄은 auth_expired로 분류하고, 실패 횟수에 넣지 않으며, 같은 sweep의 다음 실행을 잇지 않는다.
+# 사람이 다시 로그인하기 전까지 반드시 실패하므로 MAX_FAILS 기회를 쓰지 않고, 남은 저장소를 같은 이유로 띄우지 않는다.
+CHAIN_AUTH="$TEST_TMP/chain-auth.sh"
+CHAIN_AUTH_LINE='{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login, or use claude setup-token and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs"}'
+# shellcheck disable=SC2016  # 스텁 본문의 $1은 스텁이 실행될 때 펼쳐진다
+printf '#!/usr/bin/env bash\necho "$1" >>"%s"\necho %s\nexit 1\n' "$TEST_TMP/chain-auth.out" "'$CHAIN_AUTH_LINE'" >"$CHAIN_AUTH"
+chmod +x "$CHAIN_AUTH"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+chain_auth_notify() { HARNESS_METRICS_DIR="$CHAIN_DATA" "$ROOT/scripts/harvest-auto.sh" notify; }
+CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-auth.out" | tr -d ' ')" "an expired login stops the sweep after the first run"
+assert_eq "failed|auth_expired" "$(jq -sr '[.[] | select(.event=="finished")] | last | "\(.result)|\(.reason)"' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "an expired login is recorded as auth_expired"
+CHAIN_AUTH_P="$(sed -n 1p "$TEST_TMP/chain-auth.out")"
+assert_eq "failed|0" "$(jq -r '"\(.result)|\(.fails)"' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")" "an expired login does not count as a failure"
+assert_eq "auth_expired" "$(jq -r '.components.sync_auto.last_error' "$CHAIN_DATA/health.json")" "health names the expired login"
+for _ in 1 2 3; do CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep; done
+assert_eq "4|$CHAIN_AUTH_P|0" "$(wc -l <"$TEST_TMP/chain-auth.out" | tr -d ' ')|$(sort -u "$TEST_TMP/chain-auth.out")|$(jq -r '.fails' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")" "repeated expired logins never use up the retries"
+CHAIN_AUTH_MSG="$(chain_auth_notify | jq -r '.systemMessage')"
+assert_contains "$CHAIN_AUTH_MSG" "claude auth login" "session start says the login expired"
+assert_contains "$CHAIN_AUTH_MSG" "claude setup-token" "and names the token for unattended runs"
+assert_eq "" "$(chain_auth_notify)" "the notice is shown once per failure"
+CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+# 에이전트를 띄우지 않고 끝난 sync는 로그인이 풀렸다는 근거가 아니다.
+jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"chain-x",scope:"sync",result:"no-change",exit_code:0,no_agent:true}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+assert_contains "$(chain_auth_notify | jq -r '.systemMessage')" "claude auth login" "a newer expired login is told again, even after a run that launched no agent"
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'harvest-auto.sh" notify' "session start asks for the expired-login notice"
+# 과거 버전은 인증 실패를 agent_error로 세어 fails:3으로 포기했다. 로그가 인증 실패인 지난 실패는 횟수에서 빼 다시 후보가 된다.
+# 로그가 인증 실패가 아닌 지난 실패는 그대로 센다.
+CHAIN_PLUGIN="$(jq -r '.plugin' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")"
+CHAIN_BATCH="$(printf '%s' "sync-$CHAIN_PLUGIN" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+printf '%s\n' "$CHAIN_AUTH_LINE" >"$TEST_TMP/chain-legacy-auth.log"
+printf '%s\n' '{"type":"result","is_error":true,"result":"tool failed"}' >"$TEST_TMP/chain-legacy-other.log"
+for CHAIN_N in 1 2 3; do
+  jq -cn --arg p "$CHAIN_PLUGIN" '{plugin:$p,at:"2026-01-01T00:00:00Z",result:"failed",fails:3}' >"$CHAIN_DATA/sync-auto/p-chain-$CHAIN_N.json"
+done
+jq -cn --arg p "$CHAIN_PLUGIN" '{plugin:$p,at:"2026-01-01T00:00:00Z",result:"improved",fails:0}' >"$CHAIN_DATA/sync-auto/p-chain-1.json"
+for _ in 1 2 3; do
+  jq -cn --arg b "$CHAIN_BATCH" --arg l "$TEST_TMP/chain-legacy-auth.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"chain-2",batch:$b,scope:"sync",result:"failed",exit_code:1,reason:"agent_error",log:$l}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+  jq -cn --arg b "$CHAIN_BATCH" --arg l "$TEST_TMP/chain-legacy-other.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"chain-3",batch:$b,scope:"sync",result:"failed",exit_code:1,reason:"agent_error",log:$l}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+done
+: >"$TEST_TMP/chain-stub.out"
+HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "chain-2" "$(cut -d'|' -f1 "$TEST_TMP/chain-stub.out" | sort -u | tr '\n' ' ' | sed 's/ $//')" "a target given up only for expired logins is tried again, others stay given up"
+assert_eq "" "$(chain_auth_notify)" "a run that worked after the expired login clears the notice"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+pass "an expired login is classified, not counted, stops the sweep and is told once"
 # 사용자가 다시 작업 중이면 잇지 않는다 — 다음 sweep(유휴 대기 포함)이 이어받는다.
 find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
 : >"$TEST_TMP/chain-stub.out"
@@ -5463,17 +5616,19 @@ rw_commit() { # file author epoch
     GIT_COMMITTER_NAME="$2" GIT_COMMITTER_EMAIL="$2@example.com" GIT_COMMITTER_DATE="@$3" \
     git -C "$RW_REPO" commit -q -m "$1"
 }
-rw_merge() { # branch pr epoch
+rw_merge() { # branch pr epoch [title]
+  local body=()
+  [[ -n "${4:-}" ]] && body=(-m "$4")
   GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.com GIT_AUTHOR_DATE="@$3" \
     GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.com GIT_COMMITTER_DATE="@$3" \
-    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)"
+    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)" ${body[@]+"${body[@]}"}
 }
 DAY=86400
 T0=1790000000
 rw_commit base me "$T0"
 # PR #1 (NJ-1): 내 PR, 머지 T0+1d. PR #2: 같은 키를 머지 하루 뒤에 시작 → 재작업.
-git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY))
-git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY)) "Add login form"
+git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY)) "Fix login validation"
 # PR #3 (NJ-2)와 #4: #4는 #3 머지 전에 시작한 분할 PR → 재작업 아님.
 git -C "$RW_REPO" switch -q -c feature/NJ-2-b; rw_commit c me $((T0 + 3 * DAY)); git -C "$RW_REPO" switch -q develop
 git -C "$RW_REPO" switch -q -c feature/NJ-2; rw_commit d me $((T0 + 3 * DAY + 100)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-2 3 $((T0 + 4 * DAY))
@@ -5497,6 +5652,25 @@ assert_eq "20" "$(jq -r '.rework_ratio' <<<"$RW")" "rework ratio is rework over 
 RW_WIDE="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)))"
 assert_eq "1:2,6:7" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW_WIDE")" "a wider window catches the late follow-up"
 pass "rework ratio from merge history"
+
+# 재작업 판정: 후속 PR에 제목을 붙이고, 판정 파일(TSV)로 결함 수정(defect)만 재작업으로 센 보정값을 낸다. 판정 없는 후속은 재작업으로 둔다.
+assert_eq "Add login form|Fix login validation|Merged in feature/NJ-4 (pull request #6)" \
+  "$(jq -r '[.rework[0].title, .rework[0].followups[0].title, .rework[1].title] | join("|")' <<<"$RW_WIDE")" "rework titles come from the merge body first line, else the subject"
+assert_eq "false" "$(jq -r 'has("judged_ratio") or has("judged_rework_prs") or has("unjudged")' <<<"$RW_WIDE")" "without --judgments no judged keys appear"
+RW_J="$TEST_TMP/rework-judgments.tsv"
+printf '# repo\torig\tfollowup\tverdict\tnote\n\nrework-repo\t1\t2\tscope\tagreed extra field\n' >"$RW_J"
+RW_JUDGED="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J")"
+assert_eq "28.6|1|14.3|rework-repo:6:7" \
+  "$(jq -r '"\(.rework_ratio)|\(.judged_rework_prs)|\(.judged_ratio)|\([.unjudged[] | "\(.repo):\(.pr):\(.followup)"] | join(","))"' <<<"$RW_JUDGED")" "non-defect follow-ups leave judged rework, unjudged ones stay"
+assert_eq "scope:agreed extra field|null" "$(jq -r '"\(.rework[0].followups[0].verdict):\(.rework[0].followups[0].note)|\(.rework[1].followups[0].verdict)"' <<<"$RW_JUDGED")" "follow-ups carry their verdict"
+printf 'rework-repo\t1\t2\tdefect\nrework-repo\t06\t7\tplanned\n' >"$RW_J"
+assert_eq "1|14.3|0" "$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J" | jq -r '"\(.judged_rework_prs)|\(.judged_ratio)|\(.unjudged | length)"')" "a defect follow-up keeps the rework"
+printf 'rework-repo\t1\t2\tbug\n' >"$RW_J"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$RW_J" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "an unknown verdict is a usage error"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$TEST_TMP/no-such.tsv" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "a missing judgments file is a usage error"
+pass "rework judgments"
 
 # 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
 PLACE_ROOT="$TEST_TMP/place-project"
@@ -5562,17 +5736,15 @@ assert_eq "edited by a person" "$(<"$MF_ROOT/$MF_RUNNER")" "a modified managed f
 printf 'mine\n' >"$MF_ROOT/$MF_SKILL"
 mf_refuse "untracked" "$MF_ROOT" "$MF_SKILL"
 assert_eq "mine" "$(<"$MF_ROOT/$MF_SKILL")" "an unrecorded existing file is not overwritten"
-MF_RENDER="$(jq -r 'first(.artifacts[] | select(.mode == "render") | .path)' "$ROOT/templates/managed-files.json")"
-mf_refuse "not a copy artifact" "$MF_ROOT" "$MF_RENDER"
-mf_refuse "not a copy artifact" "$MF_ROOT" .claude/settings.json
-mf_refuse "not a copy artifact" "$MF_ROOT" AGENTS.md
+mf_refuse "not a managed artifact" "$MF_ROOT" .claude/settings.json
+mf_refuse "not a managed artifact" "$MF_ROOT" AGENTS.md
 for bad in ../outside.sh /etc/passwd .ai-harness/workflows/../../x.sh; do
   mf_refuse "invalid path" "$MF_ROOT" "$bad"
 done
 assert_not_file "$MF_ROOT/AGENTS.md"
 MF_FRESH="$TEST_TMP/managed-place-fresh"
 mkdir -p "$MF_FRESH"
-mf_refuse "not a copy artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
+mf_refuse "not a managed artifact" "$MF_FRESH" "$MF_RUNNER" AGENTS.md
 assert_not_file "$MF_FRESH/$MF_RUNNER"
 [[ ! -d "$MF_FRESH/.ai-harness" ]] || fail "a rejected call creates no directories"
 mkdir -p "$TEST_TMP/mf-escape" "$MF_FRESH/.claude"
@@ -5587,6 +5759,79 @@ rm -f "$MF_FRESH/$MF_RUNNER" && mkdir -p "$MF_FRESH/$MF_RUNNER"
 mf_refuse "is a directory" "$MF_FRESH" "$MF_RUNNER"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "place-managed-file.sh --root . --path" "unattended sync copies copy artifacts with the placer"
 pass "unattended sync places copy artifacts byte for byte"
+
+# 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
+# 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
+RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
+assert_eq "6" "$(grep -c . <<<"$RD_PATHS")" "six workflow entry points are render artifacts"
+while IFS= read -r rd_path; do
+  "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
+  "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"
+  cmp -s "$TEST_TMP/render-1" "$TEST_TMP/render-2" || fail "render is deterministic: $rd_path"
+  cmp -s "$TEST_TMP/render-1" "$ROOT/$rd_path" || fail "generated $rd_path matches the render script"
+done <<<"$RD_PATHS"
+"$ROOT/scripts/render-managed-file.sh" --path .agents/skills/review/SKILL.md >"$TEST_TMP/render-codex"
+cmp -s "$ROOT/templates/review/SKILL.md" "$TEST_TMP/render-codex" || fail "the Codex skill is the template as is"
+"$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$TEST_TMP/render-claude"
+RD_CLAUDE="$(<"$TEST_TMP/render-claude")"
+assert_eq "---" "$(sed -n 1p "$TEST_TMP/render-claude")" "the command keeps its frontmatter"
+assert_eq "$(sed -n 's/^description: //p' "$ROOT/templates/review/SKILL.md")" "$(sed -n 's/^description: //p' "$TEST_TMP/render-claude")" "the command keeps the template description"
+assert_eq '0' "$(grep -c '^name:' "$TEST_TMP/render-claude" || true)" "the command drops the skill name"
+assert_eq 'argument-hint: "<PR 번호, 브랜치, 또는 diff>"' "$(sed -n 3p "$TEST_TMP/render-claude")" "the command takes its argument hint from the catalog"
+assert_eq "---" "$(sed -n 4p "$TEST_TMP/render-claude")" "the hint closes the frontmatter"
+assert_contains "$RD_CLAUDE" $'1. @AGENTS.md\n2. @.ai-harness/workflows/review.md\n3. @.ai-harness/workflows/review-graph.json' "startup reads are imported with @"
+# shellcheck disable=SC2016  # $ARGUMENTS는 Claude 커맨드 자리표시자다
+assert_eq $'\n## Request\n\n$ARGUMENTS' "$(tail -n 4 "$TEST_TMP/render-claude")" "the command ends with the request"
+for rd_bad in .ai-harness/workflows/workflow-driver.sh AGENTS.md ../x.md; do
+  if "$ROOT/scripts/render-managed-file.sh" --path "$rd_bad" >/dev/null 2>&1; then fail "render refuses $rd_bad"; fi
+done
+# 배치도 같은 스크립트로 한다. 사람이 고친 render 파일은 지금처럼 덮어쓰지 않는다.
+RD_ROOT="$TEST_TMP/render-place"
+mkdir -p "$RD_ROOT"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md --path .agents/skills/review/SKILL.md >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "the placer writes the rendered command"
+cmp -s "$TEST_TMP/render-codex" "$RD_ROOT/.agents/skills/review/SKILL.md" || fail "the placer writes the rendered Codex skill"
+[[ ! -x "$RD_ROOT/.claude/commands/review.md" ]] || fail "a rendered file is not executable"
+# render와 copy를 한 호출에 섞어도(순서와 상관없이) 각 파일이 제 내용을 받는다.
+for rd_order in render-first copy-first; do
+  RD_MIX="$TEST_TMP/render-mix-$rd_order"
+  mkdir -p "$RD_MIX"
+  if [[ "$rd_order" == render-first ]]; then
+    "$ROOT/scripts/place-managed-file.sh" --root "$RD_MIX" --path .claude/commands/review.md --path .ai-harness/workflows/review-graph.json >/dev/null
+  else
+    "$ROOT/scripts/place-managed-file.sh" --root "$RD_MIX" --path .ai-harness/workflows/review-graph.json --path .claude/commands/review.md >/dev/null
+  fi
+  cmp -s "$TEST_TMP/render-claude" "$RD_MIX/.claude/commands/review.md" || fail "mixed placement ($rd_order) writes the rendered command"
+  cmp -s "$ROOT/templates/review/references/review-graph.json" "$RD_MIX/.ai-harness/workflows/review-graph.json" || fail "mixed placement ($rd_order) copies the graph"
+  [[ -z "$(find "$RD_MIX" -name '.place.*')" ]] || fail "mixed placement ($rd_order) leaves no temporary files"
+done
+printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
+mkdir -p "$RD_ROOT/.ai-harness"
+jq -n --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '{managed_files: {".claude/commands/review.md": {content_sha256: $h}}}' >"$RD_ROOT/.ai-harness/harness.json"
+# 표시 없는 기록(예전 손 렌더)은 해시가 맞아도 저장소 맞춤이 있을 수 있어 사람이 본 뒤(--first-render)에만 바꾼다(#316).
+mf_refuse "first deterministic render needs a person" "$RD_ROOT" .claude/commands/review.md
+assert_eq "old" "$(<"$RD_ROOT/.claude/commands/review.md")" "an unmarked hand render is not overwritten without review"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md --first-render >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "a reviewed first render replaces the hand render"
+# record는 스크립트 결과와 같은 render에만 표시를 남기고, 표시가 있으면 다음 sync는 그냥 갱신한다.
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "1" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record marks a deterministic render"
+printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "null" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record does not mark a render that differs from the script"
+jq --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '.managed_files[".claude/commands/review.md"] = {content_sha256: $h, renderer: 1}' "$RD_ROOT/.ai-harness/harness.json" >"$RD_ROOT/.ai-harness/h2" && mv "$RD_ROOT/.ai-harness/h2" "$RD_ROOT/.ai-harness/harness.json"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "an unchanged marked render is refreshed"
+rd_rc=0; "$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "place-managed-file exits 2 on --path without a value"
+rd_rc=0; "$ROOT/scripts/render-managed-file.sh" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "render-managed-file exits 2 on --path without a value"
+printf 'team wording\n' >>"$RD_ROOT/.claude/commands/review.md"
+mf_refuse "modified since it was recorded" "$RD_ROOT" .claude/commands/review.md
+assert_contains "$(<"$RD_ROOT/.claude/commands/review.md")" "team wording" "a render a person changed is not overwritten"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+[[ "$(<"$ROOT/skills/harness-init/SKILL.md")" != *'`mode:"render"` 항목만 직접 쓴다'* ]] || fail "harness init no longer writes render artifacts by hand"
+pass "workflow entry points render deterministically"
 
 # monitor-fetch.sh: 모니터링 도구 응답을 한 형식으로 맞추고, 자격증명을 보낼 곳을 저장소 설정이 정하지 못하게 한다.
 AF_DATA="$TEST_TMP/autofix-data"
@@ -5870,6 +6115,33 @@ assert_contains "$(af_budget_run bogus)" "--max-budget-usd 10" "an invalid budge
 af_state 'del(.signatures["budget:1"])'
 cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
 pass "autofix unlimited daily cap and budget"
+
+# 로그인 만료(#315): 자동 수정도 인증 실패를 auth_expired로 분류해 실패 횟수에 넣지 않는다. 과거 버전이 agent_error로 센
+# 인증 실패(로그로 판정)는 횟수에서 빼 fails:3으로 포기된 에러가 다시 후보가 된다. 같은 회차에 이미 인증 실패가 났으면
+# 그 회차의 자동 수정 실행은 띄우지 않는다.
+AF_SAVED_STATE="$(<"$AF_DATA/autofix/p-af-svc/state.json")"
+cp "$AF_DATA/autofix/runs.jsonl" "$AF_STUB/runs.saved"
+AF_AUTH_LINE='{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login"}'
+printf '%s\n' "$AF_AUTH_LINE" >"$AF_STUB/legacy-auth.log"
+af_state '.signatures["sentry:101"] = {status:"failed",fails:3,attempts:1,title:"t"}'
+for _ in 1 2 3; do
+  jq -cn --arg l "$AF_STUB/legacy-auth.log" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
+done
+# 마지막 PR·해결 앞의 인증 실패는 지금 실패 횟수에 들어 있지 않으므로 빼지 않는다.
+jq -cn --arg l "$AF_STUB/legacy-auth.log" '{at:"2000-01-01T00:00:00Z",event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
+af_state '.signatures["sentry:101"].fails = 4'
+jq -n '{state:"open"}' >"$AF_STUB/pr-state.json"
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+AF_STUB_RESULT="$AF_AUTH_LINE" af_auto sweep
+assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "an error given up only for expired logins is tried again"
+assert_eq "failed|1|auth_expired" "$(af_sig '"\(.status)|\(.fails)|\(.last_reason)"')" "an expired login is classified and not counted, and only failures after the last PR are forgiven"
+assert_eq "auth_expired" "$(jq -sr '[.[] | select(.event=="finished")] | last | .reason' "$AF_DATA/autofix/runs.jsonl")" "the run log names the expired login"
+AF_STUB_RESULT="$AF_AUTH_LINE" HM_LLM_TICK_STARTED_AT="2000-01-01T00:00:00Z" af_auto sweep
+assert_eq "$((AF_BEFORE + 1))|auth_expired" "$(<"$AF_STUB/agent-count")|$(jq -sr 'last | .reason' "$AF_DATA/autofix/runs.jsonl")" "no more fixes start in a round that already hit an expired login"
+printf '%s\n' "$AF_SAVED_STATE" >"$AF_DATA/autofix/p-af-svc/state.json"
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "auth_expired: '로그인 만료" "the autofix tab says the login expired"
+pass "autofix classifies expired logins without counting them"
 
 # 상태 기록 실패·유실(#278 2차): 시작 상태를 못 남기면 실행하지 않고, 상태 파일을 잃은 프로젝트는 실행 기록으로 되살린다.
 AF_BEFORE="$(<"$AF_STUB/agent-count")"
@@ -8725,6 +8997,75 @@ assert_contains "$(st_item ops | jq -r '.[0].detail')" "끊기기 전 마지막 
 assert_contains "$(st_item api | jq -r '.[0].detail')" "사용량 한도 안내 문장" "a run with a result shows its report"
 [[ "$(st_item api | jq -r '.[0].detail')" != *"끊기기 전 마지막 진행"* ]] || fail "a run with a result does not show the last progress line"
 pass "board status shows the last progress of a run that was cut off"
+
+# 로그인 만료(#315): 여러 저장소의 인증 실패는 한 카드로 묶고 사람이 읽는 제목을 단다. 과거 버전이 agent_error로 남긴 실패도
+# 로그가 인증 실패면 같이 묶는다. 그 뒤 성공한 실행이 있으면(다시 로그인함) 카드가 사라진다.
+ST_AUTH="$ST_T/auth-data"
+mkdir -p "$ST_AUTH/harvest-auto"
+printf '%s\n' '{"type":"result","is_error":true,"result":"Failed to authenticate: this login reached its time limit. Run claude auth login"}' >"$ST_T/logs/auth-1.log"
+cp "$ST_T/logs/auth-1.log" "$ST_T/logs/auth-2.log"
+printf '%s\n' '{"type":"result","is_error":true,"result":"도구 실패"}' >"$ST_T/logs/auth-other.log"
+{
+  st_fin 30 a1 sync failed 1 "$ST_T/logs/auth-1.log" '{"reason": "auth_expired"}'
+  st_fin 20 a2 project failed 1 "$ST_T/logs/auth-2.log" '{"reason": "agent_error"}'
+  st_fin 10 a3 project failed 1 "$ST_T/logs/auth-other.log" '{"reason": "agent_error"}'
+} >"$ST_AUTH/harvest-auto/runs.jsonl"
+ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AUTH" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh")"
+assert_eq "0|0|1" "$(st_item a1 | jq 'length')|$(st_item a2 | jq 'length')|$(st_item a3 | jq 'length')" "expired-login failures leave the per-target cards, other failures stay"
+ST_AUTH_CARD="$(jq -c '[.items[] | select(.reason == "auth_expired")]' <<<"$ST_OUT")"
+assert_eq "1|needs_human" "$(jq -r 'length' <<<"$ST_AUTH_CARD")|$(jq -r '.[0].state' <<<"$ST_AUTH_CARD")" "expired-login failures are one card"
+assert_eq "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token" "$(jq -r '.[0].title' <<<"$ST_AUTH_CARD")" "the card says what happened and what to run"
+assert_contains "$(jq -r '.[0].detail' <<<"$ST_AUTH_CARD")" "a1" "the card lists the stopped targets"
+assert_contains "$(jq -r '.[0].detail' <<<"$ST_AUTH_CARD")" "a2" "including one recorded by an older version"
+st_fin 5 a3 project no-change 0 "$ST_T/logs/ok.log" >>"$ST_AUTH/harvest-auto/runs.jsonl"
+ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AUTH" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh")"
+assert_eq "0" "$(jq '[.items[] | select(.reason == "auth_expired" or .project == "a1" or .project == "a2")] | length' <<<"$ST_OUT")" "a run that worked afterwards clears the expired-login card"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "i.reason === 'auth_expired'" "the board shows the expired-login title as is"
+pass "board status folds expired-login failures into one card that clears after a working run"
+
+# 로그인 만료 후속(#326): 자동 수정만 쓰는 사용자도 묶음 카드를 받고, 세션 안내와 보드는 같은 기준(마지막 성공 실행 이후인가)으로 판정한다.
+# 로그인 만료 뒤 에이전트를 띄우지 못한 실패(exit 70)는 성공이 아니므로 안내도 카드도 남는다.
+ST_AF="$ST_T/af-data"
+mkdir -p "$ST_AF/autofix"
+st_af_fin() { # $1=분 전 $2=project $3=outcome $4=exit_code $5=log $6=덧붙일 JSON 객체
+  local extra="${6:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg at "$(st_ago "$1")" --arg p "$2" --arg o "$3" --argjson e "$4" --arg log "$5" --argjson x "$extra" \
+    '{at: $at, event: "finished", project: $p, signature: "sig-1", outcome: $o, exit_code: $e, log: $log} + $x'
+}
+{
+  st_af_fin 30 af-svc failed 1 "$ST_T/logs/auth-1.log" '{"reason": "auth_expired"}'
+  st_af_fin 20 af-svc failed 70 "$ST_T/logs/none-af70.log"
+} >"$ST_AF/autofix/runs.jsonl"
+st_af_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AF" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh"
+}
+st_af_notify() { HARNESS_METRICS_DIR="$ST_AF" "$ROOT/scripts/harvest-auto.sh" notify; }
+ST_AF_CARD="$(st_af_status | jq -c '[.items[] | select(.reason == "auth_expired")]')"
+assert_eq "1|needs_human" "$(jq -r 'length' <<<"$ST_AF_CARD")|$(jq -r '.[0].state // ""' <<<"$ST_AF_CARD")" "an expired login in an autofix run is the same bundled card, without any harvest run"
+assert_contains "$(jq -r '.[0].detail // ""' <<<"$ST_AF_CARD")" "af-svc(autofix)" "the card names the stopped autofix target"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a failure that launched no agent after the expired login keeps the session notice, like the board"
+assert_eq "" "$(st_af_notify)" "the notice is still shown once per failure"
+st_af_fin 10 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | length')" "an autofix run that worked afterwards clears the card"
+st_af_fin 5 af-svc failed 1 "$ST_T/logs/auth-2.log" '{"reason": "auth_expired"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer expired login after a working run is told again"
+st_af_fin 1 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "" "$(st_af_notify)" "a working run after the expired login clears the notice"
+# 이전 버전이 agent_error로 남긴 자동 수정 실패는 로그로 판정한다: 인증 실패 로그면 카드·안내에 넣고, 다른 실패 로그는 건너뛰어 그 전의 로그인 만료를 찾는다.
+st_af_fin 0 af-old failed 1 "$ST_T/logs/auth-1.log" '{"reason": "agent_error"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_status | jq -r '[.items[] | select(.reason == "auth_expired")] | .[0].detail // ""')" "af-old(autofix)" "a legacy autofix failure whose log is an expired login joins the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "and is told at session start"
+jq -cn --arg at "$(st_ago 0)" --arg log "$ST_T/logs/auth-other.log" \
+  '{at: $at, event: "finished", project: "af-other", signature: "sig-2", outcome: "failed", exit_code: 1, reason: "agent_error", log: $log}' >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | .[0].detail // "" | test("af-other") | if . then 1 else 0 end')" "a legacy failure with another log stays out of the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer unrelated failure does not hide the earlier expired login"
+pass "the session notice and the board agree on expired logins, autofix included"
 
 # 여러 Claude 설정 폴더(#296): work.sh가 기본 폴더·서버 환경의 폴더·프로필 자동 감지·사용자 지정 폴더마다 claude agents를 불러 sessionId로 합친다.
 # HOME을 바꾸지 않고 환경변수로만 격리한다(서버 환경에 CLAUDE_CONFIG_DIR이 있을 수 있어 명시적으로 빼거나 지정한다).

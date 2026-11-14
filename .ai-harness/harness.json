@@ -36,28 +36,34 @@
       "template_version": "0.64.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "c7706e3b0fee83e85025bb325d4c1cf055f239915722e2ee3a44f02a623c6ab5",
-      "template_version": "0.64.0"
+      "content_sha256": "73d6fbd10df2897f24e0705373f2e87236daa553b4cc876395c825997a89db1e",
+      "template_version": "0.72.0",
+      "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "a406f93602f179f79e49031526673490ffe452b3fe57203ebc8341b600c8fd81",
-      "template_version": "0.64.0"
+      "content_sha256": "396ab32815fffdbf8c22fff378f7e59343243b7958e69e4e3d71a6e5ddb52df3",
+      "template_version": "0.72.0",
+      "renderer": 1
     },
     ".agents/skills/review/SKILL.md": {
       "content_sha256": "26d8ad2f47661b66d807101b94aed8cef3d8f4dc377c604d12a21a9eb969dad4",
-      "template_version": "0.64.0"
+      "template_version": "0.72.0",
+      "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "a5d611a71e50c7ed1c61e4ea3c805b5f226f53f3124aa6a6d09a8327aca7ad3e",
-      "template_version": "0.64.0"
+      "content_sha256": "d80c3dcc068945ffb8c1d99a96cbb7ea3e6c83c2f543b04c30037471c016e535",
+      "template_version": "0.72.0",
+      "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "a0d769cc3ad00ed795b83ef347814890534e147b9549005cf78c236e1108fedc",
-      "template_version": "0.64.0"
+      "content_sha256": "84b3b21c3393f791d030e604181587adb7e76b9edf54a9ebaa51d490e8d87f9d",
+      "template_version": "0.72.0",
+      "renderer": 1
     },
     ".claude/commands/review.md": {
       "content_sha256": "54780daf3c0540888d9d4ecf1a8d985319982157444cd53a7557c53b1201f512",
-      "template_version": "0.64.0"
+      "template_version": "0.72.0",
+      "renderer": 1
     }
   }
 }

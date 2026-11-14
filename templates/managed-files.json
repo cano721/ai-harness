@@ -65,7 +65,8 @@
       "integration": "claude",
       "workflow": "implement-feature",
       "source": "templates/implement-feature/SKILL.md",
-      "mode": "render"
+      "mode": "render",
+      "argument_hint": "<기능 요청 또는 이슈 번호>"
     },
     {
       "path": ".claude/commands/fix-bug.md",
@@ -73,7 +74,8 @@
       "integration": "claude",
       "workflow": "fix-bug",
       "source": "templates/fix-bug/SKILL.md",
-      "mode": "render"
+      "mode": "render",
+      "argument_hint": "<버그 설명 또는 이슈 번호>"
     },
     {
       "path": ".claude/commands/review.md",
@@ -81,7 +83,8 @@
       "integration": "claude",
       "workflow": "review",
       "source": "templates/review/SKILL.md",
-      "mode": "render"
+      "mode": "render",
+      "argument_hint": "<PR 번호, 브랜치, 또는 diff>"
     },
     {
       "path": ".agents/skills/declarative-code/SKILL.md",

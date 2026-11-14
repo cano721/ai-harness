@@ -187,9 +187,9 @@ orphan_records() { # $1=project → JSON lines {signature, record} (상태에 �
            | {signature: $g[0].signature, record: ($rec + {
                first_detected_at: ([$ev[] | select(.signature == $g[0].signature) | .at] | min),
                attempts: ([$g[] | select(.event == "tracked" or .outcome == "pr_opened")] | length),
-               # 실패 횟수: 마지막으로 PR을 열었거나 해결된 뒤의 실패 실행 수(사용량 한도 제외) — command_run이 세는 것과 같다.
+               # 실패 횟수: 마지막으로 PR을 열었거나 해결된 뒤의 실패 실행 수(사용량 한도·로그인 만료 제외) — command_run이 세는 것과 같다.
                fails: ((([$g[] | select(.outcome == "pr_opened" or .event == "resolved") | .at] | max) // "") as $reset
-                 | [$g[] | select(.event == "finished" and .outcome == "failed" and .reason != "usage_limit" and .at > $reset)] | length),
+                 | [$g[] | select(.event == "finished" and .outcome == "failed" and ((.reason // "") | IN("usage_limit", "auth_expired") | not) and .at > $reset)] | length),
                recovered: "runs"})}
          else empty end) )' "$RUNS_FILE" 2>/dev/null
 }
@@ -212,13 +212,36 @@ recover_attempts() { # $1=project
         else .signatures[$sig] = (($cur // {}) + $r
           + (if $r.status == "pr_open" then {pr_opened_at:($cur.pr_opened_at // $r.pr_opened_at)}
              elif $r.recovered != null then {} else {attempts:(($cur.attempts // 1) - 1)} end)
-          + (if $r.status == "failed" and $r.recovered == null and $r.last_reason != "usage_limit" then {fails:(($cur.fails // 0) + 1)} else {} end)
+          + (if $r.status == "failed" and $r.recovered == null and (($r.last_reason // "") | IN("usage_limit", "auth_expired") | not) then {fails:(($cur.fails // 0) + 1)} else {} end)
           + {updated_at:$now, recovered_at:$now, recovered_by:$token}) end' \
       --arg sig "$sig" --argjson r "$rec" --arg launched "$(jq -r '.launched // ""' <<<"$line")" --arg token "$token" || continue
     # 이번 쓰기가 실제로 옮겼을 때만 남긴다 — 다른 쪽이 먼저 옮겼으면 recovered_by가 이번 토큰과 다르다.
     jq -e --arg s "$sig" --arg t "$token" '.signatures[$s].recovered_by == $t' <<<"$(state_get "$project")" >/dev/null 2>&1 || continue
     log_event "$project" recovered "$sig" "$(jq -c '{status, artifact:(.pr // null)}' <<<"$rec")"
   done <<<"$(orphan_records "$project")"
+}
+
+# 이전 버전은 로그인 만료를 agent_error로 세어 MAX_FAILS에서 포기했다(#315). 실행 기록에서 로그가 인증 실패인 지난 실패를
+# 시그니처마다 세어 실패 횟수에서 한 번만 뺀다(auth_checked). 이번 버전은 인증 실패를 세지 않으므로 다시 뺄 것이 없다.
+forgive_auth_fails() { # $1=project
+  local project="$1" pending="" sig="" log="" counts="{}"
+  [[ -f "$RUNS_FILE" ]] || return 0
+  pending="$(state_get "$project" | jq -c '[(.signatures // {}) | to_entries[]
+    | select((.value.auth_checked // false) == false and (.value.fails // 0) > 0) | .key]' 2>/dev/null)"
+  [[ -n "$pending" && "$pending" != "[]" ]] || return 0
+  while IFS=$'\t' read -r sig log; do
+    [[ -n "$sig" && "$(hm_log_fail_reason "$log")" == "auth_expired" ]] || continue
+    counts="$(jq -c --arg s "$sig" '.[$s] = ((.[$s] // 0) + 1)' <<<"$counts")"
+  # 실패 횟수는 마지막으로 PR을 열었거나 해결된 뒤부터 센다(orphan_records와 같은 기준) — 그 앞의 실패는 빼지 않는다.
+  done <<<"$(jq -Rrn --arg p "$project" --argjson sigs "$pending" '[inputs | fromjson? | objects
+      | select(.project == $p and (.signature | IN($sigs[])))] | group_by(.signature)[]
+      | (([.[] | select(.outcome == "pr_opened" or .event == "resolved") | .at] | max) // "") as $reset
+      | .[] | select(.event == "finished" and .outcome == "failed" and (.at // "") > $reset
+        and ((.reason // "") | IN("usage_limit", "auth_expired") | not) and (.log // "") != "")
+      | [.signature, .log] | @tsv' "$RUNS_FILE" 2>/dev/null)"
+  state_update "$project" 'reduce $sigs[] as $s (.; if .signatures[$s] == null or (.signatures[$s].auth_checked // false) then .
+      else .signatures[$s] |= (.fails = ([(.fails // 0) - ($n[$s] // 0), 0] | max) | .auth_checked = true) end)' \
+    --argjson sigs "$pending" --argjson n "$counts" || true
 }
 
 # ── 검증 ─────────────────────────────────────────────────────────────────────
@@ -235,6 +258,7 @@ verify_repo() { # $1=repo json
   local fetched=0 state_json=""
   now_e="$(date +%s)"
   recover_attempts "$project"
+  forgive_auth_fails "$project"
   state_json="$(state_get "$project")"
   while IFS= read -r sig; do
     rec="$(jq -c --arg s "$sig" '.signatures[$s]' <<<"$state_json")"
@@ -403,6 +427,12 @@ sweep_once() {
     lock_busy && { log_event "$project" skipped "$sig" '{"reason":"busy"}'; return 0; }
     # 전용 주기(HM_AUTOFIX_INTERVAL_MINUTES)는 backfill 경로의 LLM 단계 판정을 거치지 않으므로 사용량 한도 휴지를 여기서도 지킨다.
     hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && { log_event "$project" skipped "$sig" '{"reason":"usage_backoff"}'; return 0; }
+    # 같은 정기 회차(backfill-due가 넘긴 시작 시각) 안에서 이미 로그인 만료로 실패한 무인 실행이 있으면 띄우지 않는다(#315).
+    # 다음 회차는 다시 한 건으로 확인한다 — 다시 로그인했으면 그대로 돈다.
+    if [[ -n "${HM_LLM_TICK_STARTED_AT:-}" ]] && hm_auth_expired_since "$HM_LLM_TICK_STARTED_AT"; then
+      log_event "$project" skipped "$sig" '{"reason":"auth_expired"}'
+      return 0
+    fi
     # Codex 샌드박스는 .git이 읽기 전용이라 브랜치·커밋·PR까지 갈 수 없다.
     if [[ -z "${HM_AUTOFIX_CMD:-}" ]] && ! command -v claude >/dev/null 2>&1; then
       log_event "$project" skipped "$sig" '{"reason":"needs_claude"}'
@@ -554,9 +584,7 @@ command_run() {
   fi
 
   cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
-  fail_reason="$(jq -Rrn '[inputs | fromjson? | objects | select(.type=="result")] | last
-    | if . == null then empty elif .api_error == "usage_limit_reached" or .api_error_status == 429 then "usage_limit"
-      elif .is_error == true then (.api_error // "agent_error") else empty end' "$log_file" 2>/dev/null || true)"
+  fail_reason="$(hm_log_fail_reason "$log_file")"
   # 스킬은 마지막에 `AI_HARNESS_AUTOFIX_RESULT outcome=<결과> artifact=<PR URL>` 한 줄을 남긴다.
   # 에러 본문에 심긴 같은 문구에 속지 않게 에이전트의 최종 응답에서만 읽는다(사용자 정의 실행기는 마지막 줄).
   line="$({ jq -Rrn '[inputs | fromjson? | objects | select(.type=="result") | .result // empty] | last // empty' "$log_file" 2>/dev/null
@@ -567,8 +595,8 @@ command_run() {
 
   local state_ok=1
   if (( exit_code != 0 )) || [[ -z "$outcome" && -n "$fail_reason" ]]; then
-    # 사용량 한도는 시도·실패로 세지 않는다.
-    if [[ "$fail_reason" == "usage_limit" ]]; then
+    # 사용량 한도·로그인 만료는 시도·실패로 세지 않는다 — 로그인 만료는 사람이 다시 로그인하기 전까지 반드시 실패한다.
+    if [[ "$fail_reason" == "usage_limit" || "$fail_reason" == "auth_expired" ]]; then
       set_sig "$project" "$sig" '{status:"failed",attempts:(($cur.attempts // 1) - 1)}' || state_ok=0
     else
       set_sig "$project" "$sig" '{status:"failed",fails:(($cur.fails // 0) + 1),attempts:(($cur.attempts // 1) - 1)}' || state_ok=0

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 DATA="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAYS="${BOARD_DAYS:-7}"
 STALE_HOURS="${BOARD_STALE_HOURS:-6}"
 now_e=$(date -u +%s)
@@ -39,6 +40,7 @@ if [ -f "$runs" ]; then
       if .exit_code == 143 then (if .duration_s != null then "\((.duration_s / 60) | round)분 시간 제한으로 중단됨" else "시간 제한으로 중단됨" end)
       elif .exit_code == 137 then "강제 종료됨"
       elif .reason == "usage_limit" then "사용량 한도에 닿음"
+      elif .reason == "auth_expired" then "로그인 만료"
       elif .reason != null then "에이전트 오류 (\(.reason))"
       elif .exit_code == 70 then "작업 worktree를 만들지 못함"
       elif .exit_code == 71 then "동기화 계획을 세우지 못함"
@@ -66,7 +68,7 @@ if [ -f "$runs" ]; then
           | human_reason as $why
           | {kind: kind, project, state: "needs_human", at,
              title: ("실행 실패 (\($why))" + (if $streak >= 2 then " · \($streak)번 연속" else "" end)),
-             detail: null, fail_reason: $why, streak: $streak, exit_code: (.exit_code // null),
+             detail: null, fail_reason: $why, reason_key: $k, streak: $streak, exit_code: (.exit_code // null),
              link: .artifact, log: .log, cost: .cost_usd, duration_s: .duration_s, result: .result, cmd: null}
         elif .event == "finished" and .at >= $since then
           (.log as $l | $latest | index($l)) as $is_latest
@@ -87,6 +89,11 @@ if [ -f "$runs" ]; then
     if [ -n "$log" ] && [ ! -s "$log" ] && [ "$(jq -r '.state' <<<"$item")" != running ]; then
       item=$(jq -c '.log = null' <<<"$item")
       log=""
+    fi
+    # 이전 버전은 로그인 만료를 agent_error로 남겼다 — 로그가 인증 실패면 같은 원인으로 묶이게 이유를 바로잡는다(#315).
+    if [ -n "$log" ] && [ "$(jq -r '.reason_key // empty' <<<"$item")" = agent_error ] \
+      && [ "$(jq -Rrn -L "$SCRIPTS_DIR" 'include "fail-reason"; log_fail_reason' "$log" 2>/dev/null)" = auth_expired ]; then
+      item=$(jq -c '.reason_key = "auth_expired"' <<<"$item")
     fi
     if [ "$(jq -r '.state' <<<"$item")" = needs_human ]; then
       ex=$(result_excerpt "$log" || true)
@@ -121,6 +128,39 @@ if [ -f "$runs" ]; then
 else
   echo '[]' > "$tmp/runs2.json"; echo '[]' > "$tmp/skips.json"; echo '[]' > "$tmp/quiet.json"
 fi
+
+# 로그인 만료(#315): 저장소마다 같은 이유로 실패한 카드를 한 장으로 묶고 할 일을 제목에 쓴다.
+# 그 뒤 끝까지 돈 실행이 하나라도 있으면(다시 로그인함) 묶음 카드도, 남은 저장소별 실패 카드도 내린다.
+# 성공 판정(run_ok)은 세션 시작 안내(harvest-auto.sh notify)와 같은 정의를 쓴다(#326).
+# 자동 수정 실행의 로그인 만료도 같은 카드에 넣는다 — 자동 수정만 쓰는 사용자도 카드를 받는다(#326).
+# 이전 버전이 agent_error로 남긴 자동 수정 실패는 로그로 판정한다.
+af_runs="$DATA/autofix/runs.jsonl"
+[ -f "$af_runs" ] || af_runs=/dev/null
+h_runs="$runs"
+[ -f "$h_runs" ] || h_runs=/dev/null
+last_ok=$(jq -Rrn -L "$SCRIPTS_DIR" 'include "fail-reason"; [inputs | fromjson? | objects | select(run_ok) | .at] | max // ""' \
+  "$h_runs" "$af_runs" 2>/dev/null || true)
+jq -Rcn --arg ok "$last_ok" --arg since "$since" '[inputs | fromjson? | objects
+  | select(.event == "finished" and (.at // "") > $ok and (.at // "") >= $since and (.reason == "auth_expired" or .reason == "agent_error"))] | .[]' \
+  "$af_runs" 2>/dev/null | while IFS= read -r row; do
+  if [ "$(jq -r '.reason' <<<"$row")" = agent_error ]; then
+    log=$(jq -r '.log // empty' <<<"$row")
+    if [ -z "$log" ] || [ "$(jq -Rrn -L "$SCRIPTS_DIR" 'include "fail-reason"; log_fail_reason' "$log" 2>/dev/null)" != auth_expired ]; then
+      continue
+    fi
+  fi
+  jq -c '{kind: "autofix", project, at, log, reason_key: "auth_expired"}' <<<"$row"
+done | jq -s . > "$tmp/af-auth.json"
+jq --arg ok "$last_ok" --slurpfile af "$tmp/af-auth.json" '
+  ([.[] | select(.reason_key == "auth_expired" and .at > $ok)] + $af[0]) as $live
+  | [.[] | select(.reason_key != "auth_expired")]
+    + (if ($live | length) == 0 then [] else [{
+        kind: "schedule", project: "무인 실행", state: "needs_human", at: ($live | map(.at) | max),
+        title: "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token",
+        detail: ("터미널에서 claude auth login으로 다시 로그인하거나, 무인 실행용으로 claude setup-token을 실행한 뒤 CLAUDE_CODE_OAUTH_TOKEN을 설정하세요. 다음 무인 실행이 정상으로 돌면 이 카드는 사라집니다.\n멈춘 대상: "
+          + ($live | map("\(.project)(\(.kind))") | unique | join(", "))),
+        reason: "auth_expired", link: null, log: ($live | max_by(.at) | .log), cmd: "claude auth login", repo: null}] end)' \
+  "$tmp/runs2.json" > "$tmp/runs3.json" && mv "$tmp/runs3.json" "$tmp/runs2.json"
 
 # 2) 스케줄 회차: 마지막 회차가 skip이면 막힘으로.
 sched="$DATA/logs/schedule.jsonl"
