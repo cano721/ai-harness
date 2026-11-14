@@ -427,6 +427,7 @@ workspace_root() {
 transcript_approval() {
   local since="$1" marker="$RUN/brief.json" f cwd ws name ws_re
   local re='^[[:space:]]*(승인|approve|approved)([[:space:][:punct:]]|$)'
+  # 끝의 / 는 심볼릭 링크 폴더(Orca 프로필의 projects → ~/.claude/projects) 안으로 find 가 들어가게 한다.
   local claude_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" codex_root="${CODEX_HOME:-$HOME/.codex}/sessions"
   ws="$(workspace_root)"
   name="$(printf '%s' "${REPO##*/}" | tr '[:upper:]' '[:lower:]' | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
@@ -443,7 +444,7 @@ transcript_approval() {
               or ($ws != "" and ($c == $ws or ("/private" + $c) == $ws)
                 and (.message.content | ascii_downcase | test($wsre)))))
         | {source:"claude-transcript", at:.timestamp, text:(.message.content[:200])}' "$f" 2>/dev/null | head -n 1
-    done < <(find "$claude_root" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
+    done < <(find "$claude_root/" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
   fi
   if [[ -d "$codex_root" ]]; then
     while IFS= read -r -d '' f; do
@@ -456,7 +457,7 @@ transcript_approval() {
           and ((.timestamp // "")[:19] > $since)
           and (.payload.message | ascii_downcase | test($re)))
         | {source:"codex-transcript", at:.timestamp, text:(.payload.message[:200])}' "$f" 2>/dev/null | head -n 1
-    done < <(find "$codex_root" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
+    done < <(find "$codex_root/" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
   fi
 }
 
