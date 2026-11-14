@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.74.1 (2026-11-14)
 ### 버그 수정
 
 - **Orca 에서 대화로 친 "승인"을 러너가 찾지 못하던 문제** — Orca 프로필의 `$CLAUDE_CONFIG_DIR/projects`는 `~/.claude/projects`로 가는 심볼릭 링크인데, 러너가 링크 안으로 들어가지 않아 대화에서 친 "승인"(workspace 대화의 `승인 <멤버>` 포함)이 승인 대기를 풀지 못했습니다. 이제 링크 안의 대화도 읽습니다. 멤버 러너는 sync 로 반영됩니다. (#331)
