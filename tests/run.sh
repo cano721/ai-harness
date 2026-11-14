@@ -5098,6 +5098,8 @@ am_sync_head s-render-ok
 mkdir -p "$AM_REPO/.claude/commands"
 "$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
 am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
+assert_eq "render_unmarked:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderunmarked)")" "a new render must be recorded with the renderer mark"
+am_manifest ".managed_files[\".claude/commands/review.md\"].renderer = 1"
 assert_eq "ok" "$(am_check --scope sync --head "$(am_commit renderok)")" "a render artifact equal to the render script passes"
 am_sync_head s-render-edit
 mkdir -p "$AM_REPO/.claude/commands"
@@ -5126,6 +5128,11 @@ am_render_base render-unmarked 0
 assert_eq "render_first:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-unmarked --scope sync --head "$(am_render_head render-unmarked s-render-first)")" "the first deterministic render over an unmarked hand render needs a person"
 am_render_base render-marked 1
 assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-marked --scope sync --head "$(am_render_head render-marked s-render-next)")" "a render over a marked deterministic render passes"
+# 표시가 있어도 base 파일을 사람이 고치고 다시 기록하지 않았으면 사람이 본다.
+am_render_base render-drift 1
+printf -- '- edited later\n' >>"$AM_REPO/.claude/commands/review.md"
+git -C "$AM_REPO" commit -q -am render-drift-edit && git -C "$AM_REPO" update-ref refs/remotes/origin/render-drift render-drift
+assert_eq "render_modified:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-drift --scope sync --head "$(am_render_head render-drift s-render-drift)")" "a marked render a person edited after recording needs a person"
 am_sync_head s-del
 git -C "$AM_REPO" rm -q app.js
 assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"

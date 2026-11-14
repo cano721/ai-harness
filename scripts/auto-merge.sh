@@ -198,7 +198,13 @@ check_sync() { # repo base head result
       if [[ "$status" != A ]] || jq -e --arg p "$f" '(.managed_files // {}) | has($p)' <<<"$base_json" >/dev/null 2>&1; then
         [[ "$(jq -r --arg p "$f" '.managed_files[$p].renderer? // empty' <<<"$base_json" 2>/dev/null)" == 1 ]] \
           || { echo "render_first:$f"; return 1; }
+        # 표시가 있어도 base 파일을 사람이 고친 뒤 다시 기록하지 않았으면(해시 불일치) 그 수정이 지워진다.
+        [[ "$status" != M ]] || [[ "$(jq -r --arg p "$f" '.managed_files[$p].content_sha256 // empty' <<<"$base_json")" == "$(blob_sha256 "$repo" "$base:$f")" ]] \
+          || { echo "render_modified:$f"; return 1; }
       fi
+      # 병합 뒤 다음 sync가 자동으로 갱신할 수 있게 head 기록에도 표시가 있어야 한다(record가 결과와 같을 때만 남긴다).
+      [[ "$(jq -r --arg p "$f" '.managed_files[$p].renderer? // empty' <<<"$head_json" 2>/dev/null)" == 1 ]] \
+        || { echo "render_unmarked:$f"; return 1; }
     else
       [[ "$kind" == copy ]] || { echo "unknown_kind:$kind:$f"; return 1; }
       src="$ROOT/$(jq -r '.source' <<<"$entry")"
