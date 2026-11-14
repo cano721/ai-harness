@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.74.0 (2026-11-14)
 ### 새 기능
 
 - **레퍼런스 수집을 독립 스킬 `/design-references`로 분리** — 레퍼런스만 확인하려 해도 `/landing-page`를 처음부터 40분 돌려야 했고, 화면·디자인 시스템 작업도 레퍼런스가 필요했습니다. 이제 "AI 면접 서비스 경쟁사랑 레퍼런스 모아줘"처럼 따로 불러 검색(한 턴에 동시) → 일괄 캡처 → 봇 확인 화면 처리 → `references.json`·`searches.json` → 탭 5개 보드 서빙까지 합니다. `/landing-page`의 references 단계도 같은 절차·같은 스크립트(`scripts/design-refs.sh`)를 쓰고, 대표 고르기와 시작은 그대로 `/landing-page`에 남습니다. 보드를 만들 때마다 `~/.ai-harness/board/references/<run-id>.json`에 실행 기록(작업 폴더·주제·상태·만든 시각·references.json 경로)을 남깁니다. (#314)
