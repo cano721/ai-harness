@@ -4625,6 +4625,48 @@ assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
 pass "member edit guard"
 
+# 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.
+WD="$TEST_TMP/wait-delegation"
+mkdir -p "$WD/bin"
+cat >"$WD/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+[[ -f "$WD_DIR/fail" ]] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }
+jq -Rsc --arg s "$(cat "$WD_DIR/status" 2>/dev/null || echo running)" '{ok:true, result:{terminal:{status:$s, tail:(split("\n"))}}}' "$WD_DIR/screen"
+EOF
+chmod +x "$WD/bin/orca"
+WD_HANDLE="term_3d258b5b-850f-4f77-a851-3013191cd199"
+wait_delegation() { # 인자는 그대로 넘긴다. 출력 뒤에 exit=<code>
+  local rc=0 out
+  out="$(PATH="$WD/bin:$PATH" WD_DIR="$WD" "$ROOT/scripts/wait-delegation.sh" --interval 0 "$@" 2>"$WD/err")" || rc=$?
+  printf '%s\nexit=%s' "$out" "$rc"
+}
+printf 'done\n' >"$WD/finished.md"
+WD_OUT="$(wait_delegation --done "$WD/finished.md" --terminal "$WD_HANDLE")"
+assert_contains "$WD_OUT" "reason=done" "an existing completion file ends the wait as done"
+assert_contains "$WD_OUT" "exit=0" "done exits 0"
+printf '구현 계획 brief 입니다.\n승인할까요?\n\n❯ \n⏵⏵ bypass permissions on\n' >"$WD/screen"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)"
+assert_contains "$WD_OUT" "reason=awaiting_input" "a member waiting on a free-text approval question ends the wait"
+assert_contains "$WD_OUT" "승인할까요?" "the last screen lines come with the reason"
+assert_contains "$WD_OUT" "exit=10" "awaiting_input exits 10"
+printf 'Which approach?\n❯ 1. A\n  2. B\nEnter to select · ↑/↓ to navigate\n' >"$WD/screen"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)" "reason=awaiting_input" "a question with choices ends the wait"
+printf '✻ Running tests\n' >"$WD/screen"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0 --stall 0)"
+assert_contains "$WD_OUT" "reason=stalled" "an unchanged screen without a question ends the wait as stalled"
+assert_contains "$WD_OUT" "exit=11" "stalled exits 11"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --timeout 1 --interval 1)" "reason=timeout" "a working screen waits until the timeout"
+echo exited >"$WD/status"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE")" "reason=exited" "an exited member terminal ends the wait"
+rm -f "$WD/status"; : >"$WD/fail"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal term_3d258b5b)"
+assert_contains "$WD_OUT" "reason=terminal_unavailable" "an unreadable terminal handle ends the wait instead of hanging"
+assert_contains "$(<"$WD/err")" "short handles go stale" "a short terminal handle is warned about"
+rm -f "$WD/fail"
+assert_contains "$(wait_delegation --done "$WD/none.md" --timeout 1 --interval 1)" "reason=timeout" "without a terminal the wait watches the file only"
+assert_contains "$(wait_delegation --terminal "$WD_HANDLE")" "exit=2" "the completion file is required"
+pass "delegation wait reports input gates"
+
 # 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
 assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"
 assert_eq "3" "$(jq -r '.hooks.Stop[0].hooks[0].timeout' "$ROOT/hooks/hooks.json")" "tick stays inside a short budget"
