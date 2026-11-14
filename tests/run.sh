@@ -3882,6 +3882,23 @@ assert_contains "$TARGET_STATS" "| svc | 10% (1/10) | 20% (1/5) |" "per-project 
 assert_contains "$TARGET_STATS" "| web | 0% (0/1) | - |" "project without target sessions shows no target ratio"
 pass "workflow target session ratio"
 
+# 저장소 정보 활용: 대상 세션 중 하네스 docs·워크플로 문서를 Read한 세션. AGENTS.md·CLAUDE.md는 자동 로드라 근거가 아니다.
+# 위 대상 세션 픽스처에 docs만 읽은 세션·아무것도 안 읽은 세션·AGENTS.md만 읽은 세션을 더한다(t1은 워크플로만 읽음).
+INFO_DATA="$TEST_TMP/info-ratio-data"
+cp -R "$TARGET_DATA" "$INFO_DATA"
+TARGET_DATA="$INFO_DATA" target_session i1 '{"kind":"persona","target":"developer"}' \
+  '{"kind":"doc_read","target":".ai-harness/docs/code-conventions.md"}'
+TARGET_DATA="$INFO_DATA" target_session i2 '{"kind":"file_edit","target":"/repo/src/Api.java"}'
+TARGET_DATA="$INFO_DATA" target_session i3 '{"kind":"file_edit","target":"/repo/src/Web.java"}' \
+  '{"kind":"doc_read","target":"AGENTS.md"}' '{"kind":"doc_read","target":"CLAUDE.md"}'
+INFO_STATS="$(HARNESS_METRICS_DIR="$INFO_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$INFO_STATS" "| 워크플로 대상 세션 경유 | 13% (1/8) |" "info fixture keeps target denominator"
+assert_contains "$INFO_STATS" "| 저장소 정보 활용 | 25% (2/8) |" "repo info ratio counts docs or workflow reads among target sessions"
+assert_contains "$INFO_STATS" "| 프로젝트 | 워크플로 경유 | 대상 경유 | 정보 활용 |" "per-project table has an info column"
+assert_contains "$INFO_STATS" "| svc | 8% (1/13) | 13% (1/8) | 25% (2/8) |" "per-project repo info ratio"
+assert_contains "$INFO_STATS" "| web | 0% (0/1) | - | - |" "project without target sessions shows no info ratio"
+pass "repo info ratio over target sessions"
+
 # 날짜 구간 필터: 설치일 전후처럼 특정 날짜로 자른다. until은 그 날을 포함하지 않는다.
 RANGE_DATA="$TEST_TMP/range-data"
 mkdir -p "$RANGE_DATA/events"
