@@ -13,56 +13,56 @@
   "stacks": [],
   "edit_guard": false,
   "initialized": "2026-11-07",
-  "harness_version": "0.64.0",
+  "harness_version": "0.73.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
       "content_sha256": "1e1d6c0aacf90a9b901d2f523fe4b31ac88051e8d177de12ddecbc683079e9c8",
-      "template_version": "0.64.0"
+      "template_version": "0.73.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
       "content_sha256": "0e7338264f34eaa3a1736bde70a00acb06a60d1f5819a0d4193f3761569a1961",
-      "template_version": "0.64.0"
+      "template_version": "0.73.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
       "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
-      "template_version": "0.64.0"
+      "template_version": "0.73.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
       "content_sha256": "ad054fa3f9c9c73836301665d2a0727b46bcc2b3d15dc8a9a3cce0639e5ac632",
-      "template_version": "0.64.0"
+      "template_version": "0.73.0"
     },
     ".ai-harness/workflows/review-graph.json": {
       "content_sha256": "84f6c23d91da9f16f6e03c41dcdb7b5ce3726945539293639fea03426be79170",
-      "template_version": "0.64.0"
+      "template_version": "0.73.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
       "content_sha256": "73d6fbd10df2897f24e0705373f2e87236daa553b4cc876395c825997a89db1e",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
       "content_sha256": "396ab32815fffdbf8c22fff378f7e59343243b7958e69e4e3d71a6e5ddb52df3",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     },
     ".agents/skills/review/SKILL.md": {
       "content_sha256": "26d8ad2f47661b66d807101b94aed8cef3d8f4dc377c604d12a21a9eb969dad4",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
       "content_sha256": "d80c3dcc068945ffb8c1d99a96cbb7ea3e6c83c2f543b04c30037471c016e535",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
       "content_sha256": "84b3b21c3393f791d030e604181587adb7e76b9edf54a9ebaa51d490e8d87f9d",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     },
     ".claude/commands/review.md": {
       "content_sha256": "54780daf3c0540888d9d4ecf1a8d985319982157444cd53a7557c53b1201f512",
-      "template_version": "0.72.0",
+      "template_version": "0.73.0",
       "renderer": 1
     }
   }
