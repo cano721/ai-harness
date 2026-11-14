@@ -6,6 +6,16 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 동작 변경
+
+- **워크플로 진입점을 스크립트가 만들고 sync 자동 병합이 검증** — `/implement-feature`·`/fix-bug`·`/review` 진입점 6개(`.claude/commands/*.md`·`.agents/skills/*/SKILL.md`)를 에이전트가 손으로 써서 결과가 흔들렸고(템플릿 줄이 빠진 채 남기도 했다), 자동 병합은 이 파일이 든 sync PR을 모두 `render_file:` 사유로 사람에게 넘겼습니다. 이제 `scripts/render-managed-file.sh`가 템플릿에서 결정적으로 만들고 `/ai-harness:harness-init`(최초 생성·sync·무인 sync)은 `place-managed-file.sh`로 씁니다. 자동 병합은 스크립트 결과와 바이트 같은 진입점을 통과시키고, 사람이 고친 진입점은 지금처럼 덮어쓰지 않고 사람 확인으로 넘깁니다. (#316)
+
+### 업데이트 후 해야 할 일
+
+- 다음 sync는 기록된 해시와 같은 진입점을 템플릿에서 다시 만듭니다. 에이전트가 예전에 진입점에 넣어 둔 프로젝트별 문구가 있다면 `.ai-harness/workflows/<워크플로>.md`로 옮기세요. (#316)
+
 ## v0.72.0 (2026-11-13)
 ### 새 기능
 
