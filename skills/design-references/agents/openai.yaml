@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design References"
+  short_description: "Collect, capture, and check design references and competitors, then serve them as a five-tab board."
+  default_prompt: "Use $design-references to collect references and competitors for: $ARGUMENTS"
