@@ -2485,7 +2485,10 @@ if command -v node >/dev/null 2>&1; then
   assert_contains "$(cat "$LP_W/board.html")" "이미 시작됐어요" "a board whose pick is made locks instead of sending again"
   if grep -q '남김\|뺌' "$LP_W/board.html"; then fail "the board no longer says keep/drop (남김·뺌)"; fi
   assert_contains "$(cat "$LP_W/board.html")" "이 레퍼런스로 시작" "the board has a start button"
-  assert_contains "$(cat "$LP_W/board.html")" "터미널에 답해 주세요" "a statically served board asks for the answer in the terminal"
+  assert_contains "$(cat "$LP_W/board.html")" "요약을 복사해 세션에 붙여 주세요" "a statically served board asks for the answer in the session"
+  # 보기 전용 보드는 "이 레퍼런스로 시작"을 안내하지 않고, 의견 칸은 펼칠 때만 보여 고르기 바가 본문을 덮지 않는다(#336).
+  assert_contains "$(cat "$LP_W/board.html")" '<span class="ask-run" hidden>' "the start guidance shows only when the board can start a run"
+  assert_contains "$(cat "$LP_W/board.html")" '.pick .fields{display:none;' "the pick bar keeps its fields folded until asked"
 fi
 assert_eq "--work $(cd "$LP_W" && pwd) --kind references" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
 # An interactive board is looked at, so each tab needs enough references (references_min in the graph).
@@ -2868,6 +2871,21 @@ if command -v node >/dev/null 2>&1; then
     assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "serving again on the same port reuses the running server"
     assert_eq 1 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" | wc -l | tr -d ' ')" "one board server per folder and port"
     pkill -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" 2>/dev/null || true
+    # Harness Board가 떠 있고 레퍼런스 화면을 지원하면 따로 서버를 띄우지 않고 대시보드 주소를 낸다(#336).
+    # features가 없는 이전 보드(0.73 이하)나 죽은 server.json이면 지금처럼 자체 서버를 쓴다.
+    DR_FAKE="$TEST_TMP/dr-dash"; mkdir -p "$DR_FAKE" "$HARNESS_METRICS_DIR/board"
+    printf 'import time\ntime.sleep(120)\n' >"$DR_FAKE/board-server.py"
+    python3 "$DR_FAKE/board-server.py" & dr_fake_pid=$!
+    jq -n --argjson p "$dr_fake_pid" '{port: 1, token: "x", pid: $p, url: "http://127.0.0.1:1/?t=tok", features: ["references"]}' >"$HARNESS_METRICS_DIR/board/server.json"
+    dr_port2=$((dr_port + 1))
+    assert_eq "http://127.0.0.1:1/?t=tok&refs=$(dr run-id)" "$(dr board --port "$dr_port2" --serve 2>/dev/null)" "with the Harness Board up, the reference board is shown there"
+    assert_eq 0 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port2" | wc -l | tr -d ' ')" "no separate board server starts while the Harness Board shows it"
+    assert_eq "null" "$(jq -r '.url' "$DR_REC")" "the run record keeps no tokened dashboard address"
+    jq 'del(.features)' "$HARNESS_METRICS_DIR/board/server.json" >"$DR_FAKE/old.json" && mv "$DR_FAKE/old.json" "$HARNESS_METRICS_DIR/board/server.json"
+    assert_eq "http://127.0.0.1:$dr_port2/board.html" "$(dr board --port "$dr_port2" --serve)" "an older board without the references view falls back to the board server"
+    pkill -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port2" 2>/dev/null || true
+    kill "$dr_fake_pid" 2>/dev/null || true; wait "$dr_fake_pid" 2>/dev/null || true
+    rm -f "$HARNESS_METRICS_DIR/board/server.json"
   fi
 fi
 DR_SKILL="$ROOT/skills/design-references/SKILL.md"
@@ -7660,6 +7678,25 @@ board_sh() {
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="${BOARD_PORT_OVERRIDE:-$BOARD_PORT_T}" BOARD_NO_BROWSER=1 \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
+# 레퍼런스 보드(#336): 대시보드가 실행 기록을 읽어 목록·상세·파일·고르기를 보인다. 보드를 띄우기 전에 기록을 둔다
+# (status.json은 몇 초 캐시한다). aaaa…는 보기 전용(랜딩 실행 없음), bbbb…는 reference_pick에서 기다리는 랜딩 실행,
+# cccc…는 작업 폴더가 없어진 기록이다. 작업 폴더 밖 파일로 가는 심볼릭 링크와 허용하지 않는 확장자도 둔다.
+BREF_DIR="$BOARD_DATA/board/references"; mkdir -p "$BREF_DIR"
+BREF_VIEW="$BOARD_T/refs-view"; BREF_PICK="$BOARD_T/refs-pick"
+for w in "$BREF_VIEW" "$BREF_PICK"; do
+  mkdir -p "$w/refs/lay-a" "$w/refs/int-a" "$w/captures"
+  printf 'png' >"$w/refs/lay-a/w1440-00.png"; printf 'webm' >"$w/refs/int-a/rec.webm"; printf '{}' >"$w/refs/lay-a/capture.json"
+  printf '[{"id":"hero","label":"첫 화면"}]\n' >"$w/component-slots.json"
+  jq -n '[{id:"tone-a",kind:"tone",title:"톤",captures:["refs/lay-a/w1440-00.png"]},
+    {id:"com-a",kind:"component",title:"구성",recommended:"hero",captures:[]},
+    {id:"lay-a",kind:"layout",title:"레이아웃",recommended:"layout",captures:["refs/lay-a/w1440-00.png","../outside.png","/etc/hosts"]},
+    {id:"int-a",kind:"interaction",title:"인터랙션",recommended:"interaction",video:"refs/int-a/rec.webm"},
+    {id:"cmp-a",kind:"competitor",title:"경쟁사",analysis:{leads_with:"x",claim:"y",cta:"z",gap:"w"}}]' >"$w/references.json"
+done
+printf 'secret' >"$BOARD_T/outside.png"; ln -s "$BOARD_T/outside.png" "$BREF_VIEW/refs/lay-a/link.png"; ln -s "$BOARD_T" "$BREF_VIEW/captures/up"
+mkdir -p "$BREF_PICK/.landing-run"; printf '{"node":"reference_pick","entered_at":"2020-01-01T00:00:00Z"}\n' >"$BREF_PICK/.landing-run/state.json"
+bref_rec() { jq -n --arg id "$1" --arg w "$2" --arg t "$3" '{run_id:$id, work:$w, topic:$t, status:"ready", created_at:"2026-11-14T00:00:00Z", updated_at:"2026-11-14T00:00:00Z"}' >"$BREF_DIR/$1.json"; }
+bref_rec aaaaaaaaaaaa "$BREF_VIEW" "보기 전용 보드"; bref_rec bbbbbbbbbbbb "$BREF_PICK" "랜딩 고르기"; bref_rec cccccccccccc "$BOARD_T/gone" "사라진 보드"
 assert_eq "false" "$(board_sh status | jq -r '.running')" "board is not running before open"
 BOARD_OPEN="$(board_sh open)"
 assert_eq "false" "$(jq -r '.reused' <<<"$BOARD_OPEN")" "board open starts a server"
@@ -7699,6 +7736,54 @@ BOARD_SET="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOA
 assert_eq "true" "$(jq -r '.ok' <<<"$BOARD_SET")" "board writes the harness stage"
 assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness stage merge turns on auto merge"
 assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
+# 레퍼런스 보드(#336): 목록 — 주제·상태·탭별 개수, 폴더 없는 기록은 missing, 랜딩 실행이 기다리면 can_pick.
+BREF_LIST="$(curl -s "$BOARD_BASE/references?t=$BOARD_TOKEN")"
+assert_eq "aaaaaaaaaaaa|bbbbbbbbbbbb|cccccccccccc" "$(jq -r '[.runs[].run_id] | sort | join("|")' <<<"$BREF_LIST")" "the board lists every reference run record"
+assert_eq "보기 전용 보드|ready|false|null|1,1,1,1,1" \
+  "$(jq -r '.runs[] | select(.run_id == "aaaaaaaaaaaa") | [.topic, .status, .missing, .landing_node, ([.counts.tone, .counts.component, .counts.layout, .counts.interaction, .counts.competitor] | map(tostring) | join(","))] | map(tostring) | join("|")' <<<"$BREF_LIST")" \
+  "a reference run shows its topic, status, and count per tab; without a landing run it is view-only"
+assert_eq "true|false" "$(jq -r '.runs[] | select(.run_id == "cccccccccccc") | [.missing, .can_pick] | map(tostring) | join("|")' <<<"$BREF_LIST")" "a record whose work folder is gone is listed as missing"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/references")" "the reference list needs the board token"
+# 상세: 작업 폴더 밖 매체(../·절대 경로)는 싣지 않는다.
+BREF_RUN="$(curl -s "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=aaaaaaaaaaaa")"
+assert_eq '[{"path":"refs/lay-a/w1440-00.png"}]|refs/int-a/rec.webm|hero' \
+  "$(jq -r '.run as $r | [($r.refs[] | select(.id == "lay-a") | .captures | tojson), ($r.refs[] | select(.id == "int-a") | .video.path), $r.slots[0].id] | join("|")' <<<"$BREF_RUN")" \
+  "the run detail carries only media inside the work folder"
+assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=../../etc")" "the run detail takes only a registered run id"
+# 파일 서빙: refs/·captures/ 아래 이미지·영상만. ..·절대 경로·심볼릭 링크로 밖에 닿는 것·다른 확장자·등록 안 된 실행은 거부.
+bref_file() { curl -s -o /dev/null -w '%{http_code}' -G "$BOARD_BASE/references/file" --data-urlencode "t=${3-$BOARD_TOKEN}" --data-urlencode "run=${2:-aaaaaaaaaaaa}" --data-urlencode "p=$1"; }
+assert_eq 200 "$(bref_file refs/lay-a/w1440-00.png)" "the board serves a reference capture"
+assert_eq 200 "$(bref_file refs/int-a/rec.webm)" "the board serves a reference recording"
+assert_eq "206|bytes 1-2/4" "$(curl -s -D - -o /dev/null -H 'Range: bytes=1-2' -G "$BOARD_BASE/references/file" --data-urlencode "t=$BOARD_TOKEN" --data-urlencode run=aaaaaaaaaaaa --data-urlencode p=refs/int-a/rec.webm | tr -d '\r' | awk '/^HTTP/{c=$2} /^Content-Range:/{r=$2" "$3} END{print c"|"r}')" "a recording is served in byte ranges"
+for bref_bad in ../outside.png refs/../../outside.png "$BOARD_T/outside.png" refs/lay-a/link.png captures/up/outside.png refs/lay-a/capture.json references.json .landing-run/state.json refs/lay-a/missing.png; do
+  assert_eq 404 "$(bref_file "$bref_bad")" "the board refuses reference file $bref_bad"
+done
+assert_eq 404 "$(bref_file refs/lay-a/w1440-00.png 000000000000)" "the board refuses a file of an unregistered run"
+assert_eq 403 "$(bref_file refs/lay-a/w1440-00.png aaaaaaaaaaaa wrong)" "the reference file needs the board token"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BOARD_PORT_T" -G "$BOARD_BASE/references/file" --data-urlencode "t=$BOARD_TOKEN" --data-urlencode run=aaaaaaaaaaaa --data-urlencode p=refs/lay-a/w1440-00.png)" "the reference file checks the Host"
+# 고르기: 보기 전용 실행에는 쓰지 않는다. 기다리는 랜딩 실행은 지금 할 일 카드로 뜨고, 고르면 landing-pick.mjs가
+# 보드 서버와 같은 reference-pick.json을 쓰고 실행 기록을 picked로 바꾼다. 두 번째 고르기는 409.
+bref_pick() { curl -s -w '\n%{http_code}' -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" --arg r "$1" --argjson b "$2" '$b + {t: $t, run: $r}')" "$BOARD_BASE/references/pick"; }
+BREF_BODY='{"tone":"이대로","kept":["tone-a","com-a","lay-a","int-a"],"dropped":["cmp-a"],"add_sites":["https://example.com/x"],"user_words":"3D는 과하지 않게","primary":{"layout":"lay-a","interaction":"int-a","components":{"hero":"com-a"},"added_slots":[]}}'
+assert_eq 409 "$(bref_pick aaaaaaaaaaaa "$BREF_BODY" | tail -1)" "a view-only reference board takes no pick"
+assert_not_file "$BREF_VIEW/reference-pick.json"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, run: "bbbbbbbbbbbb"}')" "$BOARD_BASE/references/pick")" "a reference pick from another origin is refused"
+if command -v node >/dev/null 2>&1; then
+  assert_eq "true" "$(jq -r '.runs[] | select(.run_id == "bbbbbbbbbbbb") | .can_pick' <<<"$BREF_LIST")" "a landing run waiting at reference_pick can be picked on the board"
+  assert_eq "needs_human|레퍼런스 고르기 — 랜딩 고르기|bbbbbbbbbbbb" \
+    "$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '.items[] | select(.kind == "references") | [.state, .title, .run_id] | join("|")')" \
+    "a landing run waiting at reference_pick shows as a to-do card"
+  assert_eq 400 "$(bref_pick bbbbbbbbbbbb '{"tone":"이대로","kept":["tone-a"],"primary":{"layout":"lay-a","interaction":"int-a","components":{},"added_slots":[]},"dropped":["lay-a"]}' | tail -1)" "a pick that stars an excluded reference is refused"
+  assert_eq 200 "$(bref_pick bbbbbbbbbbbb "$BREF_BODY" | tail -1)" "the board writes the pick of a waiting landing run"
+  assert_eq "이대로|lay-a|int-a|com-a|cmp-a|https://example.com/x|3D는 과하지 않게|board" \
+    "$(jq -r '[.tone, .primary.layout, .primary.interaction, .primary.components.hero, (.dropped | join(",")), (.add_sites | join(",")), .user_words, .via] | join("|")' "$BREF_PICK/reference-pick.json")" \
+    "the board's pick has the same shape the board server writes"
+  assert_eq picked "$(jq -r .status "$BREF_DIR/bbbbbbbbbbbb.json")" "a pick on the dashboard marks the run record picked"
+  assert_eq 409 "$(bref_pick bbbbbbbbbbbb "$BREF_BODY" | tail -1)" "a second pick in the same node is refused"
+  sleep 3  # status.json 캐시가 지나면 카드가 내려간다
+  assert_eq "" "$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '.items[] | select(.kind == "references") | .id')" "the to-do card goes away once picked"
+fi
+pass "the Harness Board lists reference boards, serves only their media, and takes a pick for a waiting landing run (#336)"
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
   | env -u AI_HARNESS_HEADLESS -u CLAUDE_PID CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
@@ -8451,7 +8536,7 @@ assert any(i.get("ask") for i in items) and any(i.get("in_repo") is False for i 
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has a real-scale scenario"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
-assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"
+assert_contains "$BOARD_TPL" "for (const key of ['list', 'refs', 'impact', 'settings'])" "the sidebar keeps the list, reference boards, impact and settings"
 # 3차: 작업 현황은 카드와 한 줄 상황만, 저장소별 연결은 하네스 설정의 '자동 수정' 탭(개인 설정보다 위)으로.
 BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac

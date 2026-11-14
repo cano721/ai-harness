@@ -18,6 +18,11 @@ POST /autofix/candidates {t, repo}  autofix-auto.sh candidates(외부 API) — �
 POST /autofix/detail {t, repo, signature}  monitor-fetch.sh detail(외부 API, 비밀값 가림) — 줄을 펼친 뒤 버튼으로만, 결과 캐시
 POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정을 씀. 주기를 바꾸면 schedule.sh install-autofix·status
 POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움(보드는 monitor 파일을 쓰지 않음)
+GET  /references?t=...           레퍼런스 보드 실행 기록 목록(주제·상태·만든 시각·탭별 개수·폴더 없음·고르기 가능)
+GET  /references/run?t&run       실행 하나의 탭 5개 내용(references.json·tone.json·component-slots.json)
+GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ 아래 이미지·영상만(realpath로 밖을 막음)
+POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
+                                 랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -34,6 +39,7 @@ import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
+import references as hrefs  # noqa: E402
 import settings as hsettings  # noqa: E402
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -115,6 +121,10 @@ def status(max_age=3):
                 except Exception as e:
                     print("autofix items:", e, file=sys.stderr, flush=True)
             data["items"] += af or []
+            try:  # 랜딩 실행이 레퍼런스 고르기에서 기다리면 '지금 할 일'에 띄운다
+                data["items"] += REFS.todo_items()
+            except Exception as e:
+                print("references items:", e, file=sys.stderr, flush=True)
             link_autofix_sessions(data["items"])
             data["items"] = drop_hidden(data["items"])
             data["hidden_count"] = len(_load(HIDDEN) or {})
@@ -752,6 +762,7 @@ def impact_refresh(repo):
 
 
 AUTOFIX = hautofix.Store(DATA)
+REFS = hrefs.Store(DATA)
 
 
 def autofix_key(repo):
@@ -1136,7 +1147,8 @@ def write_hook_conf(url):
     tmp = HOOK_CONF + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url}, f)
+        # features: 이 서버가 보여 줄 수 있는 화면. design-refs.sh는 references가 있을 때만 보드 주소를 대시보드로 안내한다.
+        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url, "features": ["references"]}, f)
     os.replace(tmp, HOOK_CONF)
     atexit.register(remove_hook_conf)
 
@@ -1374,6 +1386,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, path, ctype):
+        """레퍼런스 이미지·영상. 영상 재생(특히 Safari)이 Range를 요구해서 바이트 범위 하나를 지원한다."""
+        size = os.path.getsize(path)
+        start, end, code = 0, size - 1, 200
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        if m and size and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1)); end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            else:
+                start = max(0, size - int(m.group(2)))
+            if start > end or start >= size:
+                self.send_response(416); self.send_header("Content-Range", f"bytes */{size}"); self.send_header("Content-Length", "0"); self.end_headers()
+                return
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(65536, left))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
     def _token_ok(self, given):
         return isinstance(given, str) and secrets.compare_digest(given, TOKEN)
 
@@ -1413,6 +1458,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, impact_state())
         if u.path == "/autofix":
             return self._send(200, autofix_state())
+        if u.path == "/references":
+            return self._send(200, {"ok": True, "runs": REFS.listing()})
+        if u.path == "/references/run":
+            d = REFS.detail(q.get("run", [None])[0])
+            return self._send(200, {"ok": True, "run": d}) if d else self._send(404, {"ok": False, "message": "등록된 레퍼런스 실행이 아님"})
+        if u.path == "/references/file":
+            path = REFS.media_path(q.get("run", [None])[0], q.get("p", [None])[0])
+            if not path:
+                return self._send(404, {"ok": False, "message": "보여 줄 수 있는 레퍼런스 파일이 아님"})
+            try:
+                return self._send_file(path, REFS.media_type(path))
+            except (BrokenPipeError, ConnectionResetError):
+                return None
         if u.path == "/autofix/log":
             path = AUTOFIX.log_path(q.get("name", [None])[0])
             if not path:
@@ -1500,6 +1558,10 @@ class Handler(BaseHTTPRequestHandler):
             res = autofix_setup(req.get("repo"))
             log({"action": "autofix_setup", "repo": req.get("repo"), **res})
             return self._send(200, res)
+        if path == "/references/pick":
+            code, res = REFS.pick(req.get("run"), req)
+            log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
+            return self._send(code, res)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))
             log({"action": "impact_refresh", "repo": req.get("repo"), **res})
