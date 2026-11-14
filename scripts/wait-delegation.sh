@@ -75,7 +75,7 @@ read_screen() { # 성공하면 screen·status를 채운다
 awaiting_input() {
   local tail_text
   tail_text="$(grep -v '^[[:space:]]*$' <<<"$screen" | tail -n 12 || true)"
-  grep -Eqi 'Enter to select|to navigate|Do you want to|Would you like to|Allow (command|this)|Press enter to (confirm|approve)|\(y/n\)|❯ *1\. ' <<<"$tail_text" && return 0
+  grep -Eqi 'Enter to (select|confirm)|Esc to cancel|to navigate|trust this folder|Do you want to|Would you like to|Allow (command|this)|Press enter to (confirm|approve)|\(y/n\)|❯ *(1\.|Yes|No)( |,|$)' <<<"$tail_text" && return 0
   grep -Eq '(\?|할까요|될까요|주세요|승인)[[:space:]]*$' <<<"$tail_text"
 }
 
