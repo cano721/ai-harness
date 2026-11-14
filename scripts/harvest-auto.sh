@@ -734,7 +734,8 @@ command_notify() {
   local f="" row="" last="" key="" reason="" shown="$AUTO_DIR/auth-notified"
   for f in "$RUNS_FILE" "$HM_DATA_DIR/autofix/runs.jsonl"; do
     [[ -f "$f" ]] || continue
-    row="$(jq -Rcn --arg f "$f" '[inputs | fromjson? | objects | select(.event == "finished")]
+    # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 로그인이 풀렸다는 근거가 아니다.
+    row="$(jq -Rcn --arg f "$f" '[inputs | fromjson? | objects | select(.event == "finished" and (.no_agent // false) == false)]
       | if length == 0 then empty else (last + {key: "\($f)|\(length)|\(last.at // "")"}) end' "$f" 2>/dev/null)"
     [[ -n "$row" ]] || continue
     if [[ -z "$last" ]] || [[ "$(jq -r '.at // ""' <<<"$row")" > "$(jq -r '.at // ""' <<<"$last")" ]]; then last="$row"; fi

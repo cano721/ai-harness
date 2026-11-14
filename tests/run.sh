@@ -4073,6 +4073,23 @@ done
 assert_eq "3" "$(auto_runs '(map(select(.event=="started")) | last | .batch) as $b | [.[] | select(.event=="finished" and .batch==$b)] | length')" "a failing batch runs at most three times"
 assert_eq "gave_up" "$(auto_runs 'last | .reason')" "then it is given up"
 assert_eq "gave_up" "$(jq -r '.result' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "and stays given up"
+# 로그인 만료(#315): 이전 버전이 인증 실패를 세어 포기한 batch는 로그로 판정해 다시 시도한다.
+printf '%s\n' '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate. Run claude auth login"}' >"$TEST_TMP/auto-legacy-auth.log"
+jq -cn '{batch_id:"b-legacy",at:"2026-01-01T00:00:00Z",result:"gave_up",fails:3}' >"$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch"
+for _ in 1 2 3; do
+  jq -cn --arg b "$(printf '%s' b-legacy | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)" --arg l "$TEST_TMP/auto-legacy-auth.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"auto-svc",batch:$b,scope:"project",result:"failed",exit_code:1,reason:"agent_error",log:$l}' \
+    >>"$AUTO_DATA/harvest-auto/runs.jsonl"
+done
+AUTO_LEGACY_KEY="$(printf '%s' b-legacy | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_DAILY_MAX=99 HM_HARVEST_AUTO_AGENT=claude auto_trigger "$(auto_status auto-svc b-legacy)" "$AUTO_REPO"
+assert_eq "1|true" "$(jq -sr --arg b "$AUTO_LEGACY_KEY" '[.[] | select(.event=="started" and .batch==$b)] | length' "$AUTO_DATA/harvest-auto/runs.jsonl")|$(jq -r '.auth_checked' "$AUTO_DATA/harvest-queue/p-auto-svc/auto-attempted-batch")" "a batch given up only for expired logins runs again"
+# 분류는 API 오류로 끝난 결과 줄만 문구로 본다 — 작업 실패 보고에 같은 문구가 섞여도 로그인 만료가 아니다.
+af_reason() { printf '%s\n' "$1" | jq -Rrn -L "$ROOT/scripts" 'include "fail-reason"; log_fail_reason'; }
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"api_error_status":401,"result":"x"}')" "a 401 is an expired login"
+assert_eq "agent_error" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"max_turns","result":"setup-token 문서를 고치다 실패"}')" "a work failure mentioning setup-token is not an expired login"
+assert_eq "" "$(af_reason '{"type":"result","is_error":false,"result":"claude auth login 안내를 추가함"}')" "a successful run is not a failure"
+pass "a harvest batch given up for expired logins is retried and the classifier ignores work reports"
 pass "opt-in background harvest trigger"
 
 # 자동 harvest가 띄운 headless 세션은 프로젝트 신호로 집계하지 않는다.
@@ -5372,7 +5389,9 @@ assert_contains "$CHAIN_AUTH_MSG" "claude auth login" "session start says the lo
 assert_contains "$CHAIN_AUTH_MSG" "claude setup-token" "and names the token for unattended runs"
 assert_eq "" "$(chain_auth_notify)" "the notice is shown once per failure"
 CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
-assert_contains "$(chain_auth_notify | jq -r '.systemMessage')" "claude auth login" "a newer expired login is told again"
+# 에이전트를 띄우지 않고 끝난 sync는 로그인이 풀렸다는 근거가 아니다.
+jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"chain-x",scope:"sync",result:"no-change",exit_code:0,no_agent:true}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+assert_contains "$(chain_auth_notify | jq -r '.systemMessage')" "claude auth login" "a newer expired login is told again, even after a run that launched no agent"
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'harvest-auto.sh" notify' "session start asks for the expired-login notice"
 # 과거 버전은 인증 실패를 agent_error로 세어 fails:3으로 포기했다. 로그가 인증 실패인 지난 실패는 횟수에서 빼 다시 후보가 된다.
 # 로그가 인증 실패가 아닌 지난 실패는 그대로 센다.
@@ -5926,13 +5945,16 @@ AF_AUTH_LINE='{"type":"result","is_error":true,"terminal_reason":"api_error","re
 printf '%s\n' "$AF_AUTH_LINE" >"$AF_STUB/legacy-auth.log"
 af_state '.signatures["sentry:101"] = {status:"failed",fails:3,attempts:1,title:"t"}'
 for _ in 1 2 3; do
-  jq -cn --arg l "$AF_STUB/legacy-auth.log" '{at:"2026-01-01T00:00:00Z",event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
+  jq -cn --arg l "$AF_STUB/legacy-auth.log" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{at:$at,event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
 done
+# 마지막 PR·해결 앞의 인증 실패는 지금 실패 횟수에 들어 있지 않으므로 빼지 않는다.
+jq -cn --arg l "$AF_STUB/legacy-auth.log" '{at:"2000-01-01T00:00:00Z",event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
+af_state '.signatures["sentry:101"].fails = 4'
 jq -n '{state:"open"}' >"$AF_STUB/pr-state.json"
 AF_BEFORE="$(<"$AF_STUB/agent-count")"
 AF_STUB_RESULT="$AF_AUTH_LINE" af_auto sweep
 assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "an error given up only for expired logins is tried again"
-assert_eq "failed|0|auth_expired" "$(af_sig '"\(.status)|\(.fails)|\(.last_reason)"')" "an expired login is classified and not counted"
+assert_eq "failed|1|auth_expired" "$(af_sig '"\(.status)|\(.fails)|\(.last_reason)"')" "an expired login is classified and not counted, and only failures after the last PR are forgiven"
 assert_eq "auth_expired" "$(jq -sr '[.[] | select(.event=="finished")] | last | .reason' "$AF_DATA/autofix/runs.jsonl")" "the run log names the expired login"
 AF_STUB_RESULT="$AF_AUTH_LINE" HM_LLM_TICK_STARTED_AT="2000-01-01T00:00:00Z" af_auto sweep
 assert_eq "$((AF_BEFORE + 1))|auth_expired" "$(<"$AF_STUB/agent-count")|$(jq -sr 'last | .reason' "$AF_DATA/autofix/runs.jsonl")" "no more fixes start in a round that already hit an expired login"

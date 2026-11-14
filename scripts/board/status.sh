@@ -109,7 +109,10 @@ if [ -f "$runs" ]; then
 
   # 로그인 만료(#315): 저장소마다 같은 이유로 실패한 카드를 한 장으로 묶고 할 일을 제목에 쓴다.
   # 그 뒤 끝까지 돈 실행이 하나라도 있으면(다시 로그인함) 묶음 카드도, 남은 저장소별 실패 카드도 내린다.
-  last_ok=$(jq -Rrn '[inputs | fromjson? | objects | select(.event == "finished" and (.exit_code // 0) == 0 and .result != "failed") | .at] | max // ""' "$runs" 2>/dev/null || true)
+  # 성공 판정은 세션 시작 안내(harvest-auto.sh notify)와 같다: 자동 수정 실행도 보고, 에이전트를 띄우지 않은 sync(no_agent)는 뺀다.
+  last_ok=$(for f in "$runs" "$DATA/autofix/runs.jsonl"; do [ -f "$f" ] && cat "$f"; done | jq -Rrn '[inputs | fromjson? | objects
+    | select(.event == "finished" and (.no_agent // false) == false and (.exit_code // 0) == 0
+      and .result != "failed" and .outcome != "failed") | .at] | max // ""' 2>/dev/null || true)
   jq --arg ok "$last_ok" '
     [.[] | select(.reason_key == "auth_expired" and .at > $ok)] as $live
     | [.[] | select(.reason_key != "auth_expired")]

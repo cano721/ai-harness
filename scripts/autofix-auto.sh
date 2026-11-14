@@ -232,10 +232,13 @@ forgive_auth_fails() { # $1=project
   while IFS=$'\t' read -r sig log; do
     [[ -n "$sig" && "$(hm_log_fail_reason "$log")" == "auth_expired" ]] || continue
     counts="$(jq -c --arg s "$sig" '.[$s] = ((.[$s] // 0) + 1)' <<<"$counts")"
+  # 실패 횟수는 마지막으로 PR을 열었거나 해결된 뒤부터 센다(orphan_records와 같은 기준) — 그 앞의 실패는 빼지 않는다.
   done <<<"$(jq -Rrn --arg p "$project" --argjson sigs "$pending" '[inputs | fromjson? | objects
-      | select(.project == $p and .event == "finished" and .outcome == "failed" and (.signature | IN($sigs[]))
+      | select(.project == $p and (.signature | IN($sigs[])))] | group_by(.signature)[]
+      | (([.[] | select(.outcome == "pr_opened" or .event == "resolved") | .at] | max) // "") as $reset
+      | .[] | select(.event == "finished" and .outcome == "failed" and (.at // "") > $reset
         and ((.reason // "") | IN("usage_limit", "auth_expired") | not) and (.log // "") != "")
-      | [.signature, .log] | @tsv] | .[]' "$RUNS_FILE" 2>/dev/null)"
+      | [.signature, .log] | @tsv' "$RUNS_FILE" 2>/dev/null)"
   state_update "$project" 'reduce $sigs[] as $s (.; if .signatures[$s] == null or (.signatures[$s].auth_checked // false) then .
       else .signatures[$s] |= (.fails = ([(.fails // 0) - ($n[$s] // 0), 0] | max) | .auth_checked = true) end)' \
     --argjson sigs "$pending" --argjson n "$counts" || true
