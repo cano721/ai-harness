@@ -728,25 +728,31 @@ command_runs() {
   tail -n "$limit" "$RUNS_FILE"
 }
 
-# 세션 시작 안내: 마지막 무인 실행(harvest·sync·autofix)이 로그인 만료로 끝났고 그 뒤 끝난 실행이 없으면 한 줄 알린다.
-# 같은 실패에는 한 번만 알린다(알린 실패를 기록 파일·건수·시각으로 남긴다). 이전 버전이 agent_error로 남긴 실패는 로그로 판정한다.
+# 세션 시작 안내: 무인 실행(harvest·sync·autofix)이 마지막으로 끝까지 돈 실행 이후 로그인 만료로 끝났으면 한 줄 알린다.
+# 판정은 보드 묶음 카드와 같다(#326) — 로그인 만료 뒤 에이전트를 띄우지 못한 실패(exit 70 등)는 성공이 아니라 안내를 지우지 않는다.
+# 같은 실패에는 한 번만 알린다(알린 실패를 기록 파일·순번·시각으로 남긴다). 이전 버전이 agent_error로 남긴 실패는 로그로 판정한다.
 command_notify() {
-  local f="" row="" last="" key="" reason="" shown="$AUTO_DIR/auth-notified"
+  local f="" files=() row="" key="" last_ok="" shown="$AUTO_DIR/auth-notified"
   for f in "$RUNS_FILE" "$HM_DATA_DIR/autofix/runs.jsonl"; do
-    [[ -f "$f" ]] || continue
-    # 에이전트를 띄우지 않고 끝난 sync(no_agent)는 로그인이 풀렸다는 근거가 아니다.
-    row="$(jq -Rcn --arg f "$f" '[inputs | fromjson? | objects | select(.event == "finished" and (.no_agent // false) == false)]
-      | if length == 0 then empty else (last + {key: "\($f)|\(length)|\(last.at // "")"}) end' "$f" 2>/dev/null)"
-    [[ -n "$row" ]] || continue
-    if [[ -z "$last" ]] || [[ "$(jq -r '.at // ""' <<<"$row")" > "$(jq -r '.at // ""' <<<"$last")" ]]; then last="$row"; fi
+    [[ -f "$f" ]] && files+=("$f")
   done
-  [[ -n "$last" ]] || return 0
-  reason="$(jq -r '.reason // empty' <<<"$last")"
-  if [[ "$reason" != "auth_expired" ]]; then
-    [[ "$reason" == "agent_error" ]] || return 0
-    [[ "$(hm_log_fail_reason "$(jq -r '.log // empty' <<<"$last")")" == "auth_expired" ]] || return 0
-  fi
-  key="$(jq -r '.key' <<<"$last")"
+  (( ${#files[@]} > 0 )) || return 0
+  last_ok="$(jq -Rrn -L "$DIR" 'include "fail-reason"; [inputs | fromjson? | objects | select(run_ok) | .at] | max // ""' "${files[@]}" 2>/dev/null)"
+  while IFS= read -r row; do
+    if [[ "$(jq -r '.reason' <<<"$row")" == "agent_error" ]] \
+      && [[ "$(hm_log_fail_reason "$(jq -r '.log // empty' <<<"$row")")" != "auth_expired" ]]; then
+      continue
+    fi
+    key="$(jq -r '.key' <<<"$row")"
+    break
+  done < <(for f in "${files[@]}"; do
+      # 보드와 같은 창(BOARD_DAYS, 기본 7일)만 본다 — 오래된 실패 로그를 세션마다 다시 읽지 않는다.
+      jq -Rcn --arg f "$f" --arg ok "$last_ok" --argjson days "${BOARD_DAYS:-7}" '((now - $days * 86400) | floor | todate) as $since
+        | [inputs | fromjson? | objects | select(.event == "finished")]
+        | to_entries[] | .value + {key: "\($f)|\(.key + 1)|\(.value.at // "")"}
+        | select((.at // "") > $ok and (.at // "") >= $since and (.reason == "auth_expired" or .reason == "agent_error"))' "$f" 2>/dev/null
+    done | jq -cs 'sort_by(.at // "") | reverse | .[]')
+  [[ -n "$key" ]] || return 0
   [[ "$(cat "$shown" 2>/dev/null)" != "$key" ]] || return 0
   if ! { mkdir -p "$AUTO_DIR" && printf '%s\n' "$key" >"$shown"; } 2>/dev/null; then
     return 0

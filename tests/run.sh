@@ -4087,6 +4087,8 @@ assert_eq "1|true" "$(jq -sr --arg b "$AUTO_LEGACY_KEY" '[.[] | select(.event=="
 # 분류는 API 오류로 끝난 결과 줄만 문구로 본다 — 작업 실패 보고에 같은 문구가 섞여도 로그인 만료가 아니다.
 af_reason() { printf '%s\n' "$1" | jq -Rrn -L "$ROOT/scripts" 'include "fail-reason"; log_fail_reason'; }
 assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"api_error_status":401,"result":"x"}')" "a 401 is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth session expired and could not be refreshed"}')" "an expired OAuth session without the authenticate prefix is an expired login"
+assert_eq "auth_expired" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"api_error","result":"OAuth token has expired"}')" "an expired OAuth token is still an expired login"
 assert_eq "agent_error" "$(af_reason '{"type":"result","is_error":true,"terminal_reason":"max_turns","result":"setup-token 문서를 고치다 실패"}')" "a work failure mentioning setup-token is not an expired login"
 assert_eq "" "$(af_reason '{"type":"result","is_error":false,"result":"claude auth login 안내를 추가함"}')" "a successful run is not a failure"
 pass "a harvest batch given up for expired logins is retried and the classifier ignores work reports"
@@ -8844,6 +8846,48 @@ ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$
 assert_eq "0" "$(jq '[.items[] | select(.reason == "auth_expired" or .project == "a1" or .project == "a2")] | length' <<<"$ST_OUT")" "a run that worked afterwards clears the expired-login card"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "i.reason === 'auth_expired'" "the board shows the expired-login title as is"
 pass "board status folds expired-login failures into one card that clears after a working run"
+
+# 로그인 만료 후속(#326): 자동 수정만 쓰는 사용자도 묶음 카드를 받고, 세션 안내와 보드는 같은 기준(마지막 성공 실행 이후인가)으로 판정한다.
+# 로그인 만료 뒤 에이전트를 띄우지 못한 실패(exit 70)는 성공이 아니므로 안내도 카드도 남는다.
+ST_AF="$ST_T/af-data"
+mkdir -p "$ST_AF/autofix"
+st_af_fin() { # $1=분 전 $2=project $3=outcome $4=exit_code $5=log $6=덧붙일 JSON 객체
+  local extra="${6:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg at "$(st_ago "$1")" --arg p "$2" --arg o "$3" --argjson e "$4" --arg log "$5" --argjson x "$extra" \
+    '{at: $at, event: "finished", project: $p, signature: "sig-1", outcome: $o, exit_code: $e, log: $log} + $x'
+}
+{
+  st_af_fin 30 af-svc failed 1 "$ST_T/logs/auth-1.log" '{"reason": "auth_expired"}'
+  st_af_fin 20 af-svc failed 70 "$ST_T/logs/none-af70.log"
+} >"$ST_AF/autofix/runs.jsonl"
+st_af_status() {
+  env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AF" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh"
+}
+st_af_notify() { HARNESS_METRICS_DIR="$ST_AF" "$ROOT/scripts/harvest-auto.sh" notify; }
+ST_AF_CARD="$(st_af_status | jq -c '[.items[] | select(.reason == "auth_expired")]')"
+assert_eq "1|needs_human" "$(jq -r 'length' <<<"$ST_AF_CARD")|$(jq -r '.[0].state // ""' <<<"$ST_AF_CARD")" "an expired login in an autofix run is the same bundled card, without any harvest run"
+assert_contains "$(jq -r '.[0].detail // ""' <<<"$ST_AF_CARD")" "af-svc(autofix)" "the card names the stopped autofix target"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a failure that launched no agent after the expired login keeps the session notice, like the board"
+assert_eq "" "$(st_af_notify)" "the notice is still shown once per failure"
+st_af_fin 10 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | length')" "an autofix run that worked afterwards clears the card"
+st_af_fin 5 af-svc failed 1 "$ST_T/logs/auth-2.log" '{"reason": "auth_expired"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer expired login after a working run is told again"
+st_af_fin 1 af-svc pr_opened 0 "$ST_T/logs/ok.log" >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "" "$(st_af_notify)" "a working run after the expired login clears the notice"
+# 이전 버전이 agent_error로 남긴 자동 수정 실패는 로그로 판정한다: 인증 실패 로그면 카드·안내에 넣고, 다른 실패 로그는 건너뛰어 그 전의 로그인 만료를 찾는다.
+st_af_fin 0 af-old failed 1 "$ST_T/logs/auth-1.log" '{"reason": "agent_error"}' >>"$ST_AF/autofix/runs.jsonl"
+assert_contains "$(st_af_status | jq -r '[.items[] | select(.reason == "auth_expired")] | .[0].detail // ""')" "af-old(autofix)" "a legacy autofix failure whose log is an expired login joins the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "and is told at session start"
+jq -cn --arg at "$(st_ago 0)" --arg log "$ST_T/logs/auth-other.log" \
+  '{at: $at, event: "finished", project: "af-other", signature: "sig-2", outcome: "failed", exit_code: 1, reason: "agent_error", log: $log}' >>"$ST_AF/autofix/runs.jsonl"
+: >"$ST_AF/harvest-auto/auth-notified"
+assert_eq "0" "$(st_af_status | jq '[.items[] | select(.reason == "auth_expired")] | .[0].detail // "" | test("af-other") | if . then 1 else 0 end')" "a legacy failure with another log stays out of the card"
+assert_contains "$(st_af_notify | jq -r '.systemMessage // ""')" "claude auth login" "a newer unrelated failure does not hide the earlier expired login"
+pass "the session notice and the board agree on expired logins, autofix included"
 
 # 여러 Claude 설정 폴더(#296): work.sh가 기본 폴더·서버 환경의 폴더·프로필 자동 감지·사용자 지정 폴더마다 claude agents를 불러 sessionId로 합친다.
 # HOME을 바꾸지 않고 환경변수로만 격리한다(서버 환경에 CLAUDE_CONFIG_DIR이 있을 수 있어 명시적으로 빼거나 지정한다).

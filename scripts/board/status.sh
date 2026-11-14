@@ -107,25 +107,6 @@ if [ -f "$runs" ]; then
     fi
   done | jq -s . > "$tmp/runs2.json"
 
-  # 로그인 만료(#315): 저장소마다 같은 이유로 실패한 카드를 한 장으로 묶고 할 일을 제목에 쓴다.
-  # 그 뒤 끝까지 돈 실행이 하나라도 있으면(다시 로그인함) 묶음 카드도, 남은 저장소별 실패 카드도 내린다.
-  # 성공 판정은 세션 시작 안내(harvest-auto.sh notify)와 같다: 자동 수정 실행도 보고, 에이전트를 띄우지 않은 sync(no_agent)는 뺀다.
-  af_runs="$DATA/autofix/runs.jsonl"
-  [ -f "$af_runs" ] || af_runs=/dev/null
-  last_ok=$(jq -Rrn '[inputs | fromjson? | objects
-    | select(.event == "finished" and (.no_agent // false) == false and (.exit_code // 0) == 0
-      and .result != "failed" and .outcome != "failed") | .at] | max // ""' "$runs" "$af_runs" 2>/dev/null || true)
-  jq --arg ok "$last_ok" '
-    [.[] | select(.reason_key == "auth_expired" and .at > $ok)] as $live
-    | [.[] | select(.reason_key != "auth_expired")]
-      + (if ($live | length) == 0 then [] else [{
-          kind: "schedule", project: "무인 실행", state: "needs_human", at: ($live | map(.at) | max),
-          title: "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token",
-          detail: ("터미널에서 claude auth login으로 다시 로그인하거나, 무인 실행용으로 claude setup-token을 실행한 뒤 CLAUDE_CODE_OAUTH_TOKEN을 설정하세요. 다음 무인 실행이 정상으로 돌면 이 카드는 사라집니다.\n멈춘 대상: "
-            + ($live | map("\(.project)(\(.kind))") | unique | join(", "))),
-          reason: "auth_expired", link: null, log: ($live | max_by(.at) | .log), cmd: "claude auth login", repo: null}] end)' \
-    "$tmp/runs2.json" > "$tmp/runs3.json" && mv "$tmp/runs3.json" "$tmp/runs2.json"
-
   # 최근 24시간 변경 없이 끝난 실행은 카드 대신 종류별 횟수로만 센다.
   jq -c 'fromjson? // empty' -R "$runs" | jq -cs --argjson now "$now_e" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
@@ -147,6 +128,39 @@ if [ -f "$runs" ]; then
 else
   echo '[]' > "$tmp/runs2.json"; echo '[]' > "$tmp/skips.json"; echo '[]' > "$tmp/quiet.json"
 fi
+
+# 로그인 만료(#315): 저장소마다 같은 이유로 실패한 카드를 한 장으로 묶고 할 일을 제목에 쓴다.
+# 그 뒤 끝까지 돈 실행이 하나라도 있으면(다시 로그인함) 묶음 카드도, 남은 저장소별 실패 카드도 내린다.
+# 성공 판정(run_ok)은 세션 시작 안내(harvest-auto.sh notify)와 같은 정의를 쓴다(#326).
+# 자동 수정 실행의 로그인 만료도 같은 카드에 넣는다 — 자동 수정만 쓰는 사용자도 카드를 받는다(#326).
+# 이전 버전이 agent_error로 남긴 자동 수정 실패는 로그로 판정한다.
+af_runs="$DATA/autofix/runs.jsonl"
+[ -f "$af_runs" ] || af_runs=/dev/null
+h_runs="$runs"
+[ -f "$h_runs" ] || h_runs=/dev/null
+last_ok=$(jq -Rrn -L "$SCRIPTS_DIR" 'include "fail-reason"; [inputs | fromjson? | objects | select(run_ok) | .at] | max // ""' \
+  "$h_runs" "$af_runs" 2>/dev/null || true)
+jq -Rcn --arg ok "$last_ok" --arg since "$since" '[inputs | fromjson? | objects
+  | select(.event == "finished" and (.at // "") > $ok and (.at // "") >= $since and (.reason == "auth_expired" or .reason == "agent_error"))] | .[]' \
+  "$af_runs" 2>/dev/null | while IFS= read -r row; do
+  if [ "$(jq -r '.reason' <<<"$row")" = agent_error ]; then
+    log=$(jq -r '.log // empty' <<<"$row")
+    if [ -z "$log" ] || [ "$(jq -Rrn -L "$SCRIPTS_DIR" 'include "fail-reason"; log_fail_reason' "$log" 2>/dev/null)" != auth_expired ]; then
+      continue
+    fi
+  fi
+  jq -c '{kind: "autofix", project, at, log, reason_key: "auth_expired"}' <<<"$row"
+done | jq -s . > "$tmp/af-auth.json"
+jq --arg ok "$last_ok" --slurpfile af "$tmp/af-auth.json" '
+  ([.[] | select(.reason_key == "auth_expired" and .at > $ok)] + $af[0]) as $live
+  | [.[] | select(.reason_key != "auth_expired")]
+    + (if ($live | length) == 0 then [] else [{
+        kind: "schedule", project: "무인 실행", state: "needs_human", at: ($live | map(.at) | max),
+        title: "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token",
+        detail: ("터미널에서 claude auth login으로 다시 로그인하거나, 무인 실행용으로 claude setup-token을 실행한 뒤 CLAUDE_CODE_OAUTH_TOKEN을 설정하세요. 다음 무인 실행이 정상으로 돌면 이 카드는 사라집니다.\n멈춘 대상: "
+          + ($live | map("\(.project)(\(.kind))") | unique | join(", "))),
+        reason: "auth_expired", link: null, log: ($live | max_by(.at) | .log), cmd: "claude auth login", repo: null}] end)' \
+  "$tmp/runs2.json" > "$tmp/runs3.json" && mv "$tmp/runs3.json" "$tmp/runs2.json"
 
 # 2) 스케줄 회차: 마지막 회차가 skip이면 막힘으로.
 sched="$DATA/logs/schedule.jsonl"
