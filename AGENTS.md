@@ -4,7 +4,7 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 
 ## Preflight
 
-1. 작업 유형을 고른다: 기능 → `/implement-feature`, 버그 → `/fix-bug`, 변경 검토 → `/review`. 단순 질문·탐색은 워크플로 없이 답한다.
+1. 작업 유형을 고른다: 기능 → `/implement-feature`, 버그 → `/fix-bug`, 수정 전 원인 조사 → `/investigate`, 변경 검토 → `/review`. 단순 질문·탐색은 워크플로 없이 답한다.
 2. 소스를 고치기 전에 `.ai-harness/docs/code-conventions.md`를 Read한다. 테스트를 쓰면 `.ai-harness/docs/testing.md`, 구조를 바꾸면 `.ai-harness/docs/architecture.md`도 Read한다.
 3. 기준 브랜치는 `develop`이다. 작업은 `origin/develop`에서 딴 작업 브랜치(가능하면 worktree)에서 한다. 사용자의 현재 체크아웃을 바꾸지 않는다.
 
@@ -18,6 +18,7 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 |---|---|---|---|---|
 | `/implement-feature` | 프로젝트 로컬 | `.claude/commands/implement-feature.md` | `.agents/skills/implement-feature/` | `.ai-harness/workflows/implement-feature.md` + `feature-delivery-graph.json` |
 | `/fix-bug` | 프로젝트 로컬 | `.claude/commands/fix-bug.md` | `.agents/skills/fix-bug/` | `.ai-harness/workflows/fix-bug.md` + `bug-fix-graph.json` |
+| `/investigate` | 프로젝트 로컬 | `.claude/commands/investigate.md` | `.agents/skills/investigate/` | `.ai-harness/workflows/investigate.md` + `investigate-graph.json` |
 | `/review` | 프로젝트 로컬 | `.claude/commands/review.md` | `.agents/skills/review/` | `.ai-harness/workflows/review.md` + `review-graph.json` |
 | `/ai-harness:understand-change` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | `.ai-harness/workflows/understand-change.md` (선택 정책) |
 | `/ai-harness:explain-for` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | — |

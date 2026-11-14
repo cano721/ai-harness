@@ -1855,6 +1855,37 @@ driver start --workflow review --runtime codex --request "review my uncommitted 
 assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a changed screen file is verified even when the reviewer listed no scenario"
 pass "bug-fix and review graphs run through the same runner"
 
+# /investigate가 남긴 조사 보고를 받으면 fix-bug는 triage·reproduce를 다시 하지 않고 brief부터 시작한다. (#338)
+INVESTIGATION_REPORT="$DRIVER_TMP/investigation.md"
+printf '%s\n' '# Investigation: total ignores tax' 'root cause: tax is skipped when the discount is zero' \
+  'evidence: npm test -- total: expected 110, got 100 (origin/develop)' >"$INVESTIGATION_REPORT"
+new_driver_repo bug_investigated
+driver start --workflow bug-fix --runtime codex --request "total ignores tax" --investigation "$INVESTIGATION_REPORT"
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "an investigated bug still stops at approval"
+assert_eq "brief read-only schema=yes;" "$(tr '\n' ';' <"$FAKE_LOG")" "an investigation report skips triage and reproduce"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "tax is skipped when the discount is zero" "the brief reads the investigation report"
+assert_contains "$(run_state '[.history[] | .from + ">" + .to] | join(",")')" "triage>brief" "the skip is a declared graph edge"
+assert_eq "investigation_report_provided" "$(run_state 'first(.history[] | select(.from == "triage")) | .outcome')" "the skip names its outcome"
+# 그 전이가 없는 옛 프로젝트 그래프는 평소대로 triage·reproduce를 돈다.
+new_driver_repo bug_investigated_legacy
+mkdir -p "$DRIVER_REPO/.ai-harness/workflows"
+jq 'del(.transitions[] | select(.when == "investigation_report_provided"))' "$BUG_FIX_GRAPH_TEMPLATE" >"$DRIVER_REPO/.ai-harness/workflows/bug-fix-graph.json"
+git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m graph
+driver start --workflow bug-fix --runtime codex --request "total ignores tax" --investigation "$INVESTIGATION_REPORT"
+assert_eq "10" "$DRIVER_RC" "a legacy graph still reaches approval"
+assert_contains "$(<"$FAKE_LOG")" "triage read-only" "a legacy graph without the skip edge runs triage"
+assert_contains "$(<"$FAKE_LOG.triage.prompt")" "tax is skipped when the discount is zero" "a legacy triage still reads the report"
+new_driver_repo feature_investigated
+driver start --runtime codex --request "add feature" --investigation "$INVESTIGATION_REPORT"
+assert_eq "2" "$DRIVER_RC" "only bug-fix takes an investigation report"
+new_driver_repo bug_investigation_missing
+driver start --workflow bug-fix --runtime codex --request "total ignores tax" --investigation "$DRIVER_TMP/no-such-report.md"
+assert_eq "2" "$DRIVER_RC" "a missing investigation report is a usage error"
+: >"$DRIVER_TMP/empty-investigation.md"
+driver start --workflow bug-fix --runtime codex --request "total ignores tax" --investigation "$DRIVER_TMP/empty-investigation.md"
+assert_eq "2" "$DRIVER_RC" "an empty investigation report does not skip reproduce"
+pass "fix-bug starts from the brief with an investigation report"
+
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"
 BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
@@ -1911,7 +1942,8 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "8" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "10" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/investigate/SKILL.md") | .action')" "missing investigate entrypoint is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
 assert_eq "approval_required" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/implement-feature/SKILL.md") | .action')" "existing legacy artifact requires approval"
@@ -3164,6 +3196,52 @@ assert_contains "$(<"$REVIEW_SKILL")" "do not report completion while a blocking
 assert_contains "$HARNESS_INIT_CONTENT" "templates/review/" "harness init uses the local review template"
 pass "review graph adapters"
 
+# investigate 템플릿은 코드를 바꾸지 않는 원인 조사 진입점이다. triage·reproduce는 fix-bug와 같은 정의를 쓴다. (#338)
+INVESTIGATE_SKILL="$ROOT/templates/investigate/SKILL.md"
+INVESTIGATE_GRAPH="$ROOT/templates/investigate/references/investigate-graph.json"
+BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+assert_file "$INVESTIGATE_SKILL"
+assert_file "$INVESTIGATE_GRAPH"
+assert_file "$ROOT/templates/investigate/agents/openai.yaml"
+"$ROOT/scripts/validate-investigate-graph.sh" "$INVESTIGATE_GRAPH" >/dev/null || fail "investigate graph is valid"
+assert_eq "0" "$(jq '[.nodes[] | select(.write != false)] | length' "$INVESTIGATE_GRAPH")" "no investigate node writes to the repository"
+for shared in triage reproduce; do
+  assert_eq "$(jq -c --arg n "$shared" '.nodes[$n]' "$BUG_FIX_GRAPH")" "$(jq -c --arg n "$shared" '.nodes[$n]' "$INVESTIGATE_GRAPH")" "investigate shares the $shared node with fix-bug"
+done
+assert_eq "$(jq -c '[.transitions[] | select(.from == "reproduce") | .when] | sort' "$BUG_FIX_GRAPH")" \
+  "$(jq -c '[.transitions[] | select(.from == "reproduce") | .when] | sort' "$INVESTIGATE_GRAPH")" "investigate leaves reproduce on the same outcomes as fix-bug"
+INVALID_GRAPH="$TEST_TMP/investigate-invalid.json"
+jq '.nodes.report.write = true' "$INVESTIGATE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-investigate-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "an investigate graph with a writing node is invalid"; fi
+jq '.nodes.fix = {"write": false, "output": "fix_evidence"}' "$INVESTIGATE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-investigate-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "an investigate graph with a fix node is invalid"; fi
+jq '.transitions += [{"from": "domain_docs", "to": "report"}]' "$INVESTIGATE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-investigate-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "an investigate graph that reports without reproduce is invalid"; fi
+jq 'del(.transitions[] | select(.from == "triage" and .to == "baseline"))' "$INVESTIGATE_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-investigate-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "an investigate graph that skips the remote baseline is invalid"; fi
+INVESTIGATE_SKILL_CONTENT="$(<"$INVESTIGATE_SKILL")"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" "This is a project adapter" "investigate skill is a thin adapter"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" ".ai-harness/workflows/investigate.md" "investigate skill references the project workflow"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" ".ai-harness/workflows/investigate-graph.json" "investigate skill references the project graph"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" "git show origin/<base>:<path>" "investigate reads code at the remote base when the checkout is behind"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" "Do not edit, create, or delete any file in the repository" "investigate never edits code"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" "a person posts it" "external writes stay drafts"
+assert_contains "$INVESTIGATE_SKILL_CONTENT" "--investigation <report>" "investigate hands a fix to fix-bug with the report"
+assert_contains "$(<"$ROOT/templates/fix-bug/SKILL.md")" "--investigation <report>" "fix-bug takes an investigation report"
+assert_eq "brief" "$(jq -r 'first(.transitions[] | select(.from == "triage" and .when == "investigation_report_provided") | .to)' "$BUG_FIX_GRAPH")" "fix-bug goes from triage to brief with an investigation report"
+jq '.transitions += [{"from": "triage", "to": "brief", "when": "looks_obvious"}]' "$BUG_FIX_GRAPH" >"$INVALID_GRAPH"
+if "$ROOT/scripts/validate-bug-fix-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "fix-bug skips reproduce only with an investigation report"; fi
+jq 'del(.transitions[] | select(.when == "investigation_report_provided"))' "$BUG_FIX_GRAPH" >"$INVALID_GRAPH"
+"$ROOT/scripts/validate-bug-fix-graph.sh" "$INVALID_GRAPH" >/dev/null || fail "a bug-fix graph without the investigation edge stays valid for unsynced projects"
+assert_eq "3" "$(jq '[.artifacts[] | select(.workflow == "investigate" and .level == "standard")] | length' "$ROOT/templates/managed-files.json")" "investigate ships its graph and both entry points"
+assert_eq "copy" "$(jq -r '.artifacts[] | select(.path == ".ai-harness/workflows/investigate-graph.json") | .mode' "$ROOT/templates/managed-files.json")" "the investigate graph is copied as is"
+assert_contains "$HARNESS_INIT_CONTENT" "templates/investigate/" "harness init uses the local investigate template"
+assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/investigate-graph.json" "harness init copies the investigate graph"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/review`를 프로젝트 진입점으로' "AGENTS.md lists investigate as a project entry point"
+assert_contains "$(<"$ROOT/README.md")" "/investigate" "README documents investigate"
+pass "investigate graph adapters"
+
 # 각 기준은 독립적으로 끌 수 있고, 교정 누적만으로도 analysis batch가 된다.
 SIGNAL_DATA="$TEST_TMP/signal-data"
 HARNESS_METRICS_DIR="$SIGNAL_DATA" "$ROOT/scripts/extract-claude.sh" "$CLAUDE_FIXTURE" "user_exit"
@@ -3839,6 +3917,9 @@ case "$RATIO_STATS" in *"교정 마크"*) fail "stats no longer reports rule-bas
 assert_contains "$RATIO_STATS" "| svc | 75% (3/4) |" "per-project workflow pass ratio"
 case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project excluded from workflow ratio" ;; esac
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
+# /investigate는 하네스 생성 워크플로다: 본문을 읽지 않고 슬래시로만 들어와도 경유로 센다. (#338)
+ratio_session s10 inv 6 '{"kind":"doc_read","target":".ai-harness/docs/domain.md"}' '{"kind":"workflow","target":"investigate"}'
+assert_contains "$(HARNESS_METRICS_DIR="$RATIO_DATA" "$ROOT/scripts/stats.sh")" "| inv | 100% (1/1) |" "an investigate session passes through a harness workflow"
 pass "session ratio metrics"
 
 # 워크플로 대상 세션 경유: 조회·CI 설정·문서만 고친 세션은 기능·버그 워크플로 대상이 아니므로 분모에서 뺀다.
@@ -5912,7 +5993,7 @@ pass "unattended sync places copy artifacts byte for byte"
 # 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
 # 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
 RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
-assert_eq "6" "$(grep -c . <<<"$RD_PATHS")" "six workflow entry points are render artifacts"
+assert_eq "8" "$(grep -c . <<<"$RD_PATHS")" "eight workflow entry points are render artifacts"
 while IFS= read -r rd_path; do
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"

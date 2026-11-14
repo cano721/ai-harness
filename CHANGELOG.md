@@ -9,6 +9,8 @@
 ## v0.74.0 (2026-11-14)
 ### 새 기능
 
+- **원인 조사 워크플로 `/investigate`** — 버그·QA 이슈를 고치기 전에 원인만 조사하는 세션이 흔했는데, 담을 워크플로가 없어 뒤처진 로컬 코드를 현재로 오판하거나 재현 없이 추측으로 결론 내기 쉬웠고 하네스 활용도도 측정되지 않았습니다. 이제 `standard` 하네스에 `/investigate`가 생깁니다: 증상·재현 조건 → 원격 기준 코드(체크아웃이 `origin/<기준 브랜치>`보다 뒤처졌으면 `git show origin/<base>:<path>`로 읽기) → 관련 도메인 문서 → 재현 또는 로그·데이터 근거 → 가설·검증 결과·근거·수정 방향을 담은 원인 보고 순서입니다. 코드는 바꾸지 않고(그래프에 쓰기 노드 없음), Jira 댓글 같은 외부 쓰기는 초안 파일로만 남겨 사람이 올립니다. 수정이 필요하면 보고 파일을 `/fix-bug`에 넘기고, fix-bug는 그 보고로 triage·reproduce를 건너뛰고 brief부터 시작합니다(러너는 `workflow-driver.sh start --workflow bug-fix --investigation <보고>`). triage·reproduce 노드 정의는 fix-bug 그래프와 같습니다. `/metrics`는 investigate 세션도 하네스 워크플로 경유로 셉니다. 그래프 러너가 investigate 자체를 실행하는 것은 후속 작업입니다. (#338)
+
 - **레퍼런스 수집을 독립 스킬 `/design-references`로 분리** — 레퍼런스만 확인하려 해도 `/landing-page`를 처음부터 40분 돌려야 했고, 화면·디자인 시스템 작업도 레퍼런스가 필요했습니다. 이제 "AI 면접 서비스 경쟁사랑 레퍼런스 모아줘"처럼 따로 불러 검색(한 턴에 동시) → 일괄 캡처 → 봇 확인 화면 처리 → `references.json`·`searches.json` → 탭 5개 보드 서빙까지 합니다. `/landing-page`의 references 단계도 같은 절차·같은 스크립트(`scripts/design-refs.sh`)를 쓰고, 대표 고르기와 시작은 그대로 `/landing-page`에 남습니다. 보드를 만들 때마다 `~/.ai-harness/board/references/<run-id>.json`에 실행 기록(작업 폴더·주제·상태·만든 시각·references.json 경로)을 남깁니다. (#314)
 
 ### 동작 변경
@@ -18,6 +20,10 @@
 ### 버그 수정
 
 - 레퍼런스 캡처가 내용을 다 그린 페이지를 로그인용 reCAPTCHA 위젯이나 "captcha" 문구만 보고 봇 확인(`challenge`)으로 판정하던 문제 — 이런 표시는 본문이 거의 없는 페이지에서만 봇 확인으로 셉니다(Cloudflare 확인 화면·제목은 그대로). (#314)
+
+### 업데이트 후 해야 할 일
+
+- `standard` 하네스 프로젝트에서 `/harness-init --sync`를 실행해 `/investigate` 진입점(`.agents/skills/investigate/`·`.claude/commands/investigate.md`)과 `.ai-harness/workflows/investigate-graph.json`을 추가하세요(추가 항목이라 묻지 않고 들어갑니다). 같은 sync가 프로젝트 사실을 담는 `.ai-harness/workflows/investigate.md` 작성과 `AGENTS.md` 워크플로 표 행 추가를 제안합니다. fix-bug의 조사 보고 건너뛰기도 sync로 갱신된 `bug-fix-graph.json`부터 동작합니다. (#338)
 
 ## v0.73.0 (2026-11-14)
 ### 새 기능

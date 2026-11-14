@@ -4,6 +4,7 @@
 
 ## 1. 증거 수집 (편집 금지)
 
+- `/investigate`의 조사 보고 파일을 받으면 그 보고가 증거 수집 결과다. 다시 재현하지 않고 2절 Brief부터 쓴다(러너는 `--investigation <보고 파일>`). 보고에 재현도 동등한 근거도 없으면 평소대로 수집한다.
 - 재현은 사용자 홈을 건드리지 않게 격리한다: `HARNESS_METRICS_DIR=<임시 폴더>`, 필요하면 `HM_AUTO_WORKTREE_DIR`·`HM_CLAUDE_SKILLS_DIR`·`HM_CODEX_SKILLS_DIR`도 임시 경로로. 사용자 데이터(`~/.ai-harness`, `~/.claude`)를 지우거나 덮는 명령은 재현에 쓰지 않는다.
 - 플랫폼 차이를 먼저 의심한다: macOS `/bin/bash` 3.2 vs Linux bash 5, BSD vs GNU `sed`·`date`, `jq` 버전. 재현 환경(OS·bash·jq 버전)을 기록한다.
 - 세션 기록 추출 버그는 `tests/fixtures/claude/`·`tests/fixtures/codex/` 형식의 최소 fixture로 재현한다(실제 대화 내용·식별자를 fixture에 넣지 않는다).

@@ -43,6 +43,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options
   start   --request "<요청>" | --request-file <file>   계획 노드를 실행하고 승인 대기에서 멈춘다
           [--check "<검증 명령>"]...                    Brief(review는 수리 범위)가 제안한 검증에 더할 명령
           [--monitor-error <file>]                      고치는 모니터링 에러(/autofix candidates의 한 줄). 단계 deploy에서 merge_policy.verify의 monitor가 병합 뒤 재발 추적에 올린다
+          [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
   revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
   resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
   approve                                               터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
@@ -72,6 +73,7 @@ FEEDBACK=""
 WORKFLOW=""
 CLI_CHECKS=()
 MONITOR_ERROR=""
+INVESTIGATION_FILE=""
 while (($#)); do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || usage; REPO="$2"; shift 2 ;;
@@ -83,6 +85,7 @@ while (($#)); do
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
+    --investigation) [[ $# -ge 2 && -s "$2" ]] || usage; INVESTIGATION_FILE="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"; shift 2 ;;
     -h|--help) usage ;;
     *) printf 'unknown option: %s\n' "$1" >&2; usage ;;
   esac
@@ -93,6 +96,9 @@ case "$WORKFLOW" in
   review) ;;
   *) printf 'unknown workflow: %s\n' "$WORKFLOW" >&2; usage ;;
 esac
+# 조사 보고는 버그 수정을 시작할 때만 받는다. 다른 워크플로에는 그 보고를 대신할 노드가 없다.
+[[ -z "$INVESTIGATION_FILE" || ( "$CMD" == start && "$WORKFLOW" == bug-fix ) ]] \
+  || { printf -- '--investigation is an option of start --workflow bug-fix\n' >&2; exit 2; }
 
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
@@ -1164,13 +1170,25 @@ $(state .request)"
         go discover ""
         ;;
       triage)
+        # /investigate의 조사 보고가 있으면 그 보고가 triage·reproduce 결과다. 같은 조사를 다시 하지 않고 brief로 간다.
+        if [[ -f "$RUN/investigation.md" ]] && has_edge triage investigation_report_provided; then
+          { printf 'Investigation report from the investigate workflow (%s); it stands in for triage:\n\n' "$(state .investigation)"
+            cat "$RUN/investigation.md"; } >"$RUN/triage.out"
+          jq -n --arg p "$(state .investigation)" \
+            '{status:"evidence_sufficient", summary:("reproduction and evidence from the investigation report " + $p), evidence:["the investigation report above (triage) holds the reproduction or equivalent evidence"], hypothesis:"", needed:[]}' >"$RUN/reproduce.out"
+          log "investigation report $(state .investigation) stands in for triage and reproduce"
+          go triage investigation_report_provided
+          continue
+        fi
+        [[ ! -f "$RUN/investigation.md" ]] \
+          || log "the project graph has no triage -> brief edge for an investigation report; triage and reproduce run again with the report. Sync the harness (/harness-init --sync)"
         run_node triage triage "$CONTEXT
 
 You are the triage node of the bug-fix graph. Do not edit any file.
 From the bug report below, state the observed behavior, the expected behavior, the impact, the relevant modules and files, the project test policy, and the exact commands that verify a change (build, targeted tests, broad tests, lint).
 
 Bug report:
-$(state .request)"
+$(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvestigation report from the investigate workflow:\n%s' "$(<"$RUN/investigation.md")"; fi)"
         go triage ""
         ;;
       reproduce)
@@ -1688,17 +1706,19 @@ case "$CMD" in
       monitor_error="$(jq -c --argjson h "$(jq '.window_hours // 24' <<<"${monitor:-null}" 2>/dev/null || echo 24)" '{window_hours: $h} + .' <<<"$monitor_error")"
     fi
     mkdir -p "$RUN"
+    # 보고 파일이 실행 중에 바뀌거나 지워져도 같은 내용으로 이어 가게 실행 디렉터리에 복사해 둔다.
+    [[ -z "$INVESTIGATION_FILE" ]] || cp "$INVESTIGATION_FILE" "$RUN/investigation.md"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
     printf '%s\n' "$RUN_ID" >"$(latest_file "$WORKFLOW")"
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
-      --arg appr "$approval" --arg appr_source "$approval_source" \
+      --arg appr "$approval" --arg appr_source "$approval_source" --arg inv "$INVESTIGATION_FILE" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
         policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
-        monitor_error:$mon, status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
+        monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     ;;
   watch)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
