@@ -7,9 +7,18 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+
 ### 새 기능
 
 - **재작업 비율: 후속 PR 판정 파일로 보정값** — `scripts/rework.sh`는 머지 뒤 같은 이슈 키로 시작한 PR을 모두 재작업으로 세서, 합의로 늘어난 범위·기존 코드 결함을 뺀 보고 값과 갈렸습니다. 이제 결과의 원본·후속 PR에 제목(`title`, 머지 커밋 본문 첫 줄)이 붙고, `--judgments <파일>`(TSV `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, verdict는 `defect`·`scope`·`preexisting`·`planned`)을 주면 결함 수정만 재작업으로 센 `judged_rework_prs`·`judged_ratio`와 판정 없는 후속 목록 `unjudged`를 함께 냅니다. 판정 없는 후속은 재작업으로 남고, 기존 `rework_ratio`는 그대로입니다. (#325)
+
+### 버그 수정
+
+- 무인 실행 로그인 만료를 따로 분류·알림 — 자동 sync·harvest·autofix가 띄운 `claude -p`가 로그인 만료로 실패하면 `agent_error`로 기록돼 실패 횟수에 들어가 3번 만에 그 저장소를 포기했고, 같은 sweep의 남은 저장소도 모두 같은 이유로 실패했으며, 보드를 열기 전에는 알 수 없었다. 이제 인증 실패 결과 줄(`Failed to authenticate`·`claude auth login`·`setup-token`·401 등)을 `auth_expired`로 분류해 실패 횟수에 넣지 않고, 같은 sweep·같은 정기 회차의 남은 LLM 실행을 띄우지 않는다(다음 회차가 다시 한 건으로 확인). 보드는 같은 원인의 실패를 "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token" 카드 한 장으로 묶고, 세션 시작은 같은 실패에 한 번 안내한다. 다시 로그인한 뒤 실행이 정상으로 돌면 카드와 안내가 사라진다. 이전 버전에서 로그인 만료로 쌓인 실패 횟수는 로그로 판정해 한 번 빼므로 포기된 저장소·에러가 다시 시도된다(로그가 이미 정리돼 판정할 수 없는 실패는 그대로 센다) (#315)
+
+### 동작 변경
+
+- **workspace 인계 프롬프트가 멤버 워크플로 파일부터 읽게 합니다** — 인계에 워크플로 이름만 적으면, 범위·결정이 다 주어진 인계를 받은 멤버 세션이 Preflight의 워크플로 선택을 건너뛰고 워크플로 본문·그래프를 읽지 않았습니다. 이제 workspace Preflight ③은 인계 프롬프트의 첫 지시로 멤버 워크플로 파일(`.ai-harness/workflows/<name>.md`)을 Read 하고 그 그래프대로 진행하라고 쓰게 하고, 멤버에 러너가 있으면 러너 시작 명령도 적게 합니다. 멤버 편집 가드의 차단 메시지도 같은 내용을 안내합니다. 기존 workspace AGENTS.md에 반영하려면 `/ai-harness:harness-init` sync (#324)
 
 ## v0.72.0 (2026-11-13)
 ### 새 기능

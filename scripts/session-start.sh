@@ -43,6 +43,11 @@ impact_result="$(printf '%s' "$input" | "$ROOT/scripts/impact.sh" notify 2>/dev/
 impact_message="$(jq -r '.systemMessage // empty' <<<"$impact_result" 2>/dev/null || true)"
 [[ -n "$impact_message" ]] && messages+=("$impact_message")
 
+# 무인 실행이 로그인 만료로 멈췄으면 사람이 다시 로그인해야 한다 — 보드를 열지 않아도 알 수 있게 한 줄 알린다(#315).
+auth_result="$("$ROOT/scripts/harvest-auto.sh" notify 2>/dev/null || true)"
+auth_message="$(jq -r '.systemMessage // empty' <<<"$auth_result" 2>/dev/null || true)"
+[[ -n "$auth_message" ]] && messages+=("$auth_message")
+
 merge_result="$("$ROOT/scripts/auto-merge.sh" notify 2>/dev/null || true)"
 merge_message="$(jq -r '.systemMessage // empty' <<<"$merge_result" 2>/dev/null || true)"
 [[ -n "$merge_message" ]] && messages+=("$merge_message")
