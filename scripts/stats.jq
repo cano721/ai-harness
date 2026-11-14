@@ -32,6 +32,17 @@ def tok_in_norm: if .src=="codex" and (has_coverage("context") | not)
   then ([(.tok_in // 0) - (.cache_read // 0), 0] | max) else (.tok_in // 0) end;
 def median: sort | if length==0 then null else .[length/2 | floor] end;
 def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b))" end;
+# 기능·버그 워크플로 대상인 구현 작업의 근거. 하네스 생성물·메모·문서·빌드/CI 설정 편집은 코드 변경으로 보지 않는다.
+def implementation_persona: test("(developer|implementer|test-engineer)$");
+# Claude Code worktree(`.claude/worktrees/<이름>/`) 안은 저장소 상대 경로로 본다. 파일 이름이 없는 target
+# (Codex patch 경로가 디렉토리에서 잘린 것)과 대체값 `apply_patch`는 무엇을 고쳤는지 모르므로 세지 않는다.
+def code_file:
+  sub("^(.*/)?\\.claude/worktrees/[^/]+/"; "") as $p
+  | ($p | split("/") | last // "" | ascii_downcase) as $name
+  | $p != "apply_patch" and ($name | length) > 0
+    and ($p | test("(^|/)(\\.ai-harness|\\.claude|scratchpad|memory)/") | not)
+    and ($name | test("\\.(md|yml|yaml|json|toml|properties|gradle|kts|lock)$") | not)
+    and ($name | test("^(dockerfile|jenkinsfile)(\\..+)?$|\\.(dockerfile|jenkinsfile)$") | not);
 
 . as $all
 # 자동 harvest가 띄운 내부 세션은 프로젝트 작업이 아니므로 신호·사용량 통계에서 뺀다.
@@ -61,6 +72,10 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
 | ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid] // "?"): true})
    | add // {}) as $harnessProjects
 | ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
+# 워크플로 대상 세션: 경유했거나 구현 페르소나에 위임했거나 코드 파일을 고친 세션. 조회·설정만 바꾼 세션을 미경유로 세지 않는다.
+| ($wfPassed + ($E | map(select((.kind=="persona" and (.target // "" | implementation_persona))
+      or (.kind=="file_edit" and (.target // "" | code_file))) | {(.sid): true}) | add // {})) as $wfTarget
+| ($WA | map(select($wfTarget[.sid] == true))) as $WT
 
 | "# Harness Metrics"
 + "\n\n기간: \(if $until != "" then "\($cutoff) ~ \($until) 전날" | ltrimstr(" ") elif $cutoff=="" then "전체" else $cutoff + " 이후" end)"
@@ -98,14 +113,16 @@ def ratio_pct($a; $b): if $b==0 then "-" else "\($a*100/$b | round)% (\($a)/\($b
      else map("| \(.src) | \(.n) | \(if .coverage=="" then "legacy event" else .coverage end) |") | join("\n")
      end)
 
-+ "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다.\n\n| 지표 | 값 |\n|---|---|\n"
-+ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |"
++ "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다. 대상 세션은 그중 워크플로를 경유했거나 구현 페르소나(developer·*implementer·test-engineer)에 위임했거나 코드 파일을 고친 세션이다 — `.ai-harness/`·`.claude/`(worktree 안 코드는 제외하지 않음)·scratchpad·memory 아래, 문서(`.md`), 빌드·CI·설정 파일 편집은 코드 변경으로 보지 않는다.\n\n| 지표 | 값 |\n|---|---|\n"
++ "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |\n"
++ "| 워크플로 대상 세션 경유 | \(ratio_pct([$WT[] | select($wfPassed[.sid] == true)] | length; $WT | length)) |"
 + (if ($WA|length)==0 then ""
-   else "\n\n| 프로젝트 | 워크플로 경유 |\n|---|---|\n"
+   else "\n\n| 프로젝트 | 워크플로 경유 | 대상 경유 |\n|---|---|---|\n"
      + ($WA | group_by(.project)
-        | map({p:.[0].project, n:length, k:(map(select($wfPassed[.sid] == true)) | length)})
+        | map({p:.[0].project, n:length, k:(map(select($wfPassed[.sid] == true)) | length),
+            tn:(map(select($wfTarget[.sid] == true)) | length)})
         | sort_by(-.n)
-        | map("| \(.p) | \(ratio_pct(.k; .n)) |") | join("\n"))
+        | map("| \(.p) | \(ratio_pct(.k; .n)) | \(ratio_pct(.k; .tn)) |") | join("\n"))
    end)
 
 + "\n\n## 워크플로/커맨드\n\n| 대상 | 횟수 |\n|---|---|\n"

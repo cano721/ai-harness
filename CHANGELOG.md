@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **`/metrics` 워크플로 대상 세션 경유율** — 기존 워크플로 경유율은 하네스 프로젝트의 활성 세션 전부가 분모라 조회·검증이나 빌드/CI 설정만 바꾼 세션도 미경유로 잡혔습니다. `## 비율`에 워크플로를 경유했거나 구현 페르소나(developer·*implementer·test-engineer)에 위임했거나 코드 파일을 고친 세션만 분모로 세는 `워크플로 대상 세션 경유` 행을 더합니다. `.ai-harness/`·`.claude/`(worktree 안 코드는 제외하지 않음)·scratchpad·memory 아래, `.md`, `.yml`·`.json`·`.gradle`·`.kts` 같은 빌드·설정 파일, `Dockerfile`·`Jenkinsfile` 편집은 코드 변경으로 보지 않습니다. 기존 행은 그대로 두고, 프로젝트별 표에 `대상 경유` 열이 생깁니다. (#323)
+
 ## v0.72.0 (2026-11-13)
 ### 새 기능
 
