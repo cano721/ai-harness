@@ -92,7 +92,8 @@ article.primary{border:2px solid var(--accent)}
 @media (max-width:700px){.shots img,.shots video{height:220px}.analysis{grid-template-columns:1fr}.analysis dd{margin-bottom:6px}
 body{padding-bottom:110px}.more{display:inline-block}.start{padding:12px 14px}.pick .row{gap:8px}article header{padding-right:52px}.pick .fields{display:none;grid-template-columns:1fr}footer.pick.open .fields{display:grid}}`;
 
-// The pick bar: a live server (GET /pick answers) takes the start button; otherwise the user answers in the terminal.
+// The pick bar: a live server with a run (GET /pick answers run: true) takes the start button; otherwise — a static file,
+// or a board /design-references serves on its own — the user answers in the terminal.
 // Each board script defines BOARD_NODE, payload(), summary(), pickedText(pick), and applyPicked(pick). A pick already
 // made (GET /state), or a run past this node, locks the board: the session has submitted it, and a second press would
 // rewrite the record without changing the run.
@@ -103,7 +104,7 @@ const say=(cls,t)=>{bar.querySelectorAll('.done,.err').forEach(e=>e.remove());co
 const refresh=()=>{if(locked)return;const s=summary();out.value=s.text;bar.querySelector('.count').textContent=s.count;btn.disabled=!s.ready;};
 const lock=(label)=>{locked=true;document.querySelectorAll('main button,main input,main textarea,main select,footer.pick .fields textarea,footer.pick .fields input').forEach(e=>e.disabled=true);btn.disabled=true;if(label)btn.textContent=label;};
 const showStarted=(p,node)=>{if(p)applyPicked(p);lock('이미 시작됐어요');bar.querySelector('.count').textContent=p?'이미 시작됐어요 · '+pickedText(p):'이미 지난 단계예요 (지금 '+node+')';};
-fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server))throw 0;btn.hidden=false;
+fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server&&j.run!==false))throw 0;btn.hidden=false;
   fetch('state?node='+BOARD_NODE,{cache:'no-store'}).then(r=>r.json()).then(st=>{if(st.picked||(st.node&&st.node!==BOARD_NODE))showStarted(st.picked,st.node);}).catch(()=>{});
 }).catch(()=>{btn.hidden=true;stat.hidden=false;});
 btn.onclick=async()=>{if(locked)return;btn.disabled=true;try{const r=await fetch('pick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload())});const j=await r.json();
@@ -117,7 +118,7 @@ document.addEventListener('input',refresh);document.addEventListener('change',re
 const pickBar = (startLabel, extra) => `<footer class="pick" aria-label="고르기">
 <div class="row"><p class="count" aria-live="polite"></p><button class="more" type="button" aria-expanded="false" aria-controls="pick-fields">의견 적기</button><button class="start" type="button" hidden>${startLabel}</button></div>
 <div class="fields" id="pick-fields">${extra}</div>
-<div class="static" hidden><p><b>터미널에 답해 주세요.</b> 보드 서버 없이 열려 있어 여기서 바로 시작할 수 없어요. 아래 요약을 복사해 붙여 넣으면 돼요.</p>
+<div class="static" hidden><p><b>터미널에 답해 주세요.</b> 이 보드는 보기용이라(진행 중인 랜딩 실행이 없거나 보드 서버 없이 열렸어요) 여기서 바로 시작할 수 없어요. 아래 요약을 복사해 붙여 넣으면 돼요.</p>
 <textarea class="summary" rows="3" readonly></textarea><div><button class="copy" type="button">요약 복사</button></div></div></footer>`;
 
 const page = (title, ask, body, script) => `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -158,7 +159,7 @@ ${link(r.url)}<span class="src">${esc(r.source)}</span><span class="badge" hidde
 ${primary}${shots(r)}${analysis}${lines.join("")}</article>`;
   };
   const toneHead = () => {
-    if (!tone.mood) return `<p class="missing">tone.json이 없어요. brief의 Tone and manner를 tone.json으로도 내 주세요.</p>`;
+    if (!tone.mood) return `<p class="missing">tone.json이 없어 톤앤매너 없이 모았어요. 정해 두려면 brief의 Tone and manner를 tone.json으로 내 주세요.</p>`;
     const chips = (tone.palette ?? [])
       .map((p) => `<li><span class="chip" style="background:${esc(hex(p.hex))}"></span><b>${esc(p.name)}</b><code>${esc(p.hex)}</code><small>${esc(p.role)}</small></li>`)
       .join("");

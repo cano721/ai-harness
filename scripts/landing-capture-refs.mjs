@@ -73,17 +73,21 @@ async function challengeOf(page, response) {
     .evaluate(() => ({
       text: (document.body?.innerText ?? "").slice(0, 4000),
       frames: [...document.querySelectorAll("iframe")].map((f) => f.src).join(" "),
-      cf: !!document.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, #challenge-stage, [data-sitekey]"),
+      cf: !!document.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, #challenge-stage"),
+      widget: !!document.querySelector("[data-sitekey], .g-recaptcha, .h-captcha"),
     }))
-    .catch(() => ({ text: "", frames: "", cf: false }));
+    .catch(() => ({ text: "", frames: "", cf: false, widget: false }));
   const server = (response?.headers()?.server ?? "").toLowerCase();
   const status = response?.status() ?? 0;
+  // A captcha widget or the word "captcha" on a page that drew its content is a login or comment form, not a bot check:
+  // those signs count only on a thin page (a community site with a sign-in reCAPTCHA was once dropped as a challenge).
+  const thin = signs.text.trim().length < 400;
   const hit =
     CHALLENGE_TITLE.test(title) ||
-    CHALLENGE_TEXT.test(signs.text) ||
     signs.cf ||
-    /challenges\.cloudflare\.com|hcaptcha\.com|recaptcha/.test(signs.frames) ||
-    ((status === 403 || status === 503) && server.includes("cloudflare"));
+    /challenges\.cloudflare\.com/.test(signs.frames) ||
+    ((status === 403 || status === 503) && server.includes("cloudflare")) ||
+    (thin && (CHALLENGE_TEXT.test(signs.text) || signs.widget || /hcaptcha\.com|recaptcha/.test(signs.frames)));
   return { title, hit, status };
 }
 
