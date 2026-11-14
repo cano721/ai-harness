@@ -142,7 +142,7 @@ read_changes() { # repo base head → 실패하면 사유 출력, 종료 코드 
 
 # 내용 판정. 통과하면 "ok", 아니면 첫 사유 한 줄을 낸다(종료 코드 1).
 check_sync() { # repo base head result
-  local repo="$1" base="$2" head="$3" result="$4" mode="" status="" f="" entry="" kind="" src="" want_mode="" i=0 why=""
+  local repo="$1" base="$2" head="$3" result="$4" mode="" status="" f="" entry="" kind="" src="" want_mode="" i=0 why="" rendered=""
   local base_json="" head_json="" key=""
   case "$result" in
     improved) ;;
@@ -182,12 +182,36 @@ check_sync() { # repo base head result
     entry="$(jq -c --arg p "$f" 'first(.artifacts[] | select(.path == $p)) // empty' "$CATALOG")"
     [[ -n "$entry" ]] || { echo "non_managed_file:$f"; return 1; }
     kind="$(jq -r '.mode' <<<"$entry")"
-    # render 생성물은 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없다.
-    [[ "$kind" == copy ]] || { echo "render_file:$f"; return 1; }
-    src="$ROOT/$(jq -r '.source' <<<"$entry")"
-    want_mode=100644; [[ ! -x "$src" ]] || want_mode=100755
-    [[ "$mode" == "$want_mode" ]] || { echo "bad_mode:$mode:$f"; return 1; }
-    cmp -s "$src" <(git -C "$repo" cat-file blob "$head:$f") || { echo "copy_differs:$f"; return 1; }
+    if [[ "$kind" == render ]]; then
+      # render 생성물은 render-managed-file.sh 결과와 바이트 같을 때만 통과한다(#316). 사람이 고친 것은 다르므로 사람이 본다.
+      # 렌더가 실패해 빈 출력이 빈 파일과 같아지는 일이 없게 종료 코드를 따로 본다.
+      rendered="$(mktemp "${TMPDIR:-/tmp}/ai-harness-am-render.XXXXXX")" || { echo "render_file:$f"; return 1; }
+      if ! "$ROOT/scripts/render-managed-file.sh" --path "$f" >"$rendered" 2>/dev/null \
+        || ! cmp -s "$rendered" <(git -C "$repo" cat-file blob "$head:$f"); then
+        rm -f "$rendered"
+        echo "render_file:$f"; return 1
+      fi
+      rm -f "$rendered"
+      [[ "$mode" == 100644 ]] || { echo "bad_mode:$mode:$f"; return 1; }
+      # 기존 진입점을 바꾸는 render는 대상 브랜치(base) manifest가 이미 결정적 render로 표시한 것만 통과한다. 표시가 없으면
+      # 예전 손 렌더라 저장소 맞춤이 지워질 수 있다 — 첫 결정적 render PR은 사람이 본다. base는 PR이 바꿀 수 없다.
+      if [[ "$status" != A ]] || jq -e --arg p "$f" '(.managed_files // {}) | has($p)' <<<"$base_json" >/dev/null 2>&1; then
+        [[ "$(jq -r --arg p "$f" '.managed_files[$p].renderer? // empty' <<<"$base_json" 2>/dev/null)" == 1 ]] \
+          || { echo "render_first:$f"; return 1; }
+        # 표시가 있어도 base 파일을 사람이 고친 뒤 다시 기록하지 않았으면(해시 불일치) 그 수정이 지워진다.
+        [[ "$status" != M ]] || [[ "$(jq -r --arg p "$f" '.managed_files[$p].content_sha256 // empty' <<<"$base_json")" == "$(blob_sha256 "$repo" "$base:$f")" ]] \
+          || { echo "render_modified:$f"; return 1; }
+      fi
+      # 병합 뒤 다음 sync가 자동으로 갱신할 수 있게 head 기록에도 표시가 있어야 한다(record가 결과와 같을 때만 남긴다).
+      [[ "$(jq -r --arg p "$f" '.managed_files[$p].renderer? // empty' <<<"$head_json" 2>/dev/null)" == 1 ]] \
+        || { echo "render_unmarked:$f"; return 1; }
+    else
+      [[ "$kind" == copy ]] || { echo "unknown_kind:$kind:$f"; return 1; }
+      src="$ROOT/$(jq -r '.source' <<<"$entry")"
+      want_mode=100644; [[ ! -x "$src" ]] || want_mode=100755
+      [[ "$mode" == "$want_mode" ]] || { echo "bad_mode:$mode:$f"; return 1; }
+      cmp -s "$src" <(git -C "$repo" cat-file blob "$head:$f") || { echo "copy_differs:$f"; return 1; }
+    fi
     [[ "$(jq -r --arg p "$f" '.managed_files[$p].content_sha256 // empty' <<<"$head_json")" == "$(blob_sha256 "$repo" "$head:$f")" ]] \
       || { echo "manifest_hash_mismatch:$f"; return 1; }
   done

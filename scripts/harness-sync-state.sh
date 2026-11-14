@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SYNC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   printf 'usage: %s <status|record|plan|forget|exclude|include> --root <project-root> [--catalog <catalog.json>] [--version <version>] [--reason <text>] [--keep-version] [--file <relative-path>]...\n' "$0" >&2
@@ -263,15 +264,23 @@ case "$command_name" in
         exit 2
       }
       checksum="$(sha256_file "$target")"
+      # 워크플로 진입점(render)은 스크립트 결과와 바이트 같을 때만 renderer 표시를 남긴다(#316). 표시가 없는 기록은
+      # 예전에 손으로 렌더한 것이라 저장소 맞춤이 들어 있을 수 있다 — 첫 결정적 render는 사람이 본다(place-managed-file.sh·auto-merge.sh).
+      # render 항목이 아니거나 렌더가 실패하면 출력이 비어 빈 파일이 아닌 대상과 같아질 수 없다.
+      renderer=false
+      if [[ -s "$target" ]] && cmp -s "$target" <("$SYNC_DIR/render-managed-file.sh" --path "$path" 2>/dev/null); then
+        renderer=true
+      fi
       next_manifest="$(mktemp "${TMPDIR:-/tmp}/ai-harness-sync-state.XXXXXX")"
       # 일부만 적용한 무인 sync는 harness_version을 올리지 않는다 — 올리면 다음 sync가 나머지를 다시 잡지 않는다.
-      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" --argjson keep "$keep_version" '
+      jq --arg version "$version" --arg path "$path" --arg checksum "$checksum" --argjson keep "$keep_version" \
+        --argjson renderer "$renderer" '
         .harness_version = (if $keep and has("harness_version") then .harness_version else $version end)
         | .managed_files = (.managed_files // {})
-        | .managed_files[$path] = {
+        | .managed_files[$path] = ({
             content_sha256: $checksum,
             template_version: $version
-          }
+          } + (if $renderer then {renderer: 1} else {} end))
       ' "$temp_manifest" >"$next_manifest"
       mv "$next_manifest" "$temp_manifest"
     done

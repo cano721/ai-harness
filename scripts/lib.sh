@@ -137,6 +137,25 @@ hm_in_usage_backoff() { # $1=hours
   jq -Rn -e --arg since "$since" '[inputs | fromjson? | select(.event=="finished" and .reason=="usage_limit" and .at >= $since)] | length > 0' "$runs" >/dev/null 2>&1
 }
 
+# 무인 실행 로그의 실패 이유(usage_limit·auth_expired·api_error·agent_error, 실패가 아니면 빈 값). 분류는 fail-reason.jq 하나다.
+hm_log_fail_reason() { # $1=log
+  [[ -n "${1:-}" && -f "$1" ]] || return 0
+  jq -Rrn -L "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" 'include "fail-reason"; log_fail_reason' "$1" 2>/dev/null || true
+}
+
+# 무인 실행(harvest·sync·autofix)이 $1 이후 로그인 만료(auth_expired)로 끝난 적이 있으면 참.
+# 같은 회차의 남은 LLM 실행은 같은 이유로 실패하므로 띄우지 않는다(#315).
+hm_auth_expired_since() { # $1=ISO 시각
+  local since="${1:-}" f=""
+  [[ -n "$since" ]] || return 1
+  for f in "$HM_DATA_DIR/harvest-auto/runs.jsonl" "$HM_DATA_DIR/autofix/runs.jsonl"; do
+    [[ -f "$f" ]] || continue
+    jq -Rn -e --arg since "$since" '[inputs | fromjson? | objects | select(.event == "finished" and .reason == "auth_expired" and (.at // "") >= $since)] | length > 0' \
+      "$f" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
 # MAJOR.MINOR.PATCH 비교(접두 v·pre-release 꼬리 무시). $1이 $2보다 낮으면 참.
 hm_version_lt() {
   local a="${1#v}" b="${2#v}" i

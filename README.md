@@ -505,6 +505,7 @@ stateDiagram-v2
 
 - **LLM 단계는 쉬는 동안만**: 수집은 바로 하고, LLM 정리·자동 harvest는 최근 `HM_IDLE_MINUTES`(20)분간 Claude·Codex 기록에 시각이 찍힌 줄(대화·도구 호출)이 남지 않을 때까지 최대 `HM_IDLE_WAIT_HOURS`(4)시간 기다렸다가 돕니다. 열린 세션이 덧붙이는 시각 없는 줄(`last-prompt`·`cost-state`)은 활동으로 보지 않습니다. 작업과 사용량 한도가 겹치지 않게 하기 위해서입니다. 회차마다 돌았는지·넘긴 이유는 `~/.ai-harness/logs/schedule.jsonl`에 남습니다
 - **사용량 한도 휴지**: 자동 harvest가 사용량 한도로 실패한 뒤 `HM_LLM_BACKOFF_HOURS`(5)시간은 LLM 단계를 쉽니다
+- **로그인 만료**: 무인 실행이 로그인 만료(`auth_expired`)로 실패하면 실패 횟수에 넣지 않고 같은 회차의 남은 LLM 실행을 멈춥니다. 보드 카드 한 장과 세션 시작 안내로 `claude auth login`(또는 무인 실행용 `claude setup-token` + `CLAUDE_CODE_OAUTH_TOKEN`)을 알리고, 다음 실행이 정상으로 돌면 사라집니다
 
 `scripts/collect.sh`는 세션 1개를 즉시 수집하는 수동 진입점으로 남아 있습니다. 세션을 거의 열지 않는데도 정해진 시각에 돌리고 싶다면 OS 스케줄러에 `HM_BACKFILL_FOREGROUND=1 <플러그인>/scripts/backfill-due.sh`를 등록할 수 있고, macOS는 `scripts/schedule.sh install`(선택 사항)이 이를 대신합니다.
 
@@ -621,7 +622,7 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 
 | 대상 | 병합 조건 (모두 만족) |
 |---|---|
-| sync PR | 결과 `improved`(일부 적용은 `sync_partial`이 켜졌을 때만) · 바뀐 파일이 카탈로그 `copy` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물(커맨드·SKILL 어댑터)이 바뀐 PR은 사람이 봅니다** — 템플릿을 프로젝트에 맞게 다시 쓴 것이라 기계적으로 검증할 수 없습니다 |
+| sync PR | 결과 `improved`(일부 적용은 `sync_partial`이 켜졌을 때만) · 바뀐 파일이 카탈로그 `copy`·`render` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · render 생성물(워크플로 진입점 커맨드·SKILL)이 `scripts/render-managed-file.sh` 결과와 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물이 스크립트 결과와 다르거나(사람이 고친 진입점), 기준 브랜치 manifest에 결정적 render 표시(`renderer`)가 없는 기존 진입점을 처음 바꾸는 PR(예전 손 렌더의 저장소 맞춤이 지워질 수 있음, `render_first:`), 표시 뒤에 사람이 고친 진입점을 바꾸는 PR(`render_modified:`), head 기록에 표시가 없는 PR(`render_unmarked:`)은 사람이 봅니다** |
 | harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_*`로 조정, 최대 5개·100줄) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
 | 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
 | 공통 (병합 직전, PR 호스트에서 직접 읽음) | 사용자 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci`가 꺼졌을 때만 병합) |
