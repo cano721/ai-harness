@@ -1024,6 +1024,16 @@ mkdir -p "$DRIVER_TMP/codex/sessions/2999"
 driver resume
 assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
 
+# 실측: Orca 프로필의 CLAUDE_CONFIG_DIR/projects 는 ~/.claude/projects 로 가는 심볼릭 링크다. 링크 안의 대화도 읽는다.
+new_driver_repo symlinked_projects
+driver start --runtime codex --request "add feature"
+mv "$DRIVER_TMP/claude/projects" "$DRIVER_TMP/real-projects"
+ln -s "$DRIVER_TMP/real-projects" "$DRIVER_TMP/claude/projects"
+say_in_claude "승인"
+driver resume
+rm "$DRIVER_TMP/claude/projects" && mv "$DRIVER_TMP/real-projects" "$DRIVER_TMP/claude/projects"
+assert_eq "0:claude-transcript" "$DRIVER_RC:$(run_state .approval.source)" "an approval is found when the Claude projects folder is a symlink"
+
 # workspace가 인계한 멤버 세션의 승인은 사용자가 workspace 대화에서 멤버 이름을 붙여 친 "승인 <멤버>"로도 받는다(#331).
 # 조율 세션이 보낸 세션 간 메시지(isMeta·origin peer)는 승인이 아니다 — 에이전트가 사람 승인을 대신할 수 없다.
 WS_ROOT="$DRIVER_TMP/ws"
@@ -4758,6 +4768,9 @@ assert_contains "$WD_OUT" "승인할까요?" "the last screen lines come with th
 assert_contains "$WD_OUT" "exit=10" "awaiting_input exits 10"
 printf 'Which approach?\n❯ 1. A\n  2. B\nEnter to select · ↑/↓ to navigate\n' >"$WD/screen"
 assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)" "reason=awaiting_input" "a question with choices ends the wait"
+# 실측: 새 폴더에서 뜬 Claude 의 신뢰 확인 창은 번호 없는 선택지와 'Enter to confirm' 이다.
+printf ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n' >"$WD/screen"
+assert_contains "$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0)" "reason=awaiting_input" "the folder trust prompt ends the wait"
 printf '✻ Running tests\n' >"$WD/screen"
 WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --input-idle 0 --stall 0)"
 assert_contains "$WD_OUT" "reason=stalled" "an unchanged screen without a question ends the wait as stalled"

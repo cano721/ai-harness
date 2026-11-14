@@ -6,6 +6,13 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- **Orca 에서 대화로 친 "승인"을 러너가 찾지 못하던 문제** — Orca 프로필의 `$CLAUDE_CONFIG_DIR/projects`는 `~/.claude/projects`로 가는 심볼릭 링크인데, 러너가 링크 안으로 들어가지 않아 대화에서 친 "승인"(workspace 대화의 `승인 <멤버>` 포함)이 승인 대기를 풀지 못했습니다. 이제 링크 안의 대화도 읽습니다. 멤버 러너는 sync 로 반영됩니다. (#331)
+- **인계 대기 헬퍼가 폴더 신뢰 확인 창을 입력 대기로 보지 못하던 문제** — 새 폴더에서 뜬 Claude 의 신뢰 확인 창(`Enter to confirm · Esc to cancel`, 번호 없는 선택지)이면 `wait-delegation.sh`가 15분 뒤 `stalled`로만 끝났습니다. 이제 바로 `awaiting_input`으로 알립니다. (#331)
+
 ## v0.74.0 (2026-11-14)
 ### 새 기능
 
