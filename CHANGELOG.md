@@ -10,6 +10,9 @@
 
 ### 새 기능
 
+- **workspace 인계 대기가 멤버의 승인·질문 정체를 알립니다** — 완료 파일만 기다리면 멤버 세션이 brief 승인 게이트나 질문에서 멈춰도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 새 `scripts/wait-delegation.sh --done <완료 파일> --terminal <멤버 터미널 handle>`은 완료 파일이 생기거나, 멤버 화면이 입력을 기다리거나(`awaiting_input`), 화면이 오래 그대로거나(`stalled`), 터미널이 끝나거나, handle 을 못 읽으면 바로 끝나고 이유와 마지막 화면을 찍습니다. workspace AGENTS.md Preflight ③의 완료 파일 방식은 이 헬퍼로 기다리고, handle 은 전체 ID 를 쓰도록 안내합니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다. (#331)
+
+
 - **재작업 비율: 후속 PR 판정 파일로 보정값** — `scripts/rework.sh`는 머지 뒤 같은 이슈 키로 시작한 PR을 모두 재작업으로 세서, 합의로 늘어난 범위·기존 코드 결함을 뺀 보고 값과 갈렸습니다. 이제 결과의 원본·후속 PR에 제목(`title`, 머지 커밋 본문 첫 줄)이 붙고, `--judgments <파일>`(TSV `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, verdict는 `defect`·`scope`·`preexisting`·`planned`)을 주면 결함 수정만 재작업으로 센 `judged_rework_prs`·`judged_ratio`와 판정 없는 후속 목록 `unjudged`를 함께 냅니다. 판정 없는 후속은 재작업으로 남고, 기존 `rework_ratio`는 그대로입니다. (#325)
 
 - **`/metrics` 워크플로 대상 세션 경유율** — 기존 워크플로 경유율은 하네스 프로젝트의 활성 세션 전부가 분모라 조회·검증이나 빌드/CI 설정만 바꾼 세션도 미경유로 잡혔습니다. `## 비율`에 워크플로를 경유했거나 구현 페르소나(developer·*implementer·test-engineer)에 위임했거나 코드 파일을 고친 세션만 분모로 세는 `워크플로 대상 세션 경유` 행을 더합니다. `.ai-harness/`·`.claude/`(worktree 안 코드는 제외하지 않음)·scratchpad·memory 아래, `.md`, `.yml`·`.json`·`.gradle`·`.kts` 같은 빌드·설정 파일, `Dockerfile`·`Jenkinsfile` 편집은 코드 변경으로 보지 않습니다. 기존 행은 그대로 두고, 프로젝트별 표에 `대상 경유` 열이 생깁니다. (#323)
