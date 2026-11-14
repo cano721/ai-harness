@@ -56,6 +56,8 @@ $ROOT/scripts/rework.sh --repo <저장소> [--repo <저장소>]... --author <이
 
 정의: 기간 안에 머지된 PR(작성자 커밋 포함) 중, 머지 뒤 window일 안에 **같은 이슈 키로 새 PR 작업이 시작된** 비율. 시작 시각은 후속 PR이 들여온 가장 이른 커밋이라 원본 머지 전에 시작한 분할 PR은 세지 않는다. window가 아직 끝나지 않은 PR은 `pending_prs`로 분모에서 빠진다 — 이번 주 값이 비어 보이면 기간을 window만큼 앞당겨 다시 잰다. 원격 브랜치(`git fetch`)만 보므로 먼저 fetch하고, 머지되지 않은 후속 PR은 세지 못한다(과소 추정)는 점을 함께 쓴다.
 
+같은 이슈 키의 후속이 모두 결함 수정은 아니다. 결과의 `rework[].title`·`followups[].title`(머지 커밋 본문 첫 줄)을 보고 사람이 판정한 TSV를 `--judgments <파일>`로 넘기면 보정값을 함께 낸다. 한 줄에 `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, `repo`는 `by_repo`의 이름, verdict는 `defect`(앞선 PR 결함 수정)·`scope`(합의로 늘어난 범위)·`preexisting`(기존 코드 결함)·`planned`(계획된 단계 분할) 중 하나다. `#` 주석과 빈 줄은 건너뛰고, 그 밖의 verdict는 usage 오류(exit 2)다. 결과에 `judged_rework_prs`(defect이거나 판정 없는 후속이 있는 재작업)·`judged_ratio`(settled 기준)·`unjudged`(판정 없는 후속)가 붙고 `rework_ratio`는 그대로다. 판정 없는 후속은 재작업으로 남으므로, 보정값을 보고할 때 `unjudged`가 비어 있지 않으면 그 수를 함께 쓴다.
+
 2. 원본 표를 그대로 붙이지 말고 **요약**해서 출력:
 
 ```

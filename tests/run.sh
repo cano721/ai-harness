@@ -5463,17 +5463,19 @@ rw_commit() { # file author epoch
     GIT_COMMITTER_NAME="$2" GIT_COMMITTER_EMAIL="$2@example.com" GIT_COMMITTER_DATE="@$3" \
     git -C "$RW_REPO" commit -q -m "$1"
 }
-rw_merge() { # branch pr epoch
+rw_merge() { # branch pr epoch [title]
+  local body=()
+  [[ -n "${4:-}" ]] && body=(-m "$4")
   GIT_AUTHOR_NAME=bot GIT_AUTHOR_EMAIL=bot@example.com GIT_AUTHOR_DATE="@$3" \
     GIT_COMMITTER_NAME=bot GIT_COMMITTER_EMAIL=bot@example.com GIT_COMMITTER_DATE="@$3" \
-    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)"
+    git -C "$RW_REPO" merge -q --no-ff "$1" -m "Merged in $1 (pull request #$2)" ${body[@]+"${body[@]}"}
 }
 DAY=86400
 T0=1790000000
 rw_commit base me "$T0"
 # PR #1 (NJ-1): 내 PR, 머지 T0+1d. PR #2: 같은 키를 머지 하루 뒤에 시작 → 재작업.
-git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY))
-git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY))
+git -C "$RW_REPO" switch -q -c feature/NJ-1; rw_commit a me $((T0 + DAY / 2)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1 1 $((T0 + DAY)) "Add login form"
+git -C "$RW_REPO" switch -q -c feature/NJ-1-fix; rw_commit b me $((T0 + 2 * DAY)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-1-fix 2 $((T0 + 3 * DAY)) "Fix login validation"
 # PR #3 (NJ-2)와 #4: #4는 #3 머지 전에 시작한 분할 PR → 재작업 아님.
 git -C "$RW_REPO" switch -q -c feature/NJ-2-b; rw_commit c me $((T0 + 3 * DAY)); git -C "$RW_REPO" switch -q develop
 git -C "$RW_REPO" switch -q -c feature/NJ-2; rw_commit d me $((T0 + 3 * DAY + 100)); git -C "$RW_REPO" switch -q develop; rw_merge feature/NJ-2 3 $((T0 + 4 * DAY))
@@ -5497,6 +5499,25 @@ assert_eq "20" "$(jq -r '.rework_ratio' <<<"$RW")" "rework ratio is rework over 
 RW_WIDE="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)))"
 assert_eq "1:2,6:7" "$(jq -r '[.rework[] | "\(.pr):\(.followups[0].pr)"] | join(",")' <<<"$RW_WIDE")" "a wider window catches the late follow-up"
 pass "rework ratio from merge history"
+
+# 재작업 판정: 후속 PR에 제목을 붙이고, 판정 파일(TSV)로 결함 수정(defect)만 재작업으로 센 보정값을 낸다. 판정 없는 후속은 재작업으로 둔다.
+assert_eq "Add login form|Fix login validation|Merged in feature/NJ-4 (pull request #6)" \
+  "$(jq -r '[.rework[0].title, .rework[0].followups[0].title, .rework[1].title] | join("|")' <<<"$RW_WIDE")" "rework titles come from the merge body first line, else the subject"
+assert_eq "false" "$(jq -r 'has("judged_ratio") or has("judged_rework_prs") or has("unjudged")' <<<"$RW_WIDE")" "without --judgments no judged keys appear"
+RW_J="$TEST_TMP/rework-judgments.tsv"
+printf '# repo\torig\tfollowup\tverdict\tnote\n\nrework-repo\t1\t2\tscope\tagreed extra field\n' >"$RW_J"
+RW_JUDGED="$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J")"
+assert_eq "28.6|1|14.3|rework-repo:6:7" \
+  "$(jq -r '"\(.rework_ratio)|\(.judged_rework_prs)|\(.judged_ratio)|\([.unjudged[] | "\(.repo):\(.pr):\(.followup)"] | join(","))"' <<<"$RW_JUDGED")" "non-defect follow-ups leave judged rework, unjudged ones stay"
+assert_eq "scope:agreed extra field|null" "$(jq -r '"\(.rework[0].followups[0].verdict):\(.rework[0].followups[0].note)|\(.rework[1].followups[0].verdict)"' <<<"$RW_JUDGED")" "follow-ups carry their verdict"
+printf 'rework-repo\t1\t2\tdefect\nrework-repo\t06\t7\tplanned\n' >"$RW_J"
+assert_eq "1|14.3|0" "$("$ROOT/scripts/rework.sh" --repo "$RW_REPO" --author '^me@' --exclude-key NJ-0 --window 10 --now $((T0 + 40 * DAY)) --judgments "$RW_J" | jq -r '"\(.judged_rework_prs)|\(.judged_ratio)|\(.unjudged | length)"')" "a defect follow-up keeps the rework"
+printf 'rework-repo\t1\t2\tbug\n' >"$RW_J"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$RW_J" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "an unknown verdict is a usage error"
+RW_RC=0; "$ROOT/scripts/rework.sh" --repo "$RW_REPO" --judgments "$TEST_TMP/no-such.tsv" >/dev/null 2>&1 || RW_RC=$?
+assert_eq "2" "$RW_RC" "a missing judgments file is a usage error"
+pass "rework judgments"
 
 # 무인 실행은 .claude/ 아래를 Write/Edit로 쓸 수 없어(보호 경로) 스크립트로 옮긴다. settings·hook과 저장소 밖은 막는다.
 PLACE_ROOT="$TEST_TMP/place-project"

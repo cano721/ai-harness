@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **재작업 비율: 후속 PR 판정 파일로 보정값** — `scripts/rework.sh`는 머지 뒤 같은 이슈 키로 시작한 PR을 모두 재작업으로 세서, 합의로 늘어난 범위·기존 코드 결함을 뺀 보고 값과 갈렸습니다. 이제 결과의 원본·후속 PR에 제목(`title`, 머지 커밋 본문 첫 줄)이 붙고, `--judgments <파일>`(TSV `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, verdict는 `defect`·`scope`·`preexisting`·`planned`)을 주면 결함 수정만 재작업으로 센 `judged_rework_prs`·`judged_ratio`와 판정 없는 후속 목록 `unjudged`를 함께 냅니다. 판정 없는 후속은 재작업으로 남고, 기존 `rework_ratio`는 그대로입니다. (#325)
+
 ## v0.72.0 (2026-11-13)
 ### 새 기능
 
