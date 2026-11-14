@@ -10,7 +10,7 @@ def auth_failure:
   or ((.api_error // "") | tostring | test("auth"; "i"))
   or (((.terminal_reason // "api_error") == "api_error")
       and ((.result // "") | tostring
-        | test("Failed to authenticate|claude auth login|setup-token|authentication_error|OAuth token (has )?expired|Invalid API key|Please run /login"; "i")));
+        | test("Failed to authenticate|claude auth login|setup-token|authentication_error|OAuth (token|session) (has )?expired|Invalid API key|Please run /login"; "i")));
 
 def fail_reason:
   if . == null then empty
@@ -20,3 +20,9 @@ def fail_reason:
   else empty end;
 
 def log_fail_reason: [inputs | fromjson? | objects | select(.type == "result")] | last | fail_reason;
+
+# 실행 기록(harvest-auto·autofix runs.jsonl) 한 줄이 끝까지 돈 실행인가 — 로그인 만료 뒤 다시 로그인했다는 근거다.
+# 세션 시작 안내(harvest-auto.sh notify)와 보드 묶음 카드가 같이 쓴다(#326). 에이전트를 띄우지 않은 sync(no_agent)는 근거가 아니다.
+def run_ok:
+  .event == "finished" and (.no_agent // false) == false and (.exit_code // 0) == 0
+  and .result != "failed" and .outcome != "failed";
