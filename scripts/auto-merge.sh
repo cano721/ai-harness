@@ -193,6 +193,12 @@ check_sync() { # repo base head result
       fi
       rm -f "$rendered"
       [[ "$mode" == 100644 ]] || { echo "bad_mode:$mode:$f"; return 1; }
+      # 기존 진입점을 바꾸는 render는 대상 브랜치(base) manifest가 이미 결정적 render로 표시한 것만 통과한다. 표시가 없으면
+      # 예전 손 렌더라 저장소 맞춤이 지워질 수 있다 — 첫 결정적 render PR은 사람이 본다. base는 PR이 바꿀 수 없다.
+      if [[ "$status" != A ]] || jq -e --arg p "$f" '(.managed_files // {}) | has($p)' <<<"$base_json" >/dev/null 2>&1; then
+        [[ "$(jq -r --arg p "$f" '.managed_files[$p].renderer? // empty' <<<"$base_json" 2>/dev/null)" == 1 ]] \
+          || { echo "render_first:$f"; return 1; }
+      fi
     else
       [[ "$kind" == copy ]] || { echo "unknown_kind:$kind:$f"; return 1; }
       src="$ROOT/$(jq -r '.source' <<<"$entry")"

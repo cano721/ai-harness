@@ -620,7 +620,7 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 
 | 대상 | 병합 조건 (모두 만족) |
 |---|---|
-| sync PR | 결과 `improved`(일부 적용은 `sync_partial`이 켜졌을 때만) · 바뀐 파일이 카탈로그 `copy`·`render` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · render 생성물(워크플로 진입점 커맨드·SKILL)이 `scripts/render-managed-file.sh` 결과와 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물이 스크립트 결과와 다르면(사람이 고친 진입점) 사람이 봅니다** |
+| sync PR | 결과 `improved`(일부 적용은 `sync_partial`이 켜졌을 때만) · 바뀐 파일이 카탈로그 `copy`·`render` 생성물과 `harness.json`뿐 · copy 생성물이 템플릿과 바이트 일치 · render 생성물(워크플로 진입점 커맨드·SKILL)이 `scripts/render-managed-file.sh` 결과와 바이트 일치 · manifest 해시가 파일과 일치 · `harness.json`은 관리 해시·버전 외 정책 필드가 그대로이고, 해시는 이번에 바꾼 파일 것만 바뀜(항목 삭제 거부). **render 생성물이 스크립트 결과와 다르거나(사람이 고친 진입점), 기준 브랜치 manifest에 결정적 render 표시(`renderer`)가 없는 기존 진입점을 처음 바꾸는 PR(예전 손 렌더의 저장소 맞춤이 지워질 수 있음, `render_first:`)은 사람이 봅니다** |
 | harvest PR | 결과 `improved` · harvest가 기록한 1회차 독립 검토 전부 통과(`--first-pass pass`)·기대효과 — 에이전트 자기 신고라 거르는 데만 씀 · 바뀐 파일이 `AGENTS.md`·`.ai-harness/docs/**/*.md`·`.ai-harness/workflows/*.md`뿐 · 파일 3개·추가+삭제 40줄 이하(`harvest_max_*`로 조정, 최대 5개·100줄) · **worker가 따로 띄운 읽기 전용 검토 세션이 최종 diff를 통과**시킴(검증·승인 약화, 기존 규칙과 모순, 과잉 일반화, 무관한 지시가 있으면 탈락. 판정 줄에 그 실행만의 토큰을 요구해 diff 안에 미리 적힌 판정은 받지 않음) |
 | 공통 (내용) | 추가·수정만(삭제·이름 바꾸기·모드 변경·링크·서브모듈 거부, 제어 문자가 든 경로 거부), 일반 파일 모드(copy는 템플릿과 같은 실행 비트) · PR URL이 이 저장소(origin)의 PR · 기준이 원격 브랜치(`origin/<branch>`) |
 | 공통 (병합 직전, PR 호스트에서 직접 읽음) | 사용자 설정이 여전히 켜져 있음 · PR이 열려 있음 · 이 실행이 시작된 뒤 열린 PR · head가 판정한 커밋 그대로 · 대상 브랜치가 판정한 기준 브랜치 · 사람 활동(코멘트·리뷰·승인) 없음 — 사람이 보기 시작하면 사람에게 넘김 · 충돌 없음 · 원격 CI가 head에서 통과(GitHub 브랜치 보호가 막고 있으면 대기, `wait_hours` 안에 안 끝나면 사람에게, CI가 없으면 `require_ci`가 꺼졌을 때만 병합) |

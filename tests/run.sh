@@ -5088,6 +5088,27 @@ mkdir -p "$AM_REPO/.claude/commands"
 printf ' ' >>"$AM_REPO/.claude/commands/review.md"
 am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"}"
 assert_eq "render_file:.claude/commands/review.md" "$(am_check --scope sync --head "$(am_commit renderedit)")" "a render artifact one byte off needs a person"
+# 예전 손 렌더(저장소 맞춤 포함)가 기록된 저장소: 해시가 맞아도 base manifest에 renderer 표시가 없으면 첫 결정적
+# render PR은 사람이 본다. 표시는 base(대상 브랜치) 것만 믿는다 — head에 표시를 넣어도 통과하지 않는다.
+am_render_base() { # name renderer-mark(0|1) → origin/<name>: 옛 진입점이 기록된 기준 브랜치
+  git -C "$AM_REPO" checkout -q -B "$1" develop
+  mkdir -p "$AM_REPO/.claude/commands"
+  # shellcheck disable=SC2016  # $ARGUMENTS는 옛 진입점의 자리표시자 문자열이다
+  printf -- '---\ndescription: old\n---\n\n- team routing line\n\n요청: $ARGUMENTS\n' >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\"} + (if $2 == 1 then {renderer: 1} else {} end)"
+  git -C "$AM_REPO" add -A && git -C "$AM_REPO" commit -q -m "$1"
+  git -C "$AM_REPO" update-ref "refs/remotes/origin/$1" "$1"
+}
+am_render_head() { # base branch → 옛 진입점을 스크립트 결과로 바꾼 sync 커밋
+  am_on "$1" "$2"
+  "$ROOT/scripts/render-managed-file.sh" --path .claude/commands/review.md >"$AM_REPO/.claude/commands/review.md"
+  am_manifest ".harness_version = \"9.9.9\" | .managed_files[\".claude/commands/review.md\"] = {content_sha256:\"$(am_sha "$AM_REPO/.claude/commands/review.md")\", renderer: 1}"
+  am_commit "$2"
+}
+am_render_base render-unmarked 0
+assert_eq "render_first:.claude/commands/review.md" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-unmarked --scope sync --head "$(am_render_head render-unmarked s-render-first)")" "the first deterministic render over an unmarked hand render needs a person"
+am_render_base render-marked 1
+assert_eq "ok" "$("$ROOT/scripts/auto-merge.sh" check --repo "$AM_REPO" --base origin/render-marked --scope sync --head "$(am_render_head render-marked s-render-next)")" "a render over a marked deterministic render passes"
 am_sync_head s-del
 git -C "$AM_REPO" rm -q app.js
 assert_eq "unsupported_change:D:app.js" "$(am_check --scope sync --head "$(am_commit del)")" "a deletion is refused"
@@ -5646,8 +5667,24 @@ done
 printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
 mkdir -p "$RD_ROOT/.ai-harness"
 jq -n --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '{managed_files: {".claude/commands/review.md": {content_sha256: $h}}}' >"$RD_ROOT/.ai-harness/harness.json"
+# 표시 없는 기록(예전 손 렌더)은 해시가 맞아도 저장소 맞춤이 있을 수 있어 사람이 본 뒤(--first-render)에만 바꾼다(#316).
+mf_refuse "first deterministic render needs a person" "$RD_ROOT" .claude/commands/review.md
+assert_eq "old" "$(<"$RD_ROOT/.claude/commands/review.md")" "an unmarked hand render is not overwritten without review"
+"$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md --first-render >/dev/null
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "a reviewed first render replaces the hand render"
+# record는 스크립트 결과와 같은 render에만 표시를 남기고, 표시가 있으면 다음 sync는 그냥 갱신한다.
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "1" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record marks a deterministic render"
+printf 'old\n' >"$RD_ROOT/.claude/commands/review.md"
+"$ROOT/scripts/harness-sync-state.sh" record --root "$RD_ROOT" --version 9.9.9 --file .claude/commands/review.md
+assert_eq "null" "$(jq -r '.managed_files[".claude/commands/review.md"].renderer' "$RD_ROOT/.ai-harness/harness.json")" "record does not mark a render that differs from the script"
+jq --arg h "$(mf_sha "$RD_ROOT/.claude/commands/review.md")" '.managed_files[".claude/commands/review.md"] = {content_sha256: $h, renderer: 1}' "$RD_ROOT/.ai-harness/harness.json" >"$RD_ROOT/.ai-harness/h2" && mv "$RD_ROOT/.ai-harness/h2" "$RD_ROOT/.ai-harness/harness.json"
 "$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path .claude/commands/review.md >/dev/null
-cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "an unchanged older render is refreshed"
+cmp -s "$TEST_TMP/render-claude" "$RD_ROOT/.claude/commands/review.md" || fail "an unchanged marked render is refreshed"
+rd_rc=0; "$ROOT/scripts/place-managed-file.sh" --root "$RD_ROOT" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "place-managed-file exits 2 on --path without a value"
+rd_rc=0; "$ROOT/scripts/render-managed-file.sh" --path >/dev/null 2>&1 || rd_rc=$?
+assert_eq "2" "$rd_rc" "render-managed-file exits 2 on --path without a value"
 printf 'team wording\n' >>"$RD_ROOT/.claude/commands/review.md"
 mf_refuse "modified since it was recorded" "$RD_ROOT" .claude/commands/review.md
 assert_contains "$(<"$RD_ROOT/.claude/commands/review.md")" "team wording" "a render a person changed is not overwritten"

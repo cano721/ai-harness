@@ -4,6 +4,7 @@
 # 옮겨 적으면 틀어질 수 있어 에이전트가 건너뛰었다 — 그래서 자동 sync 대부분이 일부 적용으로 끝났다.
 # - 경로는 플러그인 카탈로그(templates/managed-files.json)의 mode:copy·render 항목만 받는다. 원본은 카탈로그가 정하고 호출자가 고르지 못한다
 # - copy는 템플릿 바이트 그대로, render(워크플로 진입점)는 render-managed-file.sh 결과를 쓴다(#316)
+# - manifest에 renderer 표시가 없는 기존 render(예전 손 렌더)는 저장소 맞춤이 있을 수 있어 --first-render 없이는 덮어쓰지 않는다
 # - .claude/ 아래도 같은 방식으로 쓴다(보호 경로라 Write가 막힌다). 카탈로그에 없는 settings·hook은 받지 않는다
 # - 덮어쓰기는 harness.json에 기록된 해시와 지금 내용이 같은(사람이 고치지 않은) 파일만 한다. 없는 파일은 새로 만든다
 # - 실행 비트는 템플릿을 따른다
@@ -15,17 +16,18 @@ TEMPLATES="$PLUGIN_ROOT/templates"
 CATALOG="$TEMPLATES/managed-files.json"
 
 usage() {
-  printf 'usage: %s --root <project-root> --path <카탈로그 경로> [--path <카탈로그 경로>]...\n' "$0" >&2
+  printf 'usage: %s --root <project-root> --path <카탈로그 경로> [--path <카탈로그 경로>]... [--first-render]\n' "$0" >&2
   exit 2
 }
 fail() { printf 'place-managed-file: %s\n' "$1" >&2; exit 2; }
 sha256_of() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{print $1}'; }
 
-root="" paths=()
+root="" paths=() first_render=0
 while (($#)); do
   case "$1" in
-    --root) root="${2:-}"; shift 2 ;;
-    --path) paths+=("${2:-}"); shift 2 ;;
+    --root) (($# >= 2)) || usage; root="$2"; shift 2 ;;
+    --path) (($# >= 2)) || usage; paths+=("$2"); shift 2 ;;
+    --first-render) first_render=1; shift ;;
     *) usage ;;
   esac
 done
@@ -73,6 +75,12 @@ for path in "${paths[@]}"; do
     recorded="$(jq -r --arg p "$path" '.managed_files[$p].content_sha256? // empty' "$manifest" 2>/dev/null || true)"
     [[ -n "$recorded" ]] || fail "existing file is not a recorded managed file (untracked): $path"
     [[ "$(sha256_of "$dest")" == "$recorded" ]] || fail "existing file was modified since it was recorded: $path"
+    # 표시 없는 render 기록은 예전 손 렌더라 저장소 맞춤이 들어 있을 수 있다. 첫 결정적 render는 사람이 diff를 본 뒤에만
+    # (--first-render) 덮어쓴다(#316).
+    if [[ "$kind" == render && "$first_render" != 1 ]] \
+      && [[ "$(jq -r --arg p "$path" '.managed_files[$p].renderer? // empty' "$manifest" 2>/dev/null || true)" != 1 ]]; then
+      fail "first deterministic render needs a person (no renderer mark; rerun with --first-render after review): $path"
+    fi
   fi
   kinds+=("$kind")
   srcs+=("$src")

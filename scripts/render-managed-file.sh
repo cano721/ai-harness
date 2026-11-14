@@ -20,7 +20,7 @@ fail() { printf 'render-managed-file: %s\n' "$1" >&2; exit 2; }
 path=""
 while (($#)); do
   case "$1" in
-    --path) path="${2:-}"; shift 2 ;;
+    --path) (($# >= 2)) || usage; path="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
