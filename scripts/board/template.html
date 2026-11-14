@@ -2281,7 +2281,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   // 승인 모드: 러너와 같은 개인 설정(HM_APPROVAL_REPOS > HM_APPROVAL > 사람 확인). 저장소 manifest의 approval은 쓰지 않는다.
   const APPROVALS = [['human', '사람 확인'], ['auto', '자동 통과']];
   const APPR = Object.fromEntries(APPROVALS);
-  const APPROVAL_DESC = { human: 'Brief를 보이고 내가 승인해야 고치기 시작합니다.', auto: 'Brief와 결정 사항을 PR 본문에 남기고, 사람만 정할 것이 없으면 승인 없이 진행합니다.' };
+  const APPROVAL_DESC = { human: 'Brief를 보이고 내가 승인해야 고치기 시작합니다. workspace에서 인계한 멤버는 workspace 대화로 물어 오고, "승인 <멤버>"로 답합니다.', auto: 'Brief와 결정 사항을 PR 본문에 남기고, 사람만 정할 것이 없으면 승인 없이 진행합니다.' };
   const badApproval = (v) => descLine(`승인 모드 값(${v})이 사람 확인·자동 통과가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
   async function setApproval(body) {
     let res; try { res = await post('/settings/approval', body); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }

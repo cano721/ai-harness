@@ -391,6 +391,7 @@ print_brief() {
 수리: 대화에 "승인"이라고 입력한 뒤 resume (터미널이면 approve). 위 finding을 고치고 검증·재검토까지 이어 간다
 수리하지 않으면 여기서 끝난다: 위 finding이 검토 결과다
 EOF
+    workspace_hint
     return
   fi
   cat <<EOF
@@ -399,29 +400,58 @@ EOF
 승인: 대화에 "승인"이라고 입력한 뒤 resume (터미널이면 approve)
 수정: 바꿀 점을 말하면 revise --feedback "<바꿀 점>"으로 Brief를 다시 만든다
 EOF
+  workspace_hint
 }
 
-# 사용자가 직접 입력한 메시지만 본다: Claude는 type=user의 문자열 content(isMeta 제외), Codex는 event_msg user_message.
-# 도구 결과·모델 메시지·드라이버가 띄운 세션의 프롬프트는 "승인"으로 시작하지 않으므로 걸리지 않는다.
+# workspace가 인계한 실행이면 멤버 세션 터미널에서 기다리지 말고 조율 세션에 물어 사용자가 workspace 대화에서 답하게 한다(#331).
+workspace_hint() {
+  local ws
+  ws="$(workspace_root)"
+  [[ -n "$ws" ]] || return 0
+  printf 'workspace 인계: 이 Brief(%s)를 조율 세션에 보내고(SendMessage 등) 답을 기다린다. 사용자가 workspace 대화에 "승인 %s"를 입력하면 resume, 바꿀 점을 주면 revise --feedback\n' "$RUN/brief.md" "${REPO##*/}"
+}
+
+# 저장소를 담은 workspace(위로 올라가 .ai-harness/workspace.json이 있는 폴더). 없으면 빈 값.
+workspace_root() {
+  local d="${REPO%/*}"
+  while [[ -n "$d" && "$d" != / ]]; do
+    [[ -f "$d/.ai-harness/workspace.json" ]] && { printf '%s' "$d"; return; }
+    d="${d%/*}"
+  done
+}
+
+# 사용자가 직접 입력한 메시지만 본다: Claude는 type=user의 문자열 content(isMeta 제외, origin이 있으면 human만), Codex는 event_msg user_message.
+# 도구 결과·모델 메시지·드라이버가 띄운 세션의 프롬프트·다른 세션이 보낸 메시지는 걸리지 않는다.
+# workspace가 인계한 멤버 실행이면 사용자가 workspace 대화에서 멤버 이름을 붙여 친 "승인 <멤버>"도 받는다 —
+# 이름이 없으면 여러 멤버가 기다릴 때 어느 Brief를 승인했는지 알 수 없다. (#331)
 transcript_approval() {
-  local since="$1" marker="$RUN/brief.json" f cwd
+  local since="$1" marker="$RUN/brief.json" f cwd ws name ws_re
   local re='^[[:space:]]*(승인|approve|approved)([[:space:][:punct:]]|$)'
   local claude_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" codex_root="${CODEX_HOME:-$HOME/.codex}/sessions"
+  ws="$(workspace_root)"
+  name="$(printf '%s' "${REPO##*/}" | tr '[:upper:]' '[:lower:]' | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+  ws_re="^[[:space:]]*(승인|approve|approved)[[:space:]]+${name}([[:space:][:punct:]]|$)"
   if [[ -d "$claude_root" ]]; then
     while IFS= read -r -d '' f; do
-      jq -c --arg repo "$REPO" --arg since "$since" --arg re "$re" '
+      jq -c --arg repo "$REPO" --arg ws "$ws" --arg since "$since" --arg re "$re" --arg wsre "$ws_re" '
         select(.type == "user" and (.isMeta | not) and ((.message.content | type) == "string")
-          and ((.cwd // "") as $c | $c == $repo or ($c | startswith($repo + "/")) or ("/private" + $c) == $repo)
+          and ((.origin.kind // "human") == "human")
           and ((.timestamp // "")[:19] > $since)
-          and (.message.content | ascii_downcase | test($re)))
+          and ((.cwd // "") as $c
+            | (($c == $repo or ($c | startswith($repo + "/")) or ("/private" + $c) == $repo)
+                and (.message.content | ascii_downcase | test($re)))
+              or ($ws != "" and ($c == $ws or ("/private" + $c) == $ws)
+                and (.message.content | ascii_downcase | test($wsre)))))
         | {source:"claude-transcript", at:.timestamp, text:(.message.content[:200])}' "$f" 2>/dev/null | head -n 1
     done < <(find "$claude_root" -name '*.jsonl' -newer "$marker" -print0 2>/dev/null)
   fi
   if [[ -d "$codex_root" ]]; then
     while IFS= read -r -d '' f; do
       cwd="$(jq -r 'select(.type == "session_meta") | .payload.cwd // empty' "$f" 2>/dev/null | head -n 1)"
-      [[ "$cwd" == "$REPO" || "$cwd" == "$REPO"/* || "/private$cwd" == "$REPO" ]] || continue
-      jq -c --arg since "$since" --arg re "$re" '
+      if [[ "$cwd" == "$REPO" || "$cwd" == "$REPO"/* || "/private$cwd" == "$REPO" ]]; then :
+      elif [[ -n "$ws" && ( "$cwd" == "$ws" || "/private$cwd" == "$ws" ) ]]; then cwd=workspace
+      else continue; fi
+      jq -c --arg since "$since" --arg re "$([[ "$cwd" == workspace ]] && printf '%s' "$ws_re" || printf '%s' "$re")" '
         select(.type == "event_msg" and .payload.type == "user_message"
           and ((.timestamp // "")[:19] > $since)
           and (.payload.message | ascii_downcase | test($re)))

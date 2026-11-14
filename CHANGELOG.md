@@ -10,7 +10,7 @@
 
 ### 새 기능
 
-- **workspace 인계 대기가 멤버의 승인·질문 정체를 알립니다** — 완료 파일만 기다리면 멤버 세션이 brief 승인 게이트나 질문에서 멈춰도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 새 `scripts/wait-delegation.sh --done <완료 파일> --terminal <멤버 터미널 handle>`은 완료 파일이 생기거나, 멤버 화면이 입력을 기다리거나(`awaiting_input`), 화면이 오래 그대로거나(`stalled`), 터미널이 끝나거나, handle 을 못 읽으면 바로 끝나고 이유와 마지막 화면을 찍습니다. workspace AGENTS.md Preflight ③의 완료 파일 방식은 이 헬퍼로 기다리고, handle 은 전체 ID 를 쓰도록 안내합니다. 기존 workspace 는 `/harness-init` 재동기화로 반영됩니다. (#331)
+- **workspace 인계 대기가 멤버의 승인·질문 정체를 알립니다** — 완료 파일만 기다리면 멤버 세션이 brief 승인 게이트나 질문에서 멈춰도 조율 세션이 몰랐습니다(사용자가 물은 뒤에야 터미널을 읽어 확인). 새 `scripts/wait-delegation.sh --done <완료 파일> --terminal <멤버 터미널 handle>`은 완료 파일이 생기거나, 멤버 화면이 입력을 기다리거나(`awaiting_input`), 화면이 오래 그대로거나(`stalled`), 터미널이 끝나거나, handle 을 못 읽으면 바로 끝나고 이유와 마지막 화면을 찍습니다. workspace AGENTS.md Preflight ③의 완료 파일 방식은 이 헬퍼로 기다리고, handle 은 전체 ID 를 쓰도록 안내합니다. 승인은 기본으로 workspace 대화에서 받습니다: 러너는 workspace 안 멤버 실행이면 Brief 를 조율 세션에 보내라고 안내하고, 사용자가 workspace 대화에 직접 친 `승인 <멤버 폴더 이름>`도 승인으로 인정합니다(이름 없는 "승인"·세션 간 메시지·다른 세션이 보낸 메시지는 인정하지 않습니다 — 조율 에이전트가 대신 승인할 수 없습니다). 승인 없이 끝까지 돌리려면 Harness Board 설정에서 멤버 저장소의 승인을 "자동 통과"로 고릅니다. 기존 workspace 는 `/harness-init` 재동기화, 멤버 러너는 sync 로 반영됩니다. (#331)
 
 
 - **재작업 비율: 후속 PR 판정 파일로 보정값** — `scripts/rework.sh`는 머지 뒤 같은 이슈 키로 시작한 PR을 모두 재작업으로 세서, 합의로 늘어난 범위·기존 코드 결함을 뺀 보고 값과 갈렸습니다. 이제 결과의 원본·후속 PR에 제목(`title`, 머지 커밋 본문 첫 줄)이 붙고, `--judgments <파일>`(TSV `repo<TAB>원본PR<TAB>후속PR<TAB>verdict<TAB>메모`, verdict는 `defect`·`scope`·`preexisting`·`planned`)을 주면 결함 수정만 재작업으로 센 `judged_rework_prs`·`judged_ratio`와 판정 없는 후속 목록 `unjudged`를 함께 냅니다. 판정 없는 후속은 재작업으로 남고, 기존 `rework_ratio`는 그대로입니다. (#325)

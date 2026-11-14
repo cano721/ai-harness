@@ -1024,6 +1024,30 @@ mkdir -p "$DRIVER_TMP/codex/sessions/2999"
 driver resume
 assert_eq "0:codex-transcript" "$DRIVER_RC:$(run_state .approval.source)" "a typed approval in a Codex session is accepted"
 
+# workspace가 인계한 멤버 세션의 승인은 사용자가 workspace 대화에서 멤버 이름을 붙여 친 "승인 <멤버>"로도 받는다(#331).
+# 조율 세션이 보낸 세션 간 메시지(isMeta·origin peer)는 승인이 아니다 — 에이전트가 사람 승인을 대신할 수 없다.
+WS_ROOT="$DRIVER_TMP/ws"
+mkdir -p "$WS_ROOT/.ai-harness"
+printf '{"workspace_id":"ws","members":[{"path":"repo-ws_member","project_id":"ws_member"}]}\n' >"$WS_ROOT/.ai-harness/workspace.json"
+FAKE_SCENARIO=ok FAKE_LOG="$DRIVER_TMP/ws_member.log"
+DRIVER_REPO="$WS_ROOT/repo-ws_member"
+mkdir -p "$DRIVER_REPO" && git -C "$DRIVER_REPO" init -q && git -C "$DRIVER_REPO" config user.email t@t && git -C "$DRIVER_REPO" config user.name t
+git -C "$DRIVER_REPO" commit -q --allow-empty -m init
+DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)" WS_ROOT="$(cd "$WS_ROOT" && pwd -P)"
+: >"$FAKE_LOG"
+driver start --runtime codex --request "add feature"
+assert_contains "$DRIVER_OUT" "승인 repo-ws_member" "a member run inside a workspace says how to approve from the workspace conversation"
+say_in_claude "승인" "$WS_ROOT"
+say_in_claude "승인 repo-other" "$WS_ROOT"
+mkdir -p "$DRIVER_TMP/claude/projects/p"
+jq -nc --arg c "$DRIVER_REPO" '{type:"user", isMeta:true, cwd:$c, timestamp:"2999-01-01T00:00:00Z", origin:{kind:"peer"}, message:{role:"user", content:"승인"}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+jq -nc --arg c "$DRIVER_REPO" '{type:"user", cwd:$c, timestamp:"2999-01-01T00:00:00Z", origin:{kind:"coordinator"}, message:{role:"user", content:"승인"}}' >>"$DRIVER_TMP/claude/projects/p/ok.jsonl"
+driver resume
+assert_eq "10" "$DRIVER_RC" "a bare or other-member approval in the workspace and messages from other sessions do not approve"
+say_in_claude "승인 repo-ws_member" "$WS_ROOT"
+driver resume
+assert_eq "0:done:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .approval.source)" "the person's named approval in the workspace conversation approves the member run"
+
 # Claude 세션은 stream-json으로 돌려 도구 호출을 실시간 진행 줄로 보인다. 원본 스트림(파일 내용·명령 인자·모델 문장)은 디스크에 남기지 않는다.
 new_driver_repo claude_stream
 driver start --runtime claude --request "add feature"
