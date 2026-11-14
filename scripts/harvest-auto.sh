@@ -35,6 +35,7 @@ usage:
   harvest-auto.sh run <project> <batch_id> <repo_root> <agent> [scope]  # trigger가 띄우는 detached worker
   harvest-auto.sh agent                                              # 자동 실행에 쓸 에이전트(claude|codex)
   harvest-auto.sh runs [--limit N]                                   # 최근 자동 실행 기록
+  harvest-auto.sh notify                                             # 세션 시작 안내: 무인 실행이 로그인 만료로 멈췄는지
 EOF
   exit 2
 }
@@ -85,6 +86,27 @@ short_key() { hm_short_key "$@"; }
 
 attempt_marker() { printf '%s/%s/auto-attempted-batch\n' "$HM_DATA_DIR/harvest-queue" "$(hm_project_key "$1")"; }
 
+# 이전 버전은 로그인 만료를 agent_error로 세어 MAX_FAILS에서 포기했다(#315). 로그가 인증 실패인 지난 실패를 마커의
+# 횟수에서 한 번만 빼고(auth_checked), 그 때문에 포기한 batch는 실패 상태로 돌려 다시 시도하게 한다.
+# 이번 버전이 쓰는 마커는 처음부터 auth_checked다 — 인증 실패를 세지 않으므로 뺄 것이 없다.
+forgive_auth_fails() { # $1=marker $2=project $3=batch_id
+  local marker="$1" fails=0 n=0 log=""
+  [[ -f "$marker" && -f "$RUNS_FILE" ]] || return 0
+  jq -e '(.auth_checked // false) == false and (.fails // 0) > 0' "$marker" >/dev/null 2>&1 || return 0
+  fails="$(jq -r '.fails' "$marker" 2>/dev/null)"
+  [[ "$fails" =~ ^[0-9]+$ ]] || return 0
+  while IFS= read -r log; do
+    [[ -n "$log" && "$(hm_log_fail_reason "$log")" == "auth_expired" ]] && n=$((n + 1))
+  done <<<"$(jq -Rrn --arg p "$2" --arg b "$(batch_key "$3")" '[inputs | fromjson? | objects
+      | select(.event == "finished" and .project == $p and .batch == $b and .result == "failed"
+        and ((.reason // "") | IN("auth_expired", "usage_limit") | not)) | .log // empty] | .[]' "$RUNS_FILE" 2>/dev/null)"
+  fails=$((fails - n))
+  (( fails >= 0 )) || fails=0
+  jq -c --argjson f "$fails" --argjson max "$MAX_FAILS" \
+    '.fails = $f | .auth_checked = true | if .result == "gave_up" and $f < $max then .result = "failed" else . end' \
+    "$marker" >"$marker.tmp" 2>/dev/null && mv "$marker.tmp" "$marker"
+}
+
 command_trigger() {
   local status="$1" cwd="$2" agent="${3:-}" project="" batch_id="" repo_root="" marker=""
   [[ "${HM_HARVEST_AUTO:-0}" == "1" ]] || return 0
@@ -105,10 +127,11 @@ command_trigger() {
     fi
     mkdir -p "${marker%/*}"
     jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --arg result "$1" --argjson fails "$fails" \
-      '{batch_id:$batch_id,at:$at,result:$result,fails:$fails}' >"$marker"
+      '{batch_id:$batch_id,at:$at,result:$result,fails:$fails,auth_checked:true}' >"$marker"
   }
   local prev_result=""
   if [[ "$(jq -r '.batch_id // empty' "$marker" 2>/dev/null)" == "$batch_id" ]]; then
+    forgive_auth_fails "$marker" "$project" "$batch_id"
     prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
     # 하네스 저장소를 못 찾아 넘긴 batch만 다시 본다(이전 버전의 구분 없는 "skipped"는 한 번 재판단).
     # 실행했거나 정책상 건너뛴 batch는 끝.
@@ -363,6 +386,7 @@ maybe_sync_run() {
     plugin="$(jq -r '.plugin' <<<"$row")"
     marker="$(sync_marker "$project")"
     prev_plugin="$(jq -r '.plugin // empty' "$marker" 2>/dev/null)"
+    [[ "$prev_plugin" != "$plugin" ]] || forgive_auth_fails "$marker" "$project" "sync-$plugin"
     prev_result="$(jq -r '.result // empty' "$marker" 2>/dev/null)"
     fails=0
     if [[ "$prev_plugin" == "$plugin" ]]; then
@@ -395,7 +419,7 @@ maybe_sync_run() {
     fi
     # 마커를 못 쓰면 버전당 1회를 지킬 수 없다 — 같은 저장소를 끝없이 다시 띄우지 않게 멈춘다.
     if ! { mkdir -p "$SYNC_DIR" && jq -cn --arg plugin "$plugin" --arg at "$(now_iso)" --argjson fails "$fails" \
-        '{plugin:$plugin,at:$at,result:"launched",fails:$fails}' >"$marker"; } 2>/dev/null; then
+        '{plugin:$plugin,at:$at,result:"launched",fails:$fails,auth_checked:true}' >"$marker"; } 2>/dev/null; then
       log_skip "$project" "sync-$plugin" marker_unwritable
       return 0
     fi
@@ -607,23 +631,20 @@ command_run() {
     cost="$(jq -Rn '[inputs | fromjson? | objects | .total_cost_usd? // empty] | last // null' "$log_file" 2>/dev/null || printf 'null')"
   fi
   local fail_reason=""
-  fail_reason="$(jq -Rrn '[inputs | fromjson? | objects | select(.type=="result")] | last
-    | if . == null then empty
-      elif .api_error == "usage_limit_reached" or .api_error_status == 429 then "usage_limit"
-      elif .is_error == true then (.api_error // "agent_error")
-      else empty end' "$log_file" 2>/dev/null || true)"
+  fail_reason="$(hm_log_fail_reason "$log_file")"
   local marker_file="" fails=0
   if (( exit_code != 0 )); then
     result="failed"
     # 사용량 한도·API 오류 같은 일시 실패로 batch를 버리지 않고 다음 sweep이 다시 시도한다.
-    # 사용량 한도가 아닌 실패는 횟수를 세어 MAX_FAILS에서 포기한다(트리거가 판단).
+    # 사용량 한도·로그인 만료가 아닌 실패는 횟수를 세어 MAX_FAILS에서 포기한다(트리거가 판단).
+    # 로그인 만료는 사람이 다시 로그인하기 전까지 반드시 실패하므로 기회를 쓰지 않는다.
     if [[ "$scope" == "sync" ]]; then marker_file="$(sync_marker "$project")"; else marker_file="$(attempt_marker "$project")"; fi
     fails="$(jq -r '.fails // 0' "$marker_file" 2>/dev/null || echo 0)"
     [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
-    [[ "$fail_reason" == "usage_limit" ]] || fails=$((fails + 1))
+    case "$fail_reason" in usage_limit|auth_expired) ;; *) fails=$((fails + 1)) ;; esac
     if [[ "$scope" != "sync" ]]; then
       jq -cn --arg batch_id "$batch_id" --arg at "$(now_iso)" --argjson fails "$fails" \
-        '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails}' >"$marker_file" 2>/dev/null || true
+        '{batch_id:$batch_id,at:$at,result:"failed",fails:$fails,auth_checked:true}' >"$marker_file" 2>/dev/null || true
     fi
   elif [[ "$scope" == "sync" ]]; then
     if (( ran_agent == 0 )); then
@@ -654,7 +675,7 @@ command_run() {
   if [[ "$scope" == "sync" ]]; then
     mkdir -p "$SYNC_DIR"
     jq -cn --arg plugin "${batch_id#sync-}" --arg at "$(now_iso)" --arg result "$result" --argjson fails "$fails" \
-      '{plugin:$plugin,at:$at,result:$result,fails:$fails}' >"$(sync_marker "$project")" 2>/dev/null || true
+      '{plugin:$plugin,at:$at,result:$result,fails:$fails,auth_checked:true}' >"$(sync_marker "$project")" 2>/dev/null || true
   fi
   append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$project" --arg batch "$(batch_key "$batch_id")" \
     --arg scope "$scope" --arg result "$result" --argjson exit_code "$exit_code" \
@@ -690,7 +711,8 @@ command_run() {
   # 주기 단위인 전역 분석은 끼우지 않는다(정기 sweep에서만).
   # 동시 실행은 여전히 1개지만, sweep 주기(기본 6시간)마다 1건씩 기다리지 않는다.
   # 사용량 한도로 끝났거나, 한도 휴지 중이거나, 사용자가 다시 작업 중이면 잇지 않고 다음 sweep(유휴 대기 포함)에 넘긴다.
-  if [[ "$fail_reason" != "usage_limit" ]]; then
+  # 로그인 만료로 끝났으면 남은 저장소도 같은 이유로 실패하므로 잇지 않는다(#315). 다음 sweep이 다시 한 건으로 확인한다.
+  if [[ "$fail_reason" != "usage_limit" && "$fail_reason" != "auth_expired" ]]; then
     trap - EXIT
     hm_release_lock "$RUN_LOCK"
     if ! hm_in_usage_backoff "${HM_LLM_BACKOFF_HOURS:-5}" && ! hm_recently_active "${HM_IDLE_MINUTES:-20}"; then
@@ -706,6 +728,32 @@ command_runs() {
   tail -n "$limit" "$RUNS_FILE"
 }
 
+# 세션 시작 안내: 마지막 무인 실행(harvest·sync·autofix)이 로그인 만료로 끝났고 그 뒤 끝난 실행이 없으면 한 줄 알린다.
+# 같은 실패에는 한 번만 알린다(알린 실패를 기록 파일·건수·시각으로 남긴다). 이전 버전이 agent_error로 남긴 실패는 로그로 판정한다.
+command_notify() {
+  local f="" row="" last="" key="" reason="" shown="$AUTO_DIR/auth-notified"
+  for f in "$RUNS_FILE" "$HM_DATA_DIR/autofix/runs.jsonl"; do
+    [[ -f "$f" ]] || continue
+    row="$(jq -Rcn --arg f "$f" '[inputs | fromjson? | objects | select(.event == "finished")]
+      | if length == 0 then empty else (last + {key: "\($f)|\(length)|\(last.at // "")"}) end' "$f" 2>/dev/null)"
+    [[ -n "$row" ]] || continue
+    if [[ -z "$last" ]] || [[ "$(jq -r '.at // ""' <<<"$row")" > "$(jq -r '.at // ""' <<<"$last")" ]]; then last="$row"; fi
+  done
+  [[ -n "$last" ]] || return 0
+  reason="$(jq -r '.reason // empty' <<<"$last")"
+  if [[ "$reason" != "auth_expired" ]]; then
+    [[ "$reason" == "agent_error" ]] || return 0
+    [[ "$(hm_log_fail_reason "$(jq -r '.log // empty' <<<"$last")")" == "auth_expired" ]] || return 0
+  fi
+  key="$(jq -r '.key' <<<"$last")"
+  [[ "$(cat "$shown" 2>/dev/null)" != "$key" ]] || return 0
+  if ! { mkdir -p "$AUTO_DIR" && printf '%s\n' "$key" >"$shown"; } 2>/dev/null; then
+    return 0
+  fi
+  # shellcheck disable=SC2016  # 백틱은 안내 문구의 명령 표시다
+  jq -cn '{systemMessage: "ai-harness 무인 실행(자동 sync·harvest·autofix)이 로그인 만료로 멈췄습니다. 터미널에서 `claude auth login`으로 다시 로그인하거나, 무인 실행용으로 `claude setup-token`을 실행한 뒤 CLAUDE_CODE_OAUTH_TOKEN을 설정하세요. 다음 무인 실행이 정상으로 돌면 이 안내는 사라집니다."}'
+}
+
 command="${1:-}"
 shift || true
 case "$command" in
@@ -714,5 +762,6 @@ case "$command" in
   agent) resolve_agent ;;
   run) [[ $# -eq 4 || $# -eq 5 ]] || usage; command_run "$@" ;;
   runs) command_runs "$@" ;;
+  notify) command_notify ;;
   *) usage ;;
 esac

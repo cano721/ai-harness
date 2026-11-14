@@ -5350,6 +5350,52 @@ HARNESS_METRICS_DIR="$CHAIN_DATA" HM_SYNC_AUTO=1 HM_SYNC_AUTO_DAILY_MAX=99 HM_HA
   HM_HARVEST_AUTO_AGENT=claude HM_HARVEST_GLOBAL_DAYS=0 HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/chain-claude" \
   HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/chain-codex" "$ROOT/scripts/harvest-auto.sh" sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/chain-limit.out" | tr -d ' ')" "a usage-limited run does not chain the next one"
+# 로그인 만료(#315): 인증 실패 결과 줄은 auth_expired로 분류하고, 실패 횟수에 넣지 않으며, 같은 sweep의 다음 실행을 잇지 않는다.
+# 사람이 다시 로그인하기 전까지 반드시 실패하므로 MAX_FAILS 기회를 쓰지 않고, 남은 저장소를 같은 이유로 띄우지 않는다.
+CHAIN_AUTH="$TEST_TMP/chain-auth.sh"
+CHAIN_AUTH_LINE='{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login, or use claude setup-token and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs"}'
+# shellcheck disable=SC2016  # 스텁 본문의 $1은 스텁이 실행될 때 펼쳐진다
+printf '#!/usr/bin/env bash\necho "$1" >>"%s"\necho %s\nexit 1\n' "$TEST_TMP/chain-auth.out" "'$CHAIN_AUTH_LINE'" >"$CHAIN_AUTH"
+chmod +x "$CHAIN_AUTH"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+chain_auth_notify() { HARNESS_METRICS_DIR="$CHAIN_DATA" "$ROOT/scripts/harvest-auto.sh" notify; }
+CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "1" "$(wc -l <"$TEST_TMP/chain-auth.out" | tr -d ' ')" "an expired login stops the sweep after the first run"
+assert_eq "failed|auth_expired" "$(jq -sr '[.[] | select(.event=="finished")] | last | "\(.result)|\(.reason)"' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "an expired login is recorded as auth_expired"
+CHAIN_AUTH_P="$(sed -n 1p "$TEST_TMP/chain-auth.out")"
+assert_eq "failed|0" "$(jq -r '"\(.result)|\(.fails)"' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")" "an expired login does not count as a failure"
+assert_eq "auth_expired" "$(jq -r '.components.sync_auto.last_error' "$CHAIN_DATA/health.json")" "health names the expired login"
+for _ in 1 2 3; do CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep; done
+assert_eq "4|$CHAIN_AUTH_P|0" "$(wc -l <"$TEST_TMP/chain-auth.out" | tr -d ' ')|$(sort -u "$TEST_TMP/chain-auth.out")|$(jq -r '.fails' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")" "repeated expired logins never use up the retries"
+CHAIN_AUTH_MSG="$(chain_auth_notify | jq -r '.systemMessage')"
+assert_contains "$CHAIN_AUTH_MSG" "claude auth login" "session start says the login expired"
+assert_contains "$CHAIN_AUTH_MSG" "claude setup-token" "and names the token for unattended runs"
+assert_eq "" "$(chain_auth_notify)" "the notice is shown once per failure"
+CHAIN_CMD="$CHAIN_AUTH" HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_contains "$(chain_auth_notify | jq -r '.systemMessage')" "claude auth login" "a newer expired login is told again"
+assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'harvest-auto.sh" notify' "session start asks for the expired-login notice"
+# 과거 버전은 인증 실패를 agent_error로 세어 fails:3으로 포기했다. 로그가 인증 실패인 지난 실패는 횟수에서 빼 다시 후보가 된다.
+# 로그가 인증 실패가 아닌 지난 실패는 그대로 센다.
+CHAIN_PLUGIN="$(jq -r '.plugin' "$CHAIN_DATA/sync-auto/p-$CHAIN_AUTH_P.json")"
+CHAIN_BATCH="$(printf '%s' "sync-$CHAIN_PLUGIN" | { shasum 2>/dev/null || sha1sum; } | cut -c1-12)"
+printf '%s\n' "$CHAIN_AUTH_LINE" >"$TEST_TMP/chain-legacy-auth.log"
+printf '%s\n' '{"type":"result","is_error":true,"result":"tool failed"}' >"$TEST_TMP/chain-legacy-other.log"
+for CHAIN_N in 1 2 3; do
+  jq -cn --arg p "$CHAIN_PLUGIN" '{plugin:$p,at:"2026-01-01T00:00:00Z",result:"failed",fails:3}' >"$CHAIN_DATA/sync-auto/p-chain-$CHAIN_N.json"
+done
+jq -cn --arg p "$CHAIN_PLUGIN" '{plugin:$p,at:"2026-01-01T00:00:00Z",result:"improved",fails:0}' >"$CHAIN_DATA/sync-auto/p-chain-1.json"
+for _ in 1 2 3; do
+  jq -cn --arg b "$CHAIN_BATCH" --arg l "$TEST_TMP/chain-legacy-auth.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"chain-2",batch:$b,scope:"sync",result:"failed",exit_code:1,reason:"agent_error",log:$l}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+  jq -cn --arg b "$CHAIN_BATCH" --arg l "$TEST_TMP/chain-legacy-other.log" \
+    '{at:"2026-01-01T00:00:00Z",event:"finished",project:"chain-3",batch:$b,scope:"sync",result:"failed",exit_code:1,reason:"agent_error",log:$l}' >>"$CHAIN_DATA/harvest-auto/runs.jsonl"
+done
+: >"$TEST_TMP/chain-stub.out"
+HM_LLM_BACKOFF_HOURS=0 HM_SYNC_AUTO_DAILY_MAX=99 chain_sweep
+assert_eq "chain-2" "$(cut -d'|' -f1 "$TEST_TMP/chain-stub.out" | sort -u | tr '\n' ' ' | sed 's/ $//')" "a target given up only for expired logins is tried again, others stay given up"
+assert_eq "" "$(chain_auth_notify)" "a run that worked after the expired login clears the notice"
+find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
+pass "an expired login is classified, not counted, stops the sweep and is told once"
 # 사용자가 다시 작업 중이면 잇지 않는다 — 다음 sweep(유휴 대기 포함)이 이어받는다.
 find "$CHAIN_DATA/sync-auto" -name '*.json' -delete
 : >"$TEST_TMP/chain-stub.out"
@@ -5870,6 +5916,30 @@ assert_contains "$(af_budget_run bogus)" "--max-budget-usd 10" "an invalid budge
 af_state 'del(.signatures["budget:1"])'
 cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
 pass "autofix unlimited daily cap and budget"
+
+# 로그인 만료(#315): 자동 수정도 인증 실패를 auth_expired로 분류해 실패 횟수에 넣지 않는다. 과거 버전이 agent_error로 센
+# 인증 실패(로그로 판정)는 횟수에서 빼 fails:3으로 포기된 에러가 다시 후보가 된다. 같은 회차에 이미 인증 실패가 났으면
+# 그 회차의 자동 수정 실행은 띄우지 않는다.
+AF_SAVED_STATE="$(<"$AF_DATA/autofix/p-af-svc/state.json")"
+cp "$AF_DATA/autofix/runs.jsonl" "$AF_STUB/runs.saved"
+AF_AUTH_LINE='{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to authenticate: this login reached its time limit and cannot be renewed. Run claude auth login"}'
+printf '%s\n' "$AF_AUTH_LINE" >"$AF_STUB/legacy-auth.log"
+af_state '.signatures["sentry:101"] = {status:"failed",fails:3,attempts:1,title:"t"}'
+for _ in 1 2 3; do
+  jq -cn --arg l "$AF_STUB/legacy-auth.log" '{at:"2026-01-01T00:00:00Z",event:"finished",project:"af-svc",signature:"sentry:101",outcome:"failed",exit_code:0,reason:"agent_error",log:$l}' >>"$AF_DATA/autofix/runs.jsonl"
+done
+jq -n '{state:"open"}' >"$AF_STUB/pr-state.json"
+AF_BEFORE="$(<"$AF_STUB/agent-count")"
+AF_STUB_RESULT="$AF_AUTH_LINE" af_auto sweep
+assert_eq "$((AF_BEFORE + 1))" "$(<"$AF_STUB/agent-count")" "an error given up only for expired logins is tried again"
+assert_eq "failed|0|auth_expired" "$(af_sig '"\(.status)|\(.fails)|\(.last_reason)"')" "an expired login is classified and not counted"
+assert_eq "auth_expired" "$(jq -sr '[.[] | select(.event=="finished")] | last | .reason' "$AF_DATA/autofix/runs.jsonl")" "the run log names the expired login"
+AF_STUB_RESULT="$AF_AUTH_LINE" HM_LLM_TICK_STARTED_AT="2000-01-01T00:00:00Z" af_auto sweep
+assert_eq "$((AF_BEFORE + 1))|auth_expired" "$(<"$AF_STUB/agent-count")|$(jq -sr 'last | .reason' "$AF_DATA/autofix/runs.jsonl")" "no more fixes start in a round that already hit an expired login"
+printf '%s\n' "$AF_SAVED_STATE" >"$AF_DATA/autofix/p-af-svc/state.json"
+cp "$AF_STUB/runs.saved" "$AF_DATA/autofix/runs.jsonl"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "auth_expired: '로그인 만료" "the autofix tab says the login expired"
+pass "autofix classifies expired logins without counting them"
 
 # 상태 기록 실패·유실(#278 2차): 시작 상태를 못 남기면 실행하지 않고, 상태 파일을 잃은 프로젝트는 실행 기록으로 되살린다.
 AF_BEFORE="$(<"$AF_STUB/agent-count")"
@@ -8725,6 +8795,33 @@ assert_contains "$(st_item ops | jq -r '.[0].detail')" "끊기기 전 마지막 
 assert_contains "$(st_item api | jq -r '.[0].detail')" "사용량 한도 안내 문장" "a run with a result shows its report"
 [[ "$(st_item api | jq -r '.[0].detail')" != *"끊기기 전 마지막 진행"* ]] || fail "a run with a result does not show the last progress line"
 pass "board status shows the last progress of a run that was cut off"
+
+# 로그인 만료(#315): 여러 저장소의 인증 실패는 한 카드로 묶고 사람이 읽는 제목을 단다. 과거 버전이 agent_error로 남긴 실패도
+# 로그가 인증 실패면 같이 묶는다. 그 뒤 성공한 실행이 있으면(다시 로그인함) 카드가 사라진다.
+ST_AUTH="$ST_T/auth-data"
+mkdir -p "$ST_AUTH/harvest-auto"
+printf '%s\n' '{"type":"result","is_error":true,"result":"Failed to authenticate: this login reached its time limit. Run claude auth login"}' >"$ST_T/logs/auth-1.log"
+cp "$ST_T/logs/auth-1.log" "$ST_T/logs/auth-2.log"
+printf '%s\n' '{"type":"result","is_error":true,"result":"도구 실패"}' >"$ST_T/logs/auth-other.log"
+{
+  st_fin 30 a1 sync failed 1 "$ST_T/logs/auth-1.log" '{"reason": "auth_expired"}'
+  st_fin 20 a2 project failed 1 "$ST_T/logs/auth-2.log" '{"reason": "agent_error"}'
+  st_fin 10 a3 project failed 1 "$ST_T/logs/auth-other.log" '{"reason": "agent_error"}'
+} >"$ST_AUTH/harvest-auto/runs.jsonl"
+ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AUTH" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh")"
+assert_eq "0|0|1" "$(st_item a1 | jq 'length')|$(st_item a2 | jq 'length')|$(st_item a3 | jq 'length')" "expired-login failures leave the per-target cards, other failures stay"
+ST_AUTH_CARD="$(jq -c '[.items[] | select(.reason == "auth_expired")]' <<<"$ST_OUT")"
+assert_eq "1|needs_human" "$(jq -r 'length' <<<"$ST_AUTH_CARD")|$(jq -r '.[0].state' <<<"$ST_AUTH_CARD")" "expired-login failures are one card"
+assert_eq "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token" "$(jq -r '.[0].title' <<<"$ST_AUTH_CARD")" "the card says what happened and what to run"
+assert_contains "$(jq -r '.[0].detail' <<<"$ST_AUTH_CARD")" "a1" "the card lists the stopped targets"
+assert_contains "$(jq -r '.[0].detail' <<<"$ST_AUTH_CARD")" "a2" "including one recorded by an older version"
+st_fin 5 a3 project no-change 0 "$ST_T/logs/ok.log" >>"$ST_AUTH/harvest-auto/runs.jsonl"
+ST_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$ST_T/bin:$PATH" HARNESS_METRICS_DIR="$ST_AUTH" HARNESS_CLAUDE_PROJECTS_DIR="$ST_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$ST_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/status.sh")"
+assert_eq "0" "$(jq '[.items[] | select(.reason == "auth_expired" or .project == "a1" or .project == "a2")] | length' <<<"$ST_OUT")" "a run that worked afterwards clears the expired-login card"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "i.reason === 'auth_expired'" "the board shows the expired-login title as is"
+pass "board status folds expired-login failures into one card that clears after a working run"
 
 # 여러 Claude 설정 폴더(#296): work.sh가 기본 폴더·서버 환경의 폴더·프로필 자동 감지·사용자 지정 폴더마다 claude agents를 불러 sessionId로 합친다.
 # HOME을 바꾸지 않고 환경변수로만 격리한다(서버 환경에 CLAUDE_CONFIG_DIR이 있을 수 있어 명시적으로 빼거나 지정한다).
