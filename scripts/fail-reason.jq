@@ -6,7 +6,7 @@
 # 문구 판정은 API 오류로 끝난 결과 줄에만 쓴다 — 작업 중 실패 보고에 같은 문구가 섞여도 로그인 만료로 오인하지 않게
 # (오인하면 실패 횟수에 들지 않아 포기하지 않고 매 회차 남은 실행을 멈춘다). terminal_reason이 없는 이전 형식은 문구로 본다.
 def auth_failure:
-  (.api_error_status == 401 or .api_error_status == 403)
+  (.api_error_status == 401)
   or ((.api_error // "") | tostring | test("auth"; "i"))
   or (((.terminal_reason // "api_error") == "api_error")
       and ((.result // "") | tostring
