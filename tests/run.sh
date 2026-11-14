@@ -7783,6 +7783,14 @@ if command -v node >/dev/null 2>&1; then
   sleep 3  # status.json 캐시가 지나면 카드가 내려간다
   assert_eq "" "$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '.items[] | select(.kind == "references") | .id')" "the to-do card goes away once picked"
 fi
+# 화면: 고르기 대기·숫자는 랜딩 실행이 기다리는 것만(보기 전용은 중립 '준비됨'), 머리는 목록으로 → 제목·상태 → 탭 순서,
+# 작업 폴더는 작게 한 줄로 줄이고 전체는 title과 복사로.
+BREF_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BREF_TPL" "r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']" "a view-only reference board shows a neutral status, not waiting for a pick"
+assert_contains "$BREF_TPL" "const w = (rdata || []).filter((r) => r.can_pick).length" "the sidebar counts only reference boards a landing run waits on"
+assert_contains "$BREF_TPL" '<div class="b-refhead" id="refhead" hidden></div>
+    <div class="ds-tabs" id="tabs"' "the reference head (back, title, status) sits above the tabs"
+assert_contains "$BREF_TPL" "copyBtn('경로 복사', d.work" "the work folder path is shortened with a copy button"
 pass "the Harness Board lists reference boards, serves only their media, and takes a pick for a waiting landing run (#336)"
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \

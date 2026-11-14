@@ -718,6 +718,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-refview { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; padding-bottom: var(--space-2); }
 .b-refhead { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); justify-items: start; min-width: 0; }
 .b-refhead > .ds-title { margin: 0; }
+#refhead { margin-bottom: var(--space-4); }
+.b-refpath { display: flex; align-items: center; gap: var(--space-2); max-width: 100%; min-width: 0; }
+.b-refpath > .ds-caption { color: var(--color-text-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-refpath > .ds-btn { flex: none; }
 .b-back { transform: rotate(180deg); }
 .b-break { overflow-wrap: anywhere; }
 .b-refgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }
@@ -798,6 +802,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       <h1 class="ds-heading" id="vtitle">작업 현황</h1>
       <button type="button" class="ds-btn" id="newbtn" hidden><svg class="ds-icon" aria-hidden="true"><use href="#i-plus"/></svg>새 세션</button>
     </header>
+    <div class="b-refhead" id="refhead" hidden></div>
     <div class="ds-tabs" id="tabs" role="tablist" aria-label="출처" hidden></div>
     <div id="panel" class="ds-tabpanel">
       <p class="b-desc" id="vdesc"></p>
@@ -2244,6 +2249,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       renderTabs();
       const board = $('board');
       board.classList.toggle('b-content', view !== 'list');
+      $('refhead').hidden = !(view === 'refs' && rrun);
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
       if (view === 'settings') { $('vdesc').textContent = STABS.find(([k]) => k === stab)[2]; return renderSettings(); }
@@ -2851,7 +2857,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   function closeRefs() { rrun = null; rdetail = null; rsig = ''; renderAll(); loadRefs(true); const b = document.querySelector(`[data-refrun]`); if (b) b.focus(); }
   const refMedia = (run, m) => (m && m.remote ? m.remote : m && m.path ? `/references/file?t=${encodeURIComponent(TOKEN)}&run=${encodeURIComponent(run)}&p=${encodeURIComponent(m.path)}` : '');
-  const refStatus = (r) => (r.status === 'picked' ? ['success', '고름'] : r.can_pick ? ['attention', '고르기 대기'] : ['waiting', '고르기 대기']);
+  // 고르기 대기는 랜딩 실행이 reference_pick에서 기다릴 때만. 보기 전용(랜딩 실행 없음)·다른 단계는 중립 '준비됨'.
+  const refStatus = (r) => (r.status === 'picked' ? ['success', '고름'] : r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']);
   const refCounts = (c) => REF_TABS.map(([k, label]) => `${label} ${(c || {})[k] || 0}`).join(' · ');
   const hexColor = (v) => (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(String(v || '')) ? v : 'transparent');
 
@@ -3054,21 +3061,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   function renderRefDetail() {
     const board = $('board');
     const d = rdetail && rdetail.run_id === rrun ? rdetail : null;
-    const back = btn('목록으로', 'ds-btn--sm ds-btn--ghost'); back.dataset.key = 'ref-back'; back.prepend(icon('chevron', 'b-back')); back.onclick = closeRefs;
-    if (!d) { board.replaceChildren(back, ...(rderr ? [errorBox('레퍼런스 보드를 불러오지 못했습니다', rderr, () => { rderr = null; loadRefDetail(true); })] : loading('레퍼런스 보드를 불러오는 중'))); if (!rderr) loadRefDetail(true); return; }
+    renderRefHead(d);
+    if (!d) { board.replaceChildren(...(rderr ? [errorBox('레퍼런스 보드를 불러오지 못했습니다', rderr, () => { rderr = null; loadRefDetail(true); })] : loading('레퍼런스 보드를 불러오는 중'))); if (!rderr) loadRefDetail(true); return; }
     loadRefDetail(false);
     const key = JSON.stringify([d, rtab]);
     if (key === rsig && board.querySelector('[data-refview]')) { syncRefs(); return; }
     rsig = key;
     const s = pickState(d), canPick = d.can_pick, showPick = canPick || !!d.picked;
     const wrap = el('div', 'b-refview'); wrap.dataset.refview = d.run_id;
-    const head = el('div', 'b-refhead');
-    const meta = el('div', 'ds-card__meta'); meta.append(badge(refStatus(d)));
-    if (!d.landing_node) meta.append(chip('보기 전용'));
-    meta.append(el('span', 'ds-num', `만든 시각 ${stamp(d.created_at)}`));
-    const h = el('h2', 'ds-title', d.topic); h.id = 'ref-title'; h.tabIndex = -1;
-    head.append(back, h, meta, el('p', 'ds-caption b-line b-break', d.work));
-    wrap.append(head);
     if (d.missing) { wrap.append(notice('danger', '작업 폴더가 없어 이 보드를 다시 그릴 수 없습니다. 실행 기록만 남아 있습니다.')); board.replaceChildren(wrap); return; }
     if (canPick) wrap.append(notice('attention', '랜딩 실행이 고르기를 기다립니다. 레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 하나를 고르고(추천이 미리 찍혀 있습니다), 쓰지 않을 것만 제외한 뒤 「이 레퍼런스로 시작」을 누르세요.'));
     else if (d.picked) wrap.append(notice('success', `이미 골랐습니다 · 대표 ${[(d.picked.primary || {}).layout, (d.picked.primary || {}).interaction].filter(Boolean).join(' · ') || '없음'} · ${(d.picked.dropped || []).length}개 제외. 세션이 이어서 진행합니다.`));
@@ -3090,6 +3090,23 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     board.replaceChildren(wrap);
     syncRefs();
+  }
+  // 상세 머리: 목록으로 → 제목·상태 → 작업 폴더(작게 한 줄, 전체는 title과 복사). 탭 줄 위에 선다.
+  let refHeadSig = '';
+  function renderRefHead(d) {
+    const box = $('refhead');
+    const sig = JSON.stringify(d ? [d.run_id, d.topic, d.status, d.can_pick, d.landing_node, d.created_at, d.work] : [rrun]);
+    if (sig === refHeadSig && box.childNodes.length) return;
+    refHeadSig = sig;
+    const back = btn('목록으로', 'ds-btn--sm ds-btn--ghost'); back.dataset.key = 'ref-back'; back.prepend(icon('chevron', 'b-back')); back.onclick = closeRefs;
+    if (!d) { box.replaceChildren(back); return; }
+    const h = el('h2', 'ds-title', d.topic); h.id = 'ref-title'; h.tabIndex = -1;
+    const meta = el('div', 'ds-card__meta'); meta.append(badge(refStatus(d)));
+    if (!d.landing_node) meta.append(chip('보기 전용'));
+    meta.append(el('span', 'ds-num', `만든 시각 ${stamp(d.created_at)}`));
+    const path = el('div', 'b-refpath'); const ps = el('span', 'ds-caption', d.work); ps.title = d.work;
+    path.append(ps, copyBtn('경로 복사', d.work, 'ds-btn--sm ds-btn--ghost'));
+    box.replaceChildren(back, h, meta, path);
   }
   function renderRefs() {
     const board = $('board');
