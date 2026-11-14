@@ -3734,6 +3734,47 @@ case "${RATIO_STATS#*## 비율}" in *"| other |"*) fail "non-harness project exc
 assert_contains "$RATIO_STATS" "| nos | 0% (0/1) |" "workflow names read in another project do not count"
 pass "session ratio metrics"
 
+# 워크플로 대상 세션 경유: 조회·CI 설정·문서만 고친 세션은 기능·버그 워크플로 대상이 아니므로 분모에서 뺀다.
+# 대상 = 워크플로 경유 또는 구현 페르소나(developer·*implementer·test-engineer) 위임 또는 코드 파일 편집.
+TARGET_DATA="$TEST_TMP/target-ratio-data"
+mkdir -p "$TARGET_DATA/events"
+target_session() { # sid [events-json...] — 프로젝트는 TARGET_PROJECT(기본 svc)
+  local sid="$1" project="${TARGET_PROJECT:-svc}"; shift
+  {
+    jq -cn --arg sid "$sid" --arg p "$project" '{v:1, src:"claude", sid:$sid, project:$p, kind:"session", started:"2026-10-10T00:00:00Z",
+      ended:"2026-10-10T01:00:00Z", turns:6, coverage:["workflow","doc_read","persona","file_edit"]}'
+    for ev in "$@"; do
+      jq -cn --arg sid "$sid" --arg p "$project" --argjson e "$ev" '{v:1, src:"claude", sid:$sid, project:$p, n:1} + $e'
+    done
+  } >"$TARGET_DATA/events/claude-$sid.jsonl"
+}
+target_session t1 '{"kind":"doc_read","target":".ai-harness/workflows/fix-bug.md"}'
+target_session t2 '{"kind":"persona","target":"developer"}'
+target_session t3 '{"kind":"file_edit","target":"/repo/src/main/App.java"}'
+target_session t4 '{"kind":"persona","target":"fe-implementer"}'
+target_session t5 '{"kind":"file_edit","target":"/repo/bitbucket-pipelines.yml"}' \
+  '{"kind":"file_edit","target":"/repo/build.gradle.kts"}' '{"kind":"file_edit","target":"/repo/.ai-harness/docs/domain.md"}' \
+  '{"kind":"file_edit","target":"/repo/Dockerfile"}' '{"kind":"file_edit","target":"/repo/.claude/settings.json"}'
+target_session t6 '{"kind":"persona","target":"explorer"}' \
+  '{"kind":"file_edit","target":"/tmp/claude-1/scratchpad/plan.py"}' '{"kind":"file_edit","target":"/repo/handoffs/next.md"}' \
+  '{"kind":"file_edit","target":"/home/u/.claude/projects/x/memory/note.ts"}'
+target_session t7
+# Claude Code worktree 안의 코드 편집은 하네스 설정(.claude/) 편집이 아니다.
+target_session t8 '{"kind":"file_edit","target":".claude/worktrees/w1/src/Main.kt"}'
+# 파일 이름이 없는 target(Codex patch 경로가 디렉토리에서 잘림)·대체값은 코드 편집 근거가 아니다.
+target_session t9 '{"kind":"file_edit","target":"/repo/docs/"}' '{"kind":"file_edit","target":"apply_patch"}' '{"kind":"file_edit"}' \
+  '{"kind":"file_edit","target":".claude/worktrees/w2/README.md"}'
+target_session t10 '{"kind":"file_edit","target":"/repo/dockerfile"}' '{"kind":"file_edit","target":"/repo/deploy/app.Dockerfile"}'
+# 대상 세션이 없는 하네스 프로젝트는 대상 경유를 `-`로 낸다.
+TARGET_PROJECT=web target_session w1 '{"kind":"doc_read","target":".ai-harness/docs/testing.md"}'
+TARGET_STATS="$(HARNESS_METRICS_DIR="$TARGET_DATA" "$ROOT/scripts/stats.sh")"
+assert_contains "$TARGET_STATS" "| 워크플로 경유 세션 | 9% (1/11) |" "overall workflow ratio keeps every harness-project active session"
+assert_contains "$TARGET_STATS" "| 워크플로 대상 세션 경유 | 20% (1/5) |" "target ratio counts only implementation sessions"
+assert_contains "$TARGET_STATS" "| 프로젝트 | 워크플로 경유 | 대상 경유 |" "per-project table has a target column"
+assert_contains "$TARGET_STATS" "| svc | 10% (1/10) | 20% (1/5) |" "per-project target ratio"
+assert_contains "$TARGET_STATS" "| web | 0% (0/1) | - |" "project without target sessions shows no target ratio"
+pass "workflow target session ratio"
+
 # 날짜 구간 필터: 설치일 전후처럼 특정 날짜로 자른다. until은 그 날을 포함하지 않는다.
 RANGE_DATA="$TEST_TMP/range-data"
 mkdir -p "$RANGE_DATA/events"
