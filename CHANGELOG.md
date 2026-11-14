@@ -11,6 +11,8 @@
 
 - **레퍼런스 수집을 독립 스킬 `/design-references`로 분리** — 레퍼런스만 확인하려 해도 `/landing-page`를 처음부터 40분 돌려야 했고, 화면·디자인 시스템 작업도 레퍼런스가 필요했습니다. 이제 "AI 면접 서비스 경쟁사랑 레퍼런스 모아줘"처럼 따로 불러 검색(한 턴에 동시) → 일괄 캡처 → 봇 확인 화면 처리 → `references.json`·`searches.json` → 탭 5개 보드 서빙까지 합니다. `/landing-page`의 references 단계도 같은 절차·같은 스크립트(`scripts/design-refs.sh`)를 쓰고, 대표 고르기와 시작은 그대로 `/landing-page`에 남습니다. 보드를 만들 때마다 `~/.ai-harness/board/references/<run-id>.json`에 실행 기록(작업 폴더·주제·상태·만든 시각·references.json 경로)을 남깁니다. (#314)
 
+- **`/metrics` 저장소 정보 활용률** — 워크플로 경유율은 워크플로 파일 Read·워크플로 명령만 세서, 하네스 docs를 읽고 규칙대로 작업했지만 워크플로 파일을 열지 않은 세션이 미경유로 잡혔습니다. `## 비율`에 워크플로 대상 세션 중 `.ai-harness/docs/` 또는 `.ai-harness/workflows/` 문서를 읽은 세션 비율인 `저장소 정보 활용` 행과 프로젝트별 표의 `정보 활용` 열을 더합니다. 세션 시작 때 자동 로드되는 AGENTS.md·CLAUDE.md는 세지 않습니다. 서브에이전트가 읽은 문서는 부모 세션에 잡히지 않습니다(서브에이전트 대화가 같은 파일에 담긴 구형 Claude transcript는 예외). 기존 행·열은 그대로입니다. (#337)
+
 ### 동작 변경
 
 - **레퍼런스 검사 강화** — 무인 실행이 봇 확인(`challenge`)·실패한 캡처를 다시 열지 않고 빼고, 같은 사이트를 여러 탭에 돌려 써서 실제 사이트 4곳으로 "다섯 종류 각 1개" 검사를 통과했습니다. 이제 경쟁사는 서로 다른 도메인 2곳 이상(무인 실행도), 한 도메인은 한 종류에만(자사 사이트도 톤 레퍼런스로만), `refs/<id>/capture.json`이 `challenge`·`failed`인 레퍼런스가 남아 있으면 거부합니다. 실제 브라우저로 다시 찍은 화면은 `design-refs.sh retake`로 바꿉니다. 러너 submit과 `design-refs.sh check`가 같은 검사를 씁니다. 종류별 개수는 랜딩 그래프의 `references_min`에서 `skills/design-references/references/refs-rules.json`으로 옮겼습니다. (#314)

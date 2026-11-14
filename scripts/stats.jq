@@ -69,13 +69,15 @@ def code_file:
    | map({(.sid): true}) | add // {}) as $wfPassed
 # 하네스가 없는 프로젝트의 세션은 경유할 워크플로가 없으므로 분모에서 뺀다.
 # `~/.ai-harness/` 데이터(config·events)도 같은 접두어로 정규화되므로 docs·workflows만 하네스 근거로 본다.
-| ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))) | {($sidProject[.sid] // "?"): true})
-   | add // {}) as $harnessProjects
+| ($E | map(select(.kind=="doc_read" and (.target | test("^\\.ai-harness/(docs|workflows)/"))))) as $harnessReads
+| ($harnessReads | map({($sidProject[.sid] // "?"): true}) | add // {}) as $harnessProjects
 | ($A | map(select($harnessProjects[.project // "?"] == true and has_coverage("workflow") and has_coverage("doc_read")))) as $WA
 # 워크플로 대상 세션: 경유했거나 구현 페르소나에 위임했거나 코드 파일을 고친 세션. 조회·설정만 바꾼 세션을 미경유로 세지 않는다.
 | ($wfPassed + ($E | map(select((.kind=="persona" and (.target // "" | implementation_persona))
       or (.kind=="file_edit" and (.target // "" | code_file))) | {(.sid): true}) | add // {})) as $wfTarget
 | ($WA | map(select($wfTarget[.sid] == true))) as $WT
+# 저장소 정보 활용: 하네스 docs·워크플로 문서를 Read한 세션. AGENTS.md·CLAUDE.md는 세션 시작 때 자동 로드되므로 근거가 아니다.
+| ($harnessReads | map({(.sid): true}) | add // {}) as $infoUsed
 
 | "# Harness Metrics"
 + "\n\n기간: \(if $until != "" then "\($cutoff) ~ \($until) 전날" | ltrimstr(" ") elif $cutoff=="" then "전체" else $cutoff + " 이후" end)"
@@ -113,16 +115,18 @@ def code_file:
      else map("| \(.src) | \(.n) | \(if .coverage=="" then "legacy event" else .coverage end) |") | join("\n")
      end)
 
-+ "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다. 대상 세션은 그중 워크플로를 경유했거나 구현 페르소나(developer·*implementer·test-engineer)에 위임했거나 코드 파일을 고친 세션이다 — `.ai-harness/`·`.claude/`(worktree 안 코드는 제외하지 않음)·scratchpad·memory 아래, 문서(`.md`), 빌드·CI·설정 파일 편집은 코드 변경으로 보지 않는다.\n\n| 지표 | 값 |\n|---|---|\n"
++ "\n\n## 비율\n\n활성 세션 = 턴 ≥ \(active_min_turns). 워크플로 경유의 분모는 하네스 프로젝트(기간 안에 `.ai-harness/` 문서가 읽힌 프로젝트)의 활성 세션이다. 대상 세션은 그중 워크플로를 경유했거나 구현 페르소나(developer·*implementer·test-engineer)에 위임했거나 코드 파일을 고친 세션이다 — `.ai-harness/`·`.claude/`(worktree 안 코드는 제외하지 않음)·scratchpad·memory 아래, 문서(`.md`), 빌드·CI·설정 파일 편집은 코드 변경으로 보지 않는다. 저장소 정보 활용은 대상 세션 중 `.ai-harness/docs/`·`.ai-harness/workflows/` 문서를 읽은 세션이다 — 세션 시작 때 자동 로드되는 AGENTS.md·CLAUDE.md는 세지 않고, 서브에이전트가 읽은 문서도 부모 세션에 잡히지 않는다(구형 Claude transcript 제외).\n\n| 지표 | 값 |\n|---|---|\n"
 + "| 워크플로 경유 세션 | \(ratio_pct([$WA[] | select($wfPassed[.sid] == true)] | length; $WA | length)) |\n"
-+ "| 워크플로 대상 세션 경유 | \(ratio_pct([$WT[] | select($wfPassed[.sid] == true)] | length; $WT | length)) |"
++ "| 워크플로 대상 세션 경유 | \(ratio_pct([$WT[] | select($wfPassed[.sid] == true)] | length; $WT | length)) |\n"
++ "| 저장소 정보 활용 | \(ratio_pct([$WT[] | select($infoUsed[.sid] == true)] | length; $WT | length)) |"
 + (if ($WA|length)==0 then ""
-   else "\n\n| 프로젝트 | 워크플로 경유 | 대상 경유 |\n|---|---|---|\n"
+   else "\n\n| 프로젝트 | 워크플로 경유 | 대상 경유 | 정보 활용 |\n|---|---|---|---|\n"
      + ($WA | group_by(.project)
         | map({p:.[0].project, n:length, k:(map(select($wfPassed[.sid] == true)) | length),
-            tn:(map(select($wfTarget[.sid] == true)) | length)})
+            tn:(map(select($wfTarget[.sid] == true)) | length),
+            ti:(map(select($wfTarget[.sid] == true and $infoUsed[.sid] == true)) | length)})
         | sort_by(-.n)
-        | map("| \(.p) | \(ratio_pct(.k; .n)) | \(ratio_pct(.k; .tn)) |") | join("\n"))
+        | map("| \(.p) | \(ratio_pct(.k; .n)) | \(ratio_pct(.k; .tn)) | \(ratio_pct(.ti; .tn)) |") | join("\n"))
    end)
 
 + "\n\n## 워크플로/커맨드\n\n| 대상 | 횟수 |\n|---|---|\n"
