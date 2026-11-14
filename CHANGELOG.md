@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- 무인 실행 로그인 만료를 따로 분류·알림 — 자동 sync·harvest·autofix가 띄운 `claude -p`가 로그인 만료로 실패하면 `agent_error`로 기록돼 실패 횟수에 들어가 3번 만에 그 저장소를 포기했고, 같은 sweep의 남은 저장소도 모두 같은 이유로 실패했으며, 보드를 열기 전에는 알 수 없었다. 이제 인증 실패 결과 줄(`Failed to authenticate`·`claude auth login`·`setup-token`·401 등)을 `auth_expired`로 분류해 실패 횟수에 넣지 않고, 같은 sweep·같은 정기 회차의 남은 LLM 실행을 띄우지 않는다(다음 회차가 다시 한 건으로 확인). 보드는 같은 원인의 실패를 "로그인이 만료돼 무인 실행이 멈췄어요 — claude auth login 또는 claude setup-token" 카드 한 장으로 묶고, 세션 시작은 같은 실패에 한 번 안내한다. 다시 로그인한 뒤 실행이 정상으로 돌면 카드와 안내가 사라진다. 이전 버전에서 로그인 만료로 쌓인 실패 횟수는 로그로 판정해 한 번 빼므로 포기된 저장소·에러가 다시 시도된다(로그가 이미 정리돼 판정할 수 없는 실패는 그대로 센다) (#315)
+
 ## v0.72.0 (2026-11-13)
 ### 새 기능
 
