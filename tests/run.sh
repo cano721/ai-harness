@@ -2687,10 +2687,7 @@ export LANDING_PREVIEW_CMD="$TEST_TMP/lp-preview-hook.sh"
 assert_eq draft_review "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview a reviewer judges the draft's first viewport"
 assert_eq "http://127.0.0.1:9/a/" "$(cat "$TEST_TMP/lp-previews.log")" "the runner hands the preview URL to the person at once"
 assert_eq '["one_second","cover_logo","template_look","craft","reference_fidelity","copied_composition"]' "$(lp next --candidate a | jq -c '.required_checks')" "the draft review asks only the first-viewport checks"
-assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0)")" "a weak first viewport is redrawn before it is finished"
-touch "$LP_W/site/a/index.html"; lp submit --node draft --outcome drafted --candidate a >/dev/null
-touch "$LP_W/preview-a.json"; lp submit --node preview --outcome previewed --candidate a >/dev/null
-assert_eq draft_choose "$(lp review --candidate a --file "$(lp_review craft 0)")" "the draft is redrawn once; then, unattended, it waits for the other drafts"
+assert_eq draft_choose "$(lp review --candidate a --file "$(lp_review none 0)")" "a passing draft waits for the choice in an unattended run"
 # An unattended run finishes one candidate: after every draft review the agent chooses one with its reason, the rest fold.
 assert_eq 3 "$(lp_rc submit --node draft_choose --outcome chosen)" "the unattended choice waits until every draft review is done"
 assert_contains "$(cat "$TEST_TMP/lp.err")" "b at draft" "the runner names the candidate still drafting"
@@ -2698,7 +2695,10 @@ touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --cand
 printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
 printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
 lp submit --node preview --outcome previewed --candidate b >/dev/null
-assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a passing draft also waits for the choice in an unattended run"
+assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a second passing draft also waits for the choice"
+assert_not_file "$LP_W/redo-pick.json"
+# With three candidates one draft can be kept after its redo while another passed: the choice must still take a passed one.
+jq '.candidates.a.draft_rounds[-1].outcome = "draft_kept"' "$LP_W/.landing-run/state.json" >"$TEST_TMP/lp-state.json" && cp "$TEST_TMP/lp-state.json" "$LP_W/.landing-run/state.json"
 assert_eq draft_choose "$(lp next | jq -r '.node')" "once every draft review is done, next asks for the choice"
 printf '{"kept":["a"],"dropped":["b"],"via":"agent","reason":"a is bolder"}\n' >"$LP_W/draft-pick.json"
 assert_eq 4 "$(lp_rc submit --node draft_choose --outcome chosen)" "a draft kept after its redo is not chosen over one that passed"
@@ -2755,6 +2755,91 @@ assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-carry.json
 jq '.checks |= map(if .check == "flow" then .carried = 2 else . end)' "$(lp_review none 1 b)" >"$TEST_TMP/lp-review-carry.json"
 assert_eq "done" "$(lp review --candidate b --file "$TEST_TMP/lp-review-carry.json")" "only user input left ends at done (a pass carried from the last round counts)"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.b.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
+# The page as reviewed is what gets reported: an edit after the review sends it back to measure and review.
+assert_contains "$(lp next --candidate b)" "landing-run.sh finish" "done tells the agent to finish before reporting"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "a done candidate not yet finished keeps the run from its report"
+assert_contains "$(lp status | jq -r '.blocking[]')" "b is done but not finished" "status says what keeps the run from its report"
+assert_contains "$(lp next | jq -r '.blocking[]')" "b is done but not finished" "next without a candidate lists the same blocker"
+printf 'server up\n' >"$LP_W/site/b/server.log"; printf '# notes\n' >"$LP_W/site/b/notes.md"; touch "$LP_W/site/b/index.html"
+assert_contains "$(lp finish --candidate b)" '"unchanged_since_review":true' "logs, notes, and a touch without a change do not count as an edit after review"
+assert_eq "report true" "$(lp status | jq -r '"\(.node) \(.run_finished)"')" "finish moves the run to its report once every live candidate is finished"
+assert_eq report "$(lp next | jq -r '.node')" "next names the report step"
+printf '<h1>after the review</h1>\n' >"$LP_W/site/b/index.html"
+assert_contains "$(lp status | jq -c '.candidates.b.changed_after_review')" "./index.html" "status names a page file edited after its review"
+assert_eq 3 "$(lp_rc finish --candidate b)" "finish refuses a page edited after its review"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "./index.html" "the refusal names the changed file"
+assert_eq measure "$(jq -r '.candidates.b.node' "$LP_W/.landing-run/state.json")" "a page edited after its review goes back to measure"
+assert_eq "candidates false" "$(lp status | jq -r '"\(.node) \(.run_finished)"')" "a page sent back takes the run out of its report"
+assert_eq null "$(jq -r '.candidates.b.finished_at' "$LP_W/.landing-run/state.json")" "a page sent back is no longer finished"
+assert_eq 3 "$(lp_rc finish --candidate b)" "finish is refused until the page is reviewed again"
+lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+assert_eq "done" "$(lp review --candidate b --file "$(lp_review none 1 b)")" "measured and reviewed again, the edited page is done"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "a page reviewed again needs finish again before the report"
+assert_contains "$(lp finish)" '"candidate":"b"' "finish passes the page as it was reviewed again"
+assert_eq null "$(lp status | jq -c '.candidates.b.changed_after_review')" "a page reviewed again no longer shows the old edit"
+assert_eq "true" "$(lp status | jq -r '.run_finished')" "finished again, the run is back at its report"
+printf '<h1>edited in the report step</h1>\n' >"$LP_W/site/b/index.html"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "an edit during the report step shows at once in status"
+# Unattended, both first drafts weak: only the one with the better draft review redraws; the other folds.
+LP_W="$TEST_TMP/lp-run-two"; mkdir -p "$LP_W"
+lp init --mode unattended >/dev/null
+printf '## Tone and manner\ncalm, precise\n' >"$LP_W/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
+lp submit --node brief --outcome brief_ready >/dev/null
+cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"; cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
+cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"; cp "$TEST_TMP/lp-agent-pick.json" "$LP_W/reference-pick.json"
+lp submit --node references --outcome references_ready >/dev/null
+printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"calm","first_viewport":"one scene","primary_refs":{"layout":"R3","interaction":"R4","components":{"hero":"R2"}}},{"id":"b","dir":"site/b","motion_level":"calm","first_viewport":"two scenes","primary_refs":{"layout":"R3","interaction":"R4","components":{"hero":"R2"}}}]}\n' >"$LP_W/candidates.json"
+lp submit --node direction --outcome direction_ready >/dev/null
+mkdir -p "$LP_W/site/a" "$LP_W/site/b" "$LP_W/caps"
+for c in a b; do
+  touch "$LP_W/site/$c/index.html"; lp submit --node draft --outcome drafted --candidate "$c" >/dev/null
+  printf 'png' >"$LP_W/caps/$c-1440.png"; printf 'png' >"$LP_W/caps/$c-390.png"
+  printf '{"url":"http://127.0.0.1:9/%s/","captures":["caps/%s-1440.png","caps/%s-390.png"]}\n' "$c" "$c" "$c" >"$LP_W/preview-$c.json"
+  lp submit --node preview --outcome previewed --candidate "$c" >/dev/null
+done
+cp -R "$LP_W" "$TEST_TMP/lp-run-two-i"
+jq '.mode = "interactive"' "$LP_W/.landing-run/state.json" >"$TEST_TMP/lp-run-two-i/.landing-run/state.json"
+jq '.checks |= map(if .check == "template_look" or .check == "copied_composition" then .status = "fail" | .first_viewport = true else . end)' "$(lp_review craft 0)" >"$TEST_TMP/lp-review-a3.json"
+assert_eq draft_hold "$(lp review --candidate a --file "$TEST_TMP/lp-review-a3.json")" "the first weak draft waits for the other first draft review"
+assert_contains "$(lp next --candidate a)" "Waiting" "next says the held draft waits for the runner"
+assert_eq draft "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "with every first draft review in, the draft with fewer majors redraws"
+assert_eq folded "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "the other weak draft folds instead of redrawing"
+assert_eq "runner b a" "$(jq -r '[.via, .kept[0], .dropped[0]] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json records the runner's pick"
+assert_eq "3 1" "$(jq -r '[.scores.a.majors, .scores.b.majors] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json keeps the draft review scores behind the pick"
+assert_contains "$(lp status | jq -r '.candidates.a.folded_reason')" "b was chosen to redraw" "status carries why the other draft folded"
+touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
+touch "$LP_W/preview-b.json"; lp submit --node preview --outcome previewed --candidate b >/dev/null
+assert_eq build "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "the redrawn draft, the only one left, goes on to build"
+assert_contains "$(jq -r '.chosen | "\(.via) \(.reason)"' "$LP_W/.landing-run/state.json")" "runner the only candidate left after the redo pick" "the runner records why it chose without draft_choose"
+# Ties fall to candidates.json order.
+LP_W="$TEST_TMP/lp-run-two-t"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+lp review --candidate b --file "$(lp_review craft 0 b)" >/dev/null
+lp review --candidate a --file "$(lp_review craft 0 a)" >/dev/null
+assert_eq "draft folded" "$(jq -r '[.candidates.a.node, .candidates.b.node] | join(" ")' "$LP_W/.landing-run/state.json")" "on equal scores the first candidate in candidates.json redraws"
+# Unattended, one draft passed and the other needs a redo: draft_choose must take the passed one, so the weak one folds.
+LP_W="$TEST_TMP/lp-run-two-p"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+assert_eq draft_hold "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "a weak draft waits while the other is unreviewed"
+assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "the passed draft, the only one left, goes on to build"
+assert_eq folded "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "the weak draft folds without a redo when another passed"
+assert_eq "runner b a" "$(jq -r '[.via, .kept[0], .dropped[0]] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json records why the weak draft folded"
+assert_contains "$(jq -r '.reason' "$LP_W/redo-pick.json")" "draft_choose must take a passed draft" "the fold names the passed draft as the reason"
+assert_eq 0 "$(jq '[.history[] | select(.candidate == "a" and .to == "draft" and .from == "draft_hold")] | length' "$LP_W/.landing-run/state.json")" "the folded draft never redraws"
+LP_W="$TEST_TMP/lp-run-two-q"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a passed draft waits while the other is unreviewed"
+assert_eq folded "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "a weak draft reviewed after a passed one folds at once"
+assert_eq build "$(jq -r '.candidates.b.node' "$LP_W/.landing-run/state.json")" "the passed draft left alone goes on to build"
+LP_W="$TEST_TMP/lp-run-two-r"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "interactive: a weak draft redraws even when the other may pass"
+assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "interactive: a passed draft goes on to build"
+assert_eq draft "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "interactive: the weak draft is not folded"
+# An interactive run is unchanged: each weak draft redraws at once.
+LP_W="$TEST_TMP/lp-run-two-i"
+assert_eq draft "$(lp review --candidate a --file "$TEST_TMP/lp-review-a3.json")" "interactive: a weak draft redraws at once"
+assert_eq draft "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "interactive: both weak drafts redraw, none folds"
+assert_not_file "$LP_W/redo-pick.json"
 # A lone unattended candidate has nothing to be chosen against: it goes from its draft review straight to build.
 LP_W="$TEST_TMP/lp-run-one"; mkdir -p "$LP_W"
 lp init --mode unattended >/dev/null
@@ -2859,6 +2944,9 @@ assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "Send every s
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Do not write your own browser script for a reference" "landing-page captures references through capture-refs"
 assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "served interactive board within five minutes" "landing-page aims for the board within five minutes"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "landing-run.sh capture-refs" "landing-page lists capture-refs among the runner commands"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "Run \`landing-run.sh finish\` first" "the landing report starts from a page finish passed"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "run_finished: true" "the landing report waits for the runner's run_finished"
+assert_contains "$LANDING_VERIFY" "the page is done as it was reviewed" "verify.md no longer lets minors be fixed after the last review"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "**Picking the primary references.**" "landing-page asks for one primary per tab and per section slot"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Every section the user named in the request becomes a slot." "landing-page makes a slot for each section the user named"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "primary_refs: {layout, interaction, components}" "landing-page candidates name the references they lead with"

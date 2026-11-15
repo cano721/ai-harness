@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 동작 변경
+
+- **`/landing-page`: 최종 검토 뒤 고친 페이지는 끝난 것으로 보고하지 않습니다** — 무인 실행에서 마지막 review(입력 대기로 `done`)가 끝난 뒤 에이전트가 페이지 HTML·CSS를 더 고치고도 측정·검토를 다시 돌리지 않은 채 보고했습니다. `verify.md`가 "검토 뒤 사소한 수정은 첫 화면이 바뀔 때만 다시 검토"를 허용했고, `done`이 종단이라 러너가 볼 지점도 없었습니다. 이제 review가 후보를 `done`으로 보낼 때 그 페이지 폴더에서 화면을 바꾸는 파일(HTML·CSS·JS·데이터 JSON·이미지·폰트·미디어, 로그·메모·도구 캐시 제외)의 지문을 남기고, 보고 전에 부르는 새 명령 `landing-run.sh finish`가 지문이 달라졌으면 거부하고 후보를 `measure`로 되돌립니다(`changed_after_review`). 다시 측정·검토를 통과해야 끝납니다. 실행 전체도 `finish`를 거쳐야 보고 단계(`report`)로 넘어갑니다: 살아 있는 후보가 모두 종단에 있고 `done`인 후보가 모두 `finish`를 통과해야 하며, 그 전까지 `status`는 `run_finished: false`와 남은 일(`blocking`)을 보여 줍니다. `status`는 검토 뒤 바뀐 파일도 `changed_after_review`로 보여 줍니다. (#352)
+- **`/landing-page` 무인 실행: 두 후보의 첫 시안이 모두 약하면 나은 쪽 하나만 다시 그립니다** — 무인 실행은 결국 후보 하나만 완성하는데, 두 후보 모두 첫 시안 검토(`draft_review`)에서 재초안이 나오면 둘 다 두 번째 시안을 만들고 하나는 곧 접혀 후보 하나 분량(약 5분, 몇 달러)이 버려졌습니다. 이제 재초안이 필요한 후보는 다른 후보의 첫 시안 검토가 끝날 때까지 `draft_hold`에서 기다립니다. 다른 후보가 통과했으면 `draft_choose`가 어차피 통과한 후보를 고르므로 다시 그리지 않고 접습니다. 아니면 러너가 시안 검토 점수(주요 문제 수 → 실패 항목 수 → `candidates.json` 순서)가 나은 하나만 다시 그리게 하고 나머지는 `folded`로 접습니다. 근거와 점수는 `redo-pick.json`(`via: "runner"`)에 남고, 혼자 남은 후보는 `draft_choose` 없이 build로 갑니다. 대화형 실행은 그대로입니다. (#352)
+
 ## v0.75.0 (2026-11-15)
 ### 새 기능
 
