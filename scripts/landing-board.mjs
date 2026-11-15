@@ -41,7 +41,7 @@ function shots(r) {
 }
 
 const CSS = `:root{--bg:#f6f6f4;--card:#fff;--ink:#18191b;--sub:#6b6d70;--line:#e3e3e0;--accent:#c24e00}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"Apple SD Gothic Neo","Pretendard",system-ui,sans-serif;padding-bottom:150px}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"Apple SD Gothic Neo","Pretendard",system-ui,sans-serif;padding-bottom:96px}
 header.top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:16px clamp(16px,4vw,40px) 0}
 h1{font-size:20px;margin:0 0 4px}.ask{color:var(--sub);margin:0 0 12px;font-size:14px}
 nav{display:flex;gap:4px;overflow-x:auto}nav button{font:inherit;border:0;background:none;padding:10px 14px;border-bottom:3px solid transparent;cursor:pointer;color:var(--sub);white-space:nowrap}
@@ -71,10 +71,10 @@ p{margin:6px 0}.tag{display:inline-block;background:#fff3e8;color:#8a3b00;border
 textarea,input[type=text]{font:inherit;width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff}
 .go{display:flex;gap:8px;align-items:center;margin-top:8px;font-weight:600}
 footer.pick{position:fixed;left:0;right:0;bottom:0;z-index:3;background:#fff;border-top:1px solid var(--line);padding:12px clamp(16px,4vw,40px);box-shadow:0 -6px 20px rgba(0,0,0,.05)}
-.pick .row{display:flex;gap:10px;align-items:center}.pick .count{margin:0 auto 0 0;font-size:14px;font-weight:600;white-space:nowrap}
-.pick .fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.pick .row{display:flex;gap:10px;align-items:center}.pick .count{flex:1;min-width:0;margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pick .fields{display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;max-height:40vh;overflow:auto}footer.pick.open .fields{display:grid}
 footer.pick label{font-size:13px;color:var(--sub);display:grid;gap:4px}
-.more{display:none;white-space:nowrap;font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer}
+.more{white-space:nowrap;font:inherit;font-size:14px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer}
 .start{font:inherit;font-weight:700;border:0;background:var(--accent);color:#fff;border-radius:10px;padding:12px 20px;cursor:pointer;white-space:nowrap}
 .start:disabled{opacity:.5;cursor:default}
 .star{font:inherit;font-size:14px;font-weight:600;border:1px solid var(--line);background:#fff;color:var(--sub);border-radius:999px;padding:5px 14px;cursor:pointer;margin:0 0 12px}
@@ -87,10 +87,10 @@ article.primary{border:2px solid var(--accent)}
 .slots li b{min-width:110px}.slots li span{color:var(--sub)}.slots li span.on{color:var(--ink);font-weight:600}
 .slots li button,.add-slot button{font:inherit;font-size:13px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:3px 12px;cursor:pointer}
 .add-slot{display:flex;gap:8px;max-width:520px}.add-slot input{flex:1}
-.static{display:grid;gap:6px;margin-top:10px}.static[hidden]{display:none}.static b{color:var(--accent)}
+.static{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:14px;color:var(--sub)}.static[hidden],[hidden]{display:none!important}.static .summary{position:absolute;left:-9999px;width:1px;height:1px}
 .done{font-weight:700;color:#1d7a3a;margin:8px 0 0}.err{color:#a12a2a;margin:8px 0 0}
 @media (max-width:700px){.shots img,.shots video{height:220px}.analysis{grid-template-columns:1fr}.analysis dd{margin-bottom:6px}
-body{padding-bottom:110px}.more{display:inline-block}.start{padding:12px 14px}.pick .row{gap:8px}article header{padding-right:52px}.pick .fields{display:none;grid-template-columns:1fr}footer.pick.open .fields{display:grid}}`;
+body{padding-bottom:110px}.start{padding:12px 14px}.pick .row{gap:8px}article header{padding-right:52px}.pick .fields{grid-template-columns:1fr}}`;
 
 // The pick bar: a live server with a run (GET /pick answers run: true) takes the start button; otherwise — a static file,
 // or a board /design-references serves on its own — the user answers in the terminal.
@@ -104,7 +104,7 @@ const say=(cls,t)=>{bar.querySelectorAll('.done,.err').forEach(e=>e.remove());co
 const refresh=()=>{if(locked)return;const s=summary();out.value=s.text;bar.querySelector('.count').textContent=s.count;btn.disabled=!s.ready;};
 const lock=(label)=>{locked=true;document.querySelectorAll('main button,main input,main textarea,main select,footer.pick .fields textarea,footer.pick .fields input').forEach(e=>e.disabled=true);btn.disabled=true;if(label)btn.textContent=label;};
 const showStarted=(p,node)=>{if(p)applyPicked(p);lock('이미 시작됐어요');bar.querySelector('.count').textContent=p?'이미 시작됐어요 · '+pickedText(p):'이미 지난 단계예요 (지금 '+node+')';};
-fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server&&j.run!==false))throw 0;btn.hidden=false;
+fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server&&j.run!==false))throw 0;btn.hidden=false;document.querySelectorAll('.ask-run').forEach(e=>e.hidden=false);
   fetch('state?node='+BOARD_NODE,{cache:'no-store'}).then(r=>r.json()).then(st=>{if(st.picked||(st.node&&st.node!==BOARD_NODE))showStarted(st.picked,st.node);}).catch(()=>{});
 }).catch(()=>{btn.hidden=true;stat.hidden=false;});
 btn.onclick=async()=>{if(locked)return;btn.disabled=true;try{const r=await fetch('pick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload())});const j=await r.json();
@@ -118,8 +118,8 @@ document.addEventListener('input',refresh);document.addEventListener('change',re
 const pickBar = (startLabel, extra) => `<footer class="pick" aria-label="고르기">
 <div class="row"><p class="count" aria-live="polite"></p><button class="more" type="button" aria-expanded="false" aria-controls="pick-fields">의견 적기</button><button class="start" type="button" hidden>${startLabel}</button></div>
 <div class="fields" id="pick-fields">${extra}</div>
-<div class="static" hidden><p><b>터미널에 답해 주세요.</b> 이 보드는 보기용이라(진행 중인 랜딩 실행이 없거나 보드 서버 없이 열렸어요) 여기서 바로 시작할 수 없어요. 아래 요약을 복사해 붙여 넣으면 돼요.</p>
-<textarea class="summary" rows="3" readonly></textarea><div><button class="copy" type="button">요약 복사</button></div></div></footer>`;
+<div class="static" hidden><span>보기용 보드예요. 고른 내용은 요약을 복사해 세션에 붙여 주세요.</span><button class="copy" type="button">요약 복사</button>
+<textarea class="summary" rows="1" readonly tabindex="-1" aria-hidden="true"></textarea></div></footer>`;
 
 const page = (title, ask, body, script) => `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><style>${CSS}</style></head><body>
@@ -191,7 +191,7 @@ ${tone.avoid ? `<p class="avoid"><b>피할 느낌</b> ${esc(tone.avoid)}</p>` : 
     return `<section class="panel" id="tab-${k}" role="tabpanel" hidden>${body}</section>`;
   }).join("");
   const nav = TABS.map(([k, label]) => `<button role="tab" data-tab="${k}" aria-controls="tab-${k}">${label}<small>${of(k).length || ""}</small></button>`).join("");
-  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 대표 하나예요. 추천이 미리 ★로 찍혀 있어 그대로 시작해도 돼요. ★가 아닌 레퍼런스는 참고로 남고, 절대 쓰지 않을 것만 오른쪽 위 ×로 제외해요(되돌릴 수 있어요). 톤앤매너를 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</p>
+  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 대표 하나예요. 추천이 미리 ★로 찍혀 있어 그대로 시작해도 돼요. ★가 아닌 레퍼런스는 참고로 남고, 절대 쓰지 않을 것만 오른쪽 위 ×로 제외해요(되돌릴 수 있어요). <span class="ask-run" hidden>톤앤매너를 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</span></p>
 <nav role="tablist">${nav}</nav></header><main>${panels}</main>
 ${pickBar("이 레퍼런스로 시작", `<label>추가로 볼 사이트 (URL, 여러 개면 줄바꿈)<textarea id="add-sites" rows="1" placeholder="https://"></textarea></label>
 <label>하고 싶은 말<textarea id="memo" rows="1" placeholder="예: 3D는 과하지 않게"></textarea></label>`)}`;
