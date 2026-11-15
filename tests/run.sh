@@ -11,7 +11,7 @@ TESTS_FINISHED=0
 cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
   local board_pid conf
-  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json"; do
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json"; do
     board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
     [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
   done
@@ -8261,6 +8261,173 @@ if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/s
 fi
 pass "harness board skill and hook wiring"
 
+# 보드 상주 세션(#349): '새 세션'은 claude -p stream-json 상주 프로세스로 쥐고 입력은 stdin으로(--resume 없음, 세션 id 유지).
+# 권한·질문은 control_request로 받아 SSE(GET /events)로 1초 안에 밀어 주고, 사람이 누른 답만 control_response로 돌려준다.
+# 가짜 claude(tests/fixtures/board-resident)가 실측한 형식대로 묻고, 시나리오 클라이언트가 화면처럼 SSE를 열어 답한다.
+BR_T="$TEST_TMP/board-resident"
+BR_DATA="$BR_T/data"
+mkdir -p "$BR_DATA" "$BR_T/cwd" "$BR_T/projects"
+chmod +x "$ROOT/tests/fixtures/board-resident/claude" "$ROOT/tests/fixtures/board-resident/orca"
+BR_PORT="$(free_port)"
+BR_LOG="$BR_T/stub.jsonl"
+: >"$BR_LOG"
+env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
+  BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
+  python3 -I "$ROOT/scripts/board/board-server.py" --no-open >"$BR_T/server.log" 2>&1 &
+BR_PID=$!
+BR_URL=""
+for _ in $(seq 100); do
+  BR_URL="$(jq -r '.url // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)"
+  [[ -n "$BR_URL" ]] && break
+  sleep 0.1
+done
+[[ -n "$BR_URL" ]] || fail "board server for resident sessions starts"
+# 숨은 탭의 SSE(/events?bg=1)는 보는 사람 표시만 하고 백그라운드 갱신을 살리지 않는다(#351이 숨은 탭 폴링을 뺀 것과 같다).
+# 갱신이 1초 주기여도 4초 동안 다른 터미널의 새 세션이 밀려 오지 않아야 한다.
+br_agent() { jq -cn --arg s "$1" --arg cwd "$BR_T/cwd" --argjson at "$(date +%s)000" \
+  '{sessionId: $s, id: ($s[0:8]), kind: "background", status: "idle", state: "idle", pid: null, cwd: $cwd, name: "other terminal", startedAt: $at}'; }
+BR_HIDDEN="bbbbbbbb-0000-4000-8000-000000000349"
+BR_SSE_BG="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "[$(br_agent "$BR_HIDDEN")]" "$BR_HIDDEN" 4 bg)"
+assert_eq "true|false" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_BG")" "an event stream from a hidden tab does not keep the background refresh running"
+# SSE만 연결된 화면(/status.json 폴링 없음)도 백그라운드 갱신(#351)을 살려, 다른 터미널에 새로 생긴 세션이 이벤트로 온다.
+BR_OTHER="aaaaaaaa-0000-4000-8000-000000000349"
+BR_OTHER_JSON="[$(br_agent "$BR_HIDDEN"),$(br_agent "$BR_OTHER")]"
+BR_SSE_ONLY="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "$BR_OTHER_JSON" "$BR_OTHER" 15)"
+assert_eq "true|true" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_ONLY")" "with only the event stream open, the background refresh keeps running and pushes a session that appeared elsewhere ($(jq -r '.after' <<<"$BR_SSE_ONLY")s)"
+BR_REPORT="$(python3 -I "$ROOT/tests/fixtures/board-resident/scenario.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/cwd" "$BR_LOG")" \
+  || fail "resident scenario runs ($(tail -5 "$BR_T/server.log"))"
+br() { jq -r "$1 | tostring" <<<"$BR_REPORT"; }
+assert_eq "200|text/event-stream|hello" "$(br '[.sse_status, .sse_type, .sse_first_event] | join("|")')" "GET /events is an SSE stream that greets first"
+assert_eq "true|true" "$(br '[.new_ok, .id_has_sid] | join("|")')" "new session starts as a resident process keyed by its session id"
+assert_eq "true" "$(br '.permission_tool_stdio')" "the resident session routes permission prompts to the board over stdio"
+assert_eq "true|Bash|bg|needs_human" "$(br '[.perm_pushed, .perm_tool, .item_kind, .item_state] | join("|")')" "a permission request is pushed over SSE as a waiting item"
+assert_eq "true" "$(br '.perm_latency < 1')" "the permission request reaches SSE within a second ($(br '.perm_latency')s)"
+assert_eq "false" "$(br '.auto_answered')" "the board never answers a permission request by itself"
+assert_eq "true" "$(br '.polled_perm')" "status.json carries the same request for the polling fallback"
+assert_eq "true|allow|true|true" "$(br '[.allow, .allow_behavior, .allow_same_request, .idle_after_turn] | join("|")')" "the person's allow goes back on stdin as the control response and the turn ends"
+assert_eq "true|true|Pick a color|true" "$(br '[.send, .question_pushed, .question_text, .transcript_question] | join("|")')" "AskUserQuestion is pushed as a question with its choices"
+assert_eq "true|{\"Pick a color\":\"red\"}" "$(br '[.answer, (.answers_sent | tojson)] | join("|")')" "the person's pick goes back as the AskUserQuestion answers"
+assert_eq "false" "$(br '.bad_answer')" "an answer to a request the board does not hold is refused"
+assert_eq "true" "$(br '.seen_moves_to_idle')" "marking a resident result as read moves it out of unread"
+assert_eq "false|false" "$(br '[.question_via_permission, .send_while_pending] | join("|")')" "a question is answered only by picking, and typed input waits until it is answered"
+assert_eq "403" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$BR_PORT/events")" "the event stream needs the board token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$(jq -cn --arg t "${BR_URL#*t=}" '{t: $t, id: "x", pid: "y", answers: {}}')" "http://127.0.0.1:$BR_PORT/answer")" "an answer needs the board Origin"
+assert_eq "1|false|2" "$(br '[.launches, .resume_used, .stdin_users] | join("|")')" "follow-up input goes to the same process on stdin without --resume"
+assert_eq "true" "$(br '.end')" "a resident session can be ended from the board"
+assert_contains "$(br '.ended_cmd')" "claude --resume " "an ended resident session shows how to resume it"
+assert_eq "true|true|true" "$(br '[.send_after_end, .relaunch_resume_sid, .same_id_after_resume] | join("|")')" "sending to an ended resident session resumes the same session id"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "the board keeps a record of its resident sessions"
+kill "$BR_PID" 2>/dev/null || true
+wait "$BR_PID" 2>/dev/null || true
+for _ in $(seq 50); do
+  [[ "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" == 2 ]] && break
+  sleep 0.1
+done
+assert_eq "2" "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" "stopping the board closes the resident sessions it holds"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "stopping the board keeps the resident record for a later resume"
+BR_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen listens to server events"
+assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
+assert_contains "$BR_TPL" "post('/answer'" "the board screen answers a resident question through the session"
+assert_contains "$BR_TPL" "if (m.cleanup_failed) refresh()" "a cleanup failure pushed as meta brings the card back with its notice"
+BR_VIS="$(sed -n "/document.addEventListener('visibilitychange'/,/});/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$BR_VIS" "if (document.hidden) closeEvents()" "a hidden board tab closes its event stream (the bg=1 polling takes over)"
+assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconnects its event stream"
+assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
+# Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
+# poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.
+python3 -I -B -c '
+import sys, time, queue
+sys.path.insert(0, sys.argv[1])
+import resident as r
+hub = r.Hub(); q = hub.subscribe()
+cache = {"n": 0}
+feed = r.Feed(hub, lambda: {"items": [{"id": "a", "n": cache["n"]}]}, interval=0.5)
+feed.ensure_running(); feed.prime()
+cache["n"] = 1; t = time.time(); feed.poke()
+ev = q.get(timeout=2)
+assert ev == ("item", {"id": "a", "n": 1}) and time.time() - t < 0.3, ev  # 캐시를 새로 쓴 쪽이 알리면 바로
+cache["n"] = 2
+ev = q.get(timeout=2)
+assert ev == ("item", {"id": "a", "n": 2}), ev  # 알림이 없어도 interval 안에 비교한다
+try:
+    q.get(timeout=0.8); raise SystemExit("no change, no event")
+except queue.Empty:
+    pass
+small = r.Hub(); sq = small.subscribe()
+for n in range(600):
+    small.publish("item", {"n": n})
+assert getattr(sq, "dead", False) and small.count() == 0  # 넘친 구독자는 떼어 내고 끊김을 표시한다
+' "$ROOT/scripts/board" || fail "the feed pushes changed cache items on a poke or within its interval and drops an overflowing subscriber"
+# 상주 세션 관리의 안전장치: 이상한 줄 하나로 읽기 스레드가 죽지 않고, 동시에 쥐는 수에 상한이 있고, 오래 끝난 기록은 빠지고,
+# 보드가 SIGKILL로 죽어 이전 claude가 남아 있으면 같은 id로 다시 띄우지 않고, 꺼질 때는 도구 하위 프로세스까지 끝낸다.
+BRU_T="$BR_T/unit"
+mkdir -p "$BRU_T/board" "$BRU_T/cwd"
+python3 -I -B -c '
+import json, os, signal, subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+import resident as r
+stub, data, cwd = sys.argv[2], sys.argv[3], sys.argv[4]
+res = r.Residents(data, lambda: None, claude_bin=stub)
+
+class Fake:
+    def __init__(self, lines): self.stdout, self.pid = lines, 0
+    def wait(self): return 0
+    def poll(self): return 0
+s = r.Session("11111111-1111-4111-8111-111111111111", cwd, None, "t")
+fake = Fake([json.dumps({"type": "control_request", "request_id": "x", "request": "not a dict"}) + "\n",
+             json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "after"}]}}) + "\n"])
+s.proc = fake
+res._read(s, fake)
+assert s.last_text == "after" and s.state == "ended", (s.last_text, s.state)  # 이상한 줄 뒤에도 계속 읽는다
+
+r.MAX_LIVE = 1
+one = res.start(cwd, "hello", "one")
+two = res.start(cwd, "hello", "two")
+assert one["ok"] and not two["ok"] and "1개" in two["message"], (one, two)  # 상한을 넘으면 친절히 거절
+res.end(one["id"])
+time.sleep(0.5)
+import threading
+r.MAX_LIVE = 2
+got = []
+ts = [threading.Thread(target=lambda: got.append(res.start(cwd, "race", None))) for _ in range(6)]
+[t.start() for t in ts]; [t.join() for t in ts]
+assert sum(1 for x in got if x["ok"]) == 2, got  # 동시에 온 새 세션 요청도 상한을 넘지 않는다
+res.shutdown(grace=1)
+r.MAX_LIVE = 8
+
+old = "22222222-2222-4222-8222-222222222222"; recent = "33333333-3333-4333-8333-333333333333"
+sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", recent])
+reg = {old: {"cwd": cwd, "title": "old", "at": "2020-01-01T00:00:00Z", "pid": None},
+       recent: {"cwd": cwd, "title": "recent", "at": r.utc(), "pid": sleeper.pid}}
+with open(os.path.join(data, "board", "residents.json"), "w") as f:
+    json.dump(reg, f)
+again = r.Residents(data, lambda: None, claude_bin=stub)
+again._save()
+kept = json.load(open(os.path.join(data, "board", "residents.json")))
+assert old not in kept and recent in kept and kept[recent]["pid"] == sleeper.pid, kept  # 오래 끝난 기록은 빠지고 pid는 남는다
+busy = again.send("res|" + recent, "continue")
+assert not busy["ok"] and str(sleeper.pid) in busy["message"], busy  # 이전 프로세스가 살아 있으면 같은 id로 다시 띄우지 않는다
+sleeper.kill(); sleeper.wait()
+ok = again.send("res|" + recent, "continue")
+assert ok["ok"], ok
+again.shutdown(grace=1)
+
+group = subprocess.Popen(["bash", "-c", "sleep 30 & wait"], stdin=subprocess.PIPE, start_new_session=True)
+g = r.Session("44444444-4444-4444-8444-444444444444", cwd, None, "g"); g.proc = group; g.state = "busy"
+again._sessions[g.sid] = g
+again.shutdown(grace=0.3)
+group.wait(timeout=5)  # 그룹 리더를 거둔다(macOS는 거두지 않은 리더가 있으면 killpg 확인이 EPERM)
+time.sleep(0.5)
+try:
+    os.killpg(group.pid, 0); raise SystemExit("tool child survived the board shutdown")
+except ProcessLookupError:
+    pass
+' "$ROOT/scripts/board" "$ROOT/tests/fixtures/board-resident/claude" "$BRU_T" "$BRU_T/cwd" \
+  || fail "resident sessions survive a bad line, cap live sessions, drop old records, refuse a second process and end tool children"
+pass "board holds new sessions as resident stream-json processes and pushes permission requests over SSE"
+
 # 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
 # compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
 BIMP_T="$BOARD_T/impact"
@@ -8978,7 +9145,7 @@ assert bs.REFRESH == 2.0, bs.REFRESH
 ' "$ROOT/scripts/board/board-server.py" || fail "a BOARD_REFRESH_SECONDS that is not a positive number falls back to two seconds instead of stopping the server"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "(document.hidden ? '&bg=1' : '')" "a hidden board tab marks its polls so they keep the viewer alive without driving the background refresh"
 assert_contains "$(<"$ROOT/scripts/board/board-server.py")" "threading.Thread(target=refresher, daemon=True).start()" "the board server starts the background refresher"
-assert_contains "$(<"$ROOT/scripts/board/template.html")" "setInterval(() => refresh().catch(() => {}), 1000)" "the board polls the cached status every second"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "setInterval(() => { if (!sseLive()) refresh().catch(() => {}); }, 1000)" "the board polls the cached status every second while server events are down"
 pass "board status reads the cache and refreshes it in the background"
 
 # 정리 속도(#305) B: 정리는 캐시 항목을 쓰되 닫기 직전에 claude agents로 세션을 다시 확인한다. 그 사이 일을 시작했으면 정리하지 않고, 확인하지 못하면 멈춘다.

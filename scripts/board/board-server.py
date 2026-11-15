@@ -5,7 +5,9 @@ GET  /?t=TOKEN                   보드 화면
 GET  /status.json?t=...          status.sh 결과(작업 = claude agents, 하네스 = ~/.ai-harness)
 GET  /transcript?t&id&offset     세션 대화를 offset 이후만 읽어 돌려줌(파일 tail)
 POST /action  {t, id, action}    미리 정한 작업만 실행. send는 {text}
-POST /new     {t, cwd, prompt}   claude --bg 새 세션
+POST /new     {t, cwd, prompt}   새 세션: claude -p stream-json 상주 프로세스로 쥔다(resident.py). 이어서 보내기는 stdin으로
+GET  /events?t=...               SSE: 바뀐 항목(item·gone·meta)을 바로 민다. 끊기면 화면이 /status.json 폴링으로 돌아간다
+POST /answer  {t, id, pid, answers}  상주 세션의 AskUserQuestion에 사람이 고른 답
 POST /cleanup-bulk {t, older_days?, worktree?, dry_run?, ids?}  끝난 일 한꺼번에 정리(숨김 + 쉬는 세션 닫기, worktree는 선택·지울 수 있는 것만)
 GET  /hidden?t=...               숨긴(정리한) 항목 목록 · POST /hidden/restore {t, keys|"all"} 다시 보이기
 GET  /impact?t=...               하네스 효과: 저장소별 impact.sh compare 캐시 + 판정(계산은 뒤에서, 하루 한 번)
@@ -41,6 +43,7 @@ import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import references as hrefs  # noqa: E402
 import settings as hsettings  # noqa: E402
+import resident as hresident  # noqa: E402
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN = secrets.token_urlsafe(24)
@@ -176,6 +179,7 @@ def _collect(max_age):
             # 쓴 뒤에 본다: 비교와 쓰기 사이에 비워져도 놓치지 않는다(쓴 뒤에 비우면 data가 None이라 어차피 다시 모은다).
             if _cache.gen != gen:
                 _cache["at"] = 0.0
+            FEED.poke()  # 새 캐시를 SSE로: 바뀐 항목만 민다(#349)
         return _cache["data"]
 
 
@@ -1166,6 +1170,7 @@ def hold_permission(req):
     tpath = req.get("transcript_path")
     start = os.path.getsize(tpath) if isinstance(tpath, str) and os.path.isfile(tpath) else None
     end = time.time() + PERM_WAIT
+    FEED.poke()  # SSE로 바로 띄운다
     try:
         while time.time() < end and not ev.is_set():
             ev.wait(1)
@@ -1174,6 +1179,7 @@ def hold_permission(req):
         return {"behavior": _perms[pid]["decision"]} if _perms[pid]["decision"] else {}
     finally:
         _perms.pop(pid, None)
+        FEED.poke()
 
 
 def answered_elsewhere(tpath, start):
@@ -1199,8 +1205,8 @@ def decide_permission(pid, decision):
     return {"ok": True, "message": "허용함 — 세션이 이어서 진행" if decision == "allow" else "거부함"}
 
 
-def status_with_permissions():
-    data = status()
+def status_with_permissions(data=None):
+    data = status() if data is None else data
     failed = recent_cleanup_failed()
     if failed:  # 캐시 원본은 그대로 두고 응답에만 싣는다
         data = {**data, "cleanup_failed": failed}
@@ -1239,6 +1245,50 @@ def remove_hook_conf():
             os.remove(HOOK_CONF)
         except OSError:
             pass
+
+
+# ---- 상주 세션·SSE(#349): 새 세션은 resident.py가 stream-json 프로세스로 쥐고, 바뀐 항목은 /events로 민다 ----
+def with_residents(data):
+    """화면 목록에 보드가 쥔 상주 세션을 얹는다(status 캐시는 건드리지 않는다). 같은 sid는 상주 쪽이 이긴다."""
+    res = RESIDENTS.items()
+    if not res:
+        return data
+    for i in res:
+        apply_repo(i)
+    sids = {i["sid"] for i in res}
+    return {**data, "items": [i for i in data["items"] if i.get("sid") not in sids] + res}
+
+
+def board_snapshot(fresh=True):
+    """/status.json과 SSE가 같은 목록을 쓴다. fresh=False(SSE 비교)면 status 캐시를 나이와 관계없이 그대로 쓴다 —
+    새로 모으기는 백그라운드 갱신(refresher)이 하고, 캐시를 새로 쓰면 _collect가 FEED.poke()로 SSE 비교를 깨운다."""
+    cached = _cache["data"]
+    return with_residents(status_with_permissions(None if fresh or cached is None else cached))
+
+
+HUB = hresident.Hub()
+FEED = hresident.Feed(HUB, lambda: board_snapshot(fresh=False))
+RESIDENTS = hresident.Residents(DATA, FEED.poke)
+
+
+def resident_transcript(item_id, offset):
+    item = RESIDENTS.item(item_id)
+    if not item:
+        return None
+    res = (read_transcript(item, offset) if item.get("transcript") else
+           {"ok": True, "offset": 0, "start": 0, "reset": True, "messages": [], "status": item["status"], "live": item["live"]})
+    res["question"] = item["question"]["questions"] if item.get("question") else None
+    res["question_pid"] = item["question"]["pid"] if item.get("question") else None
+    return res
+
+
+def resident_action(req):
+    action = req.get("action")
+    if action == "send":
+        return RESIDENTS.send(req.get("id"), req.get("text"))
+    if action == "end":
+        return RESIDENTS.end(req.get("id"))
+    return {"ok": False, "message": "이 항목에서 허용하지 않는 작업"}
 
 
 # ---- 세션 작업 ----
@@ -1517,7 +1567,9 @@ class Handler(BaseHTTPRequestHandler):
             _viewer["at"] = time.time()
             if q.get("bg") != ["1"]:
                 mark_active()
-            return self._send(200, status_with_permissions())
+            return self._send(200, board_snapshot())
+        if u.path == "/events":
+            return self._events(hidden=q.get("bg") == ["1"])
         if u.path == "/commands":
             return self._send(200, list_commands(q.get("cwd", [None])[0]))
         if u.path == "/hidden":
@@ -1569,6 +1621,13 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/transcript":
             cached = (_cache["data"] or {}).get("items")
             iid = q.get("id", [None])[0]
+            if hresident.is_resident_id(iid):
+                try:
+                    offset = int(q.get("offset", ["0"])[0])
+                except ValueError:
+                    offset = 0
+                res = resident_transcript(iid, offset)
+                return self._send(200, res) if res else self._send(404, {"ok": False, "message": "보드가 쥔 세션이 아님"})
             item = next((i for i in cached if i.get("id") == iid), None) if cached else find_item(iid)
             if not item or item.get("section") != "work":
                 return self._send(404, {"ok": False, "message": "대화를 볼 수 있는 작업이 아님"})
@@ -1581,6 +1640,40 @@ class Handler(BaseHTTPRequestHandler):
                 mark_seen([item])
             return self._send(200, read_older(item, before) if before >= 0 else read_transcript(item, offset))
         self._send(404, {"error": "not found"})
+
+    def _events(self, hidden=False):
+        """SSE: hello 뒤 바뀐 항목만 민다. 15초마다 ping(보는 사람이 있다는 표시도 겸한다). 큐가 넘치면 끊고 브라우저가 다시 붙는다.
+        SSE가 살아 있으면 화면이 /status.json을 부르지 않으므로, 접속·전송마다 mark_active()로 백그라운드 갱신(REFRESH_IDLE)을 살린다.
+        숨은 탭(bg=1)은 /status.json?bg=1처럼 _viewer만 살리고 갱신은 돌리지 않는다 — 화면은 숨을 때 연결을 닫지만, 그 전에 붙은 연결도 막는다."""
+        q = HUB.subscribe()
+        FEED.ensure_running()
+        _viewer["at"] = time.time()
+        if not hidden:
+            mark_active()
+        try:
+            FEED.prime()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\n" + hresident.sse_lines("hello", {"at": utc()}))
+            self.wfile.flush()
+            while True:
+                try:
+                    ev = q.get(timeout=15)
+                except hresident.queue.Empty:
+                    ev = ("ping", {})
+                if getattr(q, "dead", False):  # 큐가 넘쳐 떼어 낸 구독자: 닫으면 브라우저가 다시 붙어 hello부터 받는다
+                    return
+                _viewer["at"] = time.time()  # 열려 있는 이벤트 연결 = 보드를 보는 사람
+                if not hidden:
+                    mark_active()
+                self.wfile.write(hresident.sse_lines(*ev))
+                self.wfile.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            HUB.unsubscribe(q)
 
     def do_POST(self):
         if not self._host_ok():
@@ -1658,13 +1751,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path == "/seen":
             ids = set(req.get("ids") or [])
+            RESIDENTS.mark_seen([i for i in ids if hresident.is_resident_id(i)])
             mark_seen([i for i in status()["items"] if i.get("id") in ids])
             return self._send(200, {"ok": True})
         if path == "/permission":
+            if RESIDENTS.owns(req.get("pid")):
+                res = RESIDENTS.decide(req.get("pid"), req.get("decision"))
+                log({"action": "permission", "resident": True, "decision": req.get("decision"), **res})
+                return self._send(200, res)
             return self._send(200, decide_permission(req.get("pid"), req.get("decision")))
+        if path == "/answer":
+            res = RESIDENTS.answer(req.get("id"), req.get("pid"), req.get("answers"))
+            log({"action": "answer", "id": req.get("id"), **res})
+            return self._send(200, res)
         if path == "/new":
-            res = new_bg(req.get("cwd"), req.get("prompt"), req.get("name"))
-            log({"action": "new", "cwd": req.get("cwd"), "chars": len(req.get("prompt") or ""), **res})
+            res = RESIDENTS.start(req.get("cwd"), req.get("prompt"), req.get("name"))
+            log({"action": "new", "cwd": req.get("cwd"), "chars": len(req.get("prompt") or ""), "resident": True, **res})
+            return self._send(200, res)
+        if path == "/action" and hresident.is_resident_id(req.get("id")):
+            res = resident_action(req)
+            log({"id": req.get("id"), "action": req.get("action"), "chars": len(req.get("text") or ""), **res})
             return self._send(200, res)
         if path != "/action":
             return self._send(404, {"error": "not found"})
@@ -1684,6 +1790,7 @@ if __name__ == "__main__":
     srv.daemon_threads = True
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
+    atexit.register(RESIDENTS.shutdown)  # 꺼질 때 쥔 세션을 닫는다(대화 기록은 남아 다음에 --resume으로 이어 쥔다)
     threading.Thread(target=refresher, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGHUP, signal.SIG_IGN)

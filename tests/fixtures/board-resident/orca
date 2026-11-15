@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# 가짜 orca(#349): 보드 상주 세션 테스트가 실제 Orca 상태를 읽지 않게 빈 목록만 돌려준다.
+echo '{"ok":true,"result":{"runs":[],"workers":[]}}'
