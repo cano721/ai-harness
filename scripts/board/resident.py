@@ -96,10 +96,13 @@ class Feed:
 
     def _loop(self):
         while True:
-            self._wake.wait(max(0.05, self._fresh_at + self.interval - time.time()))
+            idle = not self.hub.count() or self._refreshing  # 볼 사람이 없거나 새로 모으는 중이면 알림·interval만 기다린다
+            self._wake.wait(self.interval if idle else max(0.05, self._fresh_at + self.interval - time.time()))
             self._wake.clear()
             if not self.hub.count():
-                self._last = None
+                with self._run:
+                    if not self.hub.count():
+                        self._last = None
                 continue
             if time.time() - self._fresh_at >= self.interval and not self._refreshing:
                 # 새로 모으기(status.sh, 수 초)는 따로 돌려 캐시만 데운다 — 그동안 들어온 알림이 그 뒤로 밀리지 않게
