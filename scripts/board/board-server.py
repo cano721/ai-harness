@@ -1271,6 +1271,59 @@ FEED = hresident.Feed(HUB, lambda: board_snapshot(fresh=False))
 RESIDENTS = hresident.Residents(DATA, FEED.poke)
 
 
+# 자동 종료(#355): 런처로 켜고 잊어도 서버가 남지 않게, 보는 사람이 IDLE_EXIT 동안 없으면 스스로 꺼진다.
+# 보는 사람 = 화면의 /status.json·이벤트 연결(_viewer). 꺼지면 atexit가 server.json을 지우고 쥔 세션을 닫는다(대화 기록은 남는다).
+def _idle_exit_seconds():
+    """BOARD_IDLE_EXIT(분, 소수 가능). 0이면 끄지 않는다. 숫자가 아니거나 음수면 기본 30분."""
+    try:
+        minutes = float(os.environ.get("BOARD_IDLE_EXIT", "30"))
+    except ValueError:
+        minutes = 30.0
+    if minutes == 0:
+        return 0.0
+    return (minutes if minutes > 0 else 30.0) * 60
+
+
+IDLE_EXIT = _idle_exit_seconds()
+
+
+def idle_blockers():
+    """보는 사람이 없어도 끄면 안 되는 이유: 붙잡은 권한 요청(끄면 그 세션이 답을 잃는다), 열린 이벤트 연결, 작업 중·답 대기인 쥔 세션."""
+    out = []
+    if _perms:
+        out.append("permission")
+    if HUB.count():
+        out.append("events")
+    if RESIDENTS.working():
+        out.append("resident")
+    with _marks_lock:
+        if _cleaning:  # 뒤에서 세션 닫기·worktree 삭제 중 — 끊으면 반쯤 지운 worktree가 남는다
+            out.append("cleanup")
+    return out
+
+
+def idle_watch():
+    step = min(30.0, max(0.5, IDLE_EXIT / 4))
+    wall, mono = time.time(), time.monotonic()
+    while True:
+        time.sleep(step)
+        try:
+            now, now_mono = time.time(), time.monotonic()
+            # 노트북이 잠들었다 깨면 벽시계만 흐른다. 깬 직후엔 화면의 다음 폴링이 오기 전이라 보는 사람이 없어 보이므로 한 번 유예한다.
+            slept = (now - wall) - (now_mono - mono) > 60
+            wall, mono = now, now_mono
+            if slept:
+                _viewer["at"] = now
+                continue
+            if now - _viewer["at"] < IDLE_EXIT or idle_blockers():
+                continue
+            log({"action": "idle_exit", "minutes": round(IDLE_EXIT / 60, 2)})
+        except Exception:  # 감시가 조용히 죽으면 자동 종료가 꺼진 채 남는다
+            continue
+        os.kill(os.getpid(), signal.SIGTERM)  # 주 스레드의 SIGTERM 처리기가 sys.exit → atexit 정리
+        return
+
+
 def resident_transcript(item_id, offset):
     item = RESIDENTS.item(item_id)
     if not item:
@@ -1792,6 +1845,8 @@ if __name__ == "__main__":
     write_hook_conf(url)
     atexit.register(RESIDENTS.shutdown)  # 꺼질 때 쥔 세션을 닫는다(대화 기록은 남아 다음에 --resume으로 이어 쥔다)
     threading.Thread(target=refresher, daemon=True).start()
+    if IDLE_EXIT:
+        threading.Thread(target=idle_watch, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     if sys.stdout.isatty():  # board.sh가 띄우면 주소는 server.json(0600)으로만 전한다 — 로그에 토큰을 남기지 않는다
