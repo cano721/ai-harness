@@ -104,6 +104,9 @@ if item:
         [e for e in stub() if e.get("emitted") == "Bash"][0]["request_id"]
     idle, _ = wait_item(lambda i: i.get("id") == rid and i.get("state") == "review")
     report["idle_after_turn"] = bool(idle)
+    post("/seen", {"ids": [rid]})
+    read, _ = wait_item(lambda i: i.get("id") == rid and i.get("state") == "idle")
+    report["seen_moves_to_idle"] = bool(read)
 
 report["send"] = post("/action", {"id": rid, "action": "send", "text": "ASK next"}).get("ok")
 q, _ = wait_item(lambda i: i.get("id") == rid and i.get("question"))
@@ -112,6 +115,8 @@ if q:
     report["question_text"] = q["question"]["questions"][0]["question"]
     tr = get(f"/transcript?t={TOKEN}&id={urllib.request.quote(rid)}&offset=0")
     report["transcript_question"] = bool(tr.get("question"))
+    report["question_via_permission"] = post("/permission", {"pid": q["question"]["pid"], "decision": "allow"}).get("ok")
+    report["send_while_pending"] = post("/action", {"id": rid, "action": "send", "text": "typed instead"}).get("ok")
     report["answer"] = post("/answer", {"id": rid, "pid": q["question"]["pid"], "answers": {"Pick a color": "red"}}).get("ok")
     hit = wait_stub(lambda e: (e.get("stdin") or {}).get("type") == "control_response"
                     and "answers" in json.dumps(e["stdin"]))

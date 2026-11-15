@@ -1942,7 +1942,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     };
     const n = el('div', 'ds-notice'); n.dataset.status = 'attention'; n.setAttribute('role', 'status');
     const inner = el('div', 'ds-stack');
-    inner.append(el('p', 'ds-label b-line', '에이전트가 묻고 있습니다. 고르거나 아래 입력창에 직접 답하세요.'));
+    inner.append(el('p', 'ds-label b-line', pid ? '에이전트가 묻고 있습니다. 보기에서 골라 답하세요(답하면 세션이 그 자리에서 이어 갑니다).' : '에이전트가 묻고 있습니다. 고르거나 아래 입력창에 직접 답하세요.'));
     qs.forEach((q, i) => {
       const gid = `q-${i}`;
       const label = el('p', 'b-line', q.question); label.id = gid; inner.append(label);
@@ -2257,7 +2257,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       const n = data.items.findIndex((x) => x.id === it.id); if (n >= 0) data.items[n] = it; else data.items.push(it);
     }); });
     es.addEventListener('gone', (e) => { seen(); const { id } = JSON.parse(e.data); applyEvent(() => { data.items = data.items.filter((x) => x.id !== id); }); });
-    es.addEventListener('meta', (e) => { seen(); const m = JSON.parse(e.data); applyEvent(() => { data = { ...data, ...m }; }); });
+    es.addEventListener('meta', (e) => {
+      seen(); const m = JSON.parse(e.data);
+      if (m.cleanup_failed) refresh().catch(() => {});  // 뒤에서 하던 정리의 실패: refresh가 카드를 되돌리고 이유를 알린다
+      else applyEvent(() => { data = { ...data, ...m }; });
+    });
     es.onerror = () => { sseOpen = false; };  // EventSource가 스스로 다시 붙는다. 그동안은 폴링이 맡는다
   }
   const fail = (e) => { if (!data) { loadError = e.server ? `보드 서버가 작업 목록을 만들지 못했습니다(${e.message}). 터미널의 보드 로그를 확인하세요.` : '보드 서버에 닿지 못했습니다. 서버가 꺼졌을 수 있습니다.'; renderBoard(); } };

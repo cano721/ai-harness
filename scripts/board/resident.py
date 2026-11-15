@@ -63,24 +63,27 @@ class Hub:
         for q in subs:
             try:
                 q.put_nowait((event, data))
-            except queue.Full:
+            except queue.Full:  # 큐가 차 있어 끊김 신호를 넣을 수 없다 — 표시로 알리고 핸들러가 연결을 닫는다
+                q.dead = True
                 self.unsubscribe(q)
-                try:
-                    q.put_nowait(None)
-                except queue.Full:
-                    pass
 
 
 class Feed:
     """보드 목록의 바뀐 항목만 SSE로 민다. snapshot(fresh)는 board-server가 넘기는 함수다(fresh=False면 캐시로 빨리).
-    구독자가 있을 때만 돈다: 상주 세션·권한 훅이 poke()하면 캐시로 바로, 그 밖에는 interval마다 새로 모아 비교한다."""
+    구독자가 있을 때만 돈다: 상주 세션·권한 훅이 poke()하면 캐시로 바로 비교하고, poke가 끊이지 않아도
+    interval마다 한 번은 새로 모은다(다른 터미널 세션·하네스 카드 변화가 묻히지 않게). 새로 모으기는 따로 돌려
+    캐시만 데우고, 비교·전송은 언제나 캐시로 한 lock 안에서 한다 — 느린 모으기가 알림을 막지 않고,
+    먼저 모은 낡은 목록이 나중 기준을 덮어 되살아나지도 않게."""
 
     def __init__(self, hub, snapshot, interval=5.0):
         self.hub, self.snapshot, self.interval = hub, snapshot, interval
         self._wake = threading.Event()
         self._last = None
+        self._fresh_at = 0.0
+        self._refreshing = False
         self._started = False
         self._lock = threading.Lock()
+        self._run = threading.Lock()
 
     def poke(self):
         self._wake.set()
@@ -93,15 +96,29 @@ class Feed:
 
     def _loop(self):
         while True:
-            poked = self._wake.wait(self.interval)
+            self._wake.wait(max(0.05, self._fresh_at + self.interval - time.time()))
             self._wake.clear()
             if not self.hub.count():
                 self._last = None
                 continue
+            if time.time() - self._fresh_at >= self.interval and not self._refreshing:
+                # 새로 모으기(status.sh, 수 초)는 따로 돌려 캐시만 데운다 — 그동안 들어온 알림이 그 뒤로 밀리지 않게
+                self._fresh_at, self._refreshing = time.time(), True
+                threading.Thread(target=self._refresh, daemon=True).start()
             try:
-                self.push(self.snapshot(not poked))
+                with self._run:
+                    self.push(self.snapshot(False))
             except Exception:
                 pass
+
+    def _refresh(self):
+        try:
+            self.snapshot(True)
+        except Exception:
+            pass
+        finally:
+            self._refreshing = False
+            self.poke()
 
     def push(self, data):
         items = {i["id"]: i for i in data.get("items", []) if isinstance(i, dict) and i.get("id")}
@@ -123,8 +140,9 @@ class Feed:
     def prime(self):
         """구독자가 붙을 때, hello를 보내기 전에 비교 기준을 잡는다. 그 뒤 바뀐 것은 모두 밀리고, 그 전 상태는
         구독자가 hello를 받고 한 번 읽는 전체 목록에 들어 있다. 이미 기준이 있으면 그대로 둔다(다른 구독자 몫)."""
-        if self._last is None:
-            self.push(self.snapshot(False))
+        with self._run:
+            if self._last is None:
+                self.push(self.snapshot(False))
 
 
 class Session:
@@ -137,7 +155,9 @@ class Session:
         self.last_text = ""
         self.transcript = None
         self.looked = 0.0
+        self.seen = False  # 쉬는 세션의 결과를 사람이 읽었는가('결과 확인' → '쉬는 중')
         self.wlock = threading.Lock()
+        self.slock = threading.Lock()  # 다시 띄우기가 겹쳐 같은 id 프로세스가 둘 뜨지 않게
 
 
 class Residents:
@@ -147,6 +167,7 @@ class Residents:
         self.claude_bin = claude_bin
         self._sessions = {}
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         for sid, rec in (self._load() or {}).items():
             if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
                 s = Session(sid, rec["cwd"], rec.get("name"), rec.get("title") or sid[:8])
@@ -165,12 +186,13 @@ class Residents:
     def _save(self):
         with self._lock:
             data = {s.sid: {"cwd": s.cwd, "name": s.name, "title": s.title, "at": s.at} for s in self._sessions.values()}
-        os.makedirs(os.path.dirname(self.registry), exist_ok=True)
-        tmp = self.registry + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, ensure_ascii=False)
-        os.replace(tmp, self.registry)
+        with self._save_lock:  # 읽기 스레드·요청·종료 처리가 동시에 저장해도 임시 파일이 엇갈리지 않게
+            os.makedirs(os.path.dirname(self.registry), exist_ok=True)
+            tmp = self.registry + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, self.registry)
 
     # ---- 띄우기 ----
     def start(self, cwd, prompt, name=None):
@@ -225,10 +247,17 @@ class Residents:
                 ev = json.loads(raw)
             except ValueError:
                 continue
-            if not isinstance(ev, dict):
+            if not isinstance(ev, dict) or s.proc is not proc:  # 다시 띄운 뒤 남은 이전 프로세스 출력은 버린다
                 continue
             t = ev.get("type")
             changed = False
+            if t == "control_cancel_request":  # Claude가 거둔 요청은 붙잡은 목록에서도 뺀다
+                gone = [k for k, p in s.pending.items() if p["rid"] == ev.get("request_id")]
+                for k in gone:
+                    s.pending.pop(k, None)
+                if gone and not s.pending and s.state == "waiting":
+                    s.state = "busy"
+                changed = bool(gone)
             if t == "control_request":
                 req = ev.get("request") or {}
                 if req.get("subtype") == "can_use_tool":
@@ -249,7 +278,7 @@ class Residents:
                 changed = True
             elif t == "result":
                 s.state = "waiting" if s.pending else "idle"
-                changed = True
+                s.seen, changed = False, True
             elif t == "system" and ev.get("subtype") == "init" and s.state == "idle":
                 s.state, changed = "busy", True
             if changed:
@@ -270,17 +299,18 @@ class Residents:
             return {"ok": False, "message": f"보낼 내용이 비었거나 너무 김({MAX_TEXT}자 이하)"}
         if s.pending:
             return {"ok": False, "message": "권한·질문에 먼저 답해 주세요 — 답을 기다리는 동안 보낸 글은 그 요청의 답이 되지 않음"}
-        if s.proc and s.proc.stdin and s.proc.stdin.closed:  # 막 끝낸 세션: 다 끝난 뒤 다시 쥔다
-            try:
-                s.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                return {"ok": False, "message": "세션이 아직 끝나는 중 — 잠시 뒤 다시 보내세요"}
-        if s.state == "ended" or not s.proc or s.proc.poll() is not None:
-            err = self._spawn(s, ["--resume", s.sid])  # 끝난 세션(보드 재시작 등): 같은 id로 다시 쥔다
-            if err:
-                return {"ok": False, "message": err}
-        if not self._write(s, text):
-            return {"ok": False, "message": "세션에 쓰지 못함 — 세션이 끝났을 수 있음"}
+        with s.slock:
+            if s.proc and s.proc.stdin and s.proc.stdin.closed:  # 막 끝낸 세션: 다 끝난 뒤 다시 쥔다
+                try:
+                    s.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    return {"ok": False, "message": "세션이 아직 끝나는 중 — 잠시 뒤 다시 보내세요"}
+            if s.state == "ended" or not s.proc or s.proc.poll() is not None:
+                err = self._spawn(s, ["--resume", s.sid])  # 끝난 세션(보드 재시작 등): 같은 id로 다시 쥔다
+                if err:
+                    return {"ok": False, "message": err}
+            if not self._write(s, text):
+                return {"ok": False, "message": "세션에 쓰지 못함 — 세션이 끝났을 수 있음"}
         s.state, s.at = "busy", utc()
         self._save()
         self.notify()
@@ -291,9 +321,9 @@ class Residents:
 
     def decide(self, pid, decision):
         s = next((x for x in self._all() if pid in x.pending), None)
-        if not s or decision not in ("allow", "deny"):
+        p = s.pending.get(pid) if s else None  # 그 사이 다른 클릭이나 세션 종료로 빠졌을 수 있다
+        if not p or decision not in ("allow", "deny"):
             return {"ok": False, "message": "보드가 이 요청을 더 이상 붙잡고 있지 않음"}
-        p = s.pending[pid]
         if p["tool"] == "AskUserQuestion":
             return {"ok": False, "message": "질문은 보기에서 골라 답해 주세요"}
         resp = ({"behavior": "allow", "updatedInput": p["input"]} if decision == "allow"
@@ -368,7 +398,7 @@ class Residents:
         if time.time() - s.looked < 5:  # 목록을 만들 때마다 폴더를 훑지 않게
             return None
         s.looked = time.time()
-        root = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+        root = os.environ.get("HARNESS_CLAUDE_PROJECTS_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "projects")
         hits = glob.glob(os.path.join(glob.escape(root), "*", s.sid + ".jsonl"))
         s.transcript = hits[0] if hits else None
         return s.transcript
@@ -376,6 +406,14 @@ class Residents:
     def item(self, item_id):
         s = self._get(item_id)
         return self._item(s) if s else None
+
+    def mark_seen(self, ids):
+        """'결과 확인'을 읽음으로. 다음 결과가 오면 다시 '결과 확인'이 된다."""
+        hit = [s for s in (self._get(i) for i in ids or []) if s and s.state == "idle"]
+        for s in hit:
+            s.seen = True
+        if hit:
+            self.notify()
 
     def items(self):
         cut = time.time() - KEEP_HOURS * 3600
@@ -388,7 +426,7 @@ class Residents:
 
     def _item(self, s):
         live = s.state != "ended"
-        state = {"busy": "running", "waiting": "needs_human", "idle": "review"}.get(s.state, "idle")
+        state = {"busy": "running", "waiting": "needs_human", "idle": "idle" if s.seen else "review"}.get(s.state, "idle")
         it = {"section": "work", "kind": "bg", "resident": True, "agent": "claude", "id": "res|" + s.sid, "sid": s.sid,
               "short_id": s.sid[:8], "cwd": s.cwd, "project": os.path.basename(s.cwd.rstrip("/")) or s.cwd,
               "title": s.title, "detail": s.last_text, "at": s.at, "state": state, "live": live,

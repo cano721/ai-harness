@@ -1518,10 +1518,10 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     ev = q.get(timeout=15)
                 except hresident.queue.Empty:
-                    _viewer["at"] = time.time()
                     ev = ("ping", {})
-                if ev is None:
+                if getattr(q, "dead", False):  # 큐가 넘쳐 떼어 낸 구독자: 닫으면 브라우저가 다시 붙어 hello부터 받는다
                     return
+                _viewer["at"] = time.time()  # 열려 있는 이벤트 연결 = 보드를 보는 사람
                 self.wfile.write(hresident.sse_lines(*ev))
                 self.wfile.flush()
         except (OSError, ValueError):
@@ -1601,6 +1601,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path == "/seen":
             ids = set(req.get("ids") or [])
+            RESIDENTS.mark_seen([i for i in ids if hresident.is_resident_id(i)])
             mark_seen([i for i in status()["items"] if i.get("id") in ids])
             return self._send(200, {"ok": True})
         if path == "/permission":

@@ -8115,6 +8115,10 @@ assert_eq "true|allow|true|true" "$(br '[.allow, .allow_behavior, .allow_same_re
 assert_eq "true|true|Pick a color|true" "$(br '[.send, .question_pushed, .question_text, .transcript_question] | join("|")')" "AskUserQuestion is pushed as a question with its choices"
 assert_eq "true|{\"Pick a color\":\"red\"}" "$(br '[.answer, (.answers_sent | tojson)] | join("|")')" "the person's pick goes back as the AskUserQuestion answers"
 assert_eq "false" "$(br '.bad_answer')" "an answer to a request the board does not hold is refused"
+assert_eq "true" "$(br '.seen_moves_to_idle')" "marking a resident result as read moves it out of unread"
+assert_eq "false|false" "$(br '[.question_via_permission, .send_while_pending] | join("|")')" "a question is answered only by picking, and typed input waits until it is answered"
+assert_eq "403" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$BR_PORT/events")" "the event stream needs the board token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$(jq -cn --arg t "${BR_URL#*t=}" '{t: $t, id: "x", pid: "y", answers: {}}')" "http://127.0.0.1:$BR_PORT/answer")" "an answer needs the board Origin"
 assert_eq "1|false|2" "$(br '[.launches, .resume_used, .stdin_users] | join("|")')" "follow-up input goes to the same process on stdin without --resume"
 assert_eq "true" "$(br '.end')" "a resident session can be ended from the board"
 assert_contains "$(br '.ended_cmd')" "claude --resume " "an ended resident session shows how to resume it"
@@ -8132,6 +8136,25 @@ BR_TPL="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen listens to server events"
 assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
 assert_contains "$BR_TPL" "post('/answer'" "the board screen answers a resident question through the session"
+assert_contains "$BR_TPL" "if (m.cleanup_failed) refresh()" "a cleanup failure pushed as meta brings the card back with its notice"
+# 상주 세션이 계속 알려도(poke) 다른 항목은 interval마다 새로 모은다. 넘친 구독자는 끊김 표시를 받는다.
+python3 -I -B -c '
+import sys, time, threading
+sys.path.insert(0, sys.argv[1])
+import resident as r
+hub = r.Hub(); q = hub.subscribe()
+calls = []
+feed = r.Feed(hub, lambda fresh: calls.append(fresh) or {"items": [{"id": "a", "n": len(calls)}]}, interval=0.3)
+feed.ensure_running()
+end = time.time() + 1.5
+while time.time() < end:
+    feed.poke(); time.sleep(0.02)
+assert calls.count(True) >= 3, calls.count(True)  # poke가 끊이지 않아도 0.3초마다 새로 모은다
+small = r.Hub(); sq = small.subscribe()
+for n in range(600):
+    small.publish("item", {"n": n})
+assert getattr(sq, "dead", False) and small.count() == 0  # 넘친 구독자는 떼어 내고 끊김을 표시한다
+' "$ROOT/scripts/board" || fail "the feed recollects every interval under constant pokes and drops an overflowing subscriber"
 pass "board holds new sessions as resident stream-json processes and pushes permission requests over SSE"
 
 # 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
