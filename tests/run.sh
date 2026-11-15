@@ -8401,11 +8401,13 @@ old = "22222222-2222-4222-8222-222222222222"; recent = "33333333-3333-4333-8333-
 sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", recent])
 reg = {old: {"cwd": cwd, "title": "old", "at": "2020-01-01T00:00:00Z", "pid": None},
        recent: {"cwd": cwd, "title": "recent", "at": r.utc(), "pid": sleeper.pid}}
-with open(os.path.join(data, "board", "residents.json"), "w") as f:
+data2 = os.path.join(data, "again")  # 앞 인스턴스의 읽기 스레드가 늦게 _save해도 덮지 않게 따로 둔다
+os.makedirs(os.path.join(data2, "board"), exist_ok=True)
+with open(os.path.join(data2, "board", "residents.json"), "w") as f:
     json.dump(reg, f)
-again = r.Residents(data, lambda: None, claude_bin=stub)
+again = r.Residents(data2, lambda: None, claude_bin=stub)
 again._save()
-kept = json.load(open(os.path.join(data, "board", "residents.json")))
+kept = json.load(open(os.path.join(data2, "board", "residents.json")))
 assert old not in kept and recent in kept and kept[recent]["pid"] == sleeper.pid, kept  # 오래 끝난 기록은 빠지고 pid는 남는다
 busy = again.send("res|" + recent, "continue")
 assert not busy["ok"] and str(sleeper.pid) in busy["message"], busy  # 이전 프로세스가 살아 있으면 같은 id로 다시 띄우지 않는다
