@@ -24,6 +24,7 @@
   },
   "transitions": [
     {"from": "triage", "to": "reproduce"},
+    {"from": "triage", "to": "brief", "when": "investigation_report_provided"},
     {"from": "reproduce", "to": "brief", "when": "reproduced_or_evidence_sufficient"},
     {"from": "reproduce", "to": "user_decision", "when": "cannot_reproduce_and_no_observation_plan"},
     {"from": "brief", "to": "approval"},
@@ -57,6 +58,7 @@
   "invariants": [
     "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when the user setting HM_APPROVAL or HM_APPROVAL_REPOS resolves to auto and the brief has no open questions.",
     "A bug fix is not complete without reproduction or explicit equivalent verification evidence.",
+    "triage goes straight to brief only when an investigation report from the investigate workflow is provided; that report's reproduction or equivalent evidence stands in for reproduce.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
     "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",

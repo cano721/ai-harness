@@ -20,7 +20,7 @@
       "template_version": "0.73.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "0e7338264f34eaa3a1736bde70a00acb06a60d1f5819a0d4193f3761569a1961",
+      "content_sha256": "cd5a14dbab7f5692139c315eed43e47f7f9cad5f5fa7005afd668681887e6094",
       "template_version": "0.73.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -28,7 +28,7 @@
       "template_version": "0.73.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
-      "content_sha256": "ad054fa3f9c9c73836301665d2a0727b46bcc2b3d15dc8a9a3cce0639e5ac632",
+      "content_sha256": "3762595feb3d902d1cef6c19e2e2fa5cf1bddd4600e180d3a9b9216ec1f8b851",
       "template_version": "0.73.0"
     },
     ".ai-harness/workflows/review-graph.json": {
@@ -41,7 +41,7 @@
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "396ab32815fffdbf8c22fff378f7e59343243b7958e69e4e3d71a6e5ddb52df3",
+      "content_sha256": "ce3b23078f7903d5cd61ed015a0b420724f0beb1b77e0f6fb00c893fe30e1ff2",
       "template_version": "0.73.0",
       "renderer": 1
     },
@@ -56,12 +56,26 @@
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "84b3b21c3393f791d030e604181587adb7e76b9edf54a9ebaa51d490e8d87f9d",
+      "content_sha256": "9762ea69d380d2a34630a1105b5e9ed15bc3ab954b5094da566a18879214071f",
       "template_version": "0.73.0",
       "renderer": 1
     },
     ".claude/commands/review.md": {
       "content_sha256": "54780daf3c0540888d9d4ecf1a8d985319982157444cd53a7557c53b1201f512",
+      "template_version": "0.73.0",
+      "renderer": 1
+    },
+    ".ai-harness/workflows/investigate-graph.json": {
+      "content_sha256": "f66073cb4cc343282a8c0884208caca52ac93a7658306b8f532ac3eae31eece9",
+      "template_version": "0.73.0"
+    },
+    ".agents/skills/investigate/SKILL.md": {
+      "content_sha256": "e69d63e5ba8171163a022089188de98e48512e3b18f6b133ce69c0c3d671a874",
+      "template_version": "0.73.0",
+      "renderer": 1
+    },
+    ".claude/commands/investigate.md": {
+      "content_sha256": "c4c1649b0c5ea681f55ee189c33950d0f8c888350e3cc627b81be6d578d43176",
       "template_version": "0.73.0",
       "renderer": 1
     }

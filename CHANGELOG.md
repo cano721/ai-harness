@@ -6,6 +6,17 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.75.0 (2026-11-15)
+### 새 기능
+
+- **원인 조사 워크플로 `/investigate`** — 버그·QA 이슈를 고치기 전에 원인만 조사하는 세션이 흔했는데, 담을 워크플로가 없어 뒤처진 로컬 코드를 현재로 오판하거나 재현 없이 추측으로 결론 내기 쉬웠고 하네스 활용도도 측정되지 않았습니다. 이제 `standard` 하네스에 `/investigate`가 생깁니다: 증상·재현 조건 → 원격 기준 코드(체크아웃이 `origin/<기준 브랜치>`보다 뒤처졌으면 `git show origin/<base>:<path>`로 읽기) → 관련 도메인 문서 → 재현 또는 로그·데이터 근거 → 가설·검증 결과·근거·수정 방향을 담은 원인 보고 순서입니다. 코드는 바꾸지 않고(그래프에 쓰기 노드 없음), Jira 댓글 같은 외부 쓰기는 초안 파일로만 남겨 사람이 올립니다. 수정이 필요하면 보고 파일을 `/fix-bug`에 넘기고, fix-bug는 그 보고로 triage·reproduce를 건너뛰고 brief부터 시작합니다(러너는 `workflow-driver.sh start --workflow bug-fix --investigation <보고>`). triage·reproduce 노드 정의는 fix-bug 그래프와 같습니다. `/metrics`는 investigate 세션도 하네스 워크플로 경유로 셉니다. 그래프 러너가 investigate 자체를 실행하는 것은 후속 작업입니다. (#338)
+
+- **`/metrics` 저장소 정보 활용률** — 워크플로 경유율은 워크플로 파일 Read·워크플로 명령만 세서, 하네스 docs를 읽고 규칙대로 작업했지만 워크플로 파일을 열지 않은 세션이 미경유로 잡혔습니다. `## 비율`에 워크플로 대상 세션 중 `.ai-harness/docs/` 또는 `.ai-harness/workflows/` 문서를 읽은 세션 비율인 `저장소 정보 활용` 행과 프로젝트별 표의 `정보 활용` 열을 더합니다. 세션 시작 때 자동 로드되는 AGENTS.md·CLAUDE.md는 세지 않습니다. 서브에이전트가 읽은 문서는 부모 세션에 잡히지 않습니다(서브에이전트 대화가 같은 파일에 담긴 구형 Claude transcript는 예외). 기존 행·열은 그대로입니다. (#337)
+
+### 업데이트 후 해야 할 일
+
+- `standard` 하네스 프로젝트에서 `/harness-init --sync`를 실행해 `/investigate` 진입점(`.agents/skills/investigate/`·`.claude/commands/investigate.md`)과 `.ai-harness/workflows/investigate-graph.json`을 추가하세요(추가 항목이라 묻지 않고 들어갑니다). 같은 sync가 프로젝트 사실을 담는 `.ai-harness/workflows/investigate.md` 작성과 `AGENTS.md` 워크플로 표 행 추가를 제안합니다. fix-bug의 조사 보고 건너뛰기도 sync로 갱신된 `bug-fix-graph.json`부터 동작합니다. (#338)
+
 ## v0.74.1 (2026-11-14)
 ### 버그 수정
 

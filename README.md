@@ -12,6 +12,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [기존 프로젝트 하네스 업데이트](#project-sync)
 - [기능 개발 흐름](#feature-delivery)
 - [버그 수정 흐름](#bug-fix)
+- [원인 조사 흐름](#investigate)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
 - [Harness Board](#board)
@@ -164,6 +165,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 |---|---|---|---|
 | 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
 | 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
+| 원인 조사 | `.agents/skills/investigate/SKILL.md` | `.claude/commands/investigate.md` | 코드를 바꾸지 않고 원격 기준 코드·도메인 문서·재현 근거로 원인 보고를 씁니다. 수정이 필요하면 보고를 `/fix-bug`에 넘깁니다. |
 | 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
@@ -215,7 +217,7 @@ codex plugin add ai-harness@ai-harness
 
 ### 3. 평소처럼 개발
 
-일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. `standard` 초기화로 생성된 프로젝트에서는 신규 기능을 `/implement-feature`, 결함 수정을 `/fix-bug`로 시작해 각각의 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
+일반 작업은 프로젝트의 `AGENTS.md`와 `.ai-harness` 규칙을 따릅니다. `standard` 초기화로 생성된 프로젝트에서는 신규 기능을 `/implement-feature`, 결함 수정을 `/fix-bug`, 수정 전 원인 조사만 할 때는 `/investigate`로 시작해 각각의 계획 검토를 먼저 할 수 있습니다. 세션 종료 시 활동이 자동으로 기록되며, 별도 스케줄러를 돌릴 필요는 없습니다.
 
 <a id="project-sync"></a>
 
@@ -453,7 +455,35 @@ stateDiagram-v2
 4. **검토 루프** — targeted/전체 검증 뒤 재현 증거·회귀·호환성·범위 이탈을 검토합니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르도록 남거나 제품·환경 판단이 필요하면 사용자에게 넘깁니다.
 5. **PR** — 기능 개발과 같이 `git_policy`대로 커밋·push·PR을 합니다.
 
-생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow bug-fix`로 실행하고, 없으면 같은 흐름을 현재 세션에서 수행합니다.
+생성에 쓰는 [버그 수정 템플릿의 그래프 계약](templates/fix-bug/references/bug-fix-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/bug-fix-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow bug-fix`로 실행하고, 없으면 같은 흐름을 현재 세션에서 수행합니다. `/investigate`의 조사 보고를 받으면(러너는 `--investigation <보고 파일>`) triage·reproduce를 다시 하지 않고 brief부터 시작합니다. 러너는 프로젝트 그래프에 그 전이(`investigation_report_provided`)가 있을 때만 건너뛰고, sync 전 그래프에서는 보고를 입력으로 두 단계를 다시 돕니다.
+
+<a id="investigate"></a>
+
+## 원인 조사 흐름: `/investigate`
+
+버그·QA 이슈를 고치기 전에 원인만 따로 조사하는 프로젝트 로컬 Skill/command입니다. `standard` 초기화가 만들고, 기존 프로젝트는 `/harness-init --sync`가 추가로 제안합니다. **코드를 바꾸지 않습니다** — 그래프에 쓰기 노드가 없고, 메모·보고·초안은 저장소 밖(`~/.ai-harness/investigations/<저장소>/`)에 둡니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> triage
+    triage --> baseline
+    baseline --> domain_docs
+    domain_docs --> reproduce
+    reproduce --> report: 재현 또는 충분한 증거
+    reproduce --> user_decision: 재현 불가·관측 계획 없음
+    report --> done: 코드 수정 불필요
+    report --> handoff: 코드 수정 필요
+    handoff --> done: /fix-bug에 보고 전달
+```
+
+1. **증상·재현 조건** — triage는 `/fix-bug`와 같은 노드입니다.
+2. **원격 기준 코드** — `git fetch` 뒤 로컬 체크아웃이 `origin/<기준 브랜치>`보다 뒤처졌으면 `git show origin/<base>:<path>`로 읽습니다. 보고에 읽은 커밋을 남깁니다.
+3. **도메인 문서** — 관련 도메인 문서를 읽고 의도된 동작인지 먼저 가립니다.
+4. **재현 또는 근거** — reproduce도 `/fix-bug`와 같은 노드입니다. 체크아웃이 뒤처졌으면 기준 커밋을 저장소 밖에 풀어(`git archive`) 그 코드로 재현하고, 재현한 커밋을 남깁니다. 재현도 로그·데이터 근거도 없으면 사람에게 필요한 것을 묻고 멈춥니다.
+5. **원인 보고** — 가설별 검증 결과·근거(`path:line`, 명령 출력, 로그)·원인·수정 방향 제안을 Markdown 보고로 씁니다.
+6. **넘김** — 수정이 필요하면 `/fix-bug <보고 파일>`로 넘깁니다. Jira 댓글 같은 외부 쓰기는 보고 옆에 초안 파일로만 만들고 사람이 올립니다.
+
+[원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너는 아직 이 워크플로를 실행하지 않으므로 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
 
 <a id="review"></a>
 
