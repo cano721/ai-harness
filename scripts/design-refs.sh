@@ -10,6 +10,8 @@
 #              4곳으로 "다섯 종류 각 1개"를 통과했다.
 #   - board:   tone.json·references.json으로 탭 5개 보드(board.html)를 그리고(--kind drafts면 시안 보드), --serve면 보드
 #              서버를 분리 실행한다. 레퍼런스 보드를 만들 때마다 실행 기록을 <data>/board/references/<run-id>.json에 남긴다.
+#              Harness Board가 떠 있고 레퍼런스 화면을 지원하면(server.json의 features) 따로 서버를 띄우지 않고 대시보드
+#              주소(?refs=<run-id>)를 낸다 — 하네스 동작은 대시보드 한 곳에서 보이게. 대시보드가 없으면 지금처럼 자체 서버.
 # 종료 코드: 0 성공, 2 사용법, 4 산출물·입력 불충분.
 set -euo pipefail
 
@@ -190,6 +192,19 @@ run_check() {
   return 0
 }
 
+# The Harness Board's address for this run when it is up and shows reference boards (an older board without the
+# references view, or a stale server.json whose process is gone, does not count): <board url>&refs=<run id>.
+dashboard_link() {
+  local conf="$DATA_DIR/board/server.json" pid url
+  [[ -f "$conf" ]] || return 1
+  jq -e '(.features // []) | index("references") != null' "$conf" >/dev/null 2>&1 || return 1
+  pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null)"; url="$(jq -r '.url // empty' "$conf" 2>/dev/null)"
+  [[ "$pid" =~ ^[0-9]+$ && "$url" == http://127.0.0.1:* ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -q 'board-server\.py' || return 1
+  printf '%s&refs=%s\n' "$url" "$(run_id)"
+}
+
 # The run record a dashboard reads to list reference boards: one file per work folder, rewritten on every draw.
 write_record() {
   local dir file id topic created status now tmp
@@ -265,7 +280,15 @@ case "$cmd" in
     [[ -z "$SERVE" || -n "$PORT" ]] || die 2 "--serve needs --port"
     read -r -a board_cmd <<<"${LANDING_BOARD_CMD:-node $ROOT/scripts/landing-board.mjs}"
     if [[ -n "$PORT" ]]; then "${board_cmd[@]}" --work "$WORK" --kind "$KIND" >&2; else "${board_cmd[@]}" --work "$WORK" --kind "$KIND"; fi
+    dash=""
+    if [[ "$KIND" == references && -n "$SERVE" ]]; then dash="$(dashboard_link || true)"; fi
+    if [[ -n "$dash" ]]; then PORT=""; fi  # the record keeps no url: the board's address carries a per-run token
     if [[ "$KIND" == references ]]; then write_record >/dev/null; fi
+    if [[ -n "$dash" ]]; then
+      printf 'design-refs: Harness Board is up; the board is shown there (no separate board server)\n' >&2
+      printf '%s\n' "$dash"
+      exit 0
+    fi
     if [[ -n "$SERVE" ]]; then
       # Already serving this folder on this port (the references step served it, the pick step asks again): keep it.
       if ! pgrep -f "landing-board-server.mjs --work $WORK --port $PORT" >/dev/null 2>&1; then

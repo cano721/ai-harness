@@ -12,13 +12,14 @@
 보드는 사람이 화면에서 누른 답만 돌려준다 — 스스로 허용·거부·답하지 않는다.
 상태가 바뀌면 notify()를 불러 SSE(GET /events)가 바뀐 항목을 바로 밀게 한다.
 """
-import glob, json, os, queue, re, secrets, subprocess, threading, time, uuid
+import glob, json, os, queue, re, secrets, signal, subprocess, sys, threading, time, uuid
 from datetime import datetime, timezone
 
 FLAGS = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
          "--permission-prompt-tool", "stdio"]
-KEEP_HOURS = 48  # 끝난 상주 세션 기록을 목록에 보여 주는 시간(work.sh의 BOARD_DONE_HOURS와 같은 기본값)
+KEEP_HOURS = 48  # 끝난 상주 세션 기록을 목록·기록 파일에 두는 시간(work.sh의 BOARD_DONE_HOURS와 같은 기본값)
 MAX_TEXT = 8000
+MAX_LIVE = 8  # 보드가 한꺼번에 쥐는 상주 세션 수 — 세션마다 claude 프로세스 하나라 끝없이 늘지 않게
 
 
 def utc():
@@ -69,18 +70,15 @@ class Hub:
 
 
 class Feed:
-    """보드 목록의 바뀐 항목만 SSE로 민다. snapshot(fresh)는 board-server가 넘기는 함수다(fresh=False면 캐시로 빨리).
-    구독자가 있을 때만 돈다: 상주 세션·권한 훅이 poke()하면 캐시로 바로 비교하고, poke가 끊이지 않아도
-    interval마다 한 번은 새로 모은다(다른 터미널 세션·하네스 카드 변화가 묻히지 않게). 새로 모으기는 따로 돌려
-    캐시만 데우고, 비교·전송은 언제나 캐시로 한 lock 안에서 한다 — 느린 모으기가 알림을 막지 않고,
-    먼저 모은 낡은 목록이 나중 기준을 덮어 되살아나지도 않게."""
+    """보드 목록의 바뀐 항목만 SSE로 민다. snapshot()은 board-server가 넘기는 함수로, 상태 캐시를 그대로 읽는다(모으지 않는다).
+    상태를 새로 모으는 일은 board-server의 백그라운드 갱신(#351)이 맡고, 캐시를 새로 쓸 때마다 poke()한다.
+    상주 세션·권한 훅도 바뀔 때 poke()한다. 구독자가 있을 때만 비교하고, poke가 없어도 interval마다 한 번 비교한다(안전망).
+    비교·기준 교체는 한 lock 안에서 한다 — 먼저 읽은 낡은 목록이 나중 기준을 덮어 되살아나지 않게."""
 
-    def __init__(self, hub, snapshot, interval=5.0):
+    def __init__(self, hub, snapshot, interval=15.0):
         self.hub, self.snapshot, self.interval = hub, snapshot, interval
         self._wake = threading.Event()
         self._last = None
-        self._fresh_at = 0.0
-        self._refreshing = False
         self._started = False
         self._lock = threading.Lock()
         self._run = threading.Lock()
@@ -96,32 +94,18 @@ class Feed:
 
     def _loop(self):
         while True:
-            idle = not self.hub.count() or self._refreshing  # 볼 사람이 없거나 새로 모으는 중이면 알림·interval만 기다린다
-            self._wake.wait(self.interval if idle else max(0.05, self._fresh_at + self.interval - time.time()))
+            self._wake.wait(self.interval)
             self._wake.clear()
             if not self.hub.count():
                 with self._run:
                     if not self.hub.count():
                         self._last = None
                 continue
-            if time.time() - self._fresh_at >= self.interval and not self._refreshing:
-                # 새로 모으기(status.sh, 수 초)는 따로 돌려 캐시만 데운다 — 그동안 들어온 알림이 그 뒤로 밀리지 않게
-                self._fresh_at, self._refreshing = time.time(), True
-                threading.Thread(target=self._refresh, daemon=True).start()
             try:
                 with self._run:
-                    self.push(self.snapshot(False))
+                    self.push(self.snapshot())
             except Exception:
                 pass
-
-    def _refresh(self):
-        try:
-            self.snapshot(True)
-        except Exception:
-            pass
-        finally:
-            self._refreshing = False
-            self.poke()
 
     def push(self, data):
         items = {i["id"]: i for i in data.get("items", []) if isinstance(i, dict) and i.get("id")}
@@ -145,7 +129,7 @@ class Feed:
         구독자가 hello를 받고 한 번 읽는 전체 목록에 들어 있다. 이미 기준이 있으면 그대로 둔다(다른 구독자 몫)."""
         with self._run:
             if self._last is None:
-                self.push(self.snapshot(False))
+                self.push(self.snapshot())
 
 
 class Session:
@@ -159,6 +143,7 @@ class Session:
         self.transcript = None
         self.looked = 0.0
         self.seen = False  # 쉬는 세션의 결과를 사람이 읽었는가('결과 확인' → '쉬는 중')
+        self.prev_pid = None  # 지난 보드가 띄운 프로세스(기록에서). 보드가 SIGKILL로 죽으면 아직 살아 있을 수 있다
         self.wlock = threading.Lock()
         self.slock = threading.Lock()  # 다시 띄우기가 겹쳐 같은 id 프로세스가 둘 뜨지 않게
 
@@ -175,6 +160,7 @@ class Residents:
             if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
                 s = Session(sid, rec["cwd"], rec.get("name"), rec.get("title") or sid[:8])
                 s.at = rec.get("at") or s.at
+                s.prev_pid = rec.get("pid") if isinstance(rec.get("pid"), int) else None
                 self._sessions[sid] = s
 
     # ---- 기록(보드를 다시 켜도 끝난 상주 세션을 이어 쥘 수 있게) ----
@@ -187,8 +173,13 @@ class Residents:
             return {}
 
     def _save(self):
+        """기록: 살아 있는 세션은 pid까지, 끝난 지 KEEP_HOURS 넘은 세션은 뺀다(목록에서도 이미 안 보인다)."""
+        cut = time.time() - KEEP_HOURS * 3600
         with self._lock:
-            data = {s.sid: {"cwd": s.cwd, "name": s.name, "title": s.title, "at": s.at} for s in self._sessions.values()}
+            for sid in [k for k, s in self._sessions.items() if s.state == "ended" and _epoch(s.at) < cut]:
+                del self._sessions[sid]
+            data = {s.sid: {"cwd": s.cwd, "name": s.name, "title": s.title, "at": s.at,
+                            "pid": s.proc.pid if self._live(s) else s.prev_pid} for s in self._sessions.values()}
         with self._save_lock:  # 읽기 스레드·요청·종료 처리가 동시에 저장해도 임시 파일이 엇갈리지 않게
             os.makedirs(os.path.dirname(self.registry), exist_ok=True)
             tmp = self.registry + ".tmp"
@@ -203,6 +194,8 @@ class Residents:
             return {"ok": False, "message": "작업 경로가 없거나 절대 경로가 아님"}
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_TEXT:
             return {"ok": False, "message": "첫 지시가 비었거나 너무 김"}
+        if self._live_count() >= MAX_LIVE:
+            return {"ok": False, "message": self._full_message()}
         name = name[:160] if isinstance(name, str) and name.strip() else None
         sid = str(uuid.uuid4())
         s = Session(sid, cwd, name, name or " ".join(prompt.split())[:80])
@@ -245,6 +238,8 @@ class Residents:
 
     # ---- stdout 읽기 ----
     def _read(self, s, proc):
+        """stdout을 끝까지 비운다. 한 줄 처리에서 예외가 나도 다음 줄로 간다 — 이 스레드가 죽으면 stdout을 아무도
+        비우지 않아 파이프가 차고 claude가 멈춘다."""
         for raw in proc.stdout:
             try:
                 ev = json.loads(raw)
@@ -252,45 +247,52 @@ class Residents:
                 continue
             if not isinstance(ev, dict) or s.proc is not proc:  # 다시 띄운 뒤 남은 이전 프로세스 출력은 버린다
                 continue
-            t = ev.get("type")
-            changed = False
-            if t == "control_cancel_request":  # Claude가 거둔 요청은 붙잡은 목록에서도 뺀다
-                gone = [k for k, p in s.pending.items() if p["rid"] == ev.get("request_id")]
-                for k in gone:
-                    s.pending.pop(k, None)
-                if gone and not s.pending and s.state == "waiting":
-                    s.state = "busy"
-                changed = bool(gone)
-            if t == "control_request":
-                req = ev.get("request") or {}
-                if req.get("subtype") == "can_use_tool":
-                    pid = "res-" + secrets.token_hex(8)
-                    s.pending[pid] = {"rid": ev.get("request_id"), "tool": req.get("tool_name") or "?",
-                                      "input": req.get("input") if isinstance(req.get("input"), dict) else {}, "at": utc()}
-                    s.state, changed = "waiting", True
-                else:  # 보드가 맡지 않은 요청(훅 콜백 등)은 지원하지 않는다고 바로 알린다 — 권한 답이 아니다
-                    self._line(s, json.dumps({"type": "control_response", "response": {
-                        "subtype": "error", "request_id": ev.get("request_id"), "error": "not supported by the board"}}))
-            elif t == "assistant":
-                texts = [c.get("text") for c in ((ev.get("message") or {}).get("content") or [])
-                         if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
-                if texts:
-                    s.last_text = texts[-1][:400]
-                if s.state != "waiting":
-                    s.state = "busy"
-                changed = True
-            elif t == "result":
-                s.state = "waiting" if s.pending else "idle"
-                s.seen, changed = False, True
-            elif t == "system" and ev.get("subtype") == "init" and s.state == "idle":
-                s.state, changed = "busy", True
-            if changed:
-                s.at = utc()
-                self.notify()
+            try:
+                self._handle(s, ev)
+            except Exception as e:
+                print("resident:", type(e).__name__, e, file=sys.stderr, flush=True)
         proc.wait()
         if s.proc is proc:
             s.state, s.pending, s.at = "ended", {}, utc()
             self._save()
+            self.notify()
+
+    def _handle(self, s, ev):
+        """stdout 한 줄(JSON 이벤트)을 세션 상태로 옮긴다."""
+        t = ev.get("type")
+        changed = False
+        if t == "control_cancel_request":  # Claude가 거둔 요청은 붙잡은 목록에서도 뺀다
+            gone = [k for k, p in list(s.pending.items()) if p["rid"] == ev.get("request_id")]
+            for k in gone:
+                s.pending.pop(k, None)
+            if gone and not s.pending and s.state == "waiting":
+                s.state = "busy"
+            changed = bool(gone)
+        if t == "control_request":
+            req = ev.get("request") or {}
+            if req.get("subtype") == "can_use_tool":
+                pid = "res-" + secrets.token_hex(8)
+                s.pending[pid] = {"rid": ev.get("request_id"), "tool": req.get("tool_name") or "?",
+                                  "input": req.get("input") if isinstance(req.get("input"), dict) else {}, "at": utc()}
+                s.state, changed = "waiting", True
+            else:  # 보드가 맡지 않은 요청(훅 콜백 등)은 지원하지 않는다고 바로 알린다 — 권한 답이 아니다
+                self._line(s, json.dumps({"type": "control_response", "response": {
+                    "subtype": "error", "request_id": ev.get("request_id"), "error": "not supported by the board"}}))
+        elif t == "assistant":
+            texts = [c.get("text") for c in ((ev.get("message") or {}).get("content") or [])
+                     if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
+            if texts:
+                s.last_text = texts[-1][:400]
+            if s.state != "waiting":
+                s.state = "busy"
+            changed = True
+        elif t == "result":
+            s.state = "waiting" if s.pending else "idle"
+            s.seen, changed = False, True
+        elif t == "system" and ev.get("subtype") == "init" and s.state == "idle":
+            s.state, changed = "busy", True
+        if changed:
+            s.at = utc()
             self.notify()
 
     # ---- 사람이 보드에서 한 일 ----
@@ -309,7 +311,14 @@ class Residents:
                 except subprocess.TimeoutExpired:
                     return {"ok": False, "message": "세션이 아직 끝나는 중 — 잠시 뒤 다시 보내세요"}
             if s.state == "ended" or not s.proc or s.proc.poll() is not None:
+                if s.prev_pid and _alive_with(s.prev_pid, s.sid):
+                    return {"ok": False, "message": f"지난 보드가 띄운 같은 세션(pid {s.prev_pid})이 아직 돌고 있음 — "
+                                                    "같은 대화를 두 프로세스가 쓰지 않게, 그 프로세스가 끝난 뒤 다시 보내세요"}
+                if self._live_count() >= MAX_LIVE:
+                    return {"ok": False, "message": self._full_message()}
                 err = self._spawn(s, ["--resume", s.sid])  # 끝난 세션(보드 재시작 등): 같은 id로 다시 쥔다
+                if not err:
+                    s.prev_pid = None
                 if err:
                     return {"ok": False, "message": err}
             if not self._write(s, text):
@@ -381,10 +390,24 @@ class Residents:
             try:
                 s.proc.wait(timeout=max(0.1, end - time.time()))
             except subprocess.TimeoutExpired:
-                s.proc.terminate()
+                try:  # 세션은 자기 프로세스 그룹으로 띄웠다(start_new_session) — 도구가 띄운 하위 프로세스까지 함께 끝낸다
+                    os.killpg(s.proc.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    s.proc.terminate()
         self._save()
 
     # ---- 목록 ----
+    @staticmethod
+    def _live(s):
+        return s.proc is not None and s.proc.poll() is None
+
+    def _live_count(self):
+        return sum(1 for s in self._all() if self._live(s))
+
+    def _full_message(self):
+        return (f"보드가 쥔 세션이 이미 {MAX_LIVE}개 돌고 있음 — 다 쓴 세션을 '세션 끝내기'로 닫은 뒤 다시 시도하세요"
+                "(대화 기록은 남아 나중에 이어 쥘 수 있음)")
+
     def _all(self):
         with self._lock:
             return list(self._sessions.values())
@@ -450,6 +473,21 @@ def _epoch(iso):
         return datetime.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
     except ValueError:
         return 0.0
+
+
+def _alive_with(pid, sid):
+    """그 pid가 아직 살아 있고 명령줄에 이 세션 id가 있는가(재사용된 다른 프로세스 pid는 아니라고 본다)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return True  # 확인하지 못하면 안전한 쪽(거절)으로
+    return sid in out
 
 
 def sse_lines(event, data):

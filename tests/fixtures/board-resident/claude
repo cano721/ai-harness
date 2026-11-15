@@ -22,8 +22,12 @@ def out(obj):
 
 
 args = sys.argv[1:]
-if args[:1] == ["agents"]:
-    print("[]")
+if args[:1] == ["agents"]:  # BOARD_STUB_AGENTS 파일이 있으면 그 목록(다른 터미널 세션 흉내), 없으면 빈 목록
+    try:
+        with open(os.environ.get("BOARD_STUB_AGENTS") or os.devnull) as f:
+            print(f.read().strip() or "[]")
+    except OSError:
+        print("[]")
     sys.exit(0)
 note(argv=args)
 if "--input-format" not in args or "stream-json" not in args:

@@ -40,11 +40,12 @@ glob_dirs() { # $1=glob 패턴 → 일치하는 폴더를 줄마다 하나씩
 }
 # 응답 없는 폴더(로그인 안 된 프로필 등) 하나가 상태 전체를 멈추지 않게 폴더마다 시간 제한을 둔다.
 # 출력은 파이프($(...))가 아니라 파일로 받는다 — 끝낸 명령의 자식이 출력을 물고 남아 있으면 $(...)는 그 자식까지 기다린다.
-AGENTS_OUT=$(mktemp)
-trap 'rm -f "$AGENTS_OUT"' EXIT
-with_timeout() { # 출력 → $AGENTS_OUT
-  local pid watchdog rc=0
-  "$@" >"$AGENTS_OUT" 2>/dev/null &
+WORK_TMP=$(mktemp -d)
+trap 'rm -rf "$WORK_TMP"' EXIT
+with_timeout() { # $1=출력 파일, 나머지=명령. 성공하면 종료 코드 0
+  local out=$1 pid watchdog rc=0
+  shift
+  "$@" >"$out" 2>/dev/null &
   pid=$!
   ( sleep "${BOARD_AGENTS_TIMEOUT:-20}"; kill -TERM "$pid" 2>/dev/null; sleep 3; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watchdog=$!
@@ -65,21 +66,31 @@ while IFS= read -r d; do
   [ -n "$d" ] && add_cfg_dir "$d"
 done <<<"$(colon_split "${BOARD_CLAUDE_CONFIG_DIRS:-}")"
 
-# 폴더마다 목록을 받아 항목에 config_dir(기본 폴더는 null)을 달고, sessionId가 같으면 pid 있는 쪽(없으면 먼저 나온 쪽)만 남긴다.
-agents='[]'
+# 폴더마다 목록을 동시에 받는다(폴더당 ~0.2초가 폴더 수만큼 쌓이지 않게). 성공한 폴더만 ok.<n>을 남긴다.
+n=0
 while IFS= read -r d; do
   [ -n "$d" ] || continue
+  n=$((n + 1))
+  printf '%s\n' "$d" >"$WORK_TMP/cfg.$n"
   if [ "$d" = "@default" ]; then
-    with_timeout env -u CLAUDE_CONFIG_DIR claude agents --json --all || continue
-    cfg_json=null
+    { with_timeout "$WORK_TMP/agents.$n" env -u CLAUDE_CONFIG_DIR claude agents --json --all && : >"$WORK_TMP/ok.$n"; } &
   else
-    CLAUDE_CONFIG_DIR="$d" with_timeout claude agents --json --all || continue
-    cfg_json=$(jq -Rn --arg d "$d" '$d')
+    { CLAUDE_CONFIG_DIR="$d" with_timeout "$WORK_TMP/agents.$n" claude agents --json --all && : >"$WORK_TMP/ok.$n"; } &
   fi
-  got=$(<"$AGENTS_OUT")
+done <<<"$cfg_dirs"
+wait
+# 폴더 순서대로 항목에 config_dir(기본 폴더는 null)을 달고, sessionId가 같으면 pid 있는 쪽(없으면 먼저 나온 쪽)만 남긴다.
+agents='[]'
+i=0
+while [ "$i" -lt "$n" ]; do
+  i=$((i + 1))
+  [ -f "$WORK_TMP/ok.$i" ] || continue
+  d=$(<"$WORK_TMP/cfg.$i")
+  if [ "$d" = "@default" ]; then cfg_json=null; else cfg_json=$(jq -Rn --arg d "$d" '$d'); fi
+  got=$(<"$WORK_TMP/agents.$i")
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$got" || continue
   agents=$(jq -c --argjson cfg "$cfg_json" --argjson more "$got" '. + ($more | map(. + {config_dir: $cfg}))' <<<"$agents")
-done <<<"$cfg_dirs"
+done
 agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
 
 now_ms=$(( $(date +%s) * 1000 ))
@@ -88,31 +99,45 @@ now_ms=$(( $(date +%s) * 1000 ))
 # 지난 결과를 쓴다(캐시: $DATA/board/work-cache.json, 이번 목록의 세션만 남김). transcript는 읽기만 한다.
 CACHE_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/board"
 CACHE="$CACHE_DIR/work-cache.json"
-WORK_TMP=$(mktemp -d)
-trap 'rm -f "$AGENTS_OUT"; rm -rf "$WORK_TMP"' EXIT
+# 파일마다 "크기:수정시각<TAB>경로"를 한 줄씩. 여러 파일을 stat 한 번으로 읽는다(파일마다 하위 프로세스를 띄우지 않게).
 if stat -c %s /dev/null >/dev/null 2>&1; then
-  file_key() { stat -c '%s:%Y' "$1" 2>/dev/null; } # GNU
+  file_keys() { stat --printf '%s:%Y\t%n\n' "$@" 2>/dev/null; } # GNU
 else
-  file_key() { stat -f '%z:%m' "$1" 2>/dev/null; } # BSD(macOS)
+  file_keys() { stat -f '%z:%m%t%N' "$@" 2>/dev/null; } # BSD(macOS)
 fi
 # 모양이 틀린 항목(옛 형식·손상)은 버린다 — 남겨 두면 jq가 죽어 작업 칸 전체가 빈다
 jq -c 'if type == "object" then with_entries(select((.value | type) == "object" and (.value.key | type) == "string"
   and (.value.titles | type) == "object" and (.value.summary | type) == "object")) else {} end' "$CACHE" >"$WORK_TMP/old" 2>/dev/null \
   || echo '{}' >"$WORK_TMP/old"
 
-# 세션마다 transcript 경로와 키(크기:수정 시각)
+# 세션마다 transcript 경로와 키(크기:수정 시각, 모든 파일을 stat 한 번으로). 경로는 지난 캐시에 있던 것이 아직 있으면 그대로 쓰고,
+# 없을 때만 프로젝트 폴더 전체를 glob한다(폴더가 수백 개라 세션마다 glob하면 그것만 0.3초).
 : >"$WORK_TMP/cur.tsv"
-while IFS=$'\t' read -r sid cfg; do
+paths=()
+# 칸 구분은 공백류가 아닌 \x1f — 탭이면 빈 칸(기본 폴더의 cfg)이 합쳐져 다음 칸이 밀린다.
+while IFS=$'\x1f' read -r sid cfg known; do
   [ -n "$sid" ] || continue
   proj="$PROJECTS"
   [ -z "$cfg" ] || proj="$cfg/projects"
-  for f in "$proj"/*/"$sid".jsonl; do
+  case "$known" in
+    "$proj"/*/"$sid".jsonl) set -- "$known" ;;
+    *) set -- ;;
+  esac
+  if [ $# -eq 0 ] || [ ! -f "$1" ]; then set -- "$proj"/*/"$sid".jsonl; fi
+  for f in "$@"; do
     [ -f "$f" ] || continue
-    printf '%s\t%s\t%s\n' "$sid" "$f" "$(file_key "$f")" >>"$WORK_TMP/cur.tsv"
+    printf '%s\t%s\n' "$sid" "$f" >>"$WORK_TMP/cur.tsv"
+    paths+=("$f")
     break
   done
-done <<<"$(jq -r '.[] | [.sessionId, (.config_dir // "")] | @tsv' <<<"$agents")"
-jq -Rn '[inputs | split("\t") | {sid: .[0], path: .[1], key: (.[2] // "")}]' <"$WORK_TMP/cur.tsv" >"$WORK_TMP/cur.json"
+done <<<"$(jq -r --slurpfile old "$WORK_TMP/old" '
+  ($old[0] | keys | map({key: (split("/") | last | rtrimstr(".jsonl")), value: .}) | from_entries) as $known
+  | .[] | [.sessionId, (.config_dir // ""), ($known[.sessionId] // "")] | join("\u001f")' <<<"$agents")"
+: >"$WORK_TMP/keys.tsv"
+[ "${#paths[@]}" -eq 0 ] || file_keys "${paths[@]}" >"$WORK_TMP/keys.tsv" || true
+jq -Rn --rawfile k "$WORK_TMP/keys.tsv" '
+  ($k | split("\n") | map(select(. != "") | split("\t") | {key: (.[1:] | join("\t")), value: .[0]}) | from_entries) as $keys
+  | [inputs | split("\t") | (.[1:] | join("\t")) as $p | {sid: .[0], path: $p, key: ($keys[$p] // "")}]' <"$WORK_TMP/cur.tsv" >"$WORK_TMP/cur.json"
 
 # 바뀐(또는 처음 보는) transcript만 파싱한다
 : >"$WORK_TMP/new"

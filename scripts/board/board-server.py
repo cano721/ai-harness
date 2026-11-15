@@ -20,6 +20,11 @@ POST /autofix/candidates {t, repo}  autofix-auto.sh candidates(외부 API) — �
 POST /autofix/detail {t, repo, signature}  monitor-fetch.sh detail(외부 API, 비밀값 가림) — 줄을 펼친 뒤 버튼으로만, 결과 캐시
 POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정을 씀. 주기를 바꾸면 schedule.sh install-autofix·status
 POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움(보드는 monitor 파일을 쓰지 않음)
+GET  /references?t=...           레퍼런스 보드 실행 기록 목록(주제·상태·만든 시각·탭별 개수·폴더 없음·고르기 가능)
+GET  /references/run?t&run       실행 하나의 탭 5개 내용(references.json·tone.json·component-slots.json)
+GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ 아래 이미지·영상만(realpath로 밖을 막음)
+POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
+                                 랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -36,6 +41,7 @@ import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
+import references as hrefs  # noqa: E402
 import settings as hsettings  # noqa: E402
 import resident as hresident  # noqa: E402
 
@@ -51,7 +57,17 @@ PERM_WAIT = int(os.environ.get("BOARD_PERMISSION_WAIT", "3500"))  # 훅 timeout(
 # 붙잡고 있어도 터미널 창은 그대로 떠 있으므로 길게 둔다. 브라우저는 뒤에 있는 탭의 타이머를 1분 단위로 늦추기 때문에
 # 짧게 잡으면 사용자가 보드를 열어 둔 채로도 요청이 풀려 버린다(허용을 눌러도 '이미 처리됨').
 VIEWER_GONE = int(os.environ.get("BOARD_VIEWER_GONE", "1800"))
-_cache = {"at": 0.0, "data": None}
+class _Cache(dict):
+    """상태 캐시. 동작이 data를 None으로 비울 때마다 세대(gen)를 올린다 — 모으는 도중 비워졌는지 _collect가 알 수 있게(#348)."""
+    gen = 0
+
+    def __setitem__(self, key, value):
+        if key == "data" and value is None:
+            self.gen += 1
+        super().__setitem__(key, value)
+
+
+_cache = _Cache(at=0.0, data=None)
 _viewer = {"at": time.time()}  # 막 켜졌을 때 다시 연결해 온 요청을 바로 돌려보내지 않게
 _perms = {}  # id -> {info, event, decision}
 _lock = threading.Lock()
@@ -88,49 +104,119 @@ def jira_base():
 JIRA = jira_base()
 
 
-def status(max_age=3):
-    af = None
-    if _cache["data"] is None or time.time() - _cache["at"] > max_age:
-        # 자동 수정 카드는 전역 lock 밖에서 모은다 — 자식 호출(autofix-auto.sh status·저장소 찾기)이 느려도
-        # 다른 요청(/status.json·/action)이 줄 서서 기다리지 않게. 결과는 Store가 파일 변경 기준으로 캐시한다.
-        try:
-            af = AUTOFIX.items(harness_repos, autofix_key)
-        except Exception as e:
-            print("autofix items:", e, file=sys.stderr, flush=True)
+# 상태 캐시(#348): 요청은 캐시만 읽는다. MAX_AGE가 지난 캐시는 그대로 돌려주고 백그라운드 갱신을 깨운다 — 갱신(status.sh 2–3초)이
+# lock을 쥐고 있어도 줄 서지 않는다. 캐시가 없거나(동작 뒤 비움) STALE_SYNC보다 오래됐으면(한동안 아무도 안 봄) 그 자리에서 모은다.
+# 백그라운드 갱신은 보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 동안만 REFRESH 주기로 돈다(아무도 안 보면 쉰다).
+def _positive_env(name, default):
+    """양수 환경변수. 숫자가 아니거나 0 이하면 기본값 — 잘못 적은 값 하나로 서버가 안 뜨지 않게."""
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+REFRESH = _positive_env("BOARD_REFRESH_SECONDS", 2.0)
+REFRESH_IDLE = 60
+STALE_SYNC = 30
+FAIL_BACKOFF_MAX = 5.0
+_wake = threading.Event()
+_active = {"at": 0.0}  # 보이는 화면이 마지막으로 상태를 받은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
+_refresh_fails = {"n": 0}
+
+
+def mark_active():
+    """보는 사람이 있다고 표시한다 — 백그라운드 갱신이 REFRESH_IDLE 동안 돈다. 폴링 말고 다른 연결도 이것을 부른다."""
+    _active["at"] = time.time()
+
+
+def _build():
+    """status.sh 결과에 서버 쪽 판정(묶음·분류·자동 수정·숨김·PR 상태)을 붙인 새 상태. 캐시는 건드리지 않는다."""
+    out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90)
+    data = json.loads(out.stdout)
+    try:
+        groups.annotate(data["items"], os.path.join(DATA, "board", "links.json"))
+    except Exception as e:  # 묶음은 덤 — 실패해도 보드는 그대로 보인다
+        print("groups:", e, file=sys.stderr, flush=True)
+    for i in data["items"]:  # Orca 터미널에 떠 있는 대화형 세션은 그 터미널로 입력을 보낼 수 있다
+        if (i.get("section") == "work" and i.get("kind") == "agent" and i.get("orca_handle")
+                and i.get("status") != "waiting" and "send" not in i.get("actions", [])):
+            i["actions"] = i.get("actions", []) + ["send"]
+    data["items"] = classify_work(data["items"])
+    # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다.
+    # 결과는 Store가 파일 변경 기준으로 캐시한다.
+    try:
+        data["items"] += AUTOFIX.items(harness_repos, autofix_key) or []
+    except Exception as e:
+        print("autofix items:", e, file=sys.stderr, flush=True)
+    try:  # 랜딩 실행이 레퍼런스 고르기에서 기다리면 '지금 할 일'에 띄운다
+        data["items"] += REFS.todo_items()
+    except Exception as e:
+        print("references items:", e, file=sys.stderr, flush=True)
+    link_autofix_sessions(data["items"])
+    data["items"] = drop_hidden(data["items"])
+    data["hidden_count"] = len(_load(HIDDEN) or {})
+    prstate.apply(data["items"])
+    daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
+    for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
+        if i.get("kind") == "schedule" and i.get("state") == "blocked" and i.get("title") == "하루 실행 상한 도달" \
+                and daily.isdigit() and int(daily) >= 1000:
+            i["state"], i["title"] = "done", "하루 실행 상한 도달(지난 기록) → 지금은 제한 없음"
+    data["jira_base"] = JIRA
+    return data
+
+
+def _collect(max_age):
+    """캐시가 없거나 max_age보다 오래됐으면 모은다. 한 번에 하나만 모으고, 기다린 쪽은 방금 모은 결과를 쓴다.
+    캐시 시각은 모으기 시작한 때다 — 결과가 그 시점의 상태라서, 나이가 실제 데이터 나이가 된다."""
     with _lock:
         if _cache["data"] is None or time.time() - _cache["at"] > max_age:
-            out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90)
-            data = json.loads(out.stdout)
-            try:
-                groups.annotate(data["items"], os.path.join(DATA, "board", "links.json"))
-            except Exception as e:  # 묶음은 덤 — 실패해도 보드는 그대로 보인다
-                print("groups:", e, file=sys.stderr, flush=True)
-            for i in data["items"]:  # Orca 터미널에 떠 있는 대화형 세션은 그 터미널로 입력을 보낼 수 있다
-                if (i.get("section") == "work" and i.get("kind") == "agent" and i.get("orca_handle")
-                        and i.get("status") != "waiting" and "send" not in i.get("actions", [])):
-                    i["actions"] = i.get("actions", []) + ["send"]
-            data["items"] = classify_work(data["items"])
-            # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다.
-            # lock 밖 판정 뒤에 다른 요청이 캐시를 비웠으면 여기서 모은다(Store 캐시라 대개 즉시 돌아온다).
-            if af is None:
-                try:
-                    af = AUTOFIX.items(harness_repos, autofix_key)
-                except Exception as e:
-                    print("autofix items:", e, file=sys.stderr, flush=True)
-            data["items"] += af or []
-            link_autofix_sessions(data["items"])
-            data["items"] = drop_hidden(data["items"])
-            data["hidden_count"] = len(_load(HIDDEN) or {})
-            prstate.apply(data["items"])
-            daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
-            for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
-                if i.get("kind") == "schedule" and i.get("state") == "blocked" and i.get("title") == "하루 실행 상한 도달" \
-                        and daily.isdigit() and int(daily) >= 1000:
-                    i["state"], i["title"] = "done", "하루 실행 상한 도달(지난 기록) → 지금은 제한 없음"
-            data["jira_base"] = JIRA
+            started, gen = time.time(), _cache.gen
+            data = _build()
             _cache["data"] = data
-            _cache["at"] = time.time()
+            _cache["at"] = started
+            # 모으는 사이에 동작이 캐시를 비웠으면 이 결과는 동작 전 상태다 — 아주 오래된 것으로 둬서 다음 읽기가 다시 모으게 한다.
+            # 쓴 뒤에 본다: 비교와 쓰기 사이에 비워져도 놓치지 않는다(쓴 뒤에 비우면 data가 None이라 어차피 다시 모은다).
+            if _cache.gen != gen:
+                _cache["at"] = 0.0
+            FEED.poke()  # 새 캐시를 SSE로: 바뀐 항목만 민다(#349)
         return _cache["data"]
+
+
+def status(max_age=3):
+    data = _cache["data"]
+    if data is None or time.time() - _cache["at"] > STALE_SYNC:
+        return _collect(max_age)
+    if time.time() - _cache["at"] > max_age:
+        _wake.set()
+    return data
+
+
+def refresh_once():
+    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) 캐시를 새로 모은다. 방금 모았으면 건너뛴다."""
+    if time.time() - _active["at"] > REFRESH_IDLE:
+        return
+    try:
+        _collect(REFRESH / 2)
+        _refresh_fails["n"] = 0
+    except Exception as e:  # 실패하면 다음에 다시 모으되, 연달아 실패하면 refresh_wait가 간격을 늘린다
+        _refresh_fails["n"] += 1
+        print("refresh:", e, file=sys.stderr, flush=True)
+
+
+def refresh_wait():
+    """다음 백그라운드 수집까지 기다릴 초. REFRESH마다(모으기 시작 기준), 사이에 0.5초는 쉰다.
+    연달아 실패하면 1·2·4초…로 늘려 FAIL_BACKOFF_MAX에서 멈춘다(망가진 status.sh를 0.5초마다 돌리지 않게)."""
+    if _refresh_fails["n"]:
+        return min(FAIL_BACKOFF_MAX, 0.5 * 2 ** _refresh_fails["n"])
+    return max(0.5, REFRESH - (time.time() - _cache["at"]))
+
+
+def refresher():
+    while True:
+        _wake.wait(refresh_wait())
+        _wake.clear()
+        refresh_once()
 
 
 def find_item(item_id, fresh=False):
@@ -676,7 +762,10 @@ def bulk_cleanup(req, items=None):
     if not _bulk_lock.acquire(blocking=False):
         return {"ok": False, "message": "이미 정리하는 중입니다. 끝나면 다시 눌러 주세요."}
     try:
-        items = status()["items"] if items is None else items
+        if items is None:
+            # 실제 정리는 캐시(최대 STALE_SYNC 전)를 믿지 않고 그 자리에서 새로 모은다 — 이 경로는 세션 상태를 다시 확인하지 않아,
+            # 그새 다시 일하는 세션을 쉬는 것으로 보고 닫을 수 있다. 미리보기(dry_run)는 캐시로 충분하다.
+            items = (status() if req.get("dry_run") else _collect(3))["items"]
         older = req.get("older_days")
         older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
         if req.get("dry_run"):
@@ -755,6 +844,7 @@ def impact_refresh(repo):
 
 
 AUTOFIX = hautofix.Store(DATA)
+REFS = hrefs.Store(DATA)
 
 
 def autofix_key(repo):
@@ -1141,7 +1231,8 @@ def write_hook_conf(url):
     tmp = HOOK_CONF + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url}, f)
+        # features: 이 서버가 보여 줄 수 있는 화면. design-refs.sh는 references가 있을 때만 보드 주소를 대시보드로 안내한다.
+        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url, "features": ["references"]}, f)
     os.replace(tmp, HOOK_CONF)
     atexit.register(remove_hook_conf)
 
@@ -1169,13 +1260,14 @@ def with_residents(data):
 
 
 def board_snapshot(fresh=True):
-    """/status.json과 SSE가 같은 목록을 쓴다. fresh=False(상주 세션·권한 훅 알림)면 status 캐시를 나이와 관계없이 그대로 써 바로 민다."""
+    """/status.json과 SSE가 같은 목록을 쓴다. fresh=False(SSE 비교)면 status 캐시를 나이와 관계없이 그대로 쓴다 —
+    새로 모으기는 백그라운드 갱신(refresher)이 하고, 캐시를 새로 쓰면 _collect가 FEED.poke()로 SSE 비교를 깨운다."""
     cached = _cache["data"]
     return with_residents(status_with_permissions(None if fresh or cached is None else cached))
 
 
 HUB = hresident.Hub()
-FEED = hresident.Feed(HUB, board_snapshot)
+FEED = hresident.Feed(HUB, lambda: board_snapshot(fresh=False))
 RESIDENTS = hresident.Residents(DATA, FEED.poke)
 
 
@@ -1422,6 +1514,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, path, ctype):
+        """레퍼런스 이미지·영상. 영상 재생(특히 Safari)이 Range를 요구해서 바이트 범위 하나를 지원한다."""
+        size = os.path.getsize(path)
+        start, end, code = 0, size - 1, 200
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        if m and size and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1)); end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            else:
+                start = max(0, size - int(m.group(2)))
+            if start > end or start >= size:
+                self.send_response(416); self.send_header("Content-Range", f"bytes */{size}"); self.send_header("Content-Length", "0"); self.end_headers()
+                return
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(65536, left))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
     def _token_ok(self, given):
         return isinstance(given, str) and secrets.compare_digest(given, TOKEN)
 
@@ -1440,6 +1565,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html.replace("__DATA__", "null"), "text/html; charset=utf-8")
         if u.path == "/status.json":
             _viewer["at"] = time.time()
+            if q.get("bg") != ["1"]:
+                mark_active()
             return self._send(200, board_snapshot())
         if u.path == "/events":
             return self._events()
@@ -1463,6 +1590,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, impact_state())
         if u.path == "/autofix":
             return self._send(200, autofix_state())
+        if u.path == "/references":
+            return self._send(200, {"ok": True, "runs": REFS.listing()})
+        if u.path == "/references/run":
+            d = REFS.detail(q.get("run", [None])[0])
+            return self._send(200, {"ok": True, "run": d}) if d else self._send(404, {"ok": False, "message": "등록된 레퍼런스 실행이 아님"})
+        if u.path == "/references/file":
+            path = REFS.media_path(q.get("run", [None])[0], q.get("p", [None])[0])
+            if not path:
+                return self._send(404, {"ok": False, "message": "보여 줄 수 있는 레퍼런스 파일이 아님"})
+            try:
+                return self._send_file(path, REFS.media_type(path))
+            except (BrokenPipeError, ConnectionResetError):
+                return None
         if u.path == "/autofix/log":
             path = AUTOFIX.log_path(q.get("name", [None])[0])
             if not path:
@@ -1502,10 +1642,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def _events(self):
-        """SSE: hello 뒤 바뀐 항목만 민다. 15초마다 ping(보는 사람이 있다는 표시도 겸한다). 큐가 넘치면 끊고 브라우저가 다시 붙는다."""
+        """SSE: hello 뒤 바뀐 항목만 민다. 15초마다 ping(보는 사람이 있다는 표시도 겸한다). 큐가 넘치면 끊고 브라우저가 다시 붙는다.
+        SSE가 살아 있으면 화면이 /status.json을 부르지 않으므로, 접속·전송마다 mark_active()로 백그라운드 갱신(REFRESH_IDLE)을 살린다."""
         q = HUB.subscribe()
         FEED.ensure_running()
         _viewer["at"] = time.time()
+        mark_active()
         try:
             FEED.prime()
             self.send_response(200)
@@ -1522,6 +1664,7 @@ class Handler(BaseHTTPRequestHandler):
                 if getattr(q, "dead", False):  # 큐가 넘쳐 떼어 낸 구독자: 닫으면 브라우저가 다시 붙어 hello부터 받는다
                     return
                 _viewer["at"] = time.time()  # 열려 있는 이벤트 연결 = 보드를 보는 사람
+                mark_active()
                 self.wfile.write(hresident.sse_lines(*ev))
                 self.wfile.flush()
         except (OSError, ValueError):
@@ -1585,6 +1728,10 @@ class Handler(BaseHTTPRequestHandler):
             res = autofix_setup(req.get("repo"))
             log({"action": "autofix_setup", "repo": req.get("repo"), **res})
             return self._send(200, res)
+        if path == "/references/pick":
+            code, res = REFS.pick(req.get("run"), req)
+            log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
+            return self._send(code, res)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))
             log({"action": "impact_refresh", "repo": req.get("repo"), **res})
@@ -1641,6 +1788,7 @@ if __name__ == "__main__":
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
     atexit.register(RESIDENTS.shutdown)  # 꺼질 때 쥔 세션을 닫는다(대화 기록은 남아 다음에 --resume으로 이어 쥔다)
+    threading.Thread(target=refresher, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     if sys.stdout.isatty():  # board.sh가 띄우면 주소는 server.json(0600)으로만 전한다 — 로그에 토큰을 남기지 않는다
