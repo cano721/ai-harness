@@ -8764,7 +8764,37 @@ bs._build = build_then_invalidate
 bs._collect(3)
 bs._build = fake_build
 assert bs.status()["items"][0]["id"] == "n%d" % len(calls), calls
+# 보는 사람 표시는 mark_active() 하나로 한다(폴링 말고 다른 연결도 같은 함수로 갱신을 살린다).
+bs._active["at"] = 0.0
+bs.mark_active()
+assert time.time() - bs._active["at"] < 1, bs._active
+# 백그라운드 수집이 계속 실패하면 0.5초마다 다시 돌리지 않고 최대 5초까지 늦춘다. 성공하면 원래 주기로.
+def broken_build():
+    calls.append(1)
+    raise RuntimeError("status.sh failed")
+bs._build = broken_build
+waits = []
+for _ in range(6):
+    bs._cache["at"] = 0.0
+    bs.refresh_once()
+    waits.append(bs.refresh_wait())
+assert waits[0] >= 1 and waits == sorted(waits) and waits[-1] == 5, waits
+bs._build = fake_build
+bs.refresh_once()
+assert bs.refresh_wait() <= bs.REFRESH, bs.refresh_wait()
+# 일괄 정리는 30초 안의 캐시라도 믿지 않고 그 자리에서 새로 모은 목록으로 한다(그새 다시 일하는 세션을 닫지 않게). 미리보기는 캐시로.
+bs._cache["data"] = {"items": []}; bs._cache["at"] = time.time() - 10
+n = len(calls)
+bs.bulk_cleanup({"dry_run": True})
+assert len(calls) == n, calls  # 미리보기는 캐시
+bs.bulk_cleanup({"older_days": 1})
+assert len(calls) == n + 1, calls  # 실제 정리는 새로 모은다
 ' "$ROOT/scripts/board/board-server.py" || fail "status() serves the cache without waiting for a refresh and refreshes in the background only while someone is watching"
+BOARD_REFRESH_SECONDS=abc HARNESS_METRICS_DIR="$SR_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+assert bs.REFRESH == 2.0, bs.REFRESH
+' "$ROOT/scripts/board/board-server.py" || fail "a BOARD_REFRESH_SECONDS that is not a positive number falls back to two seconds instead of stopping the server"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "(document.hidden ? '&bg=1' : '')" "a hidden board tab marks its polls so they keep the viewer alive without driving the background refresh"
 assert_contains "$(<"$ROOT/scripts/board/board-server.py")" "threading.Thread(target=refresher, daemon=True).start()" "the board server starts the background refresher"
 assert_contains "$(<"$ROOT/scripts/board/template.html")" "setInterval(() => refresh().catch(() => {}), 1000)" "the board polls the cached status every second"

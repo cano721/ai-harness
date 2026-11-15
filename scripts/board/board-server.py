@@ -98,11 +98,27 @@ JIRA = jira_base()
 # 상태 캐시(#348): 요청은 캐시만 읽는다. MAX_AGE가 지난 캐시는 그대로 돌려주고 백그라운드 갱신을 깨운다 — 갱신(status.sh 2–3초)이
 # lock을 쥐고 있어도 줄 서지 않는다. 캐시가 없거나(동작 뒤 비움) STALE_SYNC보다 오래됐으면(한동안 아무도 안 봄) 그 자리에서 모은다.
 # 백그라운드 갱신은 보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 동안만 REFRESH 주기로 돈다(아무도 안 보면 쉰다).
-REFRESH = float(os.environ.get("BOARD_REFRESH_SECONDS", "2"))
+def _positive_env(name, default):
+    """양수 환경변수. 숫자가 아니거나 0 이하면 기본값 — 잘못 적은 값 하나로 서버가 안 뜨지 않게."""
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+REFRESH = _positive_env("BOARD_REFRESH_SECONDS", 2.0)
 REFRESH_IDLE = 60
 STALE_SYNC = 30
+FAIL_BACKOFF_MAX = 5.0
 _wake = threading.Event()
-_active = {"at": 0.0}  # 보이는 탭이 마지막으로 물은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
+_active = {"at": 0.0}  # 보이는 화면이 마지막으로 상태를 받은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
+_refresh_fails = {"n": 0}
+
+
+def mark_active():
+    """보는 사람이 있다고 표시한다 — 백그라운드 갱신이 REFRESH_IDLE 동안 돈다. 폴링 말고 다른 연결도 이것을 부른다."""
+    _active["at"] = time.time()
 
 
 def _build():
@@ -144,10 +160,12 @@ def _collect(max_age):
         if _cache["data"] is None or time.time() - _cache["at"] > max_age:
             started, gen = time.time(), _cache.gen
             data = _build()
-            # 모으는 사이에 동작이 캐시를 비웠으면 이 결과는 동작 전 상태다 — 아주 오래된 것으로 둬서 다음 읽기가 다시 모으게 한다.
-            invalidated = _cache.gen != gen
             _cache["data"] = data
-            _cache["at"] = 0.0 if invalidated else started
+            _cache["at"] = started
+            # 모으는 사이에 동작이 캐시를 비웠으면 이 결과는 동작 전 상태다 — 아주 오래된 것으로 둬서 다음 읽기가 다시 모으게 한다.
+            # 쓴 뒤에 본다: 비교와 쓰기 사이에 비워져도 놓치지 않는다(쓴 뒤에 비우면 data가 None이라 어차피 다시 모은다).
+            if _cache.gen != gen:
+                _cache["at"] = 0.0
         return _cache["data"]
 
 
@@ -166,14 +184,23 @@ def refresh_once():
         return
     try:
         _collect(REFRESH / 2)
-    except Exception as e:  # 한 번 실패해도 다음 주기에 다시 모은다
+        _refresh_fails["n"] = 0
+    except Exception as e:  # 실패하면 다음에 다시 모으되, 연달아 실패하면 refresh_wait가 간격을 늘린다
+        _refresh_fails["n"] += 1
         print("refresh:", e, file=sys.stderr, flush=True)
 
 
+def refresh_wait():
+    """다음 백그라운드 수집까지 기다릴 초. REFRESH마다(모으기 시작 기준), 사이에 0.5초는 쉰다.
+    연달아 실패하면 1·2·4초…로 늘려 FAIL_BACKOFF_MAX에서 멈춘다(망가진 status.sh를 0.5초마다 돌리지 않게)."""
+    if _refresh_fails["n"]:
+        return min(FAIL_BACKOFF_MAX, 0.5 * 2 ** _refresh_fails["n"])
+    return max(0.5, REFRESH - (time.time() - _cache["at"]))
+
+
 def refresher():
-    """REFRESH마다(모으기 시작 기준) 다시 모은다. 모으는 데 REFRESH보다 오래 걸려도 사이에 0.5초는 쉰다."""
     while True:
-        _wake.wait(max(0.5, REFRESH - (time.time() - _cache["at"])))
+        _wake.wait(refresh_wait())
         _wake.clear()
         refresh_once()
 
@@ -721,7 +748,10 @@ def bulk_cleanup(req, items=None):
     if not _bulk_lock.acquire(blocking=False):
         return {"ok": False, "message": "이미 정리하는 중입니다. 끝나면 다시 눌러 주세요."}
     try:
-        items = status()["items"] if items is None else items
+        if items is None:
+            # 실제 정리는 캐시(최대 STALE_SYNC 전)를 믿지 않고 그 자리에서 새로 모은다 — 이 경로는 세션 상태를 다시 확인하지 않아,
+            # 그새 다시 일하는 세션을 쉬는 것으로 보고 닫을 수 있다. 미리보기(dry_run)는 캐시로 충분하다.
+            items = (status() if req.get("dry_run") else _collect(3))["items"]
         older = req.get("older_days")
         older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
         if req.get("dry_run"):
@@ -1441,7 +1471,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/status.json":
             _viewer["at"] = time.time()
             if q.get("bg") != ["1"]:
-                _active["at"] = time.time()
+                mark_active()
             return self._send(200, status_with_permissions())
         if u.path == "/commands":
             return self._send(200, list_commands(q.get("cwd", [None])[0]))
