@@ -8713,6 +8713,63 @@ assert len(calls) == 1, calls  # fresh는 다시 모은다
 ' "$ROOT/scripts/board/board-server.py" || fail "find_item answers from the cache however old it is and recollects only when the id is missing or fresh is asked"
 pass "board find_item uses the cached list without recollecting status"
 
+# 상태 갱신 가속(#348): /status.json은 캐시만 읽는다. 캐시가 조금 오래됐으면 갱신 중인 lock을 기다리지 않고 캐시를 돌려주며
+# 백그라운드 갱신을 깨운다. 캐시가 없거나(동작 뒤 비움) 아주 오래됐으면 그 자리에서 모은다. 백그라운드 갱신은 보는 사람이 있을 때만 돈다.
+SR_DATA="$TEST_TMP/board-status-refresh"
+mkdir -p "$SR_DATA"
+HARNESS_METRICS_DIR="$SR_DATA" python3 -I -B -c '
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+calls = []
+def fake_build():
+    calls.append(1)
+    return {"items": [{"id": "n%d" % len(calls)}]}
+bs._build = fake_build
+d = bs.status()
+assert d["items"][0]["id"] == "n1" and len(calls) == 1, calls  # 캐시가 없으면 그 자리에서 모은다
+assert bs.status() is d and len(calls) == 1, calls  # 갓 모은 캐시는 그대로
+bs._cache["at"] = time.time() - 10
+bs._wake.clear()
+with bs._lock:  # 다른 갱신이 lock을 쥐고 있어도
+    t0 = time.time(); got = bs.status(); took = time.time() - t0
+assert got is d and took < 0.5 and len(calls) == 1, (took, calls)  # 기다리지 않고 캐시를 돌려준다
+assert bs._wake.is_set()  # 백그라운드 갱신을 깨운다
+bs._cache["at"] = time.time() - bs.STALE_SYNC - 1
+assert bs.status()["items"][0]["id"] == "n2", calls  # 아주 오래된 캐시는 그 자리에서 새로 모은다
+bs._cache["data"] = None
+assert bs.status()["items"][0]["id"] == "n3", calls  # 동작 뒤 비운 캐시도 그 자리에서
+bs._cache["at"] = time.time() - 10
+bs.refresh_once()
+assert len(calls) == 3, calls  # 막 켜져 아직 아무도 안 봤으면 백그라운드 갱신은 쉰다
+bs._active["at"] = time.time()
+bs.refresh_once()
+assert len(calls) == 4, calls  # 보는 사람이 있으면 백그라운드에서 모은다
+bs.refresh_once()
+assert len(calls) == 4, calls  # 방금 모았으면 다시 모으지 않는다
+bs._active["at"] = time.time() - bs.REFRESH_IDLE - 1; bs._cache["at"] = time.time() - 10
+bs.refresh_once()
+assert len(calls) == 4, calls  # 보는 사람이 없으면 쉰다
+# 모으는 사이에 동작이 캐시를 비우면(답 보내기·정리), 그 수집 결과는 동작 전 상태라 그대로 내보내지 않는다:
+# 다음 읽기(동작 쪽 find_item(fresh=True) 포함)가 그 자리에서 다시 모은다.
+def build_then_invalidate():
+    calls.append(1)
+    bs._cache["data"] = None  # 수집 도중 동작이 비움
+    return {"items": [{"id": "before-action"}]}
+bs._build = build_then_invalidate
+bs._collect(0)
+bs._build = fake_build
+assert bs.status()["items"][0]["id"] == "n%d" % len(calls), calls  # 동작 전 결과가 아니라 새로 모은 결과
+bs._cache["data"] = None  # 이미 비어 있던 캐시를 모으는 사이에 다른 동작이 또 비워도 같다
+bs._build = build_then_invalidate
+bs._collect(3)
+bs._build = fake_build
+assert bs.status()["items"][0]["id"] == "n%d" % len(calls), calls
+' "$ROOT/scripts/board/board-server.py" || fail "status() serves the cache without waiting for a refresh and refreshes in the background only while someone is watching"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "(document.hidden ? '&bg=1' : '')" "a hidden board tab marks its polls so they keep the viewer alive without driving the background refresh"
+assert_contains "$(<"$ROOT/scripts/board/board-server.py")" "threading.Thread(target=refresher, daemon=True).start()" "the board server starts the background refresher"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "setInterval(() => refresh().catch(() => {}), 1000)" "the board polls the cached status every second"
+pass "board status reads the cache and refreshes it in the background"
+
 # 정리 속도(#305) B: 정리는 캐시 항목을 쓰되 닫기 직전에 claude agents로 세션을 다시 확인한다. 그 사이 일을 시작했으면 정리하지 않고, 확인하지 못하면 멈춘다.
 AI_T="$TEST_TMP/board-action-item"
 mkdir -p "$AI_T/bin" "$AI_T/data" "$AI_T/cwd"
@@ -9378,14 +9435,14 @@ pass "work.sh merges sessions from the default, auto-detected and custom Claude 
 
 # 폴더마다 한 번만 부르고, 기본 폴더는 CLAUDE_CONFIG_DIR 없이(설정해 버리면 다른 설정 파일을 읽는다) 부른다. 없는 폴더는 건너뛴다.
 WK_CALLS="$(<"$WK_T/calls.log")"
-assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "the default folder is asked first and without CLAUDE_CONFIG_DIR"
+assert_eq "UNSET|agents --json --all" "$(grep "^UNSET|" "$WK_T/calls.log")" "the default folder is asked without CLAUDE_CONFIG_DIR"
 assert_eq "$WK_T/custom,$WK_T/profiles/p1/home,$WK_T/profiles/p2/home,UNSET" "$(cut -d'|' -f1 "$WK_T/calls.log" | LC_ALL=C sort | paste -sd, -)" "every existing folder is asked exactly once"
 case "$WK_CALLS" in *"$WK_T/missing"*) fail "a folder that does not exist is not asked" ;; esac
 pass "work.sh asks each existing settings folder once and the default one without CLAUDE_CONFIG_DIR"
 
 # 서버 환경에 CLAUDE_CONFIG_DIR이 있으면 그 폴더도 본다(기본 폴더는 여전히 그 변수 없이). 같은 실경로는 한 번만.
 WK_OUT_ENV="$(wk_work CLAUDE_CONFIG_DIR="$WK_T/envdir" BOARD_CLAUDE_CONFIG_DIRS="$WK_T/envdir:$WK_T/profiles/p1/home")"
-assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "even then the default folder is asked without the variable"
+assert_eq "UNSET|agents --json --all" "$(grep "^UNSET|" "$WK_T/calls.log")" "even then the default folder is asked without the variable"
 assert_eq "1|1" "$(grep -c -F "$WK_T/envdir|" "$WK_T/calls.log" | tr -d ' ')|$(grep -c -F "$WK_T/profiles/p1/home|" "$WK_T/calls.log" | tr -d ' ')" "a folder named by several sources is asked once"
 assert_eq "$WK_T/envdir|$WK_T/envdir/projects/p/$WK_SID_E.jsonl" "$(jq -r --arg s "$WK_SID_E" '.[] | select(.sid == $s) | "\(.config_dir)|\(.transcript)"' <<<"$WK_OUT_ENV")" "a session from the server environment's folder is listed with that folder"
 pass "work.sh also reads the folder from the server's CLAUDE_CONFIG_DIR and de-duplicates by real path"
@@ -9454,6 +9511,68 @@ jq -cn --arg p "$WKC_TR1" --arg k "$WKC_REAL_KEY" '{($p): {key: $k, titles: "x",
 WKC_BAD_OUT="$(wkc_work "$WKC_T/agents-one.json")"
 assert_eq "Renamed by person" "$(jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title' <<<"$WKC_BAD_OUT")" "an entry with the right key but wrong value types still gives the real title"
 pass "work.sh survives a cache with wrong-shaped entries and writes a well-formed one back"
+
+# 상태 갱신 가속(#348): 설정 폴더마다 부르는 claude agents는 동시에 돌고, transcript 키(크기:수정시각)는 transcript 수와 상관없이
+# stat 한 번으로 모은다. 경로에 공백이 있는 설정 폴더(macOS 'Application Support' 같은)도 같은 transcript를 찾는다.
+WKP_T="$(mkdir -p "$TEST_TMP/work-fast" && cd "$TEST_TMP/work-fast" && pwd -P)"
+mkdir -p "$WKP_T/bin" "$WKP_T/cwd" "$WKP_T/metrics" "$WKP_T/default/projects/p" \
+  "$WKP_T/profiles/a b/home/projects/p" "$WKP_T/profiles/c/home/projects/p" "$WKP_T/profiles/d/home/projects/p"
+WKP_REAL_STAT="$(command -v stat)"
+cat >"$WKP_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+printf 'start\n' >>"$FAKE_CLAUDE_LOG"
+sleep 1
+printf 'end\n' >>"$FAKE_CLAUDE_LOG"
+cat "${CLAUDE_CONFIG_DIR:-$FAKE_DEFAULT}/agents.json" 2>/dev/null || echo '[]'
+FAKE
+cat >"$WKP_T/bin/stat" <<'FAKE'
+#!/usr/bin/env bash
+printf 'stat\n' >>"$FAKE_STAT_LOG"
+exec "$REAL_STAT" "$@"
+FAKE
+chmod +x "$WKP_T/bin/claude" "$WKP_T/bin/stat"
+WKP_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WKP_EXPECT=""
+wkp_n=0
+for WKP_CFG in "$WKP_T/default" "$WKP_T/profiles/a b/home" "$WKP_T/profiles/c/home" "$WKP_T/profiles/d/home"; do
+  : >"$WKP_T/list.jsonl"
+  for _ in 1 2; do
+    wkp_n=$((wkp_n + 1))
+    WKP_SID="cccccccc-0000-4000-8000-00000000000$wkp_n"
+    jq -cn --arg sid "$WKP_SID" --arg cwd "$WKP_T/cwd" --argjson t "$(($(date +%s) * 1000))" \
+      '{sessionId: $sid, id: $sid[0:8], kind: "background", status: "idle", state: "running", pid: null, cwd: $cwd, name: ("task-0" + $sid[-1:]), startedAt: $t}' >>"$WKP_T/list.jsonl"
+    { jq -cn --arg t "$WKP_NOW" --arg n "$wkp_n" '{type: "user", message: {content: ("hello " + $n)}, timestamp: $t}'
+      jq -cn --arg n "$wkp_n" '{type: "ai-title", aiTitle: ("Title " + $n)}'
+    } >"$WKP_CFG/projects/p/$WKP_SID.jsonl"
+    WKP_EXPECT="$WKP_EXPECT$WKP_SID=$WKP_CFG/projects/p/$WKP_SID.jsonl=Title $wkp_n
+"
+  done
+  jq -s . "$WKP_T/list.jsonl" >"$WKP_CFG/agents.json"
+done
+wkp_work() {
+  : >"$WKP_T/claude.log"; : >"$WKP_T/stat.log"
+  env -u CLAUDE_CONFIG_DIR PATH="$WKP_T/bin:$PATH" REAL_STAT="$WKP_REAL_STAT" FAKE_CLAUDE_LOG="$WKP_T/claude.log" FAKE_STAT_LOG="$WKP_T/stat.log" \
+    FAKE_DEFAULT="$WKP_T/default" HARNESS_METRICS_DIR="$WKP_T/metrics" HARNESS_CLAUDE_PROJECTS_DIR="$WKP_T/default/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$WKP_T/profiles/*/home" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh"
+}
+WKP_COLD="$(wkp_work)"
+assert_eq "4" "$(awk '/^end$/ {exit} /^start$/ {n++} END {print n + 0}' "$WKP_T/claude.log")" "every settings folder is asked before the first answer comes back"
+assert_eq "$(printf '%s' "$WKP_EXPECT" | LC_ALL=C sort)" "$(jq -r '.[] | "\(.sid)=\(.transcript)=\(.title)"' <<<"$WKP_COLD" | LC_ALL=C sort)" \
+  "every session keeps its own transcript and title, a settings folder with a space included"
+WKP_STATS="$(wc -l <"$WKP_T/stat.log" | tr -d ' ')"
+[ "$WKP_STATS" -le 2 ] || fail "transcript keys are read with one stat call, not one per transcript (got $WKP_STATS calls for 8 transcripts)"
+WKP_WARM="$(wkp_work)"
+assert_eq "$WKP_COLD" "$WKP_WARM" "a warm run prints the same list"
+WKP_STATS="$(wc -l <"$WKP_T/stat.log" | tr -d ' ')"
+[ "$WKP_STATS" -le 2 ] || fail "a warm run also reads every transcript key with one stat call (got $WKP_STATS)"
+# 지난 캐시의 경로를 먼저 쓰되, 그 파일이 없어졌으면(다른 프로젝트 폴더로 옮겨짐) 다시 찾는다.
+WKP_MOVED_SID="cccccccc-0000-4000-8000-000000000003"
+mkdir -p "$WKP_T/profiles/a b/home/projects/q"
+mv "$WKP_T/profiles/a b/home/projects/p/$WKP_MOVED_SID.jsonl" "$WKP_T/profiles/a b/home/projects/q/"
+assert_eq "$WKP_T/profiles/a b/home/projects/q/$WKP_MOVED_SID.jsonl|Title 3" \
+  "$(wkp_work | jq -r --arg s "$WKP_MOVED_SID" '.[] | select(.sid == $s) | "\(.transcript)|\(.title)"')" "a transcript that moved since the last run is found again"
+pass "work.sh asks the settings folders in parallel and reads transcript keys in one batch"
 
 # 보드 서버는 항목의 설정 폴더로 claude를 부른다(#296): 입력·재개(send_to_bg)·정리(end_session)·정지 확인(wait_stopped)이 같은 폴더를 쓰고, 없으면 환경에서 뺀다.
 BS_T="$TEST_TMP/board-cfg-env"

@@ -48,7 +48,17 @@ PERM_WAIT = int(os.environ.get("BOARD_PERMISSION_WAIT", "3500"))  # 훅 timeout(
 # 붙잡고 있어도 터미널 창은 그대로 떠 있으므로 길게 둔다. 브라우저는 뒤에 있는 탭의 타이머를 1분 단위로 늦추기 때문에
 # 짧게 잡으면 사용자가 보드를 열어 둔 채로도 요청이 풀려 버린다(허용을 눌러도 '이미 처리됨').
 VIEWER_GONE = int(os.environ.get("BOARD_VIEWER_GONE", "1800"))
-_cache = {"at": 0.0, "data": None}
+class _Cache(dict):
+    """상태 캐시. 동작이 data를 None으로 비울 때마다 세대(gen)를 올린다 — 모으는 도중 비워졌는지 _collect가 알 수 있게(#348)."""
+    gen = 0
+
+    def __setitem__(self, key, value):
+        if key == "data" and value is None:
+            self.gen += 1
+        super().__setitem__(key, value)
+
+
+_cache = _Cache(at=0.0, data=None)
 _viewer = {"at": time.time()}  # 막 켜졌을 때 다시 연결해 온 요청을 바로 돌려보내지 않게
 _perms = {}  # id -> {info, event, decision}
 _lock = threading.Lock()
@@ -85,49 +95,87 @@ def jira_base():
 JIRA = jira_base()
 
 
-def status(max_age=3):
-    af = None
-    if _cache["data"] is None or time.time() - _cache["at"] > max_age:
-        # 자동 수정 카드는 전역 lock 밖에서 모은다 — 자식 호출(autofix-auto.sh status·저장소 찾기)이 느려도
-        # 다른 요청(/status.json·/action)이 줄 서서 기다리지 않게. 결과는 Store가 파일 변경 기준으로 캐시한다.
-        try:
-            af = AUTOFIX.items(harness_repos, autofix_key)
-        except Exception as e:
-            print("autofix items:", e, file=sys.stderr, flush=True)
+# 상태 캐시(#348): 요청은 캐시만 읽는다. MAX_AGE가 지난 캐시는 그대로 돌려주고 백그라운드 갱신을 깨운다 — 갱신(status.sh 2–3초)이
+# lock을 쥐고 있어도 줄 서지 않는다. 캐시가 없거나(동작 뒤 비움) STALE_SYNC보다 오래됐으면(한동안 아무도 안 봄) 그 자리에서 모은다.
+# 백그라운드 갱신은 보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 동안만 REFRESH 주기로 돈다(아무도 안 보면 쉰다).
+REFRESH = float(os.environ.get("BOARD_REFRESH_SECONDS", "2"))
+REFRESH_IDLE = 60
+STALE_SYNC = 30
+_wake = threading.Event()
+_active = {"at": 0.0}  # 보이는 탭이 마지막으로 물은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
+
+
+def _build():
+    """status.sh 결과에 서버 쪽 판정(묶음·분류·자동 수정·숨김·PR 상태)을 붙인 새 상태. 캐시는 건드리지 않는다."""
+    out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90)
+    data = json.loads(out.stdout)
+    try:
+        groups.annotate(data["items"], os.path.join(DATA, "board", "links.json"))
+    except Exception as e:  # 묶음은 덤 — 실패해도 보드는 그대로 보인다
+        print("groups:", e, file=sys.stderr, flush=True)
+    for i in data["items"]:  # Orca 터미널에 떠 있는 대화형 세션은 그 터미널로 입력을 보낼 수 있다
+        if (i.get("section") == "work" and i.get("kind") == "agent" and i.get("orca_handle")
+                and i.get("status") != "waiting" and "send" not in i.get("actions", [])):
+            i["actions"] = i.get("actions", []) + ["send"]
+    data["items"] = classify_work(data["items"])
+    # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다.
+    # 결과는 Store가 파일 변경 기준으로 캐시한다.
+    try:
+        data["items"] += AUTOFIX.items(harness_repos, autofix_key) or []
+    except Exception as e:
+        print("autofix items:", e, file=sys.stderr, flush=True)
+    link_autofix_sessions(data["items"])
+    data["items"] = drop_hidden(data["items"])
+    data["hidden_count"] = len(_load(HIDDEN) or {})
+    prstate.apply(data["items"])
+    daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
+    for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
+        if i.get("kind") == "schedule" and i.get("state") == "blocked" and i.get("title") == "하루 실행 상한 도달" \
+                and daily.isdigit() and int(daily) >= 1000:
+            i["state"], i["title"] = "done", "하루 실행 상한 도달(지난 기록) → 지금은 제한 없음"
+    data["jira_base"] = JIRA
+    return data
+
+
+def _collect(max_age):
+    """캐시가 없거나 max_age보다 오래됐으면 모은다. 한 번에 하나만 모으고, 기다린 쪽은 방금 모은 결과를 쓴다.
+    캐시 시각은 모으기 시작한 때다 — 결과가 그 시점의 상태라서, 나이가 실제 데이터 나이가 된다."""
     with _lock:
         if _cache["data"] is None or time.time() - _cache["at"] > max_age:
-            out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90)
-            data = json.loads(out.stdout)
-            try:
-                groups.annotate(data["items"], os.path.join(DATA, "board", "links.json"))
-            except Exception as e:  # 묶음은 덤 — 실패해도 보드는 그대로 보인다
-                print("groups:", e, file=sys.stderr, flush=True)
-            for i in data["items"]:  # Orca 터미널에 떠 있는 대화형 세션은 그 터미널로 입력을 보낼 수 있다
-                if (i.get("section") == "work" and i.get("kind") == "agent" and i.get("orca_handle")
-                        and i.get("status") != "waiting" and "send" not in i.get("actions", [])):
-                    i["actions"] = i.get("actions", []) + ["send"]
-            data["items"] = classify_work(data["items"])
-            # 자동 수정의 에러 시그니처도 같은 목록에 넣는다(사람 필요·진행 중·대기·완료). 실패해도 나머지는 그대로 보인다.
-            # lock 밖 판정 뒤에 다른 요청이 캐시를 비웠으면 여기서 모은다(Store 캐시라 대개 즉시 돌아온다).
-            if af is None:
-                try:
-                    af = AUTOFIX.items(harness_repos, autofix_key)
-                except Exception as e:
-                    print("autofix items:", e, file=sys.stderr, flush=True)
-            data["items"] += af or []
-            link_autofix_sessions(data["items"])
-            data["items"] = drop_hidden(data["items"])
-            data["hidden_count"] = len(_load(HIDDEN) or {})
-            prstate.apply(data["items"])
-            daily = hsettings.user_config().get("HM_HARVEST_AUTO_DAILY_MAX") or ""
-            for i in data["items"]:  # 상한을 올린 뒤에도 지난 이틀의 건너뜀 기록이 남아 '막힘'으로 보이지 않게
-                if i.get("kind") == "schedule" and i.get("state") == "blocked" and i.get("title") == "하루 실행 상한 도달" \
-                        and daily.isdigit() and int(daily) >= 1000:
-                    i["state"], i["title"] = "done", "하루 실행 상한 도달(지난 기록) → 지금은 제한 없음"
-            data["jira_base"] = JIRA
+            started, gen = time.time(), _cache.gen
+            data = _build()
+            # 모으는 사이에 동작이 캐시를 비웠으면 이 결과는 동작 전 상태다 — 아주 오래된 것으로 둬서 다음 읽기가 다시 모으게 한다.
+            invalidated = _cache.gen != gen
             _cache["data"] = data
-            _cache["at"] = time.time()
+            _cache["at"] = 0.0 if invalidated else started
         return _cache["data"]
+
+
+def status(max_age=3):
+    data = _cache["data"]
+    if data is None or time.time() - _cache["at"] > STALE_SYNC:
+        return _collect(max_age)
+    if time.time() - _cache["at"] > max_age:
+        _wake.set()
+    return data
+
+
+def refresh_once():
+    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) 캐시를 새로 모은다. 방금 모았으면 건너뛴다."""
+    if time.time() - _active["at"] > REFRESH_IDLE:
+        return
+    try:
+        _collect(REFRESH / 2)
+    except Exception as e:  # 한 번 실패해도 다음 주기에 다시 모은다
+        print("refresh:", e, file=sys.stderr, flush=True)
+
+
+def refresher():
+    """REFRESH마다(모으기 시작 기준) 다시 모은다. 모으는 데 REFRESH보다 오래 걸려도 사이에 0.5초는 쉰다."""
+    while True:
+        _wake.wait(max(0.5, REFRESH - (time.time() - _cache["at"])))
+        _wake.clear()
+        refresh_once()
 
 
 def find_item(item_id, fresh=False):
@@ -1392,6 +1440,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html.replace("__DATA__", "null"), "text/html; charset=utf-8")
         if u.path == "/status.json":
             _viewer["at"] = time.time()
+            if q.get("bg") != ["1"]:
+                _active["at"] = time.time()
             return self._send(200, status_with_permissions())
         if u.path == "/commands":
             return self._send(200, list_commands(q.get("cwd", [None])[0]))
@@ -1542,6 +1592,7 @@ if __name__ == "__main__":
     srv.daemon_threads = True
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
+    threading.Thread(target=refresher, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     if sys.stdout.isatty():  # board.sh가 띄우면 주소는 server.json(0600)으로만 전한다 — 로그에 토큰을 남기지 않는다
