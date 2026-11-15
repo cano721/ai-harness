@@ -219,7 +219,11 @@
         "draft_redo",
         "folded"
       ],
-      "note": "Unattended, several candidates: a first draft that needs a redo waits here until every first draft review is in. Then the runner lets only the one with the better draft review (fewest majors, then fewest failed checks, then candidates.json order) redraw and folds the rest, with the scores in redo-pick.json (via: \"runner\")."
+      "note": "Unattended, several candidates: a first draft that needs a redo waits here until every first draft review is in. If another draft passed, draft_choose must take a passed one, so the held drafts fold without a redo. Otherwise the runner lets only the one with the better draft review (fewest majors, then fewest failed checks, then candidates.json order) redraw and folds the rest. Either way the scores and the reason are in redo-pick.json (via: \"runner\")."
+    },
+    "report": {
+      "actor": "maker",
+      "note": "The run's last step, entered only by landing-run.sh finish once every live candidate is terminal (done, user_decision, or folded) and every done one passed finish with nothing changed since its review. Write the report from status; status.run_finished stays false and lists what blocks it until then."
     }
   },
   "transitions": [
@@ -492,7 +496,8 @@
     "An unattended run finishes one candidate: after every draft review the agent chooses one (draft-pick.json, via agent, with its reason), the rest fold, and a second candidate entering build is refused.",
     "The reference pick names the primary references: one layout, one interaction, and one component per section slot (or none), none of them excluded; at least one candidate leads with that primary as it is.",
     "A page edited after the review that sent it to done is not done: finish compares the reviewed fingerprint of the files that change the screen and sends a changed page back to measure and review.",
-    "Unattended with several candidates, when more than one first draft needs a redo only the one with the better draft review redraws; the others fold (redo-pick.json, via runner). An interactive run is unchanged."
+    "Unattended with several candidates, a first draft that needs a redo redraws only when no other draft passed and it has the best draft review among those needing one; the others fold (redo-pick.json, via runner). An interactive run is unchanged.",
+    "The run reaches report only through finish: every live candidate terminal and every done one finished with its page unchanged since its review."
   ],
   "budget_minutes": {
     "preview": 10,

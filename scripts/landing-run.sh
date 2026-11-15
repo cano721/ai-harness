@@ -21,7 +21,9 @@
 #     재초안이 필요한 후보 중 점수가 나은 하나만 다시 그리게 하고 나머지는 접는다(redo-pick.json, via runner). 접힐 후보의
 #     재초안은 버려지는 비용이다.
 #   - finish: review가 done으로 보낸 시점의 페이지 지문(화면을 바꾸는 파일)과 지금을 비교한다. 달라졌으면 거부하고 후보를
-#     measure로 되돌린다 — 검토 뒤 고친 페이지를 검토된 페이지로 보고하지 않게.
+#     measure로 되돌린다 — 검토 뒤 고친 페이지를 검토된 페이지로 보고하지 않게. 실행 전체는 살아 있는 후보가 모두 종단에 있고
+#     done인 후보가 모두 finish를 통과했을 때만 report로 넘어간다(finish가 그 전이를 낸다). status의 run_finished·blocking이 보고서 근거다.
+#   - 무인에서 한 후보가 draft_pass면 draft_choose는 통과한 후보를 골라야 하므로, 재초안이 필요한 후보는 다시 그리지 않고 접는다.
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
 
@@ -289,17 +291,32 @@ check_primary() {
   [[ -z "$bad" ]] || die 4 "reference-pick.json: $bad (direction.md, Picking the primary references)"
 }
 
-# Unattended: once no candidate still owes its first draft review, the drafts held for a redo are settled — the one with the
-# fewest majors (then fewest failed checks, then candidates.json order) redraws, the rest fold. One held alone just redraws.
+# Unattended: once no candidate still owes its first draft review, the drafts held for a redo are settled. When another
+# candidate's draft passed, draft_choose must take a passed one, so every held draft folds without a redo. Otherwise the one
+# with the fewest majors (then fewest failed checks, then candidates.json order) redraws and the rest fold; one held alone redraws.
 resolve_holds() {
   [[ "$(state .mode)" == unattended ]] || return 0
   jq -e '[.candidates[] | select(.node != "folded" and .node != "draft_hold" and ((.draft_reviews // 0) == 0))] | length == 0' "$STATE" >/dev/null || return 0
-  local ranked keep reason c self="$CAND"
+  local ranked keep reason c passed self="$CAND"
   ranked="$(jq -c --slurpfile cj "$WORK/candidates.json" '($cj[0].candidates | map(.id)) as $ids
     | [.candidates | to_entries[] | select(.value.node == "draft_hold")
        | .key as $k | {id: $k, majors: (.value.draft_rounds[-1].majors // 0), fails: (.value.draft_rounds[-1].fails // 0), order: ($ids | index($k) // 99)}]
     | sort_by(.majors, .fails, .order)' "$STATE")"
   [[ "$(jq length <<<"$ranked")" -ge 1 ]] || return 0
+  passed="$(jq -c '[.candidates | to_entries[] | select(.value.node == "draft_choose" and ((.value.draft_rounds // [])[-1].outcome == "draft_pass"))
+    | {id: .key, majors: (.value.draft_rounds[-1].majors // 0), fails: (.value.draft_rounds[-1].fails // 0)}]' "$STATE")"
+  if [[ "$(jq length <<<"$passed")" -ge 1 ]]; then
+    reason="$(jq -r '(.[0] | map(.id) | join(", ")) + " passed the draft review; draft_choose must take a passed draft, so a redo of " + (.[1] | map("\(.id) (\(.majors) major(s), \(.fails) failed check(s))") | join(", ")) + " would be thrown away"' <<<"[$passed,$ranked]")"
+    jq -n --argjson p "$passed" --argjson r "$ranked" --arg reason "$reason" \
+      '{kept: [$p[] | .id], dropped: [$r[] | .id], via: "runner", reason: $reason, scores: ($p + $r | map({key: .id, value: {majors, fails}}) | from_entries)}' >"$WORK/redo-pick.json"
+    save --slurpfile p "$WORK/redo-pick.json" '.redo_pick = $p[0]'
+    for c in $(jq -r '.[] | .id' <<<"$ranked"); do
+      CAND="$c"; move draft_hold folded >/dev/null
+      save --arg c "$c" --arg r "$reason" '.candidates[$c].folded_reason = "folded without a redo: \($r)"'
+    done
+    CAND="$self"
+    return 0
+  fi
   keep="$(jq -r '.[0].id' <<<"$ranked")"
   CAND="$keep"; move draft_hold draft_redo >/dev/null
   save --arg c "$keep" '.candidates[$c].draft_rounds[-1].outcome = "draft_redo"'
@@ -315,6 +332,26 @@ resolve_holds() {
   fi
   CAND="$self"
 }
+
+# Changed-after-review files per done candidate, as {id: [paths]}.
+drift_map() {
+  local c changed out="{}"
+  for c in $(jq -r '.candidates | to_entries[] | select(.value.node == "done") | .key' "$STATE"); do
+    changed="$(changed_since_review "$c")"
+    [[ -z "$changed" ]] || out="$(jq -c --arg c "$c" --arg f "$changed" '.[$c] = ($f | split("\n"))' <<<"$out")"
+  done
+  printf '%s\n' "$out"
+}
+# What still keeps the run from its report, one line each; nothing when every live candidate is terminal and finished.
+BLOCKING_JQ='
+  [ (if (.candidates | length) == 0 then "no candidate has started" else empty end),
+    (.candidates | to_entries[] | .key as $k | .value as $v
+     | if $v.node == "folded" or $v.node == "user_decision" then empty
+       elif $v.node != "done" then "\($k) is at \($v.node)"
+       elif ($drift[$k] // null) != null then "\($k) changed after its review: \($drift[$k] | join(", ")) (finish sends it back to measure)"
+       elif $v.finalized_at == null then "\($k) is done but not finished: run landing-run.sh finish --candidate \($k)"
+       else empty end) ]'
+blocking() { jq -r --argjson drift "$(drift_map)" "$BLOCKING_JQ"' | .[]' "$STATE"; }
 
 required_checks() {
   local multi; multi="$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")"
@@ -340,8 +377,11 @@ case "$cmd" in
     GRAPH="$(state .graph)"
     if [[ -z "$CAND" && "$(state .node)" == candidates ]] && jq -e '[.candidates[] | select(.node != "folded") | .node] | length > 0 and all(. == "draft_choose")' "$STATE" >/dev/null; then
       print_next draft_choose
+    elif [[ -z "$CAND" && "$(state .node)" == report ]]; then
+      jq -n '{node: "report", actor: "maker", how: "Every live candidate is finished: write the report (SKILL.md, Report) from landing-run.sh status"}'
     elif [[ -z "$CAND" && "$(state .node)" == candidates ]]; then
-      jq '{node: "candidates", candidates: (.candidates | with_entries(.value |= {node, measures, reviews, verdict})), how: "Each candidate runs its own path: landing-run.sh next --work <dir> --candidate <id>"}' "$STATE"
+      jq --argjson drift "$(drift_map)" "{node: \"candidates\", candidates: (.candidates | with_entries(.value |= {node, measures, reviews, verdict})), blocking: $BLOCKING_JQ,
+        how: \"Each candidate runs its own path: landing-run.sh next --work <dir> --candidate <id>. The report waits until blocking is empty (finish moves the run to report).\"}" "$STATE"
     else
       node="$(current)"; [[ -n "$node" ]] || die 4 "unknown candidate '$CAND'"
       print_next "$node" "$CAND"
@@ -530,14 +570,17 @@ case "$cmd" in
       printf '{"draft_round":%s,"outcome":"%s","majors":%s,"fails":%s}\n' "$k" "$outcome" "$majors" "$fails" >&2
       move draft_review "$outcome" >/dev/null
       resolve_holds
-      to="$(current)"
-      # A lone candidate has nothing to be chosen against: it goes on to build without a draft-pick.json.
-      if [[ "$to" == draft_choose && "$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")" -eq 1 ]]; then
+      # A lone candidate has nothing to be chosen against: it goes on to build without a draft-pick.json. It may be another
+      # candidate than this one (a passed draft waiting at draft_choose while this one folded).
+      lone="$(jq -r '[.candidates | to_entries[] | select(.value.node != "folded")] | if length == 1 and .[0].value.node == "draft_choose" then .[0].key else "" end' "$STATE")"
+      if [[ -n "$lone" ]]; then
         if jq -e '.redo_pick' "$STATE" >/dev/null; then why="the only candidate left after the redo pick (redo-pick.json)"; else why="the only candidate"; fi
-        save --arg c "$CAND" --arg w "$why" '.chosen = {candidate: $c, via: "runner", reason: $w}'
-        to="$(move draft_choose chosen)"
+        self="$CAND"; CAND="$lone"
+        save --arg c "$lone" --arg w "$why" '.chosen = {candidate: $c, via: "runner", reason: $w}'
+        move draft_choose chosen >/dev/null
+        CAND="$self"
       fi
-      printf '%s\n' "$to"
+      printf '%s\n' "$(current)"
       exit 0
     fi
     r=$(( $(jq -r --arg c "$CAND" '.candidates[$c].reviews' "$STATE") + 1 ))
@@ -562,7 +605,7 @@ case "$cmd" in
     # The page as it was reviewed: finish compares against this, so an edit after the review cannot pass as reviewed.
     if [[ "$to" == "done" ]]; then
       page_manifest "$CAND" >"$RUN/reviewed-$CAND.txt"
-      save --arg c "$CAND" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.candidates[$c].reviewed_at = $at | del(.candidates[$c].changed_after_review)'
+      save --arg c "$CAND" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.candidates[$c].reviewed_at = $at | del(.candidates[$c].changed_after_review, .candidates[$c].finalized_at)'
     fi
     printf '%s\n' "$to"
     ;;
@@ -584,14 +627,20 @@ case "$cmd" in
       changed="$(changed_since_review "$c")"
       if [[ -n "$changed" ]]; then
         move "done" changed_after_review >/dev/null
-        save --arg c "$c" --arg f "$changed" '.candidates[$c].changed_after_review = ($f | split("\n"))'
+        save --arg c "$c" --arg f "$changed" '.candidates[$c].changed_after_review = ($f | split("\n")) | del(.candidates[$c].finalized_at)
+          | if .node == "report" then .node = "candidates" else . end'
         refused="$refused$c: $(printf '%s' "$changed" | paste -sd ',' - | sed 's/,/, /g'); "
       else
         save --arg c "$c" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.candidates[$c].finalized_at = $at | del(.candidates[$c].changed_after_review)'
       fi
     done
     [[ -z "$refused" ]] || die 3 "the page changed after its review (${refused%; }); it is back at measure: measure, then review again"
-    jq -c --arg cs "$cands" '[($cs | split(" "))[] as $c | {candidate: $c, node: .candidates[$c].node, verdict: .candidates[$c].verdict, unchanged_since_review: true}]' "$STATE"
+    # The run is finished only here: every live candidate terminal and every done one finished, with nothing changed since.
+    if [[ "$(state .node)" == candidates ]] && [[ -z "$(blocking)" ]]; then
+      save --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.node = "report" | .entered_at = $at | .finished_at = $at | .history += [{from: "candidates", outcome: "all_finished", to: "report", at: $at}]'
+    fi
+    jq -c --arg cs "$cands" '{run: .node, finished: [($cs | split(" "))[] as $c | {candidate: $c, node: .candidates[$c].node, verdict: .candidates[$c].verdict, unchanged_since_review: true}]}' "$STATE"
+    [[ "$(state .node)" == report ]] || printf 'landing-run: not yet the report: %s\n' "$(blocking | paste -sd ';' - | sed 's/;/; /g')" >&2
     ;;
   capture)
     [[ -f "$STATE" && -n "$CAND" && -n "$URL" ]] || usage
@@ -635,16 +684,14 @@ case "$cmd" in
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"
     GRAPH="$(state .graph)"
-    # A page edited after its review is reported as such even before finish catches it.
-    drift="{}"
-    for c in $(jq -r '.candidates | to_entries[] | select(.value.node == "done") | .key' "$STATE"); do
-      changed="$(changed_since_review "$c")"
-      [[ -z "$changed" ]] || drift="$(jq -c --arg c "$c" --arg f "$changed" '.[$c] = ($f | split("\n"))' <<<"$drift")"
-    done
+    # A page edited after its review is reported as such even before finish catches it; run_finished is the report's gate.
+    drift="$(drift_map)"
     jq --slurpfile g "$GRAPH" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson drift "$drift" '
       def mins($a; $b): if $a == null or $b == null then null else ((($b | fromdateiso8601) - ($a | fromdateiso8601)) / 60 | floor) end;
-      .started_at as $s | ($g[0].budget_minutes // {}) as $bud
-      | {mode, node, elapsed_min: mins($s; $now), chosen, redo_pick,
+      ('"$BLOCKING_JQ"') as $blocking
+      | .started_at as $s | ($g[0].budget_minutes // {}) as $bud
+      | {mode, node, run_finished: (.node == "report" and ($blocking | length) == 0), blocking: $blocking,
+         elapsed_min: mins($s; $now), chosen, redo_pick,
          candidates: (.candidates | with_entries(.key as $k | .value |= (
            {node, motion_level, measures, measure, reviews, verdict, rounds, folded_reason, finalized_at,
             changed_after_review: ($drift[$k] // .changed_after_review),
