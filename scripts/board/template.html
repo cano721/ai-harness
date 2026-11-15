@@ -2278,7 +2278,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     renderPending = false; renderAll();
   }
   async function refresh() {
-    const r = await fetch('/status.json?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+    const r = await fetch('/status.json?t=' + encodeURIComponent(TOKEN) + (document.hidden ? '&bg=1' : ''), { cache: 'no-store' });
     if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.server = true; throw e; }
     const next = await r.json();
     for (const id of [...hiding]) if (!(next.items || []).some((x) => x.id === id)) hiding.delete(id);  // 서버 목록에서 사라진 것은 숨김 기록도 지운다
@@ -3120,7 +3120,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     setInterval(() => { if (((view === 'list' && tab === 'autofix') || (view === 'settings' && stab === 'autofix')) && !document.hidden) loadAutofix(false); }, 15000);
     refresh().then(() => { loadSettings(true); loadAutofix(true); loadRefs(true); }).catch(fail);
     setInterval(() => { if (view === 'refs' && !document.hidden) { if (rrun) loadRefDetail(false); else loadRefs(false); } }, 5000);
-    setInterval(() => refresh().catch(() => {}), 5000);
+    setInterval(() => refresh().catch(() => {}), 1000);
     setInterval(() => { if (view === 'impact' && !document.hidden) loadImpact(false); }, 4000);
     // 뒤에 있던 탭으로 돌아오면 바로 새로 읽는다(뒤 탭 타이머는 브라우저가 늦춰서 화면이 낡아 있을 수 있음)
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh().catch(() => {}); });
