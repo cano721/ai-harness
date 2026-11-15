@@ -15,6 +15,10 @@ PORT="${BOARD_PORT:-8765}"
 CLAUDE_SETTINGS="${HARNESS_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 HOOK_COPY="$BOARD_DIR/bin/permission-hook.py"
 HOOK_TIMEOUT=3600
+LAUNCHER_APP="${BOARD_LAUNCHER_DIR:-$HOME/Applications}/Harness Board.app"
+LAUNCHER_SHIM="$BOARD_DIR/bin/open-board"
+LAUNCHER_ROOT_FILE="$BOARD_DIR/bin/plugin-root"
+LAUNCHER_ID="com.ai-harness.board"
 
 usage() {
   cat >&2 <<'EOF'
@@ -22,7 +26,8 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh stop                    서버를 끈다
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
-env:   BOARD_PORT (기본 8765), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
+       board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
+env:   BOARD_PORT (기본 8765), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
 EOF
   exit 2
 }
@@ -223,6 +228,121 @@ command_hook() {
   esac
 }
 
+# ---- 런처: /ai-harness:setup이 사용자에게 물은 뒤에만 부른다 ----
+# 앱은 고정 경로 shim만 부르고, shim이 실행할 때마다 가장 새 플러그인 설치본을 찾는다 — 플러그인을 업데이트해
+# 설치 경로(…/<version>/)가 바뀌어도 앱을 다시 만들 필요가 없다. 찾지 못하면 install 때 기록한 경로(개발 체크아웃 등)를 쓴다.
+# Finder로 연 앱은 PATH가 /usr/bin:/bin 뿐이라 jq·python3·claude를 못 찾으므로 install 때의 PATH를 shim에 담는다.
+write_launcher_shim() { # $1=출력 경로
+  {
+    printf '#!/bin/bash\n# ai-harness Harness Board 런처 — scripts/board/board.sh launcher install이 생성. 직접 고치지 말 것.\nset -u\n'
+    printf 'export PATH=%q"${PATH:+:$PATH}"\n' "$PATH"
+    printf 'default_data=%q\n' "$HM_DATA_DIR"
+    printf 'export HARNESS_METRICS_DIR="${HARNESS_METRICS_DIR:-$default_data}"\n'
+    # Finder로 연 앱은 셸 환경을 물려받지 않는다. install 때 BOARD_IDLE_EXIT를 정했으면 그 값을 담는다.
+    if [[ -n "${BOARD_IDLE_EXIT:-}" ]]; then printf 'export BOARD_IDLE_EXIT="${BOARD_IDLE_EXIT:-%s}"\n' "$(printf '%q' "$BOARD_IDLE_EXIT")"; fi
+    cat <<'SHIM'
+data_dir="$HARNESS_METRICS_DIR"
+log="$data_dir/board/launcher.log"
+if [[ -f "$log" ]] && (( $(wc -l <"$log") > 500 )); then
+  tail -n 200 "$log" >"$log.tmp" && mv "$log.tmp" "$log"
+fi
+fail() { # 이유를 기록하고, 눈에 보이게 대화상자로 알린다(앱은 터미널이 없다)
+  printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >>"$log" 2>/dev/null
+  if [[ "${BOARD_NO_BROWSER:-0}" != 1 ]] && command -v osascript >/dev/null 2>&1; then
+    osascript -e 'on run argv' -e 'display alert "Harness Board를 열지 못했습니다" message (item 1 of argv) as warning' -e 'end run' "$1" >/dev/null 2>&1
+  fi
+  exit 1
+}
+plugins_home="${HM_PLUGIN_SEARCH_HOME:-$HOME}"
+latest="$(for dir in "$plugins_home"/.claude/plugins/cache/ai-harness/ai-harness/*/ \
+                    "$plugins_home"/.codex/plugins/cache/ai-harness/ai-harness/*/; do
+  [[ -f "${dir}scripts/board/board.sh" ]] || continue
+  version="${dir%/}"; version="${version##*/}"
+  printf '%s\t%s\n' "$version" "${dir%/}"
+done | sort -t$'\t' -k1,1V | tail -n 1)"
+root="${latest#*$'\t'}"
+[[ -n "$root" ]] || root="$(cat "$data_dir/board/bin/plugin-root" 2>/dev/null)"
+[[ -f "$root/scripts/board/board.sh" ]] || fail "ai-harness 설치본을 찾지 못했습니다. 플러그인을 다시 설치하거나 /ai-harness:board로 여세요."
+# 성공 출력에는 보드 주소(토큰)가 있어 남기지 않는다. 실패 이유(stderr)만 보인다.
+out="$(bash "$root/scripts/board/board.sh" open 2>&1 >/dev/null)" || fail "${out:-board.sh open 실패}"
+SHIM
+  } >"$1"
+  chmod 755 "$1"
+}
+
+write_launcher_app() { # $1=앱 경로 $2=shim 경로
+  mkdir -p "$1/Contents/MacOS"
+  cat >"$1/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Harness Board</string>
+  <key>CFBundleDisplayName</key><string>Harness Board</string>
+  <key>CFBundleIdentifier</key><string>$LAUNCHER_ID</string>
+  <key>CFBundleExecutable</key><string>harness-board</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <!-- 보드를 브라우저로 넘기고 바로 끝나는 앱이라 Dock에 아이콘을 띄우지 않는다. -->
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+  printf '#!/bin/bash\nexec /bin/bash %q\n' "$2" >"$1/Contents/MacOS/harness-board"
+  chmod 755 "$1/Contents/MacOS/harness-board"
+}
+
+launcher_ours() { grep -q "<string>$LAUNCHER_ID</string>" "$LAUNCHER_APP/Contents/Info.plist" 2>/dev/null; }
+
+launcher_json() { # action
+  local installed=false
+  launcher_ours && [[ -x "$LAUNCHER_SHIM" ]] && installed=true
+  jq -cn --arg a "$1" --argjson i "$installed" --arg app "$LAUNCHER_APP" --arg shim "$LAUNCHER_SHIM" \
+    '{installed: $i, app: $app, shim: $shim} + (if $a == "" then {} else {action: $a} end)'
+}
+
+command_launcher() {
+  local sub="${1:-status}" plugin_root action=unchanged
+  case "$sub" in
+    status) launcher_json "" ;;
+    install)
+      [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" == Darwin ]] || die "런처 앱은 macOS에서만 만듭니다. 다른 OS에서는 /ai-harness:board 또는 board.sh open으로 여세요."
+      if [[ -e "$LAUNCHER_APP" ]] && ! launcher_ours; then
+        die "같은 이름의 다른 앱이 있어 건드리지 않았습니다: $LAUNCHER_APP"
+      fi
+      plugin_root="$(cd "$DIR/../.." && pwd)"
+      mkdir -p "$BOARD_DIR/bin"
+      # 새 앱은 같은 폴더에서 만든 뒤 이름만 바꿔 넣는다(다른 볼륨 사이 mv는 복사라 중간 상태가 남는다). 중단돼도 임시본은 지운다.
+      mkdir -p "$(dirname "$LAUNCHER_APP")"
+      tmp="$LAUNCHER_APP.new.$$"
+      trap 'rm -rf "$tmp" "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_APP.old.$$"' EXIT
+      write_launcher_shim "$LAUNCHER_SHIM.tmp.$$"
+      write_launcher_app "$tmp" "$LAUNCHER_SHIM"
+      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$tmp/Contents/Info.plist" "$LAUNCHER_APP/Contents/Info.plist" \
+        || ! cmp -s "$tmp/Contents/MacOS/harness-board" "$LAUNCHER_APP/Contents/MacOS/harness-board"; then
+        mv "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM"
+        if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
+        mv "$tmp" "$LAUNCHER_APP"
+        action=installed
+      fi
+      printf '%s\n' "$plugin_root" >"$LAUNCHER_ROOT_FILE"
+      launcher_json "$action"
+      ;;
+    remove)
+      if launcher_ours; then
+        rm -rf "$LAUNCHER_APP"
+        action=removed
+      fi
+      if [[ -f "$LAUNCHER_SHIM" || -f "$LAUNCHER_ROOT_FILE" ]]; then
+        rm -f "$LAUNCHER_SHIM" "$LAUNCHER_ROOT_FILE"
+        action=removed
+      fi
+      launcher_json "$action"
+      ;;
+    *) usage ;;
+  esac
+}
+
 cmd="${1:-open}"
 (($#)) && shift
 case "$cmd" in
@@ -230,6 +350,7 @@ case "$cmd" in
   stop) command_stop ;;
   status) command_status ;;
   hook) command_hook "$@" ;;
+  launcher) command_launcher "$@" ;;
   -h | --help | help) usage ;;
   *) usage ;;
 esac

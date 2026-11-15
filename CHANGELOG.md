@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **보드 런처 앱 — 눌러서 Harness Board 열기 (macOS)** — 보드를 열려면 Claude 세션에서 `/board`를 쳐야 했고, 주소의 토큰이 실행마다 바뀌어 북마크로도 열 수 없었습니다. 이제 `/ai-harness:setup` 자동화 옵션에서 고르면 `~/Applications/Harness Board.app`을 만들어 Finder·Launchpad·Spotlight에서 눌러 엽니다(`board.sh launcher install|remove|status`). 누르면 보드가 떠 있으면 그 화면을, 없으면 띄워서 브라우저로 엽니다. 앱은 열 때마다 가장 새 플러그인 설치본을 찾으므로 업데이트해도 다시 설치하지 않고, 열지 못하면 이유를 대화상자로 보입니다. 함께, 보드 서버는 보는 사람이 `BOARD_IDLE_EXIT`분(기본 30, `0`이면 끄지 않음) 동안 없으면 스스로 꺼집니다 — 붙잡은 권한 요청·열린 이벤트 연결·작업 중이거나 답을 기다리는 상주 세션이 있으면 끄지 않습니다. (#355)
+
 ## v0.76.0 (2026-11-16)
 ### 새 기능
 

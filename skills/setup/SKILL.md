@@ -265,6 +265,28 @@ $ROOT/scripts/board/board.sh hook on    # 끄기: hook off
 
 훅 파일을 `~/.ai-harness/board/bin/permission-hook.py`에 복사하고 `~/.claude/settings.json`에 PermissionRequest 항목(timeout 3600)을 더한다. 바꾸기 전 백업(`settings.json.bak-board-<시각>`)을 남기고 그 경로를 결과 `backup`으로 준다. `off`는 이 항목만 빼고 다른 훅·설정은 그대로 둔다. 새 세션부터 적용된다고 알린다.
 
+### 8-3. 보드 런처 앱 (선택, macOS)
+
+`/ai-harness:board`를 치지 않고 Finder·Launchpad·Spotlight에서 눌러 보드를 여는 앱이다. **묻지 않고 만들지 않는다.** macOS가 아니면 이 항목을 건너뛴다. 현재 상태를 먼저 본다:
+
+```bash
+$ROOT/scripts/board/board.sh launcher status
+```
+
+`installed`면 설치돼 있다고 알리고 지울지 묻는다. 물을 때 함께 알린다.
+- 누르면 보드가 떠 있으면 그 화면을, 없으면 띄워서 브라우저로 연다. 열지 못하면 이유를 대화상자로 보인다.
+- 플러그인을 업데이트해도 다시 설치할 필요가 없다 — 앱은 열 때마다 가장 새 설치본을 찾는다.
+- 앱은 이 셋업을 돌린 셸의 PATH(`jq`·`python3`·`claude` 위치)를 기억한다. 이 도구들을 옮겼으면 다시 설치한다. 자동 종료 시간을 바꾸려면 `BOARD_IDLE_EXIT=<분>`을 붙여 설치한다.
+- 보드 서버는 보는 사람이 30분 없으면 스스로 꺼진다(`BOARD_IDLE_EXIT`).
+
+고르면:
+
+```bash
+$ROOT/scripts/board/board.sh launcher install    # 지우기: launcher remove
+```
+
+`~/Applications/Harness Board.app`과 `~/.ai-harness/board/bin/open-board`를 만든다. 같은 이름의 다른 앱이 있으면 건드리지 않고 멈춘다.
+
 ## 디자인 스킬 (`design`)
 
 ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자리를 채우는 외부 디자인 스킬은 `catalog/design-skills.json`이 원본 저장소·고정 커밋·라이선스·실행 스크립트 검토 결과를 적고, 어느 작업에서 어느 스킬이 주도하는지는 디자인 스킬 지도(`$ROOT/templates/ui-review/references/design-skills.md`)가 정한다. 위 기본 카탈로그와 달리 사본을 들고 있지 않고 **원본 저장소의 고정 커밋에서 받는다**. 예외로 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 ai-harness에 고정 사본으로 내장돼 있어(`builtin: "ai-harness"`) 설치하지 않는다.

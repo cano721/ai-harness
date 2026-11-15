@@ -8261,6 +8261,80 @@ if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/s
 fi
 pass "harness board skill and hook wiring"
 
+# 보드 런처(#355): 눌러서 여는 macOS 앱. 앱은 고정 경로 shim을 부르고, shim은 실행 시점에 가장 새 플러그인 설치본을 찾는다
+# (업데이트로 설치 경로가 바뀌어도 안 깨지게). Finder가 주는 짧은 PATH 대신 install 때의 PATH를 쓴다.
+BL_APPS="$BOARD_T/Applications"
+BL_HOME="$BOARD_T/launcher-home"
+launcher_sh() { BOARD_LAUNCHER_DIR="$BL_APPS" BOARD_LAUNCHER_PLATFORM=Darwin board_sh launcher "$@"; }
+assert_eq "false" "$(launcher_sh status | jq -r '.installed')" "launcher is not installed by default"
+if BOARD_LAUNCHER_PLATFORM=Linux BOARD_LAUNCHER_DIR="$BL_APPS" board_sh launcher install >/dev/null 2>&1; then fail "launcher install refuses outside macOS"; fi
+# 같은 이름의 다른 앱(다른 bundle id)은 install·remove 모두 건드리지 않는다.
+mkdir -p "$BL_APPS/Harness Board.app/Contents"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>\n' >"$BL_APPS/Harness Board.app/Contents/Info.plist"
+if launcher_sh install >/dev/null 2>&1; then fail "launcher install refuses to replace another app with the same name"; fi
+launcher_sh remove >/dev/null
+assert_contains "$(<"$BL_APPS/Harness Board.app/Contents/Info.plist")" "com.example.other" "launcher leaves another app with the same name alone"
+rm -rf "$BL_APPS/Harness Board.app"
+BL_ON="$(launcher_sh install)"
+BL_APP="$BL_APPS/Harness Board.app"
+BL_SHIM="$BOARD_DATA/board/bin/open-board"
+assert_eq "installed|$BL_APP" "$(jq -r '[.action, .app] | join("|")' <<<"$BL_ON")" "launcher install reports the app"
+assert_file "$BL_APP/Contents/Info.plist"
+assert_contains "$(<"$BL_APP/Contents/Info.plist")" "<string>harness-board</string>" "the app names its executable"
+[[ -x "$BL_APP/Contents/MacOS/harness-board" ]] || fail "the app executable is executable"
+assert_contains "$(<"$BL_APP/Contents/MacOS/harness-board")" "$BL_SHIM" "the app runs the fixed-path shim"
+[[ -x "$BL_SHIM" ]] || fail "launcher shim is executable"
+assert_eq "$ROOT" "$(<"$BOARD_DATA/board/bin/plugin-root")" "launcher records the plugin root as a fallback"
+assert_eq "true" "$(launcher_sh status | jq -r '.installed')" "launcher status after install"
+assert_eq "unchanged" "$(launcher_sh install | jq -r '.action')" "launcher install is idempotent"
+[[ -z "$(find "$BL_APPS" "$BOARD_DATA/board/bin" -maxdepth 1 -name '*.new.*' -o -maxdepth 1 -name '*.old.*' -o -maxdepth 1 -name '*.tmp.*')" ]] || fail "launcher install leaves no staging files"
+assert_eq "installed" "$(BOARD_IDLE_EXIT=45 launcher_sh install | jq -r '.action')" "launcher install picks up a new BOARD_IDLE_EXIT"
+assert_contains "$(<"$BL_SHIM")" 'BOARD_IDLE_EXIT:-45' "the launcher carries BOARD_IDLE_EXIT set at install (Finder does not pass the shell environment)"
+launcher_sh install >/dev/null
+# shim은 설치본 캐시에서 가장 새 버전을 고르고(10 > 9), 없으면 기록한 경로를 쓴다. 가짜 설치본 board.sh는 받은 인자를 남긴다.
+for v in 0.9.0 0.10.0; do
+  mkdir -p "$BL_HOME/.claude/plugins/cache/ai-harness/ai-harness/$v/scripts/board"
+  printf '#!/bin/bash\necho "%s $*" >>"%s"\n' "$v" "$BOARD_T/launcher-calls" >"$BL_HOME/.claude/plugins/cache/ai-harness/ai-harness/$v/scripts/board/board.sh"
+  : # 설치본의 board.sh는 실행 비트가 없다 — shim은 bash로 부른다
+done
+env -i HOME="$HOME" HM_PLUGIN_SEARCH_HOME="$BL_HOME" HARNESS_METRICS_DIR="$BOARD_DATA" /bin/bash "$BL_APP/Contents/MacOS/harness-board"
+assert_eq "0.10.0 open" "$(<"$BOARD_T/launcher-calls")" "the launcher opens the board from the newest installed plugin"
+# 설치본이 없으면 기록한 경로로 실제 보드를 연다. Finder처럼 PATH가 짧아도 install 때 PATH(jq·python3)를 쓴다.
+env -i HOME="$HOME" PATH=/usr/bin:/bin HM_PLUGIN_SEARCH_HOME="$BOARD_T/no-plugins" HARNESS_METRICS_DIR="$BOARD_DATA" \
+  BOARD_PORT="$BOARD_PORT_T" BOARD_NO_BROWSER=1 /bin/bash "$BL_APP/Contents/MacOS/harness-board"
+assert_eq "true" "$(board_sh status | jq -r '.running')" "the launcher starts the board from the recorded plugin root with a short PATH"
+assert_eq "true" "$(board_sh stop | jq -r '.stopped')" "board started by the launcher stops"
+assert_eq "removed" "$(launcher_sh remove | jq -r '.action')" "launcher remove"
+assert_not_file "$BL_APP/Contents/Info.plist"
+assert_not_file "$BL_SHIM"
+assert_eq "unchanged" "$(launcher_sh remove | jq -r '.action')" "launcher remove is idempotent"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "board.sh launcher install" "setup offers the board launcher"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh launcher" "board skill documents the launcher"
+pass "harness board launcher app"
+
+# 보드 자동 종료(#355): 런처로 켜고 잊어도 서버가 남지 않게 BOARD_IDLE_EXIT분 동안 보는 사람이 없으면 스스로 꺼진다.
+# 붙잡은 권한 요청이 있으면 끄지 않는다(끄면 그 터미널 세션이 답을 잃는다). 0이면 끄지 않는다.
+board_alive() { [[ "$(board_sh status | jq -r '.running')" == true ]]; }
+BOARD_IDLE_EXIT=0.05 board_sh open >/dev/null
+board_alive || fail "board with idle exit starts"
+for _ in $(seq 100); do board_alive || break; sleep 0.1; done
+board_alive && fail "board exits after BOARD_IDLE_EXIT minutes with nobody watching"
+assert_not_file "$BOARD_DATA/board/server.json"
+BOARD_IDLE_EXIT=0 board_sh open >/dev/null
+sleep 4
+board_alive || fail "BOARD_IDLE_EXIT=0 keeps the board running"
+board_sh stop >/dev/null
+BOARD_IDLE_EXIT=0.05 BOARD_PERMISSION_WAIT=8 board_sh open >/dev/null
+BI_TOKEN="$(jq -r '.token' "$BOARD_DATA/board/server.json")"
+curl -s -m 10 -X POST -H "X-Board-Hook: $BI_TOKEN" -d '{"tool_name":"Bash","session_id":"s-idle"}' "http://127.0.0.1:$BOARD_PORT_T/hook/permission" >/dev/null &
+BI_HOLD=$!
+sleep 6
+board_alive || fail "board does not exit while it holds a permission request"
+wait "$BI_HOLD" 2>/dev/null || true
+for _ in $(seq 100); do board_alive || break; sleep 0.1; done
+board_alive && fail "board exits once the held request is released"
+pass "harness board exits when nobody watches"
+
 # 보드 상주 세션(#349): '새 세션'은 claude -p stream-json 상주 프로세스로 쥐고 입력은 stdin으로(--resume 없음, 세션 id 유지).
 # 권한·질문은 control_request로 받아 SSE(GET /events)로 1초 안에 밀어 주고, 사람이 누른 답만 control_response로 돌려준다.
 # 가짜 claude(tests/fixtures/board-resident)가 실측한 형식대로 묻고, 시나리오 클라이언트가 화면처럼 SSE를 열어 답한다.
