@@ -406,6 +406,10 @@ class Residents:
     def _live_count(self):
         return sum(1 for s in self._all() if self._live(s))
 
+    def working(self):
+        """작업 중이거나 사람의 답을 기다리는 쥔 세션이 있는가 — 보드가 스스로 꺼지면 그 턴이 끊긴다(#355)."""
+        return any(self._live(s) and s.state in ("busy", "waiting") for s in self._all())
+
     def _full_message(self):
         return (f"보드가 쥔 세션이 이미 {MAX_LIVE}개 돌고 있음 — 다 쓴 세션을 '세션 끝내기'로 닫은 뒤 다시 시도하세요"
                 "(대화 기록은 남아 나중에 이어 쥘 수 있음)")

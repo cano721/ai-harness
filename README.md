@@ -673,6 +673,7 @@ HM_HARVEST_AUTO_MERGE=1    # 자동 harvest PR
 scripts/board/board.sh open      # 떠 있으면 그 주소, 없으면 띄우고 브라우저를 엽니다 (출력 JSON의 url)
 scripts/board/board.sh status    # running · url
 scripts/board/board.sh stop
+scripts/board/board.sh launcher install|remove|status   # macOS: 눌러서 여는 ~/Applications/Harness Board.app
 ```
 
 사이드바는 **작업 현황**·하네스 효과·하네스 설정 셋입니다. 작업 현황은 한 목록 화면이고, 위쪽 탭 `전체 | 작업 | 하네스 동작 | 자동 수정`(탭마다 사람 필요 수 배지)으로 출처를 고릅니다. 세 출처의 항목은 같은 상태 열 — 사람 필요(답·검토, 결과 확인) → 진행 중 → 대기(대기·막힘) → 완료·쉬는 중(접힘) — 에 놓이고, 전체 탭에서는 카드마다 출처 칩(작업·하네스·자동 수정)이 붙습니다.
@@ -685,6 +686,8 @@ scripts/board/board.sh stop
 - **보안**: `127.0.0.1`에만 묶이고, 실행마다 새 URL 토큰·Host(DNS rebinding)·Origin을 검사합니다. 브라우저에서 명령 문자열을 받지 않고 항목별로 허용된 작업만 서버가 인자를 만들어 실행합니다. 보드는 다른 세션의 질문·권한에 사람 없이 답하지 않습니다.
 - **권한 요청 훅 (선택)**: 보드에서 권한 요청에 답하려면 `/setup`의 자동화 옵션에서 PermissionRequest 훅을 연결합니다(`board.sh hook on|off`, `~/.claude/settings.json` 백업 후 추가·제거). 보드가 꺼져 있거나 30분 넘게 아무도 보지 않으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻습니다. headless 세션(`claude -p` — 워크플로 러너·자동 harvest·autofix 같은 자동 실행)의 요청은 보드로 넘기지 않습니다 — 답할 사람이 없는 세션이라 평소처럼 바로 거부되고 세션이 이어 갑니다. 훅 전용 토큰과 주소는 `~/.ai-harness/board/server.json`(0600, 종료 시 삭제)에만 있습니다.
 - **선택 의존**: Orca가 없으면 세션 묶음과 대화형 터미널 입력만 빠집니다. Jira 키 링크는 `BOARD_JIRA_URL`·`JIRA_BASE_URL` 또는 사용자 규칙 파일에 적힌 주소가 있을 때만 붙습니다. Bitbucket PR 상태·브랜치 보호는 `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`, GitHub는 `gh`로 읽습니다.
+- **런처 앱 (선택, macOS)**: `/setup` 자동화 옵션에서 고르면 `~/Applications/Harness Board.app`을 만듭니다(`board.sh launcher install|remove|status`). 누르면 `board.sh open`과 같습니다 — 떠 있으면 그 화면, 없으면 띄워서 엽니다. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고 그 스크립트가 열 때마다 가장 새 플러그인 설치본을 찾으므로, 플러그인을 업데이트해도 다시 설치하지 않습니다. Finder로 연 앱은 셸 환경을 물려받지 않아 설치 때의 PATH(와 정했다면 `BOARD_IDLE_EXIT`)를 기억합니다. 열지 못하면 이유를 대화상자로 보입니다.
+- **자동 종료**: 보는 사람(열린 보드 화면)이 `BOARD_IDLE_EXIT`분(기본 30, `0`이면 끄지 않음) 동안 없으면 서버가 스스로 꺼집니다. 붙잡은 권한 요청·열린 이벤트 연결·작업 중이거나 답을 기다리는 상주 세션이 있으면 끄지 않습니다.
 - **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`·`autofix/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
 
 <a id="autofix"></a>
