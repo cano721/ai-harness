@@ -9,7 +9,7 @@ def active_min_turns: 5;
 # 개선별 재발 후보: 한쪽 목록 상한, 반영 전 근거가 batch 기록에 없을 때 볼 날 수.
 def candidate_cap: 300;
 def baseline_days: 30;
-def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
+def harness_workflows: ["implement-feature", "fix-bug", "investigate", "review", "understand-change"];
 def ep: . + "T00:00:00Z" | fromdateiso8601;
 def day_of: (.ended // .started // "")[0:10];
 def median: map(select(. != null)) | sort

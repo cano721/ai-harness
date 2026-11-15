@@ -24,7 +24,7 @@ def metric_table($rows; $supported; $total):
 # 1턴짜리 잡세션이 분모를 몇 배로 부풀리므로 비율은 활성 세션만 센다.
 def active_min_turns: 5;
 # 하네스가 생성하는 워크플로 진입점. 프로젝트가 따로 둔 워크플로는 읽힌 `.ai-harness/workflows/<이름>.md`에서 얻는다.
-def harness_workflows: ["implement-feature", "fix-bug", "review", "understand-change"];
+def harness_workflows: ["implement-feature", "fix-bug", "investigate", "review", "understand-change"];
 def has_coverage($k): ((.coverage // []) | index($k)) != null;
 # Codex input_tokens는 캐시 읽기를 포함한다. 그 의미로 기록된 예전 이벤트(context 수집 전)는
 # 보관 정책상 재추출되지 않으므로 집계 때 캐시 제외 입력으로 맞춘다.
