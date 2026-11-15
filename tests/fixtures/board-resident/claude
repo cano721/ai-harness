@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""가짜 claude(#349): `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool stdio` 상주 세션 흉내.
+
+실측(Claude Code 2.1.325) 형식을 따른다: 권한·질문은 stdout의 control_request(subtype can_use_tool)로 나가고,
+호스트가 stdin에 control_response로 답할 때까지 그 턴이 멈춘다. stdin이 닫히면 남은 요청은 실패로 끝내고 종료한다.
+모든 실행 인자·stdin 줄·내보낸 요청을 BOARD_STUB_LOG(jsonl)에 남겨 테스트가 확인한다.
+첫 지시나 이어서 보낸 글에 PERM이 있으면 Bash 권한을, ASK가 있으면 AskUserQuestion을 묻는다. 그 밖에는 바로 답한다.
+"""
+import json, os, sys, time, uuid
+
+LOG = os.environ.get("BOARD_STUB_LOG") or os.devnull
+
+
+def note(**kv):
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"pid": os.getpid(), "at": time.time(), **kv}) + "\n")
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+args = sys.argv[1:]
+if args[:1] == ["agents"]:
+    print("[]")
+    sys.exit(0)
+note(argv=args)
+if "--input-format" not in args or "stream-json" not in args:
+    sys.exit(1)
+sid = None
+for flag in ("--session-id", "--resume"):
+    if flag in args:
+        sid = args[args.index(flag) + 1]
+sid = sid or str(uuid.uuid4())
+out({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd()})
+waiting = None  # (request_id, tool)
+for line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        continue
+    note(stdin=msg)
+    if msg.get("type") == "control_response" and waiting:
+        resp = (msg.get("response") or {}).get("response") or {}
+        if (msg.get("response") or {}).get("request_id") != waiting[0]:
+            continue
+        ok = resp.get("behavior") == "allow"
+        result = (json.dumps((resp.get("updatedInput") or {}).get("answers"), ensure_ascii=False) if waiting[1] == "AskUserQuestion"
+                  else "ran" if ok else resp.get("message", "denied"))
+        out({"type": "user", "session_id": sid, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_stub", "content": result, "is_error": not ok}]}})
+        out({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [{"type": "text", "text": "after " + result}]}})
+        out({"type": "result", "subtype": "success", "session_id": sid})
+        waiting = None
+        continue
+    if msg.get("type") != "user":
+        continue
+    content = (msg.get("message") or {}).get("content")
+    text = content if isinstance(content, str) else json.dumps(content)
+    out({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd()})
+    if "PERM" in text or "ASK" in text:
+        tool = "Bash" if "PERM" in text else "AskUserQuestion"
+        inp = ({"command": "touch made.txt"} if tool == "Bash" else
+               {"questions": [{"question": "Pick a color", "header": "Color", "multiSelect": False,
+                               "options": [{"label": "red", "description": ""}, {"label": "blue", "description": ""}]}]})
+        out({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_stub", "name": tool, "input": inp}]}})
+        rid = str(uuid.uuid4())
+        waiting = (rid, tool)
+        note(emitted=tool, request_id=rid)
+        out({"type": "control_request", "request_id": rid, "request": {"subtype": "can_use_tool", "tool_name": tool,
+             "display_name": tool, "input": inp, "tool_use_id": "toolu_stub"}})
+        continue
+    out({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [{"type": "text", "text": "echo " + text[:40]}]}})
+    out({"type": "result", "subtype": "success", "session_id": sid})
+note(eof=True, pending=bool(waiting))

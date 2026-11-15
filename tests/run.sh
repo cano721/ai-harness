@@ -11,7 +11,7 @@ TESTS_FINISHED=0
 cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
   local board_pid conf
-  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json"; do
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json"; do
     board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
     [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
   done
@@ -8079,6 +8079,60 @@ if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/s
   fail "board code carries no organization URL"
 fi
 pass "harness board skill and hook wiring"
+
+# 보드 상주 세션(#349): '새 세션'은 claude -p stream-json 상주 프로세스로 쥐고 입력은 stdin으로(--resume 없음, 세션 id 유지).
+# 권한·질문은 control_request로 받아 SSE(GET /events)로 1초 안에 밀어 주고, 사람이 누른 답만 control_response로 돌려준다.
+# 가짜 claude(tests/fixtures/board-resident)가 실측한 형식대로 묻고, 시나리오 클라이언트가 화면처럼 SSE를 열어 답한다.
+BR_T="$TEST_TMP/board-resident"
+BR_DATA="$BR_T/data"
+mkdir -p "$BR_DATA" "$BR_T/cwd" "$BR_T/projects"
+chmod +x "$ROOT/tests/fixtures/board-resident/claude" "$ROOT/tests/fixtures/board-resident/orca"
+BR_PORT="$(free_port)"
+BR_LOG="$BR_T/stub.jsonl"
+: >"$BR_LOG"
+env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
+  BOARD_JIRA_URL= JIRA_BASE_URL= python3 -I "$ROOT/scripts/board/board-server.py" --no-open >"$BR_T/server.log" 2>&1 &
+BR_PID=$!
+BR_URL=""
+for _ in $(seq 100); do
+  BR_URL="$(jq -r '.url // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)"
+  [[ -n "$BR_URL" ]] && break
+  sleep 0.1
+done
+[[ -n "$BR_URL" ]] || fail "board server for resident sessions starts"
+BR_REPORT="$(python3 -I "$ROOT/tests/fixtures/board-resident/scenario.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/cwd" "$BR_LOG")" \
+  || fail "resident scenario runs ($(tail -5 "$BR_T/server.log"))"
+br() { jq -r "$1 | tostring" <<<"$BR_REPORT"; }
+assert_eq "200|text/event-stream|hello" "$(br '[.sse_status, .sse_type, .sse_first_event] | join("|")')" "GET /events is an SSE stream that greets first"
+assert_eq "true|true" "$(br '[.new_ok, .id_has_sid] | join("|")')" "new session starts as a resident process keyed by its session id"
+assert_eq "true" "$(br '.permission_tool_stdio')" "the resident session routes permission prompts to the board over stdio"
+assert_eq "true|Bash|bg|needs_human" "$(br '[.perm_pushed, .perm_tool, .item_kind, .item_state] | join("|")')" "a permission request is pushed over SSE as a waiting item"
+assert_eq "true" "$(br '.perm_latency < 1')" "the permission request reaches SSE within a second ($(br '.perm_latency')s)"
+assert_eq "false" "$(br '.auto_answered')" "the board never answers a permission request by itself"
+assert_eq "true" "$(br '.polled_perm')" "status.json carries the same request for the polling fallback"
+assert_eq "true|allow|true|true" "$(br '[.allow, .allow_behavior, .allow_same_request, .idle_after_turn] | join("|")')" "the person's allow goes back on stdin as the control response and the turn ends"
+assert_eq "true|true|Pick a color|true" "$(br '[.send, .question_pushed, .question_text, .transcript_question] | join("|")')" "AskUserQuestion is pushed as a question with its choices"
+assert_eq "true|{\"Pick a color\":\"red\"}" "$(br '[.answer, (.answers_sent | tojson)] | join("|")')" "the person's pick goes back as the AskUserQuestion answers"
+assert_eq "false" "$(br '.bad_answer')" "an answer to a request the board does not hold is refused"
+assert_eq "1|false|2" "$(br '[.launches, .resume_used, .stdin_users] | join("|")')" "follow-up input goes to the same process on stdin without --resume"
+assert_eq "true" "$(br '.end')" "a resident session can be ended from the board"
+assert_contains "$(br '.ended_cmd')" "claude --resume " "an ended resident session shows how to resume it"
+assert_eq "true|true|true" "$(br '[.send_after_end, .relaunch_resume_sid, .same_id_after_resume] | join("|")')" "sending to an ended resident session resumes the same session id"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "the board keeps a record of its resident sessions"
+kill "$BR_PID" 2>/dev/null || true
+wait "$BR_PID" 2>/dev/null || true
+for _ in $(seq 50); do
+  [[ "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" == 2 ]] && break
+  sleep 0.1
+done
+assert_eq "2" "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" "stopping the board closes the resident sessions it holds"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "stopping the board keeps the resident record for a later resume"
+BR_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen listens to server events"
+assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
+assert_contains "$BR_TPL" "post('/answer'" "the board screen answers a resident question through the session"
+pass "board holds new sessions as resident stream-json processes and pushes permission requests over SSE"
 
 # 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
 # compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
