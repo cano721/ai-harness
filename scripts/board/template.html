@@ -184,6 +184,9 @@
   /* 그림자: 뜬 면에만 */
   --shadow-overlay: 0 8px 28px rgba(6, 8, 11, 0.18);
 
+  /* 흐림: 못 누르는 조작 요소와 쓰지 않기로 한 내용. 왜 못 누르는지는 옆에 글로 적는다 */
+  --opacity-disabled: 0.5;
+
   /* 층 */
   --z-sticky: 10;
   --z-drawer: 30;
@@ -379,7 +382,7 @@
 .ds-btn--ghost { border-color: transparent; background: transparent; }
 .ds-btn--danger { border-color: var(--color-danger-border); color: var(--color-danger); }
 .ds-btn--danger:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-danger-subtle); }
-.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
 /* 진행 중인 버튼은 흐리게 하지 않는다 — 진행형 글자가 읽혀야 한다. */
 .ds-btn[aria-busy="true"] { cursor: progress; opacity: 1; }
 .ds-btn[aria-busy="true"]::before { content: ""; width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-full); border: 2px solid currentColor; border-right-color: transparent; animation: ds-spin var(--motion-duration-loop) linear infinite; }
@@ -394,6 +397,7 @@
 }
 .ds-input::placeholder { color: var(--color-text-muted); }
 .ds-input[aria-invalid="true"] { border-color: var(--color-danger-border); }
+.ds-input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .ds-field { display: grid; gap: var(--space-1); }
 .ds-field__error { display: flex; align-items: center; gap: var(--space-1); color: var(--color-danger); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
 
@@ -423,8 +427,9 @@
   font: inherit; font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap;
 }
 button.ds-chip { min-height: var(--size-control-sm); border-color: var(--color-border-control); color: var(--color-text); cursor: pointer; }
-button.ds-chip:hover { background: var(--color-surface-hover); }
-button.ds-chip:active { background: var(--color-surface-selected); }
+button.ds-chip:not(:disabled):hover { background: var(--color-surface-hover); }
+button.ds-chip:not(:disabled):active { background: var(--color-surface-selected); }
+button.ds-chip:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 button.ds-chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
 .ds-count {
   display: inline-flex; align-items: center; justify-content: center; min-width: var(--size-badge); height: var(--size-badge); padding: 0 var(--space-1);
@@ -730,22 +735,18 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-refmedia { display: flex; gap: var(--space-2); overflow-x: auto; min-width: 0; padding-bottom: var(--space-1); }
 .b-refmedia > img, .b-refmedia > video { flex: none; height: calc(var(--size-row) * 6); width: auto; max-width: 100%; object-fit: contain; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-sunken); }
 .ds-card[data-excluded="true"] { background: var(--color-surface-sunken); }
-.ds-card[data-excluded="true"] > :not(.ds-card__meta):not(.ds-card__actions) { opacity: 0.45; filter: grayscale(1); }
-.ds-card[data-primary="true"] { border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
-.ds-card[data-missing="true"] { opacity: 0.55; }
-.b-star[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-surface); }
-.b-star:disabled, .b-select:disabled { opacity: 0.45; cursor: default; }
+.ds-card[data-excluded="true"] > :not(.ds-card__meta):not(.ds-card__actions) { opacity: var(--opacity-disabled); filter: grayscale(1); }
+.ds-card[data-missing="true"] { background: var(--color-surface-sunken); }
 .b-slotpick { display: inline-flex; align-items: center; gap: var(--space-2); }
 .b-select { width: auto; min-height: var(--size-control-sm); padding-top: 0; padding-bottom: 0; }
 .b-kv { font-size: var(--font-size-label); }
-.b-mood { font-size: var(--font-size-title); font-weight: var(--font-weight-title); }
 .b-tonegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(calc(var(--size-column-min) * 0.8), 100%), 1fr)); gap: var(--space-5); }
 .b-tonegrid h4 { margin: 0 0 var(--space-2); }
 .b-palette { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
 .b-palette > li { display: grid; grid-template-columns: var(--size-control-md) minmax(0, 1fr); gap: 0 var(--space-3); align-items: center; }
 .b-swatch { width: var(--size-control-md); height: var(--size-control-md); border: 1px solid var(--color-border); border-radius: var(--radius-md); grid-row: span 2; }
 .b-typedisplay { margin: 0 0 var(--space-1); font-size: var(--font-size-heading); line-height: var(--font-line-heading); font-weight: var(--font-weight-strong); }
-.b-quote { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-left: 3px solid var(--color-accent); background: var(--color-surface-sunken); }
+.b-quote { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-left: 1px solid var(--color-border-control); background: var(--color-surface-sunken); }
 .b-slots { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
 .b-slots > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 .b-slots > li > b { min-width: calc(var(--size-control-md) * 3); }
@@ -756,7 +757,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-refbar { position: sticky; bottom: var(--space-3); z-index: var(--z-sticky); display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-overlay); }
 .b-refbar > .b-refsum { flex: 1 1 auto; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b-refbar > .ds-btn { flex: none; }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .b-refmedia > img, .b-refmedia > video { height: calc(var(--size-row) * 4); }
   .b-kv { grid-template-columns: minmax(0, 1fr); }
   .b-kv dd { margin-bottom: var(--space-2); }
@@ -2899,7 +2900,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   function closeRefs() { rrun = null; rdetail = null; rsig = ''; renderAll(); loadRefs(true); const b = document.querySelector(`[data-refrun]`); if (b) b.focus(); }
   const refMedia = (run, m) => (m && m.remote ? m.remote : m && m.path ? `/references/file?t=${encodeURIComponent(TOKEN)}&run=${encodeURIComponent(run)}&p=${encodeURIComponent(m.path)}` : '');
   // 고르기 대기는 랜딩 실행이 reference_pick에서 기다릴 때만. 보기 전용(랜딩 실행 없음)·다른 단계는 중립 '준비됨'.
-  const refStatus = (r) => (r.status === 'picked' ? ['success', '고름'] : r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']);
+  const refStatus = (r) => (r.missing ? ['info', '폴더 없음'] : r.status === 'picked' ? ['success', '고름'] : r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']);
   const refCounts = (c) => REF_TABS.map(([k, label]) => `${label} ${(c || {})[k] || 0}`).join(' · ');
   const hexColor = (v) => (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(String(v || '')) ? v : 'transparent');
 
@@ -2913,7 +2914,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       const c = el('article', 'ds-card'); c.dataset.key = 'ref:' + r.run_id;
       const meta = el('div', 'ds-card__meta');
       meta.append(badge(refStatus(r)));
-      if (r.missing) { c.dataset.missing = 'true'; meta.append(chip('폴더 없음')); }
+      if (r.missing) c.dataset.missing = 'true';
       else if (!r.landing_node) meta.append(chip('보기 전용'));
       meta.append(el('span', 'ds-card__when ds-num', stamp(r.created_at)));
       const h = el('h3', 'ds-card__title');
@@ -2965,7 +2966,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   function toneSection(t) {
     const sec = el('section', 'ds-card');
     sec.append(el('h3', 'ds-card__title', '정해 둔 톤앤매너'));
-    const mood = el('div', 'ds-cluster'); for (const m of t.mood || []) mood.append(el('span', 'ds-chip b-mood', m)); sec.append(mood);
+    const mood = el('div', 'ds-cluster'); for (const m of t.mood || []) mood.append(el('span', 'ds-chip', m)); sec.append(mood);
     if (t.avoid) { const p = el('p', 'b-line'); p.append(el('b', null, '피할 느낌 '), t.avoid); sec.append(p); }
     const grid = el('div', 'b-tonegrid');
     const colors = el('div'); colors.append(el('h4', 'ds-label', '색'));
@@ -3016,7 +3017,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         if (outNow) { s.dropped.add(r.id); for (const k of ['layout', 'interaction']) if (s.star[k] === r.id) s.star[k] = null; for (const x of allSlots(d, s)) if (s.comp[x.id] === r.id) s.comp[x.id] = null; } else s.dropped.delete(r.id);
         syncRefs();
       };
-      acts.append(drop); c.append(acts);
+      const why = el('span', 'ds-caption b-why'); why.id = 'why-' + r.id; why.hidden = true;
+      acts.append(drop, why); c.append(acts);
     }
     return c;
   }
@@ -3074,7 +3076,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     document.querySelectorAll('#board [data-refid]').forEach((c) => {
       const id = c.dataset.refid, out = s.dropped.has(id);
       const prim = s.star.layout === id || s.star.interaction === id || allSlots(d, s).some((x) => s.comp[x.id] === id);
-      c.dataset.excluded = String(out); c.dataset.primary = String(prim && !out);
+      c.dataset.excluded = String(out); c.dataset.selected = String(prim && !out);
       const ob = c.querySelector('.b-refout'); if (ob) ob.hidden = !out;
       const st = c.querySelector('.b-star'); if (st) { const on = s.star.layout === id || s.star.interaction === id; st.setAttribute('aria-pressed', String(on)); st.textContent = on ? '★ 대표' : '★ 대표로'; st.disabled = lock || out; }
       const sel = c.querySelector('.b-select');
@@ -3084,6 +3086,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         sel.firstChild.value = ''; sel.value = mine ? mine.id : ''; sel.disabled = lock || out;
       }
       const dr = c.querySelector('.b-drop'); if (dr) { dr.lastChild.textContent = out ? '되돌리기' : '제외'; dr.firstChild.style.display = out ? 'none' : ''; dr.setAttribute('aria-label', out ? `${id} 되돌리기` : `${id} 제외`); dr.disabled = lock; }
+      // 못 누르는 조작 옆에 이유를 글로 적는다(규칙: disabled 상태표).
+      const why = c.querySelector('.b-why');
+      if (why) {
+        why.textContent = lock ? '이미 골라서 바꿀 수 없습니다' : out ? '제외해서 대표로 고를 수 없습니다. 되돌리면 고를 수 있습니다' : '';
+        why.hidden = !why.textContent;
+        for (const x of [st, sel, lock ? dr : null]) if (x) { if (x.disabled) x.setAttribute('aria-describedby', why.id); else x.removeAttribute('aria-describedby'); }
+      }
     });
     const ul = $('ref-slots');
     if (ul) {
@@ -3110,7 +3119,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     rsig = key;
     const s = pickState(d), canPick = d.can_pick, showPick = canPick || !!d.picked;
     const wrap = el('div', 'b-refview'); wrap.dataset.refview = d.run_id;
-    if (d.missing) { wrap.append(notice('danger', '작업 폴더가 없어 이 보드를 다시 그릴 수 없습니다. 실행 기록만 남아 있습니다.')); board.replaceChildren(wrap); return; }
+    if (d.missing) { wrap.append(notice('info', '작업 폴더가 없어 이 보드를 다시 그릴 수 없습니다. 실행 기록만 남아 있습니다.')); board.replaceChildren(wrap); return; }
     if (canPick) wrap.append(notice('attention', '랜딩 실행이 고르기를 기다립니다. 레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 하나를 고르고(추천이 미리 찍혀 있습니다), 쓰지 않을 것만 제외한 뒤 「이 레퍼런스로 시작」을 누르세요.'));
     else if (d.picked) wrap.append(notice('success', `이미 골랐습니다 · 대표 ${[(d.picked.primary || {}).layout, (d.picked.primary || {}).interaction].filter(Boolean).join(' · ') || '없음'} · ${(d.picked.dropped || []).length}개 제외. 세션이 이어서 진행합니다.`));
     else if (!d.landing_node) wrap.append(notice('info', '보기 전용 보드입니다. 진행 중인 랜딩 실행이 없어 여기서 고르거나 시작하지 않습니다. 고를 것이 있으면 이 보드를 그린 세션에 말로 답하세요.'));
@@ -3143,7 +3152,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!d) { box.replaceChildren(back); return; }
     const h = el('h2', 'ds-title', d.topic); h.id = 'ref-title'; h.tabIndex = -1;
     const meta = el('div', 'ds-card__meta'); meta.append(badge(refStatus(d)));
-    if (!d.landing_node) meta.append(chip('보기 전용'));
+    if (!d.landing_node && !d.missing) meta.append(chip('보기 전용'));
     meta.append(el('span', 'ds-num', `만든 시각 ${stamp(d.created_at)}`));
     const path = el('div', 'b-refpath'); const ps = el('span', 'ds-caption', d.work); ps.title = d.work;
     path.append(ps, copyBtn('경로 복사', d.work, 'ds-btn--sm ds-btn--ghost'));

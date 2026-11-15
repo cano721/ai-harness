@@ -184,6 +184,9 @@
   /* 그림자: 뜬 면에만 */
   --shadow-overlay: 0 8px 28px rgba(6, 8, 11, 0.18);
 
+  /* 흐림: 못 누르는 조작 요소와 쓰지 않기로 한 내용. 왜 못 누르는지는 옆에 글로 적는다 */
+  --opacity-disabled: 0.5;
+
   /* 층 */
   --z-sticky: 10;
   --z-drawer: 30;
@@ -379,7 +382,7 @@
 .ds-btn--ghost { border-color: transparent; background: transparent; }
 .ds-btn--danger { border-color: var(--color-danger-border); color: var(--color-danger); }
 .ds-btn--danger:not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-danger-subtle); }
-.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.ds-btn:disabled, .ds-btn[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
 /* 진행 중인 버튼은 흐리게 하지 않는다 — 진행형 글자가 읽혀야 한다. */
 .ds-btn[aria-busy="true"] { cursor: progress; opacity: 1; }
 .ds-btn[aria-busy="true"]::before { content: ""; width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-full); border: 2px solid currentColor; border-right-color: transparent; animation: ds-spin var(--motion-duration-loop) linear infinite; }
@@ -394,6 +397,7 @@
 }
 .ds-input::placeholder { color: var(--color-text-muted); }
 .ds-input[aria-invalid="true"] { border-color: var(--color-danger-border); }
+.ds-input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .ds-field { display: grid; gap: var(--space-1); }
 .ds-field__error { display: flex; align-items: center; gap: var(--space-1); color: var(--color-danger); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
 
@@ -423,8 +427,9 @@
   font: inherit; font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap;
 }
 button.ds-chip { min-height: var(--size-control-sm); border-color: var(--color-border-control); color: var(--color-text); cursor: pointer; }
-button.ds-chip:hover { background: var(--color-surface-hover); }
-button.ds-chip:active { background: var(--color-surface-selected); }
+button.ds-chip:not(:disabled):hover { background: var(--color-surface-hover); }
+button.ds-chip:not(:disabled):active { background: var(--color-surface-selected); }
+button.ds-chip:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 button.ds-chip[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-text-on-accent); }
 .ds-count {
   display: inline-flex; align-items: center; justify-content: center; min-width: var(--size-badge); height: var(--size-badge); padding: 0 var(--space-1);

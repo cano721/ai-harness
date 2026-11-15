@@ -10252,6 +10252,21 @@ DS_BAD="$(ds_sh contrast --root "$DS_T" 2>&1)" && fail "contrast check fails whe
 assert_contains "$DS_BAD" "--color-text-on-solid" "contrast failure names the token pair"
 pass "design system: computed contrast for every documented pair, light and dark"
 
+# 글자로 확인할 수 있는 규칙(#356): 중단점 폭, disabled 커서·흐림, 강조 면 위 글자색, danger 알림 문구.
+# 지금 화면은 통과하고, #341에서 들어왔던 위반을 다시 넣으면 하나씩 잡는다.
+DS_LINT_OUT="$(ds_sh lint 2>&1)" || fail "current screens follow the mechanical design rules: $DS_LINT_OUT"
+awk '{ print } index($0, "/* ds:components:end") { print "@media (max-width: 700px) { .b-x { gap: 0; } }"; print ".b-x:disabled { opacity: 0.45; cursor: default; }"; print ".b-y[aria-pressed=\"true\"] { background: var(--color-accent); color: var(--color-surface); }" }' \
+  "$ROOT/scripts/board/template.html" >"$DS_T/scripts/board/template.html"
+printf '%s\n' "    wrap.append(notice('danger', '작업 폴더가 없어 이 보드를 다시 그릴 수 없습니다.'));" >>"$DS_T/scripts/board/template.html"
+DS_LINT_BAD="$(ds_sh lint --root "$DS_T" 2>&1)" && fail "lint fails on the seeded design rule violations"
+assert_contains "$DS_LINT_BAD" "@media (max-width: 700px)" "lint flags a media query width that is not a breakpoint token"
+assert_contains "$DS_LINT_BAD" "disabled 커서는 not-allowed (지금 default)" "lint flags a disabled rule with the default cursor"
+assert_contains "$DS_LINT_BAD" "disabled 흐림은 var(--opacity-disabled) (지금 0.45)" "lint flags a disabled opacity literal"
+assert_contains "$DS_LINT_BAD" "강조 면 위 글자는 var(--color-text-on-accent)" "lint flags text on the accent surface that is not the on-accent token"
+assert_contains "$DS_LINT_BAD" "notice('danger', …)" "lint flags a danger notice that does not describe a failure"
+assert_eq "5" "$(grep -c '^scripts/board/template.html:' <<<"$DS_LINT_BAD")" "lint reports only the seeded violations, with file and line"
+pass "design system: mechanical lint for breakpoints, disabled state, accent text, danger notices"
+
 # 기준 화면은 단일 HTML이다: 버전을 고정한 글꼴 파일 하나 말고는 밖에서 아무것도 불러오지 않고, 그 글꼴이 없어도 동작한다.
 DS_REF_HTML="$(<"$DS/reference.html")"
 case "${DS_REF_HTML//"$DS_FONT_URL"/}" in *"http://"*|*"https://"*|*"<link "*|*" src="*|*"@import"*) fail "reference screen loads nothing from outside the file except the pinned font" ;; esac
