@@ -7,7 +7,7 @@ jq -e '
   . as $g
   | $g.name == "landing-page" and $g.entry == "brief"
   and ($g.terminals | index("done")) and ($g.terminals | index("user_decision")) and ($g.terminals | index("folded"))
-  and (["brief","references","reference_pick","direction","draft_pick","draft","preview","draft_review","build","measure","review","repair","done","user_decision","draft_choose","folded"]
+  and (["brief","references","reference_pick","direction","draft_pick","draft","preview","draft_review","build","measure","review","repair","done","user_decision","draft_choose","folded","draft_hold"]
        | all(.[]; . as $n | $g.nodes | has($n)))
   and $g.nodes.measure.actor == "runner" and $g.nodes.review.actor == "reviewer"
   and $g.nodes.reference_pick.actor == "human" and $g.nodes.draft_pick.actor == "human"
@@ -21,12 +21,15 @@ jq -e '
   and ([$g.transitions[] | select(.to == "build")] | all((.from == "draft_review" and .mode == "interactive") or .from == "draft_choose"))
   and ([$g.transitions[] | select(.from == "draft_review" and (.when == "draft_pass" or .when == "draft_kept") and .mode == "unattended")] | length == 2 and all(.to == "draft_choose"))
   and $g.nodes.draft_choose.actor == "maker" and $g.limits.unattended_builds == 1
+  and $g.nodes.draft_hold.actor == "runner" and ([$g.transitions[] | select(.from == "draft_hold" or .to == "draft_hold")] | all(.mode == "unattended"))
+  and ([$g.transitions[] | select(.from == "done")] | all(.to == "measure" and .when == "changed_after_review"))
   and $g.nodes.draft_review.actor == "reviewer" and ($g.review_checks.draft | index("template_look")) and ($g.review_checks.draft | index("craft"))
   and ($g.invariants | any(startswith("Measure outcomes come only from the measure script")))
   and ($g.invariants | any(startswith("Review outcomes are computed from the review JSON")))
 ' "$graph_path" >/dev/null || { printf 'invalid landing-page graph\n' >&2; exit 1; }
 for edge in 'brief references brief_ready' 'draft preview drafted' 'preview draft_review previewed' 'draft_review build draft_pass' 'draft_review draft draft_redo' 'draft_choose build chosen' 'draft_choose folded folded' 'build measure built' 'measure review measured_pass' 'measure repair measured_fail' \
-  'review repair review_issues' 'review user_decision review_limit_reached' 'review user_decision review_unverified' 'repair measure repaired'; do
+  'review repair review_issues' 'review user_decision review_limit_reached' 'review user_decision review_unverified' 'repair measure repaired' \
+  'done measure changed_after_review' 'draft_review draft_hold draft_redo_held' 'draft_hold draft draft_redo' 'draft_hold folded folded'; do
   read -r from to when <<<"$edge"
   jq -e --arg from "$from" --arg to "$to" --arg when "$when" \
     '.transitions[] | select(.from == $from and .to == $to and .when == $when)' "$graph_path" >/dev/null \

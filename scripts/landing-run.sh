@@ -17,6 +17,11 @@
 #     primary_refs로 이끄는 레퍼런스를 밝히고, 적어도 한 후보는 고른 대표를 그대로 쓴다(다 참고하면 후보가 섞인다).
 #   - draft_choose: 무인 실행은 후보 하나만 완성한다. 모든 시안 검토가 끝난 뒤 에이전트가 이유와 함께 하나를 고르고 나머지는
 #     folded로 접는다. 두 번째 후보의 build 진입은 거부한다(둘 다 완성하면 시간·비용이 두 배인데 보고서엔 하나만 쓰인다).
+#   - draft_hold: 무인·여러 후보에서 시안 검토가 재초안을 요구하면 후보를 세워 두고, 모든 후보의 첫 시안 검토가 끝나면
+#     재초안이 필요한 후보 중 점수가 나은 하나만 다시 그리게 하고 나머지는 접는다(redo-pick.json, via runner). 접힐 후보의
+#     재초안은 버려지는 비용이다.
+#   - finish: review가 done으로 보낸 시점의 페이지 지문(화면을 바꾸는 파일)과 지금을 비교한다. 달라졌으면 거부하고 후보를
+#     measure로 되돌린다 — 검토 뒤 고친 페이지를 검토된 페이지로 보고하지 않게.
 # 종료 코드: 0 성공, 2 사용법, 3 전이 거부, 4 산출물·입력 불충분.
 set -euo pipefail
 
@@ -37,6 +42,7 @@ usage:
   landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
   landing-run.sh board   --work DIR [--kind references|drafts] [--port N --serve]
   landing-run.sh wait-pick --work DIR --node reference_pick|draft_pick [--timeout-min 30]
+  landing-run.sh finish  --work DIR [--candidate ID]
   landing-run.sh status  --work DIR
 EOF
   exit 2
@@ -134,6 +140,28 @@ run_capture() {
   printf '%s\n' "$dir"
 }
 
+# What the visitor sees: the files under a candidate's dir that change the screen (markup, styles, scripts, data, images,
+# fonts, media), one "hash  ./path" line each, sorted. Logs, reports, and tool caches are not the page.
+FP_EXTS="htm css scss sass less js mjs cjs jsx ts tsx vue svelte astro mdx json svg png jpg jpeg webp avif gif ico bmp woff woff2 ttf otf eot mp4 webm mov mp3 wav ogg glb gltf hdr lottie"
+page_manifest() {
+  local dir; dir="$(jq -r --arg c "$1" '.candidates[$c].dir' "$STATE")"
+  [[ "$dir" == /* ]] || dir="$WORK/$dir"
+  [[ -d "$dir" ]] || return 0
+  dir="$(cd "$dir" && pwd)"
+  local names=(-iname '*.html') e
+  for e in $FP_EXTS; do names+=(-o -iname "*.$e"); done
+  local prune=(-name .git -o -name node_modules -o -name .landing-run -o -name .next -o -name .cache -o -name .turbo -o -name .svelte-kit -o -name .astro)
+  [[ "$WORK" != "$dir"/* ]] || prune+=(-o -path "./${WORK#"$dir"/}")
+  (cd "$dir" && find . \( "${prune[@]}" \) -prune -o -type f \( "${names[@]}" \) -print0 \
+    | xargs -0 sh -c 'for f; do printf "%s  %s\n" "$( (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") | cut -d" " -f1)" "$f"; done' _ | LC_ALL=C sort)
+}
+# Paths that differ from the manifest the review recorded (added, removed, or changed), one per line.
+changed_since_review() {
+  local saved="$RUN/reviewed-$1.txt"
+  [[ -f "$saved" ]] || return 0
+  page_manifest "$1" | LC_ALL=C comm -3 "$saved" - | sed -e 's/^[[:space:]]*//' -e 's/^[0-9a-f]*  //' | LC_ALL=C sort -u
+}
+
 current() { if [[ -n "$CAND" ]]; then jq -r --arg c "$CAND" '.candidates[$c].node // empty' "$STATE"; else state .node; fi; }
 
 move() {
@@ -159,7 +187,8 @@ move() {
   if [[ -n "$CAND" ]]; then
     save --arg c "$CAND" --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.candidates[$c].node = $t | .candidates[$c].entered_at = $at | .history += [{candidate: $c, from: $f, outcome: $o, to: $t, at: $at}]
-       | if $f == "preview" and (.candidates[$c].previewed_at == null) then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision" or $t == "folded") then .candidates[$c].finished_at = $at else . end'
+       | if $f == "preview" and (.candidates[$c].previewed_at == null) then .candidates[$c].previewed_at = $at elif ($t == "done" or $t == "user_decision" or $t == "folded") then .candidates[$c].finished_at = $at else . end
+       | if $f == "done" then .candidates[$c].finished_at = null else . end'
   else
     save --arg t "$to" --arg f "$from" --arg o "$outcome" --arg at "$at" \
       '.node = $t | .entered_at = $at | .history += [{from: $f, outcome: $o, to: $t, at: $at}]'
@@ -186,7 +215,9 @@ print_next() {
     human) how="Ask the user (in an interactive session), record their answer in the artifact, then submit with outcome picked${c:+ --candidate $c}" ;;
     runner) case "$node" in
         measure) how="Serve the page, then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
-        folded) how="Not finished: another candidate was chosen at draft_choose (status holds the reason); report it" ;;
+        folded) how="Not finished: another candidate was chosen at draft_choose or to redraw at draft_hold (status holds the reason); report it" ;;
+        draft_hold) how="Waiting: its first draft needs a redo, and once every first draft review is in the runner lets only the better of the drafts needing one redraw (by their draft review scores); work on the others" ;;
+        done) how="Before reporting: landing-run.sh finish --work <dir> --candidate $c. Do not edit the page after its review: finish refuses a page whose files changed since and sends it back to measure and review" ;;
         *) how="Terminal: report this candidate (landing-run.sh status)" ;;
       esac ;;
     reviewer) if [[ "$node" == draft_review ]]; then
@@ -258,6 +289,33 @@ check_primary() {
   [[ -z "$bad" ]] || die 4 "reference-pick.json: $bad (direction.md, Picking the primary references)"
 }
 
+# Unattended: once no candidate still owes its first draft review, the drafts held for a redo are settled — the one with the
+# fewest majors (then fewest failed checks, then candidates.json order) redraws, the rest fold. One held alone just redraws.
+resolve_holds() {
+  [[ "$(state .mode)" == unattended ]] || return 0
+  jq -e '[.candidates[] | select(.node != "folded" and .node != "draft_hold" and ((.draft_reviews // 0) == 0))] | length == 0' "$STATE" >/dev/null || return 0
+  local ranked keep reason c self="$CAND"
+  ranked="$(jq -c --slurpfile cj "$WORK/candidates.json" '($cj[0].candidates | map(.id)) as $ids
+    | [.candidates | to_entries[] | select(.value.node == "draft_hold")
+       | .key as $k | {id: $k, majors: (.value.draft_rounds[-1].majors // 0), fails: (.value.draft_rounds[-1].fails // 0), order: ($ids | index($k) // 99)}]
+    | sort_by(.majors, .fails, .order)' "$STATE")"
+  [[ "$(jq length <<<"$ranked")" -ge 1 ]] || return 0
+  keep="$(jq -r '.[0].id' <<<"$ranked")"
+  CAND="$keep"; move draft_hold draft_redo >/dev/null
+  save --arg c "$keep" '.candidates[$c].draft_rounds[-1].outcome = "draft_redo"'
+  if [[ "$(jq length <<<"$ranked")" -gt 1 ]]; then
+    reason="$(jq -r 'map("\(.id): \(.majors) major(s), \(.fails) failed check(s)") | join("; ")' <<<"$ranked") — $keep redraws (fewest majors, then fewest failed checks, then candidates.json order); a redo for each would be thrown away for all but one"
+    jq -n --argjson r "$ranked" --arg reason "$reason" \
+      '{kept: [$r[0].id], dropped: [$r[1:][] | .id], via: "runner", reason: $reason, scores: ($r | map({key: .id, value: {majors, fails}}) | from_entries)}' >"$WORK/redo-pick.json"
+    save --slurpfile p "$WORK/redo-pick.json" '.redo_pick = $p[0]'
+    for c in $(jq -r '.[1:][] | .id' <<<"$ranked"); do
+      CAND="$c"; move draft_hold folded >/dev/null
+      save --arg c "$c" --arg k "$keep" --arg r "$reason" '.candidates[$c].folded_reason = "\($k) was chosen to redraw its first draft: \($r)"'
+    done
+  fi
+  CAND="$self"
+}
+
 required_checks() {
   local multi; multi="$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")"
   jq -c --argjson multi "$multi" '.review_checks.public_page + (if $multi > 1 then .review_checks.multi_candidate else [] end)' "$GRAPH"
@@ -297,7 +355,7 @@ case "$cmd" in
       [[ -z "$CAND" ]] || die 2 "draft_choose is one choice across the candidates; submit it without --candidate"
       [[ "$(state .mode)" == unattended ]] || die 3 "draft_choose belongs to unattended runs; an interactive run picks at draft_pick"
       [[ "$OUTCOME" == chosen ]] || die 3 "submit draft_choose with outcome chosen; the runner folds the others"
-      waiting="$(jq -r '[.candidates | to_entries[] | select(.value.node | IN("draft", "preview", "draft_review")) | "\(.key) at \(.value.node)"] | join(", ")' "$STATE")"
+      waiting="$(jq -r '[.candidates | to_entries[] | select(.value.node | IN("draft", "preview", "draft_review", "draft_hold")) | "\(.key) at \(.value.node)"] | join(", ")' "$STATE")"
       [[ -z "$waiting" ]] || die 3 "choose once every candidate's draft review is done: $waiting"
       at_choose="$(jq -r '[.candidates | to_entries[] | select(.value.node == "draft_choose") | .key] | join(" ")' "$STATE")"
       [[ -n "$at_choose" ]] || die 3 "no candidate is at draft_choose"
@@ -463,13 +521,20 @@ case "$cmd" in
       elif [[ $redos -lt "$(graph '.limits.max_draft_redos // 1')" ]]; then outcome=draft_redo
       else outcome=draft_kept
       fi
-      save --arg c "$CAND" --argjson k "$k" --arg o "$outcome" --argjson m "$majors" \
-        '.candidates[$c].draft_reviews = $k | .candidates[$c].draft_rounds += [{round: $k, outcome: $o, majors: $m}]'
-      printf '{"draft_round":%s,"outcome":"%s","majors":%s}\n' "$k" "$outcome" "$majors" >&2
-      to="$(move draft_review "$outcome")"
+      # Unattended with other candidates: a redo waits for every first draft review, so only one of those needing it redraws.
+      if [[ "$outcome" == draft_redo && "$(state .mode)" == unattended ]] \
+         && [[ "$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")" -gt 1 ]]; then outcome=draft_redo_held; fi
+      fails="$(jq '[.checks[] | select(.status == "fail")] | length' "$FILE")"
+      save --arg c "$CAND" --argjson k "$k" --arg o "$outcome" --argjson m "$majors" --argjson f "$fails" \
+        '.candidates[$c].draft_reviews = $k | .candidates[$c].draft_rounds += [{round: $k, outcome: $o, majors: $m, fails: $f}]'
+      printf '{"draft_round":%s,"outcome":"%s","majors":%s,"fails":%s}\n' "$k" "$outcome" "$majors" "$fails" >&2
+      move draft_review "$outcome" >/dev/null
+      resolve_holds
+      to="$(current)"
       # A lone candidate has nothing to be chosen against: it goes on to build without a draft-pick.json.
-      if [[ "$to" == draft_choose && "$(jq '.candidates | length' "$STATE")" -eq 1 ]]; then
-        save --arg c "$CAND" '.chosen = {candidate: $c, via: "runner", reason: "the only candidate"}'
+      if [[ "$to" == draft_choose && "$(jq '[.candidates[] | select(.node != "folded")] | length' "$STATE")" -eq 1 ]]; then
+        if jq -e '.redo_pick' "$STATE" >/dev/null; then why="the only candidate left after the redo pick (redo-pick.json)"; else why="the only candidate"; fi
+        save --arg c "$CAND" --arg w "$why" '.chosen = {candidate: $c, via: "runner", reason: $w}'
         to="$(move draft_choose chosen)"
       fi
       printf '%s\n' "$to"
@@ -493,7 +558,40 @@ case "$cmd" in
     save --arg c "$CAND" --argjson r "$r" --arg v "$verdict" --argjson m "$majors" \
       '.candidates[$c].reviews = $r | .candidates[$c].verdict = $v | .candidates[$c].rounds += [{round: $r, verdict: $v, majors: $m}]'
     printf '{"round":%s,"verdict":"%s","majors":%s,"unverified_checks":%s,"needs_input":%s}\n' "$r" "$verdict" "$majors" "$unverified" "$inputs" >&2
-    move review "$outcome"
+    to="$(move review "$outcome")"
+    # The page as it was reviewed: finish compares against this, so an edit after the review cannot pass as reviewed.
+    if [[ "$to" == "done" ]]; then
+      page_manifest "$CAND" >"$RUN/reviewed-$CAND.txt"
+      save --arg c "$CAND" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.candidates[$c].reviewed_at = $at | del(.candidates[$c].changed_after_review)'
+    fi
+    printf '%s\n' "$to"
+    ;;
+  finish)
+    [[ -f "$STATE" ]] || die 4 "no run in $WORK"
+    GRAPH="$(state .graph)"
+    lock
+    if [[ -n "$CAND" ]]; then
+      [[ "$(current)" == "done" ]] || die 3 "candidate '$CAND' is at '$(current)', not done"
+      cands="$CAND"
+    else
+      cands="$(jq -r '[.candidates | to_entries[] | select(.value.node == "done") | .key] | join(" ")' "$STATE")"
+      [[ -n "$cands" ]] || die 3 "no candidate is at done"
+    fi
+    refused=""
+    for c in $cands; do
+      CAND="$c"
+      [[ -f "$RUN/reviewed-$c.txt" ]] || die 4 "no fingerprint from $c's review (reviewed by an older runner); measure and review it again"
+      changed="$(changed_since_review "$c")"
+      if [[ -n "$changed" ]]; then
+        move "done" changed_after_review >/dev/null
+        save --arg c "$c" --arg f "$changed" '.candidates[$c].changed_after_review = ($f | split("\n"))'
+        refused="$refused$c: $(printf '%s' "$changed" | paste -sd ',' - | sed 's/,/, /g'); "
+      else
+        save --arg c "$c" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.candidates[$c].finalized_at = $at | del(.candidates[$c].changed_after_review)'
+      fi
+    done
+    [[ -z "$refused" ]] || die 3 "the page changed after its review (${refused%; }); it is back at measure: measure, then review again"
+    jq -c --arg cs "$cands" '[($cs | split(" "))[] as $c | {candidate: $c, node: .candidates[$c].node, verdict: .candidates[$c].verdict, unchanged_since_review: true}]' "$STATE"
     ;;
   capture)
     [[ -f "$STATE" && -n "$CAND" && -n "$URL" ]] || usage
@@ -537,12 +635,19 @@ case "$cmd" in
   status)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"
     GRAPH="$(state .graph)"
-    jq --slurpfile g "$GRAPH" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    # A page edited after its review is reported as such even before finish catches it.
+    drift="{}"
+    for c in $(jq -r '.candidates | to_entries[] | select(.value.node == "done") | .key' "$STATE"); do
+      changed="$(changed_since_review "$c")"
+      [[ -z "$changed" ]] || drift="$(jq -c --arg c "$c" --arg f "$changed" '.[$c] = ($f | split("\n"))' <<<"$drift")"
+    done
+    jq --slurpfile g "$GRAPH" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson drift "$drift" '
       def mins($a; $b): if $a == null or $b == null then null else ((($b | fromdateiso8601) - ($a | fromdateiso8601)) / 60 | floor) end;
       .started_at as $s | ($g[0].budget_minutes // {}) as $bud
-      | {mode, node, elapsed_min: mins($s; $now), chosen,
-         candidates: (.candidates | with_entries(.value |= (
-           {node, motion_level, measures, measure, reviews, verdict, rounds, folded_reason,
+      | {mode, node, elapsed_min: mins($s; $now), chosen, redo_pick,
+         candidates: (.candidates | with_entries(.key as $k | .value |= (
+           {node, motion_level, measures, measure, reviews, verdict, rounds, folded_reason, finalized_at,
+            changed_after_review: ($drift[$k] // .changed_after_review),
             preview_min: mins($s; .previewed_at), finished_min: mins($s; .finished_at)}
            | .over_budget = ([ (if $bud.preview != null and ((.preview_min // mins($s; $now)) > $bud.preview) and (.preview_min != null or .node == "draft" or .node == "preview") then "preview" else empty end),
                                (if $bud.done != null and ((.finished_min // mins($s; $now)) > $bud.done) then "done" else empty end) ])

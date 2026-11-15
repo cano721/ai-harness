@@ -141,7 +141,11 @@
     },
     "done": {
       "actor": "runner",
-      "per_candidate": true
+      "per_candidate": true,
+      "outcomes": [
+        "changed_after_review"
+      ],
+      "note": "Reached only through a passing review (or one waiting on user input). The runner keeps the reviewed page's fingerprint; landing-run.sh finish compares it before the report and sends a page edited since back to measure."
     },
     "user_decision": {
       "actor": "runner",
@@ -184,7 +188,8 @@
       "outcomes": [
         "draft_pass",
         "draft_redo",
-        "draft_kept"
+        "draft_kept",
+        "draft_redo_held"
       ],
       "note": "A new design-reviewer judges the draft's first viewport from the preview captures and the references, only the draft checks, within three minutes. A weak first viewport is redrawn before an hour goes into finishing it."
     },
@@ -205,7 +210,16 @@
     "folded": {
       "actor": "runner",
       "per_candidate": true,
-      "note": "An unattended candidate not chosen at draft_choose; the report gives the reason."
+      "note": "An unattended candidate not chosen at draft_choose, or not chosen to redraw at draft_hold; the report gives the reason."
+    },
+    "draft_hold": {
+      "actor": "runner",
+      "per_candidate": true,
+      "outcomes": [
+        "draft_redo",
+        "folded"
+      ],
+      "note": "Unattended, several candidates: a first draft that needs a redo waits here until every first draft review is in. Then the runner lets only the one with the better draft review (fewest majors, then fewest failed checks, then candidates.json order) redraw and folds the rest, with the scores in redo-pick.json (via: \"runner\")."
     }
   },
   "transitions": [
@@ -284,6 +298,24 @@
       "from": "draft_review",
       "to": "draft",
       "when": "draft_redo"
+    },
+    {
+      "from": "draft_review",
+      "to": "draft_hold",
+      "when": "draft_redo_held",
+      "mode": "unattended"
+    },
+    {
+      "from": "draft_hold",
+      "to": "draft",
+      "when": "draft_redo",
+      "mode": "unattended"
+    },
+    {
+      "from": "draft_hold",
+      "to": "folded",
+      "when": "folded",
+      "mode": "unattended"
     },
     {
       "from": "draft_review",
@@ -366,6 +398,11 @@
       "from": "repair",
       "to": "user_decision",
       "when": "needs_user"
+    },
+    {
+      "from": "done",
+      "to": "measure",
+      "when": "changed_after_review"
     }
   ],
   "limits": {
@@ -453,7 +490,9 @@
     "Each review is a new reviewer; the briefing carries the take-lines and reference captures, not the maker's notes.",
     "The user sees a served draft (preview) before measurement and review start; verification never delays the first look.",
     "An unattended run finishes one candidate: after every draft review the agent chooses one (draft-pick.json, via agent, with its reason), the rest fold, and a second candidate entering build is refused.",
-    "The reference pick names the primary references: one layout, one interaction, and one component per section slot (or none), none of them excluded; at least one candidate leads with that primary as it is."
+    "The reference pick names the primary references: one layout, one interaction, and one component per section slot (or none), none of them excluded; at least one candidate leads with that primary as it is.",
+    "A page edited after the review that sent it to done is not done: finish compares the reviewed fingerprint of the files that change the screen and sends a changed page back to measure and review.",
+    "Unattended with several candidates, when more than one first draft needs a redo only the one with the better draft review redraws; the others fold (redo-pick.json, via runner). An interactive run is unchanged."
   ],
   "budget_minutes": {
     "preview": 10,
