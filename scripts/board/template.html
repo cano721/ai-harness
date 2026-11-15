@@ -2311,9 +2311,15 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (sig === lastSig) return;
     lastSig = sig; flush();
   }
+  // 숨은 탭은 연결을 닫는다 — 열어 두면 서버의 백그라운드 갱신이 쉬지 않는다. 숨은 동안은 bg=1 폴링이 맡는다.
+  let es = null;
+  function closeEvents() {
+    if (es) { es.close(); es = null; }
+    sseOpen = false;
+  }
   function connectEvents() {
-    if (!window.EventSource) return;
-    const es = new EventSource('/events?t=' + encodeURIComponent(TOKEN));
+    if (!window.EventSource || es) return;
+    es = new EventSource('/events?t=' + encodeURIComponent(TOKEN) + (document.hidden ? '&bg=1' : ''));
     const seen = () => { sseOpen = true; sseAt = Date.now(); };
     es.addEventListener('hello', () => { seen(); refresh().catch(() => {}); });  // 다시 붙으면 놓친 것을 한 번에 맞춘다
     es.addEventListener('ping', seen);
@@ -3156,11 +3162,15 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     refresh().then(() => { loadSettings(true); loadAutofix(true); loadRefs(true); }).catch(fail);
     setInterval(() => { if (view === 'refs' && !document.hidden) { if (rrun) loadRefDetail(false); else loadRefs(false); } }, 5000);
     // 서버 이벤트(SSE)가 살아 있으면 바뀐 항목을 바로 받고, 끊긴 동안만 1초 폴링(서버 캐시 읽기)으로 돌아간다.
-    connectEvents();
+    if (!document.hidden) connectEvents();
     setInterval(() => { if (!sseLive()) refresh().catch(() => {}); }, 1000);
     setInterval(() => { if (view === 'impact' && !document.hidden) loadImpact(false); }, 4000);
-    // 뒤에 있던 탭으로 돌아오면 바로 새로 읽는다(뒤 탭 타이머는 브라우저가 늦춰서 화면이 낡아 있을 수 있음)
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh().catch(() => {}); });
+    // 숨으면 이벤트 연결을 닫고(숨은 동안은 bg=1 폴링), 뒤에 있던 탭으로 돌아오면 다시 붙고 바로 새로 읽는다
+    // (뒤 탭 타이머는 브라우저가 늦춰서 화면이 낡아 있을 수 있음)
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) closeEvents();
+      else { connectEvents(); refresh().catch(() => {}); }
+    });
     // 캡처·검토용: ?open=<항목 id> 면 그 항목의 서랍을 연 채로 시작한다.
     const want = new URLSearchParams(location.search).get('open');
     if (want) { const tryOpen = () => { const it = itemsAll().find((i) => i.id === want); if (it) openItem(it); else setTimeout(tryOpen, 300); }; setTimeout(tryOpen, 300); }

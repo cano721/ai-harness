@@ -1569,7 +1569,7 @@ class Handler(BaseHTTPRequestHandler):
                 mark_active()
             return self._send(200, board_snapshot())
         if u.path == "/events":
-            return self._events()
+            return self._events(hidden=q.get("bg") == ["1"])
         if u.path == "/commands":
             return self._send(200, list_commands(q.get("cwd", [None])[0]))
         if u.path == "/hidden":
@@ -1641,13 +1641,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, read_older(item, before) if before >= 0 else read_transcript(item, offset))
         self._send(404, {"error": "not found"})
 
-    def _events(self):
+    def _events(self, hidden=False):
         """SSE: hello 뒤 바뀐 항목만 민다. 15초마다 ping(보는 사람이 있다는 표시도 겸한다). 큐가 넘치면 끊고 브라우저가 다시 붙는다.
-        SSE가 살아 있으면 화면이 /status.json을 부르지 않으므로, 접속·전송마다 mark_active()로 백그라운드 갱신(REFRESH_IDLE)을 살린다."""
+        SSE가 살아 있으면 화면이 /status.json을 부르지 않으므로, 접속·전송마다 mark_active()로 백그라운드 갱신(REFRESH_IDLE)을 살린다.
+        숨은 탭(bg=1)은 /status.json?bg=1처럼 _viewer만 살리고 갱신은 돌리지 않는다 — 화면은 숨을 때 연결을 닫지만, 그 전에 붙은 연결도 막는다."""
         q = HUB.subscribe()
         FEED.ensure_running()
         _viewer["at"] = time.time()
-        mark_active()
+        if not hidden:
+            mark_active()
         try:
             FEED.prime()
             self.send_response(200)
@@ -1664,7 +1666,8 @@ class Handler(BaseHTTPRequestHandler):
                 if getattr(q, "dead", False):  # 큐가 넘쳐 떼어 낸 구독자: 닫으면 브라우저가 다시 붙어 hello부터 받는다
                     return
                 _viewer["at"] = time.time()  # 열려 있는 이벤트 연결 = 보드를 보는 사람
-                mark_active()
+                if not hidden:
+                    mark_active()
                 self.wfile.write(hresident.sse_lines(*ev))
                 self.wfile.flush()
         except (OSError, ValueError):

@@ -8273,7 +8273,7 @@ BR_LOG="$BR_T/stub.jsonl"
 : >"$BR_LOG"
 env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
   BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
-  BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_JIRA_URL= JIRA_BASE_URL= \
+  BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
   python3 -I "$ROOT/scripts/board/board-server.py" --no-open >"$BR_T/server.log" 2>&1 &
 BR_PID=$!
 BR_URL=""
@@ -8283,10 +8283,16 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 [[ -n "$BR_URL" ]] || fail "board server for resident sessions starts"
+# 숨은 탭의 SSE(/events?bg=1)는 보는 사람 표시만 하고 백그라운드 갱신을 살리지 않는다(#351이 숨은 탭 폴링을 뺀 것과 같다).
+# 갱신이 1초 주기여도 4초 동안 다른 터미널의 새 세션이 밀려 오지 않아야 한다.
+br_agent() { jq -cn --arg s "$1" --arg cwd "$BR_T/cwd" --argjson at "$(date +%s)000" \
+  '{sessionId: $s, id: ($s[0:8]), kind: "background", status: "idle", state: "idle", pid: null, cwd: $cwd, name: "other terminal", startedAt: $at}'; }
+BR_HIDDEN="bbbbbbbb-0000-4000-8000-000000000349"
+BR_SSE_BG="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "[$(br_agent "$BR_HIDDEN")]" "$BR_HIDDEN" 4 bg)"
+assert_eq "true|false" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_BG")" "an event stream from a hidden tab does not keep the background refresh running"
 # SSE만 연결된 화면(/status.json 폴링 없음)도 백그라운드 갱신(#351)을 살려, 다른 터미널에 새로 생긴 세션이 이벤트로 온다.
 BR_OTHER="aaaaaaaa-0000-4000-8000-000000000349"
-BR_OTHER_JSON="$(jq -cn --arg s "$BR_OTHER" --arg cwd "$BR_T/cwd" --argjson at "$(date +%s)000" \
-  '[{sessionId: $s, id: ($s[0:8]), kind: "background", status: "idle", state: "idle", pid: null, cwd: $cwd, name: "other terminal", startedAt: $at}]')"
+BR_OTHER_JSON="[$(br_agent "$BR_HIDDEN"),$(br_agent "$BR_OTHER")]"
 BR_SSE_ONLY="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "$BR_OTHER_JSON" "$BR_OTHER" 15)"
 assert_eq "true|true" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_ONLY")" "with only the event stream open, the background refresh keeps running and pushes a session that appeared elsewhere ($(jq -r '.after' <<<"$BR_SSE_ONLY")s)"
 BR_REPORT="$(python3 -I "$ROOT/tests/fixtures/board-resident/scenario.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/cwd" "$BR_LOG")" \
@@ -8325,6 +8331,10 @@ assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen liste
 assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
 assert_contains "$BR_TPL" "post('/answer'" "the board screen answers a resident question through the session"
 assert_contains "$BR_TPL" "if (m.cleanup_failed) refresh()" "a cleanup failure pushed as meta brings the card back with its notice"
+BR_VIS="$(sed -n "/document.addEventListener('visibilitychange'/,/});/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$BR_VIS" "if (document.hidden) closeEvents()" "a hidden board tab closes its event stream (the bg=1 polling takes over)"
+assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconnects its event stream"
+assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
 # Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
 # poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.
 python3 -I -B -c '
@@ -8378,6 +8388,13 @@ two = res.start(cwd, "hello", "two")
 assert one["ok"] and not two["ok"] and "1개" in two["message"], (one, two)  # 상한을 넘으면 친절히 거절
 res.end(one["id"])
 time.sleep(0.5)
+import threading
+r.MAX_LIVE = 2
+got = []
+ts = [threading.Thread(target=lambda: got.append(res.start(cwd, "race", None))) for _ in range(6)]
+[t.start() for t in ts]; [t.join() for t in ts]
+assert sum(1 for x in got if x["ok"]) == 2, got  # 동시에 온 새 세션 요청도 상한을 넘지 않는다
+res.shutdown(grace=1)
 r.MAX_LIVE = 8
 
 old = "22222222-2222-4222-8222-222222222222"; recent = "33333333-3333-4333-8333-333333333333"

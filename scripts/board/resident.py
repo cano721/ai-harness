@@ -156,6 +156,7 @@ class Residents:
         self._sessions = {}
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
+        self._spawn_lock = threading.Lock()  # 살아 있는 수 확인 → 띄우기 → 등록을 한 묶음으로
         for sid, rec in (self._load() or {}).items():
             if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
                 s = Session(sid, rec["cwd"], rec.get("name"), rec.get("title") or sid[:8])
@@ -194,16 +195,17 @@ class Residents:
             return {"ok": False, "message": "작업 경로가 없거나 절대 경로가 아님"}
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_TEXT:
             return {"ok": False, "message": "첫 지시가 비었거나 너무 김"}
-        if self._live_count() >= MAX_LIVE:
-            return {"ok": False, "message": self._full_message()}
         name = name[:160] if isinstance(name, str) and name.strip() else None
         sid = str(uuid.uuid4())
         s = Session(sid, cwd, name, name or " ".join(prompt.split())[:80])
-        err = self._spawn(s, ["--session-id", sid] + (["--name", name] if name else []))
-        if err:
-            return {"ok": False, "message": err}
-        with self._lock:
-            self._sessions[sid] = s
+        with self._spawn_lock:  # 수 세기와 띄우기·등록을 한 번에 — 동시에 온 /new가 상한을 넘지 않게
+            if self._live_count() >= MAX_LIVE:
+                return {"ok": False, "message": self._full_message()}
+            err = self._spawn(s, ["--session-id", sid] + (["--name", name] if name else []))
+            if err:
+                return {"ok": False, "message": err}
+            with self._lock:
+                self._sessions[sid] = s
         self._save()
         self._write(s, prompt)
         self.notify()
@@ -314,13 +316,13 @@ class Residents:
                 if s.prev_pid and _alive_with(s.prev_pid, s.sid):
                     return {"ok": False, "message": f"지난 보드가 띄운 같은 세션(pid {s.prev_pid})이 아직 돌고 있음 — "
                                                     "같은 대화를 두 프로세스가 쓰지 않게, 그 프로세스가 끝난 뒤 다시 보내세요"}
-                if self._live_count() >= MAX_LIVE:
-                    return {"ok": False, "message": self._full_message()}
-                err = self._spawn(s, ["--resume", s.sid])  # 끝난 세션(보드 재시작 등): 같은 id로 다시 쥔다
-                if not err:
-                    s.prev_pid = None
+                with self._spawn_lock:
+                    if self._live_count() >= MAX_LIVE:
+                        return {"ok": False, "message": self._full_message()}
+                    err = self._spawn(s, ["--resume", s.sid])  # 끝난 세션(보드 재시작 등): 같은 id로 다시 쥔다
                 if err:
                     return {"ok": False, "message": err}
+                s.prev_pid = None
             if not self._write(s, text):
                 return {"ok": False, "message": "세션에 쓰지 못함 — 세션이 끝났을 수 있음"}
         s.state, s.at = "busy", utc()
