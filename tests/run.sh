@@ -11,7 +11,7 @@ TESTS_FINISHED=0
 cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
   local board_pid conf
-  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json"; do
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json"; do
     board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
     [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
   done
@@ -2551,7 +2551,10 @@ if command -v node >/dev/null 2>&1; then
   assert_contains "$(cat "$LP_W/board.html")" "이미 시작됐어요" "a board whose pick is made locks instead of sending again"
   if grep -q '남김\|뺌' "$LP_W/board.html"; then fail "the board no longer says keep/drop (남김·뺌)"; fi
   assert_contains "$(cat "$LP_W/board.html")" "이 레퍼런스로 시작" "the board has a start button"
-  assert_contains "$(cat "$LP_W/board.html")" "터미널에 답해 주세요" "a statically served board asks for the answer in the terminal"
+  assert_contains "$(cat "$LP_W/board.html")" "요약을 복사해 세션에 붙여 주세요" "a statically served board asks for the answer in the session"
+  # 보기 전용 보드는 "이 레퍼런스로 시작"을 안내하지 않고, 의견 칸은 펼칠 때만 보여 고르기 바가 본문을 덮지 않는다(#336).
+  assert_contains "$(cat "$LP_W/board.html")" '<span class="ask-run" hidden>' "the start guidance shows only when the board can start a run"
+  assert_contains "$(cat "$LP_W/board.html")" '.pick .fields{display:none;' "the pick bar keeps its fields folded until asked"
 fi
 assert_eq "--work $(cd "$LP_W" && pwd) --kind references" "$(LANDING_BOARD_CMD="echo" lp board)" "LANDING_BOARD_CMD replaces the board script"
 # An interactive board is looked at, so each tab needs enough references (references_min in the graph).
@@ -2684,10 +2687,7 @@ export LANDING_PREVIEW_CMD="$TEST_TMP/lp-preview-hook.sh"
 assert_eq draft_review "$(lp submit --node preview --outcome previewed --candidate a)" "after the preview a reviewer judges the draft's first viewport"
 assert_eq "http://127.0.0.1:9/a/" "$(cat "$TEST_TMP/lp-previews.log")" "the runner hands the preview URL to the person at once"
 assert_eq '["one_second","cover_logo","template_look","craft","reference_fidelity","copied_composition"]' "$(lp next --candidate a | jq -c '.required_checks')" "the draft review asks only the first-viewport checks"
-assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0)")" "a weak first viewport is redrawn before it is finished"
-touch "$LP_W/site/a/index.html"; lp submit --node draft --outcome drafted --candidate a >/dev/null
-touch "$LP_W/preview-a.json"; lp submit --node preview --outcome previewed --candidate a >/dev/null
-assert_eq draft_choose "$(lp review --candidate a --file "$(lp_review craft 0)")" "the draft is redrawn once; then, unattended, it waits for the other drafts"
+assert_eq draft_choose "$(lp review --candidate a --file "$(lp_review none 0)")" "a passing draft waits for the choice in an unattended run"
 # An unattended run finishes one candidate: after every draft review the agent chooses one with its reason, the rest fold.
 assert_eq 3 "$(lp_rc submit --node draft_choose --outcome chosen)" "the unattended choice waits until every draft review is done"
 assert_contains "$(cat "$TEST_TMP/lp.err")" "b at draft" "the runner names the candidate still drafting"
@@ -2695,7 +2695,10 @@ touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --cand
 printf 'png' >"$LP_W/caps/b-1440.png"; printf 'png' >"$LP_W/caps/b-390.png"
 printf '{"url":"http://127.0.0.1:9/b/","captures":["caps/b-1440.png","caps/b-390.png"]}\n' >"$LP_W/preview-b.json"
 lp submit --node preview --outcome previewed --candidate b >/dev/null
-assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a passing draft also waits for the choice in an unattended run"
+assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a second passing draft also waits for the choice"
+assert_not_file "$LP_W/redo-pick.json"
+# With three candidates one draft can be kept after its redo while another passed: the choice must still take a passed one.
+jq '.candidates.a.draft_rounds[-1].outcome = "draft_kept"' "$LP_W/.landing-run/state.json" >"$TEST_TMP/lp-state.json" && cp "$TEST_TMP/lp-state.json" "$LP_W/.landing-run/state.json"
 assert_eq draft_choose "$(lp next | jq -r '.node')" "once every draft review is done, next asks for the choice"
 printf '{"kept":["a"],"dropped":["b"],"via":"agent","reason":"a is bolder"}\n' >"$LP_W/draft-pick.json"
 assert_eq 4 "$(lp_rc submit --node draft_choose --outcome chosen)" "a draft kept after its redo is not chosen over one that passed"
@@ -2752,6 +2755,91 @@ assert_eq 4 "$(lp_rc review --candidate b --file "$TEST_TMP/lp-review-carry.json
 jq '.checks |= map(if .check == "flow" then .carried = 2 else . end)' "$(lp_review none 1 b)" >"$TEST_TMP/lp-review-carry.json"
 assert_eq "done" "$(lp review --candidate b --file "$TEST_TMP/lp-review-carry.json")" "only user input left ends at done (a pass carried from the last round counts)"
 assert_eq "issues (공개 불가: 입력 대기)" "$(jq -r '.candidates.b.verdict' "$LP_W/.landing-run/state.json")" "the runner computes the input-wait verdict"
+# The page as reviewed is what gets reported: an edit after the review sends it back to measure and review.
+assert_contains "$(lp next --candidate b)" "landing-run.sh finish" "done tells the agent to finish before reporting"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "a done candidate not yet finished keeps the run from its report"
+assert_contains "$(lp status | jq -r '.blocking[]')" "b is done but not finished" "status says what keeps the run from its report"
+assert_contains "$(lp next | jq -r '.blocking[]')" "b is done but not finished" "next without a candidate lists the same blocker"
+printf 'server up\n' >"$LP_W/site/b/server.log"; printf '# notes\n' >"$LP_W/site/b/notes.md"; touch "$LP_W/site/b/index.html"
+assert_contains "$(lp finish --candidate b)" '"unchanged_since_review":true' "logs, notes, and a touch without a change do not count as an edit after review"
+assert_eq "report true" "$(lp status | jq -r '"\(.node) \(.run_finished)"')" "finish moves the run to its report once every live candidate is finished"
+assert_eq report "$(lp next | jq -r '.node')" "next names the report step"
+printf '<h1>after the review</h1>\n' >"$LP_W/site/b/index.html"
+assert_contains "$(lp status | jq -c '.candidates.b.changed_after_review')" "./index.html" "status names a page file edited after its review"
+assert_eq 3 "$(lp_rc finish --candidate b)" "finish refuses a page edited after its review"
+assert_contains "$(cat "$TEST_TMP/lp.err")" "./index.html" "the refusal names the changed file"
+assert_eq measure "$(jq -r '.candidates.b.node' "$LP_W/.landing-run/state.json")" "a page edited after its review goes back to measure"
+assert_eq "candidates false" "$(lp status | jq -r '"\(.node) \(.run_finished)"')" "a page sent back takes the run out of its report"
+assert_eq null "$(jq -r '.candidates.b.finished_at' "$LP_W/.landing-run/state.json")" "a page sent back is no longer finished"
+assert_eq 3 "$(lp_rc finish --candidate b)" "finish is refused until the page is reviewed again"
+lp measure --candidate b --url http://127.0.0.1:9/ >/dev/null
+assert_eq "done" "$(lp review --candidate b --file "$(lp_review none 1 b)")" "measured and reviewed again, the edited page is done"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "a page reviewed again needs finish again before the report"
+assert_contains "$(lp finish)" '"candidate":"b"' "finish passes the page as it was reviewed again"
+assert_eq null "$(lp status | jq -c '.candidates.b.changed_after_review')" "a page reviewed again no longer shows the old edit"
+assert_eq "true" "$(lp status | jq -r '.run_finished')" "finished again, the run is back at its report"
+printf '<h1>edited in the report step</h1>\n' >"$LP_W/site/b/index.html"
+assert_eq "false" "$(lp status | jq -r '.run_finished')" "an edit during the report step shows at once in status"
+# Unattended, both first drafts weak: only the one with the better draft review redraws; the other folds.
+LP_W="$TEST_TMP/lp-run-two"; mkdir -p "$LP_W"
+lp init --mode unattended >/dev/null
+printf '## Tone and manner\ncalm, precise\n' >"$LP_W/brief.md"; cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
+lp submit --node brief --outcome brief_ready >/dev/null
+cp "$TEST_TMP/lp-refs.json" "$LP_W/references.json"; cp "$TEST_TMP/lp-searches.json" "$LP_W/searches.json"
+cp "$TEST_TMP/lp-slots.json" "$LP_W/component-slots.json"; cp "$TEST_TMP/lp-agent-pick.json" "$LP_W/reference-pick.json"
+lp submit --node references --outcome references_ready >/dev/null
+printf '{"candidates":[{"id":"a","dir":"site/a","motion_level":"calm","first_viewport":"one scene","primary_refs":{"layout":"R3","interaction":"R4","components":{"hero":"R2"}}},{"id":"b","dir":"site/b","motion_level":"calm","first_viewport":"two scenes","primary_refs":{"layout":"R3","interaction":"R4","components":{"hero":"R2"}}}]}\n' >"$LP_W/candidates.json"
+lp submit --node direction --outcome direction_ready >/dev/null
+mkdir -p "$LP_W/site/a" "$LP_W/site/b" "$LP_W/caps"
+for c in a b; do
+  touch "$LP_W/site/$c/index.html"; lp submit --node draft --outcome drafted --candidate "$c" >/dev/null
+  printf 'png' >"$LP_W/caps/$c-1440.png"; printf 'png' >"$LP_W/caps/$c-390.png"
+  printf '{"url":"http://127.0.0.1:9/%s/","captures":["caps/%s-1440.png","caps/%s-390.png"]}\n' "$c" "$c" "$c" >"$LP_W/preview-$c.json"
+  lp submit --node preview --outcome previewed --candidate "$c" >/dev/null
+done
+cp -R "$LP_W" "$TEST_TMP/lp-run-two-i"
+jq '.mode = "interactive"' "$LP_W/.landing-run/state.json" >"$TEST_TMP/lp-run-two-i/.landing-run/state.json"
+jq '.checks |= map(if .check == "template_look" or .check == "copied_composition" then .status = "fail" | .first_viewport = true else . end)' "$(lp_review craft 0)" >"$TEST_TMP/lp-review-a3.json"
+assert_eq draft_hold "$(lp review --candidate a --file "$TEST_TMP/lp-review-a3.json")" "the first weak draft waits for the other first draft review"
+assert_contains "$(lp next --candidate a)" "Waiting" "next says the held draft waits for the runner"
+assert_eq draft "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "with every first draft review in, the draft with fewer majors redraws"
+assert_eq folded "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "the other weak draft folds instead of redrawing"
+assert_eq "runner b a" "$(jq -r '[.via, .kept[0], .dropped[0]] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json records the runner's pick"
+assert_eq "3 1" "$(jq -r '[.scores.a.majors, .scores.b.majors] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json keeps the draft review scores behind the pick"
+assert_contains "$(lp status | jq -r '.candidates.a.folded_reason')" "b was chosen to redraw" "status carries why the other draft folded"
+touch "$LP_W/site/b/index.html"; lp submit --node draft --outcome drafted --candidate b >/dev/null
+touch "$LP_W/preview-b.json"; lp submit --node preview --outcome previewed --candidate b >/dev/null
+assert_eq build "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "the redrawn draft, the only one left, goes on to build"
+assert_contains "$(jq -r '.chosen | "\(.via) \(.reason)"' "$LP_W/.landing-run/state.json")" "runner the only candidate left after the redo pick" "the runner records why it chose without draft_choose"
+# Ties fall to candidates.json order.
+LP_W="$TEST_TMP/lp-run-two-t"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+lp review --candidate b --file "$(lp_review craft 0 b)" >/dev/null
+lp review --candidate a --file "$(lp_review craft 0 a)" >/dev/null
+assert_eq "draft folded" "$(jq -r '[.candidates.a.node, .candidates.b.node] | join(" ")' "$LP_W/.landing-run/state.json")" "on equal scores the first candidate in candidates.json redraws"
+# Unattended, one draft passed and the other needs a redo: draft_choose must take the passed one, so the weak one folds.
+LP_W="$TEST_TMP/lp-run-two-p"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+assert_eq draft_hold "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "a weak draft waits while the other is unreviewed"
+assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "the passed draft, the only one left, goes on to build"
+assert_eq folded "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "the weak draft folds without a redo when another passed"
+assert_eq "runner b a" "$(jq -r '[.via, .kept[0], .dropped[0]] | join(" ")' "$LP_W/redo-pick.json")" "redo-pick.json records why the weak draft folded"
+assert_contains "$(jq -r '.reason' "$LP_W/redo-pick.json")" "draft_choose must take a passed draft" "the fold names the passed draft as the reason"
+assert_eq 0 "$(jq '[.history[] | select(.candidate == "a" and .to == "draft" and .from == "draft_hold")] | length' "$LP_W/.landing-run/state.json")" "the folded draft never redraws"
+LP_W="$TEST_TMP/lp-run-two-q"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+jq '.mode = "unattended"' "$TEST_TMP/lp-run-two-i/.landing-run/state.json" >"$LP_W/.landing-run/state.json"
+assert_eq draft_choose "$(lp review --candidate b --file "$(lp_review none 0 b)")" "a passed draft waits while the other is unreviewed"
+assert_eq folded "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "a weak draft reviewed after a passed one folds at once"
+assert_eq build "$(jq -r '.candidates.b.node' "$LP_W/.landing-run/state.json")" "the passed draft left alone goes on to build"
+LP_W="$TEST_TMP/lp-run-two-r"; cp -R "$TEST_TMP/lp-run-two-i" "$LP_W"
+assert_eq draft "$(lp review --candidate a --file "$(lp_review craft 0 a)")" "interactive: a weak draft redraws even when the other may pass"
+assert_eq build "$(lp review --candidate b --file "$(lp_review none 0 b)")" "interactive: a passed draft goes on to build"
+assert_eq draft "$(jq -r '.candidates.a.node' "$LP_W/.landing-run/state.json")" "interactive: the weak draft is not folded"
+# An interactive run is unchanged: each weak draft redraws at once.
+LP_W="$TEST_TMP/lp-run-two-i"
+assert_eq draft "$(lp review --candidate a --file "$TEST_TMP/lp-review-a3.json")" "interactive: a weak draft redraws at once"
+assert_eq draft "$(lp review --candidate b --file "$(lp_review craft 0 b)")" "interactive: both weak drafts redraw, none folds"
+assert_not_file "$LP_W/redo-pick.json"
 # A lone unattended candidate has nothing to be chosen against: it goes from its draft review straight to build.
 LP_W="$TEST_TMP/lp-run-one"; mkdir -p "$LP_W"
 lp init --mode unattended >/dev/null
@@ -2856,6 +2944,9 @@ assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "Send every s
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Do not write your own browser script for a reference" "landing-page captures references through capture-refs"
 assert_contains "$(cat "$ROOT/skills/design-references/SKILL.md")" "served interactive board within five minutes" "landing-page aims for the board within five minutes"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "landing-run.sh capture-refs" "landing-page lists capture-refs among the runner commands"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "Run \`landing-run.sh finish\` first" "the landing report starts from a page finish passed"
+assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "run_finished: true" "the landing report waits for the runner's run_finished"
+assert_contains "$LANDING_VERIFY" "the page is done as it was reviewed" "verify.md no longer lets minors be fixed after the last review"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "**Picking the primary references.**" "landing-page asks for one primary per tab and per section slot"
 assert_contains "$(cat "$ROOT/skills/landing-page/references/direction.md")" "Every section the user named in the request becomes a slot." "landing-page makes a slot for each section the user named"
 assert_contains "$(cat "$ROOT/skills/landing-page/SKILL.md")" "primary_refs: {layout, interaction, components}" "landing-page candidates name the references they lead with"
@@ -2934,6 +3025,21 @@ if command -v node >/dev/null 2>&1; then
     assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "serving again on the same port reuses the running server"
     assert_eq 1 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" | wc -l | tr -d ' ')" "one board server per folder and port"
     pkill -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port" 2>/dev/null || true
+    # Harness Board가 떠 있고 레퍼런스 화면을 지원하면 따로 서버를 띄우지 않고 대시보드 주소를 낸다(#336).
+    # features가 없는 이전 보드(0.73 이하)나 죽은 server.json이면 지금처럼 자체 서버를 쓴다.
+    DR_FAKE="$TEST_TMP/dr-dash"; mkdir -p "$DR_FAKE" "$HARNESS_METRICS_DIR/board"
+    printf 'import time\ntime.sleep(120)\n' >"$DR_FAKE/board-server.py"
+    python3 "$DR_FAKE/board-server.py" & dr_fake_pid=$!
+    jq -n --argjson p "$dr_fake_pid" '{port: 1, token: "x", pid: $p, url: "http://127.0.0.1:1/?t=tok", features: ["references"]}' >"$HARNESS_METRICS_DIR/board/server.json"
+    dr_port2=$((dr_port + 1))
+    assert_eq "http://127.0.0.1:1/?t=tok&refs=$(dr run-id)" "$(dr board --port "$dr_port2" --serve 2>/dev/null)" "with the Harness Board up, the reference board is shown there"
+    assert_eq 0 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port2" | wc -l | tr -d ' ')" "no separate board server starts while the Harness Board shows it"
+    assert_eq "null" "$(jq -r '.url' "$DR_REC")" "the run record keeps no tokened dashboard address"
+    jq 'del(.features)' "$HARNESS_METRICS_DIR/board/server.json" >"$DR_FAKE/old.json" && mv "$DR_FAKE/old.json" "$HARNESS_METRICS_DIR/board/server.json"
+    assert_eq "http://127.0.0.1:$dr_port2/board.html" "$(dr board --port "$dr_port2" --serve)" "an older board without the references view falls back to the board server"
+    pkill -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port2" 2>/dev/null || true
+    kill "$dr_fake_pid" 2>/dev/null || true; wait "$dr_fake_pid" 2>/dev/null || true
+    rm -f "$HARNESS_METRICS_DIR/board/server.json"
   fi
 fi
 DR_SKILL="$ROOT/skills/design-references/SKILL.md"
@@ -7837,6 +7943,25 @@ board_sh() {
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="${BOARD_PORT_OVERRIDE:-$BOARD_PORT_T}" BOARD_NO_BROWSER=1 \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
+# 레퍼런스 보드(#336): 대시보드가 실행 기록을 읽어 목록·상세·파일·고르기를 보인다. 보드를 띄우기 전에 기록을 둔다
+# (status.json은 몇 초 캐시한다). aaaa…는 보기 전용(랜딩 실행 없음), bbbb…는 reference_pick에서 기다리는 랜딩 실행,
+# cccc…는 작업 폴더가 없어진 기록이다. 작업 폴더 밖 파일로 가는 심볼릭 링크와 허용하지 않는 확장자도 둔다.
+BREF_DIR="$BOARD_DATA/board/references"; mkdir -p "$BREF_DIR"
+BREF_VIEW="$BOARD_T/refs-view"; BREF_PICK="$BOARD_T/refs-pick"
+for w in "$BREF_VIEW" "$BREF_PICK"; do
+  mkdir -p "$w/refs/lay-a" "$w/refs/int-a" "$w/captures"
+  printf 'png' >"$w/refs/lay-a/w1440-00.png"; printf 'webm' >"$w/refs/int-a/rec.webm"; printf '{}' >"$w/refs/lay-a/capture.json"
+  printf '[{"id":"hero","label":"첫 화면"}]\n' >"$w/component-slots.json"
+  jq -n '[{id:"tone-a",kind:"tone",title:"톤",captures:["refs/lay-a/w1440-00.png"]},
+    {id:"com-a",kind:"component",title:"구성",recommended:"hero",captures:[]},
+    {id:"lay-a",kind:"layout",title:"레이아웃",recommended:"layout",captures:["refs/lay-a/w1440-00.png","../outside.png","/etc/hosts"]},
+    {id:"int-a",kind:"interaction",title:"인터랙션",recommended:"interaction",video:"refs/int-a/rec.webm"},
+    {id:"cmp-a",kind:"competitor",title:"경쟁사",analysis:{leads_with:"x",claim:"y",cta:"z",gap:"w"}}]' >"$w/references.json"
+done
+printf 'secret' >"$BOARD_T/outside.png"; ln -s "$BOARD_T/outside.png" "$BREF_VIEW/refs/lay-a/link.png"; ln -s "$BOARD_T" "$BREF_VIEW/captures/up"
+mkdir -p "$BREF_PICK/.landing-run"; printf '{"node":"reference_pick","entered_at":"2020-01-01T00:00:00Z"}\n' >"$BREF_PICK/.landing-run/state.json"
+bref_rec() { jq -n --arg id "$1" --arg w "$2" --arg t "$3" '{run_id:$id, work:$w, topic:$t, status:"ready", created_at:"2026-11-14T00:00:00Z", updated_at:"2026-11-14T00:00:00Z"}' >"$BREF_DIR/$1.json"; }
+bref_rec aaaaaaaaaaaa "$BREF_VIEW" "보기 전용 보드"; bref_rec bbbbbbbbbbbb "$BREF_PICK" "랜딩 고르기"; bref_rec cccccccccccc "$BOARD_T/gone" "사라진 보드"
 assert_eq "false" "$(board_sh status | jq -r '.running')" "board is not running before open"
 BOARD_OPEN="$(board_sh open)"
 assert_eq "false" "$(jq -r '.reused' <<<"$BOARD_OPEN")" "board open starts a server"
@@ -7876,6 +8001,62 @@ BOARD_SET="$(curl -s -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOA
 assert_eq "true" "$(jq -r '.ok' <<<"$BOARD_SET")" "board writes the harness stage"
 assert_contains "$(cat "$BOARD_DATA/config")" 'HM_SYNC_AUTO_MERGE="1"' "harness stage merge turns on auto merge"
 assert_contains "$(cat "$BOARD_DATA/board/actions.jsonl")" '"action": "harness_stage"' "board logs actions under the data dir"
+# 레퍼런스 보드(#336): 목록 — 주제·상태·탭별 개수, 폴더 없는 기록은 missing, 랜딩 실행이 기다리면 can_pick.
+BREF_LIST="$(curl -s "$BOARD_BASE/references?t=$BOARD_TOKEN")"
+assert_eq "aaaaaaaaaaaa|bbbbbbbbbbbb|cccccccccccc" "$(jq -r '[.runs[].run_id] | sort | join("|")' <<<"$BREF_LIST")" "the board lists every reference run record"
+assert_eq "보기 전용 보드|ready|false|null|1,1,1,1,1" \
+  "$(jq -r '.runs[] | select(.run_id == "aaaaaaaaaaaa") | [.topic, .status, .missing, .landing_node, ([.counts.tone, .counts.component, .counts.layout, .counts.interaction, .counts.competitor] | map(tostring) | join(","))] | map(tostring) | join("|")' <<<"$BREF_LIST")" \
+  "a reference run shows its topic, status, and count per tab; without a landing run it is view-only"
+assert_eq "true|false" "$(jq -r '.runs[] | select(.run_id == "cccccccccccc") | [.missing, .can_pick] | map(tostring) | join("|")' <<<"$BREF_LIST")" "a record whose work folder is gone is listed as missing"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/references")" "the reference list needs the board token"
+# 상세: 작업 폴더 밖 매체(../·절대 경로)는 싣지 않는다.
+BREF_RUN="$(curl -s "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=aaaaaaaaaaaa")"
+assert_eq '[{"path":"refs/lay-a/w1440-00.png"}]|refs/int-a/rec.webm|hero' \
+  "$(jq -r '.run as $r | [($r.refs[] | select(.id == "lay-a") | .captures | tojson), ($r.refs[] | select(.id == "int-a") | .video.path), $r.slots[0].id] | join("|")' <<<"$BREF_RUN")" \
+  "the run detail carries only media inside the work folder"
+assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=../../etc")" "the run detail takes only a registered run id"
+# 파일 서빙: refs/·captures/ 아래 이미지·영상만. ..·절대 경로·심볼릭 링크로 밖에 닿는 것·다른 확장자·등록 안 된 실행은 거부.
+bref_file() { curl -s -o /dev/null -w '%{http_code}' -G "$BOARD_BASE/references/file" --data-urlencode "t=${3-$BOARD_TOKEN}" --data-urlencode "run=${2:-aaaaaaaaaaaa}" --data-urlencode "p=$1"; }
+assert_eq 200 "$(bref_file refs/lay-a/w1440-00.png)" "the board serves a reference capture"
+assert_eq 200 "$(bref_file refs/int-a/rec.webm)" "the board serves a reference recording"
+assert_eq "206|bytes 1-2/4" "$(curl -s -D - -o /dev/null -H 'Range: bytes=1-2' -G "$BOARD_BASE/references/file" --data-urlencode "t=$BOARD_TOKEN" --data-urlencode run=aaaaaaaaaaaa --data-urlencode p=refs/int-a/rec.webm | tr -d '\r' | awk '/^HTTP/{c=$2} /^Content-Range:/{r=$2" "$3} END{print c"|"r}')" "a recording is served in byte ranges"
+for bref_bad in ../outside.png refs/../../outside.png "$BOARD_T/outside.png" refs/lay-a/link.png captures/up/outside.png refs/lay-a/capture.json references.json .landing-run/state.json refs/lay-a/missing.png; do
+  assert_eq 404 "$(bref_file "$bref_bad")" "the board refuses reference file $bref_bad"
+done
+assert_eq 404 "$(bref_file refs/lay-a/w1440-00.png 000000000000)" "the board refuses a file of an unregistered run"
+assert_eq 403 "$(bref_file refs/lay-a/w1440-00.png aaaaaaaaaaaa wrong)" "the reference file needs the board token"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BOARD_PORT_T" -G "$BOARD_BASE/references/file" --data-urlencode "t=$BOARD_TOKEN" --data-urlencode run=aaaaaaaaaaaa --data-urlencode p=refs/lay-a/w1440-00.png)" "the reference file checks the Host"
+# 고르기: 보기 전용 실행에는 쓰지 않는다. 기다리는 랜딩 실행은 지금 할 일 카드로 뜨고, 고르면 landing-pick.mjs가
+# 보드 서버와 같은 reference-pick.json을 쓰고 실행 기록을 picked로 바꾼다. 두 번째 고르기는 409.
+bref_pick() { curl -s -w '\n%{http_code}' -X POST -H "Origin: $BOARD_BASE" -d "$(jq -cn --arg t "$BOARD_TOKEN" --arg r "$1" --argjson b "$2" '$b + {t: $t, run: $r}')" "$BOARD_BASE/references/pick"; }
+BREF_BODY='{"tone":"이대로","kept":["tone-a","com-a","lay-a","int-a"],"dropped":["cmp-a"],"add_sites":["https://example.com/x"],"user_words":"3D는 과하지 않게","primary":{"layout":"lay-a","interaction":"int-a","components":{"hero":"com-a"},"added_slots":[]}}'
+assert_eq 409 "$(bref_pick aaaaaaaaaaaa "$BREF_BODY" | tail -1)" "a view-only reference board takes no pick"
+assert_not_file "$BREF_VIEW/reference-pick.json"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$(jq -cn --arg t "$BOARD_TOKEN" '{t: $t, run: "bbbbbbbbbbbb"}')" "$BOARD_BASE/references/pick")" "a reference pick from another origin is refused"
+if command -v node >/dev/null 2>&1; then
+  assert_eq "true" "$(jq -r '.runs[] | select(.run_id == "bbbbbbbbbbbb") | .can_pick' <<<"$BREF_LIST")" "a landing run waiting at reference_pick can be picked on the board"
+  assert_eq "needs_human|레퍼런스 고르기 — 랜딩 고르기|bbbbbbbbbbbb" \
+    "$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '.items[] | select(.kind == "references") | [.state, .title, .run_id] | join("|")')" \
+    "a landing run waiting at reference_pick shows as a to-do card"
+  assert_eq 400 "$(bref_pick bbbbbbbbbbbb '{"tone":"이대로","kept":["tone-a"],"primary":{"layout":"lay-a","interaction":"int-a","components":{},"added_slots":[]},"dropped":["lay-a"]}' | tail -1)" "a pick that stars an excluded reference is refused"
+  assert_eq 200 "$(bref_pick bbbbbbbbbbbb "$BREF_BODY" | tail -1)" "the board writes the pick of a waiting landing run"
+  assert_eq "이대로|lay-a|int-a|com-a|cmp-a|https://example.com/x|3D는 과하지 않게|board" \
+    "$(jq -r '[.tone, .primary.layout, .primary.interaction, .primary.components.hero, (.dropped | join(",")), (.add_sites | join(",")), .user_words, .via] | join("|")' "$BREF_PICK/reference-pick.json")" \
+    "the board's pick has the same shape the board server writes"
+  assert_eq picked "$(jq -r .status "$BREF_DIR/bbbbbbbbbbbb.json")" "a pick on the dashboard marks the run record picked"
+  assert_eq 409 "$(bref_pick bbbbbbbbbbbb "$BREF_BODY" | tail -1)" "a second pick in the same node is refused"
+  sleep 3  # status.json 캐시가 지나면 카드가 내려간다
+  assert_eq "" "$(curl -s "$BOARD_BASE/status.json?t=$BOARD_TOKEN" | jq -r '.items[] | select(.kind == "references") | .id')" "the to-do card goes away once picked"
+fi
+# 화면: 고르기 대기·숫자는 랜딩 실행이 기다리는 것만(보기 전용은 중립 '준비됨'), 머리는 목록으로 → 제목·상태 → 탭 순서,
+# 작업 폴더는 작게 한 줄로 줄이고 전체는 title과 복사로.
+BREF_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BREF_TPL" "r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']" "a view-only reference board shows a neutral status, not waiting for a pick"
+assert_contains "$BREF_TPL" "const w = (rdata || []).filter((r) => r.can_pick).length" "the sidebar counts only reference boards a landing run waits on"
+assert_contains "$BREF_TPL" '<div class="b-refhead" id="refhead" hidden></div>
+    <div class="ds-tabs" id="tabs"' "the reference head (back, title, status) sits above the tabs"
+assert_contains "$BREF_TPL" "copyBtn('경로 복사', d.work" "the work folder path is shortened with a copy button"
+pass "the Harness Board lists reference boards, serves only their media, and takes a pick for a waiting landing run (#336)"
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
   | env -u AI_HARNESS_HEADLESS -u CLAUDE_PID CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
@@ -8079,6 +8260,175 @@ if grep -rIqE 'https://[a-z0-9-]+\.atlassian\.net|bitbucket\.org/[a-z]' "$ROOT/s
   fail "board code carries no organization URL"
 fi
 pass "harness board skill and hook wiring"
+
+# 보드 상주 세션(#349): '새 세션'은 claude -p stream-json 상주 프로세스로 쥐고 입력은 stdin으로(--resume 없음, 세션 id 유지).
+# 권한·질문은 control_request로 받아 SSE(GET /events)로 1초 안에 밀어 주고, 사람이 누른 답만 control_response로 돌려준다.
+# 가짜 claude(tests/fixtures/board-resident)가 실측한 형식대로 묻고, 시나리오 클라이언트가 화면처럼 SSE를 열어 답한다.
+BR_T="$TEST_TMP/board-resident"
+BR_DATA="$BR_T/data"
+mkdir -p "$BR_DATA" "$BR_T/cwd" "$BR_T/projects"
+chmod +x "$ROOT/tests/fixtures/board-resident/claude" "$ROOT/tests/fixtures/board-resident/orca"
+BR_PORT="$(free_port)"
+BR_LOG="$BR_T/stub.jsonl"
+: >"$BR_LOG"
+env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
+  BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
+  BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
+  python3 -I "$ROOT/scripts/board/board-server.py" --no-open >"$BR_T/server.log" 2>&1 &
+BR_PID=$!
+BR_URL=""
+for _ in $(seq 100); do
+  BR_URL="$(jq -r '.url // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)"
+  [[ -n "$BR_URL" ]] && break
+  sleep 0.1
+done
+[[ -n "$BR_URL" ]] || fail "board server for resident sessions starts"
+# 숨은 탭의 SSE(/events?bg=1)는 보는 사람 표시만 하고 백그라운드 갱신을 살리지 않는다(#351이 숨은 탭 폴링을 뺀 것과 같다).
+# 갱신이 1초 주기여도 4초 동안 다른 터미널의 새 세션이 밀려 오지 않아야 한다.
+br_agent() { jq -cn --arg s "$1" --arg cwd "$BR_T/cwd" --argjson at "$(date +%s)000" \
+  '{sessionId: $s, id: ($s[0:8]), kind: "background", status: "idle", state: "idle", pid: null, cwd: $cwd, name: "other terminal", startedAt: $at}'; }
+BR_HIDDEN="bbbbbbbb-0000-4000-8000-000000000349"
+BR_SSE_BG="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "[$(br_agent "$BR_HIDDEN")]" "$BR_HIDDEN" 4 bg)"
+assert_eq "true|false" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_BG")" "an event stream from a hidden tab does not keep the background refresh running"
+# SSE만 연결된 화면(/status.json 폴링 없음)도 백그라운드 갱신(#351)을 살려, 다른 터미널에 새로 생긴 세션이 이벤트로 온다.
+BR_OTHER="aaaaaaaa-0000-4000-8000-000000000349"
+BR_OTHER_JSON="[$(br_agent "$BR_HIDDEN"),$(br_agent "$BR_OTHER")]"
+BR_SSE_ONLY="$(python3 -I "$ROOT/tests/fixtures/board-resident/sse-only.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/agents.json" "$BR_OTHER_JSON" "$BR_OTHER" 15)"
+assert_eq "true|true" "$(jq -r '[.hello, .pushed] | map(tostring) | join("|")' <<<"$BR_SSE_ONLY")" "with only the event stream open, the background refresh keeps running and pushes a session that appeared elsewhere ($(jq -r '.after' <<<"$BR_SSE_ONLY")s)"
+BR_REPORT="$(python3 -I "$ROOT/tests/fixtures/board-resident/scenario.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$BR_T/cwd" "$BR_LOG")" \
+  || fail "resident scenario runs ($(tail -5 "$BR_T/server.log"))"
+br() { jq -r "$1 | tostring" <<<"$BR_REPORT"; }
+assert_eq "200|text/event-stream|hello" "$(br '[.sse_status, .sse_type, .sse_first_event] | join("|")')" "GET /events is an SSE stream that greets first"
+assert_eq "true|true" "$(br '[.new_ok, .id_has_sid] | join("|")')" "new session starts as a resident process keyed by its session id"
+assert_eq "true" "$(br '.permission_tool_stdio')" "the resident session routes permission prompts to the board over stdio"
+assert_eq "true|Bash|bg|needs_human" "$(br '[.perm_pushed, .perm_tool, .item_kind, .item_state] | join("|")')" "a permission request is pushed over SSE as a waiting item"
+assert_eq "true" "$(br '.perm_latency < 1')" "the permission request reaches SSE within a second ($(br '.perm_latency')s)"
+assert_eq "false" "$(br '.auto_answered')" "the board never answers a permission request by itself"
+assert_eq "true" "$(br '.polled_perm')" "status.json carries the same request for the polling fallback"
+assert_eq "true|allow|true|true" "$(br '[.allow, .allow_behavior, .allow_same_request, .idle_after_turn] | join("|")')" "the person's allow goes back on stdin as the control response and the turn ends"
+assert_eq "true|true|Pick a color|true" "$(br '[.send, .question_pushed, .question_text, .transcript_question] | join("|")')" "AskUserQuestion is pushed as a question with its choices"
+assert_eq "true|{\"Pick a color\":\"red\"}" "$(br '[.answer, (.answers_sent | tojson)] | join("|")')" "the person's pick goes back as the AskUserQuestion answers"
+assert_eq "false" "$(br '.bad_answer')" "an answer to a request the board does not hold is refused"
+assert_eq "true" "$(br '.seen_moves_to_idle')" "marking a resident result as read moves it out of unread"
+assert_eq "false|false" "$(br '[.question_via_permission, .send_while_pending] | join("|")')" "a question is answered only by picking, and typed input waits until it is answered"
+assert_eq "403" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$BR_PORT/events")" "the event stream needs the board token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$(jq -cn --arg t "${BR_URL#*t=}" '{t: $t, id: "x", pid: "y", answers: {}}')" "http://127.0.0.1:$BR_PORT/answer")" "an answer needs the board Origin"
+assert_eq "1|false|2" "$(br '[.launches, .resume_used, .stdin_users] | join("|")')" "follow-up input goes to the same process on stdin without --resume"
+assert_eq "true" "$(br '.end')" "a resident session can be ended from the board"
+assert_contains "$(br '.ended_cmd')" "claude --resume " "an ended resident session shows how to resume it"
+assert_eq "true|true|true" "$(br '[.send_after_end, .relaunch_resume_sid, .same_id_after_resume] | join("|")')" "sending to an ended resident session resumes the same session id"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "the board keeps a record of its resident sessions"
+kill "$BR_PID" 2>/dev/null || true
+wait "$BR_PID" 2>/dev/null || true
+for _ in $(seq 50); do
+  [[ "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" == 2 ]] && break
+  sleep 0.1
+done
+assert_eq "2" "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" "stopping the board closes the resident sessions it holds"
+assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "stopping the board keeps the resident record for a later resume"
+BR_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen listens to server events"
+assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
+assert_contains "$BR_TPL" "post('/answer'" "the board screen answers a resident question through the session"
+assert_contains "$BR_TPL" "if (m.cleanup_failed) refresh()" "a cleanup failure pushed as meta brings the card back with its notice"
+BR_VIS="$(sed -n "/document.addEventListener('visibilitychange'/,/});/p" "$ROOT/scripts/board/template.html")"
+assert_contains "$BR_VIS" "if (document.hidden) closeEvents()" "a hidden board tab closes its event stream (the bg=1 polling takes over)"
+assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconnects its event stream"
+assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
+# Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
+# poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.
+python3 -I -B -c '
+import sys, time, queue
+sys.path.insert(0, sys.argv[1])
+import resident as r
+hub = r.Hub(); q = hub.subscribe()
+cache = {"n": 0}
+feed = r.Feed(hub, lambda: {"items": [{"id": "a", "n": cache["n"]}]}, interval=0.5)
+feed.ensure_running(); feed.prime()
+cache["n"] = 1; t = time.time(); feed.poke()
+ev = q.get(timeout=2)
+assert ev == ("item", {"id": "a", "n": 1}) and time.time() - t < 0.3, ev  # 캐시를 새로 쓴 쪽이 알리면 바로
+cache["n"] = 2
+ev = q.get(timeout=2)
+assert ev == ("item", {"id": "a", "n": 2}), ev  # 알림이 없어도 interval 안에 비교한다
+try:
+    q.get(timeout=0.8); raise SystemExit("no change, no event")
+except queue.Empty:
+    pass
+small = r.Hub(); sq = small.subscribe()
+for n in range(600):
+    small.publish("item", {"n": n})
+assert getattr(sq, "dead", False) and small.count() == 0  # 넘친 구독자는 떼어 내고 끊김을 표시한다
+' "$ROOT/scripts/board" || fail "the feed pushes changed cache items on a poke or within its interval and drops an overflowing subscriber"
+# 상주 세션 관리의 안전장치: 이상한 줄 하나로 읽기 스레드가 죽지 않고, 동시에 쥐는 수에 상한이 있고, 오래 끝난 기록은 빠지고,
+# 보드가 SIGKILL로 죽어 이전 claude가 남아 있으면 같은 id로 다시 띄우지 않고, 꺼질 때는 도구 하위 프로세스까지 끝낸다.
+BRU_T="$BR_T/unit"
+mkdir -p "$BRU_T/board" "$BRU_T/cwd"
+python3 -I -B -c '
+import json, os, signal, subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+import resident as r
+stub, data, cwd = sys.argv[2], sys.argv[3], sys.argv[4]
+res = r.Residents(data, lambda: None, claude_bin=stub)
+
+class Fake:
+    def __init__(self, lines): self.stdout, self.pid = lines, 0
+    def wait(self): return 0
+    def poll(self): return 0
+s = r.Session("11111111-1111-4111-8111-111111111111", cwd, None, "t")
+fake = Fake([json.dumps({"type": "control_request", "request_id": "x", "request": "not a dict"}) + "\n",
+             json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "after"}]}}) + "\n"])
+s.proc = fake
+res._read(s, fake)
+assert s.last_text == "after" and s.state == "ended", (s.last_text, s.state)  # 이상한 줄 뒤에도 계속 읽는다
+
+r.MAX_LIVE = 1
+one = res.start(cwd, "hello", "one")
+two = res.start(cwd, "hello", "two")
+assert one["ok"] and not two["ok"] and "1개" in two["message"], (one, two)  # 상한을 넘으면 친절히 거절
+res.end(one["id"])
+time.sleep(0.5)
+import threading
+r.MAX_LIVE = 2
+got = []
+ts = [threading.Thread(target=lambda: got.append(res.start(cwd, "race", None))) for _ in range(6)]
+[t.start() for t in ts]; [t.join() for t in ts]
+assert sum(1 for x in got if x["ok"]) == 2, got  # 동시에 온 새 세션 요청도 상한을 넘지 않는다
+res.shutdown(grace=1)
+r.MAX_LIVE = 8
+
+old = "22222222-2222-4222-8222-222222222222"; recent = "33333333-3333-4333-8333-333333333333"
+sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", recent])
+reg = {old: {"cwd": cwd, "title": "old", "at": "2020-01-01T00:00:00Z", "pid": None},
+       recent: {"cwd": cwd, "title": "recent", "at": r.utc(), "pid": sleeper.pid}}
+data2 = os.path.join(data, "again")  # 앞 인스턴스의 읽기 스레드가 늦게 _save해도 덮지 않게 따로 둔다
+os.makedirs(os.path.join(data2, "board"), exist_ok=True)
+with open(os.path.join(data2, "board", "residents.json"), "w") as f:
+    json.dump(reg, f)
+again = r.Residents(data2, lambda: None, claude_bin=stub)
+again._save()
+kept = json.load(open(os.path.join(data2, "board", "residents.json")))
+assert old not in kept and recent in kept and kept[recent]["pid"] == sleeper.pid, kept  # 오래 끝난 기록은 빠지고 pid는 남는다
+busy = again.send("res|" + recent, "continue")
+assert not busy["ok"] and str(sleeper.pid) in busy["message"], busy  # 이전 프로세스가 살아 있으면 같은 id로 다시 띄우지 않는다
+sleeper.kill(); sleeper.wait()
+ok = again.send("res|" + recent, "continue")
+assert ok["ok"], ok
+again.shutdown(grace=1)
+
+group = subprocess.Popen(["bash", "-c", "sleep 30 & wait"], stdin=subprocess.PIPE, start_new_session=True)
+g = r.Session("44444444-4444-4444-8444-444444444444", cwd, None, "g"); g.proc = group; g.state = "busy"
+again._sessions[g.sid] = g
+again.shutdown(grace=0.3)
+group.wait(timeout=5)  # 그룹 리더를 거둔다(macOS는 거두지 않은 리더가 있으면 killpg 확인이 EPERM)
+time.sleep(0.5)
+try:
+    os.killpg(group.pid, 0); raise SystemExit("tool child survived the board shutdown")
+except ProcessLookupError:
+    pass
+' "$ROOT/scripts/board" "$ROOT/tests/fixtures/board-resident/claude" "$BRU_T" "$BRU_T/cwd" \
+  || fail "resident sessions survive a bad line, cap live sessions, drop old records, refuse a second process and end tool children"
+pass "board holds new sessions as resident stream-json processes and pushes permission requests over SSE"
 
 # 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
 # compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
@@ -8628,7 +8978,7 @@ assert any(i.get("ask") for i in items) and any(i.get("in_repo") is False for i 
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has a real-scale scenario"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
-assert_contains "$BOARD_TPL" "for (const key of ['list', 'impact', 'settings'])" "the sidebar keeps only the list, impact and settings"
+assert_contains "$BOARD_TPL" "for (const key of ['list', 'refs', 'impact', 'settings'])" "the sidebar keeps the list, reference boards, impact and settings"
 # 3차: 작업 현황은 카드와 한 줄 상황만, 저장소별 연결은 하네스 설정의 '자동 수정' 탭(개인 설정보다 위)으로.
 BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac
@@ -8712,6 +9062,93 @@ bs.find_item("claude|s-cached", fresh=True)
 assert len(calls) == 1, calls  # fresh는 다시 모은다
 ' "$ROOT/scripts/board/board-server.py" || fail "find_item answers from the cache however old it is and recollects only when the id is missing or fresh is asked"
 pass "board find_item uses the cached list without recollecting status"
+
+# 상태 갱신 가속(#348): /status.json은 캐시만 읽는다. 캐시가 조금 오래됐으면 갱신 중인 lock을 기다리지 않고 캐시를 돌려주며
+# 백그라운드 갱신을 깨운다. 캐시가 없거나(동작 뒤 비움) 아주 오래됐으면 그 자리에서 모은다. 백그라운드 갱신은 보는 사람이 있을 때만 돈다.
+SR_DATA="$TEST_TMP/board-status-refresh"
+mkdir -p "$SR_DATA"
+HARNESS_METRICS_DIR="$SR_DATA" python3 -I -B -c '
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+calls = []
+def fake_build():
+    calls.append(1)
+    return {"items": [{"id": "n%d" % len(calls)}]}
+bs._build = fake_build
+d = bs.status()
+assert d["items"][0]["id"] == "n1" and len(calls) == 1, calls  # 캐시가 없으면 그 자리에서 모은다
+assert bs.status() is d and len(calls) == 1, calls  # 갓 모은 캐시는 그대로
+bs._cache["at"] = time.time() - 10
+bs._wake.clear()
+with bs._lock:  # 다른 갱신이 lock을 쥐고 있어도
+    t0 = time.time(); got = bs.status(); took = time.time() - t0
+assert got is d and took < 0.5 and len(calls) == 1, (took, calls)  # 기다리지 않고 캐시를 돌려준다
+assert bs._wake.is_set()  # 백그라운드 갱신을 깨운다
+bs._cache["at"] = time.time() - bs.STALE_SYNC - 1
+assert bs.status()["items"][0]["id"] == "n2", calls  # 아주 오래된 캐시는 그 자리에서 새로 모은다
+bs._cache["data"] = None
+assert bs.status()["items"][0]["id"] == "n3", calls  # 동작 뒤 비운 캐시도 그 자리에서
+bs._cache["at"] = time.time() - 10
+bs.refresh_once()
+assert len(calls) == 3, calls  # 막 켜져 아직 아무도 안 봤으면 백그라운드 갱신은 쉰다
+bs._active["at"] = time.time()
+bs.refresh_once()
+assert len(calls) == 4, calls  # 보는 사람이 있으면 백그라운드에서 모은다
+bs.refresh_once()
+assert len(calls) == 4, calls  # 방금 모았으면 다시 모으지 않는다
+bs._active["at"] = time.time() - bs.REFRESH_IDLE - 1; bs._cache["at"] = time.time() - 10
+bs.refresh_once()
+assert len(calls) == 4, calls  # 보는 사람이 없으면 쉰다
+# 모으는 사이에 동작이 캐시를 비우면(답 보내기·정리), 그 수집 결과는 동작 전 상태라 그대로 내보내지 않는다:
+# 다음 읽기(동작 쪽 find_item(fresh=True) 포함)가 그 자리에서 다시 모은다.
+def build_then_invalidate():
+    calls.append(1)
+    bs._cache["data"] = None  # 수집 도중 동작이 비움
+    return {"items": [{"id": "before-action"}]}
+bs._build = build_then_invalidate
+bs._collect(0)
+bs._build = fake_build
+assert bs.status()["items"][0]["id"] == "n%d" % len(calls), calls  # 동작 전 결과가 아니라 새로 모은 결과
+bs._cache["data"] = None  # 이미 비어 있던 캐시를 모으는 사이에 다른 동작이 또 비워도 같다
+bs._build = build_then_invalidate
+bs._collect(3)
+bs._build = fake_build
+assert bs.status()["items"][0]["id"] == "n%d" % len(calls), calls
+# 보는 사람 표시는 mark_active() 하나로 한다(폴링 말고 다른 연결도 같은 함수로 갱신을 살린다).
+bs._active["at"] = 0.0
+bs.mark_active()
+assert time.time() - bs._active["at"] < 1, bs._active
+# 백그라운드 수집이 계속 실패하면 0.5초마다 다시 돌리지 않고 최대 5초까지 늦춘다. 성공하면 원래 주기로.
+def broken_build():
+    calls.append(1)
+    raise RuntimeError("status.sh failed")
+bs._build = broken_build
+waits = []
+for _ in range(6):
+    bs._cache["at"] = 0.0
+    bs.refresh_once()
+    waits.append(bs.refresh_wait())
+assert waits[0] >= 1 and waits == sorted(waits) and waits[-1] == 5, waits
+bs._build = fake_build
+bs.refresh_once()
+assert bs.refresh_wait() <= bs.REFRESH, bs.refresh_wait()
+# 일괄 정리는 30초 안의 캐시라도 믿지 않고 그 자리에서 새로 모은 목록으로 한다(그새 다시 일하는 세션을 닫지 않게). 미리보기는 캐시로.
+bs._cache["data"] = {"items": []}; bs._cache["at"] = time.time() - 10
+n = len(calls)
+bs.bulk_cleanup({"dry_run": True})
+assert len(calls) == n, calls  # 미리보기는 캐시
+bs.bulk_cleanup({"older_days": 1})
+assert len(calls) == n + 1, calls  # 실제 정리는 새로 모은다
+' "$ROOT/scripts/board/board-server.py" || fail "status() serves the cache without waiting for a refresh and refreshes in the background only while someone is watching"
+BOARD_REFRESH_SECONDS=abc HARNESS_METRICS_DIR="$SR_DATA" python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+assert bs.REFRESH == 2.0, bs.REFRESH
+' "$ROOT/scripts/board/board-server.py" || fail "a BOARD_REFRESH_SECONDS that is not a positive number falls back to two seconds instead of stopping the server"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "(document.hidden ? '&bg=1' : '')" "a hidden board tab marks its polls so they keep the viewer alive without driving the background refresh"
+assert_contains "$(<"$ROOT/scripts/board/board-server.py")" "threading.Thread(target=refresher, daemon=True).start()" "the board server starts the background refresher"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "setInterval(() => { if (!sseLive()) refresh().catch(() => {}); }, 1000)" "the board polls the cached status every second while server events are down"
+pass "board status reads the cache and refreshes it in the background"
 
 # 정리 속도(#305) B: 정리는 캐시 항목을 쓰되 닫기 직전에 claude agents로 세션을 다시 확인한다. 그 사이 일을 시작했으면 정리하지 않고, 확인하지 못하면 멈춘다.
 AI_T="$TEST_TMP/board-action-item"
@@ -9378,14 +9815,14 @@ pass "work.sh merges sessions from the default, auto-detected and custom Claude 
 
 # 폴더마다 한 번만 부르고, 기본 폴더는 CLAUDE_CONFIG_DIR 없이(설정해 버리면 다른 설정 파일을 읽는다) 부른다. 없는 폴더는 건너뛴다.
 WK_CALLS="$(<"$WK_T/calls.log")"
-assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "the default folder is asked first and without CLAUDE_CONFIG_DIR"
+assert_eq "UNSET|agents --json --all" "$(grep "^UNSET|" "$WK_T/calls.log")" "the default folder is asked without CLAUDE_CONFIG_DIR"
 assert_eq "$WK_T/custom,$WK_T/profiles/p1/home,$WK_T/profiles/p2/home,UNSET" "$(cut -d'|' -f1 "$WK_T/calls.log" | LC_ALL=C sort | paste -sd, -)" "every existing folder is asked exactly once"
 case "$WK_CALLS" in *"$WK_T/missing"*) fail "a folder that does not exist is not asked" ;; esac
 pass "work.sh asks each existing settings folder once and the default one without CLAUDE_CONFIG_DIR"
 
 # 서버 환경에 CLAUDE_CONFIG_DIR이 있으면 그 폴더도 본다(기본 폴더는 여전히 그 변수 없이). 같은 실경로는 한 번만.
 WK_OUT_ENV="$(wk_work CLAUDE_CONFIG_DIR="$WK_T/envdir" BOARD_CLAUDE_CONFIG_DIRS="$WK_T/envdir:$WK_T/profiles/p1/home")"
-assert_eq "UNSET|agents --json --all" "$(sed -n 1p "$WK_T/calls.log")" "even then the default folder is asked without the variable"
+assert_eq "UNSET|agents --json --all" "$(grep "^UNSET|" "$WK_T/calls.log")" "even then the default folder is asked without the variable"
 assert_eq "1|1" "$(grep -c -F "$WK_T/envdir|" "$WK_T/calls.log" | tr -d ' ')|$(grep -c -F "$WK_T/profiles/p1/home|" "$WK_T/calls.log" | tr -d ' ')" "a folder named by several sources is asked once"
 assert_eq "$WK_T/envdir|$WK_T/envdir/projects/p/$WK_SID_E.jsonl" "$(jq -r --arg s "$WK_SID_E" '.[] | select(.sid == $s) | "\(.config_dir)|\(.transcript)"' <<<"$WK_OUT_ENV")" "a session from the server environment's folder is listed with that folder"
 pass "work.sh also reads the folder from the server's CLAUDE_CONFIG_DIR and de-duplicates by real path"
@@ -9454,6 +9891,68 @@ jq -cn --arg p "$WKC_TR1" --arg k "$WKC_REAL_KEY" '{($p): {key: $k, titles: "x",
 WKC_BAD_OUT="$(wkc_work "$WKC_T/agents-one.json")"
 assert_eq "Renamed by person" "$(jq -r --arg s "$WKC_SID_1" '.[] | select(.sid == $s) | .title' <<<"$WKC_BAD_OUT")" "an entry with the right key but wrong value types still gives the real title"
 pass "work.sh survives a cache with wrong-shaped entries and writes a well-formed one back"
+
+# 상태 갱신 가속(#348): 설정 폴더마다 부르는 claude agents는 동시에 돌고, transcript 키(크기:수정시각)는 transcript 수와 상관없이
+# stat 한 번으로 모은다. 경로에 공백이 있는 설정 폴더(macOS 'Application Support' 같은)도 같은 transcript를 찾는다.
+WKP_T="$(mkdir -p "$TEST_TMP/work-fast" && cd "$TEST_TMP/work-fast" && pwd -P)"
+mkdir -p "$WKP_T/bin" "$WKP_T/cwd" "$WKP_T/metrics" "$WKP_T/default/projects/p" \
+  "$WKP_T/profiles/a b/home/projects/p" "$WKP_T/profiles/c/home/projects/p" "$WKP_T/profiles/d/home/projects/p"
+WKP_REAL_STAT="$(command -v stat)"
+cat >"$WKP_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+printf 'start\n' >>"$FAKE_CLAUDE_LOG"
+sleep 1
+printf 'end\n' >>"$FAKE_CLAUDE_LOG"
+cat "${CLAUDE_CONFIG_DIR:-$FAKE_DEFAULT}/agents.json" 2>/dev/null || echo '[]'
+FAKE
+cat >"$WKP_T/bin/stat" <<'FAKE'
+#!/usr/bin/env bash
+printf 'stat\n' >>"$FAKE_STAT_LOG"
+exec "$REAL_STAT" "$@"
+FAKE
+chmod +x "$WKP_T/bin/claude" "$WKP_T/bin/stat"
+WKP_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WKP_EXPECT=""
+wkp_n=0
+for WKP_CFG in "$WKP_T/default" "$WKP_T/profiles/a b/home" "$WKP_T/profiles/c/home" "$WKP_T/profiles/d/home"; do
+  : >"$WKP_T/list.jsonl"
+  for _ in 1 2; do
+    wkp_n=$((wkp_n + 1))
+    WKP_SID="cccccccc-0000-4000-8000-00000000000$wkp_n"
+    jq -cn --arg sid "$WKP_SID" --arg cwd "$WKP_T/cwd" --argjson t "$(($(date +%s) * 1000))" \
+      '{sessionId: $sid, id: $sid[0:8], kind: "background", status: "idle", state: "running", pid: null, cwd: $cwd, name: ("task-0" + $sid[-1:]), startedAt: $t}' >>"$WKP_T/list.jsonl"
+    { jq -cn --arg t "$WKP_NOW" --arg n "$wkp_n" '{type: "user", message: {content: ("hello " + $n)}, timestamp: $t}'
+      jq -cn --arg n "$wkp_n" '{type: "ai-title", aiTitle: ("Title " + $n)}'
+    } >"$WKP_CFG/projects/p/$WKP_SID.jsonl"
+    WKP_EXPECT="$WKP_EXPECT$WKP_SID=$WKP_CFG/projects/p/$WKP_SID.jsonl=Title $wkp_n
+"
+  done
+  jq -s . "$WKP_T/list.jsonl" >"$WKP_CFG/agents.json"
+done
+wkp_work() {
+  : >"$WKP_T/claude.log"; : >"$WKP_T/stat.log"
+  env -u CLAUDE_CONFIG_DIR PATH="$WKP_T/bin:$PATH" REAL_STAT="$WKP_REAL_STAT" FAKE_CLAUDE_LOG="$WKP_T/claude.log" FAKE_STAT_LOG="$WKP_T/stat.log" \
+    FAKE_DEFAULT="$WKP_T/default" HARNESS_METRICS_DIR="$WKP_T/metrics" HARNESS_CLAUDE_PROJECTS_DIR="$WKP_T/default/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$WKP_T/profiles/*/home" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh"
+}
+WKP_COLD="$(wkp_work)"
+assert_eq "4" "$(awk '/^end$/ {exit} /^start$/ {n++} END {print n + 0}' "$WKP_T/claude.log")" "every settings folder is asked before the first answer comes back"
+assert_eq "$(printf '%s' "$WKP_EXPECT" | LC_ALL=C sort)" "$(jq -r '.[] | "\(.sid)=\(.transcript)=\(.title)"' <<<"$WKP_COLD" | LC_ALL=C sort)" \
+  "every session keeps its own transcript and title, a settings folder with a space included"
+WKP_STATS="$(wc -l <"$WKP_T/stat.log" | tr -d ' ')"
+[ "$WKP_STATS" -le 2 ] || fail "transcript keys are read with one stat call, not one per transcript (got $WKP_STATS calls for 8 transcripts)"
+WKP_WARM="$(wkp_work)"
+assert_eq "$WKP_COLD" "$WKP_WARM" "a warm run prints the same list"
+WKP_STATS="$(wc -l <"$WKP_T/stat.log" | tr -d ' ')"
+[ "$WKP_STATS" -le 2 ] || fail "a warm run also reads every transcript key with one stat call (got $WKP_STATS)"
+# 지난 캐시의 경로를 먼저 쓰되, 그 파일이 없어졌으면(다른 프로젝트 폴더로 옮겨짐) 다시 찾는다.
+WKP_MOVED_SID="cccccccc-0000-4000-8000-000000000003"
+mkdir -p "$WKP_T/profiles/a b/home/projects/q"
+mv "$WKP_T/profiles/a b/home/projects/p/$WKP_MOVED_SID.jsonl" "$WKP_T/profiles/a b/home/projects/q/"
+assert_eq "$WKP_T/profiles/a b/home/projects/q/$WKP_MOVED_SID.jsonl|Title 3" \
+  "$(wkp_work | jq -r --arg s "$WKP_MOVED_SID" '.[] | select(.sid == $s) | "\(.transcript)|\(.title)"')" "a transcript that moved since the last run is found again"
+pass "work.sh asks the settings folders in parallel and reads transcript keys in one batch"
 
 # 보드 서버는 항목의 설정 폴더로 claude를 부른다(#296): 입력·재개(send_to_bg)·정리(end_session)·정지 확인(wait_stopped)이 같은 폴더를 쓰고, 없으면 환경에서 뺀다.
 BS_T="$TEST_TMP/board-cfg-env"
