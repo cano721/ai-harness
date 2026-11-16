@@ -1,0 +1,33 @@
+#!/bin/bash
+# macOS가 없는 CI용 가짜 osacompile: -s -o <앱> <소스>를 받아 stay-open 애플릿과 같은 모양의 번들을 만든다.
+set -eu
+out="" src="" stay=false
+while (($#)); do
+  case "$1" in
+    -s) stay=true ;;
+    -o) out="$2"; shift ;;
+    *) src="$1" ;;
+  esac
+  shift
+done
+[[ "$out" == *.app ]] || { echo "stub osacompile: -o must end in .app to make an applet" >&2; exit 1; }
+mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources/Scripts"
+cat >"$out/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>applet</string>
+	<key>CFBundleIconFile</key>
+	<string>applet</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.ScriptEditor.id.stub</string>
+	<key>OSAAppletStayOpen</key>
+	<$stay/>
+</dict>
+</plist>
+PLIST
+printf 'stub applet\n' >"$out/Contents/MacOS/applet"
+chmod 755 "$out/Contents/MacOS/applet"
+printf 'stub icon\n' >"$out/Contents/Resources/applet.icns"
+cp "$src" "$out/Contents/Resources/Scripts/main.scpt"
