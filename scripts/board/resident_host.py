@@ -14,15 +14,28 @@
 - 요청 {"t", "op", ...}: start·send·decide·answer·end·mark_seen·owns·items·item, 그리고 subscribe(연결을 열어 둔 채
   상태가 바뀔 때마다 {"ev": "changed"} 한 줄을 받는다 — 보드는 그때 SSE 비교를 깨운다).
 보드 쪽은 HostClient가 Residents와 같은 메서드로 감싼다.
+- 버전: host.json에 proto(대화 형식 정수)·version(플러그인)·script(이 파일 절대 경로)를 남긴다. 플러그인이 업데이트돼 보드의
+  script와 다르면, 살아 있는 세션이 없을 때 보드가 옛 호스트를 끄고 새로 띄운다. 세션이 있으면 proto가 같을 때만 계속 쓰고
+  화면에 "이전 버전 호스트가 세션을 쥐고 있음"을 보인다(proto가 다르면 부르지 않고 안내만). 사람이 끄려면 `board.sh host-stop`.
 """
 import fcntl, hashlib, json, os, secrets, signal, socket, stat, struct, subprocess, sys, tempfile, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import resident as hresident  # noqa: E402
 
-SCRIPT = os.path.abspath(__file__)
+SCRIPT = os.path.realpath(__file__)
+PROTO = 1  # 보드↔호스트 요청 형식. 바꾸면 올린다 — 다른 proto의 호스트는 부르지 않는다
 SOCK_MAX = 100  # sun_path 한도(macOS 104, Linux 108)보다 조금 작게
 MAX_LINE = 1 << 20
+
+
+def plugin_version():
+    try:
+        with open(os.path.join(os.path.dirname(SCRIPT), "..", "..", ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            v = json.load(f).get("version")
+        return v if isinstance(v, str) else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _secure_dir(path):
@@ -152,7 +165,8 @@ class Host:
         tmp = self.paths.info + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump({"pid": os.getpid(), "sock": self.paths.sock, "token": self.token, "started": hresident.utc()}, f)
+            json.dump({"pid": os.getpid(), "sock": self.paths.sock, "token": self.token, "started": hresident.utc(),
+                       "proto": PROTO, "version": plugin_version(), "script": SCRIPT}, f)
         os.replace(tmp, self.paths.info)
         signal.signal(signal.SIGTERM, lambda *_: self.stop(term=True))
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -212,7 +226,7 @@ class Host:
             req = json.loads(line) if line else None
             uid = _peer_uid(conn)
             if not isinstance(req, dict) or (uid is not None and uid != os.getuid()) \
-                    or not secrets.compare_digest(str(req.get("t") or ""), self.token):
+                    or not secrets.compare_digest(str(req.get("t") or "").encode("utf-8", "replace"), self.token.encode()):
                 _send(conn, {"ok": False, "message": "not authorized"})
                 conn.close()
                 return
@@ -285,6 +299,8 @@ class HostClient:
         self._sub = None
         self._local = (None, None)
         self._verified = None
+        self._stale = None  # 이전 버전 호스트가 세션을 쥐고 있을 때의 안내
+        self._vet_lock = threading.RLock()
         self.wanted = False
 
     def start_watch(self):
@@ -345,10 +361,69 @@ class HostClient:
             raise OSError(res.get("message") or "host refused")
         return res["r"]
 
+    # ---- 버전(플러그인이 업데이트돼 호스트가 옛 경로에서 돌 때) ----
+    def _host(self):
+        """_info에 버전 확인을 더한다. 이 보드가 부를 수 있는 호스트면 info, 아니면 None.
+        proto·script가 같으면 그대로. 다르면: 살아 있는 세션이 없을 때 옛 호스트를 끄고 None(새로 띄우게),
+        세션이 있으면 proto가 같을 때만 계속 쓰고 안내를 남긴다. proto가 다르면 부르지 않고 안내만(None)."""
+        info = self._info()
+        if not info:
+            self._stale = None
+            return None
+        if info.get("proto") == PROTO and os.path.realpath(str(info.get("script") or "")) == SCRIPT:
+            self._stale = None
+            return info
+        with self._vet_lock:
+            key = (info["pid"], info.get("started"))
+            if self._stale and self._stale["key"] == key and time.time() - self._stale["at"] < 5:
+                return info if self._stale["keep"] else None
+            if not self._registry_live():
+                self._retire(info)
+                self._stale = None
+                return None
+            keep = info.get("proto") == PROTO
+            ver = info.get("version") or "알 수 없음"
+            msg = (f"이전 버전 호스트({ver})가 상주 세션을 쥐고 있음 — 세션을 끝내면 새 버전으로 바뀜" if keep else
+                   f"이전 버전 호스트({ver})가 상주 세션을 쥐고 있어 보드에서 다룰 수 없음 — "
+                   "board.sh host-stop으로 끄면 새 버전 호스트가 같은 세션을 이어 쥠")
+            self._stale = {"key": key, "at": time.time(), "keep": keep, "version": info.get("version"), "message": msg}
+            return info if keep else None
+
+    def _registry_live(self):
+        """기록(residents.json)에서 아직 살아 있는 세션 프로세스 수 — 옛 호스트를 부르지 않고 센다."""
+        try:
+            with open(os.path.join(self.data, "board", "residents.json"), encoding="utf-8") as f:
+                reg = json.load(f)
+        except (OSError, ValueError):
+            return 0
+        if not isinstance(reg, dict):
+            return 0
+        return sum(1 for sid, r in reg.items() if isinstance(r, dict) and isinstance(r.get("pid"), int)
+                   and hresident._alive_with(r["pid"], sid))
+
+    def _retire(self, info, wait=8.0):
+        """세션이 없는 옛 호스트를 끈다(SIGTERM → 호스트가 소켓·기록을 지우고 끝남)."""
+        try:
+            os.kill(info["pid"], signal.SIGTERM)
+        except OSError:
+            return
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                os.kill(info["pid"], 0)
+            except OSError:
+                return
+            time.sleep(0.05)
+
+    def notice(self):
+        """보드 화면에 보일 안내(이전 버전 호스트) 또는 None."""
+        s = self._stale
+        return {"message": s["message"], "version": s["version"], "readonly": not s["keep"]} if s else None
+
     def _call(self, req, spawn):
         """연결부터 못 한 경우에만 호스트를 띄워 다시 보낸다. 보낸 뒤 답을 못 받았으면 다시 보내지 않는다 —
         호스트가 이미 처리했을 수 있어(같은 글이 두 번, 새 세션이 둘) 오류로 돌려준다."""
-        info = self._info()
+        info = self._host()
         if info:
             try:
                 return self._rpc(info, req)
@@ -356,18 +431,23 @@ class HostClient:
                 pass
         if not spawn:
             raise OSError("no host")
+        if self._stale and not self._stale["keep"]:
+            raise OSError(self._stale["message"])
         info = self.ensure()
         if not info:
             raise OSError("host did not start")
         return self._rpc(info, req)
 
     def ensure(self):
-        """호스트가 없으면 분리해서 띄우고 받을 준비가 될 때까지(5초) 기다린다."""
+        """호스트가 없으면 분리해서 띄우고 받을 준비가 될 때까지(5초) 기다린다. 부를 수 없는 옛 호스트가
+        세션을 쥐고 있으면 띄우지 않는다(잠금에 막혀 어차피 뜨지 못한다)."""
         with self._spawn_lock:
             self.wanted = True
-            info = self._info()
+            info = self._host()
             if info and self._ping(info):
                 return info
+            if self._stale and not self._stale["keep"]:
+                return None
             try:
                 _secure_dir(self.paths.dir)
                 fd = os.open(self.paths.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -379,7 +459,7 @@ class HostClient:
             threading.Thread(target=proc.wait, daemon=True).start()  # 먼저 끝나면 좀비로 남지 않게 거둔다
             end = time.time() + 5
             while time.time() < end:
-                info = self._info()
+                info = self._host()
                 if info and self._ping(info):
                     return info
                 time.sleep(0.05)
@@ -394,10 +474,14 @@ class HostClient:
 
     def _subscribe_loop(self):
         """호스트의 변경 알림을 보드 SSE로 잇는다. 호스트가 죽으면(보드가 열려 있는 동안) 다시 띄운다.
-        띄우거나 붙지 못하면 1초부터 60초까지 늘려 가며 다시 시도한다(뜨자마자 죽는 호스트를 계속 띄우지 않게)."""
+        띄우거나 붙지 못하면 1초부터 60초까지 늘려 가며 다시 시도한다(뜨자마자 죽는 호스트를 계속 띄우지 않게).
+        옛 버전 호스트에 붙어 있으면 5초마다 다시 확인해, 세션이 다 끝나면 끄고 새 버전으로 바꾼다."""
         delay = 1.0
         while not self._stopped:
-            info = self._info()
+            stale_before = self._stale
+            info = self._host()
+            if self._stale != stale_before:
+                self.notify()  # 안내가 생기거나 사라졌다
             if self.wanted and not (info and self._ping(info)):
                 info = self.ensure()
             attached = False
@@ -410,10 +494,16 @@ class HostClient:
                         attached, delay = True, 1.0
                         self.wanted = True
                         self._sub = s
-                        s.settimeout(None)
+                        s.settimeout(5)
                         self.notify()
                         while not self._stopped:
-                            line, buf = _read_line(s, buf)
+                            try:
+                                line, buf = _read_line(s, buf)
+                            except socket.timeout:
+                                buf = b""
+                                if self._stale and self._host() is None:  # 옛 호스트의 세션이 끝나 껐다
+                                    break
+                                continue
                             if line is None:
                                 break
                             self.notify()
@@ -428,6 +518,7 @@ class HostClient:
             if not attached and self.wanted:
                 delay = min(60.0, delay * 2)
             time.sleep(delay if self.wanted and not attached else 1.0)
+
 
     def shutdown(self):
         """보드가 꺼질 때: 호스트와 세션은 그대로 두고 연결만 닫는다."""

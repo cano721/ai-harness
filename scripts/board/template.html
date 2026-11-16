@@ -1430,6 +1430,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const M = model(tab, filter);
     const total = Object.values(M).reduce((n, l) => n + l.length, 0);
     const nodes = [];
+    if (data && data.resident_host && tab !== 'autofix') nodes.push(notice('attention', data.resident_host.message));  // 이전 버전 상주 세션 호스트(#364)
     // 지금 할 일 — 모든 탭에서 맨 위
     const todo = el('section', 'ds-stack'); todo.setAttribute('aria-labelledby', 'sec-todo');
     const th = sectionHead('attention', '지금 할 일', units(M.todo), null, todoSummary(M.todo)); th.id = 'sec-todo'; todo.append(th);
@@ -2298,7 +2299,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       cleanupNoted.add(key); hiding.delete(f.id); lastSig = '';
       toast(`"${shortTitle(f.title || '') || '세션'}" 정리하지 못함 — ${f.message}`, false);
     }
-    const sig = JSON.stringify([next.items, next.quiet_runs]);
+    const sig = JSON.stringify([next.items, next.quiet_runs, next.resident_host]);
     loadError = null;
     if (sig === lastSig) return;
     lastSig = sig; data = next; flush();
@@ -2308,7 +2309,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const sseLive = () => sseOpen && Date.now() - sseAt < 40000;
   function applyEvent(fn) {
     if (!data) return;
-    fn(); const sig = JSON.stringify([data.items, data.quiet_runs]);
+    fn(); const sig = JSON.stringify([data.items, data.quiet_runs, data.resident_host]);
     if (sig === lastSig) return;
     lastSig = sig; flush();
   }

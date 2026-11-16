@@ -165,7 +165,8 @@ class Residents:
         self._save_lock = threading.Lock()
         self._spawn_lock = threading.Lock()  # 살아 있는 수 확인 → 띄우기 → 등록을 한 묶음으로
         for sid, rec in (self._load() or {}).items():
-            if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+            # 기록 파일에서 온 id는 UUID 형식일 때만 받는다 — --resume 인자로 넘어가므로 옵션처럼 보이는 값 등을 막는다
+            if isinstance(rec, dict) and isinstance(rec.get("cwd"), str) and isinstance(sid, str) and _SID.fullmatch(sid):
                 s = Session(sid, rec["cwd"], rec.get("name"), rec.get("title") or sid[:8])
                 s.at = rec.get("at") or s.at
                 s.prev_pid = rec.get("pid") if isinstance(rec.get("pid"), int) else None
@@ -564,6 +565,7 @@ def sse_lines(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+_SID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _RES_ID = re.compile(r"res\|[0-9a-f-]{36}")
 
 

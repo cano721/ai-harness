@@ -1253,6 +1253,7 @@ def remove_hook_conf():
 def with_residents(data):
     """화면 목록에 보드가 쥔 상주 세션을 얹는다(status 캐시는 건드리지 않는다). 같은 sid는 상주 쪽이 이긴다."""
     res = RESIDENTS.items()
+    data = {**data, "resident_host": RESIDENTS.notice()}  # 이전 버전 호스트 안내(없으면 null — SSE meta가 지난 안내를 지우게)
     if not res:
         return data
     for i in res:
