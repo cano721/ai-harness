@@ -355,9 +355,10 @@
 @media (max-width: 1023px) {
   .ds-split[data-drawer="open"] { grid-template-columns: minmax(0, 1fr); }
 }
-/* 사이드바가 본문 폭의 1/3을 넘게 차지하는 폭(--breakpoint-wide 미만)에서는 사이드바를 본문 위로 접는다. */
+/* 사이드바가 본문 폭의 1/3을 넘게 차지하는 폭(--breakpoint-wide 미만)에서는 사이드바를 본문 위로 접는다.
+   행을 정의하지 않으면 min-height 를 채우고 남는 높이를 두 auto 행이 나눠 사이드바 줄이 빈 띠로 늘어난다 — 남는 높이는 본문 행만 갖는다. */
 @media (max-width: 1023px) {
-  .ds-app { grid-template-columns: minmax(0, 1fr); }
+  .ds-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .ds-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--color-border); }
 }
 @media (max-width: 760px) {

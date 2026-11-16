@@ -10343,6 +10343,17 @@ assert_contains "$DS_LINT_BAD" "notice('danger', …)" "lint flags a danger noti
 assert_eq "5" "$(grep -c '^scripts/board/template.html:' <<<"$DS_LINT_BAD")" "lint reports only the seeded violations, with file and line"
 pass "design system: mechanical lint for breakpoints, disabled state, accent text, danger notices"
 
+# 화면 뼈대 그리드(#365): 좁은 폭에서 사이드바가 본문 위로 접히면 행이 둘이 된다. 행을 정의하지 않으면
+# min-height: 100vh 를 채우고 남는 높이를 두 auto 행이 나눠 가져 사이드바 줄이 빈 회색 띠로 늘어난다.
+# 남는 높이는 본문 행만 갖는다. 넓은 폭 사이드바(세로·sticky·전체 높이)는 그대로다.
+DS_COMPONENTS_CSS="$(<"$DS/components.css")"
+DS_APP_NARROW="$(awk '/^@media \(max-width: 1023px\)/ { m = 1 } m && /^}/ { m = 0 } m && /\.ds-app[ {]/' "$DS/components.css")"
+assert_contains "$DS_APP_NARROW" "grid-template-columns: minmax(0, 1fr)" "narrow layout folds the sidebar above the main column"
+assert_contains "$DS_APP_NARROW" "grid-template-rows: auto 1fr" "narrow layout gives the leftover height to the main row, not the sidebar row"
+assert_contains "$DS_COMPONENTS_CSS" ".ds-app { display: grid; grid-template-columns: var(--size-sidebar) minmax(0, 1fr); min-height: 100vh; }" "wide layout keeps the full-height two-column frame"
+assert_contains "$DS_COMPONENTS_CSS" "position: sticky; top: 0; height: 100vh;" "wide sidebar stays sticky at full height"
+pass "design system: app frame rows on narrow screens"
+
 # 기준 화면은 단일 HTML이다: 버전을 고정한 글꼴 파일 하나 말고는 밖에서 아무것도 불러오지 않고, 그 글꼴이 없어도 동작한다.
 DS_REF_HTML="$(<"$DS/reference.html")"
 case "${DS_REF_HTML//"$DS_FONT_URL"/}" in *"http://"*|*"https://"*|*"<link "*|*" src="*|*"@import"*) fail "reference screen loads nothing from outside the file except the pinned font" ;; esac
