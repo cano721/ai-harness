@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- **무인 sync·harvest·autofix가 플러그인 스크립트를 실행하지 못하던 문제** — 무인 worker가 허용한 스크립트 경로는 launchd가 고른 설치본(Codex 쪽일 수 있음)이었는데, claude는 `--plugin-dir`을 줘도 같은 이름의 설치본이 더 높은 버전이면 그쪽 스킬을 로드했습니다. 배치가 도는 중에 플러그인이 업데이트되면 `open-pr.sh --check`·`harness-sync-state.sh plan`이 "This command requires approval"로 거부돼 sync가 전부 `left_for_user`로 끝났습니다. 이제 claude worker는 `installed_plugins.json`에서 가장 높은 ai-harness 설치본을 골라 `--plugin-dir`·스크립트 허용 목록·읽기 디렉터리에 같은 경로로 씁니다(설치본을 못 찾으면 지금처럼 실행 중인 설치본). 이미 멈춘 저장소는 대화형으로 `/ai-harness:harness-init --sync --apply`를 실행하면 됩니다. (#366)
+
 ## v0.77.0 (2026-11-16)
 ### 새 기능
 
