@@ -204,6 +204,9 @@ for s in "$DATA"/runs/*/*/state.json; do
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.presented_at // .started_at), title: $title,
          detail: "노드 \(.node)에서 사람 결정을 기다림", link: null, log: $path,
          cmd: "workflow-driver.sh approve --run \(.run_id)"}
+      elif .status == "baseline_changed" then
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
+         detail: "멈춘 뒤 저장소가 바뀌어 이어 가지 않음: \(.message // .node)", link: null, log: $path, cmd: null}
       elif .status == "failed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}

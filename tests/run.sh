@@ -1487,6 +1487,127 @@ DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status 
 assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
 assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
 
+# resume·approve는 에이전트를 부르기 전에 러너가 멈춘 때의 기준점(HEAD·작업 트리 지문)과 지금을 대조한다. (#371)
+# 같으면 그대로 잇고, 미커밋 수정·다른 커밋이면 차이와 남은 검사를 보이고 멈춘다. done에서 바뀌었으면 성공을 돌려주지 않는다.
+new_driver_repo baseline_same
+driver start --runtime codex --request "add feature"
+assert_eq "10:$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$DRIVER_RC:$(run_state .baseline.head)" "the runner keeps the baseline where it stopped"
+[[ -n "$(run_state '.baseline.fingerprint // ""')" ]] || fail "the baseline keeps the working tree fingerprint"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a resume from the same baseline continues as before"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a finished run resumed with nothing changed still reports done"
+echo later >"$DRIVER_REPO/later.txt"
+driver resume
+assert_eq "20" "$DRIVER_RC" "a finished run whose working tree changed does not report success"
+[[ "$(run_state .status)" != "done" ]] || fail "a changed finished run is not left as done"
+assert_contains "$DRIVER_OUT" "later.txt" "the stop names the changed file"
+driver resume --accept-changes
+assert_eq "20" "$DRIVER_RC" "a finished run does not take changes in; they need a new run"
+assert_contains "$DRIVER_OUT" "start a new run" "the finished run says how to check the change"
+rm "$DRIVER_REPO/later.txt"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "back at the baseline, the finished run reports done again"
+git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -q --allow-empty -m "after done"
+driver resume
+assert_eq "20" "$DRIVER_RC" "a commit after a finished run also stops it"
+
+new_driver_repo baseline_dirty
+driver start --runtime codex --request "add feature"
+echo hand >"$DRIVER_REPO/hand.txt"
+say_in_claude "승인"
+driver resume
+assert_eq "20:approval" "$DRIVER_RC:$(run_state .node)" "an uncommitted change after the stop halts resume"
+[[ "$(<"$FAKE_LOG")" != *deliver* ]] || fail "no agent writes when the baseline moved"
+assert_contains "$DRIVER_OUT" "hand.txt" "the stop names the uncommitted file"
+assert_contains "$DRIVER_OUT" "node approval" "the stop names where the run would continue"
+assert_contains "$DRIVER_OUT" "checks: true" "the stop names the remaining required checks"
+assert_contains "$DRIVER_OUT" "resume --accept-changes" "the stop says how to take the change in on purpose"
+driver resume
+assert_eq "20" "$DRIVER_RC" "a plain resume keeps stopping until the change is accepted or undone"
+driver resume --accept-changes
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an explicit --accept-changes moves the baseline and continues"
+assert_eq "1" "$(run_state '.baseline_accepted | length')" "the accepted change is recorded"
+driver status --accept-changes
+assert_eq "2" "$DRIVER_RC" "--accept-changes belongs to resume and approve only"
+
+new_driver_repo baseline_commit
+driver start --runtime codex --request "add feature"
+echo other >"$DRIVER_REPO/other.txt"
+git -C "$DRIVER_REPO" add -A && git -C "$DRIVER_REPO" commit -q -m "someone else's commit"
+say_in_claude "승인"
+driver resume
+assert_eq "20:approval" "$DRIVER_RC:$(run_state .node)" "a different commit after the stop halts resume"
+[[ "$(<"$FAKE_LOG")" != *deliver* ]] || fail "no agent writes when HEAD moved"
+assert_contains "$DRIVER_OUT" "someone else's commit" "the stop lists the new commits"
+driver resume --accept-changes
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an accepted commit becomes the run's head, so the write nodes do not see HEAD as moved"
+
+# 기준점이 없던 이전 버전의 실행도 HEAD는 대조한다.
+new_driver_repo baseline_legacy
+driver start --runtime codex --request "add feature"
+jq 'del(.baseline)' "$(run_dir)/state.json" >"$DRIVER_TMP/legacy.json" && mv "$DRIVER_TMP/legacy.json" "$(run_dir)/state.json"
+git -C "$DRIVER_REPO" commit -q --allow-empty -m moved
+say_in_claude "승인"
+driver resume
+assert_eq "20" "$DRIVER_RC" "a run from before baselines still stops when HEAD moved"
+
+# 러너 자신의 체크포인트 커밋·publish가 HEAD를 옮겨도 기준점이 따라가 정상 재개는 막히지 않는다.
+new_driver_repo baseline_checkpoint
+with_policy pr-only human
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "checkpoint commits and publish keep the baseline with them"
+assert_eq "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "$(run_state .baseline.head)" "the baseline follows the runner's own commits"
+driver resume
+assert_eq "0" "$DRIVER_RC" "a finished pr-only run resumed with nothing changed still reports done"
+
+# 불변식 위반(40)은 러너가 허용하지 않은 변경이라 기준점이 되지 않는다. 다음 resume은 에이전트를 부르기 전에 멈춘다.
+new_driver_repo baseline_violation
+FAKE_SCENARIO=brief_writes
+driver start --runtime codex --request "add feature"
+assert_eq "40" "$DRIVER_RC" "a read-only node that writes stops the run"
+BW_CALLS="$(wc -l <"$FAKE_LOG")"
+driver resume
+assert_eq "20:$BW_CALLS" "$DRIVER_RC:$(wc -l <"$FAKE_LOG")" "after an invariant violation, resume stops on the unaccepted change before any agent runs"
+assert_contains "$DRIVER_OUT" "sneaky.txt" "the stop names the change the violation left"
+new_driver_repo baseline_head_moved
+FAKE_SCENARIO=commit
+driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+driver resume
+assert_eq "40" "$DRIVER_RC" "a write node that commits moves HEAD and stops the run"
+driver resume
+assert_eq "20:1" "$DRIVER_RC:$(grep -c '^deliver ' "$FAKE_LOG")" "resume after HEAD moved stops before the write node runs again"
+
+# 리뷰를 지난 노드(remote_ci 등)에서는 받아들인 변경이 검증·리뷰를 건너뛰므로 --accept-changes도 거부한다.
+new_driver_repo baseline_ci
+with_policy pr-only auto
+FAKE_SCENARIO=ci_pending
+driver start --runtime codex --request "add feature"
+assert_eq "30:remote_ci" "$DRIVER_RC:$(run_state .node)" "the run waits at remote_ci"
+driver resume
+assert_eq "30" "$DRIVER_RC" "resuming a pending remote CI with nothing changed checks again as before"
+echo late >"$DRIVER_REPO/late.txt"
+driver resume --accept-changes
+assert_eq "20:remote_ci" "$DRIVER_RC:$(run_state .node)" "a change after review is not taken into the run"
+assert_contains "$DRIVER_OUT" "start a new run" "the stop sends the change to a new run"
+
+# 예전 진입점도 같은 대조를 거친다.
+new_driver_repo baseline_shim
+shim() { DRIVER_RC=0; DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+  FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK=true PATH="$ROOT/tests/fixtures/driver:$PATH" \
+  bash "$DRIVER_SHIM" "$@" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?; }
+shim start --runtime codex --request "add feature"
+echo hand >"$DRIVER_REPO/hand.txt"
+say_in_claude "승인"
+shim resume
+assert_eq "20" "$DRIVER_RC" "the old entry point stops on a changed baseline too"
+[[ "$(<"$FAKE_LOG")" != *deliver* ]] || fail "the old entry point does not write when the baseline moved"
+pass "resume compares the saved baseline before any agent runs"
+
 # 병합 노드: 병합 조건은 개인 설정(HM_MERGE_*), 기준 브랜치·검증 명령은 저장소 사실이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
 export HM_SMOKE_RETRY_SECONDS=0
 as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 실제 push는 bare 저장소로 보낸다(insteadOf)
@@ -9242,7 +9363,7 @@ assert (r1["project"], r1.get("worktree")) == ("shopper", "shopper-wt-a"), r1  #
 assert (r2["project"], r2.get("worktree"), r2["in_repo"]) == ("acme", "ACME-12", True), r2  # 지워진 worktree는 경로 모양으로
 assert r3["project"] == "plain-folder" and r3["in_repo"] is False, r3  # 추정할 수 없으면 저장소 밖
 ' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions and workflow runners in a git worktree count under the original repository, with the worktree name kept as a detail"
-assert_eq "5" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
+assert_eq "6" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
 BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
 assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"
@@ -10385,6 +10506,7 @@ ba_run() { # $1=run 폴더 $2=status $3=node
 ba_run a/1 incomplete publish
 ba_run b/1 running discover
 ba_run c/1 running repair
+ba_run d/1 baseline_changed approval
 touch -t 202601010000 "$BA_DATA/runs/b/1/state.json" "$BA_DATA/runs/b/1/progress.log"
 ba_status() {
   env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
@@ -10405,6 +10527,8 @@ assert_eq "blocked|no_activity" "$(jq -r '.items[] | select(.kind == "runner" an
   "a running runner with no record for a long time is stopped"
 assert_eq "running|null" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-c/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
   "a runner that just wrote its record is still working"
+assert_eq "needs_human" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-d/1"))) | .state' <<<"$BA_OUT")" \
+  "a runner stopped because the repository changed after it stopped waits for a person (#371)"
 assert_eq "running" "$(ba_status BOARD_RUNNER_STALE_MIN=99999999 | jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | .state')" \
   "BOARD_RUNNER_STALE_MIN sets how long a quiet runner still counts as working"
 pass "board status shows a dead or incomplete workflow runner as stopped"
