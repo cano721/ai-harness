@@ -5,7 +5,8 @@ GET  /?t=TOKEN                   보드 화면
 GET  /status.json?t=...          status.sh 결과(작업 = claude agents, 하네스 = ~/.ai-harness)
 GET  /transcript?t&id&offset     세션 대화를 offset 이후만 읽어 돌려줌(파일 tail)
 POST /action  {t, id, action}    미리 정한 작업만 실행. send는 {text}
-POST /new     {t, cwd, prompt}   새 세션: claude -p stream-json 상주 프로세스로 쥔다(resident.py). 이어서 보내기는 stdin으로
+POST /new     {t, cwd, prompt}   새 세션: claude -p stream-json 상주 프로세스로 쥔다(resident.py). 이어서 보내기는 stdin으로.
+                                 세션은 보드와 따로 사는 호스트(resident_host.py)가 쥐고 보드는 유닉스 소켓으로 붙는다(#364)
 GET  /events?t=...               SSE: 바뀐 항목(item·gone·meta)을 바로 민다. 끊기면 화면이 /status.json 폴링으로 돌아간다
 POST /answer  {t, id, pid, answers}  상주 세션의 AskUserQuestion에 사람이 고른 답
 POST /cleanup-bulk {t, older_days?, worktree?, dry_run?, ids?}  끝난 일 한꺼번에 정리(숨김 + 쉬는 세션 닫기, worktree는 선택·지울 수 있는 것만)
@@ -44,6 +45,7 @@ import prstate  # noqa: E402
 import references as hrefs  # noqa: E402
 import settings as hsettings  # noqa: E402
 import resident as hresident  # noqa: E402
+import resident_host as hhost  # noqa: E402
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN = secrets.token_urlsafe(24)
@@ -1268,7 +1270,7 @@ def board_snapshot(fresh=True):
 
 HUB = hresident.Hub()
 FEED = hresident.Feed(HUB, lambda: board_snapshot(fresh=False))
-RESIDENTS = hresident.Residents(DATA, FEED.poke)
+RESIDENTS = hhost.HostClient(DATA, FEED.poke)  # 세션은 호스트가 쥔다 — 보드가 꺼져도 남는다(#364)
 
 
 # 자동 종료(#355): 런처로 켜고 잊어도 서버가 남지 않게, 보는 사람이 IDLE_EXIT 동안 없으면 스스로 꺼진다.
@@ -1288,14 +1290,13 @@ IDLE_EXIT = _idle_exit_seconds()
 
 
 def idle_blockers():
-    """보는 사람이 없어도 끄면 안 되는 이유: 붙잡은 권한 요청(끄면 그 세션이 답을 잃는다), 열린 이벤트 연결, 작업 중·답 대기인 쥔 세션."""
+    """보는 사람이 없어도 끄면 안 되는 이유: 붙잡은 권한 요청(끄면 그 세션이 답을 잃는다), 열린 이벤트 연결.
+    상주 세션은 호스트가 쥐므로(#364) 보드가 꺼져도 끊기지 않는다 — 막는 이유가 아니다."""
     out = []
     if _perms:
         out.append("permission")
     if HUB.count():
         out.append("events")
-    if RESIDENTS.working():
-        out.append("resident")
     with _marks_lock:
         if _cleaning:  # 뒤에서 세션 닫기·worktree 삭제 중 — 끊으면 반쯤 지운 worktree가 남는다
             out.append("cleanup")
@@ -1843,7 +1844,8 @@ if __name__ == "__main__":
     srv.daemon_threads = True
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
-    atexit.register(RESIDENTS.shutdown)  # 꺼질 때 쥔 세션을 닫는다(대화 기록은 남아 다음에 --resume으로 이어 쥔다)
+    RESIDENTS.start_watch()
+    atexit.register(RESIDENTS.shutdown)  # 꺼질 때 호스트 연결만 닫는다 — 세션과 붙잡은 요청은 호스트에 남는다(#364)
     threading.Thread(target=refresher, daemon=True).start()
     if IDLE_EXIT:
         threading.Thread(target=idle_watch, daemon=True).start()
