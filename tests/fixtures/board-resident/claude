@@ -4,7 +4,8 @@
 실측(Claude Code 2.1.325) 형식을 따른다: 권한·질문은 stdout의 control_request(subtype can_use_tool)로 나가고,
 호스트가 stdin에 control_response로 답할 때까지 그 턴이 멈춘다. stdin이 닫히면 남은 요청은 실패로 끝내고 종료한다.
 모든 실행 인자·stdin 줄·내보낸 요청을 BOARD_STUB_LOG(jsonl)에 남겨 테스트가 확인한다.
-첫 지시나 이어서 보낸 글에 PERM이 있으면 Bash 권한을, ASK가 있으면 AskUserQuestion을 묻는다. 그 밖에는 바로 답한다.
+첫 지시나 이어서 보낸 글에 PERM이 있으면 Bash 권한을, ASK가 있으면 AskUserQuestion을 묻는다(SLOW가 함께 있으면 1.5초 뒤).
+그 밖에는 바로 답한다.
 """
 import json, os, sys, time, uuid
 
@@ -64,6 +65,8 @@ for line in sys.stdin:
     text = content if isinstance(content, str) else json.dumps(content)
     out({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd()})
     if "PERM" in text or "ASK" in text:
+        if "SLOW" in text:  # 보드가 꺼진 동안 묻게 — 테스트가 그 사이 보드를 끈다(#364)
+            time.sleep(1.5)
         tool = "Bash" if "PERM" in text else "AskUserQuestion"
         inp = ({"command": "touch made.txt"} if tool == "Bash" else
                {"questions": [{"question": "Pick a color", "header": "Color", "multiSelect": False,
