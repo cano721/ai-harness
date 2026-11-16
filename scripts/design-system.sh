@@ -8,13 +8,14 @@ set -euo pipefail
 #   sync      원본을 각 화면의 표시 구간에 다시 넣는다
 #   check     사본이 원본과 같은지 본다 (다르면 exit 1)
 #   contrast  규칙 문서가 허용한 전경/배경 쌍의 대비를 라이트·다크로 계산한다 (미달이면 exit 1, --md 는 표)
+#   lint      글자로 확인할 수 있는 규칙(중단점 폭·disabled 커서와 흐림·강조 면 글자색·danger 알림 문구)을 본다 (위반이면 exit 1)
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
 MD=""
 
 usage() {
-  printf 'usage: design-system.sh <sync|check|contrast> [--root DIR] [--md]\n' >&2
+  printf 'usage: design-system.sh <sync|check|contrast|lint> [--root DIR] [--md]\n' >&2
   exit 2
 }
 
@@ -95,6 +96,11 @@ case "$CMD" in
     else
       python3 -I "$DIR/design-contrast.py" "$DS/tokens.css" "$DS/contrast-pairs.tsv"
     fi
+    ;;
+  lint)
+    # 화면 목록은 targets()가 원본이다. 공용 부품 원본도 같이 본다.
+    # shellcheck disable=SC2046  # 경로에 공백이 없는 저장소 상대 경로 목록을 단어로 나눠 넘긴다
+    python3 -I "$DIR/design-lint.py" "$ROOT" docs/design-system/components.css $(targets | cut -d' ' -f1)
     ;;
   *) usage ;;
 esac

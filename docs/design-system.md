@@ -13,7 +13,7 @@ ai-harness가 사용자에게 보여 주는 단일 HTML 화면(보드, 하네스
 - 확인 대기: 8 — 목록은 이 문서를 만든 PR #288(이슈 #287) 본문의 "결정 사항"에 있다
 - 적용 범위: 보드는 공용 부품으로 재구성했다(#291 — 토큰·부품 사본을 싣고 예전 변수 이름이 없다). 리포트에는 아직 토큰만 이어 두었다(기존 변수 이름 유지)
 - 밖으로 나가는 요청: 글꼴 파일 하나(아래 `## 타이포그래피`). 그 밖에는 화면이 밖에서 아무것도 불러오지 않는다 — `tests/run.sh`가 이 URL 하나만 허용한다
-- 사본 규칙: 보드·리포트·기준 화면은 단일 HTML이라 토큰·부품 CSS를 파일 안에 사본으로 싣는다. 원본을 고친 뒤 `scripts/design-system.sh sync`로 맞추고, `check`와 `contrast`는 `tests/run.sh`가 돌린다
+- 사본 규칙: 보드·리포트·기준 화면은 단일 HTML이라 토큰·부품 CSS를 파일 안에 사본으로 싣는다. 원본을 고친 뒤 `scripts/design-system.sh sync`로 맞추고, `check`·`contrast`·`lint`(중단점 폭, disabled 커서·흐림, 강조 면 글자색, 빨강 알림 문구)는 `tests/run.sh`가 돌린다
 
 ## 원칙
 
@@ -151,7 +151,7 @@ ai-harness가 사용자에게 보여 주는 단일 HTML 화면(보드, 하네스
 | hover | 바탕이 `--color-surface-hover`. 눌리는 요소에만 있다 |
 | focus-visible | `--color-focus` 2px 윤곽 + 바깥 여백. 모든 조작 요소가 같은 모양 |
 | active | 바탕이 `--color-surface-selected` (버튼·칩·줄 머리·눌리는 카드·선택 사다리) |
-| disabled | 흐리게 + 금지 커서, hover 없음. 왜 못 누르는지 옆에 글로 적는다 |
+| disabled | 흐리게(`--opacity-disabled`) + 금지 커서(`not-allowed`), hover 없음. 왜 못 누르는지 옆에 글로 적는다. 쓰지 않기로 한 내용(제외한 카드)도 같은 흐림을 쓴다 |
 | loading (버튼) | `aria-busy="true"` — 도는 표시 + 진행형 글자("저장하는 중"). 흐리게 하지 않는다(글자가 읽혀야 한다) |
 | selected / open | 위 "선택·열림 표시" |
 | invalid (입력) | `--color-danger-border` 윤곽 + `.ds-field__error` |
