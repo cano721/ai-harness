@@ -13,11 +13,11 @@
   "stacks": [],
   "edit_guard": false,
   "initialized": "2026-11-07",
-  "harness_version": "0.73.0",
+  "harness_version": "0.77.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
       "content_sha256": "1e1d6c0aacf90a9b901d2f523fe4b31ac88051e8d177de12ddecbc683079e9c8",
-      "template_version": "0.73.0"
+      "template_version": "0.77.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
       "content_sha256": "cd5a14dbab7f5692139c315eed43e47f7f9cad5f5fa7005afd668681887e6094",
@@ -25,58 +25,58 @@
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
       "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
-      "template_version": "0.73.0"
+      "template_version": "0.77.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
       "content_sha256": "3762595feb3d902d1cef6c19e2e2fa5cf1bddd4600e180d3a9b9216ec1f8b851",
-      "template_version": "0.73.0"
+      "template_version": "0.77.0"
     },
     ".ai-harness/workflows/review-graph.json": {
       "content_sha256": "84f6c23d91da9f16f6e03c41dcdb7b5ce3726945539293639fea03426be79170",
-      "template_version": "0.73.0"
+      "template_version": "0.77.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
       "content_sha256": "73d6fbd10df2897f24e0705373f2e87236daa553b4cc876395c825997a89db1e",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
       "content_sha256": "ce3b23078f7903d5cd61ed015a0b420724f0beb1b77e0f6fb00c893fe30e1ff2",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".agents/skills/review/SKILL.md": {
       "content_sha256": "26d8ad2f47661b66d807101b94aed8cef3d8f4dc377c604d12a21a9eb969dad4",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
       "content_sha256": "d80c3dcc068945ffb8c1d99a96cbb7ea3e6c83c2f543b04c30037471c016e535",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
       "content_sha256": "9762ea69d380d2a34630a1105b5e9ed15bc3ab954b5094da566a18879214071f",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".claude/commands/review.md": {
       "content_sha256": "54780daf3c0540888d9d4ecf1a8d985319982157444cd53a7557c53b1201f512",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".ai-harness/workflows/investigate-graph.json": {
       "content_sha256": "f66073cb4cc343282a8c0884208caca52ac93a7658306b8f532ac3eae31eece9",
-      "template_version": "0.73.0"
+      "template_version": "0.77.0"
     },
     ".agents/skills/investigate/SKILL.md": {
       "content_sha256": "e69d63e5ba8171163a022089188de98e48512e3b18f6b133ce69c0c3d671a874",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     },
     ".claude/commands/investigate.md": {
       "content_sha256": "c4c1649b0c5ea681f55ee189c33950d0f8c888350e3cc627b81be6d578d43176",
-      "template_version": "0.73.0",
+      "template_version": "0.77.0",
       "renderer": 1
     }
   }
