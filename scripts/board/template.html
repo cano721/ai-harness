@@ -2418,7 +2418,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       const p = r.protection;
       if (!p) descs.push('브랜치 보호: 아직 확인하지 않음');
       else if (p.error) descs.push(descLine(`브랜치 보호(${p.base})를 읽지 못해 러너는 병합하지 않고 넘깁니다: ${p.error}`, 'info'));
-      else if (p.approvals < 1) descs.push(descLine(`브랜치 보호(${p.base})에 필수 승인이 없어 러너는 병합하지 않고 넘깁니다.`, 'info'));
+      else if (p.approvals < 1) descs.push(descLine(`브랜치 보호(${p.base})에 필수 승인이 없어 러너는 승인 없이 병합합니다${p.checks > 0 ? '(필수 체크는 통과해야 함)' : ''}.`, 'attention'));
+      else descs.push(`브랜치 보호(${p.base}): 승인 ${p.approvals}${p.checks > 0 ? ' · 필수 체크 통과' : ''} 뒤 병합`);
     }
     if (r.change) {
       const c = r.change, st = { needs_human: '답해야 함', review: '결과 확인', running: '작업 중', idle: '끝남', gone: '세션 없음' }[c.state] || '상태 모름';
@@ -2455,8 +2456,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const cur = P.HM_DELIVERY_LEVEL || 'pr';
     const descs = [LEVEL_DESC[cur] + ' 기본값 PR까지.'];
     if (cur !== 'pr') {
-      descs.push(`병합 조건 최소치: ${P.HM_MERGE_REQUIRE || '저장소 값(없으면 승인·CI·충돌 없음·draft 아님)'} · 승인 ${P.HM_MERGE_MIN_APPROVALS || '저장소 값(1)'} · ${P.HM_MERGE_METHOD || '저장소 방식(squash)'}`);
-      descs.push('호스트의 필수 승인 수·필수 체크가 더 높으면 그 값이 하한입니다. 무인 실행(자동 개선·동기화)은 이 설정으로 병합하지 않습니다.');
+      descs.push('병합 조건과 방식은 저장소 호스트 설정을 따릅니다 — 기준 브랜치 보호의 필수 승인·필수 체크, 저장소가 허용한 병합 방식. 보호가 없는 저장소는 승인 없이 병합합니다.');
+      descs.push('무인 실행(자동 개선·동기화)은 이 설정으로 병합하지 않습니다.');
     }
     mine.append(settingRow('set-mine', '내 기본 단계', descs, segment('set-mine', LEVELS, cur, (k) => setLevel({ scope: 'default', level: k })), cur !== 'pr'));
     const appr = P.HM_APPROVAL || 'human';

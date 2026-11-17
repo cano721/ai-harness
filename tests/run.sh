@@ -1487,7 +1487,7 @@ DRIVER_OUT="$(HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" bash "$DRIVER_SHIM" status 
 assert_eq "0" "$DRIVER_RC" "an older feature run is still found after another workflow started"
 assert_contains "$DRIVER_OUT" "workflow feature" "the old entry point resumes the feature run, not the newer bug-fix run"
 
-# 병합 노드: 병합 조건은 개인 설정(HM_MERGE_*), 기준 브랜치·검증 명령은 저장소 사실이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
+# 병합 노드: 병합 조건·방식은 저장소 호스트 규칙(브랜치 보호·허용 병합 방식), 기준 브랜치·검증 명령은 저장소 사실이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
 export HM_SMOKE_RETRY_SECONDS=0
 as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 실제 push는 bare 저장소로 보낸다(insteadOf)
   git -C "$DRIVER_REPO" config remote.origin.url "https://$1.git"
@@ -1495,13 +1495,10 @@ as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 
 }
 MR_DATA="$DRIVER_TMP/merge-data"
 mkdir -p "$MR_DATA"
-merge_config() { # merge-settings-json → 개인 config: 검증에 배포·스모크·재발 추적이 있으면 단계 deploy, 아니면 merge. 조건·방식은 HM_MERGE_*
-  jq -r '"HM_APPROVAL=auto", "HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end),
-    (if .require then "HM_MERGE_REQUIRE=\"" + (.require | join(" ")) + "\"" else empty end),
-    (if .min_approvals then "HM_MERGE_MIN_APPROVALS=\(.min_approvals)" else empty end),
-    (if .method then "HM_MERGE_METHOD=\(.method)" else empty end)' <<<"$1" >"$MR_DATA/config"
+merge_config() { # merge-settings-json → 개인 config: 검증에 배포·스모크·재발 추적이 있으면 단계 deploy, 아니면 merge
+  jq -r '"HM_APPROVAL=auto", "HM_DELIVERY_LEVEL=" + (if (.verify // []) | any(IN("deploy", "smoke", "monitor")) then "deploy" else "merge" end)' <<<"$1" >"$MR_DATA/config"
 }
-merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사실은 manifest에, 병합 조건은 개인 config에 두고 approval auto로 실행한다
+merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사실은 manifest에, 단계는 개인 config에 두고 approval auto로 실행한다
   new_driver_repo "$1"
   with_policy pr-only auto
   as_host_repo "${3:-github.com/acme/app}"
@@ -1512,12 +1509,13 @@ merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사
   cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
   DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
 }
-# 병합은 호스트가 필수 승인을 거는 기준 브랜치에만 한다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
+# 병합 조건은 호스트 보호 규칙이다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
 export FAKE_PROTECTION=classic
-MP_BASIC='{"require":["human_approval","remote_ci","no_conflict","not_draft"],"min_approvals":1,"method":"squash","verify":["target_ci"],"base":"main"}'
+MP_BASIC='{"verify":["target_ci"],"base":"main"}'
 merge_run merge_ok "$MP_BASIC"
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "merge policy merges and verifies when every condition holds"
 assert_contains "$(<"$FAKE_LOG")" "gh merge https://github.com/acme/app/pull/7 --squash --match-head-commit $(git -C "$DRIVER_REPO" rev-parse HEAD)" "the runner merges with the head pinned to the reviewed, pushed commit"
+assert_contains "$(<"$FAKE_LOG")" "gh api repos/acme/app" "the merge method is read from the repository settings"
 assert_eq "remote_ci,merge,post_merge_verify" "$(run_state '[.history[] | select(.from | IN("remote_ci", "merge", "post_merge_verify")) | .from] | join(",")')" "merge follows remote CI and is verified after"
 assert_eq "1111111111111111111111111111111111111111:alice:passed" "$(run_state '"\(.merge.commit):\(.merge.approvals | join(",")):\(.post_merge.target_ci.status)"')" "the merge commit and the approvers are recorded"
 assert_contains "$DRIVER_OUT" "merged: 111111111111 (squash); after merge: target_ci passed" "done reports the merge and the post-merge checks"
@@ -1562,9 +1560,10 @@ assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh m
 assert_contains "$DRIVER_OUT" "is not in this repository" "the repository mismatch is named"
 # Bitbucket: 승인은 마지막 push 뒤의 것만 센다. 자격증명은 stdin으로 넘긴다.
 export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='tok"en' FAKE_PROTECTION=bb_glob
-merge_run bb_merge "$(jq -c '.verify = [] | .require = ["human_approval","remote_ci","no_conflict"]' <<<"$MP_BASIC")" bitbucket.org/acme/app
-assert_eq "0:done:111111111111" "$DRIVER_RC:$(run_state .status):$(run_state .merge.commit)" "a Bitbucket pull request is merged when its conditions hold"
+merge_run bb_merge "$(jq -c '.verify = []' <<<"$MP_BASIC")" bitbucket.org/acme/app
+assert_eq "0:done:111111111111:repository default" "$DRIVER_RC:$(run_state .status):$(run_state .merge.commit):$(run_state .merge.method)" "a Bitbucket pull request is merged when its conditions hold"
 assert_contains "$(<"$FAKE_LOG")" "curl POST acme/app/pullrequests/7/merge" "the Bitbucket merge endpoint is called"
+assert_contains "$(<"$FAKE_LOG")" 'curl body {"close_source_branch": false}' "Bitbucket merges with the repository's default strategy"
 merge_run bb_stale "$(jq -c '.verify = []' <<<"$MP_BASIC")" bitbucket.org/acme/app
 assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "a Bitbucket approval from before the last push does not count"
 unset ATLASSIAN_USER BITBUCKET_API_TOKEN
@@ -1572,14 +1571,22 @@ export FAKE_PROTECTION=classic
 # 사람이 먼저 병합했으면 그 병합 커밋으로 병합 후 검증을 이어 간다.
 merge_run merge_outside "$MP_BASIC"
 assert_eq "0:done:outside the runner:0" "$DRIVER_RC:$(run_state .status):$(run_state .merge.method):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a pull request merged by a person is verified without merging again"
-# 개인 조건에서 승인을 빼도 호스트 보호가 필수 승인을 걸면 그 승인을 기다린다. 방식은 HM_MERGE_METHOD를 따른다.
-merge_run merge_noapproval '{"require":["remote_ci"],"method":"merge","verify":[],"base":"main"}'
-assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the host's required approval is a floor even when the personal conditions leave approval out"
+# 호스트 보호가 필수 승인을 걸면 그 승인을 기다린다. 방식은 저장소가 허용한 방식을 따른다.
+export FAKE_MERGE_METHODS=merge_only
+merge_run merge_noapproval '{"verify":[],"base":"main"}'
+assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the host's required approval is waited for"
 assert_contains "$DRIVER_OUT" "human approval: 0 of 1" "the wait names the approval the host requires"
 touch "$FAKE_LOG.approved"
 DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver resume
-assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "resume merges once the host-required approval arrives"
-assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method follows HM_MERGE_METHOD"
+assert_eq "0:done:merge" "$DRIVER_RC:$(run_state .status):$(run_state .merge.method)" "resume merges once the host-required approval arrives"
+assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the merge method is the one the repository allows"
+for m in unknown:"the repository settings do not say which merge methods are allowed" denied:"cannot read which merge methods the repository allows"; do
+  export FAKE_MERGE_METHODS="${m%%:*}"
+  merge_run "merge_method_${m%%:*}" "$MP_BASIC"
+  assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "merge methods ${m%%:*}: the runner does not guess a merge method"
+  assert_contains "$DRIVER_OUT" "${m#*:}" "merge methods ${m%%:*}: the person is told why"
+done
+unset FAKE_MERGE_METHODS
 # 원격 CI가 없다는 보고는 remote_ci 조건을 채우지 못한다.
 merge_run merge_ci_none "$MP_BASIC"
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "require remote_ci needs a passed remote CI, not 'no CI'"
@@ -1597,16 +1604,16 @@ assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a failed CI on t
 assert_contains "$DRIVER_OUT" "post-merge check failed: CI on main for the merge commit" "the failure is reported as post-merge"
 assert_contains "$(run_state '.findings[1]')" "git revert 1111111111111111111111111111111111111111" "rollback instructions are given, not executed"
 # 배포 확인 명령을 실행할 수 없으면(127) 기한까지 기다리지 않는다.
-merge_run pm_deploy_missing '{"base":"main","require":["human_approval"],"verify":["deploy"],"deploy_check_cmd":"no-such-deploy-check"}'
+merge_run pm_deploy_missing '{"base":"main","verify":["deploy"],"deploy_check_cmd":"no-such-deploy-check"}'
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a deploy check that cannot run is reported at once"
 assert_contains "$DRIVER_OUT" "could not run (exit 127" "the broken command is named"
 # base가 manifest에도 origin 기본 브랜치에도 없으면 시작하지 않는다.
-merge_run merge_nobase '{"require":["human_approval"]}'
+merge_run merge_nobase '{}'
 assert_eq "2" "$DRIVER_RC" "merge needs to know the base branch it may merge into"
 assert_contains "$DRIVER_OUT" "merge_policy.base" "the error says how to set the base branch"
 merge_run pm_ci_other "$MP_BASIC"
 assert_eq "20:unverified" "$DRIVER_RC:$(run_state .post_merge.target_ci.status)" "a CI result for another commit does not verify the merge"
-MP_DEPLOY="$(jq -cn --arg d "test -f $DRIVER_TMP/deployed-\$FAKE_SCENARIO" '{base:"main", require:["human_approval"], verify:["target_ci","deploy","smoke"], deploy_check_cmd:$d, deploy_timeout_minutes:30, smoke_cmd:"test \"$HM_MERGE_COMMIT\" = 1111111111111111111111111111111111111111"}')"
+MP_DEPLOY="$(jq -cn --arg d "test -f $DRIVER_TMP/deployed-\$FAKE_SCENARIO" '{base:"main", verify:["target_ci","deploy","smoke"], deploy_check_cmd:$d, deploy_timeout_minutes:30, smoke_cmd:"test \"$HM_MERGE_COMMIT\" = 1111111111111111111111111111111111111111"}')"
 merge_run pm_deploy "$MP_DEPLOY"
 assert_eq "30:incomplete:post_merge_verify" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "a deploy not observed yet leaves the run resumable"
 assert_contains "$DRIVER_OUT" "not deployed yet" "the wait says the deploy is not observed"
@@ -1620,7 +1627,7 @@ jq '.merge.merged_epoch -= 3600' "$(find "$DRIVER_TMP/runs" -path "*/$(basename 
 driver resume
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a deploy not observed within the timeout goes to a person"
 assert_contains "$DRIVER_OUT" "was not observed as deployed within 30 minutes" "the timeout is named"
-merge_run pm_smoke_fail '{"require":["human_approval"],"verify":["smoke"],"smoke_cmd":"false","base":"main"}'
+merge_run pm_smoke_fail '{"verify":["smoke"],"smoke_cmd":"false","base":"main"}'
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a smoke check that fails twice goes to a person"
 assert_contains "$DRIVER_OUT" "the smoke check failed twice" "the smoke failure is named"
 # 모니터링 재발 확인: 관찰 창이 길어 러너는 고친 에러를 /autofix 추적에 올리는 데까지 한다.
@@ -1634,7 +1641,7 @@ monitor_run() { # scenario [--monitor-error 파일] → monitor 설정·project_
     | .merge_policy = {verify: ["monitor", "target_ci"], base: "main"} | if $local == "1" then del(.monitor) else . end' \
     "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -qam "repository facts"
-  merge_config '{"require":["human_approval"],"verify":["monitor"]}'
+  merge_config '{"verify":["monitor"]}'
   cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
   DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "fix the crash" "$@"
 }
@@ -1675,7 +1682,7 @@ assert_eq "2" "$DRIVER_RC" "a monitoring error without a signature does not star
 cat "$DRIVER_TMP/monitor-error.json" "$DRIVER_TMP/monitor-error.json" >"$DRIVER_TMP/two-errors.json"
 monitor_run pm_monitor_two --monitor-error "$DRIVER_TMP/two-errors.json"
 assert_eq "2:no run" "$DRIVER_RC:$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*" -name state.json | grep -q . && echo run || echo "no run")" "several monitoring errors in one file are refused before a run is created"
-merge_run pm_monitor_noconfig '{"require":["human_approval"],"verify":["monitor"],"base":"main"}'
+merge_run pm_monitor_noconfig '{"verify":["monitor"],"base":"main"}'
 assert_eq "2" "$DRIVER_RC" "verify monitor without the monitor settings does not start"
 assert_contains "$DRIVER_OUT" "needs the monitor settings (/autofix setup)" "the error points at /autofix setup"
 # merge 노드가 없는 옛 그래프는 병합하지 않고 PR까지로 끝낸다.
@@ -1694,9 +1701,9 @@ assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LO
 assert_contains "$DRIVER_OUT" "the project graph has no merge node" "the outcome asks for a harness sync"
 rm -f "$MR_DATA/config"
 unset FAKE_PROTECTION
-pass "merge node: personal conditions, repository facts, merge by the runner, post-merge checks"
+pass "merge node: host rules, repository facts, merge by the runner, post-merge checks"
 
-# 개인 자동화 단계(#242): 병합 여부는 사용자 config의 단계가, 팀 통제는 호스트 브랜치 보호가 정한다. 저장소 merge_policy는 사실만 준다.
+# 개인 자동화 단계(#242): 병합 여부는 사용자 config의 단계가, 병합 조건은 호스트 브랜치 보호가 정한다(#384). 저장소 merge_policy는 사실만 준다.
 DL_DATA="$DRIVER_TMP/delivery-data"
 mkdir -p "$DL_DATA"
 delivery_run() { # scenario git_policy harness-jq-filter config-text [host/owner/repo] → 사용자 config를 두고 approval auto로 실행한다
@@ -1722,8 +1729,8 @@ assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "level merge
 assert_eq "target_ci" "$(run_state '.post_merge | keys_unsorted | join(",")')" "level merge verifies up to the target branch CI, not deploy or smoke"
 assert_eq "1:1:main" "$(run_state '"\(.protection.approvals):\(.protection.checks):\(.protection.base)"')" "the merge node read the base branch protection from the host"
 assert_contains "$(<"$FAKE_LOG")" "gh api repos/acme/app/branches/main/protection" "classic branch protection is read for the base branch"
-assert_eq "human_approval,remote_ci,no_conflict,not_draft:1:squash" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.min_approvals):\(.policy.merge.method)"')" "without personal merge settings every condition applies, whatever the repository merge_policy says"
-assert_contains "$DRIVER_OUT" "notice: merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used" "the ignored repository merge conditions are named"
+assert_eq "false:squash" "$(run_state '"\(.policy.merge | has("require") or has("min_approvals") or has("method")):\(.merge.method)"')" "the repository merge_policy conditions are not used; the method is the repository's allowed one"
+assert_contains "$DRIVER_OUT" "notice: merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection" "the ignored repository merge conditions are named"
 delivery_run dl_deploy pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=deploy'
 assert_eq "0:done:target_ci,deploy,smoke" "$DRIVER_RC:$(run_state .status):$(run_state '.post_merge | keys_unsorted | join(",")')" "level deploy goes on to the repository's deploy and smoke checks"
 delivery_run dl_deploy_nocmd pr-only '.merge_policy = {base: "main"}' 'HM_DELIVERY_LEVEL=deploy'
@@ -1731,19 +1738,23 @@ assert_eq "0:done:target_ci" "$DRIVER_RC:$(run_state .status):$(run_state '.post
 assert_contains "$DRIVER_OUT" "delivery level deploy: the repository has no deploy or smoke check" "the result says why deploy was not verified"
 delivery_run dl_repo_level pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=pr' 'HM_DELIVERY_LEVEL_REPOS="other=deploy, acme-app=merge"' 'HM_MERGE_REQUIRE="human_approval remote_ci"' 'HM_MERGE_METHOD=merge')"
 assert_eq "0:done:1:HM_DELIVERY_LEVEL_REPOS:acme-app" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.delivery.source)" "a per-repository level overrides the default level"
-assert_eq "human_approval,remote_ci:merge" "$(run_state '"\(.policy.merge.require | join(",")):\(.policy.merge.method)"')" "personal merge conditions and method come from the user config"
-assert_contains "$(<"$FAKE_LOG")" "--merge --match-head-commit" "the personal merge method is used"
+assert_contains "$(<"$FAKE_LOG")" "--squash --match-head-commit" "an old personal HM_MERGE_METHOD is not used"
+assert_contains "$DRIVER_OUT" "notice: HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used" "the ignored personal merge settings are named"
 export FAKE_PROTECTION=ruleset
 delivery_run dl_ruleset pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
-assert_eq "30:merge:0" "$DRIVER_RC:$(run_state .node):$(gh_merges)" "the host's required approval count is a floor over the personal one"
+assert_eq "30:merge:0" "$DRIVER_RC:$(run_state .node):$(gh_merges)" "the host's required approval count is the condition"
 assert_contains "$DRIVER_OUT" "human approval: 1 of 2" "the runner waits for the approvals the host ruleset requires"
-for p in none:"has no host branch protection that requires an approving review" checks_only:"has no host branch protection that requires an approving review" \
-  denied:"cannot read the branch protection of main from the host"; do
+# 보호가 없거나 필수 체크만 있으면 저장소 규칙대로 승인 없이 병합한다. 보호를 읽지 못하면 사람에게 넘긴다.
+for p in none:"" checks_only:remote_ci; do
   export FAKE_PROTECTION="${p%%:*}"
   delivery_run "dl_prot_${p%%:*}" pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
-  assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "protection ${p%%:*}: a personal level does not merge into an unprotected or unreadable branch"
-  assert_contains "$DRIVER_OUT" "${p#*:}" "protection ${p%%:*}: the person is told why"
+  assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "protection ${p%%:*}: the runner merges by the repository's own rules"
+  assert_eq "0" "$(run_state .protection.approvals)" "protection ${p%%:*}: no approval is required"
 done
+export FAKE_PROTECTION=denied
+delivery_run dl_prot_denied pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "protection denied: the runner does not merge without knowing the repository's rules"
+assert_contains "$DRIVER_OUT" "cannot read the branch protection of main from the host" "protection denied: the person is told why"
 export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='token'
 export FAKE_PROTECTION=bb_glob
 delivery_run dl_bb_glob pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge' bitbucket.org/acme/app
@@ -1766,13 +1777,12 @@ assert_eq "2" "$(grep -c 'notice: the repository git_policy merge is no longer u
 delivery_run dl_none_pr pr-only "$DL_FACTS" ''
 assert_eq "0:done:0:[]" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state ".policy.notices | tostring")" "pr-only without a personal level stops at the pull request without a notice"
 [[ "$DRIVER_OUT" != *"notice:"* ]] || fail "repository facts alone raise no notice"
-# 개인 단계가 없던 이전 버전의 병합 대기 실행을 resume해도 호스트 보호 확인을 거친다.
+# 이전 버전이 시작 때 정한 병합 조건(require·min_approvals·method)으로 대기하던 실행을 resume하면 호스트 규칙으로 다시 판정한다.
 state_file="$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"
 jq '.node = "merge" | .status = "running" | .policy.git = "merge" | .policy.delivery = null
   | .policy.merge = {require: ["remote_ci"], min_approvals: 1, method: "squash", verify: [], base: "main"}' "$state_file" >"$DRIVER_TMP/s.json" && mv "$DRIVER_TMP/s.json" "$state_file"
 driver resume
-assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(gh_merges)" "a legacy merge run resumed after the update does not merge into an unprotected branch"
-assert_contains "$DRIVER_OUT" "has no host branch protection that requires an approving review" "the resumed legacy run names the missing protection"
+assert_eq "0:done:1:squash" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .merge.method)" "a legacy merge run resumed after the update follows the host rules, not its old conditions"
 export FAKE_PROTECTION=classic
 HM_INTERNAL_SESSION=1 delivery_run dl_unattended pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
 assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh ' "$FAKE_LOG" || true)" "an unattended run does not merge on a personal level either"
@@ -1781,11 +1791,11 @@ unset FAKE_PROTECTION
 delivery_run dl_bad pr-only "$DL_FACTS" 'HM_DELIVERY_LEVEL=ship'
 assert_eq "2" "$DRIVER_RC" "an unknown delivery level does not start"
 assert_contains "$DRIVER_OUT" "must be pr, merge, or deploy" "the error names the levels"
-delivery_run dl_bad_require pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=merge' 'HM_MERGE_REQUIRE=lgtm')"
-assert_eq "2" "$DRIVER_RC" "invalid personal merge conditions do not start"
-assert_contains "$DRIVER_OUT" "HM_MERGE_REQUIRE" "the error names the personal setting"
+delivery_run dl_old_require pr-only "$DL_FACTS" "$(printf '%s\n' 'HM_DELIVERY_LEVEL=merge' 'HM_MERGE_REQUIRE=lgtm')"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an old personal merge condition no longer stops the start"
+assert_contains "$DRIVER_OUT" "HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used" "the notice names the old settings"
 rm -f "$DL_DATA/config"
-pass "delivery level: personal stage, repository facts, host branch protection"
+pass "delivery level: personal stage, repository facts, host rules"
 
 # review: 승인 노드가 없는 그래프다. 수리는 사람이 동의한 뒤에만 하고, 커밋하지 않는다.
 review_run() { # scenario → 커밋 안 된 변경을 검토하기 시작한다
@@ -8477,8 +8487,9 @@ assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconn
 assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
 # 묶음 목록(읽지 않은 결과 등)에서도 상주 세션은 눌러 열린다 — 동작이 send·end뿐이라 view가 없어도.
 BR_OPENABLE="$(grep -m1 '^  const openable = ' "$ROOT/scripts/board/template.html")"
-assert_eq "true false true" "$(node -e "const SERVER = true, srcOf = (i) => i.section; ${BR_OPENABLE}
-console.log([openable({ section: 'work', resident: true, actions: ['send', 'end'] }), openable({ section: 'work', actions: ['send'] }), openable({ section: 'work', actions: ['view'] })].join(' '))")" \
+# 함수 본문은 환경변수로 넘긴다 — bash 3.2는 "$(... "${VAR} {...}")" 안의 중괄호를 깨뜨린다.
+assert_eq "true false true" "$(BR_OPENABLE="$BR_OPENABLE" node -e 'const SERVER = true, srcOf = (i) => i.section; eval(process.env.BR_OPENABLE.replace("const openable", "var openable"));
+console.log([openable({ section: "work", resident: true, actions: ["send", "end"] }), openable({ section: "work", actions: ["send"] }), openable({ section: "work", actions: ["view"] })].join(" "))')" \
   "a resident session in a grouped list opens its drawer; other work items still need view"
 # Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
 # poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.

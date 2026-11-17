@@ -95,7 +95,7 @@ LEVEL_KO = {"pr": "PR까지", "merge": "병합까지", "deploy": "배포·검증
 
 # ---- 개인 설정(~/.ai-harness/config) ----
 CONFIG = os.path.join(os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness"), "config")
-PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS", "HM_MERGE_REQUIRE", "HM_MERGE_MIN_APPROVALS", "HM_MERGE_METHOD",
+PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS",
                  "HM_APPROVAL", "HM_APPROVAL_REPOS",
                  "HM_HARVEST_AUTO", "HM_SYNC_AUTO", "HM_HARVEST_AUTO_MERGE", "HM_SYNC_AUTO_MERGE",
                  "HM_HARVEST_AUTO_DAILY_MAX", "HM_SYNC_AUTO_DAILY_MAX")
@@ -296,7 +296,7 @@ def effective(row, cfg):
     return {"level": level, "source": src, "notes": notes}
 
 
-# ---- 호스트 브랜치 보호(개인 단계의 병합 안전장치) ----
+# ---- 호스트 브랜치 보호(개인 단계의 병합 조건) ----
 def protection(repo, base):
     """러너 branch_protection과 같은 판정: {approvals, checks} 또는 {error}."""
     url = _git(repo, "remote", "get-url", "origin")
