@@ -587,18 +587,21 @@ command_run() {
   else
     # 적용할 관리 생성물(add·refresh)이 없는 sync는 에이전트를 띄우지 않는다 — 버전만 다른 경우가 대부분이다.
     # 무인 sync가 적용하는 것은 add·refresh뿐이라, 그 밖(승인 필요·제외)만 남은 저장소에 에이전트를 띄우지 않는다.
-    local pending=1
+    local pending=1 sync_plan="" candidates=""
     if [[ "$scope" == "sync" ]]; then
-      pending="$("$DIR/harness-sync-state.sh" plan --root "$work_dir" --catalog "$ROOT/templates/managed-files.json" 2>/dev/null \
-        | jq '(.counts.add // 0) + (.counts.refresh // 0)' 2>/dev/null)"
+      sync_plan="$("$DIR/harness-sync-state.sh" plan --root "$work_dir" --catalog "$ROOT/templates/managed-files.json" 2>/dev/null)"
+      pending="$(jq '(.counts.add // 0) + (.counts.refresh // 0)' <<<"$sync_plan" 2>/dev/null)"
       [[ "$pending" =~ ^[0-9]+$ ]] || pending=-1
+      # 켤 수 있는 stack(ui·design-system)은 무인 sync가 켜지 않는다. 에이전트를 띄우지 않는 실행에도 로그에 남긴다.
+      candidates="$(jq -r '(.stack_candidates // [])[] | "켤 수 있는 stack: \(.stack) (근거: \(.evidence | join(", "))) — /harness-init --reconfigure 로 켠다. 자동으로 켜지 않는다"' <<<"$sync_plan" 2>/dev/null || true)"
     fi
     if (( pending == -1 )); then
       printf 'sync 계획 실패: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
       exit_code=71
       ran_agent=0
     elif (( pending == 0 )); then
-      printf '적용할 관리 생성물 없음: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
+      { printf '적용할 관리 생성물 없음: %s (%s)\n' "$repo_root" "$base_ref"
+        [[ -z "$candidates" ]] || printf '%s\n' "$candidates"; } >"$log_file"
       ran_agent=0
     else
       agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"

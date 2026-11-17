@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 동작 변경
+
+- **sync 보고가 켤 수 있는 화면 검토·디자인 채점을 알려 줍니다** — 디자인 규칙 문서·기준 화면·화면 파일은 하네스를 깐 뒤에 생기는 일이 많은데, sync는 manifest `stacks`에 없는 것을 아예 보지 않아 `ui-review`·`design-audit`를 켤 수 있다는 사실이 어디에도 남지 않았습니다. 이제 `harness-sync-state.sh plan`이 `stack_candidates`로 켜지지 않은 `ui`(서버 렌더링 템플릿·웹 프론트 의존성·서버 없이 여는 단일 HTML 화면)와 `design-system`(디자인 규칙 문서 + 기준 화면)을 근거 파일과 함께 내고, `/harness-init --sync` 보고와 자동 sync PR 본문 "사람 확인 필요" 표, 적용할 것이 없어 에이전트를 띄우지 않은 자동 sync 로그에 "켤 수 있는 stack"으로 남습니다. 자동으로 켜지는 않습니다 — 켜려면 `/harness-init --reconfigure`. UI 감지도 단일 HTML 화면(테스트·fixture·vendor·예시 제외)을 잡습니다. (#381)
+
 ## v0.79.0 (2026-11-17)
 ### 개선
 

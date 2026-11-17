@@ -10,7 +10,10 @@
     "claude",
     "codex"
   ],
-  "stacks": [],
+  "stacks": [
+    "ui",
+    "design-system"
+  ],
   "edit_guard": false,
   "initialized": "2026-11-07",
   "harness_version": "0.77.0",
@@ -78,6 +81,74 @@
       "content_sha256": "c4c1649b0c5ea681f55ee189c33950d0f8c888350e3cc627b81be6d578d43176",
       "template_version": "0.77.0",
       "renderer": 1
+    },
+    ".ai-harness/workflows/ui-review-graph.json": {
+      "content_sha256": "956966be420bc7edadcd7009f0cf48b1f8a6d0a648139eb4965dd4e4a97f46a0",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/ui-review/SKILL.md": {
+      "content_sha256": "e28b867542c7cf01a9ac26eef7b07774dbb6d62ec4e1f79a251de1bdc88d68e6",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/ui-review/references/checklist.md": {
+      "content_sha256": "b6490525052c85c7b605b318b23f88dddb618cb5285f0452c12360d18370377d",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/ui-review/SKILL.md": {
+      "content_sha256": "e28b867542c7cf01a9ac26eef7b07774dbb6d62ec4e1f79a251de1bdc88d68e6",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/ui-review/references/checklist.md": {
+      "content_sha256": "b6490525052c85c7b605b318b23f88dddb618cb5285f0452c12360d18370377d",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/ui-review/references/design-handoff.md": {
+      "content_sha256": "a779a4ba895551a813a5b261b2e2d9b88e58e4fed3b9da7709854cb7d9ba7bec",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/ui-review/references/design-skills.md": {
+      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/ui-review/references/web-interface-guidelines.md": {
+      "content_sha256": "d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/ui-review/references/design-handoff.md": {
+      "content_sha256": "a779a4ba895551a813a5b261b2e2d9b88e58e4fed3b9da7709854cb7d9ba7bec",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/ui-review/references/design-skills.md": {
+      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/ui-review/references/web-interface-guidelines.md": {
+      "content_sha256": "d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/design-audit/SKILL.md": {
+      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/design-audit/references/design-skills.md": {
+      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "template_version": "0.78.0"
+    },
+    ".agents/skills/design-audit/references/figma-mcp.md": {
+      "content_sha256": "c8109b03efa0311a556c08b0e91bb6b2cdf4fc60b4ef620e55c7efebb95f9e0d",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/design-audit/SKILL.md": {
+      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/design-audit/references/design-skills.md": {
+      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "template_version": "0.78.0"
+    },
+    ".claude/skills/design-audit/references/figma-mcp.md": {
+      "content_sha256": "c8109b03efa0311a556c08b0e91bb6b2cdf4fc60b4ef620e55c7efebb95f9e0d",
+      "template_version": "0.78.0"
     }
   }
 }
