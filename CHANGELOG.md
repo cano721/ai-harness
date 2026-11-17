@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.81.0 (2026-11-17)
 ### 버그 수정
 
 - **랜딩 미리보기·보드 서버가 며칠씩 남지 않습니다** — `/landing-page`가 시안을 볼 때마다 즉석 서버(`python3 -m http.server`)를 띄우고 끄지 않아, 실행이 끝나도 서버가 수십 개씩 쌓였습니다. 이제 미리보기는 `landing-run.sh serve`로만 띄우고(같은 폴더면 재사용), `landing-run.sh stop`이 그 실행의 서버를 모두 끕니다. 미리보기·보드 서버는 요청 없이 30분이 지나면 스스로 끝나고, 보드를 열어 둔 동안은 유지됩니다. (#396)
