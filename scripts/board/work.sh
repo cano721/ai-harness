@@ -66,12 +66,46 @@ while IFS= read -r d; do
   [ -n "$d" ] && add_cfg_dir "$d"
 done <<<"$(colon_split "${BOARD_CLAUDE_CONFIG_DIRS:-}")"
 
+CACHE_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/board"
+# 파일마다 "크기:수정시각<TAB>경로"를 한 줄씩. 여러 파일을 stat 한 번으로 읽는다(파일마다 하위 프로세스를 띄우지 않게).
+if stat -c %s /dev/null >/dev/null 2>&1; then
+  file_keys() { stat --printf '%s:%Y\t%n\n' "$@" 2>/dev/null; } # GNU
+else
+  file_keys() { stat -f '%z:%m%t%N' "$@" 2>/dev/null; } # BSD(macOS)
+fi
+
+# claude agents 입력 캐시(#380): 보드의 백그라운드 갱신은 BOARD_CACHE_SECONDS를 넘긴다. 그 폴더의 세션 상태 파일(sessions/*.json,
+# jobs/*/state.json)이 그대로이고 그 초보다 젊으면 지난 목록을 다시 쓴다(claude 프로세스 하나가 ~0.3초 CPU). 없으면(기본) 늘 새로.
+AGENTS_SECS="${BOARD_CACHE_SECONDS:-0}"
+case "$AGENTS_SECS" in ''|*[!0-9]*) AGENTS_SECS=0 ;; esac
+AGENTS_CACHE="$CACHE_DIR/agents-cache"
+now_e=$(date +%s)
+agents_key() { # $1=설정 폴더(@default 가능) → 상태 파일 지문
+  local root=$1
+  [ "$root" != "@default" ] || root="$HOME/.claude"
+  { printf '%s\n' "$root"; file_keys "$root"/sessions/*.json "$root"/jobs/*/state.json || true; } | cksum | tr -d ' \t'
+}
+
 # 폴더마다 목록을 동시에 받는다(폴더당 ~0.2초가 폴더 수만큼 쌓이지 않게). 성공한 폴더만 ok.<n>을 남긴다.
 n=0
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   n=$((n + 1))
   printf '%s\n' "$d" >"$WORK_TMP/cfg.$n"
+  if [ "$AGENTS_SECS" -gt 0 ]; then
+    key=$(agents_key "$d")
+    printf '%s\n' "$key" >"$WORK_TMP/key.$n"
+    slot="$AGENTS_CACHE/$(printf '%s' "$d" | cksum | tr -d ' \t')"
+    ckey="" cat_e=0
+    [ ! -f "$slot.key" ] || read -r ckey cat_e <"$slot.key" || true
+    case "$cat_e" in ''|*[!0-9]*) cat_e=0 ;; esac
+    if [ "$ckey" = "$key" ] && [ -f "$slot.json" ] && [ "$now_e" -ge "$cat_e" ] && [ $((now_e - cat_e)) -lt "$AGENTS_SECS" ] \
+      && cp "$slot.json" "$WORK_TMP/agents.$n" 2>/dev/null; then
+      : >"$WORK_TMP/ok.$n"
+      : >"$WORK_TMP/hit.$n"
+      continue
+    fi
+  fi
   if [ "$d" = "@default" ]; then
     { with_timeout "$WORK_TMP/agents.$n" env -u CLAUDE_CONFIG_DIR claude agents --json --all && : >"$WORK_TMP/ok.$n"; } &
   else
@@ -89,6 +123,11 @@ while [ "$i" -lt "$n" ]; do
   if [ "$d" = "@default" ]; then cfg_json=null; else cfg_json=$(jq -Rn --arg d "$d" '$d'); fi
   got=$(<"$WORK_TMP/agents.$i")
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$got" || continue
+  if [ "$AGENTS_SECS" -gt 0 ] && [ ! -f "$WORK_TMP/hit.$i" ] && mkdir -p "$AGENTS_CACHE" 2>/dev/null && chmod 700 "$AGENTS_CACHE" 2>/dev/null; then
+    slot="$AGENTS_CACHE/$(printf '%s' "$d" | cksum | tr -d ' \t')"
+    { cp "$WORK_TMP/agents.$i" "$slot.json.$$" && chmod 600 "$slot.json.$$" && mv -f "$slot.json.$$" "$slot.json" \
+      && printf '%s %s\n' "$(<"$WORK_TMP/key.$i")" "$now_e" >"$slot.key.$$" && chmod 600 "$slot.key.$$" && mv -f "$slot.key.$$" "$slot.key"; } 2>/dev/null || true
+  fi
   agents=$(jq -c --argjson cfg "$cfg_json" --argjson more "$got" '. + ($more | map(. + {config_dir: $cfg}))' <<<"$agents")
 done
 agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
@@ -97,14 +136,7 @@ now_ms=$(( $(date +%s) * 1000 ))
 
 # transcript마다 제목·요약을 뽑는 일(전체 grep + tail|jq)이 상태 수집에서 가장 비싸다. 경로·크기·수정 시각이 같으면
 # 지난 결과를 쓴다(캐시: $DATA/board/work-cache.json, 이번 목록의 세션만 남김). transcript는 읽기만 한다.
-CACHE_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/board"
 CACHE="$CACHE_DIR/work-cache.json"
-# 파일마다 "크기:수정시각<TAB>경로"를 한 줄씩. 여러 파일을 stat 한 번으로 읽는다(파일마다 하위 프로세스를 띄우지 않게).
-if stat -c %s /dev/null >/dev/null 2>&1; then
-  file_keys() { stat --printf '%s:%Y\t%n\n' "$@" 2>/dev/null; } # GNU
-else
-  file_keys() { stat -f '%z:%m%t%N' "$@" 2>/dev/null; } # BSD(macOS)
-fi
 # 모양이 틀린 항목(옛 형식·손상)은 버린다 — 남겨 두면 jq가 죽어 작업 칸 전체가 빈다
 jq -c 'if type == "object" then with_entries(select((.value | type) == "object" and (.value.key | type) == "string"
   and (.value.titles | type) == "object" and (.value.summary | type) == "object")) else {} end' "$CACHE" >"$WORK_TMP/old" 2>/dev/null \
@@ -217,4 +249,7 @@ jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile c
        link: null, log: null, cmd: (if .kind == "background" then "claude attach \(.id // .sessionId[0:8])" else null end),
        id: "claude|\(.sessionId)"}
     | .actions = ((if .transcript then ["view"] else [] end)
-                  + (if .kind == "bg" and (.status == "idle" or .status == "waiting" or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"
+                  # 입력을 기다리는(idle) 실행 중 세션은 claude attach로 원래 세션에, 멈췄으면 --resume으로(#380). 작업 중이면 언제든
+                  # 권한 창이 뜰 수 있고, 질문·권한 창(state blocked)에서는 글·Enter가 선택지로 읽힐 수 있어 보내기를 열지 않는다 —
+                  # 화면이 attach 명령을 안내한다.
+                  + (if .kind == "bg" and ((.status == "idle" and .state != "blocked") or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"
