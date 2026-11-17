@@ -13,6 +13,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [기능 개발 흐름](#feature-delivery)
 - [버그 수정 흐름](#bug-fix)
 - [원인 조사 흐름](#investigate)
+- [기존 화면 품질 개선 흐름](#design-polish)
 - [변경 검토 흐름](#review)
 - [자가학습](#self-learning)
 - [Harness Board](#board)
@@ -71,6 +72,7 @@ flowchart LR
 | `/design-references` | 페이지·화면을 만들기 전에 같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 모아 보고 싶을 때 ("경쟁사랑 레퍼런스 모아줘") | 검색을 한 턴에 동시에 보내고, 모든 페이지를 한 번에 캡처하며(봇 확인 화면은 실제 브라우저로 다시 열어 바꾸거나 다른 사이트로 교체), 톤·구성요소·레이아웃·인터랙션·경쟁사 다섯 종류로 나눠 테이크 라인과 경쟁사 분석을 붙입니다. 경쟁사는 서로 다른 도메인 2곳 이상, 한 사이트는 한 종류에만, 캡처가 비거나 막힌 레퍼런스는 남기지 않는 검사(`scripts/design-refs.sh check`)를 통과해야 탭 5개 보드를 http로 띄웁니다. `/landing-page`의 레퍼런스 단계도 같은 절차·검사를 씁니다. Node.js와 Playwright Chromium이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
 | `/design-system-builder` | 프로젝트의 디자인 시스템을 처음 만들거나, 흩어진 값을 정리하거나, 시안에서 토큰을 뽑을 때 | 기존 코드 추출(같은 의도로 3회 이상 쓰인 값만, 기존 이름 유지)·새로 설계(질문 라운드당 3개 이하, 추천 기본값 제시)·시안 추출(확인 전까지 draft) 중 하나로 디자인 규칙 문서·스택별 토큰 파일(CSS 변수·Tailwind·theme.ts·Flutter·Compose·SwiftUI)·반복된 공통 컴포넌트·기준 화면을 만듭니다. 규칙 문서의 필수 절이 `design-audit`의 채점 입력입니다. 기존 문서는 덮어쓰지 않고 refresh/merge를 묻고, 하네스 보호 파일은 diff 승인 후에만 고칩니다. 요청하면 토큰 파일을 원본으로 Figma 라이브러리(Variables·Text style·컴포넌트 variant)를 생성하고, 이후에는 Figma와 토큰 값의 어긋남을 보고합니다(Figma 원격 MCP 쓰기 권한 필요). 랜딩·업무 화면 구현에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
 | `/design-screen` | 디자인 시스템으로 새 화면 시안을 그리거나 기존 화면에 요구사항을 붙일 때 — Figma든 코드든 | 디자인 시스템이 가진 것(Figma 라이브러리·코드 토큰과 공통 컴포넌트)과 요청으로 그릴 곳을 고릅니다. 둘 다 있고 요청이 말하지 않으면 한 번 묻습니다. 기획을 화면 분류·형제·상태(빈·로딩·에러 등)·컴포넌트 매핑으로 정리한 뒤, Figma면 라이브러리 인스턴스와 Variables만으로 프레임을, 코드면 프로젝트 스택으로 토큰·공통 컴포넌트만 쓴 화면과 상태별 목 데이터를 만들어 브라우저로 캡처합니다. 디자인 시스템에 없는 요소는 `제안 / …`으로 따로 둡니다. 그 다음 `design-audit` 기준으로 독립 채점하고 감점 순으로 고쳐 다시 재는 루프를 통과(90+·절반 미만 축 없음)까지, 최대 3회 돕니다. 요구사항을 깎거나 디자인 시스템을 고쳐 점수를 올리지 않습니다. 코드 시안은 커밋하지 않고, 실데이터 연동·테스트·PR은 프로젝트 기능 워크플로(`implement-feature`)로 넘깁니다. 규칙 문서가 필요하고, Figma 대상은 Figma 라이브러리와 Figma 원격 MCP 쓰기 권한이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
+| `/design-polish` | 이미 동작하는 화면을 전반적으로 다듬을 때 — 위계·간격·색·형제 화면과의 일관성 | 화면을 실제 브라우저로 뷰포트·테마마다 캡처하고 독립 비평으로 근거(캡처·규칙 문서 절) 달린 고칠 목록을 냅니다. 하네스에 `design-polish` 워크플로가 있으면 그 진입점으로 넘겨 고른 항목을 고치고 다시 측정·검토하며, 없으면 비평과 고칠 목록까지만 하고 파일을 바꾸지 않습니다. | 요청 시 자동 선택·사용자 실행 |
 | `/ux-writing-builder` | 화면 문구 규칙(말투·해요체/합니다체·원칙·용어집·버튼/토스트/에러 등 컴포넌트별 규칙)을 처음 정하거나 다시 정리할 때 | 기존 코드의 문구를 실측해(`scripts/ux-writing-lint.py extract`) 섞인 종결 어미와 같은 뜻 다른 단어를 보여 주고, 라운드당 3개 이하 질문(추천 기본값 포함)으로 정해 `.ai-harness/docs/ux-writing.md`를 만듭니다. 일반 원칙 12개를 기본안으로 제안하고, 규칙마다 근거(코드 위치·작성자 결정·참고 자료)를 남깁니다. 기존 문서는 refresh/merge/leave 중 고르게 합니다. 장문 윤문에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
 | `/ux-writing-audit` | 변경분·화면·기획서 문구가 규칙에 맞는지 볼 때, UI 문구를 바꾼 PR 전 | 용어집 금지어·금지 표현·종결 어미는 스크립트가 결정적으로 잡고(수정안의 조사까지 맞춤), 버튼이 결과를 말하는지·에러가 원인과 다음 행동을 주는지 같은 맥락은 규칙 문서 기준으로 판단해 `위치·원문·수정안·위반 규칙` 표와 점수(90점·주요 위반 없음이면 통과)를 냅니다. 규칙 문서가 없으면 채점하지 않습니다. 하네스의 `implement-feature`·`fix-bug`는 문서가 있으면 UI 문구를 쓸 때 읽고 PR 전에 이 감사를 돌립니다. | 요청 시 자동 선택·사용자 실행 |
 
@@ -155,7 +157,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 - **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
 - **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/board`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`·`/ux-writing-builder`·`/ux-writing-audit`)과 `/landing-page`·`/design-references`·`/design-screen`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/board`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`·`/ux-writing-builder`·`/ux-writing-audit`)과 `/landing-page`·`/design-references`·`/design-screen`·`/design-polish`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -166,6 +168,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 | 기능 개발 | `.agents/skills/implement-feature/SKILL.md` | `.claude/commands/implement-feature.md` | 내부 템플릿을 프로젝트 정책으로 구체화해 생성합니다. `.ai-harness/workflows/implement-feature.md`와 프로젝트 docs를 먼저 읽는 진입점입니다. |
 | 버그 수정 | `.agents/skills/fix-bug/SKILL.md` | `.claude/commands/fix-bug.md` | 내부 템플릿을 프로젝트의 재현·수정·회귀 검증 규칙으로 구체화해 생성합니다. |
 | 원인 조사 | `.agents/skills/investigate/SKILL.md` | `.claude/commands/investigate.md` | 코드를 바꾸지 않고 원격 기준 코드·도메인 문서·재현 근거로 원인 보고를 씁니다. 수정이 필요하면 보고를 `/fix-bug`에 넘깁니다. |
+| 기존 화면 품질 개선 | `.agents/skills/design-polish/SKILL.md` | `.claude/commands/design-polish.md` | 이미 동작하는 화면을 브라우저로 측정·채점하고, 독립 비평의 고칠 목록에서 사람이 고른 항목만 고친 뒤 다시 측정·검토합니다. |
 | 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
@@ -484,6 +487,39 @@ stateDiagram-v2
 6. **넘김** — 수정이 필요하면 `/fix-bug <보고 파일>`로 넘깁니다. Jira 댓글 같은 외부 쓰기는 보고 옆에 초안 파일로만 만들고 사람이 올립니다.
 
 [원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너는 아직 이 워크플로를 실행하지 않으므로 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
+
+<a id="design-polish"></a>
+
+## 기존 화면 품질 개선 흐름: `/design-polish`
+
+"이 화면 전반적으로 다듬어줘"처럼 이미 동작하는 화면의 위계·간격·색·형제 화면과의 일관성을 끌어올리는 프로젝트 로컬 Skill/command입니다. `standard` 초기화가 만들고, 기존 프로젝트는 `/harness-init --sync`가 추가로 제안합니다. 새 시안은 `/design-screen`, 동작이 빠졌거나 틀린 것은 `/implement-feature`·`/fix-bug`, 비평만 원하면 `design-reviewer` 에이전트입니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> measure: 기준선
+    measure --> diagnose: 기준선 측정
+    diagnose --> approval: 고칠 목록
+    diagnose --> fix_list: 규칙 문서·기준 화면 없음
+    approval --> fix: 사람이 고른 항목 승인
+    fix --> verify
+    verify --> measure: 검사 통과 (다시 측정)
+    measure --> review: 수정 뒤 측정
+    review --> fix: 남은 항목·회귀·나빠진 축
+    review --> verify: 측정 뒤 파일 변경
+    review --> publish: 통과
+    publish --> verify: 검토 뒤 파일 변경
+    publish --> remote_ci
+    remote_ci --> done
+```
+
+1. **측정** — 대상 화면과 같은 공용 부품·토큰을 쓰는 형제 화면을 실제 브라우저로 지원 뷰포트·테마마다 캡처하고, 디자인 규칙 문서와 기준 화면이 있으면 `design-audit`으로 채점합니다. 캡처와 채점 보고는 저장소 밖 실행 폴더에 남고, 프로젝트 기계 검사(디자인 lint·대비·토큰 사본 검사 등)는 러너가 직접 실행합니다.
+2. **진단** — 화면을 만들지 않은 독립 세션이 캡처·규칙 문서 절을 근거로 심각도 순 고칠 목록(`P1`, `P2`, …)을 냅니다.
+3. **선택** — 주요(major) 항목이 미리 선택된 목록을 보여 주고 멈춥니다. 다른 항목을 고르려면 `revise --select "P1,P3"`, 진단을 고치려면 `revise --feedback`, 그대로면 대화에 `승인`. `HM_APPROVAL=auto`면 주요 항목만 고르고 근거를 PR 본문 결정 사항에 남깁니다.
+4. **수정 → 검사 → 다시 측정 → 독립 검토** — TDD는 강제하지 않고, 기계로 잡히는 위반에만 검사를 더합니다. 통과는 러너가 측정 결과로 판정합니다: 고른 항목이 남지 않고, audit 총점 90 이상(`limits.audit_pass_score`)이며 어느 축도 기준선보다 낮지 않고, 형제 화면 회귀·새 문제가 없고, 검사가 통과해야 합니다. 아니면 다시 고치고, 3회(`limits.max_repair_attempts`)를 넘으면 사람에게 넘깁니다.
+5. **바뀐 파일 거부** — 측정 뒤 바뀐 파일은 검토하지 않고, 검토 뒤 바뀐 파일은 내보내지 않습니다. 둘 다 검사·측정·검토를 다시 거칩니다. 기준선의 화면·뷰포트·테마를 모두 다시 찍지 않은 측정은 측정으로 치지 않습니다.
+6. **PR** — `git_policy`대로 커밋·push·PR을 하고 원격 CI를 끝까지 봅니다.
+
+규칙 문서·기준 화면이 없는 저장소는 채점할 기준이 없어 비평과 고칠 목록까지만 내고 아무것도 바꾸지 않습니다(`/design-system-builder`로 규칙을 만들거나, 이미 있으면 `/harness-init --reconfigure`로 `design-system` stack을 켭니다). 하네스가 없는 저장소에서는 플러그인 전역 `/design-polish`가 같은 측정·비평·고칠 목록까지만 합니다. [그래프 계약](templates/design-polish/references/design-polish-graph.json)은 `.ai-harness/workflows/design-polish-graph.json`으로 복사되고 `workflow-driver.sh --workflow polish`가 실행합니다.
 
 <a id="review"></a>
 

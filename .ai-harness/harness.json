@@ -23,8 +23,8 @@
       "template_version": "0.77.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "cd5a14dbab7f5692139c315eed43e47f7f9cad5f5fa7005afd668681887e6094",
-      "template_version": "0.73.0"
+      "content_sha256": "67bf6637daa13d1ba7b896197b63a38fc5aaa8c9941eabcdcaf4b72cd675c44c",
+      "template_version": "0.79.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
       "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
@@ -149,6 +149,20 @@
     ".claude/skills/design-audit/references/figma-mcp.md": {
       "content_sha256": "c8109b03efa0311a556c08b0e91bb6b2cdf4fc60b4ef620e55c7efebb95f9e0d",
       "template_version": "0.78.0"
+    },
+    ".ai-harness/workflows/design-polish-graph.json": {
+      "content_sha256": "5c40c5175cb6d54f4048c2c87ff4d3eb6b2e3a1b267c1ff2bbfa494b8a8d195d",
+      "template_version": "0.79.0"
+    },
+    ".agents/skills/design-polish/SKILL.md": {
+      "content_sha256": "309d884827f6e1bd47823422a1730431c39705814fbf77537acb1709c988e27c",
+      "template_version": "0.79.0",
+      "renderer": 1
+    },
+    ".claude/commands/design-polish.md": {
+      "content_sha256": "190d0a38e0f3a1995ad9ab90cb8a0c90ef344b4a09a2a063ea4579f10d8a9f0e",
+      "template_version": "0.79.0",
+      "renderer": 1
     }
   }
 }

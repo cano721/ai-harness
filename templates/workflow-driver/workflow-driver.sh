@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
-#   - 워크플로: --workflow feature|bug-fix|review(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review·design-polish)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
+#   - 워크플로: --workflow feature|bug-fix|review|polish(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+#   - polish(기존 화면 품질 개선): measure(브라우저 캡처·design-audit 채점) → diagnose(독립 비평, 고칠 목록) → approval(사람이 항목 선택,
+#     revise --select) → fix → verify → measure → review. 통과 판정(고른 주요 항목 0·audit 기준·기준선보다 나빠진 축 없음)은
+#     이 스크립트가 측정 결과로 한다. 측정 뒤 바뀐 파일은 review가, 검토 뒤 바뀐 파일은 publish가 거부하고 verify(검사)부터 다시 돈다.
 #   - 노드: 그래프의 nodes. write:false 노드는 읽기 전용 세션(Codex sandbox read-only, Claude는 읽기 도구만)으로 띄우고
 #     세션 전후 작업 트리 지문이 다르면 멈춘다. 명령을 실행해야 하는 읽기 노드(commands·network·browser)도 같은 지문 비교로 쓰기를 막는다.
 #     actor:human 노드에서는 실행을 멈추고(interrupt) 사람을 기다린다.
@@ -38,26 +41,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review] [options]
+usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [options]
 
   start   --request "<요청>" | --request-file <file>   계획 노드를 실행하고 승인 대기에서 멈춘다
           [--check "<검증 명령>"]...                    Brief(review는 수리 범위)가 제안한 검증에 더할 명령
           [--monitor-error <file>]                      고치는 모니터링 에러(/autofix candidates의 한 줄). 단계 deploy에서 merge_policy.verify의 monitor가 병합 뒤 재발 추적에 올린다
           [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
   revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
+          --select "<ID,ID...>"                         polish만: 고칠 목록에서 고칠 항목을 바꾼다(모델을 부르지 않는다). 다시 승인을 기다린다
   resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
   approve                                               터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
   status                                                현재 노드·이력·다음 행동을 보인다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
-  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)이다.
+  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면이다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
 
   정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
   자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)만 병합 여부를 정한다. 없으면 PR까지다.
 
-exit: 0 done(push했으면 원격 CI 통과까지, 단계 merge·deploy면 병합 후 검증까지) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
+exit: 0 done(push했으면 원격 CI 통과까지, 단계 merge·deploy면 병합 후 검증까지. polish는 규칙 문서가 없어 고칠 목록까지만 낸 fix_list 포함) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
 }
@@ -74,6 +78,7 @@ WORKFLOW=""
 CLI_CHECKS=()
 MONITOR_ERROR=""
 INVESTIGATION_FILE=""
+SELECT=""
 while (($#)); do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || usage; REPO="$2"; shift 2 ;;
@@ -83,6 +88,7 @@ while (($#)); do
     --request) [[ $# -ge 2 ]] || usage; REQUEST="$2"; shift 2 ;;
     --request-file) [[ $# -ge 2 && -f "$2" ]] || usage; REQUEST="$(<"$2")"; shift 2 ;;
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
+    --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
     --investigation) [[ $# -ge 2 && -s "$2" ]] || usage; INVESTIGATION_FILE="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"; shift 2 ;;
@@ -94,6 +100,7 @@ case "$WORKFLOW" in
   ""|feature|implement-feature) WORKFLOW="${WORKFLOW:+feature}" ;;
   bug-fix|fix-bug) WORKFLOW=bug-fix ;;
   review) ;;
+  polish|design-polish) WORKFLOW=polish ;;
   *) printf 'unknown workflow: %s\n' "$WORKFLOW" >&2; usage ;;
 esac
 # 조사 보고는 버그 수정을 시작할 때만 받는다. 다른 워크플로에는 그 보고를 대신할 노드가 없다.
@@ -166,7 +173,11 @@ case "$WORKFLOW" in
   feature) GRAPH_NAME=feature-delivery-graph.json TEMPLATE=implement-feature BRIEF_TITLE="Implementation Brief" UI_UNVERIFIED="implementation done, UI unverified" ;;
   bug-fix) GRAPH_NAME=bug-fix-graph.json TEMPLATE=fix-bug BRIEF_TITLE="Bug Fix Brief" UI_UNVERIFIED="implementation done, UI unverified" ;;
   review) GRAPH_NAME=review-graph.json TEMPLATE=review BRIEF_TITLE="Repair scope" UI_UNVERIFIED="code review clean, UI unverified" ;;
+  polish) GRAPH_NAME=design-polish-graph.json TEMPLATE=design-polish BRIEF_TITLE="Polish fix list" UI_UNVERIFIED="screens unmeasured" ;;
 esac
+# 고칠 항목 선택은 polish의 고칠 목록에만 있다.
+[[ -z "$SELECT" || ( "$CMD" == revise && "$WORKFLOW" == polish ) ]] \
+  || { printf -- '--select is an option of revise --workflow polish\n' >&2; exit 2; }
 
 # 프로젝트 그래프가 계약이다. 없으면 이 스크립트 옆(설치본) 또는 저장소 템플릿 배치(templates/<워크플로>/references)의 원본을 쓴다.
 GRAPH="$REPO/.ai-harness/workflows/$GRAPH_NAME"
@@ -225,6 +236,19 @@ worktree_tree() {
   GIT_INDEX_FILE="$idx" git -C "$REPO" add -A
   GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree
   rm -f "$idx"
+}
+
+# 상태에 남긴 트리(measured_tree·reviewed_tree)와 지금 작업 트리가 같은가. 측정·검토 뒤 바뀐 파일을 거부하는 공용 게이트다.
+tree_unchanged_since() { # state-key
+  local saved
+  saved="$(state ".$1 // \"\"")"
+  [[ -n "$saved" && "$(worktree_tree)" == "$saved" ]]
+}
+changed_since() { # state-key → 바뀐 경로를 ", "로 이어서
+  local saved
+  saved="$(state ".$1 // \"\"")"
+  [[ -n "$saved" ]] || { printf 'no %s was recorded' "$1"; return; }
+  git -C "$REPO" diff --name-only "$saved" "$(worktree_tree)" | head -n 20 | paste -sd ',' - | sed 's/,/, /g'
 }
 
 # git_policy가 커밋을 허용하면 쓰기 노드 뒤 로컬 커밋을 남긴다. worktree가 사라져도 사이클 단위로 남는다. push는 하지 않는다.
@@ -318,6 +342,14 @@ run_agent() {
       fi
       [[ -n "$schema" ]] && args+=(--json-schema "$(<"$schema")")
       [[ -d "$RUN/$label" ]] && args+=(--add-dir "$RUN/$label")
+      # 측정 증거(캡처·채점 보고)를 읽어 판정하는 읽기 노드(reads_run). 읽기 도구만 있고, 측정 디렉터리만 연다 —
+      # 수정 쪽 요약(fix-N.out)·이전 판정·state.json을 보지 않아야 독립 판정이다.
+      if [[ "$writable" != true && "$commands" != true && "$(jq -r --arg n "$node" '.nodes[$n].reads_run // false' "$GRAPH")" == true ]]; then
+        local ev
+        while IFS= read -r ev; do
+          [[ -n "$ev" && -d "$ev" ]] && args+=(--add-dir "$ev")
+        done <<<"$(state '(.measurements // [])[].evidence_dir')"
+      fi
       # 답할 사람이 없는 세션이다. 보드 권한 훅이 이 세션의 권한 요청을 보드로 넘겨 붙잡지 않게 표시한다(없으면 바로 거부된다).
       (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
       if ((rc == 0)); then
@@ -396,6 +428,17 @@ print_brief() {
 == 다음 ==
 수리: 대화에 "승인"이라고 입력한 뒤 resume (터미널이면 approve). 위 finding을 고치고 검증·재검토까지 이어 간다
 수리하지 않으면 여기서 끝난다: 위 finding이 검토 결과다
+EOF
+    workspace_hint
+    return
+  fi
+  if [[ "$WORKFLOW" == polish ]]; then
+    cat <<EOF
+
+== 다음 ==
+승인: 표에서 [x]로 고른 항목을 고친다. 대화에 "승인"이라고 입력한 뒤 resume (터미널이면 approve)
+고를 항목 바꾸기: revise --select "P1,P3" (모델을 부르지 않는다. 바꾼 목록을 다시 보여 주고 승인을 기다린다)
+다시 진단: 빠진 문제나 틀린 판단을 말하면 revise --feedback "<바꿀 점>"으로 고칠 목록을 다시 만든다
 EOF
     workspace_hint
     return
@@ -580,6 +623,14 @@ review_output() { # out-file → 상태의 findings·needs_user_decision(·ui_sc
 # publish: git_policy가 허용할 때만 세션을 띄워 커밋·일반 push·PR을 맡기고, 결과를 이 스크립트가 git으로 확인한다.
 publish() {
   local policy problems="[]" out pr_url
+  # 검토한 트리와 지금 트리가 다르면 검토 뒤에 누군가 파일을 바꾼 것이다. 그 변경은 측정·검토를 받지 않았으므로
+  # 내보내지 않고 검사부터 다시 한다(verify → measure → review, 그 전이를 선언한 그래프만 — 다른 그래프는 아래 커밋 트리 비교가 같은 보장을 한다).
+  if has_edge publish changed_after_review && ! tree_unchanged_since reviewed_tree; then
+    state_set '.findings = ["files changed after the review: " + $f] | .changed_after_review = ($f | split(", "))' --arg f "$(changed_since reviewed_tree)"
+    log "refused: files changed after the review ($(changed_since reviewed_tree)); checking, measuring, and reviewing again"
+    go publish changed_after_review
+    return
+  fi
   policy="$(state '.policy.git // ""')"
   case "$policy" in
     pr-only|direct|merge) ;;
@@ -612,7 +663,7 @@ $(brief_context)" "$PUBLISH_SCHEMA"
   # 세션의 보고가 아니라 git 상태로 판정한다.
   [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
     || problems="$(jq -c '. + ["uncommitted changes remain after publish"]' <<<"$problems")"
-  [[ "$(worktree_tree)" == "$(state '.reviewed_tree // ""')" ]] \
+  tree_unchanged_since reviewed_tree \
     || problems="$(jq -c '. + ["the committed tree differs from the reviewed tree"]' <<<"$problems")"
   if [[ "$(state .start_head)" != none ]] && ! git -C "$REPO" merge-base --is-ancestor "$(state .start_head)" HEAD 2>/dev/null; then
     problems="$(jq -c '. + ["history before the run was rewritten"]' <<<"$problems")"
@@ -1100,6 +1151,9 @@ REPRODUCE_SCHEMA="$RUN/reproduce-schema.json"
 PUBLISH_SCHEMA="$RUN/publish-schema.json"
 REMOTE_CI_SCHEMA="$RUN/remote-ci-schema.json"
 UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
+MEASURE_SCHEMA="$RUN/measure-schema.json"
+DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
+POLISH_REVIEW_SCHEMA="$RUN/polish-review-schema.json"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
@@ -1135,17 +1189,107 @@ else printf 'Put anything the person must decide in open_questions.\n'; fi)" "$i
     "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)"
 }
 
+# ---- polish(기존 화면 품질 개선) ----
+# 측정 결과의 캡처가 그 측정의 증거 디렉터리 안에 실제로 있는지. 이름만 적은 캡처는 측정이 아니다.
+measure_captures_present() { # measure-output evidence-dir
+  local c n=0
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    [[ "$c" == /* ]] || c="$2/$c"
+    case "$c" in "$2"/*) ;; *) return 1 ;; esac
+    [[ "$c" != *..* && -s "$c" ]] || return 1
+    n=$((n + 1))
+  done <<<"$(jq -r '.screens[].captures[]' "$1")"
+  [[ "$n" -gt 0 ]] && jq -e 'all(.screens[]; (.captures | length) > 0) and any(.screens[]; .role == "target")' "$1" >/dev/null
+}
+
+# 규칙 문서·기준 화면이 있고 기준선이 실제로 채점됐을 때만 통과를 판정할 수 있다(design-audit 스킬이 없으면 채점이 없다).
+polish_has_rules() { [[ "$(state '(.baseline.rules.document // "") != "" and (.baseline.rules.reference_screen // "") != "" and (.baseline.audit.scored == true)')" == true ]]; }
+
+measure_prompt() { # evidence-dir
+  local ev="$1" same=""
+  if [[ "$(state '.baseline // null')" != null ]]; then
+    same="This is a re-measure after a fix. Render exactly the screens, viewports, and themes of the baseline below (same names), so each capture has a baseline twin, and score them the same way:
+$(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.theme) · \(.url)") | join("\n")')"
+  else
+    same="This is the baseline before any change. Choose the screens: every target screen the request names, plus the screens that share the components or tokens those screens use (role sibling; .ai-harness/docs/ui.md may list them, otherwise find them in the code) — a later fix to a shared component is checked on them."
+  fi
+  printf '%s\n\n%s' "$CONTEXT" "You are the measure node of the design-polish graph. Do not edit, create, or delete any file in the repository; save captures, audit reports, and notes only under $ev.
+Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository and stop any server you started before you finish.
+$same
+Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
+Rules: find the design rule document and the reference screen (.ai-harness/docs/frontend.md or ui.md section \"## 디자인 점검\", DESIGN.md, docs/design-system.md). Put their paths in rules, or empty strings when missing. When both exist, score every target screen with the project design-audit skill (.agents/skills/design-audit/SKILL.md or .claude/skills/design-audit/SKILL.md) exactly as its rubric says, using the captures for what the rubric marks as needing a render, and save the report as $ev/audit.md. audit.total is the lowest total among the target screens and audit.axes the lowest score per axis A-E (-1 for an axis the rubric leaves 미확인); audit.report is the report path. When either rule source is missing or the skill is absent, set audit.scored false, total -1, every axis -1, report empty.
+checks: the exact shell commands the project names for checking screens mechanically (design lint, contrast, token-copy checks, the UI test suite) from ui.md, AGENTS.md, or the testing docs. Do not run them; the driver runs them from the repository root with bash -c.
+status: measured when every target screen rendered at every required viewport and theme; otherwise unmeasured with each gap in unmeasured.
+Return only JSON matching the schema.
+
+Request (the screens to polish and what to improve):
+$(state .request)"
+}
+
+# 고칠 목록을 승인 대상으로 만든다. 선택(selected)·검증 명령이 승인에 묶인다 — 하나라도 바뀌면 이전 승인은 무효다.
+polish_brief() { # selected-ids-json
+  local auto=false
+  [[ "$(state '.policy.approval // "human"')" == auto ]] && auto=true
+  jq --argjson sel "$1" --argjson checks "$(state '.checks')" --argjson auto "$auto" \
+    '{items, needs_decision, selected: $sel, checks: $checks, open_questions: [], needs_human: [],
+      decisions: (if $auto then [{question: "고칠 항목", choice: (if ($sel | length) > 0 then ($sel | join(", ")) else "없음" end),
+        rationale: "HM_APPROVAL=auto라 사람이 고르지 않는다. 심각도 major 항목만 골랐다 — minor·사람 판단 항목은 고치지 않고 목록으로 남긴다"}] else [] end)}' \
+    "$RUN/diagnose.out" >"$RUN/brief.json"
+  jq -r --arg base "$(state '"기준선 측정: " + (if .baseline.audit.scored then "design-audit \(.baseline.audit.total)/100 (A \(.baseline.audit.axes.A) · B \(.baseline.audit.axes.B) · C \(.baseline.audit.axes.C) · D \(.baseline.audit.axes.D) · E \(.baseline.audit.axes.E))" else "design-audit 채점 없음" end) + " · 캡처 " + .baseline.evidence_dir')" '
+    "## 고칠 목록 (심각도 순)\n\n" + $base + "\n\n| 고침 | ID | 심각도 | 항목 | 근거 | 고칠 방향 |\n|---|---|---|---|---|---|\n"
+    + (.selected as $sel | [.items[] | "| " + (if (.id as $id | $sel | index($id)) != null then "[x]" else "[ ]" end)
+        + " | \(.id) | \(.severity) | \(.title) | \(.evidence | join("<br>")) | \(.fix)\(if .mechanical then " (기계 검사로 잡을 수 있음 — 그 검사를 더한다)" else "" end) |"] | join("\n"))
+    + (if (.needs_decision | length) > 0 then "\n\n## 사람이 정할 점 (고치지 않음)\n\n" + (.needs_decision | map("- " + .) | join("\n")) else "" end)
+    + (if (.decisions | length) > 0 then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end)' \
+    "$RUN/brief.json" >"$RUN/brief.md"
+  printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
+  state_set '.selected = $s | .presented_at = $t | .feedback = null | .approval = null' --argjson s "$1" --arg t "$(now_utc)"
+  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+}
+
+polish_findings_text() {
+  state '(.findings // []) | if length > 0 then "\nStill to resolve from the last review, check run, or remote CI:\n" + (map("- " + .) | join("\n")) else "" end'
+}
+
+# review의 판정은 모델이 아니라 이 스크립트가 측정 결과로 한다. 모델은 남은 항목·회귀·새 문제를 증거로 보고할 뿐이다.
+polish_verdict() { # review-output → stdout: 통과를 막는 문제(JSON 배열)
+  jq -c --slurpfile s "$STATE" --argjson pass "$(jq -r '.limits.audit_pass_score // 90' "$GRAPH")" --argjson rules "$(polish_has_rules && echo true || echo false)" '
+    $s[0] as $st | ($st.measurements | last) as $m | $st.baseline.audit as $b
+    | [ (.remaining[] as $r | select($st.selected | index($r)) | "selected item still present: " + $r
+          + (first($st.items[]? | select(.id == $r) | " — " + .title) // "")),
+        (.regressions[] | "regression: " + .),
+        (.new_findings[] | "new issue: " + .),
+        (if $rules then
+          (if ($m.audit.scored | not) then "design-audit did not score the screens after the fix"
+           elif $m.audit.total < $pass then "design-audit total \($m.audit.total) is below \($pass)" else empty end),
+          (["A","B","C","D","E"][] as $a
+            | if ($b.axes[$a] >= 0 and $m.audit.axes[$a] >= 0 and $m.audit.axes[$a] < $b.axes[$a]) then "axis \($a) fell below the baseline: \($b.axes[$a]) -> \($m.audit.axes[$a])"
+              elif ($b.axes[$a] >= 0 and $m.audit.axes[$a] < 0) then "axis \($a) was scored at the baseline but is 미확인 after the fix" else empty end)
+        else empty end) ]' "$1"
+}
+
+polish_summary() {
+  state '"polished " + ((.selected // []) | join(", ")) + (if .baseline.audit.scored then "; design-audit \(.baseline.audit.total) -> \((.measurements | last).audit.total)" else "" end)
+    + "; captures: baseline " + .baseline.evidence_dir + ", after " + ((.measurements | last).evidence_dir)'
+}
+
 execute() {
   local node brief
   while :; do
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
       case "$node" in
+        fix_list)
+          finish fix_list 0 "critique only — the project has no design rule document and reference screen to score against, so nothing was changed. Fix list: $RUN/brief.md (captures: $(state .baseline.evidence_dir)). To polish with scoring, create the rules with /ai-harness:design-system-builder, or when they already exist enable the design-system stack with /harness-init --reconfigure, then start again" ;;
         done)
+          if [[ "$WORKFLOW" == polish && "$(state '.polish_outcome // ""')" == nothing_to_fix ]]; then
+            finish "done" 0 "nothing to polish$(state 'if (.items // [] | length) > 0 then ": no major item (approval auto selects major items only); the minor items are listed" else ": the critique found nothing to fix" end') in $RUN/brief.md; nothing was changed"
+          fi
           if [[ "$WORKFLOW" == review ]]; then
             finish "done" 0 "no blocking findings remain$(state 'if .attempts > 0 then "; \(.attempts) repair round(s) passed the required checks (run by the driver) and re-review; the repairs are left uncommitted — commit and push them as git_policy allows" else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary else "" end')"
           fi
-          finish "done" 0 "required checks passed (run by the driver) and no blocking findings remain$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
+          finish "done" 0 "$(if [[ "$WORKFLOW" == polish ]]; then printf '%s; required checks passed (run by the driver) and the independent review found no remaining selected item, regression, or lower audit axis' "$(polish_summary)"; else printf 'required checks passed (run by the driver) and no blocking findings remain'; fi)$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
           elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
             + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status + (if .value.note then " (" + .value.note + ")" else "" end)] | join(", ")) else "" end)
           elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
@@ -1160,6 +1304,82 @@ execute() {
       continue
     fi
     case "$node" in
+      measure)
+        local m_label m_ev m_out
+        if [[ "$(state '.baseline // null')" == null ]]; then m_label=measure-baseline; else m_label="measure-$(state .attempts)-$(state '.measurements // [] | length')"; fi
+        m_ev="$RUN/$m_label"
+        # resume이 같은 측정을 다시 돌 때 이전 캡처가 이번 근거로 섞이지 않게 한다.
+        rm -rf "${RUN:?}/$m_label"
+        mkdir -p "$m_ev"
+        run_node measure "$m_label" "$(measure_prompt "$m_ev")" "$MEASURE_SCHEMA"
+        m_out="$RUN/$m_label.out"
+        jq -e '(.status | IN("measured", "unmeasured")) and (.screens | type) == "array" and (.rules.document | type) == "string"
+          and (.rules.reference_screen | type) == "string" and (.audit.scored | type) == "boolean" and (.audit.total | type) == "number"
+          and (.audit.axes | type) == "object" and (.checks | type) == "array" and (.unmeasured | type) == "array"' "$m_out" >/dev/null 2>&1 \
+          || finish incomplete 30 "measure output does not match the schema ($m_out)"
+        # 캡처가 없거나 증거 디렉터리 밖이면 측정하지 않은 것이다. 측정 없는 비교·판정은 하지 않는다.
+        if [[ "$(jq -r .status "$m_out")" != measured ]] || ! measure_captures_present "$m_out" "$m_ev" \
+          || ! jq -e --slurpfile s "$STATE" '[.screens[] | [.screen, .viewport, .theme]] as $now
+            | all(($s[0].baseline.screens // [])[]; [.screen, .viewport, .theme] as $b | $now | index([$b]) != null)' "$m_out" >/dev/null; then
+          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
+            --slurpfile r "$m_out" --arg e "$m_ev"
+          go measure "$(edge_when measure user_decision)"
+          continue
+        fi
+        state_set '.measurements += [($r[0] | {label: $l, audit, summary, evidence_dir: $e, at: $t})]' \
+          --slurpfile r "$m_out" --arg l "$m_label" --arg e "$m_ev" --arg t "$(now_utc)"
+        if [[ "$(state '.baseline // null')" == null ]]; then
+          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e})
+            | .checks = ([.cli_checks[], $r[0].checks[]] | map(select(length > 0)) | unique)' --slurpfile r "$m_out" --arg e "$m_ev"
+          # 검사 명령은 측정 세션이 고른 것이라 승인 전에는 실행하지 않는다. 고칠 목록과 함께 승인받은 뒤 verify가 실행한다.
+          go measure baseline_measured
+        else
+          # 이 트리가 측정한 화면이다. review는 이 트리에서만 시작한다.
+          state_set '.measured_tree = $t' --arg t "$(worktree_tree)"
+          go measure remeasured
+        fi
+        ;;
+      diagnose)
+        local audit_report revise_note=""
+        audit_report="$(state '.baseline.audit.report // ""')"
+        [[ -n "$audit_report" ]] || audit_report="(none, the screens were not scored)"
+        [[ "$(state '.feedback // ""')" == "" ]] \
+          || revise_note="$(printf '\n\nPrevious fix list:\n%s\n\nRevise it with this feedback from the person:\n%s' "$(<"$RUN/brief.md")" "$(state .feedback)")"
+        run_node diagnose diagnose "$CONTEXT
+
+You are the diagnose node of the design-polish graph. Do not edit any file. You did not make these screens; critique them independently from the evidence of the baseline measurement, as a first-time user and as a design reviewer holding the project's own rules (the design rule document, its tokens and shared components, the reference screen, .ai-harness/docs/ui.md) first and general interface quality second.
+Evidence: captures in $(state .baseline.evidence_dir) (read the images), the design-audit report $audit_report, and the project checks the driver will run after the fix: $(state '.checks | join(" ; ")').
+List what to fix as items, most severe first, with ids P1, P2, ... in that order. Each item: severity major (a rule the audit deducted, a broken hierarchy or primary action, unreadable contrast or a missing focus state, a failing project check, a screen that disagrees with its siblings in the rule document, a broken layout at a supported viewport or theme) or minor (everything else worth fixing); a short title; evidence — the capture files that show it and the rule-document section or audit line it breaks (both when they exist); fix — what to change, in tokens and shared components rather than raw values; mechanical — true when a machine check (lint, contrast, token-copy check) could catch it.
+Put anything that needs a product or content decision in needs_decision instead of items. Do not list what the screens already do right.
+Return only JSON matching the schema.
+
+Baseline summary: $(state .baseline.summary)
+
+Request:
+$(state .request)$revise_note" "$DIAGNOSE_SCHEMA"
+        jq -e '(.items | type) == "array" and (.needs_decision | type) == "array"
+          and all(.items[]; (.id | test("^P[0-9]+$")) and (.severity | IN("major", "minor")) and (.evidence | length) > 0)
+          and ([.items[].id] | length == (unique | length))' "$RUN/diagnose.out" >/dev/null 2>&1 \
+          || finish incomplete 30 "diagnose output does not match the schema, or an item has no evidence ($RUN/diagnose.out)"
+        state_set '.items = $d[0].items' --slurpfile d "$RUN/diagnose.out"
+        # 규칙 문서·기준 화면이 없으면 채점 기준이 없어 통과를 판정할 수 없다. 비평과 고칠 목록까지만 낸다.
+        if ! polish_has_rules; then
+          polish_brief '[]'
+          go diagnose no_design_rules
+          continue
+        fi
+        local sel
+        sel="$(jq -c '[.items[] | select(.severity == "major") | .id]' "$RUN/diagnose.out")"
+        if [[ "$(jq '.items | length' "$RUN/diagnose.out")" -eq 0 ]] \
+          || [[ "$(state '.policy.approval // "human"')" == auto && "$sel" == "[]" ]]; then
+          polish_brief "$sel"
+          state_set '.polish_outcome = "nothing_to_fix"'
+          go diagnose nothing_to_fix
+          continue
+        fi
+        polish_brief "$sel"
+        go diagnose fix_list_ready
+        ;;
       discover)
         run_node discover discover "$CONTEXT
 
@@ -1266,6 +1486,12 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
           evidence="$(transcript_approval "$(state .presented_at | cut -c1-19)" | head -n 1)"
           [[ -n "$evidence" ]] && record_approval "$evidence"
         fi
+        if [[ "$WORKFLOW" == polish && "$(state '.selected // [] | length')" -eq 0 ]]; then
+          state_set '.approval = null | .status = "waiting_approval"'
+          print_brief
+          log "no item is selected; choose with revise --select \"P1,P3\": run $RUN_ID"
+          exit 10
+        fi
         if [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]]; then
           go approval user_explicitly_approved
         else
@@ -1302,6 +1528,29 @@ $(brief_context)"
         ;;
       fix)
         local before_fix
+        if [[ "$WORKFLOW" == polish ]]; then
+          [[ "$(state '.selected | length')" -gt 0 ]] \
+            || finish incomplete 30 "no item is selected to fix; choose with revise --select \"P1,P3\" and approve again"
+          if [[ "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
+            go fix "$(edge_when fix user_decision)"
+            continue
+          fi
+          state_set '.attempts += 1'
+          before_fix="$(fingerprint)"
+          run_node fix "fix-$(state .attempts)" "$CONTEXT
+
+You are the fix node of the design-polish graph. Fix the selected items below in the existing screens, and nothing else. Use the project's design rule document, semantic tokens, and shared components; prefer fixing a shared component or token over a one-off override, and when you change one, keep every screen that uses it right (the measure node captures those screens again).
+Test-first is not required for spacing, color, or hierarchy changes. Add a check only for a violation a machine can catch (an item marked mechanical): extend the project's existing lint or check script so it fails on the violation, and keep it passing.
+Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")'), then measures the screens again and has an independent reviewer compare them with the baseline.
+Return a concise summary of what you changed for each item and the commands you ran.
+$(polish_findings_text)
+
+$(brief_context)"
+          [[ "$(fingerprint)" != "$before_fix" ]] || finish incomplete 30 "fix changed nothing; the selected items cannot be done without a change"
+          checkpoint "fix-$(state .attempts)"
+          go fix ""
+          continue
+        fi
         before_fix="$(fingerprint)"
         run_node fix fix "$CONTEXT
 
@@ -1330,6 +1579,46 @@ $(brief_context)"
         fi
         ;;
       review)
+        if [[ "$WORKFLOW" == polish ]]; then
+          # 측정한 트리에서만 검토한다. 측정 뒤 바뀐 파일은 검사·측정을 받지 않았다 — 거부하고 verify부터 다시 돈다.
+          if ! tree_unchanged_since measured_tree; then
+            log "refused: files changed after the measurement ($(changed_since measured_tree)); checking and measuring again"
+            state_set '.changed_after_measure = ($f | split(", "))' --arg f "$(changed_since measured_tree)"
+            go review changed_after_measure
+            continue
+          fi
+          local r_label problems
+          r_label="review-$(state .attempts)"
+          run_node review "$r_label" "$CONTEXT
+
+You are the review node of the design-polish graph. Do not edit any file. You did not make this change; judge it only from the evidence, not from the fixer's summary.
+Compare the baseline captures in $(state .baseline.evidence_dir) with the captures after the fix in $(state '(.measurements | last).evidence_dir') — every screen, viewport, and theme pair, the sibling screens as closely as the targets — and read both design-audit reports when they exist. The change is git diff $(state .start_head) (including the driver's checkpoint commits).
+remaining: the ids of selected items that are still visible in the captures after the fix. regressions: anything on any captured screen that is worse than its baseline (layout, spacing, hierarchy, contrast, a shared component or token change showing wrong on a screen it was not meant for), each with the capture pair that shows it. new_findings: new major issues the change introduced that are not regressions of a baseline capture. Leave an array empty when you found nothing for it.
+Set needs_user_decision to true only when a remaining item or regression needs a product or design-rule decision from a person.
+Return only JSON matching the schema.
+
+Selected items:
+$(jq -r --argjson s "$(state .selected)" '.items[] | select(.id as $i | $s | index($i)) | "- \(.id) [\(.severity)] \(.title) — \(.fix)"' "$RUN/brief.json")
+
+Design-audit: baseline $(state '.baseline.audit | if .scored then "\(.total) (A \(.axes.A) B \(.axes.B) C \(.axes.C) D \(.axes.D) E \(.axes.E)) " + .report else "not scored" end'); after the fix $(state '(.measurements | last).audit | if .scored then "\(.total) (A \(.axes.A) B \(.axes.B) C \(.axes.C) D \(.axes.D) E \(.axes.E)) " + .report else "not scored" end')" "$POLISH_REVIEW_SCHEMA"
+          jq -e '(.remaining | type) == "array" and (.regressions | type) == "array" and (.new_findings | type) == "array"
+            and (.needs_user_decision | type) == "boolean"' "$RUN/$r_label.out" >/dev/null 2>&1 \
+            || finish incomplete 30 "review output does not match the schema; the polish is not done ($RUN/$r_label.out)"
+          problems="$(polish_verdict "$RUN/$r_label.out")"
+          state_set '.polish_review = ($r[0] | {summary, remaining, regressions, new_findings}) + {problems: $p, at: $t}' \
+            --slurpfile r "$RUN/$r_label.out" --argjson p "$problems" --arg t "$(now_utc)"
+          if [[ "$problems" == "[]" ]]; then
+            state_set '.findings = [] | .reviewed_tree = $t' --arg t "$(worktree_tree)"
+            go review polish_passed
+          elif [[ "$(jq -r .needs_user_decision "$RUN/$r_label.out")" == true ]]; then
+            state_set '.findings = $p | .needs_user_decision = true' --argjson p "$problems"
+            go review "$(edge_when review user_decision)"
+          else
+            state_set '.findings = $p | .needs_user_decision = false' --argjson p "$problems"
+            go review polish_failed
+          fi
+          continue
+        fi
         # 그래프에 verify 노드가 있으면 검증은 이미 그 노드가 했다. 없으면(feature) 리뷰 전에 이 스크립트가 실행한다.
         if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null && ! run_checks "review-$(state .attempts)"; then
           state_set '.findings = $f | .needs_user_decision = false' --argjson f "$(check_findings "review-$(state .attempts)")"
@@ -1786,6 +2075,34 @@ cat >"$UI_REVIEW_SCHEMA" <<'EOF'
   "blocking_findings":{"type":"array","items":{"type":"string"}},"non_blocking_findings":{"type":"array","items":{"type":"string"}},
   "unverified":{"type":"array","items":{"type":"string"}}}}
 EOF
+cat >"$MEASURE_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["status","summary","screens","rules","audit","checks","unmeasured"],
+ "properties":{"status":{"type":"string","enum":["measured","unmeasured"]},"summary":{"type":"string"},
+  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures"],
+   "properties":{"screen":{"type":"string"},"role":{"type":"string","enum":["target","sibling"]},"url":{"type":"string"},
+    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}}}}},
+  "rules":{"type":"object","additionalProperties":false,"required":["document","reference_screen"],
+   "properties":{"document":{"type":"string"},"reference_screen":{"type":"string"}}},
+  "audit":{"type":"object","additionalProperties":false,"required":["scored","total","axes","report"],
+   "properties":{"scored":{"type":"boolean"},"total":{"type":"number"},"report":{"type":"string"},
+    "axes":{"type":"object","additionalProperties":false,"required":["A","B","C","D","E"],
+     "properties":{"A":{"type":"number"},"B":{"type":"number"},"C":{"type":"number"},"D":{"type":"number"},"E":{"type":"number"}}}}},
+  "checks":{"type":"array","items":{"type":"string"}},"unmeasured":{"type":"array","items":{"type":"string"}}}}
+EOF
+cat >"$DIAGNOSE_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["summary","items","needs_decision"],
+ "properties":{"summary":{"type":"string"},
+  "items":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","severity","title","evidence","fix","mechanical"],
+   "properties":{"id":{"type":"string"},"severity":{"type":"string","enum":["major","minor"]},"title":{"type":"string"},
+    "evidence":{"type":"array","items":{"type":"string"}},"fix":{"type":"string"},"mechanical":{"type":"boolean"}}}},
+  "needs_decision":{"type":"array","items":{"type":"string"}}}}
+EOF
+cat >"$POLISH_REVIEW_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["summary","remaining","regressions","new_findings","needs_user_decision"],
+ "properties":{"summary":{"type":"string"},"remaining":{"type":"array","items":{"type":"string"}},
+  "regressions":{"type":"array","items":{"type":"string"}},"new_findings":{"type":"array","items":{"type":"string"}},
+  "needs_user_decision":{"type":"boolean"}}}
+EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
  "properties":{"summary":{"type":"string"},"branch":{"type":"string"},"pr_url":{"type":"string"}}}
@@ -1803,8 +2120,21 @@ case "$CMD" in
     exit 0
     ;;
   revise)
-    [[ -n "$FEEDBACK" ]] || usage
+    [[ -n "$FEEDBACK" || -n "$SELECT" ]] || usage
     [[ "$(state .node)" == approval ]] || { printf 'revise works only while waiting for approval of a brief (node: %s)\n' "$(state .node)" >&2; exit 2; }
+    [[ -z "$SELECT" || -z "$FEEDBACK" ]] || { printf -- '--select and --feedback are separate revisions; run one, then the other\n' >&2; exit 2; }
+    if [[ -n "$SELECT" ]]; then
+      # 고칠 항목 선택은 결정적이다: 목록에 있는 ID만 받고, 바뀐 목록을 다시 보여 주며 새 승인을 기다린다.
+      sel="$(jq -cn --arg s "$SELECT" '[$s | splits("[,[:space:]]+") | select(length > 0) | ascii_upcase] | unique')"
+      unknown="$(jq -r --argjson s "$sel" '[$s[] as $i | select([.items[].id] | index($i) | not) | $i] | join(", ")' "$RUN/diagnose.out")"
+      [[ -z "$unknown" ]] || { printf 'not in the fix list: %s (ids: %s)\n' "$unknown" "$(jq -r '[.items[].id] | join(", ")' "$RUN/diagnose.out")" >&2; exit 2; }
+      [[ "$sel" != "[]" ]] || { printf -- '--select needs at least one id from the fix list\n' >&2; exit 2; }
+      polish_brief "$sel"
+      state_set '.status = "waiting_approval"'
+      print_brief
+      log "selection changed to $(jq -r 'join(", ")' <<<"$sel"); waiting for approval: run $RUN_ID"
+      exit 10
+    fi
     state_set '.feedback = $f' --arg f "$FEEDBACK"
     go approval brief_changed_or_not_approved
     ;;

@@ -7,6 +7,14 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+### 새 기능
+
+- **기존 화면 품질 개선 워크플로 `/design-polish`** — "이 화면 전반적으로 다듬어줘"를 받을 곳이 없었습니다(`design-reviewer`는 비평만, `/design-screen`은 새 시안용, `implement-feature`는 화면이 그려지는지만 보고 승인 대상도 달랐습니다). 이제 같은 러너의 새 그래프(`workflow-driver.sh --workflow polish`)가 대상과 공용 부품을 함께 쓰는 형제 화면을 브라우저로 뷰포트·테마마다 캡처하고 `design-audit`으로 채점한 기준선 → 독립 비평의 근거 달린 고칠 목록 → 사람이 고른 항목만 수정(`revise --select`, 무인이면 주요 항목만) → 러너가 검사 실행 → 다시 측정 → 독립 검토로 갑니다. 통과는 러너가 측정 결과로 판정합니다(고른 항목 0건, audit 90 이상, 기준선보다 낮아진 축 없음, 형제 화면 회귀 없음, 검사 통과). 아니면 최대 3회 다시 고치고 사람에게 넘깁니다. 측정 뒤나 검토 뒤 바뀐 파일은 거부하고 검사·측정·검토를 다시 거칩니다. 측정 세션이 찾은 검사 명령은 승인 전에는 실행하지 않습니다. TDD는 강제하지 않습니다. 규칙 문서·기준 화면이 없는 저장소는 비평과 고칠 목록까지만 하고, 하네스가 없는 저장소는 플러그인 전역 `/design-polish`가 같은 일을 합니다. (#382)
+
+### 업데이트 후 해야 할 일
+
+- 기존 프로젝트는 `/harness-init --sync --apply`로 `/design-polish` 진입점·그래프와 새 러너를 받습니다. 워크플로 본문 `.ai-harness/workflows/design-polish.md`와 AGENTS.md 표 한 줄은 sync가 제안합니다.
+
 ### 동작 변경
 
 - **sync 보고가 켤 수 있는 화면 검토·디자인 채점을 알려 줍니다** — 디자인 규칙 문서·기준 화면·화면 파일은 하네스를 깐 뒤에 생기는 일이 많은데, sync는 manifest `stacks`에 없는 것을 아예 보지 않아 `ui-review`·`design-audit`를 켤 수 있다는 사실이 어디에도 남지 않았습니다. 이제 `harness-sync-state.sh plan`이 `stack_candidates`로 켜지지 않은 `ui`(서버 렌더링 템플릿·웹 프론트 의존성·서버 없이 여는 단일 HTML 화면)와 `design-system`(디자인 규칙 문서 + 기준 화면)을 근거 파일과 함께 내고, `/harness-init --sync` 보고와 자동 sync PR 본문 "사람 확인 필요" 표, 적용할 것이 없어 에이전트를 띄우지 않은 자동 sync 로그에 "켤 수 있는 stack"으로 남습니다. 자동으로 켜지는 않습니다 — 켜려면 `/harness-init --reconfigure`. UI 감지도 단일 HTML 화면(테스트·fixture·vendor·예시 제외)을 잡습니다. (#381)

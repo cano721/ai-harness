@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Polish"
+  short_description: "Measure, fix, and re-measure existing screens against the design rules."
+  default_prompt: "Use the generated $design-polish entrypoint to polish these existing screens: measure them, list what to fix, and fix the items I choose: $ARGUMENTS"
