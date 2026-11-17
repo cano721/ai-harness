@@ -1166,7 +1166,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const ex = pick.match(/^실행 실패 \((.*)\)$/);
     return ex ? '실행이 실패했습니다. 열어서 로그를 확인하세요.' : pick;
   }
-  const openable = (i) => !(srcOf(i) === 'work' && !(SERVER && (i.actions || []).includes('view')));
+  const openable = (i) => i.resident || !(srcOf(i) === 'work' && !(SERVER && (i.actions || []).includes('view')));
 
   // ---- 서버 동작 ----
   async function act(it, action, b) {

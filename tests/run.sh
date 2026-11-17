@@ -8437,6 +8437,11 @@ BR_VIS="$(sed -n "/document.addEventListener('visibilitychange'/,/});/p" "$ROOT/
 assert_contains "$BR_VIS" "if (document.hidden) closeEvents()" "a hidden board tab closes its event stream (the bg=1 polling takes over)"
 assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconnects its event stream"
 assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
+# 묶음 목록(읽지 않은 결과 등)에서도 상주 세션은 눌러 열린다 — 동작이 send·end뿐이라 view가 없어도.
+BR_OPENABLE="$(grep -m1 '^  const openable = ' "$ROOT/scripts/board/template.html")"
+assert_eq "true false true" "$(node -e "const SERVER = true, srcOf = (i) => i.section; ${BR_OPENABLE}
+console.log([openable({ section: 'work', resident: true, actions: ['send', 'end'] }), openable({ section: 'work', actions: ['send'] }), openable({ section: 'work', actions: ['view'] })].join(' '))")" \
+  "a resident session in a grouped list opens its drawer; other work items still need view"
 # Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
 # poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.
 python3 -I -B -c '
