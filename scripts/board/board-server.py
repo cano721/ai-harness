@@ -31,7 +31,7 @@ POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_wor
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
 상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
-import atexit, json, os, re, secrets, shutil, signal, subprocess, sys, threading, time, unicodedata, webbrowser
+import atexit, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -122,9 +122,19 @@ REFRESH = _positive_env("BOARD_REFRESH_SECONDS", 2.0)
 REFRESH_IDLE = 60
 STALE_SYNC = 30
 FAIL_BACKOFF_MAX = 5.0
+# 갱신 비용(#380): 다음 갱신은 max(REFRESH, 직전 갱신 시간 × 2) 뒤 — 바쁜 Mac에서 수집이 시간의 절반을 넘게 차지하지 않게.
+# 값싼 변경 지문(fingerprint)이 같으면 전체 수집을 건너뛰되, FULL_REFRESH마다는 모은다(지문에 없는 입력·시각에 따른 판정).
+FULL_REFRESH = _positive_env("BOARD_FULL_REFRESH_SECONDS", 30.0)
+TRANSCRIPT_REFRESH = _positive_env("BOARD_TRANSCRIPT_REFRESH_SECONDS", 10.0)
+SNAPSHOT = os.path.join(DATA, "board", "snapshot.json")  # 마지막 목록(0600). 다시 띄우면 이것부터 보인다
 _wake = threading.Event()
 _active = {"at": 0.0}  # 보이는 화면이 마지막으로 상태를 받은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
 _refresh_fails = {"n": 0}
+_timing = {"start": 0.0, "dur": 0.0}  # 마지막 백그라운드 갱신(건너뛴 확인 포함)의 시작 시각·걸린 시간
+_full = {"at": 0.0}  # 마지막 전체 수집 시작 시각
+_fp = {"last": None}  # 마지막 백그라운드 수집 직전의 지문
+_snap = {"on": False, "sig": None}  # 스냅숏 쓰기는 서버로 돌 때(restore_snapshot 뒤)만
+_snap_lock = threading.Lock()
 
 
 def mark_active():
@@ -132,9 +142,15 @@ def mark_active():
     _active["at"] = time.time()
 
 
-def _build():
-    """status.sh 결과에 서버 쪽 판정(묶음·분류·자동 수정·숨김·PR 상태)을 붙인 새 상태. 캐시는 건드리지 않는다."""
-    out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90)
+def _build(cached=False):
+    """status.sh 결과에 서버 쪽 판정(묶음·분류·자동 수정·숨김·PR 상태)을 붙인 새 상태. 캐시는 건드리지 않는다.
+    cached=True(백그라운드 갱신)면 status.sh·work.sh가 바뀌지 않은 입력(하네스 기록·claude agents)의 지난 결과를 FULL_REFRESH초 동안 다시 쓴다.
+    동작 뒤 다시 모을 때는 넘기지 않아 늘 새로 읽는다."""
+    env = {**os.environ}
+    env.pop("BOARD_CACHE_SECONDS", None)
+    if cached:
+        env["BOARD_CACHE_SECONDS"] = str(max(1, int(FULL_REFRESH)))
+    out = subprocess.run(["bash", os.path.join(DIR, "status.sh")], capture_output=True, text=True, timeout=90, env=env)
     data = json.loads(out.stdout)
     try:
         groups.annotate(data["items"], os.path.join(DATA, "board", "links.json"))
@@ -165,28 +181,40 @@ def _build():
                 and daily.isdigit() and int(daily) >= 1000:
             i["state"], i["title"] = "done", "하루 실행 상한 도달(지난 기록) → 지금은 제한 없음"
     data["jira_base"] = JIRA
+    data["snapshot_at"] = None  # 새로 모은 목록. SSE meta가 화면의 "N분 전 상태" 표시를 지우게 키는 늘 싣는다
     return data
 
 
-def _collect(max_age):
+def _collect(max_age, cached=False):
     """캐시가 없거나 max_age보다 오래됐으면 모은다. 한 번에 하나만 모으고, 기다린 쪽은 방금 모은 결과를 쓴다.
     캐시 시각은 모으기 시작한 때다 — 결과가 그 시점의 상태라서, 나이가 실제 데이터 나이가 된다."""
+    fresh = None
     with _lock:
-        if _cache["data"] is None or time.time() - _cache["at"] > max_age:
+        if _cache["data"] is None or _cache.get("restored") or time.time() - _cache["at"] > max_age:
             started, gen = time.time(), _cache.gen
-            data = _build()
-            _cache["data"] = data
+            fresh = _build(cached)
+            _cache["data"] = fresh
             _cache["at"] = started
+            _cache["restored"] = False
+            _full["at"] = started
             # 모으는 사이에 동작이 캐시를 비웠으면 이 결과는 동작 전 상태다 — 아주 오래된 것으로 둬서 다음 읽기가 다시 모으게 한다.
             # 쓴 뒤에 본다: 비교와 쓰기 사이에 비워져도 놓치지 않는다(쓴 뒤에 비우면 data가 None이라 어차피 다시 모은다).
             if _cache.gen != gen:
                 _cache["at"] = 0.0
             FEED.poke()  # 새 캐시를 SSE로: 바뀐 항목만 민다(#349)
-        return _cache["data"]
+        data = _cache["data"]
+    if fresh is not None:
+        save_snapshot(fresh)  # 파일 쓰기는 lock 밖에서 — 기다리는 요청을 붙잡지 않게
+    return data
 
 
 def status(max_age=3):
     data = _cache["data"]
+    # 다시 띄운 직후: 저장된 스냅숏을 바로 주고 뒤에서 새로 모은다. 뒤의 수집이 실패하고 있으면 지난 목록을 계속 보이지 않고
+    # 그 자리에서 모아 오류를 드러낸다.
+    if data is not None and _cache.get("restored") and not _refresh_fails["n"]:
+        _wake.set()
+        return data
     if data is None or time.time() - _cache["at"] > STALE_SYNC:
         return _collect(max_age)
     if time.time() - _cache["at"] > max_age:
@@ -194,24 +222,124 @@ def status(max_age=3):
     return data
 
 
-def refresh_once():
-    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) 캐시를 새로 모은다. 방금 모았으면 건너뛴다."""
-    if time.time() - _active["at"] > REFRESH_IDLE:
+# ---- 변경 지문·스냅숏(#380) ----
+def _claude_dirs():
+    """work.sh가 claude agents를 부르는 설정 폴더와 같은 목록(기본·서버 환경·프로필 자동 감지·사용자 지정)."""
+    dirs = [os.path.expanduser("~/.claude")]
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        dirs.append(os.environ["CLAUDE_CONFIG_DIR"])
+    default_globs = os.path.expanduser("~/Library/Application Support/orca/claude-profiles/*/home")
+    for pattern in os.environ.get("BOARD_CLAUDE_PROFILE_GLOBS", default_globs).split(":"):
+        if pattern:
+            dirs += sorted(glob.glob(pattern))
+    dirs += [d for d in os.environ.get("BOARD_CLAUDE_CONFIG_DIRS", "").split(":") if d]
+    return dirs
+
+
+def _stat_hash(paths):
+    h = hashlib.sha1()
+    for p in sorted(set(paths)):
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        h.update(f"{p}\0{st.st_size}\0{st.st_mtime_ns}\n".encode("utf-8", "surrogateescape"))
+    return h.hexdigest()
+
+
+def fingerprint():
+    """전체 수집 없이 바뀐 것이 있는지 보는 값싼 지문(경로·크기·수정 시각만, 내용은 읽지 않는다). (상태, 진행 기록) 두 값:
+    상태 = 하네스 기록(무인 실행·러너 상태·대기열·자동 수정·레퍼런스 실행)과 설정 폴더마다 세션 상태 파일(sessions/·jobs/) —
+    바뀌면 바로 모은다. 진행 기록 = 보이는 세션의 대화 기록과 러너의 진행 로그 — 일하는 세션이 몇 초마다 바꾸므로
+    TRANSCRIPT_REFRESH마다만 모은다(열어 둔 대화는 /transcript가 따로 읽어 늦지 않는다)."""
+    state = [os.path.join(DATA, p) for p in ("harvest-auto/runs.jsonl", "autofix/runs.jsonl", "logs/schedule.jsonl",
+                                             "applied/applied.jsonl", "config", "board/links.json", "board/hidden.json",
+                                             "board/seen.json")]
+    for pattern in ("runs/*/*/state.json", "harvest-queue/*/analysis-batch.json", "harvest-queue/*/auto-attempted-batch",
+                    "autofix/*/state.json"):
+        state += glob.glob(os.path.join(DATA, pattern))
+    state += REFS.watch_paths()
+    for d in _claude_dirs():
+        state += glob.glob(os.path.join(d, "sessions", "*.json")) + glob.glob(os.path.join(d, "jobs", "*", "state.json"))
+    progress = glob.glob(os.path.join(DATA, "runs", "*", "*", "*"))
+    progress += [i["transcript"] for i in (_cache["data"] or {}).get("items", []) if isinstance(i.get("transcript"), str)]
+    return _stat_hash(state), _stat_hash(progress)
+
+
+def save_snapshot(data):
+    """마지막 목록을 0600 파일로 남긴다(내용이 바뀌었을 때만). /status.json이 주는 것과 같은 status 결과다 —
+    붙잡은 권한 요청·상주 세션 같은 실행 중 상태는 싣지 않는다."""
+    if not _snap["on"]:
         return
     try:
-        _collect(REFRESH / 2)
+        sig = hashlib.sha1(json.dumps({k: v for k, v in data.items() if k != "generated_at"},
+                                      ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        if sig == _snap["sig"]:
+            return
+        body = json.dumps({**data, "snapshot_at": utc()}, ensure_ascii=False)
+        os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
+        with _snap_lock:  # 백그라운드 수집과 동작 뒤 수집이 함께 끝나도 한 번에 하나씩, 스레드마다 다른 임시 파일로
+            tmp = f"{SNAPSHOT}.{os.getpid()}.{threading.get_ident()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(body)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, SNAPSHOT)
+            _snap["sig"] = sig
+    except (OSError, TypeError, ValueError) as e:  # 스냅숏은 덤 — 못 써도 보드는 그대로
+        print("snapshot:", e, file=sys.stderr, flush=True)
+
+
+def restore_snapshot():
+    """서버가 뜰 때 한 번: 저장된 스냅숏이 있으면 캐시에 올려 첫 화면이 바로 보이게 하고(snapshot_at = 그때 시각),
+    이후 수집 결과를 스냅숏으로 쓰기 시작한다. 새 수집이 끝나면 SSE로 바뀐다."""
+    _snap["on"] = True
+    data = _load(SNAPSHOT)
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list) or not data.get("snapshot_at"):
+        return False
+    with _lock:
+        if _cache["data"] is None:
+            _cache["data"], _cache["at"], _cache["restored"] = data, 0.0, True
+    return True
+
+
+def refresh_once():
+    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) 캐시를 새로 모은다. 방금 모았으면 건너뛴다.
+    상태 지문이 지난 수집 때와 같고 FULL_REFRESH 안이면(진행 기록만 바뀌었으면 TRANSCRIPT_REFRESH 안이면) 모으지 않고
+    캐시를 확인된 새것으로 친다(복원한 스냅숏은 늘 새로 모은다)."""
+    if time.time() - _active["at"] > REFRESH_IDLE:
+        return
+    started = time.time()
+    try:
+        fp, last = fingerprint(), _fp["last"]
+        since = started - _full["at"]
+        unchanged = last is not None and fp[0] == last[0] and (fp[1] == last[1] or since < TRANSCRIPT_REFRESH)
+        # at=0은 _collect가 "동작 전 결과"로 표시한 캐시다 — 지문이 같아도 새것으로 치지 않고 다시 모은다.
+        if unchanged and since < FULL_REFRESH:
+            with _lock:  # 확인과 쓰기 사이에 다른 수집이 "동작 전 결과"(at=0)로 표시하지 못하게
+                fresh = _cache["data"] is not None and not _cache.get("restored") and _cache["at"] > 0
+                if fresh:
+                    _cache["at"] = started
+            if fresh:
+                _timing.update(start=started, dur=time.time() - started)
+                return
+        _collect(REFRESH / 2, cached=True)
+        _fp["last"] = fp
         _refresh_fails["n"] = 0
     except Exception as e:  # 실패하면 다음에 다시 모으되, 연달아 실패하면 refresh_wait가 간격을 늘린다
+        _fp["last"] = None
         _refresh_fails["n"] += 1
         print("refresh:", e, file=sys.stderr, flush=True)
+    _timing.update(start=started, dur=time.time() - started)
 
 
 def refresh_wait():
-    """다음 백그라운드 수집까지 기다릴 초. REFRESH마다(모으기 시작 기준), 사이에 0.5초는 쉰다.
+    """다음 백그라운드 갱신까지 기다릴 초. 직전 갱신 시작 뒤 max(REFRESH, 걸린 시간 × 2)에(#380), 사이에 0.5초는 쉰다.
     연달아 실패하면 1·2·4초…로 늘려 FAIL_BACKOFF_MAX에서 멈춘다(망가진 status.sh를 0.5초마다 돌리지 않게)."""
     if _refresh_fails["n"]:
         return min(FAIL_BACKOFF_MAX, 0.5 * 2 ** _refresh_fails["n"])
-    return max(0.5, REFRESH - (time.time() - _cache["at"]))
+    interval = max(REFRESH, 2 * _timing["dur"])
+    return max(0.5, interval - (time.time() - _timing["start"]))
 
 
 def refresher():
@@ -233,11 +361,11 @@ def find_item(item_id, fresh=False):
     return next((i for i in status()["items"] if i.get("id") == item_id), None)
 
 
-def live_agents(item, config_dir=None):
+def live_agents(item, config_dir=None, timeout=15):
     """정리 직전 확인: 그 설정 폴더에서 claude agents 목록을 새로 받는다(status.sh 전체 대신 이것만). 실패하면 None."""
     cwd = item.get("cwd") if item.get("cwd") and os.path.isdir(item["cwd"]) else os.path.expanduser("~")
     try:
-        agents = json.loads(claude(["agents", "--json", "--all"], cwd, timeout=15, config_dir=config_dir).stdout)
+        agents = json.loads(claude(["agents", "--json", "--all"], cwd, timeout=timeout, config_dir=config_dir).stdout)
     except Exception:
         return None
     return agents if isinstance(agents, list) else None
@@ -249,6 +377,8 @@ def action_item(item_id, action):
     if action != "cleanup":
         item = find_item(item_id, fresh=True)
         return (item, None) if item else (None, "항목이 이미 바뀌었음 — 다시 시도")
+    if _cache.get("restored"):  # 다시 띄운 직후의 지난 목록으로는 정리하지 않는다
+        return None, "목록을 새로 모으는 중 — 잠시 뒤 다시 시도"
     cached = find_item(item_id)
     if cached is None:
         return None, "항목이 이미 바뀌었음 — 다시 시도"
@@ -1347,15 +1477,19 @@ def resident_action(req):
 
 
 # ---- 세션 작업 ----
-def claude(args, cwd, timeout=60, config_dir=None):
-    """claude CLI 호출. config_dir은 status 항목에서 온 값만(브라우저 입력 아님) — 없으면 CLAUDE_CONFIG_DIR을 빼 기본 폴더로 부른다."""
+def _claude_env(config_dir=None):
     env = {**os.environ}
     env.pop("CLAUDECODE", None)
     if config_dir:
         env["CLAUDE_CONFIG_DIR"] = config_dir
     else:
         env.pop("CLAUDE_CONFIG_DIR", None)
-    return subprocess.run(["claude", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+    return env
+
+
+def claude(args, cwd, timeout=60, config_dir=None):
+    """claude CLI 호출. config_dir은 status 항목에서 온 값만(브라우저 입력 아님) — 없으면 CLAUDE_CONFIG_DIR을 빼 기본 폴더로 부른다."""
+    return subprocess.run(["claude", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=_claude_env(config_dir))
 
 
 def send_to_terminal(item, text):
@@ -1376,18 +1510,200 @@ def send_to_terminal(item, text):
     return {"ok": False, "message": "Orca로 보내지 못함: " + json.dumps(res.get("error") or res, ensure_ascii=False)[:240]}
 
 
+ATTACH_READY = 20.0  # claude attach가 화면을 그릴 때까지 기다리는 최대 초
+ATTACH_SETTLE = 3.0  # 첫 화면 뒤 이만큼이면 준비된 것으로 본다(작업 중이면 스피너 때문에 조용해지지 않는다)
+ATTACH_CONFIRM = _positive_env("BOARD_ATTACH_CONFIRM", 8.0)  # 보낸 글이 대화 기록에 나타날 때까지 기다리는 최대 초
+
+
+def _pty_read(fd):
+    """PTY 출력 한 덩어리를 읽어 버린다(커서 위치 질의에는 답한다 — 안 하면 TUI가 기다린다). 끝났으면 -1."""
+    try:
+        chunk = os.read(fd, 65536)
+    except BlockingIOError:
+        return 0
+    except OSError:
+        return -1
+    if not chunk:
+        return -1
+    if b"\x1b[6n" in chunk:
+        try:
+            os.write(fd, b"\x1b[1;1R")
+        except OSError:
+            pass
+    return len(chunk)
+
+
+def _pty_drain(fd, seconds, quiet=None, settle=None):
+    """seconds 동안 출력을 읽어 버린다. 첫 출력 뒤 quiet초 조용하거나 settle초가 지나면 일찍 끝낸다. 읽은 바이트 수(끝났으면 -1)."""
+    end, last, first, got = time.time() + seconds, time.time(), None, 0
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            n = _pty_read(fd)
+            if n < 0:
+                return -1
+            if n:
+                got, last = got + n, time.time()
+                first = first or last
+        if got and ((quiet is not None and time.time() - last >= quiet) or (settle is not None and time.time() - first >= settle)):
+            return got
+    return got
+
+
+def _pty_write(fd, data, seconds=10.0):
+    """막히지 않게 나눠 쓴다. 쓰는 동안 화면 출력도 읽어 버린다 — 큰 붙여넣기에서 입력·출력 큐가 서로를 기다리며 멈추지 않게."""
+    end = time.time() + seconds
+    while data:
+        if time.time() > end:
+            raise OSError("PTY에 쓰는 시간이 넘음")
+        r, w, _ = select.select([fd], [fd], [], 0.05)
+        if r and _pty_read(fd) < 0:
+            raise OSError("claude attach가 끝남")
+        if w:
+            try:
+                data = data[os.write(fd, data[:1024]):]
+            except BlockingIOError:
+                pass
+
+
+def _detach(proc):
+    """붙은 클라이언트만 끝낸다(세션 프로세스는 따로 산다 — 실측: SIGHUP·SIGTERM·SIGKILL 모두 같은 pid로 이어 감).
+    보드 서버는 SIGHUP을 무시하므로 자식이 그 설정을 물려받아도 끝나게 SIGTERM·SIGKILL로 이어 간다."""
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=1.5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    proc.wait()  # SIGKILL 뒤라 곧 돌아온다 — 거두지 않은 자식을 남기지 않게
+
+
+def _live_status(item):
+    """보내기 직전 그 세션의 지금 상태를 claude agents로 다시 본다(상태 파일 값은 agents와 달라 쓰지 않는다). 모르면 None."""
+    agents = live_agents(item, item.get("config_dir") or None, timeout=3)  # 확인과 쓰기 사이 틈을 짧게
+    a = next((x for x in agents or [] if isinstance(x, dict) and x.get("sessionId") == item.get("sid")), None)
+    if a is None:
+        return None
+    return a.get("status") if a.get("pid") is not None else "stopped"
+
+
+def _landed(path, start, text):
+    """보낸 글(첫 줄 앞 40자)이 start 바이트 뒤 대화 기록의 사람 입력에 나타났는가 — 쉬는 세션은 user 기록,
+    작업 중이면 대기열(queue-operation) 기록. 답변·도구 결과에 같은 낱말이 나와도 세지 않는다."""
+    needle = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")[:40]
+    try:
+        with open(path, "rb") as f:
+            f.seek(start)
+            lines = f.read().split(b"\n")
+    except OSError:
+        return False
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("type") == "queue-operation":
+            content = rec.get("content")
+        elif rec.get("type") == "user":
+            msg = rec.get("message")
+            content = _text(msg.get("content") or "") if isinstance(msg, dict) else None
+        else:
+            continue
+        if isinstance(content, str) and needle in content:
+            return True
+    return False
+
+
+def send_to_running_bg(item, text):
+    """실행 중인 bg 세션(#380): `claude attach <id>`를 PTY로 붙여 원래 세션의 입력창에 글을 넣고(Enter) 뗀다.
+    `--resume`은 이미 도는 세션의 복제본을 띄우므로 쓰지 않는다. 작업 중이면 Claude Code가 대기열에 넣어 끝난 뒤 처리한다.
+    붙여넣기 직전과 Enter 직전에 세션 상태를 다시 보고, 그 사이 질문·권한 창으로 넘어갔으면 Enter를 보내지 않는다
+    (창에서 Enter는 기본 선택지를 고른다). 보낸 글이 대화 기록에 나타났을 때만 성공이라고 한다."""
+    short = item.get("short_id") or ""
+    hint = f"터미널에서 claude attach {short}로 열어 확인하세요"
+    if not re.fullmatch(r"[0-9a-f]{8}", short):
+        return {"ok": False, "message": "세션 id를 알 수 없어 보내지 않음"}
+    # 줄바꿈·탭만 남기고 제어 문자를 뺀다 — ESC가 붙여넣기 범위를 끝내고 나머지를 키 입력으로 읽히게 하지 않게
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text.replace("\r\n", "\n").replace("\r", "\n"))
+    if not text.strip():
+        return {"ok": False, "message": "보낼 내용이 비었음"}
+    path = item.get("transcript")
+    try:
+        start = os.path.getsize(path) if path else 0
+    except OSError:
+        start = 0
+    master, slave = pty.openpty()
+    env = {**_claude_env(item.get("config_dir")), "TERM": "xterm-256color"}
+    cwd = item.get("cwd") if item.get("cwd") and os.path.isdir(item["cwd"]) else os.path.expanduser("~")
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+        fcntl.fcntl(master, fcntl.F_SETFL, fcntl.fcntl(master, fcntl.F_GETFL) | os.O_NONBLOCK)
+        proc = subprocess.Popen(["claude", "attach", short], stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env,
+                                start_new_session=True, close_fds=True)
+    except OSError as e:
+        os.close(master)
+        os.close(slave)
+        return {"ok": False, "message": f"claude attach를 띄우지 못함: {e}"}
+    os.close(slave)
+    typed, moved, pasted = False, None, False
+    try:
+        if _pty_drain(master, ATTACH_READY, quiet=0.6, settle=ATTACH_SETTLE) > 0:
+            st = _live_status(item)
+            if st not in ("idle", "busy"):
+                moved = st or "unknown"
+            else:
+                pasted = True
+                _pty_write(master, b"\x1b[200~" + text.encode() + b"\x1b[201~")  # 붙여넣기로 — 줄바꿈이 Enter로 읽히지 않게
+                _pty_drain(master, 0.3)
+                st = _live_status(item)
+                if st not in ("idle", "busy"):
+                    moved = st or "unknown"
+                else:
+                    _pty_write(master, b"\r")
+                    _pty_drain(master, 0.5)
+                    typed = True
+    except OSError:
+        pass
+    finally:
+        _detach(proc)
+        os.close(master)
+    if moved == "unknown":
+        return {"ok": False, "message": f"세션 상태를 다시 확인하지 못해 보내지 않음 — {hint}"}
+    if moved is not None:
+        return {"ok": False, "message": f"세션이 질문·권한 창으로 넘어가 보내지 않음 — {hint}"
+                + (" (붙여넣은 글이 입력창에 남아 있을 수 있음)" if pasted else "")}
+    if not typed:
+        return {"ok": False, "message": f"세션 화면에 붙지 못해 보내지 않음 — {hint}"
+                + (" (붙여넣은 글이 입력창에 남아 있을 수 있음)" if pasted else "")}
+    if not path:
+        return {"ok": True, "message": "실행 중인 세션에 입력함"}
+    end = time.time() + ATTACH_CONFIRM
+    while time.time() < end:
+        if _landed(path, start, text):
+            return {"ok": True, "message": "실행 중인 세션에 입력함" + (" — 작업이 끝나면 이어서 처리" if item.get("status") == "busy" else "")}
+        time.sleep(0.25)
+    return {"ok": False, "message": f"입력이 세션에 들어갔는지 확인하지 못함 — {hint}"}
+
+
 def send_to_bg(item, text):
-    """bg 세션에 이어서 지시한다. 실행 중이면 멈춘 뒤 같은 ID로 깨운다(옵션을 넘기면 복사본이 생기므로 넘기지 않는다)."""
+    """bg 세션에 이어서 지시한다. 실행 중이면 claude attach로 그 세션에(#380), 멈췄으면 같은 ID로 깨운다(옵션을 넘기면 복사본이 생기므로 넘기지 않는다).
+    질문·권한 창에서 기다리는 세션에는 보내지 않는다 — 글이 창의 선택지로 잘못 읽힐 수 있다."""
     if not isinstance(text, str) or not text.strip() or len(text) > 8000:
         return {"ok": False, "message": "보낼 내용이 비었거나 너무 김(8000자 이하)"}
     if item.get("kind") == "agent":
         return send_to_terminal(item, text)
-    if item.get("status") == "busy":
-        return {"ok": False, "message": "작업 중인 세션 — 끝난 뒤 보내세요"}
     if item.get("live"):
-        claude(["stop", item["short_id"]], item["cwd"], timeout=30, config_dir=item.get("config_dir"))
-        if not wait_stopped(item):  # 덜 멈춘 채 깨우면 복사본이 생긴다
-            return {"ok": False, "message": "세션이 멈추지 않음 — 잠시 뒤 다시 보내세요"}
+        if item.get("status") == "waiting":
+            return {"ok": False, "message": f"질문·권한 창에서 기다리는 세션 — 터미널에서 claude attach {item.get('short_id') or ''}로 열어 답하세요"}
+        if item.get("status") not in ("idle", "busy"):
+            return {"ok": False, "message": f"지금은 보낼 수 없는 상태({item.get('status')}) — 터미널에서 claude attach {item.get('short_id') or ''}로 열어 확인하세요"}
+        return send_to_running_bg(item, text)
     out = claude(["--bg", "--resume", item["sid"], text], item["cwd"], config_dir=item.get("config_dir"))
     msg = (out.stdout + out.stderr).strip()
     if out.returncode == 0 and "copy" not in msg:
@@ -1788,6 +2104,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path == "/references/pick":
             code, res = REFS.pick(req.get("run"), req)
+            if res.get("ok"):  # 고른 실행은 지금 할 일에서 내려간다 — 다른 동작처럼 다음 읽기가 새로 모으게(#380 적응형 주기를 기다리지 않게)
+                _cache["data"] = None
             log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
             return self._send(code, res)
         if path == "/impact/refresh":
@@ -1845,6 +2163,7 @@ if __name__ == "__main__":
     srv.daemon_threads = True
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
+    restore_snapshot()  # 첫 화면은 지난 목록부터(#380) — 새 수집이 끝나면 SSE로 바뀐다
     RESIDENTS.start_watch()
     atexit.register(RESIDENTS.shutdown)  # 꺼질 때 호스트 연결만 닫는다 — 세션과 붙잡은 요청은 호스트에 남는다(#364)
     threading.Thread(target=refresher, daemon=True).start()

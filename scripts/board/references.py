@@ -50,6 +50,20 @@ class Store:
         out = [self.record(n[:-5]) for n in names]
         return [r for r in out if r]
 
+    def watch_paths(self):
+        """보드 갱신 지문(#380)에 넣을 파일: 실행 기록과 그 작업 폴더의 랜딩 실행 상태(고르면 바뀐다)."""
+        try:
+            out = [os.path.join(self.dir, n) for n in os.listdir(self.dir) if n.endswith(".json")]
+        except OSError:
+            return []
+        for rec in self.records():
+            land = os.path.join(rec["work"], ".landing-run")
+            try:
+                out += [os.path.join(land, n) for n in os.listdir(land)]
+            except OSError:
+                pass
+        return out
+
     @staticmethod
     def _landing(work):
         """작업 폴더의 랜딩 실행: {node, picked, since} 또는 None(실행 없음). reference_pick이면 그 노드에서 이미
