@@ -1431,6 +1431,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const total = Object.values(M).reduce((n, l) => n + l.length, 0);
     const nodes = [];
     if (data && data.resident_host && tab !== 'autofix') nodes.push(notice('attention', data.resident_host.message));  // 이전 버전 상주 세션 호스트가 세션을 쥐고 있을 때 안내
+    if (data && data.snapshot_at) nodes.push(notice('info', `${ago(data.snapshot_at)} 저장한 목록입니다. 지금 상태를 새로 모으는 중입니다.`));  // 다시 띄운 직후 보이는 지난 목록
     // 지금 할 일 — 모든 탭에서 맨 위
     const todo = el('section', 'ds-stack'); todo.setAttribute('aria-labelledby', 'sec-todo');
     const th = sectionHead('attention', '지금 할 일', units(M.todo), null, todoSummary(M.todo)); th.id = 'sec-todo'; todo.append(th);
@@ -1922,8 +1923,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const note = $('dnote');
     if (canSend && it.resident) note.textContent = it.interrupted ? '호스트가 꺼질 때 끊긴 요청이 있었습니다. 다시 보내면 같은 대화로 이어 갑니다.' : it.live ? (it.status === 'waiting' ? '권한·질문에 먼저 답해 주세요. 답하면 세션이 그 자리에서 이어 갑니다.' : '보드가 쥔 세션입니다. 보내면 같은 세션이 바로 받습니다.') : '끝난 세션입니다. 보내면 같은 대화로 다시 쥡니다.';
     else if (canSend && it.kind === 'agent') note.textContent = it.status === 'busy' ? 'Orca 터미널에 직접 입력합니다. 작업 중이라 끝난 뒤 이어서 처리됩니다.' : 'Orca 터미널에 직접 입력합니다.';
-    else if (canSend) note.textContent = it.live ? '보내면 세션을 잠깐 멈췄다가 같은 대화로 이어서 깨웁니다.' : '끝난 세션입니다. 보내면 같은 대화로 다시 깨웁니다.';
-    else if (it.kind === 'bg') note.textContent = '작업 중에는 보낼 수 없습니다. 끝나면 입력창이 열립니다.';
+    else if (canSend) note.textContent = it.live ? '입력을 기다리는 세션에 바로 입력합니다.' : '끝난 세션입니다. 보내면 같은 대화로 다시 깨웁니다.';
+    else if (it.kind === 'bg') note.textContent = (it.status === 'waiting' || it.bg_state === 'blocked') ? `질문이나 권한 창(또는 사용량 한도)에서 기다리고 있습니다. 보드에서 보내면 창에 잘못 입력될 수 있어 막았습니다. 터미널에서 ${it.cmd || 'claude attach'}로 열어 답하세요.`
+      : it.status === 'busy' ? `작업 중입니다. 작업 중에는 언제든 권한 창이 뜰 수 있어, 입력을 기다릴 때 보낼 수 있습니다. 지금 넣으려면 터미널에서 ${it.cmd || 'claude attach'}로 여세요.` : '지금은 보낼 수 없습니다.';
     else note.textContent = it.status === 'waiting' ? '권한·답을 기다리는 중입니다. 대화형 세션은 띄운 터미널에서 답해야 합니다.' : '대화형 세션은 띄운 터미널에서 이어서 입력합니다.';
     const tools = $('dtools'); tools.replaceChildren();
     const r = it.refs;
@@ -2299,7 +2301,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       cleanupNoted.add(key); hiding.delete(f.id); lastSig = '';
       toast(`"${shortTitle(f.title || '') || '세션'}" 정리하지 못함 — ${f.message}`, false);
     }
-    const sig = JSON.stringify([next.items, next.quiet_runs, next.resident_host]);
+    const sig = JSON.stringify([next.items, next.quiet_runs, next.resident_host, next.snapshot_at]);
     loadError = null;
     if (sig === lastSig) return;
     lastSig = sig; data = next; flush();
@@ -2309,7 +2311,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const sseLive = () => sseOpen && Date.now() - sseAt < 40000;
   function applyEvent(fn) {
     if (!data) return;
-    fn(); const sig = JSON.stringify([data.items, data.quiet_runs, data.resident_host]);
+    fn(); const sig = JSON.stringify([data.items, data.quiet_runs, data.resident_host, data.snapshot_at]);
     if (sig === lastSig) return;
     lastSig = sig; flush();
   }
