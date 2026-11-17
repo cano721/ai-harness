@@ -96,7 +96,8 @@ body{padding-bottom:110px}.start{padding:12px 14px}.pick .row{gap:8px}article he
 // or a board /design-references serves on its own — the user answers in the terminal.
 // Each board script defines BOARD_NODE, payload(), summary(), pickedText(pick), and applyPicked(pick). A pick already
 // made (GET /state), or a run past this node, locks the board: the session has submitted it, and a second press would
-// rewrite the record without changing the run.
+// rewrite the record without changing the run. While the board is open it asks /pick every four minutes so the board server,
+// which exits after half an hour without a request, stays up for as long as someone is looking.
 const PICK_JS = `
 let locked=false;
 const bar=document.querySelector('footer.pick'),btn=bar.querySelector('.start'),stat=bar.querySelector('.static'),out=bar.querySelector('.summary');
@@ -104,7 +105,7 @@ const say=(cls,t)=>{bar.querySelectorAll('.done,.err').forEach(e=>e.remove());co
 const refresh=()=>{if(locked)return;const s=summary();out.value=s.text;bar.querySelector('.count').textContent=s.count;btn.disabled=!s.ready;};
 const lock=(label)=>{locked=true;document.querySelectorAll('main button,main input,main textarea,main select,footer.pick .fields textarea,footer.pick .fields input').forEach(e=>e.disabled=true);btn.disabled=true;if(label)btn.textContent=label;};
 const showStarted=(p,node)=>{if(p)applyPicked(p);lock('이미 시작됐어요');bar.querySelector('.count').textContent=p?'이미 시작됐어요 · '+pickedText(p):'이미 지난 단계예요 (지금 '+node+')';};
-fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(!(j&&j.server&&j.run!==false))throw 0;btn.hidden=false;document.querySelectorAll('.ask-run').forEach(e=>e.hidden=false);
+fetch('pick',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(j&&j.server)setInterval(()=>fetch('pick',{cache:'no-store'}).catch(()=>{}),240000);if(!(j&&j.server&&j.run!==false))throw 0;btn.hidden=false;document.querySelectorAll('.ask-run').forEach(e=>e.hidden=false);
   fetch('state?node='+BOARD_NODE,{cache:'no-store'}).then(r=>r.json()).then(st=>{if(st.picked||(st.node&&st.node!==BOARD_NODE))showStarted(st.picked,st.node);}).catch(()=>{});
 }).catch(()=>{btn.hidden=true;stat.hidden=false;});
 btn.onclick=async()=>{if(locked)return;btn.disabled=true;try{const r=await fetch('pick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload())});const j=await r.json();
