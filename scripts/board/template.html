@@ -2349,11 +2349,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const LEVELS = [['pr', 'PR까지'], ['merge', '병합까지'], ['deploy', '배포·검증까지']];
   const LVL = Object.fromEntries(LEVELS);
   const LEVEL_DESC = { pr: 'PR까지 만들고 병합·배포는 내가 합니다.', merge: '조건이 맞으면 러너가 병합하고 병합 커밋의 CI까지 봅니다.', deploy: '병합 뒤 저장소의 배포 확인·스모크 명령까지 돌립니다.' };
-  let sdata = null, sfetchedAt = 0, serr = null;
+  let sdata = null, sfetchedAt = 0, serr = null, sver = 0; // sver: 화면에서 먼저 바꾼 횟수 — 그 전에 떠난 응답은 버린다
   async function loadSettings(force) {
     if (!SERVER) return;
     if (!force && sdata && Date.now() - sfetchedAt < 15000) return;
-    try { const r = await fetch('/settings?t=' + encodeURIComponent(TOKEN)); if (!r.ok) throw new Error(`HTTP ${r.status}`); sdata = await r.json(); sfetchedAt = Date.now(); serr = null; } catch (e) { serr = e.message; }
+    const ver = sver;
+    try { const r = await fetch('/settings?t=' + encodeURIComponent(TOKEN)); if (!r.ok) throw new Error(`HTTP ${r.status}`); const d = await r.json(); if (ver !== sver) return; sdata = d; sfetchedAt = Date.now(); serr = null; } catch (e) { if (ver !== sver) return; serr = e.message; }
     if (view === 'settings') renderAll();
   }
   const sameVal = (a, b) => String(a ?? '') === String(b ?? '');
@@ -2383,19 +2384,29 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     row.append(left, ctl); return row;
   }
   const descLine = (text, status) => { const p = el('p', 'ds-setting__desc'); if (status) { p.classList.add('b-iconline'); p.append(icon(status), el('span', null, text)); } else p.textContent = text; return p; };
-  async function setLevel(body) {
-    let res; try { res = await post('/settings/personal', body); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-    toast(res.message, res.ok); if (res.ok) loadSettings(true);
+  // 고른 값은 저장 응답을 기다리지 않고 바로 보인다. 실패하면 되돌리고, 성공하면 서버가 계산한 적용 단계로 다시 그린다.
+  async function saveSetting(path, body, apply) {
+    const undo = apply(); sver++; renderAll();
+    let res; try { res = await post(path, body); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    toast(res.message, res.ok);
+    if (!res.ok) { undo(); sver++; renderAll(); }
+    loadSettings(true);
   }
+  function localSet(scope, repo, key, personalKey, value) {
+    if (scope === 'default') {
+      const P = sdata.personal || (sdata.personal = {}), prev = P[personalKey];
+      P[personalKey] = value || null; return () => { P[personalKey] = prev; };
+    }
+    const r = (sdata.repos || []).find((x) => x.repo === repo); if (!r) return () => {};
+    const prev = r[key]; r[key] = value || null; return () => { r[key] = prev; };
+  }
+  const setLevel = (body) => saveSetting('/settings/personal', body, () => localSet(body.scope, body.repo, 'mine', 'HM_DELIVERY_LEVEL', body.level));
   // 승인 모드: 러너와 같은 개인 설정(HM_APPROVAL_REPOS > HM_APPROVAL > 사람 확인). 저장소 manifest의 approval은 쓰지 않는다.
   const APPROVALS = [['human', '사람 확인'], ['auto', '자동 통과']];
   const APPR = Object.fromEntries(APPROVALS);
   const APPROVAL_DESC = { human: 'Brief를 보이고 내가 승인해야 고치기 시작합니다. workspace에서 인계한 멤버는 workspace 대화로 물어 오고, "승인 <멤버>"로 답합니다.', auto: 'Brief와 결정 사항을 PR 본문에 남기고, 사람만 정할 것이 없으면 승인 없이 진행합니다.' };
   const badApproval = (v) => descLine(`승인 모드 값(${v})이 사람 확인·자동 통과가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
-  async function setApproval(body) {
-    let res; try { res = await post('/settings/approval', body); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-    toast(res.message, res.ok); if (res.ok) loadSettings(true);
-  }
+  const setApproval = (body) => saveSetting('/settings/approval', body, () => localSet(body.scope, body.repo, 'approval_mine', 'HM_APPROVAL', body.mode));
   function renderSettings() {
     const board = $('board');
     if (!SERVER) { board.replaceChildren(empty('설정은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
@@ -2486,10 +2497,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     harvest: ['자동 개선', '쉬는 동안 쌓인 세션 기록으로 하네스 규칙 개선안을 찾아 draft PR을 엽니다.', '병합까지 켜면 독립 검토를 통과하고 변경 크기 한도 안인 PR만, CI 통과·사람 활동 없음을 확인한 뒤 병합합니다.'],
     sync: ['자동 동기화', '플러그인이 새 버전이면 하네스 생성물을 최신 템플릿으로 맞추는 draft PR을 엽니다.', '병합까지 켜면 템플릿을 그대로 복사한 파일과 하네스 설정 파일만 바뀐 PR을, CI 통과·사람 활동 없음을 확인한 뒤 병합합니다.'],
   };
-  async function setHarness(body) {
-    let res; try { res = await post('/settings/harness', body); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-    toast(res.message, res.ok); if (res.ok) loadSettings(true);
-  }
+  const setHarness = (body) => saveSetting('/settings/harness', body, () => {
+    const P = sdata.personal || (sdata.personal = {}), K = body.kind.toUpperCase();
+    const next = 'daily_max' in body ? { [`HM_${K}_AUTO_DAILY_MAX`]: String(body.daily_max) }
+      : { [`HM_${K}_AUTO`]: body.stage !== 'off' ? '1' : null, [`HM_${K}_AUTO_MERGE`]: body.stage === 'merge' ? '1' : null };
+    const prev = Object.fromEntries(Object.keys(next).map((k) => [k, P[k]]));
+    Object.assign(P, next); return () => Object.assign(P, prev);
+  });
   function harnessSettings(P) {
     const out = [], rows = el('div', 'ds-rows');
     let anyMerge = false;

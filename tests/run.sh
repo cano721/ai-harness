@@ -8218,6 +8218,26 @@ assert_eq "600" "$(filemode "$BOARD_DATA/config")" "config keeps its mode"
 assert_eq "deploy" "$(HARNESS_METRICS_DIR="$BOARD_DATA" bash -c 'source "$1/scripts/lib.sh"; printf %s "$HM_DELIVERY_LEVEL"' _ "$ROOT")" "the runner config reader reads what the board wrote"
 pass "harness board settings writes"
 
+# 설정 화면(#385): 고른 값은 저장 응답을 기다리지 않고 바로 보이고(실패하면 되돌림), 저장소 읽기는 병렬·추정 캐시로 빠르게 한다.
+HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+calls = []
+s._suggest = lambda repo: calls.append(repo) or {"base": "main", "method": "squash", "host": "github"}
+s._suggest_cache.clear()
+assert s.suggest("/r") == s.suggest("/r") and calls == ["/r"], calls  # 두 번째 읽기는 git을 다시 부르지 않는다
+s._suggest_cache["/r"] = (0, {})
+s.suggest("/r")
+assert calls == ["/r", "/r"], calls  # 오래된 추정은 다시 계산한다
+' "$ROOT/scripts/board" || fail "board caches the base-branch guess"
+BOARD_TPL="$(<"$ROOT/scripts/board/template.html")"
+for f in "const setLevel = (body) => saveSetting(" "const setApproval = (body) => saveSetting(" "const setHarness = (body) => saveSetting(" "if (!res.ok) { undo(); sver++; renderAll(); }" "if (ver !== sver) return;"; do
+  assert_contains "$BOARD_TPL" "$f" "settings save shows the choice at once and reverts on failure: $f"
+done
+assert_contains "$(<"$ROOT/scripts/board/board-server.py")" "pool.map(hsettings.read_repo, harness_repos())" "settings reads repositories in parallel"
+pass "board settings show a choice at once"
+
 # 보드의 승인 모드는 러너와 같은 개인 설정(HM_APPROVAL_REPOS > HM_APPROVAL > human)에서 계산한다.
 # manifest에 남은 approval:"auto"는 보이지도 쓰이지도 않는다(#310).
 BOARD_APPR_REPO="$BOARD_T/repos/appr"
@@ -8480,8 +8500,9 @@ assert_contains "$BR_VIS" "connectEvents()" "a board tab that shows again reconn
 assert_contains "$(sed -n '/function closeEvents()/,/^  }$/p' "$ROOT/scripts/board/template.html")" "es.close()" "closing the event stream really closes the EventSource"
 # 묶음 목록(읽지 않은 결과 등)에서도 상주 세션은 눌러 열린다 — 동작이 send·end뿐이라 view가 없어도.
 BR_OPENABLE="$(grep -m1 '^  const openable = ' "$ROOT/scripts/board/template.html")"
-assert_eq "true false true" "$(node -e "const SERVER = true, srcOf = (i) => i.section; ${BR_OPENABLE}
-console.log([openable({ section: 'work', resident: true, actions: ['send', 'end'] }), openable({ section: 'work', actions: ['send'] }), openable({ section: 'work', actions: ['view'] })].join(' '))")" \
+# 함수 본문은 환경변수로 넘긴다 — bash 3.2는 "$(... "${VAR} {...}")" 안의 중괄호를 깨뜨린다.
+assert_eq "true false true" "$(BR_OPENABLE="$BR_OPENABLE" node -e 'const SERVER = true, srcOf = (i) => i.section; eval(process.env.BR_OPENABLE.replace("const openable", "var openable"));
+console.log([openable({ section: "work", resident: true, actions: ["send", "end"] }), openable({ section: "work", actions: ["send"] }), openable({ section: "work", actions: ["view"] })].join(" "))')" \
   "a resident session in a grouped list opens its drawer; other work items still need view"
 # Feed는 상태를 직접 모으지 않고 캐시만 비교한다(모으기는 #351 백그라운드 갱신이 하고 poke로 알린다).
 # poke가 오면 바로, 없어도 interval마다 바뀐 항목을 민다. 넘친 구독자는 끊김 표시를 받는다.
