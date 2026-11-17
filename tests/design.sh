@@ -983,4 +983,54 @@ assert_contains "$(<"$ROOT/README.md")" "| \`/ux-writing-audit\` |" "README list
 if grep -rqiE 'midas|jobda|khb1122|toss' "$ROOT/skills/ux-writing-builder" "$ROOT/skills/ux-writing-audit" "$UX_LINT"; then fail "UX writing files carry organization-specific values"; fi
 pass "ux-writing: deterministic lint, builder template, audit contract, consumers"
 
+# 랜딩 미리보기는 landing-run.sh serve로만 띄운다. 에이전트가 즉석 서버(python3 -m http.server)를 띄우고 잊어
+# 몇 주씩 수십 개가 남았다 — serve는 같은 폴더면 재사용하고, stop이 이 WORK의 서버를 끄고, 서버는 요청이 없으면 스스로 끝난다.
+LS_W="$TEST_TMP/landing-serve"
+mkdir -p "$LS_W/site/a/.secret" "$LS_W/site/b" "$TEST_TMP/landing-serve-outside"
+printf '<title>A</title>\n' >"$LS_W/site/a/index.html"
+printf 'body{}\n' >"$LS_W/site/a/s.css"
+printf 'x\n' >"$LS_W/site/a/.secret/key"
+printf '<title>B</title>\n' >"$LS_W/site/b/index.html"
+ls_run() { "$ROOT/scripts/landing-run.sh" "$@"; }
+LS_RC=0; ls_run serve --work "$LS_W" --dir ../landing-serve-outside >/dev/null 2>&1 || LS_RC=$?
+assert_eq 2 "$LS_RC" "serve refuses a folder outside WORK"
+LS_RC=0; ls_run serve --work "$LS_W" --candidate a >/dev/null 2>&1 || LS_RC=$?
+assert_eq 4 "$LS_RC" "serve --candidate needs a landing run"
+if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+  LS_URL="$(ls_run serve --work "$LS_W" --dir site/a)"
+  assert_contains "$LS_URL" "http://127.0.0.1:" "serve prints the served address"
+  assert_eq "<title>A</title>" "$(curl -s "$LS_URL")" "a folder serves its index.html"
+  assert_eq "200 text/css" "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "${LS_URL}s.css")" "files are served with their type"
+  assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' "${LS_URL}.secret/key")" "dotfiles are not served"
+  assert_eq 404 "$(curl -s -o /dev/null -w '%{http_code}' --path-as-is "${LS_URL}../b/index.html")" "nothing outside the served folder is served"
+  assert_eq "$LS_URL" "$(ls_run serve --work "$LS_W" --dir site/a)" "serving the same folder again reuses the running server"
+  LS_URL_B="$(ls_run serve --work "$LS_W" --dir site/b)"
+  assert_eq "<title>B</title>" "$(curl -s "$LS_URL_B")" "another folder gets its own server"
+  LS_ABS="$(cd "$LS_W" && pwd)"
+  assert_eq 2 "$(pgrep -f "landing-serve.mjs --root $LS_ABS/" | wc -l | tr -d ' ')" "one server per folder"
+  assert_contains "$(ls_run stop --work "$LS_W")" "stopped 2 server(s)" "stop stops every page server of the run"
+  sleep 0.3
+  assert_eq 0 "$(pgrep -f "landing-serve.mjs --root $LS_ABS/" | wc -l | tr -d ' ')" "no page server is left after stop"
+  # 유휴 종료: 요청 없이 정한 시간이 지나면 미리보기·보드 서버가 스스로 끝난다(0.01분 = 0.6초).
+  node "$ROOT/scripts/landing-serve.mjs" --root "$LS_W/site/a" --idle-minutes 0.01 >/dev/null 2>&1 &
+  LS_PID=$!
+  ls_port=$((20000 + RANDOM % 20000))
+  node "$ROOT/scripts/landing-board-server.mjs" --work "$LS_W" --port "$ls_port" --idle-minutes 0.01 >/dev/null 2>&1 &
+  LS_BPID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    kill -0 "$LS_PID" 2>/dev/null || kill -0 "$LS_BPID" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "$LS_PID" 2>/dev/null; then kill "$LS_PID"; fail "the page server exits after its idle time"; fi
+  if kill -0 "$LS_BPID" 2>/dev/null; then kill "$LS_BPID"; fail "the board server exits after its idle time"; fi
+fi
+LS_BOARD_SRC="$(<"$ROOT/scripts/landing-board.mjs")"
+assert_contains "$LS_BOARD_SRC" "setInterval(()=>fetch('pick',{cache:'no-store'})" "an open board keeps its server alive"
+LS_SKILL="$(<"$ROOT/skills/landing-page/SKILL.md")"
+# shellcheck disable=SC2016  # 스킬 본문의 $WORK를 문자 그대로 찾는다
+assert_contains "$LS_SKILL" 'landing-run.sh serve --work "$WORK" --candidate <id>' "the skill serves pages through the runner"
+assert_contains "$LS_SKILL" 'Do not start your own server' "the skill forbids ad hoc servers"
+assert_contains "$(<"$ROOT/skills/landing-page/references/verify.md")" "never start \`python3 -m http.server\`" "verify points at serve instead of an ad hoc server"
+pass "landing pages are served through landing-run.sh serve, reused, stopped, and exit when idle"
+
 finish_tests
