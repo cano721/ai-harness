@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.79.0 (2026-11-17)
 ### 개선
 
 - **보드 런처 앱이 Dock에 남습니다 (macOS)** — v0.77.0 런처는 브라우저만 열고 바로 끝나서 보드가 떠 있어도 Dock에 보이지 않았고, Dock에서 끌 수도 없었으며, 아이콘도 없었습니다. 이제 런처는 AppleScript 앱이라 보드가 떠 있는 동안 Dock에 남습니다. Dock 아이콘을 다시 누르면 보드 화면을 다시 열고, Dock에서 종료하면 보드 서버도 끕니다. 보드가 자동 종료나 `board.sh stop`으로 꺼지면 앱도 따라 끝납니다. 앱 아이콘도 생겼습니다. (#363)
