@@ -176,6 +176,9 @@
   /* 그림자: 뜬 면에만 */
   --shadow-overlay: 0 8px 28px rgba(6, 8, 11, 0.18);
 
+  /* 흐림: 못 누르는 조작 요소와 쓰지 않기로 한 내용. 왜 못 누르는지는 옆에 글로 적는다 */
+  --opacity-disabled: 0.5;
+
   /* 층 */
   --z-sticky: 10;
   --z-drawer: 30;
@@ -375,7 +378,7 @@ h2 + .lead { margin: 0 0 14px; color: var(--ink-2); font-size: 13px; max-width: 
 .groups .row .what { font-weight: 550; }
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
 .cols h3, .card h3 { font-size: 14px; margin: 0 0 8px; color: var(--ink-2); }
 /* 개선별 성과 */
 .imp { display: grid; gap: 10px; }
@@ -438,7 +441,7 @@ pre { font-size: 12px; line-height: 1.45; overflow: auto; max-height: 360px; bac
 .abgrid { display: grid; gap: 12px; }
 .stack { display: grid; gap: 12px; }
 footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
-@media (max-width: 480px) {
+@media (max-width: 760px) {
   h1 { font-size: 22px; }
   .rate { grid-template-columns: 1fr minmax(88px, auto); }
   .rate .track { grid-column: 1 / -1; grid-row: 2; }

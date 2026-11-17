@@ -687,7 +687,8 @@ scripts/board/board.sh launcher install|remove|status   # macOS: 눌러서 여�
 - **권한 요청 훅 (선택)**: 보드에서 권한 요청에 답하려면 `/setup`의 자동화 옵션에서 PermissionRequest 훅을 연결합니다(`board.sh hook on|off`, `~/.claude/settings.json` 백업 후 추가·제거). 보드가 꺼져 있거나 30분 넘게 아무도 보지 않으면 훅은 아무것도 출력하지 않아 평소처럼 터미널에서 묻습니다. headless 세션(`claude -p` — 워크플로 러너·자동 harvest·autofix 같은 자동 실행)의 요청은 보드로 넘기지 않습니다 — 답할 사람이 없는 세션이라 평소처럼 바로 거부되고 세션이 이어 갑니다. 훅 전용 토큰과 주소는 `~/.ai-harness/board/server.json`(0600, 종료 시 삭제)에만 있습니다.
 - **선택 의존**: Orca가 없으면 세션 묶음과 대화형 터미널 입력만 빠집니다. Jira 키 링크는 `BOARD_JIRA_URL`·`JIRA_BASE_URL` 또는 사용자 규칙 파일에 적힌 주소가 있을 때만 붙습니다. Bitbucket PR 상태·브랜치 보호는 `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`, GitHub는 `gh`로 읽습니다.
 - **런처 앱 (선택, macOS)**: `/setup` 자동화 옵션에서 고르면 `~/Applications/Harness Board.app`을 만듭니다(`board.sh launcher install|remove|status`). 누르면 `board.sh open`과 같습니다 — 떠 있으면 그 화면, 없으면 띄워서 엽니다. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고 그 스크립트가 열 때마다 가장 새 플러그인 설치본을 찾으므로, 플러그인을 업데이트해도 다시 설치하지 않습니다. Finder로 연 앱은 셸 환경을 물려받지 않아 설치 때의 PATH(와 정했다면 `BOARD_IDLE_EXIT`)를 기억합니다. 열지 못하면 이유를 대화상자로 보입니다.
-- **자동 종료**: 보는 사람(열린 보드 화면)이 `BOARD_IDLE_EXIT`분(기본 30, `0`이면 끄지 않음) 동안 없으면 서버가 스스로 꺼집니다. 붙잡은 권한 요청·열린 이벤트 연결·작업 중이거나 답을 기다리는 상주 세션이 있으면 끄지 않습니다.
+- **자동 종료**: 보는 사람(열린 보드 화면)이 `BOARD_IDLE_EXIT`분(기본 30, `0`이면 끄지 않음) 동안 없으면 서버가 스스로 꺼집니다. 붙잡은 권한 요청·열린 이벤트 연결이 있으면 끄지 않습니다.
+- **상주 세션 호스트**: 보드의 '새 세션'(상주 세션)은 보드와 따로 사는 호스트 프로세스가 쥡니다. `stop`·플러그인 업데이트 뒤 재기동에도 세션과 붙잡은 권한·질문이 그대로이고, 다시 연 보드에 바로 보입니다. 호스트는 쥔 세션도 보드 연결도 없으면 몇 분(`BOARD_HOST_IDLE`초, 기본 300) 뒤 스스로 끝나며 로그인 항목은 만들지 않습니다. 재부팅 뒤 보드를 처음 열면 사람이 끝내지 않은 48시간 안 세션을 같은 id로 이어 쥐어 입력을 기다립니다. 즉 상주 세션은 사람이 끝내기 전까지 살고, 재부팅 뒤 보드를 열면 최대 8개가 다시 뜹니다(각자 SessionStart 훅이 돌지만 입력 전에는 모델을 부르지 않습니다). 호스트를 끄려면 `board.sh host-stop`(대화 기록 유지, 다음에 같은 id로 이어 쥠). 플러그인 업데이트 뒤 이전 버전 호스트가 세션을 쥐고 있으면 화면에 알리고, 세션이 끝나면 새 버전으로 바꿉니다.
 - **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`·`autofix/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
 
 <a id="autofix"></a>
@@ -917,7 +918,7 @@ vendor/           /diagram이 쓰는 Archify 엔진 고정 사본과 lock (scrip
 catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스킬 원본 (catalog.json이 목록·버전·필요 환경변수, design-skills.json이 디자인 스킬의 원본·고정 커밋·검토 기록과 내장 여부)
 agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
-docs/design-system.md, docs/design-system/   보드·리포트 화면의 디자인 규칙, 토큰·공용 부품 CSS, 기준 화면 (scripts/design-system.sh sync|check|contrast)
+docs/design-system.md, docs/design-system/   보드·리포트 화면의 디자인 규칙, 토큰·공용 부품 CSS, 기준 화면 (scripts/design-system.sh sync|check|contrast|lint)
 tests/            회귀 테스트와 fixtures (bash tests/run.sh)
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```

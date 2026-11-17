@@ -9,8 +9,11 @@
   --permission-prompt-tool stdio가 없으면 묻지 않고 바로 거부된다.
 - stdin을 닫으면 붙잡힌 요청은 "permission stream closed"로 실패하고 프로세스가 끝난다. 대화 기록은 남아
   `claude -p --resume <id>`(stream-json)로 같은 id를 이어 쥘 수 있다.
+- `--resume <id>`로 띄운 stream-json은 입력이 오기 전에는 모델을 부르지 않는다(SessionStart 훅 이벤트만 나오고 init·
+  대화 기록 추가 없음). 그래서 호스트가 새로 뜰 때 끝나지 않은 세션을 다시 띄워 입력 대기로 둘 수 있다(#364).
 보드는 사람이 화면에서 누른 답만 돌려준다 — 스스로 허용·거부·답하지 않는다.
-상태가 바뀌면 notify()를 불러 SSE(GET /events)가 바뀐 항목을 바로 밀게 한다.
+Residents는 보드 서버가 아니라 resident_host.py의 호스트 프로세스가 쥔다(#364). 보드가 꺼져도 세션·붙잡은 요청이 남는다.
+상태가 바뀌면 notify()를 불러 호스트가 붙은 보드에 알리고, 보드는 SSE(GET /events)로 바뀐 항목을 바로 민다.
 """
 import glob, json, os, queue, re, secrets, signal, subprocess, sys, threading, time, uuid
 from datetime import datetime, timezone
@@ -143,7 +146,11 @@ class Session:
         self.transcript = None
         self.looked = 0.0
         self.seen = False  # 쉬는 세션의 결과를 사람이 읽었는가('결과 확인' → '쉬는 중')
-        self.prev_pid = None  # 지난 보드가 띄운 프로세스(기록에서). 보드가 SIGKILL로 죽으면 아직 살아 있을 수 있다
+        self.prev_pid = None  # 지난 호스트가 띄운 프로세스(기록에서). 호스트가 SIGKILL로 죽으면 잠깐 살아 있을 수 있다
+        self.closed = False  # 사람이 '세션 끝내기'로 끝냈다 — 호스트가 새로 떠도 다시 띄우지 않는다
+        self.interrupted = False  # 호스트가 꺼질 때 턴·권한·질문이 끊겼다 — 다시 보낼 때까지 카드에 알린다
+        self.quiet = False  # --resume으로 다시 띄워 아직 입력을 받지 않았다(이때 오는 init은 턴 시작이 아니다)
+        self.saved_state = None
         self.wlock = threading.Lock()
         self.slock = threading.Lock()  # 다시 띄우기가 겹쳐 같은 id 프로세스가 둘 뜨지 않게
 
@@ -158,10 +165,13 @@ class Residents:
         self._save_lock = threading.Lock()
         self._spawn_lock = threading.Lock()  # 살아 있는 수 확인 → 띄우기 → 등록을 한 묶음으로
         for sid, rec in (self._load() or {}).items():
-            if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+            # 기록 파일에서 온 id는 UUID 형식일 때만 받는다 — --resume 인자로 넘어가므로 옵션처럼 보이는 값 등을 막는다
+            if isinstance(rec, dict) and isinstance(rec.get("cwd"), str) and isinstance(sid, str) and _SID.fullmatch(sid):
                 s = Session(sid, rec["cwd"], rec.get("name"), rec.get("title") or sid[:8])
                 s.at = rec.get("at") or s.at
                 s.prev_pid = rec.get("pid") if isinstance(rec.get("pid"), int) else None
+                s.closed = rec.get("closed") is not False  # #364 이전 기록(키 없음)은 사람이 끝냈는지 몰라 다시 띄우지 않는다
+                s.interrupted = rec.get("interrupted") is True or rec.get("state") in ("busy", "waiting")
                 self._sessions[sid] = s
 
     # ---- 기록(보드를 다시 켜도 끝난 상주 세션을 이어 쥘 수 있게) ----
@@ -176,12 +186,16 @@ class Residents:
     def _save(self):
         """기록: 살아 있는 세션은 pid까지, 끝난 지 KEEP_HOURS 넘은 세션은 뺀다(목록에서도 이미 안 보인다)."""
         cut = time.time() - KEEP_HOURS * 3600
-        with self._lock:
-            for sid in [k for k, s in self._sessions.items() if s.state == "ended" and _epoch(s.at) < cut]:
-                del self._sessions[sid]
-            data = {s.sid: {"cwd": s.cwd, "name": s.name, "title": s.title, "at": s.at,
-                            "pid": s.proc.pid if self._live(s) else s.prev_pid} for s in self._sessions.values()}
-        with self._save_lock:  # 읽기 스레드·요청·종료 처리가 동시에 저장해도 임시 파일이 엇갈리지 않게
+        with self._save_lock:  # 읽기 스레드·요청·종료 처리가 동시에 저장해도 먼저 복사한 낡은 목록이 나중에 덮지 않게
+            with self._lock:
+                for sid in [k for k, s in self._sessions.items() if s.state == "ended" and _epoch(s.at) < cut]:
+                    del self._sessions[sid]
+                data = {}
+                for s in self._sessions.values():
+                    s.saved_state = s.state
+                    data[s.sid] = {"cwd": s.cwd, "name": s.name, "title": s.title, "at": s.at, "state": s.state,
+                                   "closed": s.closed, "interrupted": s.interrupted,
+                                   "pid": s.proc.pid if self._live(s) else s.prev_pid}
             os.makedirs(os.path.dirname(self.registry), exist_ok=True)
             tmp = self.registry + ".tmp"
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -225,8 +239,39 @@ class Residents:
         threading.Thread(target=self._read, args=(s, s.proc), daemon=True).start()
         return None
 
+    def resume_all(self, wait=5.0):
+        """호스트가 새로 떴을 때(재부팅·호스트가 죽은 뒤): 사람이 끝내지 않았고 KEEP_HOURS 안인 세션을 같은 id로
+        --resume해 입력 대기로 둔다. 입력 전에는 모델을 부르지 않는다. 최근 것부터 MAX_LIVE 안에서만.
+        지난 호스트가 띄운 프로세스가 아직 살아 있으면(죽은 호스트의 stdin EOF를 받고 끝나는 중) wait초까지 기다리고,
+        그래도 살아 있으면 두 프로세스가 같은 대화를 쓰지 않게 건너뛴다(사람이 보내면 send가 다시 확인한다)."""
+        cut = time.time() - KEEP_HOURS * 3600
+        cands = sorted((s for s in self._all() if s.proc is None and not s.closed and _epoch(s.at) >= cut),
+                       key=lambda s: _epoch(s.at), reverse=True)
+        end = time.time() + wait
+        while time.time() < end and any(s.prev_pid and _alive_with(s.prev_pid, s.sid) for s in cands):
+            time.sleep(0.1)
+        started = []
+        for s in cands:
+            if s.prev_pid and _alive_with(s.prev_pid, s.sid):
+                continue
+            with s.slock, self._spawn_lock:
+                if s.proc is not None or s.closed:  # 그 사이 사람이 보내 이미 다시 쥐었거나 끝냈다
+                    continue
+                if self._live_count() >= MAX_LIVE:
+                    break
+                if self._spawn(s, ["--resume", s.sid]):
+                    continue
+                s.state, s.quiet, s.prev_pid = "idle", True, None
+                s.seen = not s.interrupted  # 끊긴 세션만 '결과 확인'으로 올려 눈에 띄게
+            started.append(s.sid)
+        if started:
+            self._save()
+            self.notify()
+        return started
+
     def _write(self, s, text):
         line = json.dumps({"type": "user", "message": {"role": "user", "content": text}}, ensure_ascii=False)
+        s.quiet = False
         return self._line(s, line)
 
     def _line(self, s, line):
@@ -255,7 +300,9 @@ class Residents:
                 print("resident:", type(e).__name__, e, file=sys.stderr, flush=True)
         proc.wait()
         if s.proc is proc:
-            s.state, s.pending, s.at = "ended", {}, utc()
+            if not s.quiet:  # 입력 없이 다시 띄운 채 끝났으면(resume 실패 등) 시각을 그대로 둬 KEEP_HOURS가 지나면 빠지게
+                s.at = utc()
+            s.state, s.pending = "ended", {}
             self._save()
             self.notify()
 
@@ -291,11 +338,17 @@ class Residents:
         elif t == "result":
             s.state = "waiting" if s.pending else "idle"
             s.seen, changed = False, True
-        elif t == "system" and ev.get("subtype") == "init" and s.state == "idle":
+        elif t == "system" and ev.get("subtype") == "init" and s.state == "idle" and not s.quiet:
             s.state, changed = "busy", True
         if changed:
             s.at = utc()
+            self._persist(s)
             self.notify()
+
+    def _persist(self, s):
+        """상태(작업 중·답 대기·쉼)가 바뀔 때만 기록한다 — 호스트가 갑자기 죽어도 끊긴 요청이 있었는지 남는다."""
+        if s.state != s.saved_state:
+            self._save()
 
     # ---- 사람이 보드에서 한 일 ----
     def send(self, item_id, text):
@@ -325,7 +378,7 @@ class Residents:
                 s.prev_pid = None
             if not self._write(s, text):
                 return {"ok": False, "message": "세션에 쓰지 못함 — 세션이 끝났을 수 있음"}
-        s.state, s.at = "busy", utc()
+        s.state, s.at, s.closed, s.interrupted = "busy", utc(), False, False
         self._save()
         self.notify()
         return {"ok": True, "message": "보냄 — 같은 세션이 바로 이어서 받음"}
@@ -365,14 +418,18 @@ class Residents:
         if not s.pending and s.state == "waiting":
             s.state = "busy"
         s.at = utc()
+        self._persist(s)
         self.notify()
         return {"ok": ok, "message": message if ok else "세션에 쓰지 못함 — 세션이 끝났을 수 있음"}
 
     def end(self, item_id):
-        """세션을 끝낸다: stdin을 닫으면 Claude가 붙잡힌 요청을 실패로 끝내고 종료한다. 대화 기록은 지우지 않는다."""
+        """세션을 끝낸다: stdin을 닫으면 Claude가 붙잡힌 요청을 실패로 끝내고 종료한다. 대화 기록은 지우지 않는다.
+        사람이 끝낸 세션으로 기록해 호스트가 새로 떠도 다시 띄우지 않는다."""
         s = self._get(item_id)
         if not s:
             return {"ok": False, "message": "보드가 쥔 세션이 아님"}
+        s.closed, s.interrupted = True, False
+        self._save()
         if s.proc and s.proc.poll() is None:
             with s.wlock:
                 try:
@@ -382,11 +439,16 @@ class Residents:
         return {"ok": True, "message": f"세션을 끝냄 — 대화 기록은 남음(claude --resume {s.sid})"}
 
     def shutdown(self, grace=3.0):
-        """보드가 꺼질 때: 쥔 세션의 stdin을 닫아 끝내고(대화 기록은 남는다), grace 안에 안 끝나면 SIGTERM.
-        board.sh stop이 5초 기다리므로 그보다 짧게 둔다. 작업 중이던 턴은 끊기지만 다음에 보내면 같은 id로 이어 쥔다."""
+        """호스트가 SIGTERM으로 꺼질 때: 쥔 세션의 stdin을 닫아 끝내고(대화 기록은 남는다), grace 안에 안 끝나면 그룹째 SIGTERM.
+        사람이 끝낸 것이 아니므로 closed로 기록하지 않는다 — 다음 호스트가 같은 id로 이어 쥔다."""
         live = [s for s in self._all() if s.proc and s.proc.poll() is None]
         for s in live:
-            self.end("res|" + s.sid)
+            s.interrupted = s.interrupted or s.state in ("busy", "waiting")
+            with s.wlock:
+                try:
+                    s.proc.stdin.close()
+                except OSError:
+                    pass
         end = time.time() + grace
         for s in live:
             try:
@@ -406,9 +468,8 @@ class Residents:
     def _live_count(self):
         return sum(1 for s in self._all() if self._live(s))
 
-    def working(self):
-        """작업 중이거나 사람의 답을 기다리는 쥔 세션이 있는가 — 보드가 스스로 꺼지면 그 턴이 끊긴다(#355)."""
-        return any(self._live(s) and s.state in ("busy", "waiting") for s in self._all())
+    def live_count(self):
+        return self._live_count()
 
     def _full_message(self):
         return (f"보드가 쥔 세션이 이미 {MAX_LIVE}개 돌고 있음 — 다 쓴 세션을 '세션 끝내기'로 닫은 뒤 다시 시도하세요"
@@ -465,6 +526,9 @@ class Residents:
               "status": {"busy": "busy", "waiting": "waiting"}.get(s.state, "idle"),
               "transcript": self._transcript(s), "actions": ["send"] + (["end"] if live else []),
               "cmd": None if live else f"claude --resume {s.sid}"}
+        if s.interrupted:
+            it["interrupted"] = True
+            it["detail"] = "호스트가 꺼질 때 끊긴 요청이 있었음 — 다시 보내 이어가기"
         for pid, p in list(s.pending.items()):
             if p["tool"] == "AskUserQuestion":
                 it.setdefault("question", {"pid": pid, "questions": p["input"].get("questions") or []})
@@ -501,6 +565,7 @@ def sse_lines(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
+_SID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _RES_ID = re.compile(r"res\|[0-9a-f-]{36}")
 
 
