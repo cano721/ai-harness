@@ -913,13 +913,13 @@ catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스�
 agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 docs/design-system.md, docs/design-system/   보드·리포트 화면의 디자인 규칙, 토큰·공용 부품 CSS, 기준 화면 (scripts/design-system.sh sync|check|contrast|lint)
-tests/            회귀 테스트와 fixtures (bash tests/run.sh)
+tests/            회귀 테스트: 영역 파일 <영역>.sh, 공용 lib.sh, fixtures (bash tests/run.sh [영역...|--changed])
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
 macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/board`·`langfuse`는 Python 3(표준 라이브러리)을 씁니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
-개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
+개발 시 회귀 테스트는 아래와 같습니다. 작업 중에는 `bash tests/run.sh --changed`로 바뀐 영역만 돌리고, PR 전에 전체를 돌립니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 
 ```bash
 bash tests/run.sh

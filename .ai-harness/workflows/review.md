@@ -10,7 +10,7 @@
 ## blocking으로 보는 것 (이 저장소 기준)
 
 - `bash tests/run.sh`·`bash -n`·`npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh` 중 하나라도 실패
-- 새 동작에 `tests/run.sh` 단언이 없음(TDD 정책)
+- 새 동작에 `tests/<영역>.sh` 단언이 없음(TDD 정책)
 - macOS `/bin/bash` 3.2 또는 Linux에서 깨지는 구문
 - 사용자 데이터(`~/.ai-harness`·`~/.claude`·사용자 저장소)를 확인 없이 지우거나 덮음, 무인 실행이 병합·force push함
 - 회사·개인 식별자, 토큰, 사내 URL
