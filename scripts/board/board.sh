@@ -23,7 +23,8 @@ LAUNCHER_ID="com.ai-harness.board"
 usage() {
   cat >&2 <<'EOF'
 usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, 없으면 띄운 뒤 주소를 연다
-       board.sh stop                    서버를 끈다
+       board.sh stop                    서버를 끈다(상주 세션 호스트는 그대로)
+       board.sh host-stop               상주 세션 호스트를 끈다(대화 기록 유지, 다음 호스트가 같은 id로 이어 쥠)
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
@@ -147,6 +148,25 @@ command_stop() {
   kill -0 "$pid" 2>/dev/null && die "보드 서버(pid $pid)가 5초 안에 끝나지 않았습니다."
   rm -f "$CONF"
   jq -cn --argjson pid "$pid" '{running: false, stopped: true, pid: $pid}'
+}
+
+# 상주 세션 호스트(#364)를 끈다: 호스트가 세션 stdin을 닫고 끝낸다(대화 기록 유지, 사람이 끝낸 것으로 기록하지 않음).
+# 다음 호스트가 뜰 때(보드가 열려 있으면 곧바로) 같은 id로 --resume해 이어 쥔다. 이전 버전 호스트를 새 버전으로 바꿀 때 쓴다.
+command_host_stop() {
+  local info="$BOARD_DIR/host/host.json" pid i
+  pid="$(jq -r '.pid // empty | tostring' "$info" 2>/dev/null || true)"
+  if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null \
+    || ! ps -o command= -p "$pid" 2>/dev/null | grep -q 'resident_host\.py'; then
+    jq -cn '{host: false, stopped: false}'
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  for ((i = 0; i < 100; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -0 "$pid" 2>/dev/null && die "상주 세션 호스트(pid $pid)가 10초 안에 끝나지 않았습니다."
+  jq -cn --argjson pid "$pid" '{host: true, stopped: true, pid: $pid}'
 }
 
 command_status() {
@@ -348,6 +368,7 @@ cmd="${1:-open}"
 case "$cmd" in
   open) command_open "$@" ;;
   stop) command_stop ;;
+  host-stop) command_host_stop ;;
   status) command_status ;;
   hook) command_hook "$@" ;;
   launcher) command_launcher "$@" ;;

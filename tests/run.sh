@@ -11,9 +11,16 @@ TESTS_FINISHED=0
 cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
   local board_pid conf
-  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json"; do
+  for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json" "$TEST_TMP/board-resident/data/board/host/host.json"; do
     board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
     [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
+    if [[ "$conf" == */host/host.json && "$board_pid" =~ ^[0-9]+$ ]]; then
+      # 상주 세션 호스트는 SIGTERM 뒤 세션을 닫으며 기록을 쓴다 — 끝난 뒤 지워야 폴더가 다시 생기지 않는다
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
+        kill -0 "$board_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
   done
   case "$TEST_TMP" in
     */ai-harness-tests.*) find "$TEST_TMP" -depth -delete 2>/dev/null || true ;;
@@ -8362,21 +8369,30 @@ BR_T="$TEST_TMP/board-resident"
 BR_DATA="$BR_T/data"
 mkdir -p "$BR_DATA" "$BR_T/cwd" "$BR_T/projects"
 chmod +x "$ROOT/tests/fixtures/board-resident/claude" "$ROOT/tests/fixtures/board-resident/orca"
-BR_PORT="$(free_port)"
 BR_LOG="$BR_T/stub.jsonl"
 : >"$BR_LOG"
-env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
-  BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
-  BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
-  python3 -I "$ROOT/scripts/board/board-server.py" --no-open >"$BR_T/server.log" 2>&1 &
-BR_PID=$!
-BR_URL=""
-for _ in $(seq 100); do
-  BR_URL="$(jq -r '.url // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)"
-  [[ -n "$BR_URL" ]] && break
-  sleep 0.1
-done
-[[ -n "$BR_URL" ]] || fail "board server for resident sessions starts"
+# 보드를 끄고 다시 켜는 테스트(#364)가 같은 환경으로 여러 번 띄운다. 호스트는 보드가 띄우므로 이 환경을 물려받는다.
+br_start() {
+  BR_PORT="$(free_port)"
+  env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
+    BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_HOST_IDLE=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
+    python3 -I "$ROOT/scripts/board/board-server.py" --no-open >>"$BR_T/server.log" 2>&1 &
+  BR_PID=$!
+  BR_URL=""
+  for _ in $(seq 100); do
+    [[ "$(jq -r '.pid // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)" == "$BR_PID" ]] \
+      && BR_URL="$(jq -r '.url // empty' "$BR_DATA/board/server.json" 2>/dev/null || true)"
+    [[ -n "$BR_URL" ]] && break
+    sleep 0.1
+  done
+  [[ -n "$BR_URL" ]] || fail "board server for resident sessions starts ($(tail -5 "$BR_T/server.log"))"
+}
+br_stop() { # board.sh stop과 같이 SIGTERM
+  kill "$BR_PID" 2>/dev/null || true
+  wait "$BR_PID" 2>/dev/null || true
+}
+br_start
 # 숨은 탭의 SSE(/events?bg=1)는 보는 사람 표시만 하고 백그라운드 갱신을 살리지 않는다(#351이 숨은 탭 폴링을 뺀 것과 같다).
 # 갱신이 1초 주기여도 4초 동안 다른 터미널의 새 세션이 밀려 오지 않아야 한다.
 br_agent() { jq -cn --arg s "$1" --arg cwd "$BR_T/cwd" --argjson at "$(date +%s)000" \
@@ -8412,14 +8428,6 @@ assert_eq "true" "$(br '.end')" "a resident session can be ended from the board"
 assert_contains "$(br '.ended_cmd')" "claude --resume " "an ended resident session shows how to resume it"
 assert_eq "true|true|true" "$(br '[.send_after_end, .relaunch_resume_sid, .same_id_after_resume] | join("|")')" "sending to an ended resident session resumes the same session id"
 assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "the board keeps a record of its resident sessions"
-kill "$BR_PID" 2>/dev/null || true
-wait "$BR_PID" 2>/dev/null || true
-for _ in $(seq 50); do
-  [[ "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" == 2 ]] && break
-  sleep 0.1
-done
-assert_eq "2" "$(jq -s '[.[] | select(.eof)] | length' "$BR_LOG")" "stopping the board closes the resident sessions it holds"
-assert_eq "true" "$(jq --arg id "$(br '.new_id')" 'has($id | ltrimstr("res|"))' "$BR_DATA/board/residents.json")" "stopping the board keeps the resident record for a later resume"
 BR_TPL="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BR_TPL" "new EventSource('/events?t='" "the board screen listens to server events"
 assert_contains "$BR_TPL" "if (!sseLive()) refresh()" "the board screen polls only while server events are down"
@@ -8523,6 +8531,212 @@ except ProcessLookupError:
 ' "$ROOT/scripts/board" "$ROOT/tests/fixtures/board-resident/claude" "$BRU_T" "$BRU_T/cwd" \
   || fail "resident sessions survive a bad line, cap live sessions, drop old records, refuse a second process and end tool children"
 pass "board holds new sessions as resident stream-json processes and pushes permission requests over SSE"
+
+# 상주 세션 호스트(#364): 상주 세션은 보드 서버가 아니라 따로 뜬 호스트(resident_host.py)가 쥐고, 보드는 유닉스 소켓으로 붙는다.
+# 보드를 끄고 켜도 세션 pid가 그대로이고, 꺼진 동안 생긴 권한 요청은 다시 붙은 보드에 바로 뜬다.
+# 호스트가 SIGKILL로 죽으면(재부팅 흉내) 다음 보드가 호스트를 다시 띄우고, 사람이 끝내지 않은 세션만 같은 id로 --resume해 입력을 기다린다.
+# 세션도 보드 연결도 없으면 호스트가 스스로 끝난다. 앞 블록의 보드(BR_PID)와 세션(BR_RID)을 이어 쓴다.
+br_client() { python3 -I "$ROOT/tests/fixtures/board-resident/client.py" "http://127.0.0.1:$BR_PORT" "${BR_URL#*t=}" "$@"; }
+br_mode() { python3 -I -c 'import os, sys; print(format(os.stat(sys.argv[1]).st_mode & 0o777, "o"))' "$1"; }
+br_alive() { kill -0 "$1" 2>/dev/null; }
+br_launch_pid() { # 그 세션 id로 띄운 마지막 가짜 claude의 pid
+  jq -rs --arg s "$1" '[.[] | select(.argv and (.argv | index($s)))] | last | .pid // empty' "$BR_LOG"
+}
+br_wait() { # 조건 셸 식, 0.1초 단위 횟수
+  local i
+  for ((i = 0; i < $2; i++)); do eval "$1" && return 0; sleep 0.1; done
+  return 1
+}
+BR_RID="$(br '.new_id')"
+BR_SID="${BR_RID#res|}"
+BR_HOST_JSON="$BR_DATA/board/host/host.json"
+assert_file "$BR_HOST_JSON"
+BR_HOST_PID="$(jq -r '.pid' "$BR_HOST_JSON")"
+assert_eq "true" "$(br_alive "$BR_HOST_PID" && [[ "$BR_HOST_PID" != "$BR_PID" ]] && echo true || echo false)" "a separate host process holds the resident sessions"
+BR_SOCK="$(jq -r '.sock' "$BR_HOST_JSON")"
+assert_eq "600|700|600" "$(br_mode "$BR_SOCK")|$(br_mode "$(dirname "$BR_SOCK")")|$(br_mode "$BR_HOST_JSON")" "the host socket is 0600 in a 0700 folder and its record is 0600"
+BR_NOAUTH="$(python3 -I -c '
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1])
+s.sendall(json.dumps({"op": "items"}).encode() + b"\n")
+data = b""
+while not data.endswith(b"\n"):
+    got = s.recv(65536)
+    if not got:
+        break
+    data += got
+print("refused" if not data or json.loads(data).get("ok") is False and "items" not in json.loads(data) else "accepted")
+' "$BR_SOCK")"
+assert_eq "refused" "$BR_NOAUTH" "the host refuses a connection that does not present the host token"
+BR_NONASCII="$(python3 -I -c '
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1])
+s.sendall(json.dumps({"t": "토큰아님", "op": "items"}).encode() + b"\n")
+print(json.loads(s.recv(65536)).get("ok"))
+' "$BR_SOCK")"
+assert_eq "False|true" "$BR_NONASCII|$(br_alive "$BR_HOST_PID" && echo true || echo false)" "a non-ASCII token is refused cleanly and the host keeps running"
+BR_RT1="$(br_client roundtrip "$BR_RID" "before restart")"
+assert_eq "true" "$(jq -r '.ok and .seconds != null and .seconds < 3' <<<"$BR_RT1")" "a resident round trip before the board restart is quick ($(jq -r '.seconds' <<<"$BR_RT1")s)"
+BR_SESS_PID="$(br_launch_pid "$BR_SID")"
+BR_LAUNCHES="$(jq -s '[.[] | select(.argv)] | length' "$BR_LOG")"
+# 보드가 꺼지는 사이에 권한을 묻게(SLOW = 1.5초 뒤) 보내고 보드를 끈다.
+assert_eq "true" "$(br_client send "$BR_RID" "SLOWPERM while away" | jq -r '.ok')" "send before the board stops"
+br_stop
+br_wait "[[ ! -f '$BR_DATA/board/server.json' ]]" 50 || fail "the board stops"
+br_wait "jq -se --argjson p $BR_SESS_PID 'any(.[]; .pid == \$p and .emitted == \"Bash\")' '$BR_LOG' >/dev/null" 50 \
+  || fail "the resident session asks for a permission while the board is off"
+assert_eq "false" "$([[ -f "$BR_DATA/board/server.json" ]] && echo true || echo false)" "the permission request was made while no board was running"
+assert_eq "true|true|0" "$(br_alive "$BR_SESS_PID" && echo true || echo false)|$(br_alive "$BR_HOST_PID" && echo true || echo false)|$(jq -s --argjson p "$BR_SESS_PID" '[.[] | select(.pid == $p and .eof)] | length' "$BR_LOG")" \
+  "stopping the board leaves the host and its resident session running"
+br_start
+assert_eq "$BR_HOST_PID" "$(jq -r '.pid' "$BR_HOST_JSON")" "a restarted board attaches to the running host"
+BR_PERM_AT="$(br_client waitperm "$BR_RID" 5)"
+# 다시 켠 보드의 첫 목록(첫 수집이라 1–2초 걸릴 수 있다)에 이미 실려 있어야 한다 — 따로 더 기다리지 않는다.
+assert_eq "true" "$(jq -r '.first' <<<"$BR_PERM_AT")" "a permission request made while the board was off is in the first listing of the board that comes back ($(jq -r '.seconds' <<<"$BR_PERM_AT")s)"
+assert_eq "true" "$(br_client allow "$BR_RID" | jq -r '.ok')" "the person's allow after the restart is accepted"
+br_wait "jq -se --argjson p $BR_SESS_PID 'any(.[]; .pid == \$p and .stdin.type == \"control_response\" and (.stdin | tostring | test(\"allow\")))' '$BR_LOG' >/dev/null" 50 \
+  || fail "the allow reaches the same resident process after the board restart"
+BR_RT2="$(br_client roundtrip "$BR_RID" "after restart")"
+assert_eq "true" "$(jq -r '.ok and .seconds != null and .seconds < 3' <<<"$BR_RT2")" "a resident round trip after the board restart is still quick ($(jq -r '.seconds' <<<"$BR_RT2")s)"
+assert_eq "$BR_SESS_PID|$BR_LAUNCHES" "$(br_launch_pid "$BR_SID")|$(jq -s '[.[] | select(.argv)] | length' "$BR_LOG")" "the board restart neither relaunches nor resumes the session"
+# 사람이 끝낸 세션 B와, 권한을 기다리던 세션 A를 두고 호스트를 SIGKILL한다(재부팅 흉내).
+BR_B="$(br_client new "$BR_T/cwd" "hello B" | jq -r '.id')"
+BR_SID_B="${BR_B#res|}"
+br_wait "[[ \"\$(br_client item '$BR_B' | jq -r '.state')\" == review ]]" 50 || fail "session B finishes its first turn"
+assert_eq "true" "$(br_client end "$BR_B" | jq -r '.ok')" "a person ends session B"
+br_wait "[[ \"\$(br_client item '$BR_B' | jq -r '.live')\" == false ]]" 50 || fail "session B ends"
+assert_eq "true" "$(br_client send "$BR_RID" "PERM before kill" | jq -r '.ok')" "session A asks again"
+assert_eq "true" "$(br_client waitperm "$BR_RID" 5 | jq -r '.seconds != null')" "session A waits on a permission when the host dies"
+br_stop
+BR_LAUNCHES="$(jq -s '[.[] | select(.argv)] | length' "$BR_LOG")"
+kill -9 "$BR_HOST_PID"
+br_wait "! br_alive $BR_HOST_PID" 50 || fail "the host is killed"
+br_wait "jq -se --argjson p $BR_SESS_PID 'any(.[]; .pid == \$p and .eof)' '$BR_LOG' >/dev/null" 50 || fail "the session held by the killed host ends"
+br_start
+br_wait "[[ \$(jq -s '[.[] | select(.argv)] | length' '$BR_LOG') -gt $BR_LAUNCHES ]]" 80 || fail "opening the board after the host died resumes the open session ($(tail -5 "$BR_T/server.log"))"
+sleep 1
+BR_NEW_HOST="$(jq -r '.pid // empty' "$BR_HOST_JSON")"
+assert_eq "true" "$([[ -n "$BR_NEW_HOST" && "$BR_NEW_HOST" != "$BR_HOST_PID" ]] && br_alive "$BR_NEW_HOST" && echo true || echo false)" "opening the board starts a new host when the old one died"
+assert_eq "[[\"--resume\",\"$BR_SID\"]]" "$(jq -sc --argjson n "$BR_LAUNCHES" '[.[] | select(.argv)][$n:] | map(.argv | [.[index("--resume")], .[index("--resume") + 1]])' "$BR_LOG")" \
+  "only the session nobody ended is resumed, with the same id"
+BR_RESUMED="$(br_launch_pid "$BR_SID")"
+assert_eq "0" "$(jq -s --argjson p "$BR_RESUMED" '[.[] | select(.pid == $p and .stdin)] | length' "$BR_LOG")" "a resumed session waits for input — nothing is sent to it on its own"
+BR_A_ITEM="$(br_client item "$BR_RID")"
+assert_eq "true|true|idle|false" "$(jq -r '[.live, .interrupted, .status, (.permission != null)] | map(tostring) | join("|")' <<<"$BR_A_ITEM")" "the resumed session is live, idle, and marked as interrupted without the lost request"
+assert_contains "$(jq -r '.detail' <<<"$BR_A_ITEM")" "끊긴 요청" "the card says a request was cut off and to send again"
+assert_eq "false" "$(br_client item "$BR_B" | jq -r '.live')" "the session a person ended stays ended"
+BR_RT3="$(br_client roundtrip "$BR_RID" "after host restart")"
+assert_eq "true" "$(jq -r '.ok and .seconds != null' <<<"$BR_RT3")" "sending to the resumed session continues the same process"
+assert_eq "$BR_RESUMED|null" "$(br_launch_pid "$BR_SID")|$(br_client item "$BR_RID" | jq -r '.interrupted')" "the resumed process takes the input and the interrupted mark clears"
+# 끝낼 세션이 없고 보드 연결도 없으면 호스트가 스스로 끝난다(BOARD_HOST_IDLE=1초).
+assert_eq "true" "$(br_client end "$BR_RID" | jq -r '.ok')" "a person ends session A"
+br_wait "[[ \"\$(br_client item '$BR_RID' | jq -r '.live')\" == false ]]" 50 || fail "session A ends"
+sleep 2
+assert_eq "true" "$(br_alive "$BR_NEW_HOST" && echo true || echo false)" "the host stays while a board is connected"
+br_stop
+br_wait "! br_alive $BR_NEW_HOST" 100 || fail "the host exits on its own with no session and no board"
+assert_eq "false|false" "$([[ -e "$BR_SOCK" ]] && echo true || echo false)|$([[ -f "$BR_HOST_JSON" ]] && echo true || echo false)" "the exiting host removes its socket and record"
+# 플러그인이 업데이트되면 호스트가 옛 경로의 코드로 돌 수 있다. 보드는 host.json의 proto·script를 보고,
+# 세션이 없으면 옛 호스트를 끄고 새로 띄우며, 세션이 있으면(같은 proto) 계속 쓰면서 화면에 안내하고 세션이 끝나면 바꾼다.
+br_real() { python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+BR_NEW_SCRIPT="$(br_real "$ROOT/scripts/board/resident_host.py")"
+BR_OLD="$BR_T/oldplugin/scripts/board"
+mkdir -p "$BR_OLD"
+cp "$ROOT/scripts/board/resident_host.py" "$ROOT/scripts/board/resident.py" "$BR_OLD/"
+br_old_host() { # 옛 플러그인 경로에서 호스트를 띄우고 BR_OLD_PID에 남긴다
+  env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
+    BOARD_STUB_LOG="$BR_LOG" BOARD_HOST_IDLE=60 python3 -I "$BR_OLD/resident_host.py" >>"$BR_T/oldhost.log" 2>&1 &
+  BR_OLD_PID=$!
+  br_wait "[[ \"\$(jq -r '.pid // empty' '$BR_HOST_JSON' 2>/dev/null)\" == $BR_OLD_PID ]]" 50 || fail "an old-path host starts"
+}
+br_host_script() { br_real "$(jq -r '.script // empty' "$BR_HOST_JSON" 2>/dev/null)"; }
+br_old_host
+assert_eq "$(br_real "$BR_OLD/resident_host.py")|1" "$(br_host_script)|$(jq -r '.proto' "$BR_HOST_JSON")" "the host records its script path and protocol"
+br_start
+br_wait "[[ \"\$(br_host_script)\" == '$BR_NEW_SCRIPT' ]]" 100 || fail "a board replaces an old-path host that holds no session ($(tail -3 "$BR_T/server.log"))"
+assert_eq "false" "$(br_alive "$BR_OLD_PID" && echo true || echo false)" "the old-path host with no session is stopped"
+br_stop
+br_wait "[[ ! -f '$BR_HOST_JSON' ]]" 100 || fail "the replaced host exits once the board leaves"
+# 옛 호스트가 세션을 쥐고 있으면 끄지 않고 계속 쓰며 안내한다. 세션이 끝나면 새 버전으로 바꾼다.
+br_old_host
+BR_OLD_ID="$(python3 -I -c '
+import json, socket, sys
+info = json.load(open(sys.argv[1]))
+s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(info["sock"])
+s.sendall(json.dumps({"t": info["token"], "op": "start", "cwd": sys.argv[2], "prompt": "hello old", "name": None}).encode() + b"\n")
+print(json.loads(s.recv(65536))["r"]["id"])
+' "$BR_HOST_JSON" "$BR_T/cwd")"
+br_wait "[[ -n \"\$(br_launch_pid '${BR_OLD_ID#res|}')\" ]]" 50 || fail "the old-path host starts a session"
+br_start
+br_wait "[[ \"\$(br_client item '$BR_OLD_ID' | jq -r '.live')\" == true ]]" 50 || fail "the board shows the session the old-path host holds"
+assert_eq "$BR_OLD_PID" "$(jq -r '.pid' "$BR_HOST_JSON")" "an old-path host that holds a session keeps running"
+BR_META="$(curl -s "http://127.0.0.1:$BR_PORT/status.json?t=${BR_URL#*t=}" | jq -c '.resident_host')"
+assert_contains "$BR_META" "이전 버전 호스트" "the board says an older host holds the sessions"
+assert_eq "false" "$(jq -r '.readonly' <<<"$BR_META")" "a same-protocol older host is still used"
+assert_eq "true" "$(br_client end "$BR_OLD_ID" | jq -r '.ok')" "a person ends the session through the older host"
+br_wait "[[ \"\$(br_host_script)\" == '$BR_NEW_SCRIPT' ]]" 200 || fail "once its sessions end the older host is replaced by the current one"
+assert_eq "false|null" "$(br_alive "$BR_OLD_PID" && echo true || echo false)|$(curl -s "http://127.0.0.1:$BR_PORT/status.json?t=${BR_URL#*t=}" | jq -c '.resident_host')" "the older host is gone and the notice clears"
+# board.sh host-stop: 사람이 호스트를 끈다. 세션은 닫히되 사람이 끝낸 것이 아니므로 다음 호스트가 같은 id로 이어 쥔다.
+BR_C="$(br_client new "$BR_T/cwd" "hello C" | jq -r '.id')"
+BR_SID_C="${BR_C#res|}"
+br_wait "[[ \"\$(br_client item '$BR_C' | jq -r '.state')\" == review ]]" 50 || fail "session C finishes its first turn"
+BR_C_PID="$(br_launch_pid "$BR_SID_C")"
+BR_HS_HOST="$(jq -r '.pid' "$BR_HOST_JSON")"
+BR_HS="$(env HARNESS_METRICS_DIR="$BR_DATA" bash "$ROOT/scripts/board/board.sh" host-stop)"
+assert_eq "true|$BR_HS_HOST" "$(jq -r '"\(.stopped)|\(.pid)"' <<<"$BR_HS")" "board.sh host-stop stops the resident host"
+br_wait "jq -se --argjson p $BR_C_PID 'any(.[]; .pid == \$p and .eof)' '$BR_LOG' >/dev/null" 50 || fail "host-stop closes the session's input"
+br_wait "[[ \"\$(br_launch_pid '$BR_SID_C')\" != '$BR_C_PID' ]]" 100 || fail "the next host resumes the session after host-stop"
+assert_eq "--resume|$BR_SID_C" "$(jq -rs --arg s "$BR_SID_C" '[.[] | select(.argv and (.argv | index($s)))] | last | .argv | "\(.[index("--resume")])|\(.[index("--resume") + 1])"' "$BR_LOG")" "after host-stop the session comes back with the same id"
+assert_eq "true" "$(br_client end "$BR_C" | jq -r '.ok')" "a person ends session C"
+br_wait "[[ \"\$(br_client item '$BR_C' | jq -r '.live')\" == false ]]" 50 || fail "session C ends"
+br_stop
+br_wait "[[ ! -f '$BR_HOST_JSON' ]]" 100 || fail "the host exits once the last session ends and the board leaves"
+assert_eq "{\"host\":false,\"stopped\":false}" "$(env HARNESS_METRICS_DIR="$BR_DATA" bash "$ROOT/scripts/board/board.sh" host-stop)" "host-stop with no host says so"
+BR_REG="$BR_DATA/board/residents.json"
+assert_eq "true|true" "$(jq -r --arg a "$BR_SID" --arg b "$BR_SID_B" '[.[$a].closed, .[$b].closed] | map(tostring) | join("|")' "$BR_REG")" "sessions a person ended are recorded as closed and kept for resume"
+# 다시 띄우기 규칙(단위): 사람이 끝낸 것·KEEP_HOURS 넘은 것·이전 프로세스가 살아 있는 것은 안 띄우고, MAX_LIVE 안에서 최근 것부터.
+python3 -I -B -c '
+import json, os, subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+import resident as r
+stub, data, cwd = sys.argv[2], sys.argv[3], sys.argv[4]
+ids = ["5555555%d-5555-4555-8555-555555555555" % n for n in range(6)]
+sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", ids[2]])
+now = r.utc()
+reg = {ids[0]: {"cwd": cwd, "title": "closed", "at": now, "pid": None, "closed": True},
+       ids[1]: {"cwd": cwd, "title": "old", "at": "2020-01-01T00:00:00Z", "pid": None},
+       ids[2]: {"cwd": cwd, "title": "alive", "at": now, "pid": sleeper.pid, "closed": False},
+       ids[3]: {"cwd": cwd, "title": "older open", "at": "2099-01-01T00:00:00Z", "pid": None, "state": "busy", "closed": False},
+       ids[4]: {"cwd": cwd, "title": "newest open", "at": "2099-01-02T00:00:00Z", "pid": None, "state": "waiting", "closed": False},
+       ids[5]: {"cwd": cwd, "title": "legacy record without closed", "at": "2099-01-03T00:00:00Z", "pid": None},
+       "--help": {"cwd": cwd, "title": "not a session id", "at": "2099-01-04T00:00:00Z", "pid": None, "closed": False}}
+d = os.path.join(data, "resume")
+os.makedirs(os.path.join(d, "board"), exist_ok=True)
+with open(os.path.join(d, "board", "residents.json"), "w") as f:
+    json.dump(reg, f)
+r.MAX_LIVE = 1
+res = r.Residents(d, lambda: None, claude_bin=stub)
+started = res.resume_all(wait=0.5)
+assert started == [ids[4]], started  # 상한 1 → 가장 최근 것 하나만(#364 이전 기록은 사람이 끝냈는지 몰라 빼고)
+it = res.item("res|" + ids[4])
+assert it["live"] and it["interrupted"] and it["status"] == "idle", it
+assert not res.item("res|" + ids[2])["live"]  # 이전 프로세스가 살아 있으면 두 프로세스가 같은 대화를 쓰지 않게 건너뛴다
+assert "--help" not in res._sessions  # UUID가 아닌 id는 기록에서 읽지 않는다(--resume 인자로 넘기지 않게)
+res.shutdown(grace=1)  # 호스트 SIGTERM 경로: 사람이 끝낸 것이 아니므로 다음 호스트가 다시 쥔다
+kept = json.load(open(os.path.join(d, "board", "residents.json")))
+assert kept[ids[4]]["closed"] is False, kept[ids[4]]
+sleeper.kill(); sleeper.wait()
+' "$ROOT/scripts/board" "$ROOT/tests/fixtures/board-resident/claude" "$BRU_T" "$BRU_T/cwd" \
+  || fail "resume on host start skips ended, old and still-running sessions and stays within MAX_LIVE"
+# 보드는 macOS CommandLineTools의 Python 3.9로도 뜬다 — 3.10+ 문법(match, 괄호 with 등)을 쓰지 않는다.
+python3 -I -c '
+import ast, glob, sys
+for p in sorted(glob.glob(sys.argv[1] + "/*.py")):
+    ast.parse(open(p, encoding="utf-8").read(), p, feature_version=(3, 9))
+' "$ROOT/scripts/board" || fail "board python stays Python 3.9 compatible"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "세션을 쥔 동안만 사는 호스트" "the board skill describes the host that lives only while it holds sessions"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh host-stop" "the board skill tells how to stop the resident host"
+pass "a separate host keeps resident sessions across board restarts and resumes open ones after it dies (round trip $(jq -r '.seconds' <<<"$BR_RT1")s → $(jq -r '.seconds' <<<"$BR_RT2")s)"
 
 # 보드 '하네스 효과'(#256): impact.sh compare를 뒤에서 돌려 저장소·날짜별로 캐시하고, /harness-impact가 보관한 매칭으로 판정한다.
 # compare는 가짜 스크립트(고정 JSON·exit 3)로 바꾸고, view·render는 진짜 impact.sh로 돌린다.
