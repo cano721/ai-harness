@@ -2,7 +2,7 @@
 
 Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, 실제 작업 기록을 근거로 그 규칙을 점진적으로 개선하는 듀얼 플러그인입니다.
 
-하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소, 또는 사용자가 [개인 자동화 단계](#delivery-level)를 `merge`·`deploy`로 고르고 호스트가 기준 브랜치에 필수 승인을 건 저장소뿐이며, 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
+하네스는 에이전트가 더 자주 행동하게 만드는 자동 실행기가 아닙니다. 평소 작업을 가볍게 기록하고, 충분한 근거가 쌓였을 때만 사람이 `/harvest`로 검토·승인하는 구조입니다. 파일 수정, PR 생성, 플러그인 업데이트는 모두 명시적인 사용자 요청 뒤에만 일어납니다(워크플로의 PR 생성은 초기화 때 고른 `git_policy` 범위 안에서). 예외는 사용자가 켠 [자동 harvest](#auto-harvest)·[자동 sync](#auto-sync)·[모니터링 기반 자동 수정](#autofix)뿐이며, 이때도 결과는 draft PR까지이고 병합은 사람이 합니다. 워크플로가 병합까지 하는 것은 초기화 때 `git_policy:"merge"`와 병합 조건을 사람이 직접 고른 저장소, 또는 사용자가 [개인 자동화 단계](#delivery-level)를 `merge`·`deploy`로 고른 저장소뿐이며(병합 조건은 그 저장소 호스트의 브랜치 보호를 따릅니다), 무인 실행은 그 경우에도 병합하지 않습니다. 예외는 사용자 설정과 저장소 설정을 모두 켠 [자동 병합](#auto-merge)으로, 기계적으로 검증되는 PR만 병합합니다.
 
 ## 목차
 
@@ -340,8 +340,8 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 |---|---|---|
 | 에이전트가 이 저장소에서 커밋·PR을 해도 되는지 | `harness.json` `git_policy`: `pr-only` \| `direct` \| 미설정 | 팀(PR) |
 | 병합·배포에 쓸 저장소 사실: 기준 브랜치, 배포 확인·스모크 명령, 쓸 수 있는 검증 | `harness.json` `merge_policy`(사실만) | 팀(PR) |
-| PR 뒤 어디까지 갈지 + 병합 조건 최소치·방식 | `~/.ai-harness/config` `HM_DELIVERY_LEVEL(_REPOS)`, `HM_MERGE_*` ([개인 자동화 단계](#delivery-level)) | 개인 |
-| 리뷰 없는 병합을 실제로 막는 상한 | 호스트 브랜치 보호 | 팀(호스트) |
+| PR 뒤 어디까지 갈지 | `~/.ai-harness/config` `HM_DELIVERY_LEVEL(_REPOS)` ([개인 자동화 단계](#delivery-level)) | 개인 |
+| 병합 조건(필수 승인·필수 체크)과 병합 방식 | 호스트 브랜치 보호·저장소 병합 설정 | 팀(호스트) |
 
 ```json
 "git_policy": "pr-only",
@@ -354,13 +354,13 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 }
 ```
 
-**예전 설정**: `git_policy:"merge"`는 `pr-only`와 같은 PR 범위로 읽고, `merge_policy`의 `require`·`min_approvals`·`method`는 쓰지 않습니다. 시작은 막지 않고 실행 시작과 결과에 `notice:`로 안내합니다. `/harness-init --sync`가 manifest를 사실만 남기도록 정리를 제안합니다.
+**예전 설정**: `git_policy:"merge"`는 `pr-only`와 같은 PR 범위로 읽고, `merge_policy`의 `require`·`min_approvals`·`method`와 개인 `HM_MERGE_*`는 쓰지 않습니다(병합 조건은 호스트 규칙). 시작은 막지 않고 실행 시작과 결과에 `notice:`로 안내합니다. `/harness-init --sync`가 manifest를 사실만 남기도록 정리를 제안합니다.
 
 | 단계 | 동작 |
 |---|---|
-| 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. `human_approval`은 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 `min_approvals`개(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), `remote_ci`는 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님) |
+| 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. 조건은 **저장소 호스트 규칙**입니다: 기준 브랜치 보호에 필수 승인이 있으면 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 그 수만큼(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), 필수 체크가 있으면 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님). 보호가 없으면 승인 없이 병합합니다. 충돌 없음·draft 아님·리뷰어의 변경 요청 없음은 항상 봅니다 |
 | 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
-| 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) `HM_MERGE_METHOD`(기본 `squash`)대로 병합합니다. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신하고, `rebase`는 지원하지 않습니다 |
+| 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) 저장소의 방식으로 병합합니다 — GitHub는 저장소가 허용한 방식 중 squash → merge → rebase 순(허용 방식을 읽지 못하면 사람에게), Bitbucket은 저장소 기본 전략. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신합니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
 
@@ -369,14 +369,11 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 <a id="delivery-level"></a>
 #### 개인 자동화 단계 (`HM_DELIVERY_LEVEL`)
 
-에이전트가 어디까지 스스로 진행할지는 사람마다 다릅니다. **병합 여부는 사용자 설정 `~/.ai-harness/config`의 자동화 단계만** 정하고, 단계가 없으면 PR까지입니다. 저장소 `git_policy`는 커밋·PR 범위만 정합니다. 팀 통제는 하네스가 따로 상한을 두지 않고 **PR 호스트의 브랜치 보호**(필수 승인·필수 체크)에 맡깁니다. `/ai-harness:setup`에서 고르거나 직접 적습니다.
+에이전트가 어디까지 스스로 진행할지는 사람마다 다릅니다. **병합 여부는 사용자 설정 `~/.ai-harness/config`의 자동화 단계만** 정하고, 단계가 없으면 PR까지입니다. 저장소 `git_policy`는 커밋·PR 범위만 정합니다. **병합 조건과 방식은 하네스가 정하지 않고 저장소 호스트 설정을 따릅니다**(브랜치 보호의 필수 승인·필수 체크, 저장소 병합 방식). `/ai-harness:setup`에서 고르거나 직접 적습니다.
 
 ```bash
 HM_DELIVERY_LEVEL=pr                               # 기본 단계: pr | merge | deploy
 HM_DELIVERY_LEVEL_REPOS="acme-app=merge,api=deploy"  # 저장소별 덮어쓰기(<project_id>=<단계>, 쉼표·공백 구분)
-HM_MERGE_REQUIRE="human_approval,remote_ci,no_conflict,not_draft"  # 병합 조건 최소치 (선택)
-HM_MERGE_MIN_APPROVALS=1                           # (선택)
-HM_MERGE_METHOD=squash                             # squash | merge | rebase (선택)
 ```
 
 | 단계 | `git_policy` `pr-only`(예전 `merge` 포함) | `direct` | 그 밖(커밋 안 함) |
@@ -387,12 +384,12 @@ HM_MERGE_METHOD=squash                             # squash | merge | rebase (�
 
 | 값 | 어디에 | 누가 바꾸나 |
 |---|---|---|
-| 내 단계, 병합 조건 최소치(`HM_MERGE_*`), 병합 방식 | 사용자 설정 `~/.ai-harness/config` | 사용자가 즉시 |
+| 내 단계 | 사용자 설정 `~/.ai-harness/config` | 사용자가 즉시 |
 | `merge_policy.base`·`deploy_check_cmd`·`deploy_timeout_minutes`·`smoke_cmd`·쓸 수 있는 `verify` | 저장소 `harness.json` (저장소 사실) | PR |
-| 필수 승인 수·필수 체크 | 호스트 브랜치 보호 | 호스트 관리자 |
+| 필수 승인 수·필수 체크, 허용 병합 방식 | 호스트 브랜치 보호·저장소 설정 | 호스트 관리자 |
 
-- **안전장치**: `merge` 노드는 병합 직전에 호스트에서 기준 브랜치의 보호 규칙을 읽습니다. GitHub는 규칙 세트(`GET /repos/{owner}/{repo}/rules/branches/{branch}`, 읽기 권한으로 보임)와 브랜치 보호(`GET /repos/{owner}/{repo}/branches/{branch}/protection`, 관리자만 읽힘)를, Bitbucket Cloud는 branch restrictions(`require_approvals_to_merge`·`require_default_reviewer_approvals_to_merge`·`require_passing_builds_to_merge`, glob 패턴과 branching model 대상 모두 — 관리자 권한 필요)를 봅니다. **필수 승인이 1 이상**인 보호가 없거나 읽을 수 없으면 병합하지 않고 `user_decision`(exit 20)으로 넘깁니다. 필수 체크만 있는 보호도 리뷰 없는 병합을 막지 못하므로 보호 없음으로 봅니다. 보호가 있으면 호스트의 필수 승인 수와 필수 체크를 병합 조건의 하한으로 더해(`human_approval`·`min_approvals`, `remote_ci`) 러너가 직접 판정합니다.
-- **조건 기본값**: `HM_MERGE_*`가 없으면 네 조건 모두·승인 1·`squash`를 씁니다. 저장소 `merge_policy`의 `require`·`min_approvals`·`method`는 읽지 않습니다.
+- **병합 조건**: `merge` 노드는 병합 직전에 호스트에서 기준 브랜치의 보호 규칙을 읽습니다. GitHub는 규칙 세트(`GET /repos/{owner}/{repo}/rules/branches/{branch}`, 읽기 권한으로 보임)와 브랜치 보호(`GET /repos/{owner}/{repo}/branches/{branch}/protection`, 관리자만 읽힘)를, Bitbucket Cloud는 branch restrictions(`require_approvals_to_merge`·`require_default_reviewer_approvals_to_merge`·`require_passing_builds_to_merge`, glob 패턴과 branching model 대상 모두 — 관리자 권한 필요)를 봅니다. 호스트의 필수 승인 수와 필수 체크를 그대로 병합 조건으로 쓰고, 보호가 없으면 승인 없이 병합합니다. 호스트가 강제하지 않는 경우(GitHub 관리자 우회, Bitbucket의 비강제 merge check)에도 러너가 그 규칙을 직접 판정합니다. 보호 규칙을 읽을 수 없으면 모르는 채로 병합하지 않고 `user_decision`(exit 20)으로 넘깁니다. 사람 리뷰를 거치게 하려면 기준 브랜치에 필수 승인을 거세요.
+- **예전 설정**: `HM_MERGE_REQUIRE`·`HM_MERGE_MIN_APPROVALS`·`HM_MERGE_METHOD`와 저장소 `merge_policy`의 `require`·`min_approvals`·`method`는 읽지 않고, 값이 있으면 `notice:`로 안내합니다.
 - **저장소 키**: `HM_DELIVERY_LEVEL_REPOS`의 키는 `/metrics`·`HM_AUTOFIX_REPOS`와 같은 `project_id`입니다(`harness.json`의 `project_id` → origin 저장소 이름).
 - **무인 실행**은 단계와 상관없이 병합하지 않습니다. 무인 PR의 병합은 [자동 병합](#auto-merge)(사용자 설정 `HM_*_AUTO_MERGE`)만 합니다.
 - **단계가 없을 때**: 저장소가 예전 `git_policy:"merge"`여도 PR까지이고 안내만 남깁니다([병합](#merge-policy)의 예전 설정).
@@ -862,9 +859,6 @@ HM_APPROVAL=human               # 승인 게이트: human|auto (기본 human). a
 HM_APPROVAL_REPOS=               # 저장소별 승인 모드(<project_id>=human|auto, 쉼표 구분). 전체 설정보다 우선
 HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 PR까지
 HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
-HM_MERGE_REQUIRE=                # 개인 단계의 병합 조건 최소치(비면 네 조건 모두)
-HM_MERGE_MIN_APPROVALS=          # 비면 1
-HM_MERGE_METHOD=                 # squash|merge|rebase. 비면 squash
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
 HM_AUTOFIX_REPOS=                # 자동 수정을 허용할 project_id 목록(쉼표 구분). 비어 있으면 아무 저장소도 돌지 않음
 HM_AUTOFIX_INTERVAL_MINUTES=     # 자동 수정 sweep 전용 주기(분). 비면 정기 backfill 주기에 같이 돎. 바꾸면 schedule.sh install
@@ -919,13 +913,13 @@ catalog/          /setup이 사용자 전역에 선택 설치하는 기본 스�
 agents/           플러그인 전역 에이전트 (harvest-reviewer·design-reviewer)
 templates/        /harness-init이 프로젝트에 생성하는 진입점·그래프 계약 원본 (managed-files.json이 단일 출처)
 docs/design-system.md, docs/design-system/   보드·리포트 화면의 디자인 규칙, 토큰·공용 부품 CSS, 기준 화면 (scripts/design-system.sh sync|check|contrast|lint)
-tests/            회귀 테스트와 fixtures (bash tests/run.sh)
+tests/            회귀 테스트: 영역 파일 <영역>.sh, 공용 lib.sh, fixtures (bash tests/run.sh [영역...|--changed])
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
 macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/board`·`langfuse`는 Python 3(표준 라이브러리)을 씁니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
-개발 시 회귀 테스트는 아래와 같습니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
+개발 시 회귀 테스트는 아래와 같습니다. 작업 중에는 `bash tests/run.sh --changed`로 바뀐 영역만 돌리고, PR 전에 전체를 돌립니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 
 ```bash
 bash tests/run.sh

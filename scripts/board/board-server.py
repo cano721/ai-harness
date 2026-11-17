@@ -32,6 +32,7 @@ POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_wor
 상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
 import atexit, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -1059,8 +1060,10 @@ def settings_state():
     by_sid = {i.get("sid"): i for i in (_cache["data"] or {}).get("items", []) if i.get("sid")}
     cfg = hsettings.user_config()
     rows = []
-    for repo in harness_repos():
-        row = hsettings.read_repo(repo)
+    with ThreadPoolExecutor(max_workers=8) as pool:  # 저장소마다 git을 여러 번 부른다 — 저장소가 많으면 차례로 읽는 데 수 초 걸린다
+        read = list(pool.map(hsettings.read_repo, harness_repos()))
+    for row in read:
+        repo = row["repo"]
         if row.get("error"):
             rows.append(row)
             continue

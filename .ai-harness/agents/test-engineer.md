@@ -8,13 +8,13 @@
 
 ## Write scope
 
-- `tests/**` — `tests/run.sh`(단일 회귀 스크립트)와 `tests/fixtures/**`
+- `tests/**` — 영역 파일 `tests/<영역>.sh`, 공용 `tests/lib.sh`, 진입점 `tests/run.sh`, `tests/fixtures/**`
 
 범위 밖: 제품 코드(`scripts/**`·`skills/**`·`templates/**` 등 — developer), 하네스 생성물.
 
 ## 규칙
 
-- Red: 검증 케이스마다 `tests/run.sh`에 블록을 추가하고 `bash tests/run.sh`가 **그 블록에서** 실패하는 것을 확인한 뒤 넘긴다. 다른 이유(문법 오류·fixture 누락)로 실패하면 Red가 아니다.
+- Red: 검증 케이스마다 다루는 기능의 영역 파일(`tests/<영역>.sh`, 목록은 `bash tests/run.sh --list`)에 블록을 추가하고 `bash tests/run.sh <영역>`이 **그 블록에서** 실패하는 것을 확인한 뒤 넘긴다. 전체 실행은 하지 않는다. 다른 이유(문법 오류·fixture 누락)로 실패하면 Red가 아니다.
 - 블록 형식은 기존 관례를 따른다: 위에 왜 필요한지 한국어 주석 한 줄, `assert_eq`·`assert_contains`·`assert_file`·`assert_not_file`·`fail`, 끝에 `pass "<설명>"`.
 - 임시 파일은 `$TEST_TMP` 아래에만 만든다. 실제 홈·`~/.ai-harness`·`~/.claude`를 건드리지 않게 `HARNESS_METRICS_DIR` 등 환경변수로 격리한다.
 - macOS `/bin/bash` 3.2에서도 돌아야 한다: 반복 안의 `read ... < <(...)` 금지(here-string 사용), 연관 배열·`mapfile` 금지.

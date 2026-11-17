@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # workflow-driver 테스트용 가짜 curl. Bitbucket Cloud API(api.bitbucket.org)만 흉내 낸다. 작업 디렉터리는 저장소다.
 set -euo pipefail
-method=GET url=""
+method=GET url="" body=""
 while (($#)); do
   case "$1" in
     -X) method="$2"; shift 2 ;;
-    -K|-H|-d|--max-time) shift 2 ;;
+    -d) body="$2"; shift 2 ;;
+    -K|-H|--max-time) shift 2 ;;
     https://*) url="$1"; shift ;;
     *) shift ;;
   esac
@@ -15,7 +16,7 @@ cfg="$(cat)"
 printf 'curl %s %s\n' "$method" "${url#https://api.bitbucket.org/2.0/repositories/}" >>"$FAKE_LOG"
 scenario="${FAKE_SCENARIO:-ok}"
 case "$method $url" in
-  "POST "*/merge) touch "$FAKE_LOG.merged"; echo '{}' ;;
+  "POST "*/merge) printf 'curl body %s\n' "$body" >>"$FAKE_LOG"; touch "$FAKE_LOG.merged"; echo '{}' ;;
   *"/diffstat"*) echo '{"values":[{"status":"modified"}]}' ;;
   *"/statuses"*) echo '{"values":[{"state":"SUCCESSFUL"}]}' ;;
   # 기준 브랜치 보호(branch restrictions). FAKE_PROTECTION=bb_glob|bb_model|bb_denied|그 밖(제한 없음)

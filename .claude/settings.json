@@ -2,6 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(bash tests/run.sh)",
+      "Bash(bash tests/run.sh:*)",
       "Bash(bash -n scripts/*.sh scripts/board/*.sh tests/*.sh)",
       "Bash(npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh)",
       "Bash(scripts/release-prep.sh --check)",
