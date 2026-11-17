@@ -16,9 +16,9 @@
 
 승인 뒤 검증 케이스를 1~3개씩 slice로 나눈다. slice마다:
 
-1. **Red** — test-engineer가 `tests/run.sh`에 블록을 추가하고 `bash tests/run.sh`가 그 블록에서 실패함을 확인한다.
+1. **Red** — test-engineer가 영역 파일 `tests/<영역>.sh`에 블록을 추가하고 `bash tests/run.sh <영역>`이 그 블록에서 실패함을 확인한다.
 2. **Green** — developer가 최소 변경으로 통과시킨다.
-3. **Refactor** — 테스트를 바꾸지 않고 정리, `bash tests/run.sh` 재통과.
+3. **Refactor** — 테스트를 바꾸지 않고 정리, `bash tests/run.sh --changed` 재통과.
 
 역할 분리는 작업 위험이 뒷받침할 때만 쓴다. 역할 도구가 없으면 현재 세션에서 페르소나(`.ai-harness/agents/`)를 바꿔 가며 진행한다.
 
@@ -26,7 +26,7 @@
 
 모든 slice 뒤 reviewer가 검토하고, blocking finding이 0개가 될 때까지 **리뷰 → 원인별 수정 → 검증 → 재리뷰**를 반복한다. 한도는 그래프 수리 한도를 따르고, 넘으면 사용자 판단으로 올린다.
 
-## 4. 검증 명령 (완료 증거)
+## 4. 검증 명령 (완료 증거 — PR 직전 한 번)
 
 ```bash
 bash tests/run.sh

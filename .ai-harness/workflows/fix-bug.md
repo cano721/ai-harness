@@ -15,10 +15,10 @@
 
 ## 3. 회귀 → 수정
 
-- **회귀 테스트는 test-engineer**(`tests/run.sh` 블록, 수정 전 실패 확인), **수정은 developer**(`scripts/`·`skills/`·`templates/` 등). developer는 `tests/**`를 고치지 않는다.
+- **회귀 테스트는 test-engineer**(영역 파일 `tests/<영역>.sh`의 블록, `bash tests/run.sh <영역>`으로 수정 전 실패 확인), **수정은 developer**(`scripts/`·`skills/`·`templates/` 등). developer는 `tests/**`를 고치지 않는다.
 - 리뷰 → 원인별 수정 → 검증 → 재리뷰. 한도는 그래프 수리 한도, 넘거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 
-## 4. 검증 명령
+## 4. 검증 명령 (PR 직전 한 번. 작업 중에는 `bash tests/run.sh --changed`·`--lint`)
 
 ```bash
 bash tests/run.sh
