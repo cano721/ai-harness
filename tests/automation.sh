@@ -760,6 +760,9 @@ WD="$TEST_TMP/wait-delegation"
 mkdir -p "$WD/bin"
 cat >"$WD/bin/orca" <<'EOF'
 #!/usr/bin/env bash
+# 실측(Orca 1.4.250): close 는 실제로 닫혀도 오류(tab_not_found)를 낼 수 있다 — 종료 코드가 아니라 list 로 판정해야 한다.
+if [[ "${2:-}" == close ]]; then printf '%s\n' "$*" >>"$WD_DIR/closed"; [[ -f "$WD_DIR/close_noop" ]] && rm -f "$WD_DIR/closed"; echo tab_not_found >&2; exit 1; fi
+if [[ "${2:-}" == list ]]; then [[ -f "$WD_DIR/closed" ]] && echo '{"ok":true,"result":{"terminals":[]}}' || echo '{"ok":true,"result":{"terminals":[{"handle":"term_3d258b5b-850f-4f77-a851-3013191cd199"}]}}'; exit 0; fi
 [[ -f "$WD_DIR/fail" ]] && { echo '{"ok":false,"error":{"code":"terminal_handle_stale"}}'; exit 1; }
 jq -Rsc --arg s "$(cat "$WD_DIR/status" 2>/dev/null || echo running)" '{ok:true, result:{terminal:{status:$s, tail:(split("\n"))}}}' "$WD_DIR/screen"
 EOF
@@ -799,6 +802,45 @@ rm -f "$WD/fail"
 assert_contains "$(wait_delegation --done "$WD/none.md" --timeout 1 --interval 1)" "reason=timeout" "without a terminal the wait watches the file only"
 assert_contains "$(wait_delegation --terminal "$WD_HANDLE")" "exit=2" "the completion file is required"
 pass "delegation wait reports input gates"
+
+# 끝난 멤버 탭을 닫는다(--close). 대화형 세션은 끝나도 입력 대기로 남아 세션당 수백 MB를 쥔다(2026-11-17: 끝난 세션
+# 탭 십여 개·swap 27GB). 오래 켠 조율 세션은 나중에 추가된 문서 규칙을 못 읽으므로 대기 스크립트가 직접 닫는다.
+# 완료 파일이 아직 미확인(CI 대기 등)이거나 user_decision이면, 화면이 일하는 중이거나 질문 중이면 닫지 않는다.
+printf '## 결과\nPR: #12\n원격 CI: 성공\n' >"$WD/final.md"
+printf '⏺ 끝났습니다.\n\n❯ \n⏵⏵ bypass permissions on\n' >"$WD/screen"
+rm -f "$WD/closed" "$WD/close_noop"
+WD_OUT="$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE" --close)"
+assert_contains "$WD_OUT" "reason=done" "closing still reports the completion"
+assert_contains "$WD_OUT" "closed=yes" "a finished idle member tab is closed"
+assert_contains "$(<"$WD/closed")" "terminal close --terminal $WD_HANDLE" "the member terminal is closed by its full handle"
+case "$(<"$WD/closed")" in *--tab*) fail "close without --tab (with --tab Orca closes nothing for launched agents)" ;; esac
+rm -f "$WD/closed"
+assert_contains "$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE")" "reason=done" "without --close the wait only reports"
+assert_not_file "$WD/closed"
+printf '## 결과\n원격 CI: PLACEHOLDER\n' >"$WD/pending.md"
+WD_OUT="$(wait_delegation --done "$WD/pending.md" --terminal "$WD_HANDLE" --close)"
+assert_contains "$WD_OUT" "closed=no" "a completion file whose CI is still open keeps the tab"
+assert_contains "$WD_OUT" "close_reason=done_file_pending" "the reason names the open completion file"
+printf '## 결과\n그래프 종료: user_decision (원격 CI 미확인)\n' >"$WD/decision.md"
+assert_contains "$(wait_delegation --done "$WD/decision.md" --terminal "$WD_HANDLE" --close)" "close_reason=user_decision" "a run that stopped for the user keeps its tab"
+assert_not_file "$WD/closed"
+printf '✻ Polling CI…\n⏵⏵ bypass permissions on · esc to interrupt\n' >"$WD/screen"
+WD_OUT="$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE" --close --close-wait 0)"
+assert_contains "$WD_OUT" "close_reason=busy" "a member still working is not closed"
+printf '✻ done 7:11 PM · 1 shell still running\n❯ \n' >"$WD/screen"
+assert_contains "$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE" --close --close-wait 0)" "close_reason=busy" "a member with a background shell is not closed"
+printf '머지할까요?\n\n❯ \n' >"$WD/screen"
+assert_contains "$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE" --close --close-wait 0)" "close_reason=awaiting_input" "a member asking a question is not closed"
+assert_not_file "$WD/closed"
+printf '⏺ 끝났습니다.\n❯ \n' >"$WD/screen"
+: >"$WD/close_noop"
+assert_contains "$(wait_delegation --done "$WD/final.md" --terminal "$WD_HANDLE" --close)" "close_reason=still_listed" "a close that left the terminal listed is reported, not trusted"
+rm -f "$WD/close_noop" "$WD/closed"
+assert_contains "$(wait_delegation --done "$WD/final.md" --close)" "exit=2" "--close needs the member terminal"
+WD_INIT="$(<"$ROOT/skills/harness-init/SKILL.md")"
+assert_contains "$WD_INIT" 'wait-delegation.sh --done <완료 파일> --terminal <멤버 터미널 전체 handle> --close' "workspace delegation waits with --close"
+assert_contains "$WD_INIT" "③이 끝난 멤버 탭을 닫지 않음" "sync flags a workspace that does not close finished member tabs"
+pass "delegation wait closes a finished member tab"
 
 # 정기 작업은 OS 스케줄러 없이 에이전트 hook이 깨운다. LLM 단계는 사용자가 쉴 때만, 한도 직후엔 쉰다.
 assert_contains "$(jq -r '.hooks.Stop[0].hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/tick.sh" "Stop hook ticks the scheduler"
