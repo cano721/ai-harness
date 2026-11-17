@@ -249,6 +249,7 @@ jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile c
        link: null, log: null, cmd: (if .kind == "background" then "claude attach \(.id // .sessionId[0:8])" else null end),
        id: "claude|\(.sessionId)"}
     | .actions = ((if .transcript then ["view"] else [] end)
-                  # 실행 중(쉬는·작업 중)이면 claude attach로 원래 세션에, 멈췄으면 --resume으로(#380). 질문·권한 창에서 기다리면
-                  # 창에 잘못 입력될 수 있어 보내기를 열지 않는다 — 화면이 attach 명령을 안내한다.
-                  + (if .kind == "bg" and (.status == "idle" or .status == "busy" or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"
+                  # 입력을 기다리는(idle) 실행 중 세션은 claude attach로 원래 세션에, 멈췄으면 --resume으로(#380). 작업 중이면 언제든
+                  # 권한 창이 뜰 수 있고, 질문·권한 창(state blocked)에서는 글·Enter가 선택지로 읽힐 수 있어 보내기를 열지 않는다 —
+                  # 화면이 attach 명령을 안내한다.
+                  + (if .kind == "bg" and ((.status == "idle" and .state != "blocked") or .pid == null) then ["send"] else [] end)) ]' <<<"$agents"

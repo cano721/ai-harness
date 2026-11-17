@@ -130,7 +130,9 @@ SNAPSHOT = os.path.join(DATA, "board", "snapshot.json")  # 마지막 목록(0600
 _wake = threading.Event()
 _active = {"at": 0.0}  # 보이는 화면이 마지막으로 상태를 받은 때. 숨은 탭(bg=1)은 _viewer만 살리고 갱신은 돌리지 않는다
 _refresh_fails = {"n": 0}
-_timing = {"start": 0.0, "dur": 0.0}  # 마지막 백그라운드 갱신(건너뛴 확인 포함)의 시작 시각·걸린 시간
+_timing = {"start": 0.0, "dur": 0.0}  # 마지막 백그라운드 수집의 시작 시각·걸린 시간
+_tick = {"at": 0.0}  # 마지막 백그라운드 확인(지문) 시각
+_pending = {"at": None}  # 바뀐 것이 있어 모을 차례를 기다리는 시각(직전 수집 시작 + 2×걸린 시간)
 _full = {"at": 0.0}  # 마지막 전체 수집 시작 시각
 _fp = {"last": None}  # 마지막 백그라운드 수집 직전의 지문
 _snap = {"on": False, "sig": None}  # 스냅숏 쓰기는 서버로 돌 때(restore_snapshot 뒤)만
@@ -304,12 +306,14 @@ def restore_snapshot():
 
 
 def refresh_once():
-    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) 캐시를 새로 모은다. 방금 모았으면 건너뛴다.
+    """보는 사람이 있으면(보이는 탭의 마지막 /status.json 뒤 REFRESH_IDLE 이내) REFRESH마다 지문을 보고 필요할 때만 모은다.
     상태 지문이 지난 수집 때와 같고 FULL_REFRESH 안이면(진행 기록만 바뀌었으면 TRANSCRIPT_REFRESH 안이면) 모으지 않고
-    캐시를 확인된 새것으로 친다(복원한 스냅숏은 늘 새로 모은다)."""
+    캐시를 확인된 새것으로 친다(복원한 스냅숏은 늘 새로 모은다). 모을 때는 직전 수집 시작 뒤 그 수집 시간의 두 배가
+    지나야 한다(#380) — 바쁜 Mac에서 수집이 시간의 절반을 넘지 않게. 그 전이면 _pending으로 두고 열리는 즉시 모은다."""
     if time.time() - _active["at"] > REFRESH_IDLE:
         return
     started = time.time()
+    _tick["at"] = started
     try:
         fp, last = fingerprint(), _fp["last"]
         since = started - _full["at"]
@@ -321,25 +325,33 @@ def refresh_once():
                 if fresh:
                     _cache["at"] = started
             if fresh:
-                _timing.update(start=started, dur=time.time() - started)
+                _pending["at"] = None
                 return
+        gate = _timing["start"] + 2 * _timing["dur"]
+        if started < gate and not _cache.get("restored") and _cache["data"] is not None:
+            _pending["at"] = gate  # 바뀐 것은 있지만 아직 쉬는 중 — 열리면 모은다
+            return
+        _pending["at"] = None
         _collect(REFRESH / 2, cached=True)
+        _timing.update(start=started, dur=time.time() - started)
         _fp["last"] = fp
         _refresh_fails["n"] = 0
     except Exception as e:  # 실패하면 다음에 다시 모으되, 연달아 실패하면 refresh_wait가 간격을 늘린다
         _fp["last"] = None
         _refresh_fails["n"] += 1
         print("refresh:", e, file=sys.stderr, flush=True)
-    _timing.update(start=started, dur=time.time() - started)
 
 
 def refresh_wait():
-    """다음 백그라운드 갱신까지 기다릴 초. 직전 갱신 시작 뒤 max(REFRESH, 걸린 시간 × 2)에(#380), 사이에 0.5초는 쉰다.
+    """다음 백그라운드 확인까지 기다릴 초. REFRESH마다(확인 시작 기준), 모을 것이 쉬는 중이면 쉬는 시간이 끝날 때, 사이에 0.5초는 쉰다.
     연달아 실패하면 1·2·4초…로 늘려 FAIL_BACKOFF_MAX에서 멈춘다(망가진 status.sh를 0.5초마다 돌리지 않게)."""
     if _refresh_fails["n"]:
         return min(FAIL_BACKOFF_MAX, 0.5 * 2 ** _refresh_fails["n"])
-    interval = max(REFRESH, 2 * _timing["dur"])
-    return max(0.5, interval - (time.time() - _timing["start"]))
+    now = time.time()
+    wait = REFRESH - (now - _tick["at"])
+    if _pending["at"] is not None:
+        wait = min(wait, _pending["at"] - now)
+    return max(0.5, wait)
 
 
 def refresher():
@@ -897,6 +909,9 @@ def bulk_cleanup(req, items=None):
         if items is None:
             # 실제 정리는 캐시(최대 STALE_SYNC 전)를 믿지 않고 그 자리에서 새로 모은다 — 이 경로는 세션 상태를 다시 확인하지 않아,
             # 그새 다시 일하는 세션을 쉬는 것으로 보고 닫을 수 있다. 미리보기(dry_run)는 캐시로 충분하다.
+            # 캐시 시각은 지문 확인으로도 새로 매겨지므로(#380) 나이로 판단하지 않고 비운 뒤 입력 캐시 없이 모은다.
+            if not req.get("dry_run"):
+                _cache["data"] = None
             items = (status() if req.get("dry_run") else _collect(3))["items"]
         older = req.get("older_days")
         older = float(older) if isinstance(older, (int, float)) and not isinstance(older, bool) and older > 0 else 0
@@ -1511,12 +1526,24 @@ def send_to_terminal(item, text):
 
 
 ATTACH_READY = 20.0  # claude attach가 화면을 그릴 때까지 기다리는 최대 초
-ATTACH_SETTLE = 3.0  # 첫 화면 뒤 이만큼이면 준비된 것으로 본다(작업 중이면 스피너 때문에 조용해지지 않는다)
+ATTACH_SETTLE = 3.0  # 첫 화면 뒤 이만큼이면 준비된 것으로 본다(화면이 계속 바뀌어 조용해지지 않을 때)
 ATTACH_CONFIRM = _positive_env("BOARD_ATTACH_CONFIRM", 8.0)  # 보낸 글이 대화 기록에 나타날 때까지 기다리는 최대 초
+_ANSI = re.compile(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[=>78DEM]")
+# 질문·권한 창 표지(실측: Claude Code 2.1.326 권한 창 — "Do you want to proceed?", "❯ 1. Yes", "Esc to cancel · Tab to amend").
+# 이것이 화면에 보이면 Enter를 보내지 않는다 — 창에서 Enter는 기본 선택지(허용)를 고른다.
+_PROMPT_MARKS = (b"Do you want to", b"Esc to cancel", b"Tab to amend", b"\xe2\x9d\xaf 1. ", b"Enter to select")
+_attach_locks = {}
+_attach_locks_guard = threading.Lock()
 
 
-def _pty_read(fd):
-    """PTY 출력 한 덩어리를 읽어 버린다(커서 위치 질의에는 답한다 — 안 하면 TUI가 기다린다). 끝났으면 -1."""
+def _screen(raw):
+    """PTY 출력에서 제어 시퀀스를 뺀 글자만(창 표지·에코 확인용)."""
+    return _ANSI.sub(b"", raw)
+
+
+def _pty_read(fd, out=None, answer=True):
+    """PTY 출력 한 덩어리를 읽는다. out(bytearray)에 모으고, 커서 위치 질의에는 answer일 때만 답한다
+    (안 하면 TUI가 기다린다. 붙여넣는 동안은 답을 입력과 섞지 않게 미룬다). 끝났으면 -1, 미룬 질의가 있으면 -2."""
     try:
         chunk = os.read(fd, 65536)
     except BlockingIOError:
@@ -1525,7 +1552,12 @@ def _pty_read(fd):
         return -1
     if not chunk:
         return -1
+    if out is not None:
+        out += chunk
+        del out[:-65536]  # 마지막 화면만 있으면 된다
     if b"\x1b[6n" in chunk:
+        if not answer:
+            return -2
         try:
             os.write(fd, b"\x1b[1;1R")
         except OSError:
@@ -1533,16 +1565,16 @@ def _pty_read(fd):
     return len(chunk)
 
 
-def _pty_drain(fd, seconds, quiet=None, settle=None):
-    """seconds 동안 출력을 읽어 버린다. 첫 출력 뒤 quiet초 조용하거나 settle초가 지나면 일찍 끝낸다. 읽은 바이트 수(끝났으면 -1)."""
+def _pty_drain(fd, seconds, quiet=None, settle=None, out=None):
+    """seconds 동안 출력을 읽는다(out에 모음). 첫 출력 뒤 quiet초 조용하거나 settle초가 지나면 일찍 끝낸다. 읽은 바이트 수(끝났으면 -1)."""
     end, last, first, got = time.time() + seconds, time.time(), None, 0
     while time.time() < end:
         r, _, _ = select.select([fd], [], [], 0.05)
         if r:
-            n = _pty_read(fd)
-            if n < 0:
+            n = _pty_read(fd, out)
+            if n == -1:
                 return -1
-            if n:
+            if n > 0:
                 got, last = got + n, time.time()
                 first = first or last
         if got and ((quiet is not None and time.time() - last >= quiet) or (settle is not None and time.time() - first >= settle)):
@@ -1550,20 +1582,29 @@ def _pty_drain(fd, seconds, quiet=None, settle=None):
     return got
 
 
-def _pty_write(fd, data, seconds=10.0):
-    """막히지 않게 나눠 쓴다. 쓰는 동안 화면 출력도 읽어 버린다 — 큰 붙여넣기에서 입력·출력 큐가 서로를 기다리며 멈추지 않게."""
-    end = time.time() + seconds
+def _pty_write(fd, data, seconds=10.0, out=None):
+    """막히지 않게 나눠 쓴다. 쓰는 동안 화면 출력도 읽는다 — 큰 붙여넣기에서 입력·출력 큐가 서로를 기다리며 멈추지 않게.
+    쓰는 동안 온 커서 위치 질의는 다 쓴 뒤에 답한다(붙여넣은 글 사이에 응답이 끼지 않게)."""
+    end, owed = time.time() + seconds, False
     while data:
         if time.time() > end:
             raise OSError("PTY에 쓰는 시간이 넘음")
         r, w, _ = select.select([fd], [fd], [], 0.05)
-        if r and _pty_read(fd) < 0:
-            raise OSError("claude attach가 끝남")
+        if r:
+            n = _pty_read(fd, out, answer=False)
+            if n == -1:
+                raise OSError("claude attach가 끝남")
+            owed = owed or n == -2
         if w:
             try:
                 data = data[os.write(fd, data[:1024]):]
             except BlockingIOError:
                 pass
+    if owed:
+        try:
+            os.write(fd, b"\x1b[1;1R")
+        except OSError:
+            pass
 
 
 def _detach(proc):
@@ -1583,12 +1624,17 @@ def _detach(proc):
 
 
 def _live_status(item):
-    """보내기 직전 그 세션의 지금 상태를 claude agents로 다시 본다(상태 파일 값은 agents와 달라 쓰지 않는다). 모르면 None."""
+    """보내기 직전 그 세션의 지금 상태를 claude agents로 다시 본다: "idle"(입력 대기)·"busy"·"waiting"·"blocked"·"stopped" 또는 모르면 None.
+    실측: 권한 창이면 status=waiting·state=blocked, 사용량 한도로 멈추면 status=idle·state=blocked."""
     agents = live_agents(item, item.get("config_dir") or None, timeout=3)  # 확인과 쓰기 사이 틈을 짧게
     a = next((x for x in agents or [] if isinstance(x, dict) and x.get("sessionId") == item.get("sid")), None)
     if a is None:
         return None
-    return a.get("status") if a.get("pid") is not None else "stopped"
+    if a.get("pid") is None:
+        return "stopped"
+    if a.get("state") == "blocked" and a.get("status") == "idle":
+        return "blocked"
+    return a.get("status")
 
 
 def _landed(path, start, text):
@@ -1620,24 +1666,55 @@ def _landed(path, start, text):
     return False
 
 
+def _status_hint(st, short):
+    if st == "stopped":
+        return f"세션이 그새 멈춤 — 다시 보내면 같은 대화로 깨웁니다"
+    if st == "busy":
+        return f"세션이 그새 작업을 시작함 — 끝나면 다시 보내거나 터미널에서 claude attach {short}로 넣으세요"
+    if st in ("waiting", "blocked"):
+        return f"세션이 질문·권한 창(또는 사용량 한도)에서 기다림 — 터미널에서 claude attach {short}로 열어 답하세요"
+    return f"세션 상태를 다시 확인하지 못함 — 터미널에서 claude attach {short}로 열어 확인하세요"
+
+
 def send_to_running_bg(item, text):
-    """실행 중인 bg 세션(#380): `claude attach <id>`를 PTY로 붙여 원래 세션의 입력창에 글을 넣고(Enter) 뗀다.
-    `--resume`은 이미 도는 세션의 복제본을 띄우므로 쓰지 않는다. 작업 중이면 Claude Code가 대기열에 넣어 끝난 뒤 처리한다.
-    붙여넣기 직전과 Enter 직전에 세션 상태를 다시 보고, 그 사이 질문·권한 창으로 넘어갔으면 Enter를 보내지 않는다
-    (창에서 Enter는 기본 선택지를 고른다). 보낸 글이 대화 기록에 나타났을 때만 성공이라고 한다."""
+    """입력을 기다리는 bg 세션(#380): `claude attach <id>`를 PTY로 붙여 원래 세션의 입력창에 글을 넣고(Enter) 뗀다.
+    `--resume`은 이미 도는 세션의 복제본을 띄우므로 쓰지 않는다. 권한을 대신 승인하지 않도록 겹겹이 막는다:
+    붙기 전·붙여넣기 전·Enter 전에 claude agents로 입력 대기(idle)인지 보고, 화면에 질문·권한 창 표지가 보이면 멈추며,
+    붙여넣은 글이 입력창에 보일 때만 Enter를 보낸다. 보낸 글이 대화 기록에 나타났을 때만 성공이라고 한다."""
     short = item.get("short_id") or ""
     hint = f"터미널에서 claude attach {short}로 열어 확인하세요"
     if not re.fullmatch(r"[0-9a-f]{8}", short):
         return {"ok": False, "message": "세션 id를 알 수 없어 보내지 않음"}
-    # 줄바꿈·탭만 남기고 제어 문자를 뺀다 — ESC가 붙여넣기 범위를 끝내고 나머지를 키 입력으로 읽히게 하지 않게
-    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text.replace("\r\n", "\n").replace("\r", "\n"))
+    path = item.get("transcript")
+    if not path or not os.path.isfile(path):  # 들어갔는지 확인할 수 없으면 보내지 않는다
+        return {"ok": False, "message": f"이 세션의 대화 기록을 찾지 못해 보내지 않음 — {hint}"}
+    # 줄바꿈·탭만 남기고 제어 문자(C0·DEL·C1)를 뺀다 — ESC 등이 붙여넣기 범위를 끝내고 나머지를 키 입력으로 읽히게 하지 않게
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text.replace("\r\n", "\n").replace("\r", "\n"))
     if not text.strip():
         return {"ok": False, "message": "보낼 내용이 비었음"}
-    path = item.get("transcript")
     try:
-        start = os.path.getsize(path) if path else 0
+        body = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return {"ok": False, "message": "보낼 글에 쓸 수 없는 문자가 있음 — 다시 입력해 주세요"}
+    with _attach_locks_guard:
+        lock = _attach_locks.setdefault(item.get("sid") or short, threading.Lock())
+    if not lock.acquire(blocking=False):
+        return {"ok": False, "message": "이 세션에 이미 보내는 중 — 끝난 뒤 다시 보내세요"}
+    try:
+        return _attach_send(item, text, body, short, hint, path)
+    finally:
+        lock.release()
+
+
+def _attach_send(item, text, body, short, hint, path):
+    st = _live_status(item)
+    if st != "idle":
+        return {"ok": False, "message": _status_hint(st, short)}
+    try:
+        start = os.path.getsize(path)
     except OSError:
         start = 0
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")[:20].encode("utf-8")
     master, slave = pty.openpty()
     env = {**_claude_env(item.get("config_dir")), "TERM": "xterm-256color"}
     cwd = item.get("cwd") if item.get("cwd") and os.path.isdir(item["cwd"]) else os.path.expanduser("~")
@@ -1651,58 +1728,66 @@ def send_to_running_bg(item, text):
         os.close(slave)
         return {"ok": False, "message": f"claude attach를 띄우지 못함: {e}"}
     os.close(slave)
-    typed, moved, pasted = False, None, False
+    typed, why, left = False, None, False
     try:
-        if _pty_drain(master, ATTACH_READY, quiet=0.6, settle=ATTACH_SETTLE) > 0:
+        seen = bytearray()
+        if _pty_drain(master, ATTACH_READY, quiet=0.6, settle=ATTACH_SETTLE, out=seen) <= 0:
+            why = f"세션 화면에 붙지 못해 보내지 않음 — {hint}"
+        elif any(m in _screen(seen) for m in _PROMPT_MARKS):
+            why = f"화면에 질문·권한 창이 떠 있어 보내지 않음 — {hint}"
+        else:
             st = _live_status(item)
-            if st not in ("idle", "busy"):
-                moved = st or "unknown"
+            if st != "idle":
+                why = _status_hint(st, short)
             else:
-                pasted = True
-                _pty_write(master, b"\x1b[200~" + text.encode() + b"\x1b[201~")  # 붙여넣기로 — 줄바꿈이 Enter로 읽히지 않게
-                _pty_drain(master, 0.3)
+                after = bytearray()
+                _pty_write(master, b"\x1b[200~" + body + b"\x1b[201~", out=after)  # 붙여넣기로 — 줄바꿈이 Enter로 읽히지 않게
+                left = True
+                _pty_drain(master, 0.8, quiet=0.4, out=after)
+                shown = _screen(after)
                 st = _live_status(item)
-                if st not in ("idle", "busy"):
-                    moved = st or "unknown"
+                if any(m in shown for m in _PROMPT_MARKS):
+                    why = f"붙여넣는 사이 질문·권한 창이 떠 Enter를 보내지 않음 — {hint}"
+                elif st != "idle":
+                    why = _status_hint(st, short)
+                elif first not in shown and b"[Pasted text" not in shown:
+                    why = f"입력창에 글이 보이지 않아 Enter를 보내지 않음 — {hint}"
                 else:
                     _pty_write(master, b"\r")
                     _pty_drain(master, 0.5)
-                    typed = True
+                    typed, left = True, False
+                # 멈춘 경우 붙여넣은 글은 지우지 않는다: 지우는 키(Ctrl-C)는 창에서는 거절·중단으로, 작업 중이면 중단으로 읽힌다.
     except OSError:
-        pass
+        why = why or f"세션 화면과 주고받지 못함 — {hint}"
     finally:
         _detach(proc)
         os.close(master)
-    if moved == "unknown":
-        return {"ok": False, "message": f"세션 상태를 다시 확인하지 못해 보내지 않음 — {hint}"}
-    if moved is not None:
-        return {"ok": False, "message": f"세션이 질문·권한 창으로 넘어가 보내지 않음 — {hint}"
-                + (" (붙여넣은 글이 입력창에 남아 있을 수 있음)" if pasted else "")}
     if not typed:
-        return {"ok": False, "message": f"세션 화면에 붙지 못해 보내지 않음 — {hint}"
-                + (" (붙여넣은 글이 입력창에 남아 있을 수 있음)" if pasted else "")}
-    if not path:
-        return {"ok": True, "message": "실행 중인 세션에 입력함"}
+        return {"ok": False, "message": (why or f"보내지 못함 — {hint}") + (" (붙여넣은 글이 입력창에 남아 있을 수 있음)" if left else "")}
     end = time.time() + ATTACH_CONFIRM
     while time.time() < end:
         if _landed(path, start, text):
-            return {"ok": True, "message": "실행 중인 세션에 입력함" + (" — 작업이 끝나면 이어서 처리" if item.get("status") == "busy" else "")}
+            return {"ok": True, "message": "실행 중인 세션에 입력함"}
         time.sleep(0.25)
     return {"ok": False, "message": f"입력이 세션에 들어갔는지 확인하지 못함 — {hint}"}
 
 
 def send_to_bg(item, text):
-    """bg 세션에 이어서 지시한다. 실행 중이면 claude attach로 그 세션에(#380), 멈췄으면 같은 ID로 깨운다(옵션을 넘기면 복사본이 생기므로 넘기지 않는다).
-    질문·권한 창에서 기다리는 세션에는 보내지 않는다 — 글이 창의 선택지로 잘못 읽힐 수 있다."""
+    """bg 세션에 이어서 지시한다. 입력을 기다리는(idle) 실행 중 세션은 claude attach로 그 세션에(#380), 멈췄으면 같은 ID로
+    깨운다(옵션을 넘기면 복사본이 생기므로 넘기지 않는다). 작업 중이거나 질문·권한 창에서 기다리는 세션에는 보내지 않는다 —
+    작업 중에는 언제든 권한 창이 뜰 수 있고, 창에서 글·Enter는 선택지로 읽힐 수 있다."""
     if not isinstance(text, str) or not text.strip() or len(text) > 8000:
         return {"ok": False, "message": "보낼 내용이 비었거나 너무 김(8000자 이하)"}
     if item.get("kind") == "agent":
         return send_to_terminal(item, text)
     if item.get("live"):
-        if item.get("status") == "waiting":
-            return {"ok": False, "message": f"질문·권한 창에서 기다리는 세션 — 터미널에서 claude attach {item.get('short_id') or ''}로 열어 답하세요"}
-        if item.get("status") not in ("idle", "busy"):
-            return {"ok": False, "message": f"지금은 보낼 수 없는 상태({item.get('status')}) — 터미널에서 claude attach {item.get('short_id') or ''}로 열어 확인하세요"}
+        short = item.get("short_id") or ""
+        if item.get("status") == "busy":
+            return {"ok": False, "message": f"작업 중인 세션 — 입력을 기다릴 때 보낼 수 있음. 지금 넣으려면 터미널에서 claude attach {short}"}
+        if item.get("status") == "waiting" or item.get("bg_state") == "blocked":
+            return {"ok": False, "message": f"질문·권한 창(또는 사용량 한도)에서 기다리는 세션 — 터미널에서 claude attach {short}로 열어 답하세요"}
+        if item.get("status") != "idle":
+            return {"ok": False, "message": f"지금은 보낼 수 없는 상태({item.get('status')}) — 터미널에서 claude attach {short}로 열어 확인하세요"}
         return send_to_running_bg(item, text)
     out = claude(["--bg", "--resume", item["sid"], text], item["cwd"], config_dir=item.get("config_dir"))
     msg = (out.stdout + out.stderr).strip()
