@@ -37,7 +37,7 @@ $ROOT/scripts/board/board.sh status
 
 ## 런처 앱 (macOS, 선택)
 
-`/ai-harness:board` 없이 눌러서 여는 앱 `~/Applications/Harness Board.app`은 `/ai-harness:setup`의 자동화 옵션(8-3)으로 사용자가 고를 때만 만든다. 이 스킬은 몰래 만들지 않는다. 상태 확인·지우기는 `$ROOT/scripts/board/board.sh launcher status|remove`. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고, 그 스크립트가 열 때마다 가장 새 플러그인 설치본의 `board.sh open`을 부른다 — 플러그인을 업데이트해도 다시 설치할 필요가 없다. 열지 못하면 이유를 대화상자로 보이고 `~/.ai-harness/board/launcher.log`에 남긴다(보드 주소·토큰은 남기지 않는다).
+`/ai-harness:board` 없이 눌러서 여는 앱 `~/Applications/Harness Board.app`은 `/ai-harness:setup`의 자동화 옵션(8-3)으로 사용자가 고를 때만 만든다. 이 스킬은 몰래 만들지 않는다. 상태 확인·지우기는 `$ROOT/scripts/board/board.sh launcher status|remove`. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고, 그 스크립트가 열 때마다 가장 새 플러그인 설치본의 `board.sh open`을 부른다 — 플러그인을 업데이트해도 다시 설치할 필요가 없다. 열지 못하면 이유를 대화상자로 보이고 `~/.ai-harness/board/launcher.log`에 남긴다(보드 주소·토큰은 남기지 않는다). 앱은 보드가 떠 있는 동안 Dock에 남는다 — Dock 아이콘을 다시 누르면 화면을 다시 열고, Dock에서 종료하면 보드 서버도 끄며, 보드가 자동 종료나 `board.sh stop`으로 꺼지면 10초 안에 따라 끝난다.
 
 ## 보드가 하는 일과 하지 않는 일
 
