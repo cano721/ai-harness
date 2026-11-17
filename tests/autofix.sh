@@ -246,7 +246,9 @@ assert_contains "$AF_ARGS" '--permission-mode dontAsk' "unlisted commands are de
 # shellcheck disable=SC2016
 assert_contains "$AF_ARGS" '--plugin-dir "$plugin_root"' "autofix loads the installed copy it may run (#366)"
 # shellcheck disable=SC2016
-assert_contains "$AF_ARGS" '"Bash($plugin_root/scripts/open-pr.sh*)"' "autofix may run open-pr.sh of that copy"
+assert_contains "$AF_ARGS" '"Bash($scripts_dir/open-pr.sh*)"' "autofix may run open-pr.sh through the stable link (#400)"
+# shellcheck disable=SC2016
+assert_contains "$AF_ARGS" '--scripts $scripts_dir' "autofix agent is told the stable scripts path (#400)"
 if grep -qE '"Bash"|"Bash\((curl|gh|bash|sh|python|node) ' <<<"$AF_ARGS"; then fail "unattended autofix must not allow arbitrary Bash"; fi
 assert_contains "$AF_ARGS" '"Bash(git push -u origin fix/*)"' "push is limited to fix branches"
 assert_contains "$AF_ARGS" '"Read(~/.claude/settings.json)"' "agent cannot read credential settings"

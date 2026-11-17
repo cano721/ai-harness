@@ -84,7 +84,9 @@ AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format stream-json --verbose)
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '--plugin-dir "$plugin_root"' "agent loads the same plugin copy it is allowed to run"
 # shellcheck disable=SC2016
-assert_contains "$AUTO_ARGS" '"Bash($scripts_glob)"' "agent may run that copy's scripts"
+assert_contains "$AUTO_ARGS" '"Bash($scripts_dir/*)"' "agent may run that copy's scripts through the stable link"
+# shellcheck disable=SC2016
+assert_contains "$AUTO_ARGS" '--scripts $scripts_dir' "agent is told the stable scripts path it is allowed to run"
 # shellcheck disable=SC2016
 assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'plugin_root="$(hm_claude_plugin_root "$ROOT")"' "claude worker uses the installed copy claude would load"
 # shellcheck disable=SC2016
@@ -101,6 +103,23 @@ assert_eq "$TEST_TMP/pr-0.77.0" "$(CLAUDE_CONFIG_DIR="$PR_CFG" hm_claude_plugin_
 printf '{}' >"$PR_CFG/plugins/installed_plugins.json"
 assert_eq "/fallback" "$(CLAUDE_CONFIG_DIR="$PR_CFG" hm_claude_plugin_root /fallback)" "no installed copy falls back"
 assert_eq "/fallback" "$(CLAUDE_CONFIG_DIR="$TEST_TMP/no-such-cfg" hm_claude_plugin_root /fallback)" "missing plugin state falls back"
+# 허용 규칙은 경로 문자열 앞부분 일치라, 설치 경로가 버전·프로필로 바뀌거나 공백이 있으면(에이전트가 따옴표로 감싼다)
+# 일치하지 않는다(#400). 데이터 디렉토리 아래 공백 없는 고정 링크 하나로 규칙과 호출 경로를 통일한다.
+SP_DATA="$TEST_TMP/stable-link-data"
+mkdir -p "$TEST_TMP/Application Support/pr-0.80.0/scripts" "$TEST_TMP/pr-0.81.0/scripts"
+SP_LINK="$(HM_DATA_DIR="$SP_DATA" hm_auto_plugin_link "$TEST_TMP/Application Support/pr-0.80.0")"
+assert_eq "$SP_DATA/run/plugin" "$SP_LINK" "stable plugin link lives under the data directory"
+assert_eq "$TEST_TMP/Application Support/pr-0.80.0" "$(readlink "$SP_LINK")" "stable link points at the copy claude loads"
+[[ -d "$SP_LINK/scripts" ]] || fail "stable link resolves to the scripts directory"
+SP_LINK="$(HM_DATA_DIR="$SP_DATA" hm_auto_plugin_link "$TEST_TMP/pr-0.81.0")"
+assert_eq "$TEST_TMP/pr-0.81.0" "$(readlink "$SP_LINK")" "stable link follows a plugin update between runs"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'scripts_dir="$(hm_auto_plugin_link "$plugin_root")/scripts"' "harvest worker allows scripts through the stable link"
+for SP_SKILL in harvest harness-init autofix; do
+  # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+  assert_contains "$(<"$ROOT/skills/$SP_SKILL/SKILL.md")" '`--scripts <dir>`' "$SP_SKILL skill uses the scripts path the unattended worker passes"
+done
+pass "unattended runs call plugin scripts through a stable space-free link"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '"${read_dirs[@]}"' "agent can read events and transcripts outside the work tree"
 # shellcheck disable=SC2016
@@ -620,7 +639,7 @@ HARNESS_METRICS_DIR="$SCOPE_DATA" HM_HARVEST_AUTO=1 HM_HARVEST_AUTO_FOREGROUND=1
   "$ROOT/scripts/harvest-auto.sh" trigger "$(auto_status ws b-ws errors)" "$APPLY_HOME/ws"
 assert_eq "ws|1|$(cd "$APPLY_HOME/ws" && pwd -P)" "$(cat "$TEST_TMP/scope-stub.out")" "workspace batch runs in the workspace root"
 # shellcheck disable=SC2016
-SCOPED_ARGS="$(sed -n '/--scope $scope"/,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh")"
+SCOPED_ARGS="$(sed -n '/--auto --scope $scope /,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh")"
 assert_contains "$SCOPED_ARGS" '--permission-mode dontAsk' "scoped runs deny anything not pre-approved"
 assert_contains "$SCOPED_ARGS" '--disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit"' "scoped runs cannot edit files directly"
 # 전역 실행은 주기(기본 7일)마다 한 번, 다른 실행이 없을 때만.
