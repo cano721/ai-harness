@@ -19,15 +19,16 @@
 #   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
 #     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
 #   - 병합: 개인 자동화 단계가 merge·deploy면 원격 CI 뒤 merge 노드에서 이 스크립트가 PR 호스트(gh·Bitbucket API)에서 직접 읽은 상태로
-#     병합 조건(사람 승인·원격 CI·충돌 없음·draft 아님)을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+#     저장소 호스트 규칙(브랜치 보호의 필수 승인·필수 체크)과 충돌 없음·draft 아님·변경 요청 없음을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
 #     병합 뒤 post_merge_verify가 단계에 맞는 검증(타깃 CI·배포 확인 명령·스모크 명령)을 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
 #     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
 #   - 자동화 단계: 병합 여부는 사용자 설정(~/.ai-harness/config)의 HM_DELIVERY_LEVEL(pr|merge|deploy, 저장소별은 HM_DELIVERY_LEVEL_REPOS)만
-#     정하고, 없으면 PR까지다. git_policy는 커밋·PR 범위만 정한다 — 예전 값 merge는 pr-only로 읽고 안내를 남긴다. 병합 조건 최소치·방식은
-#     HM_MERGE_*(없으면 네 조건 모두·승인 1·squash), 기준 브랜치·배포·스모크 명령은 저장소 merge_policy(저장소 사실)에서 읽는다.
-#     merge_policy의 require·min_approvals·method는 쓰지 않는다. 병합은 호스트가 기준 브랜치에 필수 승인을 거는 보호 규칙을 읽을 수
-#     있을 때만 하고, 보호가 없거나 읽지 못하면 사람에게 넘긴다.
+#     정하고, 없으면 PR까지다. git_policy는 커밋·PR 범위만 정한다 — 예전 값 merge는 pr-only로 읽고 안내를 남긴다. 기준 브랜치·배포·스모크
+#     명령은 저장소 merge_policy(저장소 사실)에서 읽는다. 병합 조건과 방식은 하네스가 정하지 않고 저장소 호스트 설정을 따른다:
+#     필수 승인 수·필수 체크는 기준 브랜치 보호 규칙에서(보호가 없으면 승인 없이 병합), 방식은 저장소가 허용한 방식(GitHub)·기본 전략(Bitbucket).
+#     호스트가 강제하지 않는 경우(관리자 우회·Bitbucket 비강제 merge check)에도 러너가 그 규칙을 직접 판정한다. 보호 규칙을 읽지 못하면 사람에게 넘긴다.
+#     예전 HM_MERGE_*와 merge_policy의 require·min_approvals·method는 쓰지 않는다.
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
@@ -769,10 +770,23 @@ pr_merge() { # url method head
   case "$(pr_provider "$1")" in
     github) (cd "$REPO" && gh pr merge "$1" "--$2" --match-head-commit "$3") ;;
     bitbucket)
-      # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었고, rebase에 맞는 전략은 없다.
-      [[ "$2" != rebase ]] || { echo "method rebase is not supported for Bitbucket; set HM_MERGE_METHOD to squash or merge" >&2; return 1; }
-      bb_api POST "$(bb_path "$1")/merge" \
-        "$(jq -cn --arg m "$2" '{merge_strategy: (if $m == "merge" then "merge_commit" else "squash" end), close_source_branch: false}')" >/dev/null ;;
+      # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었다. 전략을 넘기지 않아 저장소 기본 전략으로 병합한다.
+      bb_api POST "$(bb_path "$1")/merge" '{"close_source_branch": false}' >/dev/null ;;
+  esac
+}
+# 저장소가 정한 병합 방식. GitHub는 기본 방식이 없어 저장소가 허용한 방식 중 squash → merge → rebase 순으로 고른다.
+# Bitbucket은 전략을 넘기지 않으면 저장소 기본 전략을 쓴다. 허용 방식을 읽지 못하면 실패(stderr에 이유)한다.
+merge_method() { # pr-url
+  local slug out
+  case "$(pr_provider "$1")" in
+    github)
+      slug="$(repo_slug "$1")"
+      out="$(cd "$REPO" && gh api "repos/${slug#*/}" 2>&1)" || { printf '%s\n' "$(head -c 200 <<<"$out")" >&2; return 1; }
+      jq -re 'if .allow_squash_merge == true then "squash" elif .allow_merge_commit == true then "merge"
+        elif .allow_rebase_merge == true then "rebase" else empty end' <<<"$out" \
+        || { echo "the repository settings do not say which merge methods are allowed" >&2; return 1; } ;;
+    bitbucket) echo "repository default" ;;
+    *) echo "unsupported pull request host: $1" >&2; return 1 ;;
   esac
 }
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601? // empty'; }
@@ -835,13 +849,12 @@ branch_protection() { # pr-url base
   jq -cn --argjson a "$approvals" --argjson c "$checks" '{approvals: $a, checks: $c}'
 }
 
-# merge: 시작 때 정한 병합 조건(개인 HM_MERGE_* 또는 기본값)을 PR 호스트에서 읽은 상태로 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+# merge: 저장소 호스트 규칙(기준 브랜치 보호)과 PR 상태를 호스트에서 직접 읽어 판정하고, 모두 맞을 때만 head를 고정해 저장소의 방식으로 병합한다.
 merge() {
-  local url head facts blocked="[]" unmet="[]" mp err origin method i merged_epoch protection
+  local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
-  method="$(jq -r .method <<<"$mp")"
   [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
   if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
@@ -866,40 +879,41 @@ merge() {
         merged_epoch="$(iso_epoch "$(jq -r .merged_at <<<"$facts")")"
         [[ -n "$(jq -r .merge_commit <<<"$facts")" ]] \
           || finish incomplete 30 "the pull request is merged but the host has not reported the merge commit yet; run resume to check again"
-        state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then $m else "outside the runner" end),
+        state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then (.merge.method // "by the runner") else "outside the runner" end),
             approvals: (.merge.approvals // []), merged_at: $f.merged_at, merged_epoch: ($e | tonumber)}' \
-          --argjson f "$facts" --arg m "$method" --arg e "${merged_epoch:-$(date -u +%s)}"
+          --argjson f "$facts" --arg e "${merged_epoch:-$(date -u +%s)}"
         log "the pull request is merged: $(jq -r .merge_commit <<<"$facts")"
         go merge merged
         return ;;
       CLOSED) blocked='["the pull request was closed without merging"]' ;;
     esac
   fi
-  # 팀 통제는 호스트 브랜치 보호에 있다. 필수 승인이 걸린 기준 브랜치에만 병합하고, 호스트의 필수 승인 수·필수 체크를
-  # 병합 조건의 하한으로 더한다. 개인 단계 없이 시작한 이전 버전의 실행을 resume해도 같은 확인을 거친다.
+  # 병합 조건은 저장소 호스트 규칙이다. 기준 브랜치 보호의 필수 승인 수·필수 체크를 조건으로 쓰고(보호가 없으면 승인 없이 병합),
+  # 호스트가 강제하지 않아도 러너가 직접 판정한다. 규칙을 읽지 못하면 모르는 채로 병합하지 않는다. 방식은 저장소 설정을 따른다.
+  # 이전 버전이 시작 때 정한 require·min_approvals·method(개인 HM_MERGE_* 또는 기본값)는 resume에서도 쓰지 않는다.
   if [[ "$blocked" == "[]" ]]; then
     if ! protection="$(branch_protection "$url" "$(jq -r .base <<<"$mp")" 2>"$RUN/protection.why")"; then
       blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" --arg e "$(head -c 300 "$RUN/protection.why")" \
-        '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only into a branch the host protects with required approvals — merge by hand or let the runner read the protection"]' <<<"$blocked")"
-    elif [[ "$(jq -r .approvals <<<"$protection")" -lt 1 ]]; then
-      blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" \
-        '. + ["\($b) has no host branch protection that requires an approving review; the runner merges only into a protected branch — protect it on the host or merge by hand"]' <<<"$blocked")"
+        '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only by the rules the repository sets — merge by hand or let the runner read the protection"]' <<<"$blocked")"
+    elif ! method="$(merge_method "$url" 2>"$RUN/method.why")"; then
+      blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" \
+        '. + ["cannot read which merge methods the repository allows (\($e)); merge by hand"]' <<<"$blocked")"
     else
       state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$(jq -r .base <<<"$mp")" --arg t "$(now_utc)"
-      mp="$(jq -c --argjson p "$protection" '.require = ((.require + ["human_approval"]) | unique)
-        | .min_approvals = ([.min_approvals, $p.approvals] | max)
-        | if $p.checks > 0 then .require = ((.require + ["remote_ci"]) | unique) else . end' <<<"$mp")"
+      mp="$(jq -c --argjson p "$protection" '.min_approvals = $p.approvals
+        | .require = ([if $p.approvals > 0 then "human_approval" else empty end, if $p.checks > 0 then "remote_ci" else empty end]
+            + ["no_conflict", "not_draft"])' <<<"$mp")"
     fi
   fi
+  # 리뷰어의 변경 요청은 저장소 규칙과 상관없이 넘어가지 않는다.
+  [[ "$(jq -r .changes_requested <<<"$facts")" != true ]] || blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
   # 승인·CI는 리뷰하고 push한 그 커밋에 대한 것이어야 한다. head가 움직였으면 누군가 push했다.
   [[ ${#head} -ge 7 && "$(jq -r .head <<<"$facts")" =~ ^[0-9a-f]{7,}$ && "$head" == "$(jq -r .head <<<"$facts")"* ]] \
     || blocked="$(jq -c --arg h "$head" --arg p "$(jq -r .head <<<"$facts")" '. + ["the pull request head \($p) is not the pushed and reviewed commit \($h)"]' <<<"$blocked")"
   while IFS= read -r cond; do
     case "$cond" in
       human_approval)
-        if [[ "$(jq -r .changes_requested <<<"$facts")" == true ]]; then
-          blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
-        elif (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
+        if (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
           unmet="$(jq -c --argjson f "$facts" --argjson n "$(jq -r .min_approvals <<<"$mp")" \
             '. + ["human approval: \($f.approvals | length) of \($n) on the current head\(if ($f.approvals | length) > 0 then " (" + ($f.approvals | join(", ")) + ")" else "" end)"]' <<<"$unmet")"
         fi ;;
@@ -922,7 +936,7 @@ merge() {
       not_draft)
         [[ "$(jq -r .draft <<<"$facts")" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
     esac
-  done <<<"$(jq -r '.require[]' <<<"$mp")"
+  done <<<"$(jq -r '.require[]?' <<<"$mp")"
   if [[ "$blocked" != "[]" ]]; then
     state_set '.findings = $b | .merge = {blocked: $b, facts: $f}' --argjson b "$blocked" --argjson f "$facts"
     go merge merge_blocked
@@ -937,7 +951,7 @@ merge() {
     go merge merge_blocked
     return
   fi
-  state_set '.merge = {requested: true, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg t "$(now_utc)"
+  state_set '.merge = {requested: true, method: $m, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg m "$method" --arg t "$(now_utc)"
   log "merge requested for $url ($method)"
   # 호스트가 병합(과 병합 커밋)을 보고하기까지 잠깐 걸릴 수 있다. 끝내 안 보이면 resume이 다시 읽는다.
   for i in 1 2 3 4 5; do
@@ -1605,8 +1619,8 @@ case "$CMD" in
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
     git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
-    # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy의
-    # 병합 조건(require·min_approvals·method)은 쓰지 않는다. 시작은 막지 않고 결과에 안내를 남긴다.
+    # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
+    # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
     if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
@@ -1616,7 +1630,10 @@ case "$CMD" in
       notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
     if [[ "$WORKFLOW" != review ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
-      notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; set personal merge conditions with HM_MERGE_* (/ai-harness:setup)"]' <<<"$notices")"
+      notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
+    fi
+    if [[ "$WORKFLOW" != review && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
+      notices="$(jq -c '. + ["HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
     approval_setting="$(approval_mode)" || exit 2
     read -r approval approval_source <<<"$approval_setting"
@@ -1654,29 +1671,22 @@ case "$CMD" in
     # 여기서 git_policy merge는 개인 단계가 merge·deploy라는 뜻이다(저장소 값 merge는 위에서 pr-only로 읽었다).
     merge_policy=null
     if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
-      # 병합 조건 최소치·방식은 사용자 설정(없으면 네 조건 모두·승인 1·squash), 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은
-      # 저장소 사실이다. merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
-      merge_policy="$(jq -c --arg lvl "$level" --arg req "$(user_config HM_MERGE_REQUIRE)" --arg min "$(user_config HM_MERGE_MIN_APPROVALS)" \
-        --arg method "$(user_config HM_MERGE_METHOD)" '(.merge_policy // {}) as $r
+      # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. 병합 조건·방식은 merge 노드가 호스트에서 읽는다.
+      # merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
+      merge_policy="$(jq -c --arg lvl "$level" '(.merge_policy // {}) as $r
         | ($r.deploy_check_cmd // "") as $deploy | ($r.smoke_cmd // "") as $smoke
         | (if ($r.verify | type) == "array" then $r.verify
            else [(if $deploy != "" then "deploy" else empty end), (if $smoke != "" then "smoke" else empty end)] end) as $avail
         | [$avail[] | select(IN("deploy", "smoke", "monitor")) | select((. != "deploy" or $deploy != "") and (. != "smoke" or $smoke != ""))] as $post
-        | {require: (if $req != "" then [$req | splits("[,[:space:]]+") | select(. != "")]
-                     else ["human_approval", "remote_ci", "no_conflict", "not_draft"] end),
-           min_approvals: (if $min != "" then ($min | tonumber? // $min) else 1 end),
-           method: (if $method != "" then $method else "squash" end),
-           verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
+        | {verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
            deploy_check_cmd: $deploy, deploy_timeout_minutes: ($r.deploy_timeout_minutes // 60), smoke_cmd: $smoke, base: ($r.base // "")}' \
         "$REPO/.ai-harness/harness.json")"
       if [[ "$level" == deploy ]] && ! jq -e '.verify | index("deploy") or index("smoke")' <<<"$merge_policy" >/dev/null; then
         delivery="$(jq -c '.note = "the repository has no deploy or smoke check (merge_policy.deploy_check_cmd, smoke_cmd), so the run stops after the merge and target CI"' <<<"$delivery")"
       fi
-      jq -e '(.require | length > 0 and all(.[]; IN("human_approval", "remote_ci", "no_conflict", "not_draft")))
-          and (.min_approvals | type == "number" and . >= 1) and (.method | IN("squash", "merge", "rebase"))
-          and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
-        || { printf 'the personal merge settings are invalid: HM_MERGE_REQUIRE (one or more of human_approval, remote_ci, no_conflict, not_draft), HM_MERGE_MIN_APPROVALS (1 or more), HM_MERGE_METHOD squash|merge|rebase in ~/.ai-harness/config, merge_policy.deploy_timeout_minutes (above 0) in .ai-harness/harness.json; got %s\n' \
-          "$(jq -c '{require, min_approvals, method, deploy_timeout_minutes}' <<<"$merge_policy")" >&2; exit 2; }
+      jq -e '.deploy_timeout_minutes | type == "number" and . > 0' <<<"$merge_policy" >/dev/null \
+        || { printf 'merge_policy.deploy_timeout_minutes in .ai-harness/harness.json must be a number above 0; got %s\n' \
+          "$(jq -c '.deploy_timeout_minutes' <<<"$merge_policy")" >&2; exit 2; }
     fi
     if [[ "$merge_policy" != null ]]; then
       # 병합할 수 있는 기준 브랜치. manifest에 없으면 origin의 기본 브랜치로 정하고, 둘 다 없으면 시작하지 않는다.
@@ -1695,8 +1705,6 @@ case "$CMD" in
           exit 2
         fi
       fi
-      [[ "$(jq -r .method <<<"$merge_policy")" != rebase || "$(git -C "$REPO" config --get remote.origin.url || true)" != *bitbucket.org* ]] \
-        || { printf 'HM_MERGE_METHOD rebase is not supported for Bitbucket; choose squash or merge\n' >&2; exit 2; }
     fi
     monitor_error=null
     if [[ -n "$MONITOR_ERROR" ]]; then

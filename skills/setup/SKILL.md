@@ -228,17 +228,14 @@ $ROOT/scripts/setup.sh team list
 
 1. 기본 단계 `HM_DELIVERY_LEVEL`:
    - `pr` — PR까지. 병합·배포는 사람이 한다 (직접 리뷰하고 싶은 사람)
-   - `merge` — 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
+   - `merge` — 저장소 호스트의 병합 조건이 맞으면 러너가 병합하고 병합 커밋의 원격 CI까지 본다
    - `deploy` — `merge`에 더해 저장소에 있는 배포 확인·스모크 명령까지. 저장소에 그 명령이 없으면 `merge`까지 하고 결과에 밝힌다
 2. 저장소마다 다르게 하고 싶으면 `HM_DELIVERY_LEVEL_REPOS="<project_id>=<단계>,…"`로 덮어쓴다. `project_id`는 저장소 `.ai-harness/harness.json`의 `project_id`(없으면 origin 저장소 이름)이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
-3. `merge`·`deploy`를 골랐으면 병합 조건 최소치를 묻는다. 정하지 않으면 네 조건 모두·승인 1·squash를 쓴다. 현재 저장소 manifest `merge_policy`에 예전 `require`·`min_approvals`·`method`가 남아 있으면 그 값을 보여 주고 옮길지 묻는다 — 러너는 그 값을 읽지 않는다.
-   - `HM_MERGE_REQUIRE` — `human_approval`·`remote_ci`·`no_conflict`·`not_draft` 중 쉼표 구분
-   - `HM_MERGE_MIN_APPROVALS` — 1 이상
-   - `HM_MERGE_METHOD` — `squash`·`merge`·`rebase`(Bitbucket은 rebase 불가)
+3. 병합 조건·방식은 묻지 않는다 — 러너가 저장소 호스트 설정을 따른다. 설정 파일에 예전 `HM_MERGE_REQUIRE`·`HM_MERGE_MIN_APPROVALS`·`HM_MERGE_METHOD`가 남아 있으면 더 이상 쓰이지 않는다고 알리고, 사용자가 동의하면 그 줄을 지운다.
 
 `merge`·`deploy`를 고르면 다음을 함께 알린다.
-- 팀 통제는 PR 호스트의 브랜치 보호다. 러너는 병합 직전에 기준 브랜치의 보호 규칙을 읽고, **필수 승인이 걸려 있지 않거나 읽을 수 없으면 병합하지 않고 사람에게 넘긴다**. GitHub 예전 브랜치 보호와 Bitbucket branch restrictions는 저장소 관리자 권한이 있어야 읽히므로, 권한이 없으면 GitHub 규칙 세트로 보호하거나 직접 병합한다.
-- 호스트의 필수 승인 수·필수 체크는 내 조건보다 우선하는 하한으로 더해진다.
+- 병합 조건은 저장소 호스트 규칙이다. 러너는 병합 직전에 기준 브랜치의 보호 규칙을 읽어 필수 승인 수·필수 체크를 조건으로 쓰고, 병합 방식은 저장소가 허용한 방식(GitHub)·기본 전략(Bitbucket)을 쓴다. **보호가 없는 저장소는 승인 없이 병합한다** — 사람 리뷰를 거치게 하려면 기준 브랜치에 필수 승인을 걸어야 한다.
+- 보호 규칙을 읽을 수 없으면 병합하지 않고 사람에게 넘긴다. GitHub 예전 브랜치 보호와 Bitbucket branch restrictions는 저장소 관리자 권한이 있어야 읽히므로, 권한이 없으면 GitHub 규칙 세트로 보호하거나 직접 병합한다.
 - 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
 - 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
 
