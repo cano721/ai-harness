@@ -8420,11 +8420,14 @@ chmod +x "$ROOT/tests/fixtures/board-resident/claude" "$ROOT/tests/fixtures/boar
 BR_LOG="$BR_T/stub.jsonl"
 : >"$BR_LOG"
 # 보드를 끄고 다시 켜는 테스트(#364)가 같은 환경으로 여러 번 띄운다. 호스트는 보드가 띄우므로 이 환경을 물려받는다.
+# 가짜 claude agents 목록(BOARD_STUB_AGENTS)은 세션 상태 파일(sessions/·jobs/)을 만들지 않아 갱신 지문(#380)에 잡히지 않는다 —
+# 다른 터미널에 생긴 세션이 밀려 오는지 보려면 전체 수집 최소 주기를 1초로 둔다.
 br_start() {
   BR_PORT="$(free_port)"
   env PATH="$ROOT/tests/fixtures/board-resident:$PATH" HARNESS_METRICS_DIR="$BR_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BR_T/projects" \
     BOARD_CLAUDE_PROFILE_GLOBS="$BR_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= BOARD_PORT="$BR_PORT" BOARD_STUB_LOG="$BR_LOG" \
     BOARD_STUB_AGENTS="$BR_T/agents.json" BOARD_REFRESH_SECONDS=1 BOARD_HOST_IDLE=1 BOARD_JIRA_URL= JIRA_BASE_URL= \
+    BOARD_FULL_REFRESH_SECONDS=1 \
     python3 -I "$ROOT/scripts/board/board-server.py" --no-open >>"$BR_T/server.log" 2>&1 &
   BR_PID=$!
   BR_URL=""
@@ -9433,7 +9436,7 @@ HARNESS_METRICS_DIR="$SR_DATA" python3 -I -B -c '
 import importlib.util, sys, time
 spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
 calls = []
-def fake_build():
+def fake_build(cached=False):
     calls.append(1)
     return {"items": [{"id": "n%d" % len(calls)}]}
 bs._build = fake_build
@@ -9463,7 +9466,7 @@ bs.refresh_once()
 assert len(calls) == 4, calls  # 보는 사람이 없으면 쉰다
 # 모으는 사이에 동작이 캐시를 비우면(답 보내기·정리), 그 수집 결과는 동작 전 상태라 그대로 내보내지 않는다:
 # 다음 읽기(동작 쪽 find_item(fresh=True) 포함)가 그 자리에서 다시 모은다.
-def build_then_invalidate():
+def build_then_invalidate(cached=False):
     calls.append(1)
     bs._cache["data"] = None  # 수집 도중 동작이 비움
     return {"items": [{"id": "before-action"}]}
@@ -9481,13 +9484,14 @@ bs._active["at"] = 0.0
 bs.mark_active()
 assert time.time() - bs._active["at"] < 1, bs._active
 # 백그라운드 수집이 계속 실패하면 0.5초마다 다시 돌리지 않고 최대 5초까지 늦춘다. 성공하면 원래 주기로.
-def broken_build():
+def broken_build(cached=False):
     calls.append(1)
     raise RuntimeError("status.sh failed")
 bs._build = broken_build
 waits = []
 for _ in range(6):
     bs._cache["at"] = 0.0
+    bs._timing["dur"] = 0  # 직전 수집의 쉬는 시간(#380)과 상관없이 실패 백오프만 본다
     bs.refresh_once()
     waits.append(bs.refresh_wait())
 assert waits[0] >= 1 and waits == sorted(waits) and waits[-1] == 5, waits
@@ -10339,12 +10343,12 @@ def calls():
         lines = f.read().splitlines()
     open(calls_log, "w").close()
     return lines
-item = {"kind": "bg", "short_id": "abcd1234", "sid": "sid-1", "cwd": cwd, "live": True, "status": "idle", "state": "idle"}
+item = {"kind": "bg", "short_id": "abcd1234", "sid": "sid-1", "cwd": cwd, "live": False, "status": None, "state": "done"}
 with_cfg = dict(item, config_dir="/cfg/work")
 res = bs.send_to_bg(with_cfg, "이어서 해줘")
 c = calls()
 assert res["ok"], res
-assert [l.split("|", 1)[1].split()[0] for l in c] == ["stop", "agents", "--bg"], c  # 멈추고, 멈췄는지 보고, 같은 ID로 깨운다
+assert [l.split("|", 1)[1].split()[0] for l in c] == ["--bg"], c  # 멈춘 세션은 같은 ID로 깨운다(실행 중 세션은 아래 #380 블록)
 assert all(l.startswith("/cfg/work|") for l in c), c
 assert bs.end_session(with_cfg) is True
 c = calls()
@@ -10363,6 +10367,311 @@ bs.claude(["agents", "--json", "--all"], cwd, 5)
 assert calls() == ["UNSET|agents --json --all"]
 ' "$ROOT/scripts/board/board-server.py" "$BS_T/bin" "$BS_T/cwd" || fail "the board calls claude with the item's own settings folder for send, stop and the stopped check, and without the variable otherwise"
 pass "board server passes an item's settings folder to claude and drops CLAUDE_CONFIG_DIR when it has none"
+
+# 실행 중인 bg 세션에 답하기(#380): --resume은 이미 도는 세션의 복제본을 띄운다. 입력을 기다리는(idle) 세션은 claude attach를
+# PTY로 붙여 원래 세션의 입력창에 넣고 떼며, 대화 기록에 그 글이 들어갔는지로 확인한다. 권한 창에서 Enter는 허용을 고르므로
+# 붙기 전·붙여넣기 전·Enter 전 상태 확인, 화면의 창 표지, 입력창 에코를 모두 통과해야 Enter를 보낸다. 작업 중·창 대기 세션은
+# 보내지 않고 attach 명령을 안내한다. 멈춘 세션만 --resume으로 깨운다.
+BA3_T="$TEST_TMP/board-attach"
+mkdir -p "$BA3_T/bin" "$BA3_T/cwd" "$BA3_T/data"
+# 가짜 claude: agents는 상태 파일의 첫 줄("status:state" 또는 stopped)을 돌려주고 두 줄 이상이면 그 줄을 지운다(호출마다 다음 상태).
+# attach는 진짜 TUI처럼 raw 모드로 받는다: 붙여넣기가 끝나면 입력창 에코(❯ + 글)를 그리고, Enter(CR)를 받으면 Enter 표시 파일과
+# 대기열 기록을 남긴다. FAKE_ATTACH_DIALOG=before|after면 붙을 때·붙여넣은 뒤 권한 창(실측 문구)을 그린다.
+cat >"$BA3_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "${CLAUDE_CONFIG_DIR-UNSET}" "$([ -t 0 ] && echo tty || echo notty)" "$*" >>"$FAKE_CLAUDE_CALLS"
+case "$1" in
+  agents)
+    cur=$(head -n 1 "$FAKE_STATUS_FILE")
+    if [ "$(wc -l <"$FAKE_STATUS_FILE")" -gt 1 ]; then tail -n +2 "$FAKE_STATUS_FILE" >"$FAKE_STATUS_FILE.next"; mv "$FAKE_STATUS_FILE.next" "$FAKE_STATUS_FILE"; fi
+    if [ "$cur" = stopped ]; then
+      echo '[{"sessionId": "abcd1234-0000-4000-8000-000000000001", "pid": null, "status": null, "state": "done"}]'
+    else
+      jq -cn --arg s "${cur%%:*}" --arg st "${cur#*:}" '[{sessionId: "abcd1234-0000-4000-8000-000000000001", pid: 4242, status: $s, state: $st}]'
+    fi ;;
+  --bg) echo 'backgrounded' ;;
+  attach)
+    exec python3 -c '
+import json, os, sys, time, tty
+tty.setraw(0)
+dialog = os.environ.get("FAKE_ATTACH_DIALOG", "")
+prompt = "Do you want to proceed?\r\n\xe2\x9d\xaf 1. Yes\r\n  2. No\r\nEsc to cancel \xc2\xb7 Tab to amend\r\n".encode("latin-1")
+os.write(1, b"Claude Code\r\n" + (prompt if dialog == "before" else b"\xe2\x9d\xaf \r\n"))
+buf = b""
+while True:
+    chunk = os.read(0, 65536)
+    if not chunk:
+        sys.exit(0)
+    buf += chunk
+    if b"\x1b[201~" in chunk:
+        pasted = buf.split(b"\x1b[200~", 1)[-1].split(b"\x1b[201~", 1)[0]
+        if dialog == "after":
+            os.write(1, prompt)
+        elif not os.environ.get("FAKE_ATTACH_NOECHO"):
+            os.write(1, b"\x1b[2K\xe2\x9d\xaf\xc2\xa0" + pasted.replace(b"\n", b"\r\n  ") + b"\r\n")
+    if buf.endswith(b"\r"):
+        break
+open(os.environ["FAKE_ENTER"], "w").close()
+if not os.environ.get("FAKE_ATTACH_DROP"):
+    with open(os.environ["FAKE_TRANSCRIPT"], "a") as f:
+        f.write(json.dumps({"type": "queue-operation", "operation": "enqueue", "content": buf[:-1].decode()}, ensure_ascii=False) + "\n")
+time.sleep(30)
+' ;;
+esac
+FAKE
+chmod +x "$BA3_T/bin/claude"
+: >"$BA3_T/t.jsonl"; : >"$BA3_T/calls.log"
+HARNESS_METRICS_DIR="$BA3_T/data" FAKE_CLAUDE_CALLS="$BA3_T/calls.log" FAKE_TRANSCRIPT="$BA3_T/t.jsonl" FAKE_STATUS_FILE="$BA3_T/status" \
+  FAKE_ENTER="$BA3_T/enter" BOARD_ATTACH_CONFIRM=4 python3 -I -B -c '
+import importlib.util, os, sys, threading, time
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+bin_dir, cwd, calls_log, tpath, sfile, enter = (sys.argv[2], sys.argv[3], os.environ["FAKE_CLAUDE_CALLS"], os.environ["FAKE_TRANSCRIPT"],
+                                                os.environ["FAKE_STATUS_FILE"], os.environ["FAKE_ENTER"])
+os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+def calls():
+    with open(calls_log) as f:
+        lines = f.read().splitlines()
+    open(calls_log, "w").close()
+    return lines
+def cmds(c):
+    return [l.split("|", 2)[2] for l in c if not l.split("|", 2)[2].startswith("agents")]
+def states(*s):
+    with open(sfile, "w") as f:
+        f.write("\n".join(s) + "\n")
+    if os.path.exists(enter):
+        os.remove(enter)
+def env(**kv):
+    for k in ("FAKE_ATTACH_DIALOG", "FAKE_ATTACH_NOECHO", "FAKE_ATTACH_DROP"):
+        os.environ.pop(k, None)
+    os.environ.update(kv)
+base = {"kind": "bg", "short_id": "abcd1234", "sid": "abcd1234-0000-4000-8000-000000000001", "cwd": cwd, "transcript": tpath,
+        "config_dir": "/cfg/work", "live": True, "pid": 4242, "status": "idle", "bg_state": "done"}
+calls()
+# 입력을 기다리는 세션: 붙기 전·붙여넣기 전·Enter 전에 상태를 보고, 입력창에 글이 보이면 Enter
+states("idle:done")
+res = bs.send_to_bg(dict(base), "첫 줄\n둘째 줄\x1b[201~\x9b끝")
+c = calls()
+assert res["ok"], res
+assert cmds(c) == ["attach abcd1234"], c  # --resume·stop 없이 원래 세션에 붙는다
+assert all(l.startswith("/cfg/work|") for l in c), c  # 그 세션의 설정 폴더로
+assert [l for l in c if "attach" in l][0].startswith("/cfg/work|tty|"), c  # 터미널(PTY)로 붙는다
+assert len([l for l in c if "|agents" in l]) == 3, c
+assert "둘째 줄[201~끝" in open(tpath).read()  # 여러 줄 그대로, 제어 문자(ESC·C1)는 빼고
+big = "긴 글 " + "가" * 7990
+states("idle:done")
+assert bs.send_to_bg(dict(base), big)["ok"]  # 8000자 붙여넣기도 PTY 큐에 막히지 않는다
+assert big in open(tpath).read()
+calls()
+# 작업 중·질문/권한 창·사용량 한도로 멈춘 세션에는 키를 하나도 보내지 않고 attach를 안내한다(작업 중에는 언제든 권한 창이 뜬다)
+for st, bgs in (("busy", "working"), ("waiting", "blocked"), ("idle", "blocked")):
+    res = bs.send_to_bg(dict(base, status=st, bg_state=bgs), "예")
+    assert not res["ok"] and "claude attach abcd1234" in res["message"], (st, res)
+    assert calls() == [], st
+def refused(why, *seq, **kv):
+    states(*seq); env(**kv)
+    before = open(tpath).read()
+    res = bs.send_to_bg(dict(base), "보내면 안 되는 글")
+    assert not res["ok"] and "claude attach abcd1234" in res["message"], (why, res)
+    assert not os.path.exists(enter), why + ": Enter was sent"
+    assert open(tpath).read() == before, why
+    return res
+# 붙기 직전 확인에서 이미 권한 창 → 붙지도 않는다
+refused("waiting before attach", "waiting:blocked")
+assert cmds(calls()) == []
+states("stopped")
+res = bs.send_to_bg(dict(base), "멈춘 사이 글")
+assert not res["ok"] and "멈춤" in res["message"] and cmds(calls()) == [], res  # 그새 멈췄으면 다시 보내면 --resume으로 간다
+# 두 번째(붙여넣기 전) 확인에서만 권한 창 → 붙여넣지도 않는다
+r = refused("waiting before paste", "idle:done", "waiting:blocked")
+assert "남아 있을 수" not in r["message"], r
+# 세 번째(Enter 전) 확인에서만 권한 창 → Enter 없이, 붙여넣은 글이 남았을 수 있다고 알린다
+r = refused("waiting before enter", "idle:done", "idle:done", "waiting:blocked")
+assert "남아 있을 수" in r["message"], r
+# 상태는 idle이어도 화면에 권한 창 표지가 보이면 Enter를 보내지 않는다(상태 파일이 화면보다 늦을 수 있다)
+refused("dialog on screen", "idle:done", FAKE_ATTACH_DIALOG="before")
+r = refused("dialog after paste", "idle:done", FAKE_ATTACH_DIALOG="after")
+assert "권한" in r["message"] and "남아 있을 수" in r["message"], r
+# 붙여넣은 글이 입력창에 보이지 않으면 Enter를 보내지 않는다
+refused("no echo", "idle:done", FAKE_ATTACH_NOECHO="1")
+env()
+calls()
+# 대화 기록의 사람 입력에 안 보이면 보냈다고 하지 않는다
+states("idle:done"); env(FAKE_ATTACH_DROP="1")
+res = bs.send_to_bg(dict(base), "안 들어가는 글")
+assert not res["ok"] and "claude attach abcd1234" in res["message"], res
+env()
+with open(tpath, "a") as f:  # 답변에 같은 낱말이 나와도 사람 입력으로 치지 않는다
+    f.write("{\"type\": \"assistant\", \"message\": {\"content\": \"계속 진행\"}}\n")
+assert not bs._landed(tpath, 0, "계속 진행") and bs._landed(tpath, 0, "첫 줄")
+calls()
+# 같은 세션에 보내는 중이면 겹쳐 보내지 않는다
+lock = bs._attach_locks.setdefault(base["sid"], threading.Lock()); lock.acquire()
+res = bs.send_to_bg(dict(base), "겹친 글")
+lock.release()
+assert not res["ok"] and "이미 보내는 중" in res["message"] and calls() == [], res
+# 대화 기록을 모르면 들어갔는지 확인할 수 없으므로 보내지 않는다
+res = bs.send_to_bg(dict(base, transcript=None), "글")
+assert not res["ok"] and "claude attach abcd1234" in res["message"] and calls() == [], res
+# 쓸 수 없는 문자(짝 없는 서로게이트)는 친절한 오류
+res = bs.send_to_bg(dict(base), "글 \ud800")
+assert not res["ok"] and "문자" in res["message"] and calls() == [], res
+# 멈춘 세션만 --resume
+res = bs.send_to_bg(dict(base, live=False, pid=None, status=None, bg_state="done"), "다시 시작")
+assert res["ok"], res
+assert cmds(calls()) == ["--bg --resume abcd1234-0000-4000-8000-000000000001 다시 시작"]
+res = bs.send_to_bg(dict(base, short_id="x; rm -rf /"), "글")
+assert not res["ok"] and calls() == [], res  # 이상한 id로는 붙지 않는다
+' "$ROOT/scripts/board/board-server.py" "$BA3_T/bin" "$BA3_T/cwd" || fail "a running background session gets the reply through claude attach, never a --resume copy"
+# 화면: 입력을 기다리는 bg 세션(그리고 멈춘 세션)에만 보내기를 열고, 나머지는 attach 안내(명령 복사 버튼은 이미 있다).
+BA3_WORK="$(sed -n '/^    | .actions = /,/\]'"'"' <<</p' "$ROOT/scripts/board/work.sh")"
+assert_contains "$BA3_WORK" '(.status == "idle" and .state != "blocked") or .pid == null' "work.sh offers send only to background sessions waiting for input and stopped ones"
+assert_contains "$(<"$ROOT/scripts/board/template.html")" "claude attach" "the board tells how to answer a background session that waits at a prompt"
+pass "a running background session gets replies through claude attach, a stopped one through --resume, a prompt-waiting one gets the attach hint"
+
+# 갱신 비용(#380): 다음 갱신은 직전 수집 시간의 두 배 뒤(수집이 시간의 절반을 넘지 않게), 값싼 변경 지문이 같으면 전체 수집을
+# 건너뛰되 최소 주기(BOARD_FULL_REFRESH_SECONDS)마다는 모은다. 마지막 결과는 0600 스냅숏으로 남겨 다시 띄우면 그것부터 보인다.
+BRC_T="$TEST_TMP/board-refresh-cost"
+mkdir -p "$BRC_T/data/harvest-auto" "$BRC_T/cfg/sessions" "$BRC_T/cfg/jobs/j1" "$BRC_T/home"
+printf '{}\n' >"$BRC_T/cfg/sessions/1.json"
+printf '{}\n' >"$BRC_T/cfg/jobs/j1/state.json"
+printf 'a\n' >"$BRC_T/t.jsonl"
+HOME="$BRC_T/home" HARNESS_METRICS_DIR="$BRC_T/data" BOARD_REFRESH_SECONDS=0.2 BOARD_FULL_REFRESH_SECONDS=30 \
+  BOARD_CLAUDE_CONFIG_DIRS="$BRC_T/cfg" BOARD_CLAUDE_PROFILE_GLOBS="$BRC_T/none/*" python3 -I -B -c '
+import importlib.util, json, os, stat, sys, time
+def load():
+    spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+T, data = sys.argv[2], os.environ["HARNESS_METRICS_DIR"]
+bs = load()
+assert bs.restore_snapshot() is False  # 서버가 뜰 때 부른다. 스냅숏이 없으면 아무것도 올리지 않는다
+calls = []
+def slow_build(cached=False):
+    calls.append(cached); time.sleep(0.4)
+    return {"items": [{"id": "n%d" % len(calls), "transcript": T + "/t.jsonl"}], "snapshot_at": None}
+bs._build = slow_build
+fp = [("a", "t")]
+real_fp, bs.fingerprint = bs.fingerprint, lambda: fp[0]
+bs._active["at"] = time.time()
+bs.refresh_once()
+assert calls == [True], calls  # 백그라운드 갱신은 status.sh의 입력 캐시를 쓴다
+assert bs.refresh_wait() <= max(0.5, bs.REFRESH) + 0.01, bs.refresh_wait()  # 지문 확인은 느린 수집 뒤에도 REFRESH마다
+bs._cache["at"] = time.time() - 5
+bs.refresh_once()
+assert len(calls) == 1, calls  # 지문이 같으면 건너뛴다
+assert time.time() - bs._cache["at"] < 1  # 확인한 캐시는 새것으로 친다(요청이 그 자리에서 모으지 않게)
+# 지문이 바뀌어도 직전 수집 시작 뒤 그 수집 시간의 두 배가 지나기 전에는 모으지 않고, 열리는 때에 맞춰 다시 본다
+bs._timing.update(start=time.time(), dur=1.0)
+fp[0] = ("b", "t"); bs._cache["at"] = time.time() - 5
+bs.refresh_once()
+assert len(calls) == 1 and bs._pending["at"] is not None, (calls, bs._pending)
+assert bs.refresh_wait() <= max(0.5, bs.REFRESH) + 0.01, bs.refresh_wait()
+bs._timing["start"] -= 3
+bs.refresh_once()
+assert len(calls) == 2 and bs._pending["at"] is None, calls  # 쉬는 시간이 지나면 바로 모은다
+fp[0] = ("b", "t2"); bs._cache["at"] = time.time() - 5
+bs.refresh_once()
+assert len(calls) == 2, calls  # 대화 기록만 바뀌었으면(일하는 세션) TRANSCRIPT_REFRESH 안에서는 건너뛴다
+bs._cache["at"] = time.time() - 5; bs._full["at"] = time.time() - bs.TRANSCRIPT_REFRESH - 1; bs._timing["dur"] = 0
+bs.refresh_once()
+assert len(calls) == 3, calls  # 그 뒤에는 모은다
+bs._cache["at"] = time.time() - 5; bs._full["at"] = time.time() - bs.FULL_REFRESH - 1; bs._timing["dur"] = 0
+bs.refresh_once()
+assert len(calls) == 4, calls  # 지문이 같아도 최소 주기마다는 모은다
+# 정리(B1): 지문 확인은 캐시 시각만 새로 매기므로, 실제 일괄 정리는 나이와 관계없이 입력 캐시 없이 새로 모은다
+bs._cache["at"] = time.time() - 5; bs.refresh_once()  # 건너뛴 확인 직후
+n = len(calls)
+bs.bulk_cleanup({"older_days": 1})
+assert len(calls) == n + 1 and calls[-1] is False, calls
+bs._cache["data"] = None
+bs.status()
+assert calls[-1] is False, calls  # 동작 뒤 비운 캐시는 입력 캐시 없이 새로 모은다
+# 진짜 지문: 하네스 기록·세션 상태 파일·보이는 세션의 대화 기록이 바뀌면 달라진다
+bs.fingerprint = real_fp
+a = bs.fingerprint()
+assert a == bs.fingerprint()
+time.sleep(1.1)
+with open(T + "/t.jsonl", "a") as f: f.write("b\n")
+b = bs.fingerprint(); assert b != a
+with open(data + "/harvest-auto/runs.jsonl", "a") as f: f.write("{}\n")
+c = bs.fingerprint(); assert c != b
+with open(T + "/cfg/sessions/2.json", "w") as f: f.write("{}")
+d = bs.fingerprint(); assert d != c
+with open(T + "/cfg/jobs/j1/state.json", "a") as f: f.write(" ")
+assert bs.fingerprint() != d
+# 스냅숏: 0600 파일, 다시 띄우면 첫 응답은 수집을 기다리지 않는 스냅숏
+snap = os.path.join(data, "board", "snapshot.json")
+assert stat.S_IMODE(os.stat(snap).st_mode) == 0o600, oct(os.stat(snap).st_mode)
+saved = json.load(open(snap))
+bs2 = load(); fresh = []
+bs2._build = lambda cached=False: (fresh.append(1), {"items": [{"id": "fresh"}], "snapshot_at": None})[1]
+assert bs2.restore_snapshot() is True
+t0 = time.time(); d = bs2.status()
+assert not fresh and time.time() - t0 < 0.5, fresh
+assert [i["id"] for i in d["items"]] == [i["id"] for i in saved["items"]], d
+assert d["snapshot_at"], d  # 화면이 "N분 전 상태 — 새로 모으는 중"을 보인다
+assert bs2._wake.is_set()  # 바로 새로 모으도록 깨운다
+bs2._active["at"] = time.time()
+bs2.fingerprint = lambda: ("same", "x"); bs2._fp["last"] = ("same", "x")
+bs2.refresh_once()
+assert fresh, "a restored snapshot is replaced by a fresh collection even when the fingerprint did not change"
+d = bs2.status()
+assert d["items"][0]["id"] == "fresh" and d["snapshot_at"] is None, d
+os.remove(snap)
+bs3 = load(); bs3._build = lambda cached=False: {"items": [], "snapshot_at": None}
+assert bs3.status()["snapshot_at"] is None  # 스냅숏이 없으면 예전처럼 그 자리에서 모은다
+' "$ROOT/scripts/board/board-server.py" "$BRC_T" || fail "the board refresh backs off after slow collections, skips unchanged inputs within the full-refresh period and restores the last snapshot first"
+# status.sh가 받는 환경: 백그라운드 갱신만 BOARD_CACHE_SECONDS를 넘긴다
+assert_contains "$(sed -n '/^def _build(/,/^    data = json.loads/p' "$ROOT/scripts/board/board-server.py")" "BOARD_CACHE_SECONDS" "the background refresh lets status.sh reuse unchanged inputs"
+BRC_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BRC_TPL" "새로 모으는 중" "the board says the list is a saved snapshot being refreshed"
+assert_contains "$BRC_TPL" "data.snapshot_at" "the board reads when the snapshot was taken"
+pass "board refresh backs off, skips unchanged inputs and opens with the last snapshot"
+
+# status.sh·work.sh 입력 캐시(#380): BOARD_CACHE_SECONDS가 있으면 하네스 기록(무인 실행·러너·대기열)이 그대로일 때 지난 결과를,
+# 설정 폴더의 세션 상태 파일(sessions/·jobs/)이 그대로일 때 지난 claude agents 결과를 그 초 동안 다시 쓴다. 없으면(기본) 늘 새로.
+BSC_T="$TEST_TMP/board-status-cache"
+mkdir -p "$BSC_T/bin" "$BSC_T/data/harvest-auto" "$BSC_T/data/board" "$BSC_T/cfg/sessions" "$BSC_T/projects"
+BSC_REAL_JQ="$(command -v jq)"
+cat >"$BSC_T/bin/jq" <<'FAKE'
+#!/usr/bin/env bash
+printf 'jq\n' >>"$FAKE_JQ_LOG"
+exec "$REAL_JQ" "$@"
+FAKE
+cat >"$BSC_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+printf 'agents\n' >>"$FAKE_CLAUDE_LOG"
+echo '[]'
+FAKE
+chmod +x "$BSC_T/bin/jq" "$BSC_T/bin/claude"
+bsc_fin() { jq -cn --arg at "$(jq -rn --argjson m "$1" '(now - $m * 60) | floor | todate')" --arg p "$2" \
+  '{at: $at, event: "finished", project: $p, batch: "b", scope: "project", result: "left_for_user", exit_code: 0, artifact: null, log: null}'; }
+bsc_fin 30 p1 >"$BSC_T/data/harvest-auto/runs.jsonl"
+bsc_status() {
+  : >"$BSC_T/jq.log"; : >"$BSC_T/claude.log"
+  env -u CLAUDE_CONFIG_DIR PATH="$BSC_T/bin:$PATH" REAL_JQ="$BSC_REAL_JQ" FAKE_JQ_LOG="$BSC_T/jq.log" FAKE_CLAUDE_LOG="$BSC_T/claude.log" \
+    HARNESS_METRICS_DIR="$BSC_T/data" HARNESS_CLAUDE_PROJECTS_DIR="$BSC_T/projects" HOME="$BSC_T/home" \
+    BOARD_CLAUDE_PROFILE_GLOBS="$BSC_T/none/*" BOARD_CLAUDE_CONFIG_DIRS="$BSC_T/cfg" "$@" bash "$ROOT/scripts/board/status.sh"
+}
+BSC_COLD="$(bsc_status BOARD_CACHE_SECONDS=600)"
+BSC_COLD_JQ="$(wc -l <"$BSC_T/jq.log" | tr -d ' ')"
+assert_eq "1" "$(jq '[.items[] | select(.project == "p1")] | length' <<<"$BSC_COLD")" "the cold run lists the harness run"
+BSC_WARM="$(bsc_status BOARD_CACHE_SECONDS=600)"
+BSC_WARM_JQ="$(wc -l <"$BSC_T/jq.log" | tr -d ' ')"
+assert_eq "$(jq -c 'del(.generated_at)' <<<"$BSC_COLD")" "$(jq -c 'del(.generated_at)' <<<"$BSC_WARM")" "a warm run prints the same status"
+[ "$BSC_WARM_JQ" -lt $((BSC_COLD_JQ / 2)) ] || fail "a warm run reuses the harness part (jq calls cold=$BSC_COLD_JQ warm=$BSC_WARM_JQ)"
+assert_eq "0" "$(grep -c agents "$BSC_T/claude.log")" "a warm run reuses claude agents while the session state files are unchanged"
+for f in "$BSC_T/data/board/"status-cache* "$BSC_T/data/board/"agents-cache*; do
+  [ -e "$f" ] || continue
+  assert_eq "" "$(find "$f" -perm -g+r 2>/dev/null; find "$f" -perm -o+r 2>/dev/null)" "status caches are readable only by the user: $f"
+done
+bsc_fin 5 p2 >>"$BSC_T/data/harvest-auto/runs.jsonl"
+assert_eq "1" "$(bsc_status BOARD_CACHE_SECONDS=600 | jq '[.items[] | select(.project == "p2")] | length')" "a new harness record is picked up at once"
+printf '{}\n' >"$BSC_T/cfg/sessions/9.json"
+bsc_status BOARD_CACHE_SECONDS=600 >/dev/null
+assert_eq "1" "$(grep -c agents "$BSC_T/claude.log")" "a changed session state file asks that folder's claude agents again (only that folder)"
+bsc_status >/dev/null
+assert_eq "2" "$(grep -c agents "$BSC_T/claude.log")" "without BOARD_CACHE_SECONDS every folder is asked again"
+pass "status.sh and work.sh reuse unchanged harness records and session lists only when the board asks"
 
 # '세션으로 열기'가 띄우는 세션 이름은 원문 로그 제목이 아니라 시그니처다(#296): 원문 로그가 세션 이름·카드 제목으로 새지 않고, 시그니처로 에러 카드와 이어진다.
 BO_DATA="$TEST_TMP/board-open-agent"
