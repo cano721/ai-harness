@@ -4298,9 +4298,25 @@ assert_file "$(auto_runs '[.[] | select(.event=="finished")] | last | .log')"
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
 AUTO_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format stream-json --verbose)/p' "$ROOT/scripts/harvest-auto.sh")"
 # shellcheck disable=SC2016
-assert_contains "$AUTO_ARGS" '--plugin-dir "$ROOT"' "agent loads the same plugin copy it is allowed to run"
+assert_contains "$AUTO_ARGS" '--plugin-dir "$plugin_root"' "agent loads the same plugin copy it is allowed to run"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '"Bash($scripts_glob)"' "agent may run that copy's scripts"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'plugin_root="$(hm_claude_plugin_root "$ROOT")"' "claude worker uses the installed copy claude would load"
+# shellcheck disable=SC2016
+assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" '--add-dir "$plugin_root"' "agent can read the plugin copy outside the work tree"
+# --plugin-dir과 같은 이름의 설치본이 있으면 claude는 버전이 높은 쪽을 로드한다(#366).
+# 가장 높은 설치본을 고르고, 없거나 스크립트가 없는 경로는 건너뛰고, 못 찾으면 기본값.
+PR_CFG="$TEST_TMP/plugin-root-cfg"
+mkdir -p "$PR_CFG/plugins" "$TEST_TMP/pr-0.77.0/scripts" "$TEST_TMP/pr-0.68.0/scripts" "$TEST_TMP/pr-0.80.0"
+jq -n --arg a "$TEST_TMP/pr-0.77.0" --arg b "$TEST_TMP/pr-0.68.0" --arg c "$TEST_TMP/pr-0.80.0" --arg d "$TEST_TMP/pr-missing" '{version: 2, plugins: {
+  "ai-harness@ai-harness": [{scope: "user", installPath: $a, version: "0.77.0"}, {scope: "project", installPath: $b, version: "0.68.0"}, {scope: "user", installPath: $c, version: "0.80.0"}],
+  "ai-harness@other": [{scope: "user", installPath: $d, version: "0.99.0"}],
+  "other@ai-harness": [{scope: "user", installPath: $b, version: "1.0.0"}]}}' >"$PR_CFG/plugins/installed_plugins.json"
+assert_eq "$TEST_TMP/pr-0.77.0" "$(CLAUDE_CONFIG_DIR="$PR_CFG" hm_claude_plugin_root /fallback)" "highest installed copy with scripts is chosen"
+printf '{}' >"$PR_CFG/plugins/installed_plugins.json"
+assert_eq "/fallback" "$(CLAUDE_CONFIG_DIR="$PR_CFG" hm_claude_plugin_root /fallback)" "no installed copy falls back"
+assert_eq "/fallback" "$(CLAUDE_CONFIG_DIR="$TEST_TMP/no-such-cfg" hm_claude_plugin_root /fallback)" "missing plugin state falls back"
 # shellcheck disable=SC2016
 assert_contains "$AUTO_ARGS" '"${read_dirs[@]}"' "agent can read events and transcripts outside the work tree"
 # shellcheck disable=SC2016
@@ -5949,7 +5965,7 @@ chain_global
 assert_eq "1" "$(jq -sr '[.[] | select(.event=="started" and .project=="_global")] | length' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "a chain does not add global runs beyond the periodic sweep"
 # 무인 실행은 transcript를 남기지 않는다 — 사용자 활동 판정과 수집에 섞이지 않게.
 # shellcheck disable=SC2016  # 스크립트 원문의 literal 변수 참조를 검사
-assert_eq "2" "$(grep -c -- '--plugin-dir "$ROOT" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
+assert_eq "2" "$(grep -c -- '--plugin-dir "$plugin_root" --no-session-persistence' "$ROOT/scripts/harvest-auto.sh")" "unattended claude runs keep no transcript"
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
@@ -6445,6 +6461,10 @@ af_auto track --project af-svc --candidate "$AF_LIST" --pr https://github.com/ac
 assert_eq "pr_open|https://github.com/acme/svc/pull/42|50" "$(af_sig '"\(.status)|\(.pr)"')|$(jq -r '.signatures["sentry:101"].baseline.count' "$AF_DATA/autofix/p-af-svc/state.json")" "manual PR joins verification"
 AF_ARGS="$(sed -n '/AGENT_CMD=(claude/,/--output-format json)/p' "$ROOT/scripts/autofix-auto.sh")"
 assert_contains "$AF_ARGS" '--permission-mode dontAsk' "unlisted commands are denied without asking"
+# shellcheck disable=SC2016
+assert_contains "$AF_ARGS" '--plugin-dir "$plugin_root"' "autofix loads the installed copy it may run (#366)"
+# shellcheck disable=SC2016
+assert_contains "$AF_ARGS" '"Bash($plugin_root/scripts/open-pr.sh*)"' "autofix may run open-pr.sh of that copy"
 if grep -qE '"Bash"|"Bash\((curl|gh|bash|sh|python|node) ' <<<"$AF_ARGS"; then fail "unattended autofix must not allow arbitrary Bash"; fi
 assert_contains "$AF_ARGS" '"Bash(git push -u origin fix/*)"' "push is limited to fix branches"
 assert_contains "$AF_ARGS" '"Read(~/.claude/settings.json)"' "agent cannot read credential settings"
