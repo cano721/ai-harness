@@ -5,7 +5,7 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 ## Preflight
 
 1. 작업 유형을 고른다: 기능 → `/implement-feature`, 버그 → `/fix-bug`, 수정 전 원인 조사 → `/investigate`, 변경 검토 → `/review`. 단순 질문·탐색은 워크플로 없이 답한다.
-2. 소스를 고치기 전에 `.ai-harness/docs/code-conventions.md`를 Read한다. 테스트를 쓰면 `.ai-harness/docs/testing.md`, 구조를 바꾸면 `.ai-harness/docs/architecture.md`도 Read한다.
+2. 소스를 고치기 전에 `.ai-harness/docs/code-conventions.md`를 Read한다. 테스트를 쓰면 `.ai-harness/docs/testing.md`, 구조를 바꾸면 `.ai-harness/docs/architecture.md`, 사용자 화면(보드·리포트·기준 화면)을 바꾸면 `.ai-harness/docs/ui.md`와 `docs/design-system.md`도 Read한다.
 3. 기준 브랜치는 `develop`이다. 작업은 `origin/develop`에서 딴 작업 브랜치(가능하면 worktree)에서 한다. 사용자의 현재 체크아웃을 바꾸지 않는다.
 
 ## Hard constraints
@@ -47,6 +47,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 | `.ai-harness/docs/code-conventions.md` | 셸(bash 3.2 호환)·Python·Skill/템플릿·듀얼 매니페스트·공개 저장소·커밋 규칙 |
 | `.ai-harness/docs/testing.md` | `tests/run.sh`·영역 파일(`tests/<영역>.sh`) 실행·작성 규칙, CI와 같은 shellcheck |
 | `.ai-harness/docs/domain.md` | 도메인 문서 인덱스 |
+| `.ai-harness/docs/ui.md` | 단일 HTML 화면 목록, 보드 격리 실행, 뷰포트·테마, 디자인 기계 검사, `## 디자인 점검`(`ui-review`·`design-audit` 입력) |
 | `CONTRIBUTING.md` | 브랜치·버전·릴리스 규칙의 원본 |
 
 ## Quick Commands

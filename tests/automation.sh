@@ -1078,7 +1078,8 @@ git -C "$SYNC_CUR" add .ai-harness && git -C "$SYNC_CUR" commit -q -m harness
 make_repo "$SYNC_MIN"
 mkdir -p "$SYNC_MIN/.ai-harness"
 jq -n '{project_id:"sync-min",harness_version:"0.1.0",level:"minimal",integrations:["claude"]}' >"$SYNC_MIN/.ai-harness/harness.json"
-git -C "$SYNC_MIN" add .ai-harness && git -C "$SYNC_MIN" commit -q -m harness
+printf '%s\n' '<!doctype html><title>report</title>' >"$SYNC_MIN/report.html"
+git -C "$SYNC_MIN" add .ai-harness report.html && git -C "$SYNC_MIN" commit -q -m harness
 make_repo "$SYNC_PLAIN"
 sync_cmd() { HARNESS_METRICS_DIR="$SYNC_DATA" "$ROOT/scripts/sync-auto.sh" "$@"; }
 SYNC_REPO_REAL="$(cd "$SYNC_REPO" && pwd -P)"
@@ -1156,6 +1157,7 @@ jq -cn --arg a "$SYNC_MIN" '{kind:"session",cwd:$a}' >>"$SYNC_DATA/events/sync.j
 HM_SYNC_AUTO=1 sync_sweep
 assert_eq "1" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "no-op sync skips the agent"
 assert_eq "no-change" "$(jq -r '.result' "$SYNC_DATA/sync-auto/p-sync-min.json")" "no-op sync is recorded as no-change"
+assert_contains "$(grep -rh '켤 수 있는 stack' "$SYNC_DATA/harvest-auto/logs" 2>/dev/null)" "켤 수 있는 stack: ui (근거: report.html)" "no-op auto sync logs the stacks it could enable"
 
 # 자동 harvest와 별개인 하루 상한.
 jq '.result = "failed" | .fails = 1' "$SYNC_DATA/sync-auto/p-sync-svc.json" >"$TEST_TMP/sync-marker" \
