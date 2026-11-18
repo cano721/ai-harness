@@ -179,6 +179,13 @@ for s in "$root/.claude/settings.json" "$root/.claude/settings.local.json"; do
   done < <(jq -r '.hooks // {} | .[][]?.hooks[]?.command // empty' "$s" 2>/dev/null || true)
 done
 
+# ── 편집 가드의 '읽음' 판정 ───────────────────────────────────────────────────
+# transcript를 문자열로 grep하는 옛 가드는 Edit·Write의 file_path에도 맞아 문서를 쓰기만 한 세션을 통과시킨다.
+guard="$root/.ai-harness/hooks/direct-edit-guard.sh"
+if [[ -f "$guard" ]] && ! grep -q -E '\.name *== *"Read"' "$guard"; then
+  finding guard_read_by_grep medium ".ai-harness/hooks/direct-edit-guard.sh" "" "file_path" "" "편집 가드가 transcript를 문자열로 판정해 Edit·Write로 문서를 쓰기만 한 세션도 통과한다 — 플러그인 skills/harness-init/references/direct-edit-guard.sh처럼 jq로 줄을 파싱해 짝 결과가 성공인 Read 호출·읽기 형태 셸 명령만 인정하게 고친다"
+fi
+
 # ── 역할 매핑(harness.json roles)이 가리키는 기존 에이전트·라우터 ─────────────
 # 역할을 기존 에이전트(source existing)나 스택 역할 세트(source stack)에 넘기면 하네스 페르소나를 만들지 않으므로,
 # 대상이 사라지면 위임이 조용히 끊긴다.

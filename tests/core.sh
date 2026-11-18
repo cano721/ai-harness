@@ -347,9 +347,12 @@ Write scope: `api/src/test/**`
 DOC
 # shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
 printf '{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.ai-harness/hooks/direct-edit-guard.sh"}]}]}}\n' >"$CONTRACT/.claude/settings.json"
+mkdir -p "$CONTRACT/.ai-harness/hooks"
+# shellcheck disable=SC2016  # 옛 가드 본문을 문자 그대로 쓴다
+printf '%s\n' '#!/usr/bin/env bash' 'grep -q "\"file_path\":\"[^\"]*code-conventions.md\"" "$transcript" || exit 2' >"$CONTRACT/.ai-harness/hooks/direct-edit-guard.sh"
 CONTRACT_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT")"
 contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
-assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
+assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,guard_read_by_grep,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
 assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
 assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
 assert_eq ".ai-harness/workflows/implement-feature.md:10 5 10" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
@@ -371,6 +374,8 @@ cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
 DOC
 # shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
 printf '# developer\n\nWrite scope: `src/main/**`\n' >"$CONTRACT_OK/.ai-harness/agents/developer.md"
+mkdir -p "$CONTRACT_OK/.ai-harness/hooks"
+cp "$ROOT/skills/harness-init/references/direct-edit-guard.sh" "$CONTRACT_OK/.ai-harness/hooks/direct-edit-guard.sh"
 CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
