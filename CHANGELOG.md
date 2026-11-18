@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.82.0 (2026-11-18)
 ### 버그 수정
 
 - **플러그인 설치 경로에 공백이 있어도 무인 harvest·sync·autofix가 스크립트를 실행합니다** — 무인 실행은 플러그인 설치 경로로 시작하는 명령만 허용했는데, 경로에 공백이 있으면(예: `~/Library/Application Support/...` 아래 Claude 설정 디렉토리) 에이전트가 명령을 따옴표로 감싸 허용 규칙과 맞지 않았고, 첫 스크립트 호출부터 "requires approval"로 거부돼 아무것도 못 하고 끝났습니다. 이제 실행마다 `~/.ai-harness/run/plugin`에 이번에 로드할 설치본을 가리키는 링크를 만들고, 허용 규칙과 에이전트의 스크립트 호출을 이 고정 경로 하나로 맞춥니다. 버전·프로필이 바뀌어도 규칙이 따라 바뀌지 않아도 됩니다. (#400)
