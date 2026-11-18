@@ -19,11 +19,13 @@ LAUNCHER_APP="${BOARD_LAUNCHER_DIR:-$HOME/Applications}/Harness Board.app"
 LAUNCHER_SHIM="$BOARD_DIR/bin/open-board"
 LAUNCHER_ROOT_FILE="$BOARD_DIR/bin/plugin-root"
 LAUNCHER_ID="com.ai-harness.board"
+LAUNCHER_SRC="$BOARD_DIR/bin/launcher.applescript"
 
 usage() {
   cat >&2 <<'EOF'
 usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, 없으면 띄운 뒤 주소를 연다
-       board.sh stop                    서버를 끈다
+       board.sh stop                    서버를 끈다(상주 세션 호스트는 그대로)
+       board.sh host-stop               상주 세션 호스트를 끈다(대화 기록 유지, 다음 호스트가 같은 id로 이어 쥠)
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
@@ -149,6 +151,25 @@ command_stop() {
   jq -cn --argjson pid "$pid" '{running: false, stopped: true, pid: $pid}'
 }
 
+# 상주 세션 호스트(#364)를 끈다: 호스트가 세션 stdin을 닫고 끝낸다(대화 기록 유지, 사람이 끝낸 것으로 기록하지 않음).
+# 다음 호스트가 뜰 때(보드가 열려 있으면 곧바로) 같은 id로 --resume해 이어 쥔다. 이전 버전 호스트를 새 버전으로 바꿀 때 쓴다.
+command_host_stop() {
+  local info="$BOARD_DIR/host/host.json" pid i
+  pid="$(jq -r '.pid // empty | tostring' "$info" 2>/dev/null || true)"
+  if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null \
+    || ! ps -o command= -p "$pid" 2>/dev/null | grep -q 'resident_host\.py'; then
+    jq -cn '{host: false, stopped: false}'
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  for ((i = 0; i < 100; i++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -0 "$pid" 2>/dev/null && die "상주 세션 호스트(pid $pid)가 10초 안에 끝나지 않았습니다."
+  jq -cn --argjson pid "$pid" '{host: true, stopped: true, pid: $pid}'
+}
+
 command_status() {
   local pid
   if pid="$(board_pid)"; then
@@ -229,6 +250,8 @@ command_hook() {
 }
 
 # ---- 런처: /ai-harness:setup이 사용자에게 물은 뒤에만 부른다 ----
+# 앱은 osacompile로 만든 stay-open AppleScript 애플릿이다(#363). 보드가 떠 있는 동안 Dock에 남고, Dock에서 종료하면
+# 보드도 끄며, 보드가 다른 이유로 꺼지면 따라 끝난다. 셸 스크립트 실행 파일은 Apple 이벤트를 받지 못해 이렇게 할 수 없다.
 # 앱은 고정 경로 shim만 부르고, shim이 실행할 때마다 가장 새 플러그인 설치본을 찾는다 — 플러그인을 업데이트해
 # 설치 경로(…/<version>/)가 바뀌어도 앱을 다시 만들 필요가 없다. 찾지 못하면 install 때 기록한 경로(개발 체크아웃 등)를 쓴다.
 # Finder로 연 앱은 PATH가 /usr/bin:/bin 뿐이라 jq·python3·claude를 못 찾으므로 install 때의 PATH를 shim에 담는다.
@@ -241,12 +264,14 @@ write_launcher_shim() { # $1=출력 경로
     # Finder로 연 앱은 셸 환경을 물려받지 않는다. install 때 BOARD_IDLE_EXIT를 정했으면 그 값을 담는다.
     if [[ -n "${BOARD_IDLE_EXIT:-}" ]]; then printf 'export BOARD_IDLE_EXIT="${BOARD_IDLE_EXIT:-%s}"\n' "$(printf '%q' "$BOARD_IDLE_EXIT")"; fi
     cat <<'SHIM'
+mode="${1:-open}" # open | alive(앱이 보드가 살아 있는지 확인: 0 살아 있음, 1 꺼짐, 2 확인 실패) | stop(앱을 종료할 때)
 data_dir="$HARNESS_METRICS_DIR"
 log="$data_dir/board/launcher.log"
 if [[ -f "$log" ]] && (( $(wc -l <"$log") > 500 )); then
   tail -n 200 "$log" >"$log.tmp" && mv "$log.tmp" "$log"
 fi
 fail() { # 이유를 기록하고, 눈에 보이게 대화상자로 알린다(앱은 터미널이 없다)
+  [[ "$mode" == open ]] || exit 2
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >>"$log" 2>/dev/null
   if [[ "${BOARD_NO_BROWSER:-0}" != 1 ]] && command -v osascript >/dev/null 2>&1; then
     osascript -e 'on run argv' -e 'display alert "Harness Board를 열지 못했습니다" message (item 1 of argv) as warning' -e 'end run' "$1" >/dev/null 2>&1
@@ -263,33 +288,89 @@ done | sort -t$'\t' -k1,1V | tail -n 1)"
 root="${latest#*$'\t'}"
 [[ -n "$root" ]] || root="$(cat "$data_dir/board/bin/plugin-root" 2>/dev/null)"
 [[ -f "$root/scripts/board/board.sh" ]] || fail "ai-harness 설치본을 찾지 못했습니다. 플러그인을 다시 설치하거나 /ai-harness:board로 여세요."
-# 성공 출력에는 보드 주소(토큰)가 있어 남기지 않는다. 실패 이유(stderr)만 보인다.
-out="$(bash "$root/scripts/board/board.sh" open 2>&1 >/dev/null)" || fail "${out:-board.sh open 실패}"
+case "$mode" in
+  alive)
+    # 꺼졌을 때만 1 — 플러그인 업데이트 중이라 확인을 못 한 것(2)으로 앱이 끝나면 Dock으로 끌 수 없는 서버가 남는다.
+    state="$(bash "$root/scripts/board/board.sh" status 2>/dev/null)" || exit 2
+    case "$state" in *'"running":true'*) exit 0 ;; *'"running":false'*) exit 1 ;; *) exit 2 ;; esac
+    ;;
+  stop) bash "$root/scripts/board/board.sh" stop >/dev/null 2>&1 ;;
+  open)
+    # 성공 출력에는 보드 주소(토큰)가 있어 남기지 않는다. 실패 이유(stderr)만 보인다.
+    out="$(bash "$root/scripts/board/board.sh" open 2>&1 >/dev/null)" || fail "${out:-board.sh open 실패}"
+    ;;
+  *) exit 2 ;;
+esac
 SHIM
   } >"$1"
   chmod 755 "$1"
 }
 
-write_launcher_app() { # $1=앱 경로 $2=shim 경로
-  mkdir -p "$1/Contents/MacOS"
-  cat >"$1/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>Harness Board</string>
-  <key>CFBundleDisplayName</key><string>Harness Board</string>
-  <key>CFBundleIdentifier</key><string>$LAUNCHER_ID</string>
-  <key>CFBundleExecutable</key><string>harness-board</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <!-- 보드를 브라우저로 넘기고 바로 끝나는 앱이라 Dock에 아이콘을 띄우지 않는다. -->
-  <key>LSUIElement</key><true/>
-</dict>
-</plist>
-PLIST
-  printf '#!/bin/bash\nexec /bin/bash %q\n' "$2" >"$1/Contents/MacOS/harness-board"
-  chmod 755 "$1/Contents/MacOS/harness-board"
+write_launcher_script() { # $1=출력 경로 $2=shim 경로
+  local icon_sum quoted="${2//\\/\\\\}"
+  quoted="${quoted//\"/\\\"}" # AppleScript 문자열 안의 \와 "를 이스케이프
+  icon_sum="$(cksum <"$DIR/launcher-icon.py")"
+  {
+    printf -- '-- ai-harness Harness Board 런처 — scripts/board/board.sh launcher install이 생성. 직접 고치지 말 것.\n'
+    # 앱 만드는 단계(write_launcher_app)를 바꾸면 build를 올린다 — 기존 앱이 다시 만들어진다.
+    printf -- '-- build: 2, icon: %s\n' "${icon_sum%% *}"
+    printf 'property shim : "%s"\n' "$quoted"
+    cat <<'APPLESCRIPT'
+property leaving : false
+
+on run
+	openBoard()
+end run
+
+-- 떠 있을 때 Dock 아이콘을 다시 누르면 보드 화면을 다시 연다.
+on reopen
+	openBoard()
+end reopen
+
+on openBoard()
+	try
+		do shell script "/bin/bash " & quoted form of shim
+	on error
+		-- 이유는 shim이 대화상자와 launcher.log로 이미 알렸다.
+		set leaving to true
+		quit
+	end try
+end openBoard
+
+-- 보드가 자동 종료·board.sh stop으로 꺼지면(alive가 1) 앱도 끝난다. 확인 자체가 실패하면 다음 확인까지 기다린다.
+on idle
+	try
+		do shell script "/bin/bash " & quoted form of shim & " alive"
+	on error number code
+		if code is 1 then
+			set leaving to true
+			quit
+		end if
+	end try
+	return 10
+end idle
+
+-- Dock·메뉴에서 앱을 종료하면 보드 서버도 끈다.
+on quit
+	if not leaving then
+		try
+			do shell script "/bin/bash " & quoted form of shim & " stop"
+		end try
+	end if
+	continue quit
+end quit
+APPLESCRIPT
+  } >"$1"
+}
+
+write_launcher_app() { # $1=앱 경로 $2=AppleScript 소스
+  local out
+  # 성공해도 서명 교체 안내를 stderr에 찍으므로 실패할 때만 보인다.
+  out="$(osacompile -s -o "$1" "$2" 2>&1)" || die "osacompile로 런처 앱을 만들지 못했습니다: $out"
+  plutil -replace CFBundleIdentifier -string "$LAUNCHER_ID" "$1/Contents/Info.plist" || die "런처 앱 bundle id를 쓰지 못했습니다"
+  python3 -I "$DIR/launcher-icon.py" "$1/Contents/Resources/applet.icns" || die "런처 앱 아이콘을 그리지 못했습니다"
+  # Info.plist·아이콘을 바꿔 osacompile의 ad-hoc 서명이 깨졌으니 다시 서명한다(Apple Silicon은 서명 없는 실행 파일을 막는다).
+  out="$(codesign --force -s - "$1" 2>&1)" || die "런처 앱을 서명하지 못했습니다: $out"
 }
 
 launcher_ours() { grep -q "<string>$LAUNCHER_ID</string>" "$LAUNCHER_APP/Contents/Info.plist" 2>/dev/null; }
@@ -314,13 +395,20 @@ command_launcher() {
       mkdir -p "$BOARD_DIR/bin"
       # 새 앱은 같은 폴더에서 만든 뒤 이름만 바꿔 넣는다(다른 볼륨 사이 mv는 복사라 중간 상태가 남는다). 중단돼도 임시본은 지운다.
       mkdir -p "$(dirname "$LAUNCHER_APP")"
-      tmp="$LAUNCHER_APP.new.$$"
-      trap 'rm -rf "$tmp" "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_APP.old.$$"' EXIT
+      rm -rf "$(dirname "$LAUNCHER_APP")"/.harness-board.new.* # 강제 종료로 남은 지난 임시본
+      # osacompile은 이름이 .app으로 끝나야 애플릿을 만들고 앱 이름도 파일 이름에서 따므로, 임시 폴더 안에 같은 이름으로 만든다.
+      stage="$(dirname "$LAUNCHER_APP")/.harness-board.new.$$"
+      tmp="$stage/$(basename "$LAUNCHER_APP")"
+      trap 'rm -rf "$stage" "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_APP.old.$$"' EXIT
+      mkdir -p "$stage"
       write_launcher_shim "$LAUNCHER_SHIM.tmp.$$"
-      write_launcher_app "$tmp" "$LAUNCHER_SHIM"
-      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$tmp/Contents/Info.plist" "$LAUNCHER_APP/Contents/Info.plist" \
-        || ! cmp -s "$tmp/Contents/MacOS/harness-board" "$LAUNCHER_APP/Contents/MacOS/harness-board"; then
+      write_launcher_script "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SHIM"
+      # 컴파일한 애플릿은 매번 바이트가 달라, 소스(shim·AppleScript·아이콘 생성기 체크섬)가 같고 애플릿이 있으면 그대로 둔다.
+      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC" \
+        || ! launcher_ours || [[ ! -x "$LAUNCHER_APP/Contents/MacOS/applet" ]]; then
+        write_launcher_app "$tmp" "$LAUNCHER_SRC.tmp.$$"
         mv "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM"
+        mv "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC"
         if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
         mv "$tmp" "$LAUNCHER_APP"
         action=installed
@@ -333,8 +421,8 @@ command_launcher() {
         rm -rf "$LAUNCHER_APP"
         action=removed
       fi
-      if [[ -f "$LAUNCHER_SHIM" || -f "$LAUNCHER_ROOT_FILE" ]]; then
-        rm -f "$LAUNCHER_SHIM" "$LAUNCHER_ROOT_FILE"
+      if [[ -f "$LAUNCHER_SHIM" || -f "$LAUNCHER_ROOT_FILE" || -f "$LAUNCHER_SRC" ]]; then
+        rm -f "$LAUNCHER_SHIM" "$LAUNCHER_ROOT_FILE" "$LAUNCHER_SRC"
         action=removed
       fi
       launcher_json "$action"
@@ -348,6 +436,7 @@ cmd="${1:-open}"
 case "$cmd" in
   open) command_open "$@" ;;
   stop) command_stop ;;
+  host-stop) command_host_stop ;;
   status) command_status ;;
   hook) command_hook "$@" ;;
   launcher) command_launcher "$@" ;;

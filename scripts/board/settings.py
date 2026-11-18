@@ -6,7 +6,7 @@ HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS에 둔다(#242). 병합 여부는 이
 기준 브랜치·배포 확인·스모크 명령은 저장소 사실이라 harness.json에 있고, 보드는 직접 고치지 않는다 —
 그 저장소에서 /ai-harness:harness-init 설정 변경을 돌려 draft PR로 낸다.
 """
-import json, os, re, subprocess, tempfile, threading
+import json, os, re, subprocess, tempfile, threading, time
 
 LEVELS = ("pr", "merge", "deploy")
 
@@ -55,7 +55,20 @@ def level_of(m):
     return gp or "none"  # direct | 미설정
 
 
+SUGGEST_TTL = 600  # 기준 브랜치·병합 방식 추정은 자주 바뀌지 않는데 git을 여러 번 불러 설정 화면 읽기의 대부분을 차지한다
+_suggest_cache = {}
+
+
 def suggest(repo):
+    hit = _suggest_cache.get(repo)
+    if hit and time.time() - hit[0] < SUGGEST_TTL:
+        return hit[1]
+    val = _suggest(repo)
+    _suggest_cache[repo] = (time.time(), val)
+    return val
+
+
+def _suggest(repo):
     # PR이 실제로 향하는 통합 브랜치(develop)가 있으면 그것, 없으면 원격 기본 브랜치
     base = "develop" if _git(repo, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/develop") else ""
     if not base:
@@ -95,7 +108,7 @@ LEVEL_KO = {"pr": "PR까지", "merge": "병합까지", "deploy": "배포·검증
 
 # ---- 개인 설정(~/.ai-harness/config) ----
 CONFIG = os.path.join(os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness"), "config")
-PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS", "HM_MERGE_REQUIRE", "HM_MERGE_MIN_APPROVALS", "HM_MERGE_METHOD",
+PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS",
                  "HM_APPROVAL", "HM_APPROVAL_REPOS",
                  "HM_HARVEST_AUTO", "HM_SYNC_AUTO", "HM_HARVEST_AUTO_MERGE", "HM_SYNC_AUTO_MERGE",
                  "HM_HARVEST_AUTO_DAILY_MAX", "HM_SYNC_AUTO_DAILY_MAX")
@@ -296,7 +309,7 @@ def effective(row, cfg):
     return {"level": level, "source": src, "notes": notes}
 
 
-# ---- 호스트 브랜치 보호(개인 단계의 병합 안전장치) ----
+# ---- 호스트 브랜치 보호(개인 단계의 병합 조건) ----
 def protection(repo, base):
     """러너 branch_protection과 같은 판정: {approvals, checks} 또는 {error}."""
     url = _git(repo, "remote", "get-url", "origin")

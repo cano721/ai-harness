@@ -170,6 +170,20 @@ hm_version_lt() {
   return 1
 }
 
+# claude가 로드할 ai-harness 설치본 경로. --plugin-dir과 같은 이름의 설치본이 있으면 claude는 버전이 높은 쪽을
+# 로드하므로(#366), 무인 worker는 가장 높은 설치본을 --plugin-dir·스크립트 허용 목록에 같이 써서 경로를 맞춘다.
+hm_claude_plugin_root() { # $1=찾지 못했을 때 쓸 경로
+  local state="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" best="" best_version="" version path
+  while IFS=$'\t' read -r version path; do
+    [[ -n "$path" && -d "$path/scripts" ]] || continue
+    if [[ -z "$best" ]] || hm_version_lt "$best_version" "$version"; then
+      best="$path"; best_version="$version"
+    fi
+  done < <(jq -r '(.plugins // {}) | to_entries[] | select(.key | startswith("ai-harness@")) | .value[]?
+    | [(.version // ""), (.installPath // "")] | @tsv' "$state" 2>/dev/null || true)
+  printf '%s\n' "${best:-$1}"
+}
+
 # 프로젝트 이름 → 파일시스템 안전 키. prefix가 '.', '..' 같은 인자의 경로 탈출을 막는다.
 hm_project_key() {
   printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"

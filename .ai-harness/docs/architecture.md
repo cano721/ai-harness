@@ -26,7 +26,7 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 | `catalog/` | `/setup`이 사용자 전역에 선택 설치하는 기본 스킬 원본(`catalog.json`, `design-skills.json`) | `/setup` |
 | `vendor/archify/` | `/diagram` 엔진 고정 사본과 `vendor/archify.lock.json`. `scripts/vendor-archify.sh`로만 갱신 | `/diagram` |
 | `evals/` | Skill 평가 과제(`evals/<skill>/<case>/`)와 A/B 통제 실험(`evals/ab/`, `scripts/ab.sh`가 사용) | 메인테이너 |
-| `tests/run.sh` | 단일 회귀 테스트 스크립트 + `tests/fixtures/` | 로컬·CI |
+| `tests/` | 회귀 테스트: 진입점 `run.sh`(영역 선택·`--changed`·`--lint`), 공용 `lib.sh`, 영역 파일 `<영역>.sh`, `fixtures/` | 로컬·CI |
 | `docs/design/` | 설계 문서 | 사람 |
 
 ## 이 저장소 자신의 하네스
