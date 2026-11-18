@@ -35,7 +35,7 @@ scripts/release-prep.sh --check                                          # 버�
 - git이 필요한 테스트는 `$TEST_TMP` 아래에 `git init -q`로 저장소를 만들고 `user.email test@example.com`을 설정한다. 원격은 `git init --bare` 로컬 경로.
 - fixture는 `tests/fixtures/<종류>/`(`claude/`·`codex/` 세션 기록, `driver/` 러너용 가짜 CLI, `ab/` A/B 정답 구현). 실제 사람·회사 식별자 금지.
 - 외부 서비스(GitHub·Bitbucket·LLM)는 호출하지 않는다 — 가짜 실행 파일 디렉토리를 `PATH` 앞에 두는 방식이 기존 관례다(예: 러너 테스트의 `PATH="$ROOT/tests/fixtures/driver:$PATH"`).
-- macOS `/bin/bash` 3.2에서도 돌아야 한다(`tests/core.sh`가 fd 누수 패턴을 검사).
+- macOS `/bin/bash` 3.2에서도 돌아야 한다(`tests/core.sh`가 fd 누수 패턴을 검사). 명령 인자인 `"$(... "{a, b}" ...)"`의 안쪽 큰따옴표 문자열에 든 쉼표 중괄호도 3.2가 펼치므로, 안쪽 문자열은 변수나 작은따옴표로 뺀다(`tests/bash32-check.py`가 `--lint`·core 영역에서 검사).
 
 ## 평가(evals)는 별개
 

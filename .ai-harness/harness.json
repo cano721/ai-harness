@@ -155,12 +155,12 @@
       "template_version": "0.79.0"
     },
     ".agents/skills/design-polish/SKILL.md": {
-      "content_sha256": "309d884827f6e1bd47823422a1730431c39705814fbf77537acb1709c988e27c",
+      "content_sha256": "95fb803791d5e43d26132bd8e4ba9315247582f1539d8022d7ab2e3cd05408da",
       "template_version": "0.79.0",
       "renderer": 1
     },
     ".claude/commands/design-polish.md": {
-      "content_sha256": "190d0a38e0f3a1995ad9ab90cb8a0c90ef344b4a09a2a063ea4579f10d8a9f0e",
+      "content_sha256": "fa026870684ccf624af16b6c6c081f328fce846e02864bcf7eb15affc547fed6",
       "template_version": "0.79.0",
       "renderer": 1
     }

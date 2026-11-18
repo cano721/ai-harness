@@ -1198,6 +1198,9 @@ UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 MEASURE_SCHEMA="$RUN/measure-schema.json"
 DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
 POLISH_REVIEW_SCHEMA="$RUN/polish-review-schema.json"
+# 측정 세션이 캡처마다 같은 페이지 상태에서 평가하는 레이아웃 검사. 결과는 측정 JSON의 screens[].layout으로 받는다.
+LAYOUT_PROBE="$RUN/layout-probe.js"
+LAYOUT_PROBE_ID="layout-probe/1"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
@@ -1262,6 +1265,7 @@ $(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.th
 Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository and stop any server you started before you finish.
 $same
 Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
+Layout check: in the same page and state, right before each capture and scrolled to the top, evaluate the expression in $LAYOUT_PROBE in the page (for example Playwright: await page.evaluate(fs.readFileSync('$LAYOUT_PROBE', 'utf8'))) and put the object it returns, unchanged, in that screen's layout. Do not edit, filter, or explain away its issues; the driver reads them. A screen without the probe's result is unmeasured.
 Rules: find the design rule document and the reference screen (.ai-harness/docs/frontend.md or ui.md section \"## 디자인 점검\", DESIGN.md, docs/design-system.md). Put their paths in rules, or empty strings when missing. When both exist, score every target screen with the project design-audit skill (.agents/skills/design-audit/SKILL.md or .claude/skills/design-audit/SKILL.md) exactly as its rubric says, using the captures for what the rubric marks as needing a render, and save the report as $ev/audit.md. audit.total is the lowest total among the target screens and audit.axes the lowest score per axis A-E (-1 for an axis the rubric leaves 미확인); audit.report is the report path. When either rule source is missing or the skill is absent, set audit.scored false, total -1, every axis -1, report empty.
 checks: the exact shell commands the project names for checking screens mechanically (design lint, contrast, token-copy checks, the UI test suite) from ui.md, AGENTS.md, or the testing docs. Do not run them; the driver runs them from the repository root with bash -c.
 status: measured when every target screen rendered at every required viewport and theme; otherwise unmeasured with each gap in unmeasured.
@@ -1292,6 +1296,14 @@ polish_brief() { # selected-ids-json
   state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
 }
 
+# 측정의 레이아웃 검사 결과를 프롬프트용 문구로. baseline 또는 last(마지막 측정).
+polish_layout_text() { # baseline|last
+  jq -r --arg w "$1" --arg p "$LAYOUT_PROBE_ID" '
+    (if $w == "baseline" then .baseline.layout else (.measurements | last).layout end // [])
+    | [.[] as $s | $s.issues[] | "- \($s.role) \($s.screen) · \($s.viewport) · \($s.theme): \(.kind) — \(.detail)"]
+    | "Layout check (\($p), run in the live page): " + (if length == 0 then "no issue on any captured screen." else "found\n" + join("\n") end)' "$STATE"
+}
+
 polish_findings_text() {
   state '(.findings // []) | if length > 0 then "\nStill to resolve from the last review, check run, or remote CI:\n" + (map("- " + .) | join("\n")) else "" end'
 }
@@ -1304,6 +1316,12 @@ polish_verdict() { # review-output → stdout: 통과를 막는 문제(JSON 배�
           + (first($st.items[]? | select(.id == $r) | " — " + .title) // "")),
         (.regressions[] | "regression: " + .),
         (.new_findings[] | "new issue: " + .),
+        # 레이아웃 검사: 대상 화면의 깨짐은 기준선에 있었어도 막는다(다듬은 화면이 깨진 채 통과하지 않게).
+        # 형제 화면은 고칠 대상이 아니므로 기준선 같은 화면·뷰포트·테마에 없던 깨짐만 회귀로 막는다.
+        (($st.baseline.layout // []) as $bl | ($m.layout // [])[] as $s | $s.issues[] as $i
+          | select($s.role == "target"
+              or ([$bl[] | select(.screen == $s.screen and .viewport == $s.viewport and .theme == $s.theme) | .issues[].key] | index($i.key) | not))
+          | "layout (\($s.role) \($s.screen) · \($s.viewport) · \($s.theme)): \($i.kind) — \($i.detail)"),
         (if $rules then
           (if ($m.audit.scored | not) then "design-audit did not score the screens after the fix"
            elif $m.audit.total < $pass then "design-audit total \($m.audit.total) is below \($pass)" else empty end),
@@ -1363,17 +1381,20 @@ execute() {
           || finish incomplete 30 "measure output does not match the schema ($m_out)"
         # 캡처가 없거나 증거 디렉터리 밖이면 측정하지 않은 것이다. 측정 없는 비교·판정은 하지 않는다.
         if [[ "$(jq -r .status "$m_out")" != measured ]] || ! measure_captures_present "$m_out" "$m_ev" \
+          || ! jq -e --arg p "$LAYOUT_PROBE_ID" 'all(.screens[]; .layout.probe == $p and .layout.viewport.w > 0)' "$m_out" >/dev/null \
           || ! jq -e --slurpfile s "$STATE" '[.screens[] | [.screen, .viewport, .theme]] as $now
             | all(($s[0].baseline.screens // [])[]; [.screen, .viewport, .theme] as $b | $now | index([$b]) != null)' "$m_out" >/dev/null; then
-          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
+          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again, or the layout probe did not run on every screen): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
             --slurpfile r "$m_out" --arg e "$m_ev"
           go measure "$(edge_when measure user_decision)"
           continue
         fi
-        state_set '.measurements += [($r[0] | {label: $l, audit, summary, evidence_dir: $e, at: $t})]' \
+        state_set '.measurements += [($r[0] | {label: $l, audit, summary, evidence_dir: $e, at: $t,
+            layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})]' \
           --slurpfile r "$m_out" --arg l "$m_label" --arg e "$m_ev" --arg t "$(now_utc)"
         if [[ "$(state '.baseline // null')" == null ]]; then
-          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e})
+          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e,
+            layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})
             | .checks = ([.cli_checks[], $r[0].checks[]] | map(select(length > 0)) | unique)' --slurpfile r "$m_out" --arg e "$m_ev"
           # 검사 명령은 측정 세션이 고른 것이라 승인 전에는 실행하지 않는다. 고칠 목록과 함께 승인받은 뒤 verify가 실행한다.
           go measure baseline_measured
@@ -1393,7 +1414,10 @@ execute() {
 
 You are the diagnose node of the design-polish graph. Do not edit any file. You did not make these screens; critique them independently from the evidence of the baseline measurement, as a first-time user and as a design reviewer holding the project's own rules (the design rule document, its tokens and shared components, the reference screen, .ai-harness/docs/ui.md) first and general interface quality second.
 Evidence: captures in $(state .baseline.evidence_dir) (read the images), the design-audit report $audit_report, and the project checks the driver will run after the fix: $(state '.checks | join(" ; ")').
+Look at every capture for empty bands, horizontal overflow, and clipped or cut-off elements before judging anything else. A full-page capture shows a sticky or fixed element (a sidebar, a header) only where it sits at the top of the page, so its background seems to end at the viewport height; that alone is not a defect (the layout check below already looks at it in the live page).
+$(polish_layout_text baseline)
 List what to fix as items, most severe first, with ids P1, P2, ... in that order. Each item: severity major (a rule the audit deducted, a broken hierarchy or primary action, unreadable contrast or a missing focus state, a failing project check, a screen that disagrees with its siblings in the rule document, a broken layout at a supported viewport or theme) or minor (everything else worth fixing); a short title; evidence — the capture files that show it and the rule-document section or audit line it breaks (both when they exist); fix — what to change, in tokens and shared components rather than raw values; mechanical — true when a machine check (lint, contrast, token-copy check) could catch it.
+Every layout check issue above is a major item with mechanical true (one item may cover the same issue on several viewports or themes); the fix is checked by the same probe after the fix.
 Put anything that needs a product or content decision in needs_decision instead of items. Do not list what the screens already do right.
 Return only JSON matching the schema.
 
@@ -1649,6 +1673,9 @@ $(brief_context)"
 
 You are the review node of the design-polish graph. Do not edit any file. You did not make this change; judge it only from the evidence, not from the fixer's summary.
 Compare the baseline captures in $(state .baseline.evidence_dir) with the captures after the fix in $(state '(.measurements | last).evidence_dir') — every screen, viewport, and theme pair, the sibling screens as closely as the targets — and read both design-audit reports when they exist. The change is git diff $(state .start_head) (including the driver's checkpoint commits).
+Look at each capture first for empty bands (a row or column stretched with no content), horizontal overflow, and clipped or cut-off elements, then for the rest. A defect that was already in the baseline capture is still a defect on a target screen. A full-page capture shows a sticky or fixed element only at the top of the page, so its background seems to end at the viewport height; that alone is not a defect.
+$(polish_layout_text last)
+The driver blocks the pass on its own for every layout check issue on a target screen and for every new one on a sibling screen; you do not need to repeat them, but report what else the captures show.
 remaining: the ids of selected items that are still visible in the captures after the fix. regressions: anything on any captured screen that is worse than its baseline (layout, spacing, hierarchy, contrast, a shared component or token change showing wrong on a screen it was not meant for), each with the capture pair that shows it. new_findings: new major issues the change introduced that are not regressions of a baseline capture. Leave an array empty when you found nothing for it.
 Set needs_user_decision to true only when a remaining item or regression needs a product or design-rule decision from a person.
 Return only JSON matching the schema.
@@ -2139,9 +2166,15 @@ EOF
 cat >"$MEASURE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","screens","rules","audit","checks","unmeasured"],
  "properties":{"status":{"type":"string","enum":["measured","unmeasured"]},"summary":{"type":"string"},
-  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures"],
+  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures","layout"],
    "properties":{"screen":{"type":"string"},"role":{"type":"string","enum":["target","sibling"]},"url":{"type":"string"},
-    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}}}}},
+    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}},
+    "layout":{"type":"object","additionalProperties":false,"required":["probe","viewport","document","issues"],
+     "properties":{"probe":{"type":"string"},
+      "viewport":{"type":"object","additionalProperties":false,"required":["w","h"],"properties":{"w":{"type":"number"},"h":{"type":"number"}}},
+      "document":{"type":"object","additionalProperties":false,"required":["w","h"],"properties":{"w":{"type":"number"},"h":{"type":"number"}}},
+      "issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","key","detail"],
+       "properties":{"kind":{"type":"string"},"key":{"type":"string"},"detail":{"type":"string"}}}}}}}}},
   "rules":{"type":"object","additionalProperties":false,"required":["document","reference_screen"],
    "properties":{"document":{"type":"string"},"reference_screen":{"type":"string"}}},
   "audit":{"type":"object","additionalProperties":false,"required":["scored","total","axes","report"],
@@ -2163,6 +2196,128 @@ cat >"$POLISH_REVIEW_SCHEMA" <<'EOF'
  "properties":{"summary":{"type":"string"},"remaining":{"type":"array","items":{"type":"string"}},
   "regressions":{"type":"array","items":{"type":"string"}},"new_findings":{"type":"array","items":{"type":"string"}},
   "needs_user_decision":{"type":"boolean"}}}
+EOF
+# 레이아웃 probe: 브라우저에서 평가하는 식 하나. 가로 넘침·잘린 글자·본문 앞 빈 띠·배경이 못 채움만 본다(오탐 기준은 주석과
+# tests/fixtures/polish-layout). 모델의 눈과 채점이 놓친 깨짐을 측정 결과에 남겨 러너가 통과를 막는다(#409).
+[[ "$WORKFLOW" != polish ]] || cat >"$LAYOUT_PROBE" <<'EOF'
+(() => {
+  // layout-probe/1 — 측정 세션이 캡처 직전 같은 페이지 상태에서 평가한다(workflow-driver.sh가 실행 폴더에 쓴다).
+  // 취향이 아니라 기계로 확실한 깨짐만 낸다. 기준은 tests/fixtures/polish-layout의 깨진·정상 페이지로 고정한다.
+  const de = document.documentElement, body = document.body;
+  const VW = de.clientWidth, VH = innerHeight, SX = scrollX, SY = scrollY;
+  const DOC_H = Math.max(de.scrollHeight, body ? body.scrollHeight : 0);
+  const issues = [];
+  const name = (el) => {
+    let s = el.tagName.toLowerCase();
+    if (el.id) return s + "#" + el.id;
+    const c = [...el.classList].slice(0, 2);
+    return c.length ? s + "." + c.join(".") : s;
+  };
+  const path = (el) => [el.parentElement && el.parentElement !== body ? name(el.parentElement) : "", name(el)].filter(Boolean).join(" > ");
+  const box = (el) => { const r = el.getBoundingClientRect(); return { l: r.left + SX, t: r.top + SY, r: r.right + SX, b: r.bottom + SY, w: r.width, h: r.height }; };
+  const shown = (el) => { const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden" && +cs.opacity > 0; };
+  const all = body ? [...body.querySelectorAll("*")].filter((el) => !el.closest("script,style,template,noscript")) : [];
+  const transparent = (c) => !c || c === "transparent" || /rgba\([^)]*,\s*0\)$/.test(c);
+
+  // 내용: 보이는 글자 줄, 그림·입력 요소, 배경 그림이 있는 상자. 빈 띠·잘림은 이것을 기준으로 본다.
+  const content = [];
+  const REPLACED = "img,svg,canvas,video,iframe,input,select,textarea,button,picture,object,embed,[role=img]";
+  if (body) {
+    const tw = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+      if (!n.data.trim() || !n.parentElement || n.parentElement.closest("script,style,template,noscript")) continue;
+      if (!shown(n.parentElement)) continue;
+      const rg = document.createRange();
+      rg.selectNodeContents(n);
+      for (const r of rg.getClientRects()) if (r.width > 0 && r.height > 0) content.push({ node: n, l: r.left + SX, t: r.top + SY, r: r.right + SX, b: r.bottom + SY });
+    }
+  }
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") continue;
+    if (el.matches(REPLACED) || (cs.backgroundImage && cs.backgroundImage !== "none")) {
+      const b = box(el);
+      if (b.w > 0 && b.h > 0) content.push({ node: el, ...b });
+    }
+  }
+
+  // 1. 가로 넘침: 문서가 뷰포트보다 넓어 페이지 전체가 옆으로 밀린다(루트가 숨김이면 스크롤이 생기지 않으므로 보지 않는다).
+  const rootClipsX = ["hidden", "clip"].includes(getComputedStyle(de).overflowX) || (body && ["hidden", "clip"].includes(getComputedStyle(body).overflowX));
+  if (!rootClipsX && de.scrollWidth > VW + 1) {
+    const culprits = all.filter((el) => {
+      const b = box(el), p = el.parentElement && box(el.parentElement);
+      return b.w > 0 && b.r > VW + 1 && (!p || p.r <= VW + 1) && getComputedStyle(el).position !== "fixed";
+    }).slice(0, 3);
+    issues.push({ kind: "overflow-x", key: "overflow-x", detail: `document is ${de.scrollWidth}px wide in a ${VW}px viewport` + (culprits.length ? `: ${culprits.map((el) => `${path(el)} reaches ${Math.round(box(el).r)}px`).join("; ")}` : "") });
+  }
+
+  // 2. 잘린 글자: 넘침을 숨기는 상자의 경계가 글자 줄을 가로지른다(줄 일부만 보임).
+  //    말줄임(text-overflow: ellipsis)·줄 수 제한(line-clamp)·화면 낭독 전용(1~2px 상자)·통째로 숨긴 줄(접힌 영역)은 의도된 숨김이라 보지 않는다.
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    const hx = ["hidden", "clip"].includes(cs.overflowX), hy = ["hidden", "clip"].includes(cs.overflowY);
+    if (!(hx || hy) || !shown(el)) continue;
+    const r0 = el.getBoundingClientRect();
+    if (r0.width <= 2 || r0.height <= 2) continue;
+    const cl = r0.left + SX + el.clientLeft, ct = r0.top + SY + el.clientTop, cr = cl + el.clientWidth, cb = ct + el.clientHeight;
+    const ellipsis = cs.textOverflow === "ellipsis";
+    const clamp = cs.webkitLineClamp && cs.webkitLineClamp !== "none";
+    let hit = null;
+    for (const c of content) {
+      if (!(c.node.nodeType === 3) || !el.contains(c.node)) continue;
+      // 가장 가까운 자르는 상자가 이 상자일 때만(안쪽 스크롤 상자가 있으면 그 상자 몫이다).
+      let a = c.node.parentElement, nearest = null;
+      for (; a && a !== el.parentElement; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (["hidden", "clip", "auto", "scroll"].includes(s.overflowX) || ["hidden", "clip", "auto", "scroll"].includes(s.overflowY)) { nearest = a; break; }
+      }
+      if (nearest !== el) continue;
+      const cutX = hx && !ellipsis && c.l < cr - 1 && c.r > cr + 1;
+      const cutY = hy && !clamp && c.t < cb - 1 && c.b > cb + 1;
+      if (cutX || cutY) { hit = { c, axis: cutX ? "right" : "bottom" }; break; }
+    }
+    if (hit) issues.push({ kind: "clipped", key: "clipped:" + path(el), detail: `${path(el)} cuts the text "${hit.c.node.data.trim().slice(0, 40)}" at its ${hit.axis} edge` });
+  }
+
+  // 3. 본문 앞 빈 띠: 본문(main)이 시작하기 전에 화면 전체 폭에 내용이 없는 높은 띠가 있다(늘어난 머리 줄·사이드바 줄).
+  //    본문 안의 여백(히어로·섹션 패딩)과 본문 뒤 여백(짧은 페이지의 바닥)은 보지 않는다.
+  const main = document.querySelector("main, [role=main]");
+  if (main && shown(main)) {
+    const mt = box(main).t;
+    const band = Math.max(160, Math.round(VH * 0.18));
+    const above = content.filter((c) => c.t < mt - 1 && !main.contains(c.node)).map((c) => Math.min(c.b, mt));
+    const from = above.length ? Math.max(...above) : 0;
+    if (mt - from >= band) {
+      issues.push({ kind: "empty-band", key: "empty-band:before-main", detail: `${Math.round(mt - from)}px band with no content from y=${Math.round(from)} to the start of ${name(main)} at y=${Math.round(mt)} (threshold ${band}px)` });
+    }
+  }
+
+  // 4. 배경이 못 채움: (a) 본문을 감싸 화면 폭 전체를 칠한 뼈대가 뷰포트보다 짧게 끝나 아래로 다른 바탕색이 보인다.
+  //    (b) 가장자리 열(사이드바 등)의 배경이 부모보다 먼저 끝나 스크롤하면 열 아래가 비어 보인다.
+  //    sticky·fixed 열은 스크롤해도 뷰포트를 따라오므로, 뷰포트 높이를 채우면 통과다(전체 캡처에서만 끊겨 보인다).
+  const effBg = (el) => { for (let a = el; a; a = a.parentElement) { const c = getComputedStyle(a).backgroundColor; if (!transparent(c)) return c; } return "rgb(255, 255, 255)"; };
+  const canvas = !transparent(getComputedStyle(de).backgroundColor) ? getComputedStyle(de).backgroundColor : body && !transparent(getComputedStyle(body).backgroundColor) ? getComputedStyle(body).backgroundColor : "rgb(255, 255, 255)";
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    if (transparent(cs.backgroundColor) || !shown(el) || el === main) continue;
+    const b = box(el);
+    const frame = main ? el.contains(main) : el.parentElement === body;
+    if (frame && b.w >= VW * 0.95 && b.t <= 1 && b.b < VH - 8 && DOC_H <= VH + 1 && cs.backgroundColor !== canvas) {
+      issues.push({ kind: "bg-short", key: "bg-short:" + path(el), detail: `${path(el)} paints the page but ends at y=${Math.round(b.b)} in a ${VH}px viewport; below it the page shows ${canvas}` });
+      continue;
+    }
+    const p = el.parentElement;
+    if (!p || p === de) continue;
+    const pb = box(p);
+    const edge = b.l - SX <= 1 || b.r - SX >= VW - 1;
+    if (!edge || b.w >= VW * 0.5 || b.h < VH * 0.5 || b.t - pb.t > 2 || cs.backgroundColor === effBg(p)) continue;
+    const pinned = ["sticky", "fixed"].includes(cs.position);
+    const short = pinned ? b.h < Math.min(VH, pb.h) - 1 : pb.b - b.b >= 24;
+    if (short) issues.push({ kind: "bg-short", key: "bg-short:" + path(el), detail: `${path(el)} column background ends at y=${Math.round(b.b)} while its container runs to y=${Math.round(pb.b)}${pinned ? " and it does not fill the viewport" : ""}` });
+  }
+
+  return { probe: "layout-probe/1", viewport: { w: VW, h: VH }, document: { w: de.scrollWidth, h: DOC_H }, issues };
+})()
 EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
