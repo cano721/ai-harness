@@ -43,6 +43,13 @@
       "mode": "copy"
     },
     {
+      "path": ".ai-harness/workflows/design-polish-graph.json",
+      "level": "standard",
+      "workflow": "design-polish",
+      "source": "templates/design-polish/references/design-polish-graph.json",
+      "mode": "copy"
+    },
+    {
       "path": ".agents/skills/implement-feature/SKILL.md",
       "level": "standard",
       "integration": "codex",
@@ -72,6 +79,14 @@
       "integration": "codex",
       "workflow": "investigate",
       "source": "templates/investigate/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".agents/skills/design-polish/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "design-polish",
+      "source": "templates/design-polish/SKILL.md",
       "mode": "render"
     },
     {
@@ -109,6 +124,15 @@
       "source": "templates/investigate/SKILL.md",
       "mode": "render",
       "argument_hint": "<증상 설명 또는 이슈 번호>"
+    },
+    {
+      "path": ".claude/commands/design-polish.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "design-polish",
+      "source": "templates/design-polish/SKILL.md",
+      "mode": "render",
+      "argument_hint": "<다듬을 화면과 아쉬운 점>"
     },
     {
       "path": ".agents/skills/declarative-code/SKILL.md",

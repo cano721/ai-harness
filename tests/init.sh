@@ -28,7 +28,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "10" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "12" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/investigate/SKILL.md") | .action')" "missing investigate entrypoint is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
@@ -87,6 +87,27 @@ if "$ROOT/scripts/harness-sync-state.sh" exclude --root "$SYNC_ROOT" --file ../o
   fail "exclude rejects paths outside the project"
 fi
 pass "project harness sync exclusions"
+
+# 켤 수 있는 stack: 화면 파일(단일 HTML 포함)·디자인 규칙 문서 + 기준 화면이 init 뒤에 생겨도 sync 보고가 알린다. manifest는 바꾸지 않는다.
+STACK_ROOT="$TEST_TMP/stack-candidates"
+mkdir -p "$STACK_ROOT/.ai-harness" "$STACK_ROOT/scripts/board" "$STACK_ROOT/tests/fixtures/page" "$STACK_ROOT/docs/design-system"
+printf '%s\n' '{"project_id":"stack-candidates","level":"standard","integrations":["codex"],"stacks":[]}' >"$STACK_ROOT/.ai-harness/harness.json"
+printf '%s\n' '<!doctype html><title>board</title>' >"$STACK_ROOT/scripts/board/template.html"
+printf '%s\n' '<!doctype html><title>fixture</title>' >"$STACK_ROOT/tests/fixtures/page/index.html"
+printf '%s\n' '# rules' '## 메타' '- 기준 화면: <URL path or Storybook command and address>' '## 컴포넌트' >"$STACK_ROOT/docs/design-system.md"
+STACK_MANIFEST_BEFORE="$(shasum -a 256 <"$STACK_ROOT/.ai-harness/harness.json")"
+STACK_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$STACK_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "scripts/board/template.html" "$(jq -r '.stack_candidates[] | select(.stack=="ui") | .evidence | join(",")' <<<"$STACK_PLAN")" "a standalone HTML screen makes ui a candidate; fixture HTML does not"
+assert_eq "" "$(jq -r '.stack_candidates[] | select(.stack=="design-system") | .stack' <<<"$STACK_PLAN")" "a rule document without a reference screen is not a design-system candidate"
+printf '%s\n' '<!doctype html><title>reference</title>' >"$STACK_ROOT/docs/design-system/reference.html"
+STACK_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$STACK_ROOT" --catalog "$ROOT/templates/managed-files.json")"
+assert_eq "docs/design-system.md,docs/design-system/reference.html" "$(jq -r '.stack_candidates[] | select(.stack=="design-system") | .evidence | join(",")' <<<"$STACK_PLAN")" "rule document plus reference screen makes design-system a candidate"
+assert_contains "$(jq -r '.stack_candidates[0].detail' <<<"$STACK_PLAN")" "Never enabled automatically" "candidates say they are not enabled automatically"
+assert_eq "$STACK_MANIFEST_BEFORE" "$(shasum -a 256 <"$STACK_ROOT/.ai-harness/harness.json")" "plan does not change the manifest stacks"
+jq '.stacks = ["ui","design-system"]' "$STACK_ROOT/.ai-harness/harness.json" >"$STACK_ROOT/hj" && mv "$STACK_ROOT/hj" "$STACK_ROOT/.ai-harness/harness.json"
+assert_eq "0" "$("$ROOT/scripts/harness-sync-state.sh" plan --root "$STACK_ROOT" --catalog "$ROOT/templates/managed-files.json" | jq '.stack_candidates | length')" "enabled stacks are not proposed again"
+assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "stack_candidates" "harness init reports stack candidates in sync"
+pass "sync plan proposes ui and design-system stacks it can enable"
 
 # 고아 생성물: 설정에서 integration·stack을 빼거나 역할을 기존 에이전트에 넘기면 남은 관리 생성물이 제거 후보가 된다.
 ORPHAN_ROOT="$TEST_TMP/orphan-project"
@@ -714,7 +735,7 @@ pass "unattended sync places copy artifacts byte for byte"
 # 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
 # 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
 RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
-assert_eq "8" "$(grep -c . <<<"$RD_PATHS")" "eight workflow entry points are render artifacts"
+assert_eq "10" "$(grep -c . <<<"$RD_PATHS")" "ten workflow entry points are render artifacts"
 while IFS= read -r rd_path; do
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"

@@ -4,8 +4,8 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 
 ## Preflight
 
-1. 작업 유형을 고른다: 기능 → `/implement-feature`, 버그 → `/fix-bug`, 수정 전 원인 조사 → `/investigate`, 변경 검토 → `/review`. 단순 질문·탐색은 워크플로 없이 답한다.
-2. 소스를 고치기 전에 `.ai-harness/docs/code-conventions.md`를 Read한다. 테스트를 쓰면 `.ai-harness/docs/testing.md`, 구조를 바꾸면 `.ai-harness/docs/architecture.md`도 Read한다.
+1. 작업 유형을 고른다: 기능 → `/implement-feature`, 버그 → `/fix-bug`, 수정 전 원인 조사 → `/investigate`, 기존 화면 품질 개선 → `/design-polish`, 변경 검토 → `/review`. 단순 질문·탐색은 워크플로 없이 답한다.
+2. 소스를 고치기 전에 `.ai-harness/docs/code-conventions.md`를 Read한다. 테스트를 쓰면 `.ai-harness/docs/testing.md`, 구조를 바꾸면 `.ai-harness/docs/architecture.md`, 사용자 화면(보드·리포트·기준 화면)을 바꾸면 `.ai-harness/docs/ui.md`와 `docs/design-system.md`도 Read한다.
 3. 기준 브랜치는 `develop`이다. 작업은 `origin/develop`에서 딴 작업 브랜치(가능하면 worktree)에서 한다. 사용자의 현재 체크아웃을 바꾸지 않는다.
 
 ## Hard constraints
@@ -19,11 +19,12 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 | `/implement-feature` | 프로젝트 로컬 | `.claude/commands/implement-feature.md` | `.agents/skills/implement-feature/` | `.ai-harness/workflows/implement-feature.md` + `feature-delivery-graph.json` |
 | `/fix-bug` | 프로젝트 로컬 | `.claude/commands/fix-bug.md` | `.agents/skills/fix-bug/` | `.ai-harness/workflows/fix-bug.md` + `bug-fix-graph.json` |
 | `/investigate` | 프로젝트 로컬 | `.claude/commands/investigate.md` | `.agents/skills/investigate/` | `.ai-harness/workflows/investigate.md` + `investigate-graph.json` |
+| `/design-polish` | 프로젝트 로컬 | `.claude/commands/design-polish.md` | `.agents/skills/design-polish/` | `.ai-harness/workflows/design-polish.md` + `design-polish-graph.json` |
 | `/review` | 프로젝트 로컬 | `.claude/commands/review.md` | `.agents/skills/review/` | `.ai-harness/workflows/review.md` + `review-graph.json` |
 | `/ai-harness:understand-change` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | `.ai-harness/workflows/understand-change.md` (선택 정책) |
 | `/ai-harness:explain-for` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | — |
 
-그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review --request "<요청>"`. 승인 모드는 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human` 순으로 정한다. manifest의 기존 `approval`은 무시하며, 값이 있으면 러너가 개인 설정으로 옮기라는 안내를 남긴다.
+그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review|polish --request "<요청>"`. 승인 모드는 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human` 순으로 정한다. manifest의 기존 `approval`은 무시하며, 값이 있으면 러너가 개인 설정으로 옮기라는 안내를 남긴다.
 
 ## 페르소나
 
@@ -47,6 +48,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 | `.ai-harness/docs/code-conventions.md` | 셸(bash 3.2 호환)·Python·Skill/템플릿·듀얼 매니페스트·공개 저장소·커밋 규칙 |
 | `.ai-harness/docs/testing.md` | `tests/run.sh`·영역 파일(`tests/<영역>.sh`) 실행·작성 규칙, CI와 같은 shellcheck |
 | `.ai-harness/docs/domain.md` | 도메인 문서 인덱스 |
+| `.ai-harness/docs/ui.md` | 단일 HTML 화면 목록, 보드 격리 실행, 뷰포트·테마, 디자인 기계 검사, `## 디자인 점검`(`ui-review`·`design-audit` 입력) |
 | `CONTRIBUTING.md` | 브랜치·버전·릴리스 규칙의 원본 |
 
 ## Quick Commands

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Polish"
+  short_description: "Measure existing screens, list what to fix with evidence, and run the project polish workflow when it exists."
+  default_prompt: "Use $design-polish to polish these existing screens: $ARGUMENTS"
