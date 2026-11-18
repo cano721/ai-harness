@@ -1,0 +1,13 @@
+/* 공용 화면 뼈대(.ds-app)를 줄인 사본 — 사이드바 + 본문, 좁은 폭에서 사이드바를 본문 위 가로 줄로 접는다. */
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: #f6f6f7; color: #111; }
+.app { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
+.side { background: #eceef1; border-right: 1px solid #ccc; padding: 16px; position: sticky; top: 0; height: 100vh; }
+.side a { display: block; padding: 6px 0; }
+main { padding: 24px 32px; }
+.card { background: #fff; border: 1px solid #ccc; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 1023px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; height: auto; border-right: 0; border-bottom: 1px solid #ccc; display: flex; gap: 16px; }
+}
