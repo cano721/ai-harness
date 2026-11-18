@@ -50,8 +50,10 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [
           [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
   revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
           --select "<ID,ID...>"                         polish만: 고칠 목록에서 고칠 항목을 바꾼다(모델을 부르지 않는다). 다시 승인을 기다린다
-  resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
-  approve                                               터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
+  resume  [--accept-changes]                            승인을 확인하고 멈춘 노드부터 이어 간다
+  approve [--accept-changes]                            터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
+          resume·approve·revise는 에이전트를 부르기 전에 러너가 멈춘 때의 기준점(HEAD·작업 트리)과 지금을 대조한다.
+          바뀌었으면 차이와 남은 검사를 보이고 20으로 멈춘다. 바뀐 것을 이 실행에 넣을 때만 --accept-changes로 기준점을 옮긴다
   status                                                현재 노드·이력·다음 행동을 보인다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
@@ -79,6 +81,7 @@ WORKFLOW=""
 CLI_CHECKS=()
 MONITOR_ERROR=""
 INVESTIGATION_FILE=""
+ACCEPT_CHANGES=""
 SELECT=""
 while (($#)); do
   case "$1" in
@@ -89,6 +92,7 @@ while (($#)); do
     --request) [[ $# -ge 2 ]] || usage; REQUEST="$2"; shift 2 ;;
     --request-file) [[ $# -ge 2 && -f "$2" ]] || usage; REQUEST="$(<"$2")"; shift 2 ;;
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
+    --accept-changes) ACCEPT_CHANGES=1; shift ;;
     --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
@@ -107,6 +111,9 @@ esac
 # 조사 보고는 버그 수정을 시작할 때만 받는다. 다른 워크플로에는 그 보고를 대신할 노드가 없다.
 [[ -z "$INVESTIGATION_FILE" || ( "$CMD" == start && "$WORKFLOW" == bug-fix ) ]] \
   || { printf -- '--investigation is an option of start --workflow bug-fix\n' >&2; exit 2; }
+
+[[ -z "$ACCEPT_CHANGES" || "$CMD" == resume || "$CMD" == approve ]] \
+  || { printf -- '--accept-changes is an option of resume and approve\n' >&2; exit 2; }
 
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
@@ -289,7 +296,66 @@ checkpoint() { # node
   { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "wip($TEMPLATE): $1 · run $RUN_ID"; } >"$RUN/checkpoint.log" 2>&1 \
     || finish incomplete 30 "checkpoint commit after $1 failed; see $RUN/checkpoint.log. Fix the cause and run resume"
   state_set '.head = $h | .checkpoints += [$h]' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  save_baseline
   log "checkpoint commit after $1: $(git -C "$REPO" rev-parse --short HEAD)"
+}
+
+# 기준점: 러너가 마지막으로 본 저장소 상태(HEAD·작업 트리 지문, 차이를 보일 트리 객체). 러너가 멈출 때(종료 trap)와
+# 러너 자신이 HEAD를 옮길 때(체크포인트·publish) 남긴다. 그 뒤의 변경은 러너가 모르는 변경이다.
+save_baseline() {
+  state_set '.repo_baseline = {head: $h, fingerprint: $f, tree: $tr, at: $t}' --arg h "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" \
+    --arg f "$(fingerprint)" --arg tr "$(worktree_tree 2>/dev/null || true)" --arg t "$(now_utc)"
+}
+
+# 이어 가기 전에 기준점과 지금을 대조한다. 같으면 그대로, 다르면 에이전트를 부르기 전에 차이·남은 검사를 보이고 멈춘다.
+# 기준점이 없는 이전 버전의 실행은 HEAD만 대조한다. --accept-changes는 진행 중인 실행의 기준점만 옮긴다 — 끝난 실행의 성공은 바뀐 코드를 검사한 것이 아니다.
+check_baseline() {
+  local saved_head saved_fp saved_tree head node report tree
+  saved_head="$(state '.repo_baseline.head // .head // .start_head')"
+  saved_fp="$(state '.repo_baseline.fingerprint // ""')"
+  saved_tree="$(state '.repo_baseline.tree // ""')"
+  head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)"
+  [[ "$head" != "$saved_head" || ( -n "$saved_fp" && "$(fingerprint)" != "$saved_fp" ) ]] || return 0
+  node="$(state .node)"
+  report="$RUN/baseline-changes.txt"
+  {
+    printf 'saved baseline: HEAD %s at %s\n' "$saved_head" "$(state '.repo_baseline.at // "an older run (HEAD only)"')"
+    if [[ "$head" != "$saved_head" ]]; then
+      printf 'HEAD is now %s\n' "$head"
+      if git -C "$REPO" cat-file -e "$saved_head^{commit}" 2>/dev/null; then
+        printf 'commits since the baseline:\n'
+        git -C "$REPO" log --oneline -n 20 "$saved_head..HEAD" 2>/dev/null | sed 's/^/  + /'
+        git -C "$REPO" log --oneline -n 20 "HEAD..$saved_head" 2>/dev/null | sed 's/^/  - /'
+      fi
+    fi
+    printf 'changed files since the baseline:\n'
+    tree="$(worktree_tree 2>/dev/null || true)"
+    if [[ -n "$saved_tree" && -n "$tree" ]] && git -C "$REPO" cat-file -e "$saved_tree^{tree}" 2>/dev/null; then
+      git -C "$REPO" diff --name-status "$saved_tree" "$tree" | sed 's/^/  /'
+    else
+      git -C "$REPO" status --short --untracked-files=all | sed 's/^/  /'
+    fi
+    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
+  } >"$report"
+  while IFS= read -r line; do log "$line"; done <"$report"
+  if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
+    finish baseline_changed 20 "the repository changed after the run ended at $node, so its result no longer covers the code; undo the change and resume, or start a new run to check it (see $report)"
+  fi
+  # 리뷰를 지난 변경만 push·병합된다. 그 뒤에 받아들인 변경은 검증·리뷰를 다시 거치지 않으므로 새 실행으로 보낸다.
+  case "$node" in
+    publish|remote_ci|merge|post_merge_verify)
+      finish baseline_changed 20 "the repository changed after the runner stopped at $node, past review; the change would skip verify and review. Undo it and resume, or start a new run for it (see $report)" ;;
+  esac
+  if [[ -z "$ACCEPT_CHANGES" ]]; then
+    # 상태가 running이면 러너가 기준점을 남기지 못하고 끊긴 것이다(강제 종료). 바뀐 것은 러너 자신의 하다 만 작업일 수 있다.
+    if [[ "$(state .status)" == running ]]; then
+      finish baseline_changed 20 "the runner was cut off at $node without recording where it stopped, so these changes may be its own unfinished work; nothing ran. If they are, take them in with resume --accept-changes; otherwise undo them and resume (see $report)"
+    fi
+    finish baseline_changed 20 "the repository changed after the runner stopped at $node; nothing ran. Undo the change and resume, or take it into this run with resume --accept-changes (see $report)"
+  fi
+  state_set '.head = $h | .baseline_accepted += [{from: (.repo_baseline.head // .head), to: $h, at: $t}]' --arg h "$head" --arg t "$(now_utc)"
+  save_baseline
+  log "accepted the changes since the baseline (--accept-changes); continuing at $node"
 }
 
 go() { # from outcome → 그래프에 선언된 전이만 따른다
@@ -706,6 +772,7 @@ $(brief_context)" "$PUBLISH_SCHEMA"
   state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
     --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg u "$pr_url" \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
+  save_baseline
   if [[ "$problems" == "[]" ]]; then
     go publish published_or_not_required
   else
@@ -2096,6 +2163,7 @@ case "$CMD" in
         policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
+    save_baseline
     ;;
   watch)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
@@ -2329,6 +2397,9 @@ cat >"$REMOTE_CI_SCHEMA" <<'EOF'
   "summary":{"type":"string"},"failures":{"type":"array","items":{"type":"string"}}}}
 EOF
 
+# 이어 가는 명령은 에이전트를 부르기 전에(approve는 묻기 전에, approve·revise는 그 명령의 진입 조건을 본 뒤) 기준점을 대조한다.
+[[ "$CMD" != resume ]] || check_baseline
+
 case "$CMD" in
   status)
     jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
@@ -2339,6 +2410,7 @@ case "$CMD" in
     [[ -n "$FEEDBACK" || -n "$SELECT" ]] || usage
     [[ "$(state .node)" == approval ]] || { printf 'revise works only while waiting for approval of a brief (node: %s)\n' "$(state .node)" >&2; exit 2; }
     [[ -z "$SELECT" || -z "$FEEDBACK" ]] || { printf -- '--select and --feedback are separate revisions; run one, then the other\n' >&2; exit 2; }
+    check_baseline
     if [[ -n "$SELECT" ]]; then
       # 고칠 항목 선택은 결정적이다: 목록에 있는 ID만 받고, 바뀐 목록을 다시 보여 주며 새 승인을 기다린다.
       sel="$(jq -cn --arg s "$SELECT" '[$s | splits("[,[:space:]]+") | select(length > 0) | ascii_upcase] | unique')"
@@ -2356,6 +2428,7 @@ case "$CMD" in
     ;;
   approve)
     [[ "$(state .status)" == waiting_approval ]] || { printf 'nothing to approve (node: %s)\n' "$(state .node)" >&2; exit 2; }
+    check_baseline
     # 에이전트의 Bash 도구·codex exec에는 제어 터미널이 없어 여기서 열리지 않는다.
     (exec 3<>/dev/tty) 2>/dev/null || { printf 'approve needs a terminal; in a conversation, type "승인" and run resume\n' >&2; exit 10; }
     exec 3<>/dev/tty
@@ -2369,5 +2442,8 @@ case "$CMD" in
     ;;
 esac
 
+# 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
+# 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
+trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
 state_set '.status = "running"'
 execute

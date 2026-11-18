@@ -23,7 +23,7 @@
       "template_version": "0.77.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "67bf6637daa13d1ba7b896197b63a38fc5aaa8c9941eabcdcaf4b72cd675c44c",
+      "content_sha256": "aa95b7cf29da749bfe6e908557a893f48253b3c272f762010f7e5b30810e7e1e",
       "template_version": "0.79.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -39,12 +39,12 @@
       "template_version": "0.77.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "73d6fbd10df2897f24e0705373f2e87236daa553b4cc876395c825997a89db1e",
+      "content_sha256": "45bd6ba2ea33025cc8d069c6021d5b1e792c044b0cdc2d994f47b2804c0e9986",
       "template_version": "0.77.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "ce3b23078f7903d5cd61ed015a0b420724f0beb1b77e0f6fb00c893fe30e1ff2",
+      "content_sha256": "352c2582ec2a81e23911ccbcdd59bb7e2949d755292bf72bdec9f08b5116b4b0",
       "template_version": "0.77.0",
       "renderer": 1
     },
@@ -54,12 +54,12 @@
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "d80c3dcc068945ffb8c1d99a96cbb7ea3e6c83c2f543b04c30037471c016e535",
+      "content_sha256": "a869ef404cadf24944938bac3cce30033619249347a55f96862baa6248d75ef9",
       "template_version": "0.77.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "9762ea69d380d2a34630a1105b5e9ed15bc3ab954b5094da566a18879214071f",
+      "content_sha256": "9d2c6a4a5b6f6323d21b6a274e99fe695750a86ba24d94365c42fd31b48b8e53",
       "template_version": "0.77.0",
       "renderer": 1
     },
@@ -155,12 +155,12 @@
       "template_version": "0.79.0"
     },
     ".agents/skills/design-polish/SKILL.md": {
-      "content_sha256": "95fb803791d5e43d26132bd8e4ba9315247582f1539d8022d7ab2e3cd05408da",
+      "content_sha256": "cdd9874cb934a3a7190072925cc391896419136832767288686852998aaafe26",
       "template_version": "0.79.0",
       "renderer": 1
     },
     ".claude/commands/design-polish.md": {
-      "content_sha256": "fa026870684ccf624af16b6c6c081f328fce846e02864bcf7eb15affc547fed6",
+      "content_sha256": "7ce7725c2c9f9c44015ac16699c9ebfdd897a2ea5b342c1b182dcec4e8f83c21",
       "template_version": "0.79.0",
       "renderer": 1
     }

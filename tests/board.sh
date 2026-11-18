@@ -1405,7 +1405,7 @@ assert (r1["project"], r1.get("worktree")) == ("shopper", "shopper-wt-a"), r1  #
 assert (r2["project"], r2.get("worktree"), r2["in_repo"]) == ("acme", "ACME-12", True), r2  # 지워진 worktree는 경로 모양으로
 assert r3["project"] == "plain-folder" and r3["in_repo"] is False, r3  # 추정할 수 없으면 저장소 밖
 ' "$ROOT/scripts/board/board-server.py" "$BWT" || fail "sessions and workflow runners in a git worktree count under the original repository, with the worktree name kept as a detail"
-assert_eq "5" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
+assert_eq "6" "$(grep -c 'kind: "runner", project: .proj, cwd: .repo' "$ROOT/scripts/board/status.sh")" "workflow runner items carry their working path for the repository judgment"
 BOARD_TPLX="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BOARD_TPLX" "groupHit.has(i.group.id)" "a repository filter keeps an Orca group together with its coordinator"
 assert_contains "$BOARD_TPLX" "if (workers.length) {" "a group with no workers does not say 0 workers"

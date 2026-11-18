@@ -1419,6 +1419,8 @@ ba_run() { # $1=run 폴더 $2=status $3=node
 ba_run a/1 incomplete publish
 ba_run b/1 running discover
 ba_run c/1 running repair
+ba_run d/1 baseline_changed approval
+jq '.needs_user_decision = true' "$BA_DATA/runs/d/1/state.json" >"$BA_T/d.json" && mv "$BA_T/d.json" "$BA_DATA/runs/d/1/state.json"
 touch -t 202601010000 "$BA_DATA/runs/b/1/state.json" "$BA_DATA/runs/b/1/progress.log"
 ba_status() {
   env -u CLAUDE_CONFIG_DIR PATH="$BA_T/bin:$PATH" BA_AGENTS="$BA_T/agents.json" HARNESS_METRICS_DIR="$BA_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BA_T/projects" \
@@ -1439,6 +1441,10 @@ assert_eq "blocked|no_activity" "$(jq -r '.items[] | select(.kind == "runner" an
   "a running runner with no record for a long time is stopped"
 assert_eq "running|null" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-c/1"))) | "\(.state)|\(.stall)"' <<<"$BA_OUT")" \
   "a runner that just wrote its record is still working"
+assert_eq "needs_human" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-d/1"))) | .state' <<<"$BA_OUT")" \
+  "a runner stopped because the repository changed after it stopped waits for a person (#371)"
+assert_eq "null" "$(jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-d/1"))) | .cmd' <<<"$BA_OUT")" \
+  "a baseline-changed run does not offer approve even when a polish measurement awaited a decision (#371)"
 assert_eq "running" "$(ba_status BOARD_RUNNER_STALE_MIN=99999999 | jq -r '.items[] | select(.kind == "runner" and (.cwd | endswith("repo-b/1"))) | .state')" \
   "BOARD_RUNNER_STALE_MIN sets how long a quiet runner still counts as working"
 pass "board status shows a dead or incomplete workflow runner as stopped"
