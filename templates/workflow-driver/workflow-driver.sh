@@ -116,6 +116,36 @@ RUNS_DIR="${HM_FEATURE_RUNS_DIR:-$HOME/.ai-harness/runs}/$(basename "$REPO")-$(p
 # 프롬프트·세션 로그에 코드가 담긴다. 실행 디렉토리는 본인만 읽는다.
 mkdir -p "$RUNS_DIR"
 chmod 700 "$RUNS_DIR" 2>/dev/null || true
+# Claude Code는 자기 설정 디렉터리(~/.claude, CLAUDE_CONFIG_DIR) 안의 파일을 무인 세션이 고치거나 읽지 못하게 막는다.
+# 저장소나 실행 폴더가 그 안이면 fix 세션의 Edit·캡처 Read가 모두 거부돼 "fix changed nothing"으로 수리 횟수만 쓴다(#411).
+claude_config_dir_of() { # path → stdout: 그 경로를 품은 Claude 설정 디렉터리(아니면 1)
+  local p d c
+  p="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  for d in "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+    [[ -n "$d" ]] || continue
+    c="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$p/" in "$c"/*) printf '%s' "$c"; return 0 ;; esac
+  done
+  return 1
+}
+refuse_claude_protected() { # runtime — claude 런타임만. codex sandbox는 이 경로를 막지 않는다.
+  [[ "$1" == claude ]] || return 0
+  local dir
+  if dir="$(claude_config_dir_of "$REPO")"; then
+    printf 'refused: the repository %s is inside the Claude Code configuration directory %s. Claude Code does not let a non-interactive session edit or read files there, so every write node would be denied and use up repair attempts. Work in a clone or worktree outside it (git worktree add <path outside %s> <branch>), or use --runtime codex\n' "$REPO" "$dir" "$dir" >&2
+    exit 2
+  fi
+  if dir="$(claude_config_dir_of "$RUNS_DIR")"; then
+    printf 'refused: the run folder %s is inside the Claude Code configuration directory %s, so sessions could not read the captures and notes saved there. Set HM_FEATURE_RUNS_DIR to a folder outside it, or use --runtime codex\n' "$RUNS_DIR" "$dir" >&2
+    exit 2
+  fi
+}
+# claude 세션이 권한에 막힌 도구 호출(result의 permission_denials). 모델이 못 한 것이 아니라 환경이 막은 것이다.
+session_denials() { # label → stdout: "Edit a.css, Read b.png" (없으면 빈 문자열)
+  [[ -s "$RUN/$1.json" ]] || return 0
+  jq -rs --arg repo "$REPO/" '[.[] | (.permission_denials // [])[] | "\(.tool_name) \(.tool_input.file_path // .tool_input.path // .tool_input.command // "" | tostring | ltrimstr($repo) | .[-120:])"]
+    | unique | .[:5] | join(", ")' "$RUN/$1.json" 2>/dev/null || true
+}
 # latest는 워크플로와 무관한 최근 실행, latest-<워크플로>는 그 워크플로의 최근 실행이다. --workflow 없는 resume은 latest를 잇는다.
 latest_file() { # [workflow]
   if [[ -z "${1:-}" ]]; then printf '%s/latest' "$RUNS_DIR"; else printf '%s/latest-%s' "$RUNS_DIR" "$1"; fi
@@ -1565,7 +1595,7 @@ $(brief_context)"
         go regression ""
         ;;
       fix)
-        local before_fix
+        local before_fix denied
         if [[ "$WORKFLOW" == polish ]]; then
           [[ "$(state '.selected | length')" -gt 0 ]] \
             || finish incomplete 30 "no item is selected to fix; choose with revise --select \"P1,P3\" and approve again"
@@ -1584,7 +1614,15 @@ Return a concise summary of what you changed for each item and the commands you 
 $(polish_findings_text)
 
 $(brief_context)"
-          [[ "$(fingerprint)" != "$before_fix" ]] || finish incomplete 30 "fix changed nothing; the selected items cannot be done without a change"
+          if [[ "$(fingerprint)" == "$before_fix" ]]; then
+            denied="$(session_denials "fix-$(state .attempts)")"
+            if [[ -n "$denied" ]]; then
+              # 권한에 막혀 아무것도 못 바꾼 세션은 수리 시도가 아니다. 횟수를 되돌려 원인을 고친 뒤 resume이 같은 회차로 다시 고친다.
+              state_set '.attempts -= 1'
+              finish incomplete 30 "fix changed nothing because the session was denied: $denied. This environment failure does not count as a repair attempt; allow those paths (or move the repository out of a protected folder) and run resume"
+            fi
+            finish incomplete 30 "fix changed nothing; the selected items cannot be done without a change"
+          fi
           checkpoint "fix-$(state .attempts)"
           go fix ""
           continue
@@ -1597,7 +1635,11 @@ Do not commit, push, create a PR, or change scope. After you finish, the driver 
 Return a concise summary of the cause, the changed areas, and the commands you ran.
 
 $(brief_context)"
-        [[ "$(fingerprint)" != "$before_fix" ]] || finish incomplete 30 "fix changed nothing; an approved bug fix cannot be done without a change to the cause"
+        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+          denied="$(session_denials fix)"
+          [[ -z "$denied" ]] || finish incomplete 30 "fix changed nothing because the session was denied: $denied. Allow those paths (or move the repository out of a protected folder) and run resume"
+          finish incomplete 30 "fix changed nothing; an approved bug fix cannot be done without a change to the cause"
+        fi
         checkpoint fix
         go fix ""
         ;;
@@ -1790,6 +1832,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         fi
         ;;
       repair)
+        local before_fix denied
         # 수리 한도·제품 판단으로 사람에게 넘기는 엣지는 그래프가 정한다(review는 re_review가 한도를 본다).
         if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
           local escalate
@@ -1804,6 +1847,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
           continue
         fi
         state_set '.attempts += 1 | .repaired_findings = .findings'
+        before_fix="$(fingerprint)"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
 You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
@@ -1812,6 +1856,13 @@ Blocking findings:
 $(state '.findings')
 
 $(brief_context)"
+        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+          denied="$(session_denials "repair-$(state .attempts)")"
+          if [[ -n "$denied" ]]; then
+            state_set '.attempts -= 1'
+            finish incomplete 30 "repair changed nothing because the session was denied: $denied. This environment failure does not count as a repair attempt; allow those paths (or move the repository out of a protected folder) and run resume"
+          fi
+        fi
         checkpoint "repair-$(state .attempts)"
         # 그래프가 repair 뒤 verify 노드로 가면(bug-fix·review) 검증은 그 노드가 한다. 아니면(feature) 여기서 실행한다.
         if has_edge repair ""; then
@@ -1934,6 +1985,7 @@ case "$CMD" in
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
+    refuse_claude_protected "$RUNTIME"
     git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
@@ -2052,6 +2104,7 @@ case "$CMD" in
     ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
+    [[ "$CMD" == status ]] || refuse_claude_protected "$(state .runtime)"
     ;;
   *) usage ;;
 esac

@@ -34,6 +34,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_GRAPH="$ROOT/skills/landing-page/references/landing-page-graph.json"
 
 die() { local code="$1"; shift; printf 'landing-run: %s\n' "$*" >&2; exit "$code"; }
+claude_config_dir_of() { # path → stdout: 그 경로를 품은 Claude 설정 디렉터리(아니면 1)
+  local p d c
+  p="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  for d in "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+    [[ -n "$d" ]] || continue
+    c="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$p/" in "$c"/*) printf '%s' "$c"; return 0 ;; esac
+  done
+  return 1
+}
 usage() {
   cat >&2 <<'EOF'
 usage:
@@ -367,6 +377,13 @@ required_checks() {
 case "$cmd" in
   init)
     [[ "$MODE" == interactive || "$MODE" == unattended ]] || usage
+    # Claude Code는 자기 설정 디렉터리(~/.claude, CLAUDE_CONFIG_DIR) 안의 파일 편집·읽기를 막는다(무인은 거부, 대화형은 매번 승인).
+    # 실행 폴더가 그 안이면 페이지를 만들지도 캡처를 읽지도 못한 채 측정·검토 회차만 쓴다(#411). Claude 세션에서만 본다.
+    if [[ -n "${CLAUDECODE:-}" ]] && protected="$(claude_config_dir_of "$WORK")"; then
+      [[ "$MODE" == interactive ]] \
+        || die 2 "refused: the work folder $WORK is inside the Claude Code configuration directory $protected, where an unattended Claude session may not edit or read files. Use a folder outside it."
+      printf 'landing-run: notice: the work folder is inside the Claude Code configuration directory %s; every edit and read there will ask for permission. A folder outside it avoids that.\n' "$protected" >&2
+    fi
     GRAPH="${GRAPH_ARG:-$DEFAULT_GRAPH}"
     "$ROOT/scripts/validate-landing-page-graph.sh" "$GRAPH" >/dev/null
     [[ ! -f "$STATE" ]] || die 3 "a run already exists in $RUN"
