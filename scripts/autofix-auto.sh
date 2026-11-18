@@ -466,9 +466,11 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     AGENT_CMD+=("$3")
     return
   fi
-  local tool="" extra="" name="" scrub="{}" plugin_root=""
+  local tool="" extra="" name="" scrub="{}" plugin_root="" scripts_dir=""
   # 같은 이름의 설치본이 더 높은 버전이면 claude는 --plugin-dir 대신 그것을 로드한다(#366). 허용 경로를 맞춘다.
   plugin_root="$(hm_claude_plugin_root "$ROOT")"
+  # 설치 경로에 공백이 있으면 허용 규칙이 일치하지 않는다. 공백 없는 고정 링크로 허용하고 호출하게 한다(#400).
+  scripts_dir="$(hm_auto_plugin_link "$plugin_root")/scripts"
   local -a bash_allow=() unset_env=() budget=()
   [[ -z "$BUDGET_USD" ]] || budget=(--max-budget-usd "$BUDGET_USD")
   for tool in "${BUILD_TOOLS[@]}"; do bash_allow+=("Bash($tool)"); done
@@ -478,7 +480,7 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
   # Claude Code는 settings.json env를 도구 프로세스에 넣는다. 같은 키를 빈 값으로 덮어 에이전트 쪽에서는 비운다.
   scrub="$(printf '%s\n' "${MONITOR_SECRETS[@]}" | jq -Rsc 'split("\n") | map(select(. != "")) | {env: (map({(.): ""}) | add)}')"
   AGENT_ENV=(env "${unset_env[@]}")
-  AGENT_CMD=(claude -p "/ai-harness:autofix --auto --base $2 --error $3"
+  AGENT_CMD=(claude -p "/ai-harness:autofix --auto --base $2 --error $3 --scripts $scripts_dir"
     --plugin-dir "$plugin_root" --no-session-persistence
     --settings "$scrub"
     --permission-mode dontAsk
@@ -487,7 +489,7 @@ agent_command() { # $1=work_dir $2=base $3=error file(작업 트리 상대 경�
     "Bash(git status*)" "Bash(git diff*)" "Bash(git log*)" "Bash(git show*)" "Bash(git add *)"
     "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
     "Bash(git push -u origin fix/*)" "Bash(git push origin fix/*)" "Bash(git push origin --delete fix/*)"
-    "Bash(jq *)" "Bash($plugin_root/scripts/open-pr.sh*)"
+    "Bash(jq *)" "Bash($scripts_dir/open-pr.sh*)"
     --disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)" "Read(/$HM_DATA_DIR/config)"
     "Read(~/.claude/settings.json)" "Read(~/.claude/settings.local.json)" "Read(~/.claude.json)" "Read(~/.ssh/**)" "Read(~/.config/gh/**)"
     ${budget[@]+"${budget[@]}"}

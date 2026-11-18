@@ -447,7 +447,7 @@ resolve_agent() {
 }
 
 agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행할 argv를 AGENT_CMD에 채운다
-  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_glob="" plugin_root=""
+  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_dir="" plugin_root=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
     # 테스트·사용자 정의 실행기: "<cmd> <project>"
     read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
@@ -468,7 +468,8 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       # 설치본이 더 높은 버전이면 claude는 설치본을 로드한다(#366: 배치 중 업데이트로 sync 전부 거부). 그래서
       # $ROOT(launchd shim이 고른 Codex 쪽일 수 있다) 대신 claude가 로드할 가장 높은 설치본을 함께 쓴다.
       plugin_root="$(hm_claude_plugin_root "$ROOT")"
-      scripts_glob="$plugin_root/scripts/*"
+      # 설치 경로 대신 공백 없는 고정 링크로 허용하고, 에이전트에게도 그 경로를 --scripts로 넘긴다(#400).
+      scripts_dir="$(hm_auto_plugin_link "$plugin_root")/scripts"
       # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
       # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
       local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR" --add-dir "$plugin_root") codex_root=""
@@ -487,8 +488,8 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
         deny_args+=("Edit(/$codex_root/**)" "Write(/$codex_root/**)")
       done < <(codex_session_roots)
       if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
-        local prompt="/ai-harness:harvest $project --auto --base $base"
-        [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base"
+        local prompt="/ai-harness:harvest $project --auto --base $base --scripts $scripts_dir"
+        [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base --scripts $scripts_dir"
         AGENT_CMD=(claude -p "$prompt"
           --plugin-dir "$plugin_root" --no-session-persistence
           "${read_dirs[@]}"
@@ -498,18 +499,18 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git fetch*)"
           "Bash(git push origin *)" "Bash(git push -u origin *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
           "Bash(git ls-remote*)"
-          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_dir/*)"
           "${deny_args[@]}"
           --max-budget-usd "$BUDGET_USD"
           --output-format stream-json --verbose)
       else
         # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
-        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope --scripts $scripts_dir"
           --plugin-dir "$plugin_root" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode dontAsk
           --allowedTools "Read" "Grep" "Glob" "Agent"
-          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_dir/*)"
           --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash(git *)"
           --max-budget-usd "$BUDGET_USD"
           --output-format stream-json --verbose)

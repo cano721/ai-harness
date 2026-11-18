@@ -184,6 +184,16 @@ hm_claude_plugin_root() { # $1=찾지 못했을 때 쓸 경로
   printf '%s\n' "${best:-$1}"
 }
 
+# 무인 실행이 플러그인 스크립트를 부르는 고정 경로. 허용 규칙(Bash(<경로>/*))은 문자열 앞부분 일치라
+# 설치 경로가 버전·프로필로 바뀌거나 공백이 있으면(에이전트가 따옴표로 감싼다) 일치하지 않는다(#400).
+# 데이터 디렉토리 아래 링크 하나가 이번에 로드할 설치본을 가리키게 해 규칙과 호출 경로를 그것으로 통일한다.
+hm_auto_plugin_link() { # $1=플러그인 루트 → 링크 경로 출력
+  local link="$HM_DATA_DIR/run/plugin"
+  mkdir -p "${link%/*}"
+  ln -sfn "$1" "$link"
+  printf '%s\n' "$link"
+}
+
 # 프로젝트 이름 → 파일시스템 안전 키. prefix가 '.', '..' 같은 인자의 경로 탈출을 막는다.
 hm_project_key() {
   printf 'p-%s\n' "$(printf '%s' "$1" | jq -sRr '@uri')"

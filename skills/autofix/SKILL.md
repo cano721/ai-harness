@@ -75,6 +75,7 @@ $ROOT/scripts/autofix-auto.sh runs --limit 20
 - 현재 디렉토리는 기준 브랜치 최신 커밋을 checkout한 **작업 전용 독립 저장소**(원본의 로컬 clone, detached)다. `origin`은 원본과 같은 원격이다. 여기서 `fix/autofix-<짧은-요약>` 브랜치를 만든다 — 무인 실행의 push 권한은 `fix/` 브랜치에만 열려 있다. 프로젝트 규칙에 이슈 키가 필요해도 이슈를 만들지 않는다. 종료 후 worker가 이 디렉토리를 지운다.
 - `--error` 파일(`.ai-harness-stage/autofix/error.json`)에 에러가 있다: `signature`, `title`, `count`, `window_hours`, `first_seen`/`last_seen`, `link`, `detail`(스택·태그, 비밀값 가림), `previous`(지난 PR·재발 기록), `reason`(`new`·`regressed`·`reappeared`…). 이 파일과 `.ai-harness-stage/`는 커밋하지 않는다.
 - 위 **수정 절차**를 따른다. 승인 게이트는 개인 승인 모드(`HM_APPROVAL`·`HM_APPROVAL_REPOS`)와 관계없이 **정책 승인**으로 통과한다 — Bug Fix Brief(관찰/기대 동작, 근거, 원인, 재현 테스트, 변경 범위, 판단이 갈린 점의 추천안)를 PR 본문에 싣는 것으로 대신한다. 단 사람만 정할 수 있는 것(제품 동작 변경, 데이터 삭제·마이그레이션, 외부 시스템 쓰기, 공개 API 계약 변경)이 필요하면 고치지 않고 `left_for_user`.
+- 스크립트 경로: 무인 worker는 `--scripts <dir>`로 공백 없는 고정 경로를 넘기고 그 경로만 허용한다. 이 값이 있으면 아래 `$ROOT/scripts/<이름>`을 모두 `<dir>/<이름>`으로 바꿔 부른다 — 설치 경로(`$ROOT`)는 버전·프로필로 바뀌고 공백이 들어갈 수 있어 허용 규칙에 일치하지 않는다.
 - 변경을 적용하기 전에 `$ROOT/scripts/open-pr.sh --check`로 PR을 열 수 있는지 확인한다. 실패하면 브랜치를 만들거나 push하지 말고 `left_for_user`.
 - PR: 커밋 → `git push -u origin <branch>` → `$ROOT/scripts/open-pr.sh --base <--base 값> --title "<제목>" --body-file .ai-harness-stage/autofix/pr.md`. 본문 첫 줄에 `자동 수정(/autofix --auto) 결과 — 병합 전 검토 필요`를 밝히고, 이어서:
   - 모니터링 근거: 시그니처, 제목, 창 안 발생 수, 처음/마지막 발생, 링크
