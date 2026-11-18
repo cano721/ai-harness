@@ -588,6 +588,18 @@ assert_contains "$(cat skills/landing-page/SKILL.md)" "**Nothing may wait for a 
 assert_contains "$LANDING_VERIFY" "a distinctive element placed under the stock formula" "a 3D element under the stock hero does not excuse it"
 jq '.first_viewport_major = ["craft"]' "$LP_GRAPH" >"$TEST_TMP/lp-bad-graph.json"
 if "$ROOT/scripts/validate-landing-page-graph.sh" "$TEST_TMP/lp-bad-graph.json" >/dev/null 2>&1; then fail "a landing-page graph must count a first-viewport template look as major"; fi
+# 실행 폴더가 Claude Code 설정 디렉터리 안이면(#411) Claude 세션은 그 안의 파일을 고치거나 읽지 못한다: 무인은 시작 전에 거부,
+# 대화형은 매번 승인을 묻는다고 알린다. Claude 밖(codex 등)에서는 막지 않는다.
+LP_CFG="$TEST_TMP/lp-claude-config"
+mkdir -p "$LP_CFG/jobs/u" "$LP_CFG/jobs/i" "$LP_CFG/jobs/c"
+lp_p_rc=0; CLAUDECODE=1 CLAUDE_CONFIG_DIR="$LP_CFG" "$ROOT/scripts/landing-run.sh" init --work "$LP_CFG/jobs/u" --mode unattended >/dev/null 2>"$TEST_TMP/lp-p.err" || lp_p_rc=$?
+assert_eq 2 "$lp_p_rc" "an unattended landing run in the Claude configuration directory is refused"
+assert_contains "$(cat "$TEST_TMP/lp-p.err")" "inside the Claude Code configuration directory" "the refusal says why"
+assert_not_file "$LP_CFG/jobs/u/.landing-run/state.json"
+CLAUDECODE=1 CLAUDE_CONFIG_DIR="$LP_CFG" "$ROOT/scripts/landing-run.sh" init --work "$LP_CFG/jobs/i" --mode interactive >/dev/null 2>"$TEST_TMP/lp-p.err"
+assert_contains "$(cat "$TEST_TMP/lp-p.err")" "will ask for permission" "an interactive run there starts with a notice"
+env -u CLAUDECODE CLAUDE_CONFIG_DIR="$LP_CFG" "$ROOT/scripts/landing-run.sh" init --work "$LP_CFG/jobs/c" --mode unattended >/dev/null \
+  || fail "a runner outside Claude Code is not limited by the Claude configuration directory"
 pass "landing-page graph runner and measure gate"
 
 # design-references: the reference step on its own (no landing run) — the same check the landing runner uses, the same

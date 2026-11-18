@@ -6,6 +6,15 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- **작업 폴더가 Claude Code 설정 디렉터리 안이면 러너가 시작 전에 알려 주고, 권한에 막힌 수정은 시도 횟수로 세지 않습니다** — Claude Code는 자기 설정 디렉터리(`~/.claude`, `CLAUDE_CONFIG_DIR`) 안 파일을 무인 세션이 고치거나 읽지 못하게 막습니다. 실측에서 저장소가 그 아래(`~/.claude/jobs/...`)였을 때 `/design-polish`의 claude 런타임 fix 세션이 Edit·캡처 Read를 모두 거부당해 러너가 `fix changed nothing`으로 멈췄고, 그때마다 수리 횟수(최대 3)가 하나씩 줄어 사람이 손으로 되돌려야 했습니다. 이제 `workflow-driver.sh`(feature·bug-fix·review·polish)는 claude 런타임에서 저장소나 실행 폴더가 그 안이면 `start`·`resume` 전에 이유와 우회 방법(바깥 worktree, `HM_FEATURE_RUNS_DIR`, `--runtime codex`)을 알리며 거부하고, fix·repair 세션이 권한에 막혀 아무것도 못 바꿨으면 막힌 호출을 보여 주고 시도 횟수를 되돌립니다(권한 때문에 바꾸지 못한 것은 모델의 실패가 아니라 환경 실패). `landing-run.sh init`은 Claude 세션의 무인 실행이면 거부하고, 대화형이면 매번 승인을 묻게 된다고 알립니다. codex 런타임은 이 경로를 막지 않아 그대로 둡니다. (#411)
+
+### 업데이트 후 해야 할 일
+
+- 기존 프로젝트는 `/harness-init --sync --apply`로 새 러너(`.ai-harness/workflows/workflow-driver.sh`)를 받습니다.
+
 ## v0.83.0 (2026-11-18)
 ### 새 기능
 

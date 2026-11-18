@@ -69,6 +69,7 @@ case "$node:$scenario" in
   diagnose:*) jq -n '{summary:"두 가지", needs_decision:["빈 상태 문구를 바꿀지"], items:[
     {id:"P1", severity:"major", title:"카드 사이 간격이 형제 화면과 다르다", evidence:["board-1280-light.png", "docs/design-system.md ## 레이아웃"], fix:"--space-2로 맞춘다", mechanical:false},
     {id:"P2", severity:"minor", title:"보조 문구 대비가 낮다", evidence:["board-1280-light.png"], fix:"--color-text-muted", mechanical:true}]}' >"$out" ;;
+  fix:polish_denied) printf 'Edit was denied; nothing changed\n' >"$out" ;;
   fix:polish_*) echo "polish $(date +%s%N)" >>screen.css; printf 'fixed P1\n' >"$out" ;;
   review:polish_bad_review_once)
     if [[ -f "$FAKE_LOG.bad_review" ]]; then
