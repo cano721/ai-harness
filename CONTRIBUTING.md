@@ -130,7 +130,7 @@ git switch develop && git merge --ff-only main && git push
 
 ## 검증
 
-PR을 올리기 전에 로컬에서 통과시킨다. CI도 같은 것을 돌린다.
+PR을 올리기 전에 로컬에서 통과시킨다. CI도 같은 것을 돌린다. 작업 중에는 `bash tests/run.sh --changed`(바뀐 영역만)·`bash tests/run.sh --lint`(바뀐 셸 파일만)로 충분하다.
 
 ```bash
 bash tests/run.sh

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // /landing-page board server: serves WORK read-only and takes the user's pick from the board, so the user can choose on
 // the page and start without typing the answer into the terminal.
-//   node landing-board-server.mjs --work DIR --port N
+//   node landing-board-server.mjs --work DIR --port N [--idle-minutes M]
+// It exits by itself after M minutes (default 30, LANDING_BOARD_IDLE_MINUTES; 0 keeps it up) without a request. An open
+// board page asks /pick every few minutes, so the server lives while someone has the board open and goes away after the
+// tab is closed; `board --serve` starts it again.
 //   GET  <path>  a file inside WORK (never a dotfile such as .landing-run)
 //   GET  /pick   {"server": true, "run": <a landing run is in WORK>} — the board takes picks only with a run; a board that
 //                /design-references serves alone is for looking, and its pick bar shows the summary to paste instead
@@ -21,8 +24,9 @@ const argv = process.argv.slice(2);
 const opt = (k) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : "");
 const work = resolve(opt("--work") || "");
 const port = Number(opt("--port"));
-if (!opt("--work") || !Number.isInteger(port) || port < 1 || port > 65535) {
-  console.error("usage: landing-board-server.mjs --work DIR --port N");
+const idleMinutes = Number(opt("--idle-minutes") || process.env.LANDING_BOARD_IDLE_MINUTES || "30");
+if (!opt("--work") || !Number.isInteger(port) || port < 1 || port > 65535 || !(idleMinutes >= 0)) {
+  console.error("usage: landing-board-server.mjs --work DIR --port N [--idle-minutes M]");
   process.exit(2);
 }
 
@@ -33,7 +37,9 @@ const send = (res, code, body) => {
   res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
 };
+let lastHit = Date.now();
 const server = createServer((req, res) => {
+  lastHit = Date.now();
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   if (url.pathname === "/state") {
     if (req.method !== "GET") return send(res, 405, { error: "method not allowed" });
@@ -75,4 +81,12 @@ const server = createServer((req, res) => {
   if (req.method === "HEAD") return res.end();
   createReadStream(path).pipe(res);
 });
+if (idleMinutes > 0) {
+  const idleMs = idleMinutes * 60000;
+  setInterval(() => {
+    if (Date.now() - lastHit < idleMs) return;
+    console.log(`idle ${idleMinutes} min: exiting`);
+    process.exit(0);
+  }, Math.min(idleMs, 30000));
+}
 server.listen(port, "127.0.0.1", () => console.log(`board server: http://127.0.0.1:${port}/`));

@@ -5,6 +5,7 @@ set -euo pipefail
 MERGE_SHA=1111111111111111111111111111111111111111
 scenario="${FAKE_SCENARIO:-ok}"
 # gh api: 기준 브랜치 보호 규칙. FAKE_PROTECTION=classic|ruleset|none|checks_only|denied (기본 none)
+#   저장소 설정(허용 병합 방식): FAKE_MERGE_METHODS=all|merge_only|rebase_only|unknown|denied (기본 all)
 if [[ "${1:-}" == api ]]; then
   printf 'gh api %s\n' "$2" >>"$FAKE_LOG"
   protection="${FAKE_PROTECTION:-none}"
@@ -21,6 +22,15 @@ if [[ "${1:-}" == api ]]; then
         classic) echo '{"required_pull_request_reviews":{"required_approving_review_count":1},"required_status_checks":{"contexts":["ci"]}}' ;;
         denied) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
         *) echo "gh: Branch not protected (HTTP 404)" >&2; exit 1 ;;
+      esac ;;
+    repos/*/*/*) exit 64 ;;
+    repos/*/*)
+      case "${FAKE_MERGE_METHODS:-all}" in
+        all) echo '{"allow_squash_merge":true,"allow_merge_commit":true,"allow_rebase_merge":true}' ;;
+        merge_only) echo '{"allow_squash_merge":false,"allow_merge_commit":true,"allow_rebase_merge":false}' ;;
+        rebase_only) echo '{"allow_squash_merge":false,"allow_merge_commit":false,"allow_rebase_merge":true}' ;;
+        unknown) echo '{"name":"app"}' ;;
+        denied) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
       esac ;;
     *) exit 64 ;;
   esac
