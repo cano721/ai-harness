@@ -805,4 +805,90 @@ assert_contains "$(<"$RD_ROOT/.claude/commands/review.md")" "team wording" "a re
 [[ "$(<"$ROOT/skills/harness-init/SKILL.md")" != *'`mode:"render"` 항목만 직접 쓴다'* ]] || fail "harness init no longer writes render artifacts by hand"
 pass "workflow entry points render deterministically"
 
+# 편집 가드 예시는 Read 도구 호출만 '읽음'으로 인정한다 — 문서를 Edit·Write만 한 세션이 transcript 문자열 grep으로 통과하던 문제(#372).
+DG="$TEST_TMP/direct-guard"
+DG_GUARD="$ROOT/skills/harness-init/references/direct-edit-guard.sh"
+assert_file "$DG_GUARD"
+mkdir -p "$DG/repo/.ai-harness/docs" "$DG/repo/src/main" "$DG/repo/src/test" "$DG/t/sess/subagents"
+git -C "$DG/repo" init -q
+DGR="$(git -C "$DG/repo" rev-parse --show-toplevel)"
+DG_CONV="$DGR/.ai-harness/docs/code-conventions.md"
+DG_TEST="$DGR/.ai-harness/docs/testing.md"
+DG_N=0
+dg_call() { # $1=tool name, $2=input json, [$3=is_error] -> tool_use 줄과 짝 tool_result 줄
+  DG_N=$((DG_N + 1))
+  jq -cn --arg n "$1" --argjson i "$2" --arg id "t$DG_N" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$n,input:$i}]}}'
+  jq -cn --arg id "t$DG_N" --arg e "${3:-false}" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,is_error:($e=="true"),content:"x"}]}}'
+}
+dg_line() { # $1=tool name, $2=file_path, [$3=is_error]
+  dg_call "$1" "$(jq -cn --arg f "$2" '{file_path:$f}')" "${3:-false}"
+}
+dg_bash() { # $1=command, [$2=is_error]
+  dg_call Bash "$(jq -cn --arg c "$1" '{command:$c}')" "${2:-false}"
+}
+dg_codex() { # $1=command, $2=exit code
+  DG_N=$((DG_N + 1))
+  jq -cn --arg c "$1" --arg id "c$DG_N" '{type:"response_item",payload:{type:"function_call",name:"exec_command",call_id:$id,arguments:({cmd:$c}|tojson)}}'
+  jq -cn --arg id "c$DG_N" --arg x "$2" '{type:"response_item",payload:{type:"function_call_output",call_id:$id,output:("Process exited with code " + $x + "\nOutput:\n")}}'
+}
+: >"$DG/t/none.jsonl"
+{ dg_line Write "$DG_CONV"; dg_line Edit "$DG_CONV"; dg_line MultiEdit "$DG_CONV"; } >"$DG/t/write.jsonl"
+dg_line Read "$DG_CONV" >"$DG/t/read.jsonl"
+dg_line Read "$DG_CONV" true >"$DG/t/read-failed.jsonl"
+jq -cn --arg f "$DG_CONV" '{type:"assistant",message:{content:[{type:"tool_use",id:"t0",name:"Read",input:{file_path:$f}}]}}' >"$DG/t/read-no-result.jsonl"
+{ dg_line Read "$DG_CONV"; dg_line Write "$DG_TEST"; } >"$DG/t/read-conv-write-test.jsonl"
+{ dg_line Read "$DG_CONV"; dg_line Read "$DG_TEST"; } >"$DG/t/read-both.jsonl"
+printf '{"type":"user","message":{"content":"please check \\"file_path\\":\\"%s\\""}}\n' "$DG_CONV" >"$DG/t/mention.jsonl"
+dg_bash "cat $DG_CONV" >"$DG/t/bash-cat.jsonl"
+dg_bash "cat $DG_CONV" true >"$DG/t/bash-cat-failed.jsonl"
+dg_bash "sed -n '1,80p' .ai-harness/docs/code-conventions.md" >"$DG/t/bash-sed.jsonl"
+dg_bash "grep -rn .ai-harness/docs/code-conventions.md scripts" >"$DG/t/bash-grep-pattern.jsonl"
+dg_bash "grep -n rule .ai-harness/docs/code-conventions.md" >"$DG/t/bash-grep-file.jsonl"
+{ dg_bash "sed -n 'w .ai-harness/docs/code-conventions.md' README.md"; dg_bash "sed -n 's/a/b/gw .ai-harness/docs/code-conventions.md' README.md"; } >"$DG/t/bash-sed-w.jsonl"
+{ dg_bash "grep -e .ai-harness/docs/code-conventions.md scripts"; dg_bash "grep -A 3 .ai-harness/docs/code-conventions.md scripts"; } >>"$DG/t/bash-grep-pattern.jsonl"
+jq -cn '{type:"response_item",payload:{type:"function_call",name:"exec_command",call_id:"cb",arguments:({cmd:"cat .ai-harness/docs/code-conventions.md"}|tojson)}}' >"$DG/t/codex-read-body.jsonl"
+jq -cn '{type:"response_item",payload:{type:"function_call_output",call_id:"cb",output:"Process exited with code 0\nOutput:\nfoo exited with code 1\n"}}' >>"$DG/t/codex-read-body.jsonl"
+dg_bash "cat code-conventions.md" | jq -c --arg d "$DGR/.ai-harness/docs" 'if .type == "assistant" then . + {cwd: $d} else . end' >"$DG/t/bash-row-cwd.jsonl"
+{ dg_bash "cat > $DG_CONV <<'X'"; dg_bash "echo x | tee $DG_CONV"; dg_bash "sed -i '' 's/a/b/' $DG_CONV"; dg_bash "git add $DG_CONV"; dg_bash "cat $DG_CONV && git add $DG_CONV"; } >"$DG/t/bash-write.jsonl"
+dg_codex "sed -n '1,200p' .ai-harness/docs/code-conventions.md" 0 >"$DG/t/codex-read.jsonl"
+dg_codex "sed -n '1,200p' .ai-harness/docs/code-conventions.md" 1 >"$DG/t/codex-read-failed.jsonl"
+dg_codex "cat > .ai-harness/docs/code-conventions.md <<'X'" 0 >"$DG/t/codex-write.jsonl"
+cp "$DG/t/none.jsonl" "$DG/t/sess.jsonl"
+dg_line Read "$DG_CONV" >"$DG/t/sess/subagents/agent-a1.jsonl"
+direct_guard() { # $1=edited file, $2=transcript, [$3=agent_id, $4=tool] -> exit code; stderr to $DG/err
+  jq -cn --arg cwd "$DGR" --arg f "$1" --arg t "$2" --arg a "${3:-}" --arg n "${4:-Edit}" \
+    '{tool_name:$n, cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
+    | bash "$DG_GUARD" 2>"$DG/err" >/dev/null && echo 0 || echo $?
+}
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/none.jsonl")" "edit without reading the conventions is blocked"
+assert_eq "[Direct edit guard] " "$(head -1 "$DG/err" | cut -c1-20)" "block message starts with the counted guard prefix"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/write.jsonl")" "writing the conventions with Write/Edit/MultiEdit is not reading them"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/mention.jsonl")" "a file_path string inside a user message is not a read"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/read.jsonl")" "reading the conventions with Read lets the edit through"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/read.jsonl" "" Write)" "Write of a source file passes after Read"
+assert_eq "2" "$(direct_guard "$DGR/src/test/AppTest.java" "$DG/t/read-conv-write-test.jsonl")" "a test edit also needs testing.md read, and writing it does not count"
+assert_eq "0" "$(direct_guard "$DGR/src/test/AppTest.java" "$DG/t/read-both.jsonl")" "a test edit passes after reading both docs"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/codex-read.jsonl")" "a Codex read-only shell command counts as reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/read-failed.jsonl")" "a Read that failed is not reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/read-no-result.jsonl")" "a Read without a result is not reading"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-cat.jsonl")" "a successful Bash cat of the doc counts as reading"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-sed.jsonl")" "a successful Bash sed -n with a relative path counts as reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-grep-pattern.jsonl")" "a grep that only searches for the doc path is not reading"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-grep-file.jsonl")" "a grep over the doc counts as reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-sed-w.jsonl")" "a sed script that writes the doc is not reading"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-row-cwd.jsonl")" "a Bash relative path resolves against that row's cwd"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-cat-failed.jsonl")" "a failed Bash cat is not reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/bash-write.jsonl")" "Bash commands that write or stage the doc are not reading"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/codex-read-body.jsonl")" "a failure phrase inside the read doc's text does not fail the read"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/codex-read-failed.jsonl")" "a Codex read that exited non-zero is not reading"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/codex-write.jsonl")" "a Codex shell command that writes the doc is not reading it"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/sess.jsonl" a1)" "a subagent's own Read in its transcript counts"
+assert_eq "2" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/sess.jsonl" a2)" "another subagent's Read does not count"
+assert_eq "0" "$(direct_guard "$DGR/src/main/App.java" "$DG/t/missing.jsonl")" "an unreadable transcript fails open"
+assert_eq "0" "$(direct_guard "$DGR/.ai-harness/docs/domain.md" "$DG/t/none.jsonl")" "harness documents are not guarded"
+assert_eq "0" "$(direct_guard "$DGR/README.md" "$DG/t/none.jsonl")" "files outside source paths are not guarded"
+assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}' | bash "$DG_GUARD" >/dev/null 2>&1 && echo 0 || echo $?)" "non-edit tools pass"
+assert_eq "0" "$(grep -v '^[[:space:]]*#' "$DG_GUARD" | grep -c -E '(^|[|;&(])[[:space:]]*grep[[:space:]]' || true)" "the example guard parses the transcript with jq instead of grepping it"
+pass "direct edit guard counts only successful reads as reading"
+
 finish_tests
