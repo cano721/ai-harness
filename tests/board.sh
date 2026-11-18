@@ -1170,7 +1170,8 @@ assert_eq "null|null" "$(jq -r '[.repos[] | select(.project == "shop") | .check,
   "the board does not call the monitoring tool on its own"
 [[ ! -e "$BAF_T/check.log" && ! -e "$BAF_T/candidates.log" ]] || fail "opening the autofix view makes no external call"
 # 접근 확인: 종료 코드를 사람 말로, 결과는 캐시
-assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "{\"t\":\"$BAF_TOKEN\",\"repo\":\"x\"}" "$BAF_BASE/autofix/check")" "autofix check checks the Origin"
+BAF_BODY="{\"t\":\"$BAF_TOKEN\",\"repo\":\"x\"}"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$BAF_BODY" "$BAF_BASE/autofix/check")" "autofix check checks the Origin"
 assert_eq "false" "$(baf_post check '{"repo":"/etc"}' | jq -r '.ok')" "autofix check accepts only harness repos"
 baf_repo() { jq -r --arg p "$1" '.repos[] | select(.project == $p) | .repo' <<<"$BAF"; }
 BAF_SHOP="$(baf_repo shop)"; BAF_BLOG="$(baf_repo blog)"; BAF_TOOL="$(baf_repo tool)"

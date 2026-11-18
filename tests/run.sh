@@ -5,7 +5,7 @@
 #   bash tests/run.sh board init       고른 영역만
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
 #   bash tests/run.sh --fast           느린 영역(SLOW_AREAS)을 뺀다. 다른 선택과 같이 쓸 수 있다
-#   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x (파일마다 따로)
+#   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x + bash 3.2 중괄호 검사 (파일마다 따로)
 #   bash tests/run.sh --list           영역 목록
 set -euo pipefail
 
@@ -94,6 +94,7 @@ lint_changed() {
     printf '# lint %s\n' "$file"
     bash -n "$ROOT/$file" || rc=1
     (cd "$ROOT" && "${sc[@]}" -S style -x "$file") || rc=1
+    python3 -I "$TESTS_DIR/bash32-check.py" "$ROOT/$file" || rc=1
   done <<<"$files"
   return "$rc"
 }
