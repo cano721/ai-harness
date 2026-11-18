@@ -12,6 +12,51 @@ sha256_file() {
   sha256sum "$1" | awk '{print $1}'
 }
 
+# 저장소 파일 목록(상대 경로). git이면 추적·미추적(ignore 제외), 아니면 find. 화면이 아닌 디렉터리(테스트·fixture·
+# vendor·빌드 산출물·예시·하네스 생성물)는 뺀다 — 그 안의 HTML은 사용자가 보는 화면이 아니다.
+screen_files() {
+  if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$root" ls-files --cached --others --exclude-standard 2>/dev/null
+  else
+    (cd "$root" && find . \( -name .git -o -name node_modules \) -prune -o -type f -print | sed 's#^\./##')
+  fi | grep -vE '(^|/)(tests?|__tests__|spec|fixtures?|vendor|node_modules|dist|build|coverage|examples?|evals?|\.ai-harness|\.claude|\.agents|\.codex)/' || true
+}
+
+# 켜지 않은 stack 중 저장소 파일이 근거가 되는 것(ui·design-system)을 근거와 함께 낸다. 제안일 뿐 manifest를 바꾸지 않는다 —
+# 규칙 문서·기준 화면·단일 HTML 화면은 init 뒤에 생기는 일이 많아, sync 보고가 그 사실을 알리는 유일한 경로다.
+stack_candidates() { # stacks-json
+  local stacks="$1" files ui="" doc="" ref="" pkg value
+  files="$(screen_files)"
+  if ! jq -e 'index("ui")' <<<"$stacks" >/dev/null; then
+    # 서버 렌더링 템플릿, 단일 HTML 화면(서버·빌드 없이 여는 보드·리포트 등), 웹 프론트 의존성.
+    ui="$(grep -E '(^|/)templates/.*\.(html?|jinja2?|j2)$|(^|/)src/main/resources/templates/|\.jsp$|(^|/)app/views/.*\.erb$|(^|/)resources/views/.*\.blade\.php$|\.html?$' <<<"$files" | LC_ALL=C sort | head -n 5 || true)"
+    while IFS= read -r pkg; do
+      [[ -n "$pkg" && -f "$root/$pkg" ]] || continue
+      jq -e '((.dependencies // {}) + (.devDependencies // {})) as $d
+        | ($d | has("react") or has("vue") or has("svelte") or has("@angular/core") or has("solid-js") or has("preact"))
+          and ((($d | has("react-native") or has("expo")) | not) or ($d | has("react-native-web")))' "$root/$pkg" >/dev/null 2>&1 \
+        && ui="$(printf '%s\n%s' "$ui" "$pkg" | sed '/^$/d')"
+    done <<<"$(grep -E '(^|/)package\.json$' <<<"$files" || true)"
+    [[ -z "$ui" ]] || jq -cn --arg e "$ui" '{stack:"ui", evidence:($e | split("\n") | map(select(length > 0)) | unique),
+      detail:"user-facing screens exist but the ui-review contract is off; enable it with /harness-init --reconfigure (adds the ui stack). Never enabled automatically"}'
+  fi
+  if ! jq -e 'index("design-system")' <<<"$stacks" >/dev/null; then
+    # design-audit은 디자인 규칙 문서와 기준 화면(열어 조작할 수 있는 예시)이 둘 다 있어야 채점할 수 있다.
+    for value in DESIGN.md docs/design-system.md docs/DESIGN.md design-system.md; do
+      [[ -f "$root/$value" ]] && { doc="$value"; break; }
+    done
+    if [[ -n "$doc" ]]; then
+      ref="$(grep -E '^\.storybook/|(^|/)design-system[^/]*/.*\.html?$|(^|/)design-system[^/]*\.html?$' <<<"$files" | LC_ALL=C sort | head -n 3 || true)"
+      if [[ -z "$ref" ]]; then
+        value="$(sed -nE 's/^[-*][[:space:]]*기준 화면:[[:space:]]*//p' "$root/$doc" | head -n 1)"
+        [[ -z "$value" || "$value" == \<* ]] || ref="$doc: 기준 화면: $value"
+      fi
+      [[ -z "$ref" ]] || jq -cn --arg d "$doc" --arg r "$ref" '{stack:"design-system", evidence:([$d] + ($r | split("\n") | map(select(length > 0)))),
+        detail:"a design rule document and a reference screen exist but design-audit scoring is off; enable it with /harness-init --reconfigure (adds the design-system stack). Never enabled automatically"}'
+    fi
+  fi
+}
+
 command_name="${1:-}"
 [[ -n "$command_name" ]] || usage
 shift
@@ -194,13 +239,15 @@ case "$command_name" in
                 detail:"no longer generated for the current configuration; confirm removal with the user, delete the file, then `forget` (or `exclude` to keep it out of future plans)"}'
           done | jq -s '.'
     )"
+    candidates="$(stack_candidates "$stacks" | jq -s '.')"
     jq -n --argjson items "$plan_items" --argjson suggestions "$suggestions" --argjson retired "$retired" \
-      --argjson orphaned "$orphaned" \
+      --argjson orphaned "$orphaned" --argjson candidates "$candidates" \
       '{items: $items,
         counts: ($items | group_by(.action) | map({key: .[0].action, value: length}) | from_entries),
         suggestions: $suggestions,
         retired: $retired,
-        orphaned: $orphaned}'
+        orphaned: $orphaned,
+        stack_candidates: $candidates}'
     ;;
   exclude|include)
     ((${#files[@]} > 0)) || usage

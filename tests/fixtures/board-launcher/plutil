@@ -1,0 +1,5 @@
+#!/bin/bash
+# 가짜 plutil: -replace CFBundleIdentifier -string <값> <파일>만 흉내 낸다.
+set -eu
+[[ "$1 $2 $3" == "-replace CFBundleIdentifier -string" ]] || exit 1
+sed "s|com\.apple\.ScriptEditor\.id\.[^<]*|$4|" "$5" >"$5.tmp" && mv "$5.tmp" "$5"

@@ -8,6 +8,9 @@
 #     첫 화면에서 실패한 first_viewport_major 항목은 검토자가 minor로 적어도 주요로 센다.
 #   - board: tone.json·references.json으로 레퍼런스 보드(board.html, 탭 5개)를, --kind drafts면 시안 보드(draft-board.html)를
 #     만든다. 에이전트가 보드 HTML을 손으로 짜지 않는다. --serve면 보드 서버를 분리 실행해 보드의 시작 버튼이 고른 결과를 쓴다.
+#   - serve: 후보 페이지 폴더(또는 --dir)를 정적 서버(landing-serve.mjs)로 분리 실행하고 URL을 낸다. 같은 폴더를 이미
+#     서빙 중이면 그 서버를 쓴다. 서버는 요청 없이 30분이 지나면 스스로 끝난다 — 에이전트가 즉석 서버를 띄우고 잊어
+#     며칠씩 남던 것을 막는다. stop은 이 WORK의 미리보기·보드 서버를 모두 끈다.
 #   - wait-pick: 고른 결과 파일이 그 노드 시작 뒤에 생길 때까지 기다린다(세션은 이 명령을 백그라운드로 두고 턴을 끝낸다).
 #   - capture: 스크롤 투어·감속·JS 끔 캡처와 밀착 인화지를 만든다. measure 뒤에도 자동으로 돈다(검토자가 다시 찍지 않게).
 #   - capture-refs·board·레퍼런스 검사: /design-references의 공용 스크립트(design-refs.sh)에 넘긴다. 혼자 부른 스킬과
@@ -31,6 +34,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_GRAPH="$ROOT/skills/landing-page/references/landing-page-graph.json"
 
 die() { local code="$1"; shift; printf 'landing-run: %s\n' "$*" >&2; exit "$code"; }
+claude_config_dir_of() { # path → stdout: 그 경로를 품은 Claude 설정 디렉터리(아니면 1)
+  local p d c
+  p="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  for d in "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+    [[ -n "$d" ]] || continue
+    c="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$p/" in "$c"/*) printf '%s' "$c"; return 0 ;; esac
+  done
+  return 1
+}
 usage() {
   cat >&2 <<'EOF'
 usage:
@@ -43,6 +56,8 @@ usage:
   landing-run.sh capture-refs --work DIR --file REFS-TO-CAPTURE.json [--background]
   landing-run.sh operate --work DIR --url URL --file SCRIPT.mjs [--label NAME] [--width PX]
   landing-run.sh board   --work DIR [--kind references|drafts] [--port N --serve]
+  landing-run.sh serve   --work DIR --candidate ID | --dir PAGE_DIR [--port N]
+  landing-run.sh stop    --work DIR
   landing-run.sh wait-pick --work DIR --node reference_pick|draft_pick [--timeout-min 30]
   landing-run.sh finish  --work DIR [--candidate ID]
   landing-run.sh status  --work DIR
@@ -51,7 +66,7 @@ EOF
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH="" KIND="references" PORT="" SERVE="" BACKGROUND="" TIMEOUT_MIN=30
+WORK="" MODE="" GRAPH_ARG="" CAND="" NODE="" OUTCOME="" URL="" FILE="" LABEL="" WIDTH="" KIND="references" PORT="" SITE="" SERVE="" BACKGROUND="" TIMEOUT_MIN=30
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work) WORK="$2"; shift 2 ;;
@@ -66,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --width) WIDTH="$2"; shift 2 ;;
     --kind) KIND="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --dir) SITE="$2"; shift 2 ;;
     --serve) SERVE=1; shift ;;
     --background) BACKGROUND=1; shift ;;
     --timeout-min) TIMEOUT_MIN="$2"; shift 2 ;;
@@ -216,7 +232,7 @@ print_next() {
       else how="Do this node's work (read only the docs listed), write the artifacts, then: landing-run.sh submit --work <dir> --node $node --outcome <one of outcomes>${c:+ --candidate $c}"; fi ;;
     human) how="Ask the user (in an interactive session), record their answer in the artifact, then submit with outcome picked${c:+ --candidate $c}" ;;
     runner) case "$node" in
-        measure) how="Serve the page, then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
+        measure) how="Serve the page (landing-run.sh serve --work <dir> --candidate $c), then: landing-run.sh measure --work <dir> --candidate $c --url <served url>" ;;
         folded) how="Not finished: another candidate was chosen at draft_choose or to redraw at draft_hold (status holds the reason); report it" ;;
         draft_hold) how="Waiting: its first draft needs a redo, and once every first draft review is in the runner lets only the better of the drafts needing one redraw (by their draft review scores); work on the others" ;;
         done) how="Before reporting: landing-run.sh finish --work <dir> --candidate $c. Do not edit the page after its review: finish refuses a page whose files changed since and sends it back to measure and review" ;;
@@ -361,6 +377,13 @@ required_checks() {
 case "$cmd" in
   init)
     [[ "$MODE" == interactive || "$MODE" == unattended ]] || usage
+    # Claude Code는 자기 설정 디렉터리(~/.claude, CLAUDE_CONFIG_DIR) 안의 파일 편집·읽기를 막는다(무인은 거부, 대화형은 매번 승인).
+    # 실행 폴더가 그 안이면 페이지를 만들지도 캡처를 읽지도 못한 채 측정·검토 회차만 쓴다(#411). Claude 세션에서만 본다.
+    if [[ -n "${CLAUDECODE:-}" ]] && protected="$(claude_config_dir_of "$WORK")"; then
+      [[ "$MODE" == interactive ]] \
+        || die 2 "refused: the work folder $WORK is inside the Claude Code configuration directory $protected, where an unattended Claude session may not edit or read files. Use a folder outside it."
+      printf 'landing-run: notice: the work folder is inside the Claude Code configuration directory %s; every edit and read there will ask for permission. A folder outside it avoids that.\n' "$protected" >&2
+    fi
     GRAPH="${GRAPH_ARG:-$DEFAULT_GRAPH}"
     "$ROOT/scripts/validate-landing-page-graph.sh" "$GRAPH" >/dev/null
     [[ ! -f "$STATE" ]] || die 3 "a run already exists in $RUN"
@@ -666,6 +689,39 @@ case "$cmd" in
     ;;
   board)
     exec "$ROOT/scripts/design-refs.sh" board --work "$WORK" --kind "$KIND" ${PORT:+--port "$PORT"} ${SERVE:+--serve}
+    ;;
+  serve)
+    if [[ -n "$CAND" ]]; then
+      [[ -f "$STATE" ]] || die 4 "no run in $WORK"
+      rel="$(jq -r --arg c "$CAND" '.candidates[$c].dir // empty' "$STATE")"
+      [[ -n "$rel" ]] || die 4 "candidate '$CAND' has no page folder"
+    else
+      rel="$SITE"
+    fi
+    [[ -n "$rel" ]] || usage
+    [[ -z "$PORT" || "$PORT" =~ ^[0-9]+$ ]] || die 2 "port is a number"
+    case "$rel" in /*) site="$rel" ;; *) site="$WORK/$rel" ;; esac
+    site="$(cd "$site" 2>/dev/null && pwd)" || die 4 "page folder not found: $rel"
+    [[ "$site" == "$WORK" || "$site" == "$WORK"/* ]] || die 2 "the page folder must be inside WORK"
+    mkdir -p "$RUN"
+    tag="${site#"$WORK"}"; tag="${tag//\//_}"
+    log="$RUN/serve${tag:-_}.log"
+    # Already serving this folder (the preview served it, measure asks again): keep that server and its address.
+    if ! pgrep -f "landing-serve.mjs --root $site --port" >/dev/null 2>&1 || ! grep -q '^serving: ' "$log" 2>/dev/null; then
+      # Detached, not a background task of the session; it exits by itself after half an hour without a request.
+      nohup node "$ROOT/scripts/landing-serve.mjs" --root "$site" --port "${PORT:-0}" >"$log" 2>&1 </dev/null &
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q '^serving: ' "$log" 2>/dev/null && break; sleep 0.2; done
+      grep -q '^serving: ' "$log" || die 4 "page server did not start: $(tail -3 "$log")"
+    fi
+    sed -n 's/^serving: //p' "$log" | tail -1
+    ;;
+  stop)
+    stopped=0
+    for pattern in "landing-serve.mjs --root $WORK --port" "landing-serve.mjs --root $WORK/" "landing-board-server.mjs --work $WORK --port"; do
+      n="$( (pgrep -f "$pattern" 2>/dev/null || true) | wc -l | tr -d ' ')"
+      [[ "$n" == 0 ]] || { pkill -f "$pattern" 2>/dev/null || true; stopped=$((stopped + n)); }
+    done
+    printf 'landing-run: stopped %d server(s) for %s\n' "$stopped" "$WORK"
     ;;
   wait-pick)
     [[ -f "$STATE" ]] || die 4 "no run in $WORK"

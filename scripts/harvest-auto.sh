@@ -447,14 +447,13 @@ resolve_agent() {
 }
 
 agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행할 argv를 AGENT_CMD에 채운다
-  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_glob=""
+  local project="$1" work_dir="$2" agent="$3" base="${4:-HEAD}" scope="${5:-project}" scripts_dir="" plugin_root=""
   if [[ -n "${HM_HARVEST_AUTO_CMD:-}" ]]; then
     # 테스트·사용자 정의 실행기: "<cmd> <project>"
     read -r -a AGENT_CMD <<<"$HM_HARVEST_AUTO_CMD"
     AGENT_CMD+=("$project")
     return
   fi
-  scripts_glob="$ROOT/scripts/*"
   case "$agent" in
     codex)
       # --approve-for-me는 workspace-write 샌드박스다. 큐 기록(~/.ai-harness)은 쓸 수 있게 열지만,
@@ -465,14 +464,19 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
         "ai-harness harvest skill을 인자 \"$project --auto --base $base\"로 실행하라. 커밋·push가 막히면 개선안 보고로 끝내라.")
       ;;
     *)
-      # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. launchd shim이 Codex 쪽
-      # 설치본을 골라도 claude는 기본으로 자기 캐시의 플러그인을 로드하므로, 이 설치본을 명시해 맞춘다.
+      # 허용 목록의 스크립트 경로와 실제로 로드되는 스킬의 경로가 같아야 한다. --plugin-dir을 줘도 같은 이름의
+      # 설치본이 더 높은 버전이면 claude는 설치본을 로드한다(#366: 배치 중 업데이트로 sync 전부 거부). 그래서
+      # $ROOT(launchd shim이 고른 Codex 쪽일 수 있다) 대신 claude가 로드할 가장 높은 설치본을 함께 쓴다.
+      plugin_root="$(hm_claude_plugin_root "$ROOT")"
+      # 설치 경로 대신 공백 없는 고정 링크로 허용하고, 에이전트에게도 그 경로를 --scripts로 넘긴다(#400).
+      scripts_dir="$(hm_auto_plugin_link "$plugin_root")/scripts"
       # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
       # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
-      local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR") codex_root=""
+      local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR" --add-dir "$plugin_root") codex_root=""
       # 읽기 위해 연 디렉토리는 쓰지 못하게 한다. 데이터 디렉토리의 config·shim은 이후 실행이 source·실행하므로
       # 여기를 고칠 수 있으면 transcript 속 지시가 샌드박스 밖 코드 실행으로 이어진다.
       local deny_args=(--disallowedTools "Edit(/$HM_DATA_DIR/**)" "Write(/$HM_DATA_DIR/**)"
+        "Edit(/$plugin_root/**)" "Write(/$plugin_root/**)"
         "Edit(/$HM_CLAUDE_PROJECTS_DIR/**)" "Write(/$HM_CLAUDE_PROJECTS_DIR/**)"
         "Bash(git -C *)" "Bash(git reset*)" "Bash(git clean*)" "Bash(git push --force*)" "Bash(git push -f*)"
         "Bash(git push origin --force*)" "Bash(git push origin -f*)" "Bash(git push origin +*)"
@@ -484,10 +488,10 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
         deny_args+=("Edit(/$codex_root/**)" "Write(/$codex_root/**)")
       done < <(codex_session_roots)
       if [[ "$scope" == "project" || "$scope" == "sync" ]]; then
-        local prompt="/ai-harness:harvest $project --auto --base $base"
-        [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base"
+        local prompt="/ai-harness:harvest $project --auto --base $base --scripts $scripts_dir"
+        [[ "$scope" == "sync" ]] && prompt="/ai-harness:harness-init --sync --apply --auto --base $base --scripts $scripts_dir"
         AGENT_CMD=(claude -p "$prompt"
-          --plugin-dir "$ROOT" --no-session-persistence
+          --plugin-dir "$plugin_root" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode acceptEdits
           --allowedTools "Read" "Grep" "Glob" "Edit" "Write" "Agent"
@@ -495,18 +499,18 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
           "Bash(git commit *)" "Bash(git switch -c *)" "Bash(git checkout -b *)" "Bash(git fetch*)"
           "Bash(git push origin *)" "Bash(git push -u origin *)" "Bash(git rev-parse*)" "Bash(git branch --show-current*)"
           "Bash(git ls-remote*)"
-          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_dir/*)"
           "${deny_args[@]}"
           --max-budget-usd "$BUDGET_USD"
           --output-format stream-json --verbose)
       else
         # 개인 지침은 auto-apply.sh로만 바꾼다: 편집 도구를 금지하고, 미리 허용한 것 외에는 묻지 않고 거부한다.
-        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope"
-          --plugin-dir "$ROOT" --no-session-persistence
+        AGENT_CMD=(claude -p "/ai-harness:harvest $project --auto --scope $scope --scripts $scripts_dir"
+          --plugin-dir "$plugin_root" --no-session-persistence
           "${read_dirs[@]}"
           --permission-mode dontAsk
           --allowedTools "Read" "Grep" "Glob" "Agent"
-          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_glob)"
+          "Bash(jq *)" "Bash(head *)" "Bash(tail *)" "Bash($scripts_dir/*)"
           --disallowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Bash(git *)"
           --max-budget-usd "$BUDGET_USD"
           --output-format stream-json --verbose)
@@ -584,18 +588,21 @@ command_run() {
   else
     # 적용할 관리 생성물(add·refresh)이 없는 sync는 에이전트를 띄우지 않는다 — 버전만 다른 경우가 대부분이다.
     # 무인 sync가 적용하는 것은 add·refresh뿐이라, 그 밖(승인 필요·제외)만 남은 저장소에 에이전트를 띄우지 않는다.
-    local pending=1
+    local pending=1 sync_plan="" candidates=""
     if [[ "$scope" == "sync" ]]; then
-      pending="$("$DIR/harness-sync-state.sh" plan --root "$work_dir" --catalog "$ROOT/templates/managed-files.json" 2>/dev/null \
-        | jq '(.counts.add // 0) + (.counts.refresh // 0)' 2>/dev/null)"
+      sync_plan="$("$DIR/harness-sync-state.sh" plan --root "$work_dir" --catalog "$ROOT/templates/managed-files.json" 2>/dev/null)"
+      pending="$(jq '(.counts.add // 0) + (.counts.refresh // 0)' <<<"$sync_plan" 2>/dev/null)"
       [[ "$pending" =~ ^[0-9]+$ ]] || pending=-1
+      # 켤 수 있는 stack(ui·design-system)은 무인 sync가 켜지 않는다. 에이전트를 띄우지 않는 실행에도 로그에 남긴다.
+      candidates="$(jq -r '(.stack_candidates // [])[] | "켤 수 있는 stack: \(.stack) (근거: \(.evidence | join(", "))) — /harness-init --reconfigure 로 켠다. 자동으로 켜지 않는다"' <<<"$sync_plan" 2>/dev/null || true)"
     fi
     if (( pending == -1 )); then
       printf 'sync 계획 실패: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
       exit_code=71
       ran_agent=0
     elif (( pending == 0 )); then
-      printf '적용할 관리 생성물 없음: %s (%s)\n' "$repo_root" "$base_ref" >"$log_file"
+      { printf '적용할 관리 생성물 없음: %s (%s)\n' "$repo_root" "$base_ref"
+        [[ -z "$candidates" ]] || printf '%s\n' "$candidates"; } >"$log_file"
       ran_agent=0
     else
       agent_command "$project" "$work_dir" "$agent" "${base_ref#origin/}" "$scope"

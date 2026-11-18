@@ -28,6 +28,49 @@ last_progress() {
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# 작업(work.sh)과 하네스 칸(아래 1–5)을 합쳐 낸다. $1 = 하네스 칸 파일이 있는 폴더(이번에 만든 $tmp 또는 입력 캐시).
+finish() {
+  local h=$1
+  bash "$(dirname "$0")/work.sh" > "$tmp/work.json" 2>/dev/null || echo '[]' > "$tmp/work.json"
+  jq -e 'type == "array"' "$tmp/work.json" >/dev/null 2>&1 || echo '[]' > "$tmp/work.json"
+
+  jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpfile work "$tmp/work.json" --slurpfile quiet "$h/quiet.json" \
+    --slurpfile qhidden "$h/queue_hidden.json" \
+    '{generated_at: $gen, window_days: $days, quiet_runs: $quiet[0], queue_hidden: $qhidden[0], items: ((add | map(
+       .section = (if .kind == "runner" then "work" else "harness" end)
+       | .id = "\(.kind)|\(.project)|\(.at)"
+       | .actions = ([ (select(.state == "queued" and (.kind | startswith("harvest"))) | "harvest_now"),
+                       (select(.state == "needs_human" and .repo != null) | "open_agent") ])
+       | .cause = (if .state == "needs_human" and ((.detail // "") | test("whitelist|화이트리스트|HTTP 403|원격에 접근할 수 없|PR 생성 사전 점검 실패|PR을 열 수 없")) then "remote_blocked" else null end)))
+       + $work[0] | sort_by(.at // "") | reverse)}' \
+    "$h/runs2.json" "$h/skips.json" "$h/sched.json" "$h/runner.json" "$h/applied.json" "$h/queue.json"
+}
+
+# 입력 캐시(#380): 보드의 백그라운드 갱신은 BOARD_CACHE_SECONDS를 넘긴다. 하네스 기록 파일들의 크기·수정 시각이 그대로이고
+# 그 초보다 젊으면 지난 하네스 칸을 다시 쓴다(시각에 따라 바뀌는 판정 — 멈춤·기간 — 은 그 초 안에서만 늦는다). 없으면(기본) 늘 새로 모은다.
+PARTS="runs2 skips sched runner applied queue quiet queue_hidden"
+CACHE_SECS="${BOARD_CACHE_SECONDS:-0}"
+case "$CACHE_SECS" in ''|*[!0-9]*) CACHE_SECS=0 ;; esac
+HCACHE="$DATA/board/status-cache"
+hkey=""
+if [ "$CACHE_SECS" -gt 0 ]; then
+  if stat -c %s /dev/null >/dev/null 2>&1; then keys_of() { stat --printf '%s:%Y\t%n\n' "$@" 2>/dev/null; }
+  else keys_of() { stat -f '%z:%m%t%N' "$@" 2>/dev/null; }; fi
+  hkey=$({ printf '%s %s %s %s\n' "$DAYS" "$STALE_HOURS" "${BOARD_RUNNER_STALE_MIN:-}" "$SCRIPTS_DIR"
+    keys_of "$DATA/harvest-auto/runs.jsonl" "$DATA/autofix/runs.jsonl" "$DATA/logs/schedule.jsonl" "$DATA/applied/applied.jsonl" \
+      "$DATA"/runs/*/*/* "$DATA"/harvest-queue/*/analysis-batch.json "$DATA"/harvest-queue/*/auto-attempted-batch || true
+  } | cksum | tr -d ' \t')
+  ckey="" cat_e=0
+  [ ! -f "$HCACHE/key" ] || read -r ckey cat_e <"$HCACHE/key" || true
+  case "$cat_e" in ''|*[!0-9]*) cat_e=0 ;; esac
+  hit=1
+  for p in $PARTS; do [ -f "$HCACHE/$p.json" ] || hit=0; done
+  if [ "$hit" = 1 ] && [ -n "$ckey" ] && [ "$ckey" = "$hkey" ] && [ "$now_e" -ge "$cat_e" ] && [ $((now_e - cat_e)) -lt "$CACHE_SECS" ]; then
+    finish "$HCACHE"
+    exit 0
+  fi
+fi
+
 # 1) 무인 실행(harvest·sync): 로그 경로로 started/finished 짝을 맞춘다.
 runs="$DATA/harvest-auto/runs.jsonl"
 if [ -f "$runs" ]; then
@@ -266,16 +309,15 @@ done
 jq -s . "$tmp/queue.jsonl" > "$tmp/queue.json"
 jq -s 'group_by(.hidden) | map({reason: .[0].hidden, count: length})' "$tmp/queue_hidden.jsonl" > "$tmp/queue_hidden.json"
 
-bash "$(dirname "$0")/work.sh" > "$tmp/work.json" 2>/dev/null || echo '[]' > "$tmp/work.json"
-jq -e 'type == "array"' "$tmp/work.json" >/dev/null 2>&1 || echo '[]' > "$tmp/work.json"
+# 입력 캐시를 쓴다(0700 폴더·0600 파일). 칸 파일을 먼저 바꾸고 키는 마지막에 — 키가 맞으면 칸도 그 키의 것이다.
+if [ -n "$hkey" ] && mkdir -p "$HCACHE" 2>/dev/null && chmod 700 "$HCACHE" 2>/dev/null; then
+  saved=1
+  for p in $PARTS; do
+    { cp "$tmp/$p.json" "$HCACHE/.$p.json.$$" && chmod 600 "$HCACHE/.$p.json.$$" && mv -f "$HCACHE/.$p.json.$$" "$HCACHE/$p.json"; } 2>/dev/null || saved=0
+  done
+  if [ "$saved" = 1 ]; then
+    { printf '%s %s\n' "$hkey" "$now_e" >"$HCACHE/.key.$$" && chmod 600 "$HCACHE/.key.$$" && mv -f "$HCACHE/.key.$$" "$HCACHE/key"; } 2>/dev/null || true
+  fi
+fi
 
-jq -s --arg gen "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson days "$DAYS" --slurpfile work "$tmp/work.json" --slurpfile quiet "$tmp/quiet.json" \
-  --slurpfile qhidden "$tmp/queue_hidden.json" \
-  '{generated_at: $gen, window_days: $days, quiet_runs: $quiet[0], queue_hidden: $qhidden[0], items: ((add | map(
-     .section = (if .kind == "runner" then "work" else "harness" end)
-     | .id = "\(.kind)|\(.project)|\(.at)"
-     | .actions = ([ (select(.state == "queued" and (.kind | startswith("harvest"))) | "harvest_now"),
-                     (select(.state == "needs_human" and .repo != null) | "open_agent") ])
-     | .cause = (if .state == "needs_human" and ((.detail // "") | test("whitelist|화이트리스트|HTTP 403|원격에 접근할 수 없|PR 생성 사전 점검 실패|PR을 열 수 없")) then "remote_blocked" else null end)))
-     + $work[0] | sort_by(.at // "") | reverse)}' \
-  "$tmp/runs2.json" "$tmp/skips.json" "$tmp/sched.json" "$tmp/runner.json" "$tmp/applied.json" "$tmp/queue.json"
+finish "$tmp"
