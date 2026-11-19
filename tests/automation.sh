@@ -949,8 +949,8 @@ assert_eq "pending" "$(HM_EFFECT_MIN_EXPECTED=50 run_rq effect --rule-id rule-on
 pass "rule quality gates and measured effect"
 
 # PreToolUse(Bash) DB 스캔 가드(opt-in)는 명령 위치의 DB 클라이언트·드라이버 쿼리 중 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
-DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash")' "$ROOT/hooks/hooks.json")"
-assert_eq "2" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
+DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.hooks[0].command | contains("db-scan-guard"))' "$ROOT/hooks/hooks.json")"
+assert_eq "3" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
 assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$DB_GUARD_HOOK")" "db scan guard stays inside a short budget"
 GUARD_COMMAND="$(jq -r '.hooks[0].command' <<<"$DB_GUARD_HOOK")"
 assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"
@@ -1819,5 +1819,120 @@ assert_eq "2" "$(grep -c -- '--plugin-dir "$plugin_root" --no-session-persistenc
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
+
+# 백그라운드 Bash 감시자 hook: 명령을 바꾸지 않고(권한 판정이 그대로) 아무것도 출력하지 않는다. 등록·끄기·오류 통과.
+BG_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash" and (.hooks[0].command | contains("background-watchdog")))' "$ROOT/hooks/hooks.json")"
+assert_eq "$LITERAL_PLUGIN_ROOT/scripts/background-watchdog-hook.sh\"" "$(jq -r '.hooks[0].command' <<<"$BG_HOOK")" "Bash PreToolUse registers the background watchdog"
+assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$BG_HOOK")" "background watchdog hook stays inside a short budget"
+bg_hook() { "$ROOT/scripts/background-watchdog-hook.sh"; printf '|%s' "$?"; }
+assert_eq "|0" "$(jq -cn '{tool_input:{command:"echo bg",run_in_background:true}}' | bg_hook)" "background input gets no hook output (command and permissions untouched)"
+assert_eq "|0" "$(jq -cn '{tool_input:{command:"echo fg",run_in_background:false}}' | bg_hook)" "foreground input passes through"
+assert_eq "|0" "$(printf '%s\n' '{broken' | bg_hook)" "malformed input fails open silently"
+assert_eq "|0" "$(jq -cn '{tool_input:{command:["a"],run_in_background:true}}' | bg_hook)" "non-string command fails open silently"
+pass "background command watchdog hook"
+
+# 감시자는 실제 프로세스 그룹에서: 가짜 에이전트가 hook을 부르고, Claude Code처럼 명령을 eval '…'로 넣은 셸을 새 그룹 리더로 띄운다.
+# 띄우는 프로세스는 인자에 $TEST_TMP를 넣어 실패해도 cleanup이 끈다.
+BG_LOOP='while :; do sleep 1; done'
+cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
+#!/bin/bash
+# bg-agent.sh <hook에 줄 명령> <실제로 띄울 명령> <출력 접두어> — BG_HOOK_CMD(hooks.json의 hook 명령)를 sh -c로 부른 뒤
+# Claude Code처럼 eval '…' 뒤에 명령이 더 이어지는(그래서 exec되지 않는) 셸을 자식 그룹 리더로 띄우고 산다.
+# hook 명령은 env로 받는다 — 이 프로세스(가짜 에이전트)의 인자에 hook 경로가 없어야 한다.
+jq -cn --arg c "$1" '{tool_input:{command:$c,run_in_background:true}}' | /bin/sh -c "$BG_HOOK_CMD" >"$3.hook"
+q="'"
+esc="${2//$q/$q\"$q\"$q}"
+perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "eval '$esc' </dev/null && :" "$3.shell" >"$3.out" 2>"$3.err" &
+echo $! >"$3.pid"
+wait $!
+echo $? >"$3.status"
+while :; do sleep 1; done
+EOF
+bg_start() { # 이름 hook명령 [실행명령] → BG_AGENT, BG_GROUP
+  rm -f "$TEST_TMP/$1".*
+  BG_HOOK_CMD="$(jq -r '.hooks[0].command' <<<"$BG_HOOK")${BG_HOOK_SUFFIX:-}" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    bash "$TEST_TMP/bg-agent.sh" "$2" "${3:-$2}" "$TEST_TMP/$1" &
+  BG_AGENT=$!
+  for _ in $(seq 1 50); do [[ -s "$TEST_TMP/$1.pid" ]] && break; sleep 0.1; done
+  BG_GROUP="$(<"$TEST_TMP/$1.pid")"
+}
+bg_watching() { pgrep -f "background-watchdog.sh $BG_AGENT " >/dev/null && echo true || echo false; }
+bg_claimed() { [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] && echo true || echo false; }
+# shellcheck disable=SC2009  # ppid·pgid까지 보여야 해서 pgrep으로 대신할 수 없다
+bg_procs() { ps -A -o pid=,ppid=,pgid=,args= | grep -F -e "$TEST_TMP" -e background-watchdog | grep -v grep | cut -c1-200; }
+bg_group_gone() { # pgid 초 → 그 시간 안에 그룹이 비면 0
+  local i
+  for i in $(seq 1 $(($2 * 10))); do kill -0 -- "-$1" 2>/dev/null || return 0; sleep 0.1; done
+  return 1
+}
+bg_stop_agent() { kill -KILL "$BG_AGENT" 2>/dev/null; wait "$BG_AGENT" 2>/dev/null || true; }
+
+# 에이전트가 강제로 끝나면 그룹 전체(ppid 1로 떨어진 손자 포함)를 끈다. hook 출력은 없다.
+bg_start bg-kill "( bash -c '$BG_LOOP' '$TEST_TMP/bg-orphan' & ); bash -c '$BG_LOOP' '$TEST_TMP/bg-main'"
+sleep 2
+assert_eq "" "$(<"$TEST_TMP/bg-kill.hook")" "hook prints nothing for a background command"
+assert_eq "true" "$(kill -0 -- "-$BG_GROUP" 2>/dev/null && echo true || echo false)" "background server keeps running while the agent lives"
+[[ "$(bg_claimed)" == true ]] || fail "watchdog found and claimed the background command's group (hook run through /bin/sh like hooks.json): agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "process group (with an orphaned grandchild) survives after the agent is gone"
+
+# hook을 감싼 sh가 마지막 명령을 exec하지 않아도(일부 dash) hook의 부모가 아니라 그 위 에이전트를 감시한다.
+BG_HOOK_SUFFIX='; :' bg_start bg-wrap "bash -c '$BG_LOOP' '$TEST_TMP/bg-wrap'"
+sleep 2
+[[ "$(bg_claimed)" == true ]] || fail "watchdog watches the agent even when sh does not exec the hook: agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "group survives the agent when sh did not exec the hook"
+
+# 명령이 먼저 끝나면 감시자도 바로 끝나고, 명령의 출력·종료 코드는 그대로다(작은따옴표가 든 명령도 찾는다).
+bg_start bg-done "sleep 3; printf '%s' \"it's done\"; printf err >&2; exit 7"
+sleep 1
+assert_eq "true" "$(bg_claimed)" "watchdog found a command that contains single quotes"
+for _ in $(seq 1 80); do [[ -s "$TEST_TMP/bg-done.status" ]] && break; sleep 0.1; done
+assert_eq "it's done|err|7" "$(<"$TEST_TMP/bg-done.out")|$(<"$TEST_TMP/bg-done.err")|$(<"$TEST_TMP/bg-done.status")" "command output and exit status are unchanged"
+BG_LEFT=true
+for _ in $(seq 1 30); do [[ "$(bg_watching)" == false ]] && { BG_LEFT=false; break; }; sleep 0.1; done
+assert_eq "false" "$BG_LEFT" "watchdog exits as soon as the command group is empty"
+assert_eq "false" "$(bg_claimed)" "watchdog releases its claim when it ends"
+bg_stop_agent
+
+# 리더 셸이 먼저 끝나도(일부 pid만 꺼진 경우) 그룹에 남은 프로세스가 있으면 감시를 이어 간다.
+bg_start bg-left "bash -c '$BG_LOOP' '$TEST_TMP/bg-left' & sleep 2; exit 0"
+for _ in $(seq 1 50); do [[ -s "$TEST_TMP/bg-left.status" ]] && break; sleep 0.1; done
+sleep 2
+assert_eq "true" "$(bg_watching)" "watchdog keeps watching members left after the leader shell exits"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "group members left by an exited leader shell survive the agent"
+
+# hook이 본 명령과 다른 그룹은 건드리지 않는다(못 찾으면 아무것도 하지 않는다).
+bg_start bg-other "echo not-this-one" "bash -c '$BG_LOOP' '$TEST_TMP/bg-other'"
+sleep 1
+bg_stop_agent
+sleep 4
+assert_eq "true" "$(kill -0 -- "-$BG_GROUP" 2>/dev/null && echo true || echo false)" "watchdog leaves a group it did not match"
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 너무 짧은 첫 줄(cd x 등)은 다른 명령과 헷갈리므로 감시하지 않는다.
+bg_start bg-short "cd /
+bash -c '$BG_LOOP' '$TEST_TMP/bg-short'"
+sleep 1
+assert_eq "false" "$(bg_watching)" "a too-short first line starts no watch"
+bg_stop_agent
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 끄면 감시자를 띄우지 않는다.
+HM_BACKGROUND_WATCHDOG=0 bg_start bg-off "bash -c '$BG_LOOP' '$TEST_TMP/bg-off'"
+sleep 1
+assert_eq "false" "$(bg_watching)" "HM_BACKGROUND_WATCHDOG=0 starts no watchdog"
+bg_stop_agent
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 에이전트를 처음부터 볼 수 없으면 바로 물러난다.
+BG_GONE="$(bash -c 'echo $$' "$TEST_TMP/bg-gone")"
+BG_START=$SECONDS
+"$ROOT/scripts/background-watchdog.sh" "$BG_GONE" " " "sleep 100" "$TEST_TMP/bg-claims"
+assert_eq "0" "$((SECONDS - BG_START > 1))" "watchdog exits at once when the agent is already gone"
+pass "background watchdog cleans the process group"
 
 finish_tests
