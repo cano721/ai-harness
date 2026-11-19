@@ -2051,7 +2051,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/autofix":
             return self._send(200, autofix_state())
         if u.path == "/guide":
-            return self._send(200, hguide.state())
+            return self._send(200, hguide.state(harness=harness_repos(), repos=known_repos()))
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":

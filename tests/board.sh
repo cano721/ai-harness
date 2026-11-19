@@ -1566,4 +1566,98 @@ assert not missing, missing
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "?view=guide" "board skill documents the guide query"
 pass "harness board guide: first steps, flow modes with card links, folded agent-only group, table of contents, first open on the guide (#432)"
 
+# 하네스 안내 카드에서 바로 실행(#442): guide.json의 run이 실행 범위(global·repo·harness)를 정하고,
+# 서버가 실행 가능 여부와 이유(하네스를 깐 저장소 없음·기본 스킬 미설치)를 내려 준다. 실행은 기존 POST /new를 쓴다.
+python3 -I -B -c '
+import json, sys
+root = sys.argv[1]
+raw = json.load(open(root + "/scripts/board/guide.json", encoding="utf-8"))
+for g in raw["groups"]:
+    for i in g["items"]:
+        run = i.get("run")
+        assert run in (None, "global", "repo", "harness"), i
+        if g.get("fold"):
+            assert run is None, ("folded group has no run", i)
+        if i["id"].startswith("agents/") or (i["id"].startswith("templates/") and not i.get("entry")):
+            assert run is None, ("card without a command has no run", i)
+        if i["id"].startswith("templates/") and i.get("entry"):
+            assert run == "harness", ("workflows run only in a harness repository", i)
+        if i["id"].startswith("catalog/"):
+            assert run == "global", ("catalog skills run anywhere", i)
+by = {i["id"]: i for g in raw["groups"] for i in g["items"]}
+assert by["skills/board"].get("run") is None, "the board does not launch itself"
+assert by["skills/setup"]["run"] == "global" and by["skills/harness-update"]["run"] == "global"
+assert by["skills/harness-init"]["run"] == "repo"
+' "$ROOT" || fail "guide.json run scopes are consistent: no run without a command or in the folded group, workflows need a harness, catalog runs anywhere"
+BRUN_T="$TEST_TMP/guide-run"; mkdir -p "$BRUN_T/skills/jira"
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+root, skills = sys.argv[1], sys.argv[2]
+def items(**kw):
+    return {i["id"]: i for g in guide.state(root, **kw)["groups"] for i in g["items"]}
+it = items(harness=[], repos=[], skills_dir=skills)
+wf = it["templates/implement-feature"]
+assert (wf["run"], wf["runnable"], wf["blocked"]) == ("harness", False, "no_harness_repo"), wf
+jira = it["catalog/jira"]
+assert (jira["run"], jira["runnable"], jira["blocked"]) == ("global", False, "not_installed"), jira
+setup = it["skills/setup"]
+assert (setup["run"], setup["runnable"], setup["blocked"]) == ("global", True, None), setup
+assert it["skills/harness-init"]["runnable"] is True and it["skills/harness-init"]["run"] == "repo"
+for k in ("skills/board", "agents/design-reviewer", "templates/ui-review"):
+    assert it[k]["run"] is None and it[k]["runnable"] is False and it[k]["blocked"] is None, it[k]
+open(skills + "/jira/SKILL.md", "w").write("---\nname: jira\n---\n")
+it = items(harness=["/r/one"], repos=["/r/one", "/r/two"], skills_dir=skills)
+assert it["templates/implement-feature"]["runnable"] is True and it["templates/implement-feature"]["blocked"] is None
+assert it["catalog/jira"]["runnable"] is True, it["catalog/jira"]
+st = guide.state(root, harness=["/r/one"], repos=["/r/two"], skills_dir=skills)
+assert st["launch"]["harness"] == ["/r/one"], st["launch"]
+assert st["launch"]["repos"] == ["/r/one", "/r/two"], "repo candidates include the harness repositories"
+assert st["launch"]["home"], st["launch"]
+' "$ROOT" "$BRUN_T/skills" || fail "guide state says which cards can run and why not: no harness repository, catalog skill not installed"
+# 서버: /guide가 격리된 기본 스킬 폴더(HM_CLAUDE_SKILLS_DIR)와 보드가 아는 하네스 저장소로 판정한다.
+BRUN_DATA="$TEST_TMP/guide-run-data"; mkdir -p "$BRUN_DATA/harvest-auto"
+BRUN_PORT="$(free_port)"
+brun_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BRUN_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BRUN_PORT" BOARD_NO_BROWSER=1 \
+    HM_CLAUDE_SKILLS_DIR="$BRUN_T/server-skills" BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BRUN_URL="$(brun_sh open | jq -r '.url')"
+BRUN_BASE="http://127.0.0.1:$BRUN_PORT/guide?t=${BRUN_URL#*t=}"
+brun_item() { curl -s "$BRUN_BASE" | jq -r --arg id "$1" '[.groups[].items[] | select(.id == $id)][0] | "\(.run)|\(.runnable)|\(.blocked)"'; }
+assert_eq "harness|false|no_harness_repo" "$(brun_item templates/implement-feature)" "a workflow card cannot run before any repository has the harness"
+assert_eq "global|false|not_installed" "$(brun_item catalog/jira)" "a catalog card cannot run before setup installs the skill"
+mkdir -p "$BRUN_T/server-skills/jira" "$BRUN_T/repo/.ai-harness"
+printf -- '---\nname: jira\n---\n' >"$BRUN_T/server-skills/jira/SKILL.md"
+git -C "$BRUN_T/repo" init -q
+printf '{}\n' >"$BRUN_T/repo/.ai-harness/harness.json"
+BRUN_REPO="$(cd "$BRUN_T/repo" && pwd -P)"
+jq -cn --arg r "$BRUN_REPO" '{repo:$r}' >"$BRUN_DATA/harvest-auto/runs.jsonl"
+assert_eq "harness|true|null" "$(brun_item templates/implement-feature)" "a workflow card runs once the board knows a harness repository"
+assert_eq "global|true|null" "$(brun_item catalog/jira)" "a catalog card runs once the skill is installed"
+assert_contains "$(curl -s "$BRUN_BASE" | jq -r '.launch.harness | join(" ")')" "$BRUN_REPO" "the guide offers harness repositories as launch candidates"
+assert_eq "true" "$(brun_sh stop | jq -r '.stopped')" "guide run board stops"
+BRUN_FN="$(sed -n '/---- 하네스 안내 ----/,/---- 레퍼런스 보드 ----/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BRUN_FN" "btn('실행', 'ds-btn--sm ds-btn--primary')" "a runnable card has one primary run button"
+assert_contains "$BRUN_FN" "copyBtn('명령 복사', it.cmd, 'ds-btn--sm ds-btn--ghost')" "copying the command becomes the secondary action"
+assert_contains "$BRUN_FN" "'하네스를 깐 저장소가 없습니다'" "a blocked workflow card says why"
+assert_contains "$BRUN_FN" "'아직 설치하지 않았습니다'" "a blocked catalog card says why"
+assert_contains "$BRUN_FN" "toCard('프로젝트 하네스 만들기', 'skills/harness-init')" "the no-harness reason links to the harness card"
+assert_contains "$BRUN_FN" "toCard('처음 셋업', 'skills/setup')" "the not-installed reason links to the setup card"
+assert_contains "$BRUN_FN" "if (SERVER && it.run)" "a screen opened without the board server shows no run button"
+assert_contains "$BRUN_FN" "openNew({" "running a card opens the existing new-session form"
+BRUN_DLG="$(sed -n '/---- 대화 상자: 새 세션/,/let cleaning = null/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BRUN_DLG" "\$('dlg').returnValue = '';" "closing the prefilled form with Esc does not reuse the last ok and start a session"
+assert_contains "$BRUN_DLG" "if (res.ok && !draft)" "the form gets back what the new-session button had after a card run"
+assert_contains "$BRUN_FN" "a.dataset.key = 'why:' + it.id" "each blocked card's reason link keeps its own focus key"
+assert_contains "$(sed -n '/---- 대화 상자: 새 세션/,/let cleaning = null/p' "$ROOT/scripts/board/template.html")" "post('/new'," "the new-session form starts the session through the existing endpoint"
+assert_contains "$BRUN_FN" "'세션을 띄웠습니다 — 작업 현황에서 진행을 봅니다'" "a launched card says where to follow it"
+assert_contains "$BRUN_FN" "goLink('작업 현황 열기', 'list')" "the launch toast links to the work list"
+BRUN_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BRUN_TPL" "보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다." "the reused new-session form explains where questions go"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "실행" "board skill documents running a card"
+pass "harness board guide: run a feature card from the guide with the new-session form, blocked cards say why (#442)"
+
 finish_tests
