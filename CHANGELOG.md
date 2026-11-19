@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **에이전트 세션이 끝나면 백그라운드로 띄운 dev 서버도 정리됩니다** — Claude Code의 Bash 도구가 백그라운드(`run_in_background`)로 실행한 명령마다 감시자가 붙어, 세션이 강제로 끝나도(프로세스 kill 등) 그 명령의 프로세스 그룹(부모가 먼저 끝나 떨어져 나간 worker 포함)을 TERM 뒤 KILL로 끕니다. 명령은 바꾸지 않으므로 권한 확인·출력·종료 코드는 그대로이고, 포그라운드 명령에는 붙지 않습니다. 끄려면 `HM_BACKGROUND_WATCHDOG=0`. 명령 안에서 다시 `&`로 띄우고 바로 끝나는 형태(`npm run dev > log &`), 스스로 `setsid`로 새 세션을 만드는 프로세스, 포그라운드로 시작했다가 백그라운드로 넘어간 명령은 정리하지 못합니다. 세션이 끝난 뒤에도 살려야 하는 프로세스는 `setsid`로 띄우세요. (#423)
+
 ## v0.84.0 (2026-11-19)
 ### 버그 수정
 

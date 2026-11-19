@@ -918,6 +918,7 @@ HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
+HM_BACKGROUND_WATCHDOG=1         # 0이면 백그라운드 Bash 명령에 세션 종료 감시자를 붙이지 않음(Claude Code)
 HM_SETUP_HINT=1                  # 0이면 /setup 안내(첫 세션·카탈로그 추가)를 띄우지 않음. 관리 스킬 갱신은 계속
 HM_TEAM_RULES=                   # 팀 규칙 원본(git URL 또는 로컬 경로, skills/<name>.md). 비우면 저장소 표식(team_rules)을 본다
 HM_TEAM_RULES_REF=               # git 원본의 브랜치·태그·커밋(비우면 기본 브랜치)
