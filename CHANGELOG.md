@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 동작 변경
+
+- **워크플로 러너가 반복되는 repair 실패를 일찍 멈추고 실패한 검사만 다시 실행합니다** — 연속된 두 repair 라운드에서 같은 검사가 같은 핵심 오류(실패 위치·메시지, 경로·시각·숫자는 정규화)로 실패하면 그래프 `limits.max_identical_repair_failures`(기본 2)에 따라 `user_decision`으로 넘기고 사유에 반복된 실패를 적습니다. 빌드 도구의 꼬리 요약줄은 비교하지 않아 실패한 테스트가 바뀌는 진전은 계속 고칩니다. 오류 위치가 변경 파일 밖의 의존 산출물(`node_modules`·가상환경·`site-packages`·`vendor`)뿐인 환경 오류는 repair 없이 바로 넘기며, 스택 프레임·보고서 경로는 근거로 쓰지 않습니다. repair에서는 직전 실패 검사만 먼저 실행하고 통과하면 전체 필수 검사를 확정 실행합니다. 같은 검사 명령은 한 라운드에서 한 번만 실행합니다.
+
 ## v0.84.0 (2026-11-19)
 ### 버그 수정
 

@@ -396,6 +396,78 @@ assert_eq "30:brief" "$DRIVER_RC:$(run_state .node)" "a brief without a verifica
 FAKE_CHECK="grep -q fixed feature.txt" start_and_approve fixcheck
 assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing driver-run check goes to repair, then review"
 assert_eq "deliver;repair;review" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "check failure skips the reviewer and repairs first"
+
+# 같은 정규화 실패가 연속되면 수리를 더 반복하지 않고 그래프의 repair -> user_decision 전이로 사람에게 넘긴다.
+# 검사 출력은 파일로 둬서 종료 사유의 시그니처가 로그에 찍힌 명령 문자열이 아니라 실패 출력에서 왔음을 확인한다.
+STALL_OUT="$DRIVER_TMP/stall-output"
+mkdir -p "$STALL_OUT"
+printf 'src/app.ts:42: error E12 at 2026-11-19T12:34:56 took 123ms\n' >"$STALL_OUT/same.txt"
+FAKE_CHECK="cat '$STALL_OUT/same.txt' >&2; false" start_and_approve repeat_failure_signature
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "two matching failed checks stop repair at the repeat limit"
+assert_contains "$DRIVER_OUT" "src/app.ts:<n>: error E<n> at <time> took <duration>" "the repeated failure decision names its normalized signature"
+assert_eq "repair>user_decision" "$(run_state '.history | last | .from + ">" + .to')" "the stall goes to a person through the graph's repair escalation edge"
+
+# 실행마다 바뀌는 객체 주소·출력 순서만 다른 실패는 같은 실패다.
+ADDR_COUNT="$DRIVER_TMP/addr-count"
+FAKE_CHECK="n=0; [[ -f '$ADDR_COUNT' ]] && n=\$(cat '$ADDR_COUNT'); n=\$((n + 1)); printf '%s' \"\$n\" >'$ADDR_COUNT'; if [[ \$((n % 2)) == 1 ]]; then printf 'FAILED tests/test_order.py::test_total - assert <app.Order object at 0x7f8a3c10b2e0> == 110\\nFAILED tests/test_order.py::test_tax - assert 0 == 10\\n'; else printf 'FAILED tests/test_order.py::test_tax - assert 0 == 10\\nFAILED tests/test_order.py::test_total - assert <app.Order object at 0x10c4d2a90> == 110\\n'; fi; false" start_and_approve address_noise_repeat
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "object addresses and output order do not hide a repeated failure"
+
+# 핵심 오류가 달라지면 이전 실패와 같은 반복으로 세지 않는다.
+DIFFERENT_FAILURE_COUNT="$DRIVER_TMP/different-failure-count"
+FAKE_CHECK="n=0; [[ -f '$DIFFERENT_FAILURE_COUNT' ]] && n=\$(cat '$DIFFERENT_FAILURE_COUNT'); n=\$((n + 1)); printf '%s' \"\$n\" >'$DIFFERENT_FAILURE_COUNT'; case \"\$n\" in 1) printf 'src/app.ts:1: error first\\n' >&2 ;; 2) printf 'src/app.ts:2: error second\\n' >&2 ;; *) printf 'src/app.ts:3: error third\\n' >&2 ;; esac; false" start_and_approve different_failure_signature
+assert_eq "20:user_decision:3" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a changed failure gets another repair before a repeated new failure stops it"
+
+# 실패한 테스트가 달라도 빌드 도구의 꼬리 요약줄은 같다. 요약줄이 아니라 실패 위치로 시그니처를 만들어 진전하는 수리를 막지 않는다.
+gradle_failure() { # test-name line → Gradle 테스트 실패 출력
+  printf '%s() FAILED\n    org.opentest4j.AssertionFailedError at %s.java:%s\n\n3 tests completed, 1 failed\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task '"'"':test'"'"'.\n> There were failing tests. See the report at: file:///home/u/proj/build/reports/tests/test/index.html\n\nBUILD FAILED in 4s\n' "$1" "$1" "$2"
+}
+gradle_failure FooTest 10 >"$STALL_OUT/gradle-1.txt"
+gradle_failure BarTest 99 >"$STALL_OUT/gradle-2.txt"
+gradle_failure BazTest 7 >"$STALL_OUT/gradle-3.txt"
+GRADLE_COUNT="$DRIVER_TMP/gradle-count"
+FAKE_CHECK="n=0; [[ -f '$GRADLE_COUNT' ]] && n=\$(cat '$GRADLE_COUNT'); n=\$((n + 1)); printf '%s' \"\$n\" >'$GRADLE_COUNT'; [[ \$n -ge 4 ]] && exit 0; cat '$STALL_OUT/gradle-'\$n'.txt'; exit 1" start_and_approve gradle_progress
+assert_eq "0:done:3" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "different failing tests under the same build summary are progress, not a repeat"
+# 테스트 이름 줄에는 오류 낱말이 없고, 실패가 많으면 바뀐 실패가 뒤쪽에 있다. 둘 다 시그니처에 들어가야 진전을 반복으로 세지 않는다.
+jest_failure() { # test-name → jest 실패 출력
+  printf 'FAIL src/total.test.ts\n  ● total › %s\n\n    expect(received).toBe(expected)\n\n    Expected: 110\n    Received: 100\n\n      at Object.<anonymous> (src/total.test.ts:12:5)\n\nTests:       1 failed, 3 passed, 4 total\n' "$1"
+}
+jest_failure "adds tax" >"$STALL_OUT/jest-1.txt"
+jest_failure "rounds total" >"$STALL_OUT/jest-2.txt"
+JEST_COUNT="$DRIVER_TMP/jest-count"
+FAKE_CHECK="n=0; [[ -f '$JEST_COUNT' ]] && n=\$(cat '$JEST_COUNT'); n=\$((n + 1)); printf '%s' \"\$n\" >'$JEST_COUNT'; [[ \$n -ge 3 ]] && exit 0; cat '$STALL_OUT/jest-'\$n'.txt'; exit 1" start_and_approve jest_progress
+assert_eq "0:done:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a different failing test name is progress even without an error word on its line"
+many_failures() { # count → Gradle 실패 count개
+  local i
+  for i in $(seq 1 "$1"); do printf 'Case%sTest > check() FAILED\n    org.opentest4j.AssertionFailedError at Case%sTest.java:5\n' "$i" "$i"; done
+  printf '\nBUILD FAILED in 9s\n'
+}
+many_failures 7 >"$STALL_OUT/many-1.txt"
+many_failures 6 >"$STALL_OUT/many-2.txt"
+many_failures 5 >"$STALL_OUT/many-3.txt"
+MANY_COUNT="$DRIVER_TMP/many-count"
+FAKE_CHECK="n=0; [[ -f '$MANY_COUNT' ]] && n=\$(cat '$MANY_COUNT'); n=\$((n + 1)); printf '%s' \"\$n\" >'$MANY_COUNT'; [[ \$n -ge 4 ]] && exit 0; cat '$STALL_OUT/many-'\$n'.txt'; exit 1" start_and_approve many_failures_progress
+assert_eq "0:done:3" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "fixing the last of many failures is progress, not a repeat"
+
+# 환경 오류는 실패 원인 위치가 변경 파일 밖 의존 산출물일 때만이다. 그때는 repair 없이 바로 사람에게 넘긴다.
+printf "node_modules/antd/lib/input/Input.d.ts(3,5): error TS1005: ',' expected.\n" >"$STALL_OUT/tsc-dependency.txt"
+FAKE_CHECK="cat '$STALL_OUT/tsc-dependency.txt'; false" start_and_approve dependency_output_failure
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failure located in a dependency outside the changes goes to a person without a repair"
+[[ "$(<"$FAKE_LOG")" != *repair* ]] || fail "an environment failure is not repaired"
+assert_contains "$DRIVER_OUT" "node_modules/antd/lib/input/Input.d.ts" "the environment decision names the dependency location"
+
+# 보고서 경로(build/reports)와 스택 프레임(node_modules)은 원인 위치가 아니다. 이런 실패는 환경 오류로 넘기지 않고 고친다.
+gradle_failure FooTest 10 >"$STALL_OUT/gradle-report.txt"
+FAKE_CHECK="cat '$STALL_OUT/gradle-report.txt'; grep -q fixed feature.txt" start_and_approve gradle_report_path
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a Gradle report path is not a dependency failure"
+printf 'FAIL src/total.test.ts\n  ● total › adds tax\n\n    expect(received).toBe(expected)\n\n      at Object.<anonymous> (src/total.test.ts:5:7)\n      at Promise.then.completed (node_modules/jest-circus/build/utils.js:298:28)\n' >"$STALL_OUT/jest-stack.txt"
+FAKE_CHECK="cat '$STALL_OUT/jest-stack.txt'; grep -q fixed feature.txt" start_and_approve jest_stack_frame
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a node_modules stack frame is not a dependency failure"
+
+# repair는 직전 실패 check만 다시 실행하고, 통과 뒤 전체 required set을 한 번 확정한다.
+REPAIR_CHECK_LOG="$DRIVER_TMP/repair-checks.log"
+FAKE_CHECK="printf 'A\\n' >>'$REPAIR_CHECK_LOG'; grep -q fixed feature.txt" start_and_approve repair_failed_checks_only --check "printf 'B\\n' >>'$REPAIR_CHECK_LOG'" --check "printf 'B\\n' >>'$REPAIR_CHECK_LOG'"
+assert_eq "3" "$(grep -c '^A$' "$REPAIR_CHECK_LOG")" "the failed check runs for the initial failure, repair, and final confirmation"
+assert_eq "2" "$(grep -c '^B$' "$REPAIR_CHECK_LOG")" "a passing duplicated command runs once initially and once in final confirmation"
 start_and_approve review_blocks
 assert_eq "20:user_decision:$(jq -r '.limits.max_repair_attempts' "$FEATURE_GRAPH")" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "blocking findings stop at user_decision after the graph's repair limit"
 assert_eq "$(($(jq -r '.limits.max_repair_attempts' "$FEATURE_GRAPH") + 1))" "$(grep -c '^review read-only' "$FAKE_LOG")" "every repair is followed by a re-review"
@@ -935,6 +1007,13 @@ assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "reproduce 
 FAKE_CHECK="grep -q fixed feature.txt" bug_run bug_fixcheck
 assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing verify goes to repair, then verify and review again"
 assert_eq "fix;repair;review" "$(grep -E '^(fix|repair|review) ' "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the failed check is repaired before review"
+# verify 노드의 첫 실패(attempts 0)는 환경 오류로 확정되지 않으면 repair를 먼저 받는다. 같은 실패가 repair 뒤에도 반복될 때만 멈춘다.
+FAKE_CHECK="cat '$STALL_OUT/same.txt'; false" bug_run bug_verify_stall
+assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a non-environment verify failure is repaired before the repeat stops it"
+assert_eq "2" "$(grep -c '^repair ' "$FAKE_LOG")" "the first verify failure is not escalated without a repair"
+FAKE_CHECK="cat '$STALL_OUT/tsc-dependency.txt'; false" bug_run bug_verify_dependency
+assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a confirmed dependency failure at verify goes to a person without a repair"
+assert_eq "repair>user_decision" "$(run_state '.history | last | .from + ">" + .to')" "the environment decision follows the bug-fix graph's escalation edge"
 bug_run bug_noop
 assert_eq "30:incomplete" "$DRIVER_RC:$(run_state .status)" "a bug fix without a change is not done"
 bug_run bug_fix_noop
