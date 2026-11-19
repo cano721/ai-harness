@@ -6,6 +6,26 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## v0.84.0 (2026-11-19)
+### 버그 수정
+
+- **작업 폴더가 Claude Code 설정 디렉터리 안이면 러너가 시작 전에 알려 주고, 권한에 막힌 수정은 시도 횟수로 세지 않습니다** — Claude Code는 자기 설정 디렉터리(`~/.claude`, `CLAUDE_CONFIG_DIR`) 안 파일을 무인 세션이 고치거나 읽지 못하게 막습니다. 실측에서 저장소가 그 아래(`~/.claude/jobs/...`)였을 때 `/design-polish`의 claude 런타임 fix 세션이 Edit·캡처 Read를 모두 거부당해 러너가 `fix changed nothing`으로 멈췄고, 그때마다 수리 횟수(최대 3)가 하나씩 줄어 사람이 손으로 되돌려야 했습니다. 이제 `workflow-driver.sh`(feature·bug-fix·review·polish)는 claude 런타임에서 저장소나 실행 폴더가 그 안이면 `start`·`resume` 전에 이유와 우회 방법(바깥 worktree, `HM_FEATURE_RUNS_DIR`, `--runtime codex`)을 알리며 거부하고, fix·repair 세션이 권한에 막혀 아무것도 못 바꿨으면 막힌 호출을 보여 주고 시도 횟수를 되돌립니다(권한 때문에 바꾸지 못한 것은 모델의 실패가 아니라 환경 실패). `landing-run.sh init`은 Claude 세션의 무인 실행이면 거부하고, 대화형이면 매번 승인을 묻게 된다고 알립니다. codex 런타임은 이 경로를 막지 않아 그대로 둡니다. (#411)
+
+- **`/design-polish`가 깨진 레이아웃을 통과시키지 않습니다** — 실측에서 다듬은 뒤의 360폭 목록 화면에 위쪽 메뉴 줄 아래 큰 빈 띠(본문이 짧을 때 사이드바 줄이 늘어나는 #365 버그)가 그대로 남았는데 design-audit 96점·독립 검토 통과로 끝났습니다. 채점 기준은 토큰·부품·위계를 보고 빈 띠를 보지 않았고, 검토는 기준선과 비교해 "나빠진 것"만 찾아 기준선부터 있던 깨짐을 놓쳤습니다. 이제 측정 노드가 캡처마다 같은 페이지 상태에서 러너가 준 레이아웃 검사(`layout-probe/1`)를 브라우저로 실행해 결과를 측정 JSON에 넣습니다: 문서 가로 넘침, 본문(`main`) 앞 콘텐츠 없는 큰 띠, 넘침을 숨긴 상자가 글자 줄을 가로지름, 배경이 뷰포트·열 높이를 못 채움. 말줄임·줄 수 제한·접힌 영역·화면 낭독 전용 요소·가로 스크롤 탭·sticky 사이드바·바닥 고정 푸터·히어로 여백은 의도된 모양이라 잡지 않습니다(깨진·정상 고정 페이지로 검증). 러너는 대상 화면의 깨짐은 기준선에 있었어도, 형제 화면은 새로 생긴 깨짐만 통과를 막고, 검사 결과가 없는 측정은 측정으로 치지 않습니다. 진단은 기준선 깨짐을 주요 항목으로 올리고, 진단·검토 프롬프트는 캡처에서 빈 띠·넘침·잘림을 먼저 봅니다. 1280 상세 캡처에서 사이드바 배경이 900px에서 끊겨 보인 것은 버그가 아니라 전체 페이지 캡처의 특성입니다(sticky 사이드바는 스크롤하면 뷰포트를 계속 채움) — 검토가 이를 결함으로 읽지 않게 프롬프트에 적었습니다. (#409)
+
+- **편집 가드가 실제로 읽은 문서만 '읽음'으로 인정합니다** — `/harness-init`이 만드는 편집 가드(`.ai-harness/hooks/direct-edit-guard.sh`) 명세가 transcript에서 `"file_path":"…/code-conventions.md"`를 문자열로 찾아, Edit·Write로 그 문서를 **쓰기만 한** 세션도 읽은 것으로 통과했습니다. 이제 명세는 jq로 transcript 줄을 파싱해 짝 결과가 성공인 읽기만 인정합니다 — Read 도구 호출, 또는 그 문서를 대상으로 한 읽기 형태 셸 명령(`cat`·`head`·`sed -n`·`grep` 등, 리다이렉트·`tee`·`sed -i`·명령 연결이 있으면 제외. Codex 포함). Write·Edit·MultiEdit, 실패한 읽기는 읽음이 아닙니다. 바탕이 되는 예시 가드 `skills/harness-init/references/direct-edit-guard.sh`를 함께 두었고, `--sync`의 워크플로 계약 점검이 옛 방식 가드를 `guard_read_by_grep`으로 짚어 고치는 diff를 제안합니다. (#372)
+
+- **러너 `resume`이 멈춘 뒤 바뀐 저장소를 모른 채 이어 가지 않습니다** — `workflow-driver.sh resume`은 상태 파일만 보고 이어 갔습니다. 멈춘 뒤 다른 커밋이 생겼으면 쓰기 노드가 파일부터 고친 뒤에야 HEAD 이동을 알아챘고, 사람이 고친 미커밋 수정은 러너의 체크포인트 커밋·push에 섞였으며, `done`인 실행은 그 뒤 코드가 바뀌어도 이전의 "필수 검사 통과"를 그대로 돌려줬습니다. 이제 러너가 멈출 때와 스스로 HEAD를 옮길 때(체크포인트 커밋·publish) 기준점(HEAD + 작업 트리 지문)을 남기고, `resume`·`approve`·`revise`(예전 진입점 `implement-feature-driver.sh` 포함)는 에이전트를 부르기 전에 대조합니다. 다르면 아무것도 실행하지 않고 바뀐 커밋·파일과 남은 노드·검사를 보여 준 뒤 exit 20으로 멈춥니다. 바뀐 것을 이 실행에 넣으려면 `resume --accept-changes`를 씁니다. 리뷰를 지난 노드(publish·remote_ci·merge·post_merge_verify)와 끝난 실행(`done`·`user_decision`·polish `fix_list`)은 받아들인 변경이 검증·리뷰를 건너뛰므로 새 실행으로 검사합니다. 불변식 위반(exit 40)으로 멈춘 상태는 기준점이 되지 않고, Harness Board는 이렇게 멈춘 실행을 사람 판단 필요로 보입니다. 같은 기준점의 재개는 그대로입니다. 프로젝트의 러너 사본은 `/harness-init --sync`로 갱신됩니다. (#371)
+
+### 개선
+
+- **macOS 기본 bash에서 회귀 테스트가 중간에 끊기지 않게 검사합니다** — macOS `/bin/bash` 3.2는 명령 인자인 `"$(... "{a, b}" ...)"`처럼 큰따옴표 명령 치환 안의 큰따옴표 문자열에 든 쉼표 있는 중괄호를 펼칩니다. 보드 단언이 이 모양이라 node가 깨진 JS를 받아 로컬 스위트가 멈췄고(CI의 bash 5에서는 재현되지 않아 늦게 발견), 같은 모양이 보드 자동 수정 Origin 단언에도 남아 있었습니다(요청 본문이 둘로 쪼개져 전송). 남은 곳을 고치고, 따옴표 구조를 읽어 이 모양을 찾는 `tests/bash32-check.py`를 `tests/run.sh --lint`와 core 영역(전체 실행·CI)에 넣었습니다. 대입(`x="$(...)"`)·`[[ ]]`·작은따옴표·heredoc은 안전하므로 걸지 않습니다. (#410)
+
+### 업데이트 후 해야 할 일
+
+- 기존 프로젝트는 `/harness-init --sync --apply`로 새 러너(`.ai-harness/workflows/workflow-driver.sh`)를 받습니다.
+- **편집 가드를 켠 저장소는 가드를 갱신하세요** — 기존 `.ai-harness/hooks/direct-edit-guard.sh`는 자동으로 바뀌지 않습니다. 그 저장소에서 `/ai-harness:harness-init --sync`를 실행해 "보호 파일 후속 조치" 표의 `guard_read_by_grep` 행을 승인하거나, 플러그인의 `skills/harness-init/references/direct-edit-guard.sh`를 복사해 `SOURCE_RE`·`TEST_RE`만 저장소의 소스·테스트 경로로 바꿉니다. 편집 가드를 쓰지 않는 저장소는 할 일이 없습니다. (#372)
+
 ## v0.83.0 (2026-11-18)
 ### 새 기능
 

@@ -22,15 +22,16 @@
 #   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
 #     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
 #   - 병합: 개인 자동화 단계가 merge·deploy면 원격 CI 뒤 merge 노드에서 이 스크립트가 PR 호스트(gh·Bitbucket API)에서 직접 읽은 상태로
-#     병합 조건(사람 승인·원격 CI·충돌 없음·draft 아님)을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+#     저장소 호스트 규칙(브랜치 보호의 필수 승인·필수 체크)과 충돌 없음·draft 아님·변경 요청 없음을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
 #     병합 뒤 post_merge_verify가 단계에 맞는 검증(타깃 CI·배포 확인 명령·스모크 명령)을 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
 #     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
 #   - 자동화 단계: 병합 여부는 사용자 설정(~/.ai-harness/config)의 HM_DELIVERY_LEVEL(pr|merge|deploy, 저장소별은 HM_DELIVERY_LEVEL_REPOS)만
-#     정하고, 없으면 PR까지다. git_policy는 커밋·PR 범위만 정한다 — 예전 값 merge는 pr-only로 읽고 안내를 남긴다. 병합 조건 최소치·방식은
-#     HM_MERGE_*(없으면 네 조건 모두·승인 1·squash), 기준 브랜치·배포·스모크 명령은 저장소 merge_policy(저장소 사실)에서 읽는다.
-#     merge_policy의 require·min_approvals·method는 쓰지 않는다. 병합은 호스트가 기준 브랜치에 필수 승인을 거는 보호 규칙을 읽을 수
-#     있을 때만 하고, 보호가 없거나 읽지 못하면 사람에게 넘긴다.
+#     정하고, 없으면 PR까지다. git_policy는 커밋·PR 범위만 정한다 — 예전 값 merge는 pr-only로 읽고 안내를 남긴다. 기준 브랜치·배포·스모크
+#     명령은 저장소 merge_policy(저장소 사실)에서 읽는다. 병합 조건과 방식은 하네스가 정하지 않고 저장소 호스트 설정을 따른다:
+#     필수 승인 수·필수 체크는 기준 브랜치 보호 규칙에서(보호가 없으면 승인 없이 병합), 방식은 저장소가 허용한 방식(GitHub)·기본 전략(Bitbucket).
+#     호스트가 강제하지 않는 경우(관리자 우회·Bitbucket 비강제 merge check)에도 러너가 그 규칙을 직접 판정한다. 보호 규칙을 읽지 못하면 사람에게 넘긴다.
+#     예전 HM_MERGE_*와 merge_policy의 require·min_approvals·method는 쓰지 않는다.
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
@@ -49,8 +50,10 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [
           [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
   revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
           --select "<ID,ID...>"                         polish만: 고칠 목록에서 고칠 항목을 바꾼다(모델을 부르지 않는다). 다시 승인을 기다린다
-  resume                                                승인을 확인하고 멈춘 노드부터 이어 간다
-  approve                                               터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
+  resume  [--accept-changes]                            승인을 확인하고 멈춘 노드부터 이어 간다
+  approve [--accept-changes]                            터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
+          resume·approve·revise는 에이전트를 부르기 전에 러너가 멈춘 때의 기준점(HEAD·작업 트리)과 지금을 대조한다.
+          바뀌었으면 차이와 남은 검사를 보이고 20으로 멈춘다. 바뀐 것을 이 실행에 넣을 때만 --accept-changes로 기준점을 옮긴다
   status                                                현재 노드·이력·다음 행동을 보인다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
@@ -78,6 +81,7 @@ WORKFLOW=""
 CLI_CHECKS=()
 MONITOR_ERROR=""
 INVESTIGATION_FILE=""
+ACCEPT_CHANGES=""
 SELECT=""
 while (($#)); do
   case "$1" in
@@ -88,6 +92,7 @@ while (($#)); do
     --request) [[ $# -ge 2 ]] || usage; REQUEST="$2"; shift 2 ;;
     --request-file) [[ $# -ge 2 && -f "$2" ]] || usage; REQUEST="$(<"$2")"; shift 2 ;;
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
+    --accept-changes) ACCEPT_CHANGES=1; shift ;;
     --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
@@ -107,6 +112,9 @@ esac
 [[ -z "$INVESTIGATION_FILE" || ( "$CMD" == start && "$WORKFLOW" == bug-fix ) ]] \
   || { printf -- '--investigation is an option of start --workflow bug-fix\n' >&2; exit 2; }
 
+[[ -z "$ACCEPT_CHANGES" || "$CMD" == resume || "$CMD" == approve ]] \
+  || { printf -- '--accept-changes is an option of resume and approve\n' >&2; exit 2; }
+
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
 
@@ -115,6 +123,36 @@ RUNS_DIR="${HM_FEATURE_RUNS_DIR:-$HOME/.ai-harness/runs}/$(basename "$REPO")-$(p
 # 프롬프트·세션 로그에 코드가 담긴다. 실행 디렉토리는 본인만 읽는다.
 mkdir -p "$RUNS_DIR"
 chmod 700 "$RUNS_DIR" 2>/dev/null || true
+# Claude Code는 자기 설정 디렉터리(~/.claude, CLAUDE_CONFIG_DIR) 안의 파일을 무인 세션이 고치거나 읽지 못하게 막는다.
+# 저장소나 실행 폴더가 그 안이면 fix 세션의 Edit·캡처 Read가 모두 거부돼 "fix changed nothing"으로 수리 횟수만 쓴다(#411).
+claude_config_dir_of() { # path → stdout: 그 경로를 품은 Claude 설정 디렉터리(아니면 1)
+  local p d c
+  p="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  for d in "${CLAUDE_CONFIG_DIR:-}" "$HOME/.claude"; do
+    [[ -n "$d" ]] || continue
+    c="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$p/" in "$c"/*) printf '%s' "$c"; return 0 ;; esac
+  done
+  return 1
+}
+refuse_claude_protected() { # runtime — claude 런타임만. codex sandbox는 이 경로를 막지 않는다.
+  [[ "$1" == claude ]] || return 0
+  local dir
+  if dir="$(claude_config_dir_of "$REPO")"; then
+    printf 'refused: the repository %s is inside the Claude Code configuration directory %s. Claude Code does not let a non-interactive session edit or read files there, so every write node would be denied and use up repair attempts. Work in a clone or worktree outside it (git worktree add <path outside %s> <branch>), or use --runtime codex\n' "$REPO" "$dir" "$dir" >&2
+    exit 2
+  fi
+  if dir="$(claude_config_dir_of "$RUNS_DIR")"; then
+    printf 'refused: the run folder %s is inside the Claude Code configuration directory %s, so sessions could not read the captures and notes saved there. Set HM_FEATURE_RUNS_DIR to a folder outside it, or use --runtime codex\n' "$RUNS_DIR" "$dir" >&2
+    exit 2
+  fi
+}
+# claude 세션이 권한에 막힌 도구 호출(result의 permission_denials). 모델이 못 한 것이 아니라 환경이 막은 것이다.
+session_denials() { # label → stdout: "Edit a.css, Read b.png" (없으면 빈 문자열)
+  [[ -s "$RUN/$1.json" ]] || return 0
+  jq -rs --arg repo "$REPO/" '[.[] | (.permission_denials // [])[] | "\(.tool_name) \(.tool_input.file_path // .tool_input.path // .tool_input.command // "" | tostring | ltrimstr($repo) | .[-120:])"]
+    | unique | .[:5] | join(", ")' "$RUN/$1.json" 2>/dev/null || true
+}
 # latest는 워크플로와 무관한 최근 실행, latest-<워크플로>는 그 워크플로의 최근 실행이다. --workflow 없는 resume은 latest를 잇는다.
 latest_file() { # [workflow]
   if [[ -z "${1:-}" ]]; then printf '%s/latest' "$RUNS_DIR"; else printf '%s/latest-%s' "$RUNS_DIR" "$1"; fi
@@ -258,7 +296,66 @@ checkpoint() { # node
   { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "wip($TEMPLATE): $1 · run $RUN_ID"; } >"$RUN/checkpoint.log" 2>&1 \
     || finish incomplete 30 "checkpoint commit after $1 failed; see $RUN/checkpoint.log. Fix the cause and run resume"
   state_set '.head = $h | .checkpoints += [$h]' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  save_baseline
   log "checkpoint commit after $1: $(git -C "$REPO" rev-parse --short HEAD)"
+}
+
+# 기준점: 러너가 마지막으로 본 저장소 상태(HEAD·작업 트리 지문, 차이를 보일 트리 객체). 러너가 멈출 때(종료 trap)와
+# 러너 자신이 HEAD를 옮길 때(체크포인트·publish) 남긴다. 그 뒤의 변경은 러너가 모르는 변경이다.
+save_baseline() {
+  state_set '.repo_baseline = {head: $h, fingerprint: $f, tree: $tr, at: $t}' --arg h "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" \
+    --arg f "$(fingerprint)" --arg tr "$(worktree_tree 2>/dev/null || true)" --arg t "$(now_utc)"
+}
+
+# 이어 가기 전에 기준점과 지금을 대조한다. 같으면 그대로, 다르면 에이전트를 부르기 전에 차이·남은 검사를 보이고 멈춘다.
+# 기준점이 없는 이전 버전의 실행은 HEAD만 대조한다. --accept-changes는 진행 중인 실행의 기준점만 옮긴다 — 끝난 실행의 성공은 바뀐 코드를 검사한 것이 아니다.
+check_baseline() {
+  local saved_head saved_fp saved_tree head node report tree
+  saved_head="$(state '.repo_baseline.head // .head // .start_head')"
+  saved_fp="$(state '.repo_baseline.fingerprint // ""')"
+  saved_tree="$(state '.repo_baseline.tree // ""')"
+  head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)"
+  [[ "$head" != "$saved_head" || ( -n "$saved_fp" && "$(fingerprint)" != "$saved_fp" ) ]] || return 0
+  node="$(state .node)"
+  report="$RUN/baseline-changes.txt"
+  {
+    printf 'saved baseline: HEAD %s at %s\n' "$saved_head" "$(state '.repo_baseline.at // "an older run (HEAD only)"')"
+    if [[ "$head" != "$saved_head" ]]; then
+      printf 'HEAD is now %s\n' "$head"
+      if git -C "$REPO" cat-file -e "$saved_head^{commit}" 2>/dev/null; then
+        printf 'commits since the baseline:\n'
+        git -C "$REPO" log --oneline -n 20 "$saved_head..HEAD" 2>/dev/null | sed 's/^/  + /'
+        git -C "$REPO" log --oneline -n 20 "HEAD..$saved_head" 2>/dev/null | sed 's/^/  - /'
+      fi
+    fi
+    printf 'changed files since the baseline:\n'
+    tree="$(worktree_tree 2>/dev/null || true)"
+    if [[ -n "$saved_tree" && -n "$tree" ]] && git -C "$REPO" cat-file -e "$saved_tree^{tree}" 2>/dev/null; then
+      git -C "$REPO" diff --name-status "$saved_tree" "$tree" | sed 's/^/  /'
+    else
+      git -C "$REPO" status --short --untracked-files=all | sed 's/^/  /'
+    fi
+    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
+  } >"$report"
+  while IFS= read -r line; do log "$line"; done <"$report"
+  if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
+    finish baseline_changed 20 "the repository changed after the run ended at $node, so its result no longer covers the code; undo the change and resume, or start a new run to check it (see $report)"
+  fi
+  # 리뷰를 지난 변경만 push·병합된다. 그 뒤에 받아들인 변경은 검증·리뷰를 다시 거치지 않으므로 새 실행으로 보낸다.
+  case "$node" in
+    publish|remote_ci|merge|post_merge_verify)
+      finish baseline_changed 20 "the repository changed after the runner stopped at $node, past review; the change would skip verify and review. Undo it and resume, or start a new run for it (see $report)" ;;
+  esac
+  if [[ -z "$ACCEPT_CHANGES" ]]; then
+    # 상태가 running이면 러너가 기준점을 남기지 못하고 끊긴 것이다(강제 종료). 바뀐 것은 러너 자신의 하다 만 작업일 수 있다.
+    if [[ "$(state .status)" == running ]]; then
+      finish baseline_changed 20 "the runner was cut off at $node without recording where it stopped, so these changes may be its own unfinished work; nothing ran. If they are, take them in with resume --accept-changes; otherwise undo them and resume (see $report)"
+    fi
+    finish baseline_changed 20 "the repository changed after the runner stopped at $node; nothing ran. Undo the change and resume, or take it into this run with resume --accept-changes (see $report)"
+  fi
+  state_set '.head = $h | .baseline_accepted += [{from: (.repo_baseline.head // .head), to: $h, at: $t}]' --arg h "$head" --arg t "$(now_utc)"
+  save_baseline
+  log "accepted the changes since the baseline (--accept-changes); continuing at $node"
 }
 
 go() { # from outcome → 그래프에 선언된 전이만 따른다
@@ -675,6 +772,7 @@ $(brief_context)" "$PUBLISH_SCHEMA"
   state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
     --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg u "$pr_url" \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
+  save_baseline
   if [[ "$problems" == "[]" ]]; then
     go publish published_or_not_required
   else
@@ -820,10 +918,23 @@ pr_merge() { # url method head
   case "$(pr_provider "$1")" in
     github) (cd "$REPO" && gh pr merge "$1" "--$2" --match-head-commit "$3") ;;
     bitbucket)
-      # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었고, rebase에 맞는 전략은 없다.
-      [[ "$2" != rebase ]] || { echo "method rebase is not supported for Bitbucket; set HM_MERGE_METHOD to squash or merge" >&2; return 1; }
-      bb_api POST "$(bb_path "$1")/merge" \
-        "$(jq -cn --arg m "$2" '{merge_strategy: (if $m == "merge" then "merge_commit" else "squash" end), close_source_branch: false}')" >/dev/null ;;
+      # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었다. 전략을 넘기지 않아 저장소 기본 전략으로 병합한다.
+      bb_api POST "$(bb_path "$1")/merge" '{"close_source_branch": false}' >/dev/null ;;
+  esac
+}
+# 저장소가 정한 병합 방식. GitHub는 기본 방식이 없어 저장소가 허용한 방식 중 squash → merge → rebase 순으로 고른다.
+# Bitbucket은 전략을 넘기지 않으면 저장소 기본 전략을 쓴다. 허용 방식을 읽지 못하면 실패(stderr에 이유)한다.
+merge_method() { # pr-url
+  local slug out
+  case "$(pr_provider "$1")" in
+    github)
+      slug="$(repo_slug "$1")"
+      out="$(cd "$REPO" && gh api "repos/${slug#*/}" 2>&1)" || { printf '%s\n' "$(head -c 200 <<<"$out")" >&2; return 1; }
+      jq -re 'if .allow_squash_merge == true then "squash" elif .allow_merge_commit == true then "merge"
+        elif .allow_rebase_merge == true then "rebase" else empty end' <<<"$out" \
+        || { echo "the repository settings do not say which merge methods are allowed" >&2; return 1; } ;;
+    bitbucket) echo "repository default" ;;
+    *) echo "unsupported pull request host: $1" >&2; return 1 ;;
   esac
 }
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601? // empty'; }
@@ -886,13 +997,12 @@ branch_protection() { # pr-url base
   jq -cn --argjson a "$approvals" --argjson c "$checks" '{approvals: $a, checks: $c}'
 }
 
-# merge: 시작 때 정한 병합 조건(개인 HM_MERGE_* 또는 기본값)을 PR 호스트에서 읽은 상태로 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
+# merge: 저장소 호스트 규칙(기준 브랜치 보호)과 PR 상태를 호스트에서 직접 읽어 판정하고, 모두 맞을 때만 head를 고정해 저장소의 방식으로 병합한다.
 merge() {
-  local url head facts blocked="[]" unmet="[]" mp err origin method i merged_epoch protection
+  local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
-  method="$(jq -r .method <<<"$mp")"
   [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
   if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
@@ -917,40 +1027,41 @@ merge() {
         merged_epoch="$(iso_epoch "$(jq -r .merged_at <<<"$facts")")"
         [[ -n "$(jq -r .merge_commit <<<"$facts")" ]] \
           || finish incomplete 30 "the pull request is merged but the host has not reported the merge commit yet; run resume to check again"
-        state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then $m else "outside the runner" end),
+        state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then (.merge.method // "by the runner") else "outside the runner" end),
             approvals: (.merge.approvals // []), merged_at: $f.merged_at, merged_epoch: ($e | tonumber)}' \
-          --argjson f "$facts" --arg m "$method" --arg e "${merged_epoch:-$(date -u +%s)}"
+          --argjson f "$facts" --arg e "${merged_epoch:-$(date -u +%s)}"
         log "the pull request is merged: $(jq -r .merge_commit <<<"$facts")"
         go merge merged
         return ;;
       CLOSED) blocked='["the pull request was closed without merging"]' ;;
     esac
   fi
-  # 팀 통제는 호스트 브랜치 보호에 있다. 필수 승인이 걸린 기준 브랜치에만 병합하고, 호스트의 필수 승인 수·필수 체크를
-  # 병합 조건의 하한으로 더한다. 개인 단계 없이 시작한 이전 버전의 실행을 resume해도 같은 확인을 거친다.
+  # 병합 조건은 저장소 호스트 규칙이다. 기준 브랜치 보호의 필수 승인 수·필수 체크를 조건으로 쓰고(보호가 없으면 승인 없이 병합),
+  # 호스트가 강제하지 않아도 러너가 직접 판정한다. 규칙을 읽지 못하면 모르는 채로 병합하지 않는다. 방식은 저장소 설정을 따른다.
+  # 이전 버전이 시작 때 정한 require·min_approvals·method(개인 HM_MERGE_* 또는 기본값)는 resume에서도 쓰지 않는다.
   if [[ "$blocked" == "[]" ]]; then
     if ! protection="$(branch_protection "$url" "$(jq -r .base <<<"$mp")" 2>"$RUN/protection.why")"; then
       blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" --arg e "$(head -c 300 "$RUN/protection.why")" \
-        '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only into a branch the host protects with required approvals — merge by hand or let the runner read the protection"]' <<<"$blocked")"
-    elif [[ "$(jq -r .approvals <<<"$protection")" -lt 1 ]]; then
-      blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" \
-        '. + ["\($b) has no host branch protection that requires an approving review; the runner merges only into a protected branch — protect it on the host or merge by hand"]' <<<"$blocked")"
+        '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only by the rules the repository sets — merge by hand or let the runner read the protection"]' <<<"$blocked")"
+    elif ! method="$(merge_method "$url" 2>"$RUN/method.why")"; then
+      blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" \
+        '. + ["cannot read which merge methods the repository allows (\($e)); merge by hand"]' <<<"$blocked")"
     else
       state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$(jq -r .base <<<"$mp")" --arg t "$(now_utc)"
-      mp="$(jq -c --argjson p "$protection" '.require = ((.require + ["human_approval"]) | unique)
-        | .min_approvals = ([.min_approvals, $p.approvals] | max)
-        | if $p.checks > 0 then .require = ((.require + ["remote_ci"]) | unique) else . end' <<<"$mp")"
+      mp="$(jq -c --argjson p "$protection" '.min_approvals = $p.approvals
+        | .require = ([if $p.approvals > 0 then "human_approval" else empty end, if $p.checks > 0 then "remote_ci" else empty end]
+            + ["no_conflict", "not_draft"])' <<<"$mp")"
     fi
   fi
+  # 리뷰어의 변경 요청은 저장소 규칙과 상관없이 넘어가지 않는다.
+  [[ "$(jq -r .changes_requested <<<"$facts")" != true ]] || blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
   # 승인·CI는 리뷰하고 push한 그 커밋에 대한 것이어야 한다. head가 움직였으면 누군가 push했다.
   [[ ${#head} -ge 7 && "$(jq -r .head <<<"$facts")" =~ ^[0-9a-f]{7,}$ && "$head" == "$(jq -r .head <<<"$facts")"* ]] \
     || blocked="$(jq -c --arg h "$head" --arg p "$(jq -r .head <<<"$facts")" '. + ["the pull request head \($p) is not the pushed and reviewed commit \($h)"]' <<<"$blocked")"
   while IFS= read -r cond; do
     case "$cond" in
       human_approval)
-        if [[ "$(jq -r .changes_requested <<<"$facts")" == true ]]; then
-          blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
-        elif (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
+        if (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
           unmet="$(jq -c --argjson f "$facts" --argjson n "$(jq -r .min_approvals <<<"$mp")" \
             '. + ["human approval: \($f.approvals | length) of \($n) on the current head\(if ($f.approvals | length) > 0 then " (" + ($f.approvals | join(", ")) + ")" else "" end)"]' <<<"$unmet")"
         fi ;;
@@ -973,7 +1084,7 @@ merge() {
       not_draft)
         [[ "$(jq -r .draft <<<"$facts")" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
     esac
-  done <<<"$(jq -r '.require[]' <<<"$mp")"
+  done <<<"$(jq -r '.require[]?' <<<"$mp")"
   if [[ "$blocked" != "[]" ]]; then
     state_set '.findings = $b | .merge = {blocked: $b, facts: $f}' --argjson b "$blocked" --argjson f "$facts"
     go merge merge_blocked
@@ -988,7 +1099,7 @@ merge() {
     go merge merge_blocked
     return
   fi
-  state_set '.merge = {requested: true, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg t "$(now_utc)"
+  state_set '.merge = {requested: true, method: $m, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg m "$method" --arg t "$(now_utc)"
   log "merge requested for $url ($method)"
   # 호스트가 병합(과 병합 커밋)을 보고하기까지 잠깐 걸릴 수 있다. 끝내 안 보이면 resume이 다시 읽는다.
   for i in 1 2 3 4 5; do
@@ -1154,6 +1265,9 @@ UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 MEASURE_SCHEMA="$RUN/measure-schema.json"
 DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
 POLISH_REVIEW_SCHEMA="$RUN/polish-review-schema.json"
+# 측정 세션이 캡처마다 같은 페이지 상태에서 평가하는 레이아웃 검사. 결과는 측정 JSON의 screens[].layout으로 받는다.
+LAYOUT_PROBE="$RUN/layout-probe.js"
+LAYOUT_PROBE_ID="layout-probe/1"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
@@ -1218,6 +1332,7 @@ $(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.th
 Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository and stop any server you started before you finish.
 $same
 Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
+Layout check: in the same page and state, right before each capture and scrolled to the top, evaluate the expression in $LAYOUT_PROBE in the page (for example Playwright: await page.evaluate(fs.readFileSync('$LAYOUT_PROBE', 'utf8'))) and put the object it returns, unchanged, in that screen's layout. Do not edit, filter, or explain away its issues; the driver reads them. A screen without the probe's result is unmeasured.
 Rules: find the design rule document and the reference screen (.ai-harness/docs/frontend.md or ui.md section \"## 디자인 점검\", DESIGN.md, docs/design-system.md). Put their paths in rules, or empty strings when missing. When both exist, score every target screen with the project design-audit skill (.agents/skills/design-audit/SKILL.md or .claude/skills/design-audit/SKILL.md) exactly as its rubric says, using the captures for what the rubric marks as needing a render, and save the report as $ev/audit.md. audit.total is the lowest total among the target screens and audit.axes the lowest score per axis A-E (-1 for an axis the rubric leaves 미확인); audit.report is the report path. When either rule source is missing or the skill is absent, set audit.scored false, total -1, every axis -1, report empty.
 checks: the exact shell commands the project names for checking screens mechanically (design lint, contrast, token-copy checks, the UI test suite) from ui.md, AGENTS.md, or the testing docs. Do not run them; the driver runs them from the repository root with bash -c.
 status: measured when every target screen rendered at every required viewport and theme; otherwise unmeasured with each gap in unmeasured.
@@ -1248,6 +1363,14 @@ polish_brief() { # selected-ids-json
   state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
 }
 
+# 측정의 레이아웃 검사 결과를 프롬프트용 문구로. baseline 또는 last(마지막 측정).
+polish_layout_text() { # baseline|last
+  jq -r --arg w "$1" --arg p "$LAYOUT_PROBE_ID" '
+    (if $w == "baseline" then .baseline.layout else (.measurements | last).layout end // [])
+    | [.[] as $s | $s.issues[] | "- \($s.role) \($s.screen) · \($s.viewport) · \($s.theme): \(.kind) — \(.detail)"]
+    | "Layout check (\($p), run in the live page): " + (if length == 0 then "no issue on any captured screen." else "found\n" + join("\n") end)' "$STATE"
+}
+
 polish_findings_text() {
   state '(.findings // []) | if length > 0 then "\nStill to resolve from the last review, check run, or remote CI:\n" + (map("- " + .) | join("\n")) else "" end'
 }
@@ -1260,6 +1383,12 @@ polish_verdict() { # review-output → stdout: 통과를 막는 문제(JSON 배�
           + (first($st.items[]? | select(.id == $r) | " — " + .title) // "")),
         (.regressions[] | "regression: " + .),
         (.new_findings[] | "new issue: " + .),
+        # 레이아웃 검사: 대상 화면의 깨짐은 기준선에 있었어도 막는다(다듬은 화면이 깨진 채 통과하지 않게).
+        # 형제 화면은 고칠 대상이 아니므로 기준선 같은 화면·뷰포트·테마에 없던 깨짐만 회귀로 막는다.
+        (($st.baseline.layout // []) as $bl | ($m.layout // [])[] as $s | $s.issues[] as $i
+          | select($s.role == "target"
+              or ([$bl[] | select(.screen == $s.screen and .viewport == $s.viewport and .theme == $s.theme) | .issues[].key] | index($i.key) | not))
+          | "layout (\($s.role) \($s.screen) · \($s.viewport) · \($s.theme)): \($i.kind) — \($i.detail)"),
         (if $rules then
           (if ($m.audit.scored | not) then "design-audit did not score the screens after the fix"
            elif $m.audit.total < $pass then "design-audit total \($m.audit.total) is below \($pass)" else empty end),
@@ -1319,17 +1448,20 @@ execute() {
           || finish incomplete 30 "measure output does not match the schema ($m_out)"
         # 캡처가 없거나 증거 디렉터리 밖이면 측정하지 않은 것이다. 측정 없는 비교·판정은 하지 않는다.
         if [[ "$(jq -r .status "$m_out")" != measured ]] || ! measure_captures_present "$m_out" "$m_ev" \
+          || ! jq -e --arg p "$LAYOUT_PROBE_ID" 'all(.screens[]; .layout.probe == $p and .layout.viewport.w > 0)' "$m_out" >/dev/null \
           || ! jq -e --slurpfile s "$STATE" '[.screens[] | [.screen, .viewport, .theme]] as $now
             | all(($s[0].baseline.screens // [])[]; [.screen, .viewport, .theme] as $b | $now | index([$b]) != null)' "$m_out" >/dev/null; then
-          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
+          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again, or the layout probe did not run on every screen): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
             --slurpfile r "$m_out" --arg e "$m_ev"
           go measure "$(edge_when measure user_decision)"
           continue
         fi
-        state_set '.measurements += [($r[0] | {label: $l, audit, summary, evidence_dir: $e, at: $t})]' \
+        state_set '.measurements += [($r[0] | {label: $l, audit, summary, evidence_dir: $e, at: $t,
+            layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})]' \
           --slurpfile r "$m_out" --arg l "$m_label" --arg e "$m_ev" --arg t "$(now_utc)"
         if [[ "$(state '.baseline // null')" == null ]]; then
-          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e})
+          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e,
+            layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})
             | .checks = ([.cli_checks[], $r[0].checks[]] | map(select(length > 0)) | unique)' --slurpfile r "$m_out" --arg e "$m_ev"
           # 검사 명령은 측정 세션이 고른 것이라 승인 전에는 실행하지 않는다. 고칠 목록과 함께 승인받은 뒤 verify가 실행한다.
           go measure baseline_measured
@@ -1349,7 +1481,10 @@ execute() {
 
 You are the diagnose node of the design-polish graph. Do not edit any file. You did not make these screens; critique them independently from the evidence of the baseline measurement, as a first-time user and as a design reviewer holding the project's own rules (the design rule document, its tokens and shared components, the reference screen, .ai-harness/docs/ui.md) first and general interface quality second.
 Evidence: captures in $(state .baseline.evidence_dir) (read the images), the design-audit report $audit_report, and the project checks the driver will run after the fix: $(state '.checks | join(" ; ")').
+Look at every capture for empty bands, horizontal overflow, and clipped or cut-off elements before judging anything else. A full-page capture shows a sticky or fixed element (a sidebar, a header) only where it sits at the top of the page, so its background seems to end at the viewport height; that alone is not a defect (the layout check below already looks at it in the live page).
+$(polish_layout_text baseline)
 List what to fix as items, most severe first, with ids P1, P2, ... in that order. Each item: severity major (a rule the audit deducted, a broken hierarchy or primary action, unreadable contrast or a missing focus state, a failing project check, a screen that disagrees with its siblings in the rule document, a broken layout at a supported viewport or theme) or minor (everything else worth fixing); a short title; evidence — the capture files that show it and the rule-document section or audit line it breaks (both when they exist); fix — what to change, in tokens and shared components rather than raw values; mechanical — true when a machine check (lint, contrast, token-copy check) could catch it.
+Every layout check issue above is a major item with mechanical true (one item may cover the same issue on several viewports or themes); the fix is checked by the same probe after the fix.
 Put anything that needs a product or content decision in needs_decision instead of items. Do not list what the screens already do right.
 Return only JSON matching the schema.
 
@@ -1527,7 +1662,7 @@ $(brief_context)"
         go regression ""
         ;;
       fix)
-        local before_fix
+        local before_fix denied
         if [[ "$WORKFLOW" == polish ]]; then
           [[ "$(state '.selected | length')" -gt 0 ]] \
             || finish incomplete 30 "no item is selected to fix; choose with revise --select \"P1,P3\" and approve again"
@@ -1546,7 +1681,15 @@ Return a concise summary of what you changed for each item and the commands you 
 $(polish_findings_text)
 
 $(brief_context)"
-          [[ "$(fingerprint)" != "$before_fix" ]] || finish incomplete 30 "fix changed nothing; the selected items cannot be done without a change"
+          if [[ "$(fingerprint)" == "$before_fix" ]]; then
+            denied="$(session_denials "fix-$(state .attempts)")"
+            if [[ -n "$denied" ]]; then
+              # 권한에 막혀 아무것도 못 바꾼 세션은 수리 시도가 아니다. 횟수를 되돌려 원인을 고친 뒤 resume이 같은 회차로 다시 고친다.
+              state_set '.attempts -= 1'
+              finish incomplete 30 "fix changed nothing because the session was denied: $denied. This environment failure does not count as a repair attempt; allow those paths (or move the repository out of a protected folder) and run resume"
+            fi
+            finish incomplete 30 "fix changed nothing; the selected items cannot be done without a change"
+          fi
           checkpoint "fix-$(state .attempts)"
           go fix ""
           continue
@@ -1559,7 +1702,11 @@ Do not commit, push, create a PR, or change scope. After you finish, the driver 
 Return a concise summary of the cause, the changed areas, and the commands you ran.
 
 $(brief_context)"
-        [[ "$(fingerprint)" != "$before_fix" ]] || finish incomplete 30 "fix changed nothing; an approved bug fix cannot be done without a change to the cause"
+        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+          denied="$(session_denials fix)"
+          [[ -z "$denied" ]] || finish incomplete 30 "fix changed nothing because the session was denied: $denied. Allow those paths (or move the repository out of a protected folder) and run resume"
+          finish incomplete 30 "fix changed nothing; an approved bug fix cannot be done without a change to the cause"
+        fi
         checkpoint fix
         go fix ""
         ;;
@@ -1593,6 +1740,9 @@ $(brief_context)"
 
 You are the review node of the design-polish graph. Do not edit any file. You did not make this change; judge it only from the evidence, not from the fixer's summary.
 Compare the baseline captures in $(state .baseline.evidence_dir) with the captures after the fix in $(state '(.measurements | last).evidence_dir') — every screen, viewport, and theme pair, the sibling screens as closely as the targets — and read both design-audit reports when they exist. The change is git diff $(state .start_head) (including the driver's checkpoint commits).
+Look at each capture first for empty bands (a row or column stretched with no content), horizontal overflow, and clipped or cut-off elements, then for the rest. A defect that was already in the baseline capture is still a defect on a target screen. A full-page capture shows a sticky or fixed element only at the top of the page, so its background seems to end at the viewport height; that alone is not a defect.
+$(polish_layout_text last)
+The driver blocks the pass on its own for every layout check issue on a target screen and for every new one on a sibling screen; you do not need to repeat them, but report what else the captures show.
 remaining: the ids of selected items that are still visible in the captures after the fix. regressions: anything on any captured screen that is worse than its baseline (layout, spacing, hierarchy, contrast, a shared component or token change showing wrong on a screen it was not meant for), each with the capture pair that shows it. new_findings: new major issues the change introduced that are not regressions of a baseline capture. Leave an array empty when you found nothing for it.
 Set needs_user_decision to true only when a remaining item or regression needs a product or design-rule decision from a person.
 Return only JSON matching the schema.
@@ -1749,6 +1899,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         fi
         ;;
       repair)
+        local before_fix denied
         # 수리 한도·제품 판단으로 사람에게 넘기는 엣지는 그래프가 정한다(review는 re_review가 한도를 본다).
         if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
           local escalate
@@ -1763,6 +1914,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
           continue
         fi
         state_set '.attempts += 1 | .repaired_findings = .findings'
+        before_fix="$(fingerprint)"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
 You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
@@ -1771,6 +1923,13 @@ Blocking findings:
 $(state '.findings')
 
 $(brief_context)"
+        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+          denied="$(session_denials "repair-$(state .attempts)")"
+          if [[ -n "$denied" ]]; then
+            state_set '.attempts -= 1'
+            finish incomplete 30 "repair changed nothing because the session was denied: $denied. This environment failure does not count as a repair attempt; allow those paths (or move the repository out of a protected folder) and run resume"
+          fi
+        fi
         checkpoint "repair-$(state .attempts)"
         # 그래프가 repair 뒤 verify 노드로 가면(bug-fix·review) 검증은 그 노드가 한다. 아니면(feature) 여기서 실행한다.
         if has_edge repair ""; then
@@ -1893,9 +2052,10 @@ case "$CMD" in
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
+    refuse_claude_protected "$RUNTIME"
     git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
-    # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy의
-    # 병합 조건(require·min_approvals·method)은 쓰지 않는다. 시작은 막지 않고 결과에 안내를 남긴다.
+    # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
+    # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
     if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
@@ -1905,7 +2065,10 @@ case "$CMD" in
       notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
     if [[ "$WORKFLOW" != review ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
-      notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; set personal merge conditions with HM_MERGE_* (/ai-harness:setup)"]' <<<"$notices")"
+      notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
+    fi
+    if [[ "$WORKFLOW" != review && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
+      notices="$(jq -c '. + ["HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
     approval_setting="$(approval_mode)" || exit 2
     read -r approval approval_source <<<"$approval_setting"
@@ -1943,29 +2106,22 @@ case "$CMD" in
     # 여기서 git_policy merge는 개인 단계가 merge·deploy라는 뜻이다(저장소 값 merge는 위에서 pr-only로 읽었다).
     merge_policy=null
     if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
-      # 병합 조건 최소치·방식은 사용자 설정(없으면 네 조건 모두·승인 1·squash), 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은
-      # 저장소 사실이다. merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
-      merge_policy="$(jq -c --arg lvl "$level" --arg req "$(user_config HM_MERGE_REQUIRE)" --arg min "$(user_config HM_MERGE_MIN_APPROVALS)" \
-        --arg method "$(user_config HM_MERGE_METHOD)" '(.merge_policy // {}) as $r
+      # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. 병합 조건·방식은 merge 노드가 호스트에서 읽는다.
+      # merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
+      merge_policy="$(jq -c --arg lvl "$level" '(.merge_policy // {}) as $r
         | ($r.deploy_check_cmd // "") as $deploy | ($r.smoke_cmd // "") as $smoke
         | (if ($r.verify | type) == "array" then $r.verify
            else [(if $deploy != "" then "deploy" else empty end), (if $smoke != "" then "smoke" else empty end)] end) as $avail
         | [$avail[] | select(IN("deploy", "smoke", "monitor")) | select((. != "deploy" or $deploy != "") and (. != "smoke" or $smoke != ""))] as $post
-        | {require: (if $req != "" then [$req | splits("[,[:space:]]+") | select(. != "")]
-                     else ["human_approval", "remote_ci", "no_conflict", "not_draft"] end),
-           min_approvals: (if $min != "" then ($min | tonumber? // $min) else 1 end),
-           method: (if $method != "" then $method else "squash" end),
-           verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
+        | {verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
            deploy_check_cmd: $deploy, deploy_timeout_minutes: ($r.deploy_timeout_minutes // 60), smoke_cmd: $smoke, base: ($r.base // "")}' \
         "$REPO/.ai-harness/harness.json")"
       if [[ "$level" == deploy ]] && ! jq -e '.verify | index("deploy") or index("smoke")' <<<"$merge_policy" >/dev/null; then
         delivery="$(jq -c '.note = "the repository has no deploy or smoke check (merge_policy.deploy_check_cmd, smoke_cmd), so the run stops after the merge and target CI"' <<<"$delivery")"
       fi
-      jq -e '(.require | length > 0 and all(.[]; IN("human_approval", "remote_ci", "no_conflict", "not_draft")))
-          and (.min_approvals | type == "number" and . >= 1) and (.method | IN("squash", "merge", "rebase"))
-          and (.deploy_timeout_minutes | type == "number" and . > 0)' <<<"$merge_policy" >/dev/null \
-        || { printf 'the personal merge settings are invalid: HM_MERGE_REQUIRE (one or more of human_approval, remote_ci, no_conflict, not_draft), HM_MERGE_MIN_APPROVALS (1 or more), HM_MERGE_METHOD squash|merge|rebase in ~/.ai-harness/config, merge_policy.deploy_timeout_minutes (above 0) in .ai-harness/harness.json; got %s\n' \
-          "$(jq -c '{require, min_approvals, method, deploy_timeout_minutes}' <<<"$merge_policy")" >&2; exit 2; }
+      jq -e '.deploy_timeout_minutes | type == "number" and . > 0' <<<"$merge_policy" >/dev/null \
+        || { printf 'merge_policy.deploy_timeout_minutes in .ai-harness/harness.json must be a number above 0; got %s\n' \
+          "$(jq -c '.deploy_timeout_minutes' <<<"$merge_policy")" >&2; exit 2; }
     fi
     if [[ "$merge_policy" != null ]]; then
       # 병합할 수 있는 기준 브랜치. manifest에 없으면 origin의 기본 브랜치로 정하고, 둘 다 없으면 시작하지 않는다.
@@ -1984,8 +2140,6 @@ case "$CMD" in
           exit 2
         fi
       fi
-      [[ "$(jq -r .method <<<"$merge_policy")" != rebase || "$(git -C "$REPO" config --get remote.origin.url || true)" != *bitbucket.org* ]] \
-        || { printf 'HM_MERGE_METHOD rebase is not supported for Bitbucket; choose squash or merge\n' >&2; exit 2; }
     fi
     monitor_error=null
     if [[ -n "$MONITOR_ERROR" ]]; then
@@ -2009,6 +2163,7 @@ case "$CMD" in
         policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
+    save_baseline
     ;;
   watch)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
@@ -2017,6 +2172,7 @@ case "$CMD" in
     ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
+    [[ "$CMD" == status ]] || refuse_claude_protected "$(state .runtime)"
     ;;
   *) usage ;;
 esac
@@ -2078,9 +2234,15 @@ EOF
 cat >"$MEASURE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","screens","rules","audit","checks","unmeasured"],
  "properties":{"status":{"type":"string","enum":["measured","unmeasured"]},"summary":{"type":"string"},
-  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures"],
+  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures","layout"],
    "properties":{"screen":{"type":"string"},"role":{"type":"string","enum":["target","sibling"]},"url":{"type":"string"},
-    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}}}}},
+    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}},
+    "layout":{"type":"object","additionalProperties":false,"required":["probe","viewport","document","issues"],
+     "properties":{"probe":{"type":"string"},
+      "viewport":{"type":"object","additionalProperties":false,"required":["w","h"],"properties":{"w":{"type":"number"},"h":{"type":"number"}}},
+      "document":{"type":"object","additionalProperties":false,"required":["w","h"],"properties":{"w":{"type":"number"},"h":{"type":"number"}}},
+      "issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","key","detail"],
+       "properties":{"kind":{"type":"string"},"key":{"type":"string"},"detail":{"type":"string"}}}}}}}}},
   "rules":{"type":"object","additionalProperties":false,"required":["document","reference_screen"],
    "properties":{"document":{"type":"string"},"reference_screen":{"type":"string"}}},
   "audit":{"type":"object","additionalProperties":false,"required":["scored","total","axes","report"],
@@ -2103,6 +2265,128 @@ cat >"$POLISH_REVIEW_SCHEMA" <<'EOF'
   "regressions":{"type":"array","items":{"type":"string"}},"new_findings":{"type":"array","items":{"type":"string"}},
   "needs_user_decision":{"type":"boolean"}}}
 EOF
+# 레이아웃 probe: 브라우저에서 평가하는 식 하나. 가로 넘침·잘린 글자·본문 앞 빈 띠·배경이 못 채움만 본다(오탐 기준은 주석과
+# tests/fixtures/polish-layout). 모델의 눈과 채점이 놓친 깨짐을 측정 결과에 남겨 러너가 통과를 막는다(#409).
+[[ "$WORKFLOW" != polish ]] || cat >"$LAYOUT_PROBE" <<'EOF'
+(() => {
+  // layout-probe/1 — 측정 세션이 캡처 직전 같은 페이지 상태에서 평가한다(workflow-driver.sh가 실행 폴더에 쓴다).
+  // 취향이 아니라 기계로 확실한 깨짐만 낸다. 기준은 tests/fixtures/polish-layout의 깨진·정상 페이지로 고정한다.
+  const de = document.documentElement, body = document.body;
+  const VW = de.clientWidth, VH = innerHeight, SX = scrollX, SY = scrollY;
+  const DOC_H = Math.max(de.scrollHeight, body ? body.scrollHeight : 0);
+  const issues = [];
+  const name = (el) => {
+    let s = el.tagName.toLowerCase();
+    if (el.id) return s + "#" + el.id;
+    const c = [...el.classList].slice(0, 2);
+    return c.length ? s + "." + c.join(".") : s;
+  };
+  const path = (el) => [el.parentElement && el.parentElement !== body ? name(el.parentElement) : "", name(el)].filter(Boolean).join(" > ");
+  const box = (el) => { const r = el.getBoundingClientRect(); return { l: r.left + SX, t: r.top + SY, r: r.right + SX, b: r.bottom + SY, w: r.width, h: r.height }; };
+  const shown = (el) => { const cs = getComputedStyle(el); return cs.display !== "none" && cs.visibility !== "hidden" && +cs.opacity > 0; };
+  const all = body ? [...body.querySelectorAll("*")].filter((el) => !el.closest("script,style,template,noscript")) : [];
+  const transparent = (c) => !c || c === "transparent" || /rgba\([^)]*,\s*0\)$/.test(c);
+
+  // 내용: 보이는 글자 줄, 그림·입력 요소, 배경 그림이 있는 상자. 빈 띠·잘림은 이것을 기준으로 본다.
+  const content = [];
+  const REPLACED = "img,svg,canvas,video,iframe,input,select,textarea,button,picture,object,embed,[role=img]";
+  if (body) {
+    const tw = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+      if (!n.data.trim() || !n.parentElement || n.parentElement.closest("script,style,template,noscript")) continue;
+      if (!shown(n.parentElement)) continue;
+      const rg = document.createRange();
+      rg.selectNodeContents(n);
+      for (const r of rg.getClientRects()) if (r.width > 0 && r.height > 0) content.push({ node: n, l: r.left + SX, t: r.top + SY, r: r.right + SX, b: r.bottom + SY });
+    }
+  }
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") continue;
+    if (el.matches(REPLACED) || (cs.backgroundImage && cs.backgroundImage !== "none")) {
+      const b = box(el);
+      if (b.w > 0 && b.h > 0) content.push({ node: el, ...b });
+    }
+  }
+
+  // 1. 가로 넘침: 문서가 뷰포트보다 넓어 페이지 전체가 옆으로 밀린다(루트가 숨김이면 스크롤이 생기지 않으므로 보지 않는다).
+  const rootClipsX = ["hidden", "clip"].includes(getComputedStyle(de).overflowX) || (body && ["hidden", "clip"].includes(getComputedStyle(body).overflowX));
+  if (!rootClipsX && de.scrollWidth > VW + 1) {
+    const culprits = all.filter((el) => {
+      const b = box(el), p = el.parentElement && box(el.parentElement);
+      return b.w > 0 && b.r > VW + 1 && (!p || p.r <= VW + 1) && getComputedStyle(el).position !== "fixed";
+    }).slice(0, 3);
+    issues.push({ kind: "overflow-x", key: "overflow-x", detail: `document is ${de.scrollWidth}px wide in a ${VW}px viewport` + (culprits.length ? `: ${culprits.map((el) => `${path(el)} reaches ${Math.round(box(el).r)}px`).join("; ")}` : "") });
+  }
+
+  // 2. 잘린 글자: 넘침을 숨기는 상자의 경계가 글자 줄을 가로지른다(줄 일부만 보임).
+  //    말줄임(text-overflow: ellipsis)·줄 수 제한(line-clamp)·화면 낭독 전용(1~2px 상자)·통째로 숨긴 줄(접힌 영역)은 의도된 숨김이라 보지 않는다.
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    const hx = ["hidden", "clip"].includes(cs.overflowX), hy = ["hidden", "clip"].includes(cs.overflowY);
+    if (!(hx || hy) || !shown(el)) continue;
+    const r0 = el.getBoundingClientRect();
+    if (r0.width <= 2 || r0.height <= 2) continue;
+    const cl = r0.left + SX + el.clientLeft, ct = r0.top + SY + el.clientTop, cr = cl + el.clientWidth, cb = ct + el.clientHeight;
+    const ellipsis = cs.textOverflow === "ellipsis";
+    const clamp = cs.webkitLineClamp && cs.webkitLineClamp !== "none";
+    let hit = null;
+    for (const c of content) {
+      if (!(c.node.nodeType === 3) || !el.contains(c.node)) continue;
+      // 가장 가까운 자르는 상자가 이 상자일 때만(안쪽 스크롤 상자가 있으면 그 상자 몫이다).
+      let a = c.node.parentElement, nearest = null;
+      for (; a && a !== el.parentElement; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (["hidden", "clip", "auto", "scroll"].includes(s.overflowX) || ["hidden", "clip", "auto", "scroll"].includes(s.overflowY)) { nearest = a; break; }
+      }
+      if (nearest !== el) continue;
+      const cutX = hx && !ellipsis && c.l < cr - 1 && c.r > cr + 1;
+      const cutY = hy && !clamp && c.t < cb - 1 && c.b > cb + 1;
+      if (cutX || cutY) { hit = { c, axis: cutX ? "right" : "bottom" }; break; }
+    }
+    if (hit) issues.push({ kind: "clipped", key: "clipped:" + path(el), detail: `${path(el)} cuts the text "${hit.c.node.data.trim().slice(0, 40)}" at its ${hit.axis} edge` });
+  }
+
+  // 3. 본문 앞 빈 띠: 본문(main)이 시작하기 전에 화면 전체 폭에 내용이 없는 높은 띠가 있다(늘어난 머리 줄·사이드바 줄).
+  //    본문 안의 여백(히어로·섹션 패딩)과 본문 뒤 여백(짧은 페이지의 바닥)은 보지 않는다.
+  const main = document.querySelector("main, [role=main]");
+  if (main && shown(main)) {
+    const mt = box(main).t;
+    const band = Math.max(160, Math.round(VH * 0.18));
+    const above = content.filter((c) => c.t < mt - 1 && !main.contains(c.node)).map((c) => Math.min(c.b, mt));
+    const from = above.length ? Math.max(...above) : 0;
+    if (mt - from >= band) {
+      issues.push({ kind: "empty-band", key: "empty-band:before-main", detail: `${Math.round(mt - from)}px band with no content from y=${Math.round(from)} to the start of ${name(main)} at y=${Math.round(mt)} (threshold ${band}px)` });
+    }
+  }
+
+  // 4. 배경이 못 채움: (a) 본문을 감싸 화면 폭 전체를 칠한 뼈대가 뷰포트보다 짧게 끝나 아래로 다른 바탕색이 보인다.
+  //    (b) 가장자리 열(사이드바 등)의 배경이 부모보다 먼저 끝나 스크롤하면 열 아래가 비어 보인다.
+  //    sticky·fixed 열은 스크롤해도 뷰포트를 따라오므로, 뷰포트 높이를 채우면 통과다(전체 캡처에서만 끊겨 보인다).
+  const effBg = (el) => { for (let a = el; a; a = a.parentElement) { const c = getComputedStyle(a).backgroundColor; if (!transparent(c)) return c; } return "rgb(255, 255, 255)"; };
+  const canvas = !transparent(getComputedStyle(de).backgroundColor) ? getComputedStyle(de).backgroundColor : body && !transparent(getComputedStyle(body).backgroundColor) ? getComputedStyle(body).backgroundColor : "rgb(255, 255, 255)";
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    if (transparent(cs.backgroundColor) || !shown(el) || el === main) continue;
+    const b = box(el);
+    const frame = main ? el.contains(main) : el.parentElement === body;
+    if (frame && b.w >= VW * 0.95 && b.t <= 1 && b.b < VH - 8 && DOC_H <= VH + 1 && cs.backgroundColor !== canvas) {
+      issues.push({ kind: "bg-short", key: "bg-short:" + path(el), detail: `${path(el)} paints the page but ends at y=${Math.round(b.b)} in a ${VH}px viewport; below it the page shows ${canvas}` });
+      continue;
+    }
+    const p = el.parentElement;
+    if (!p || p === de) continue;
+    const pb = box(p);
+    const edge = b.l - SX <= 1 || b.r - SX >= VW - 1;
+    if (!edge || b.w >= VW * 0.5 || b.h < VH * 0.5 || b.t - pb.t > 2 || cs.backgroundColor === effBg(p)) continue;
+    const pinned = ["sticky", "fixed"].includes(cs.position);
+    const short = pinned ? b.h < Math.min(VH, pb.h) - 1 : pb.b - b.b >= 24;
+    if (short) issues.push({ kind: "bg-short", key: "bg-short:" + path(el), detail: `${path(el)} column background ends at y=${Math.round(b.b)} while its container runs to y=${Math.round(pb.b)}${pinned ? " and it does not fill the viewport" : ""}` });
+  }
+
+  return { probe: "layout-probe/1", viewport: { w: VW, h: VH }, document: { w: de.scrollWidth, h: DOC_H }, issues };
+})()
+EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
  "properties":{"summary":{"type":"string"},"branch":{"type":"string"},"pr_url":{"type":"string"}}}
@@ -2112,6 +2396,9 @@ cat >"$REMOTE_CI_SCHEMA" <<'EOF'
  "properties":{"status":{"type":"string","enum":["passed","failed","none","pending","unverified"]},"commit":{"type":"string"},
   "summary":{"type":"string"},"failures":{"type":"array","items":{"type":"string"}}}}
 EOF
+
+# 이어 가는 명령은 에이전트를 부르기 전에(approve는 묻기 전에, approve·revise는 그 명령의 진입 조건을 본 뒤) 기준점을 대조한다.
+[[ "$CMD" != resume ]] || check_baseline
 
 case "$CMD" in
   status)
@@ -2123,6 +2410,7 @@ case "$CMD" in
     [[ -n "$FEEDBACK" || -n "$SELECT" ]] || usage
     [[ "$(state .node)" == approval ]] || { printf 'revise works only while waiting for approval of a brief (node: %s)\n' "$(state .node)" >&2; exit 2; }
     [[ -z "$SELECT" || -z "$FEEDBACK" ]] || { printf -- '--select and --feedback are separate revisions; run one, then the other\n' >&2; exit 2; }
+    check_baseline
     if [[ -n "$SELECT" ]]; then
       # 고칠 항목 선택은 결정적이다: 목록에 있는 ID만 받고, 바뀐 목록을 다시 보여 주며 새 승인을 기다린다.
       sel="$(jq -cn --arg s "$SELECT" '[$s | splits("[,[:space:]]+") | select(length > 0) | ascii_upcase] | unique')"
@@ -2140,6 +2428,7 @@ case "$CMD" in
     ;;
   approve)
     [[ "$(state .status)" == waiting_approval ]] || { printf 'nothing to approve (node: %s)\n' "$(state .node)" >&2; exit 2; }
+    check_baseline
     # 에이전트의 Bash 도구·codex exec에는 제어 터미널이 없어 여기서 열리지 않는다.
     (exec 3<>/dev/tty) 2>/dev/null || { printf 'approve needs a terminal; in a conversation, type "승인" and run resume\n' >&2; exit 10; }
     exec 3<>/dev/tty
@@ -2153,5 +2442,8 @@ case "$CMD" in
     ;;
 esac
 
+# 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
+# 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
+trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
 state_set '.status = "running"'
 execute

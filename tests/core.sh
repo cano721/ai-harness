@@ -347,9 +347,12 @@ Write scope: `api/src/test/**`
 DOC
 # shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
 printf '{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"${CLAUDE_PROJECT_DIR}/.ai-harness/hooks/direct-edit-guard.sh"}]}]}}\n' >"$CONTRACT/.claude/settings.json"
+mkdir -p "$CONTRACT/.ai-harness/hooks"
+# shellcheck disable=SC2016  # 옛 가드 본문을 문자 그대로 쓴다
+printf '%s\n' '#!/usr/bin/env bash' 'grep -q "\"file_path\":\"[^\"]*code-conventions.md\"" "$transcript" || exit 2' >"$CONTRACT/.ai-harness/hooks/direct-edit-guard.sh"
 CONTRACT_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT")"
 contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
-assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
+assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,guard_read_by_grep,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
 assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
 assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
 assert_eq ".ai-harness/workflows/implement-feature.md:10 5 10" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
@@ -371,6 +374,8 @@ cat >"$CONTRACT_OK/.ai-harness/workflows/implement-feature.md" <<'DOC'
 DOC
 # shellcheck disable=SC2016  # 정규식·백틱·변수 이름을 문자 그대로 쓴다
 printf '# developer\n\nWrite scope: `src/main/**`\n' >"$CONTRACT_OK/.ai-harness/agents/developer.md"
+mkdir -p "$CONTRACT_OK/.ai-harness/hooks"
+cp "$ROOT/skills/harness-init/references/direct-edit-guard.sh" "$CONTRACT_OK/.ai-harness/hooks/direct-edit-guard.sh"
 CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
@@ -471,5 +476,38 @@ if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]
   assert_eq "ok" "$(cd "$TEST_TMP" && /bin/bash -c 'for i in $(seq 1 300); do IFS=$'"'"'\t'"'"' read -r a b <<<"$(printf "x\ty\n" | head -n 1)"; done; echo ok')" "here-string reads do not exhaust file descriptors on bash 3.2"
 fi
 pass "bash 3.2 file descriptor safety"
+
+# macOS /bin/bash 3.2는 명령 인자인 "$(... "{a, b}" ...)" 안 큰따옴표 문자열의 중괄호를 펼친다(#410 — 보드 openable
+# 단언이 node에 깨진 JS를 넘겨 로컬 스위트가 끊겼다). CI의 bash 5는 못 잡으므로 따옴표 구조로 검사한다.
+B32_DIR="$TEST_TMP/bash32"
+mkdir -p "$B32_DIR"
+cat >"$B32_DIR/bad.sh" <<'EOF'
+V=x
+echo "$(node -e "${V} f({ a: 1, b: 2 })")"
+f "$(printf '%s' "{\"t\":\"$V\",\"r\":\"x\"}")"
+echo "$(echo "{a,
+b}")"
+EOF
+cat >"$B32_DIR/good.sh" <<'EOF'
+V=x
+x="$(echo "{a, b}")"
+[[ "$(echo "{a,b}")" == "{a,b}" ]]
+echo "$(jq -cn --arg r "$V" '{r:$r, log:1}')"
+echo "$(echo "${V:-a,b}")" "{a, b}"
+cat <<EOT
+"$(echo "{a, b}")"
+EOT
+# echo "$(echo "{a, b}")"
+EOF
+B32_OUT="$(python3 -I "$ROOT/tests/bash32-check.py" "$B32_DIR/bad.sh" 2>&1 || true)"
+assert_eq "2 3 4" "$(sed -n 's/.*bad\.sh:\([0-9]*\):.*/\1/p' <<<"$B32_OUT" | tr '\n' ' ' | sed 's/ $//')" "bash 3.2 brace check flags braces inside a quoted command substitution argument"
+python3 -I "$ROOT/tests/bash32-check.py" "$B32_DIR/good.sh" >/dev/null || fail "bash 3.2 brace check leaves assignments, [[ ]], single quotes, heredocs and comments alone"
+if [[ -x /bin/bash ]] && [[ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" == 3 ]]; then
+  assert_eq "a b" "$(/bin/bash -c 'echo "$(echo "{a, b}")"' | tr -s ' \n' ' ' | sed 's/ $//')" "bash 3.2 really expands braces the check looks for"
+fi
+B32_FILES=()
+while IFS= read -r f; do B32_FILES+=("$f"); done < <(find "$ROOT/scripts" "$ROOT/tests" "$ROOT/hooks" "$ROOT/templates" "$ROOT/skills" "$ROOT/.ai-harness" -name '*.sh' -not -path '*/fixtures/*' 2>/dev/null)
+python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files avoid braces that bash 3.2 expands inside quoted command substitutions"
+pass "bash 3.2 brace expansion safety"
 
 finish_tests
