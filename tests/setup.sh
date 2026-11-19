@@ -88,6 +88,7 @@ cp -R "$ROOT/catalog" "$SETUP_CATALOG"
 HINT_OUT="$(printf '{"transcript_path":"/x/rollout-2026-10-30T00-00-00-abc.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
 assert_contains "$HINT_OUT" "ai-harness setup 스킬" "Codex hint names the skill"
 assert_contains "$HINT_OUT" "datadog·sentry·jira·confluence" "first hint lists the catalog"
+assert_contains "$HINT_OUT" "기능 소개는 보드(ai-harness board 스킬)의 하네스 안내 화면에서 볼 수 있습니다" "Codex first hint points to the board guide"
 assert_eq "" "$(printf '{}' | setup_cmd notify)" "first hint shown once"
 setup_cmd 'done' >/dev/null
 jq '.version += 1 | .skills += [{name:"pagerduty", since:.version, summary:"x", env:[]}]' "$SETUP_CATALOG/catalog.json" >"$SETUP_T/c.json"
@@ -96,6 +97,10 @@ NEW_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r
 assert_contains "$NEW_HINT" "새 기본 스킬이 추가됐습니다: pagerduty" "new catalog skills announced"
 assert_contains "$NEW_HINT" "/ai-harness:setup" "Claude hint uses the slash command"
 assert_eq "" "$(printf '{}' | setup_cmd notify)" "new-skill hint shown once"
+SETUP_T="$TEST_TMP/setup-hint-claude"
+mkdir -p "$SETUP_T"
+CLAUDE_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$CLAUDE_HINT" "기능 소개는 보드(/ai-harness:board)의 하네스 안내 화면에서 볼 수 있습니다" "Claude first hint points to the board guide"
 SETUP_T="$TEST_TMP/setup-off"
 mkdir -p "$SETUP_T"
 SETUP_ENV=(HM_SETUP_HINT=0)

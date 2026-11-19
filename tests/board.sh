@@ -1502,10 +1502,68 @@ BGUIDE_TPL="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BGUIDE_TPL" "guide: { label: '하네스 안내'" "the board has a harness guide view"
 assert_contains "$BGUIDE_TPL" "'/guide?t='" "the guide view loads the feature list from the server"
 assert_contains "$BGUIDE_TPL" "copyBtn('명령 복사', it.cmd" "each feature offers its command to copy"
-assert_contains "$BGUIDE_TPL" "['settings', 'impact', 'refs', 'guide'].includes(savedView)" "the board reopens the guide view after a reload"
+assert_contains "$BGUIDE_TPL" "['settings', 'impact', 'refs', 'guide'].includes(saved)" "the board reopens the guide view after a reload"
 assert_contains "$BGUIDE_TPL" "view === 'guide' || !names.length" "the guide view hides the project filter"
 assert_contains "$BGUIDE_TPL" "function goLink(text, v, st, lt)" "guide links can open a tab of the work list"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 안내" "board skill documents the guide view"
 pass "harness board guide view: feature list from the repository, Korean titles, drift caught by tests (#432)"
+
+# 하네스 안내 보강(#432): 처음 쓰는 사람의 시작 3단계, 흐름 단계의 자동/직접 구분과 카드 링크,
+# 에이전트가 알아서 쓰는 것(스택 규칙·에이전트)은 한 묶음으로 기본 접힘, 묶음 목차, 첫 진입은 안내 화면.
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+st = guide.state(sys.argv[1])
+groups = {g["key"]: g for g in st["groups"]}
+auto = groups["auto"]
+assert auto["fold"] is True, auto
+ids = {i["id"] for i in auto["items"]}
+assert {"agents/design-reviewer", "agents/harvest-reviewer", "templates/ui-review", "templates/feature-sliced-design"} <= ids, ids
+assert not any(i.startswith("skills/") or i.startswith("catalog/") for i in ids), ids
+assert len(ids) == 11, sorted(ids)
+assert all(g["fold"] is False for k, g in groups.items() if k != "auto"), [k for k, g in groups.items() if g["fold"]]
+assert "stack" not in groups, "stack rules live in the auto group"
+items = {i["id"]: i for g in st["groups"] for i in g["items"]}
+assert items["skills/design-polish"]["title"] == "화면 점검 (하네스 없이)", items["skills/design-polish"]
+assert items["templates/design-polish"]["title"] == "화면 다듬기"
+' "$ROOT" || fail "guide folds the things agents use on their own into one group and names the global polish skill for repositories without a harness"
+BGUIDE_TPL="$(<"$ROOT/scripts/board/template.html")"
+BGUIDE_FN="$(sed -n '/---- 하네스 안내 ----/,/---- 레퍼런스 보드 ----/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BGUIDE_FN" "'처음이면 이것부터'" "the guide starts newcomers with three steps"
+assert_contains "$BGUIDE_FN" "['skills/setup', '셋업'," "the first step is setup"
+assert_contains "$BGUIDE_FN" "['skills/harness-init', '프로젝트 하네스 만들기'," "the second step is the project harness"
+assert_contains "$BGUIDE_FN" "['templates/implement-feature', '기능 개발'," "the third step is feature delivery"
+assert_contains "$BGUIDE_FN" "function guideJump(" "guide links scroll to and focus a card"
+assert_contains "$BGUIDE_FN" "c.tabIndex = -1" "a jumped-to card can take focus"
+assert_contains "$BGUIDE_FN" "MODE = { auto: '자동', opt: '켜면 자동', manual: '직접 실행' }" "flow steps say whether they run on their own"
+assert_contains "$BGUIDE_FN" "['기록', 'auto'," "recording runs on its own"
+assert_contains "$BGUIDE_FN" "['자동 개선', 'opt', 'skills/harvest'" "auto harvest runs on its own only when turned on"
+assert_contains "$BGUIDE_FN" "['동기화', 'opt', 'skills/harness-init'" "auto sync runs on its own only when turned on"
+assert_contains "$BGUIDE_FN" "['효과 확인', 'manual', 'skills/harness-impact'" "impact check is run by the person"
+assert_contains "$BGUIDE_FN" "goLink('켜는 곳: 하네스 설정', 'settings', 'harness')" "opt-in steps link to the settings tab that turns them on"
+assert_contains "$BGUIDE_FN" "g.fold" "folded groups render as a collapsed row"
+assert_contains "$BGUIDE_FN" "setAttribute('aria-expanded'" "the folded group head is an expand button"
+assert_contains "$BGUIDE_FN" "'b-toc'" "the guide has a table of contents"
+assert_contains "$BGUIDE_TPL" ".b-toc ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap;" "the table of contents wraps instead of scrolling sideways"
+# 시작 화면 규칙을 실제로 돌린다: 처음(저장 없음) → 안내, 쓰던 사람 → 그대로, ?view=guide → 안내.
+BGUIDE_START="$(grep -A1 -m1 '^  const startView = ' "$ROOT/scripts/board/template.html")"
+assert_eq "guide list list settings guide list" "$(BGUIDE_START="$BGUIDE_START" node -e 'eval(process.env.BGUIDE_START.replace("const startView", "var startView"));
+console.log([startView("?t=x", null, false), startView("?t=x", null, true), startView("?t=x", "list", true), startView("?t=x", "settings", true), startView("?t=x&view=guide", "list", true), startView("?t=x&view=other", "list", true)].join(" "))')" \
+  "a first-time board opens on the guide, a used board keeps its view, ?view=guide opens the guide"
+assert_contains "$BGUIDE_TPL" "store('hb-tab') === null && store('hb-stab') === null" "someone who only used tabs is not a first-time visitor"
+# 시작 단계·흐름 단계가 가리키는 카드가 기능 목록에 있어야 한다(없으면 링크가 조용히 글자가 된다).
+BGUIDE_IDS="$(printf '%s\n' "$BGUIDE_FN" | sed -n "/const START = \[/,/^  \];/p;/const FLOW = \[/,/^  \];/p" | grep -oE "'(skills|templates|agents|catalog)/[a-z0-9-]+'" | tr -d "'" | sort -u)"
+[[ -n "$BGUIDE_IDS" ]] || fail "guide start and flow steps name cards"
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+have = {i["id"] for g in guide.state(sys.argv[1])["groups"] for i in g["items"]}
+missing = [i for i in sys.argv[2].split() if i not in have]
+assert not missing, missing
+' "$ROOT" "$BGUIDE_IDS" || fail "every card the guide steps link to is in the feature list"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "?view=guide" "board skill documents the guide query"
+pass "harness board guide: first steps, flow modes with card links, folded agent-only group, table of contents, first open on the guide (#432)"
 
 finish_tests

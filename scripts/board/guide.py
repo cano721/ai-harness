@@ -4,6 +4,7 @@
   agents/*.md(플러그인 에이전트), catalog/catalog.json(기본 스킬 카탈로그). 항목 id는 "<출처>/<이름>"이다.
 - guide.json에 없는 기능은 "기타" 묶음에 원래 설명의 첫 문장으로 남고, 저장소에 없는 guide.json 항목은 빠진다.
   둘 다 coverage()가 알려 주고 tests/board.sh가 0건인지 확인한다 — 새 기능을 더하면 guide.json도 같이 고친다.
+- 묶음의 "fold": true는 사람이 부르지 않고 에이전트가 알아서 쓰는 묶음이다 — 화면이 기본으로 접는다.
 - 부르는 명령은 출처로 정한다: 플러그인 스킬 /ai-harness:<이름>, 카탈로그 /<이름>, 워크플로(entry) /<이름>, 그 밖은 없음.
 """
 import glob, json, os, re
@@ -108,10 +109,11 @@ def state(root=ROOT, guide_path=GUIDE):
             items.append({"id": iid, "name": name, "title": i.get("title") or name, "summary": i.get("summary") or "",
                           "ask": i.get("ask") or "", "cmd": _cmd(iid, name, i.get("entry")), "view": view})
         if items:
-            groups.append({"key": g.get("key") or "", "label": g.get("label") or "", "desc": g.get("desc") or "", "items": items})
+            groups.append({"key": g.get("key") or "", "label": g.get("label") or "", "desc": g.get("desc") or "",
+                           "fold": g.get("fold") is True, "items": items})
     rest = [k for k in found if k not in seen]
     if rest:
-        groups.append({"key": "other", "label": "기타", "desc": "안내 문구가 아직 없는 기능입니다. 설명은 원문 첫 문장입니다.",
+        groups.append({"key": "other", "label": "기타", "desc": "안내 문구가 아직 없는 기능입니다. 설명은 원문 첫 문장입니다.", "fold": False,
                        "items": [{"id": k, "name": found[k]["name"], "title": found[k]["name"],
                                   "summary": _first_sentence(found[k]["description"]), "ask": "",
                                   "cmd": _cmd(k, found[k]["name"], False), "view": None} for k in rest]})
