@@ -1836,25 +1836,30 @@ pass "background command watchdog hook"
 BG_LOOP='while :; do sleep 1; done'
 cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
 #!/bin/bash
-# bg-agent.sh <hooks.json의 hook 명령> <hook에 줄 명령> <실제로 띄울 명령> <출력 접두어> — hook을 부른 뒤 명령 셸을 자식 그룹 리더로 띄우고 산다
-jq -cn --arg c "$2" '{tool_input:{command:$c,run_in_background:true}}' | /bin/sh -c "$1" >"$4.hook"
+# bg-agent.sh <hook에 줄 명령> <실제로 띄울 명령> <출력 접두어> — BG_HOOK_CMD(hooks.json의 hook 명령)를 sh -c로 부른 뒤
+# Claude Code처럼 eval '…' 뒤에 명령이 더 이어지는(그래서 exec되지 않는) 셸을 자식 그룹 리더로 띄우고 산다.
+# hook 명령은 env로 받는다 — 이 프로세스(가짜 에이전트)의 인자에 hook 경로가 없어야 한다.
+jq -cn --arg c "$1" '{tool_input:{command:$c,run_in_background:true}}' | /bin/sh -c "$BG_HOOK_CMD" >"$3.hook"
 q="'"
-esc="${3//$q/$q\"$q\"$q}"
-perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "eval '$esc' </dev/null" "$4.shell" >"$4.out" 2>"$4.err" &
-echo $! >"$4.pid"
+esc="${2//$q/$q\"$q\"$q}"
+perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "eval '$esc' </dev/null && :" "$3.shell" >"$3.out" 2>"$3.err" &
+echo $! >"$3.pid"
 wait $!
-echo $? >"$4.status"
+echo $? >"$3.status"
 while :; do sleep 1; done
 EOF
 bg_start() { # 이름 hook명령 [실행명령] → BG_AGENT, BG_GROUP
   rm -f "$TEST_TMP/$1".*
-  CLAUDE_PLUGIN_ROOT="$ROOT" bash "$TEST_TMP/bg-agent.sh" "$(jq -r '.hooks[0].command' <<<"$BG_HOOK")" "$2" "${3:-$2}" "$TEST_TMP/$1" &
+  BG_HOOK_CMD="$(jq -r '.hooks[0].command' <<<"$BG_HOOK")${BG_HOOK_SUFFIX:-}" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    bash "$TEST_TMP/bg-agent.sh" "$2" "${3:-$2}" "$TEST_TMP/$1" &
   BG_AGENT=$!
   for _ in $(seq 1 50); do [[ -s "$TEST_TMP/$1.pid" ]] && break; sleep 0.1; done
   BG_GROUP="$(<"$TEST_TMP/$1.pid")"
 }
 bg_watching() { pgrep -f "background-watchdog.sh $BG_AGENT " >/dev/null && echo true || echo false; }
 bg_claimed() { [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] && echo true || echo false; }
+# shellcheck disable=SC2009  # ppid·pgid까지 보여야 해서 pgrep으로 대신할 수 없다
+bg_procs() { ps -A -o pid=,ppid=,pgid=,args= | grep -F -e "$TEST_TMP" -e background-watchdog | grep -v grep | cut -c1-200; }
 bg_group_gone() { # pgid 초 → 그 시간 안에 그룹이 비면 0
   local i
   for i in $(seq 1 $(($2 * 10))); do kill -0 -- "-$1" 2>/dev/null || return 0; sleep 0.1; done
@@ -1867,9 +1872,18 @@ bg_start bg-kill "( bash -c '$BG_LOOP' '$TEST_TMP/bg-orphan' & ); bash -c '$BG_L
 sleep 2
 assert_eq "" "$(<"$TEST_TMP/bg-kill.hook")" "hook prints nothing for a background command"
 assert_eq "true" "$(kill -0 -- "-$BG_GROUP" 2>/dev/null && echo true || echo false)" "background server keeps running while the agent lives"
-assert_eq "true" "$(bg_claimed)" "watchdog found and claimed the background command's group (hook run through /bin/sh like hooks.json)"
+[[ "$(bg_claimed)" == true ]] || fail "watchdog found and claimed the background command's group (hook run through /bin/sh like hooks.json): agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
 bg_stop_agent
 bg_group_gone "$BG_GROUP" 8 || fail "process group (with an orphaned grandchild) survives after the agent is gone"
+
+# hook을 감싼 sh가 마지막 명령을 exec하지 않아도(일부 dash) hook의 부모가 아니라 그 위 에이전트를 감시한다.
+BG_HOOK_SUFFIX='; :' bg_start bg-wrap "bash -c '$BG_LOOP' '$TEST_TMP/bg-wrap'"
+sleep 2
+[[ "$(bg_claimed)" == true ]] || fail "watchdog watches the agent even when sh does not exec the hook: agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "group survives the agent when sh did not exec the hook"
 
 # 명령이 먼저 끝나면 감시자도 바로 끝나고, 명령의 출력·종료 코드는 그대로다(작은따옴표가 든 명령도 찾는다).
 bg_start bg-done "sleep 3; printf '%s' \"it's done\"; printf err >&2; exit 7"

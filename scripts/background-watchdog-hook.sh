@@ -18,7 +18,15 @@ source "$DIR/lib.sh" 2>/dev/null || exit 0
 
 # hook의 부모가 에이전트 프로세스다. 명령 셸은 이 hook이 끝난 뒤 에이전트의 자식으로 뜨므로,
 # 지금 있는 자식을 적어 넘겨 감시자가 새로 뜬 셸만 고르게 한다.
+# hooks.json의 명령은 sh -c로 돈다. sh가 마지막 명령을 exec하지 않으면(일부 dash) 부모는 이 hook을 부른 래퍼 셸이라 한 단계 위가 에이전트다.
 agent="$PPID"
+# 부모가 셸이고 그 인자에 이 hook이 있을 때만 올라간다 — 인자(프롬프트)에 스크립트 이름이 든 에이전트를 래퍼로 오인하지 않는다.
+parent_comm="$(ps -o comm= -p "$agent" 2>/dev/null)"
+parent_comm="${parent_comm##*/}"
+parent_comm="${parent_comm#-}"
+if [[ "$parent_comm" =~ ^(sh|dash|bash|ash|zsh)$ && "$(ps -ww -o args= -p "$agent" 2>/dev/null)" == *background-watchdog-hook.sh* ]]; then
+  agent="$(ps -o ppid= -p "$agent" 2>/dev/null | tr -d ' ')"
+fi
 [[ "$agent" =~ ^[0-9]+$ && "$agent" -gt 1 ]] || exit 0
 before=" "
 while read -r pid ppid; do
