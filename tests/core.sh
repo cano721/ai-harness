@@ -510,4 +510,159 @@ while IFS= read -r f; do B32_FILES+=("$f"); done < <(find "$ROOT/scripts" "$ROOT
 python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files avoid braces that bash 3.2 expands inside quoted command substitutions"
 pass "bash 3.2 brace expansion safety"
 
+# 병렬 실행은 영역 출력·실패 요약을 섞지 않고, -j 인자 오류도 기존 사용법처럼 거부한다.
+RUNNER_FIXTURE="$TEST_TMP/parallel-runner"
+mkdir -p "$RUNNER_FIXTURE/tests"
+cp "$ROOT/tests/run.sh" "$RUNNER_FIXTURE/tests/run.sh"
+cat >"$RUNNER_FIXTURE/tests/alpha.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'alpha: begin\n'
+sleep 1
+printf 'ok 1 - alpha\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/beta.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'beta: begin\n'
+sleep 1
+printf 'ok 1 - beta\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/fail.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'fail: begin\n'
+exit 1
+EOF
+cat >"$RUNNER_FIXTURE/tests/after.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'after: ran\n'
+printf 'ok 1 - after\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/workflow.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'workflow: ran\n'
+printf 'ok 1 - workflow\n'
+EOF
+chmod +x "$RUNNER_FIXTURE/tests/"*.sh
+git -C "$RUNNER_FIXTURE" init -q
+git -C "$RUNNER_FIXTURE" config user.email test@example.com
+git -C "$RUNNER_FIXTURE" config user.name test
+git -C "$RUNNER_FIXTURE" add tests
+git -C "$RUNNER_FIXTURE" commit -q -m baseline
+parallel_out="$TEST_TMP/parallel.out"
+parallel_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 alpha beta >"$parallel_out" 2>&1 || parallel_rc=$?
+assert_eq "0" "$parallel_rc" "-j runs selected passing areas"
+assert_contains "$(<"$parallel_out")" "# alpha" "parallel output keeps an area heading"
+assert_contains "$(<"$parallel_out")" "# beta" "parallel output keeps every area heading"
+assert_contains "$(<"$parallel_out")" "# all passed: 2 tests in alpha beta" "parallel output preserves the aggregate summary"
+alpha_block="$(sed -n '/^# alpha$/,/^# alpha: /p' "$parallel_out")"
+assert_contains "$alpha_block" "ok 1 - alpha" "an area's lines stay in its own block"
+[[ "$alpha_block" != *"beta"* ]] || fail "parallel output interleaves another area inside a block: $alpha_block"
+fast_out="$TEST_TMP/parallel-fast.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --fast workflow alpha >"$fast_out" 2>&1
+assert_contains "$(<"$fast_out")" "# all passed: 1 tests in alpha" "--fast filters slow areas before parallel scheduling"
+[[ "$(<"$fast_out")" != *"# workflow"* ]] || fail "--fast must exclude slow areas during parallel scheduling"
+printf '# changed for --changed selection\n' >>"$RUNNER_FIXTURE/tests/beta.sh"
+changed_out="$TEST_TMP/parallel-changed.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --changed >"$changed_out" 2>&1
+assert_contains "$(<"$changed_out")" "# all passed: 1 tests in beta" "--changed selects only changed areas before parallel scheduling"
+parallel_fail_out="$TEST_TMP/parallel-fail.out"
+parallel_fail_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail after >"$parallel_fail_out" 2>&1 || parallel_fail_rc=$?
+assert_eq "1" "$parallel_fail_rc" "parallel runner returns failure when one area fails"
+assert_contains "$(<"$parallel_fail_out")" "after: ran" "parallel runner continues areas after a failure"
+assert_contains "$(<"$parallel_fail_out")" "# FAILED: fail (1 passed)" "parallel runner summarizes failed areas and passed tests"
+# 실패 요약은 시작 순서(느린 영역 먼저)가 아니라 선택 순서를 따른다 — 직렬과 같다.
+order_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail workflow >"$TEST_TMP/parallel-order.out" 2>&1 || order_rc=$?
+assert_eq "1" "$order_rc" "a failing area fails the parallel run"
+cat >"$RUNNER_FIXTURE/tests/workflow.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail workflow >"$TEST_TMP/parallel-order.out" 2>&1 || true
+assert_contains "$(<"$TEST_TMP/parallel-order.out")" "# FAILED: fail workflow" "failed areas are listed in selection order"
+# 중단(TERM)하면 돌던 영역을 끝내고 임시 파일을 남기지 않는다.
+term_tmp="$TEST_TMP/term-tmpdir"
+mkdir -p "$term_tmp"
+cat >"$RUNNER_FIXTURE/tests/hang.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" >"$TEST_TMP/hang.pid"
+exec sleep 30
+EOF
+TMPDIR="$term_tmp" bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 hang after >"$TEST_TMP/parallel-term.out" 2>&1 &
+term_runner=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [[ -s "$TEST_TMP/hang.pid" ]] && break
+  sleep 0.25
+done
+[[ -s "$TEST_TMP/hang.pid" ]] || fail "hang fixture area never started"
+kill -TERM "$term_runner"
+term_rc=0
+wait "$term_runner" || term_rc=$?
+assert_eq "143" "$term_rc" "TERM stops the parallel runner with the signal's exit code"
+hang_pid="$(<"$TEST_TMP/hang.pid")"
+sleep 0.5
+if kill -0 "$hang_pid" 2>/dev/null; then
+  kill "$hang_pid" 2>/dev/null || true
+  fail "an interrupted parallel run leaves its areas running"
+fi
+assert_eq "" "$(ls -A "$term_tmp")" "an interrupted parallel run removes its temporary files"
+# 터미널 Ctrl-C는 프로세스 그룹 전체에 INT를 보낸다: 폴링 중인 sleep이 먼저 죽어도 정리 경로를 탄다.
+for n in g1 g2 g3; do
+  cat >"$RUNNER_FIXTURE/tests/$n.sh" <<EOF
+#!/usr/bin/env bash
+trap 'printf "%s\\n" "$n" >>"$TEST_TMP/group-exits"' EXIT
+printf 'started\\n' >>"$TEST_TMP/group-started"
+sleep 8
+EOF
+done
+: >"$TEST_TMP/group-started"
+perl -e '$SIG{INT}="DEFAULT"; setpgrp(0,0); exec @ARGV' env TMPDIR="$term_tmp" bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 g1 g2 g3 >"$TEST_TMP/parallel-int.out" 2>&1 &
+int_runner=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [[ "$(wc -l <"$TEST_TMP/group-started")" -ge 2 ]] && break
+  sleep 0.25
+done
+sleep 0.5
+kill -INT -- "-$int_runner"
+int_rc=0
+wait "$int_runner" || int_rc=$?
+assert_eq "130" "$int_rc" "Ctrl-C to the process group stops the parallel runner with 130"
+assert_contains "$(<"$TEST_TMP/parallel-int.out")" "# interrupted:" "Ctrl-C runs the parallel cleanup path"
+sleep 0.5
+if pgrep -f "$RUNNER_FIXTURE/tests/g[123].sh" >/dev/null; then
+  pkill -f "$RUNNER_FIXTURE/tests/g[123].sh" || true
+  fail "Ctrl-C leaves parallel areas running"
+fi
+assert_eq "" "$(ls -A "$term_tmp")" "Ctrl-C removes the parallel run's temporary files"
+# 슬롯이 비면 다음 영역을 바로 시작한다: 오래 걸리는 영역이 뒤 영역을 묶어 두지 않는다.
+cat >"$RUNNER_FIXTURE/tests/slow.sh" <<EOF
+#!/usr/bin/env bash
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [[ -f "$TEST_TMP/third-started" ]] && { printf 'ok 1 - slow\n'; exit 0; }
+  sleep 0.5
+done
+printf 'slow: third area never started while slow was running\n'
+exit 1
+EOF
+cat >"$RUNNER_FIXTURE/tests/quick.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'ok 1 - quick\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/third.sh" <<EOF
+#!/usr/bin/env bash
+: >"$TEST_TMP/third-started"
+printf 'ok 1 - third\n'
+EOF
+pool_out="$TEST_TMP/parallel-pool.out"
+pool_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 slow quick third >"$pool_out" 2>&1 || pool_rc=$?
+assert_eq "0" "$pool_rc" "a free slot starts the next area while a slow area still runs: $(<"$pool_out")"
+assert_contains "$(<"$pool_out")" "# all passed: 3 tests" "pool scheduling keeps the aggregate summary"
+parallel_invalid_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 0 >"$TEST_TMP/parallel-invalid.out" 2>&1 || parallel_invalid_rc=$?
+assert_eq "2" "$parallel_invalid_rc" "-j rejects zero concurrency"
+assert_contains "$(<"$TEST_TMP/parallel-invalid.out")" "-j" "invalid concurrency explains the option"
+pass "parallel test runner buffers areas and preserves failures"
+
 finish_tests
