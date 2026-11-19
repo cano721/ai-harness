@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# 백그라운드 Bash 명령의 감시자. 사용: background-watchdog.sh <에이전트 pid> "<hook 때 있던 자식 pid들>" <명령> <선점 디렉토리>
+# 백그라운드 Bash 명령의 감시자. 사용: background-watchdog.sh <에이전트 pid> "<hook 때 있던 자식 pid들>" <명령> <선점 디렉토리> [호출 id]
 # background-watchdog-hook.sh가 띄운다. 에이전트의 자식으로 새로 뜬 프로세스 그룹 리더 중 인자에 명령 첫 줄이 든 것을
 # 찾아, 그 그룹이 남아 있는 동안 지켜본다. 에이전트가 사라지면 그룹 전체(ppid 1로 떨어진 손자 worker 포함)를
 # TERM → 최대 5초 → KILL로 끄고, 그룹이 비면 바로 끝난다. 감시자는 그룹 밖에 있어 리더 셸만 먼저 끝나도 감시가 이어진다.
 # 찾지 못하면(권한 거부로 실행 안 됨, 형식이 다름, 리더가 곧바로 끝남) 아무것도 하지 않는다. setsid로 새 세션을 만든 자손은 그룹 밖이라 정리하지 못한다.
 set -uo pipefail
 
-[[ $# == 4 && "$1" =~ ^[0-9]+$ && "$1" -gt 1 ]] || exit 0
+[[ ($# == 4 || $# == 5) && "$1" =~ ^[0-9]+$ && "$1" -gt 1 ]] || exit 0
 agent="$1"
 before="$2"
 command_text="$3"
 claims="$4"
+tool_use_id="${5:-}"
 # 에이전트를 처음부터 볼 수 없으면(잠깐 떴다 사라진 래퍼 셸, 신호가 막힌 sandbox) 감시할 수 없다.
 kill -0 "$agent" 2>/dev/null || exit 0
 trap '' HUP INT
@@ -53,7 +54,9 @@ while [[ -z "$group" ]]; do
     if ((SECONDS < 5)); then sleep 0.1; else sleep 0.5; fi
   fi
 done
-trap 'rmdir "$claims/$group" 2>/dev/null' EXIT
+# 선점 디렉토리에 호출 id를 남기면 무거운 명령 슬롯(heavy-slot-hook.sh)이 그룹이 사는 동안 슬롯을 쥔다.
+[[ -z "$tool_use_id" ]] || printf '%s' "$tool_use_id" >"$claims/$group/tool_use_id" 2>/dev/null
+trap 'rm -f "$claims/$group/tool_use_id"; rmdir "$claims/$group" 2>/dev/null' EXIT
 
 while kill -0 -- "-$group" 2>/dev/null; do
   if ! kill -0 "$agent" 2>/dev/null; then
