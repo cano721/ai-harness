@@ -648,6 +648,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-sechead > .b-sechead__end { margin-left: auto; }
 .b-content { max-width: var(--size-content-max); min-width: 0; }
 .b-line { margin: 0; }
+.b-steps { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-3); }
 .b-gap { display: grid; gap: var(--space-4); min-width: 0; }
 .b-detailgrid { display: grid; gap: var(--space-2); min-width: 0; }
 /* 제안 / 묶음 안의 항목 줄: 묶음을 펼쳤을 때 구성원 하나를 여는 버튼. 제목은 줄바꿈하고 곁 정보는 아래로. */
@@ -869,6 +870,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     refs: { label: '레퍼런스', sub: '레퍼런스 보드 보고 고르기' },
     impact: { label: '하네스 효과', sub: '개선과 재발 여부' },
     settings: { label: '하네스 설정', sub: '내 자동화 단계' },
+    guide: { label: '하네스 안내', sub: '하네스 소개와 기능' },
   };
   // 탭은 같은 목록을 거르는 필터다. 설명은 그 탭의 내용만 한 줄로.
   const TABS = [
@@ -1013,7 +1015,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 
   // ---- 상태 ----
   const savedView = store('hb-view');
-  let view = ['settings', 'impact', 'refs'].includes(savedView) ? savedView : 'list';
+  let view = ['settings', 'impact', 'refs', 'guide'].includes(savedView) ? savedView : 'list';
   let tab = ['work', 'harness', 'autofix'].includes(savedView) ? savedView : (TABS.some(([k]) => k === store('hb-tab')) ? store('hb-tab') : 'all');
   if (['work', 'harness', 'autofix'].includes(savedView)) { store('hb-view', 'list'); store('hb-tab', tab); }
   let stab = ['harness', 'autofix'].includes(store('hb-stab')) ? store('hb-stab') : 'work';
@@ -1533,7 +1535,18 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     return out;
   }
   // 화면을 바꾸는 동작은 버튼이 아니라 글자 링크다(다른 곳으로 가기).
-  function goLink(text, v, st) { const a = el('a', null, text); a.href = '#'; a.dataset.key = 'go:' + text; a.onclick = (e) => { e.preventDefault(); view = v; if (st) { stab = st; store('hb-stab', st); } store('hb-view', v); renderAll(); }; return a; }
+  // lt: 작업 현황으로 갈 때 고를 탭(하네스 안내의 'list:harness' 같은 대상).
+  function goLink(text, v, st, lt) {
+    const a = el('a', null, text); a.href = '#'; a.dataset.key = 'go:' + text;
+    a.onclick = (e) => {
+      e.preventDefault(); view = v;
+      if (st) { stab = st; store('hb-stab', st); }
+      if (lt) { tab = lt; filter = 'all'; store('hb-tab', lt); if (lt === 'autofix') loadAutofix(true); }
+      if (v === 'refs') { rrun = null; rdetail = null; }
+      store('hb-view', v); renderAll(); window.scrollTo(0, 0);
+    };
+    return a;
+  }
   function notice(status, text) { const n = el('div', 'ds-notice'); if (status !== 'info') n.dataset.status = status; n.setAttribute('role', status === 'danger' ? 'alert' : 'status'); n.append(icon(status), el('p', null, text)); return n; }
   function errorBox(title, cause, retry) {
     const e = el('div', 'ds-error'); e.setAttribute('role', 'alert');
@@ -2147,7 +2160,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   function renderSidebar() {
     const views = $('views'); views.replaceChildren();
-    for (const key of ['list', 'refs', 'impact', 'settings']) {
+    for (const key of ['list', 'refs', 'impact', 'settings', 'guide']) {
       const v = VIEWS[key];
       let n = null;
       if (key === 'list') { const t = todoCount('all', view === 'list' ? filter : 'all'); if (t) n = count(t, 'attention', '건, 지금 할 일'); }
@@ -2166,7 +2179,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       for (const [p, l] of Object.entries(per)) counts[p] = units(l);
       names = [...new Set(Object.values(model('all', 'all')).flat().map((i) => i.project))].sort((x, y) => String(x || '').localeCompare(String(y || '')));
     } else if (view === 'settings') names = ((sdata && sdata.repos) || []).map((r) => r.name);
-    $('projbox').hidden = view === 'settings' || !names.length;
+    $('projbox').hidden = view === 'settings' || view === 'guide' || !names.length;
     const nr = nonRepoSet(), run = {};
     if (view === 'list') for (const i of model(tab, 'all').running) run[i.project] = (run[i.project] || 0) + 1;
     if (view === 'impact') for (const r of (idata && idata.repos) || []) if (!QUIET.includes(repoStatus(r))) run[r.name] = 1;
@@ -2267,6 +2280,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
       if (view === 'settings') { $('vdesc').textContent = STABS.find(([k]) => k === stab)[2]; return renderSettings(); }
+      if (view === 'guide') { $('vdesc').textContent = '하네스가 무엇이고 어떤 기능이 있는지, 어떻게 부르는지 봅니다.'; return renderGuide(); }
       if (view === 'refs') { $('vdesc').textContent = rrun ? '' : '이 맥에서 그린 레퍼런스 보드입니다. 열면 탭 5개로 보고, 랜딩 실행이 기다리면 여기서 골라 시작합니다.'; $('vdesc').hidden = !!rrun; return renderRefs(); }
       $('vdesc').textContent = TABS.find(([k]) => k === tab)[2];
       if (SERVER && !data) { board.replaceChildren(...(loadError ? [errorBox('작업 목록을 불러오지 못했습니다', loadError, () => { loadError = null; renderBoard(); refresh().catch(fail); })] : loading('작업 목록을 불러오는 중'))); return; }
@@ -2873,6 +2887,64 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (quiet.length) {
       const body = el('div', 'b-gap'); body.append(...quiet.map(impactRepo));
       out.push(group('impact:quiet', `판단할 데이터가 부족하거나 계산하지 못한 저장소 ${quiet.length}곳`, [], body, null));
+    }
+    board.replaceChildren(...out);
+  }
+
+  // ---- 하네스 안내 ----
+  // 기능 목록은 서버가 저장소(skills·templates·agents·catalog)에서 읽고 guide.json의 한국어 문구를 붙인다. 정적 정보라 한 번만 받는다.
+  const FLOW = [
+    ['설치', '프로젝트를 실측해 에이전트가 따를 규칙 문서·워크플로·역할을 깝니다.'],
+    ['작업', '기능 개발·버그 수정·리뷰 같은 워크플로가 계획 승인부터 검증·PR까지 정해진 단계로 일합니다.'],
+    ['기록', '작업하는 동안 이벤트를 가볍게 남기고, 세션을 정리해 사용자가 바로잡은 것을 모읍니다.'],
+    ['자동 개선', '쌓인 기록에서 에이전트 행동을 실제로 바꿀 개선안만 골라 PR로 냅니다.'],
+    ['동기화', '플러그인이 새 버전이 되면 프로젝트에 깐 파일을 최신 템플릿에 안전하게 맞춥니다.'],
+    ['효과 확인', '반영한 개선의 실수가 다시 나왔는지와 설치 전후 지표로 효과를 봅니다.'],
+  ];
+  const GUIDE_GO = { list: ['작업 현황 열기', 'list'], 'list:harness': ['하네스 동작 보기', 'list', 'harness'], 'list:autofix': ['자동 수정 보기', 'list', 'autofix'], refs: ['레퍼런스 열기', 'refs'], impact: ['하네스 효과 열기', 'impact'], settings: ['하네스 설정 열기', 'settings'] };
+  let gdata = null, gerr = null, gbusy = false;
+  async function loadGuide() {
+    if (!SERVER || gdata || gbusy) return;
+    gbusy = true;
+    try { const r = await fetch('/guide?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' }); if (!r.ok) throw new Error(`HTTP ${r.status}`); gdata = await r.json(); gerr = null; } catch (e) { gerr = e.message; }
+    gbusy = false;
+    if (view === 'guide') renderAll();
+  }
+  function guideIntro() {
+    const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'guide-intro');
+    const h = el('h2', 'ds-title', '하네스란'); h.id = 'guide-intro';
+    const ol = el('ol', 'b-steps');
+    for (const [name, text] of FLOW) { const li = el('li'); li.append(el('span', 'ds-label', name), el('p', 'b-line ds-muted', text)); ol.append(li); }
+    s.append(h, el('p', 'b-line', '하네스는 프로젝트마다 에이전트가 따를 규칙과 작업 흐름을 깔고, 일한 기록으로 그 규칙을 계속 고쳐 가는 플러그인입니다. 아래 여섯 단계가 한 바퀴를 이룹니다.'), ol);
+    return s;
+  }
+  function guideCard(it) {
+    const c = el('article', 'ds-card'); c.dataset.key = 'guide:' + it.id;
+    c.append(el('h3', 'ds-card__title', it.title), el('p', 'b-line', it.summary));
+    if (it.ask) c.append(el('p', 'ds-caption b-line', `“${it.ask}”처럼 말해도 됩니다.`));
+    const go = it.view && GUIDE_GO[it.view];
+    if (it.cmd || go) {
+      const acts = el('div', 'ds-card__actions');
+      if (it.cmd) { const cb = copyBtn('명령 복사', it.cmd, 'ds-btn--sm'); cb.dataset.key = 'copy:' + it.id; acts.append(el('code', null, it.cmd), cb); }
+      if (go) { const a = goLink(go[0], go[1], null, go[2]); a.dataset.key = 'guide-go:' + it.id; acts.append(a); }
+      c.append(acts);
+    }
+    return c;
+  }
+  function renderGuide() {
+    const board = $('board');
+    const out = [guideIntro()];
+    if (!SERVER) out.push(empty('기능 목록은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.'));
+    else if (!gdata) { out.push(...(gerr ? [errorBox('기능 목록을 불러오지 못했습니다', `보드 서버가 기능 목록을 읽지 못했습니다(${gerr}).`, () => { gerr = null; renderAll(); loadGuide(); })] : loading('기능 목록을 불러오는 중'))); if (!gerr) loadGuide(); }
+    else if (!(gdata.groups || []).length) out.push(empty('보여 줄 기능을 찾지 못했습니다.', '플러그인 설치가 온전한지 확인하고, 필요하면 플러그인을 다시 설치하세요.'));
+    else {
+      for (const g of gdata.groups) {
+        const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'guide-' + g.key);
+        const h = el('h2', 'ds-title', g.label); h.id = 'guide-' + g.key;
+        const cols = el('div', 'ds-columns ds-columns--even'); cols.append(...g.items.map(guideCard));
+        s.append(h); if (g.desc) s.append(el('p', 'b-line ds-muted', g.desc)); s.append(cols);
+        out.push(s);
+      }
     }
     board.replaceChildren(...out);
   }

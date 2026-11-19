@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
 import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
+import guide as hguide  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import references as hrefs  # noqa: E402
@@ -2049,6 +2050,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, impact_state())
         if u.path == "/autofix":
             return self._send(200, autofix_state())
+        if u.path == "/guide":
+            return self._send(200, hguide.state())
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":

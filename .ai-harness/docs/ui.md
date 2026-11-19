@@ -6,7 +6,7 @@ ai-harness가 사용자에게 보여 주는 화면은 서버나 빌드 없이 �
 
 | 화면 | 원본 | 여는 법 |
 |---|---|---|
-| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
+| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정·하네스 안내) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
 | 하네스 효과 리포트 | `skills/harness-impact/report-template.html` | `scripts/impact.sh`가 데이터를 넣어 만든 HTML 파일을 브라우저로 연다 |
 | 기준 화면 (디자인 시스템 예시) | `docs/design-system/reference.html` | 파일을 바로 연다(`file://`). `?theme=light|dark`, `?drawer=1`로 상태를 고정한다 |
 
