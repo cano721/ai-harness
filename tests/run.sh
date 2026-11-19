@@ -5,6 +5,7 @@
 #   bash tests/run.sh board init       고른 영역만
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
 #   bash tests/run.sh --fast           느린 영역(SLOW_AREAS)을 뺀다. 다른 선택과 같이 쓸 수 있다
+#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다
 #   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x + bash 3.2 중괄호 검사 (파일마다 따로)
 #   bash tests/run.sh --list           영역 목록
 set -euo pipefail
@@ -15,7 +16,7 @@ ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SLOW_AREAS="workflow automation design init"
 
 usage() {
-  sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 all_areas() {
@@ -102,13 +103,26 @@ lint_changed() {
 selected=""
 fast=0
 changed=0
+jobs=1
+parallel=0
+expect_jobs=0
 for arg in "$@"; do
+  if [[ "$expect_jobs" == 1 ]]; then
+    [[ "$arg" =~ ^[0-9]+$ ]] || { printf 'run.sh: -j 값은 1 이상의 정수여야 합니다\n' >&2; exit 2; }
+    jobs="$arg"
+    while [[ "$jobs" == 0* && "$jobs" != 0 ]]; do jobs="${jobs#0}"; done
+    [[ "$jobs" != 0 ]] || { printf 'run.sh: -j 값은 1 이상의 정수여야 합니다\n' >&2; exit 2; }
+    parallel=1
+    expect_jobs=0
+    continue
+  fi
   case "$arg" in
     -h | --help) usage; exit 0 ;;
     --list) all_areas; exit 0 ;;
     --lint) lint_changed; exit $? ;;
     --fast) fast=1 ;;
     --changed) changed=1 ;;
+    -j) expect_jobs=1 ;;
     -*) printf 'run.sh: 모르는 옵션 %s\n' "$arg" >&2; usage >&2; exit 2 ;;
     *)
       [[ -f "$TESTS_DIR/$arg.sh" && "$arg" != run && "$arg" != lib ]] || { printf 'run.sh: 없는 영역 %s (--list 참고)\n' "$arg" >&2; exit 2; }
@@ -116,6 +130,7 @@ for arg in "$@"; do
       ;;
   esac
 done
+[[ "$expect_jobs" == 0 ]] || { printf 'run.sh: -j 뒤에 동시 실행 수를 지정하세요\n' >&2; usage >&2; exit 2; }
 [[ "$changed" == 0 ]] || selected="$selected $(changed_areas | tr '\n' ' ')"
 [[ -n "${selected// /}" || "$changed" == 1 ]] || selected="$(all_areas | tr '\n' ' ')"
 
@@ -135,20 +150,67 @@ fi
 
 failed=""
 total=0
-for a in $areas; do
-  printf '# %s\n' "$a"
-  start="$(date +%s)"
-  out_file="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
-  if bash "$TESTS_DIR/$a.sh" 2>&1 | tee "$out_file"; then
-    :
-  else
-    failed="$failed $a"
+if [[ "$parallel" == 0 ]]; then
+  for a in $areas; do
+    printf '# %s\n' "$a"
+    start="$(date +%s)"
+    out_file="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
+    if bash "$TESTS_DIR/$a.sh" 2>&1 | tee "$out_file"; then
+      :
+    else
+      failed="$failed $a"
+    fi
+    n="$(grep -c '^ok ' "$out_file" || true)"
+    rm -f "$out_file"
+    total=$((total + n))
+    printf '# %s: %d passed in %ds\n' "$a" "$n" "$(($(date +%s) - start))"
+  done
+else
+  # Bash 3.2 호환: 인덱스 배열과 고정 크기 batch만 사용하고 wait -n/mapfile은 쓰지 않는다.
+  area_list=()
+  for a in $areas; do area_list[${#area_list[@]}]="$a"; done
+  area_count="${#area_list[@]}"
+  # 영역 수보다 큰 값은 실제 최대 영역 수로 제한해 큰 숫자의 산술 오버플로를 피한다.
+  if [[ "${#jobs}" -gt "${#area_count}" ]]; then
+    jobs="$area_count"
+  elif [[ "${#jobs}" -eq "${#area_count}" ]] && [[ "$jobs" -gt "$area_count" ]]; then
+    jobs="$area_count"
   fi
-  n="$(grep -c '^ok ' "$out_file" || true)"
-  rm -f "$out_file"
-  total=$((total + n))
-  printf '# %s: %d passed in %ds\n' "$a" "$n" "$(($(date +%s) - start))"
-done
+  batch_start=0
+  while [[ "$batch_start" -lt "$area_count" ]]; do
+    pids=()
+    batch_end=$((batch_start + jobs))
+    [[ "$batch_end" -le "$area_count" ]] || batch_end="$area_count"
+    i="$batch_start"
+    while [[ "$i" -lt "$batch_end" ]]; do
+      a="${area_list[$i]}"
+      out_files[i]="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
+      home_dirs[i]="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-test-home.XXXXXX")"
+      starts[i]="$(date +%s)"
+      HOME="${home_dirs[$i]}" bash "$TESTS_DIR/$a.sh" >"${out_files[$i]}" 2>&1 &
+      pids[i]=$!
+      i=$((i + 1))
+    done
+    i="$batch_start"
+    while [[ "$i" -lt "$batch_end" ]]; do
+      a="${area_list[$i]}"
+      if wait "${pids[$i]}"; then
+        :
+      else
+        failed="$failed $a"
+      fi
+      n="$(grep -c '^ok ' "${out_files[$i]}" || true)"
+      total=$((total + n))
+      printf '# %s\n' "$a"
+      cat "${out_files[$i]}"
+      printf '# %s: %d passed in %ds\n' "$a" "$n" "$(($(date +%s) - ${starts[$i]}))"
+      rm -f "${out_files[$i]}"
+      rm -rf "${home_dirs[$i]}"
+      i=$((i + 1))
+    done
+    batch_start="$batch_end"
+  done
+fi
 
 if [[ -n "$failed" ]]; then
   printf '# FAILED:%s (%d passed)\n' "$failed" "$total" >&2

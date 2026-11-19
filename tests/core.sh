@@ -510,4 +510,68 @@ while IFS= read -r f; do B32_FILES+=("$f"); done < <(find "$ROOT/scripts" "$ROOT
 python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files avoid braces that bash 3.2 expands inside quoted command substitutions"
 pass "bash 3.2 brace expansion safety"
 
+# 병렬 실행은 영역 출력·실패 요약을 섞지 않고, -j 인자 오류도 기존 사용법처럼 거부한다.
+RUNNER_FIXTURE="$TEST_TMP/parallel-runner"
+mkdir -p "$RUNNER_FIXTURE/tests"
+cp "$ROOT/tests/run.sh" "$RUNNER_FIXTURE/tests/run.sh"
+cat >"$RUNNER_FIXTURE/tests/alpha.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'alpha: begin\n'
+sleep 1
+printf 'ok 1 - alpha\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/beta.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'beta: begin\n'
+sleep 1
+printf 'ok 1 - beta\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/fail.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'fail: begin\n'
+exit 1
+EOF
+cat >"$RUNNER_FIXTURE/tests/after.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'after: ran\n'
+printf 'ok 1 - after\n'
+EOF
+cat >"$RUNNER_FIXTURE/tests/workflow.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'workflow: ran\n'
+printf 'ok 1 - workflow\n'
+EOF
+chmod +x "$RUNNER_FIXTURE/tests/"*.sh
+git -C "$RUNNER_FIXTURE" init -q
+git -C "$RUNNER_FIXTURE" config user.email test@example.com
+git -C "$RUNNER_FIXTURE" config user.name test
+git -C "$RUNNER_FIXTURE" add tests
+git -C "$RUNNER_FIXTURE" commit -q -m baseline
+parallel_out="$TEST_TMP/parallel.out"
+parallel_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 alpha beta >"$parallel_out" 2>&1 || parallel_rc=$?
+assert_eq "0" "$parallel_rc" "-j runs selected passing areas"
+assert_contains "$(<"$parallel_out")" "# alpha" "parallel output keeps an area heading"
+assert_contains "$(<"$parallel_out")" "# beta" "parallel output keeps every area heading"
+assert_contains "$(<"$parallel_out")" "# all passed: 2 tests in alpha beta" "parallel output preserves the aggregate summary"
+fast_out="$TEST_TMP/parallel-fast.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --fast workflow alpha >"$fast_out" 2>&1
+assert_contains "$(<"$fast_out")" "# all passed: 1 tests in alpha" "--fast filters slow areas before parallel scheduling"
+[[ "$(<"$fast_out")" != *"# workflow"* ]] || fail "--fast must exclude slow areas during parallel scheduling"
+printf '# changed for --changed selection\n' >>"$RUNNER_FIXTURE/tests/beta.sh"
+changed_out="$TEST_TMP/parallel-changed.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --changed >"$changed_out" 2>&1
+assert_contains "$(<"$changed_out")" "# all passed: 1 tests in beta" "--changed selects only changed areas before parallel scheduling"
+parallel_fail_out="$TEST_TMP/parallel-fail.out"
+parallel_fail_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail after >"$parallel_fail_out" 2>&1 || parallel_fail_rc=$?
+assert_eq "1" "$parallel_fail_rc" "parallel runner returns failure when one area fails"
+assert_contains "$(<"$parallel_fail_out")" "after: ran" "parallel runner continues areas after a failure"
+assert_contains "$(<"$parallel_fail_out")" "# FAILED: fail (1 passed)" "parallel runner summarizes failed areas and passed tests"
+parallel_invalid_rc=0
+bash "$RUNNER_FIXTURE/tests/run.sh" -j 0 >"$TEST_TMP/parallel-invalid.out" 2>&1 || parallel_invalid_rc=$?
+assert_eq "2" "$parallel_invalid_rc" "-j rejects zero concurrency"
+assert_contains "$(<"$TEST_TMP/parallel-invalid.out")" "-j" "invalid concurrency explains the option"
+pass "parallel test runner buffers areas and preserves failures"
+
 finish_tests

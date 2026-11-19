@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- **테스트 영역을 병렬 실행할 수 있습니다** — `bash tests/run.sh -j 2`처럼 `-j N`을 지정하면 선택된 영역을 최대 N개까지 병렬 실행하고 영역별 출력을 묶어 보여 줍니다. 기본 직렬 실행은 유지되며, GitHub Actions 회귀 테스트는 보수적으로 2개 영역을 함께 실행합니다. (#425)
+
 ## v0.84.0 (2026-11-19)
 ### 버그 수정
 
