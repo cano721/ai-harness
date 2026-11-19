@@ -1351,6 +1351,11 @@ LAYOUT_PROBE_ID="layout-probe/1"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
+# 화면 검증·재현 세션의 앱 서버 수명. dev 서버를 명령 안에서 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(#435).
+APP_SERVER_RULE="App server: start any server with the tool's background run, not with &, nohup, or setsid inside the command, and poll the port or a health URL with a time limit instead of ending your turn to wait for it. Reuse a server already running for this working tree instead of starting another on the same port. Before you finish, stop the whole process group of every server you started (TERM, a few seconds, then KILL) and confirm no process of that group is left; a free port does not mean it stopped, because dev workers close the port and survive TERM."
+# 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
+APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
+
 brief_prompt() {
   local role inputs
   if [[ "$WORKFLOW" == bug-fix ]]; then
@@ -1409,7 +1414,9 @@ $(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.th
     same="This is the baseline before any change. Choose the screens: every target screen the request names, plus the screens that share the components or tokens those screens use (role sibling; .ai-harness/docs/ui.md may list them, otherwise find them in the code) — a later fix to a shared component is checked on them."
   fi
   printf '%s\n\n%s' "$CONTEXT" "You are the measure node of the design-polish graph. Do not edit, create, or delete any file in the repository; save captures, audit reports, and notes only under $ev.
-Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository and stop any server you started before you finish.
+Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository.
+$APP_SERVER_RULE
+$APP_BUILD_RULE
 $same
 Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
 Layout check: in the same page and state, right before each capture and scrolled to the top, evaluate the expression in $LAYOUT_PROBE in the page (for example Playwright: await page.evaluate(fs.readFileSync('$LAYOUT_PROBE', 'utf8'))) and put the object it returns, unchanged, in that screen's layout. Do not edit, filter, or explain away its issues; the driver reads them. A screen without the probe's result is unmeasured.
@@ -1637,7 +1644,8 @@ $(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvesti
         run_node reproduce reproduce "$CONTEXT
 
 You are the reproduce node of the bug-fix graph. Do not edit, create, or delete any file in the repository; keep scratch scripts, logs, and notes under $repro.
-Reproduce the bug below with the smallest safe steps: a test or command run, or a request against a local server started with the local or test configuration the project documents. Never use production data or credentials, and point anything the app writes at $repro or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
+Reproduce the bug below with the smallest safe steps: a test or command run, or a request against a local server started with the local or test configuration the project documents. Never use production data or credentials, and point anything the app writes at $repro or a temporary directory: a new file in the repository stops the run.
+$APP_SERVER_RULE
 status: reproduced when you observed the failure yourself; evidence_sufficient when you could not run it but logs, a stack trace, or code reading with a falsifiable hypothesis show the failure, or a safe observation plan will confirm the fix; blocked when neither is possible. Put what you observed (commands and their decisive output, or the log lines and code paths) in evidence. When blocked, put in needed what a person must provide: an environment, logs, or the expected behavior.
 Return only JSON matching the schema.
 
@@ -1944,7 +1952,9 @@ $(brief_context)" "$REVIEW_SCHEMA"
 You are the ui_review node. Do not edit, create, or delete any file in the repository. Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with its references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first.
 If the project has a native-ui skill (.agents/skills/native-ui/SKILL.md or .claude/skills/native-ui/SKILL.md) and the screens belong to a native app, follow it: render and operate them in a simulator or emulator instead of a browser, with the same evidence rules.
 A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser (a simulator or emulator for native screens, as above), and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
-Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
+Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run.
+$APP_SERVER_RULE
+$APP_BUILD_RULE
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
 Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence.

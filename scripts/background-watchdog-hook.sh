@@ -9,6 +9,9 @@ trap 'exit 0' ERR
 command -v jq >/dev/null 2>&1 || exit 0
 input="$(cat)" || exit 0
 command_text="$(jq -er 'select(.tool_input.run_in_background == true) | .tool_input.command | strings' <<<"$input" 2>/dev/null)" || exit 0
+# 무거운 명령 슬롯(heavy-slot-hook.sh)이 이 호출의 그룹이 사는 동안 슬롯을 쥐도록 그룹에 호출 id를 남긴다.
+tool_use_id="$(jq -r '.tool_use_id // "" | strings' <<<"$input" 2>/dev/null)"
+[[ "$tool_use_id" =~ ^[A-Za-z0-9_-]+$ ]] || tool_use_id=""
 [[ -n "${command_text//[[:space:]]/}" ]] || exit 0
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
@@ -35,8 +38,8 @@ done <<<"$(ps -A -o pid=,ppid= 2>/dev/null)"
 
 # 감시자는 출력과 분리하고 자기 프로세스 그룹에서 띄운다 — 에이전트 그룹에 오는 신호(터미널 탭 닫기·Ctrl+C)와 무관하게 남아야 한다.
 if command -v perl >/dev/null 2>&1; then
-  perl -e 'setpgrp(0, 0); exec @ARGV' "$DIR/background-watchdog.sh" "$agent" "$before" "$command_text" "$HM_DATA_DIR/bg-watchdog" </dev/null >/dev/null 2>&1 &
+  perl -e 'setpgrp(0, 0); exec @ARGV' "$DIR/background-watchdog.sh" "$agent" "$before" "$command_text" "$HM_DATA_DIR/bg-watchdog" "$tool_use_id" </dev/null >/dev/null 2>&1 &
 else
-  "$DIR/background-watchdog.sh" "$agent" "$before" "$command_text" "$HM_DATA_DIR/bg-watchdog" </dev/null >/dev/null 2>&1 &
+  "$DIR/background-watchdog.sh" "$agent" "$before" "$command_text" "$HM_DATA_DIR/bg-watchdog" "$tool_use_id" </dev/null >/dev/null 2>&1 &
 fi
 exit 0
