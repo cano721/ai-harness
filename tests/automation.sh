@@ -967,7 +967,7 @@ pass "rule quality gates and measured effect"
 
 # PreToolUse(Bash) DB 스캔 가드(opt-in)는 명령 위치의 DB 클라이언트·드라이버 쿼리 중 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
 DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.hooks[0].command | contains("db-scan-guard"))' "$ROOT/hooks/hooks.json")"
-assert_eq "3" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
+assert_eq "4" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array (edit guard, db scan, background watchdog, heavy slot)"
 assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$DB_GUARD_HOOK")" "db scan guard stays inside a short budget"
 GUARD_COMMAND="$(jq -r '.hooks[0].command' <<<"$DB_GUARD_HOOK")"
 assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"
@@ -1856,7 +1856,7 @@ cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
 # bg-agent.sh <hook에 줄 명령> <실제로 띄울 명령> <출력 접두어> — BG_HOOK_CMD(hooks.json의 hook 명령)를 sh -c로 부른 뒤
 # Claude Code처럼 eval '…' 뒤에 명령이 더 이어지는(그래서 exec되지 않는) 셸을 자식 그룹 리더로 띄우고 산다.
 # hook 명령은 env로 받는다 — 이 프로세스(가짜 에이전트)의 인자에 hook 경로가 없어야 한다.
-jq -cn --arg c "$1" '{tool_input:{command:$c,run_in_background:true}}' | /bin/sh -c "$BG_HOOK_CMD" >"$3.hook"
+jq -cn --arg c "$1" --arg id "${BG_TOOL_USE_ID:-}" '{tool_input:{command:$c,run_in_background:true}} + (if $id == "" then {} else {tool_use_id:$id} end)' | /bin/sh -c "$BG_HOOK_CMD" >"$3.hook"
 q="'"
 esc="${2//$q/$q\"$q\"$q}"
 perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "eval '$esc' </dev/null && :" "$3.shell" >"$3.out" 2>"$3.err" &
@@ -1951,5 +1951,173 @@ BG_START=$SECONDS
 "$ROOT/scripts/background-watchdog.sh" "$BG_GONE" " " "sleep 100" "$TEST_TMP/bg-claims"
 assert_eq "0" "$((SECONDS - BG_START > 1))" "watchdog exits at once when the agent is already gone"
 pass "background watchdog cleans the process group"
+
+# 무거운 명령 슬롯(#436): 병렬 세션의 빌드·dev 서버·전체 테스트를 메모리 기준 동시 수로 줄 세운다.
+# hook은 이 테스트 셸에서 직접(명령 치환 없이) 불러 부모 pid(=에이전트)가 살아 있게 한다.
+HS="$ROOT/scripts/heavy-slot-hook.sh"
+HS_DIR="$HARNESS_METRICS_DIR/heavy-slots"
+HS_REG_PRE="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash" and (.hooks[0].command | contains("heavy-slot")))' "$ROOT/hooks/hooks.json")"
+assert_eq "$LITERAL_PLUGIN_ROOT/scripts/heavy-slot-hook.sh\" pre" "$(jq -r '.hooks[0].command' <<<"$HS_REG_PRE")" "Bash PreToolUse registers the heavy slot hook"
+assert_eq "600" "$(jq -r '.hooks[0].timeout' <<<"$HS_REG_PRE")" "the heavy slot hook may wait up to its timeout"
+assert_eq "$LITERAL_PLUGIN_ROOT/scripts/heavy-slot-hook.sh\" post" "$(jq -r '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].command | select(contains("heavy-slot"))' "$ROOT/hooks/hooks.json")" "Bash PostToolUse releases heavy slots"
+# 실패한 명령은 PostToolUse 대신 PostToolUseFailure가 온다(실측).
+assert_eq "$LITERAL_PLUGIN_ROOT/scripts/heavy-slot-hook.sh\" post" "$(jq -r '.hooks.PostToolUseFailure[] | select(.matcher == "Bash") | .hooks[0].command | select(contains("heavy-slot"))' "$ROOT/hooks/hooks.json")" "Bash PostToolUseFailure releases heavy slots of failed commands"
+hs_in() { # tool_use_id 명령 [bg] [transcript]
+  jq -cn --arg id "$1" --arg c "$2" --argjson bg "${3:-false}" --arg t "${4:-}" \
+    '{tool_name:"Bash", tool_use_id:$id, transcript_path:$t, tool_input:{command:$c, run_in_background:$bg}}'
+}
+hs_call() { # 모드 입력 → $TEST_TMP/hs.out, $TEST_TMP/hs.rc
+  printf '%s' "$2" | "$HS" "$1" >"$TEST_TMP/hs.out" 2>"$TEST_TMP/hs.err"
+  echo $? >"$TEST_TMP/hs.rc"
+}
+hs_slots() { find "$HS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | sed 's#.*/##; s#\.json$##' | sort | paste -sd' ' -; }
+
+# 판정: 패키지 매니저 build·dev·start·test:ci, 프레임워크 CLI, 빌드 도구, compose up. 앞의 cd·env·nohup은 건너뛴다.
+for c in "yarn web build" "cd apps/web && npm run dev" "nohup yarn dev -p 3100 > log 2>&1 &" "VAR_ENV=st yarn start -p 3999" \
+  "(cd apps/web && pnpm build)" "yarn web test:ci" "npx next build" "./gradlew clean build" "docker compose up -d" "yarn workspace web dev"; do
+  "$HS" match "$c" || fail "heavy command not matched: $c"
+done
+for c in "pnpm --filter web build" "pnpm -r build" "yarn workspace web run build" "yarn run build" "sudo docker compose up -d" "timeout 300 yarn build"; do
+  "$HS" match "$c" || fail "heavy command not matched: $c"
+done
+for c in "ls -la" "grep -rn build src" "echo yarn build" "yarn web test src/a.spec.ts" "git status" "cat package.json" "yarn add build" "yarn remove dev" "echo 'a && yarn build'"; do
+  ! "$HS" match "$c" || fail "light command matched as heavy: $c"
+done
+HM_HEAVY_PATTERNS='^make( |$)' "$HS" match "make all" || fail "HM_HEAVY_PATTERNS replaces the default patterns"
+! HM_HEAVY_PATTERNS='^make( |$)' "$HS" match "yarn build" || fail "HM_HEAVY_PATTERNS replaces, not extends, the defaults"
+
+# 기본은 꺼짐: 아무것도 쓰지 않고 출력도 없다.
+hs_call pre "$(hs_in t-off "yarn build")"
+assert_eq "0||" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")|$(hs_slots)" "without HM_HEAVY_SLOTS the hook does nothing"
+
+export HM_HEAVY_SLOTS=1 HM_HEAVY_MEM_FREE_PCT=80 HM_HEAVY_WAIT=0
+# 가벼운 명령은 슬롯을 쓰지 않는다.
+hs_call pre "$(hs_in t-light "git status")"
+assert_eq "0||" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")|$(hs_slots)" "light commands pass without a slot"
+# 슬롯을 얻으면 출력 없이 통과하고, 다 찼으면 기다리다(여기서는 0초) 이유를 담아 거절한다.
+hs_call pre "$(hs_in t1 "yarn web build")"
+assert_eq "0||t1" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")|$(hs_slots)" "a free slot is taken silently"
+hs_call pre "$(hs_in t2 "npm run dev")"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")" "a full slot set denies the command"
+HS_REASON="$(jq -r '.hookSpecificOutput.permissionDecisionReason' "$TEST_TMP/hs.out")"
+assert_contains "$HS_REASON" "[Heavy slot] " "the denial starts with a bracketed hook prefix like the other guards"
+assert_contains "$HS_REASON" "yarn web build" "the denial names the command holding the slot"
+assert_eq "t1" "$(hs_slots)" "a denied command takes no slot"
+# 같은 tool_use_id로 다시 오면 이미 쥔 슬롯이다.
+hs_call pre "$(hs_in t1 "yarn web build")"
+assert_eq "0|" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")" "a retried call keeps its own slot"
+# PostToolUse(포그라운드)가 반환하면 다음 명령이 얻는다.
+hs_call post "$(hs_in t1 "yarn web build")"
+assert_eq "" "$(hs_slots)" "PostToolUse releases a foreground slot"
+hs_call pre "$(hs_in tf "yarn web build")"
+hs_call post "$(jq -cn '{tool_name:"Bash", tool_use_id:"tf", hook_event_name:"PostToolUseFailure", is_interrupt:false, error:"exit 1", tool_input:{command:"yarn web build"}}')"
+assert_eq "" "$(hs_slots)" "PostToolUseFailure input releases the slot of a failed command"
+hs_call pre "$(hs_in t2 "npm run dev")"
+assert_eq "t2" "$(hs_slots)" "the next heavy command gets the released slot"
+
+# 기다리는 동안 슬롯이 비면 얻는다.
+( sleep 1; rm -f "$HS_DIR/t2.json" ) &
+HS_START=$SECONDS
+HM_HEAVY_WAIT=8 hs_call pre "$(hs_in t3 "yarn build")"
+assert_eq "0||t3" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")|$(hs_slots)" "a waiting command gets a slot once it frees"
+assert_eq "1" "$((SECONDS - HS_START < 7))" "the wait ends as soon as a slot frees"
+wait
+
+# 회수: 주인 에이전트가 없거나, transcript에 그 호출의 결과(Esc·중단 포함)가 있으면 끝난 것이다.
+HS_DEAD="$(bash -c 'echo $$')"
+jq -cn --arg a "$HS_DEAD" '{tool_use_id:"t3", agent:($a|tonumber), cmd:"yarn build", bg:false, transcript:"", started:now|floor}' >"$HS_DIR/t3.json"
+hs_call pre "$(hs_in t4 "yarn build")"
+assert_eq "t4" "$(hs_slots)" "a slot whose agent is gone is reclaimed"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t4","is_error":true,"content":"interrupted"}]}}' >"$TEST_TMP/hs-transcript.jsonl"
+jq --arg t "$TEST_TMP/hs-transcript.jsonl" '.transcript = $t' "$HS_DIR/t4.json" >"$TEST_TMP/hs.tmp" && mv "$TEST_TMP/hs.tmp" "$HS_DIR/t4.json"
+hs_call pre "$(hs_in t5 "yarn build")"
+assert_eq "t5" "$(hs_slots)" "a slot whose call already has a tool_result is reclaimed (no PostToolUse after Esc)"
+rm -f "$HS_DIR"/*.json
+
+# 메모리가 빠듯하면 상한보다 적게: 여유 15% 미만은 1, 30% 미만은 절반.
+HM_HEAVY_SLOTS=4 HM_HEAVY_MEM_FREE_PCT=10 hs_call pre "$(hs_in m1 "yarn build")"
+HM_HEAVY_SLOTS=4 HM_HEAVY_MEM_FREE_PCT=10 hs_call pre "$(hs_in m2 "yarn build")"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")" "under 15% free memory only one heavy command runs"
+assert_contains "$(jq -r '.hookSpecificOutput.permissionDecisionReason' "$TEST_TMP/hs.out")" "10%" "the denial reports the free memory"
+HM_HEAVY_SLOTS=4 HM_HEAVY_MEM_FREE_PCT=25 hs_call pre "$(hs_in m2 "yarn build")"
+HM_HEAVY_SLOTS=4 HM_HEAVY_MEM_FREE_PCT=25 hs_call pre "$(hs_in m3 "yarn build")"
+assert_eq "deny|m1 m2" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")|$(hs_slots)" "under 30% free memory half the slots are used"
+HM_HEAVY_SLOTS=4 HM_HEAVY_MEM_FREE_PCT=60 hs_call pre "$(hs_in m3 "yarn build")"
+assert_eq "m1 m2 m3" "$(hs_slots)" "with enough memory the configured limit applies"
+rm -f "$HS_DIR"/*.json
+
+# 동시에 온 hook 여럿 중 상한만큼만 얻는다(lock).
+# 각 hook의 부모(에이전트 역할) 서브셸은 끝까지 살아 있어야 한다 — 먼저 끝나면 그 슬롯이 회수돼 다른 hook이 얻는다.
+for i in 1 2 3 4 5 6; do { HM_HEAVY_SLOTS=2 hs_call pre "$(hs_in "c$i" "yarn build")"; sleep 3; } & done
+wait
+assert_eq "2" "$(find "$HS_DIR" -maxdepth 1 -name 'c*.json' | wc -l | tr -d ' ')" "concurrent hooks take exactly the configured number of slots"
+rm -f "$HS_DIR"/*.json
+# 죽은 pid가 쥔 lock은 회수한다.
+HS_DEAD_LOCK="$(bash -c 'echo $$')"
+mkdir -p "$HS_DIR/.lock" && printf '%s\n' "$HS_DEAD_LOCK" >"$HS_DIR/.lock/pid"
+hs_call pre "$(hs_in l1 "yarn build")"
+assert_eq "l1" "$(hs_slots)" "a stale lock from a dead hook is taken over"
+rm -f "$HS_DIR"/*.json
+
+# 깨진 입력·tool_use_id 없음은 그대로 통과한다.
+hs_call pre '{broken'
+assert_eq "0|" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")" "malformed input fails open"
+hs_call pre "$(jq -cn '{tool_name:"Bash", tool_input:{command:"yarn build"}}')"
+assert_eq "0||" "$(<"$TEST_TMP/hs.rc")|$(<"$TEST_TMP/hs.out")|$(hs_slots)" "input without tool_use_id fails open"
+unset HM_HEAVY_SLOTS HM_HEAVY_MEM_FREE_PCT HM_HEAVY_WAIT
+pass "heavy command slots"
+
+# 백그라운드 서버: PostToolUse는 띄운 직후 오므로 반환하지 않고, 감시자가 찾은 그룹이 사는 동안 쥔다.
+mkdir -p "$TEST_TMP/hs-bin"
+printf '%s\n' '#!/bin/bash' 'while :; do sleep 1; done' >"$TEST_TMP/hs-bin/yarn"
+chmod +x "$TEST_TMP/hs-bin/yarn"
+HS_BG_CMD="yarn dev --port 39999 $TEST_TMP/hs-bg"
+export HM_HEAVY_SLOTS=1 HM_HEAVY_MEM_FREE_PCT=80 HM_HEAVY_WAIT=0
+hs_call pre "$(hs_in bg1 "$HS_BG_CMD" true)"
+assert_eq "bg1" "$(hs_slots)" "a background heavy command takes a slot"
+PATH="$TEST_TMP/hs-bin:$PATH" BG_TOOL_USE_ID=bg1 bg_start hs-bg "$HS_BG_CMD"
+for _ in $(seq 1 50); do [[ -f "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP/tool_use_id" ]] && break; sleep 0.1; done
+assert_eq "bg1" "$(cat "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP/tool_use_id" 2>/dev/null)" "the watchdog records which call its group belongs to"
+hs_call post "$(hs_in bg1 "$HS_BG_CMD" true)"
+assert_eq "bg1" "$(hs_slots)" "PostToolUse keeps a background slot"
+jq '.started -= 600' "$HS_DIR/bg1.json" >"$TEST_TMP/hs.tmp" && mv "$TEST_TMP/hs.tmp" "$HS_DIR/bg1.json"
+hs_call pre "$(hs_in bg2 "yarn build")"
+assert_eq "deny|bg1" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")|$(hs_slots)" "a background slot is held while its watched group lives"
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+bg_group_gone "$BG_GROUP" 5 || fail "test group did not stop"
+for _ in $(seq 1 30); do [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] || break; sleep 0.2; done
+hs_call pre "$(hs_in bg2 "yarn build")"
+[[ "$(hs_slots)" == bg2 ]] || fail "the background slot frees once its group is gone: slots=$(hs_slots) claims=$(find "$HARNESS_METRICS_DIR/bg-watchdog" 2>/dev/null | tr '\n' ' ') slot=$(cat "$HS_DIR"/*.json 2>/dev/null) out=$(cat "$TEST_TMP/hs.out")"
+bg_stop_agent
+rm -f "$HS_DIR"/*.json
+
+# 감시자가 KILL로 죽어 선점 디렉토리만 남으면(그룹은 없음) 슬롯을 쥐지 않는다.
+jq -cn --argjson a "$$" '{tool_use_id:"bg3", agent:$a, cmd:"yarn dev", bg:true, transcript:"", started:((now|floor) - 600)}' >"$HS_DIR/bg3.json"
+HS_DEAD_GROUP="$(bash -c 'echo $$')"
+mkdir -p "$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP" && printf bg3 >"$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP/tool_use_id"
+hs_call pre "$(hs_in bg4 "yarn build")"
+assert_eq "bg4" "$(hs_slots)" "a leftover claim whose group is gone does not hold the slot"
+rm -rf "${HARNESS_METRICS_DIR:?}/bg-watchdog/$HS_DEAD_GROUP" "$HS_DIR"/*.json
+
+# 상한을 이 세션의 백그라운드 서버만 쥐고 있으면 기다려도 풀리지 않는다 — 기다리지 않고 바로 알린다.
+jq -cn --argjson a "$$" '{tool_use_id:"own1", agent:$a, cmd:"yarn dev -p 3000", bg:true, transcript:"", started:(now|floor)}' >"$HS_DIR/own1.json"
+HS_START=$SECONDS
+HM_HEAVY_WAIT=20 hs_call pre "$(hs_in own2 "yarn build")"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")" "a slot held only by this session's own server is denied"
+assert_eq "1" "$((SECONDS - HS_START < 5))" "the own-server denial does not wait"
+assert_contains "$(jq -r '.hookSpecificOutput.permissionDecisionReason' "$TEST_TMP/hs.out")" "이 세션이 백그라운드로 띄운 서버" "the denial says the session's own server holds the slot"
+# 다른 세션의 서버면 기다린다(여기서는 다른 살아 있는 pid로 흉내).
+sleep 30 &
+HS_OTHER=$!
+jq --argjson a "$HS_OTHER" '.agent = $a' "$HS_DIR/own1.json" >"$TEST_TMP/hs.tmp" && mv "$TEST_TMP/hs.tmp" "$HS_DIR/own1.json"
+# 백그라운드 명령은 감시자가 그룹을 놓치지 않게 HM_HEAVY_BG_WAIT(기본 60초)까지만 기다린다.
+HS_START=$SECONDS
+HM_HEAVY_WAIT=20 HM_HEAVY_BG_WAIT=1 hs_call pre "$(hs_in own3 "yarn start" true)"
+assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs.out")" "a background command waiting for another session is denied after its short wait"
+assert_eq "1" "$((SECONDS - HS_START < 8))" "a background command waits only HM_HEAVY_BG_WAIT"
+kill "$HS_OTHER" 2>/dev/null; wait "$HS_OTHER" 2>/dev/null || true
+unset HM_HEAVY_SLOTS HM_HEAVY_MEM_FREE_PCT HM_HEAVY_WAIT
+rm -f "$HS_DIR"/*.json
+pass "background heavy commands hold their slot while the server lives"
 
 finish_tests
