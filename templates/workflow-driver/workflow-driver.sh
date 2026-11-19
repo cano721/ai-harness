@@ -223,6 +223,7 @@ GRAPH="$REPO/.ai-harness/workflows/$GRAPH_NAME"
 [[ -f "$GRAPH" ]] || GRAPH="$SCRIPT_DIR/../$TEMPLATE/references/$GRAPH_NAME"
 jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>&1 || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
 MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
+MAX_IDENTICAL_FAILURES="$(jq -r '.limits.max_identical_repair_failures // 2' "$GRAPH")"
 
 finish() { # status exit_code message
   local message="$3"
@@ -474,8 +475,9 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
   guard_head "$node"
 }
 
-run_checks() { # label → $RUN/<label>.checks.json, 하나라도 실패하면 1
-  local label="$1" i=0 failed=0 cmd rc results="[]"
+run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문자열은 한 번만 실행한다
+  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]"
+  commands="$(jq -c 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end)' <<<"$commands")"
   while IFS= read -r cmd; do
     i=$((i + 1))
     rc=0
@@ -483,13 +485,91 @@ run_checks() { # label → $RUN/<label>.checks.json, 하나라도 실패하면 1
     results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
       '. + [{command:$cmd, exit:$rc, tail:$tail}]' <<<"$results")"
     if ((rc != 0)); then failed=1; log "check failed: $cmd (exit $rc)"; else log "check passed: $cmd"; fi
-  done < <(state '.checks[]')
+  done < <(jq -r '.[]' <<<"$commands")
   printf '%s\n' "$results" >"$RUN/$label.checks.json"
   return "$failed"
 }
 
+# 실패한 check 명령과 출력 꼬리(요약줄 뺀 모든 줄)를 정규화한 값. 테스트 이름 줄에는 오류 낱말이 없고 바뀐 실패가 뒤쪽에 있을 수 있어
+# 줄을 고르거나 자르지 않는다. 빌드 도구의 꼬리 요약줄(BUILD FAILED·report 경로 등)은 실패가 달라도 같아서 뺀다.
+# 경로 앞부분·시각·소요 시간·주소·UUID·숫자는 라운드마다 바뀌는 잡음이라 지우고, 병렬 실행의 출력 순서가 바뀌어도 같게 줄을 정렬한다.
+check_signature() { # checks.json → JSON 배열 [{command, error}]
+  jq -c '
+    def summary: test("(?i)^[[:space:]]*(BUILD FAILED|FAILURE: |\\* What went wrong|\\* Try:|Execution failed for task|> There were failing tests|npm ERR!|[0-9]+ tests? completed)|See the report at|file://");
+    [.[] | select(.exit != 0) | {command, error:(.tail | split("\n") | map(sub("[[:space:]]+$"; "")) | map(select(length > 0 and (summary | not)))
+      | map(gsub("/Users/[^/[:space:]]+|/home/[^/[:space:]]+|/private/var/[^[:space:]]+/|/var/folders/[^[:space:]]+/"; "<path>/")
+        | gsub("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"; "<uuid>")
+        | gsub("0x[0-9a-fA-F]+"; "<addr>") | gsub("@[0-9a-f]{6,}\\b"; "@<hash>")
+        | gsub("[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+-]+Z?"; "<time>")
+        | gsub("[0-9]+([.][0-9]+)?[[:space:]]*(ms|msec|seconds?|secs?|s)\\b"; "<duration>")
+        | gsub("[0-9]+"; "<n>")) | sort | join("\n"))}]' "$1"
+}
+
+# 실패 원인 위치가 전부 변경 파일 밖의 의존 산출물(node_modules·가상환경·site-packages·vendor)이면 그 위치를 낸다.
+# 원인 위치는 줄 맨 앞의 `경로:줄[:열]` 또는 `경로(줄,열)` 바로 뒤에 심각도 error(fatal error)가 오는 진단만 본다. 스택 프레임(`at ... (node_modules/...)`)·
+# 보고서 경로(`See the report at .../build/reports/...`)는 원인 위치가 아니고, build·dist는 프로젝트 자신의 산출물이라 넣지 않는다.
+dependency_failure_location() { # checks.json → 위치(쉼표 구분) 또는 빈 값
+  local locations changed location
+  locations="$(jq -r '[.[] | select(.exit != 0) | .tail | split("\n")[]
+    | capture("^[[:space:]]*(?<loc>[^[:space:]():]+)(:[0-9]+(:[0-9]+)?|[(][0-9]+,[0-9]+[)])[[:space:]:-]+(?i:(fatal[[:space:]]+)?error)\\b")?
+    | .loc | sub("^[.]/"; "")] | unique | .[]' "$1")"
+  [[ -n "$locations" ]] || return 0
+  changed="$(git -C "$REPO" diff --name-only "$(state '.diff_base // .start_head')" --; git -C "$REPO" ls-files --others --exclude-standard)"
+  while IFS= read -r location; do
+    [[ "$location" =~ (^|/)(node_modules|\.venv|venv|site-packages|vendor)/ ]] || return 0
+    if [[ -n "$changed" ]] && printf '%s\n' "$changed" | awk -v l="$location" 'length($0) > 0 && (l == $0 || substr(l, length(l) - length($0)) == "/" $0) { found = 1 } END { exit !found }'; then
+      return 0
+    fi
+  done <<<"$locations"
+  printf '%s\n' "$locations" | head -n 3 | paste -sd ',' - | sed 's/,/, /g'
+}
+
 check_findings() {
   jq -c '[.[] | select(.exit != 0) | "required check failed: \(.command) (exit \(.exit))\n\(.tail)"]' "$RUN/$1.checks.json"
+}
+
+failed_check_commands() { jq -c '[.[] | select(.exit != 0) | .command] | reduce .[] as $c ([]; if index($c) then . else . + [$c] end)' "$1"; }
+
+# 노드가 부르는 필수 검사. repair 뒤에는 직전에 실패한 check만 먼저 돌리고, 통과하면 전체를 한 번 돌려 확정한다.
+verify_checks() { # label → 통과면 0. 실패면 findings·다음에 다시 돌릴 check·실패 시그니처를 기록하고 1
+  local label="$1" commands file
+  commands="$(state '.repair_checks // []')"
+  if [[ "$(state .attempts)" -gt 0 && "$commands" != "[]" ]] && ! run_checks "$label-failed" "$commands"; then
+    file="$RUN/$label-failed.checks.json"
+  elif run_checks "$label"; then
+    state_set '.repair_checks = [] | .repair_failure_signature = "" | .repair_failure_streak = 0'
+    return 0
+  else
+    file="$RUN/$label.checks.json"
+  fi
+  state_set '.findings = $f | .needs_user_decision = false | .repair_checks = $c' \
+    --argjson f "$(check_findings "$(basename "$file" .checks.json)")" --argjson c "$(failed_check_commands "$file")"
+  note_check_failure "$file"
+  return 1
+}
+
+# 검사 실패마다 부른다(findings를 기록한 뒤). repair 뒤의 실패는 시그니처 연속 횟수를 센다.
+# 확정된 환경 오류이거나 같은 실패가 그래프 limit만큼 이어지면 사람의 판단을 요청한다 — 전이는 그래프의 repair 단계가 고른다.
+note_check_failure() { # checks.json
+  local checks="$1" signature streak=1 location
+  signature="$(check_signature "$checks")"
+  if [[ "$(state .attempts)" -gt 0 ]]; then
+    if [[ "$signature" == "$(state '.repair_failure_signature // ""')" ]]; then
+      streak=$(( $(state '.repair_failure_streak // 0') + 1 ))
+    fi
+    state_set '.repair_failure_signature = $s | .repair_failure_streak = $n' --arg s "$signature" --argjson n "$streak"
+  fi
+  location="$(dependency_failure_location "$checks")"
+  if [[ -n "$location" ]]; then
+    request_user_decision "a required check failed at a dependency outside the changed files ($location); fix the environment (install or rebuild dependencies), not the code"
+  elif [[ "$(state .attempts)" -gt 0 ]] && ((streak >= MAX_IDENTICAL_FAILURES)); then
+    request_user_decision "the same required-check failure repeated in $streak consecutive repair rounds (limit $MAX_IDENTICAL_FAILURES): $(jq -r 'map(.command + ": " + (.error | gsub("\n"; " / "))) | join(" | ")' <<<"$signature")"
+  fi
+}
+
+request_user_decision() { # reason → 다음 repair 단계가 그래프의 user_decision 전이로 넘긴다
+  state_set '.needs_user_decision = true | .repair_stall = $r | .findings = [$r] + (.findings // [])' --arg r "$1"
+  log "repair stopped: $1"
 }
 
 # 리뷰·수리·화면 검증 노드가 받는 기준 문서. review는 승인된 Brief 대신 검토 범위다.
@@ -1424,7 +1504,7 @@ execute() {
           elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .repair_stall then " (" + .repair_stall + ")" else "" end')$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
       esac
     fi
     # review가 수리 동의를 기다리던 노드면 그 노드를 다시 실행하지 않고 동의만 확인한다.
@@ -1666,7 +1746,7 @@ $(brief_context)"
         if [[ "$WORKFLOW" == polish ]]; then
           [[ "$(state '.selected | length')" -gt 0 ]] \
             || finish incomplete 30 "no item is selected to fix; choose with revise --select \"P1,P3\" and approve again"
-          if [[ "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
+          if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
             go fix "$(edge_when fix user_decision)"
             continue
           fi
@@ -1712,10 +1792,9 @@ $(brief_context)"
         ;;
       verify)
         # 검증은 모델이 아니라 이 스크립트가 직접 실행한다.
-        if run_checks "verify-$(state .attempts)"; then
+        if verify_checks "verify-$(state .attempts)"; then
           go verify required_checks_pass
         else
-          state_set '.findings = $f | .needs_user_decision = false' --argjson f "$(check_findings "verify-$(state .attempts)")"
           if ! has_edge verify required_checks_fail; then
             # 실패 엣지가 없는 그래프(동기화 전)는 실패를 고칠 경로가 없다.
             printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
@@ -1770,9 +1849,15 @@ Design-audit: baseline $(state '.baseline.audit | if .scored then "\(.total) (A 
           continue
         fi
         # 그래프에 verify 노드가 있으면 검증은 이미 그 노드가 했다. 없으면(feature) 리뷰 전에 이 스크립트가 실행한다.
-        if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null && ! run_checks "review-$(state .attempts)"; then
-          state_set '.findings = $f | .needs_user_decision = false' --argjson f "$(check_findings "review-$(state .attempts)")"
-        else
+        local review_checks_ok=true
+        if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null; then
+          if [[ "$(state '.checks_verified_attempt // -1')" == "$(state .attempts)" ]]; then
+            state_set '.checks_verified_attempt = null'
+          elif ! verify_checks "review-$(state .attempts)"; then
+            review_checks_ok=false
+          fi
+        fi
+        if [[ "$review_checks_ok" == true ]]; then
           run_node review "review-$(state .attempts)" "$CONTEXT
 
 You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief. The driver already ran the required checks and they passed.
@@ -1908,7 +1993,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
             # review 그래프는 repair에서 사람에게 가는 엣지가 없다(한도는 re_review가 본다). 검증 실패가 한도까지 반복되면 여기서 넘긴다.
             printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
             state_set '.node = "user_decision"'
-            finish user_decision 20 "a person must decide: the repair limit ($MAX_REPAIR) was reached with blocking findings left; see $RUN/unresolved.json"
+            finish user_decision 20 "a person must decide: $(state '.repair_stall // empty' | grep . || printf 'the repair limit (%s) was reached with blocking findings left' "$MAX_REPAIR"); see $RUN/unresolved.json"
           fi
           go repair "$escalate"
           continue
@@ -1934,10 +2019,11 @@ $(brief_context)"
         # 그래프가 repair 뒤 verify 노드로 가면(bug-fix·review) 검증은 그 노드가 한다. 아니면(feature) 여기서 실행한다.
         if has_edge repair ""; then
           go repair ""
-        elif run_checks "repair-$(state .attempts)"; then
+        elif verify_checks "repair-$(state .attempts)"; then
+          # 리뷰는 같은 트리의 검사를 다시 돌리지 않는다.
+          state_set '.checks_verified_attempt = .attempts'
           go repair required_checks_pass
         else
-          state_set '.findings = $f' --argjson f "$(check_findings "repair-$(state .attempts)")"
           go repair required_checks_fail
         fi
         ;;

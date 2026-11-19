@@ -49,7 +49,7 @@
     {"from": "post_merge_verify", "to": "done", "when": "post_merge_verified"},
     {"from": "post_merge_verify", "to": "user_decision", "when": "post_merge_failed_or_unverified"}
   ],
-  "limits": {"max_repair_attempts": 3, "audit_pass_score": 90},
+  "limits": {"max_repair_attempts": 3, "audit_pass_score": 90, "max_identical_repair_failures": 2},
   "invariants": [
     "measure renders the target screens and the screens that share their components in a real browser at the viewports and themes the project supports, saves the captures in the run directory, scores them with the project design-audit rubric when a design rule document and a reference screen exist, and does not change the working tree; a screen that could not be rendered ends at user_decision, never as measured.",
     "diagnose is an independent read-only critique of the baseline captures: every fix-list item carries its evidence (a capture and a rule-document section or rubric line) and a severity, ordered most severe first.",

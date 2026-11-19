@@ -19,4 +19,5 @@ jobs:
       - name: ShellCheck
         run: shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh
       - name: Regression tests
-        run: bash tests/run.sh
+        timeout-minutes: 30
+        run: bash tests/run.sh -j 2

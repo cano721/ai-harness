@@ -71,7 +71,7 @@ workspace 세션에서 `subagent_type: developer`는 멤버의 `.claude/agents/d
 
 1. 워크플로 계약의 단일 출처를 정하고, 나머지는 거기서 생성하거나 거기에 대해 검증한다.
 2. 공통 절차와 저장소 사실을 분리해, 공통 절차 개선이 모든 저장소에 전파되게 한다.
-3. 세션을 어디서 열든 대상 저장소 밖에서는 그 저장소 코드를 바꾸지 못하게 하고 저장소 세션으로 인계한다 — 권고가 아니라 차단으로. (개정 전: "코드 변경 전에 워크플로를 읽게 한다". R2 참고)
+3. 세션을 어디서 열든 대상 저장소 밖에서는 그 저장소 코드를 바꾸지 못하게 하고 저장소 세션으로 인계한다 — 권고가 아니라 사용자 확인 또는 차단으로, 모델 혼자서는 진행하지 못하게. (개정 전: "코드 변경 전에 워크플로를 읽게 한다". R2 참고)
 4. 작업 크기에 맞는 경로를 둔다.
 5. 경유와 효과를 잴 수 있게 계측을 고친다.
 
@@ -171,6 +171,7 @@ workspace 세션이 대상 저장소에 세션을 띄우는 방식은 실측에�
 - 발동: 세션 프로젝트 디렉토리가 그 멤버 root가 아닐 때만(멤버 안에서는 저장소 가드가 담당). 
 - ~~검사: 이 세션(서브에이전트면 그 transcript)이 그 멤버의 워크플로 본문 또는 승인 BRIEF를 Read 또는 Bash로 읽었는지. 아니면 exit 2로 차단하고 멤버 워크플로 목록을 안내한다.~~
 - 검사(개정): 워크플로 읽기 여부와 무관하게 exit 2로 차단하고 멤버 세션 인계(새 세션 + 인계 프롬프트, 또는 `/cd`)를 안내한다. 서브에이전트도 같다. 읽기로 해제하던 경로는 workspace 세션이 멤버 hook·페르소나 없이 구현하는 열쇠가 되어 제거했다(2026-10-21 jobda-workspace 사고).
+- 검사(개정2): 기본은 차단 대신 사용자 확인(`permissionDecision: ask`)이다. 사용자가 허용한 편집만 진행하고, 확인 창 문구(`permissionDecisionReason`)는 무엇을 허용하는지만 적으며, 인계 절차는 거부돼도 모델에 닿는 `additionalContext`에 둔다. bypass 모드에서도 확인이 뜨고 답할 사람이 없는 `-p`는 거부된다(실측). `HM_MEMBER_GUARD=block`이면 개정1처럼 exit 2. 경고(통과 + 안내)로 낮추지 않은 이유는 개정1의 사고와 같다 — 판단을 모델에게 맡기면 진행해 버린다. 계측 영향: 사용자가 거부한 확인은 `guard_block`이 아니라 `permission_deny`로 잡힌다.
 - 안내(개정): 인계는 R1의 완료 신호(백그라운드 세션 알림·감독 디스패치·완료 파일)와 함께 건다.
 - 오류는 통과(fail-open), timeout 3초.
 
@@ -192,7 +193,7 @@ Codex는 상위 폴더의 `.agents/skills`를 독립 저장소 안에서 발견�
 - workspace AGENTS.md와 harness-init 7-4의 "Claude는 cwd의 `.claude/`만 로드하므로 해결 불가"는 현재 버전에서 틀렸다. workspace에서 `/add-dir <member>`면 멤버 슬래시 커맨드를 쓸 수 있고, `/cd <member>`면 가드까지 적용된다. Preflight를 이 기준으로 고친다.
 - **`/cd` 후 멤버 가드가 깨진다.** 멤버 settings의 hook 명령이 `${CLAUDE_PROJECT_DIR}/.ai-harness/hooks/...`인데, `/cd` 뒤에도 이 변수는 workspace 루트를 가리킨다. 생성하는 hook 명령을 `"$(git rev-parse --show-toplevel)"` 또는 hook 입력의 `cwd` 기준으로 바꾼다(단계 2).
 - `/add-dir` 페르소나와 사용자 전역 페르소나가 같은 이름일 때의 우선순위는 문서에 없다. R3의 경고는 유지한다.
-- 편집 가드(R2)는 편집 파일 경로로 멤버를 판정하므로 어느 방식으로 진입하든 동작한다. hook 문서상 PreToolUse는 exit 2로 차단할 수 있고 입력에 `cwd`·`transcript_path`·`agent_id`가 온다.
+- 편집 가드(R2)는 편집 파일 경로로 멤버를 판정하므로 어느 방식으로 진입하든 동작한다. hook 문서상 PreToolUse는 exit 2로 차단하거나 JSON `permissionDecision: ask`로 사용자 확인을 띄울 수 있고 입력에 `cwd`·`transcript_path`·`agent_id`가 온다.
 
 ### D6. 계측
 

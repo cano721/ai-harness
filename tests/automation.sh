@@ -717,7 +717,8 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
 
-# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드는 워크플로를 읽었어도 바꾸지 못하고 멤버 세션으로 인계한다.
+# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드 편집은 워크플로를 읽었어도 모델이 혼자 진행하지 못한다.
+# 기본은 사용자 확인(permissionDecision: ask)이고, HM_MEMBER_GUARD=block이면 예전처럼 막고 멤버 세션으로 인계하게 한다.
 assert_contains "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
 assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
 assert_eq "3" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
@@ -737,32 +738,41 @@ guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/impl
 cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
 mkdir -p "$GW/t/sess/subagents"
 cp "$GW/t/read.jsonl" "$GW/t/sess/subagents/agent-a1.jsonl"
-member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; stderr to $GW/err
-  local agent="${4:-}"
+member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> ask(확인 요청) | exit code; stdout $GW/out, stderr $GW/err
+  local agent="${4:-}" rc=0
   jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
     '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
-    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >/dev/null && echo 0 || echo $?
+    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
+  if [[ "$rc" == 0 && "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$GW/out" 2>/dev/null)" == ask ]]; then echo ask; else echo "$rc"; fi
 }
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code is blocked"
-assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
-assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
-assert_contains "$(<"$GW/err")" 'cd jobda && claude --bg -n <인계 이름> "<인계>"' "block message hands off to a Claude Code background session in the member"
-assert_contains "$(<"$GW/err")" 'notify_when_idle: true' "block message waits on the background session's turn-end notice"
-assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message keeps Orca supervision as an option when the user wants it"
-assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
-assert_contains "$(<"$GW/err")" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "block message tells the handoff to open by reading the member workflow file"
-[[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
-assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow does not unblock a workspace session"
-assert_contains "$(<"$GW/err")" "/cd worktrees/NJ-1/jobda" "block message hands off to the worktree, not the main checkout"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent of a workspace session is blocked even when it and its parent read the workflow"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "the verdict does not depend on a readable transcript"
+guard_reason() { jq -r '.hookSpecificOutput.permissionDecisionReason' "$GW/out"; }
+guard_context() { jq -r '.hookSpecificOutput.additionalContext' "$GW/out"; }
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code asks the user instead of going ahead"
+assert_eq "PreToolUse" "$(jq -r '.hookSpecificOutput.hookEventName' "$GW/out")" "ask decision names its hook event"
+assert_eq "" "$(<"$GW/err")" "asking writes nothing to stderr (no hook error in the transcript)"
+[[ "$(guard_reason)" == "[Direct edit guard] jobda "* ]] || fail "ask reason starts with the guard prefix and names the member"
+assert_contains "$(guard_reason)" "허용하면 이 편집만 진행" "ask reason tells the user what approving means"
+[[ "$(guard_reason)" != *"claude --bg"* ]] || fail "the user's prompt stays short; handoff steps go to the model"
+assert_contains "$(guard_context)" "거부되면 다시 시도하지 마세요" "the model is told not to retry a denied edit"
+assert_contains "$(guard_context)" "Bash로 파일을 써서 우회하지 마세요" "the model is told not to route around the prompt with Bash"
+assert_contains "$(guard_context)" '/cd jobda' "handoff context offers /cd into the member"
+assert_contains "$(guard_context)" 'cd jobda && claude --bg -n <인계 이름> "<인계>"' "handoff context hands off to a Claude Code background session in the member"
+assert_contains "$(guard_context)" 'notify_when_idle: true' "handoff context waits on the background session's turn-end notice"
+assert_contains "$(guard_context)" 'orca orchestration check --wait' "handoff context keeps Orca supervision as an option when the user wants it"
+assert_contains "$(guard_context)" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
+assert_contains "$(guard_context)" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "handoff context tells the handoff to open by reading the member workflow file"
+[[ "$(guard_context)$(guard_reason)" != *"워크플로를 읽고"* ]] || fail "reading the workflow is never offered as the way through"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read still asks"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow still asks"
+assert_eq "ask" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow still asks"
+assert_contains "$(guard_context)" "/cd worktrees/NJ-1/jobda" "handoff context hands off to the worktree, not the main checkout"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent of a workspace session still asks even when it and its parent read the workflow"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "the verdict does not depend on a readable transcript"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the member is left to the member's own guard"
 assert_eq "0" "$(member_guard "$GW/jobda/src" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened below the member root is inside the member"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl" a1)" "a subagent of a member session passes"
 assert_eq "0" "$(member_guard "$GW/worktrees/NJ-1/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the worktree passes"
-assert_eq "2" "$(member_guard "$GW/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a worktree is its own member: a main-checkout session cannot edit it"
+assert_eq "ask" "$(member_guard "$GW/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a worktree is its own member: a main-checkout session must ask"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.ai-harness/docs/domain.md" "$GW/t/none.jsonl")" "harness documents are not guarded"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.claude/settings.json" "$GW/t/none.jsonl")" "tool settings are not guarded"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/docs/handoff.md" "$GW/t/none.jsonl")" "markdown documents are not guarded"
@@ -772,6 +782,13 @@ ln -s "$GW/jobda" "$GW/jobda-link"
 assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
+assert_eq "" "$(<"$GW/out")" "passing cases print no decision"
+assert_eq "2" "$(HM_MEMBER_GUARD=block member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=block keeps the hard block"
+[[ "$(<"$GW/err")" == "[Direct edit guard] "* ]] || fail "hard block stderr starts with the counted guard prefix"
+assert_contains "$(<"$GW/err")" '/cd jobda' "hard block still hands off to the member"
+assert_contains "$(<"$GW/err")" "Bash로 파일을 써서 우회하지 마세요" "hard block still forbids writing around it with Bash"
+assert_eq "" "$(<"$GW/out")" "hard block prints no ask decision"
+assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "block mode still passes a session opened in the member"
 pass "member edit guard"
 
 # 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.
@@ -949,8 +966,8 @@ assert_eq "pending" "$(HM_EFFECT_MIN_EXPECTED=50 run_rq effect --rule-id rule-on
 pass "rule quality gates and measured effect"
 
 # PreToolUse(Bash) DB 스캔 가드(opt-in)는 명령 위치의 DB 클라이언트·드라이버 쿼리 중 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
-DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash")' "$ROOT/hooks/hooks.json")"
-assert_eq "2" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
+DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.hooks[0].command | contains("db-scan-guard"))' "$ROOT/hooks/hooks.json")"
+assert_eq "3" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array"
 assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$DB_GUARD_HOOK")" "db scan guard stays inside a short budget"
 GUARD_COMMAND="$(jq -r '.hooks[0].command' <<<"$DB_GUARD_HOOK")"
 assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"
@@ -1819,5 +1836,120 @@ assert_eq "2" "$(grep -c -- '--plugin-dir "$plugin_root" --no-session-persistenc
 # 무인 실행이 도는 동안 정기 실행은 LLM 단계를 건너뛴다.
 assert_contains "$(<"$ROOT/scripts/backfill-due.sh")" "run_in_flight && { SKIP_REASON=run_in_flight; return 1; }" "scheduled LLM steps skip while an unattended run is in flight"
 pass "auto sync chains runs within the daily cap"
+
+# 백그라운드 Bash 감시자 hook: 명령을 바꾸지 않고(권한 판정이 그대로) 아무것도 출력하지 않는다. 등록·끄기·오류 통과.
+BG_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash" and (.hooks[0].command | contains("background-watchdog")))' "$ROOT/hooks/hooks.json")"
+assert_eq "$LITERAL_PLUGIN_ROOT/scripts/background-watchdog-hook.sh\"" "$(jq -r '.hooks[0].command' <<<"$BG_HOOK")" "Bash PreToolUse registers the background watchdog"
+assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$BG_HOOK")" "background watchdog hook stays inside a short budget"
+bg_hook() { "$ROOT/scripts/background-watchdog-hook.sh"; printf '|%s' "$?"; }
+assert_eq "|0" "$(jq -cn '{tool_input:{command:"echo bg",run_in_background:true}}' | bg_hook)" "background input gets no hook output (command and permissions untouched)"
+assert_eq "|0" "$(jq -cn '{tool_input:{command:"echo fg",run_in_background:false}}' | bg_hook)" "foreground input passes through"
+assert_eq "|0" "$(printf '%s\n' '{broken' | bg_hook)" "malformed input fails open silently"
+assert_eq "|0" "$(jq -cn '{tool_input:{command:["a"],run_in_background:true}}' | bg_hook)" "non-string command fails open silently"
+pass "background command watchdog hook"
+
+# 감시자는 실제 프로세스 그룹에서: 가짜 에이전트가 hook을 부르고, Claude Code처럼 명령을 eval '…'로 넣은 셸을 새 그룹 리더로 띄운다.
+# 띄우는 프로세스는 인자에 $TEST_TMP를 넣어 실패해도 cleanup이 끈다.
+BG_LOOP='while :; do sleep 1; done'
+cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
+#!/bin/bash
+# bg-agent.sh <hook에 줄 명령> <실제로 띄울 명령> <출력 접두어> — BG_HOOK_CMD(hooks.json의 hook 명령)를 sh -c로 부른 뒤
+# Claude Code처럼 eval '…' 뒤에 명령이 더 이어지는(그래서 exec되지 않는) 셸을 자식 그룹 리더로 띄우고 산다.
+# hook 명령은 env로 받는다 — 이 프로세스(가짜 에이전트)의 인자에 hook 경로가 없어야 한다.
+jq -cn --arg c "$1" '{tool_input:{command:$c,run_in_background:true}}' | /bin/sh -c "$BG_HOOK_CMD" >"$3.hook"
+q="'"
+esc="${2//$q/$q\"$q\"$q}"
+perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "eval '$esc' </dev/null && :" "$3.shell" >"$3.out" 2>"$3.err" &
+echo $! >"$3.pid"
+wait $!
+echo $? >"$3.status"
+while :; do sleep 1; done
+EOF
+bg_start() { # 이름 hook명령 [실행명령] → BG_AGENT, BG_GROUP
+  rm -f "$TEST_TMP/$1".*
+  BG_HOOK_CMD="$(jq -r '.hooks[0].command' <<<"$BG_HOOK")${BG_HOOK_SUFFIX:-}" CLAUDE_PLUGIN_ROOT="$ROOT" \
+    bash "$TEST_TMP/bg-agent.sh" "$2" "${3:-$2}" "$TEST_TMP/$1" &
+  BG_AGENT=$!
+  for _ in $(seq 1 50); do [[ -s "$TEST_TMP/$1.pid" ]] && break; sleep 0.1; done
+  BG_GROUP="$(<"$TEST_TMP/$1.pid")"
+}
+bg_watching() { pgrep -f "background-watchdog.sh $BG_AGENT " >/dev/null && echo true || echo false; }
+bg_claimed() { [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] && echo true || echo false; }
+# shellcheck disable=SC2009  # ppid·pgid까지 보여야 해서 pgrep으로 대신할 수 없다
+bg_procs() { ps -A -o pid=,ppid=,pgid=,args= | grep -F -e "$TEST_TMP" -e background-watchdog | grep -v grep | cut -c1-200; }
+bg_group_gone() { # pgid 초 → 그 시간 안에 그룹이 비면 0
+  local i
+  for i in $(seq 1 $(($2 * 10))); do kill -0 -- "-$1" 2>/dev/null || return 0; sleep 0.1; done
+  return 1
+}
+bg_stop_agent() { kill -KILL "$BG_AGENT" 2>/dev/null; wait "$BG_AGENT" 2>/dev/null || true; }
+
+# 에이전트가 강제로 끝나면 그룹 전체(ppid 1로 떨어진 손자 포함)를 끈다. hook 출력은 없다.
+bg_start bg-kill "( bash -c '$BG_LOOP' '$TEST_TMP/bg-orphan' & ); bash -c '$BG_LOOP' '$TEST_TMP/bg-main'"
+sleep 2
+assert_eq "" "$(<"$TEST_TMP/bg-kill.hook")" "hook prints nothing for a background command"
+assert_eq "true" "$(kill -0 -- "-$BG_GROUP" 2>/dev/null && echo true || echo false)" "background server keeps running while the agent lives"
+[[ "$(bg_claimed)" == true ]] || fail "watchdog found and claimed the background command's group (hook run through /bin/sh like hooks.json): agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "process group (with an orphaned grandchild) survives after the agent is gone"
+
+# hook을 감싼 sh가 마지막 명령을 exec하지 않아도(일부 dash) hook의 부모가 아니라 그 위 에이전트를 감시한다.
+BG_HOOK_SUFFIX='; :' bg_start bg-wrap "bash -c '$BG_LOOP' '$TEST_TMP/bg-wrap'"
+sleep 2
+[[ "$(bg_claimed)" == true ]] || fail "watchdog watches the agent even when sh does not exec the hook: agent=$BG_AGENT group=$BG_GROUP
+$(bg_procs)"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "group survives the agent when sh did not exec the hook"
+
+# 명령이 먼저 끝나면 감시자도 바로 끝나고, 명령의 출력·종료 코드는 그대로다(작은따옴표가 든 명령도 찾는다).
+bg_start bg-done "sleep 3; printf '%s' \"it's done\"; printf err >&2; exit 7"
+sleep 1
+assert_eq "true" "$(bg_claimed)" "watchdog found a command that contains single quotes"
+for _ in $(seq 1 80); do [[ -s "$TEST_TMP/bg-done.status" ]] && break; sleep 0.1; done
+assert_eq "it's done|err|7" "$(<"$TEST_TMP/bg-done.out")|$(<"$TEST_TMP/bg-done.err")|$(<"$TEST_TMP/bg-done.status")" "command output and exit status are unchanged"
+BG_LEFT=true
+for _ in $(seq 1 30); do [[ "$(bg_watching)" == false ]] && { BG_LEFT=false; break; }; sleep 0.1; done
+assert_eq "false" "$BG_LEFT" "watchdog exits as soon as the command group is empty"
+assert_eq "false" "$(bg_claimed)" "watchdog releases its claim when it ends"
+bg_stop_agent
+
+# 리더 셸이 먼저 끝나도(일부 pid만 꺼진 경우) 그룹에 남은 프로세스가 있으면 감시를 이어 간다.
+bg_start bg-left "bash -c '$BG_LOOP' '$TEST_TMP/bg-left' & sleep 2; exit 0"
+for _ in $(seq 1 50); do [[ -s "$TEST_TMP/bg-left.status" ]] && break; sleep 0.1; done
+sleep 2
+assert_eq "true" "$(bg_watching)" "watchdog keeps watching members left after the leader shell exits"
+bg_stop_agent
+bg_group_gone "$BG_GROUP" 8 || fail "group members left by an exited leader shell survive the agent"
+
+# hook이 본 명령과 다른 그룹은 건드리지 않는다(못 찾으면 아무것도 하지 않는다).
+bg_start bg-other "echo not-this-one" "bash -c '$BG_LOOP' '$TEST_TMP/bg-other'"
+sleep 1
+bg_stop_agent
+sleep 4
+assert_eq "true" "$(kill -0 -- "-$BG_GROUP" 2>/dev/null && echo true || echo false)" "watchdog leaves a group it did not match"
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 너무 짧은 첫 줄(cd x 등)은 다른 명령과 헷갈리므로 감시하지 않는다.
+bg_start bg-short "cd /
+bash -c '$BG_LOOP' '$TEST_TMP/bg-short'"
+sleep 1
+assert_eq "false" "$(bg_watching)" "a too-short first line starts no watch"
+bg_stop_agent
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 끄면 감시자를 띄우지 않는다.
+HM_BACKGROUND_WATCHDOG=0 bg_start bg-off "bash -c '$BG_LOOP' '$TEST_TMP/bg-off'"
+sleep 1
+assert_eq "false" "$(bg_watching)" "HM_BACKGROUND_WATCHDOG=0 starts no watchdog"
+bg_stop_agent
+kill -KILL -- "-$BG_GROUP" 2>/dev/null || true
+
+# 에이전트를 처음부터 볼 수 없으면 바로 물러난다.
+BG_GONE="$(bash -c 'echo $$' "$TEST_TMP/bg-gone")"
+BG_START=$SECONDS
+"$ROOT/scripts/background-watchdog.sh" "$BG_GONE" " " "sleep 100" "$TEST_TMP/bg-claims"
+assert_eq "0" "$((SECONDS - BG_START > 1))" "watchdog exits at once when the agent is already gone"
+pass "background watchdog cleans the process group"
 
 finish_tests
