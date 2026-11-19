@@ -166,9 +166,17 @@ if [[ "$parallel" == 0 ]]; then
     printf '# %s: %d passed in %ds\n' "$a" "$n" "$(($(date +%s) - start))"
   done
 else
-  # Bash 3.2 호환: 인덱스 배열과 고정 크기 batch만 사용하고 wait -n/mapfile은 쓰지 않는다.
+  # Bash 3.2 호환: wait -n·mapfile 없이 kill -0 폴링으로 슬롯이 비는 즉시 다음 영역을 시작한다.
+  # 느린 영역(SLOW_AREAS 순서)을 먼저 시작해 전체 시간이 가장 긴 영역 하나에 가깝게 한다.
+  # 출력은 영역별 파일에 모았다가 시작 순서대로 블록째 내보내 섞이지 않게 하고,
+  # 실패 요약은 직렬과 같은 선택 순서로 낸다. 실행 환경(HOME 등)은 직렬과 같다.
   area_list=()
-  for a in $areas; do area_list[${#area_list[@]}]="$a"; done
+  for s in $SLOW_AREAS; do
+    for a in $areas; do [[ "$a" != "$s" ]] || area_list[${#area_list[@]}]="$a"; done
+  done
+  for a in $areas; do
+    case " $SLOW_AREAS " in *" $a "*) ;; *) area_list[${#area_list[@]}]="$a" ;; esac
+  done
   area_count="${#area_list[@]}"
   # 영역 수보다 큰 값은 실제 최대 영역 수로 제한해 큰 숫자의 산술 오버플로를 피한다.
   if [[ "${#jobs}" -gt "${#area_count}" ]]; then
@@ -176,39 +184,82 @@ else
   elif [[ "${#jobs}" -eq "${#area_count}" ]] && [[ "$jobs" -gt "$area_count" ]]; then
     jobs="$area_count"
   fi
-  batch_start=0
-  while [[ "$batch_start" -lt "$area_count" ]]; do
-    pids=()
-    batch_end=$((batch_start + jobs))
-    [[ "$batch_end" -le "$area_count" ]] || batch_end="$area_count"
-    i="$batch_start"
-    while [[ "$i" -lt "$batch_end" ]]; do
-      a="${area_list[$i]}"
-      out_files[i]="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
-      home_dirs[i]="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-test-home.XXXXXX")"
-      starts[i]="$(date +%s)"
-      HOME="${home_dirs[$i]}" bash "$TESTS_DIR/$a.sh" >"${out_files[$i]}" 2>&1 &
-      pids[i]=$!
+  next=0
+  running=0
+  shown=0
+  # 중단되면 돌던 영역에 TERM을 보내(영역의 EXIT 트랩이 서버·TEST_TMP를 치운다) 기다리고,
+  # 이미 끝난 영역의 블록은 내보낸 뒤 출력 파일을 지운다. Ctrl-C는 그룹 전체에 가서 폴링 중인
+  # 명령이 먼저 죽을 수 있으므로 EXIT 트랩도 같은 정리를 탄다(정상 종료 전에 푼다).
+  stop_parallel() { # exit-code
+    local j=0 code="$1"
+    [[ "$code" != 0 ]] || code=1
+    trap - INT TERM EXIT
+    while [[ "$j" -lt "$next" ]]; do
+      if [[ -z "${ends[$j]:-}" && -n "${pids[$j]:-}" ]]; then
+        kill -TERM "${pids[$j]}" 2>/dev/null || true
+      fi
+      j=$((j + 1))
+    done
+    wait 2>/dev/null || true
+    j=0
+    while [[ "$j" -lt "$next" ]]; do
+      if [[ "$j" -ge "$shown" && -n "${ends[$j]:-}" && -f "${out_files[$j]:-}" ]]; then
+        printf '# %s (finished before the interrupt)\n' "${area_list[$j]}"
+        cat "${out_files[$j]}"
+        [[ "${rcs[$j]:-1}" == 0 ]] || printf '# %s: failed\n' "${area_list[$j]}"
+      fi
+      [[ -z "${out_files[$j]:-}" ]] || rm -f "${out_files[$j]}"
+      j=$((j + 1))
+    done
+    printf '# interrupted: %d of %d areas finished\n' "$shown" "$area_count" >&2
+    exit "$code"
+  }
+  trap 'stop_parallel 130' INT
+  trap 'stop_parallel 143' TERM
+  trap 'stop_parallel "$?"' EXIT
+  while [[ "$shown" -lt "$area_count" ]]; do
+    while [[ "$running" -lt "$jobs" && "$next" -lt "$area_count" ]]; do
+      out_files[next]="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
+      starts[next]="$(date +%s)"
+      ends[next]=""
+      bash "$TESTS_DIR/${area_list[$next]}.sh" >"${out_files[$next]}" 2>&1 &
+      pids[next]=$!
+      running=$((running + 1))
+      next=$((next + 1))
+    done
+    i="$shown"
+    while [[ "$i" -lt "$next" ]]; do
+      if [[ -z "${ends[$i]}" ]] && ! kill -0 "${pids[$i]}" 2>/dev/null; then
+        if wait "${pids[$i]}"; then rcs[i]=0; else rcs[i]=1; fi
+        ends[i]="$(date +%s)"
+        running=$((running - 1))
+        # 앞 영역을 기다리느라 블록을 아직 못 내보내도 끝났다는 사실은 바로 알린다.
+        [[ "$i" -eq "$shown" ]] || printf '# %s finished in %ds (output follows earlier areas)\n' "${area_list[$i]}" "$((${ends[$i]} - ${starts[$i]}))" >&2
+      fi
       i=$((i + 1))
     done
-    i="$batch_start"
-    while [[ "$i" -lt "$batch_end" ]]; do
-      a="${area_list[$i]}"
-      if wait "${pids[$i]}"; then
-        :
-      else
-        failed="$failed $a"
-      fi
-      n="$(grep -c '^ok ' "${out_files[$i]}" || true)"
+    while [[ "$shown" -lt "$next" && -n "${ends[$shown]}" ]]; do
+      a="${area_list[$shown]}"
+      n="$(grep -c '^ok ' "${out_files[$shown]}" || true)"
       total=$((total + n))
       printf '# %s\n' "$a"
-      cat "${out_files[$i]}"
-      printf '# %s: %d passed in %ds\n' "$a" "$n" "$(($(date +%s) - ${starts[$i]}))"
-      rm -f "${out_files[$i]}"
-      rm -rf "${home_dirs[$i]}"
-      i=$((i + 1))
+      cat "${out_files[$shown]}"
+      printf '# %s: %d passed in %ds\n' "$a" "$n" "$((${ends[$shown]} - ${starts[$shown]}))"
+      rm -f "${out_files[$shown]}"
+      shown=$((shown + 1))
     done
-    batch_start="$batch_end"
+    # sleep을 포그라운드로 두면 그 sleep이 막 정상 종료한 순간 온 Ctrl-C를 bash가 버린다.
+    # 백그라운드 sleep을 wait 내장으로 기다리면 INT/TERM 트랩이 바로 돈다.
+    if [[ "$shown" -lt "$area_count" ]]; then
+      sleep 0.2 &
+      wait "$!" || true
+    fi
+  done
+  trap - INT TERM EXIT
+  for a in $areas; do
+    i=0
+    while [[ "${area_list[$i]}" != "$a" ]]; do i=$((i + 1)); done
+    [[ "${rcs[$i]}" == 0 ]] || failed="$failed $a"
   done
 fi
 
