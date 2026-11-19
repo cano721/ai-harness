@@ -891,4 +891,26 @@ assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}'
 assert_eq "0" "$(grep -v '^[[:space:]]*#' "$DG_GUARD" | grep -c -E '(^|[|;&(])[[:space:]]*grep[[:space:]]' || true)" "the example guard parses the transcript with jq instead of grepping it"
 pass "direct edit guard counts only successful reads as reading"
 
+# 화면 검증 서버 수명: dev 서버를 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(실측). 계약과 러너가
+# 운영 빌드 우선·백그라운드 실행·재사용·그룹 종료 확인을 지시한다. (#435)
+UIR_CONTENT="$(<"$ROOT/templates/ui-review/SKILL.md")"
+assert_contains "$UIR_CONTENT" "## 앱 서버 수명" "ui-review has a server lifecycle section"
+assert_contains "$UIR_CONTENT" "운영 빌드" "ui-review prefers a production build for one-shot review"
+assert_contains "$UIR_CONTENT" "백그라운드 실행" "ui-review starts servers with the tool's background run"
+assert_contains "$UIR_CONTENT" "이미 떠 있는 서버" "ui-review reuses a running server"
+assert_contains "$UIR_CONTENT" "프로세스 그룹" "ui-review stops the whole process group"
+assert_contains "$UIR_CONTENT" "포트가 비었다는 것만으로" "ui-review does not treat a free port as stopped"
+DRIVER_SRC="$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")"
+# 어느 노드 프롬프트가 어느 규칙을 쓰는지: 직전 "You are the <node> node" 기준으로 묶는다.
+rule_nodes() { awk -v rule="\$$1" 'match($0, /You are the [a-z_]+ node/) { node = substr($0, RSTART + 12, RLENGTH - 17) } $0 == rule { print node }' "$ROOT/templates/workflow-driver/workflow-driver.sh" | sort | paste -sd' ' -; }
+assert_eq "measure reproduce ui_review" "$(rule_nodes APP_SERVER_RULE)" "measure, reproduce, and ui_review prompts carry the server lifecycle rule"
+assert_eq "measure ui_review" "$(rule_nodes APP_BUILD_RULE)" "only the one-shot render prompts prefer a production build"
+assert_contains "$DRIVER_SRC" "the tool's background run, not with &, nohup, or setsid" "the runner rule starts servers in the background run"
+assert_contains "$DRIVER_SRC" "Reuse a server already running for this working tree" "the runner rule reuses a running server"
+assert_contains "$DRIVER_SRC" "stop the whole process group" "the runner rule stops the process group"
+assert_contains "$DRIVER_SRC" "a free port does not mean it stopped" "the runner rule does not trust a free port"
+assert_contains "$DRIVER_SRC" "prefer the project's production build" "the runner rule prefers a production build"
+assert_contains "$DRIVER_SRC" "keep build output in ignored paths" "the runner keeps build output out of the change check"
+pass "ui review server lifecycle"
+
 finish_tests
