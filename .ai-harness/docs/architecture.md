@@ -17,7 +17,7 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 | `.codex-plugin/plugin.json` | Codex 플러그인 매니페스트(`skills: ./skills/`) | Codex 설치 |
 | `.agents/plugins/marketplace.json` | Codex 마켓플레이스 | Codex 설치 |
 | `release.json` | 배포 버전·릴리스 URL. `scripts/check-update.sh`가 `main`의 이 파일로 최신 버전을 판단 | 업데이트 확인 |
-| `hooks/hooks.json` | SessionStart(`session-start.sh`)·Stop(`tick.sh`)·PreToolUse(`member-edit-guard.sh`, `db-scan-guard.sh`) | Claude Code |
+| `hooks/hooks.json` | SessionStart(`session-start.sh`)·Stop(`tick.sh`)·PreToolUse(`member-edit-guard.sh`, `db-scan-guard.sh`, `background-watchdog-hook.sh`) | Claude Code |
 | `skills/<name>/SKILL.md` | 플러그인 전역 Skill. Claude·Codex가 같은 파일을 읽는다(`agents/openai.yaml`은 Codex 표시용, 일부 Skill만) | 두 도구 |
 | `agents/` | 플러그인 전역 에이전트(`harvest-reviewer`, `design-reviewer`) | Claude Code |
 | `scripts/` | 수집·집계·보관·업데이트·sync·그래프 검증. `scripts/lib.sh`가 공용 변수·함수(데이터 디렉토리 `~/.ai-harness`, 설정 로드, `project_id_for_cwd`) | hook·Skill |
@@ -38,6 +38,8 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 1. hook(`session-start.sh`, `tick.sh`)이 Claude·Codex 세션 기록을 추출(`extract-claude.jq`·`extract-codex.sh`)해 `~/.ai-harness/events/`에 쌓는다.
 2. `/metrics`(`stats.sh`·`stats.jq`)가 집계, `/harvest`가 개선 PR을 만든다. 무인 실행은 `harvest-auto.sh`·`sync-auto.sh`·`autofix-auto.sh`(opt-in).
 3. `/harness-init`이 템플릿을 대상 프로젝트로 복사·렌더링하고 `harness-sync-state.sh`로 해시를 기록, 이후 sync가 차이를 계획한다.
+
+`PreToolUse(Bash)`의 `background-watchdog-hook.sh`는 `run_in_background: true` 입력마다 `background-watchdog.sh`를 자기 프로세스 그룹에서 출력과 분리해 띄우고 아무것도 출력하지 않는다. 명령을 바꾸지 않으므로 권한 판정·출력·종료 코드가 그대로다 — `updatedInput`으로 명령을 감싸면 Claude Code가 바뀐 명령으로 권한을 다시 판정해 allow 규칙이 맞지 않는다(실측). 감시자는 에이전트(hook의 `$PPID`)의 자식으로 hook 뒤에 새로 뜬 프로세스 그룹 리더 중 인자에 명령 첫 줄이 든 것을 찾아 (그룹 pid를 `~/.ai-harness/bg-watchdog/`에 선점, 첫 줄이 공백 빼고 4자 미만이면 감시하지 않음) 그룹이 남아 있는 동안 지켜본다. 에이전트가 사라지면 그룹 전체를 TERM → 최대 5초(비면 바로) → KILL로 끄고, 그룹이 비면 끝난다. 찾지 못하거나 에이전트를 처음부터 볼 수 없으면 아무것도 하지 않는다. 끄기: `HM_BACKGROUND_WATCHDOG=0`. 한계: `setsid`로 새 세션을 만든 자손, 명령 안에서 `&`로 띄우고 곧바로 끝나는 리더 셸의 그룹(`npm run dev > log &` 형태 — dev 서버는 `&` 없이 `run_in_background`로 띄운다), 포그라운드로 시작했다가 백그라운드로 넘어간 명령, 권한 확인을 120초 넘게 기다린 뒤 승인된 명령은 정리하지 못한다. `nohup x &`처럼 명령 안에서 다시 `&`로 띄운 것은 감시자가 리더 셸을 잡았는지에 따라 정리되기도 남기도 한다 — 세션 뒤에도 살려야 하는 프로세스는 `setsid`로 띄운다.
 
 ## 브랜치·배포
 
