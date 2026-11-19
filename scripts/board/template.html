@@ -652,6 +652,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-stephead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .b-toc ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
 .b-toc li { min-width: 0; }
+.b-guidecmd, .b-runwhy { flex-basis: 100%; margin: 0; }
+.b-pick { display: block; max-height: calc(var(--size-row) * 6); overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.b-pick__opt { display: grid; gap: var(--space-1); min-height: var(--size-target-min); padding: var(--space-2) var(--space-3); border-left: 2px solid transparent; cursor: pointer; min-width: 0; }
+.b-pick__opt:hover { background: var(--color-surface-hover); }
+.b-pick__opt[aria-selected="true"] { background: var(--color-surface-selected); border-left-color: var(--color-accent); }
+.b-pick__head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.b-pick__path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-pick__other { color: var(--color-text-muted); }
+.b-pick__none { padding: var(--space-2) var(--space-3); margin: 0; }
+.ds-toast > a { flex: none; white-space: nowrap; }
 /* 안내 화면에서 링크로 옮겨 간 카드·제목: 포커스만 받고 조작 요소처럼 보이지 않는다. 키보드로 왔을 때만 윤곽. */
 .ds-card[tabindex="-1"], h2[tabindex="-1"] { scroll-margin-top: var(--space-5); }
 .ds-card[tabindex="-1"]:focus, h2[tabindex="-1"]:focus { outline: none; }
@@ -792,6 +802,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
   <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
   <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></symbol>
 </svg>
 <div class="ds-app">
   <aside class="ds-sidebar" id="side">
@@ -835,11 +846,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 <dialog class="b-dialog" id="dlg" aria-labelledby="dlg-title">
   <form method="dialog">
     <h2 class="ds-title" id="dlg-title">새 세션</h2>
-    <p class="b-line ds-muted">claude를 백그라운드로 띄웁니다. 작업 현황에 곧 나타납니다.</p>
-    <div class="ds-field"><label class="ds-label" for="fcwd">작업 경로</label><input class="ds-input" id="fcwd" list="repos" required placeholder="/path/to/repo"><datalist id="repos"></datalist></div>
+    <p class="b-line ds-muted" id="dlgdesc">보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다.</p>
+    <p class="b-line ds-muted" id="fglobal" hidden></p>
+    <div class="ds-field" id="fpickfield"><label class="ds-label" for="fpick">저장소</label><input class="ds-input" id="fpick" role="combobox" aria-expanded="true" aria-controls="fpicklist" aria-autocomplete="list" aria-describedby="fcwdhint fpickerr" autocomplete="off" placeholder="이름이나 경로로 찾기"><div class="b-pick" id="fpicklist" role="listbox" aria-label="저장소 후보"></div><span class="ds-field__error" id="fpickerr" hidden><svg class="ds-icon" aria-hidden="true"><use href="#i-danger"/></svg>저장소를 고르세요. 목록에서 고르거나 경로를 직접 입력합니다.</span><span class="ds-caption" id="fcwdhint" hidden></span></div>
+    <div class="ds-field" id="fcwdfield" hidden><label class="ds-label" for="fcwd">작업 경로</label><input class="ds-input" id="fcwd" required placeholder="/path/to/repo" aria-describedby="fcwdhint"></div>
     <div class="ds-field"><label class="ds-label" for="fname">이름 (선택)</label><input class="ds-input" id="fname" placeholder="예: 배송비 계산 버그 확인"></div>
     <div class="ds-field"><label class="ds-label" for="fprompt">첫 지시</label><div class="b-acwrap"><textarea class="ds-input b-textarea" id="fprompt" required placeholder="/로 시작하면 스킬·명령을 고를 수 있습니다"></textarea></div></div>
-    <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" value="ok">세션 띄우기</button></div>
+    <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" id="dlgok" value="ok">세션 띄우기</button></div>
   </form>
 </dialog>
 <dialog class="b-dialog" id="cdlg" aria-labelledby="cdlg-title" aria-describedby="cwarn cdesc">
@@ -999,16 +1012,19 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
 
   // ---- 토스트: 성공은 잠깐, 실패는 닫을 때까지 ----
-  function toast(msg, ok) {
+  function toast(msg, ok, action) {
     const t = el('div', 'ds-toast'); t.dataset.status = ok ? 'success' : 'danger'; t.setAttribute('role', ok ? 'status' : 'alert');
     const origin = document.activeElement; let timer = null;
     const close = btn('', 'ds-btn--sm ds-btn--ghost ds-btn--icon'); close.setAttribute('aria-label', '알림 닫기'); close.append(icon('close'));
     const dismiss = () => { const had = t.contains(document.activeElement); t.remove(); if (had && origin && origin.isConnected && origin.focus) origin.focus(); };
-    const arm = () => { if (ok) timer = setTimeout(dismiss, 5000); };
+    // 동작(링크·버튼)이 든 토스트는 성공이어도 닫을 때까지 남는다 — 사라지는 토스트 안의 동작에는 키보드로 닿지 못한다.
+    const arm = () => { if (ok && !action) timer = setTimeout(dismiss, 5000); };
     const hold = () => clearTimeout(timer);
     close.onclick = dismiss;
     t.addEventListener('mouseenter', hold); t.addEventListener('focusin', hold); t.addEventListener('mouseleave', arm); t.addEventListener('focusout', arm);
-    t.append(icon(ok ? 'success' : 'danger'), el('p', null, msg || (ok ? '완료했습니다.' : '요청을 처리하지 못했습니다.')), close);
+    t.append(icon(ok ? 'success' : 'danger'), el('p', null, msg || (ok ? '완료했습니다.' : '요청을 처리하지 못했습니다.')));
+    if (action) t.append(action);
+    t.append(close);
     $('toasts').append(t); arm();
   }
   const copyBtn = (label, value, cls) => {
@@ -2096,21 +2112,124 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
 
   // ---- 대화 상자: 새 세션 · 세션 정리 · 저장소 사실 ----
-  $('newbtn').onclick = async () => {
-    try {
-      const repos = await (await fetch('/repos?t=' + encodeURIComponent(TOKEN))).json();
-      const dl = $('repos'); dl.replaceChildren(); repos.forEach((r) => { const o = el('option'); o.value = r; dl.append(o); });
-      if (!$('fcwd').value && repos.length) $('fcwd').value = repos[0];
-    } catch (e) { /* 경로는 직접 입력할 수 있다 */ }
+  // 새 세션 양식 하나를 새 세션 버튼과 하네스 안내의 실행 버튼이 같이 쓴다(같은 동작은 같은 모양).
+  // from: { scope(global|repo|harness|optional), launch(/launch 응답), key(연 버튼의 data-key — 카드에서 열 때), title, prompt, name, hint, done }
+  const GLOBAL_NOTE = '어느 저장소와도 상관없어 홈에서 띄웁니다.';
+  // 범위별 저장소 후보: harness는 하네스를 깐 저장소만, optional은 맨 위에 홈, global은 고르지 않는다.
+  // prefer 'unharnessed': 하네스를 아직 깔지 않은 저장소를 먼저(하네스 만들기 — 깐 저장소에 실행하면 동기화가 된다). 그 안은 서버 순서(최근 사용).
+  const pickChoices = (scope, L, prefer) => {
+    if (scope === 'global') return [];
+    let repos = (L.repos || []).filter((r) => scope !== 'harness' || r.harness);
+    if (prefer === 'unharnessed') repos = [...repos.filter((r) => !r.harness), ...repos.filter((r) => r.harness)];
+    return scope === 'optional' && L.home ? [{ path: L.home, name: '저장소 없이(홈에서)', short: L.home, home: true }, ...repos] : repos;
+  };
+  // 처음 고른 값: 아무 저장소에서나 띄우지 않는다. 지난번 고른 곳(새 세션 버튼) → optional은 홈 → 후보가 하나면 그것 → 없음(고르기 전에는 띄우지 않음).
+  const pickDefault = (scope, choices, kept) => {
+    if (kept && choices.some((c) => c.path === kept)) return kept;
+    if (scope === 'optional') return (choices.find((c) => c.home) || {}).path || '';
+    return choices.length === 1 ? choices[0].path : '';
+  };
+  // 같은 이름 저장소(복제본)를 가르는 것은 경로 끝(부모 폴더)이라, 긴 경로는 앞을 줄이고 끝 세 마디를 남긴다. 전체 경로는 title.
+  const shortPath = (p) => { const s = String(p || '').split('/'); return s.length > 5 ? [s[0], '…', ...s.slice(-3)].join('/') : String(p || ''); };
+  let dlgFrom = null, dlgDraft = null;
+  const pick = { all: [], shown: [], at: 0, scope: null };
+  function drawPick() {
+    const q = $('fpick').value.trim().toLowerCase(), list = $('fpicklist');
+    if (pick.scope === 'global') { list.replaceChildren(); return; }
+    pick.shown = pick.all.filter((c) => !q || c.name.toLowerCase().includes(q) || c.path.toLowerCase().includes(q));
+    list.replaceChildren();
+    const opts = pick.shown.map((c) => {
+      const o = el('div', 'b-pick__opt'), head = el('span', 'b-pick__head');
+      head.append(el('span', 'ds-label', c.name)); if (c.harness) head.append(chip('하네스'));
+      o.append(head, el('span', 'ds-caption b-pick__path', shortPath(c.short))); o.title = c.path;
+      o.onclick = () => { $('fcwd').value = c.path; $('fcwdfield').hidden = true; pickError(false); drawPick(); $('fpick').focus(); };
+      return o;
+    });
+    if (!opts.length) list.append(el('p', 'ds-caption b-pick__none', q ? '찾는 이름의 저장소가 없습니다.' : '고를 저장소가 없습니다. 경로를 직접 입력하세요.'));
+    const other = el('div', 'b-pick__opt b-pick__other', '다른 경로 직접 입력');
+    other.onclick = () => { $('fcwdfield').hidden = false; drawPick(); $('fcwd').select(); };
+    opts.push(other);
+    const typed = !$('fcwdfield').hidden;
+    let cur = typed ? opts.length - 1 : pick.shown.findIndex((c) => c.path === $('fcwd').value);
+    // 검색어가 있는데 고른 저장소가 결과에 없으면 첫 결과를 고른다 — Enter가 보이지 않는 저장소에서 띄우지 않게.
+    // 검색어가 없으면 고르지 않은 채로 둔다(처음 고른 값은 pickDefault).
+    if (!typed && cur < 0 && q && pick.shown.length) { cur = 0; $('fcwd').value = pick.shown[0].path; }
+    else if (!typed && cur < 0) $('fcwd').value = '';
+    opts.forEach((o, i) => { o.id = 'fpick-' + i; o.setAttribute('role', 'option'); o.setAttribute('aria-selected', String(i === cur)); o.onmousedown = (e) => e.preventDefault(); list.append(o); });
+    pick.at = cur;
+    if (cur >= 0) { $('fpick').setAttribute('aria-activedescendant', 'fpick-' + cur); opts[cur].scrollIntoView({ block: 'nearest' }); } else $('fpick').removeAttribute('aria-activedescendant');
+  }
+  $('fpick').addEventListener('input', drawPick);
+  $('fpick').addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const n = pick.shown.length + 1;  // 마지막은 "다른 경로 직접 입력"
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const from = pick.at < 0 ? (e.key === 'ArrowDown' ? -1 : 0) : pick.at;
+      const i = (from + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      if (i < n - 1) { $('fcwd').value = pick.shown[i].path; $('fcwdfield').hidden = true; pickError(false); } else $('fcwdfield').hidden = false;
+      drawPick();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!$('fcwdfield').hidden) $('fcwd').select(); else $('dlgok').click();
+    } else if (e.key === 'Escape' && $('fpick').value) { e.preventDefault(); $('fpick').value = ''; drawPick(); }
+  });
+  function openNew(from) {
+    $('dlg').returnValue = '';  // Esc로 닫으면 returnValue가 바뀌지 않는다 — 지난번 'ok'가 남아 미리 채운 세션이 뜨지 않게 비운다
+    dlgFrom = from; dlgDraft = null;
+    const scope = from.scope, L = from.launch || {};
+    $('dlg-title').textContent = from.title || '새 세션';
+    // 저장소와 무관한 기능은 "고른 저장소에서" 설명 대신 왜 홈에서 띄우는지를 말한다.
+    $('dlgdesc').hidden = scope === 'global'; $('fglobal').hidden = scope !== 'global';
+    $('fglobal').textContent = GLOBAL_NOTE + ' 질문과 권한 요청은 작업 현황에서 답합니다.';
+    $('fpickfield').hidden = scope === 'global';
+    $('fcwdfield').hidden = true;
+    const hint = $('fcwdhint'); hint.hidden = !from.hint; hint.textContent = from.hint || '';
+    if (from.key) {
+      dlgDraft = { cwd: $('fcwd').value, prompt: $('fprompt').value, name: $('fname').value };
+      $('fprompt').value = from.prompt; $('fname').value = from.name;
+      $('fprompt').setSelectionRange(from.prompt.length, from.prompt.length);  // Tab으로 들어가면 명령 뒤에 바로 덧붙인다
+    }
+    pick.scope = scope; pick.all = pickChoices(scope, L, from.prefer); $('fpick').value = ''; pickError(false);
+    // 후보가 없으면(목록을 못 받음) 새 세션 버튼은 지난번 직접 입력한 경로를 남긴다.
+    const def = pickDefault(scope, pick.all, from.key ? '' : $('fcwd').value);
+    if (scope === 'global') $('fcwd').value = L.home || ''; else if (def || from.key || pick.all.length) $('fcwd').value = def;
+    if (scope !== 'global' && !pick.all.length) $('fcwdfield').hidden = false;
+    drawPick();
     $('dlg').showModal();
+    (scope === 'global' ? $('dlgok') : $('fcwdfield').hidden ? $('fpick') : $('fcwd')).focus();
+  }
+  // 고르지 않고 띄우려 하면 칸 아래에 알린다(필수 칸 규칙). 숨은 경로 칸의 브라우저 검사 대신 여기서 막는다.
+  function pickError(on) {
+    $('fpickerr').hidden = !on;
+    $('fpick').toggleAttribute('aria-invalid', on);
+  }
+  $('dlgok').addEventListener('click', (e) => {
+    if (pick.scope === 'global' || !$('fcwdfield').hidden || $('fcwd').value.trim()) return;
+    e.preventDefault(); pickError(true); $('fpick').focus();
+  });
+  $('newbtn').onclick = async () => {
+    let launch = {};
+    try { launch = await (await fetch('/launch?t=' + encodeURIComponent(TOKEN))).json(); } catch (e) { /* 경로는 직접 입력할 수 있다 */ }
+    openNew({ scope: 'optional', launch });
   };
   if (SERVER) autocomplete($('fprompt'), () => $('fcwd').value.trim(), true);
+  // 한 줄 칸의 Enter는 띄우기다(양식의 첫 제출 버튼이 취소라 기본 동작이면 닫혀 버린다).
+  for (const id of ['fcwd', 'fname']) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('dlgok').click(); } });
   $('dlg').addEventListener('close', async () => {
-    if ($('dlg').returnValue !== 'ok') return;
-    let res; try { res = await post('/new', { cwd: $('fcwd').value.trim(), prompt: $('fprompt').value.trim(), name: $('fname').value.trim() || null }); } catch (e) { res = { ok: false, message: '세션을 띄우지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-    toast(res.message, res.ok);
-    if (res.ok) { $('fprompt').value = ''; $('fname').value = ''; setTimeout(refresh, 2500); }
-    $('newbtn').focus();
+    const from = dlgFrom, draft = dlgDraft; dlgFrom = null; dlgDraft = null;
+    const back = () => { const b = from && from.key ? document.querySelector(`[data-key="${CSS.escape(from.key)}"]`) : $('newbtn'); if (b) b.focus(); };
+    const req = { cwd: $('fcwd').value.trim(), prompt: $('fprompt').value.trim(), name: $('fname').value.trim() || null };
+    // 카드에서 연 양식은 결과와 상관없이 새 세션 버튼이 쓰던 입력으로 되돌린다.
+    if (draft) { $('fcwd').value = draft.cwd; $('fprompt').value = draft.prompt; $('fname').value = draft.name; }
+    if ($('dlg').returnValue !== 'ok') { back(); return; }
+    let res; try { res = await post('/new', req); } catch (e) { res = { ok: false, message: '보드 서버에 닿지 못했습니다.' }; }
+    if (!res.ok) toast(`세션을 띄우지 못했습니다 — ${res.message}`, false);
+    else if (from && from.done) from.done(res);
+    else toast(res.message, true);
+    if (res.ok && !draft) { $('fprompt').value = ''; $('fname').value = ''; }
+    if (res.ok) setTimeout(refresh, 2500);
+    back();
   });
   let cleaning = null, cleanLevel = 'idle', cleanSeq = 0;
   // 정리 확인 수준(서버 close_level과 같은 순서). 상태는 정리를 막지 않고 확인창의 문구·무게만 바꾼다.
@@ -2922,11 +3041,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     ['효과 확인', 'manual', 'skills/harness-impact', '반영한 개선의 실수가 다시 나왔는지와 설치 전후 지표로 효과를 봅니다.'],
   ];
   const GUIDE_GO = { list: ['작업 현황 열기', 'list'], 'list:harness': ['하네스 동작 보기', 'list', 'harness'], 'list:autofix': ['자동 수정 보기', 'list', 'autofix'], refs: ['레퍼런스 열기', 'refs'], impact: ['하네스 효과 열기', 'impact'], settings: ['하네스 설정 열기', 'settings'] };
-  let gdata = null, gerr = null, gbusy = false;
-  async function loadGuide() {
-    if (!SERVER || gdata || gbusy) return;
+  // 기능 목록은 정적이지만 실행 가능 여부(하네스 저장소·설치한 스킬)는 바뀌므로 안내 화면을 다시 그릴 때 1분이 지났으면 조용히 다시 받는다.
+  let gdata = null, gerr = null, gbusy = false, gAt = 0;
+  async function loadGuide(force) {
+    if (!SERVER || gbusy || (gdata && !force)) return;
     gbusy = true;
-    try { const r = await fetch('/guide?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' }); if (!r.ok) throw new Error(`HTTP ${r.status}`); gdata = await r.json(); gerr = null; } catch (e) { gerr = e.message; }
+    try { const r = await fetch('/guide?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' }); if (!r.ok) throw new Error(`HTTP ${r.status}`); gdata = await r.json(); gerr = null; } catch (e) { if (!gdata) gerr = e.message; }
+    gAt = Date.now();  // 다시 받기에 실패해도 1분 뒤에 다시 시도한다(다시 그릴 때마다 묻지 않게)
     gbusy = false;
     if (view === 'guide') renderAll();
   }
@@ -2982,6 +3103,25 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     nav.append(el('p', 'ds-caption b-line', '기능 묶음으로 가기'), ul);
     return nav;
   }
+  // 카드에서 바로 실행(이슈 442): 기존 새 세션 양식을 명령·카드 이름으로 채워 연다. 범위(run)가 저장소 후보를 정한다.
+  const RUN_HINT = {
+    repo: '이 기능은 저장소 코드를 읽거나 바꿉니다.',
+    harness: '하네스를 깐 저장소만 보입니다.',
+    optional: '저장소가 있으면 그 코드를 쓰고, 없어도 됩니다.',
+  };
+  // 막힌 카드마다 같은 곳을 가리키는 링크가 생기므로 포커스 키를 카드별로 준다(다시 그려도 그 카드 링크로 돌아온다).
+  const whyLink = (it, a) => { a.dataset.key = 'why:' + it.id; return a; };
+  const RUN_BLOCK = {
+    no_harness_repo: (it) => ['하네스를 깐 저장소가 없습니다', whyLink(it, toCard('프로젝트 하네스 만들기', 'skills/harness-init'))],
+    not_installed: (it) => ['아직 설치하지 않았습니다', whyLink(it, toCard('처음 셋업', 'skills/setup'))],
+  };
+  function guideRun(it) {
+    openNew({
+      key: 'run:' + it.id, scope: it.run, prefer: it.prefer, launch: gdata.launch, hint: RUN_HINT[it.run],
+      title: `${it.title} 실행`, prompt: it.cmd + ' ', name: it.title,
+      done: () => toast('세션을 띄웠습니다 — 작업 현황에서 진행을 봅니다', true, goLink('작업 현황 열기', 'list')),
+    });
+  }
   function guideCard(it) {
     const c = el('article', 'ds-card'); c.dataset.key = 'guide:' + it.id; c.id = guideCardId(it.id); c.tabIndex = -1;
     c.append(el('h3', 'ds-card__title', it.title), el('p', 'b-line', it.summary));
@@ -2989,8 +3129,26 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const go = it.view && GUIDE_GO[it.view];
     if (it.cmd || go) {
       const acts = el('div', 'ds-card__actions');
-      if (it.cmd) { const cb = copyBtn('명령 복사', it.cmd, 'ds-btn--sm'); cb.dataset.key = 'copy:' + it.id; acts.append(el('code', null, it.cmd), cb); }
+      let why = null;
+      if (it.cmd) acts.append(el('code', 'b-guidecmd', it.cmd));  // 명령은 한 줄을 차지해 카드마다 버튼 줄이 같은 자리에서 시작한다
+      if (SERVER && it.run) {
+        // 카드마다 주 동작은 실행 하나지만, 서른 장이 모두 채운 버튼이면 화면이 무겁다 — 채운 주 버튼은 "처음이면 이것부터" 세 카드만.
+        const rb = btn('', START.some(([id]) => id === it.id) ? 'ds-btn--sm ds-btn--primary' : 'ds-btn--sm'); rb.append(icon('play'), '실행');
+        rb.dataset.key = 'run:' + it.id;
+        rb.setAttribute('aria-label', `${it.title} 실행`);
+        rb.onclick = () => { if (rb.getAttribute('aria-disabled') !== 'true') guideRun(it); };
+        acts.append(rb);
+        if (!it.runnable) {
+          // disabled 규칙: 흐림·금지 커서는 부품이 그리고, 왜 못 누르는지와 풀 곳을 옆에 글로 적는다.
+          const [text, link] = (RUN_BLOCK[it.blocked] || (() => ['지금은 실행할 수 없습니다', null]))(it);
+          why = el('p', 'ds-caption b-runwhy'); why.id = 'runwhy-' + guideCardId(it.id);
+          why.append(text + (link ? '. 먼저 ' : '.')); if (link) why.append(link);
+          rb.setAttribute('aria-disabled', 'true'); rb.setAttribute('aria-describedby', why.id);
+        }
+      }
+      if (it.cmd) { const cb = copyBtn('명령 복사', it.cmd, 'ds-btn--sm ds-btn--ghost'); cb.dataset.key = 'copy:' + it.id; acts.append(cb); }
       if (go) { const a = goLink(go[0], go[1], null, go[2]); a.dataset.key = 'guide-go:' + it.id; acts.append(a); }
+      if (why) acts.append(why);
       c.append(acts);
     }
     return c;
@@ -3023,7 +3181,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!SERVER) out.push(empty('기능 목록은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.'));
     else if (!gdata) { out.push(...(gerr ? [errorBox('기능 목록을 불러오지 못했습니다', `보드 서버가 기능 목록을 읽지 못했습니다(${gerr}).`, () => { gerr = null; renderAll(); loadGuide(); })] : loading('기능 목록을 불러오는 중'))); if (!gerr) loadGuide(); }
     else if (!(gdata.groups || []).length) out.push(empty('보여 줄 기능을 찾지 못했습니다.', '플러그인 설치가 온전한지 확인하고, 필요하면 플러그인을 다시 설치하세요.'));
-    else out.push(guideToc(gdata.groups), ...gdata.groups.map(guideGroup));
+    else { out.push(guideToc(gdata.groups), ...gdata.groups.map(guideGroup)); if (Date.now() - gAt > 60000) loadGuide(true); }
     board.replaceChildren(...out);
   }
 
