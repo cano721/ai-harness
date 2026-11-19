@@ -6,7 +6,7 @@
       "desc": "플러그인을 깔고 프로젝트에 하네스를 세우는 기능입니다.",
       "items": [
         { "id": "skills/setup", "run": "global", "title": "처음 셋업", "summary": "기본 스킬 카탈로그와 외부 디자인 스킬을 고르고, 토큰을 안전하게 저장하고, 자동화 옵션을 켭니다.", "ask": "하네스 셋업해줘" },
-        { "id": "skills/harness-init", "run": "repo", "title": "프로젝트 하네스 만들기", "summary": "프로젝트를 실측해 규칙 문서·워크플로·역할을 만들고, 이미 있으면 최신 템플릿에 안전하게 맞춥니다.", "ask": "이 저장소에 하네스 깔아줘" },
+        { "id": "skills/harness-init", "run": "repo", "prefer": "unharnessed", "title": "프로젝트 하네스 만들기", "summary": "프로젝트를 실측해 규칙 문서·워크플로·역할을 만들고, 이미 있으면 최신 템플릿에 안전하게 맞춥니다.", "ask": "이 저장소에 하네스 깔아줘" },
         { "id": "skills/harness-update", "run": "global", "title": "플러그인 업데이트", "summary": "최신 버전을 확인하고, 요청할 때만 플러그인을 업데이트합니다.", "ask": "하네스 최신 버전 확인해줘" },
         { "id": "skills/board", "title": "하네스 보드", "summary": "작업 세션·하네스 동작·효과·설정을 이 화면 하나에서 보고 답합니다.", "ask": "보드 열어줘", "view": "list" }
       ]

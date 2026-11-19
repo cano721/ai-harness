@@ -8,6 +8,7 @@
 - 부르는 명령은 출처로 정한다: 플러그인 스킬 /ai-harness:<이름>, 카탈로그 /<이름>, 워크플로(entry) /<이름>, 그 밖은 없음.
 - 카드에서 바로 실행(#442): guide.json 항목의 "run"이 실행 범위다 — global(저장소와 무관, 홈에서), repo(저장소 코드를 읽거나 바꿈),
   harness(하네스를 깐 저장소에서만 의미), optional(저장소가 있으면 쓰고 없어도 됨). 명령이 없거나 접힌 묶음이면 실행하지 않는다.
+  "prefer": "unharnessed"는 저장소 목록에서 하네스를 아직 깔지 않은 저장소를 먼저 보인다(하네스 만들기 — 깐 저장소에 실행하면 동기화).
   실행할 수 없으면 blocked가 이유다: no_harness_repo(후보 중 하네스를 깐 저장소가 없음), not_installed(기본 스킬 카탈로그 항목을
   아직 설치하지 않음 — setup.sh와 같은 폴더). 실행 자체는 보드의 기존 POST /new가 한다.
 - 저장소 후보(candidates): Orca 저장소 목록, Claude Code 사용 기록(~/.claude.json의 projects 키 — 경로만 쓰고 값은 쓰지 않는다),
@@ -21,6 +22,7 @@ ROOT = os.path.normpath(os.path.join(DIR, "..", ".."))
 GUIDE = os.path.join(DIR, "guide.json")
 VIEWS = ("list", "list:harness", "list:autofix", "refs", "impact", "settings")
 RUNS = ("global", "repo", "harness", "optional")
+PREFERS = ("unharnessed",)
 
 
 def default_skills_dir():
@@ -191,7 +193,8 @@ def state(root=ROOT, guide_path=GUIDE, launch=None, skills_dir=None):
             run, runnable, blocked = _run(iid, name, cmd, i.get("run"), g.get("fold") is True, launch, skills)
             items.append({"id": iid, "name": name, "title": i.get("title") or name, "summary": i.get("summary") or "",
                           "ask": i.get("ask") or "", "cmd": cmd, "view": view,
-                          "run": run, "runnable": runnable, "blocked": blocked})
+                          "run": run, "runnable": runnable, "blocked": blocked,
+                          "prefer": i.get("prefer") if run and i.get("prefer") in PREFERS else None})
         if items:
             groups.append({"key": g.get("key") or "", "label": g.get("label") or "", "desc": g.get("desc") or "",
                            "fold": g.get("fold") is True, "items": items})
@@ -201,5 +204,5 @@ def state(root=ROOT, guide_path=GUIDE, launch=None, skills_dir=None):
                        "items": [{"id": k, "name": found[k]["name"], "title": found[k]["name"],
                                   "summary": _first_sentence(found[k]["description"]), "ask": "",
                                   "cmd": _cmd(k, found[k]["name"], False), "view": None,
-                                  "run": None, "runnable": False, "blocked": None} for k in rest]})
+                                  "run": None, "runnable": False, "blocked": None, "prefer": None} for k in rest]})
     return {"ok": True, "groups": groups, "launch": launch or {"home": os.path.expanduser("~"), "repos": []}}

@@ -1649,6 +1649,7 @@ assert (jira["run"], jira["runnable"], jira["blocked"]) == ("global", False, "no
 setup = it["skills/setup"]
 assert (setup["run"], setup["runnable"], setup["blocked"]) == ("global", True, None), setup
 assert it["skills/harness-init"]["runnable"] is True and it["skills/harness-init"]["run"] == "repo"
+assert it["skills/harness-init"]["prefer"] == "unharnessed" and it["skills/diagram"]["prefer"] is None, it["skills/harness-init"]
 for k in ("skills/board", "agents/design-reviewer", "templates/ui-review"):
     assert it[k]["run"] is None and it[k]["runnable"] is False and it[k]["blocked"] is None, it[k]
 open(skills + "/jira/SKILL.md", "w").write("---\nname: jira\n---\n")
@@ -1691,8 +1692,26 @@ assert_eq "two|~,one,two|one,two|" "$(BRUN_PICK="$BRUN_PICK" node -e 'eval(proce
 const L = { home: "~", repos: [{ path: "/r/one", name: "one", harness: false }, { path: "/r/two", name: "two", harness: true }] };
 console.log(["harness", "optional", "repo", "global"].map((s) => pickChoices(s, L).map((c) => c.home ? "~" : c.name).join(",")).join("|"))')" \
   "the picker lists only harness repositories for workflows, offers home first for optional cards and nothing for global ones"
+# 기본 선택: optional은 홈, repo·harness는 후보가 하나일 때만 그것(아니면 고르기 전에는 띄우지 않음), 새 세션 버튼은 지난번 고른 곳.
+# 하네스 만들기는 아직 하네스를 깔지 않은 저장소가 먼저 온다(깐 저장소에 실행하면 동기화가 된다).
+BRUN_DEF="$(sed -n '/^  const pickDefault = /,/^  };/p' "$ROOT/scripts/board/template.html")"
+[[ -n "$BRUN_DEF" ]] || fail "the dialog has a pickDefault function"
+assert_eq "~||/r/two|/r/one|/r/one|two,one|one,two" "$(BRUN_PICK="$BRUN_PICK" BRUN_DEF="$BRUN_DEF" node -e 'eval(process.env.BRUN_PICK.replace("const pickChoices", "var pickChoices")); eval(process.env.BRUN_DEF.replace("const pickDefault", "var pickDefault"));
+const L = { home: "~", repos: [{ path: "/r/two", name: "two", harness: true }, { path: "/r/one", name: "one", harness: false }] };
+console.log([pickDefault("optional", pickChoices("optional", L), ""), pickDefault("repo", pickChoices("repo", L), ""), pickDefault("harness", pickChoices("harness", L), ""),
+  pickDefault("repo", pickChoices("repo", L), "/r/one"), pickDefault("optional", pickChoices("optional", L), "/r/one"),
+  pickChoices("repo", L).map((c) => c.name).join(","), pickChoices("repo", L, "unharnessed").map((c) => c.name).join(",")].join("|"))')" \
+  "optional starts on home, repo waits for a pick unless one candidate, the new-session button keeps the last pick, harness-init lists repositories without the harness first"
+assert_contains "$BRUN_TPL" "저장소를 고르세요. 목록에서 고르거나 경로를 직접 입력합니다." "launching without a repository asks for one under the field"
+assert_contains "$BRUN_TPL" 'class="ds-field__error" id="fpickerr"' "the missing repository uses the field error part"
+assert_contains "$BRUN_DLG" "if (pick.scope === 'global') { list.replaceChildren(); return; }" "a global card builds no repository list at all"
+# 줄마다 이름 아래 경로가 실제로 보여야 같은 이름 저장소를 가른다 — 후보가 많아도 grid 행이 눌리지 않게 목록은 block 흐름.
+assert_contains "$BRUN_TPL" ".b-pick { display: block;" "the picker list keeps each row's path line visible when it scrolls"
+BRUN_SP="$(grep -m1 '^  const shortPath = ' "$ROOT/scripts/board/template.html")"
+assert_eq "h/…/work/copy-b/shop|h/a/b" "$(BRUN_SP="$BRUN_SP" node -e 'eval(process.env.BRUN_SP.replace("const shortPath", "var shortPath")); console.log([shortPath("h/x/y/work/copy-b/shop"), shortPath("h/a/b")].join("|"))')" \
+  "a long path keeps its end so two repositories with the same name are told apart"
 assert_contains "$BRUN_DLG" "'저장소 없이(홈에서)'" "optional cards can run without a repository"
-assert_contains "$BRUN_DLG" "if (!typed && cur < 0 && pick.shown.length)" "searching selects the first match so Enter never launches in a repository the list no longer shows"
+assert_contains "$BRUN_DLG" "if (!typed && cur < 0 && q && pick.shown.length)" "searching selects the first match so Enter never launches in a repository the list no longer shows"
 assert_contains "$BRUN_DLG" "'다른 경로 직접 입력'" "the picker can open the typed path field"
 assert_contains "$BRUN_DLG" "'어느 저장소와도 상관없어 홈에서 띄웁니다.'" "a global card says why it runs from home"
 assert_contains "$BRUN_DLG" "\$('fpickfield').hidden = scope === 'global';" "a global card shows no repository picker"
