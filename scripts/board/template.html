@@ -653,6 +653,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-toc ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
 .b-toc li { min-width: 0; }
 .b-guidecmd, .b-runwhy { flex-basis: 100%; margin: 0; }
+.b-pick { display: grid; max-height: calc(var(--size-row) * 6); overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.b-pick__opt { display: grid; gap: var(--space-1); min-height: var(--size-target-min); padding: var(--space-2) var(--space-3); border-left: 2px solid transparent; cursor: pointer; min-width: 0; }
+.b-pick__opt:hover { background: var(--color-surface-hover); }
+.b-pick__opt[aria-selected="true"] { background: var(--color-surface-selected); border-left-color: var(--color-accent); }
+.b-pick__head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.b-pick__path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-pick__other { color: var(--color-text-muted); }
+.b-pick__none { padding: var(--space-2) var(--space-3); margin: 0; }
 .ds-toast > a { flex: none; white-space: nowrap; }
 /* 안내 화면에서 링크로 옮겨 간 카드·제목: 포커스만 받고 조작 요소처럼 보이지 않는다. 키보드로 왔을 때만 윤곽. */
 .ds-card[tabindex="-1"], h2[tabindex="-1"] { scroll-margin-top: var(--space-5); }
@@ -794,6 +802,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
   <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
   <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></symbol>
 </svg>
 <div class="ds-app">
   <aside class="ds-sidebar" id="side">
@@ -837,8 +846,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 <dialog class="b-dialog" id="dlg" aria-labelledby="dlg-title">
   <form method="dialog">
     <h2 class="ds-title" id="dlg-title">새 세션</h2>
-    <p class="b-line ds-muted">보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다.</p>
-    <div class="ds-field"><label class="ds-label" for="fcwd">작업 경로</label><input class="ds-input" id="fcwd" list="repos" required placeholder="/path/to/repo" aria-describedby="fcwdhint"><datalist id="repos"></datalist><span class="ds-caption" id="fcwdhint" hidden></span></div>
+    <p class="b-line ds-muted" id="dlgdesc">보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다.</p>
+    <p class="b-line ds-muted" id="fglobal" hidden></p>
+    <div class="ds-field" id="fpickfield"><label class="ds-label" for="fpick">저장소</label><input class="ds-input" id="fpick" role="combobox" aria-expanded="true" aria-controls="fpicklist" aria-autocomplete="list" aria-describedby="fcwdhint" autocomplete="off" placeholder="이름이나 경로로 찾기"><div class="b-pick" id="fpicklist" role="listbox" aria-label="저장소 후보"></div><span class="ds-caption" id="fcwdhint" hidden></span></div>
+    <div class="ds-field" id="fcwdfield" hidden><label class="ds-label" for="fcwd">작업 경로</label><input class="ds-input" id="fcwd" required placeholder="/path/to/repo" aria-describedby="fcwdhint"></div>
     <div class="ds-field"><label class="ds-label" for="fname">이름 (선택)</label><input class="ds-input" id="fname" placeholder="예: 배송비 계산 버그 확인"></div>
     <div class="ds-field"><label class="ds-label" for="fprompt">첫 지시</label><div class="b-acwrap"><textarea class="ds-input b-textarea" id="fprompt" required placeholder="/로 시작하면 스킬·명령을 고를 수 있습니다"></textarea></div></div>
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" id="dlgok" value="ok">세션 띄우기</button></div>
@@ -1006,7 +1017,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const origin = document.activeElement; let timer = null;
     const close = btn('', 'ds-btn--sm ds-btn--ghost ds-btn--icon'); close.setAttribute('aria-label', '알림 닫기'); close.append(icon('close'));
     const dismiss = () => { const had = t.contains(document.activeElement); t.remove(); if (had && origin && origin.isConnected && origin.focus) origin.focus(); };
-    const arm = () => { if (ok) timer = setTimeout(dismiss, 5000); };
+    // 동작(링크·버튼)이 든 토스트는 성공이어도 닫을 때까지 남는다 — 사라지는 토스트 안의 동작에는 키보드로 닿지 못한다.
+    const arm = () => { if (ok && !action) timer = setTimeout(dismiss, 5000); };
     const hold = () => clearTimeout(timer);
     close.onclick = dismiss;
     t.addEventListener('mouseenter', hold); t.addEventListener('focusin', hold); t.addEventListener('mouseleave', arm); t.addEventListener('focusout', arm);
@@ -2100,35 +2112,93 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
 
   // ---- 대화 상자: 새 세션 · 세션 정리 · 저장소 사실 ----
-  const fillRepos = (repos) => { const dl = $('repos'); dl.replaceChildren(); repos.forEach((r) => { const o = el('option'); o.value = r; dl.append(o); }); };
-  // 새 세션 양식 하나를 새 세션 버튼과 하네스 안내의 실행 버튼이 같이 쓴다. from: 연 쪽(포커스 복귀 키·띄운 뒤 알림·양식 값).
+  // 새 세션 양식 하나를 새 세션 버튼과 하네스 안내의 실행 버튼이 같이 쓴다(같은 동작은 같은 모양).
+  // from: { scope(global|repo|harness|optional), launch(/launch 응답), key(연 버튼의 data-key — 카드에서 열 때), title, prompt, name, hint, done }
+  const GLOBAL_NOTE = '어느 저장소와도 상관없어 홈에서 띄웁니다.';
+  // 범위별 저장소 후보: harness는 하네스를 깐 저장소만, optional은 맨 위에 홈, global은 고르지 않는다.
+  const pickChoices = (scope, L) => {
+    if (scope === 'global') return [];
+    const repos = (L.repos || []).filter((r) => scope !== 'harness' || r.harness);
+    return scope === 'optional' && L.home ? [{ path: L.home, name: '저장소 없이(홈에서)', short: L.home, home: true }, ...repos] : repos;
+  };
   let dlgFrom = null, dlgDraft = null;
+  const pick = { all: [], shown: [], at: 0 };
+  function drawPick() {
+    const q = $('fpick').value.trim().toLowerCase(), list = $('fpicklist');
+    pick.shown = pick.all.filter((c) => !q || c.name.toLowerCase().includes(q) || c.path.toLowerCase().includes(q));
+    list.replaceChildren();
+    const opts = pick.shown.map((c) => {
+      const o = el('div', 'b-pick__opt'), head = el('span', 'b-pick__head');
+      head.append(el('span', 'ds-label', c.name)); if (c.harness) head.append(chip('하네스'));
+      o.append(head, el('span', 'ds-caption b-pick__path', c.short)); o.title = c.path;
+      o.onclick = () => { $('fcwd').value = c.path; $('fcwdfield').hidden = true; drawPick(); $('fpick').focus(); };
+      return o;
+    });
+    if (!opts.length) list.append(el('p', 'ds-caption b-pick__none', q ? '찾는 이름의 저장소가 없습니다.' : '고를 저장소가 없습니다. 경로를 직접 입력하세요.'));
+    const other = el('div', 'b-pick__opt b-pick__other', '다른 경로 직접 입력');
+    other.onclick = () => { $('fcwdfield').hidden = false; drawPick(); $('fcwd').select(); };
+    opts.push(other);
+    const typed = !$('fcwdfield').hidden;
+    let cur = typed ? opts.length - 1 : pick.shown.findIndex((c) => c.path === $('fcwd').value);
+    // 검색으로 고른 저장소가 목록에서 빠지면 첫 결과를 고른다 — Enter가 보이지 않는 저장소에서 띄우지 않게.
+    if (!typed && cur < 0 && pick.shown.length) { cur = 0; $('fcwd').value = pick.shown[0].path; }
+    opts.forEach((o, i) => { o.id = 'fpick-' + i; o.setAttribute('role', 'option'); o.setAttribute('aria-selected', String(i === cur)); o.onmousedown = (e) => e.preventDefault(); list.append(o); });
+    pick.at = cur;
+    if (cur >= 0) { $('fpick').setAttribute('aria-activedescendant', 'fpick-' + cur); opts[cur].scrollIntoView({ block: 'nearest' }); } else $('fpick').removeAttribute('aria-activedescendant');
+  }
+  $('fpick').addEventListener('input', drawPick);
+  $('fpick').addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const n = pick.shown.length + 1;  // 마지막은 "다른 경로 직접 입력"
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const from = pick.at < 0 ? (e.key === 'ArrowDown' ? -1 : 0) : pick.at;
+      const i = (from + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      if (i < n - 1) { $('fcwd').value = pick.shown[i].path; $('fcwdfield').hidden = true; } else $('fcwdfield').hidden = false;
+      drawPick();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!$('fcwdfield').hidden) $('fcwd').select(); else $('dlgok').click();
+    } else if (e.key === 'Escape' && $('fpick').value) { e.preventDefault(); $('fpick').value = ''; drawPick(); }
+  });
   function openNew(from) {
-    dlgFrom = from || null; dlgDraft = null;
     $('dlg').returnValue = '';  // Esc로 닫으면 returnValue가 바뀌지 않는다 — 지난번 'ok'가 남아 미리 채운 세션이 뜨지 않게 비운다
-    const hint = $('fcwdhint'); hint.hidden = !(from && from.hint); hint.textContent = (from && from.hint) || '';
-    if (from) {
+    dlgFrom = from; dlgDraft = null;
+    const scope = from.scope, L = from.launch || {};
+    $('dlg-title').textContent = from.title || '새 세션';
+    // 저장소와 무관한 기능은 "고른 저장소에서" 설명 대신 왜 홈에서 띄우는지를 말한다.
+    $('dlgdesc').hidden = scope === 'global'; $('fglobal').hidden = scope !== 'global';
+    $('fglobal').textContent = GLOBAL_NOTE + ' 질문과 권한 요청은 작업 현황에서 답합니다.';
+    $('fpickfield').hidden = scope === 'global';
+    $('fcwdfield').hidden = true;
+    const hint = $('fcwdhint'); hint.hidden = !from.hint; hint.textContent = from.hint || '';
+    if (from.key) {
       dlgDraft = { cwd: $('fcwd').value, prompt: $('fprompt').value, name: $('fname').value };
-      fillRepos(from.repos); $('fcwd').value = from.cwd; $('fprompt').value = from.prompt; $('fname').value = from.name;
+      $('fprompt').value = from.prompt; $('fname').value = from.name;
       $('fprompt').setSelectionRange(from.prompt.length, from.prompt.length);  // Tab으로 들어가면 명령 뒤에 바로 덧붙인다
     }
+    pick.all = pickChoices(scope, L); $('fpick').value = '';
+    // 고른 채 연다: 새 세션 버튼은 지난번 고른 곳이 후보에 있으면 그대로, 아니면 가장 최근 저장소(없으면 첫 후보).
+    const kept = !from.key && pick.all.find((c) => c.path === $('fcwd').value);
+    const first = kept || pick.all.find((c) => !c.home) || pick.all[0];
+    // 후보가 없으면(목록을 못 받음) 새 세션 버튼은 지난번 직접 입력한 경로를 남긴다.
+    if (scope === 'global') $('fcwd').value = L.home || ''; else if (first) $('fcwd').value = first.path; else if (from.key) $('fcwd').value = '';
+    if (scope !== 'global' && !pick.all.length) $('fcwdfield').hidden = false;
+    drawPick();
     $('dlg').showModal();
-    if (from) { $('fcwd').focus(); $('fcwd').select(); }
+    (scope === 'global' ? $('dlgok') : $('fcwdfield').hidden ? $('fpick') : $('fcwd')).focus();
   }
   $('newbtn').onclick = async () => {
-    try {
-      const repos = await (await fetch('/repos?t=' + encodeURIComponent(TOKEN))).json();
-      fillRepos(repos);
-      if (!$('fcwd').value && repos.length) $('fcwd').value = repos[0];
-    } catch (e) { /* 경로는 직접 입력할 수 있다 */ }
-    openNew(null);
+    let launch = {};
+    try { launch = await (await fetch('/launch?t=' + encodeURIComponent(TOKEN))).json(); } catch (e) { /* 경로는 직접 입력할 수 있다 */ }
+    openNew({ scope: 'optional', launch });
   };
   if (SERVER) autocomplete($('fprompt'), () => $('fcwd').value.trim(), true);
   // 한 줄 칸의 Enter는 띄우기다(양식의 첫 제출 버튼이 취소라 기본 동작이면 닫혀 버린다).
   for (const id of ['fcwd', 'fname']) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('dlgok').click(); } });
   $('dlg').addEventListener('close', async () => {
     const from = dlgFrom, draft = dlgDraft; dlgFrom = null; dlgDraft = null;
-    const back = () => { const b = from ? document.querySelector(`[data-key="${CSS.escape(from.key)}"]`) : $('newbtn'); if (b) b.focus(); };
+    const back = () => { const b = from && from.key ? document.querySelector(`[data-key="${CSS.escape(from.key)}"]`) : $('newbtn'); if (b) b.focus(); };
     const req = { cwd: $('fcwd').value.trim(), prompt: $('fprompt').value.trim(), name: $('fname').value.trim() || null };
     // 카드에서 연 양식은 결과와 상관없이 새 세션 버튼이 쓰던 입력으로 되돌린다.
     if (draft) { $('fcwd').value = draft.cwd; $('fprompt').value = draft.prompt; $('fname').value = draft.name; }
@@ -3015,9 +3085,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   // 카드에서 바로 실행(이슈 442): 기존 새 세션 양식을 명령·카드 이름으로 채워 연다. 범위(run)가 저장소 후보를 정한다.
   const RUN_HINT = {
-    global: '기본 위치(홈)에서 띄웁니다. 다른 경로를 적어도 됩니다.',
-    repo: '보드가 아는 저장소에서 고르거나 경로를 적습니다.',
-    harness: '하네스를 깐 저장소에서 고릅니다.',
+    repo: '이 기능은 저장소 코드를 읽거나 바꿉니다.',
+    harness: '하네스를 깐 저장소만 보입니다.',
+    optional: '저장소가 있으면 그 코드를 쓰고, 없어도 됩니다.',
   };
   // 막힌 카드마다 같은 곳을 가리키는 링크가 생기므로 포커스 키를 카드별로 준다(다시 그려도 그 카드 링크로 돌아온다).
   const whyLink = (it, a) => { a.dataset.key = 'why:' + it.id; return a; };
@@ -3026,11 +3096,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     not_installed: (it) => ['아직 설치하지 않았습니다', whyLink(it, toCard('처음 셋업', 'skills/setup'))],
   };
   function guideRun(it) {
-    const L = gdata.launch || {}, home = L.home || '', harness = L.harness || [], repos = L.repos || [];
-    const cands = it.run === 'harness' ? harness : it.run === 'global' ? [...new Set([home, ...repos].filter(Boolean))] : repos;
     openNew({
-      key: 'run:' + it.id, repos: cands, hint: RUN_HINT[it.run],
-      cwd: it.run === 'global' ? home : cands[0] || '', prompt: it.cmd + ' ', name: it.title,
+      key: 'run:' + it.id, scope: it.run, launch: gdata.launch, hint: RUN_HINT[it.run],
+      title: `${it.title} 실행`, prompt: it.cmd + ' ', name: it.title,
       done: () => toast('세션을 띄웠습니다 — 작업 현황에서 진행을 봅니다', true, goLink('작업 현황 열기', 'list')),
     });
   }
@@ -3044,7 +3112,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       let why = null;
       if (it.cmd) acts.append(el('code', 'b-guidecmd', it.cmd));  // 명령은 한 줄을 차지해 카드마다 버튼 줄이 같은 자리에서 시작한다
       if (SERVER && it.run) {
-        const rb = btn('실행', 'ds-btn--sm ds-btn--primary'); rb.dataset.key = 'run:' + it.id;
+        // 카드마다 주 동작은 실행 하나지만, 서른 장이 모두 채운 버튼이면 화면이 무겁다 — 채운 주 버튼은 "처음이면 이것부터" 세 카드만.
+        const rb = btn('', START.some(([id]) => id === it.id) ? 'ds-btn--sm ds-btn--primary' : 'ds-btn--sm'); rb.append(icon('play'), '실행');
+        rb.dataset.key = 'run:' + it.id;
         rb.setAttribute('aria-label', `${it.title} 실행`);
         rb.onclick = () => { if (rb.getAttribute('aria-disabled') !== 'true') guideRun(it); };
         acts.append(rb);

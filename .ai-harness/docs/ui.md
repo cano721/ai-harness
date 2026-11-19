@@ -25,7 +25,7 @@ bash scripts/board/board.sh stop      # 끝나면 반드시 끈다 (같은 환�
 - 보드 서버가 쓰는 것(`board/server.json`·로그)은 `HARNESS_METRICS_DIR` 아래에만 생긴다. 저장소에는 아무것도 쓰지 않는다.
 - 화면 쿼리 `?theme=light|dark`로 테마를 고정할 수 있다(보드·기준 화면).
 - 보드를 처음 연 브라우저(localStorage `hb-view`·`hb-tab`·`hb-stab`이 모두 없음)는 하네스 안내 화면으로 시작한다. 다른 화면을 검토하려면 사이드바에서 고르거나 이미 쓰던 프로필을 쓴다. 보드 주소에 `&view=guide`를 붙이면 안내 화면이 바로 열린다.
-- 안내 카드의 "실행"은 새 세션 양식을 열고 띄우기는 실제로 `claude`를 띄운다. 검토할 때는 가짜 `claude`(예: `tests/fixtures/board-resident/claude`)가 든 폴더를 `PATH` 앞에 두고 보드를 연다. 실행 가능 여부는 `HM_CLAUDE_SKILLS_DIR`(기본 스킬 설치 여부)와 보드가 아는 하네스 저장소로 정해지므로, 막힌 상태를 보려면 빈 `HM_CLAUDE_SKILLS_DIR`와 빈 데이터 디렉터리로 연다.
+- 안내 카드의 "실행"은 새 세션 양식을 열고 띄우기는 실제로 `claude`를 띄운다. 검토할 때는 가짜 `claude`(예: `tests/fixtures/board-resident/claude`)가 든 폴더를 `PATH` 앞에 두고 보드를 연다. 실행 가능 여부는 `HM_CLAUDE_SKILLS_DIR`(기본 스킬 설치 여부)와 저장소 후보 중 하네스 저장소로 정해진다. 후보는 `orca repo list --json`·`HARNESS_CLAUDE_JSON`(기본 `~/.claude.json`의 `projects` 키)·데이터 디렉터리의 알려진 저장소에서 오므로, 사용자 저장소가 섞이지 않게 하려면 가짜 `orca`(저장소 목록을 돌려주는 스크립트)를 `PATH` 앞에 두고 `HARNESS_CLAUDE_JSON`을 fixture로 바꾼다. 임시 폴더 아래 fixture 저장소는 걸러지므로 `BOARD_TEMP_ROOTS`(콜론 구분, 빈 값이면 거르지 않음)를 함께 준다. 막힌 상태를 보려면 빈 `HM_CLAUDE_SKILLS_DIR`와 빈 데이터 디렉터리로 연다.
 
 ## 브라우저
 

@@ -46,8 +46,8 @@
       "label": "디자인",
       "desc": "저장소의 디자인 시스템을 먼저 따라 화면과 페이지를 만들고 검토하는 기능입니다.",
       "items": [
-        { "id": "skills/design-references", "run": "repo", "title": "레퍼런스 모으기", "summary": "같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 캡처해 탭 다섯 개짜리 보드로 보여 줍니다.", "ask": "경쟁사랑 레퍼런스 모아줘", "view": "refs" },
-        { "id": "skills/landing-page", "run": "repo", "title": "랜딩 페이지", "summary": "소개·랜딩 페이지를 방향 잡기부터 구성·서체·모션·브라우저 검증까지 만듭니다.", "ask": "서비스 소개 페이지 만들어줘" },
+        { "id": "skills/design-references", "run": "optional", "title": "레퍼런스 모으기", "summary": "같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 캡처해 탭 다섯 개짜리 보드로 보여 줍니다.", "ask": "경쟁사랑 레퍼런스 모아줘", "view": "refs" },
+        { "id": "skills/landing-page", "run": "optional", "title": "랜딩 페이지", "summary": "소개·랜딩 페이지를 방향 잡기부터 구성·서체·모션·브라우저 검증까지 만듭니다.", "ask": "서비스 소개 페이지 만들어줘" },
         { "id": "skills/design-system-builder", "run": "repo", "title": "디자인 시스템 만들기", "summary": "기존 코드나 시안에서 디자인 규칙 문서·토큰·공용 컴포넌트·기준 화면을 만듭니다.", "ask": "디자인 시스템 만들어줘" },
         { "id": "skills/design-screen", "run": "repo", "title": "화면 시안 그리기", "summary": "디자인 시스템의 부품만으로 새 화면을 그리고, 규칙 채점을 통과할 때까지 고칩니다.", "ask": "이 화면 시안 그려줘" },
         { "id": "skills/design-polish", "run": "repo", "title": "화면 점검 (하네스 없이)", "summary": "하네스가 없는 저장소에서 화면을 실제로 띄워 재고, 근거 달린 고칠 목록만 냅니다(파일은 바꾸지 않음). 화면 다듬기 워크플로가 있는 저장소에서는 그 워크플로로 넘깁니다.", "ask": "이 화면 어디를 다듬으면 좋을까" },
@@ -55,7 +55,7 @@
         { "id": "skills/ux-writing-audit", "run": "repo", "title": "UX 문구 점검", "summary": "화면 문구를 문구 규칙 문서에 견줘 위치·원문·고칠 문장·어긴 규칙을 알려 줍니다.", "ask": "이 화면 문구 점검해줘" },
         { "id": "skills/web-design-guidelines", "run": "repo", "title": "웹 인터페이스 가이드 점검", "summary": "화면 코드를 웹 인터페이스 가이드라인에 견줘 접근성·사용성 문제를 찾습니다.", "ask": "내 화면 접근성 점검해줘" },
         { "id": "skills/emil-design-eng", "run": "repo", "title": "UI 완성도 지침", "summary": "컴포넌트 설계·애니메이션·작은 디테일로 화면의 완성도를 높이는 지침입니다.", "ask": "이 애니메이션 더 자연스럽게 해줘" },
-        { "id": "skills/diagram", "run": "repo", "title": "다이어그램", "summary": "코드베이스나 설명한 시스템의 구조·흐름·시퀀스를 검증한 다이어그램 HTML로 그립니다.", "ask": "이 서비스 구조도 그려줘" }
+        { "id": "skills/diagram", "run": "optional", "title": "다이어그램", "summary": "코드베이스나 설명한 시스템의 구조·흐름·시퀀스를 검증한 다이어그램 HTML로 그립니다.", "ask": "이 서비스 구조도 그려줘" }
       ]
     },
     {
@@ -64,7 +64,7 @@
       "desc": "코드를 바꾸지 않고 변경과 개념을 설명하며, 하네스가 없는 저장소에서도 씁니다.",
       "items": [
         { "id": "skills/understand-change", "run": "repo", "title": "변경 이해하기", "summary": "변경·PR의 배경과 흐름·위험·검증 방법을 설명해 다음 설계 판단에 참여할 수 있게 합니다.", "ask": "이 PR 뭐가 바뀐 건지 설명해줘" },
-        { "id": "skills/explain-for", "run": "global", "title": "듣는 사람에 맞춰 설명", "summary": "사실은 그대로 두고 듣는 사람(직무·경력·아이·가족)에 맞춰 말과 깊이를 바꿉니다.", "ask": "이거 팀장님께 설명하듯 정리해줘" }
+        { "id": "skills/explain-for", "run": "optional", "title": "듣는 사람에 맞춰 설명", "summary": "사실은 그대로 두고 듣는 사람(직무·경력·아이·가족)에 맞춰 말과 깊이를 바꿉니다.", "ask": "이거 팀장님께 설명하듯 정리해줘" }
       ]
     },
     {
