@@ -1095,7 +1095,7 @@ command_done() {
 
 # SessionStart: 관리 사본 갱신 + 셋업 안내. 안내는 카탈로그 버전마다 한 번만.
 command_notify() {
-  local input transcript seen shown version refreshed="" new_names messages=() setup_cmd
+  local input transcript seen shown version refreshed="" new_names messages=() setup_cmd board_cmd
   input="$(cat)"
   [[ -f "$CATALOG" ]] || return 0
   mkdir -p "$STATE_DIR"
@@ -1106,15 +1106,17 @@ command_notify() {
   [[ -n "$refreshed" ]] && messages+=("ai-harness 기본 스킬을 새 버전으로 갱신했습니다: $refreshed")
 
   transcript="$(jq -r '.transcript_path // empty' <<<"$input" 2>/dev/null || true)"
-  setup_cmd="/ai-harness:setup"
-  [[ "$(basename "${transcript:-x}")" == rollout-*.jsonl ]] && setup_cmd="ai-harness setup 스킬"
+  setup_cmd="/ai-harness:setup" board_cmd="/ai-harness:board"
+  if [[ "$(basename "${transcript:-x}")" == rollout-*.jsonl ]]; then
+    setup_cmd="ai-harness setup 스킬" board_cmd="ai-harness board 스킬"
+  fi
   version="$(catalog_version)"
   seen="$(read_state | jq -r '.catalog_version // 0')"
   shown="$(sed -n '1p' "$STATE_DIR/hint-shown" 2>/dev/null || true)"
   [[ "$shown" =~ ^[0-9]+$ ]] || shown=0
   if [[ "${HM_SETUP_HINT:-1}" != "0" ]] && ((version > seen && version > shown)); then
     if ((seen == 0)); then
-      messages+=("ai-harness 기본 스킬($(catalog_names | paste -sd, - | sed 's/,/·/g'))을 골라 설치하려면 $setup_cmd 을 실행하세요. (이 안내는 한 번만 표시됩니다)")
+      messages+=("ai-harness 기본 스킬($(catalog_names | paste -sd, - | sed 's/,/·/g'))을 골라 설치하려면 $setup_cmd 을 실행하세요. 기능 소개는 보드($board_cmd)의 하네스 안내 화면에서 볼 수 있습니다. (이 안내는 한 번만 표시됩니다)")
     else
       new_names="$(jq -r --argjson s "$seen" '[.skills[] | select((.since // 1) > $s) | .name] | join(", ")' "$CATALOG")"
       [[ -n "$new_names" ]] && messages+=("ai-harness에 새 기본 스킬이 추가됐습니다: $new_names. 설치하려면 $setup_cmd 을 실행하세요.")

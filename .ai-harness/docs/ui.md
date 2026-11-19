@@ -6,7 +6,7 @@ ai-harness가 사용자에게 보여 주는 화면은 서버나 빌드 없이 �
 
 | 화면 | 원본 | 여는 법 |
 |---|---|---|
-| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
+| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정·하네스 안내) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
 | 하네스 효과 리포트 | `skills/harness-impact/report-template.html` | `scripts/impact.sh`가 데이터를 넣어 만든 HTML 파일을 브라우저로 연다 |
 | 기준 화면 (디자인 시스템 예시) | `docs/design-system/reference.html` | 파일을 바로 연다(`file://`). `?theme=light|dark`, `?drawer=1`로 상태를 고정한다 |
 
@@ -24,6 +24,7 @@ bash scripts/board/board.sh stop      # 끝나면 반드시 끈다 (같은 환�
 - 로그인·시드 없음. 빈 데이터 디렉터리면 각 화면이 빈 상태로 그려진다. 항목이 있는 상태를 보려면 데이터 디렉터리에 `events/*.jsonl` 등을 넣는다(`tests/run.sh`의 보드 블록이 만드는 형태).
 - 보드 서버가 쓰는 것(`board/server.json`·로그)은 `HARNESS_METRICS_DIR` 아래에만 생긴다. 저장소에는 아무것도 쓰지 않는다.
 - 화면 쿼리 `?theme=light|dark`로 테마를 고정할 수 있다(보드·기준 화면).
+- 보드를 처음 연 브라우저(localStorage `hb-view`·`hb-tab`·`hb-stab`이 모두 없음)는 하네스 안내 화면으로 시작한다. 다른 화면을 검토하려면 사이드바에서 고르거나 이미 쓰던 프로필을 쓴다. 보드 주소에 `&view=guide`를 붙이면 안내 화면이 바로 열린다.
 
 ## 브라우저
 
