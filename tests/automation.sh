@@ -717,7 +717,8 @@ if grep -q '"Bash(git \*)"' <(sed -n '/if \[\[ "$scope" == "project" \]\]; then/
 fi
 pass "unattended inputs cannot escape into code execution or outside the managed block"
 
-# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드는 워크플로를 읽었어도 바꾸지 못하고 멤버 세션으로 인계한다.
+# 플러그인 편집 가드: 세션이 열린 곳과 다른 하네스 저장소의 코드 편집은 워크플로를 읽었어도 모델이 혼자 진행하지 못한다.
+# 기본은 사용자 확인(permissionDecision: ask)이고, HM_MEMBER_GUARD=block이면 예전처럼 막고 멤버 세션으로 인계하게 한다.
 assert_contains "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].command' "$ROOT/hooks/hooks.json")" "scripts/member-edit-guard.sh" "PreToolUse hook runs the member edit guard"
 assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
 assert_eq "3" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
@@ -737,32 +738,41 @@ guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/impl
 cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
 mkdir -p "$GW/t/sess/subagents"
 cp "$GW/t/read.jsonl" "$GW/t/sess/subagents/agent-a1.jsonl"
-member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> exit code; stderr to $GW/err
-  local agent="${4:-}"
+member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> ask(확인 요청) | exit code; stdout $GW/out, stderr $GW/err
+  local agent="${4:-}" rc=0
   jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
     '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
-    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >/dev/null && echo 0 || echo $?
+    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
+  if [[ "$rc" == 0 && "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$GW/out" 2>/dev/null)" == ask ]]; then echo ask; else echo "$rc"; fi
 }
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code is blocked"
-assert_contains "$(<"$GW/err")" "[Direct edit guard] " "block message carries the counted guard prefix"
-assert_contains "$(<"$GW/err")" '/cd jobda' "block message offers /cd into the member"
-assert_contains "$(<"$GW/err")" 'cd jobda && claude --bg -n <인계 이름> "<인계>"' "block message hands off to a Claude Code background session in the member"
-assert_contains "$(<"$GW/err")" 'notify_when_idle: true' "block message waits on the background session's turn-end notice"
-assert_contains "$(<"$GW/err")" 'orca orchestration check --wait' "block message keeps Orca supervision as an option when the user wants it"
-assert_contains "$(<"$GW/err")" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
-assert_contains "$(<"$GW/err")" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "block message tells the handoff to open by reading the member workflow file"
-[[ "$(<"$GW/err")" != *"워크플로를 읽고"* ]] || fail "block message no longer offers reading the workflow as the way through"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read does not unblock a workspace session"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow does not unblock"
-assert_eq "2" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow does not unblock a workspace session"
-assert_contains "$(<"$GW/err")" "/cd worktrees/NJ-1/jobda" "block message hands off to the worktree, not the main checkout"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent of a workspace session is blocked even when it and its parent read the workflow"
-assert_eq "2" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "the verdict does not depend on a readable transcript"
+guard_reason() { jq -r '.hookSpecificOutput.permissionDecisionReason' "$GW/out"; }
+guard_context() { jq -r '.hookSpecificOutput.additionalContext' "$GW/out"; }
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "workspace edit of member code asks the user instead of going ahead"
+assert_eq "PreToolUse" "$(jq -r '.hookSpecificOutput.hookEventName' "$GW/out")" "ask decision names its hook event"
+assert_eq "" "$(<"$GW/err")" "asking writes nothing to stderr (no hook error in the transcript)"
+[[ "$(guard_reason)" == "[Direct edit guard] jobda "* ]] || fail "ask reason starts with the guard prefix and names the member"
+assert_contains "$(guard_reason)" "허용하면 이 편집만 진행" "ask reason tells the user what approving means"
+[[ "$(guard_reason)" != *"claude --bg"* ]] || fail "the user's prompt stays short; handoff steps go to the model"
+assert_contains "$(guard_context)" "거부되면 다시 시도하지 마세요" "the model is told not to retry a denied edit"
+assert_contains "$(guard_context)" "Bash로 파일을 써서 우회하지 마세요" "the model is told not to route around the prompt with Bash"
+assert_contains "$(guard_context)" '/cd jobda' "handoff context offers /cd into the member"
+assert_contains "$(guard_context)" 'cd jobda && claude --bg -n <인계 이름> "<인계>"' "handoff context hands off to a Claude Code background session in the member"
+assert_contains "$(guard_context)" 'notify_when_idle: true' "handoff context waits on the background session's turn-end notice"
+assert_contains "$(guard_context)" 'orca orchestration check --wait' "handoff context keeps Orca supervision as an option when the user wants it"
+assert_contains "$(guard_context)" '완료 파일(결과·PR 링크·원격 CI 상태)' "without supervised dispatch the handoff names a completion file to wait for"
+assert_contains "$(guard_context)" "첫 지시로 멤버 워크플로 파일(\`.ai-harness/workflows/<name>.md\`)을 Read 하고 그 그래프대로 진행하라고 적습니다" "handoff context tells the handoff to open by reading the member workflow file"
+[[ "$(guard_context)$(guard_reason)" != *"워크플로를 읽고"* ]] || fail "reading the workflow is never offered as the way through"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/read.jsonl")" "reading the member workflow with Read still asks"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/cd.jsonl")" "cd into the member in Bash then reading its workflow still asks"
+assert_eq "ask" "$(member_guard "$GW" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/wt.jsonl")" "reading the worktree's workflow still asks"
+assert_contains "$(guard_context)" "/cd worktrees/NJ-1/jobda" "handoff context hands off to the worktree, not the main checkout"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/sess.jsonl" a1)" "a subagent of a workspace session still asks even when it and its parent read the workflow"
+assert_eq "ask" "$(member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/missing.jsonl")" "the verdict does not depend on a readable transcript"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the member is left to the member's own guard"
 assert_eq "0" "$(member_guard "$GW/jobda/src" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened below the member root is inside the member"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl" a1)" "a subagent of a member session passes"
 assert_eq "0" "$(member_guard "$GW/worktrees/NJ-1/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session opened in the worktree passes"
-assert_eq "2" "$(member_guard "$GW/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a worktree is its own member: a main-checkout session cannot edit it"
+assert_eq "ask" "$(member_guard "$GW/jobda" "$GW/worktrees/NJ-1/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a worktree is its own member: a main-checkout session must ask"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.ai-harness/docs/domain.md" "$GW/t/none.jsonl")" "harness documents are not guarded"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/.claude/settings.json" "$GW/t/none.jsonl")" "tool settings are not guarded"
 assert_eq "0" "$(member_guard "$GW" "$GW/jobda/docs/handoff.md" "$GW/t/none.jsonl")" "markdown documents are not guarded"
@@ -772,6 +782,13 @@ ln -s "$GW/jobda" "$GW/jobda-link"
 assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
+assert_eq "" "$(<"$GW/out")" "passing cases print no decision"
+assert_eq "2" "$(HM_MEMBER_GUARD=block member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=block keeps the hard block"
+[[ "$(<"$GW/err")" == "[Direct edit guard] "* ]] || fail "hard block stderr starts with the counted guard prefix"
+assert_contains "$(<"$GW/err")" '/cd jobda' "hard block still hands off to the member"
+assert_contains "$(<"$GW/err")" "Bash로 파일을 써서 우회하지 마세요" "hard block still forbids writing around it with Bash"
+assert_eq "" "$(<"$GW/out")" "hard block prints no ask decision"
+assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "block mode still passes a session opened in the member"
 pass "member edit guard"
 
 # 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.
