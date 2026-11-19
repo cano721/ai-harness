@@ -218,7 +218,7 @@ ${list}
     [[ -n "$list" ]] || exit 0
     reason="[Heavy slot] 무거운 명령(빌드·dev 서버·전체 테스트)이 동시 한도 ${cap}개(남은 메모리 ${free:-?}%)를 모두 쓰고 있어 ${wait_limit}초 기다린 뒤 이 명령을 실행하지 않았습니다. 지금 실행 중:
 ${list}
-잠시 뒤 다시 시도하거나, 더 쓰지 않는 dev 서버·빌드를 먼저 끝내세요. 같은 작업 트리에 이미 떠 있는 서버가 있으면 그것을 쓰세요."
+같은 명령을 그대로 다시 실행하세요 — 다시 실행하면 이 hook이 자리가 날 때까지 또 기다립니다. bash -c·스크립트로 감싸거나 명령을 바꿔 이 대기를 피하지 마세요. 세 번 연속 거절되면 멈추고 사용자에게 상황(실행 중인 명령)을 알리세요. 더 쓰지 않는 dev 서버·빌드가 이 세션에 있으면 먼저 끝내세요."
     jq -cn --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
     exit 0
   fi

@@ -2002,6 +2002,9 @@ assert_eq "deny" "$(jq -r '.hookSpecificOutput.permissionDecision' "$TEST_TMP/hs
 HS_REASON="$(jq -r '.hookSpecificOutput.permissionDecisionReason' "$TEST_TMP/hs.out")"
 assert_contains "$HS_REASON" "[Heavy slot] " "the denial starts with a bracketed hook prefix like the other guards"
 assert_contains "$HS_REASON" "yarn web build" "the denial names the command holding the slot"
+assert_contains "$HS_REASON" "같은 명령을 그대로 다시 실행하세요" "the denial tells the model a plain retry waits again (measured: models retry as is)"
+assert_contains "$HS_REASON" "bash -c·스크립트로 감싸거나" "the denial forbids wrapping the command to dodge the wait"
+assert_contains "$HS_REASON" "세 번 연속 거절되면" "the denial bounds retries before asking the user"
 assert_eq "t1" "$(hs_slots)" "a denied command takes no slot"
 # 같은 tool_use_id로 다시 오면 이미 쥔 슬롯이다.
 hs_call pre "$(hs_in t1 "yarn web build")"
