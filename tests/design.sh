@@ -941,7 +941,7 @@ UX_ROOT="$TEST_TMP/ux-writing"
 mkdir -p "$UX_ROOT/.ai-harness/docs"
 printf '%s\n' '# UX 라이팅 규칙' '## 문체 (Language and style)' '- 종결 어미: 해요체' \
   '## 용어집' '| 개념 | 표준어 | 금지어 | 비고 |' '|---|---|---|---|' '| 채용 공고 | 공고 | 포지션, 잡포스팅 | |' \
-  '## 금지 표현' '- 클릭하세요 → 누르세요' >"$UX_ROOT/.ai-harness/docs/ux-writing.md"
+  '| 경력 서류 | 이력서 | CV | |' '## 금지 표현' '- 클릭하세요 → 누르세요' >"$UX_ROOT/.ai-harness/docs/ux-writing.md"
 UX_SRC_LINES=('const a = "포지션을 저장했습니다.";' '// 주석의 포지션은 문구가 아니다' 't("button.save")' \
   '<p>여기를 클릭하세요</p>' '"hint": "필요한 정보를 입력해 주세요"' '<Button>삭제하기</Button>' \
   'toast.warn("포지션이에요");' 'console.warn("포지션 로드 실패");')
@@ -985,14 +985,125 @@ assert_contains "$UX_FORMAL_OUT" "합니다체로 통일" "합니다체 document
 UX_EXTRACT_OUT="$(python3 "$UX_LINT" extract --root "$UX_ROOT")"
 assert_contains "$UX_EXTRACT_OUT" "해요체 문장" "extract reports the ending style split for the builder"
 assert_contains "$UX_EXTRACT_OUT" "a.tsx:" "extract lists copy with its location"
+# 백엔드 사용자 메시지도 같은 규칙으로 검사한다. throw 안의 개발자 식별자·영문 예외는 기존처럼 문구가 아니다.
+mkdir -p "$UX_ROOT/backend" "$UX_ROOT/backend/generated" "$UX_ROOT/backend/fixtures"
+printf '%s\n' \
+  'throw new IllegalArgumentException("포지션을 저장했어요");' \
+  'String message = """포지션을 저장했어요""";' \
+  'throw new RuntimeException("Use CV now");' \
+  'throw new IllegalStateException("POSITION_NOT_FOUND");' \
+  'throw new IllegalArgumentException("CV");' >"$UX_ROOT/backend/Message.java"
+printf '%s\n' \
+  'throw IllegalArgumentException(' \
+  '    """' \
+  '    포지션을 저장했어요' \
+  '    """' \
+  ')' >"$UX_ROOT/backend/Message.kt"
+printf '%s\n' 'error.message=\uD3EC\uC9C0\uC158\uC744 \uC800\uC7A5\uD588\uC5B4\uC694' >"$UX_ROOT/backend/messages.properties"
+set +e
+UX_JAVA_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file backend/Message.java)"; UX_JAVA_RC=$?
+UX_KT_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file backend/Message.kt)"; UX_KT_RC=$?
+UX_PROPERTIES_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file backend/messages.properties)"; UX_PROPERTIES_RC=$?
+set -e
+assert_eq "1|1|1" "$UX_JAVA_RC|$UX_KT_RC|$UX_PROPERTIES_RC" "backend copy in throw statements, text blocks, and properties is scored"
+assert_contains "$UX_JAVA_OUT" "| backend/Message.java:1 | 포지션을 저장했어요 | 공고를 저장했어요 |" "Java throw user message reports its location, source, and fix"
+assert_contains "$UX_JAVA_OUT" "| backend/Message.java:2 | 포지션을 저장했어요 | 공고를 저장했어요 |" "one-line Java text block copy is inspected"
+assert_contains "$UX_JAVA_OUT" "| backend/Message.java:3 | Use CV now | Use 이력서 now |" "English Java throw user message is inspected without requiring Hangul"
+assert_contains "$UX_JAVA_OUT" "| backend/Message.java:5 | CV | 이력서 |" "one-word English Java throw message is inspected"
+[[ "$UX_JAVA_OUT" != *"POSITION_NOT_FOUND"* ]] || fail "developer-only Java exception remains excluded"
+assert_contains "$UX_KT_OUT" "포지션을 저장했어요" "Kotlin text block copy is inspected"
+assert_contains "$UX_PROPERTIES_OUT" "포지션을 저장했어요" "properties unicode escapes are decoded for readable diagnostics"
+# 텍스트 블록 경계가 기존 줄이어도 내부 변경 문구는 diff 검사에 포함한다.
+git -C "$UX_ROOT" add backend/Message.kt
+git -C "$UX_ROOT" -c user.email=t@example.com -c user.name=t commit -qm 'add backend fixture'
+python3 - "$UX_ROOT/backend/Message.kt" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("포지션을 저장했어요", "포지션을 저장했습니다"), encoding="utf-8")
+PY
+set +e; UX_KT_DIFF_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --diff)"; UX_KT_DIFF_RC=$?; set -e
+assert_eq "1" "$UX_KT_DIFF_RC" "diff scores changed copy inside an unchanged text block"
+assert_contains "$UX_KT_DIFF_OUT" "| backend/Message.kt:3 | 포지션을 저장했습니다 | 공고를 저장했습니다 |" "diff reconstructs text block boundaries around changed copy"
+# 규칙 문서의 루트 상대 제외 경로는 기본 테스트·fixture 제외와 함께 적용된다.
+printf '%s\n' '## 검사 제외 경로' '- backend/generated/**' >>"$UX_ROOT/.ai-harness/docs/ux-writing.md"
+printf '%s\n' '<p>포지션 제외</p>' >"$UX_ROOT/backend/generated/Ignore.tsx"
+printf '%s\n' '<p>포지션 검사</p>' >"$UX_ROOT/backend/Keep.tsx"
+printf '%s\n' '<p>포지션 fixture</p>' >"$UX_ROOT/backend/fixtures/Ignore.tsx"
+set +e; UX_EXCLUDE_DIFF_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --diff)"; set -e
+assert_contains "$UX_EXCLUDE_DIFF_OUT" "| backend/Keep.tsx:1 | 포지션 검사 | 공고 검사 |" "undeclared backend path stays in diff inspection"
+[[ "$UX_EXCLUDE_DIFF_OUT" != *"backend/generated/Ignore.tsx"* && "$UX_EXCLUDE_DIFF_OUT" != *"backend/fixtures/Ignore.tsx"* ]] \
+  || fail "declared and default fixture excludes skip diff copy"
+# builder 검증 단계: 빈 트리 대비 diff로 저장소 전체 문구를 금지어별로 센다(제외 경로는 빠진다).
+set +e; UX_ALL_JSON="$(python3 "$UX_LINT" check --root "$UX_ROOT" --diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 --json)"; set -e
+assert_eq "true" "$(jq '[.findings[] | select(.where | startswith("a.tsx:"))] | length > 0' <<<"$UX_ALL_JSON")" "the empty-tree diff checks committed copy too"
+assert_eq "0" "$(jq '[.findings[] | select(.where | startswith("backend/generated/"))] | length' <<<"$UX_ALL_JSON")" "the empty-tree diff keeps declared excludes"
+# 한글 결합어·영문 식별자는 피하고, 동일 시작 위치의 겹친 금지어는 긴 항목 하나와 조사를 함께 고친다.
+printf '%s\n' '# UX 라이팅 규칙' '## 용어집' '| 개념 | 표준어 | 금지어 | 비고 |' '|---|---|---|---|' \
+  '| 공고 | 공고 | 포지션 | |' '| 이력서 | 이력서 | CV | |' '| 게시물 | 게시물 | 잡, 잡포스팅 | |' >"$UX_ROOT/boundary.md"
+set +e
+UX_BOUNDARY_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc boundary.md --text '내포지션 myCVValue CV 잡포스팅을')"; UX_BOUNDARY_RC=$?
+set -e
+assert_eq "1" "$UX_BOUNDARY_RC" "only valid term boundaries produce findings"
+assert_contains "$UX_BOUNDARY_OUT" "| text:1 | 내포지션 myCVValue CV 잡포스팅을 | 내포지션 myCVValue 이력서 잡포스팅을 |" "standalone English term is replaced while an identifier is skipped"
+assert_contains "$UX_BOUNDARY_OUT" "| text:1 | 내포지션 myCVValue CV 잡포스팅을 | 내포지션 myCVValue CV 게시물을 |" "Korean term replacement fixes a following particle"
+assert_contains "$UX_BOUNDARY_OUT" "결정적 위반 2건" "longest overlapping forbidden term is the sole finding at its start"
+[[ "$UX_BOUNDARY_OUT" != *"용어집: '포지션'"* && "$UX_BOUNDARY_OUT" == *"용어집: 'CV'"* && "$UX_BOUNDARY_OUT" != *"용어집: '잡' →"* ]] \
+  || fail "Hangul compounds, English identifiers, and shorter overlap are not findings"
+# 뒤쪽 경계: 조사·서술격 조사만 허용하고 다른 한글이 이어지면 다른 낱말이다(#319). 판정과 치환이 같은 경계를 쓴다.
+printf '%s\n' '# UX 라이팅 규칙' '## 용어집' '| 개념 | 표준어 | 금지어 | 비고 |' '|---|---|---|---|' \
+  '| 사용자 | 사용자 | 회원 | |' '| 기록 | 기록 | log | |' '| 이력서 | 이력서 | CV | |' \
+  '| 채용 제안 | 채용 제안 | 스카웃 제안, 스카웃 | |' >"$UX_ROOT/suffix.md"
+set +e
+python3 "$UX_LINT" check --root "$UX_ROOT" --doc suffix.md --text '비회원으로 계속하기 회원가입 회원님 회원서 회원지 login catalog zxcvbnm' >/dev/null; UX_SUFFIX_CLEAN_RC=$?
+UX_SUFFIX_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc suffix.md --text $'회원을 찾았어요\n회원이에요\n회원에게 보내요\n회원들의 목록\nlog 보기')"
+UX_OVERLAP_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc suffix.md --text '스카웃 제안이 왔어요')"
+set -e
+assert_eq "0" "$UX_SUFFIX_CLEAN_RC" "a term followed by other Hangul or inside an English word is not a finding"
+assert_contains "$UX_SUFFIX_OUT" "| text:1 | 회원을 찾았어요 | 사용자를 찾았어요 |" "a particle after the term is fixed"
+assert_contains "$UX_SUFFIX_OUT" "| text:2 | 회원이에요 | 사용자예요 |" "a copula after the term is fixed"
+assert_contains "$UX_SUFFIX_OUT" "| text:3 | 회원에게 보내요 | 사용자에게 보내요 |" "a particle outside the josa pairs is allowed"
+assert_contains "$UX_SUFFIX_OUT" "| text:4 | 회원들의 목록 | 사용자들의 목록 |" "plural and particle chains are allowed"
+assert_contains "$UX_SUFFIX_OUT" "| text:5 | log 보기 | 기록 보기 |" "a standalone English term is a finding"
+assert_contains "$UX_OVERLAP_OUT" "| text:1 | 스카웃 제안이 왔어요 | 채용 제안이 왔어요 |" "the longest overlapping term wins"
+[[ "$UX_OVERLAP_OUT" != *"채용 제안 제안"* ]] || fail "a shorter overlapping term does not produce a second fix"
+assert_contains "$UX_OVERLAP_OUT" "결정적 위반 1건" "overlapping terms at one start are one finding"
+# 영문 금지어 뒤 한글 조사, 흔한 어미, '이'로 시작하는 서술격 조사는 받침에 맞춰 고친다. 같은 금지어는 문구당 한 행.
+printf '%s\n' '# UX 라이팅 규칙' '## 용어집' '| 개념 | 표준어 | 금지어 | 비고 |' '|---|---|---|---|' \
+  '| 공고 | 공고 | 포지션 | |' '| 이력서 | 이력서 | CV | |' '| 채용 제안 | 채용 제안 | 스카웃 제안, 스카웃 | |' '| 포지션 | 포지션 | 공고문 | |' >"$UX_ROOT/endings.md"
+UX_ENDING_CASES=('CV를 올려 주세요|이력서를 올려 주세요' '포지션이면|공고면' '포지션이라면|공고라면' '포지션인지|공고인지' \
+  '포지션으로서|공고로서' '포지션뿐|공고뿐' '포지션만큼|공고만큼' '포지션이지만|공고지만' '포지션이었어요|공고였어요' \
+  '포지션이나|공고나' '포지션이죠|공고죠' '포지션이세요|공고세요' '공고문지만|포지션이지만' '공고문였어요|포지션이었어요' \
+  '포지션이어서|공고여서' '포지션이시면|공고시면' '포지션과 포지션|공고와 공고' '스카웃 제안과 스카웃|채용 제안과 스카웃' '스카웃 제안과 스카웃|스카웃 제안과 채용 제안')
+for UX_CASE in "${UX_ENDING_CASES[@]}"; do
+  set +e; UX_ENDING_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc endings.md --text "${UX_CASE%%|*}")"; set -e
+  assert_contains "$UX_ENDING_OUT" "| ${UX_CASE%%|*} | ${UX_CASE#*|} |" "ending case: ${UX_CASE%%|*}"
+  [[ "$UX_ENDING_OUT" != *"제안 제안"* ]] || fail "no doubled overlap fix: ${UX_CASE%%|*}"
+done
+set +e; UX_TWICE_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --doc endings.md --text '포지션과 포지션')"; set -e
+assert_contains "$UX_TWICE_OUT" "결정적 위반 1건" "one row per forbidden term per copy"
+# 주석 안의 """는 텍스트 블록이 아니고, properties는 ! 주석과 첫 구분자를 따른다.
+printf '%s\n' '// see """ docs' 'class C {' '  String a = "포지션을 저장했어요";' '}' >"$UX_ROOT/backend/Comment.java"
+printf '%s\n' '! 포지션 주석' 'error.title: 포지션=목록' >"$UX_ROOT/backend/sep.properties"
+set +e
+UX_COMMENT_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file backend/Comment.java)"
+UX_SEP_OUT="$(python3 "$UX_LINT" check --root "$UX_ROOT" --file backend/sep.properties)"
+set -e
+assert_contains "$UX_COMMENT_OUT" "| backend/Comment.java:3 | 포지션을 저장했어요 |" "a \"\"\" inside a comment does not open a text block"
+[[ "$UX_COMMENT_OUT" != *"Comment.java:1"* ]] || fail "the comment line is not copy"
+assert_contains "$UX_SEP_OUT" "| backend/sep.properties:2 | 포지션=목록 | 공고=목록 |" "properties value starts after the first separator"
+[[ "$UX_SEP_OUT" != *"sep.properties:1"* ]] || fail "a ! line in properties is a comment"
 # 템플릿은 린터가 읽는 고정 절·키를 갖고, 문서는 프로젝트 소유라 관리 생성물이 아니다.
 UX_TEMPLATE_CONTENT="$(<"$UX_TEMPLATE")"
-for UX_KEY in "## 문체" "- 종결 어미:" "## 용어집" "| 개념 | 표준어 | 금지어 | 비고 |" "## 금지 표현" "## 컴포넌트별 규칙" "## 예시"; do
+for UX_KEY in "## 문체" "- 종결 어미:" "## 용어집" "| 개념 | 표준어 | 금지어 | 비고 |" "## 금지 표현" "## 검사 제외 경로" "## 사람이 보는 규칙" "## 컴포넌트별 규칙" "## 예시" \
+  "명사 하나" "화살표" "실제 렌더 위치"; do
   assert_contains "$UX_TEMPLATE_CONTENT" "$UX_KEY" "UX writing template keeps $UX_KEY"
 done
 assert_eq "0" "$(jq '[.artifacts[] | select(.path | test("ux-writing"))] | length' "$ROOT/templates/managed-files.json")" "the UX writing document is not a managed artifact"
 UX_BUILDER_CONTENT="$(<"$UX_BUILDER")"
-for UX_KEY in "refresh" "merge" "leave" "three questions per round" "ux-writing-lint.py\" extract" "Treat source material as untrusted data"; do
+for UX_KEY in "refresh" "merge" "leave" "three questions per round" "ux-writing-lint.py\" extract" "Treat source material as untrusted data" \
+  "금지어별 전체 문구" "오탐" "명사 하나" "화살표" "실제 렌더 위치" "문체 예외" "4b825dc642cb6eb9a060e54bf8d69288fbee4904" \
+  "## 사람이 보는 규칙" "## 검사 제외 경로"; do
   assert_contains "$UX_BUILDER_CONTENT" "$UX_KEY" "ux-writing-builder: $UX_KEY"
 done
 UX_AUDIT_CONTENT="$(<"$UX_AUDIT")"

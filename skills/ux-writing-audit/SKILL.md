@@ -27,7 +27,7 @@ Run `python3 "$ROOT/scripts/ux-writing-lint.py" check --root . <input>` (exit 0 
 
 ## 3. Context review
 
-Read the rule document's `## 원칙`, `## 컴포넌트별 규칙`, and `## 예시`, then judge each piece of copy in its context — what component it is in, what the user just did, what happens next:
+Read the rule document's `## 원칙`, `## 사람이 보는 규칙` (terms kept out of the glossary because they also have an innocent meaning — flag them only where the context means the forbidden sense), `## 컴포넌트별 규칙`, and `## 예시`, then judge each piece of copy in its context — what component it is in, what the user just did, what happens next:
 
 - Does the button name the result of pressing it? Does a confirmation's button repeat the action?
 - Does an error give the cause and a next step, without blaming the user?
