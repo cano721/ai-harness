@@ -109,6 +109,29 @@ SETUP_ENV=()
 assert_contains "$(<"$ROOT/scripts/session-start.sh")" 'setup.sh" notify' "SessionStart carries the setup notice"
 pass "setup hint on first session and on new catalog skills"
 
+# 버전 바뀜 안내(#439): 확인한 버전(보드와 같은 board/version-seen.json)보다 플러그인이 높으면 그 버전에 대해 한 번 알린다.
+# 상태가 없으면(첫 설치·이 기능 이전 사용자) 알리지 않고 현재 버전으로 기록한다 — 첫 설치 안내와 겹치지 않는다.
+SETUP_T="$TEST_TMP/setup-version"
+mkdir -p "$SETUP_T"
+SETUP_ENV=(HM_SETUP_HINT=0 HM_PLUGIN_ROOT="$ROOT/tests/fixtures/changelog")
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "no version notice without a seen version"
+assert_eq "0.10.0" "$(jq -r '.seen' "$SETUP_T/data/board/version-seen.json")" "the first session records the current version"
+printf '{"seen":"0.9.0"}' >"$SETUP_T/data/board/version-seen.json"
+VER_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_eq "ai-harness가 v0.9.0에서 v0.10.0으로 올랐습니다. 업데이트 후 해야 할 일 1건과 바뀐 점은 보드(/ai-harness:board)의 하네스 안내에서 봅니다." "$VER_HINT" "version notice names the range, the to-dos and the board guide"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "version notice shown once per version"
+assert_eq "0.9.0" "$(jq -r '.seen' "$SETUP_T/data/board/version-seen.json")" "the notice does not mark the changes as seen"
+SETUP_T="$TEST_TMP/setup-version-codex"
+mkdir -p "$SETUP_T/data/board"
+printf '{"seen":"0.9.1"}' >"$SETUP_T/data/board/version-seen.json"
+VER_HINT="$(printf '{"transcript_path":"/x/rollout-2026-10-30T00-00-00-abc.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$VER_HINT" "v0.9.1에서 v0.10.0으로 올랐습니다" "Codex notice names the range"
+assert_contains "$VER_HINT" "보드(ai-harness board 스킬)의 하네스 안내에서 봅니다" "Codex notice names the board skill"
+printf '{"seen":"0.10.0"}' >"$SETUP_T/data/board/version-seen.json"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "no notice once the changes are seen"
+SETUP_ENV=()
+pass "session start tells once that the plugin version went up and where to read the changes (#439)"
+
 # 팀 규칙: 개인 config → 저장소 표식 순으로 원본을 찾고, 차이를 보여 준 sha로만 팀 블록을 쓴다. 개인 블록은 유지. (#243)
 SETUP_T="$TEST_TMP/setup-team"
 SETUP_CATALOG="$ROOT/catalog"
