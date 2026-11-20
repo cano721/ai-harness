@@ -46,7 +46,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 |---|---|
 | `.ai-harness/docs/architecture.md` | 디렉토리 책임, 기술 스택, 데이터 흐름, 브랜치·배포 |
 | `.ai-harness/docs/code-conventions.md` | 셸(bash 3.2 호환)·Python·Skill/템플릿·듀얼 매니페스트·공개 저장소·커밋 규칙 |
-| `.ai-harness/docs/testing.md` | `tests/run.sh`·영역 파일(`tests/<영역>.sh`) 실행·작성 규칙, CI와 같은 shellcheck |
+| `.ai-harness/docs/testing.md` | `tests/run.sh`·영역 파일(`tests/<영역>.sh`) 실행(`--changed`·`--lint`·`--fast`·`-j N` 병렬)·작성 규칙, CI와 같은 shellcheck |
 | `.ai-harness/docs/domain.md` | 도메인 문서 인덱스 |
 | `.ai-harness/docs/ui.md` | 단일 HTML 화면 목록, 보드 격리 실행, 뷰포트·테마, 디자인 기계 검사, `## 디자인 점검`(`ui-review`·`design-audit` 입력) |
 | `CONTRIBUTING.md` | 브랜치·버전·릴리스 규칙의 원본 |
@@ -56,7 +56,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 ```bash
 bash tests/run.sh --changed                                                   # 작업 중: 바뀐 파일을 다루는 영역만
 bash tests/run.sh --lint                                                      # 작업 중: 바뀐 셸 파일만 bash -n + shellcheck
-bash tests/run.sh                                                             # 전체 회귀 — PR 직전 한 번 (CI와 같음)
+bash tests/run.sh -j 2                                                        # 전체 회귀 — PR 직전 한 번 (CI와 같음). 메모리가 빠듯하면 -j 없이 직렬
 bash -n scripts/*.sh scripts/board/*.sh tests/*.sh                            # 문법 (PR 직전)
 npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh   # PR 직전, CI와 같은 수준 (apt shellcheck는 SC2015도 실패)
 scripts/release-prep.sh --check                                               # 버전 네 곳 정합성
