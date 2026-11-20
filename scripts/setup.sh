@@ -1095,7 +1095,7 @@ command_done() {
 
 # SessionStart: 관리 사본 갱신 + 셋업 안내. 안내는 카탈로그 버전마다 한 번만.
 command_notify() {
-  local input transcript seen shown version refreshed="" new_names messages=() setup_cmd board_cmd
+  local input transcript seen shown version refreshed="" new_names messages=() setup_cmd board_cmd first_hint=""
   input="$(cat)"
   [[ -f "$CATALOG" ]] || return 0
   mkdir -p "$STATE_DIR"
@@ -1116,12 +1116,29 @@ command_notify() {
   [[ "$shown" =~ ^[0-9]+$ ]] || shown=0
   if [[ "${HM_SETUP_HINT:-1}" != "0" ]] && ((version > seen && version > shown)); then
     if ((seen == 0)); then
+      first_hint=1
       messages+=("ai-harness 기본 스킬($(catalog_names | paste -sd, - | sed 's/,/·/g'))을 골라 설치하려면 $setup_cmd 을 실행하세요. 기능 소개는 보드($board_cmd)의 하네스 안내 화면에서 볼 수 있습니다. (이 안내는 한 번만 표시됩니다)")
     else
       new_names="$(jq -r --argjson s "$seen" '[.skills[] | select((.since // 1) > $s) | .name] | join(", ")' "$CATALOG")"
       [[ -n "$new_names" ]] && messages+=("ai-harness에 새 기본 스킬이 추가됐습니다: $new_names. 설치하려면 $setup_cmd 을 실행하세요.")
     fi
     printf '%s\n' "$version" >"$STATE_DIR/hint-shown"
+  fi
+
+  # 플러그인 버전이 확인한 버전(보드와 같은 board/version-seen.json)보다 오르면 그 버전에 대해 한 번(#439).
+  # 확인 상태가 없으면 changes.py가 현재 버전으로 기록만 한다 — 첫 설치 안내와 겹치지 않는다. 확인은 보드에서 한다.
+  local vh vfrom vto vtodo vto_p lead shown_to
+  vh="$(python3 "$DIR/board/changes.py" hint "${HM_PLUGIN_ROOT:-$ROOT}" "$HM_DATA_DIR" 2>/dev/null || true)"
+  if [[ -n "$vh" && -z "$first_hint" ]]; then
+    vfrom="$(jq -r '.from' <<<"$vh")" vto="$(jq -r '.to' <<<"$vh")" vtodo="$(jq -r '.todo' <<<"$vh")"
+    shown_to="$(sed -n '1p' "$STATE_DIR/version-hint-shown" 2>/dev/null || true)"
+    if [[ "$shown_to" != "$vto" ]]; then
+      case "${vto: -1}" in 0 | 3 | 6) vto_p="으로" ;; *) vto_p="로" ;; esac
+      lead="바뀐 점은"
+      ((vtodo > 0)) && lead="업데이트 후 해야 할 일 ${vtodo}건과 바뀐 점은"
+      messages+=("ai-harness가 v${vfrom}에서 v${vto}${vto_p} 올랐습니다. $lead 보드($board_cmd)의 하네스 안내에서 봅니다.")
+      printf '%s\n' "$vto" >"$STATE_DIR/version-hint-shown"
+    fi
   fi
 
   local cwd team_msg

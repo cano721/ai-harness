@@ -95,6 +95,11 @@ command_open() {
   done
   mkdir -p "$BOARD_DIR"
   refresh_hook_copy || true
+  # 다른 플러그인 폴더(업데이트 전 버전)에서 뜬 서버는 새 버전 화면·버전 바뀜 안내(#439)를 못 보인다 — 끄고 이 버전으로 띄운다.
+  # 상주 세션은 따로 사는 호스트(#364)가 쥐므로 보드를 다시 띄워도 이어진다.
+  if pid="$(board_pid)" && [[ "$(conf_field root)" != "$DIR" ]]; then
+    command_stop >/dev/null
+  fi
   if pid="$(board_pid)"; then
     url="$(conf_field url)"
     [[ -n "$url" ]] || die "보드 서버(pid $pid)가 떠 있지만 주소를 남기지 않는 이전 버전입니다. board.sh stop 뒤 다시 여세요."

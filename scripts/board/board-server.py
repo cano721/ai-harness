@@ -23,6 +23,8 @@ POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정�
 POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움
 POST /autofix/discover {t, provider, site?, org?, hours}  monitor-fetch.sh discover(외부 API) — 버튼으로만, 결과 캐시
 POST /autofix/monitor {t, repo, provider, site?, org?, picks, options?}  캐시한 discover 줄로 만든 monitor를 monitor-fetch.sh save로 씀
+GET  /guide/changes?t=...        버전 바뀜 안내(#439): 확인한 버전 이후 CHANGELOG 절을 묶어서. 확인 상태가 없으면 현재 버전으로 기록
+POST /guide/changes/seen {t, to} 확인한 버전을 to(화면이 보여 준 버전)로 기록
 GET  /references?t=...           레퍼런스 보드 실행 기록 목록(주제·상태·만든 시각·탭별 개수·폴더 없음·고르기 가능)
 GET  /references/run?t&run       실행 하나의 탭 5개 내용(references.json·tone.json·component-slots.json)
 GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ 아래 이미지·영상만(realpath로 밖을 막음)
@@ -43,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
 import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
+import changes as hchanges  # noqa: E402
 import guide as hguide  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
@@ -1392,7 +1395,8 @@ def write_hook_conf(url):
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         # features: 이 서버가 보여 줄 수 있는 화면. design-refs.sh는 references가 있을 때만 보드 주소를 대시보드로 안내한다.
-        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url, "features": ["references"]}, f)
+        # root: 이 서버를 띄운 플러그인 폴더. 플러그인이 업데이트되면 board.sh open이 다른 폴더의 서버를 새 버전으로 바꿔 띄운다(#439).
+        json.dump({"port": PORT, "token": HOOK_TOKEN, "pid": os.getpid(), "url": url, "features": ["references"], "root": DIR}, f)
     os.replace(tmp, HOOK_CONF)
     atexit.register(remove_hook_conf)
 
@@ -2080,6 +2084,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, autofix_state())
         if u.path == "/guide":
             return self._send(200, hguide.state(launch=launch_state()))
+        if u.path == "/guide/changes":
+            return self._send(200, hchanges.state(data=DATA))
         if u.path == "/launch":
             return self._send(200, launch_state())
         if u.path == "/references":
@@ -2230,6 +2236,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/autofix/setup":
             res = autofix_setup(req.get("repo"))
             log({"action": "autofix_setup", "repo": req.get("repo"), **res})
+            return self._send(200, res)
+        if path == "/guide/changes/seen":
+            res = hchanges.confirm(req.get("to"), data=DATA)
+            log({"action": "version_seen", "to": req.get("to"), "ok": res["ok"]})
             return self._send(200, res)
         if path == "/references/pick":
             code, res = REFS.pick(req.get("run"), req)

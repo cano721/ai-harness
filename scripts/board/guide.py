@@ -11,6 +11,8 @@
   "prefer": "unharnessed"는 저장소 목록에서 하네스를 아직 깔지 않은 저장소를 먼저 보인다(하네스 만들기 — 깐 저장소에 실행하면 동기화).
   실행할 수 없으면 blocked가 이유다: no_harness_repo(후보 중 하네스를 깐 저장소가 없음), not_installed(기본 스킬 카탈로그 항목을
   아직 설치하지 않음 — setup.sh와 같은 폴더). 실행 자체는 보드의 기존 POST /new가 한다.
+- "since"(#439)는 그 기능이 처음 들어간 릴리스 버전이다. 화면이 확인한 버전(changes.py)과 견줘 "새 기능" 배지를 붙인다.
+  채우는 법: 기능 원본 파일(skills/<n>/SKILL.md 등)을 처음 더한 커밋(git log --follow --diff-filter=A)이 든 첫 릴리스 태그.
 - 저장소 후보(candidates): Orca 저장소 목록, Claude Code 사용 기록(~/.claude.json의 projects 키 — 경로만 쓰고 값은 쓰지 않는다),
   보드가 아는 저장소를 모아 없는 폴더·git 최상위가 아닌 곳·worktree(.git이 파일)·임시 폴더·홈을 거른다.
   최근 사용 순은 Claude Code 대화 기록 폴더(~/.claude/projects/<경로 슬러그>)의 수정 시각, 없으면 이름순.
@@ -193,6 +195,7 @@ def state(root=ROOT, guide_path=GUIDE, launch=None, skills_dir=None):
             run, runnable, blocked = _run(iid, name, cmd, i.get("run"), g.get("fold") is True, launch, skills)
             items.append({"id": iid, "name": name, "title": i.get("title") or name, "summary": i.get("summary") or "",
                           "ask": i.get("ask") or "", "cmd": cmd, "view": view,
+                          "since": i.get("since") if re.fullmatch(r"\d+\.\d+\.\d+", str(i.get("since") or "")) else None,
                           "run": run, "runnable": runnable, "blocked": blocked,
                           "prefer": i.get("prefer") if run and i.get("prefer") in PREFERS else None})
         if items:

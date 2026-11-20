@@ -1794,4 +1794,144 @@ assert_contains "$BRUN_TPL" "보드가 고른 저장소에서 Claude 세션을 �
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "저장소 없이(홈에서)" "board skill documents the launch scopes"
 pass "harness board guide: run a feature card from the guide with the new-session form, scope-aware repository picker, blocked cards say why (#442)"
 
+# 버전 바뀜 안내(#439): 확인한 플러그인 버전은 사용자 데이터(board/version-seen.json)에 두고, 보드와 세션 시작 안내가 같은 값을 본다.
+# 바뀐 것은 플러그인과 함께 배포되는 CHANGELOG.md에서 읽는다 — 확인한 버전 초과 ~ 현재 버전 이하의 절을 합치고(건너뛴 버전 포함),
+# Unreleased는 빼고, 해야 할 일 → 새 기능 → 동작 변경 → 버그 수정 → 기타 순으로 묶는다. 버전은 숫자로 견준다(0.9.1 < 0.10.0).
+BVER_ROOT="$ROOT/tests/fixtures/changelog"
+BVER_DATA="$TEST_TMP/version-notes"; mkdir -p "$BVER_DATA"
+python3 -c '
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import changes
+root, data = sys.argv[2], sys.argv[3]
+seen = os.path.join(data, "board", "version-seen.json")
+# 상태 없음(첫 설치·이 기능 이전 사용자): 쏟아내지 않고 현재 버전으로 조용히 기록한다.
+st = changes.state(root, data)
+assert st["current"] == "0.10.0" and st["unseen"] is False and st["seen"] == "0.10.0", st
+assert json.load(open(seen))["seen"] == "0.10.0"
+# 최근 업데이트(다시 펼쳐 보기): 확인한 범위를 모르면 현재 버전 절 하나.
+assert [g["key"] for g in st["recent"]["groups"]] == ["todo", "feature", "fix"], st["recent"]
+assert st["recent"]["versions"] == ["0.10.0"] and st["recent"]["from"] == "0.9.1", st["recent"]
+# 뒤처짐: 건너뛴 버전까지 합친다.
+json.dump({"seen": "0.9.0"}, open(seen, "w"))
+st = changes.state(root, data)
+assert st["unseen"] is True and st["from"] == "0.9.0" and st["to"] == "0.10.0", st
+assert st["versions"] == ["0.10.0", "0.9.1"], st["versions"]
+keys = [g["key"] for g in st["groups"]]
+assert keys == ["todo", "feature", "change", "fix"], keys
+labels = {g["key"]: g["label"] for g in st["groups"]}
+assert labels == {"todo": "업데이트 후 해야 할 일", "feature": "새 기능", "change": "동작 변경", "fix": "버그 수정"}, labels
+by = {g["key"]: g["items"] for g in st["groups"]}
+assert [i["title"] for i in by["feature"]] == ["새 화면이 생겼습니다"], by["feature"]
+bt = chr(96)  # 백틱(셸 따옴표 안에 그대로 쓰지 않는다)
+assert by["feature"][0]["body"] == bt + "board" + bt + " 화면에서 **바로** 봅니다. (#12)" and by["feature"][0]["version"] == "0.10.0", by["feature"]
+# 굵은 제목이 없는 항목은 첫 문장이 제목이고(마크다운 기호 없이), 남는 것이 이슈 번호뿐이면 제목에 붙이고 펼칠 것이 없다.
+assert by["todo"] == [{"title": "기존 프로젝트는 /harness-init --sync --apply로 받습니다. (#12)", "body": "", "version": "0.10.0"}], by["todo"]
+assert [i["title"] for i in by["change"]] == ["기본값이 바뀌었습니다", "빨라졌습니다", "굵은 제목 없는 항목입니다."], by["change"]
+assert by["change"][2]["body"] == "굵은 제목 없는 항목입니다. 펼치면 첫 문장도 함께 보입니다. (#8)", by["change"][2]  # 잘린 제목도 펼치면 전부 보인다
+assert by["change"][0]["body"] == "이제 꺼져 있습니다. (#11, #10)\n이어지는 줄도 같은 항목입니다.", by["change"][0]
+assert st["counts"] == {"todo": 1, "total": 6}, st["counts"]
+assert "아직 나가지 않은 기능" not in json.dumps(st, ensure_ascii=False)
+assert "처음 기능" not in json.dumps(st, ensure_ascii=False)
+# 확인: 본 버전(to)까지만 기록한다 — 페이지를 연 뒤 플러그인이 또 올랐으면 그 버전은 남는다.
+assert changes.confirm("0.11.0", root, data)["ok"] is False
+assert changes.confirm("garbage", root, data)["ok"] is False
+assert changes.confirm("0.10.0", root, data)["ok"] is True
+assert json.load(open(seen)) == {"seen": "0.10.0", "prev": "0.9.0"}, open(seen).read()
+st = changes.state(root, data)
+assert st["unseen"] is False and st["recent"]["from"] == "0.9.0" and st["recent"]["versions"] == ["0.10.0", "0.9.1"], st
+assert changes.confirm("0.9.1", root, data)["ok"] is False  # 되돌리지 않는다
+# 확인한 버전이 더 높으면(되돌린 설치) 바뀐 것이 없고 상태를 건드리지 않는다. 깨진 상태 파일은 없는 것으로 본다.
+json.dump({"seen": "0.11.0"}, open(seen, "w"))
+assert changes.state(root, data)["unseen"] is False and json.load(open(seen)) == {"seen": "0.11.0"}
+open(seen, "w").write("{not json")
+assert changes.state(root, data)["unseen"] is False and json.load(open(seen))["seen"] == "0.10.0"
+# 세션 시작 안내용 요약: 상태가 없으면 기록만 하고 알리지 않는다.
+os.remove(seen)
+assert changes.hint(root, data) is None and os.path.isfile(seen)
+json.dump({"seen": "0.9.0"}, open(seen, "w"))
+assert changes.hint(root, data) == {"from": "0.9.0", "to": "0.10.0", "todo": 1}, changes.hint(root, data)
+# CHANGELOG가 없어도 버전이 올랐다는 사실은 말한다(묶음은 비어 있음).
+nolog = os.path.join(data, "nolog"); os.makedirs(nolog + "/.claude-plugin", exist_ok=True)
+open(nolog + "/.claude-plugin/plugin.json", "w").write(json.dumps({"version": "0.10.0"}))
+st = changes.state(nolog, data)
+assert st["unseen"] is True and st["groups"] == [], st
+' "$ROOT" "$BVER_ROOT" "$BVER_DATA" || fail "version notes: seen state, merged CHANGELOG sections, buckets, confirm"
+# 실제 CHANGELOG도 읽힌다: 현재 버전 절이 있고 묶음 이름이 알려진 것이다.
+python3 -c '
+import sys, tempfile
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import changes
+st = changes.state(sys.argv[1], tempfile.mkdtemp(dir=sys.argv[2]))
+assert st["recent"]["versions"] == [st["current"]] and st["recent"]["groups"], st["recent"]
+# 옛 절의 코드 블록은 앞 항목의 본문이고(울타리·빈 제목 항목이 생기지 않음), "#### 업데이트 후 해야 할 일"도 소제목이다.
+text = open(sys.argv[1] + "/CHANGELOG.md", encoding="utf-8").read()
+items = [(v["version"], b, it) for v in changes.parse(text) for b, it in v["items"]]
+bad = [(v, it["title"]) for v, b, it in items if not it["title"].strip() or it["title"].startswith("```")]
+assert not bad, bad[:5]
+assert any(v == "0.17.0" and b == "todo" for v, b, it in items), "v0.17.0 #### heading"
+' "$ROOT" "$TEST_TMP" || fail "the shipped CHANGELOG has a section for the current plugin version and parses without empty items"
+# 기능 카드의 since: guide.json 모든 항목에 처음 들어간 릴리스 버전이 있고 형식이 맞다(아직 릴리스 전인 기능은 다음 버전). 화면에도 실린다.
+python3 -c '
+import json, re, sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import changes, guide
+raw = json.load(open(sys.argv[1] + "/scripts/board/guide.json", encoding="utf-8"))
+bad = [i.get("id") for g in raw["groups"] for i in g["items"] if not re.fullmatch(r"\d+\.\d+\.\d+", str(i.get("since", "")))]
+assert not bad, bad
+items = {i["id"]: i for g in guide.state(sys.argv[1])["groups"] for i in g["items"]}
+assert items["skills/harvest"]["since"] == "0.16.0" and items["skills/board"]["since"] == "0.63.0", items["skills/board"]
+' "$ROOT" || fail "every guide.json item says the release it first shipped in"
+# 서버: GET /guide/changes는 토큰·Host, POST /guide/changes/seen은 Origin·토큰을 확인한다.
+mkdir -p "$BVER_DATA/srv/board"; printf '{"seen":"0.9.0"}' >"$BVER_DATA/srv/board/version-seen.json"
+BVER_PORT="$(free_port)"
+bver_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BVER_DATA/srv" HM_PLUGIN_ROOT="$BVER_ROOT" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BVER_PORT" BOARD_NO_BROWSER=1 \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BVER_URL="$(bver_sh open | jq -r '.url')"
+BVER_TOKEN="${BVER_URL#*t=}"
+BVER_BASE="http://127.0.0.1:$BVER_PORT"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/guide/changes?t=wrong")" "version notes check the token"
+assert_eq "true 0.9.0 0.10.0 1" "$(curl -s "$BVER_BASE/guide/changes?t=$BVER_TOKEN" | jq -r '"\(.unseen) \(.from) \(.to) \(.counts.todo)"')" "the board serves the changes since the seen version"
+BVER_BODY="{\"t\":\"$BVER_TOKEN\",\"to\":\"0.10.0\"}"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$BVER_BODY" "$BVER_BASE/guide/changes/seen")" "confirming checks the Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $BVER_BASE" -H 'Content-Type: application/json' -d '{"t":"wrong","to":"0.10.0"}' "$BVER_BASE/guide/changes/seen")" "confirming checks the token"
+assert_eq "0.9.0" "$(jq -r '.seen' "$BVER_DATA/srv/board/version-seen.json")" "a refused confirm writes nothing"
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BVER_BASE" -H 'Content-Type: application/json' -d "$BVER_BODY" "$BVER_BASE/guide/changes/seen" | jq -r '.ok')" "confirming records the version"
+assert_eq "false 0.10.0" "$(curl -s "$BVER_BASE/guide/changes?t=$BVER_TOKEN" | jq -r '"\(.unseen) \(.seen)"')" "after confirming nothing is unseen"
+# 플러그인이 업데이트되면(서버를 띄운 플러그인 폴더가 다르면) open이 옛 서버를 끄고 이 버전으로 다시 띄운다.
+BVER_PID="$(jq -r '.pid' "$BVER_DATA/srv/board/server.json")"
+assert_eq "$ROOT/scripts/board" "$(jq -r '.root' "$BVER_DATA/srv/board/server.json")" "the server records the plugin folder it runs from"
+assert_eq "true" "$(bver_sh open | jq -r '.reused')" "the same plugin folder reuses the running board"
+jq '.root = "/old/plugin/scripts/board"' "$BVER_DATA/srv/board/server.json" >"$BVER_DATA/conf.json" && cat "$BVER_DATA/conf.json" >"$BVER_DATA/srv/board/server.json"
+BVER_OPEN="$(bver_sh open)"
+assert_eq "false" "$(jq -r '.reused' <<<"$BVER_OPEN")" "a board from another plugin folder is replaced"
+[[ "$(jq -r '.pid' <<<"$BVER_OPEN")" != "$BVER_PID" ]] || fail "the replaced board runs as a new process"
+assert_eq "true" "$(bver_sh stop | jq -r '.stopped')" "version notes board stops"
+# 화면: 안내 맨 위 패널, 사이드바 개수·새 소식, 카드의 새 기능 배지, 최소 마크다운(innerHTML 없이), 다시 그리기 생략.
+BVER_FN="$(sed -n '/---- 하네스 안내 ----/,/---- 레퍼런스 보드 ----/p' "$ROOT/scripts/board/template.html")"
+BVER_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BVER_FN" "'/guide/changes?t='" "the board loads the version notes from the server"
+assert_contains "$BVER_FN" "post('/guide/changes/seen', { to: cdata.to })" "confirming posts the version the user saw"
+assert_contains "$BVER_FN" "에서 바뀐 것" "the panel names the version range"
+assert_contains "$BVER_FN" "'확인했습니다'" "the panel ends with a confirm button"
+assert_contains "$BVER_FN" "btn('확인했습니다', 'ds-btn--primary')" "confirm is the panel's primary action"
+assert_contains "$BVER_FN" "최근 업데이트 v" "a confirmed update folds into a recent-update row"
+assert_contains "$BVER_FN" "badge(['info', '새 기능'])" "cards added after the seen version carry one info badge"
+assert_contains "$BVER_FN" "const out = [...guideChanges(), guideIntro()" "the version notes come before the introduction"
+assert_contains "$BVER_TPL" "badge(['info', '새 소식'])" "the sidebar says there is news when nothing needs doing"
+assert_contains "$BVER_TPL" "'건, 업데이트 후 해야 할 일'" "the sidebar counts the update to-dos as human work"
+assert_contains "$BVER_TPL" "loadChanges();" "the sidebar badge loads with the board"
+assert_contains "$BVER_FN" "board.dataset.gsig === sig" "the guide is not rebuilt when its data did not change"
+BVER_VCMP="$(grep -m1 '^  const vcmp = ' "$ROOT/scripts/board/template.html")"
+[[ -n "$BVER_VCMP" ]] || fail "the board compares versions with vcmp"
+assert_eq "1 -1 0 -1" "$(BVER_VCMP="$BVER_VCMP" node -e 'eval(process.env.BVER_VCMP.replace("const vcmp", "var vcmp")); console.log([vcmp("0.10.0", "0.9.1"), vcmp("0.9.1", "0.10.0"), vcmp("1.2.3", "1.2.3"), vcmp("", "0.1.0")].join(" "))')" "versions compare as numbers"
+BVER_MD="$(sed -n '/^  function mdInline(/,/^  }/p' "$ROOT/scripts/board/template.html")"
+[[ -n "$BVER_MD" ]] || fail "the board has an inline markdown renderer"
+[[ "$BVER_MD" != *innerHTML* ]] || fail "inline markdown must not use innerHTML"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "바뀐 것" "board skill documents the version notes"
+pass "harness board guide: version notes since the seen version, confirm, sidebar badge, new-feature badges (#439)"
+
 finish_tests

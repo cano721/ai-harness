@@ -653,6 +653,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-toc ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
 .b-toc li { min-width: 0; }
 .b-guidecmd, .b-runwhy { flex-basis: 100%; margin: 0; }
+.b-changes { gap: var(--space-4); padding: var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); }
+.b-changes__foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.b-changes__foot > .b-line { flex: 1 1 16rem; min-width: 0; }
+.b-changes__recent { gap: var(--space-4); }
 .b-pick { display: block; max-height: calc(var(--size-row) * 6); overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
 .b-pick__opt { display: grid; gap: var(--space-1); min-height: var(--size-target-min); padding: var(--space-2) var(--space-3); border-left: 2px solid transparent; cursor: pointer; min-width: 0; }
 .b-pick__opt:hover { background: var(--color-surface-hover); }
@@ -1019,19 +1023,22 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     [/out ?of ?memory/i, '메모리 부족'], [/permission|forbidden|unauthori[sz]ed|access denied/i, '권한 거부'], [/not ?found|404/i, '찾지 못함 에러'],
     [/illegalstate/i, '잘못된 상태 에러'], [/illegalargument|validation|invalid/i, '잘못된 입력 에러'], [/typeerror/i, '타입 에러']];
   const fallbackTitle = (raw, where) => `${where}에서 난 ${(ERR_KIND.find(([re]) => re.test(String(raw || ''))) || [null, '에러'])[1]}`;
-  // 아주 작은 마크다운: 제목·목록·굵게·코드·코드 블록만. innerHTML을 쓰지 않는다(대화는 외부 데이터).
+  // 줄 안의 굵게·코드만 요소로, 나머지는 글자로. innerHTML을 쓰지 않는다(대화·변경 기록은 외부 데이터).
+  function mdInline(s, parent) {
+    const re = /(\*\*[^*]+\*\*|`[^`]+`)/g; let last = 0, m;
+    while ((m = re.exec(s))) {
+      if (m.index > last) parent.append(s.slice(last, m.index));
+      parent.append(m[0].startsWith('**') ? el('strong', null, m[0].slice(2, -2)) : el('code', null, m[0].slice(1, -1)));
+      last = re.lastIndex;
+    }
+    if (last < s.length) parent.append(s.slice(last));
+    return parent;
+  }
+  // 아주 작은 마크다운: 제목·목록·굵게·코드·코드 블록만.
   function md(text) {
     const frag = document.createDocumentFragment();
     const lines = String(text || '').split('\n');
-    const inline = (s, parent) => {
-      const re = /(\*\*[^*]+\*\*|`[^`]+`)/g; let last = 0, m;
-      while ((m = re.exec(s))) {
-        if (m.index > last) parent.append(s.slice(last, m.index));
-        parent.append(m[0].startsWith('**') ? el('strong', null, m[0].slice(2, -2)) : el('code', null, m[0].slice(1, -1)));
-        last = re.lastIndex;
-      }
-      if (last < s.length) parent.append(s.slice(last));
-    };
+    const inline = mdInline;
     let list = null;
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
@@ -2332,6 +2339,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (key === 'list') { const t = todoCount('all', view === 'list' ? filter : 'all'); if (t) n = count(t, 'attention', '건, 지금 할 일'); }
       if (key === 'impact') { const rec = ((idata && idata.repos) || []).reduce((s, r) => s + (r.improvements || []).filter((x) => x.result && x.result.verdict === 'recurred').length, 0); if (rec) n = badge(['danger', `재발 ${rec}`]); }
       if (key === 'refs') { const w = (rdata || []).filter((r) => r.can_pick).length; if (w) n = count(w, 'attention', '건, 고르기 대기'); }
+      // 확인 안 한 업데이트(이슈 439): 해야 할 일이 있으면 그 수(사람 필요), 없으면 정보 배지 하나.
+      if (key === 'guide' && cdata && cdata.unseen) n = cdata.counts.todo ? count(cdata.counts.todo, 'attention', '건, 업데이트 후 해야 할 일') : badge(['info', '새 소식']);
       if (key === 'settings') { const pend = ((sdata && sdata.repos) || []).filter((r) => r.change && r.change.state !== 'gone').length; if (pend) n = count(pend, null, '건 변경 진행 중'); }
       views.append(navItem(v.label, v.sub, key === view ? 'page' : null, () => { if (view === key && !(key === 'refs' && rrun)) return; view = key; filter = 'all'; store('hb-view', key); if (key === 'refs') { rrun = null; rdetail = null; loadRefs(true); } closeDrawer(); renderAll(); }, n));
     }
@@ -2442,6 +2451,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       renderTabs();
       const board = $('board');
       board.classList.toggle('b-content', view !== 'list');
+      if (view !== 'guide') delete board.dataset.gsig;  // 다른 화면을 그렸으면 돌아올 때 안내를 새로 그린다
       $('refhead').hidden = !(view === 'refs' && rrun);
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
@@ -3210,16 +3220,117 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!SERVER || gbusy || (gdata && !force)) return;
     gbusy = true;
     try { const r = await fetch('/guide?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' }); if (!r.ok) throw new Error(`HTTP ${r.status}`); gdata = await r.json(); gerr = null; } catch (e) { if (!gdata) gerr = e.message; }
+    if (force) loadChanges();
     gAt = Date.now();  // 다시 받기에 실패해도 1분 뒤에 다시 시도한다(다시 그릴 때마다 묻지 않게)
     gbusy = false;
     if (view === 'guide') renderAll();
+  }
+  // ---- 버전 바뀜 안내(이슈 439) ----
+  // 서버가 사용자 데이터의 "확인한 버전"과 플러그인 CHANGELOG로 만든다. 세션 시작 안내도 같은 값을 본다(그래서 localStorage가 아니다).
+  let cdata = null, cbusy = false;
+  async function loadChanges() {
+    if (!SERVER || cbusy) return;
+    cbusy = true;
+    try { const r = await fetch('/guide/changes?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' }); if (r.ok) cdata = await r.json(); } catch (e) { /* 못 받으면 패널·배지 없이 안내만 */ }
+    cbusy = false;
+    renderAll();
+  }
+  const vcmp = (a, b) => { const p = (v) => String(v || '').split('.').map((x) => Number(x) || 0), x = p(a), y = p(b); for (let i = 0; i < 3; i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return Math.sign(d); } return 0; };
+  const isNewFeature = (it) => !!(cdata && cdata.unseen && it.since && vcmp(it.since, cdata.seen) > 0);
+  // 펼치는 줄의 열고 닫기. 안내 화면은 데이터가 같으면 다시 그리지 않으므로 서명도 맞춰 둔다.
+  function guideToggle(key, head, body, label) {
+    if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+    const on = expanded.has(key); head.setAttribute('aria-expanded', String(on)); body.hidden = !on;
+    if (label) head.querySelector('.ds-row__title').textContent = label(on);
+    $('board').dataset.gsig = guideSig();
+  }
+  function changeRow(it, many, key) {
+    const row = el('div', 'ds-row'), open = expanded.has(key), did = 'chg-' + key.replace(/[^\w-]/g, '_');
+    const lines = String(it.body || '').split('\n').filter((l) => l.trim() && !/^```/.test(l.trim()));
+    const head = el(lines.length ? 'button' : 'div', 'ds-row__head');
+    const tt = el('span', 'ds-row__title', it.title); tt.title = it.title;
+    if (lines.length) { head.type = 'button'; head.dataset.key = key; head.setAttribute('aria-expanded', String(open)); head.setAttribute('aria-controls', did); head.append(icon('chevron', 'ds-row__chevron')); }
+    head.append(tt);
+    if (many) { const sd = el('span', 'ds-row__side'); sd.append(el('span', 'ds-num', 'v' + it.version)); head.append(sd); }
+    row.append(head);
+    if (lines.length) {
+      const body = el('div', 'ds-row__detail'); body.id = did; body.hidden = !open;
+      body.append(...lines.map((l) => mdInline(l, el('p', 'b-line'))));
+      head.onclick = () => guideToggle(key, head, body);
+      row.append(body);
+    }
+    return row;
+  }
+  // 묶음 하나: 머리(점·이름·개수) + 줄 목록. 버그 수정·기타는 한 줄로 접는다(끝난 일은 조용하게).
+  function changeGroup(g, many, scope, live) {
+    const wrap = el('div', 'ds-stack'), ns = scope + ':' + g.key;
+    const todo = g.key === 'todo' && live;
+    const rows = el('div', 'ds-rows'); rows.append(...g.items.map((it, i) => changeRow(it, many, `chg:${ns}:${i}`)));
+    if (g.key !== 'fix' && g.key !== 'other') { wrap.append(sectionHead(todo ? 'attention' : null, g.label, g.items.length, '건'), rows); return wrap; }
+    const key = 'chg:' + ns, open = expanded.has(key), did = 'chg-' + ns.replace(/[^\w-]/g, '_');
+    const outer = el('div', 'ds-rows'), row = el('div', 'ds-row');
+    const head = el('button', 'ds-row__head'); head.type = 'button'; head.dataset.key = key;
+    head.setAttribute('aria-expanded', String(open)); head.setAttribute('aria-controls', did);
+    const sd = el('span', 'ds-row__side'); sd.append(count(g.items.length, null, '건'));
+    head.append(icon('chevron', 'ds-row__chevron'), el('span', 'ds-row__title', g.label), sd);
+    const body = el('div', 'ds-row__detail'); body.id = did; body.hidden = !open; body.append(rows);
+    head.onclick = () => guideToggle(key, head, body);
+    row.append(head, body); outer.append(row); wrap.append(outer);
+    return wrap;
+  }
+  const changeGroups = (r, scope, live) => r.groups.map((g) => changeGroup(g, r.versions.length > 1, scope, live));
+  async function confirmChanges(b) {
+    if (b.getAttribute('aria-busy') === 'true') return;
+    busy(b, '기록하는 중');
+    let res;
+    try { res = await post('/guide/changes/seen', { to: cdata.to }); } catch (e) { res = { ok: false, message: '보드 서버에 닿지 못했습니다. 보드가 떠 있는지 확인한 뒤 다시 누르세요.' }; }
+    if (!res.ok) { unbusy(b); toast(res.message, false); return; }
+    toast(`v${cdata.to}까지 확인했습니다. 다시 보려면 맨 위 최근 업데이트를 펼칩니다.`, true);
+    // 다시 받기가 실패해도 기록은 끝났다 — 화면 쪽 값을 먼저 확인한 상태로 바꿔 패널을 접는다.
+    const { from, to, versions, groups, counts } = cdata;
+    cdata = { ...cdata, unseen: false, seen: to, recent: { from, to, versions, groups, counts } };
+    renderAll();
+    await loadChanges();
+    const h = document.querySelector('[data-key="chg:recent"]'); if (h) h.focus();
+  }
+  // 안내 화면 맨 위: 확인 안 한 업데이트는 패널, 확인한 뒤에는 접힌 "최근 업데이트" 한 줄.
+  function guideChanges() {
+    if (!cdata || !cdata.current) return [];
+    if (cdata.unseen) {
+      const s = el('section', 'ds-stack b-changes'); s.setAttribute('aria-labelledby', 'guide-changes');
+      const h = el('h2', 'ds-title', `v${cdata.from} → v${cdata.to}에서 바뀐 것`); h.id = 'guide-changes'; h.tabIndex = -1;
+      const vs = cdata.versions || [];
+      s.append(h, el('p', 'b-line ds-muted', vs.length > 1
+        ? `건너뛴 버전을 포함해 ${vs.length}개 버전(${vs.slice().reverse().map((v) => 'v' + v).join(' · ')})의 변경을 합쳤습니다. 줄을 펼치면 전문이 나옵니다.`
+        : '줄을 펼치면 전문이 나옵니다.'));
+      if ((cdata.groups || []).length) s.append(...changeGroups(cdata, 'new', true));
+      else s.append(el('p', 'b-line', '플러그인의 변경 기록(CHANGELOG.md)에서 이 버전의 절을 찾지 못했습니다. 릴리스 노트에서 확인하세요.'));
+      const foot = el('div', 'b-changes__foot');
+      const b = btn('확인했습니다', 'ds-btn--primary'); b.dataset.key = 'chg:confirm'; b.onclick = () => confirmChanges(b);
+      foot.append(b, el('p', 'ds-caption b-line', '확인하면 이 안내가 한 줄로 접히고, 기능 카드의 새 기능 표시와 사이드바 알림이 사라집니다.'));
+      s.append(foot);
+      return [s];
+    }
+    const r = cdata.recent; if (!r) return [];
+    const key = 'chg:recent', open = expanded.has(key);
+    const rows = el('div', 'ds-rows'), row = el('div', 'ds-row');
+    const head = el('button', 'ds-row__head'); head.type = 'button'; head.dataset.key = key;
+    head.setAttribute('aria-expanded', String(open)); head.setAttribute('aria-controls', 'chg-recent');
+    const sd = el('span', 'ds-row__side'); sd.append(el('span', 'ds-num', r.from ? `v${r.from} → v${r.to}` : `v${r.to}`));
+    head.append(icon('chevron', 'ds-row__chevron'), el('span', 'ds-row__title', `최근 업데이트 v${r.to} 보기`), sd);
+    const body = el('div', 'ds-row__detail b-changes__recent'); body.id = 'chg-recent'; body.hidden = !open; body.append(...changeGroups(r, 'recent', false));
+    head.onclick = () => guideToggle(key, head, body, (on) => (on ? `최근 업데이트 v${r.to} 접기` : `최근 업데이트 v${r.to} 보기`));
+    if (open) head.querySelector('.ds-row__title').textContent = `최근 업데이트 v${r.to} 접기`;
+    row.append(head, body); rows.append(row);
+    const s = el('section', 'ds-stack'); s.setAttribute('aria-label', '최근 업데이트'); s.append(rows);
+    return [s];
   }
   const guideCardId = (id) => 'gc-' + id.replace(/[^\w-]/g, '_');
   const guideGroupOf = (id) => ((gdata && gdata.groups) || []).find((g) => g.items.some((i) => i.id === id));
   // 카드(또는 묶음 머리)로 이동: 접힌 묶음 안이면 펼친 뒤 스크롤하고 포커스를 옮긴다.
   function guideJump(targetId, cardId) {
     const g = cardId && guideGroupOf(cardId);
-    if (g && g.fold && !expanded.has('guide:' + g.key)) { expanded.add('guide:' + g.key); renderGuide(); }
+    if (g && g.fold && !expanded.has('guide:' + g.key)) { expanded.add('guide:' + g.key); renderGuide(true); }
     const t = $(targetId); if (!t) return;
     t.scrollIntoView({ block: 'start' }); t.focus({ preventScroll: true });
   }
@@ -3287,6 +3398,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   function guideCard(it) {
     const c = el('article', 'ds-card'); c.dataset.key = 'guide:' + it.id; c.id = guideCardId(it.id); c.tabIndex = -1;
+    if (isNewFeature(it)) { const meta = el('div', 'ds-card__meta'); meta.append(badge(['info', '새 기능']), el('span', null, `v${it.since}부터`)); c.append(meta); }
     c.append(el('h3', 'ds-card__title', it.title), el('p', 'b-line', it.summary));
     if (it.ask) c.append(el('p', 'ds-caption b-line', `“${it.ask}”처럼 말해도 됩니다.`));
     const go = it.view && GUIDE_GO[it.view];
@@ -3330,22 +3442,24 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const side = el('span', 'ds-row__side'); side.append(count(g.items.length, null, '개'));
     head.append(icon('chevron', 'ds-row__chevron'), el('span', 'ds-row__title', open ? '카드 접기' : '카드 펼쳐 보기'), side);
     const body = el('div', 'ds-row__detail'); body.id = did; body.hidden = !open; body.append(cols);
-    head.onclick = () => {
-      if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
-      const on = expanded.has(key); head.setAttribute('aria-expanded', String(on)); body.hidden = !on;
-      head.querySelector('.ds-row__title').textContent = on ? '카드 접기' : '카드 펼쳐 보기';
-    };
+    head.onclick = () => guideToggle(key, head, body, (on) => (on ? '카드 접기' : '카드 펼쳐 보기'));
     row.append(head, body); rows.append(row); s.append(rows);
     return s;
   }
-  function renderGuide() {
+  // 안내 화면은 작업 상태가 바뀔 때마다 불리지만, 보여 줄 데이터가 같으면 다시 그리지 않는다 — "복사함" 표시·선택·스크롤이 풀리지 않게.
+  const guideSig = () => JSON.stringify([SERVER, gdata, gerr, cdata, [...expanded].filter((k) => k.startsWith('guide:') || k.startsWith('chg:')).sort()]);
+  function renderGuide(force) {
     const board = $('board');
-    const out = [guideIntro(), guideStart(), guideFlow()];
+    if (SERVER && gdata && Date.now() - gAt > 60000) loadGuide(true);  // 끝나면 버전 안내도 한 번 다시 받는다
+    const sig = guideSig();
+    if (!force && board.dataset.gsig === sig && board.childElementCount) return;
+    const out = [...guideChanges(), guideIntro(), guideStart(), guideFlow()];
     if (!SERVER) out.push(empty('기능 목록은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.'));
     else if (!gdata) { out.push(...(gerr ? [errorBox('기능 목록을 불러오지 못했습니다', `보드 서버가 기능 목록을 읽지 못했습니다(${gerr}).`, () => { gerr = null; renderAll(); loadGuide(); })] : loading('기능 목록을 불러오는 중'))); if (!gerr) loadGuide(); }
     else if (!(gdata.groups || []).length) out.push(empty('보여 줄 기능을 찾지 못했습니다.', '플러그인 설치가 온전한지 확인하고, 필요하면 플러그인을 다시 설치하세요.'));
-    else { out.push(guideToc(gdata.groups), ...gdata.groups.map(guideGroup)); if (Date.now() - gAt > 60000) loadGuide(true); }
+    else out.push(guideToc(gdata.groups), ...gdata.groups.map(guideGroup));
     board.replaceChildren(...out);
+    board.dataset.gsig = sig;
   }
 
   // ---- 레퍼런스 보드 ----
@@ -3659,6 +3773,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     renderAll();
     setInterval(() => { if (((view === 'list' && tab === 'autofix') || (view === 'settings' && stab === 'autofix')) && !document.hidden) loadAutofix(false); }, 15000);
     refresh().then(() => { loadSettings(true); loadAutofix(true); loadRefs(true); }).catch(fail);
+    loadChanges();
     setInterval(() => { if (view === 'refs' && !document.hidden) { if (rrun) loadRefDetail(false); else loadRefs(false); } }, 5000);
     // 서버 이벤트(SSE)가 살아 있으면 바뀐 항목을 바로 받고, 끊긴 동안만 1초 폴링(서버 캐시 읽기)으로 돌아간다.
     if (!document.hidden) connectEvents();
