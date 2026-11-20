@@ -11,6 +11,7 @@ ux-writing-audit 스킬의 LLM 검토 몫이다(#293). 같은 입력이면 같�
 종료 코드: 0 위반 없음, 1 위반 있음, 2 잘못된 인자, 3 규칙 문서 없음(미채점).
 """
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -93,12 +94,18 @@ def parse_doc(path):
         if bad:
             terms.append((bad, parts[1].strip().strip("`") if len(parts) > 1 else "", "금지 표현"))
 
+    excludes = []
+    for line in pick("검사 제외 경로", "제외 경로", "excluded paths", "exclude paths"):
+        m = re.match(r"^\s*[-*]\s+`?([^`\s]+)`?", line)
+        if m:
+            excludes.append(m.group(1).lstrip("/"))
+
     style = None
     for line in pick("문체", "language and style", "style"):
         m = re.match(r"^\s*[-*]\s*(종결\s*어미|sentence\s*ending)\s*:\s*([^<\s]+)", line, re.I)
         if m:
             style = STYLE_ALIASES.get(m.group(2).strip().lower())
-    return {"terms": terms, "style": style}
+    return {"terms": terms, "style": style, "excludes": excludes}
 
 
 # 개발자만 보는 문자열: 로그·예외·단언. 사용자 화면 문구가 아니다.
@@ -111,6 +118,8 @@ IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]+_[A-Z0-9_]+\b|\b[a-z]+[A-Z]\w*\s*[:=(]
 def is_comment(stripped, ext):
     if stripped.startswith(("//", "/*", "*", "<!--", "{/*")):
         return True
+    if ext == ".properties" and stripped.startswith("!"):
+        return True
     return stripped.startswith("#") and ext in HASH_COMMENT_EXTS
 
 
@@ -119,11 +128,29 @@ def segments(line, ext):
     stripped = line.strip()
     if not stripped or is_comment(stripped, ext):
         return []
-    if ext not in TEXT_EXTS and DEV_ONLY.search(stripped):
+    throw_message = re.search(r"\bthrow\b", stripped) and (
+        HANGUL.search(stripped)
+        or any(
+            " " in next(g for g in m.groups() if g is not None)
+            or re.fullmatch(r"[A-Za-z]+", next(g for g in m.groups() if g is not None))
+            for m in QUOTED.finditer(stripped)
+        )
+    )
+    if ext not in TEXT_EXTS and DEV_ONLY.search(stripped) and not (
+        throw_message
+    ):
         return []
-    if ext in TEXT_EXTS:
+    if ext == ".properties":
+        sep = re.search(r"(?<!\\)[=:]", line)
+        value = line[sep.end():] if sep else ""
+        if value:
+            decoded = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), value)
+            return [decoded.strip()] if LETTER.search(decoded) else []
+    if ext in TEXT_EXTS or ext == ".textblock":
         return [stripped]
     found = []
+    if ext in (".java", ".kt"):
+        found.extend(re.findall(r'"""(.*?)"""', line))
     for m in QUOTED.finditer(line):
         found.append(next(g for g in m.groups() if g is not None))
     found.extend(m.group(1) for m in JSX_TEXT.finditer(line))
@@ -132,7 +159,7 @@ def segments(line, ext):
         seg = seg.strip()
         if not LETTER.search(seg):
             continue
-        if not HANGUL.search(seg) and " " not in seg:
+        if not HANGUL.search(seg) and " " not in seg and not throw_message:
             continue  # 영문 한 단어는 키·클래스명·경로일 가능성이 높다
         if IDENTIFIER.search(seg):
             continue
@@ -179,30 +206,82 @@ def fix_copula(word, rest):
     return "예요" if rest in ("에요", "예요") else rest
 
 
-def replace_term(seg, bad, good):
-    pattern = re.compile(
-        re.escape(bad)
-        + r"(?:이?(에요|예요)|이(야|다|고|라)(?![가-힣])|(으로|이랑|을|를|이|가|은|는|과|와|랑|로)(?![가-힣]))?",
-        re.I,
-    )
+# 금지어 뒤에 붙어도 같은 낱말로 보는 조사·어미 조각. 조각을 이어 붙인 것만 허용하고(회원들의·포지션이었어요),
+# 그 밖의 한글이 이어지면 다른 낱말이다(회원 ⊄ 회원가입·회원님). 합성어와 겹치는 한 글자 어미(서·지·시)는
+# 앞말이 붙은 꼴(으로서·인지·이시)로만 둔다.
+SUFFIX_TOKENS = sorted(set((
+    "들", "은", "는", "이", "가", "을", "를", "의", "에", "에서", "에게", "께", "께서", "한테", "한테서", "와", "과",
+    "도", "만", "로", "으로", "로서", "으로서", "랑", "이랑", "하고", "부터", "까지", "보다", "처럼", "마다", "조차",
+    "밖에", "뿐", "만큼", "끼리", "나", "이나", "든", "이든", "요", "에요", "예요", "야", "이야", "다", "고", "라", "며",
+    "면", "지만", "죠", "니", "니까", "네요", "세요", "이시", "이신", "인", "인지", "일", "임", "인데", "입니다", "입니까",
+    "었", "였", "어요", "어서", "여서", "습니다", "는데", "서요",
+)), key=len, reverse=True)
+TERM_SUFFIX = "(?:" + "|".join(SUFFIX_TOKENS) + ")*"
+# 받침 없는 말 뒤에서 서술격 조사 '이'가 빠지는 꼴(공고지만·공고였어요). 받침 있는 말로 바꾸면 '이'를 되살린다.
+COPULA_TAILS = ("에요", "예요", "었", "였", "야", "다", "고", "라", "며", "면", "지", "죠", "니", "나", "든", "랑", "세요", "시", "신", "네요")
+JOSA_HEAD = re.compile(r"(으로|이랑|을|를|이|가|은|는|과|와|랑|로)")
 
-    def sub(m):
-        copula = m.group(1) or m.group(2)
-        if copula:
-            return good + fix_copula(good, copula)
-        return good + (fix_josa(good, m.group(3)) if m.group(3) else "")
 
-    return pattern.sub(sub, seg)
+def term_pattern(bad):
+    """판정과 치환이 함께 쓰는 금지어 경계. 한글은 앞에 한글이 없고 뒤에는 조사·어미만, 영문은 영숫자 경계."""
+    if HANGUL.search(bad):
+        return re.compile(r"(?<![가-힣])" + re.escape(bad) + r"(" + TERM_SUFFIX + r")(?![가-힣])", re.I)
+    # Python의 \b는 한글도 단어 글자로 봐서 'CV를'을 놓친다. 영숫자만 경계로 본다.
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(bad) + r"(?![A-Za-z0-9_])(" + TERM_SUFFIX + r")", re.I)
+
+
+def fix_suffix(good, rest):
+    """바뀐 낱말 바로 뒤 조사·서술격 조사를 받침에 맞춘다(공고을 → 공고를, 공고이지만 → 공고지만)."""
+    if not rest:
+        return rest
+    batchim = has_batchim(good)
+    if rest.startswith("이") and len(rest) > 1 and not JOSA_HEAD.fullmatch(rest[:2]):
+        # '이' 다음에 한글이 더 오면 주격 '이'가 아니라 서술격 조사거나 '이나·이든·이며' 같은 조사다.
+        if batchim:
+            return rest
+        tail = rest[1:]
+        if tail.startswith("에요"):
+            return "예요" + tail[2:]
+        if tail.startswith("었"):
+            return "였" + tail[1:]
+        if tail.startswith("어"):
+            return "여" + tail[1:]
+        return tail
+    if batchim:
+        if rest.startswith("예요"):
+            return "이에요" + rest[2:]
+        if rest.startswith("였"):
+            return "이었" + rest[1:]
+        if rest.startswith("여"):
+            return "이어" + rest[1:]
+        if rest.startswith(COPULA_TAILS) and not JOSA_HEAD.match(rest):
+            return "이" + rest
+    m = JOSA_HEAD.match(rest)
+    if m:
+        return fix_josa(good, m.group(1)) + rest[m.end():]
+    return rest
 
 
 def check_segment(seg, rules):
     found = []
-    low = seg.lower()
+    matches = []
     for bad, good, origin in rules["terms"]:
-        if bad.lower() in low:
-            fix = replace_term(seg, bad, good) if good else ""
-            rule = f"{origin}: '{bad}'" + (f" → '{good}'" if good else " 사용 금지")
-            found.append((fix, rule))
+        matches.extend((m.start(), m.end(), bad, good, origin) for m in term_pattern(bad).finditer(seg))
+    # 겹치면 먼저 시작하고 더 긴 금지어 하나만: '스카웃 제안'이 '스카웃'을 덮는다.
+    chosen = {}
+    last_end = -1
+    for start, end, bad, good, origin in sorted(matches, key=lambda x: (x[0], -(x[1] - x[0]))):
+        if start < last_end:
+            continue
+        last_end = end
+        chosen.setdefault((bad, good, origin), set()).add(start)
+    for (bad, good, origin), starts in chosen.items():
+        fix = ""
+        if good:
+            fix = term_pattern(bad).sub(
+                lambda m: good + fix_suffix(good, m.group(1)) if m.start() in starts else m.group(0), seg)
+        rule = f"{origin}: '{bad}'" + (f" → '{good}'" if good else " 사용 금지")
+        found.append((fix, rule))
     want = rules["style"]
     if want:
         for sentence in SENTENCE_SPLIT.split(seg):
@@ -227,7 +306,7 @@ def is_ui_path(rel, doc_rel=None):
     return not any(p in part for part in low.split("/") for p in SKIP_PARTS)
 
 
-def iter_lines(args, root, doc_rel=None):
+def iter_lines(args, root, doc_rel=None, excludes=None):
     """(위치, 확장자, 줄) 을 낸다. diff는 추가된 줄만 새 파일 기준 줄번호로, untracked 파일은 전체를."""
     if args.text is not None:
         for i, line in enumerate(args.text.splitlines(), 1):
@@ -239,7 +318,8 @@ def iter_lines(args, root, doc_rel=None):
         rel = os.path.relpath(path, root)
         with open(path, encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh, 1):
-                yield f"{rel}:{i}", ext, line.rstrip("\n")
+                if not excluded_path(rel, excludes):
+                    yield f"{rel}:{i}", ext, line.rstrip("\n")
         return
     untracked = []
     if args.diff_file:
@@ -268,11 +348,11 @@ def iter_lines(args, root, doc_rel=None):
         if m:
             lineno = int(m.group(1))
             continue
-        if line.startswith("+") and path and path != "/dev/null" and is_ui_path(path, doc_rel):
+        if line.startswith("+") and path and path != "/dev/null" and is_ui_path(path, doc_rel) and not excluded_path(path, excludes):
             yield f"{path}:{lineno}", os.path.splitext(path)[1].lower(), line[1:]
             lineno += 1
     for rel in untracked:
-        if not is_ui_path(rel, doc_rel):
+        if not is_ui_path(rel, doc_rel) or excluded_path(rel, excludes):
             continue
         try:
             with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as fh:
@@ -280,6 +360,12 @@ def iter_lines(args, root, doc_rel=None):
                     yield f"{rel}:{i}", os.path.splitext(rel)[1].lower(), line.rstrip("\n")
         except OSError:
             continue
+
+
+def excluded_path(rel, patterns):
+    normalized = os.path.normpath(rel).replace(os.sep, "/")
+    return any(fnmatch.fnmatchcase(normalized, pattern) or normalized.startswith(pattern.rstrip("/") + "/")
+               for pattern in (patterns or []))
 
 
 def cell(text):
@@ -295,7 +381,71 @@ def cmd_check(args):
         return 3
     rules = parse_doc(doc)
     findings = []
-    for where, ext, line in iter_lines(args, root, os.path.relpath(doc, root)):
+    entries = list(iter_lines(args, root, os.path.relpath(doc, root), rules["excludes"]))
+    logical = []
+    block = []
+    block_where = None
+    diff_blocks = []
+    covered = {}
+    if args.diff is not None or args.diff_file:
+        changed = {}
+        for where, ext, _ in entries:
+            if ext in (".java", ".kt"):
+                path, _, number = where.rpartition(":")
+                changed.setdefault(path, set()).add(int(number))
+        for rel, numbers in changed.items():
+            try:
+                with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as fh:
+                    source = fh.read().splitlines()
+            except OSError:
+                continue
+            start = None
+            parts = []
+            for number, source_line in enumerate(source, 1):
+                if start is None and '"""' in source_line:
+                    before, remainder = source_line.split('"""', 1)
+                    if '"""' in remainder:
+                        text = remainder.split('"""', 1)[0]
+                        if number in numbers:
+                            diff_blocks.append((f"{rel}:{number}", ".textblock", text))
+                            covered.setdefault(rel, set()).add(number)
+                    else:
+                        start = number
+                        parts = [remainder]
+                    continue
+                if start is not None:
+                    if '"""' in source_line:
+                        parts.append(source_line.split('"""', 1)[0])
+                        touched = [n for n in numbers if start <= n <= number]
+                        if touched:
+                            diff_blocks.append((f"{rel}:{touched[0]}", ".textblock", " ".join(parts)))
+                            covered.setdefault(rel, set()).update(touched)
+                        start = None
+                        parts = []
+                    else:
+                        parts.append(source_line)
+    if diff_blocks:
+        entries = [entry for entry in entries if not (
+            entry[1] in (".java", ".kt") and
+            int(entry[0].rsplit(":", 1)[1]) in covered.get(entry[0].rsplit(":", 1)[0], set()))]
+    for where, ext, line in entries:
+        if ext in (".java", ".kt") and (block or ('"""' in line and not is_comment(line.strip(), ext))):
+            if not block:
+                block_where = where
+                line = line.split('"""', 1)[1]
+            if '"""' in line:
+                block.append(line.split('"""', 1)[0])
+                logical.append((block_where, ".textblock", " ".join(block)))
+                block = []
+                block_where = None
+            else:
+                block.append(line)
+            continue
+        logical.append((where, ext, line))
+    if block:
+        logical.append((block_where, ".textblock", " ".join(block)))
+    logical.extend(diff_blocks)
+    for where, ext, line in logical:
         for seg in segments(line, ext):
             for fix, rule in check_segment(seg, rules):
                 findings.append({"where": where, "text": seg, "fix": fix, "rule": rule})
