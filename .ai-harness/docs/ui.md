@@ -6,7 +6,7 @@ ai-harness가 사용자에게 보여 주는 화면은 서버나 빌드 없이 �
 
 | 화면 | 원본 | 여는 법 |
 |---|---|---|
-| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
+| Harness Board (작업 현황·하네스 동작·하네스 설정·하네스 효과·레퍼런스 보드·자동 수정·하네스 안내) | `scripts/board/template.html` (서버 `scripts/board/board-server.py`) | 아래 "보드를 격리해 띄우기" |
 | 하네스 효과 리포트 | `skills/harness-impact/report-template.html` | `scripts/impact.sh`가 데이터를 넣어 만든 HTML 파일을 브라우저로 연다 |
 | 기준 화면 (디자인 시스템 예시) | `docs/design-system/reference.html` | 파일을 바로 연다(`file://`). `?theme=light|dark`, `?drawer=1`로 상태를 고정한다 |
 
@@ -24,6 +24,8 @@ bash scripts/board/board.sh stop      # 끝나면 반드시 끈다 (같은 환�
 - 로그인·시드 없음. 빈 데이터 디렉터리면 각 화면이 빈 상태로 그려진다. 항목이 있는 상태를 보려면 데이터 디렉터리에 `events/*.jsonl` 등을 넣는다(`tests/run.sh`의 보드 블록이 만드는 형태).
 - 보드 서버가 쓰는 것(`board/server.json`·로그)은 `HARNESS_METRICS_DIR` 아래에만 생긴다. 저장소에는 아무것도 쓰지 않는다.
 - 화면 쿼리 `?theme=light|dark`로 테마를 고정할 수 있다(보드·기준 화면).
+- 보드를 처음 연 브라우저(localStorage `hb-view`·`hb-tab`·`hb-stab`이 모두 없음)는 하네스 안내 화면으로 시작한다. 다른 화면을 검토하려면 사이드바에서 고르거나 이미 쓰던 프로필을 쓴다. 보드 주소에 `&view=guide`를 붙이면 안내 화면이 바로 열린다.
+- 안내 카드의 "실행"은 새 세션 양식을 열고 띄우기는 실제로 `claude`를 띄운다. 검토할 때는 가짜 `claude`(예: `tests/fixtures/board-resident/claude`)가 든 폴더를 `PATH` 앞에 두고 보드를 연다. 실행 가능 여부는 `HM_CLAUDE_SKILLS_DIR`(기본 스킬 설치 여부)와 저장소 후보 중 하네스 저장소로 정해진다. 후보는 `orca repo list --json`·`HARNESS_CLAUDE_JSON`(기본 `~/.claude.json`의 `projects` 키)·데이터 디렉터리의 알려진 저장소에서 오므로, 사용자 저장소가 섞이지 않게 하려면 가짜 `orca`(저장소 목록을 돌려주는 스크립트)를 `PATH` 앞에 두고 `HARNESS_CLAUDE_JSON`을 fixture로 바꾼다. 임시 폴더 아래 fixture 저장소는 걸러지므로 `BOARD_TEMP_ROOTS`(콜론 구분, 빈 값이면 거르지 않음)를 함께 준다. 막힌 상태를 보려면 빈 `HM_CLAUDE_SKILLS_DIR`와 빈 데이터 디렉터리로 연다.
 
 ## 브라우저
 

@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
 import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
+import guide as hguide  # noqa: E402
 import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import references as hrefs  # noqa: E402
@@ -1919,6 +1920,25 @@ def prompt_for(item):
     return f"ai-harness 보드에서 넘어왔다: {item['title']}. 상황을 확인하고 내가 결정할 것을 정리해줘."
 
 
+_launch = {"at": 0.0, "data": None}
+
+
+def launch_state():
+    """새 세션 저장소 후보(안내 카드 실행·새 세션 버튼). orca 호출과 사용 기록 읽기가 있어 BOARD_LAUNCH_TTL초(기본 30) 동안 다시 쓴다."""
+    try:
+        ttl = float(os.environ.get("BOARD_LAUNCH_TTL") or 30)
+    except ValueError:
+        ttl = 30.0
+    if _launch["data"] is None or time.time() - _launch["at"] >= ttl:
+        try:
+            repos = hguide.candidates(sorted(set(known_repos()) | set(harness_repos())))
+        except Exception:  # 후보를 못 모아도 안내 화면·새 세션은 열린다(경로 직접 입력)
+            repos = []
+        _launch["data"] = {"home": os.path.expanduser("~"), "repos": repos}
+        _launch["at"] = time.time()
+    return _launch["data"]
+
+
 def known_repos():
     repos = set()
     try:
@@ -2049,6 +2069,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, impact_state())
         if u.path == "/autofix":
             return self._send(200, autofix_state())
+        if u.path == "/guide":
+            return self._send(200, hguide.state(launch=launch_state()))
+        if u.path == "/launch":
+            return self._send(200, launch_state())
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":

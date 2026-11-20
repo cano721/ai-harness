@@ -1429,7 +1429,7 @@ assert any(i.get("ask") for i in items) and any(i.get("in_repo") is False for i 
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has a real-scale scenario"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
-assert_contains "$BOARD_TPL" "for (const key of ['list', 'refs', 'impact', 'settings'])" "the sidebar keeps the list, reference boards, impact and settings"
+assert_contains "$BOARD_TPL" "for (const key of ['list', 'refs', 'impact', 'settings', 'guide'])" "the sidebar keeps the list, reference boards, impact, settings and the guide"
 # 3차: 작업 현황은 카드와 한 줄 상황만, 저장소별 연결은 하네스 설정의 '자동 수정' 탭(개인 설정보다 위)으로.
 BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac
@@ -1439,5 +1439,304 @@ assert_contains "$BOARD_AFSET" "afRepoRow" "the autofix settings tab shows per-r
 [[ "${BOARD_AFSET%%개인 설정(~/.ai-harness/config)*}" == *"저장소별 연결"* ]] || fail "per-repo connections come before personal settings"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "자동 수정" "board skill documents the autofix view"
 pass "harness board autofix view: readiness, progress, runs, cached checks, configure-only writes"
+
+# 하네스 안내(#432): 기능 목록은 저장소(skills·templates·agents·catalog)에서 읽고, 화면 문구는 guide.json에서 붙인다.
+# 저장소의 기능과 guide.json이 어긋나면 여기서 실패한다 — 새 스킬을 더하면 guide.json에 이름·요약을 함께 적는다.
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+root = sys.argv[1]
+cov = guide.coverage(root)
+assert cov == {"unlisted": [], "stale": []}, cov
+st = guide.state(root)
+assert st["ok"] is True
+items = {i["id"]: i for g in st["groups"] for i in g["items"]}
+assert all(g["label"] and g["items"] for g in st["groups"]), "every group has a label and items"
+for i in items.values():
+    assert i["title"] and i["summary"], i
+assert items["skills/harvest"]["cmd"] == "/ai-harness:harvest", items["skills/harvest"]
+assert items["templates/implement-feature"]["cmd"] == "/implement-feature"
+assert items["catalog/jira"]["cmd"] == "/jira"
+assert items["agents/design-reviewer"]["cmd"] is None
+assert items["skills/harness-impact"]["view"] == "impact"
+assert not any(g["key"] == "other" for g in st["groups"]), "nothing falls into the other group in this repository"
+' "$ROOT" || fail "guide lists every harness feature from the repository with a Korean title and summary"
+# 어긋남: guide.json에 없는 스킬은 "기타" 묶음에 원래 설명으로 남고, 저장소에 없는 항목은 화면에서 빠진다.
+BGUIDE_ROOT="$TEST_TMP/guide-root"
+mkdir -p "$BGUIDE_ROOT/skills/known" "$BGUIDE_ROOT/skills/newbie" "$BGUIDE_ROOT/catalog" "$BGUIDE_ROOT/agents"
+printf -- '---\nname: known\ndescription: Known skill.\n---\n' >"$BGUIDE_ROOT/skills/known/SKILL.md"
+printf -- '---\nname: newbie\ndescription: >\n  First sentence here. Second sentence.\n---\n' >"$BGUIDE_ROOT/skills/newbie/SKILL.md"
+printf '{"version":1,"skills":[]}\n' >"$BGUIDE_ROOT/catalog/catalog.json"
+jq -n '{groups:[{key:"start",label:"시작",desc:"설명",items:[
+  {id:"skills/known",title:"알려진 스킬",summary:"요약"},
+  {id:"skills/gone",title:"없어진 스킬",summary:"요약"}]}]}' >"$BGUIDE_ROOT/guide.json"
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+root, gpath = sys.argv[2], sys.argv[2] + "/guide.json"
+assert guide.coverage(root, gpath) == {"unlisted": ["skills/newbie"], "stale": ["skills/gone"]}, guide.coverage(root, gpath)
+st = guide.state(root, gpath)
+ids = [i["id"] for g in st["groups"] for i in g["items"]]
+assert ids == ["skills/known", "skills/newbie"], ids
+other = [g for g in st["groups"] if g["key"] == "other"][0]
+assert other["items"][0]["title"] == "newbie" and other["items"][0]["summary"] == "First sentence here.", other
+' "$ROOT" "$BGUIDE_ROOT" || fail "guide keeps an unlisted skill in the other group and drops a stale entry"
+# 서버: /guide는 토큰과 Host를 확인하고 목록을 내준다. 화면은 다섯 번째 화면으로 이 목록을 그린다.
+BGUIDE_DATA="$TEST_TMP/guide-data"; mkdir -p "$BGUIDE_DATA"
+BGUIDE_PORT="$(free_port)"
+bguide_sh() {
+  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BGUIDE_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BGUIDE_PORT" BOARD_NO_BROWSER=1 \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BGUIDE_URL="$(bguide_sh open | jq -r '.url')"
+BGUIDE_TOKEN="${BGUIDE_URL#*t=}"
+BGUIDE_BASE="http://127.0.0.1:$BGUIDE_PORT"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BGUIDE_BASE/guide?t=wrong")" "guide endpoint checks the token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$BGUIDE_PORT" "$BGUIDE_BASE/guide?t=$BGUIDE_TOKEN")" "guide endpoint checks the Host"
+assert_eq "/ai-harness:harvest" "$(curl -s "$BGUIDE_BASE/guide?t=$BGUIDE_TOKEN" | jq -r '[.groups[].items[] | select(.id == "skills/harvest")][0].cmd')" "guide endpoint serves the feature list"
+assert_eq "true" "$(bguide_sh stop | jq -r '.stopped')" "guide board stops"
+BGUIDE_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BGUIDE_TPL" "guide: { label: '하네스 안내'" "the board has a harness guide view"
+assert_contains "$BGUIDE_TPL" "'/guide?t='" "the guide view loads the feature list from the server"
+assert_contains "$BGUIDE_TPL" "copyBtn('명령 복사', it.cmd" "each feature offers its command to copy"
+assert_contains "$BGUIDE_TPL" "['settings', 'impact', 'refs', 'guide'].includes(saved)" "the board reopens the guide view after a reload"
+assert_contains "$BGUIDE_TPL" "view === 'guide' || !names.length" "the guide view hides the project filter"
+assert_contains "$BGUIDE_TPL" "function goLink(text, v, st, lt)" "guide links can open a tab of the work list"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 안내" "board skill documents the guide view"
+pass "harness board guide view: feature list from the repository, Korean titles, drift caught by tests (#432)"
+
+# 하네스 안내 보강(#432): 처음 쓰는 사람의 시작 3단계, 흐름 단계의 자동/직접 구분과 카드 링크,
+# 에이전트가 알아서 쓰는 것(스택 규칙·에이전트)은 한 묶음으로 기본 접힘, 묶음 목차, 첫 진입은 안내 화면.
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+st = guide.state(sys.argv[1])
+groups = {g["key"]: g for g in st["groups"]}
+auto = groups["auto"]
+assert auto["fold"] is True, auto
+ids = {i["id"] for i in auto["items"]}
+assert {"agents/design-reviewer", "agents/harvest-reviewer", "templates/ui-review", "templates/feature-sliced-design"} <= ids, ids
+assert not any(i.startswith("skills/") or i.startswith("catalog/") for i in ids), ids
+assert len(ids) == 11, sorted(ids)
+assert all(g["fold"] is False for k, g in groups.items() if k != "auto"), [k for k, g in groups.items() if g["fold"]]
+assert "stack" not in groups, "stack rules live in the auto group"
+items = {i["id"]: i for g in st["groups"] for i in g["items"]}
+assert items["skills/design-polish"]["title"] == "화면 점검 (하네스 없이)", items["skills/design-polish"]
+assert items["templates/design-polish"]["title"] == "화면 다듬기"
+' "$ROOT" || fail "guide folds the things agents use on their own into one group and names the global polish skill for repositories without a harness"
+BGUIDE_TPL="$(<"$ROOT/scripts/board/template.html")"
+BGUIDE_FN="$(sed -n '/---- 하네스 안내 ----/,/---- 레퍼런스 보드 ----/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$BGUIDE_FN" "'처음이면 이것부터'" "the guide starts newcomers with three steps"
+assert_contains "$BGUIDE_FN" "['skills/setup', '셋업'," "the first step is setup"
+assert_contains "$BGUIDE_FN" "['skills/harness-init', '프로젝트 하네스 만들기'," "the second step is the project harness"
+assert_contains "$BGUIDE_FN" "['templates/implement-feature', '기능 개발'," "the third step is feature delivery"
+assert_contains "$BGUIDE_FN" "function guideJump(" "guide links scroll to and focus a card"
+assert_contains "$BGUIDE_FN" "c.tabIndex = -1" "a jumped-to card can take focus"
+assert_contains "$BGUIDE_FN" "MODE = { auto: '자동', opt: '켜면 자동', manual: '직접 실행' }" "flow steps say whether they run on their own"
+assert_contains "$BGUIDE_FN" "['기록', 'auto'," "recording runs on its own"
+assert_contains "$BGUIDE_FN" "['자동 개선', 'opt', 'skills/harvest'" "auto harvest runs on its own only when turned on"
+assert_contains "$BGUIDE_FN" "['동기화', 'opt', 'skills/harness-init'" "auto sync runs on its own only when turned on"
+assert_contains "$BGUIDE_FN" "['효과 확인', 'manual', 'skills/harness-impact'" "impact check is run by the person"
+assert_contains "$BGUIDE_FN" "goLink('켜는 곳: 하네스 설정', 'settings', 'harness')" "opt-in steps link to the settings tab that turns them on"
+assert_contains "$BGUIDE_FN" "g.fold" "folded groups render as a collapsed row"
+assert_contains "$BGUIDE_FN" "setAttribute('aria-expanded'" "the folded group head is an expand button"
+assert_contains "$BGUIDE_FN" "'b-toc'" "the guide has a table of contents"
+assert_contains "$BGUIDE_TPL" ".b-toc ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap;" "the table of contents wraps instead of scrolling sideways"
+# 시작 화면 규칙을 실제로 돌린다: 처음(저장 없음) → 안내, 쓰던 사람 → 그대로, ?view=guide → 안내.
+BGUIDE_START="$(grep -A1 -m1 '^  const startView = ' "$ROOT/scripts/board/template.html")"
+assert_eq "guide list list settings guide list" "$(BGUIDE_START="$BGUIDE_START" node -e 'eval(process.env.BGUIDE_START.replace("const startView", "var startView"));
+console.log([startView("?t=x", null, false), startView("?t=x", null, true), startView("?t=x", "list", true), startView("?t=x", "settings", true), startView("?t=x&view=guide", "list", true), startView("?t=x&view=other", "list", true)].join(" "))')" \
+  "a first-time board opens on the guide, a used board keeps its view, ?view=guide opens the guide"
+assert_contains "$BGUIDE_TPL" "store('hb-tab') === null && store('hb-stab') === null" "someone who only used tabs is not a first-time visitor"
+# 시작 단계·흐름 단계가 가리키는 카드가 기능 목록에 있어야 한다(없으면 링크가 조용히 글자가 된다).
+BGUIDE_IDS="$(printf '%s\n' "$BGUIDE_FN" | sed -n "/const START = \[/,/^  \];/p;/const FLOW = \[/,/^  \];/p" | grep -oE "'(skills|templates|agents|catalog)/[a-z0-9-]+'" | tr -d "'" | sort -u)"
+[[ -n "$BGUIDE_IDS" ]] || fail "guide start and flow steps name cards"
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+have = {i["id"] for g in guide.state(sys.argv[1])["groups"] for i in g["items"]}
+missing = [i for i in sys.argv[2].split() if i not in have]
+assert not missing, missing
+' "$ROOT" "$BGUIDE_IDS" || fail "every card the guide steps link to is in the feature list"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "?view=guide" "board skill documents the guide query"
+pass "harness board guide: first steps, flow modes with card links, folded agent-only group, table of contents, first open on the guide (#432)"
+
+# 하네스 안내 카드에서 바로 실행(#442): guide.json의 run이 실행 범위(global·repo·harness·optional)를 정하고,
+# 서버가 실행 가능 여부와 이유(하네스를 깐 저장소 없음·기본 스킬 미설치)를 내려 준다. 실행은 기존 POST /new를 쓴다.
+# 범위는 각 SKILL.md 본문 근거로 정했다(PR 본문 "결정 사항" 표) — 바꾸면 여기와 표를 같이 고친다.
+python3 -I -B -c '
+import json, sys
+root = sys.argv[1]
+raw = json.load(open(root + "/scripts/board/guide.json", encoding="utf-8"))
+for g in raw["groups"]:
+    for i in g["items"]:
+        run = i.get("run")
+        assert run in (None, "global", "repo", "harness", "optional"), i
+        if g.get("fold"):
+            assert run is None, ("folded group has no run", i)
+        if i["id"].startswith("agents/") or (i["id"].startswith("templates/") and not i.get("entry")):
+            assert run is None, ("card without a command has no run", i)
+        if i["id"].startswith("templates/") and i.get("entry"):
+            assert run == "harness", ("workflows run only in a harness repository", i)
+        if i["id"].startswith("catalog/"):
+            assert run == "global", ("catalog skills run anywhere", i)
+by = {i["id"]: i.get("run") for g in raw["groups"] for i in g["items"] if not i["id"].startswith(("catalog/", "agents/", "templates/"))}
+want = {
+  "skills/setup": "global", "skills/harness-update": "global", "skills/metrics": "global", "skills/board": None,
+  "skills/harvest": "harness", "skills/harness-impact": "harness",
+  "skills/diagram": "optional", "skills/design-references": "optional", "skills/landing-page": "optional", "skills/explain-for": "optional",
+  "skills/harness-init": "repo", "skills/autofix": "repo", "skills/understand-change": "repo", "skills/design-system-builder": "repo",
+  "skills/design-screen": "repo", "skills/design-polish": "repo", "skills/ux-writing-builder": "repo", "skills/ux-writing-audit": "repo",
+  "skills/web-design-guidelines": "repo", "skills/emil-design-eng": "repo",
+}
+assert by == want, {k: (by.get(k), want.get(k)) for k in set(by) | set(want) if by.get(k) != want.get(k)}
+' "$ROOT" || fail "guide.json run scopes match each skill: global, repo, harness, optional; none without a command or in the folded group"
+# 저장소 후보: Orca 저장소 목록, Claude Code 사용 기록(~/.claude.json의 projects 키만), 보드가 아는 저장소를 모아
+# 없는 폴더·하위 폴더·worktree·임시 폴더·홈을 거르고 중복을 없앤 뒤 최근 사용 순(같으면 이름순)으로 준다.
+BRUN_T="$TEST_TMP/guide-run"; BRUN_C="$BRUN_T/cand"; mkdir -p "$BRUN_T/skills/jira" "$BRUN_C/home" "$BRUN_C/tmp" "$BRUN_C/bin" "$BRUN_C/projects"
+BRUN_C="$(cd "$BRUN_C" && pwd)"  # TMPDIR 끝의 / 때문에 생기는 // 를 없앤다(Claude Code 기록 폴더 이름은 정규화한 경로에서 나온다)
+for r in alpha beta gamma; do mkdir -p "$BRUN_C/code/$r/.git"; done
+mkdir -p "$BRUN_C/code/gamma/.ai-harness" "$BRUN_C/code/alpha/src" "$BRUN_C/code/wt" "$BRUN_C/code/plain" "$BRUN_C/tmp/scratch/.git" "$BRUN_C/code/scratchpad/x/.git" "$BRUN_C/home/.git"
+printf '{}\n' >"$BRUN_C/code/gamma/.ai-harness/harness.json"
+printf 'gitdir: /elsewhere\n' >"$BRUN_C/code/wt/.git"
+jq -n --arg c "$BRUN_C" '{projects: {($c + "/code/alpha"): {secret: "x"}, ($c + "/code/alpha/src"): {}, ($c + "/code/wt"): {}, ($c + "/code/plain"): {},
+  ($c + "/code/missing"): {}, ($c + "/tmp/scratch"): {}, ($c + "/code/scratchpad/x"): {}, ($c + "/home"): {}}, other: "ignored"}' >"$BRUN_C/claude.json"
+cat >"$BRUN_C/bin/orca" <<EOF
+#!/usr/bin/env bash
+[[ "\$*" == "repo list --json" ]] || exit 1
+printf '{"ok":true,"result":{"repos":[{"path":"%s","displayName":"beta"},{"path":"%s/","displayName":"alpha"}]}}\n' "$BRUN_C/code/beta" "$BRUN_C/code/alpha"
+EOF
+chmod +x "$BRUN_C/bin/orca"
+BRUN_SLUG="$(printf '%s' "$BRUN_C/code/gamma" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$BRUN_C/projects/$BRUN_SLUG"
+PATH="$BRUN_C/bin:$PATH" python3 -I -B -c '
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+c = sys.argv[2]
+got = guide.candidates(seeds=[c + "/code/gamma"], home=c + "/home", claude_json=c + "/claude.json",
+                       projects_dir=c + "/projects", temp_roots=[c + "/tmp"])
+names = [r["name"] for r in got]
+assert names == ["gamma", "alpha", "beta"], got
+g = got[0]
+assert g["harness"] is True and g["used"] and g["path"] == c + "/code/gamma", g
+assert got[1]["harness"] is False and got[1]["used"] is None, got[1]
+assert got[1]["short"] == got[1]["path"], got[1]
+home = guide.candidates(seeds=[c + "/code/alpha"], home=c + "/code", claude_json=c + "/none.json", projects_dir=c + "/projects", temp_roots=[], orca=False)
+assert [r["short"] for r in home] == ["~/alpha"], home
+assert guide.candidates(seeds=[], home=c + "/home", claude_json=c + "/none.json", projects_dir=c + "/projects", temp_roots=[], orca=False) == []
+open(c + "/bad.json", "w").write("{\"projects\": [1, 2]}")
+assert guide.candidates(seeds=[], home=c + "/home", claude_json=c + "/bad.json", projects_dir=c + "/projects", temp_roots=[], orca=False) == []
+' "$ROOT" "$BRUN_C" || fail "launch candidates come from Orca, Claude Code history and known repositories, without subfolders, worktrees, temp folders or home, most recent first"
+python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts/board")
+import guide
+root, skills = sys.argv[1], sys.argv[2]
+def items(**kw):
+    return {i["id"]: i for g in guide.state(root, **kw)["groups"] for i in g["items"]}
+none = {"home": "/h", "repos": [{"path": "/r/one", "name": "one", "short": "/r/one", "harness": False, "used": None}]}
+it = items(launch=none, skills_dir=skills)
+wf = it["templates/implement-feature"]
+assert (wf["run"], wf["runnable"], wf["blocked"]) == ("harness", False, "no_harness_repo"), wf
+jira = it["catalog/jira"]
+assert (jira["run"], jira["runnable"], jira["blocked"]) == ("global", False, "not_installed"), jira
+setup = it["skills/setup"]
+assert (setup["run"], setup["runnable"], setup["blocked"]) == ("global", True, None), setup
+assert it["skills/harness-init"]["runnable"] is True and it["skills/harness-init"]["run"] == "repo"
+assert it["skills/harness-init"]["prefer"] == "unharnessed" and it["skills/diagram"]["prefer"] is None, it["skills/harness-init"]
+for k in ("skills/board", "agents/design-reviewer", "templates/ui-review"):
+    assert it[k]["run"] is None and it[k]["runnable"] is False and it[k]["blocked"] is None, it[k]
+open(skills + "/jira/SKILL.md", "w").write("---\nname: jira\n---\n")
+some = {"home": "/h", "repos": none["repos"] + [{"path": "/r/two", "name": "two", "short": "/r/two", "harness": True, "used": None}]}
+it = items(launch=some, skills_dir=skills)
+assert it["templates/implement-feature"]["runnable"] is True and it["templates/implement-feature"]["blocked"] is None
+assert it["catalog/jira"]["runnable"] is True, it["catalog/jira"]
+assert guide.state(root, launch=some, skills_dir=skills)["launch"] == some
+' "$ROOT" "$BRUN_T/skills" || fail "guide state says which cards can run and why not: no harness repository, catalog skill not installed"
+# 서버: /guide·/launch가 격리된 기본 스킬 폴더(HM_CLAUDE_SKILLS_DIR)·사용 기록(HARNESS_CLAUDE_JSON)·가짜 orca로 판정한다.
+BRUN_DATA="$TEST_TMP/guide-run-data"; mkdir -p "$BRUN_DATA/harvest-auto" "$BRUN_T/faketmp"
+BRUN_PORT="$(free_port)"
+brun_sh() {
+  env PATH="$BRUN_C/bin:$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BRUN_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BRUN_C/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" HARNESS_CLAUDE_JSON="$BRUN_T/none.json" BOARD_LAUNCH_TTL=0 BOARD_TEMP_ROOTS="$BRUN_T/faketmp" \
+    BOARD_PORT="$BRUN_PORT" BOARD_NO_BROWSER=1 HM_CLAUDE_SKILLS_DIR="$BRUN_T/server-skills" BOARD_JIRA_URL= JIRA_BASE_URL= \
+    bash "$ROOT/scripts/board/board.sh" "$@"
+}
+BRUN_URL="$(brun_sh open | jq -r '.url')"
+BRUN_BASE="http://127.0.0.1:$BRUN_PORT/guide?t=${BRUN_URL#*t=}"
+brun_item() { curl -s "$BRUN_BASE" | jq -r --arg id "$1" '[.groups[].items[] | select(.id == $id)][0] | "\(.run)|\(.runnable)|\(.blocked)"'; }
+assert_eq "harness|false|no_harness_repo" "$(brun_item templates/implement-feature)" "a workflow card cannot run before any repository has the harness"
+assert_eq "global|false|not_installed" "$(brun_item catalog/jira)" "a catalog card cannot run before setup installs the skill"
+assert_eq "alpha beta" "$(curl -s "$BRUN_BASE" | jq -r '[.launch.repos[].name] | join(" ")')" "the guide offers Orca repositories as launch candidates"
+mkdir -p "$BRUN_T/server-skills/jira"
+printf -- '---\nname: jira\n---\n' >"$BRUN_T/server-skills/jira/SKILL.md"
+jq -cn --arg r "$BRUN_C/code/gamma" '{repo:$r}' >"$BRUN_DATA/harvest-auto/runs.jsonl"
+assert_eq "harness|true|null" "$(brun_item templates/implement-feature)" "a workflow card runs once the board knows a harness repository"
+assert_eq "global|true|null" "$(brun_item catalog/jira)" "a catalog card runs once the skill is installed"
+assert_eq "gamma:true" "$(curl -s "http://127.0.0.1:$BRUN_PORT/launch?t=${BRUN_URL#*t=}" | jq -r '.repos[] | select(.harness) | "\(.name):\(.harness)"')" "the new-session picker gets the same candidates with the harness mark"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$BRUN_PORT/launch?t=wrong")" "launch candidates check the token"
+assert_eq "true" "$(brun_sh stop | jq -r '.stopped')" "guide run board stops"
+BRUN_FN="$(sed -n '/---- 하네스 안내 ----/,/---- 레퍼런스 보드 ----/p' "$ROOT/scripts/board/template.html")"
+BRUN_DLG="$(sed -n '/---- 대화 상자: 새 세션/,/let cleaning = null/p' "$ROOT/scripts/board/template.html")"
+BRUN_TPL="$(<"$ROOT/scripts/board/template.html")"
+# 범위별 고르는 목록: harness는 하네스 저장소만, optional은 맨 위에 "저장소 없이(홈에서)", global은 목록 없음.
+BRUN_PICK="$(sed -n '/^  const pickChoices = /,/^  };/p' "$ROOT/scripts/board/template.html")"
+[[ -n "$BRUN_PICK" ]] || fail "the dialog has a pickChoices function"
+assert_eq "two|~,one,two|one,two|" "$(BRUN_PICK="$BRUN_PICK" node -e 'eval(process.env.BRUN_PICK.replace("const pickChoices", "var pickChoices"));
+const L = { home: "~", repos: [{ path: "/r/one", name: "one", harness: false }, { path: "/r/two", name: "two", harness: true }] };
+console.log(["harness", "optional", "repo", "global"].map((s) => pickChoices(s, L).map((c) => c.home ? "~" : c.name).join(",")).join("|"))')" \
+  "the picker lists only harness repositories for workflows, offers home first for optional cards and nothing for global ones"
+# 기본 선택: optional은 홈, repo·harness는 후보가 하나일 때만 그것(아니면 고르기 전에는 띄우지 않음), 새 세션 버튼은 지난번 고른 곳.
+# 하네스 만들기는 아직 하네스를 깔지 않은 저장소가 먼저 온다(깐 저장소에 실행하면 동기화가 된다).
+BRUN_DEF="$(sed -n '/^  const pickDefault = /,/^  };/p' "$ROOT/scripts/board/template.html")"
+[[ -n "$BRUN_DEF" ]] || fail "the dialog has a pickDefault function"
+assert_eq "~||/r/two|/r/one|/r/one|two,one|one,two" "$(BRUN_PICK="$BRUN_PICK" BRUN_DEF="$BRUN_DEF" node -e 'eval(process.env.BRUN_PICK.replace("const pickChoices", "var pickChoices")); eval(process.env.BRUN_DEF.replace("const pickDefault", "var pickDefault"));
+const L = { home: "~", repos: [{ path: "/r/two", name: "two", harness: true }, { path: "/r/one", name: "one", harness: false }] };
+console.log([pickDefault("optional", pickChoices("optional", L), ""), pickDefault("repo", pickChoices("repo", L), ""), pickDefault("harness", pickChoices("harness", L), ""),
+  pickDefault("repo", pickChoices("repo", L), "/r/one"), pickDefault("optional", pickChoices("optional", L), "/r/one"),
+  pickChoices("repo", L).map((c) => c.name).join(","), pickChoices("repo", L, "unharnessed").map((c) => c.name).join(",")].join("|"))')" \
+  "optional starts on home, repo waits for a pick unless one candidate, the new-session button keeps the last pick, harness-init lists repositories without the harness first"
+assert_contains "$BRUN_TPL" "저장소를 고르세요. 목록에서 고르거나 경로를 직접 입력합니다." "launching without a repository asks for one under the field"
+assert_contains "$BRUN_TPL" 'class="ds-field__error" id="fpickerr"' "the missing repository uses the field error part"
+assert_contains "$BRUN_DLG" "if (pick.scope === 'global') { list.replaceChildren(); return; }" "a global card builds no repository list at all"
+# 줄마다 이름 아래 경로가 실제로 보여야 같은 이름 저장소를 가른다 — 후보가 많아도 grid 행이 눌리지 않게 목록은 block 흐름.
+assert_contains "$BRUN_TPL" ".b-pick { display: block;" "the picker list keeps each row's path line visible when it scrolls"
+BRUN_SP="$(grep -m1 '^  const shortPath = ' "$ROOT/scripts/board/template.html")"
+assert_eq "h/…/work/copy-b/shop|h/a/b" "$(BRUN_SP="$BRUN_SP" node -e 'eval(process.env.BRUN_SP.replace("const shortPath", "var shortPath")); console.log([shortPath("h/x/y/work/copy-b/shop"), shortPath("h/a/b")].join("|"))')" \
+  "a long path keeps its end so two repositories with the same name are told apart"
+assert_contains "$BRUN_DLG" "'저장소 없이(홈에서)'" "optional cards can run without a repository"
+assert_contains "$BRUN_DLG" "if (!typed && cur < 0 && q && pick.shown.length)" "searching selects the first match so Enter never launches in a repository the list no longer shows"
+assert_contains "$BRUN_DLG" "'다른 경로 직접 입력'" "the picker can open the typed path field"
+assert_contains "$BRUN_DLG" "'어느 저장소와도 상관없어 홈에서 띄웁니다.'" "a global card says why it runs from home"
+assert_contains "$BRUN_DLG" "\$('fpickfield').hidden = scope === 'global';" "a global card shows no repository picker"
+assert_contains "$BRUN_DLG" "\$('fcwdfield').hidden = true;" "the typed path field starts folded behind the picker"
+assert_contains "$BRUN_DLG" "\$('dlg').returnValue = '';" "closing the prefilled form with Esc does not reuse the last ok and start a session"
+assert_contains "$BRUN_DLG" "if (res.ok && !draft)" "the form gets back what the new-session button had after a card run"
+assert_contains "$BRUN_DLG" "post('/new'," "the new-session form starts the session through the existing endpoint"
+assert_contains "$BRUN_DLG" "openNew({ scope: 'optional'" "the new-session button uses the same picker"
+assert_contains "$BRUN_FN" "openNew({" "running a card opens the existing new-session form"
+assert_contains "$BRUN_FN" "title: \`\${it.title} 실행\`" "the form opened from a card is titled with the card"
+assert_contains "$BRUN_FN" "START.some(([id]) => id === it.id) ? 'ds-btn--sm ds-btn--primary' : 'ds-btn--sm'" "only the three first-step cards make run the filled primary button"
+assert_contains "$BRUN_FN" "icon('play')" "run buttons carry the play icon"
+assert_contains "$BRUN_FN" "copyBtn('명령 복사', it.cmd, 'ds-btn--sm ds-btn--ghost')" "copying the command becomes the secondary action"
+assert_contains "$BRUN_FN" "'하네스를 깐 저장소가 없습니다'" "a blocked workflow card says why"
+assert_contains "$BRUN_FN" "'아직 설치하지 않았습니다'" "a blocked catalog card says why"
+assert_contains "$BRUN_FN" "toCard('프로젝트 하네스 만들기', 'skills/harness-init')" "the no-harness reason links to the harness card"
+assert_contains "$BRUN_FN" "toCard('처음 셋업', 'skills/setup')" "the not-installed reason links to the setup card"
+assert_contains "$BRUN_FN" "a.dataset.key = 'why:' + it.id" "each blocked card's reason link keeps its own focus key"
+assert_contains "$BRUN_FN" "if (SERVER && it.run)" "a screen opened without the board server shows no run button"
+assert_contains "$BRUN_FN" "'세션을 띄웠습니다 — 작업 현황에서 진행을 봅니다'" "a launched card says where to follow it"
+assert_contains "$BRUN_FN" "goLink('작업 현황 열기', 'list')" "the launch toast links to the work list"
+assert_contains "$BRUN_TPL" "if (ok && !action) timer = setTimeout(dismiss, 5000)" "a toast with an action stays until closed"
+assert_contains "$(<"$ROOT/docs/design-system.md")" "동작이 든 토스트" "the design rules say how long a toast with an action stays"
+assert_contains "$BRUN_TPL" "보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다." "the reused new-session form explains where questions go"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "저장소 없이(홈에서)" "board skill documents the launch scopes"
+pass "harness board guide: run a feature card from the guide with the new-session form, scope-aware repository picker, blocked cards say why (#442)"
 
 finish_tests

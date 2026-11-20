@@ -104,6 +104,7 @@ export HM_SETUP_HINT=0
 # 도입 효과 안내도 전용 테스트만 켠다.
 export HM_IMPACT_HINT=0
 export HM_CLAUDE_SKILLS_DIR="$TEST_TMP/global-skills/claude" HM_CODEX_SKILLS_DIR="$TEST_TMP/global-skills/codex"
+export HARNESS_CLAUDE_JSON="$TEST_TMP/claude.json"  # 보드 새 세션 저장소 후보가 실제 ~/.claude.json을 읽지 않게
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 
