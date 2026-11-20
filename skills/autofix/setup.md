@@ -2,6 +2,8 @@
 
 `/autofix setup`이거나, 수동 실행 0단계에서 monitor 설정이 없다고 나왔을 때(`monitor-fetch.sh check` exit 5) SKILL.md가 이 파일로 보낸다. 경로 표기 `$ROOT`는 SKILL.md와 같다(플러그인 루트).
 
+보드(`/ai-harness:board`) 하네스 설정의 "자동 수정" 탭에도 같은 일을 하는 폼이 있다(datadog·sentry만, 개인 로컬 파일에만 쓴다. `monitor-fetch.sh discover`로 고르고 `monitor-fetch.sh save`로 쓴다). 사용자가 대화 대신 화면으로 하고 싶어 하면 그 폼을 알려 준다.
+
 **묻지 않고 정하지 않는다.** provider·service·env·project·environment 같은 값은 저장소 흔적과 실제 모니터링 데이터로 선택지를 보여 주고 사용자가 고르게 한다. 만든 설정은 쓰기 전에 전체를 보여 주고 확인받는다.
 
 ## 설정 형식

@@ -7,9 +7,12 @@
 - 진행·이력은 autofix-auto.sh status·runs, 개인 설정은 autofix-auto.sh configure(인자 없음 = 현재 값)를 그대로 쓴다.
 - 쓰기는 autofix-auto.sh configure만 거친다(값 검증·원자적 쓰기의 단일 작성자). 주기를 바꾸면 schedule.sh install-autofix·status를
   돌린다(sweep 전용 에이전트만, 등록 즉시 실행 없음).
-- 보드는 수정 실행(sweep·run)을 시작하지 않고 PR을 병합하지 않으며 monitor 설정 파일을 쓰지 않는다.
+- 설정 폼(#450): 최근 에러 조회(monitor-fetch.sh discover)는 버튼으로만 부르고 결과를 캐시한다. 저장은 캐시한 줄 가운데
+  고른 것만으로 monitor를 만들어 monitor-fetch.sh save(검증·원자적 쓰기의 단일 작성자)에 넘긴다 — 보드가 파일을 직접 쓰지 않고,
+  화면이 보낸 query·이름을 그대로 쓰지 않는다. 쓰는 곳은 개인 로컬 파일뿐이다.
+- 보드는 수정 실행(sweep·run)을 시작하지 않고 PR을 병합하지 않는다.
 """
-import glob, json, os, subprocess, threading, time
+import glob, json, os, re, subprocess, threading, time
 from datetime import datetime, timezone
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +27,12 @@ CHECK_LABEL = {0: "접근됨", 3: "요청 실패", 4: "자격증명·설정 오�
 CANDIDATE_KEYS = ("signature", "title", "culprit", "count", "first_seen", "last_seen", "reason", "link", "provider", "meta")
 DETAIL_MAX = 8000  # 펼친 줄에 보일 원문(스택·샘플) 길이 상한
 RUN_KEYS = ("at", "event", "project", "signature", "reason", "outcome", "artifact", "duration_s", "cost_usd", "exit_code", "next")
+DISCOVER_HOURS = (24, 168)
+DISCOVER_MAX = 400  # 조직 전체 조회라 저장소 서비스가 상위 몇십 줄 밖에 있을 수 있다. 화면은 검색칸으로 좁힌다
+DD_SITES = ("datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "datadoghq.eu", "ap1.datadoghq.com", "ap2.datadoghq.com", "ddog-gov.com")
+SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+DD_BARE_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+MONITOR_INT_KEYS = ("min_events", "window_hours", "grace_hours", "quiet_hours")
 CONFIG_FLAGS = (("add_repo", "--add-repo"), ("remove_repo", "--remove-repo"), ("interval_minutes", "--interval-minutes"),
                 ("daily_max", "--daily-max"), ("max_attempts", "--max-attempts"), ("budget_usd", "--budget-usd"))
 
@@ -75,6 +84,26 @@ STAGE_KO = {"fixing": "수정 중", "pr": "PR 검토 대기", "deploy_wait": "�
             "skipped": "건너뜀", "declined": "PR 닫힘", "failed": "실행 실패"}
 OUTCOME_KO = {"left_for_user": "사람 판단 필요", "not_code_bug": "코드 버그 아님", "not_reproducible": "재현 불가",
               "no_result": "결과 없음", "deploy_unobserved": "배포 확인 못 함"}
+
+
+def _dd_term(key, value):
+    """monitor-fetch.sh DD_TERM과 같은 표기: 공백·특수문자가 있으면 따옴표로 감싼다."""
+    return f"{key}:{value}" if DD_BARE_RE.match(value) else f"{key}:{json.dumps(value, ensure_ascii=False)}"
+
+
+def datadog_query(rows):
+    """고른 service·env 줄로 query를 만든다. 한 줄이면 discover가 준 query, env가 같으면 service만 OR로 묶고,
+    env가 섞이면 줄마다 (service env)를 OR로 묶는다 — 고르지 않은 조합(api의 staging 등)이 끼지 않게."""
+    if len(rows) == 1:
+        return rows[0]["query"]
+    envs = {r["env"] for r in rows}
+    if len(envs) == 1:
+        env = next(iter(envs))
+        services = " OR ".join(_dd_term("service", r["service"]) for r in rows)
+        return " ".join([f"({services})"] + ([_dd_term("env", env)] if env else []) + ["status:error"])
+    clauses = " OR ".join("(" + " ".join([_dd_term("service", r["service"])] + ([_dd_term("env", r["env"])] if r["env"] else [])) + ")"
+                          for r in rows)
+    return f"({clauses}) status:error"
 
 
 def board_state(sig):
@@ -310,6 +339,113 @@ class Store:
                 res = {"at": _utc(), "detail": None, "error": _last_line(err, out) or f"원문을 불러오지 못함(exit {rc})"}
         self._put("details.json", f"{repo}\u0000{signature}", res)
         return res
+
+    # ---- 설정 폼 ----
+    @staticmethod
+    def _discover_key(provider, site=None, org=None):
+        return f"{provider}|{site or org or ''}"
+
+    def discover(self, req):
+        provider, hours = req.get("provider"), req.get("hours", 24)
+        site, org = req.get("site") or None, req.get("org") or None
+        if provider not in ("datadog", "sentry"):
+            return {"ok": False, "message": "datadog·sentry만 조회합니다"}
+        if hours not in DISCOVER_HOURS:
+            return {"ok": False, "message": "조회 기간은 24시간·7일만"}
+        args = ["discover", "--provider", provider, "--hours", str(hours)]
+        if provider == "datadog":
+            org = None
+            if site is not None and site not in DD_SITES:
+                return {"ok": False, "message": "지원하지 않는 Datadog 사이트"}
+            if site:
+                args += ["--site", site]
+        else:
+            site = None
+            if org is not None and not (isinstance(org, str) and SLUG_RE.match(org)):
+                return {"ok": False, "message": "Sentry 조직 이름이 올바르지 않음"}
+            if org:
+                args += ["--org", org]
+        rc, out, err = _run(MONITOR_SH, args, 90)
+        if rc != 0:
+            msg = _last_line(err, out) or f"최근 에러를 불러오지 못함(exit {rc})"
+            if rc == 4:
+                msg += " — 자격증명은 /ai-harness:setup에서 저장합니다."
+            res = {"at": _utc(), "hours": hours, "items": [], "error": msg}
+        else:
+            if provider == "datadog":
+                keys = ("service", "env", "count", "query")
+            elif org:
+                keys = ("project", "environment", "events", "issues")
+            else:
+                keys = ("org", "name")
+            items = [{k: r.get(k) for k in keys} for r in _lines(out)][:DISCOVER_MAX]
+            for it in items:
+                for k in keys:
+                    if k in ("count", "events", "issues"):
+                        it[k] = it[k] if isinstance(it[k], int) else 0
+                    elif not isinstance(it[k], str):
+                        it[k] = ""
+            res = {"at": _utc(), "hours": hours, "items": items, "error": None}
+        res["kind"] = "orgs" if provider == "sentry" and not org else "rows"
+        self._put("discover.json", self._discover_key(provider, site, org), res)
+        n = len(res["items"])
+        return {"ok": not res["error"], "message": res["error"] or (f"조직 {n}곳" if res["kind"] == "orgs" else f"최근 에러 묶음 {n}개"),
+                "discover": res}
+
+    def save_monitor(self, repo, req):
+        """캐시한 discover 줄 가운데 고른 것으로 monitor를 만들어 monitor-fetch.sh save에 넘긴다. 이어서 접근을 확인한다."""
+        provider, picks = req.get("provider"), req.get("picks")
+        site, org = req.get("site") or None, req.get("org") or None
+        if provider not in ("datadog", "sentry"):
+            return {"ok": False, "message": "datadog·sentry만 저장합니다"}
+        if not isinstance(picks, list) or not picks or not all(isinstance(p, dict) for p in picks):
+            return {"ok": False, "message": "최근 에러 표에서 하나 이상 고르세요"}
+        cached = self._load("discover.json").get(self._discover_key(provider, site if provider == "datadog" else None,
+                                                                    org if provider == "sentry" else None)) or {}
+        rows = cached.get("items") if cached.get("kind") == "rows" else None
+        if not rows:
+            return {"ok": False, "message": "최근 에러를 먼저 불러오세요"}
+        if provider == "datadog":
+            if site is not None and site not in DD_SITES:
+                return {"ok": False, "message": "지원하지 않는 Datadog 사이트"}
+            chosen = []
+            for p in picks:
+                hit = next((r for r in rows if r.get("service") == p.get("service") and r.get("env") == p.get("env")), None)
+                if not hit:
+                    return {"ok": False, "message": "고른 줄이 마지막 조회 결과에 없습니다. 다시 불러온 뒤 고르세요."}
+                if hit not in chosen:
+                    chosen.append(hit)
+            monitor = {"provider": "datadog", "query": datadog_query(chosen)}
+            if site and site != "datadoghq.com":
+                monitor["site"] = site
+        else:
+            if len(picks) != 1:
+                return {"ok": False, "message": "Sentry는 프로젝트·환경 한 줄만 고릅니다"}
+            p = picks[0]
+            hit = next((r for r in rows if r.get("project") == p.get("project") and r.get("environment") == p.get("environment")), None)
+            if not hit:
+                return {"ok": False, "message": "고른 줄이 마지막 조회 결과에 없습니다. 다시 불러온 뒤 고르세요."}
+            monitor = {"provider": "sentry", "org": org, "project": hit["project"]}
+            if hit["environment"]:
+                monitor["environment"] = hit["environment"]
+        opts = req.get("options") or {}
+        if not isinstance(opts, dict):
+            return {"ok": False, "message": "추가 설정이 올바르지 않음"}
+        for k, v in opts.items():
+            if k in MONITOR_INT_KEYS and isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100000:
+                monitor[k] = v
+            elif k == "deploy_branch" and isinstance(v, str) and v.strip():
+                monitor[k] = v.strip()
+            elif not (k == "deploy_branch" and v in ("", None)):
+                return {"ok": False, "message": f"{k} 값이 올바르지 않음"}
+        rc, out, err = _run(MONITOR_SH, ["save", "--root", repo, "--monitor", json.dumps(monitor, ensure_ascii=False)], 30)
+        rows = _lines(out)
+        if rc != 0 or not rows:
+            return {"ok": False, "message": _last_line(err, out) or f"설정을 저장하지 못함(exit {rc})", "monitor": monitor}
+        check = self.check(repo)
+        msg = "개인 설정에 저장함 — 접근 확인됨" if check.get("code") == 0 else \
+            f"개인 설정에 저장함 — 접근 확인은 실패({check['label']}). 연결 행의 안내를 확인하세요"
+        return {"ok": True, "message": msg, "monitor": rows[-1].get("monitor"), "check": check}
 
     def configure(self, req):
         args = []

@@ -20,7 +20,9 @@ POST /autofix/check {t, repo}    monitor-fetch.sh check(외부 API) — 버튼�
 POST /autofix/candidates {t, repo}  autofix-auto.sh candidates(외부 API) — 버튼으로만, 결과 캐시
 POST /autofix/detail {t, repo, signature}  monitor-fetch.sh detail(외부 API, 비밀값 가림) — 줄을 펼친 뒤 버튼으로만, 결과 캐시
 POST /autofix/configure {t, ...} autofix-auto.sh configure로만 개인 설정을 씀. 주기를 바꾸면 schedule.sh install-autofix·status
-POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움(보드는 monitor 파일을 쓰지 않음)
+POST /autofix/setup {t, repo}    그 저장소에서 /ai-harness:autofix setup 세션을 띄움
+POST /autofix/discover {t, provider, site?, org?, hours}  monitor-fetch.sh discover(외부 API) — 버튼으로만, 결과 캐시
+POST /autofix/monitor {t, repo, provider, site?, org?, picks, options?}  캐시한 discover 줄로 만든 monitor를 monitor-fetch.sh save로 씀
 GET  /guide/changes?t=...        버전 바뀜 안내(#439): 확인한 버전 이후 CHANGELOG 절을 묶어서. 확인 상태가 없으면 현재 버전으로 기록
 POST /guide/changes/seen {t, to} 확인한 버전을 to(화면이 보여 준 버전)로 기록
 GET  /references?t=...           레퍼런스 보드 실행 기록 목록(주제·상태·만든 시각·탭별 개수·폴더 없음·고르기 가능)
@@ -1017,6 +1019,13 @@ def autofix_button(kind, repo):
     res = AUTOFIX.candidates(repo, autofix_key(repo))
     msg = res["error"] or f"후보 {len(res['items'])}건"
     return {"ok": not res["error"], "message": msg, "candidates": res}
+
+
+def autofix_save_monitor(req):
+    repo = req.get("repo")
+    if repo not in harness_repos():
+        return {"ok": False, "message": "하네스 저장소 목록에 없는 경로"}
+    return AUTOFIX.save_monitor(repo, {k: req.get(k) for k in ("provider", "site", "org", "picks", "options")})
 
 
 def autofix_detail(repo, signature):
@@ -2215,6 +2224,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/autofix/configure":
             res = AUTOFIX.configure({k: v for k, v in req.items() if k != "t"})
             log({"action": "autofix_configure", "keys": sorted(k for k in req if k != "t"), "ok": res["ok"], "message": res["message"]})
+            return self._send(200, res)
+        if path == "/autofix/discover":
+            res = AUTOFIX.discover({k: req.get(k) for k in ("provider", "site", "org", "hours") if k in req})
+            log({"action": "autofix_discover", "provider": req.get("provider"), "ok": res["ok"], "message": res["message"]})
+            return self._send(200, res)
+        if path == "/autofix/monitor":
+            res = autofix_save_monitor(req)
+            log({"action": "autofix_monitor", "repo": req.get("repo"), "provider": req.get("provider"), "ok": res["ok"], "message": res["message"]})
             return self._send(200, res)
         if path == "/autofix/setup":
             res = autofix_setup(req.get("repo"))
