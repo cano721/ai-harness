@@ -271,8 +271,9 @@ $ROOT/scripts/board/board.sh launcher status
 ```
 
 `installed`면 설치돼 있다고 알리고 지울지 묻는다. 물을 때 함께 알린다.
-- 누르면 보드가 떠 있으면 그 화면을, 없으면 띄워서 브라우저로 연다. 열지 못하면 이유를 대화상자로 보인다.
-- 앱은 보드가 떠 있는 동안 Dock에 남는다. Dock 아이콘을 다시 누르면 보드 화면을 다시 열고, Dock에서 종료하면 보드 서버도 꺼진다. 보드가 다른 이유로 꺼지면 앱도 따라 끝난다.
+- 누르면 보드가 떠 있으면 그 화면을, 없으면 띄워서 앱 창 하나에 연다(브라우저 탭을 새로 열지 않는다). 열지 못하면 이유를 대화상자로 보인다.
+- 앱은 보드가 떠 있는 동안 Dock에 남는다. Dock 아이콘을 다시 누르면 그 창을 앞으로 가져오고, 창을 닫거나 앱을 종료하면 보드 서버도 꺼진다. 보드가 다른 이유로 꺼지면 앱도 따라 끝난다. 실행 로그·리포트 링크는 앱 안의 새 창으로, 외부 링크는 기본 브라우저로 열린다.
+- 창 앱은 설치 때 `swiftc`(Xcode Command Line Tools)로 만든다. 없으면 누를 때마다 브라우저로 여는 AppleScript 앱을 대신 설치한다 — `xcode-select --install` 뒤 다시 `install`하면 창 앱으로 바뀐다.
 - 플러그인을 업데이트해도 다시 설치할 필요가 없다 — 앱은 열 때마다 가장 새 설치본을 찾는다.
 - 앱은 이 셋업을 돌린 셸의 PATH(`jq`·`python3`·`claude` 위치)를 기억한다. 이 도구들을 옮겼으면 다시 설치한다. 자동 종료 시간을 바꾸려면 `BOARD_IDLE_EXIT=<분>`을 붙여 설치한다.
 - 보드 서버는 보는 사람이 30분 없으면 스스로 꺼진다(`BOARD_IDLE_EXIT`).
@@ -283,7 +284,7 @@ $ROOT/scripts/board/board.sh launcher status
 $ROOT/scripts/board/board.sh launcher install    # 지우기: launcher remove
 ```
 
-`~/Applications/Harness Board.app`(macOS 기본 `osacompile`로 만든 AppleScript 앱, 아이콘 포함)과 `~/.ai-harness/board/bin/open-board`를 만든다. 같은 이름의 다른 앱이 있으면 건드리지 않고 멈춘다. v0.77.0에 만든 앱(Dock에 남지 않는 앱)은 다시 `install`하면 바뀐다.
+`~/Applications/Harness Board.app`(`swiftc`로 만든 창 앱, 없거나 빌드에 실패하면 `osacompile`로 만든 AppleScript 앱. 아이콘 포함. `launcher status`의 `kind`가 `window`/`applet`)과 `~/.ai-harness/board/bin/open-board`를 만든다. 같은 이름의 다른 앱이 있으면 건드리지 않고 멈춘다. v0.77.0에 만든 앱(Dock에 남지 않는 앱)은 다시 `install`하면 바뀐다.
 
 ## 디자인 스킬 (`design`)
 

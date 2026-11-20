@@ -1,0 +1,22 @@
+#!/bin/bash
+# Linux CI용 가짜 swiftc: 출력 실행 파일을 만들고 컴파일 호출을 남긴다.
+set -eu
+args="$*"
+out=""
+while (($#)); do
+  case "$1" in
+    -o) out="$2"; shift ;;
+  esac
+  shift
+done
+[[ -n "$out" ]] || exit 2
+if [[ "${BOARD_LAUNCHER_SWIFTC_FAIL:-0}" == 1 ]]; then
+  echo "stub swiftc failure" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$out")"
+printf '#!/bin/bash\nexit 0\n' >"$out"
+chmod 755 "$out"
+if [[ -n "${BOARD_LAUNCHER_TOOL_LOG:-}" ]]; then
+  printf 'swiftc %s\n' "$args" >>"$BOARD_LAUNCHER_TOOL_LOG"
+fi
