@@ -12,8 +12,8 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-# 그래프 러너·자동 실행 흐름을 실제로 돌려 영역 하나에 2분 넘게 걸리는 영역. --fast에서 뺀다.
-SLOW_AREAS="workflow automation design init"
+# 그래프 러너·자동 실행 흐름을 실제로 돌리는 느린 영역. --fast에서 빼고, -j에서는 이 순서(긴 것부터, macOS 실측)로 먼저 시작한다.
+SLOW_AREAS="automation workflow-merge workflow-runs design workflow-feature workflow-publish workflow init"
 
 usage() {
   sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -24,7 +24,7 @@ all_areas() {
   for f in "$TESTS_DIR"/*.sh; do
     n="${f##*/}"
     n="${n%.sh}"
-    case "$n" in run | lib) continue ;; esac
+    case "$n" in run | lib | lib-*) continue ;; esac # lib-*.sh: 여러 영역이 source하는 공용 헬퍼
     printf '%s\n' "$n"
   done
 }
@@ -35,6 +35,11 @@ areas_for_file() {
   case "$file" in
     tests/lib.sh | tests/run.sh | scripts/lib.sh) all_areas; return ;;
     tests/fixtures/*) ;;
+    tests/lib-*.sh)
+      # 공용 헬퍼는 그 파일 이름을 언급(source)하는 영역들로 잇는다.
+      n="${file#tests/}"
+      (cd "$TESTS_DIR" && grep -lF -- "$n" *.sh 2>/dev/null | grep -vxE 'run\.sh|lib\.sh|lib-.*\.sh' || true) | sed 's/\.sh$//'
+      return ;;
     tests/*.sh) n="${file#tests/}"; printf '%s\n' "${n%.sh}"; return ;;
   esac
   while [[ "$probe" == */* ]]; do
