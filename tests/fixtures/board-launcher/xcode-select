@@ -1,0 +1,4 @@
+#!/bin/bash
+# 가짜 xcode-select: BOARD_LAUNCHER_NO_CLT=1이면 Command Line Tools가 없는 맥처럼 실패한다.
+[[ "${BOARD_LAUNCHER_NO_CLT:-0}" == 1 ]] && { echo "xcode-select: error: unable to get active developer directory" >&2; exit 2; }
+echo /Library/Developer/CommandLineTools

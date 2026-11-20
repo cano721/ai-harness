@@ -387,10 +387,13 @@ pass "harness board skill and hook wiring"
 # (업데이트로 설치 경로가 바뀌어도 안 깨지게). Finder가 주는 짧은 PATH 대신 install 때의 PATH를 쓴다.
 BL_APPS="$BOARD_T/Applications"
 BL_HOME="$BOARD_T/launcher-home"
-# macOS 도구(osacompile·plutil·codesign)가 없는 CI에서는 같은 모양의 번들을 만드는 가짜를 쓴다. macOS에서는 진짜로 만든다.
-BL_PATH="$PATH"
-command -v osacompile >/dev/null 2>&1 || { chmod +x "$ROOT"/tests/fixtures/board-launcher/*; BL_PATH="$ROOT/tests/fixtures/board-launcher:$PATH"; }
-launcher_sh() { PATH="$BL_PATH" BOARD_LAUNCHER_DIR="$BL_APPS" BOARD_LAUNCHER_PLATFORM=Darwin board_sh launcher "$@"; }
+# 앱 만드는 도구(swiftc·osacompile·plutil·codesign)는 OS와 상관없이 가짜를 쓴다. 호출 기록으로 Swift와 AppleScript 대체 경로를 구분한다.
+# 진짜 컴파일은 아래 typecheck가 macOS에서 따로 본다.
+chmod +x "$ROOT"/tests/fixtures/board-launcher/*
+BL_PATH="$ROOT/tests/fixtures/board-launcher:$PATH"
+BL_TOOL_LOG="$BOARD_T/launcher-tools.log"
+BL_SWIFTC="$ROOT/tests/fixtures/board-launcher/swiftc"
+launcher_sh() { PATH="$BL_PATH" BOARD_LAUNCHER_SWIFTC="${BL_SWIFTC_OVERRIDE-$BL_SWIFTC}" BOARD_LAUNCHER_TOOL_LOG="$BL_TOOL_LOG" BOARD_LAUNCHER_DIR="$BL_APPS" BOARD_LAUNCHER_PLATFORM=Darwin board_sh launcher "$@"; }
 assert_eq "false" "$(launcher_sh status | jq -r '.installed')" "launcher is not installed by default"
 if BOARD_LAUNCHER_PLATFORM=Linux BOARD_LAUNCHER_DIR="$BL_APPS" board_sh launcher install >/dev/null 2>&1; then fail "launcher install refuses outside macOS"; fi
 # 같은 이름의 다른 앱(다른 bundle id)은 install·remove 모두 건드리지 않는다.
@@ -405,17 +408,23 @@ BL_APP="$BL_APPS/Harness Board.app"
 BL_SHIM="$BOARD_DATA/board/bin/open-board"
 assert_eq "installed|$BL_APP" "$(jq -r '[.action, .app] | join("|")' <<<"$BL_ON")" "launcher install reports the app"
 assert_file "$BL_APP/Contents/Info.plist"
-# Dock에 남는 앱(#363): stay-open AppleScript 애플릿. 셸 스크립트 실행 파일은 Apple 이벤트를 못 받아 Dock의 '종료'를 듣지 않는다.
+# Swift 앱은 WKWebView 창과 앱 수명주기를 직접 관리한다.
 assert_contains "$(<"$BL_APP/Contents/Info.plist")" "<string>com.ai-harness.board</string>" "the app keeps the launcher bundle id"
-grep -A1 OSAAppletStayOpen "$BL_APP/Contents/Info.plist" | grep -q '<true/>' || fail "the app stays open so the Dock shows it while the board runs"
 grep -q LSUIElement "$BL_APP/Contents/Info.plist" && fail "the app is not hidden from the Dock"
-[[ -x "$BL_APP/Contents/MacOS/applet" ]] || fail "the app is a compiled applet"
-assert_eq "icns" "$(head -c 4 "$BL_APP/Contents/Resources/applet.icns")" "the app has its own icon"
-BL_SRC="$BOARD_DATA/board/bin/launcher.applescript"
-assert_contains "$(<"$BL_SRC")" "$BL_SHIM" "the app runs the fixed-path shim"
-for h in "on run" "on reopen" "on idle" "on quit"; do assert_contains "$(<"$BL_SRC")" "$h" "the app handles '$h'"; done
-assert_contains "$(<"$BL_SRC")" '" alive"' "the app checks whether the board is still up"
-assert_contains "$(<"$BL_SRC")" '" stop"' "quitting the app stops the board"
+[[ -x "$BL_APP/Contents/MacOS/harness-board" ]] || fail "the app is a compiled Swift executable"
+assert_eq "icns" "$(head -c 4 "$BL_APP/Contents/Resources/applet.icns")" "the app keeps its icon"
+assert_contains "$(<"$BL_APP/Contents/Info.plist")" "harness-board" "the app declares its Swift executable"
+assert_contains "$(<"$BL_TOOL_LOG")" "swiftc -O -parse-as-library " "launcher builds the single-file @main app as a library"
+# 가짜 swiftc는 소스를 보지 않는다 — 진짜 swiftc가 있으면(macOS) 소스가 실제로 컴파일되는지 본다.
+if [[ "$(uname -s)" == Darwin ]] && command -v swiftc >/dev/null 2>&1; then
+  BL_TC="$(swiftc -parse-as-library -typecheck "$ROOT/scripts/board/BoardLauncher.swift" 2>&1)" || fail "BoardLauncher.swift compiles: $BL_TC"
+fi
+grep -q "^codesign --force -s - .*/Harness Board.app$" "$BL_TOOL_LOG" || fail "launcher ad-hoc signs the Swift app"
+assert_file "$ROOT/scripts/board/BoardLauncher.swift"
+assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "WKWebView" "the Swift launcher renders the board in WKWebView"
+assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "--app" "the Swift launcher asks the shim to open without a browser"
+assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "alive" "the Swift launcher exits when the board stops"
+assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "stop" "the Swift launcher stops the board on quit"
 python3 -I - "$BL_APP/Contents/Resources/applet.icns" <<'ICNS' || fail "the icon holds PNG images up to 512px"
 import struct, sys
 data = open(sys.argv[1], "rb").read()
@@ -428,6 +437,37 @@ while pos < len(data):
     pos += size
 assert kinds[b"ic09"] == (512, 512) and kinds[b"icp4"] == (16, 16), kinds
 ICNS
+assert_eq "window" "$(launcher_sh status | jq -r '.kind')" "status reports the window app"
+# swiftc가 없거나 컴파일에 실패해도 AppleScript 런처 설치는 유지한다. 실패면 이유를 알린다.
+launcher_sh remove >/dev/null
+BL_ERR="$(BL_SWIFTC_OVERRIDE="$BOARD_T/no-swiftc" launcher_sh install 2>&1 >/dev/null)"
+[[ -x "$BL_APP/Contents/MacOS/applet" && ! -e "$BL_APP/Contents/MacOS/harness-board" ]] || fail "launcher falls back to an applet when swiftc is unavailable"
+assert_contains "$BL_ERR" "xcode-select --install" "a missing swiftc tells how to get the window app"
+assert_eq "applet" "$(launcher_sh status | jq -r '.kind')" "status reports the applet fallback"
+assert_file "$BOARD_DATA/board/bin/launcher.applescript"
+# swiftc가 다시 생기면 다음 install이 창 앱으로 바꾼다.
+assert_eq "installed" "$(launcher_sh install | jq -r '.action')" "launcher install upgrades the applet once swiftc is available"
+assert_eq "window" "$(launcher_sh status | jq -r '.kind')" "the upgraded launcher is the window app"
+# 이미 쓰던 창 앱은 새로 만들다 실패해도 애플릿으로 낮추지 않는다(빌드 기록이 어긋난 상황을 흉내 낸다).
+printf 'stale\n' >"$BL_APP/Contents/Resources/launcher-build"
+BL_ERR="$(BOARD_LAUNCHER_SWIFTC_FAIL=1 launcher_sh install 2>&1 >/dev/null)"
+[[ -x "$BL_APP/Contents/MacOS/harness-board" && ! -e "$BL_APP/Contents/MacOS/applet" ]] || fail "a failed rebuild keeps the working window app"
+assert_contains "$BL_ERR" "그대로 둡니다" "a failed rebuild says the current app was kept"
+launcher_sh remove >/dev/null
+BL_ERR="$(BOARD_LAUNCHER_SWIFTC_FAIL=1 launcher_sh install 2>&1 >/dev/null)"
+[[ -x "$BL_APP/Contents/MacOS/applet" && ! -e "$BL_APP/Contents/MacOS/harness-board" ]] || fail "launcher falls back to an applet when Swift compilation fails"
+assert_contains "$BL_ERR" "stub swiftc failure" "a failed Swift build tells why the browser launcher was installed"
+# 같은 소스·같은 컴파일러로는 install마다 다시 컴파일하지 않는다.
+assert_eq "unchanged" "$(BOARD_LAUNCHER_SWIFTC_FAIL=1 launcher_sh install 2>/dev/null | jq -r '.action')" "a failed Swift build is not retried on every install"
+launcher_sh remove >/dev/null
+assert_not_file "$BOARD_DATA/board/bin/launcher-swift-failed"
+# Command Line Tools가 없는 맥: swiftc 명령은 있어도 xcode-select가 실패하면 쓰지 않는다.
+BL_ERR="$(BL_SWIFTC_OVERRIDE="" BOARD_LAUNCHER_NO_CLT=1 launcher_sh install 2>&1 >/dev/null)"
+[[ -x "$BL_APP/Contents/MacOS/applet" ]] || fail "a Mac without Command Line Tools gets the applet"
+assert_contains "$BL_ERR" "xcode-select --install" "a Mac without Command Line Tools is told how to get the window app"
+assert_eq "window" "$(BL_SWIFTC_OVERRIDE="" launcher_sh install >/dev/null && launcher_sh status | jq -r '.kind')" "swiftc found on PATH builds the window app"
+launcher_sh remove >/dev/null
+launcher_sh install >/dev/null
 [[ -x "$BL_SHIM" ]] || fail "launcher shim is executable"
 assert_eq "$ROOT" "$(<"$BOARD_DATA/board/bin/plugin-root")" "launcher records the plugin root as a fallback"
 assert_eq "true" "$(launcher_sh status | jq -r '.installed')" "launcher status after install"
@@ -442,8 +482,8 @@ for v in 0.9.0 0.10.0; do
   printf '#!/bin/bash\necho "%s $*" >>"%s"\n' "$v" "$BOARD_T/launcher-calls" >"$BL_HOME/.claude/plugins/cache/ai-harness/ai-harness/$v/scripts/board/board.sh"
   : # 설치본의 board.sh는 실행 비트가 없다 — shim은 bash로 부른다
 done
-env -i HOME="$HOME" HM_PLUGIN_SEARCH_HOME="$BL_HOME" HARNESS_METRICS_DIR="$BOARD_DATA" /bin/bash "$BL_SHIM"
-assert_eq "0.10.0 open" "$(<"$BOARD_T/launcher-calls")" "the launcher opens the board from the newest installed plugin"
+env -i HOME="$HOME" HM_PLUGIN_SEARCH_HOME="$BL_HOME" HARNESS_METRICS_DIR="$BOARD_DATA" /bin/bash "$BL_SHIM" open --app
+assert_eq "0.10.0 open --no-browser" "$(<"$BOARD_T/launcher-calls")" "the Swift launcher opens the newest board without a browser"
 # 설치본이 없으면 기록한 경로로 실제 보드를 연다. Finder처럼 PATH가 짧아도 install 때 PATH(jq·python3)를 쓴다.
 env -i HOME="$HOME" PATH=/usr/bin:/bin HM_PLUGIN_SEARCH_HOME="$BOARD_T/no-plugins" HARNESS_METRICS_DIR="$BOARD_DATA" \
   BOARD_PORT="$BOARD_PORT_T" BOARD_NO_BROWSER=1 /bin/bash "$BL_SHIM"
@@ -456,14 +496,13 @@ BL_ALIVE=0; bl_shim alive || BL_ALIVE=$?
 assert_eq "1" "$BL_ALIVE" "the shim reports a stopped board with 1 (the app then quits itself)"
 BL_ALIVE=0; env -i HOME="$HOME" PATH=/usr/bin:/bin HM_PLUGIN_SEARCH_HOME="$BOARD_T/no-plugins" HARNESS_METRICS_DIR="$BOARD_T/no-data" /bin/bash "$BL_SHIM" alive || BL_ALIVE=$?
 assert_eq "2" "$BL_ALIVE" "the shim reports a failed check with 2 so the app keeps its Dock icon"
-assert_contains "$(<"$BL_SRC")" "if code is 1 then" "the app quits only when the board is down, not when the check fails"
 assert_not_file "$BOARD_DATA/board/launcher.log"
-# v0.77.0의 셸 스크립트 앱(같은 bundle id)은 다시 install하면 애플릿으로 바뀐다.
+# 예전 셸 스크립트 앱(같은 bundle id)은 Swift 앱으로 다시 설치한다.
 rm -rf "$BL_APP" && mkdir -p "$BL_APP/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>com.ai-harness.board</string><key>LSUIElement</key><true/></dict></plist>\n' >"$BL_APP/Contents/Info.plist"
 printf '#!/bin/bash\n' >"$BL_APP/Contents/MacOS/harness-board"
 assert_eq "installed" "$(launcher_sh install | jq -r '.action')" "launcher install replaces the v0.77.0 shell app"
-[[ -x "$BL_APP/Contents/MacOS/applet" && ! -e "$BL_APP/Contents/MacOS/harness-board" ]] || fail "the replaced launcher is an applet"
+[[ -x "$BL_APP/Contents/MacOS/harness-board" && ! -e "$BL_APP/Contents/MacOS/applet" ]] || fail "the replaced launcher is a Swift app"
 assert_eq "removed" "$(launcher_sh remove | jq -r '.action')" "launcher remove"
 assert_not_file "$BL_APP/Contents/Info.plist"
 assert_not_file "$BL_SHIM"
