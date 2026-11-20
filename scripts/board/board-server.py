@@ -66,6 +66,30 @@ PERM_WAIT = int(os.environ.get("BOARD_PERMISSION_WAIT", "3500"))  # 훅 timeout(
 # 붙잡고 있어도 터미널 창은 그대로 떠 있으므로 길게 둔다. 브라우저는 뒤에 있는 탭의 타이머를 1분 단위로 늦추기 때문에
 # 짧게 잡으면 사용자가 보드를 열어 둔 채로도 요청이 풀려 버린다(허용을 눌러도 '이미 처리됨').
 VIEWER_GONE = int(os.environ.get("BOARD_VIEWER_GONE", "1800"))
+
+
+def release_note_image(name):
+    """플러그인 번들 안 assets/release-notes의 일반 이미지 파일만 반환한다(#457). SVG는 받지 않는다 — 주소를 직접 열면
+    보드 출처에서 스크립트가 돌 수 있다. 이름은 폴더 바로 아래 파일 하나로 한정하고, 링크는 따라가지 않는다."""
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+        return None
+    if os.path.splitext(name)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        return None
+    folder = os.path.join(hchanges.plugin_root(), "assets", "release-notes")
+    path = os.path.join(folder, name)
+    try:
+        if os.path.islink(os.path.join(hchanges.plugin_root(), "assets")) or os.path.islink(folder):
+            return None
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        real_folder, real_path = os.path.realpath(folder), os.path.realpath(path)
+        if os.path.commonpath((real_folder, real_path)) != real_folder:
+            return None
+        return path
+    except (OSError, ValueError):
+        return None
+
+
 class _Cache(dict):
     """상태 캐시. 동작이 data를 None으로 비울 때마다 세대(gen)를 올린다 — 모으는 도중 비워졌는지 _collect가 알 수 있게(#348)."""
     gen = 0
@@ -2086,6 +2110,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, hguide.state(launch=launch_state()))
         if u.path == "/guide/changes":
             return self._send(200, hchanges.state(data=DATA))
+        if u.path.startswith("/release-notes/"):
+            name = u.path[len("/release-notes/"):]
+            path = release_note_image(name)
+            if not path:
+                return self._send(404, {"error": "not_found"})
+            mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".webp": "image/webp", ".gif": "image/gif"}[os.path.splitext(name)[1].lower()]
+            try:
+                return self._send_file(path, mime)
+            except (BrokenPipeError, ConnectionResetError):
+                return None
         if u.path == "/launch":
             return self._send(200, launch_state())
         if u.path == "/references":
