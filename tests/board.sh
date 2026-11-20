@@ -1076,6 +1076,20 @@ if [[ "\$1" == check ]]; then
     *) echo "ok command"; exit 0 ;;
   esac
 fi
+if [[ "\$1" == discover ]]; then
+  printf '%s\n' "\$*" >>"$BAF_T/discover.log"
+  case "\$*" in
+    *--provider\ datadog*--site\ datadoghq.eu*) ;;
+    *--provider\ datadog*)
+      printf '%s\n' '{"provider":"datadog","service":"api","env":"prod","count":120,"query":"service:api env:prod status:error"}' \
+        '{"provider":"datadog","service":"web worker","env":"prod","count":7,"query":"service:\"web worker\" env:prod status:error"}' \
+        '{"provider":"datadog","service":"batch","env":"staging","count":3,"query":"service:batch env:staging status:error"}' ;;
+    *--org\ acme*) printf '%s\n' '{"provider":"sentry","org":"acme","project":"web","environment":"production","events":42,"issues":5}' \
+        '{"provider":"sentry","org":"acme","project":"api","environment":"","events":2,"issues":1}' ;;
+    *--provider\ sentry*) printf '%s\n' '{"provider":"sentry","org":"acme","name":"Acme"}' ;;
+  esac
+  exit 0
+fi
 if [[ "\$1" == detail ]]; then
   printf '%s\n' "\$*" >>"$BAF_T/detail.log"
   printf '%s\n' '{"message":"TypeError: cart is undefined","exception":[{"type":"TypeError","value":"cart is undefined","frames":[{"file":"cart.js","function":"total","line":12,"in_app":true}]}]}'
@@ -1198,6 +1212,47 @@ assert_eq "true|TypeError" "$(jq -r '"\(.ok)|\(.detail.detail.exception[0].type)
 assert_contains "$(<"$BAF_T/detail.log")" '--meta {"id":"9"}' "candidate detail looks the error up by its saved meta"
 assert_eq "TypeError: cart is undefined" "$(baf_get | jq -r '.repos[] | select(.project == "shop") | .details["sentry:9"].detail.message')" "candidate detail is cached for the view"
 assert_eq "false" "$(baf_post detail "$(jq -cn --arg r "$BAF_SHOP" '{repo:$r, signature:"sentry:404"}')" | jq -r '.ok')" "an error with no saved lookup asks to fetch candidates again"
+# 설정 폼(#450): 최근 에러 조회는 버튼으로만 하고 캐시한다. 저장은 캐시한 줄에서 고른 것만으로 monitor를 만들어 save로 쓴다.
+[[ ! -e "$BAF_T/discover.log" ]] || fail "the board does not look up recent errors on its own"
+assert_eq "false" "$(baf_post discover '{"provider":"command"}' | jq -r '.ok')" "discover takes only datadog and sentry"
+assert_eq "false" "$(baf_post discover '{"provider":"datadog","site":"evil.example.com"}' | jq -r '.ok')" "discover takes only public datadog sites"
+assert_eq "false" "$(baf_post discover '{"provider":"datadog","hours":5}' | jq -r '.ok')" "discover takes only 24 hours or 7 days"
+assert_eq "false" "$(baf_post discover '{"provider":"sentry","org":"a/../b"}' | jq -r '.ok')" "discover rejects an odd sentry org"
+BAF_DS="$(baf_post discover '{"provider":"datadog","hours":24}')"
+assert_eq "true|rows|3|api|prod|120" "$(jq -r '"\(.ok)|\(.discover.kind)|\(.discover.items | length)|\(.discover.items[0].service)|\(.discover.items[0].env)|\(.discover.items[0].count)"' <<<"$BAF_DS")" \
+  "discover returns service/env rows with counts"
+assert_contains "$(<"$BAF_T/discover.log")" "discover --provider datadog --hours 24" "discover passes provider and hours"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[]}')" | jq -r '.ok')" "saving needs at least one row"
+assert_eq "false" "$(baf_post monitor '{"repo":"/etc","provider":"datadog","picks":[{"service":"api","env":"prod"}]}' | jq -r '.ok')" "saving accepts only harness repos"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[{service:"evil", env:"prod"}]}')" | jq -r '.ok')" \
+  "saving rejects a row that the last lookup did not return"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", site:"datadoghq.eu", picks:[{service:"api", env:"prod"}]}')" | jq -r '.ok')" \
+  "rows are matched against the lookup for the same site"
+[[ ! -e "$BAF_DATA/autofix/monitors/blog.json" ]] || fail "a rejected save writes nothing"
+BAF_SV="$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[{service:"api", env:"prod"}, {service:"web worker", env:"prod"}], options:{min_events:5}}')")"
+assert_eq "true" "$(jq -r '.ok' <<<"$BAF_SV")" "saving picked rows succeeds"
+assert_eq '(service:api OR service:"web worker") env:prod status:error|5' "$(jq -r '"\(.query)|\(.min_events)"' "$BAF_DATA/autofix/monitors/blog.json")" \
+  "rows in one env become one query with the services ORed"
+assert_contains "$(tail -n 1 "$BAF_T/check.log")" "$BAF_BLOG" "saving runs the access check right away"
+assert_eq "local|datadog" "$(baf_get | jq -r '.repos[] | select(.project == "blog") | "\(.ready.source)|\(.ready.provider)"')" "the saved file shows up as personal local settings"
+baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[{service:"api", env:"prod"}, {service:"batch", env:"staging"}]}')" >/dev/null
+assert_eq '((service:api env:prod) OR (service:batch env:staging)) status:error' "$(jq -r '.query' "$BAF_DATA/autofix/monitors/blog.json")" \
+  "rows in different envs keep each service with its own env"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[{service:"api", env:"prod"}], options:{min_events:"5; rm -rf"}}')" | jq -r '.ok')" \
+  "detail options must be numbers"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"datadog", picks:[{service:"api", env:"prod"}], options:{base_url:"https://x"}}')" | jq -r '.ok')" \
+  "unknown options are rejected"
+assert_eq "orgs|acme" "$(baf_post discover '{"provider":"sentry"}' | jq -r '"\(.discover.kind)|\(.discover.items[0].org)"')" "sentry discover without an org lists organizations"
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"sentry", org:"acme", picks:[{project:"web", environment:"production"}]}')" | jq -r '.ok')" \
+  "sentry rows must be looked up for the org first"
+baf_post discover '{"provider":"sentry","org":"acme"}' >/dev/null
+assert_eq "false" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"sentry", org:"acme", picks:[{project:"web", environment:"production"}, {project:"api", environment:""}]}')" | jq -r '.ok')" \
+  "sentry takes one row only"
+assert_eq "true" "$(baf_post monitor "$(jq -cn --arg r "$BAF_BLOG" '{repo:$r, provider:"sentry", org:"acme", picks:[{project:"api", environment:""}]}')" | jq -r '.ok')" "a sentry row saves"
+assert_eq '{"provider":"sentry","org":"acme","project":"api"}' "$(jq -c . "$BAF_DATA/autofix/monitors/blog.json")" "an empty environment is left out (all environments)"
+case "$(cat "$BAF_DATA/autofix/monitors/blog.json")" in *"$BAF_SECRET"*) fail "the saved monitor never carries a credential" ;; esac
+assert_eq '{"project_id":"blog"}' "$(<"$BAF_BLOG/.ai-harness/harness.json")" "the form never touches the repository manifest"
+find "$BAF_DATA/autofix/monitors/blog.json" -delete
 assert_eq "1" "$(wc -l <"$BAF_T/detail.log" | tr -d ' ')" "only the button press calls the monitoring tool for a stack"
 # 설정 쓰기: configure만 거친다. 틀린 값은 아무것도 바꾸지 않는다.
 BAF_CFG_BEFORE="$(<"$BAF_DATA/config")"

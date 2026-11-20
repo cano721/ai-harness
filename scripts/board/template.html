@@ -725,6 +725,15 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-dialog__foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 .b-check { display: flex; align-items: center; gap: var(--space-2); }
 .b-check > input { width: var(--size-icon); height: var(--size-icon); margin: 0; accent-color: var(--color-accent); }
+/* 모니터링 설정 폼: 최근 에러 표 — 줄마다 고르기 + 이름 + 건수. 줄 전체가 label이라 어디를 눌러도 고른다. */
+.b-mrows { display: grid; border: 1px solid var(--color-border); border-radius: var(--radius-md); max-height: calc(var(--size-row) * 7); overflow: auto; }
+.b-mrows > label { display: flex; align-items: center; gap: var(--space-2); min-height: var(--size-target-min); padding: var(--space-2) var(--space-3); cursor: pointer; min-width: 0; }
+.b-mrows > label + label { border-top: 1px solid var(--color-border); }
+.b-mrows > label:hover { background: var(--color-surface-hover); }
+.b-mrows > label > input { width: var(--size-icon); height: var(--size-icon); margin: 0; flex: none; accent-color: var(--color-accent); }
+.b-mrows > label > span:first-of-type { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.b-mrows > label > .ds-caption { flex: none; font-variant-numeric: tabular-nums; }
+.b-mopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr)); gap: var(--space-3); }
 /* 제안 / 지표 타일: 이름 → 값 → 근거. 요약 화면(하네스 효과)과 리포트의 같은 자리. */
 .b-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(calc(var(--size-column-min) * 0.75), 100%), 1fr)); gap: var(--space-3); }
 .b-tile { display: grid; gap: var(--space-1); align-content: start; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); min-width: 0; }
@@ -874,6 +883,32 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <div class="ds-field"><label class="ds-label" for="ssmokecmd">스모크 명령 (비우면 없음)</label><input class="ds-input ds-mono" id="ssmokecmd" placeholder="curl -fsS https://staging.example.com/health"></div>
     <p class="ds-caption b-line" id="snote"></p>
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" value="ok">변경 PR 만들기</button></div>
+  </form>
+</dialog>
+<dialog class="b-dialog" id="mdlg" aria-labelledby="mtitle">
+  <form method="dialog" id="mform">
+    <h2 class="ds-title" id="mtitle"></h2>
+    <p class="b-line ds-muted">최근 에러를 불러와 자동 수정이 지켜볼 줄을 고릅니다. 저장하면 이 맥의 개인 설정에만 쓰고 저장소 파일은 건드리지 않습니다.</p>
+    <p class="b-line" id="mcur" hidden></p>
+    <div class="ds-field"><span class="ds-label" id="mprov-l">모니터링 도구</span><div id="mprov"></div></div>
+    <div class="ds-field" id="msitef"><label class="ds-label" for="msite">Datadog 사이트</label><select class="ds-input" id="msite"></select></div>
+    <div class="ds-field" id="morgf" hidden><span class="ds-label" id="morg-l">Sentry 조직</span><div class="b-mrows" id="morgs" role="radiogroup" aria-labelledby="morg-l"></div></div>
+    <div class="ds-cluster"><button type="button" class="ds-btn" id="mload"></button><span class="ds-caption" id="mstate" role="status"></span></div>
+    <div class="ds-field" id="mrowsf" hidden><span class="ds-label" id="mrows-l"></span><div class="b-mrows" id="mrows" aria-labelledby="mrows-l"></div><span class="ds-caption" id="mrows-help"></span></div>
+    <div class="ds-rows" id="moptrow" hidden><div class="ds-row">
+      <button type="button" class="ds-row__head" id="mopt-h" aria-expanded="false" aria-controls="mopts"><svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg><span class="ds-row__title">세부 기준 (비우면 기본값)</span></button>
+      <div class="ds-row__detail b-mopts" id="mopts" hidden>
+        <div class="ds-field"><label class="ds-label" for="mo-min_events">후보가 되는 최소 건수</label><input class="ds-input" id="mo-min_events" inputmode="numeric" placeholder="10"></div>
+        <div class="ds-field"><label class="ds-label" for="mo-window_hours">세는 기간(시간)</label><input class="ds-input" id="mo-window_hours" inputmode="numeric" placeholder="24"></div>
+        <div class="ds-field"><label class="ds-label" for="mo-grace_hours">배포 뒤 유예(시간)</label><input class="ds-input" id="mo-grace_hours" inputmode="numeric" placeholder="24"></div>
+        <div class="ds-field"><label class="ds-label" for="mo-quiet_hours">재발 없음 확인(시간)</label><input class="ds-input" id="mo-quiet_hours" inputmode="numeric" placeholder="72"></div>
+        <div class="ds-field"><label class="ds-label" for="mo-deploy_branch">배포 브랜치</label><input class="ds-input ds-mono" id="mo-deploy_branch" placeholder="main"></div>
+      </div>
+    </div></div>
+    <div class="ds-field" id="mprevf" hidden><span class="ds-label">저장할 설정</span><pre class="ds-pre ds-mono b-raw" id="mprev"></pre></div>
+    <span class="ds-field__error" id="merr" hidden></span>
+    <p class="ds-caption b-line" id="mwhy" hidden></p>
+    <div class="b-dialog__foot"><button type="button" class="ds-btn ds-btn--ghost" id="mchat">대화로 설정하기</button><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="button" class="ds-btn ds-btn--primary" id="msave">저장</button></div>
   </form>
 </dialog>
 <script id="data" type="application/json">__DATA__</script>
@@ -2701,7 +2736,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const acts = el('div', 'ds-cluster');
     const call = (label, busyLabel, path) => { const b = btn(label, 'ds-btn--sm'); b.onclick = async () => { busy(b, busyLabel); let res; try { res = await post(path, { repo: r.repo }); } catch (e) { res = { ok: false, message: '보드 서버에 닿지 못했습니다.' }; } toast(res.message, res.ok); await loadAutofix(true); }; return b; };
     if (r.repo && rd && rd.source !== 'none') acts.append(call(r.check ? '다시 접근 확인' : '접근 확인', '확인하는 중', '/autofix/check'));
-    if (r.repo && rd && (rd.source === 'none' || rd.code === 4)) acts.append(call(rd.source === 'none' ? '설정하기' : '설정 고치기', '띄우는 중', '/autofix/setup'));
+    if (r.repo && rd && rd.provider !== 'command') {
+      const b = btn(rd.source === 'none' ? '설정하기' : rd.code === 4 ? '설정 고치기' : '설정 바꾸기', 'ds-btn--sm'); b.onclick = () => openMonitorForm(r); acts.append(b);
+    } else if (r.repo && rd && rd.code === 4) acts.append(call('설정 고치기', '띄우는 중', '/autofix/setup'));
     return settingRow(id, r.name, descs, acts, false);
   }
   const withCur = (opts, cur, fmt) => (cur == null || opts.some(([k]) => sameVal(k, cur)) ? opts : [...opts, [cur, fmt(cur)]]);
@@ -2791,6 +2828,132 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     toast(res.message, res.ok);
     if (res.ok) { await refresh(); loadSettings(true); }
   });
+
+  // ---- 모니터링 설정 폼 ----
+  // 최근 에러 조회·저장은 서버가 한다. 화면은 고른 줄(이름 쌍)만 보내고, 서버가 마지막 조회 결과에서 다시 찾아 설정을 만든다.
+  const DD_SITES = ['datadoghq.com', 'us3.datadoghq.com', 'us5.datadoghq.com', 'datadoghq.eu', 'ap1.datadoghq.com', 'ap2.datadoghq.com', 'ddog-gov.com'];
+  const MOPT_INT = ['min_events', 'window_hours', 'grace_hours', 'quiet_hours'];
+  let mf = null;
+  const ddTerm = (k, v) => `${k}:${/^[A-Za-z0-9._/-]+$/.test(v) ? v : JSON.stringify(v)}`;
+  // 미리보기용. 저장할 값은 서버(autofix.py datadog_query)가 같은 규칙으로 다시 만든다.
+  function ddQuery(rows) {
+    if (rows.length === 1) return rows[0].query;
+    const envs = [...new Set(rows.map((r) => r.env))];
+    if (envs.length === 1) return [`(${rows.map((r) => ddTerm('service', r.service)).join(' OR ')})`, ...(envs[0] ? [ddTerm('env', envs[0])] : []), 'status:error'].join(' ');
+    return `(${rows.map((r) => `(${[ddTerm('service', r.service), ...(r.env ? [ddTerm('env', r.env)] : [])].join(' ')})`).join(' OR ')}) status:error`;
+  }
+  function mOptions() {
+    const out = {}; let bad = null;
+    for (const k of MOPT_INT) {
+      const v = $('mo-' + k).value.trim(); $('mo-' + k).removeAttribute('aria-invalid');
+      if (!v) continue;
+      if (!/^\d{1,6}$/.test(v)) { bad = bad || k; $('mo-' + k).setAttribute('aria-invalid', 'true'); continue; }
+      out[k] = Number(v);
+    }
+    const b = $('mo-deploy_branch').value.trim(); $('mo-deploy_branch').removeAttribute('aria-invalid');
+    if (b) { if (/^[A-Za-z0-9._/-]{1,200}$/.test(b)) out.deploy_branch = b; else { bad = bad || 'deploy_branch'; $('mo-deploy_branch').setAttribute('aria-invalid', 'true'); } }
+    return { out, bad };
+  }
+  function mMonitor() {
+    if (!mf || !mf.rows || !mf.picked.size) return null;
+    const rows = mf.rows.filter((r, i) => mf.picked.has(i));
+    const m = mf.provider === 'datadog'
+      ? { provider: 'datadog', query: ddQuery(rows), ...($('msite').value !== 'datadoghq.com' ? { site: $('msite').value } : {}) }
+      : { provider: 'sentry', org: mf.org, project: rows[0].project, ...(rows[0].environment ? { environment: rows[0].environment } : {}) };
+    return { ...m, ...mOptions().out };
+  }
+  function mRender() {
+    const dd = mf.provider === 'datadog';
+    $('mprov').replaceChildren(segment('mprov-l', [['datadog', 'Datadog'], ['sentry', 'Sentry']], mf.provider, (v) => { mf.provider = v; mReset(); mRender(); }));
+    $('msitef').hidden = !dd;
+    $('morgf').hidden = dd || !mf.orgs;
+    if (!dd && mf.orgs) {
+      $('morgs').replaceChildren(...mf.orgs.map((o) => {
+        const l = el('label'); const i = el('input'); i.type = 'radio'; i.name = 'morg'; i.checked = o.org === mf.org;
+        i.onchange = () => { mf.org = o.org; mf.rows = null; mf.picked.clear(); mf.msg = ''; mRender(); };
+        l.append(i, el('span', null, o.name && o.name !== o.org ? `${o.name} (${o.org})` : o.org)); return l;
+      }));
+    }
+    const needOrg = !dd && !mf.org;
+    $('mload').textContent = needOrg ? '조직 불러오기' : mf.rows && mf.hours === 24 && !mf.rows.length ? '최근 7일로 넓혀 불러오기' : mf.rows ? '다시 불러오기' : '최근 에러 불러오기';
+    $('mstate').textContent = mf.msg || '';
+    $('mrowsf').hidden = !mf.rows;
+    if (mf.rows) {
+      $('mrows-l').textContent = `최근 ${mf.hours === 24 ? '24시간' : '7일'} 에러 (${dd ? '서비스 · 환경' : '프로젝트 · 환경'}, 많은 순)`;
+      $('mrows').setAttribute('role', dd ? 'group' : 'radiogroup');
+      $('mrows-help').textContent = dd ? '여러 줄을 고르면 한 설정으로 묶습니다.' : 'Sentry는 프로젝트·환경 한 줄만 고릅니다.';
+      if (!mf.rows.length) $('mrows').replaceChildren(el('p', 'ds-caption b-line', `최근 ${mf.hours === 24 ? '24시간' : '7일'} 동안 에러가 없습니다.${mf.hours === 24 ? ' 기간을 넓혀 다시 불러오세요.' : ' 이 도구에 에러가 쌓이는지 확인하세요.'}`));
+      else $('mrows').replaceChildren(...mf.rows.map((r, idx) => {
+        const l = el('label'); const i = el('input'); i.type = dd ? 'checkbox' : 'radio'; i.name = 'mrow'; i.checked = mf.picked.has(idx);
+        i.onchange = () => { if (!dd) mf.picked.clear(); if (i.checked) mf.picked.add(idx); else mf.picked.delete(idx); mRender(); };
+        const name = dd ? `${r.service} · ${r.env || '환경 없음'}` : `${r.project} · ${r.environment || '전체 환경'}`;
+        const cnt = dd ? `${r.count.toLocaleString()}건` : `${r.events.toLocaleString()}건 · 이슈 ${r.issues}개`;
+        const rec = mf.recommend && mf.recommend(r) ? el('span', 'ds-chip', '지금 설정') : null;
+        l.append(i, el('span', null, name)); if (rec) l.append(rec); l.append(el('span', 'ds-caption', cnt)); return l;
+      }));
+    }
+    $('moptrow').hidden = !mf.rows || !mf.rows.length;
+    const m = mMonitor();
+    $('mprevf').hidden = !m;
+    $('mprev').textContent = m ? JSON.stringify(m, null, 2) : '';
+    const why = !mf.rows ? '최근 에러를 먼저 불러오세요.' : !mf.picked.size ? '최근 에러 표에서 지켜볼 줄을 고르세요.' : mOptions().bad ? '세부 기준에 숫자가 아닌 값이 있습니다.' : '';
+    $('msave').setAttribute('aria-disabled', String(!!why));
+    $('merr').hidden = !mf.err; if (mf.err) $('merr').replaceChildren(icon('danger'), mf.err);
+    $('mwhy').hidden = !why || !!mf.err; $('mwhy').textContent = why;
+    mf.why = why;
+  }
+  function mReset() { mf.orgs = null; mf.org = null; mf.rows = null; mf.picked = new Set(); mf.msg = ''; mf.err = ''; }
+  function openMonitorForm(r) {
+    const rd = r.ready || {};
+    mf = { repo: r.repo, name: r.name, provider: rd.provider === 'sentry' ? 'sentry' : 'datadog' };
+    mReset();
+    $('mtitle').textContent = `${r.name}: 모니터링 설정`;
+    const cur = rd.source && rd.source !== 'none' && rd.summary ? `${AF_SOURCE[rd.source] || '설정'}: ${PROVIDER[rd.provider] || rd.provider} · ${rd.summary}` : '';
+    $('mcur').hidden = !cur;
+    $('mcur').textContent = cur ? `${cur}. ${rd.source === 'manifest' ? '저장하면 개인 설정이 저장소 설정보다 먼저 쓰입니다.' : '저장하면 이 값을 바꿉니다.'}` : '';
+    mf.recommend = rd.provider === 'datadog' && rd.summary ? (row) => rd.summary.split(' · ')[0] === row.query : null;
+    $('msite').replaceChildren(...DD_SITES.map((v) => { const o = el('option', null, v); o.value = v; return o; }));
+    $('msite').value = 'datadoghq.com';
+    for (const k of [...MOPT_INT, 'deploy_branch']) { $('mo-' + k).value = ''; $('mo-' + k).removeAttribute('aria-invalid'); }
+    $('mopt-h').setAttribute('aria-expanded', 'false'); $('mopts').hidden = true;
+    mRender();
+    $('mdlg').showModal();
+  }
+  $('msite').onchange = () => { mf.rows = null; mf.picked.clear(); mf.msg = ''; mRender(); };
+  $('mopt-h').onclick = () => { const open = $('mopt-h').getAttribute('aria-expanded') !== 'true'; $('mopt-h').setAttribute('aria-expanded', String(open)); $('mopts').hidden = !open; };
+  $('mopts').addEventListener('input', () => mRender());
+  $('mload').onclick = async () => {
+    if ($('mload').getAttribute('aria-busy') === 'true') return;
+    const dd = mf.provider === 'datadog';
+    const hours = mf.rows && mf.hours === 24 && !mf.rows.length ? 168 : (mf.hours || 24);
+    const body = { provider: mf.provider, hours, ...(dd ? { site: $('msite').value } : mf.org ? { org: mf.org } : {}) };
+    busy($('mload'), '불러오는 중'); mf.err = '';
+    let res; try { res = await post('/autofix/discover', body); } catch (e) { res = { ok: false, message: '최근 에러를 불러오지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    unbusy($('mload'));
+    if (!mf) return;
+    if (!res.ok) { mf.err = res.message; mRender(); return; }
+    const d = res.discover;
+    if (d.kind === 'orgs') { mf.orgs = d.items; if (d.items.length === 1) mf.org = d.items[0].org; mf.msg = d.items.length ? `조직 ${d.items.length}곳` : '이 토큰으로 볼 수 있는 조직이 없습니다.'; }
+    else { mf.rows = d.items; mf.hours = d.hours; mf.picked = new Set(mf.recommend ? d.items.map((r, i) => (mf.recommend(r) ? i : -1)).filter((i) => i >= 0) : []); mf.msg = `${ago(d.at)} 불러옴`; }
+    mRender();
+  };
+  $('msave').onclick = async () => {
+    if (!mf || mf.why || $('msave').getAttribute('aria-busy') === 'true') return;
+    const dd = mf.provider === 'datadog';
+    const picks = mf.rows.filter((r, i) => mf.picked.has(i)).map((r) => (dd ? { service: r.service, env: r.env } : { project: r.project, environment: r.environment }));
+    busy($('msave'), '저장하는 중'); mf.err = '';
+    let res; try { res = await post('/autofix/monitor', { repo: mf.repo, provider: mf.provider, picks, options: mOptions().out, ...(dd ? { site: $('msite').value } : { org: mf.org }) }); } catch (e) { res = { ok: false, message: '설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    unbusy($('msave'));
+    if (!mf) { toast(res.message, res.ok); return; }
+    if (!res.ok) { mf.err = res.message; mRender(); return; }
+    $('mdlg').close(); toast(res.message, true); await loadAutofix(true);
+  };
+  $('mchat').onclick = async () => {
+    const repo = mf.repo; $('mdlg').close();
+    let res; try { res = await post('/autofix/setup', { repo }); } catch (e) { res = { ok: false, message: '설정 세션을 띄우지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    toast(res.message, res.ok); await loadAutofix(true);
+  };
+  $('mdlg').addEventListener('close', () => { mf = null; });
 
   // ---- 하네스 효과 ----
   // 판정·비교 가능성·추세·저장소 상태는 impact.sh view가 정한 값이다. 화면은 말로 옮기기만 한다.
