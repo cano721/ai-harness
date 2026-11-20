@@ -131,6 +131,16 @@ while [ "$i" -lt "$n" ]; do
   agents=$(jq -c --argjson cfg "$cfg_json" --argjson more "$got" '. + ($more | map(. + {config_dir: $cfg}))' <<<"$agents")
 done
 agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
+# 위임한 세션 되살리기(#465): 대화형 세션은 살아 있는 동안만 claude agents 목록에 있어, 맡긴 세션이 PR까지 내고 탭이 닫히면
+# 결과와 함께 사라졌다. 부모 대화 기록에서 띄운 것으로 확인된 터미널(groups.py가 links.json scan handles에 남김)의 세션만
+# 끝난 항목으로 되살린다 — 사람이 직접 열었다 닫은 세션은 그대로 뺀다. 오래된 것은 아래 DONE_HOURS 규칙으로 걸러진다.
+if [ -f "$CACHE_DIR/links.json" ] && revived=$(jq -c --slurpfile l "$CACHE_DIR/links.json" '
+    ($l[0] // {}) as $links | map(.sessionId) as $have
+    | ([($links.scan // {})[]? | (.handles // [])[]?] | unique | map(($links.handles // {})[.] // empty) | unique
+       | map(select(. as $sid | $have | index($sid) | not))) as $gone
+    | . + ($gone | map({sessionId: ., id: .[0:8], kind: "interactive", pid: null, cwd: null}))' <<<"$agents" 2>/dev/null); then
+  agents=$revived
+fi
 
 now_ms=$(( $(date +%s) * 1000 ))
 
@@ -191,6 +201,8 @@ while IFS=$'\t' read -r t key; do
          # 마지막 기록이 API 오류 메시지면(응답이 끊김) 세션은 더 진행하지 않는다 — 사람이 다시 시작해야 한다.
          api_error: ((map(select(.type == "user" or .type == "assistant")) | last) as $z
            | ($z.type == "assistant" and ($z.isApiErrorMessage == true or ($z.message.content | text? // "" | startswith("API Error:"))))),
+         # 되살린 위임 세션(#465)은 claude agents가 cwd를 주지 않으므로 transcript에서 읽는다.
+         cwd: (map(.cwd // empty) | last // null),
          last: (map(.timestamp // empty) | max // null)}' 2>/dev/null || echo '{}')
   jq -cn --arg p "$t" --arg k "$key" --argjson ti "$titles" --argjson s "$summary" '{path: $p, key: $k, titles: $ti, summary: $s}' >>"$WORK_TMP/new"
 done <<<"$(jq -r --slurpfile old "$WORK_TMP/old" '.[] | select(.key == "" or $old[0][.path].key != .key) | [.path, .key] | @tsv' "$WORK_TMP/cur.json")"
@@ -229,7 +241,7 @@ jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile c
     | (($s.last // null) // (if .startedAt then (.startedAt / 1000 | floor | todate) else null end)) as $at
     | select(.pid != null or ($at != null and ($now / 1000 - ($at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) < $hours * 3600))
     | {section: "work", kind: (if .kind == "background" then "bg" else "agent" end), state: $st,
-       project: (.cwd // "?" | split("/") | map(select(. != "")) | .[-1]),
+       project: (.cwd // $s.cwd // "?" | split("/") | map(select(. != "")) | .[-1]),
        at: $at,
        title: ($ti.custom // (if (.name // "" | test("-[0-9a-f]{2}$")) then $ti.ai else null end) // .name // $ti.ai // .sessionId[0:8]),
        term: .name,
@@ -242,7 +254,7 @@ jq --slurpfile c "$WORK_TMP/cache" --slurpfile new "$WORK_TMP/new" --slurpfile c
                 + (if $s.prompt then "요청: " + ($s.prompt | clip(140)) else "" end)
                 + (if $s.reply then "\n— " + ($s.reply | clip(220)) else "" end)),
        reply_tail: ($s.reply_tail // null),
-       agent: "claude", sid: .sessionId, short_id: (.id // .sessionId[0:8]), pid, cwd,
+       agent: "claude", sid: .sessionId, short_id: (.id // .sessionId[0:8]), pid, cwd: (.cwd // $s.cwd),
        config_dir: (.config_dir // null),
        transcript: (if $path == "" then null else $path end),
        live: (.pid != null), status: .status, bg_state: .state,
