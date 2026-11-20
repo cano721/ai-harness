@@ -301,8 +301,16 @@ case "$mode" in
     ;;
   stop) bash "$root/scripts/board/board.sh" stop >/dev/null 2>&1 ;;
   open)
-    # 성공 출력에는 보드 주소(토큰)가 있어 남기지 않는다. 실패 이유(stderr)만 보인다.
-    out="$(bash "$root/scripts/board/board.sh" open 2>&1 >/dev/null)" || fail "${out:-board.sh open 실패}"
+    # 창 앱(--app)에는 보드 주소 JSON(stdout)만 돌려주고 브라우저는 열지 않는다. 경고(stderr)가 JSON에 섞이지 않게 따로 받는다.
+    if [[ "${2:-}" == --app ]]; then
+      err="$data_dir/board/launcher.err"
+      mkdir -p "$data_dir/board"
+      out="$(bash "$root/scripts/board/board.sh" open --no-browser 2>"$err")" || fail "$(cat "$err" 2>/dev/null || true)"
+      rm -f "$err"
+      printf '%s\n' "$out"
+    else
+      out="$(bash "$root/scripts/board/board.sh" open 2>&1 >/dev/null)" || fail "${out:-board.sh open 실패}"
+    fi
     ;;
   *) exit 2 ;;
 esac
@@ -378,13 +386,55 @@ write_launcher_app() { # $1=앱 경로 $2=AppleScript 소스
   out="$(codesign --force -s - "$1" 2>&1)" || die "런처 앱을 서명하지 못했습니다: $out"
 }
 
+# Swift 창 앱(#455): 누를 때마다 브라우저 탭을 새로 여는 대신 WKWebView 창 하나를 앞으로 가져온다.
+# macOS의 /usr/bin/swiftc는 Command Line Tools가 없으면 설치 창만 띄우고 실패하므로 xcode-select로 먼저 본다.
+# BOARD_LAUNCHER_SWIFTC는 테스트가 가짜 컴파일러를 넣는 자리다(사용자 설정 아님).
+LAUNCHER_SWIFT_FAILED="$BOARD_DIR/bin/launcher-swift-failed"
+have_swiftc() {
+  [[ -n "${BOARD_LAUNCHER_SWIFTC:-}" ]] && { [[ -x "$BOARD_LAUNCHER_SWIFTC" ]]; return; }
+  command -v swiftc >/dev/null 2>&1 || return 1
+  [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" != Darwin ]] || xcode-select -p >/dev/null 2>&1
+}
+
+# 앱을 다시 만들지 정하는 입력. 아래 Info.plist·설정 파일 모양을 바꾸면 앞의 v 번호를 올린다.
+swift_stamp() { printf 'v1 swift %s icon %s\n' "$(cksum <"$DIR/BoardLauncher.swift")" "$(cksum <"$DIR/launcher-icon.py")"; }
+# 컴파일 실패를 기억하는 값 — 같은 소스·같은 컴파일러면 install마다 다시 시도하지 않는다.
+swift_failed_stamp() { printf '%s %s\n' "$(swift_stamp)" "$("${BOARD_LAUNCHER_SWIFTC:-swiftc}" --version 2>/dev/null | head -n 1)"; }
+
+write_swift_launcher_app() { # $1=앱 경로 $2=shim 경로. 실패하면 SWIFT_FAILURE에 이유를 두고 1
+  local app="$1" out res="$1/Contents/Resources"
+  mkdir -p "$app/Contents/MacOS" "$res" || { SWIFT_FAILURE="앱 폴더를 만들지 못했습니다"; return 1; }
+  out="$("${BOARD_LAUNCHER_SWIFTC:-swiftc}" -O -parse-as-library "$DIR/BoardLauncher.swift" -o "$app/Contents/MacOS/harness-board" 2>&1)" \
+    || { SWIFT_FAILURE="$(printf '%s\n' "$out" | grep -m1 'error' || printf '%s' "${out%%$'\n'*}")"; SWIFT_COMPILE_FAILED=1; return 1; }
+  cat >"$app/Contents/Info.plist" <<PLIST || { SWIFT_FAILURE="Info.plist를 쓰지 못했습니다"; return 1; }
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>harness-board</string>
+<key>CFBundleIconFile</key><string>applet</string>
+<key>CFBundleIdentifier</key><string>$LAUNCHER_ID</string>
+<key>CFBundleName</key><string>Harness Board</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>
+PLIST
+  jq -cn --arg shim "$2" '{shim:$shim}' >"$res/launcher-config.json" || { SWIFT_FAILURE="앱 설정을 쓰지 못했습니다"; return 1; }
+  python3 -I "$DIR/launcher-icon.py" "$res/applet.icns" || { SWIFT_FAILURE="아이콘을 그리지 못했습니다"; return 1; }
+  swift_stamp >"$res/launcher-build" || { SWIFT_FAILURE="빌드 기록을 쓰지 못했습니다"; return 1; }
+  # 서명은 마지막에 — 서명 뒤에 번들 안 파일을 바꾸면 봉인이 깨진다.
+  out="$(codesign --force -s - "$app" 2>&1)" || { SWIFT_FAILURE="서명하지 못했습니다: $out"; return 1; }
+}
+
 launcher_ours() { grep -q "<string>$LAUNCHER_ID</string>" "$LAUNCHER_APP/Contents/Info.plist" 2>/dev/null; }
 
 launcher_json() { # action
-  local installed=false
+  local installed=false kind=""
   launcher_ours && [[ -x "$LAUNCHER_SHIM" ]] && installed=true
-  jq -cn --arg a "$1" --argjson i "$installed" --arg app "$LAUNCHER_APP" --arg shim "$LAUNCHER_SHIM" \
-    '{installed: $i, app: $app, shim: $shim} + (if $a == "" then {} else {action: $a} end)'
+  if [[ "$installed" == true ]]; then
+    if [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]]; then kind=window; else kind=applet; fi
+  fi
+  jq -cn --arg a "$1" --argjson i "$installed" --arg app "$LAUNCHER_APP" --arg shim "$LAUNCHER_SHIM" --arg k "$kind" \
+    '{installed: $i, app: $app, shim: $shim} + (if $k == "" then {} else {kind: $k} end) + (if $a == "" then {} else {action: $a} end)'
 }
 
 command_launcher() {
@@ -408,14 +458,46 @@ command_launcher() {
       mkdir -p "$stage"
       write_launcher_shim "$LAUNCHER_SHIM.tmp.$$"
       write_launcher_script "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SHIM"
-      # 컴파일한 애플릿은 매번 바이트가 달라, 소스(shim·AppleScript·아이콘 생성기 체크섬)가 같고 애플릿이 있으면 그대로 둔다.
-      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC" \
-        || ! launcher_ours || [[ ! -x "$LAUNCHER_APP/Contents/MacOS/applet" ]]; then
-        write_launcher_app "$tmp" "$LAUNCHER_SRC.tmp.$$"
+      # 컴파일한 앱은 매번 바이트가 달라, 입력(shim·AppleScript·Swift 소스·아이콘 생성기)이 같고 앱이 있으면 그대로 둔다.
+      # swiftc를 쓸 수 있으면 Swift 창 앱을, 없거나 빌드에 실패하면 AppleScript 애플릿을 둔다.
+      local rebuild=0 window_app=0 keep_window=0
+      [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]] && window_app=1
+      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC" || ! launcher_ours; then
+        rebuild=1
+      elif have_swiftc; then
+        if [[ "$(cat "$LAUNCHER_APP/Contents/Resources/launcher-build" 2>/dev/null)" != "$(swift_stamp)" ]] \
+          && [[ "$(cat "$LAUNCHER_SWIFT_FAILED" 2>/dev/null)" != "$(swift_failed_stamp)" ]]; then
+          rebuild=1
+        fi
+      elif [[ ! -x "$LAUNCHER_APP/Contents/MacOS/applet" ]] && ((!window_app)); then
+        rebuild=1
+      fi
+      if ((rebuild)); then
+        SWIFT_FAILURE="" SWIFT_COMPILE_FAILED=0
+        if ! have_swiftc; then
+          SWIFT_FAILURE="swiftc를 쓸 수 없습니다. xcode-select --install로 Command Line Tools를 깐 뒤 다시 install하면 창 앱으로 바뀝니다"
+        elif write_swift_launcher_app "$tmp" "$LAUNCHER_SHIM"; then
+          rm -f "$LAUNCHER_SWIFT_FAILED"
+        else
+          ((SWIFT_COMPILE_FAILED)) && swift_failed_stamp >"$LAUNCHER_SWIFT_FAILED"
+          # 이미 쓰던 창 앱은 고정 경로 shim만 부르므로 shim이 바뀌어도 그대로 쓸 수 있다 — 애플릿으로 낮추지 않는다.
+          ((window_app)) && launcher_ours && keep_window=1
+        fi
+        if [[ -n "$SWIFT_FAILURE" ]]; then
+          if ((keep_window)); then
+            printf 'board: %s\n' "Swift 창 앱을 새로 만들지 못해 지금 앱을 그대로 둡니다: $SWIFT_FAILURE" >&2
+          else
+            printf 'board: %s\n' "Swift 창 앱을 만들지 못해 누를 때마다 브라우저로 여는 런처를 설치했습니다: $SWIFT_FAILURE" >&2
+            rm -rf "$tmp"
+            write_launcher_app "$tmp" "$LAUNCHER_SRC.tmp.$$"
+          fi
+        fi
         mv "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM"
         mv "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC"
-        if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
-        mv "$tmp" "$LAUNCHER_APP"
+        if ((!keep_window)); then
+          if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
+          mv "$tmp" "$LAUNCHER_APP"
+        fi
         action=installed
       fi
       printf '%s\n' "$plugin_root" >"$LAUNCHER_ROOT_FILE"
@@ -427,7 +509,7 @@ command_launcher() {
         action=removed
       fi
       if [[ -f "$LAUNCHER_SHIM" || -f "$LAUNCHER_ROOT_FILE" || -f "$LAUNCHER_SRC" ]]; then
-        rm -f "$LAUNCHER_SHIM" "$LAUNCHER_ROOT_FILE" "$LAUNCHER_SRC"
+        rm -f "$LAUNCHER_SHIM" "$LAUNCHER_ROOT_FILE" "$LAUNCHER_SRC" "$LAUNCHER_SWIFT_FAILED"
         action=removed
       fi
       launcher_json "$action"
