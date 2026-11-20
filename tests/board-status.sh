@@ -1520,4 +1520,44 @@ assert pv.status("empty")["queue_hidden"] == []
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server reproduces the #299 situations"
 pass "board preview fixture reproduces the #299 screens with fake data"
 
+# 위임한 세션의 결과 유지(#465): 대화형 세션은 살아 있는 동안만 claude agents 목록에 있다. 부모 대화 기록에서 띄운 것으로 확인된
+# 터미널(links.json scan handles → 짝지은 sid)의 세션이 탭을 닫아 목록에서 빠지면, transcript로 끝난 항목을 되살려 묶음·PR이 남게 한다.
+# 띄운 기록이 없는 세션(사람이 직접 연 탭)은 되살리지 않는다.
+WD_T="$(mkdir -p "$TEST_TMP/work-delegated" && cd "$TEST_TMP/work-delegated" && pwd -P)"
+mkdir -p "$WD_T/bin" "$WD_T/projects/parent" "$WD_T/projects/child" "$WD_T/metrics/board" "$WD_T/member"
+cat >"$WD_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_AGENTS"
+FAKE
+chmod +x "$WD_T/bin/claude"
+WD_PARENT="cccccccc-0000-4000-8000-000000000001"
+WD_CHILD="cccccccc-0000-4000-8000-000000000002"
+WD_SOLO="cccccccc-0000-4000-8000-000000000003"
+WD_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg sid "$WD_PARENT" --arg cwd "$WD_T" --argjson t "$(($(date +%s) * 1000))" \
+  '[{sessionId: $sid, id: $sid[0:8], kind: "interactive", status: "idle", pid: 4242, cwd: $cwd, startedAt: $t}]' >"$WD_T/agents.json"
+jq -cn --arg t "$WD_NOW" '{type: "user", message: {content: "작업 맡겨줘"}, timestamp: $t}' >"$WD_T/projects/parent/$WD_PARENT.jsonl"
+for WD_SID in "$WD_CHILD" "$WD_SOLO"; do
+  { jq -cn --arg t "$WD_NOW" --arg cwd "$WD_T/member" '{type: "user", cwd: $cwd, message: {content: "#12 고쳐줘"}, timestamp: $t}'
+    jq -cn '{type: "ai-title", aiTitle: "Fix the example issue"}'
+    jq -cn --arg t "$WD_NOW" '{type: "assistant", message: {content: [{type: "text", text: "PR을 열었습니다."}]}, timestamp: $t}'
+  } >"$WD_T/projects/child/$WD_SID.jsonl"
+done
+jq -cn --arg p "$WD_T/projects/parent/$WD_PARENT.jsonl" --arg c "$WD_CHILD" --arg s "$WD_SOLO" \
+  '{handles: {"term_11111111-2222-3333-4444-555555555555": $c, "term_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": $s},
+    scan: {($p): {v: 2, offset: 0, handles: ["term_11111111-2222-3333-4444-555555555555"]}}}' >"$WD_T/metrics/board/links.json"
+WD_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$WD_T/bin:$PATH" FAKE_AGENTS="$WD_T/agents.json" HARNESS_METRICS_DIR="$WD_T/metrics" \
+  HARNESS_CLAUDE_PROJECTS_DIR="$WD_T/projects" BOARD_CLAUDE_PROFILE_GLOBS="$WD_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
+assert_eq "done|false|member|Fix the example issue" \
+  "$(jq -r --arg s "$WD_CHILD" '.[] | select(.sid == $s) | "\(.state)|\(.live)|\(.project)|\(.title)"' <<<"$WD_OUT")" \
+  "a delegated session whose tab closed comes back as an ended item named after its own folder"
+assert_eq "" "$(jq -r --arg s "$WD_SOLO" '.[] | select(.sid == $s) | .sid' <<<"$WD_OUT")" "a closed session no parent spawned stays out"
+assert_eq "1" "$(jq -r --arg s "$WD_PARENT" '[.[] | select(.sid == $s)] | length' <<<"$WD_OUT")" "the parent is listed once"
+WD_TPL="$(<"$ROOT/scripts/board/template.html")"
+# shellcheck disable=SC2016  # 템플릿 리터럴을 글자 그대로 찾는다
+assert_contains "$WD_TPL" '`끝남 · PR #${n}`' "a finished worker in a group reads as ended with its PR, not as resting"
+assert_contains "$WD_TPL" "memberStatus(it), ago(it.at)" "group member rows use the worker status"
+pass "work.sh keeps a delegated session after its tab closes"
+
 finish_tests

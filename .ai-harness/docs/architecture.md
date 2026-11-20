@@ -24,6 +24,7 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 | `scripts/board/` | `/board` 로컬 서버(Python 표준 라이브러리 + 셸 진입점) | `/board` |
 | `templates/` | `/harness-init`이 **다른 프로젝트**에 생성하는 진입점·그래프·러너 원본. `templates/managed-files.json`이 관리 생성물 카탈로그의 단일 출처 | `/harness-init`, sync |
 | `catalog/` | `/setup`이 사용자 전역에 선택 설치하는 기본 스킬 원본(`catalog.json`, `design-skills.json`) | `/setup` |
+| `mods/harness-delegations/` | 선택 설치 Claude Code mod(마켓플레이스의 별도 플러그인). 맡긴 Orca 탭 상태를 프롬프트 위 한 줄로 보이고 조율 세션에 알린다. 판정 문구는 `scripts/wait-delegation.sh`와 같게(`tests/automation.sh` 검사), 검증은 `claude plugin validate`·`claude plugin test` | Claude Code (mod를 켠 사용자) |
 | `vendor/archify/` | `/diagram` 엔진 고정 사본과 `vendor/archify.lock.json`. `scripts/vendor-archify.sh`로만 갱신 | `/diagram` |
 | `evals/` | Skill 평가 과제(`evals/<skill>/<case>/`)와 A/B 통제 실험(`evals/ab/`, `scripts/ab.sh`가 사용) | 메인테이너 |
 | `tests/` | 회귀 테스트: 진입점 `run.sh`(영역 선택·`--changed`·`--lint`), 공용 `lib.sh`, 영역 파일 `<영역>.sh`, `fixtures/` | 로컬·CI |
