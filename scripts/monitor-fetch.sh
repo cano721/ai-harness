@@ -6,6 +6,7 @@
 #   detail: 에러 하나의 스택·샘플(비밀값 가림)
 #   count:  기준 시각 이후 같은 에러가 다시 나왔는지 — 수정 검증용
 #   describe: 보드 준비 상태 — 설정 출처(로컬·manifest·없음)·요약·자격증명 유무. 요청을 보내지 않고 값을 내지 않는다
+#   save:   보드 설정 폼이 만든 monitor를 개인 로컬 파일에 쓴다(검증·원자적 쓰기의 단일 작성자)
 #   discover: setup 보조 — 저장소 설정 없이 최근 에러를 Datadog service·env / Sentry project·environment별 건수로 보여 준다
 # 종료 코드: 2 인자 오류, 3 요청 실패, 4 설정·자격증명 오류, 5 monitor 설정 없음(/autofix가 setup으로 넘어가는 신호).
 # 자격증명은 저장소 설정에 두지 않는다: 환경변수 → ~/.ai-harness/config → ~/.claude/settings.json env 순으로 찾는다.
@@ -20,6 +21,7 @@ usage() {
 usage:
   monitor-fetch.sh check  --root <repo>                                  # 설정·자격증명·접근 확인
   monitor-fetch.sh describe --root <repo>                                # 설정 출처·요약·자격증명 유무(요청 없음, 값 미출력, JSON)
+  monitor-fetch.sh save   --root <repo> --monitor <json>                  # datadog·sentry monitor를 개인 로컬 파일에 쓴다(보드 설정 폼)
   monitor-fetch.sh list   --root <repo> [--hours N]                       # 후보 에러(JSON lines)
   monitor-fetch.sh detail --root <repo> --meta <json>                     # 스택·샘플(JSON)
   monitor-fetch.sh count  --root <repo> --meta <json> --since <iso>       # {seen,count,last_seen}
@@ -33,13 +35,14 @@ EOF
   exit 2
 }
 
-ROOT_DIR=""; HOURS=""; META="{}"; SINCE=""; D_PROVIDER=""; D_ORG=""; D_SITE=""; D_BASE_URL=""
+ROOT_DIR=""; HOURS=""; META="{}"; MONITOR_JSON=""; SINCE=""; D_PROVIDER=""; D_ORG=""; D_SITE=""; D_BASE_URL=""
 action="${1:-}"; shift || true
 while (( $# > 0 )); do
   case "$1" in
     --root) ROOT_DIR="${2:-}"; shift 2 ;;
     --hours) HOURS="${2:-}"; shift 2 ;;
     --meta) META="${2:-}"; shift 2 ;;
+    --monitor) MONITOR_JSON="${2:-}"; shift 2 ;;
     --since) SINCE="${2:-}"; shift 2 ;;
     --provider) D_PROVIDER="${2:-}"; shift 2 ;;
     --org) D_ORG="${2:-}"; shift 2 ;;
@@ -288,7 +291,7 @@ datadog_discover() {
   http POST "$DD_BASE/api/v2/logs/analytics/aggregate" \
     "$(jq -cn --arg from "now-${HOURS}h" '{filter:{query:"status:error",from:$from,to:"now"},
       compute:[{aggregation:"count",type:"total"}],
-      group_by:[{facet:"service",limit:50,sort:{aggregation:"count",order:"desc"}},{facet:"env",limit:20,sort:{aggregation:"count",order:"desc"}}]}')" \
+      group_by:[{facet:"service",limit:200,sort:{aggregation:"count",order:"desc",type:"measure"}},{facet:"env",limit:20,sort:{aggregation:"count",order:"desc",type:"measure"}}]}')" \
     | jq -c "$DD_TERM"' [.data.buckets[]? | {service: (.by.service // "" | tostring), env: (.by.env // "" | tostring),
         count: ((.computes.c0 // 0) | tonumber? // 0)}
         | select(.service != "")] | sort_by(-.count)[]
@@ -369,10 +372,62 @@ command_describe() {
       code:$code, problem:(if $pr == "" then null else $pr end)}'
 }
 
+# save: 보드 설정 폼이 만든 monitor 객체를 개인 로컬 파일에 쓴다 — 이 파일의 단일 작성자. 저장소 manifest는 건드리지 않는다.
+# 모양 검증은 여기서, provider별 전송처 규칙은 읽을 때와 같은 *_setup으로 본다(자격증명이 없어도 저장은 된다).
+# command 어댑터는 저장소 안 실행 파일을 정하는 일이라 폼 대상이 아니다(/autofix setup).
+command_save() {
+  local file="" dir="" tmp="" bad="" problem=""
+  # 입력은 JSON 객체 하나만. macOS jq 1.6은 깨진 입력에도 0으로 끝날 수 있어 결과가 비었는지로 본다.
+  monitor="$(jq -cs 'if length == 1 and (.[0] | type == "object") then .[0] else empty end' <<<"$MONITOR_JSON" 2>/dev/null)"
+  [[ -n "$monitor" ]] || die "monitor는 JSON 객체 하나여야 합니다" 2
+  bad="$(jq -r '
+    def int_ok: type == "number" and . == floor and . >= 0 and . <= 100000;
+    def str_ok($re): type == "string" and test($re);
+    if (.provider | IN("datadog", "sentry") | not) then "보드에서는 datadog·sentry만 저장합니다 (command는 /autofix setup)"
+    else
+      (if .provider == "datadog" then ["query", "site"] else ["org", "project", "environment", "base_url"] end
+        + ["provider", "min_events", "window_hours", "deploy_branch", "grace_hours", "quiet_hours"]) as $allowed
+      | ([keys[] | select(IN($allowed[]) | not)] | first) as $extra
+      | if $extra then "알 수 없는 monitor 필드: \($extra)"
+        elif .provider == "datadog" and ((.query | type == "string" and length > 0 and length <= 2000) | not) then "monitor.query가 필요합니다"
+        elif .provider == "sentry" and ((.org | str_ok("^[A-Za-z0-9._-]+$")) and (.project | str_ok("^[A-Za-z0-9._-]+$")) | not)
+          then "monitor.org·monitor.project가 필요합니다"
+        elif .provider == "sentry" and has("environment") and ((.environment | type == "string" and length <= 200) | not)
+          then "monitor.environment가 올바르지 않습니다"
+        elif any([.min_events, .window_hours, .grace_hours, .quiet_hours][]; . != null and (int_ok | not))
+          then "min_events·window_hours·grace_hours·quiet_hours는 0 이상의 정수여야 합니다"
+        elif has("deploy_branch") and ((.deploy_branch | str_ok("^[A-Za-z0-9._/-]{1,200}$")) | not) then "deploy_branch가 올바르지 않습니다"
+        else empty end
+    end' <<<"$monitor" 2>/dev/null)" || bad="monitor를 읽지 못했습니다"
+  [[ -z "$bad" ]] || die "$bad" 2
+  case "$(cfg provider)" in
+    sentry) problem="$( ( sentry_setup ) 2>&1 >/dev/null)" ;;
+    datadog) problem="$( ( datadog_setup ) 2>&1 >/dev/null)" ;;
+  esac
+  # 자격증명이 없다는 것만 저장을 막지 않는다. 전송처(site·base_url) 같은 설정 오류는 막는다.
+  case "$problem" in
+    ""|*"토큰 없음"*|*"키 없음"*) ;;
+    *) die "$problem" 4 ;;
+  esac
+  read_manifest
+  file="$(hm_monitor_file "$PROJECT_ID")"
+  [[ -n "$file" ]] || die "저장소의 project_id를 파일 이름으로 쓸 수 없습니다: $PROJECT_ID" 4
+  dir="$(dirname "$file")"
+  mkdir -p "$dir" || die "설정 폴더를 만들지 못했습니다: $dir" 3
+  tmp="$(mktemp "$dir/.monitor.XXXXXX")" || die "설정 파일을 쓰지 못했습니다: $dir" 3
+  { jq . <<<"$monitor" >"$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file"; } || { find "$tmp" -delete 2>/dev/null; die "설정 파일을 쓰지 못했습니다: $file" 3; }
+  jq -cn --arg p "$PROJECT_ID" --arg f "$file" --argjson m "$monitor" '{project:$p, file:$f, monitor:$m}'
+}
+
 [[ -n "$ROOT_DIR" && -d "$ROOT_DIR" ]] || usage
 if [[ "$action" == describe ]]; then
   command_describe
   exit 0
+fi
+if [[ "$action" == save ]]; then
+  [[ -n "$MONITOR_JSON" ]] || usage
+  command_save
+  exit $?
 fi
 load_monitor
 provider="$(cfg provider)"

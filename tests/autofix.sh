@@ -533,6 +533,8 @@ assert_eq 'service:"web worker" env:staging status:error' "$(sed -n 2p <<<"$AFD_
 assert_eq "|service:batch status:error" "$(sed -n 3p <<<"$AFD_DD" | jq -r '"\(.env)|\(.query)"')" "a service without env gets no env term"
 assert_contains "$(<"$AFD_STUB/http.log")" '"from":"now-6h"' "datadog discover honours --hours"
 assert_contains "$(<"$AFD_STUB/http.log")" '"query":"status:error"' "datadog discover aggregates error logs"
+# 실제 API는 group_by 정렬에 type이 없으면 400(input_validation_error: 'aggregation' Unrecognized parameter)을 낸다.
+assert_eq "2" "$(grep -o '"sort":{"aggregation":"count","order":"desc","type":"measure"}' "$AFD_STUB/http.log" | wc -l | tr -d ' ')" "datadog discover sorts groups by a count measure"
 AFD_SE="$(afd --provider sentry --org acme)"
 assert_eq "acme|api|production|42|5" "$(head -n 1 <<<"$AFD_SE" | jq -r '"\(.org)|\(.project)|\(.environment)|\(.events)|\(.issues)"')" \
   "sentry discover counts events and issues per project and environment"
@@ -549,6 +551,29 @@ assert_eq "4" "$AFD_RC" "discover without credentials is a config error"
 AFD_RC=0; afd --provider command >/dev/null 2>&1 || AFD_RC=$?
 assert_eq "2" "$AFD_RC" "discover supports only datadog and sentry"
 pass "monitor-fetch discover lists real service/env choices for setup"
+
+# save(#450): 보드 설정 폼이 만든 monitor를 개인 로컬 파일에만 쓴다. 검증에 걸리면 아무것도 쓰지 않는다.
+afs() { env -u SENTRY_AUTH_TOKEN -u HM_SENTRY_TOKEN -u DATADOG_API_KEY -u DATADOG_APP_KEY HARNESS_METRICS_DIR="$AFL_DATA" HARNESS_CLAUDE_SETTINGS=/nonexistent \
+  "$ROOT/scripts/monitor-fetch.sh" save --root "$AFL_REPO" --monitor "$1"; }
+afs_rc() { local rc=0; afs "$1" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
+AFS_FILE="$AFL_DATA/autofix/monitors/af-loc.json"
+for afs_bad in 'nope' '[1]' '{} {}' '{"provider":"datadog"}' '{"provider":"datadog","query":"q","foo":1}' '{"provider":"command","command":"tools/x.sh"}' \
+  '{"provider":"sentry","org":"a/b","project":"p"}' '{"provider":"datadog","query":"q","min_events":-1}' '{"provider":"datadog","query":"q","window_hours":1.5}' \
+  '{"provider":"datadog","query":"q","deploy_branch":"a b"}'; do
+  assert_eq "2" "$(afs_rc "$afs_bad")" "save rejects $afs_bad"
+done
+assert_eq "4" "$(afs_rc '{"provider":"datadog","query":"q","site":"evil.example.com"}')" "save keeps the datadog site rule"
+assert_eq "4" "$(afs_rc '{"provider":"sentry","org":"a","project":"b","base_url":"https://evil.example.com"}')" "save keeps the sentry host rule"
+[[ ! -e "$AFS_FILE" ]] || fail "a rejected save writes nothing"
+AFS_OUT="$(afs '{"provider":"datadog","query":"service:api env:prod status:error","window_hours":48}')"
+assert_eq "af-loc|$AFS_FILE" "$(jq -r '"\(.project)|\(.file)"' <<<"$AFS_OUT")" "save writes the repo's local monitor file even without credentials"
+assert_eq "service:api env:prod status:error|48" "$(jq -r '"\(.query)|\(.window_hours)"' "$AFS_FILE")" "save keeps the monitor as given"
+assert_eq "600" "$(stat -c %a "$AFS_FILE" 2>/dev/null || stat -f %Lp "$AFS_FILE")" "the monitor file is private"
+assert_eq "local|datadog" "$(afl_describe | jq -r '"\(.source)|\(.provider)"')" "describe reads what save wrote"
+assert_eq "2" "$(afs_rc '{"provider":"datadog","query":""}')" "a bad save after a good one fails"
+assert_eq "service:api env:prod status:error" "$(jq -r '.query' "$AFS_FILE")" "a failed save keeps the previous file"
+find "$AFS_FILE" -delete
+pass "monitor-fetch save writes a validated personal monitor file"
 
 # /autofix: 설정이 없으면 setup으로 넘어가고, setup 절차는 별도 파일에 둔다(수정 실행 때 setup 절차를 같이 읽지 않게).
 assert_file "$ROOT/skills/autofix/setup.md"
