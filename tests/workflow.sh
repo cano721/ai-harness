@@ -397,6 +397,27 @@ FAKE_CHECK="grep -q fixed feature.txt" start_and_approve fixcheck
 assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing driver-run check goes to repair, then review"
 assert_eq "deliver;repair;review" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "check failure skips the reviewer and repairs first"
 
+# 넓은 검사(final_checks)는 라운드마다 돌지 않고 리뷰가 깨끗해진 뒤 한 번 돈다. 실패하면 blocking으로 수리한다. (#462)
+FINAL_LOG="$DRIVER_TMP/final-checks.log"
+: >"$FINAL_LOG"
+FAKE_CHECK="printf 'fast\\n' >>'$FINAL_LOG'" FAKE_FINAL_CHECK="printf 'final\\n' >>'$FINAL_LOG'" start_and_approve final_once
+assert_eq "0:done:0" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a run with final checks reaches done"
+assert_eq "fast;final" "$(paste -sd ';' "$FINAL_LOG")" "fast checks run before the review and the broad check runs once after it"
+assert_eq "1:1" "$(run_state '"\(.checks | length):\(.final_checks | length)"')" "the approved final checks are kept apart from the per-round checks"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "final_checks" "the brief node is asked to split per-round and final checks"
+: >"$FINAL_LOG"
+FAKE_CHECK="printf 'fast\\n' >>'$FINAL_LOG'" FAKE_FINAL_CHECK="printf 'final\\n' >>'$FINAL_LOG'; grep -q fixed feature.txt" start_and_approve final_fails_once
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a failing final check goes to repair like a blocking finding"
+assert_eq "fast;final;final;fast" "$(paste -sd ';' "$FINAL_LOG")" "after repair the failed final check runs first and passing it on that tree is not repeated after the re-review"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "required check failed" "repair receives the final check failure"
+# 넓은 검사가 파일을 만들면 그 변경은 리뷰를 받지 않았으므로 통과가 아니다 — 수리·재리뷰를 거친다.
+FAKE_FINAL_CHECK="echo generated >side.txt" start_and_approve final_side_effect
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a final check that changes files goes through repair and review again"
+assert_contains "$(<"$FAKE_LOG.repair.prompt")" "changed files that were not reviewed: side.txt" "repair is told which files the final checks changed"
+# 넓은 검사가 checks와 겹치면 한 번만 둔다.
+FAKE_FINAL_CHECK="true" start_and_approve final_duplicate
+assert_eq "0:0" "$DRIVER_RC:$(run_state '.final_checks | length')" "a final check already in checks is not repeated"
+
 # 같은 정규화 실패가 연속되면 수리를 더 반복하지 않고 그래프의 repair -> user_decision 전이로 사람에게 넘긴다.
 # 검사 출력은 파일로 둬서 종료 사유의 시그니처가 로그에 찍힌 명령 문자열이 아니라 실패 출력에서 왔음을 확인한다.
 STALL_OUT="$DRIVER_TMP/stall-output"

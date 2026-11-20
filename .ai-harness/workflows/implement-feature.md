@@ -26,7 +26,16 @@
 
 모든 slice 뒤 reviewer가 검토하고, blocking finding이 0개가 될 때까지 **리뷰 → 원인별 수정 → 검증 → 재리뷰**를 반복한다. 한도는 그래프 수리 한도를 따르고, 넘으면 사용자 판단으로 올린다.
 
-## 4. 검증 명령 (완료 증거 — PR 직전 한 번)
+## 4. 검증 명령
+
+라운드마다(리뷰·수리 때마다, Brief의 `checks`):
+
+```bash
+bash tests/run.sh --changed
+bash tests/run.sh --lint
+```
+
+리뷰가 깨끗해진 뒤 한 번(완료 증거 — PR 직전, Brief의 `final_checks`):
 
 ```bash
 bash tests/run.sh

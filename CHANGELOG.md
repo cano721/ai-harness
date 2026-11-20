@@ -6,6 +6,16 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 동작 변경
+
+- **러너 리뷰 단계가 라운드마다 전체 회귀를 돌리지 않습니다** — `/implement-feature`·`/fix-bug` 러너의 Brief가 검증 명령을 둘로 나눕니다. `checks`(바뀐 영역 테스트·린트)는 리뷰·수리 때마다, `final_checks`(전체 회귀·전체 빌드)는 리뷰에서 blocking이 없을 때 한 번만 돕니다. 넓은 검사가 실패하면 blocking으로 수리하고, 수리 뒤 실패한 명령부터 다시 돌립니다. 예전처럼 `final_checks` 없이 만든 Brief는 동작이 같습니다. (#462)
+
+### 업데이트 후 해야 할 일
+
+- 프로젝트 워크플로 문서(`.ai-harness/workflows/implement-feature.md`·`fix-bug.md`)의 검증 명령 절을 "라운드마다 / 리뷰가 깨끗해진 뒤 한 번"으로 나눠 적으면 Brief가 그대로 옮깁니다. 나누지 않아도 동작은 예전과 같습니다. 러너 파일은 `/ai-harness:harness-init --sync`로 받습니다. (#462)
+
 ## v0.90.0 (2026-11-20)
 ### 동작 변경
 

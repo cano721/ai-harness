@@ -336,7 +336,7 @@ check_baseline() {
     else
       git -C "$REPO" status --short --untracked-files=all | sed 's/^/  /'
     fi
-    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
+    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) + (.final_checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
   } >"$report"
   while IFS= read -r line; do log "$line"; done <"$report"
   if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
@@ -534,9 +534,18 @@ failed_check_commands() { jq -c '[.[] | select(.exit != 0) | .command] | reduce 
 verify_checks() { # label → 통과면 0. 실패면 findings·다음에 다시 돌릴 check·실패 시그니처를 기록하고 1
   local label="$1" commands file
   commands="$(state '.repair_checks // []')"
-  if [[ "$(state .attempts)" -gt 0 && "$commands" != "[]" ]] && ! run_checks "$label-failed" "$commands"; then
+  local before_failed=""
+  [[ "$(state .attempts)" -gt 0 && "$commands" != "[]" ]] && before_failed="$(worktree_tree)"
+  if [[ -n "$before_failed" ]] && ! run_checks "$label-failed" "$commands"; then
     file="$RUN/$label-failed.checks.json"
-  elif run_checks "$label"; then
+  elif {
+    # 수리 뒤 다시 돌린 명령이 넓은 검사를 모두 덮고 파일을 바꾸지 않았으면, 같은 트리에서 넓은 검사를 또 돌리지 않는다.
+    if [[ -n "$before_failed" && "$(worktree_tree)" == "$before_failed" ]] \
+      && jq -e --argjson r "$commands" '(.final_checks // []) as $f | ($f | length) > 0 and ($f - $r | length) == 0' "$STATE" >/dev/null; then
+      state_set '.final_checked_tree = $t' --arg t "$before_failed"
+    fi
+    run_checks "$label"
+  }; then
     state_set '.repair_checks = [] | .repair_failure_signature = "" | .repair_failure_streak = 0'
     return 0
   else
@@ -586,6 +595,7 @@ print_brief() {
   cat "$RUN/brief.md"
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
   state '.checks[] | "- " + .'
+  state 'if (.final_checks // [] | length) > 0 then "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) else empty end'
   jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
@@ -722,7 +732,7 @@ await_repair() { # node edge
       state '{findings, checks}' >"$RUN/brief.json"
       state '"## 수리할 blocking finding\n\n" + (.findings | map("- " + (split("\n") | first)) | join("\n"))' >"$RUN/brief.md"
       state_set '.presented_at = $t | .brief_hash = $h' --arg t "$(now_utc)" \
-        --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+        --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
     fi
     if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
       print_brief auto >&2
@@ -753,9 +763,37 @@ ui_backstop() {
     | "Screen rendered by \(.): open the page that uses it; derive the user role, entry -> key action -> success check -> return, and the states from the brief or review scope"))' --arg f "$ui_files"
 }
 
+# 넓은 검사(final_checks, #462): 라운드마다 돌리지 않고 리뷰가 blocking 없이 끝난 트리에서 한 번만 돌린다(feature·bug-fix의 brief만 낸다).
+# 실패하면 그 출력이 blocking finding이 되어 수리로 간다. 수리 뒤에는 실패한 명령을 먼저 다시 돌린다(repair_checks).
+# 검사가 파일을 만들거나 고치면 그 변경은 리뷰를 받지 않았으므로 통과로 치지 않고 수리·재리뷰로 보낸다.
+final_gate() { # → 통과(또는 넓은 검사 없음)면 0, 실패면 findings를 기록하고 1
+  local label before after changed
+  [[ "$(state '.final_checks // [] | length')" -gt 0 ]] || return 0
+  before="$(worktree_tree)"
+  [[ "$(state '.final_checked_tree // ""')" != "$before" ]] || return 0
+  label="final-$(state .attempts)"
+  if run_checks "$label" "$(state '.final_checks')"; then
+    after="$(worktree_tree)"
+    if [[ "$after" == "$before" ]]; then
+      state_set '.final_checked_tree = $t' --arg t "$after"
+      return 0
+    fi
+    changed="$(git -C "$REPO" diff --name-only "$before" "$after" | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+    log "final checks changed files that were not reviewed: $changed"
+    state_set '.findings = [$m] | .needs_user_decision = false | .repair_checks = []' \
+      --arg m "the final checks changed files that were not reviewed: $changed. Keep the change if it belongs to the work (it is reviewed next), otherwise make the checks leave the tree as it was or ignore their output"
+    return 1
+  fi
+  state_set '.findings = $f | .needs_user_decision = false | .repair_checks = $c' \
+    --argjson f "$(check_findings "$label")" --argjson c "$(failed_check_commands "$RUN/$label.checks.json")"
+  note_check_failure "$RUN/$label.checks.json"
+  return 1
+}
+
 # 리뷰 노드(review·classify·re_review)의 출구. findings·needs_user_decision·ui_scenarios는 상태에 있다.
 route_review() { # node
   local node="$1"
+  if [[ "$(state '.findings | length')" -eq 0 ]]; then final_gate || true; fi
   ui_backstop
   if [[ "$(state '.findings | length')" -gt 0 ]]; then
     case "$node" in
@@ -830,7 +868,7 @@ You are the publish node. The approved change below passed the checks the driver
 - Never merge (under merge the driver merges later, once the merge conditions hold), never force-push, never push to the base branch under pr-only or merge, and do not change file contents: the committed tree must equal the reviewed one.
 Return only JSON matching the schema; pr_url is empty when no PR was opened.
 
-Checks the driver ran: $(state '.checks | join(" ; ")')
+Checks the driver ran: $(state '.checks + (.final_checks // []) | join(" ; ")')
 
 $(brief_context)" "$PUBLISH_SCHEMA"
   out="$RUN/publish.out"
@@ -1361,7 +1399,7 @@ brief_prompt() {
   if [[ "$WORKFLOW" == bug-fix ]]; then
     role="You are the brief node of the bug-fix graph. Do not edit any file.
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
-Put the exact shell commands that must pass before the fix is done in checks, including the regression check. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check."
+Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
     inputs="Bug report:
 $(state .request)
 
@@ -1373,7 +1411,7 @@ $(cat "$RUN/reproduce.out")"
   else
     role="You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
-Put the exact shell commands that must pass before the feature is done in checks. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check."
+Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
     inputs="Request:
 $(state .request)
 
@@ -1447,7 +1485,7 @@ polish_brief() { # selected-ids-json
     "$RUN/brief.json" >"$RUN/brief.md"
   printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
   state_set '.selected = $s | .presented_at = $t | .feedback = null | .approval = null' --argjson s "$1" --arg t "$(now_utc)"
-  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
 }
 
 # 측정의 레이아웃 검사 결과를 프롬프트용 문구로. baseline 또는 last(마지막 측정).
@@ -1668,7 +1706,7 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
         run_node brief "brief-$(state '.history | length')" "$(brief_prompt)" "$BRIEF_SCHEMA"
         brief="$RUN/brief-$(state '.history | length').out"
         # human은 open_questions, auto는 decisions·needs_human을 낸다. auto에서 예전 형식이 오면 승인 노드가 사람을 기다린다.
-        jq -e '(.brief | type) == "string" and (.checks | type) == "array"
+        jq -e '(.brief | type) == "string" and (.checks | type) == "array" and ((.final_checks // []) | type) == "array"
           and ((.open_questions | type) == "array"
             or ((.needs_human | type) == "array" and (.decisions | type) == "array"
               and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))' \
@@ -1681,9 +1719,11 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
         printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
+          | .final_checks = (($b[0].final_checks // []) | map(select(length > 0)) | unique) - .checks
+          | .final_checked_tree = null
           | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
-        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
         [[ "$(state '.checks | length')" -gt 0 ]] \
           || finish incomplete 30 "the brief has no verification command; revise with a check or start again with --check"
         go brief ""
@@ -2284,16 +2324,16 @@ fi
 
 if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","decisions","needs_human"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","decisions","needs_human"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
   "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["question","choice","rationale"],
    "properties":{"question":{"type":"string"},"choice":{"type":"string"},"rationale":{"type":"string"}}}},
   "needs_human":{"type":"array","items":{"type":"string"}}}}
 EOF
 else
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","open_questions"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","open_questions"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
   "open_questions":{"type":"array","items":{"type":"string"}}}}
 EOF
 fi
