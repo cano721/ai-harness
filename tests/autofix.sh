@@ -533,6 +533,8 @@ assert_eq 'service:"web worker" env:staging status:error' "$(sed -n 2p <<<"$AFD_
 assert_eq "|service:batch status:error" "$(sed -n 3p <<<"$AFD_DD" | jq -r '"\(.env)|\(.query)"')" "a service without env gets no env term"
 assert_contains "$(<"$AFD_STUB/http.log")" '"from":"now-6h"' "datadog discover honours --hours"
 assert_contains "$(<"$AFD_STUB/http.log")" '"query":"status:error"' "datadog discover aggregates error logs"
+# 실제 API는 group_by 정렬에 type이 없으면 400(input_validation_error: 'aggregation' Unrecognized parameter)을 낸다.
+assert_eq "2" "$(grep -o '"sort":{"aggregation":"count","order":"desc","type":"measure"}' "$AFD_STUB/http.log" | wc -l | tr -d ' ')" "datadog discover sorts groups by a count measure"
 AFD_SE="$(afd --provider sentry --org acme)"
 assert_eq "acme|api|production|42|5" "$(head -n 1 <<<"$AFD_SE" | jq -r '"\(.org)|\(.project)|\(.environment)|\(.events)|\(.issues)"')" \
   "sentry discover counts events and issues per project and environment"

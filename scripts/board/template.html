@@ -898,7 +898,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <div class="ds-field" id="msitef"><label class="ds-label" for="msite">Datadog 사이트</label><select class="ds-input" id="msite"></select></div>
     <div class="ds-field" id="morgf" hidden><span class="ds-label" id="morg-l">Sentry 조직</span><div class="b-mrows" id="morgs" role="radiogroup" aria-labelledby="morg-l"></div></div>
     <div class="ds-cluster"><button type="button" class="ds-btn" id="mload"></button><span class="ds-caption" id="mstate" role="status"></span></div>
-    <div class="ds-field" id="mrowsf" hidden><span class="ds-label" id="mrows-l"></span><div class="b-mrows" id="mrows" aria-labelledby="mrows-l"></div><span class="ds-caption" id="mrows-help"></span></div>
+    <div class="ds-field" id="mrowsf" hidden><span class="ds-label" id="mrows-l"></span><input class="ds-input" id="mfilter" type="search" aria-label="이름으로 좁히기" placeholder="이름으로 좁히기 (비우면 전체)"><div class="b-mrows" id="mrows" aria-labelledby="mrows-l"></div><span class="ds-caption" id="mrows-help"></span></div>
     <div class="ds-rows" id="moptrow" hidden><div class="ds-row">
       <button type="button" class="ds-row__head" id="mopt-h" aria-expanded="false" aria-controls="mopts"><svg class="ds-icon ds-row__chevron" aria-hidden="true"><use href="#i-chevron"/></svg><span class="ds-row__title">세부 기준 (비우면 기본값)</span></button>
       <div class="ds-row__detail b-mopts" id="mopts" hidden>
@@ -2891,11 +2891,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (mf.rows) {
       $('mrows-l').textContent = `최근 ${mf.hours === 24 ? '24시간' : '7일'} 에러 (${dd ? '서비스 · 환경' : '프로젝트 · 환경'}, 많은 순)`;
       $('mrows').setAttribute('role', dd ? 'group' : 'radiogroup');
-      $('mrows-help').textContent = dd ? '여러 줄을 고르면 한 설정으로 묶습니다.' : 'Sentry는 프로젝트·환경 한 줄만 고릅니다.';
-      if (!mf.rows.length) $('mrows').replaceChildren(el('p', 'ds-caption b-line', `최근 ${mf.hours === 24 ? '24시간' : '7일'} 동안 에러가 없습니다.${mf.hours === 24 ? ' 기간을 넓혀 다시 불러오세요.' : ' 이 도구에 에러가 쌓이는지 확인하세요.'}`));
-      else $('mrows').replaceChildren(...mf.rows.map((r, idx) => {
-        const l = el('label'); const i = el('input'); i.type = dd ? 'checkbox' : 'radio'; i.name = 'mrow'; i.checked = mf.picked.has(idx);
-        i.onchange = () => { if (!dd) mf.picked.clear(); if (i.checked) mf.picked.add(idx); else mf.picked.delete(idx); mRender(); };
+      $('mrows-help').textContent = (dd ? '여러 줄을 고르면 한 설정으로 묶습니다.' : 'Sentry는 프로젝트·환경 한 줄만 고릅니다.') + (mf.rows.length ? ` 전체 ${mf.rows.length}줄.` : '');
+      const q = $('mfilter').value.trim().toLowerCase();
+      const shown = mf.rows.map((r, idx) => [r, idx]).filter(([r, idx]) => mf.picked.has(idx) || !q || (dd ? `${r.service} ${r.env}` : `${r.project} ${r.environment}`).toLowerCase().includes(q));
+      $('mfilter').hidden = !mf.rows.length;
+      if (mf.rows.length && !shown.length) $('mrows').replaceChildren(el('p', 'ds-caption b-line', `"${$('mfilter').value.trim()}"이(가) 들어간 줄이 없습니다. 검색어를 지우면 ${mf.rows.length}줄이 모두 보입니다.`));
+      else if (!mf.rows.length) $('mrows').replaceChildren(el('p', 'ds-caption b-line', `최근 ${mf.hours === 24 ? '24시간' : '7일'} 동안 에러가 없습니다.${mf.hours === 24 ? ' 기간을 넓혀 다시 불러오세요.' : ' 이 도구에 에러가 쌓이는지 확인하세요.'}`));
+      else $('mrows').replaceChildren(...shown.map(([r, idx]) => {
+        const l = el('label'); const i = el('input'); i.type = dd ? 'checkbox' : 'radio'; i.name = 'mrow'; i.checked = mf.picked.has(idx); i.dataset.idx = idx;
+        // 다시 그려도 방금 누른 칸에 포커스를 돌려 키보드로 이어서 고를 수 있게 한다.
+        i.onchange = () => { if (!dd) mf.picked.clear(); if (i.checked) mf.picked.add(idx); else mf.picked.delete(idx); mRender(); const n = $('mrows').querySelector(`input[data-idx="${idx}"]`); if (n) n.focus(); };
         const name = dd ? `${r.service} · ${r.env || '환경 없음'}` : `${r.project} · ${r.environment || '전체 환경'}`;
         const cnt = dd ? `${r.count.toLocaleString()}건` : `${r.events.toLocaleString()}건 · 이슈 ${r.issues}개`;
         const rec = mf.recommend && mf.recommend(r) ? el('span', 'ds-chip', '지금 설정') : null;
@@ -2926,12 +2931,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     $('msite').value = 'datadoghq.com';
     for (const k of [...MOPT_INT, 'deploy_branch']) { $('mo-' + k).value = ''; $('mo-' + k).removeAttribute('aria-invalid'); }
     $('mopt-h').setAttribute('aria-expanded', 'false'); $('mopts').hidden = true;
+    $('mfilter').value = r.name || '';
     mRender();
     $('mdlg').showModal();
   }
   $('msite').onchange = () => { mf.rows = null; mf.picked.clear(); mf.msg = ''; mRender(); };
   $('mopt-h').onclick = () => { const open = $('mopt-h').getAttribute('aria-expanded') !== 'true'; $('mopt-h').setAttribute('aria-expanded', String(open)); $('mopts').hidden = !open; };
   $('mopts').addEventListener('input', () => mRender());
+  $('mfilter').addEventListener('input', () => { if (mf) mRender(); });
   $('mload').onclick = async () => {
     if ($('mload').getAttribute('aria-busy') === 'true') return;
     const dd = mf.provider === 'datadog';

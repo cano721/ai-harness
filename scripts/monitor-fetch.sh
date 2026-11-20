@@ -291,7 +291,7 @@ datadog_discover() {
   http POST "$DD_BASE/api/v2/logs/analytics/aggregate" \
     "$(jq -cn --arg from "now-${HOURS}h" '{filter:{query:"status:error",from:$from,to:"now"},
       compute:[{aggregation:"count",type:"total"}],
-      group_by:[{facet:"service",limit:50,sort:{aggregation:"count",order:"desc"}},{facet:"env",limit:20,sort:{aggregation:"count",order:"desc"}}]}')" \
+      group_by:[{facet:"service",limit:200,sort:{aggregation:"count",order:"desc",type:"measure"}},{facet:"env",limit:20,sort:{aggregation:"count",order:"desc",type:"measure"}}]}')" \
     | jq -c "$DD_TERM"' [.data.buckets[]? | {service: (.by.service // "" | tostring), env: (.by.env // "" | tostring),
         count: ((.computes.c0 // 0) | tonumber? // 0)}
         | select(.service != "")] | sort_by(-.count)[]
