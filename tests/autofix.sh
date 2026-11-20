@@ -98,6 +98,17 @@ AF_DD_META="$(jq -c '.meta' <<<"$AF_DD")"
 jq '{data:(.data[0:2] | map(.attributes.timestamp = "2999-01-01T00:00:00Z"))}' "$AF_STUB/dd-logs.json" >"$AF_STUB/dd-count.json"
 assert_eq "true|2" "$(af_fetch count --root "$AF_BAD" --meta "$AF_DD_META" --since 2026-10-29T00:00:00Z | jq -r '"\(.seen)|\(.count)"')" "datadog recurrence matches the stored group key"
 assert_contains "$(tail -n 1 "$AF_STUB/http.log")" "logs/events/search" "datadog count searches logs"
+AF_DD_SIG="$(jq -r '.signature' <<<"$AF_DD")"
+# 스택 프레임으로 묶는 키는 제목 정리(#460)와 무관하게 그대로다 — 이미 추적 중인 시그니처가 바뀌지 않게.
+assert_eq "datadog:013e27fae9e43ee6" "$AF_DD_SIG" "frame-grouped datadog signatures stay the same"
+# 로그 패턴을 message에 통째로 싣는 앱(#460): 시각·레벨·trace_id 앞머리를 걷어 낸 본문이 제목이고,
+# 스택이 없어도 trace_id 값이 줄마다 달라 묶음이 갈라지지 않는다.
+jq -n '{data:[range(11) as $i | {attributes:{service:"api",timestamp:"2026-10-28T0\($i % 10):00:00Z",
+  message:"2026-10-28 0\($i % 10):00:0\($i % 10).123 ERROR trace_id:\(("abcdef" | .[($i % 6):($i % 6 + 1)]) * 32) span_id:75026564392257433\($i) - KafkaDltHandler:44: [DLT] topic=orders-dlt offset=\(1000 + $i)",
+  attributes:{}}}]}' >"$AF_STUB/dd-logs.json"
+AF_DD2="$(af_fetch list --root "$AF_BAD")"
+assert_eq "1|11" "$(printf '%s\n' "$AF_DD2" | jq -sr '"\(length)|\(.[0].count)"')" "stackless logs with per-line trace ids group together"
+assert_eq "KafkaDltHandler:44: [DLT] topic=orders-dlt offset=1000" "$(jq -r '.title' <<<"$AF_DD2")" "the title drops the log line's time, level and trace ids"
 pass "monitor-fetch groups datadog logs into stable signatures"
 
 # command 어댑터: 저장소 안 스크립트가 같은 형식을 낸다.
