@@ -129,10 +129,13 @@ case "$node:$scenario" in
   brief:ui_*) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[],
     ui_scenarios:["심사자: 승인 대기 목록 진입 -> 반려 사유 입력 후 반려 -> 반려됨 확인 -> 목록 복귀 (접힌 기본 상태, 데스크톱·390px, 라이트)"]}' >"$out" ;;
   brief:*)
+    # FAKE_FINAL_CHECK: 리뷰가 깨끗해진 뒤 한 번 도는 넓은 검사(final_checks). 없으면 예전 brief 모양 그대로.
     if [[ -n "$auto" ]]; then
-      jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], decisions:[], needs_human:[]}' >"$out"
+      jq -n --arg c "$check" --arg f "${FAKE_FINAL_CHECK:-}" '{brief:"# Brief\n- add feature.txt", checks:[$c], decisions:[], needs_human:[]}
+        + if $f == "" then {} else {final_checks:[$f]} end' >"$out"
     else
-      jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[]}' >"$out"
+      jq -n --arg c "$check" --arg f "${FAKE_FINAL_CHECK:-}" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[]}
+        + if $f == "" then {} else {final_checks:[$f]} end' >"$out"
     fi ;;
   deliver:noop) printf 'nothing\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
