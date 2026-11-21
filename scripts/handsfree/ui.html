@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>핸즈프리 · 음성으로 Claude 세션 조작</title>
+<style>
+  :root {
+    --bg: #f3f4f7; --card: #ffffff; --raise: #f7f8fa; --ink: #15171c; --soft: #5d6470; --faint: #98a0ac; --line: #e3e6ec;
+    --accent: #5458e8; --accent-2: #8b5cf6; --accent-bg: #ecedfd;
+    --go: #0f9f66; --go-bg: #e2f5ec; --wait: #b8730a; --wait-bg: #fcf1dd; --wait-line: #f0d6a2;
+    --stop: #d4473d; --stop-bg: #fce8e6; --idle: #8a919c; --idle-bg: #eef0f3; --meter: #e2e5ea;
+    --shadow: 0 1px 2px rgba(20, 22, 30, .05), 0 10px 30px -16px rgba(20, 22, 30, .18);
+    --glow: rgba(84, 88, 232, .10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e0f12; --card: #16181c; --raise: #1c1e23; --ink: #eceef2; --soft: #a2a8b3; --faint: #6a707b; --line: #25272e;
+      --accent: #8d8fff; --accent-2: #b08cff; --accent-bg: #22234a;
+      --go: #3fd08f; --go-bg: #11291d; --wait: #f1b54d; --wait-bg: #2e240e; --wait-line: #4d3c14;
+      --stop: #ff7b6e; --stop-bg: #351715; --idle: #7e8590; --idle-bg: #20222788; --meter: #262931;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px -18px rgba(0, 0, 0, .8);
+      --glow: rgba(141, 143, 255, .10);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e0f12; --card: #16181c; --raise: #1c1e23; --ink: #eceef2; --soft: #a2a8b3; --faint: #6a707b; --line: #25272e;
+    --accent: #8d8fff; --accent-2: #b08cff; --accent-bg: #22234a;
+    --go: #3fd08f; --go-bg: #11291d; --wait: #f1b54d; --wait-bg: #2e240e; --wait-line: #4d3c14;
+    --stop: #ff7b6e; --stop-bg: #351715; --idle: #7e8590; --idle-bg: #20222788; --meter: #262931;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px -18px rgba(0, 0, 0, .8);
+    --glow: rgba(141, 143, 255, .10);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); min-height: 100vh;
+         background: radial-gradient(1200px 420px at 50% -120px, var(--glow), transparent 70%), var(--bg);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; min-width: 0; box-shadow: var(--shadow); }
+  h2 { font-size: 12px; font-weight: 700; color: var(--faint); margin: 0 0 10px; letter-spacing: .04em; }
+  [hidden] { display: none !important; }
+  button { font: inherit; }
+
+  /* ── 머리말 ── */
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 38px; height: 38px; border-radius: 11px; flex: none; display: grid; place-items: center; color: #fff;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 6px 18px -6px var(--accent); }
+  .logo svg { width: 20px; height: 20px; }
+  .brand-text { flex: 1; min-width: 0; }
+  .brand h1 { font-size: 18px; margin: 0; letter-spacing: -.02em; line-height: 1.2; }
+  .brand p { margin: 1px 0 0; color: var(--soft); font-size: 12.5px; }
+  .ghost { border: 1px solid var(--line); background: var(--card); color: var(--soft); font-size: 12px; cursor: pointer;
+           padding: 5px 11px; border-radius: 999px; box-shadow: var(--shadow); }
+  .ghost:hover { color: var(--ink); }
+
+  /* ── 상태 막대: 지금 상태의 색이 왼쪽에서 번진다 ── */
+  #hero { --tint: var(--idle-bg); --tone: var(--idle);
+          position: sticky; top: 10px; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+          background: linear-gradient(100deg, var(--tint) 0%, var(--card) 55%); backdrop-filter: blur(8px); }
+  #hero[data-phase="idle"] { --tint: var(--go-bg); --tone: var(--go); }
+  #hero[data-phase="hearing"] { --tint: var(--go-bg); --tone: var(--go); }
+  #hero[data-phase="transcribing"], #hero[data-phase="acting"] { --tint: var(--wait-bg); --tone: var(--wait); }
+  #hero[data-phase="off"] { --tint: var(--stop-bg); --tone: var(--stop); }
+  #hero[data-armed="1"] { --tint: var(--accent-bg); --tone: var(--accent); }
+  #lamp { position: relative; width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center;
+          background: var(--card); color: var(--tone); box-shadow: inset 0 0 0 2px var(--tone); }
+  #lamp svg { width: 19px; height: 19px; }
+  #hero[data-phase="hearing"] #lamp, #hero[data-armed="1"] #lamp { background: var(--tone); color: #fff; }
+  #lamp::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--tone); opacity: 0; }
+  #hero[data-phase="hearing"] #lamp::after, #hero[data-armed="1"] #lamp::after { animation: ring 1.3s ease-out infinite; }
+  @keyframes ring { from { transform: scale(1); opacity: .6; } to { transform: scale(1.7); opacity: 0; } }
+  .status { flex: 1; min-width: 0; }
+  #phase { font-size: 17px; font-weight: 700; line-height: 1.3; letter-spacing: -.01em; }
+  #hint { color: var(--soft); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hint b { color: var(--accent); font-weight: 600; }
+  .flags { display: flex; gap: 4px; }
+  .flag { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
+  .mic { width: 180px; flex: none; }
+  .meter { position: relative; height: 8px; border-radius: 999px; background: var(--meter); overflow: hidden; }
+  .fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 999px; background: var(--idle); transition: width .08s linear; }
+  .meter.loud .fill { background: linear-gradient(90deg, var(--go), #7be0b1); box-shadow: 0 0 10px var(--go); }
+  .meter.stale { opacity: .4; }
+  .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); opacity: .45; }
+  .mic-note { font-size: 11px; color: var(--faint); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (prefers-reduced-motion: reduce) { #lamp::after, .dot { animation: none !important; } .fill { transition: none !important; } }
+
+  /* ── 알림 띠 ── */
+  .notice { border-radius: 12px; padding: 11px 16px; background: var(--wait-bg); border: 1px solid var(--wait-line); box-shadow: var(--shadow); }
+  .notice.blue { background: var(--accent-bg); border-color: transparent; }
+  .notice-title { font-size: 12px; font-weight: 700; color: var(--wait); margin-bottom: 4px; }
+  .notice.blue .notice-title { color: var(--accent); }
+  .ask-row { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }
+  .ask-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ask-row .q { color: var(--soft); }
+  .ask-row .say-hint { white-space: nowrap; font-size: 13px; }
+  .ask-row .say-hint b, .notice b { color: var(--wait); }
+  .notice.blue b { color: var(--accent); }
+
+  /* ── 탭: 둥근 단추 묶음 ── */
+  .tabbar { display: flex; align-items: center; }
+  .tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--meter); overflow-x: auto; }
+  .tabs button { font-size: 13.5px; font-weight: 600; color: var(--soft); background: none; border: 0;
+                 padding: 6px 16px; border-radius: 9px; cursor: pointer; white-space: nowrap; transition: color .15s; }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-selected="true"] { color: var(--ink); background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .tabs button:focus-visible, .ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .count { display: inline-block; margin-left: 5px; padding: 0 6px; border-radius: 999px; font-size: 11px; background: var(--wait); color: var(--card); }
+  .panel { display: grid; gap: 14px; min-width: 0; }
+
+  /* ── 지금: 방금 들은 말 ── */
+  .last-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .last-head h2 { margin: 0; flex: 1; }
+  .when { font-size: 12px; color: var(--faint); }
+  #last-said { font-size: 21px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; letter-spacing: -.01em;
+               padding-left: 12px; border-left: 3px solid var(--accent); }
+  #last-said.empty { font-size: 14px; font-weight: 400; color: var(--soft); border-left-color: var(--line); }
+  .tag { font-size: 11px; border-radius: 6px; padding: 1px 8px; background: var(--accent-bg); color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .tag.plain { background: var(--idle-bg); color: var(--soft); font-weight: 500; }
+  .outcome { margin-top: 10px; display: grid; gap: 3px; font-size: 13px; padding-left: 15px; }
+  .ok { color: var(--go); }
+  .no { color: var(--stop); }
+  #missed { margin-top: 8px; font-size: 12px; color: var(--faint); padding-left: 15px; }
+
+  /* ── 지금: 세션 타일 ── */
+  #sessions { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); }
+  .tile { display: flex; gap: 10px; align-items: flex-start; padding: 10px 11px; border-radius: 11px; min-width: 0;
+          background: var(--raise); border: 1px solid transparent; transition: border-color .15s, transform .15s; }
+  .tile:hover { border-color: var(--line); transform: translateY(-1px); }
+  .tile.current { border-color: var(--accent); background: var(--accent-bg); box-shadow: 0 0 0 3px var(--glow); }
+  .tile.wait { border-color: var(--wait-line); background: var(--wait-bg); }
+  .num { width: 24px; height: 24px; border-radius: 7px; flex: none; background: var(--card); color: var(--soft); border: 1px solid var(--line);
+         display: grid; place-items: center; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tile.current .num { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; border-color: transparent; }
+  .tile-body { min-width: 0; flex: 1; }
+  .tile-name { font-size: 13px; font-weight: 600; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .tile-state { font-size: 11px; color: var(--faint); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); flex: none; }
+  .tile-state.work { color: var(--go); }
+  .tile-state.work .dot { background: var(--go); animation: blink 1.2s ease-in-out infinite; }
+  .tile-state.wait { color: var(--wait); }
+  .tile-state.wait .dot { background: var(--wait); }
+  @keyframes blink { 50% { opacity: .25; } }
+  .tile .ask { font-size: 11px; color: var(--wait); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--soft); font-size: 13px; }
+
+  /* ── 기록 ── */
+  .event { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .event:last-child { border-bottom: 0; }
+  .time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .event .said { overflow-wrap: anywhere; }
+  .event .said .tag { margin-left: 6px; }
+  .event .sub { margin-top: 1px; overflow-wrap: anywhere; }
+  .event.dim .said { color: var(--faint); }
+
+  /* ── 설정 ── */
+  .grid2 { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+  .set-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--soft); }
+  .set-bar .grow { flex: 1; }
+  .field { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 130px 52px; gap: 4px 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .card h2 + .field { border-top: 0; }
+  .field.bool { grid-template-columns: minmax(0, 1fr) auto; }
+  .field label { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: help; }
+  .field-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; text-align: right; }
+  .field input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
+  /* 설명은 아래로 펼치지 않고 말풍선으로 띄운다. 자리를 차지하지 않아 줄이 밀리지 않는다. */
+  .field-help { position: absolute; left: 0; bottom: calc(100% - 2px); z-index: 20; max-width: 300px;
+                padding: 7px 11px; border-radius: 9px; font-size: 12px; line-height: 1.45;
+                background: var(--ink); color: var(--bg); box-shadow: 0 8px 24px rgba(0,0,0,.25);
+                opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(3px); transition: opacity .12s, transform .12s; }
+  .field:hover .field-help, .field:has(:focus-visible) .field-help { opacity: 1; visibility: visible; transform: none; transition-delay: .35s; }
+  .reset { border: 0; background: none; color: var(--accent); font-size: 11px; cursor: pointer; text-decoration: underline; padding: 0; }
+  .saved { font-size: 11px; color: var(--go); }
+  .saved.err { color: var(--stop); }
+  .field .saved { grid-column: 1 / -1; }
+  .switch { position: relative; width: 36px; height: 20px; flex: none; }
+  .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--meter); transition: background .15s; pointer-events: none; }
+  .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
+                        box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(16px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint-line { font-size: 12px; color: var(--soft); margin: -4px 0 10px; }
+  input[type=text], select, textarea { font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line);
+                                       background: var(--raise); color: var(--ink); min-width: 0; width: 100%; }
+  input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-bg); border-color: var(--accent); }
+  .wake-row { display: flex; gap: 8px; align-items: center; }
+  .wake-row input { max-width: 280px; }
+  details.more { margin-top: 10px; font-size: 12px; color: var(--soft); }
+  details.more summary { cursor: pointer; }
+  details.more textarea { margin-top: 6px; resize: vertical; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--soft); }
+  .suggest button { font-size: 12px; border: 1px dashed var(--accent); color: var(--accent); background: var(--accent-bg); border-radius: 999px; padding: 0 9px; cursor: pointer; }
+  .pair { display: grid; grid-template-columns: 140px minmax(0, 1fr) 24px; gap: 6px; padding: 3px 0; align-items: center; }
+  .x { border: 0; background: none; color: var(--faint); cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
+  .x:hover { color: var(--stop); }
+  .actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .btn { font-size: 12px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: var(--soft); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; }
+  .btn.warn { border-color: var(--stop); color: var(--stop); }
+
+  /* ── 말하는 법 ── */
+  #lead { margin: 0 0 12px; }
+  #lead b { color: var(--accent); }
+  .cols { columns: 2; column-gap: 28px; }
+  .group { break-inside: avoid; margin-bottom: 10px; }
+  .group h3 { font-size: 12px; color: var(--faint); margin: 4px 0 2px; letter-spacing: .04em; }
+  .row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .row .does { color: var(--soft); }
+  .says { display: flex; flex-wrap: wrap; gap: 3px 4px; }
+  .say { background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; font-size: 12px; }
+  .more-btn { color: var(--accent); cursor: pointer; background: none; border: 0; font-size: 12px; padding: 0 2px; }
+
+  @media (max-width: 720px) {
+    .brand p { display: none; }
+    #hero { flex-wrap: wrap; }
+    .mic { width: 100%; order: 3; }
+    .grid2 { grid-template-columns: 1fr; }
+    .cols { columns: 1; }
+    .field { grid-template-columns: minmax(0, 1fr) 100px 48px; }
+    .ask-row { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </div>
+    <div class="brand-text">
+      <h1>핸즈프리</h1>
+      <p>손을 쓰지 않고 말로 Claude Code 세션에 지시하고 승인하는 음성 입력 도구 · 이 맥에서만 열립니다</p>
+    </div>
+    <button type="button" class="ghost" id="theme" aria-label="밝게 또는 어둡게 전환">테마</button>
+  </header>
+  <section class="card" id="hero" data-phase="off">
+    <div id="lamp" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </div>
+    <div class="status">
+      <div id="phase" role="status">연결 중</div>
+      <div id="hint"></div>
+    </div>
+    <div class="flags" id="flags"></div>
+    <div class="mic">
+      <div class="meter" id="meter" role="meter" aria-label="마이크 음량" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="fill" id="fill"></div>
+        <div class="mark" id="mark"></div>
+      </div>
+      <div class="mic-note" id="mic-note">마이크</div>
+    </div>
+  </section>
+
+  <section class="notice blue" id="dictation" hidden aria-live="polite"></section>
+  <section class="notice" id="pending" hidden aria-live="polite"></section>
+  <section class="notice" id="waiting" hidden></section>
+
+  <div class="tabbar">
+    <nav class="tabs" role="tablist" aria-label="화면 나누기">
+      <button type="button" role="tab" id="tabbtn-now" aria-controls="tab-now" data-tab="now">지금</button>
+      <button type="button" role="tab" id="tabbtn-log" aria-controls="tab-log" data-tab="log">기록</button>
+      <button type="button" role="tab" id="tabbtn-settings" aria-controls="tab-settings" data-tab="settings">설정</button>
+      <button type="button" role="tab" id="tabbtn-guide" aria-controls="tab-guide" data-tab="guide">말하는 법</button>
+    </nav>
+  </div>
+
+  <div class="panel" id="tab-now" role="tabpanel" aria-labelledby="tabbtn-now">
+    <section class="card" aria-live="polite">
+      <div class="last-head"><h2>방금 들은 말</h2><span id="last-tags"></span><span class="when" id="last-when"></span></div>
+      <div id="last-said" class="empty">아직 들은 말이 없습니다</div>
+      <div class="outcome" id="last-results"></div>
+      <div id="missed"></div>
+    </section>
+    <section class="card">
+      <h2>세션</h2>
+      <div id="sessions"><div class="empty">읽는 중…</div></div>
+    </section>
+  </div>
+
+  <div class="panel" id="tab-log" role="tabpanel" aria-labelledby="tabbtn-log" hidden>
+    <section class="card">
+      <div id="events"><div class="empty">아직 없습니다</div></div>
+    </section>
+  </div>
+
+  <div class="panel" id="tab-settings" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
+    <section class="card">
+      <h2>호출어</h2>
+      <div class="wake-row">
+        <input type="text" id="wake-main" aria-label="호출어 대표 이름" placeholder="예: 헤이 클로드, 자비스">
+        <button type="button" class="btn primary" id="wake-save">저장</button>
+        <button type="button" class="reset" id="wake-reset">기본값으로</button>
+        <span class="saved" id="wake-saved"></span>
+      </div>
+      <div id="wake-suggest"></div>
+      <details class="more">
+        <summary id="wake-tip">함께 받을 말</summary>
+        <div class="hint-line" style="margin: 6px 0 0">받아쓰기가 호출어를 다르게 적는 모양입니다. 쉼표로 나눠 적습니다. ‘클로드’처럼 대화에 자주 나오는 말은 넣지 마세요.</div>
+        <textarea id="wake-more" rows="3" aria-label="함께 받을 말"></textarea>
+      </details>
+    </section>
+    <div class="set-bar">
+      <span class="grow">바꾼 값은 다음 말부터 적용됩니다. 기본값과 다른 항목에는 이름 옆에 ‘기본값’이 나타나 하나씩 되돌릴 수 있습니다.</span>
+      <span class="saved" id="all-saved"></span>
+      <button type="button" class="btn" id="reset-all">전체 기본값으로</button>
+    </div>
+    <div class="grid2" id="set-groups"><div class="empty">읽는 중…</div></div>
+    <div class="grid2">
+      <section class="card">
+        <h2>세션 별명</h2>
+        <div class="hint-line">번호 대신 부를 이름입니다. 예: ‘결제에 ~해 줘’, ‘결제로 가’, ‘결제 승인’</div>
+        <div id="aliases"></div>
+        <div class="actions">
+          <button type="button" class="btn" id="alias-add">추가</button>
+          <button type="button" class="btn primary" id="alias-save">저장</button>
+          <span class="saved" id="alias-saved"></span>
+        </div>
+      </section>
+      <section class="card">
+        <h2>단축 명령</h2>
+        <div class="hint-line">짧은 말 하나로 정해 둔 프롬프트를 보냅니다. 예: ‘커밋’ → /commit, ‘일지 써 줘’ → 오늘 업무 일지 작성해 줘</div>
+        <div id="macros"></div>
+        <div class="actions">
+          <button type="button" class="btn" id="macro-add">추가</button>
+          <button type="button" class="btn primary" id="macro-save">저장</button>
+          <span class="saved" id="macro-saved"></span>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="panel" id="tab-guide" role="tabpanel" aria-labelledby="tabbtn-guide" hidden>
+    <section class="card">
+      <p id="lead"></p>
+      <div class="cols" id="groups"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const PHASES = {
+  idle: "듣고 있습니다", hearing: "말을 듣는 중", transcribing: "받아쓰는 중",
+  acting: "처리하는 중", paused: "쉬는 중", off: "꺼져 있습니다",
+};
+const ACTIONS = {
+  prompt: "프롬프트", approve: "승인", approve_force: "위험 승인", deny: "거절", choose: "번호 선택",
+  interrupt: "중단", undo: "방금 거 취소", enter: "엔터", goto_session: "세션 이동",
+  goto_session_named: "세션 이동", next_session: "다음 세션", prev_session: "이전 세션",
+  list_sessions: "세션 목록", current_session: "현재 세션", status_all: "세션 상태",
+  explain_dialog: "창 내용", read_last: "읽기", read_more: "이어 읽기", read_all: "전부 읽기", read_summary: "요약",
+  stop_speaking: "읽기 멈춤", tts_on: "자동 읽기 켬", tts_off: "자동 읽기 끔", pause: "쉬기",
+  resume: "다시 듣기", ping: "확인", wake_only: "호출", confirm: "대답", confirm_on: "확인 켬",
+  confirm_off: "확인 끔", open_ui: "화면 열기", dictate: "긴 말 모드", dictation: "받아씀", notify_done: "끝나면 알림",
+};
+let state = null, guideKey = "", eventsKey = "", misses = 0;
+const quote = (text) => "“" + text + "”";
+const strip = (t) => t.replace(/… \(\d+자\)$/, "");
+
+// ── 테마: 보는 사람 브라우저에만 기억한다 ──
+function applyTheme(theme) {
+  if (theme) document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+  const dark = theme ? theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  $("theme").textContent = dark ? "밝게" : "어둡게";
+}
+try { applyTheme(localStorage.getItem("handsfree-theme")); } catch (e) { applyTheme(null); }
+$("theme").onclick = () => {
+  const next = $("theme").textContent === "어둡게" ? "dark" : "light";
+  applyTheme(next);
+  try { localStorage.setItem("handsfree-theme", next); } catch (e) {}
+};
+
+// 음량은 로그 눈금으로 그린다. 말소리와 잡음 차이가 작은 쪽에서 잘 보이게.
+const LOW = Math.log10(0.0004), HIGH = Math.log10(0.3);
+const position = (level) => Math.max(0, Math.min(1, (Math.log10(Math.max(level, 1e-5)) - LOW) / (HIGH - LOW)));
+
+function ago(clock) {
+  const [h, m, s] = clock.split(":").map(Number);
+  const now = new Date(), then = new Date(now);
+  then.setHours(h, m, s, 0);
+  let sec = (now - then) / 1000;
+  if (sec < -60) sec += 86400;
+  if (sec < 5) return "방금";
+  if (sec < 60) return Math.round(sec) + "초 전";
+  if (sec < 3600) return Math.round(sec / 60) + "분 전";
+  return Math.round(sec / 3600) + "시간 전";
+}
+
+// ── 맨 위 ──
+function showHero() {
+  const hero = $("hero");
+  hero.dataset.phase = state.phase;
+  hero.dataset.armed = state.armed_left > 0 ? "1" : "0";
+  let title = PHASES[state.phase] || PHASES.idle;
+  if (state.phase === "idle" && state.speaking) title = "읽어 주는 중";
+  if (state.phase === "idle" && state.armed_left > 0) title = "불렀습니다";
+  $("phase").textContent = title;
+  const hint = $("hint");
+  if (state.phase === "paused") {
+    const left = Math.max(1, Math.round((state.paused_until - state.now) / 60));
+    hint.replaceChildren(document.createTextNode(state.paused_until ? "약 " + left + "분 뒤 돌아옵니다 · " : ""),
+      el("b", "", quote(state.wake + ", 다시 켜")));
+  } else if (state.armed_left > 0) {
+    hint.textContent = "이어서 말하세요 · " + Math.ceil(state.armed_left) + "초";
+  } else if (state.phase === "idle" && state.speaking) {
+    hint.replaceChildren(el("b", "", quote(state.wake)), document.createTextNode("만 불러도 멈춥니다"));
+  } else if (state.phase === "idle") {
+    hint.replaceChildren(el("b", "", quote(state.wake + ", ~")), document.createTextNode(" 하고 말하세요" + latencyText()));
+  } else {
+    hint.textContent = state.phase === "hearing" ? "말이 끝나면 받아씁니다" : "";
+  }
+  // 켜져 있는 것만 보인다. 꺼진 기능까지 늘어놓으면 눈에 거슬린다.
+  const flags = [];
+  if (state.tts) flags.push("자동 읽기");
+  if (state.confirm) flags.push("보내기 전 확인");
+  $("flags").replaceChildren(...flags.map((f) => el("span", "flag", f)));
+  $("mark").style.left = (position(state.threshold) * 100) + "%";
+  // 브라우저 탭만 보여도 상태를 알 수 있게 제목에 담는다.
+  const waiting = state.sessions.filter((s) => s.state === "승인 대기").length;
+  document.title = "핸즈프리 · " + title + (waiting ? " · 승인 대기 " + waiting : "");
+}
+function latencyText() {
+  const l = state.latency;
+  if (!l) return "";
+  return " · 반응 " + (l.wait + l.write + l.act).toFixed(1) + "초" + (state.latency_avg ? " (평균 " + state.latency_avg + ")" : "");
+}
+
+// ── 알림 띠 ──
+function showNotices() {
+  const d = state.dictation, dict = $("dictation");
+  dict.hidden = !d;
+  if (d) {
+    dict.replaceChildren(el("div", "notice-title", "긴 말 받아쓰는 중 · " + d.where),
+      el("div", "", d.text ? quote(d.text) : "말씀하세요…"),
+      el("div", "hint-line", "‘보내’나 ‘끝’이면 보내고, ‘취소’면 버립니다 · " + Math.max(0, d.limit - d.idle) + "초 더 조용하면 보낼지 묻습니다"));
+  }
+  const pending = $("pending");
+  pending.hidden = !state.pending;
+  if (state.pending) {
+    pending.replaceChildren(el("div", "notice-title", "대답을 기다립니다"),
+      el("div", "", quote(state.pending) + " — ‘보내’ 또는 ‘아니’로 답하세요"));
+  }
+  const waiting = state.sessions.filter((s) => s.state === "승인 대기");
+  const nowTab = $("tabbtn-now");
+  nowTab.replaceChildren(document.createTextNode("지금"));
+  if (waiting.length) nowTab.append(el("span", "count", String(waiting.length)));
+  const box = $("waiting");
+  box.hidden = !waiting.length;
+  if (!waiting.length) return;
+  box.replaceChildren(el("div", "notice-title", "승인을 기다리는 세션 " + waiting.length + "개"), ...waiting.map((s) => {
+    const row = el("div", "ask-row");
+    const what = el("div", "what");
+    what.append(el("b", "", s.number + "번 "), document.createTextNode(s.name + " "), el("span", "q", s.ask || ""));
+    const say = el("div", "say-hint");
+    say.append(el("b", "", quote(s.current ? "승인" : s.number + "번 세션 승인")), document.createTextNode(" · 거절 · 번호"));
+    row.append(what, say);
+    return row;
+  }));
+}
+
+// ── 지금 ──
+function showLast() {
+  const heard = state.events.find((e) => e.kind === "heard" && e.action !== "wake_only");
+  if (!heard) return;
+  $("last-said").className = "";
+  $("last-said").textContent = quote(heard.text);
+  const tags = [el("span", "tag", ACTIONS[heard.action] || heard.action)];
+  if (heard.armed) tags.push(el("span", "tag plain", "이어 말함"));
+  $("last-tags").replaceChildren(...tags);
+  $("last-when").textContent = ago(heard.time);
+  $("last-results").replaceChildren(...(heard.results.length
+    ? heard.results.map((r) => el("div", r.ok ? "ok" : "no", (r.ok ? "✓ " : "✕ ") + r.text))
+    : [el("div", "when", state.phase === "acting" ? "처리하는 중…" : "결과 없음")]));
+  const index = state.events.indexOf(heard);
+  const missed = state.events.slice(0, index).filter((e) => e.kind === "ignored");
+  const count = missed.reduce((sum, e) => sum + e.count, 0);
+  $("missed").textContent = count
+    ? "그 뒤 호출어 없이 들린 소리 " + count + "건 · 마지막은 " + quote(strip(missed[0].texts[missed[0].texts.length - 1]))
+    : "";
+}
+
+function showSessions() {
+  if (!state.sessions.length) return;
+  $("sessions").replaceChildren(...state.sessions.map((s) => {
+    const kind = s.state === "승인 대기" ? "wait" : s.state === "작업 중" ? "work" : "rest";
+    const tile = el("div", "tile" + (s.current ? " current" : kind === "wait" ? " wait" : ""));
+    const body = el("div", "tile-body");
+    const st = el("div", "tile-state " + kind);
+    st.append(el("span", "dot"), document.createTextNode(s.state + (s.current ? " · 여기로 입력" : "")));
+    body.append(el("div", "tile-name", s.name), st);
+    if (s.ask) body.append(el("div", "ask", s.ask));
+    if (s.ask) tile.title = s.ask;
+    tile.append(el("div", "num", String(s.number)), body);
+    return tile;
+  }));
+}
+
+// ── 기록 ──
+function showEvents() {
+  const key = JSON.stringify(state.events.slice(0, 3));
+  if (key === eventsKey) return;
+  eventsKey = key;
+  if (!state.events.length) return;
+  $("events").replaceChildren(...state.events.map((e) => {
+    const row = el("div", "event" + (e.kind === "heard" ? "" : " dim"));
+    const body = el("div", "");
+    if (e.kind === "heard") {
+      const said = el("div", "said", quote(e.text));
+      said.append(el("span", "tag" + (e.action === "wake_only" ? " plain" : ""), ACTIONS[e.action] || e.action));
+      body.append(said);
+      e.results.forEach((r) => body.append(el("div", "sub " + (r.ok ? "ok" : "no"), (r.ok ? "✓ " : "✕ ") + r.text)));
+    } else if (e.kind === "ignored") {
+      const shown = e.texts.slice(0, 3).map(strip).join(", ");
+      body.append(el("div", "said", "호출어 없이 들린 소리 " + e.count + "건 · " + shown + (e.texts.length > 3 ? " 외" : "")));
+    } else if (e.kind === "result") {
+      e.results.forEach((r) => body.append(el("div", "sub " + (r.ok ? "ok" : "no"), (r.ok ? "✓ " : "✕ ") + r.text)));
+    } else {
+      body.append(el("div", "said", e.text));
+    }
+    row.append(el("div", "time", e.time), body);
+    return row;
+  }));
+}
+
+// ── 말하는 법 ──
+function sayings(phrases) {
+  const box = el("div", "says");
+  const shown = phrases.slice(0, 3), rest = phrases.slice(3);
+  shown.forEach((p) => box.append(el("span", "say", p)));
+  if (rest.length) {
+    const more = el("button", "more-btn", "+" + rest.length);
+    more.type = "button";
+    more.setAttribute("aria-label", "나머지 " + rest.length + "개 보기");
+    more.onclick = () => { more.remove(); rest.forEach((p) => box.append(el("span", "say", p))); };
+    box.append(more);
+  }
+  return box;
+}
+function showGuide() {
+  const key = JSON.stringify([state.wake, state.groups, state.macros, state.aliases]);
+  if (key === guideKey) return;
+  guideKey = key;
+  $("lead").replaceChildren(el("b", "", quote(state.wake + ",")), document.createTextNode(" 뒤에 이어서 말합니다. 아래에 없는 말은 지금 세션에 프롬프트로 보냅니다."));
+  const groups = [{ title: "문장으로", rows: state.patterns.map((p) => ({ name: p.does, phrases: [p.say] })) }].concat(state.groups);
+  if (state.macros.length) groups.push({ title: "단축 명령", rows: state.macros.map((m) => ({ name: m.does, phrases: [m.say] })) });
+  const aliases = Object.entries(state.aliases || {});
+  if (aliases.length) groups.push({ title: "별명", rows: aliases.map(([a, t]) => ({ name: typeof t === "number" ? t + "번 세션" : t, phrases: [a] })) });
+  $("groups").replaceChildren(...groups.map((g) => {
+    const box = el("div", "group");
+    box.append(el("h3", "", g.title));
+    g.rows.filter((r) => r.phrases.length).forEach((r) => {
+      const row = el("div", "row");
+      row.append(el("div", "does", r.name), sayings(r.phrases));
+      box.append(row);
+    });
+    return box;
+  }));
+}
+
+function showOff() {
+  document.title = "핸즈프리 · 꺼져 있습니다";
+  $("hero").dataset.phase = "off";
+  $("hero").dataset.armed = "0";
+  $("phase").textContent = PHASES.off;
+  $("hint").textContent = "터미널에서 handsfree start 로 켜세요";
+  $("meter").classList.add("stale");
+  $("fill").style.width = "0";
+}
+
+async function tick() {
+  try {
+    state = await (await fetch("/state", { cache: "no-store" })).json();
+    misses = 0;
+    showHero(); showNotices(); showLast(); showSessions(); showEvents(); showGuide();
+  } catch (err) {
+    if (++misses >= 3) showOff();
+  }
+  setTimeout(tick, document.hidden ? 3000 : 700);
+}
+
+async function meter() {
+  if (!document.hidden && misses < 3) {
+    try {
+      const data = await (await fetch("/level", { cache: "no-store" })).json();
+      const threshold = state ? state.threshold : 0.015;
+      const live = data.phase === "idle" || data.phase === "hearing";
+      const box = $("meter");
+      box.classList.toggle("stale", !live);
+      box.classList.toggle("loud", live && data.level >= threshold);
+      $("fill").style.width = (live ? position(data.level) * 100 : 0) + "%";
+      box.setAttribute("aria-valuenow", String(Math.round(position(data.level) * 100)));
+      $("mic-note").textContent = live ? (data.level >= threshold ? "마이크 · 듣는 중" : "마이크 · 선을 넘으면 듣기 시작") : "마이크 · 받아쓰는 동안 쉼";
+    } catch (err) {}
+  }
+  setTimeout(meter, document.hidden ? 1500 : 150);
+}
+
+// ── 탭 ──
+const TABS = ["now", "log", "settings", "guide"];
+function openTab(name, focus) {
+  if (!TABS.includes(name)) name = "now";
+  TABS.forEach((t) => {
+    const btn = $("tabbtn-" + t), on = t === name;
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
+    $("tab-" + t).hidden = !on;
+  });
+  if (focus) $("tabbtn-" + name).focus();
+  try { localStorage.setItem("handsfree-tab", name); } catch (e) {}
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+}
+document.querySelectorAll(".tabs button").forEach((btn) => {
+  btn.onclick = () => openTab(btn.dataset.tab);
+  btn.onkeydown = (e) => {
+    const i = TABS.indexOf(btn.dataset.tab);
+    if (e.key === "ArrowRight") openTab(TABS[(i + 1) % TABS.length], true);
+    else if (e.key === "ArrowLeft") openTab(TABS[(i + TABS.length - 1) % TABS.length], true);
+    else return;
+    e.preventDefault();
+  };
+});
+(() => {
+  let saved = location.hash.slice(1);
+  if (!saved) { try { saved = localStorage.getItem("handsfree-tab"); } catch (e) {} }
+  openTab(saved || "now");
+})();
+
+// ── 설정 ──
+async function post(changes) {
+  const res = await fetch("/config", {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Handsfree": "1" }, body: JSON.stringify(changes),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: "저장하지 못했습니다" }));
+  if (!data.ok) throw new Error(data.error || "저장하지 못했습니다");
+  return data;
+}
+function flash(node, text, err) {
+  node.className = "saved" + (err ? " err" : "");
+  node.textContent = text;
+  clearTimeout(node._timer);
+  if (!err) node._timer = setTimeout(() => { node.textContent = ""; }, 2500);
+}
+const fmt = (f, v) => (Number.isInteger(f.step) ? String(Math.round(v)) : Number(v).toFixed(f.step < 0.1 ? 2 : 1)) + f.unit;
+const timers = {};
+
+function fieldRow(f) {
+  const row = el("div", "field" + (f.type === "bool" ? " bool" : ""));
+  const label = el("label", "", f.label);
+  const id = "set-" + f.key;
+  label.htmlFor = id;
+  const reset = el("button", "reset", "기본값");
+  reset.type = "button";
+  label.append(reset);
+  const saved = el("div", "saved");
+  let input, show;
+  const save = (value) => {
+    clearTimeout(timers[f.key]);
+    timers[f.key] = setTimeout(async () => {
+      try {
+        const data = await post({ [f.key]: value });
+        const fresh = data.groups.flatMap((g) => g.fields).find((x) => x.key === f.key);
+        show(fresh.value, fresh.default);
+        flash(saved, "저장됨");
+      } catch (err) { flash(saved, err.message, true); }
+    }, f.type === "bool" ? 0 : 350);
+  };
+  if (f.type === "bool") {
+    const box = el("span", "switch");
+    input = el("input"); input.type = "checkbox"; input.id = id; input.setAttribute("role", "switch");
+    box.append(input, el("span"));
+    show = (v, d) => { input.checked = !!v; reset.hidden = v === d; };
+    input.onchange = () => save(input.checked);
+    row.append(label, box);
+  } else {
+    const value = el("span", "field-value");
+    input = el("input"); input.type = "range"; input.id = id;
+    input.min = f.min; input.max = f.max; input.step = f.step;
+    show = (v, d) => { input.value = v; value.textContent = fmt(f, v); reset.hidden = Number(v) === Number(d); };
+    input.oninput = () => { value.textContent = fmt(f, input.value); };
+    input.onchange = () => save(Number(input.value));
+    row.append(label, input, value);
+  }
+  row.append(el("div", "field-help", f.help), saved);
+  reset.onclick = (e) => { e.preventDefault(); save(null); };
+  show(f.value, f.default);
+  return row;
+}
+
+function pairRow(left, right, kind) {
+  const row = el("div", "pair");
+  const a = el("input"); a.type = "text"; a.value = left;
+  a.placeholder = kind === "alias" ? "별명 (예: 결제)" : "부를 말 (예: 커밋)"; a.setAttribute("aria-label", kind === "alias" ? "별명" : "부를 말");
+  let b;
+  if (kind === "alias") {
+    b = el("select"); b.setAttribute("aria-label", "가리킬 세션");
+    const names = (state ? state.sessions : []).map((s) => s.name);
+    if (right && !names.includes(right)) names.unshift(String(right));
+    const blank = el("option", "", "세션 고르기"); blank.value = ""; b.append(blank);
+    names.forEach((n) => { const o = el("option", "", n); o.value = n; b.append(o); });
+    b.value = right ? String(right) : "";
+  } else {
+    b = el("input"); b.type = "text"; b.value = right; b.placeholder = "보낼 프롬프트 (예: /commit)"; b.setAttribute("aria-label", "보낼 프롬프트");
+  }
+  const drop = el("button", "x", "×"); drop.type = "button"; drop.setAttribute("aria-label", "삭제");
+  drop.onclick = () => row.remove();
+  row.append(a, b, drop);
+  return row;
+}
+function readPairs(box) {
+  const out = {};
+  for (const row of box.children) {
+    const [a, b] = row.querySelectorAll("input, select");
+    if (!a.value.trim() && !b.value.trim()) continue;
+    out[a.value.trim()] = b.value;
+  }
+  return out;
+}
+function fillPairs(box, entries, kind) {
+  box.replaceChildren(...(entries.length ? entries : [["", ""]]).map(([a, b]) => pairRow(a, b, kind)));
+}
+
+function showWake(data) {
+  const [main, ...more] = data.wake_words;
+  $("wake-main").value = main || "";
+  $("wake-more").value = more.join(", ");
+  $("wake-reset").hidden = data.wake_is_default;
+  $("wake-tip").textContent = "함께 받을 말 " + more.length + "개";
+  const list = data.wake_suggestions || [];
+  if (!list.length) { $("wake-suggest").replaceChildren(); return; }
+  const row = el("div", "suggest");
+  row.append(el("span", "", "알아듣지 못한 호출:"));
+  list.forEach((s) => {
+    const b = el("button", "", "+ " + s.text + (s.count > 1 ? " ×" + s.count : ""));
+    b.type = "button";
+    b.title = "함께 받을 말에 넣고 저장합니다";
+    b.onclick = () => saveWake(data.wake_words.concat([s.text]));
+    row.append(b);
+  });
+  $("wake-suggest").replaceChildren(row);
+}
+async function saveWake(words) {
+  try {
+    const data = await post({ wake_words: words });
+    showWake(data);
+    flash($("wake-saved"), "저장됨 · 이제 “" + data.wake_words[0] + "”");
+    guideKey = "";
+  } catch (err) { flash($("wake-saved"), err.message, true); }
+}
+$("wake-save").onclick = () => saveWake([$("wake-main").value].concat($("wake-more").value.split(/[,\n]/)).map((w) => w.trim()).filter(Boolean));
+$("wake-reset").onclick = () => saveWake(null);
+
+async function savePairs(key, box, note) {
+  try {
+    await post({ [key]: readPairs(box) });
+    flash(note, "저장됨");
+    guideKey = "";
+  } catch (err) { flash(note, err.message, true); }
+}
+// 전체 되돌리기는 실수로 누르기 쉬워 두 번 눌러야 한다(브라우저 확인 창은 쓰지 않는다).
+let resetArmed = null;
+$("reset-all").onclick = async () => {
+  const btn = $("reset-all");
+  if (!resetArmed) {
+    btn.textContent = "한 번 더 누르면 되돌립니다";
+    btn.classList.add("warn");
+    resetArmed = setTimeout(() => { resetArmed = null; btn.textContent = "전체 기본값으로"; btn.classList.remove("warn"); }, 4000);
+    return;
+  }
+  clearTimeout(resetArmed); resetArmed = null;
+  btn.textContent = "전체 기본값으로"; btn.classList.remove("warn");
+  try {
+    const keys = settingKeys.reduce((o, k) => (o[k] = null, o), {});
+    await post(keys);
+    await loadSettings();
+    flash($("all-saved"), "듣기·보내기·읽어 주기·소리 설정을 기본값으로 되돌렸습니다");
+  } catch (err) { flash($("all-saved"), err.message, true); }
+};
+let settingKeys = [];
+$("alias-add").onclick = () => $("aliases").append(pairRow("", "", "alias"));
+$("alias-save").onclick = () => savePairs("aliases", $("aliases"), $("alias-saved"));
+$("macro-add").onclick = () => $("macros").append(pairRow("", "", "macro"));
+$("macro-save").onclick = () => savePairs("macros", $("macros"), $("macro-saved"));
+
+async function loadSettings() {
+  try {
+    const data = await (await fetch("/config", { cache: "no-store" })).json();
+    settingKeys = data.groups.flatMap((g) => g.fields.map((f) => f.key));
+    $("set-groups").replaceChildren(...data.groups.map((g) => {
+      const box = el("section", "card");
+      box.append(el("h2", "", g.title), ...g.fields.map(fieldRow));
+      return box;
+    }));
+    showWake(data);
+    fillPairs($("aliases"), Object.entries(data.aliases), "alias");
+    fillPairs($("macros"), Object.entries(data.macros || {}), "macro");
+  } catch (err) {
+    setTimeout(loadSettings, 2000);
+  }
+}
+
+tick();
+meter();
+setTimeout(loadSettings, 800);
+</script>
+</body>
+</html>
