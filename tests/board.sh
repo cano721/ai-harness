@@ -1836,7 +1836,9 @@ pass "harness board guide: run a feature card from the guide with the new-sessio
 # 버전 바뀜 안내(#439): 확인한 플러그인 버전은 사용자 데이터(board/version-seen.json)에 두고, 보드와 세션 시작 안내가 같은 값을 본다.
 # 바뀐 것은 플러그인과 함께 배포되는 CHANGELOG.md에서 읽는다 — 확인한 버전 초과 ~ 현재 버전 이하의 절을 합치고(건너뛴 버전 포함),
 # Unreleased는 빼고, 해야 할 일 → 새 기능 → 동작 변경 → 버그 수정 → 기타 순으로 묶는다. 버전은 숫자로 견준다(0.9.1 < 0.10.0).
-BVER_ROOT="$ROOT/tests/fixtures/changelog"
+BVER_ROOT="$TEST_TMP/changelog"
+mkdir -p "$BVER_ROOT"
+cp -R "$ROOT/tests/fixtures/changelog/." "$BVER_ROOT"
 BVER_DATA="$TEST_TMP/version-notes"; mkdir -p "$BVER_DATA"
 python3 -c '
 import json, os, sys
@@ -1850,12 +1852,25 @@ assert st["current"] == "0.10.0" and st["unseen"] is False and st["seen"] == "0.
 assert json.load(open(seen))["seen"] == "0.10.0"
 # 최근 업데이트(다시 펼쳐 보기): 확인한 범위를 모르면 현재 버전 절 하나.
 assert [g["key"] for g in st["recent"]["groups"]] == ["todo", "feature", "fix"], st["recent"]
+# 릴리스 이력(#457): 확인 여부와 무관하게 버전마다 날짜·묶음별 개수·묶음을 최신부터 준다(Unreleased 제외).
+# 기능 카드의 최근 표시 기준(recent_from): 최신 릴리스 날짜에서 7일 안의 릴리스, 그보다 적으면 최근 3개 중 가장 오래된 버전.
+assert [r["version"] for r in st["releases"]] == ["0.10.0", "0.9.1", "0.9.0"] and st["recent_from"] == "0.9.0", st
+r0 = st["releases"][0]
+assert r0["date"] == "2026-01-03" and r0["unseen"] is False, r0
+assert r0["counts"] == {"todo": 1, "feature": 1, "change": 0, "fix": 1, "other": 0}, r0["counts"]
+assert [g["key"] for g in r0["groups"]] == ["todo", "feature", "fix"], r0["groups"]
+old_todo = st["releases"][2]["groups"][0]["items"][0]  # 굵은 제목 없는 항목에 요약이 있으면 요약이 제목, 원문은 펼친 곳
+assert old_todo["title"] == "설정을 한 번 다시 저장하세요." and old_todo["summary"] is None and old_todo["body"].startswith("예전 설정 파일을 열어"), old_todo
+rel = lambda v, d: {"version": v, "date": d}
+assert changes._recent_from([rel("0.5.0", "2026-03-20"), rel("0.4.0", "2026-03-14"), rel("0.3.0", "2026-03-13"), rel("0.2.0", "2026-03-12"), rel("0.1.0", "2026-03-01")]) == "0.3.0"
+assert changes._recent_from([rel("0.5.0", "2026-03-20"), rel("0.4.0", "2026-01-01"), rel("0.3.0", "2025-12-01"), rel("0.2.0", None)]) == "0.3.0"  # 7일 안이 적으면 최근 3개
 assert st["recent"]["versions"] == ["0.10.0"] and st["recent"]["from"] == "0.9.1", st["recent"]
 # 뒤처짐: 건너뛴 버전까지 합친다.
 json.dump({"seen": "0.9.0"}, open(seen, "w"))
 st = changes.state(root, data)
 assert st["unseen"] is True and st["from"] == "0.9.0" and st["to"] == "0.10.0", st
 assert st["versions"] == ["0.10.0", "0.9.1"], st["versions"]
+assert [r["unseen"] for r in st["releases"]] == [True, True, False], st["releases"]  # 확인한 버전 뒤의 릴리스만 새 버전
 keys = [g["key"] for g in st["groups"]]
 assert keys == ["todo", "feature", "change", "fix"], keys
 labels = {g["key"]: g["label"] for g in st["groups"]}
@@ -1863,15 +1878,25 @@ assert labels == {"todo": "업데이트 후 해야 할 일", "feature": "새 기
 by = {g["key"]: g["items"] for g in st["groups"]}
 assert [i["title"] for i in by["feature"]] == ["새 화면이 생겼습니다"], by["feature"]
 bt = chr(96)  # 백틱(셸 따옴표 안에 그대로 쓰지 않는다)
-assert by["feature"][0]["body"] == bt + "board" + bt + " 화면에서 **바로** 봅니다. (#12)" and by["feature"][0]["version"] == "0.10.0", by["feature"]
+# 최근 이력은 유형·요약·원문·릴리스 이미지 참조를 각각 제공한다. 요약·이미지가 없는 옛 항목은 기존 본문을 유지한다.
+feature = by["feature"][0]
+assert feature["type"] == "feature" and feature["summary"] == "보드 안내에서 최근 릴리스 이력을 바로 봅니다.", feature
+assert feature["body"] == bt + "board" + bt + " 화면에서 **바로** 봅니다. (#12)" and feature["version"] == "0.10.0", feature
+assert [(i["alt"], i["path"]) for i in feature["images"]] == [("릴리스 이력 안내 화면", "assets/release-notes/history.png")], feature
+assert feature["title"] == "새 화면이 생겼습니다" and "요약:" not in feature["body"] and "![" not in feature["body"], feature  # 요약·이미지는 원문에서 떼어 낸다
+legacy = by["change"][0]
+assert legacy["title"] == "기본값이 바뀌었습니다" and legacy["body"] == "이제 꺼져 있습니다. (#11, #10)\n이어지는 줄도 같은 항목입니다." and legacy["version"] == "0.9.1", legacy
+assert legacy["type"] == "change" and legacy["summary"] is None and legacy["images"] == [], legacy
 # 굵은 제목이 없는 항목은 첫 문장이 제목이고(마크다운 기호 없이), 남는 것이 이슈 번호뿐이면 제목에 붙이고 펼칠 것이 없다.
-assert by["todo"] == [{"title": "기존 프로젝트는 /harness-init --sync --apply로 받습니다. (#12)", "body": "", "version": "0.10.0"}], by["todo"]
+todo = by["todo"][0]
+assert todo["title"] == "기존 프로젝트는 /harness-init --sync --apply로 받습니다. (#12)" and todo["body"] == "" and todo["version"] == "0.10.0", todo
+assert todo["type"] == "todo" and todo["summary"] is None and todo["images"] == [], todo
 assert [i["title"] for i in by["change"]] == ["기본값이 바뀌었습니다", "빨라졌습니다", "굵은 제목 없는 항목입니다."], by["change"]
 assert by["change"][2]["body"] == "굵은 제목 없는 항목입니다. 펼치면 첫 문장도 함께 보입니다. (#8)", by["change"][2]  # 잘린 제목도 펼치면 전부 보인다
 assert by["change"][0]["body"] == "이제 꺼져 있습니다. (#11, #10)\n이어지는 줄도 같은 항목입니다.", by["change"][0]
 assert st["counts"] == {"todo": 1, "total": 6}, st["counts"]
 assert "아직 나가지 않은 기능" not in json.dumps(st, ensure_ascii=False)
-assert "처음 기능" not in json.dumps(st, ensure_ascii=False)
+assert "처음 기능" not in json.dumps(st["groups"], ensure_ascii=False)
 # 확인: 본 버전(to)까지만 기록한다 — 페이지를 연 뒤 플러그인이 또 올랐으면 그 버전은 남는다.
 assert changes.confirm("0.11.0", root, data)["ok"] is False
 assert changes.confirm("garbage", root, data)["ok"] is False
@@ -1940,6 +1965,18 @@ assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $B
 assert_eq "0.9.0" "$(jq -r '.seen' "$BVER_DATA/srv/board/version-seen.json")" "a refused confirm writes nothing"
 assert_eq "true" "$(curl -s -X POST -H "Origin: $BVER_BASE" -H 'Content-Type: application/json' -d "$BVER_BODY" "$BVER_BASE/guide/changes/seen" | jq -r '.ok')" "confirming records the version"
 assert_eq "false 0.10.0" "$(curl -s "$BVER_BASE/guide/changes?t=$BVER_TOKEN" | jq -r '"\(.unseen) \(.seen)"')" "after confirming nothing is unseen"
+# 릴리스 캡처는 토큰을 가진 보드에서만 플러그인 assets/release-notes 안의 실제 이미지 하나를 읽는다.
+# 경로 이탈·심볼릭 링크·이미지가 아닌 파일은 모두 거절한다.
+printf 'not an image' >"$BVER_ROOT/assets/release-notes/notes.txt"
+ln -s /etc/hosts "$BVER_ROOT/assets/release-notes/linked.png"
+printf '<svg xmlns="http://www.w3.org/2000/svg"/>' >"$BVER_ROOT/assets/release-notes/drawn.svg"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/history.png")" "release image endpoint checks a missing token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/history.png?t=wrong")" "release image endpoint checks a wrong token"
+assert_eq "200 image/png" "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$BVER_BASE/release-notes/history.png?t=$BVER_TOKEN")" "release image endpoint serves an allowed release image"
+assert_eq "404" "$(curl --path-as-is -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/../CHANGELOG.md?t=$BVER_TOKEN")" "release image endpoint rejects a path outside release notes"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/linked.png?t=$BVER_TOKEN")" "release image endpoint rejects a symbolic link"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/drawn.svg?t=$BVER_TOKEN")" "release image endpoint does not serve SVG (scripts would run on the board origin)"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/notes.txt?t=$BVER_TOKEN")" "release image endpoint rejects a non-image file"
 # 플러그인이 업데이트되면(서버를 띄운 플러그인 폴더가 다르면) open이 옛 서버를 끄고 이 버전으로 다시 띄운다.
 BVER_PID="$(jq -r '.pid' "$BVER_DATA/srv/board/server.json")"
 assert_eq "$ROOT/scripts/board" "$(jq -r '.root' "$BVER_DATA/srv/board/server.json")" "the server records the plugin folder it runs from"
@@ -1957,8 +1994,17 @@ assert_contains "$BVER_FN" "post('/guide/changes/seen', { to: cdata.to })" "conf
 assert_contains "$BVER_FN" "에서 바뀐 것" "the panel names the version range"
 assert_contains "$BVER_FN" "'확인했습니다'" "the panel ends with a confirm button"
 assert_contains "$BVER_FN" "btn('확인했습니다', 'ds-btn--primary')" "confirm is the panel's primary action"
-assert_contains "$BVER_FN" "최근 업데이트 v" "a confirmed update folds into a recent-update row"
+assert_contains "$BVER_FN" "'릴리스 이력'" "the guide lists releases one row per version"
+assert_contains "$BVER_FN" "'이전 릴리스 접기'" "older releases fold behind one row"
+assert_contains "$BVER_FN" "badge(['info', '새 버전'])" "releases after the seen version say they are new"
 assert_contains "$BVER_FN" "badge(['info', '새 기능'])" "cards added after the seen version carry one info badge"
+assert_contains "$BVER_FN" "vcmp(it.since, cdata.recent_from) >= 0" "cards from recent releases stay marked new after the update is confirmed"
+assert_contains "$BVER_FN" "el('span', 'ds-chip', '변경됨')" "cards a recent release talks about say they changed"
+assert_contains "$BVER_FN" "'b-change__summary'" "an expanded item shows the plain summary first"
+assert_contains "$BVER_FN" "'자세히'" "release history keeps the full changelog item behind a details control"
+assert_contains "$BVER_FN" "setAttribute('aria-expanded', String(on))" "release history details expose their expanded state"
+assert_contains "$BVER_FN" "setAttribute('aria-controls', did)" "release history details control their content by id"
+assert_contains "$BVER_FN" "release-notes/" "release history builds image requests from approved release-note paths"
 assert_contains "$BVER_FN" "const out = [...guideChanges(), guideIntro()" "the version notes come before the introduction"
 assert_contains "$BVER_TPL" "badge(['info', '새 소식'])" "the sidebar says there is news when nothing needs doing"
 assert_contains "$BVER_TPL" "'건, 업데이트 후 해야 할 일'" "the sidebar counts the update to-dos as human work"

@@ -8,9 +8,12 @@
 - 출처: 플러그인과 함께 배포되는 CHANGELOG.md. 확인한 버전 초과 ~ 현재 버전 이하의 절을 모두 합친다(건너뛴 버전 포함, Unreleased 제외).
   버전은 숫자 튜플로 견준다(0.9.1 < 0.10.0). 현재 버전은 .claude-plugin/plugin.json(없으면 .codex-plugin) — release.json과 같다.
 - 항목: "- **제목** — 본문"이면 굵은 제목과 나머지 본문, 굵은 제목이 없으면 첫 문장이 제목이고 본문은 전문이다. 들여쓴 줄은 같은 항목이다.
+- 쉬운 설명(#457): 항목 안 "요약: 한 줄"은 사용자용 설명(summary)으로 떼어 내고, ![설명](assets/release-notes/<파일>)은
+  화면 캡처(images)로 떼어 낸다. 보드는 제목 → 요약 → 캡처 → "자세히"(원문) 순으로 보인다. 요약이 없는 옛 항목은 원문이 바로 보인다.
+- 릴리스 이력: 확인 여부와 무관하게 버전 절마다 묶어 준다(releases). 기능 카드의 최근 표시는 recent_from 이후 since로 정한다.
 - HM_PLUGIN_ROOT는 테스트가 CHANGELOG·plugin.json fixture를 가리킬 때 쓴다.
 """
-import json, os, re, sys, threading
+import datetime, json, os, re, sys, threading
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(DIR, "..", ".."))
@@ -19,7 +22,10 @@ BUCKETS = (("todo", "업데이트 후 해야 할 일"), ("feature", "새 기능"
 HEADINGS = {"업데이트 후 해야 할 일": "todo", "새 기능": "feature", "새 설정 (선택)": "feature",
             "동작 변경": "change", "개선": "change", "달라진 점": "change", "달라진 진입점": "change", "보안": "change",
             "버그 수정": "fix", "수정": "fix"}
-VERSION_HEAD = re.compile(r"^## v(\d+\.\d+\.\d+)\b")
+VERSION_HEAD = re.compile(r"^## v(\d+\.\d+\.\d+)\b(?:\s*\((\d{4}-\d{2}-\d{2})\))?")
+# 기능 카드의 "새 기능"·"변경됨" 표시는 확인 여부와 무관하게 최근 릴리스에 붙는다(#457): 최신 릴리스 날짜에서 RECENT_DAYS일 안,
+# 그래도 RECENT_RELEASES개보다 적으면 최근 RECENT_RELEASES개. 하루에 여러 번 릴리스하므로 개수만으로는 너무 짧다.
+RECENT_DAYS, RECENT_RELEASES = 7, 3
 ISSUES_ONLY = re.compile(r"^\(#\d+(?:,\s*#\d+)*\)$")
 
 
@@ -53,17 +59,31 @@ def _plain(s):
     return re.sub(r"\*\*|`", "", s).strip()
 
 
-def _item(lines, version):
+IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(assets/release-notes/([A-Za-z0-9][A-Za-z0-9._-]*)\)")
+
+
+def _item(lines, version, bucket):
     text = "\n".join(lines).strip()
+    summary_match = re.search(r"(?:^|\n)요약:\s*(.+?)(?=\n|$)", text)
+    summary = summary_match.group(1).strip() if summary_match else None
+    if summary_match:
+        text = (text[:summary_match.start()] + text[summary_match.end():]).strip()
+    images = [{"alt": m.group(1), "path": "assets/release-notes/" + m.group(2), "name": m.group(2)} for m in IMAGE_RE.finditer(text)]
+    text = IMAGE_RE.sub("", text).strip()
     m = re.match(r"\*\*(.+?)\*\*\s*(?:—|–|-|:)?\s*", text, re.S)
     if m:
-        return {"title": _plain(m.group(1)), "body": text[m.end():].strip(), "version": version}
-    first = re.match(r"(.+?[.!?。])(\s+|$)", text, re.S)
-    title, body = (first.group(1), text[first.end():].strip()) if first else (text, "")
-    if ISSUES_ONLY.match(body):
-        title, body = f"{title} {body}", ""
-    # 굵은 제목이 없으면 제목(첫 문장)이 줄에서 잘릴 수 있으므로 펼친 곳에는 전문을 둔다. 한 문장뿐이면 펼칠 것이 없다.
-    return {"title": _plain(" ".join(title.split())), "body": text if body else "", "version": version}
+        title, body = _plain(m.group(1)), text[m.end():].strip()
+    else:
+        first = re.match(r"(.+?[.!?。])(?:\s+|$)", text, re.S)
+        title, body = (first.group(1), text[first.end():].strip()) if first else (text, "")
+        if ISSUES_ONLY.match(body):
+            title, body = f"{title} {body}", ""
+        body = text if body else ""
+        title = _plain(" ".join(title.split()))
+        if summary:  # 굵은 제목 없이 긴 문장으로 쓴 항목(주로 해야 할 일)은 요약이 제목 자리에 서고, 펼치면 원문이 나온다
+            title, body, summary = _plain(summary), text, None
+    return {"title": title, "body": body, "summary": summary, "type": bucket,
+            "images": images, "version": version}
 
 
 def parse(text):
@@ -73,7 +93,7 @@ def parse(text):
     def flush():
         nonlocal item
         if cur is not None and item:
-            cur["items"].append((bucket, _item(item, cur["version"])))
+            cur["items"].append((bucket, _item(item, cur["version"], bucket)))
         item = None
 
     for line in text.splitlines():
@@ -87,7 +107,7 @@ def parse(text):
         if line.startswith("## "):
             flush()
             m = VERSION_HEAD.match(line)
-            cur = {"version": m.group(1), "items": []} if m else None
+            cur = {"version": m.group(1), "date": m.group(2), "items": []} if m else None
             if cur:
                 versions.append(cur)
             bucket = "other"
@@ -134,6 +154,38 @@ def _range(versions, lo, hi):
             "counts": {"todo": todo, "total": sum(len(g["items"]) for g in groups)}}
 
 
+def releases(versions, cur, seen):
+    """릴리스 이력(#457): 현재 버전 이하의 버전 절마다 {version, date, unseen, counts, groups}(최신부터)와,
+    기능 카드의 최근 표시 기준 recent_from(최근 릴리스 중 가장 오래된 버전). 확인 여부와 무관하게 늘 준다."""
+    cur_t, seen_t = vtuple(cur), vtuple(seen)
+    picked = sorted((v for v in versions if vtuple(v["version"]) <= cur_t), key=lambda v: vtuple(v["version"]), reverse=True)
+    out = []
+    for v in picked:
+        r = _range([v], None, v["version"])
+        counts = {key: sum(len(g["items"]) for g in r["groups"] if g["key"] == key) for key, _ in BUCKETS}
+        if not r["groups"]:
+            continue
+        out.append({"version": v["version"], "date": v.get("date"), "unseen": bool(seen_t and vtuple(v["version"]) > seen_t),
+                    "counts": counts, "groups": r["groups"]})
+    return {"releases": out, "recent_from": _recent_from(out)}
+
+
+def _day(s):
+    try:
+        return datetime.date.fromisoformat(s or "")
+    except ValueError:
+        return None
+
+
+def _recent_from(rels):
+    if not rels:
+        return None
+    top = _day(rels[0]["date"])
+    within = [r for r in rels if top and _day(r["date"]) and (top - _day(r["date"])).days <= RECENT_DAYS] if top else []
+    picked = within if len(within) >= RECENT_RELEASES else rels[:RECENT_RELEASES]
+    return picked[-1]["version"]
+
+
 def _state_path(data):
     return os.path.join(data, "board", "version-seen.json")
 
@@ -177,7 +229,7 @@ def state(root=None, data=None):
         return {"ok": True, "current": None, "seen": None, "unseen": False, "recent": None}
     versions = _read_changelog(root)
     seen = st["seen"]
-    out = {"ok": True, "current": cur, "seen": seen, "unseen": vtuple(cur) > vtuple(seen)}
+    out = {"ok": True, "current": cur, "seen": seen, "unseen": vtuple(cur) > vtuple(seen), **releases(versions, cur, seen)}
     if out["unseen"]:
         out.update({"from": seen, "to": cur, **_range(versions, seen, cur)})
         return out
