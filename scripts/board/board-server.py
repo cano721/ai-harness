@@ -35,11 +35,12 @@ POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_wor
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
 상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
-import atexit, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
+import atexit, base64, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import quote, urlparse, parse_qs
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
@@ -108,6 +109,18 @@ _lock = threading.Lock()
 
 def utc():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _orca_executable():
+    """화면 읽기 프로그램과 혼동하지 않도록 현재 세션용 Orca CLI만 고른다."""
+    configured = os.environ.get("ORCA_CLI_COMMAND")
+    if configured:
+        return configured
+    if os.environ.get("ORCA_DEV_REPO_ROOT") and shutil.which("orca-dev"):
+        return shutil.which("orca-dev")
+    if sys.platform.startswith("linux"):
+        return shutil.which("orca-ide")
+    return shutil.which("orca")
 
 
 def log(entry):
@@ -658,8 +671,30 @@ def end_session(item):
         handle = item.get("orca_handle") or ""
         if not re.fullmatch(r"term_[0-9a-f-]{36}", handle):
             return False
-        subprocess.run(["orca", "terminal", "close", "--terminal", handle, "--json"], capture_output=True, text=True, timeout=20)
+        executable = _orca_executable()
+        if not executable:
+            return False
+        subprocess.run([executable, "terminal", "close", "--terminal", handle, "--json"], capture_output=True, text=True, timeout=20)
     return wait_stopped(item, 15)
+
+
+def _nested_clone(top):
+    """worktree 안 중첩 저장소를 찾는다. 검사가 끝나지 않으면 삭제를 막는다."""
+    visited, errors = 0, []
+    def walk_error(error):
+        errors.append(error)
+    for base, dirs, files in os.walk(top, onerror=walk_error):
+        visited += 1
+        if visited > 20000:
+            return None, "중첩 clone을 끝까지 확인하지 못해 보존함"
+        if base == top:
+            dirs[:] = [d for d in dirs if d != ".git"]
+            continue
+        if ".git" in dirs or ".git" in files:
+            return os.path.join(base, ".git"), None
+    if errors:
+        return None, "중첩 clone을 확인하지 못해 보존함"
+    return None, None
 
 
 def worktree_check(item):
@@ -677,13 +712,26 @@ def worktree_check(item):
     if os.path.realpath(gdir) == os.path.realpath(common):
         info["reason"] = "worktree가 아니라 원본 저장소라 지우지 않음"
         return info
-    _, dirty = _git(top, "status", "--porcelain")
+    nested, scan_error = _nested_clone(top)
+    if nested:
+        info["reason"] = "중첩 clone이 있어 보존함: " + os.path.relpath(nested, top)
+        return info
+    if scan_error:
+        info["reason"] = scan_error
+        return info
+    rc, dirty = _git(top, "status", "--porcelain")
+    if rc != 0:
+        info["reason"] = "작업 트리 상태를 확인하지 못함"
+        return info
     if dirty:
         info["dirty"] = dirty.splitlines()[:10]
         info["reason"] = f"커밋 안 한 변경 {len(dirty.splitlines())}개"
         return info
     rc, ahead = _git(top, "log", "--oneline", "HEAD", "--not", "--remotes")
-    if rc == 0 and ahead:
+    if rc != 0:
+        info["reason"] = "원격에 올리지 않은 커밋을 확인하지 못함"
+        return info
+    if ahead:
         info["unpushed"] = len(ahead.splitlines())
         info["reason"] = f"원격에 올리지 않은 커밋 {info['unpushed']}개"
         return info
@@ -697,6 +745,10 @@ def worktree_check(item):
         return info
     if item.get("_others_unchecked"):
         info["reason"] = "다른 설정 폴더의 세션을 확인하지 못함(" + ", ".join(item["_others_unchecked"][:3]) + ")"
+        return info
+    merged, reason = _merged_pr_state(top, info.get("branch"))
+    if not merged:
+        info["reason"] = reason
         return info
     info["removable"] = True
     return info
@@ -786,23 +838,14 @@ def _finish_cleanup(item, wt):
                 msg.append("worktree는 남김 — " + kept)
                 wt = None
     if wt:
-        if shutil.which("orca"):
-            out = subprocess.run(["orca", "worktree", "rm", "--worktree", "path:" + wt["path"], "--json"],
-                                 capture_output=True, text=True, timeout=60)
-            try:
-                ok = json.loads(out.stdout or "{}").get("ok")
-            except Exception:
-                ok = False
-        else:
-            ok = False
-        if not ok:  # Orca가 모르는 worktree거나 Orca가 없으면 git으로(강제 없이)
-            _, common = _git(wt["path"], "rev-parse", "--path-format=absolute", "--git-common-dir")
-            out = subprocess.run(["git", "-C", os.path.dirname(common), "worktree", "remove", wt["path"]],
-                                 capture_output=True, text=True, timeout=60)
-            if out.returncode != 0:
+        ok, detail = remove_worktree_candidate(wt["path"], wt.get("branch"))
+        if not ok:
+            if os.path.exists(wt["path"]):
                 unhide_keys([_hide_key(item)])
-                return {"ok": False, "message": "worktree 삭제 실패: " + (out.stderr or out.stdout)[-200:]}
-        msg.append(f"worktree 삭제({wt.get('branch')})")
+                return {"ok": False, "message": "worktree 삭제 실패: " + (detail or "삭제 도구가 실패함")}
+            msg.append(detail or "worktree는 삭제했지만 후속 확인에 실패함")
+        else:
+            msg.append(f"worktree 삭제({wt.get('branch')})")
     hide_items([item])
     _cache["data"] = None
     res = {"ok": True, "message": "정리함" + (" — " + ", ".join(msg) if msg else " — 보드에서 숨김(대화 기록은 남음)")}
@@ -893,6 +936,320 @@ def bulk_targets(items, older_days=0):
     return out
 
 
+def _worktree_roots(items):
+    """최근 세션·자동화가 알고 있는 저장소의 원본 worktree 경로를 모은다."""
+    roots = set()
+    seeds = set(known_repos()) | set(harness_repos())
+    seeds.update(i.get("cwd") for i in items if i.get("cwd"))
+    # Orca 저장소·Claude 최근 사용 저장소도 포함해 세션 카드가 없어도 후보를 찾는다.
+    try:
+        seeds.update(row.get("path") for row in hguide.candidates(sorted(seeds)) if row.get("path"))
+    except Exception:
+        pass
+    for seed in seeds:
+        if not os.path.isdir(seed):
+            continue
+        rc, common = _git(seed, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if rc == 0 and common:
+            roots.add(os.path.dirname(common) if os.path.basename(common) == ".git" else common)
+    return sorted(roots)
+
+
+def _merged_pr_state(path, branch):
+    """PR 호스트에서 병합 상태를 확인한다. 상태를 읽을 수 없으면 삭제 후보로 만들지 않는다."""
+    if not branch:
+        return False, "PR 병합 여부를 확인할 수 없음"
+    try:
+        _, remote = _git(path, "config", "--get", "remote.origin.url")
+        is_bitbucket = "bitbucket.org" in remote
+        prs = []
+        if is_bitbucket:
+            user, token = os.environ.get("ATLASSIAN_USER"), os.environ.get("BITBUCKET_API_TOKEN")
+            match = re.search(r"bitbucket\.org[:/]([^/]+)/([^/?]+?)(?:\.git)?$", remote)
+            if not user or not token or not match:
+                return False, "PR 병합 여부를 확인할 수 없음"
+            workspace, repository = match.group(1), match.group(2)
+            query = quote('source.branch.name="' + branch + '"', safe="")
+            url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repository}/pullrequests?q={query}&state=MERGED&pagelen=100"
+            auth = base64.b64encode((user + ":" + token).encode("utf-8")).decode("ascii")
+            request = Request(url, headers={"Authorization": "Basic " + auth, "Accept": "application/json"})
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                prs = payload.get("values", []) if isinstance(payload, dict) else None
+        else:
+            if not shutil.which("gh"):
+                return False, "PR 병합 여부를 확인할 수 없음"
+            out = subprocess.run(["gh", "pr", "list", "--state", "merged", "--head", branch,
+                                  "--json", "state,headRefName,headRefOid", "--limit", "100"],
+                                 cwd=path, capture_output=True, text=True, timeout=15)
+            if out.returncode != 0:
+                return False, "PR 병합 여부를 확인할 수 없음"
+            prs = json.loads(out.stdout or "[]")
+        if not isinstance(prs, list):
+            return False, "PR 병합 여부를 확인할 수 없음"
+        _, head = _git(path, "rev-parse", "HEAD")
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            if is_bitbucket:
+                merged = pr.get("state") == "MERGED" and pr.get("source", {}).get("branch", {}).get("name") == branch
+                pr_head = pr.get("source", {}).get("commit", {}).get("hash")
+            else:
+                merged = pr.get("state") == "MERGED" and pr.get("headRefName") == branch
+                pr_head = pr.get("headRefOid")
+            if not merged or not pr_head:
+                continue
+            rc, _ = _git(path, "merge-base", "--is-ancestor", head, pr_head)
+            if rc == 0:
+                return True, ""
+        return False, "PR이 병합되지 않음"
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, AttributeError, TypeError):
+        return False, "PR 병합 여부를 확인할 수 없음"
+
+
+def _orca_live_worktree_paths():
+    """Orca가 살아 있는 터미널·에이전트를 보고한 worktree 경로 → (경로 목록, 오류). 조회 실패는 오류로 돌려줘 삭제를 막는다.
+    `orca worktree ps --json`의 result.worktrees[]에서 liveTerminalCount·hasAttachedPty·unverifiableTerminalCount·agents 중 하나라도 있으면 쓰는 중으로 본다."""
+    executable = _orca_executable()
+    if not executable:
+        # Orca 안에서 띄운 보드인데 CLI를 못 찾으면 확인하지 못한 것이다.
+        return [], ("Orca CLI를 찾지 못함" if os.environ.get("ORCA_WORKSPACE_ID") else "")
+    try:
+        out = subprocess.run([executable, "worktree", "ps", "--limit", "10000", "--json"],
+                             capture_output=True, text=True, timeout=15)
+        payload = json.loads(out.stdout or "{}")
+        if out.returncode != 0 or not isinstance(payload, dict) or payload.get("ok") is False:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            message = error.get("message") if isinstance(error, dict) else ""
+            return [], str(message or out.stderr or "명령이 실패함")[-200:]
+        result = payload.get("result") or {}
+        worktrees = result.get("worktrees")
+        if not isinstance(worktrees, list):
+            return [], "worktree 목록 형식을 알 수 없음"
+        # 잘린 목록이나 응답하지 않은 호스트가 있으면 빠진 행의 세션을 볼 수 없다.
+        if result.get("truncated") or ((result.get("hostScope") or {}).get("omittedHostIds")):
+            return [], "worktree 목록이 잘려 모두 확인하지 못함"
+        paths = set()
+        for w in worktrees:
+            if not isinstance(w, dict):
+                return [], "worktree 목록 형식을 알 수 없음"
+            busy = (w.get("liveTerminalCount") or 0) > 0 or w.get("hasAttachedPty") or (w.get("unverifiableTerminalCount") or 0) > 0 \
+                or bool(w.get("agents"))
+            if busy and isinstance(w.get("path"), str) and w["path"]:
+                paths.add(w["path"])
+        return sorted(paths), ""
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError) as e:
+        return [], str(e)[-200:]
+
+
+def _board_live_agent_cwds():
+    """보드가 아는 살아 있는 에이전트 세션의 cwd → (cwd 목록, 오류). 보드에서 숨긴(정리한) 세션도 프로세스가 살아 있으면 포함한다.
+    숨김 처리 전의 원천인 `claude agents --json --all`을 설정 폴더마다 새로 불러 pid가 있는 것만 모으고, 마지막으로 모은 목록의 살아 있는 세션 cwd도 더한다."""
+    cwds, errors = set(), []
+    for item in (_cache.get("data") or {}).get("items", []):
+        if item.get("section") == "work" and item.get("live") and item.get("cwd"):
+            cwds.add(item["cwd"])
+    if shutil.which("claude"):
+        default_dir = os.path.expanduser("~/.claude")
+        folders, seen = [None], {os.path.realpath(default_dir)}
+        for d in _claude_dirs():
+            real = os.path.realpath(d)
+            if os.path.isdir(d) and real not in seen:
+                seen.add(real)
+                folders.append(d)
+        for d in folders:
+            try:
+                out = claude(["agents", "--json", "--all"], os.path.expanduser("~"), timeout=15, config_dir=d)
+                agents = json.loads(out.stdout or "null")
+            except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+                errors.append(f"{d or '기본 폴더'}: {str(e)[-80:]}")
+                continue
+            if out.returncode != 0 or not isinstance(agents, list):
+                errors.append(f"{d or '기본 폴더'}: 세션 목록을 읽지 못함")
+                continue
+            for a in agents:
+                if isinstance(a, dict) and a.get("pid") is not None and isinstance(a.get("cwd"), str) and a["cwd"]:
+                    cwds.add(a["cwd"])
+    return sorted(cwds), "; ".join(errors)[:200]
+
+
+def _live_session_reason(top):
+    """worktree(top)를 쓰는 살아 있는 세션이 있거나 확인하지 못하면 보존 사유, 없으면 빈 문자열. 호출 시점에 조회 함수를 찾는다."""
+    real_top = os.path.realpath(top)
+    for name, label in (("_orca_live_worktree_paths", "Orca"), ("_board_live_agent_cwds", "보드")):
+        try:
+            paths, error = globals()[name]()
+        except Exception as e:
+            paths, error = [], str(e)[-120:] or "조회 실패"
+        if error:
+            return f"세션 사용 여부를 확인하지 못함({label}: {error})"
+        for p in paths or []:
+            real = os.path.realpath(p)
+            if real == real_top or real.startswith(real_top + os.sep):
+                return f"아직 이 폴더에서 돌고 있는 세션이 있음({label})"
+    return ""
+
+
+def worktree_check_path(path, branch=None):
+    """PR 병합·깨끗함·원격에 존재하는 커밋을 모두 확인해 독립 worktree 후보를 판정한다."""
+    info = {"path": path, "branch": branch or "", "removable": False}
+    if not path or not os.path.isdir(path):
+        info["reason"] = "폴더가 이미 없음"
+        return info
+    rc, top = _git(path, "rev-parse", "--show-toplevel")
+    if rc != 0:
+        info["reason"] = "git 저장소가 아님"
+        return info
+    info["path"] = top
+    rc, gdir = _git(top, "rev-parse", "--path-format=absolute", "--git-dir")
+    _, common = _git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if rc != 0 or not common or os.path.realpath(gdir) == os.path.realpath(common):
+        info["reason"] = "worktree가 아니라 원본 저장소라 지우지 않음"
+        return info
+    _, current_branch = _git(top, "symbolic-ref", "--quiet", "--short", "HEAD")
+    info["branch"] = current_branch or info["branch"]
+    nested, scan_error = _nested_clone(top)
+    if nested:
+        info["reason"] = "중첩 clone이 있어 보존함: " + os.path.relpath(nested, top)
+        return info
+    if scan_error:
+        info["reason"] = scan_error
+        return info
+    rc, dirty = _git(top, "status", "--porcelain")
+    if rc != 0 or dirty:
+        info["reason"] = f"커밋 안 한 변경 {len(dirty.splitlines()) if dirty else 0}개" if rc == 0 else "변경 사항을 확인할 수 없음"
+        return info
+    # Brief의 안전 조건인 `git log HEAD --not --remotes` 결과가 비어 있어야 한다.
+    rc, ahead = _git(top, "log", "HEAD", "--not", "--remotes")
+    if rc != 0 or ahead:
+        info["reason"] = f"원격에 올리지 않은 커밋 {len(ahead.splitlines()) if ahead else 0}개" if rc == 0 else "원격에 없는 커밋을 확인할 수 없음"
+        return info
+    session_reason = _live_session_reason(top)
+    if session_reason:
+        info["reason"] = session_reason
+        return info
+    merged, reason = _merged_pr_state(top, info["branch"])
+    if not merged:
+        info["reason"] = reason
+        return info
+    info["removable"] = True
+    return info
+
+
+def worktree_candidates(items):
+    """세션 여부와 무관하게 알려진 저장소들의 linked worktree를 후보로 보여 준다."""
+    rows, seen = [], set()
+    roots = _worktree_roots(items)
+    orca_paths, orca_error = _orca_worktree_paths()
+    for path in orca_paths:
+        rc, common = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if rc == 0 and common:
+            root = os.path.dirname(common) if os.path.basename(common) == ".git" else common
+            if root not in roots:
+                roots.append(root)
+    if orca_error:
+        rows.append({"id": "worktree-error:orca", "title": "Orca worktree 조회 오류", "project": "",
+                     "path": "", "branch": "", "removable": False, "worktree_candidate": True,
+                     "lookup_error": True, "reason": "Orca worktree를 조회하지 못함: " + orca_error})
+    for root in sorted(set(roots)):
+        rc, out = _git(root, "worktree", "list", "--porcelain")
+        if rc != 0:
+            rows.append({"id": "worktree-error:" + root, "title": "Git worktree 조회 오류",
+                         "project": os.path.basename(root), "path": root, "branch": "", "removable": False,
+                         "worktree_candidate": True, "lookup_error": True,
+                         "reason": "Git worktree를 조회하지 못함"})
+            continue
+        for block in re.split(r"\n\s*\n", out.strip()):
+            fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+            path = fields.get("worktree")
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            _, common = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+            _, gdir = _git(path, "rev-parse", "--path-format=absolute", "--git-dir")
+            if not common or not gdir or os.path.realpath(common) == os.path.realpath(gdir):
+                continue
+            branch = fields.get("branch", "")
+            if branch.startswith("refs/heads/"):
+                branch = branch[len("refs/heads/"):]
+            # 세션 카드에서 이미 같은 worktree를 다루는 경우에는 별도 후보를 만들지 않는다.
+            used_by_session = False
+            for item in items:
+                if not _is_session(item) or not item.get("cwd"):
+                    continue
+                _, session_top = _git(item["cwd"], "rev-parse", "--show-toplevel")
+                if session_top and os.path.realpath(session_top) == os.path.realpath(path):
+                    used_by_session = True
+                    break
+            if used_by_session:
+                continue
+            check = worktree_check_path(path, branch)
+            check.update({"id": "worktree:" + path, "title": os.path.basename(path), "project": os.path.basename(root),
+                          "worktree_candidate": True})
+            rows.append(check)
+    return rows
+
+
+def _orca_worktree_paths():
+    """Orca가 관리하는 worktree 경로를 읽고 조회 실패를 보존 사유로 돌려준다."""
+    executable = _orca_executable()
+    if not executable:
+        return [], ""
+    try:
+        out = subprocess.run([executable, "worktree", "list", "--limit", "10000", "--json"],
+                             capture_output=True, text=True, timeout=15)
+        payload = json.loads(out.stdout or "{}")
+        if out.returncode != 0 or payload.get("ok") is False:
+            error = payload.get("error") or {}
+            return [], str(error.get("message") or out.stderr or "명령이 실패함")[-200:]
+        paths = set()
+        def visit(value):
+            if isinstance(value, dict):
+                for key in ("path", "worktreePath", "worktree_path"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and os.path.isabs(candidate):
+                        paths.add(candidate)
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        visit(payload)
+        return sorted(paths), ""
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        return [], str(e)[-200:]
+
+
+def remove_worktree_candidate(path, branch):
+    """일반 삭제만 수행한다(강제 옵션 없음). Orca가 있으면 먼저 부르고, Orca가 모르거나 실패하면 git worktree remove로 넘어간다."""
+    executable = _orca_executable()
+    if executable:
+        # Orca가 관리하면 `orca worktree rm --delete-branch --worktree path:<path> --json`으로 제거한다.
+        try:
+            out = subprocess.run([executable, "worktree", "rm", "--delete-branch", "--worktree", "path:" + path,
+                                  "--json"], capture_output=True, text=True, timeout=60)
+            result = json.loads(out.stdout or "{}")
+            if out.returncode == 0 and isinstance(result, dict) and result.get("ok"):
+                return True, ""
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+    _, common = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not common:
+        return False, "저장소 경로를 확인할 수 없음"
+    repo = os.path.dirname(common) if os.path.basename(common) == ".git" else common
+    try:
+        out = subprocess.run(["git", "-C", repo, "worktree", "remove", path], capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            return False, (out.stderr or out.stdout)[-240:]
+        if branch:
+            out = subprocess.run(["git", "-C", repo, "branch", "-d", branch], capture_output=True, text=True, timeout=30)
+            if out.returncode != 0:
+                return False, "worktree는 삭제했지만 로컬 브랜치를 지우지 못함: " + (out.stderr or out.stdout)[-200:]
+        return True, ""
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+
+
 def _is_session(i):
     return i.get("section") == "work" and bool(i.get("sid"))
 
@@ -906,6 +1263,7 @@ def bulk_plan(items, older_days=0):
             wt = worktree_check(i)
             row["worktree"] = {"removable": bool(wt.get("removable")), "reason": wt.get("reason"), "branch": wt.get("branch")}
         rows.append(row)
+    rows.extend(worktree_candidates(items))
     return rows
 
 
@@ -949,9 +1307,12 @@ def bulk_cleanup(req, items=None):
         if req.get("dry_run"):
             return {"ok": True, "plan": bulk_plan(items, older), "left": bulk_left(items, older)}
         targets = bulk_targets(items, older)
+        selected_worktrees = []
         if isinstance(req.get("ids"), list):
             want = set(req["ids"])
             targets = [i for i in targets if i.get("id") in want]
+            if req.get("worktree"):
+                selected_worktrees = [i for i in worktree_candidates(items) if i.get("id") in want]
         want_wt = bool(req.get("worktree"))
         results, others = [], []
         for i in targets:
@@ -971,6 +1332,23 @@ def bulk_cleanup(req, items=None):
             elif res.get("worktree_kept"):
                 r["worktree_kept"] = res["worktree_kept"]
             results.append(r)
+        for candidate in selected_worktrees:
+            if candidate.get("lookup_error"):
+                results.append({"id": candidate["id"], "title": candidate["title"], "ok": False,
+                                "hidden": False, "worktree_kept": candidate.get("reason") or "조회 오류"})
+                continue
+            # 실행 직전에 PR 상태·작업 트리·미푸시 커밋·중첩 clone을 다시 확인한다.
+            again = worktree_check_path(candidate["path"], candidate.get("branch"))
+            if not again.get("removable"):
+                results.append({"id": candidate["id"], "title": candidate["title"], "ok": False,
+                                "hidden": False, "worktree_kept": again.get("reason") or "안전 조건을 다시 확인하지 못함"})
+                continue
+            ok, message = remove_worktree_candidate(again["path"], again.get("branch"))
+            removed = bool(ok or not os.path.exists(again["path"]))
+            reason = None if ok else (message or "worktree 삭제에 실패함")
+            results.append({"id": candidate["id"], "title": candidate["title"], "ok": bool(ok), "hidden": False,
+                            "worktree_removed": removed, "worktree_kept": None if removed else reason,
+                            "reason": reason})
         if others:
             hide_items(others)
         _cache["data"] = None
@@ -1556,7 +1934,10 @@ def send_to_terminal(item, text):
     if item.get("status") == "waiting":
         return {"ok": False, "message": "권한·질문 창이 떠 있음 — 그 창에 잘못 입력될 수 있어 보내지 않음"}
     try:
-        out = subprocess.run(["orca", "terminal", "send", "--terminal", handle, "--text", text, "--enter", "--json"],
+        executable = _orca_executable()
+        if not executable:
+            return {"ok": False, "message": "Orca CLI를 찾을 수 없습니다"}
+        out = subprocess.run([executable, "terminal", "send", "--terminal", handle, "--text", text, "--enter", "--json"],
                              capture_output=True, text=True, timeout=20)
         res = json.loads(out.stdout or "{}")
     except Exception as e:

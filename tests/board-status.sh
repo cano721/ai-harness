@@ -279,6 +279,8 @@ HARNESS_METRICS_DIR="$WL_T/data" python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
 wt = sys.argv[2]
+# 이 블록은 세션 점유 판정만 확인한다. 병합 여부는 독립 조건이므로 여기서는 병합 확인을 고정한다.
+bs._merged_pr_state = lambda path, branch: (True, "")
 bs._cache["data"] = None
 item = {"section": "work", "sid": "s-mine", "id": "claude|s-mine", "kind": "bg", "cwd": wt, "title": "mine", "live": True, "status": "idle", "state": "idle"}
 base = bs.worktree_check(item)
