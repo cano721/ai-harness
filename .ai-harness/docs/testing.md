@@ -6,6 +6,7 @@
 
 - `tests/run.sh` — 진입점. 영역 파일을 하나씩 별도 프로세스로 돌리고 영역별 통과 수·시간을 낸다.
 - `tests/lib.sh` — 공용 준비(`$TEST_TMP`·격리 환경변수·fixture 경로·`make_repo`)와 단언 함수. 영역 파일이 source한다.
+- `tests/lib-<이름>.sh` — 몇몇 영역만 쓰는 공용 헬퍼(영역 아님). 예: `lib-driver.sh`는 그래프 러너 영역(`workflow*`)이 `lib.sh` 다음에 source한다. 바뀌면 `--changed`가 그 파일 이름을 언급하는 영역을 고른다.
 - `tests/<영역>.sh` — 영역별 블록. 목록은 `bash tests/run.sh --list`, 각 파일 머리 주석이 다루는 범위다. 파일마다 자기 `$TEST_TMP`를 쓰므로 영역끼리 상태를 나누지 않는다.
 
 ## 실행
@@ -32,7 +33,7 @@ scripts/release-prep.sh --check                                          # 버�
 
 ## 작성 규칙 (실측)
 
-- 새 블록은 다루는 기능의 영역 파일 끝에 붙인다. 같은 파일 안의 앞 블록 변수·함수는 써도 되지만 다른 영역 파일의 것은 쓸 수 없다 — 여러 영역이 쓰는 고정 값은 `tests/lib.sh`에 둔다. 새 영역 파일은 기존 파일처럼 `source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"`로 시작해 `finish_tests`로 끝낸다.
+- 새 블록은 다루는 기능의 영역 파일 끝에 붙인다. 같은 파일 안의 앞 블록 변수·함수는 써도 되지만 다른 영역 파일의 것은 쓸 수 없다 — 모든 영역이 쓰는 고정 값은 `tests/lib.sh`에, 몇몇 영역만 쓰는 헬퍼는 `tests/lib-<이름>.sh`에 둔다. 영역 하나가 3분을 넘기면 블록을 새 영역으로 나눠 `-j`가 듣게 한다(그래프 러너는 `workflow`·`workflow-feature`·`workflow-publish`·`workflow-merge`·`workflow-runs`). 새 영역 파일은 기존 파일처럼 `source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"`로 시작해 `finish_tests`로 끝낸다.
 - 한 블록 = 한 동작. 블록 위에 왜 필요한지 한국어 주석, 본문은 `assert_eq <기대> <실제> <설명>`·`assert_contains`·`assert_file`·`assert_not_file`·`fail`, 끝에 `pass "<설명>"`.
 - 임시 파일은 `$TEST_TMP`(영역 파일마다 만들고 종료 시 지움) 아래에만. 백그라운드로 띄운 서버는 인자에 `$TEST_TMP` 경로가 들어가게 한다 — 종료 시 `cleanup()`이 `$TEST_TMP`를 인자에 가진 프로세스를 모두 끈다. 사용자 홈을 건드리지 않게 격리 환경변수를 쓴다: `HARNESS_METRICS_DIR`, `HM_AUTO_WORKTREE_DIR`, `HM_CLAUDE_SKILLS_DIR`·`HM_CODEX_SKILLS_DIR`, `HM_BACKFILL_INTERVAL_HOURS=0`, `HM_SETUP_HINT=0`, `HM_IMPACT_HINT=0`(파일 머리에서 기본값을 정한다).
 - git이 필요한 테스트는 `$TEST_TMP` 아래에 `git init -q`로 저장소를 만들고 `user.email test@example.com`을 설정한다. 원격은 `git init --bare` 로컬 경로.
