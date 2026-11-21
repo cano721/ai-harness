@@ -2123,4 +2123,35 @@ unset HM_HEAVY_SLOTS HM_HEAVY_MEM_FREE_PCT HM_HEAVY_WAIT
 rm -f "$HS_DIR"/*.json
 pass "background heavy commands hold their slot while the server lives"
 
+# 상태 표시줄의 경과 시간·비용은 일이 멈춰도 바뀐다(#465). 화면 전체로 변화를 보면 정체(stalled)가 영원히 잡히지 않으므로
+# 입력창 구분선 둘 중 위쪽 것 위의 내용만 본다.
+cat >"$WD/bin/orca" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${2:-}" == list ]]; then echo '{"ok":true,"result":{"terminals":[]}}'; exit 0; fi
+n=$(( $(cat "$WD_DIR/clock" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$WD_DIR/clock"
+sed "s/{{clock}}/$n/" "$WD_DIR/screen" | jq -Rsc '{ok:true, result:{terminal:{status:"running", tail:(split("\n"))}}}'
+EOF
+chmod +x "$WD/bin/orca"
+WD_RULE="$(printf '%.0s─' {1..40})"
+printf '✻ Running tests\n%s\n❯ \n%s\nctx 10%% | {{clock}}m | cost 0.10\n' "$WD_RULE" "$WD_RULE" >"$WD/screen"
+rm -f "$WD/clock"
+WD_OUT="$(wait_delegation --done "$WD/none.md" --terminal "$WD_HANDLE" --interval 1 --input-idle 100 --stall 2 --timeout 6)"
+assert_contains "$WD_OUT" "reason=stalled" "a screen whose only change is the status line clock is stalled"
+assert_contains "$(<"$ROOT/scripts/wait-delegation.sh")" "content_of" "the change hash reads only the content above the prompt"
+pass "delegation wait sees a stall behind a ticking status line"
+
+# 조율 세션 mod(mods/harness-delegations)는 wait-delegation.sh 와 같은 문구로 입력 대기·작업 중을 판정한다(#465).
+# 한쪽만 고치면 프롬프트 위 줄과 대기 스크립트가 같은 화면을 다르게 읽는다.
+WDM_SH="$(<"$ROOT/scripts/wait-delegation.sh")"
+WDM_TS="$(<"$ROOT/mods/harness-delegations/hooks/register.tsx")"
+wdm_ts() { sed -n "s#^const $1 = /\\(.*\\)/i\$#\\1#p" <<<"$WDM_TS" | sed 's#\\/#/#g'; }
+WDM_ASK_SH="$(grep -o "grep -Eqi '[^']*Enter to (select|confirm)[^']*'" <<<"$WDM_SH" | sed "s/^grep -Eqi '//; s/'\$//")"
+WDM_BUSY_SH="$(grep -o "grep -Eqi '[^']*esc to interrupt[^']*'" <<<"$WDM_SH" | sed "s/^grep -Eqi '//; s/'\$//")"
+[ -n "$WDM_ASK_SH" ] && [ -n "$WDM_BUSY_SH" ] || fail "wait-delegation.sh patterns are readable"
+assert_eq "$WDM_ASK_SH" "$(wdm_ts ASK)" "the mod reads an input prompt with the same pattern as wait-delegation.sh"
+assert_eq "$WDM_BUSY_SH" "$(wdm_ts BUSY)" "the mod reads a working screen with the same pattern as wait-delegation.sh"
+assert_eq "harness-delegations" "$(jq -r '.plugins[] | select(.source == "./mods/harness-delegations") | .name' "$ROOT/.claude-plugin/marketplace.json")" \
+  "the marketplace lists the mod as its own optional plugin"
+pass "delegation mod and wait script share their screen patterns"
+
 finish_tests

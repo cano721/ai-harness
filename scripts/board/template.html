@@ -1339,6 +1339,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (bar) g.append(bar);
     return g;
   }
+  // 묶음 구성원(작업자)이 끝났으면 '쉬는 중'이 아니라 끝남으로, 낸 PR이 있으면 그 번호까지 — 맡긴 쪽이 결과를 바로 읽는다.
+  const memberStatus = (it) => {
+    if (srcOf(it) !== 'work' || it.live || !['idle', 'done'].includes(it.state)) return statusOf(it)[1];
+    const pr = ((it.refs && it.refs.prs) || [])[0];
+    const n = pr && (pr.match(/\/(\d+)$/) || [])[1];
+    return n ? `끝남 · PR #${n}` : '끝남';
+  };
   function memberList(items, extra) {
     const ul = el('ul', 'b-members');
     for (const it of items) {
@@ -1346,7 +1353,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (openable(it)) {
         const b = el('button', 'b-member'); b.type = 'button'; b.dataset.open = it.id; b.dataset.key = 'm:' + it.id;
         if (selected === it.id) b.setAttribute('aria-current', 'true');
-        b.append(el('b', null, titleOf(it)), el('span', 'ds-caption', [it.worktree ? `${it.project} · worktree ${it.worktree}` : it.project, statusOf(it)[1], ago(it.at), bodyOf(it) && firstSentence(bodyOf(it), 70)].filter(Boolean).join(' · ')));
+        b.append(el('b', null, titleOf(it)), el('span', 'ds-caption', [it.worktree ? `${it.project} · worktree ${it.worktree}` : it.project, memberStatus(it), ago(it.at), bodyOf(it) && firstSentence(bodyOf(it), 70)].filter(Boolean).join(' · ')));
         b.onclick = () => openItem(it);
         li.append(b);
       } else {
