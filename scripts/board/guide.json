@@ -8,7 +8,9 @@
         { "id": "skills/setup", "since": "0.50.0", "run": "global", "title": "처음 셋업", "summary": "기본 스킬 카탈로그와 외부 디자인 스킬을 고르고, 토큰을 안전하게 저장하고, 자동화 옵션을 켭니다.", "ask": "하네스 셋업해줘" },
         { "id": "skills/harness-init", "since": "0.16.0", "run": "repo", "prefer": "unharnessed", "title": "프로젝트 하네스 만들기", "summary": "프로젝트를 실측해 규칙 문서·워크플로·역할을 만들고, 이미 있으면 최신 템플릿에 안전하게 맞춥니다.", "ask": "이 저장소에 하네스 깔아줘" },
         { "id": "skills/harness-update", "since": "0.16.0", "run": "global", "title": "플러그인 업데이트", "summary": "최신 버전을 확인하고, 요청할 때만 플러그인을 업데이트합니다.", "ask": "하네스 최신 버전 확인해줘" },
-        { "id": "skills/board", "since": "0.63.0", "title": "하네스 보드", "summary": "작업 세션·하네스 동작·효과·설정을 이 화면 하나에서 보고 답합니다.", "ask": "보드 열어줘", "view": "list" }
+        { "id": "skills/board", "since": "0.63.0", "title": "하네스 보드", "summary": "작업 세션·하네스 동작·효과·설정을 이 화면 하나에서 보고 답합니다.", "ask": "보드 열어줘", "view": "list" },
+        { "id": "skills/handsfree", "since": "0.91.0", "run": "global", "title": "핸즈프리 음성 입력", "summary": "손을 쓰지 않고 \"헤이 클로드, ~\"로 Orca 세션에 지시하고 승인 창에 답합니다. 받아쓰기는 기기 안에서 합니다(macOS·Orca).", "ask": "핸즈프리 켜줘" },
+        { "id": "skills/handsfree-ui", "since": "0.91.0", "run": "global", "title": "핸즈프리 상태 화면", "summary": "방금 들은 말과 결과, 세션별 상태, 마이크 음량을 보고 호출어·별명·단축 명령·소리를 설정합니다.", "ask": "핸즈프리 화면 열어줘" }
       ]
     },
     {
