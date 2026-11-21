@@ -16,6 +16,8 @@
 
 - **맡긴 세션의 진행을 조율 세션 안에서 봅니다(선택 mod)** — `/plugin install harness-delegations@ai-harness`로 설치하는 Claude Code mod가, 이 세션이 Orca 탭으로 맡긴 세션(workspace 멤버 인계, `orca agent launch`, `orca worktree create --agent`)의 상태를 프롬프트 위 한 줄로 보입니다: 작업 중·입력 대기·정체·완료(화면의 PR 번호)·종료. 항목을 누르면 그 탭으로 가고, 탭이 닫혀 같은 worktree에 세션이 다시 뜨면 그 탭을 이어 봅니다. 상태가 바뀌면 알림과 함께 조율 세션에 메시지를 보내 에이전트가 결과(PR·CI, 질문 내용, 정체 원인)를 바로 보고합니다. `/harness-delegations`로 마지막 화면 몇 줄이 든 패널을 엽니다. (#465)
   요약: `/plugin install harness-delegations@ai-harness`로 설치하면 Orca 탭으로 맡긴 세션의 상태(작업 중·입력 대기·정체·완료)가 프롬프트 위 한 줄로 보이고, 상태가 바뀌면 에이전트가 결과를 바로 보고합니다.
+- **병합된 worktree를 끝난 일 정리에서 확인하고 안전하게 지웁니다** — 워크플로 러너는 병합 뒤 worktree를 지우지 않고, PR 병합·깨끗한 작업 트리·원격에 없는 커밋 없음·중첩 clone 없음·링크된 worktree 조건만 판정해 `state.json`의 `worktree_cleanup`(정리 가능 여부와 이유)과 진행 로그에 남깁니다. 실제 삭제는 보드의 끝난 일 정리(세션과 무관한 후보 포함)와 workspace 세션 정리가 하며, 실행 직전 조건을 다시 확인합니다. 그 worktree를 쓰는 살아 있는 세션(보드에서 숨긴 세션 포함)이 있거나 세션 조회에 실패하면 지우지 않고 이유와 함께 보존합니다. Orca 삭제가 실패하면 강제 없이 `git worktree remove`로 넘어갑니다. (#454)
+  요약: 보드의 "끝난 일 정리"에서 PR이 병합되고 변경이 남지 않은 worktree를 골라 지울 수 있습니다. 러너는 지우지 않고 정리 가능 여부만 기록하며, 살아 있는 세션이 있거나 확인하지 못하면 보존합니다.
 
 ### 동작 변경
 

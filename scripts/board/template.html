@@ -1783,7 +1783,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const leftNote = (left) => el('p', 'ds-caption b-line', left.map((l) => l.label).join(' · '));
   function renderCleanup() {
     $('dtitle').textContent = '끝난 일 정리';
-    $('dsub').textContent = '목록에서 숨기고 쉬는 세션을 닫습니다. 대화 기록은 남고, 숨긴 항목은 다시 보이게 할 수 있습니다.';
+    $('dsub').textContent = '끝난 일과 세션에 연결되지 않은 worktree를 확인합니다. 조건을 만족한 worktree만 선택해 지웁니다.';
     const body = $('dbody'), foot = $('dfoot'); foot.replaceChildren(); foot.hidden = false;
     const parts = [];
     const rangeLabel = el('h3', 'ds-label', '범위'); rangeLabel.id = 'cl-range';
@@ -1801,17 +1801,23 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (tool.err) parts.push(notice('danger', tool.err));
     if (!tool.plan) { const sr = el('p', 'ds-sr', '정리할 항목을 확인하는 중'); sr.setAttribute('role', 'status'); parts.push(sr, skeleton(2)); body.replaceChildren(...parts); return; }
-    const plan = tool.plan, left = tool.left || [], sessions = plan.filter((x) => x.session), closing = plan.filter((x) => x.close).length;
-    const can = sessions.filter((x) => x.worktree && x.worktree.removable).length, cannot = sessions.length - can;
+    const plan = tool.plan, left = tool.left || [], ordinary = plan.filter((x) => !x.worktree_candidate), sessions = ordinary.filter((x) => x.session), candidates = plan.filter((x) => x.worktree_candidate), closing = plan.filter((x) => x.close).length;
+    const can = sessions.filter((x) => x.worktree && x.worktree.removable).length + candidates.filter((x) => x.removable).length;
+    const cannot = sessions.filter((x) => x.worktree && !x.worktree.removable).length + candidates.filter((x) => !x.removable).length;
     if (!plan.length) parts.push(empty('정리할 끝난 일이 없습니다.', tool.older ? '범위를 넓히면 더 최근에 끝난 일도 정리할 수 있습니다.' : '작업 중·답 대기 세션은 정리하지 않습니다.'));
     else {
-      parts.push(el('p', 'b-line', `${plan.length}개를 목록에서 숨깁니다${closing ? ` · 쉬는 세션 ${closing}개를 닫습니다` : ''}.`));
+      parts.push(el('p', 'b-line', `${ordinary.length}개 항목을 목록에서 숨깁니다${closing ? ` · 쉬는 세션 ${closing}개를 닫습니다` : ''}${candidates.length ? ` · 세션과 무관한 worktree 후보 ${candidates.length}개` : ''}.`));
       const lab = el('label', 'b-check'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = tool.worktree; cb.disabled = !can; cb.dataset.key = 'cl-wt';
       cb.onchange = () => { tool.worktree = cb.checked; toolDone(); };
-      lab.append(cb, el('span', null, can ? `worktree도 삭제 — 지울 수 있는 ${can}개만(변경·올리지 않은 커밋 없음)${cannot ? `, 나머지 ${cannot}개는 이유와 함께 건너뜁니다` : ''}` : 'worktree 삭제 — 지울 수 있는 worktree가 없습니다'));
+      lab.append(cb, el('span', null, can ? `worktree도 삭제 — 조건을 통과한 ${can}개만${cannot ? `, 나머지 ${cannot}개는 이유와 함께 보존` : ''}` : 'worktree 삭제 — 조건을 통과한 worktree가 없습니다'));
       parts.push(lab);
       const rows = el('div', 'ds-rows');
       for (const x of plan) {
+        if (x.worktree_candidate) {
+          const d = el('div', 'ds-row'), h = el('div', 'ds-row__head'); const t = el('span', 'ds-row__title', shortTitle(x.title || '') || '(worktree 이름 없음)'); t.title = x.path || '';
+          const detail = tool.worktree ? (x.removable ? 'worktree 삭제' : `보존 — ${x.reason || '안전 조건을 통과하지 못함'}`) : (x.removable ? '삭제 조건 통과' : `보존 — ${x.reason || '안전 조건을 통과하지 못함'}`);
+          h.append(t, el('span', 'ds-row__side', `${scopeName(x.project)} · ${x.branch || '브랜치 확인 불가'} · ${detail}`)); d.append(h); rows.append(d); continue;
+        }
         const what = ['숨김'];
         if (x.close) what.push('세션 닫기');
         if (tool.worktree && x.worktree) what.push(x.worktree.removable ? 'worktree 삭제' : `worktree 유지(${x.worktree.reason || '지울 수 없음'})`);
@@ -1822,7 +1828,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (left.length) parts.push(leftNote(left));
     body.replaceChildren(...parts);
-    const go = btn(plan.length ? `${plan.length}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
+    const actionCount = ordinary.length + (tool.worktree ? candidates.filter((x) => x.removable).length : 0);
+    const go = btn(actionCount ? `${actionCount}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
     if (!plan.length) go.setAttribute('aria-disabled', 'true');
     go.onclick = async () => {
       if (!plan.length || go.getAttribute('aria-busy') === 'true') return;
