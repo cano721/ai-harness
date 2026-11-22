@@ -8,7 +8,7 @@ CODE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.absp
 sys.path.insert(0, CODE)
 import orca  # noqa: E402
 import reading  # noqa: E402
-from router import has_wake, route, squash  # noqa: E402
+from router import has_wake, route, squash, wake_variants  # noqa: E402
 
 with open(os.path.join(CODE, "defaults.json"), encoding="utf-8") as f:
     CFG = json.load(f)
@@ -92,6 +92,66 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(self.kind("헤이 클로드 다음"), "prompt")
         named = self.t("헤이 클로드 결제 세션으로 이동")
         self.assertEqual((named["type"], named["name"]), ("goto_session_named", "결제"))
+
+    def test_wake_variants(self):
+        for text in ["헤이, 클로드. 테스트 돌려 줘", "헤이클로드 테스트 돌려 줘", "Hey, Claude. 테스트 돌려 줘",
+                     "- 헤이 클로드, 테스트 돌려 줘", "헤이 클로드야, 테스트 돌려 줘",
+                     "헤이 클로드, 헤이 클로드 테스트 돌려 줘"]:
+            self.assertEqual(self.t(text), {"type": "prompt", "text": "테스트 돌려 줘"}, text)
+        self.assertEqual(self.kind("헤이 클로드."), "wake_only")
+        self.assertEqual(route("아무 말", dict(CFG, wake_words=["", " "]))["type"], "ignore")
+
+    def test_wake_inside_sentence(self):
+        self.assertTrue(has_wake("다음 단계는 검증입니다 헤이 클로드 조용", CFG["wake_words"]))
+        self.assertFalse(has_wake("다음 단계는 검증입니다", CFG["wake_words"]))
+
+    def test_armed_marks_action(self):
+        self.assertEqual(self.t("테스트 돌려 줘", armed=True), {"type": "prompt", "text": "테스트 돌려 줘", "armed": True})
+        self.assertNotIn("armed", self.t("헤이 클로드 테스트 돌려 줘", armed=True))
+
+    def test_prompt(self):
+        self.assertEqual(self.t("헤이 클로드, NJ-3550 PR 올려 줘."), {"type": "prompt", "text": "NJ-3550 PR 올려 줘"})
+        for text in ["하지 말고 테스트부터 돌려", "좋아 그럼 PR 올려", "이 세션에서 한 일 요약해 줘"]:
+            self.assertEqual(self.kind("헤이 클로드 " + text), "prompt", text)
+
+    def test_approve_is_explicit(self):
+        for text in ["승인", "허용해 줘", "어 그러자", "알겠어요", "진행해", "오케이"]:
+            self.assertEqual(self.kind("헤이 클로드, " + text), "approve", text)
+        # 망설임·맞장구·반대말과 한 음절 차이인 말은 승인이 아니다.
+        for text in ["어", "응", "해", "고", "네", "계속", "확인", "괜찮아", "해도 돼", "한번", "이번"]:
+            self.assertEqual(self.kind("헤이 클로드, " + text), "prompt", text)
+
+    def test_deny_and_interrupt(self):
+        for text in ["거절", "하지 마", "안 할 거야", "싫어요"]:
+            self.assertEqual(self.kind("헤이 클로드 " + text), "deny", text)
+        for text in ["중단", "그만해 줘", "취소"]:
+            self.assertEqual(self.kind("헤이 클로드 " + text), "interrupt", text)
+        for text in ["잠깐만", "기다려 봐"]:
+            self.assertEqual(self.kind("헤이 클로드 " + text), "prompt", text)
+
+    def test_choose(self):
+        for text, number in [("2번", 2), ("삼 번", 3), ("두 번째", 2), ("세 번째 걸로 해", 3), ("1번으로 해 줘", 1)]:
+            action = self.t("헤이 클로드 " + text)
+            self.assertEqual((action["type"], action.get("number")), ("choose", number), text)
+
+    def test_sessions(self):
+        self.assertEqual(self.t("헤이 클로드 3번 세션"), {"type": "goto_session", "index": 3})
+        self.assertEqual(self.t("헤이 클로드, 세 번 세션으로 가줘")["index"], 3)
+        self.assertEqual(self.kind("헤이 클로드 다음 세션"), "next_session")
+        self.assertEqual(self.kind("헤이 클로드 다음"), "prompt")
+        named = self.t("헤이 클로드 잡다로그 세션으로 이동")
+        self.assertEqual((named["type"], named["name"]), ("goto_session_named", "잡다로그"))
+
+    def test_wake_variants(self):
+        found = wake_variants("헤이 클로드")
+        for shape in ["에이 클로드", "애이 클로드", "헤이 끌로드", "hey claude", "에이 클라우드"]:
+            self.assertIn(shape, found)
+        self.assertNotIn("헤이 클로드", found)
+        # 한 단어 안에서는 한 음절만, 초성·중성 중 한쪽만 바꾼다.
+        self.assertNotIn("헤이 끌로뜨", found)
+        self.assertEqual(wake_variants("자비스")[:1], ["jarvis"])
+        self.assertIn("짜비스", wake_variants("자비스"))
+        self.assertLessEqual(len(wake_variants("오케이 비서 님")), 60)
 
     def test_this_session_is_not_session_two(self):
         for text in ["이번 세션에 한 일 정리해 줘", "이번 세션", "한번 세션 봐 줘"]:

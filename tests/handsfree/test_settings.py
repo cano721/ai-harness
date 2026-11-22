@@ -43,6 +43,17 @@ class ValidateTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=str(words)):
                 ui.validate({"wake_words": words}, CFG)
 
+    def test_wake_fill(self):
+        words = ui.validate({"wake_words": ["자비스"], "wake_fill": True}, CFG)["wake_words"]
+        self.assertEqual(words[:2], ["자비스", "jarvis"])
+        self.assertIn("짜비스", words)
+        # 적어 둔 말은 앞에 그대로 두고, 채우지 않으면 아무것도 더하지 않는다.
+        self.assertEqual(ui.validate({"wake_words": ["자비스", "자비쓰 야"], "wake_fill": True}, CFG)["wake_words"][:2],
+                         ["자비스", "자비쓰 야"])
+        self.assertEqual(ui.validate({"wake_words": ["자비스"]}, CFG), {"wake_words": ["자비스"]})
+        self.assertLessEqual(len(ui.validate({"wake_words": ["헤이 클로드"], "wake_fill": True}, CFG)["wake_words"]),
+                             ui.WAKE_LIMIT)
+
     def test_custom_wake_word_routes(self):
         from router import route
         cfg = dict(CFG, wake_words=["자비스", "쟈비스"])

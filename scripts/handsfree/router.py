@@ -24,6 +24,59 @@ LEADING = r"^[\s\.,!\?\-\"'“‘]*"
 TARGETABLE = ("approve", "approve_force", "deny", "interrupt", "explain_dialog", "read_last", "read_more", "read_all")
 
 
+# 받아쓰기가 자주 헷갈리는 소리. 초성 ㄱㄲㅋ·ㄷㄸㅌ·ㅂㅃㅍ·ㅈㅉㅊ·ㅅㅆ, 중성 ㅐㅔ·ㅒㅖ·ㅙㅚㅞ, ㅢ→ㅣ, 단어 첫 ㅎ→ㅇ.
+CHO_GROUPS = [{0, 1, 15}, {3, 4, 16}, {7, 8, 17}, {12, 13, 14}, {9, 10}]
+JUNG_GROUPS = [{1, 5}, {3, 7}, {10, 11, 15}]
+H, IEUNG, UI, I = 18, 11, 19, 20
+# 소리 규칙으로 안 나오는 표기(영어·장음). 단어 통째로 바뀐다.
+LOANWORDS = {"헤이": ["hey", "헤"], "클로드": ["claude", "클라우드", "클로우드"], "오케이": ["ok", "okay"],
+             "자비스": ["jarvis"], "하이": ["hi"]}
+
+
+def _syllable_alts(ch, word_start):
+    code = ord(ch) - 0xAC00
+    if not 0 <= code < 11172:
+        return []
+    cho, jung, jong = code // 588, code % 588 // 28, code % 28
+    chos = sorted(next((g for g in CHO_GROUPS if cho in g), {cho}))
+    jungs = sorted(next((g for g in JUNG_GROUPS if jung in g), {I} if jung == UI else {jung}) | {jung})
+    # 초성과 중성 중 한쪽만 바꾼다. 둘 다 바꾸면 다른 말이 된다. 단어 첫 ㅎ이 빠지는 것("헤이"→"애이")만 함께 바뀐다.
+    pairs = [(c, jung) for c in chos] + [(cho, j) for j in jungs]
+    if word_start and cho == H:
+        pairs += [(IEUNG, j) for j in jungs]
+    alts = [chr(0xAC00 + c * 588 + j * 28 + jong) for c, j in pairs]
+    return [s for s in dict.fromkeys(alts) if s != ch]
+
+
+def _word_alts(word):
+    alts = list(LOANWORDS.get(word, []))
+    for i, ch in enumerate(word):
+        alts += [word[:i] + s + word[i + 1:] for s in _syllable_alts(ch, i == 0)]
+    return [a for a in dict.fromkeys(alts) if a != word]
+
+
+def wake_variants(wake, limit=60):
+    """호출어가 받아쓰기에서 달리 적힐 만한 모양. 한 단어만 바뀐 것을 먼저, 두 단어가 함께 바뀐 것을 뒤에 둔다.
+    단어 안에서는 한 음절만 바꾼다. 여러 음절을 함께 바꾸면 전혀 다른 말이 되어 일상 대화에서 불린다."""
+    words = wake.split()
+    alts = [_word_alts(w) for w in words]
+    shapes = [words[:i] + [a] + words[i + 1:] for i, options in enumerate(alts) for a in options]
+    for i in range(len(words)):
+        for j in range(i + 1, len(words)):
+            for a in alts[i]:
+                for b in alts[j]:
+                    shape = list(words)
+                    shape[i], shape[j] = a, b
+                    shapes.append(shape)
+    seen, result = {squash(wake)}, []
+    for shape in shapes:
+        text = " ".join(shape)
+        if squash(text) not in seen:
+            seen.add(squash(text))
+            result.append(text)
+    return result[:limit]
+
+
 def squash(text):
     """비교용: 공백·문장부호를 없애고 소문자로."""
     text = unicodedata.normalize("NFC", text).lower()

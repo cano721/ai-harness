@@ -209,7 +209,9 @@ def validate(changes, cfg):
             clean[key] = validate_aliases(value, cfg)
             continue
         if key == "wake_words":
-            clean[key] = None if value is None else validate_wake(value, cfg)
+            clean[key] = None if value is None else validate_wake(value, cfg, fill=changes.get("wake_fill") is True)
+            continue
+        if key == "wake_fill":
             continue
         if key == "macros":
             clean[key] = validate_macros(value, cfg)
@@ -240,10 +242,14 @@ def validate(changes, cfg):
     return clean
 
 
-def validate_wake(value, cfg):
-    """호출어. 첫 번째가 대표 이름(받아쓰기 힌트에도 들어간다), 나머지는 잘못 받아써질 때의 변형."""
-    from router import squash
-    if not isinstance(value, list) or not 1 <= len(value) <= 40:
+WAKE_LIMIT = 80
+
+
+def validate_wake(value, cfg, fill=False):
+    """호출어. 첫 번째가 대표 이름(받아쓰기 힌트에도 들어간다), 나머지는 잘못 받아써질 때의 변형.
+    fill 이면 대표 이름의 비슷한 소리(router.wake_variants)를 뒤에 채운다. 규칙에 걸리는 모양은 조용히 뺀다."""
+    from router import squash, wake_variants
+    if not isinstance(value, list) or not 1 <= len(value) <= WAKE_LIMIT:
         raise ValueError("호출어를 하나 이상 정하세요")
     phrases = {squash(p) for ps in cfg["commands"].values() for p in ps}
     clean = []
@@ -264,6 +270,15 @@ def validate_wake(value, cfg):
             clean.append(word)
     if not clean:
         raise ValueError("호출어를 하나 이상 정하세요")
+    if fill:
+        known = {squash(w) for w in clean}
+        for word in wake_variants(clean[0]):
+            key = squash(word)
+            if len(clean) >= WAKE_LIMIT:
+                break
+            if key not in known and 3 <= len(key) <= 20 and key not in phrases and not key.isdigit():
+                known.add(key)
+                clean.append(word)
     return clean
 
 

@@ -190,6 +190,7 @@
   details.more { margin-top: 10px; font-size: 12px; color: var(--soft); }
   details.more summary { cursor: pointer; }
   details.more textarea { margin-top: 6px; resize: vertical; }
+  details.more #wake-fill { display: block; margin-top: 6px; }
   .suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--soft); }
   .suggest button { font-size: 12px; border: 1px dashed var(--accent); color: var(--accent); background: var(--accent-bg); border-radius: 999px; padding: 0 9px; cursor: pointer; }
   .pair { display: grid; grid-template-columns: 140px minmax(0, 1fr) 24px; gap: 6px; padding: 3px 0; align-items: center; }
@@ -298,8 +299,9 @@
       <div id="wake-suggest"></div>
       <details class="more">
         <summary id="wake-tip">함께 받을 말</summary>
-        <div class="hint-line" style="margin: 6px 0 0">받아쓰기가 호출어를 다르게 적는 모양입니다. 쉼표로 나눠 적습니다. ‘클로드’처럼 대화에 자주 나오는 말은 넣지 마세요.</div>
+        <div class="hint-line" style="margin: 6px 0 0">받아쓰기가 호출어를 다르게 적는 모양입니다. 호출어를 바꾸면 비슷한 소리(에이·애이, 클·끌·글, 영어 표기 등)를 저절로 채웁니다. 쉼표로 나눠 더하거나 뺄 수 있고, ‘클로드’처럼 대화에 자주 나오는 말은 넣지 마세요.</div>
         <textarea id="wake-more" rows="3" aria-label="함께 받을 말"></textarea>
+        <button type="button" class="reset" id="wake-fill" title="지금 호출어와 비슷한 소리를 목록에 더하고 저장합니다. 적어 둔 말은 그대로 둡니다">비슷한 소리 채우기</button>
       </details>
     </section>
     <div class="set-bar">
@@ -728,10 +730,12 @@ function fillPairs(box, entries, kind) {
   box.replaceChildren(...(entries.length ? entries : [["", ""]]).map(([a, b]) => pairRow(a, b, kind)));
 }
 
+let wakeLoaded = { main: "", more: "" };
 function showWake(data) {
   const [main, ...more] = data.wake_words;
   $("wake-main").value = main || "";
   $("wake-more").value = more.join(", ");
+  wakeLoaded = { main: main || "", more: $("wake-more").value };
   $("wake-reset").hidden = data.wake_is_default;
   $("wake-tip").textContent = "함께 받을 말 " + more.length + "개";
   const list = data.wake_suggestions || [];
@@ -747,15 +751,28 @@ function showWake(data) {
   });
   $("wake-suggest").replaceChildren(row);
 }
-async function saveWake(words) {
+async function saveWake(words, fill) {
   try {
-    const data = await post({ wake_words: words });
+    const before = words ? words.length : 0;
+    const data = await post(fill ? { wake_words: words, wake_fill: true } : { wake_words: words });
     showWake(data);
-    flash($("wake-saved"), "저장됨 · 이제 “" + data.wake_words[0] + "”");
+    const added = fill ? data.wake_words.length - before : 0;
+    flash($("wake-saved"), "저장됨 · 이제 “" + data.wake_words[0] + "”" + (added > 0 ? " · 비슷한 소리 " + added + "개 함께" : ""));
     guideKey = "";
   } catch (err) { flash($("wake-saved"), err.message, true); }
 }
-$("wake-save").onclick = () => saveWake([$("wake-main").value].concat($("wake-more").value.split(/[,\n]/)).map((w) => w.trim()).filter(Boolean));
+function wakeInput() {
+  const main = $("wake-main").value.trim();
+  const more = $("wake-more").value.split(/[,\n]/).map((w) => w.trim()).filter(Boolean);
+  return { main, more };
+}
+$("wake-save").onclick = () => {
+  const { main, more } = wakeInput();
+  // 호출어를 바꾸고 함께 받을 말은 손대지 않았으면, 옛 호출어의 변형은 버리고 새 호출어 것으로 채운다.
+  if (main !== wakeLoaded.main && $("wake-more").value === wakeLoaded.more) saveWake([main], true);
+  else saveWake([main].concat(more));
+};
+$("wake-fill").onclick = () => { const { main, more } = wakeInput(); saveWake([main].concat(more), true); };
 $("wake-reset").onclick = () => saveWake(null);
 
 async function savePairs(key, box, note) {
