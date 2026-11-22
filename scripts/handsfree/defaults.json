@@ -23,6 +23,7 @@
   "ai_fallback": true,
   "ai_model": "haiku",
   "follow_keyboard": true,
+  "follow_focus": true,
   "danger_patterns": ["rm -rf", "rm -fr", "--force", "push -f", "reset --hard", "clean -fd", "drop table", "drop database", "truncate", "delete from", "kubectl delete", "terraform destroy", "--no-verify"],
   "broad_option_patterns": ["don't ask again", "always allow", "auto-approve", "accept edits", "for this session", "always"],
   "model": "ggml-large-v3-turbo-q5_0.bin",

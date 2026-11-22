@@ -200,7 +200,24 @@ def snapshot():
         listing = pool.submit(orca.sessions)
         shot = pool.submit(orca.screen, handle) if handle else None
         mem["screens"] = {handle: shot.result()} if shot else {}
-        return listing.result()
+        items = listing.result()
+    follow_focus(items)
+    return items
+
+
+def follow_focus(items):
+    """Orca 에서 클릭해 앞에 띄운 탭을 입력 대상으로 삼는다.
+    앞 탭이 바뀐 순간에만 따라간다. 늘 맞추면 키보드로 친 세션이나 "N번 세션"으로 정한 대상을 다음 말에 덮어쓴다."""
+    active = next((s for s in items if s.get("active")), None)
+    if not active:
+        return
+    state = common.load_state()
+    if state.get("seen_active") == active["handle"]:
+        return
+    common.update_state(seen_active=active["handle"])
+    if common.load_config().get("follow_focus", True) and state.get("current") != active["handle"]:
+        common.update_state(current=active["handle"])
+        common.log("→ 화면에서 고른 세션을 음성 입력 대상으로 바꿈: %s" % orca.label(active))
 
 
 def screen_of(handle):

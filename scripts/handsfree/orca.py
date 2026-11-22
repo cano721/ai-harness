@@ -22,31 +22,36 @@ def _run(*args, timeout=15):
     return subprocess.run([ORCA] + list(args), capture_output=True, text=True, timeout=timeout)
 
 
+def _nodes(node, test):
+    if isinstance(node, dict):
+        if test(node):
+            yield node
+        for value in node.values():
+            yield from _nodes(value, test)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _nodes(value, test)
+
+
 def sessions():
-    """화면 탭 순서대로 [{handle, title, tab}]. 탭마다 활성 터미널 하나."""
-    out = _run("terminal", "list").stdout
-    result, tab_title, seen_tabs = [], "", set()
-    in_layout = False
-    for line in out.splitlines():
-        if line.startswith("visual layout"):
-            in_layout = True
-            continue
-        if not in_layout:
-            continue
-        m = re.match(r"\s+tab (\S+)\s+(.*)$", line)
-        if m:
-            tab_title = m.group(2).strip()
-            continue
-        m = re.match(r"\s+\* (term_\S+)\s+(.*?)\s+tab=(\S+)", line)
-        if m and m.group(3) not in seen_tabs:
-            seen_tabs.add(m.group(3))
-            result.append({"handle": m.group(1), "title": m.group(2).strip(), "tab": tab_title})
+    """화면 탭 순서대로 [{handle, title, tab, active}]. 탭마다 활성 터미널 하나.
+    active 는 Orca 가 앞에 띄운 탭이다. 화면이 여러 칸으로 나뉘어 앞 탭이 둘 이상이면 어느 쪽도 고르지 않는다."""
+    data = json.loads(_run("terminal", "list", "--json", "--include-visual-layouts").stdout or "{}").get("result", {})
+    result = []
+    groups = list(_nodes(data.get("visualLayouts", []), lambda n: isinstance(n.get("tabs"), list)))
+    for group in groups:
+        for tab in group["tabs"]:
+            terms = list(_nodes(tab.get("panes"), lambda n: n.get("type") == "terminal" and n.get("handle")))
+            if not terms:
+                continue
+            term = next((t for t in terms if t.get("leafId") == tab.get("activeLeafId")), terms[0])
+            result.append({"handle": term["handle"], "title": term.get("title", ""), "tab": tab.get("title", ""),
+                           "active": len(groups) == 1 and tab.get("tabId") == group.get("activeTabId")})
     if result:
         return result
-    data = json.loads(_run("terminal", "list", "--json").stdout or "{}")
     return [
-        {"handle": t["handle"], "title": t.get("title", ""), "tab": t.get("title", "")}
-        for t in data.get("result", {}).get("terminals", [])
+        {"handle": t["handle"], "title": t.get("title", ""), "tab": t.get("title", ""), "active": False}
+        for t in data.get("terminals", [])
     ]
 
 

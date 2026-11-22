@@ -13,6 +13,8 @@ import common  # noqa: E402
 import listener  # noqa: E402
 import orca  # noqa: E402
 
+orca._real_sessions = orca.sessions
+
 with open(os.path.join(CODE, "defaults.json"), encoding="utf-8") as f:
     DEFAULTS = json.load(f)
 
@@ -56,6 +58,7 @@ class Harness(unittest.TestCase):
         common.set_user_config = lambda key, value: self.saved.update({key: value}) or True
         common.paused_until = lambda: self.paused[0]
         common.set_paused = lambda until: self.paused.__setitem__(0, until)
+        common.load_config = lambda: self.cfg
 
     def hear(self, text, **kw):
         self.said.clear()
@@ -63,6 +66,51 @@ class Harness(unittest.TestCase):
 
     def heard(self, fragment):
         self.assertTrue(any(fragment in line for line in self.said), "%r 없음: %s" % (fragment, self.said))
+
+
+class FollowFocusTest(Harness):
+    def click(self, handle):
+        for s in self.sessions:
+            s["active"] = s["handle"] == handle
+
+    def test_clicked_tab_becomes_target(self):
+        self.click("t3")
+        self.hear("헤이 클로드, 테스트 돌려 줘")
+        self.assertEqual(self.sent, [("t3", "테스트 돌려 줘", True)])
+
+    def test_unchanged_front_tab_keeps_voice_choice(self):
+        # 앞 탭이 그대로면 "1번 세션"이나 키보드로 정한 대상을 덮지 않는다.
+        self.click("t3")
+        self.hear("헤이 클로드, 테스트 돌려 줘")
+        self.state["current"] = "t1"
+        self.hear("헤이 클로드, 로그 봐 줘")
+        self.assertEqual(self.sent[-1], ("t1", "로그 봐 줘", True))
+
+    def test_off_or_split_view_does_not_follow(self):
+        self.cfg["follow_focus"] = False
+        self.click("t2")
+        self.hear("헤이 클로드, 테스트 돌려 줘")
+        self.cfg["follow_focus"] = True
+        for s in self.sessions:
+            s["active"] = False
+        self.hear("헤이 클로드, 로그 봐 줘")
+        self.assertEqual([h for h, _, _ in self.sent], ["t1", "t1"])
+
+    def test_sessions_reads_front_tab_from_orca(self):
+        layout = {"result": {"visualLayouts": [{"root": {"type": "group", "activeTabId": "B", "tabs": [
+            {"tabId": "A", "title": "가", "activeLeafId": "a2", "panes": {"type": "split", "children": [
+                {"type": "terminal", "handle": "ta1", "leafId": "a1", "title": "가1"},
+                {"type": "terminal", "handle": "ta2", "leafId": "a2", "title": "가2"}]}},
+            {"tabId": "B", "title": "나", "activeLeafId": "b1",
+             "panes": {"type": "terminal", "handle": "tb1", "leafId": "b1", "title": "나1"}}]}}]}}
+        real_sessions, real_run = orca._real_sessions, orca._run
+        try:
+            orca._run = lambda *a, **k: type("R", (), {"stdout": json.dumps(layout)})()
+            self.assertEqual(real_sessions(), [
+                {"handle": "ta2", "title": "가2", "tab": "가", "active": False},
+                {"handle": "tb1", "title": "나1", "tab": "나", "active": True}])
+        finally:
+            orca._run = real_run
 
 
 class PromptTest(Harness):
