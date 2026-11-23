@@ -863,6 +863,19 @@ assert_contains "$(<"$GW/err")" '/cd jobda' "hard block still hands off to the m
 assert_contains "$(<"$GW/err")" "Bash로 파일을 써서 우회하지 마세요" "hard block still forbids writing around it with Bash"
 assert_eq "" "$(<"$GW/out")" "hard block prints no ask decision"
 assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "block mode still passes a session opened in the member"
+# 같은 저장소를 NFC(cwd)와 NFD(파일, git 표기) 두 정규화 형태로 가리켜도 다른 멤버로 오판하지 않는다(#479).
+MG_NFC="$(printf '\355\224\204\353\241\234\354\240\235\355\212\270')"
+MG_NFD="$(printf '\341\204\221\341\205\263\341\204\205\341\205\251\341\204\214\341\205\246\341\206\250\341\204\220\341\205\263')"
+mkdir -p "$GW/$MG_NFD/.ai-harness" "$GW/$MG_NFD/src"
+printf '{"project_id":"uni"}\n' >"$GW/$MG_NFD/.ai-harness/harness.json"
+if [[ -d "$GW/$MG_NFC" ]]; then
+  assert_eq "0" "$(member_guard "$GW/$MG_NFC" "$GW/$MG_NFD/src/a.sh" "$GW/t/none.jsonl")" "the same repo named in NFC (cwd) and NFD (file) is one member"
+  assert_eq "" "$(<"$GW/out")" "a normalization-only difference prints no ask decision"
+  assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/$MG_NFC" "$GW/$MG_NFD/src/a.sh" "$GW/t/none.jsonl")" "block mode does not block the same repo under another normalization"
+  assert_eq "ask" "$(member_guard "$GW/$MG_NFC" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a genuinely different repo still asks next to the normalization case"
+else
+  pass "skip on normalization-sensitive fs"
+fi
 pass "member edit guard"
 
 # 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.

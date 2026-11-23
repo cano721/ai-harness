@@ -13,6 +13,17 @@ assert_contains "$(<"$FEATURE_SKILL")" "workflow-driver.sh start --workflow feat
 for runner in workflow-driver.sh implement-feature-driver.sh; do
   assert_eq "1" "$(jq --arg p ".ai-harness/workflows/$runner" '[.artifacts[] | select(.path == $p and .level == "standard" and (has("integration") | not) and (has("workflow") | not or $p != ".ai-harness/workflows/workflow-driver.sh"))] | length' "$ROOT/templates/managed-files.json")" "$runner ships to every standard project regardless of integration"
 done
+# 원본의 merge·deploy 러너 우선 계약은 Codex·Claude 생성물에도 함께 전달된다. (#478)
+for adapter in implement-feature fix-bug; do
+  for generated in ".agents/skills/$adapter/SKILL.md" ".claude/commands/$adapter.md"; do
+    GENERATED_CONTENT="$(<"$ROOT/$generated")"
+    assert_contains "$GENERATED_CONTENT" 'HM_DELIVERY_LEVEL_REPOS' "$generated keeps repository-specific delivery levels"
+    assert_contains "$GENERATED_CONTENT" 'must use the runner' "$generated requires the runner for merge and deploy"
+    assert_contains "$GENERATED_CONTENT" 'delivery level, its setting source, and why it could not be applied' "$generated keeps the first-line unapplied-level report"
+    assert_contains "$GENERATED_CONTENT" 'takes precedence over “PR only, do not merge”' "$generated preserves delivery-level precedence in delegation"
+  done
+done
+pass "generated adapters preserve delivery-level runner contracts"
 assert_eq "human" "$(jq -r '.nodes.approval.actor' "$FEATURE_GRAPH")" "approval is a human node the runner interrupts at"
 DRIVER_RC=0
 bash "$DRIVER" >/dev/null 2>&1 || DRIVER_RC=$?

@@ -182,6 +182,19 @@ pass "project implementation planning gate"
 }
 pass "approval follows personal settings in skills and generated adapters"
 
+# merge·deploy 개인 단계를 정한 작업은 원본 어댑터가 러너로 보내며, 불가하면 첫 줄에서 누락 사실을 설명한다. (#478)
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for adapter in implement-feature fix-bug; do
+  ADAPTER_CONTENT="$(<"$ROOT/templates/$adapter/SKILL.md")"
+  assert_contains "$ADAPTER_CONTENT" 'HM_DELIVERY_LEVEL_REPOS' "$adapter adapter resolves repository-specific delivery levels"
+  assert_contains "$ADAPTER_CONTENT" 'must use the runner' "$adapter adapter requires the runner for merge and deploy"
+  assert_contains "$ADAPTER_CONTENT" 'first line' "$adapter adapter reports an unapplied delivery level first"
+  assert_contains "$ADAPTER_CONTENT" 'delivery level, its setting source, and why it could not be applied' "$adapter adapter names every required first-line report field"
+  assert_contains "$ADAPTER_CONTENT" 'delegated agent' "$adapter adapter preserves the delivery level when delegating"
+  assert_contains "$ADAPTER_CONTENT" 'takes precedence over “PR only, do not merge”' "$adapter adapter gives delivery level precedence over delegation limits"
+done
+pass "delivery levels require the runner or report why they were not applied"
+
 # 공용 그래프 계약은 승인 전 write와 blocking finding의 done 전이를 막는다.
 FEATURE_GRAPH="$ROOT/templates/implement-feature/references/feature-delivery-graph.json"
 assert_file "$FEATURE_GRAPH"
