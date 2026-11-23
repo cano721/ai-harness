@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review·design-polish)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
-#   - 워크플로: --workflow feature|bug-fix|review|polish(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review·design-polish·investigate)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
+#   - 워크플로: --workflow feature|bug-fix|review|polish|investigate(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+#   - investigate(원인 조사): 코드를 고치지 않고 승인 대기 없이 끝난다. baseline(기준 커밋)·handoff(fix-bug 시작 명령)는 이 스크립트가 직접 정하고,
+#     report 노드가 낸 보고는 이 스크립트가 저장소 밖(~/.ai-harness/investigations/<저장소>/)에 쓴다.
 #   - polish(기존 화면 품질 개선): measure(브라우저 캡처·design-audit 채점) → diagnose(독립 비평, 고칠 목록) → approval(사람이 항목 선택,
 #     revise --select) → fix → verify → measure → review. 통과 판정(고른 주요 항목 0·audit 기준·기준선보다 나빠진 축 없음)은
 #     이 스크립트가 측정 결과로 한다. 측정 뒤 바뀐 파일은 review가, 검토 뒤 바뀐 파일은 publish가 거부하고 verify(검사)부터 다시 돈다.
@@ -42,7 +44,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [options]
+usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|investigate] [options]
 
   start   --request "<요청>" | --request-file <file>   계획 노드를 실행하고 승인 대기에서 멈춘다
           [--check "<검증 명령>"]...                    Brief(review는 수리 범위)가 제안한 검증에 더할 명령
@@ -57,7 +59,9 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [
   status                                                현재 노드·이력·다음 행동을 보인다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
-  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면이다.
+  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선) · investigate(수정 전 원인 조사).
+          start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면·조사할 버그 보고다.
+          investigate는 코드를 고치지 않고 승인 대기 없이 끝나며, 보고를 ~/.ai-harness/investigations/<저장소>/에 남긴다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
         start에 --runtime이 없으면: 부른 런타임(Claude Code·Codex) > integrations에 설치된 것이 하나 > 설치된 CLI가 하나. 못 정하면 exit 2
 
@@ -107,6 +111,7 @@ case "$WORKFLOW" in
   bug-fix|fix-bug) WORKFLOW=bug-fix ;;
   review) ;;
   polish|design-polish) WORKFLOW=polish ;;
+  investigate) ;;
   *) printf 'unknown workflow: %s\n' "$WORKFLOW" >&2; usage ;;
 esac
 # 조사 보고는 버그 수정을 시작할 때만 받는다. 다른 워크플로에는 그 보고를 대신할 노드가 없다.
@@ -213,6 +218,7 @@ case "$WORKFLOW" in
   bug-fix) GRAPH_NAME=bug-fix-graph.json TEMPLATE=fix-bug BRIEF_TITLE="Bug Fix Brief" UI_UNVERIFIED="implementation done, UI unverified" ;;
   review) GRAPH_NAME=review-graph.json TEMPLATE=review BRIEF_TITLE="Repair scope" UI_UNVERIFIED="code review clean, UI unverified" ;;
   polish) GRAPH_NAME=design-polish-graph.json TEMPLATE=design-polish BRIEF_TITLE="Polish fix list" UI_UNVERIFIED="screens unmeasured" ;;
+  investigate) GRAPH_NAME=investigate-graph.json TEMPLATE=investigate BRIEF_TITLE="Investigation report" UI_UNVERIFIED="investigation" ;;
 esac
 # 고칠 항목 선택은 polish의 고칠 목록에만 있다.
 [[ -z "$SELECT" || ( "$CMD" == revise && "$WORKFLOW" == polish ) ]] \
@@ -1423,6 +1429,7 @@ UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 MEASURE_SCHEMA="$RUN/measure-schema.json"
 DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
 POLISH_REVIEW_SCHEMA="$RUN/polish-review-schema.json"
+REPORT_SCHEMA="$RUN/report-schema.json"
 # 측정 세션이 캡처마다 같은 페이지 상태에서 평가하는 레이아웃 검사. 결과는 측정 JSON의 screens[].layout으로 받는다.
 LAYOUT_PROBE="$RUN/layout-probe.js"
 LAYOUT_PROBE_ID="layout-probe/1"
@@ -1568,6 +1575,113 @@ polish_summary() {
     + "; captures: baseline " + .baseline.evidence_dir + ", after " + ((.measurements | last).evidence_dir)'
 }
 
+# ---- investigate(수정 전 원인 조사) ----
+# 기준 커밋: 원격 기준 확정은 결정적인 git 연산이라 세션을 띄우지 않는다. fetch가 실패하거나 origin이 없어도 멈추지 않는다.
+investigate_baseline() {
+  local fetch=ok base="" cand base_commit="" head behind=0 ahead=0 read_from=working_tree note=""
+  if ! git -C "$REPO" remote get-url origin >/dev/null 2>&1; then
+    fetch=no_remote
+    note="the repository has no origin remote; "
+  elif ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch --quiet origin >"$RUN/baseline-fetch.log" 2>&1 </dev/null; then
+    fetch=failed
+    note="git fetch origin failed (see $RUN/baseline-fetch.log), so the origin refs may be stale; "
+  fi
+  base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  base="${base#origin/}"
+  for cand in "$base" "$(jq -r '.merge_policy.base // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" develop main master; do
+    [[ -n "$cand" ]] || continue
+    if base_commit="$(git -C "$REPO" rev-parse --verify --quiet "refs/remotes/origin/$cand^{commit}")"; then base="$cand"; break; fi
+    base_commit=""
+  done
+  head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$base_commit" ]]; then
+    behind="$(git -C "$REPO" rev-list --count "HEAD..$base_commit" 2>/dev/null || printf 0)"
+    ahead="$(git -C "$REPO" rev-list --count "$base_commit..HEAD" 2>/dev/null || printf 0)"
+    [[ "$behind" == 0 ]] || read_from="origin/$base"
+  else
+    base=""
+    note+="no origin base branch was found (origin/HEAD, merge_policy.base, develop, main, master), so the code is read from the working tree"
+  fi
+  note="${note%; }"
+  state_set '.code_baseline = {base: $b, base_commit: $c, head: $h, behind: $bh, ahead: $ah, read_from: $r, fetch: $f, note: $n}' \
+    --arg b "$base" --arg c "$base_commit" --arg h "$head" --argjson bh "$behind" --argjson ah "$ahead" --arg r "$read_from" --arg f "$fetch" --arg n "$note"
+  {
+    printf 'base: %s\nbase_commit: %s\nlocal HEAD: %s (behind %s, ahead %s)\nfetch: %s\nread_from: %s\n' \
+      "${base:+origin/$base}" "${base_commit:-none}" "${head:-none}" "$behind" "$ahead" "$fetch" "$read_from"
+    [[ -z "$note" ]] || printf 'note: %s\n' "$note"
+    if [[ "$read_from" == working_tree ]]; then
+      printf 'Read the code from the working tree.\n'
+    else
+      printf 'The local checkout is %s commit(s) behind origin/%s. Read the code at the remote base, not from the working tree: git show origin/%s:<path>, git grep <pattern> origin/%s, git log origin/%s. Name commit %s in the report.\n' \
+        "$behind" "$base" "$base" "$base" "$base" "$base_commit"
+    fi
+  } >"$RUN/baseline.out"
+  log "baseline: ${base:+origin/$base }${base_commit:0:12} · behind $behind · read from $read_from · fetch $fetch"
+}
+
+# 경로의 실제 위치(심볼릭 링크를 푼 것). 아직 없는 끝부분은 그대로 붙인다.
+physical_path() { # path
+  local p="$1" rest=""
+  [[ "$p" == /* ]] || p="$PWD/$p"
+  while [[ "$p" != / && "$p" == */ ]]; do p="${p%/}"; done
+  while [[ ! -d "$p" ]]; do
+    rest="/${p##*/}$rest"
+    p="${p%/*}"
+    [[ -n "$p" ]] || p=/
+  done
+  p="$(cd "$p" && pwd -P)"
+  printf '%s%s' "${p%/}" "$rest"
+}
+
+# 보고 디렉터리의 저장소 이름: manifest project_id, 없으면 main checkout 폴더 이름. worktree가 달라도 한곳에 모인다.
+investigation_repo_name() {
+  local name
+  name="$(jq -r '.project_id // "" | tostring' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+  [[ -n "$name" ]] || name="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && cd .. && pwd -P || true)"
+  [[ -n "$name" ]] || name="$REPO"
+  name="$(printf '%s' "${name##*/}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed 's/^[.-]*//')"
+  printf '%s' "${name:-repo}"
+}
+
+# report 노드는 읽기 전용이다. 그 출력으로 이 스크립트가 보고·댓글 초안을 저장소 밖에 쓴다. 같은 이름이 있으면 덮지 않고 -2, -3…을 붙인다.
+write_investigation_report() {
+  local out="$RUN/report.out" dir repo_dir slug ts name n=1 path comment="" slug_re='^[a-z0-9][a-z0-9-]{0,40}$'
+  dir="$(physical_path "${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/investigations/$(investigation_repo_name)")"
+  repo_dir="$(cd "$REPO" && pwd -P)"
+  case "$dir/" in
+    "$repo_dir"/*) finish incomplete 30 "the investigation folder $dir is inside the repository; set HARNESS_METRICS_DIR to a folder outside it and start again" ;;
+  esac
+  mkdir -p "$dir" 2>/dev/null || finish incomplete 30 "cannot create the investigation folder $dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  slug="$(jq -r .slug "$out")"
+  [[ "$slug" =~ $slug_re ]] || slug=investigation
+  ts="$(date +%Y%m%d-%H%M)"
+  name="$ts-$slug"
+  while [[ -e "$dir/$name.md" || -e "$dir/$name.comment.md" ]]; do
+    n=$((n + 1))
+    name="$ts-$slug-$n"
+  done
+  path="$dir/$name.md"
+  { state '"기준 커밋: \(.code_baseline.base_commit // "" | if . == "" then "none" else . end) (\(.code_baseline.read_from // "working_tree"), behind \(.code_baseline.behind // 0))"'
+    printf '\n'
+    jq -r .report "$out"; } >"$path"
+  if jq -e '.comment | test("\\S")' "$out" >/dev/null; then
+    comment="$dir/$name.comment.md"
+    jq -r .comment "$out" >"$comment"
+  fi
+  state_set '.investigation_report = {path: $p, comment: $c, outcome: $r[0].outcome, summary: ($r[0].summary | gsub("[\r\n]+"; " "))}' \
+    --arg p "$path" --arg c "$comment" --slurpfile r "$out"
+  log "investigation report: $path${comment:+ (comment draft: $comment)}"
+}
+
+investigate_inputs() { # 조사 노드가 함께 읽는 앞 노드 결과(있는 것만)
+  printf 'Bug report:\n%s' "$(state .request)"
+  [[ ! -s "$RUN/triage.out" ]] || printf '\n\nTriage from the triage node:\n%s' "$(<"$RUN/triage.out")"
+  [[ ! -s "$RUN/baseline.out" ]] || printf '\n\nCode baseline from the baseline node:\n%s' "$(<"$RUN/baseline.out")"
+  [[ ! -s "$RUN/domain_docs.out" ]] || printf '\n\nDomain contract from the domain_docs node:\n%s' "$(<"$RUN/domain_docs.out")"
+  [[ ! -s "$RUN/reproduce.out" ]] || printf '\n\nReproduction from the reproduce node:\n%s' "$(<"$RUN/reproduce.out")"
+}
+
 execute() {
   local node brief
   while :; do
@@ -1577,6 +1691,12 @@ execute() {
         fix_list)
           finish fix_list 0 "critique only — the project has no design rule document and reference screen to score against, so nothing was changed. Fix list: $RUN/brief.md (captures: $(state .baseline.evidence_dir)). To polish with scoring, create the rules with /ai-harness:design-system-builder, or when they already exist enable the design-system stack with /harness-init --reconfigure, then start again" ;;
         done)
+          if [[ "$WORKFLOW" == investigate ]]; then
+            finish "done" 0 "$(state '(.investigation_report // {}) as $r
+              | ("investigation report: " + ($r.path // "") + (if ($r.comment // "") != "" then "; comment draft: " + $r.comment else "" end)) as $files
+              | if $r.outcome == "code_fix_needed" then $files + "; code fix needed — next: " + (.handoff.command // "")
+                else "no code fix needed; " + $files end')"
+          fi
           if [[ "$WORKFLOW" == polish && "$(state '.polish_outcome // ""')" == nothing_to_fix ]]; then
             finish "done" 0 "nothing to polish$(state 'if (.items // [] | length) > 0 then ": no major item (approval auto selects major items only); the minor items are listed" else ": the critique found nothing to fix" end') in $RUN/brief.md; nothing was changed"
           fi
@@ -1705,7 +1825,7 @@ $(state .request)"
           || log "the project graph has no triage -> brief edge for an investigation report; triage and reproduce run again with the report. Sync the harness (/harness-init --sync)"
         run_node triage triage "$CONTEXT
 
-You are the triage node of the bug-fix graph. Do not edit any file.
+You are the triage node of the $WORKFLOW graph. Do not edit any file.
 From the bug report below, state the observed behavior, the expected behavior, the impact, the relevant modules and files, the project test policy, and the exact commands that verify a change (build, targeted tests, broad tests, lint).
 
 Bug report:
@@ -1713,7 +1833,7 @@ $(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvesti
         go triage ""
         ;;
       reproduce)
-        local repro
+        local repro next
         repro="$RUN/reproduce"
         rm -rf "${RUN:?}/reproduce"
         mkdir -p "$repro"
@@ -1721,7 +1841,7 @@ $(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvesti
           || log "the project graph does not let reproduce run commands; it reads code and logs only. Sync the harness (/harness-init --sync)"
         run_node reproduce reproduce "$CONTEXT
 
-You are the reproduce node of the bug-fix graph. Do not edit, create, or delete any file in the repository; keep scratch scripts, logs, and notes under $repro.
+You are the reproduce node of the $WORKFLOW graph. Do not edit, create, or delete any file in the repository; keep scratch scripts, logs, and notes under $repro.
 Reproduce the bug below with the smallest safe steps: a test or command run, or a request against a local server started with the local or test configuration the project documents. Never use production data or credentials, and point anything the app writes at $repro or a temporary directory: a new file in the repository stops the run.
 $APP_SERVER_RULE
 status: reproduced when you observed the failure yourself; evidence_sufficient when you could not run it but logs, a stack trace, or code reading with a falsifiable hypothesis show the failure, or a safe observation plan will confirm the fix; blocked when neither is possible. Put what you observed (commands and their decisive output, or the log lines and code paths) in evidence. When blocked, put in needed what a person must provide: an environment, logs, or the expected behavior.
@@ -1731,16 +1851,62 @@ Bug report:
 $(state .request)
 
 Triage from the triage node:
-$(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
+$(cat "$RUN/triage.out")$(if [[ "$WORKFLOW" == investigate ]]; then
+  printf '\n\nCode baseline from the baseline node:\n%s\n\nDomain contract from the domain_docs node:\n%s' "$(cat "$RUN/baseline.out")" "$(cat "$RUN/domain_docs.out")"
+fi)" "$REPRODUCE_SCHEMA"
         jq -e '(.status | IN("reproduced", "evidence_sufficient", "blocked")) and (.evidence | type) == "array" and (.needed | type) == "array"' \
           "$RUN/reproduce.out" >/dev/null 2>&1 || finish incomplete 30 "reproduce output does not match the schema ($RUN/reproduce.out)"
         # 근거 없는 "재현됨"은 재현이 아니다. 근거가 비면 사람에게 넘긴다.
         if jq -e '.status != "blocked" and (.evidence | length) > 0' "$RUN/reproduce.out" >/dev/null; then
-          go reproduce "$(edge_when reproduce brief)"
+          # bug-fix는 brief로, investigate는 report로 간다.
+          next="$(edge_when reproduce brief)"
+          [[ -n "$next" ]] || next="$(edge_when reproduce report)"
+          go reproduce "$next"
         else
           state_set '.findings = (["could not reproduce: " + $r[0].summary] + $r[0].needed) | .needs_user_decision = true' --slurpfile r "$RUN/reproduce.out"
           go reproduce "$(edge_when reproduce user_decision)"
         fi
+        ;;
+      baseline)
+        investigate_baseline
+        go baseline ""
+        ;;
+      domain_docs)
+        run_node domain_docs domain_docs "$CONTEXT
+
+You are the domain_docs node of the investigate graph. Do not edit any file.
+Summarize the contracts that bear on the bug below from the project's domain documents (.ai-harness/docs/domain.md and the documents it indexes) and from the source documents of user-facing behavior (README, user guides, specs, API docs): the expected behavior, where it is defined (file and section), and any rule that says the observed behavior is intended. Say so when no document defines it. Read the code at the base the baseline below names.
+
+$(investigate_inputs)"
+        go domain_docs ""
+        ;;
+      report)
+        run_node report report "$CONTEXT
+
+You are the report node of the investigate graph. Do not edit, create, or delete any file; the driver writes the report and the comment draft outside the repository from your output.
+report: the investigation report in Markdown — the symptom, the reproduction or equivalent evidence, the root cause with file:line references at the base commit the baseline names, why it happens, the impact, and the direction of a fix (not the fix itself); when no code fix is needed, why the observed behavior is expected or which non-code action resolves it.
+outcome: code_fix_needed when the cause is in the code and needs a change; otherwise no_code_fix_needed.
+slug: a short file name in lowercase letters, digits, and hyphens (for example total-ignores-tax).
+summary: one line a bug fix can start from.
+comment: a draft comment for the issue tracker in the language of the bug report, or an empty string when there is nothing to post. Nobody posts it automatically.
+Return only JSON matching the schema.
+
+$(investigate_inputs)" "$REPORT_SCHEMA"
+        jq -e '(.outcome | IN("code_fix_needed", "no_code_fix_needed")) and (.slug | type) == "string"
+          and (.summary | type) == "string" and (.summary | test("\\S")) and (.report | type) == "string" and (.report | test("\\S"))
+          and (.comment | type) == "string"' "$RUN/report.out" >/dev/null 2>&1 \
+          || finish incomplete 30 "report output does not match the schema ($RUN/report.out)"
+        write_investigation_report
+        go report "$(jq -r .outcome "$RUN/report.out")"
+        ;;
+      handoff)
+        # 다음 bug-fix 실행의 시작 명령. 보고 경로와 요약으로 완전히 정해지므로 세션을 띄우지 않는다.
+        local inv_path handoff_cmd
+        inv_path="$(state .investigation_report.path)"
+        handoff_cmd="bash .ai-harness/workflows/workflow-driver.sh start --workflow bug-fix --request $(printf '%q' "$(state .investigation_report.summary)") --investigation $(printf '%q' "$inv_path")"
+        printf 'Start the fix from the investigation report:\n  %s\nor, in a conversation: /fix-bug %s\n' "$handoff_cmd" "$inv_path" >"$RUN/handoff.out"
+        state_set '.handoff = {command: $c, skill: $s}' --arg c "$handoff_cmd" --arg s "/fix-bug $inv_path"
+        go handoff ""
         ;;
       brief)
         run_node brief "brief-$(state '.history | length')" "$(brief_prompt)" "$BRIEF_SCHEMA"
@@ -2250,6 +2416,10 @@ case "$CMD" in
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
+    # review·investigate는 커밋하지 않는다. 병합·자동화 단계·시작 검사(깨끗한 트리·기준 브랜치)는 체크포인트 커밋을 위한 것이라 건너뛴다.
+    # 쓰기는 노드마다 하는 지문 비교가 막는다.
+    commits_workflow=1
+    [[ "$WORKFLOW" != review && "$WORKFLOW" != investigate ]] || commits_workflow=""
     if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
     fi
@@ -2257,10 +2427,10 @@ case "$CMD" in
       git_policy="pr-only"
       notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
-    if [[ "$WORKFLOW" != review ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
+    if [[ -n "$commits_workflow" ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
-    if [[ "$WORKFLOW" != review && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
+    if [[ -n "$commits_workflow" && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
       notices="$(jq -c '. + ["HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
     approval_setting="$(approval_mode)" || exit 2
@@ -2268,7 +2438,7 @@ case "$CMD" in
     # 병합 여부는 개인 자동화 단계만 정한다. 없으면 PR까지다. 저장소 git_policy는 커밋·PR 범위만 정한다:
     # pr-only → PR(단계가 merge·deploy면 러너가 병합), direct → PR 없이 push(병합할 PR이 없다), 그 밖 → 커밋하지 않는다.
     delivery=null
-    if [[ "$WORKFLOW" != review ]] && read -r level level_source <<<"$(delivery_level)" && [[ -n "$level" ]]; then
+    if [[ -n "$commits_workflow" ]] && read -r level level_source <<<"$(delivery_level)" && [[ -n "$level" ]]; then
       [[ "$level" =~ ^(pr|merge|deploy)$ ]] \
         || { printf '%s in ~/.ai-harness/config is "%s"; the delivery level must be pr, merge, or deploy\n' "${level_source%%:*}" "$level" >&2; exit 2; }
       note=""
@@ -2281,8 +2451,8 @@ case "$CMD" in
         '{level: $l, source: $s, repo_git_policy: $g} + (if $n == "" then {} else {note: $n} end)')"
     fi
     # 체크포인트는 git add -A로 커밋한다. 실행 전 변경이 섞이거나 기준 브랜치에 커밋이 쌓이지 않게 시작 조건을 막는다.
-    # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다.
-    if [[ "$WORKFLOW" != review ]]; then
+    # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다. investigate는 기준 브랜치·더러운 트리에서도 조사만 한다.
+    if [[ -n "$commits_workflow" ]]; then
       case "$git_policy" in
         pr-only|direct|merge)
           [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
@@ -2298,7 +2468,7 @@ case "$CMD" in
     # 병합 조건과 병합 후 검증은 시작 때 정한다. 실행 중 설정·manifest가 바뀌어도 시작 때의 정책을 따른다.
     # 여기서 git_policy merge는 개인 단계가 merge·deploy라는 뜻이다(저장소 값 merge는 위에서 pr-only로 읽었다).
     merge_policy=null
-    if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
+    if [[ "$git_policy" == merge && -n "$commits_workflow" ]]; then
       # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. 병합 조건·방식은 merge 노드가 호스트에서 읽는다.
       # merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
       merge_policy="$(jq -c --arg lvl "$level" '(.merge_policy // {}) as $r
@@ -2353,7 +2523,7 @@ case "$CMD" in
       --arg appr "$approval" --arg appr_source "$approval_source" --arg inv "$INVESTIGATION_FILE" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
-        policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
+        policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate") | not)),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     save_baseline
@@ -2409,6 +2579,11 @@ cat >"$SCOPE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","base","files","checks"],
  "properties":{"summary":{"type":"string"},"base":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},
   "checks":{"type":"array","items":{"type":"string"}}}}
+EOF
+cat >"$REPORT_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["outcome","slug","summary","report","comment"],
+ "properties":{"outcome":{"type":"string","enum":["code_fix_needed","no_code_fix_needed"]},"slug":{"type":"string"},
+  "summary":{"type":"string"},"report":{"type":"string"},"comment":{"type":"string"}}}
 EOF
 cat >"$REPRODUCE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","evidence","hypothesis","needed"],

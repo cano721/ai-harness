@@ -20,6 +20,7 @@
 ## 4. 보고 (report)
 
 - 위치: `~/.ai-harness/investigations/ai-harness/<YYYYMMDD-HHMM>-<요약>.md`. 이슈 댓글 초안은 같은 이름에 `.comment.md`를 붙인다. 공개 저장소이므로 초안에 회사·개인 식별자를 넣지 않는다.
+- 러너로 실행하면 `bash .ai-harness/workflows/workflow-driver.sh start --workflow investigate --request "<증상 또는 이슈>"` — 러너가 위 위치에 보고와 초안을 쓰고, 수정이 필요하면 아래 bug-fix 시작 명령을 출력한다.
 - 수정이 필요하면 `/fix-bug <보고 파일>` 또는 `bash .ai-harness/workflows/workflow-driver.sh start --workflow bug-fix --request "<요약>" --investigation <보고 파일>`로 넘긴다.
 
 ## 5. 이슈 트래커

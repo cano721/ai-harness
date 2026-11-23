@@ -300,7 +300,7 @@ stateDiagram-v2
 
 ### 그래프 러너: `workflow-driver.sh`
 
-러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
+러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
 
 ```text
 대화                                   러너 (.ai-harness/workflows/workflow-driver.sh --workflow feature)
@@ -485,7 +485,7 @@ stateDiagram-v2
 5. **원인 보고** — 가설별 검증 결과·근거(`path:line`, 명령 출력, 로그)·원인·수정 방향 제안을 Markdown 보고로 씁니다.
 6. **넘김** — 수정이 필요하면 `/fix-bug <보고 파일>`로 넘깁니다. Jira 댓글 같은 외부 쓰기는 보고 옆에 초안 파일로만 만들고 사람이 올립니다.
 
-[원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너는 아직 이 워크플로를 실행하지 않으므로 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
+[원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너가 `start --workflow investigate --request "<증상>"`로 실행합니다. 코드를 고치지 않고 승인 대기 없이 끝나며, 보고와 이슈 댓글 초안을 `~/.ai-harness/investigations/<저장소>/`에 남기고 수정이 필요하면 `start --workflow bug-fix --investigation <보고>` 명령을 안내합니다. 러너 없이 실행하면 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
 
 <a id="design-polish"></a>
 
