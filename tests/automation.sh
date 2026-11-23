@@ -855,6 +855,39 @@ assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}'
 ln -s "$GW/jobda" "$GW/jobda-link"
 assert_eq "0" "$(member_guard "$GW/jobda-link" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a session in a symlinked path of the same member is not blocked"
 assert_eq "0" "$(member_guard "$GW/jobda" "$GW/jobda/src/../src/main/App.java" "$GW/t/none.jsonl")" "dot-dot in the edited path still resolves to the same member"
+# APFS의 NFD·NFC 별칭에서도 cwd와 대상 파일이 같은 멤버를 뜻한다. 물리 경로 표기가 갈린 경우를 고정해 문자열 비교로 확인을 띄우지 않게 한다. (#479)
+GW_NFD_NAME="$(printf '\xe1\x84\x8c\xe1\x85\xa1\xe1\x86\xb8\xe1\x84\x83\xe1\x85\xa1')"
+GW_NFC_NAME="$(printf '\xec\x9e\xa1\xeb\x8b\xa4')"
+GW_NFD_MEMBER="$GW/$GW_NFD_NAME"
+GW_NFC_MEMBER="$GW/$GW_NFC_NAME"
+mkdir -p "$GW_NFD_MEMBER/.ai-harness" "$GW_NFD_MEMBER/src/main"
+[[ -e "$GW_NFC_MEMBER" ]] || ln -s "$GW_NFD_MEMBER" "$GW_NFC_MEMBER"
+printf '{"project_id":"nfc-member"}\n' >"$GW_NFD_MEMBER/.ai-harness/harness.json"
+member_nfc_guard() { # $1=cwd, $2=file -> ask(확인 요청) | exit code
+  local cwd="$1" file="$2" rc=0
+  (
+    export GW_NFD_MEMBER GW_NFC_MEMBER
+    # shellcheck disable=SC2329  # member guard child가 export한 pwd를 호출한다.
+    pwd() {
+      if [[ "${1:-}" == -P ]]; then
+        case "$PWD" in
+          "$GW_NFD_MEMBER" | "$GW_NFD_MEMBER"/*) printf '%s\n' "$GW_NFD_MEMBER" ;;
+          "$GW_NFC_MEMBER" | "$GW_NFC_MEMBER"/*) printf '%s\n' "$GW_NFC_MEMBER" ;;
+          *) builtin pwd "$@" ;;
+        esac
+      else
+        builtin pwd "$@"
+      fi
+    }
+    export -f pwd
+    jq -cn --arg cwd "$cwd" --arg f "$file" --arg t "$GW/t/none.jsonl" \
+      '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
+      | "$ROOT/scripts/member-edit-guard.sh"
+  ) 2>"$GW/err" >"$GW/out" || rc=$?
+  if [[ "$rc" == 0 && "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$GW/out" 2>/dev/null)" == ask ]]; then echo ask; else echo "$rc"; fi
+}
+assert_eq "0" "$(member_nfc_guard "$GW_NFD_MEMBER" "$GW_NFC_MEMBER/src/main/App.java")" "NFD cwd and NFC target identify one member"
+assert_eq "0" "$(member_nfc_guard "$GW_NFC_MEMBER" "$GW_NFD_MEMBER/src/main/App.java")" "NFC cwd and NFD target identify one member"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
 assert_eq "" "$(<"$GW/out")" "passing cases print no decision"
 assert_eq "2" "$(HM_MEMBER_GUARD=block member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=block keeps the hard block"

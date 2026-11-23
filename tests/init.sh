@@ -891,6 +891,44 @@ assert_eq "0" "$(jq -cn '{tool_name:"Bash", cwd:"/", tool_input:{command:"ls"}}'
 assert_eq "0" "$(grep -v '^[[:space:]]*#' "$DG_GUARD" | grep -c -E '(^|[|;&(])[[:space:]]*grep[[:space:]]' || true)" "the example guard parses the transcript with jq instead of grepping it"
 pass "direct edit guard counts only successful reads as reading"
 
+# APFS는 같은 디렉터리를 NFD·NFC 어느 쪽 이름으로도 찾지만, git root와 pwd -P의 표기는 다를 수 있다. 비교 전에 NFC로 맞춰 미Read 편집을 막고 Read 기록은 인정한다. (#479)
+DG_NFD_NAME="$(printf '\xe1\x84\x8c\xe1\x85\xa1\xe1\x86\xb8\xe1\x84\x83\xe1\x85\xa1')"
+DG_NFC_NAME="$(printf '\xec\x9e\xa1\xeb\x8b\xa4')"
+DG_NFD_ROOT="$DG/$DG_NFD_NAME"
+DG_NFC_ROOT="$DG/$DG_NFC_NAME"
+mkdir -p "$DG_NFD_ROOT/.ai-harness/docs" "$DG_NFD_ROOT/src/main" "$DG/nopy"
+[[ -e "$DG_NFC_ROOT" ]] || ln -s "$DG_NFD_ROOT" "$DG_NFC_ROOT"
+git -C "$DG_NFD_ROOT" init -q
+printf 'rules\n' >"$DG_NFD_ROOT/.ai-harness/docs/code-conventions.md"
+DG_NFC_DOC="$DG_NFC_ROOT/.ai-harness/docs/code-conventions.md"
+: >"$DG/t/nfc-none.jsonl"
+dg_line Read "$DG_NFD_ROOT/.ai-harness/docs/code-conventions.md" >"$DG/t/nfc-read-nfd.jsonl"
+dg_line Read "$DG_NFC_DOC" >"$DG/t/nfc-read-nfc.jsonl"
+for dg_command in jq git dirname basename cat; do
+  ln -s "$(command -v "$dg_command")" "$DG/nopy/$dg_command"
+done
+direct_nfc_guard() { # $1=target, $2=transcript, [$3=without_python] -> exit code
+  local target="$1" transcript="$2" without_python="${3:-0}" rc=0
+  (
+    export DG_NFD_ROOT DG_NFC_ROOT
+    # shellcheck disable=SC2120,SC2329  # guard child가 export한 pwd를 -P 인자로 호출한다.
+    pwd() {
+      if [[ "${1:-}" == -P && "$PWD" == "$DG_NFD_ROOT" ]]; then printf '%s\n' "$DG_NFC_ROOT"; else builtin pwd "$@"; fi
+    }
+    export -f pwd
+    jq -cn --arg cwd "$DG_NFD_ROOT" --arg f "$target" --arg t "$transcript" \
+      '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
+      | if [[ "$without_python" == 1 ]]; then env PATH="$DG/nopy" /bin/bash "$DG_GUARD"; else bash "$DG_GUARD"; fi
+  ) 2>"$DG/err" >/dev/null || rc=$?
+  printf '%s\n' "$rc"
+}
+assert_eq "2" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFD target without a Read is blocked when root is NFC"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-read-nfd.jsonl")" "NFD target accepts an NFD Read record"
+assert_eq "2" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFC target without a Read is blocked in an NFD repository"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-read-nfc.jsonl")" "NFC target accepts an NFC Read record"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 the direct guard keeps its prior fail-open result"
+pass "direct edit guard normalizes NFD and NFC paths"
+
 # 화면 검증 서버 수명: dev 서버를 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(실측). 계약과 러너가
 # 운영 빌드 우선·백그라운드 실행·재사용·그룹 종료 확인을 지시한다. (#435)
 UIR_CONTENT="$(<"$ROOT/templates/ui-review/SKILL.md")"
