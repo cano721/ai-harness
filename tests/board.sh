@@ -1538,6 +1538,18 @@ assert "커밋 안 한 변경" in res["results"][0]["worktree_kept"], res
 assert open(log).read().count("worktree rm") == before, open(log).read()
 ' "$ROOT/scripts/board/board-server.py" "$BWT_SAFE/repo" "$BWT_SAFE/orca.log" || fail "independent worktree candidates require merged, clean, pushed work and recheck before deletion"
 pass "board independently plans and safely rechecks worktree cleanup"
+# 브랜치 이름이 UTF-8로 읽히지 않아도(잘린 한글 등) 후보 수집이 죽지 않는다.
+BWT_BAD="$BAF_T/non-utf8-branch"
+git init -q "$BWT_BAD"
+# APFS는 그런 이름의 ref 파일을 만들지 못하고 커밋 메시지는 git이 재인코딩하므로, 같은 바이트를 config 값으로 재현한다.
+git -C "$BWT_BAD" config test.branch "$(printf 'wt/\xeb\xb3')"
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+rc, out = bs._git(sys.argv[2], "config", "test.branch")
+assert rc == 0 and out.startswith("wt/"), (rc, out)
+' "$ROOT/scripts/board/board-server.py" "$BWT_BAD" || fail "git output that is not valid UTF-8 does not crash worktree lookup"
+pass "board git lookups survive a branch name that is not valid UTF-8"
 # 독립 worktree 후보는 그 worktree를 쓰는 살아 있는 세션이 있으면 지울 수 없다(#454). 세션은 Orca(worktree ps)와 보드의 살아 있는 agents(숨긴 세션 포함)에서
 # 찾고, 둘 중 하나라도 조회에 실패하면 보존한다. 실행 직전 재판정에도 세션 확인이 들어간다. 조회 지점은 bs._orca_live_worktree_paths()·bs._board_live_agent_cwds()이고
 # 둘 다 (경로 목록, 오류 문자열)을 돌려준다 — 오류가 비어 있지 않으면 조회 실패다.

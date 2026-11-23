@@ -148,6 +148,7 @@ assert waits[0] >= 1 and waits == sorted(waits) and waits[-1] == 5, waits
 bs._build = fake_build
 bs.refresh_once()
 assert bs.refresh_wait() <= bs.REFRESH, bs.refresh_wait()
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 # 일괄 정리는 30초 안의 캐시라도 믿지 않고 그 자리에서 새로 모은 목록으로 한다(그새 다시 일하는 세션을 닫지 않게). 미리보기는 캐시로.
 bs._cache["data"] = {"items": []}; bs._cache["at"] = time.time() - 10
 n = len(calls)
@@ -605,6 +606,7 @@ items = [S("idle", state="idle", status="idle", live=True),
          S("perm", state="needs_human", status="waiting", live=True, permission={"pid": "p"}),
          {"section": "harness", "id": "sync|docs|" + now, "kind": "sync", "state": "done", "at": now, "title": "변경 없음", "project": "docs"},
          {"section": "harness", "id": "schedule|x|" + old, "kind": "schedule", "state": "blocked", "at": old, "title": "건너뜀", "project": "스케줄"}]
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 bs.worktree_check = lambda i: {"removable": False, "reason": "x", "path": "/nope"}
 bs.end_session = lambda i: True
 by = lambda left: {l["reason"]: l for l in left}
@@ -1229,6 +1231,7 @@ assert len(calls) == 3, calls  # 그 뒤에는 모은다
 bs._cache["at"] = time.time() - 5; bs._full["at"] = time.time() - bs.FULL_REFRESH - 1; bs._timing["dur"] = 0
 bs.refresh_once()
 assert len(calls) == 4, calls  # 지문이 같아도 최소 주기마다는 모은다
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 # 정리(B1): 지문 확인은 캐시 시각만 새로 매기므로, 실제 일괄 정리는 나이와 관계없이 입력 캐시 없이 새로 모은다
 bs._cache["at"] = time.time() - 5; bs.refresh_once()  # 건너뛴 확인 직후
 n = len(calls)

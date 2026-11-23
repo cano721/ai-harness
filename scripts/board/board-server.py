@@ -631,7 +631,7 @@ def repo_from_path(cwd):
 
 
 def _git(path, *args):
-    out = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=15)
+    out = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, errors="replace", timeout=15)
     return out.returncode, out.stdout.strip()
 
 
@@ -1199,9 +1199,10 @@ def _orca_worktree_paths():
         out = subprocess.run([executable, "worktree", "list", "--limit", "10000", "--json"],
                              capture_output=True, text=True, timeout=15)
         payload = json.loads(out.stdout or "{}")
-        if out.returncode != 0 or payload.get("ok") is False:
-            error = payload.get("error") or {}
-            return [], str(error.get("message") or out.stderr or "명령이 실패함")[-200:]
+        if out.returncode != 0 or not isinstance(payload, dict) or payload.get("ok") is False:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            message = error.get("message") if isinstance(error, dict) else ""
+            return [], str(message or out.stderr or "명령이 실패함")[-200:]
         paths = set()
         def visit(value):
             if isinstance(value, dict):
