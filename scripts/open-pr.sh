@@ -10,6 +10,7 @@ usage: open-pr.sh --title <title> --body-file <file> [--base <branch>] [--head <
        open-pr.sh --check     # push 전에 PR을 열 수 있는지(원격 종류·인증·접근)만 확인
        open-pr.sh --status <PR URL>   # {state:open|merged|closed, merged_at, merge_commit, activity} — activity는 코멘트·리뷰·승인 수(GitHub는 봇 제외)
        open-pr.sh --decline <PR URL> [--comment <text>]   # PR을 병합 없이 닫는다(GitHub close, Bitbucket decline)
+       open-pr.sh --list-open [<저장소 URL>]   # 열린 PR을 {url, head(브랜치 이름)} 한 줄씩. URL이 없으면 현재 저장소 origin
        open-pr.sh --merge <PR URL> --head <sha> [--method squash|merge|default]   # draft를 풀고 head가 같을 때만 병합
          --status는 head·base(대상 브랜치)·created(UTC, 초까지)·draft·ci(success|pending|failure|none)·mergeable(mergeable|conflicting|unknown)도 낸다
          --merge 종료 코드: 6 head가 바뀜 · 7 병합됐지만 병합된 head가 다름 · 8 실패 뒤 draft로 되돌리지 못함 · 5 그 밖의 실패
@@ -19,10 +20,11 @@ EOF
   exit 2
 }
 
-title=""; body_file=""; base=""; head=""; check=0; status_url=""; decline_url=""; comment=""; merge_url=""; method="default"
+title=""; body_file=""; base=""; head=""; check=0; list=0; list_url=""; status_url=""; decline_url=""; comment=""; merge_url=""; method="default"
 while (( $# > 0 )); do
   case "$1" in
     --check) check=1; shift ;;
+    --list-open) list=1; shift; [[ "${1:-}" != https://* ]] || { list_url="$1"; shift; } ;;
     --status) status_url="${2:-}"; shift 2 ;;
     --decline) decline_url="${2:-}"; shift 2 ;;
     --merge) merge_url="${2:-}"; shift 2 ;;
@@ -35,7 +37,7 @@ while (( $# > 0 )); do
     *) usage ;;
   esac
 done
-(( check == 1 )) || [[ -n "$status_url" || -n "$decline_url" ]] || [[ -n "$merge_url" && -n "$head" ]] \
+(( check == 1 || list == 1 )) || [[ -n "$status_url" || -n "$decline_url" ]] || [[ -n "$merge_url" && -n "$head" ]] \
   || [[ -n "$title" && -f "$body_file" ]] || usage
 case "$method" in squash|merge|default) ;; *) usage ;; esac
 
@@ -222,14 +224,9 @@ if [[ -n "$status_url" ]]; then
   exit
 fi
 
-remote="$(git remote get-url origin 2>/dev/null || true)"
+remote="$list_url"
+[[ -n "$remote" ]] || remote="$(git remote get-url origin 2>/dev/null || true)"
 [[ -n "$remote" ]] || { echo "origin 원격이 없습니다" >&2; exit 3; }
-[[ -n "$head" ]] || head="$(git rev-parse --abbrev-ref HEAD)"
-if [[ -z "$base" ]]; then
-  base="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  base="${base#origin/}"
-  [[ -n "$base" ]] || base="main"
-fi
 
 # git@host:owner/repo.git, https://[user@]host/owner/repo(.git) → host, owner/repo
 path="${remote%.git}"
@@ -240,6 +237,38 @@ case "$path" in
   http://*|https://*) host="${path#*://}"; host="${host#*@}"; host="${host%%/*}"; slug="${path#*://*/}" ;;
   *) echo "지원하지 않는 원격 형식: $remote" >&2; exit 3 ;;
 esac
+
+# 저장소의 열린 PR을 브랜치 이름과 함께 낸다 — 자동 sync가 세션에서 직접 연 옛 sync PR도 찾아 정리할 때 쓴다.
+if (( list == 1 )); then
+  case "$host" in
+    github.com)
+      gh pr list --repo "$slug" --state open --limit 200 --json url,headRefName \
+        | jq -c '.[] | {url, head: .headRefName}'
+      ;;
+    bitbucket.org)
+      [[ -n "${ATLASSIAN_USER:-}" && -n "${BITBUCKET_API_TOKEN:-}" ]] || { echo "Bitbucket 조회에는 ATLASSIAN_USER와 BITBUCKET_API_TOKEN이 필요합니다" >&2; exit 4; }
+      next="https://api.bitbucket.org/2.0/repositories/$slug/pullrequests?state=OPEN&pagelen=50"
+      pages=0
+      while [[ -n "$next" ]] && (( pages < 10 )); do
+        response="$(bb_curl "$next")"
+        code="${response##*$'\n'}"
+        [[ "$code" == 2* ]] || { echo "Bitbucket PR 목록 조회 실패 (HTTP $code)" >&2; exit 5; }
+        jq -c '(.values // [])[] | {url: .links.html.href, head: .source.branch.name}' <<<"${response%$'\n'*}"
+        next="$(jq -r '.next // empty' <<<"${response%$'\n'*}")"
+        pages=$((pages + 1))
+      done
+      ;;
+    *) echo "PR을 볼 수 없는 원격 호스트: $host" >&2; exit 3 ;;
+  esac
+  exit 0
+fi
+
+[[ -n "$head" ]] || head="$(git rev-parse --abbrev-ref HEAD)"
+if [[ -z "$base" ]]; then
+  base="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  base="${base#origin/}"
+  [[ -n "$base" ]] || base="main"
+fi
 
 if (( check == 1 )); then
   case "$host" in
