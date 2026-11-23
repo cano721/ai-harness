@@ -913,4 +913,40 @@ assert_contains "$DRIVER_SRC" "prefer the project's production build" "the runne
 assert_contains "$DRIVER_SRC" "keep build output in ignored paths" "the runner keeps build output out of the change check"
 pass "ui review server lifecycle"
 
+# 편집 가드는 경로를 유니코드 정규화 없이 비교하면 macOS에서 NFD 폴더의 저장소를 저장소 밖으로 오판해 통과시킨다(#479).
+# git은 NFD를, bash 3.2의 cd/pwd -P는 입력 형태(NFC)를 그대로 돌려준다.
+NF_NFC="$(printf '\355\224\204\353\241\234\354\240\235\355\212\270')"
+NF_NFD="$(printf '\341\204\221\341\205\263\341\204\205\341\205\251\341\204\214\341\205\246\341\206\250\341\204\220\341\205\263')"
+NF="$TEST_TMP/direct-guard-nfd"
+mkdir -p "$NF/$NF_NFD/src" "$NF/$NF_NFD/.ai-harness/docs" "$NF/t"
+git -C "$NF/$NF_NFD" init -q
+NF_ROOT="$(git -C "$NF/$NF_NFD" rev-parse --show-toplevel)"
+NF_NFC_ROOT="$NF/$NF_NFC"
+NF_NFD_ROOT="$NF/$NF_NFD"
+: >"$NF_NFD_ROOT/.ai-harness/docs/code-conventions.md"
+: >"$NF/t/none.jsonl"
+dg_line Read "$NF_NFC_ROOT/.ai-harness/docs/code-conventions.md" >"$NF/t/read-nfc.jsonl"
+nf_guard() { # $1=edited file, $2=transcript, [$3=PATH 재정의] -> exit code
+  local guard_bash rc=0
+  guard_bash="$(command -v bash)"
+  jq -cn --arg cwd "$NF_ROOT" --arg f "$1" --arg t "$2" \
+    '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
+    | PATH="${3:-$PATH}" "$guard_bash" "$DG_GUARD" 2>"$NF/err" >/dev/null || rc=$?
+  echo "$rc"
+}
+assert_eq "2" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl")" "NFC edit path in an NFD-named repo is still guarded when the conventions were not read"
+assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/read-nfc.jsonl")" "NFC edit path passes after reading the conventions by NFC path"
+assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl")" "NFD edit path is guarded when the conventions were not read"
+assert_eq "0" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/read-nfc.jsonl")" "NFD edit path passes after reading the conventions by NFC path"
+# python3가 없으면 정규화 못 하고 원래 값으로 비교한다 — NFC 입력은 예전처럼 통과(fail-open), NFD 입력은 막는다.
+# macOS의 /usr/bin/python3는 스텁이라 PATH에서 디렉토리를 빼는 것으로는 부족하다. 가드가 쓰는 명령만 링크한 PATH를 쓴다.
+NF_BIN="$TEST_TMP/nopy"
+mkdir -p "$NF_BIN"
+for nf_cmd in jq git cat dirname basename; do
+  ln -sf "$(command -v "$nf_cmd")" "$NF_BIN/$nf_cmd"
+done
+assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFC edit path keeps the old fail-open verdict"
+assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFD edit path is still guarded"
+pass "direct edit guard compares paths across unicode normalization"
+
 finish_tests

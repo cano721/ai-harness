@@ -380,6 +380,13 @@ CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
 
+# Read 판정(.name == "Read")을 쓰는 새 가드라도 NFC 정규화 흔적이 없으면 macOS NFD 경로에서 fail-open한다 — guard_no_nfc(#479).
+CONTRACT_NFC="$TEST_TMP/contract-nfc"
+mkdir -p "$CONTRACT_NFC/.ai-harness/hooks"
+sed 's/unicodedata/uni_code_data/g; s/NFC/N_F_C/g' "$ROOT/skills/harness-init/references/direct-edit-guard.sh" >"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh"
+assert_contains "$(<"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh")" '.name == "Read"' "the no-NFC fixture guard keeps the Read judgment"
+assert_eq "guard_no_nfc" "$(contract_checks "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_NFC")")" "a Read-judging guard without NFC handling is flagged guard_no_nfc only"
+
 # PR 단계는 manifest git_policy가 허용하면 계약 위반이 아니다. git_policy를 모르는 이전 어댑터는 갱신 대상으로 짚는다.
 CONTRACT_PR="$TEST_TMP/contract-pr"
 mkdir -p "$CONTRACT_PR/.ai-harness/workflows" "$CONTRACT_PR/.claude/commands"
