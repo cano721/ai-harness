@@ -577,6 +577,26 @@ printf '# changed for --changed selection\n' >>"$RUNNER_FIXTURE/tests/beta.sh"
 changed_out="$TEST_TMP/parallel-changed.out"
 HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --changed >"$changed_out" 2>&1
 assert_contains "$(<"$changed_out")" "# all passed: 1 tests in beta" "--changed selects only changed areas before parallel scheduling"
+# 여러 영역이 쓰는 공용 헬퍼(tests/lib-*.sh)는 영역이 아니고, 바뀌면 그 헬퍼를 source하는 영역만 고른다. (#467)
+printf '# shared helper\n' >"$RUNNER_FIXTURE/tests/lib-shared.sh"
+printf '# source lib-shared.sh\n' >>"$RUNNER_FIXTURE/tests/alpha.sh"
+git -C "$RUNNER_FIXTURE" add tests && git -C "$RUNNER_FIXTURE" commit -q -m helper
+assert_eq "" "$(bash "$RUNNER_FIXTURE/tests/run.sh" --list | grep -x 'lib-shared' || true)" "a lib-*.sh helper is not listed as an area"
+printf '# changed helper\n' >>"$RUNNER_FIXTURE/tests/lib-shared.sh"
+helper_out="$TEST_TMP/parallel-helper.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" --changed >"$helper_out" 2>&1
+assert_contains "$(<"$helper_out")" "# all passed: 1 tests in alpha" "a changed lib-*.sh helper selects the areas that source it"
+git -C "$RUNNER_FIXTURE" checkout -q -- tests
+# 경로가 공용 헬퍼에만 적혀 있어도 그 헬퍼를 source하는 영역을 고른다(러너 경로는 lib-driver.sh에만 있다).
+mkdir -p "$RUNNER_FIXTURE/scripts"
+printf 'x\n' >"$RUNNER_FIXTURE/scripts/helper-only.sh"
+printf '# runs scripts/helper-only.sh\n' >>"$RUNNER_FIXTURE/tests/lib-shared.sh"
+git -C "$RUNNER_FIXTURE" add tests scripts && git -C "$RUNNER_FIXTURE" commit -q -m helper-path
+printf 'y\n' >>"$RUNNER_FIXTURE/scripts/helper-only.sh"
+helper_path_out="$TEST_TMP/parallel-helper-path.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" --changed >"$helper_path_out" 2>&1
+assert_contains "$(<"$helper_path_out")" "# all passed: 1 tests in alpha" "a path named only in a lib-*.sh helper selects the areas that source it"
+git -C "$RUNNER_FIXTURE" checkout -q -- scripts
 parallel_fail_out="$TEST_TMP/parallel-fail.out"
 parallel_fail_rc=0
 bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail after >"$parallel_fail_out" 2>&1 || parallel_fail_rc=$?
