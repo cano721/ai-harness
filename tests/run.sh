@@ -13,7 +13,7 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # 그래프 러너·자동 실행 흐름을 실제로 돌리는 느린 영역. --fast에서 빼고, -j에서는 이 순서(긴 것부터, macOS 실측)로 먼저 시작한다.
-SLOW_AREAS="automation workflow-merge workflow-runs design workflow-feature workflow-publish workflow init"
+SLOW_AREAS="automation workflow-merge workflow-runs design workflow-feature workflow-publish workflow init workflow-investigate"
 
 usage() {
   sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'

@@ -33,7 +33,7 @@ Writes to external systems — issue or PR comments, tracker status changes, cha
 
 ## Graph runner
 
-The graph runner (`.ai-harness/workflows/workflow-driver.sh`) does not run this workflow yet; follow `investigate-graph.json` in this conversation as described above. Its `--investigation` option on a `bug-fix` start is how the report reaches the fix.
+The graph runner runs this workflow: `bash .ai-harness/workflows/workflow-driver.sh start --workflow investigate --request "<symptom or issue>"`. It changes no code and has no approval stop, so it starts on the base branch and with uncommitted changes, and it runs to `done` or `user_decision` in one go. The runner settles the baseline itself (`git fetch origin`, the commit read, how far the checkout is behind), runs triage, domain_docs, reproduce, and report as read-only sessions (a session that changes the working tree stops the run), and writes the report and the comment draft outside the repository to `~/.ai-harness/investigations/<repository>/<YYYYMMDD-HHMM>-<slug>.md` and `.comment.md`, with the commit read on its first line; an existing name gets `-2`, `-3`, and is never overwritten. When a code fix is needed it ends with the handoff command, `start --workflow bug-fix --request <summary> --investigation <report>` (or `/fix-bug <report>`); it does not start the fix. Without the runner, follow `investigate-graph.json` in this conversation as described above.
 
 ## Request
 

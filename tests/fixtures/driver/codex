@@ -22,6 +22,8 @@ case "$prompt" in
   *"You are the discover node"*) node=discover ;;
   *"You are the triage node"*) node=triage ;;
   *"You are the reproduce node"*) node=reproduce ;;
+  *"You are the domain_docs node"*) node=domain_docs ;;
+  *"You are the report node"*) node=report ;;
   *"You are the regression node"*) node=regression ;;
   *"You are the fix node"*) node=fix ;;
   *"You are the scope node"*) node=scope ;;
@@ -99,6 +101,16 @@ case "$node:$scenario" in
   reproduce:repro_writes) echo log >repro.log; jq -n '{status:"reproduced", summary:"x", evidence:["x"], hypothesis:"", needed:[]}' >"$out" ;;
   reproduce:*) [[ -n "$adddir" ]] && echo 'FAIL total' >"$adddir/run.log"
     jq -n '{status:"reproduced", summary:"total misses tax", evidence:["npm test -- total: expected 110, got 100"], hypothesis:"tax is skipped for zero discounts", needed:[]}' >"$out" ;;
+  domain_docs:inv_docs_writes) echo note >docs-note.md; printf 'contract\n' >"$out" ;;
+  domain_docs:*) printf 'contract: total is subtotal plus tax (docs/pricing.md)\n' >"$out" ;;
+  # investigate report: 기본은 code_fix_needed. inv_no_fix는 고칠 것이 없다. inv_report_bad는 스키마 위반, inv_bad_slug는 경로가 될 수 없는 slug.
+  report:inv_report_bad) jq -n '{summary:"x", report:"x"}' >"$out" ;;
+  report:inv_report_writes) echo draft >report.md; jq -n '{outcome:"no_code_fix_needed", slug:"x", summary:"x", report:"x", comment:""}' >"$out" ;;
+  report:inv_no_fix) jq -n '{outcome:"no_code_fix_needed", slug:"total-config", summary:"total follows the configured tax mode", report:"# Investigation\nworks as configured", comment:""}' >"$out" ;;
+  report:*) slug=total-ignores-tax
+    [[ "$scenario" == inv_bad_slug ]] && slug="../../evil"
+    jq -n --arg s "$slug" '{outcome:"code_fix_needed", slug:$s, summary:"total ignores tax when the discount is zero",
+      report:"# Investigation: total ignores tax\nroot cause: tax is skipped when the discount is zero", comment:"원인: 할인이 0일 때 세금을 빼먹는다"}' >"$out" ;;
   regression:bug_noop) printf 'nothing\n' >"$out" ;;
   regression:*) mkdir -p tests; echo 'expect 110' >tests/total.test; printf 'regression test added\n' >"$out" ;;
   fix:bug_noop|fix:bug_fix_noop) printf 'nothing\n' >"$out" ;;
