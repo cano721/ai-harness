@@ -906,6 +906,26 @@ member_nfc_guard_without_python() { # $1=cwd, $2=file
   echo "$rc"
 }
 assert_eq "2" "$(member_nfc_guard_without_python "$GW" "$GW/jobda/src/main/App.java")" "without python3 the member guard keeps its legacy cross-member block"
+# python3가 없으면 NFC 정규화를 건너뛰어 NFD cwd와 NFC 대상이 다른 멤버로 갈리고, block 모드는 기존대로 차단한다.
+GW_NFC_ENV="$GW/no-python-bin/pwd-env.sh"
+cat >"$GW_NFC_ENV" <<'PWD_ENV'
+pwd() {
+  if [[ "${1:-}" == -P ]]; then
+    case "$PWD" in
+      "$GW_NFD_MEMBER" | "$GW_NFD_MEMBER"/*) printf '%s\n' "$GW_NFD_MEMBER" ;;
+      "$GW_NFC_MEMBER" | "$GW_NFC_MEMBER"/*) printf '%s\n' "$GW_NFC_MEMBER" ;;
+      *) builtin pwd "$@" ;;
+    esac
+  else
+    builtin pwd "$@"
+  fi
+}
+PWD_ENV
+GW_NFC_RC=0
+jq -cn --arg cwd "$GW_NFD_MEMBER" --arg f "$GW_NFC_MEMBER/src/main/App.java" --arg t "$GW/t/none.jsonl" \
+  '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
+  | GW_NFD_MEMBER="$GW_NFD_MEMBER" GW_NFC_MEMBER="$GW_NFC_MEMBER" BASH_ENV="$GW_NFC_ENV" PATH="$GW_NO_PYTHON_BIN" HM_MEMBER_GUARD=block "$ROOT/scripts/member-edit-guard.sh" >"$GW/out" 2>"$GW/err" || GW_NFC_RC=$?
+assert_eq "2" "$GW_NFC_RC" "without python3 an NFD cwd and an NFC target keep the legacy block"
 assert_eq "0" "$(HM_MEMBER_GUARD=0 member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=0 turns the guard off"
 assert_eq "" "$(<"$GW/out")" "passing cases print no decision"
 assert_eq "2" "$(HM_MEMBER_GUARD=block member_guard "$GW" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "HM_MEMBER_GUARD=block keeps the hard block"

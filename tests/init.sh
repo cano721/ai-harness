@@ -894,8 +894,10 @@ pass "direct edit guard counts only successful reads as reading"
 # APFS는 같은 디렉터리를 NFD·NFC 어느 쪽 이름으로도 찾지만, git root와 pwd -P의 표기는 다를 수 있다. 비교 전에 NFC로 맞춰 미Read 편집을 막고 Read 기록은 인정한다. (#479)
 DG_NFD_NAME="$(printf '\xe1\x84\x8c\xe1\x85\xa1\xe1\x86\xb8\xe1\x84\x83\xe1\x85\xa1')"
 DG_NFC_NAME="$(printf '\xec\x9e\xa1\xeb\x8b\xa4')"
-DG_NFD_ROOT="$DG/$DG_NFD_NAME"
-DG_NFC_ROOT="$DG/$DG_NFC_NAME"
+# macOS의 TMPDIR은 /var → /private/var 심볼릭 링크라 pwd shim이 물리 경로와 맞도록 DG의 물리 경로를 기준으로 삼는다.
+DG_PHYS="$(cd "$DG" && pwd -P)"
+DG_NFD_ROOT="$DG_PHYS/$DG_NFD_NAME"
+DG_NFC_ROOT="$DG_PHYS/$DG_NFC_NAME"
 mkdir -p "$DG_NFD_ROOT/.ai-harness/docs" "$DG_NFD_ROOT/src/main" "$DG/nopy"
 [[ -e "$DG_NFC_ROOT" ]] || ln -s "$DG_NFD_ROOT" "$DG_NFC_ROOT"
 git -C "$DG_NFD_ROOT" init -q
@@ -951,6 +953,8 @@ assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-re
 assert_eq "2" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFC target without a Read is blocked in an NFD repository"
 assert_eq "0" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-read-nfd.jsonl")" "NFC target accepts an NFD Read record"
 assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/missing/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 the direct guard keeps its prior fail-open result"
+# python3가 없으면 정규화를 건너뛰므로 루트(NFC)와 대상(NFD) 표기가 갈려 기존 판정(범위 밖 통과)을 유지한다.
+assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 an unread NFD target keeps the prior root-mismatch pass"
 pass "direct edit guard normalizes NFD and NFC paths"
 
 # 화면 검증 서버 수명: dev 서버를 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(실측). 계약과 러너가

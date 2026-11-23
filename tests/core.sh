@@ -352,7 +352,7 @@ mkdir -p "$CONTRACT/.ai-harness/hooks"
 printf '%s\n' '#!/usr/bin/env bash' 'grep -q "\"file_path\":\"[^\"]*code-conventions.md\"" "$transcript" || exit 2' >"$CONTRACT/.ai-harness/hooks/direct-edit-guard.sh"
 CONTRACT_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT")"
 contract_checks() { jq -r '[.findings[].check] | unique | join(",")' <<<"$1"; }
-assert_eq "codex_exec_unbounded,discard_on_violation,guard_project_dir,guard_read_by_grep,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
+assert_eq "codex_exec_unbounded,discard_on_violation,guard_path_unnormalized,guard_project_dir,guard_read_by_grep,nonexistent_tool,pr_step_forbidden_by_adapter,regression_role,repair_limit,write_scope_unmatched" "$(contract_checks "$CONTRACT_SCAN")" "contract scan reports every class of drift"
 assert_eq "true" "$(jq -r '.contract_drift' <<<"$CONTRACT_SCAN")" "contract drift flag"
 assert_eq "/plan,/team,Task 도구" "$(jq -r '[.findings[] | select(.check=="nonexistent_tool") | .token] | join(",")' <<<"$CONTRACT_SCAN")" "nonexistent tools are named"
 assert_eq ".ai-harness/workflows/implement-feature.md:10 5 10" "$(jq -r '.findings[] | select(.check=="repair_limit") | "\(.file):\(.line) \(.token) \(.expected)"' <<<"$CONTRACT_SCAN")" "repair limit compares the body with the graph"
@@ -379,6 +379,21 @@ cp "$ROOT/skills/harness-init/references/direct-edit-guard.sh" "$CONTRACT_OK/.ai
 CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_OK")"
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
+
+# Read는 jq로 파싱하지만 경로를 NFC로 맞추지 않는 가드는 APFS NFD·NFC 표기 차이에서 판정이 갈린다. 정규화만 빠진 가드를 단독 finding으로 짚는다. (#479)
+CONTRACT_NFC="$TEST_TMP/contract-nfc"
+cp -R "$CONTRACT_OK" "$CONTRACT_NFC"
+# shellcheck disable=SC2016  # sed 식의 정규식·$를 문자 그대로 쓴다
+sed -e '/^nfc() {/,/^}/d' \
+  -e '/^root="\$(nfc "\$root")"$/d' \
+  -e '/^target="\$(nfc "\$target")"$/d' \
+  -e 's/\$(nfc "\(\$(physical "[^"]*")\)")/\1/' \
+  "$ROOT/skills/harness-init/references/direct-edit-guard.sh" >"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh"
+assert_eq "0" "$(grep -c 'unicodedata.normalize' "$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh" || true)" "the stripped guard copy has no unicodedata.normalize"
+assert_eq "0" "$(grep -c 'nfc' "$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh" || true)" "the stripped guard copy has no nfc definition or call"
+assert_contains "$(<"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh")" '.name == "Read"' "the stripped guard copy still reads the transcript with jq"
+CONTRACT_NFC_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_NFC")"
+assert_eq "guard_path_unnormalized" "$(contract_checks "$CONTRACT_NFC_SCAN")" "a guard without path normalization is the only finding"
 
 # PR 단계는 manifest git_policy가 허용하면 계약 위반이 아니다. git_policy를 모르는 이전 어댑터는 갱신 대상으로 짚는다.
 CONTRACT_PR="$TEST_TMP/contract-pr"
