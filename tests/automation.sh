@@ -893,25 +893,12 @@ assert_eq "0" "$(member_nfc_guard "$GW_NFC_MEMBER" "$GW_NFD_MEMBER/src/main/App.
 # python3가 없는 PATH에서도 member guard는 기존 경로 판정을 유지한다.
 GW_NO_PYTHON_BIN="$GW/no-python-bin"
 mkdir -p "$GW_NO_PYTHON_BIN"
-for GW_CMD in bash env cat jq dirname; do
+for GW_CMD in bash env cat jq dirname mkdir chmod; do
   ln -s "$(command -v "$GW_CMD")" "$GW_NO_PYTHON_BIN/$GW_CMD"
 done
 member_nfc_guard_without_python() { # $1=cwd, $2=file
   local rc=0
   (
-    export GW_NFD_MEMBER GW_NFC_MEMBER
-    pwd() {
-      if [[ "${1:-}" == -P ]]; then
-        case "$PWD" in
-          "$GW_NFD_MEMBER" | "$GW_NFD_MEMBER"/*) printf '%s\n' "$GW_NFD_MEMBER" ;;
-          "$GW_NFC_MEMBER" | "$GW_NFC_MEMBER"/*) printf '%s\n' "$GW_NFC_MEMBER" ;;
-          *) builtin pwd "$@" ;;
-        esac
-      else
-        builtin pwd "$@"
-      fi
-    }
-    export -f pwd
     jq -cn --arg cwd "$1" --arg f "$2" --arg t "$GW/t/none.jsonl" \
       '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
       | PATH="$GW_NO_PYTHON_BIN" HM_MEMBER_GUARD=block "$ROOT/scripts/member-edit-guard.sh"
