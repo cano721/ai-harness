@@ -25,6 +25,12 @@ file="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"
 cwd="${cwd%/}"
 [[ "$file" == /* ]] || file="$cwd/$file"
 
+nfc() { # Python이 없으면 기존 경로 표현을 유지한다.
+  local value="$1"
+  command -v python3 >/dev/null 2>&1 || { printf '%s\n' "$value"; return; }
+  python3 -c 'import sys, unicodedata; print(unicodedata.normalize("NFC", sys.argv[1]))' "$value" 2>/dev/null || printf '%s\n' "$value"
+}
+
 # 하네스 문서·도구 설정은 대상이 아니다 — workspace 세션이 하네스를 고치거나 인계 문서를 남길 수 있다.
 case "$file" in
   */.ai-harness/*|*/.claude/*|*/.agents/*|*/.codex/*|*.md) exit 0 ;;
@@ -41,6 +47,8 @@ harness_root() { # 경로에서 위로 올라가 .ai-harness/harness.json이 있
 
 member="$(harness_root "$(dirname "$file")")" || exit 0
 session_member="$(harness_root "$cwd")" || session_member=""
+member="$(nfc "$member")"
+session_member="$(nfc "$session_member")"
 [[ "$member" == "$session_member" ]] && exit 0
 # 심볼릭 링크·`..`가 섞인 경로도 같은 저장소면 통과한다(문자열만 비교하면 다른 저장소로 오판한다).
 physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }

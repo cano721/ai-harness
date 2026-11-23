@@ -18,6 +18,12 @@ command -v jq >/dev/null 2>&1 || exit 0
 input="$(cat)"
 field() { jq -r "$1 // empty" <<<"$input" 2>/dev/null || true; }
 
+nfc() { # Python이 없으면 기존 경로 표현을 유지한다.
+  local value="$1"
+  command -v python3 >/dev/null 2>&1 || { printf '%s\n' "$value"; return; }
+  python3 -c 'import sys, unicodedata; print(unicodedata.normalize("NFC", sys.argv[1]))' "$value" 2>/dev/null || printf '%s\n' "$value"
+}
+
 case "$(field .tool_name)" in
   Edit | Write | MultiEdit | NotebookEdit) ;;
   *) exit 0 ;;
@@ -29,6 +35,7 @@ agent="$(field .agent_id)"
 [[ -n "$file" && -n "$cwd" ]] || exit 0
 root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 root="$(cd "$root" && pwd -P)" || exit 0
+root="$(nfc "$root")"
 
 physical() { # 경로의 디렉토리를 실제 경로로 푼다(없으면 그대로)
   local p="$1" d
@@ -41,6 +48,7 @@ physical() { # 경로의 디렉토리를 실제 경로로 푼다(없으면 그�
 }
 
 target="$(physical "$file")"
+target="$(nfc "$target")"
 [[ "$target" == "$root/"* ]] || exit 0
 rel="${target#"$root/"}"
 [[ "$rel" =~ $SOURCE_RE ]] || exit 0
@@ -102,7 +110,9 @@ for doc in "${need[@]}"; do
   found=0
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    if [[ "$(physical "$p")" == "$(physical "$root/.ai-harness/docs/$doc")" ]]; then
+    read_path="$(nfc "$(physical "$p")")"
+    doc_path="$(nfc "$(physical "$root/.ai-harness/docs/$doc")")"
+    if [[ "$read_path" == "$doc_path" ]]; then
       found=1
       break
     fi
