@@ -4,6 +4,78 @@
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# cleanup은 프로세스 목록을 볼 수 없어도 이 영역이 띄운 자식을 직접 종료해야 한다.
+CLEANUP_BIN="$TEST_TMP/cleanup-bin"
+CLEANUP_RESULT="$TEST_TMP/cleanup-result"
+mkdir -p "$CLEANUP_BIN"
+cat >"$CLEANUP_BIN/pkill" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+cat >"$TEST_TMP/cleanup-child.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+PATH="$1:$PATH"
+result="$2"
+# shellcheck source=tests/lib.sh
+source "$3/tests/lib.sh"
+bash -c 'while :; do sleep 1; done' "$TEST_TMP/cleanup-child" &
+child_pid=$!
+track_test_process "$child_pid"
+# PGID도 직접 종료해야 한다. perl setpgrp은 macOS Bash 3.2에서도 독립 그룹을 만든다.
+perl -e 'setpgrp(0, 0); exec @ARGV' bash -c 'while :; do sleep 1; done' "$TEST_TMP/cleanup-group" &
+group_pid=$!
+track_test_process "$group_pid" "$group_pid"
+# 등록 API를 호출하지 않은 일반 영역 백그라운드 job의 셸과 손자 프로세스도 cleanup이 종료해야 한다.
+bash -c 'bash -c "while :; do sleep 1; done" "$1/cleanup-grandchild" & echo $! >"$1/cleanup-grandchild.pid"; wait' _ "$TEST_TMP" &
+unregistered_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$TEST_TMP/cleanup-grandchild.pid" ]] && break; sleep 0.1; done
+unregistered_grandchild_pid="$(<"$TEST_TMP/cleanup-grandchild.pid")"
+printf '%s|%s|%s|%s\n' "$child_pid" "$group_pid" "$unregistered_pid" "$unregistered_grandchild_pid" >"$result"
+EOF
+chmod +x "$CLEANUP_BIN/pkill" "$TEST_TMP/cleanup-child.sh"
+set +e
+TMPDIR="$TEST_TMP" "$TEST_TMP/cleanup-child.sh" "$CLEANUP_BIN" "$CLEANUP_RESULT" "$ROOT"
+CLEANUP_CHILD_RC=$?
+set -e
+assert_eq "1" "$CLEANUP_CHILD_RC" "the isolated cleanup run reports its intentionally unfinished test"
+CLEANUP_CHILD_RECORD="$(<"$CLEANUP_RESULT")"
+IFS='|' read -r CLEANUP_CHILD_PID CLEANUP_GROUP_PGID CLEANUP_UNREGISTERED_PID CLEANUP_UNREGISTERED_GRANDCHILD_PID <<<"$CLEANUP_CHILD_RECORD"
+sleep 0.1
+CLEANUP_CHILD_ALIVE="$(kill -0 "$CLEANUP_CHILD_PID" 2>/dev/null && echo true || echo false)"
+[[ "$CLEANUP_CHILD_ALIVE" != true ]] || kill -KILL "$CLEANUP_CHILD_PID" 2>/dev/null || true
+assert_eq "false" "$CLEANUP_CHILD_ALIVE" "cleanup kills a started child when pkill cannot inspect processes"
+cleanup_group_alive="$(kill -0 -- "-$CLEANUP_GROUP_PGID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_group_alive" != true ]] || kill -KILL -- "-$CLEANUP_GROUP_PGID" 2>/dev/null || true
+assert_eq "false" "$cleanup_group_alive" "cleanup kills a tracked process group when pkill cannot inspect processes"
+cleanup_unregistered_alive="$(kill -0 "$CLEANUP_UNREGISTERED_PID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_unregistered_alive" != true ]] || kill -KILL "$CLEANUP_UNREGISTERED_PID" 2>/dev/null || true
+assert_eq "false" "$cleanup_unregistered_alive" "cleanup kills an unregistered background job when pkill cannot inspect processes"
+cleanup_grandchild_alive="$(kill -0 "$CLEANUP_UNREGISTERED_GRANDCHILD_PID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_grandchild_alive" != true ]] || kill -KILL "$CLEANUP_UNREGISTERED_GRANDCHILD_PID" 2>/dev/null || true
+assert_eq "false" "$cleanup_grandchild_alive" "cleanup kills a grandchild of an unregistered background job when pkill cannot inspect processes"
+pass "cleanup kills background processes without pkill"
+
+# ps 권한이 없으면 watchdog의 실프로세스 검사 묶음을 실행하지 않아야 한다.
+WATCHDOG_PS_BIN="$TEST_TMP/watchdog-ps-bin"
+WATCHDOG_PS_PROBE="$TEST_TMP/watchdog-ps-probe.sh"
+mkdir -p "$WATCHDOG_PS_BIN"
+cat >"$WATCHDOG_PS_BIN/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$WATCHDOG_PS_BIN/ps"
+# 실제 if/else 검사 묶음을 실패하는 ps와 함께 실행하고, 뒤의 sentinel도 도달하는지 확인한다.
+{
+  awk '/^if ! ps -A -o pid=,ppid=,pgid=,args=/{copy=1} copy {print} copy && /pass "background watchdog cleans the process group"/{getline; print; exit}' "$ROOT/tests/automation.sh"
+  printf '%s\n' 'printf "%s\\n" "watchdog-test-continued"'
+} >"$WATCHDOG_PS_PROBE"
+WATCHDOG_PS_OUTPUT="$(PATH="$WATCHDOG_PS_BIN:$PATH" bash "$WATCHDOG_PS_PROBE")"
+assert_contains "$WATCHDOG_PS_OUTPUT" '# skip: background watchdog process tests need ps access' "watchdog skips the real process checks when ps fails"
+assert_eq "0" "$(grep -c -F 'background watchdog cleans the process group' <<<"$WATCHDOG_PS_OUTPUT" || true)" "watchdog does not run the real process-check completion"
+assert_contains "$WATCHDOG_PS_OUTPUT" 'watchdog-test-continued' "automation checks continue after watchdog process tests are skipped"
+pass "background watchdog skips process checks without ps"
+
 # 자동 harvest: opt-in, 재귀 차단, batch당 1회, 하네스 없는 곳 skip, 일일 상한, 결과 기록
 AUTO_DATA="$TEST_TMP/auto-data"
 AUTO_REPO="$TEST_TMP/auto-repo"
@@ -738,11 +810,13 @@ guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/impl
 cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
 mkdir -p "$GW/t/sess/subagents"
 cp "$GW/t/read.jsonl" "$GW/t/sess/subagents/agent-a1.jsonl"
+# 테스트 실행 셸의 개인 설정이 기본 guard 동작 검사를 끄지 않게 한다.
+unset HM_MEMBER_GUARD
 member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> ask(확인 요청) | exit code; stdout $GW/out, stderr $GW/err
-  local agent="${4:-}" rc=0
+  local agent="${4:-}" rc=0 member_guard_mode="${HM_MEMBER_GUARD:-1}"
   jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
     '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
-    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
+    | HM_MEMBER_GUARD="$member_guard_mode" "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
   if [[ "$rc" == 0 && "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$GW/out" 2>/dev/null)" == ask ]]; then echo ask; else echo "$rc"; fi
 }
 guard_reason() { jq -r '.hookSpecificOutput.permissionDecisionReason' "$GW/out"; }
@@ -1917,6 +1991,10 @@ assert_eq "|0" "$(jq -cn '{tool_input:{command:["a"],run_in_background:true}}' |
 pass "background command watchdog hook"
 
 # 감시자는 실제 프로세스 그룹에서: 가짜 에이전트가 hook을 부르고, Claude Code처럼 명령을 eval '…'로 넣은 셸을 새 그룹 리더로 띄운다.
+# 이 검사는 ps를 통한 실프로세스 관찰이 가능할 때만 유효하다.
+if ! ps -A -o pid=,ppid=,pgid=,args= >/dev/null 2>&1; then
+  printf '%s\n' '# skip: background watchdog process tests need ps access'
+else
 # 띄우는 프로세스는 인자에 $TEST_TMP를 넣어 실패해도 cleanup이 끈다.
 BG_LOOP='while :; do sleep 1; done'
 cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
@@ -1938,8 +2016,10 @@ bg_start() { # 이름 hook명령 [실행명령] → BG_AGENT, BG_GROUP
   BG_HOOK_CMD="$(jq -r '.hooks[0].command' <<<"$BG_HOOK")${BG_HOOK_SUFFIX:-}" CLAUDE_PLUGIN_ROOT="$ROOT" \
     bash "$TEST_TMP/bg-agent.sh" "$2" "${3:-$2}" "$TEST_TMP/$1" &
   BG_AGENT=$!
+  track_test_process "$BG_AGENT"
   for _ in $(seq 1 50); do [[ -s "$TEST_TMP/$1.pid" ]] && break; sleep 0.1; done
   BG_GROUP="$(<"$TEST_TMP/$1.pid")"
+  track_test_process "$BG_GROUP" "$BG_GROUP"
 }
 bg_watching() { pgrep -f "background-watchdog.sh $BG_AGENT " >/dev/null && echo true || echo false; }
 bg_claimed() { [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] && echo true || echo false; }
@@ -2019,11 +2099,22 @@ BG_START=$SECONDS
 "$ROOT/scripts/background-watchdog.sh" "$BG_GONE" " " "sleep 100" "$TEST_TMP/bg-claims"
 assert_eq "0" "$((SECONDS - BG_START > 1))" "watchdog exits at once when the agent is already gone"
 pass "background watchdog cleans the process group"
+fi
 
 # 무거운 명령 슬롯(#436): 병렬 세션의 빌드·dev 서버·전체 테스트를 메모리 기준 동시 수로 줄 세운다.
 # hook은 이 테스트 셸에서 직접(명령 치환 없이) 불러 부모 pid(=에이전트)가 살아 있게 한다.
 HS="$ROOT/scripts/heavy-slot-hook.sh"
 HS_DIR="$HARNESS_METRICS_DIR/heavy-slots"
+HS_PS_BIN="$TEST_TMP/hs-ps-bin"
+mkdir -p "$HS_PS_BIN"
+cat >"$HS_PS_BIN/ps" <<'EOF'
+#!/usr/bin/env bash
+# Codex sandbox may deny process enumeration. The hook needs only its direct
+# shell parent's command name in these foreground tests; all other queries stay
+# empty, as an inaccessible process list would be.
+if [[ "$*" == "-o comm= -p "* ]]; then printf '%s\n' bash; fi
+EOF
+chmod +x "$HS_PS_BIN/ps"
 HS_REG_PRE="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash" and (.hooks[0].command | contains("heavy-slot")))' "$ROOT/hooks/hooks.json")"
 assert_eq "$LITERAL_PLUGIN_ROOT/scripts/heavy-slot-hook.sh\" pre" "$(jq -r '.hooks[0].command' <<<"$HS_REG_PRE")" "Bash PreToolUse registers the heavy slot hook"
 assert_eq "600" "$(jq -r '.hooks[0].timeout' <<<"$HS_REG_PRE")" "the heavy slot hook may wait up to its timeout"
@@ -2035,7 +2126,7 @@ hs_in() { # tool_use_id 명령 [bg] [transcript]
     '{tool_name:"Bash", tool_use_id:$id, transcript_path:$t, tool_input:{command:$c, run_in_background:$bg}}'
 }
 hs_call() { # 모드 입력 → $TEST_TMP/hs.out, $TEST_TMP/hs.rc
-  printf '%s' "$2" | "$HS" "$1" >"$TEST_TMP/hs.out" 2>"$TEST_TMP/hs.err"
+  printf '%s' "$2" | PATH="$HS_PS_BIN:$PATH" "$HS" "$1" >"$TEST_TMP/hs.out" 2>"$TEST_TMP/hs.err"
   echo $? >"$TEST_TMP/hs.rc"
 }
 hs_slots() { find "$HS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | sed 's#.*/##; s#\.json$##' | sort | paste -sd' ' -; }
@@ -2139,6 +2230,10 @@ unset HM_HEAVY_SLOTS HM_HEAVY_MEM_FREE_PCT HM_HEAVY_WAIT
 pass "heavy command slots"
 
 # 백그라운드 서버: PostToolUse는 띄운 직후 오므로 반환하지 않고, 감시자가 찾은 그룹이 사는 동안 쥔다.
+# 이 하위 검사는 위 watchdog 검사와 같은 실프로세스 관찰 도구를 쓴다.
+if ! ps -A -o pid=,ppid=,pgid=,args= >/dev/null 2>&1; then
+  printf '%s\n' '# skip: background heavy process test needs ps access'
+else
 mkdir -p "$TEST_TMP/hs-bin"
 printf '%s\n' '#!/bin/bash' 'while :; do sleep 1; done' >"$TEST_TMP/hs-bin/yarn"
 chmod +x "$TEST_TMP/hs-bin/yarn"
@@ -2161,10 +2256,15 @@ hs_call pre "$(hs_in bg2 "yarn build")"
 [[ "$(hs_slots)" == bg2 ]] || fail "the background slot frees once its group is gone: slots=$(hs_slots) claims=$(find "$HARNESS_METRICS_DIR/bg-watchdog" 2>/dev/null | tr '\n' ' ') slot=$(cat "$HS_DIR"/*.json 2>/dev/null) out=$(cat "$TEST_TMP/hs.out")"
 bg_stop_agent
 rm -f "$HS_DIR"/*.json
+fi
 
 # 감시자가 KILL로 죽어 선점 디렉토리만 남으면(그룹은 없음) 슬롯을 쥐지 않는다.
+# ps가 막혀 위 실프로세스 검사가 건너뛰어도 이후 합성 슬롯 검사는 계속 켠다.
+export HM_HEAVY_SLOTS=1 HM_HEAVY_MEM_FREE_PCT=80 HM_HEAVY_WAIT=0
 jq -cn --argjson a "$$" '{tool_use_id:"bg3", agent:$a, cmd:"yarn dev", bg:true, transcript:"", started:((now|floor) - 600)}' >"$HS_DIR/bg3.json"
-HS_DEAD_GROUP="$(bash -c 'echo $$')"
+# 이 환경의 PID 한계보다 큰 수라 어떤 살아 있는 프로세스 그룹도 가리키지 않는다.
+HS_DEAD_GROUP=2147483647
+kill -0 -- "-$HS_DEAD_GROUP" 2>/dev/null && fail "the orphan claim fixture group must be absent"
 mkdir -p "$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP" && printf bg3 >"$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP/tool_use_id"
 hs_call pre "$(hs_in bg4 "yarn build")"
 assert_eq "bg4" "$(hs_slots)" "a leftover claim whose group is gone does not hold the slot"
