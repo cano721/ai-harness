@@ -37,7 +37,6 @@ jq -cn --arg at "$NOW_ISO" '{event:"started", project:"svc", scope:"repo", at:$a
   >"$BOARD_DATA/harvest-auto/runs.jsonl"
 printf '# keep this comment\nHM_DIGEST=1\nOTHER_TOOL_SETTING=x\n' >"$BOARD_DATA/config"
 chmod 600 "$BOARD_DATA/config"
-free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 BOARD_PORT_T="$(free_port)"
 board_sh() {
   env PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BOARD_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
