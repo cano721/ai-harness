@@ -75,7 +75,7 @@ pass "a needed fix is handed to fix-bug with the report"
 new_driver_repo inv_behind
 with_policy pr-only ""
 publish_base
-git clone -q "$DRIVER_TMP/remote-inv_behind.git" "$DRIVER_TMP/clone-inv_behind"
+git clone -q -b main "$DRIVER_TMP/remote-inv_behind.git" "$DRIVER_TMP/clone-inv_behind"
 git -C "$DRIVER_TMP/clone-inv_behind" -c user.email=t@t -c user.name=t commit -q --allow-empty -m ahead
 git -C "$DRIVER_TMP/clone-inv_behind" push -q origin HEAD:main 2>/dev/null
 driver start --workflow investigate --runtime codex --request "total ignores tax"
