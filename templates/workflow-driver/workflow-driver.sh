@@ -59,6 +59,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [
 
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면이다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
+        start에 --runtime이 없으면: 부른 런타임(Claude Code·Codex) > integrations에 설치된 것이 하나 > 설치된 CLI가 하나. 못 정하면 exit 2
 
   정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
@@ -2219,10 +2220,27 @@ approval_mode() {
   printf '%s %s' "$mode" "$source"
 }
 
+# --runtime이 없을 때 노드 세션을 띄울 CLI: 러너를 부른 런타임 > 저장소 integrations 중 설치된 것이 하나면 그것 > 설치된 유일한 CLI.
+# integrations의 나열 순서는 우선순위가 아니고, 한쪽이 다른 쪽 안에서 돌면 두 신호가 함께 있어 호출자를 단정하지 않는다. 못 정하면 고르지 않는다.
+default_runtime() {
+  local rt="" picked=() installed=()
+  if [[ -n "${CLAUDECODE:-}" && -z "${CODEX_THREAD_ID:-}" ]]; then printf claude; return 0; fi
+  if [[ -n "${CODEX_THREAD_ID:-}" && -z "${CLAUDECODE:-}" ]]; then printf codex; return 0; fi
+  for rt in $(jq -r '(.integrations // [])[] | select(. == "claude" or . == "codex")' "$REPO/.ai-harness/harness.json" 2>/dev/null | sort -u || true); do
+    if command -v "$rt" >/dev/null; then picked+=("$rt"); fi
+  done
+  if [[ ${#picked[@]} -eq 1 ]]; then printf '%s' "${picked[0]}"; return 0; fi
+  for rt in claude codex; do if command -v "$rt" >/dev/null; then installed+=("$rt"); fi; done
+  if [[ ${#installed[@]} -eq 1 ]]; then printf '%s' "${installed[0]}"; return 0; fi
+  if [[ ${#installed[@]} -eq 0 ]]; then printf 'neither claude nor codex found\n' >&2; return 1; fi
+  printf 'cannot choose a runtime: both claude and codex are installed, the runner was not started from exactly one of them, and .ai-harness/harness.json integrations do not name exactly one. Pass --runtime claude or --runtime codex\n' >&2
+  return 1
+}
+
 case "$CMD" in
   start)
     case "${RUNTIME:-}" in
-      "") if command -v codex >/dev/null; then RUNTIME=codex; else RUNTIME=claude; fi ;;
+      "") RUNTIME="$(default_runtime)" || exit 2 ;;
       codex|claude) ;;
       *) usage ;;
     esac
