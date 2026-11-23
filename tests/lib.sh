@@ -164,6 +164,9 @@ make_repo() {
   [[ -z "$origin" ]] || git -C "$dir" remote add origin "$origin"
 }
 
+# 테스트 서버 포트는 커널이 bind 0으로 고른 빈 포트를 쓴다 (병렬·동시 세션 충돌 방지)
+free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+
 # 여러 영역이 같이 읽는 고정 값
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 # shellcheck disable=SC2016  # hook JSON의 literal 변수 참조를 검사
