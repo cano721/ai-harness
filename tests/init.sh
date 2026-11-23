@@ -907,18 +907,42 @@ dg_line Read "$DG_NFC_DOC" >"$DG/t/nfc-read-nfc.jsonl"
 for dg_command in jq git dirname basename cat; do
   ln -s "$(command -v "$dg_command")" "$DG/nopy/$dg_command"
 done
+# macOS Bash는 PATH를 바꾼 새 셸에 export -f 함수를 다시 들이지 않을 수 있다. BASH_ENV로 같은 pwd shim을
+# 로드해 git root는 NFC, 하위 대상 경로는 NFD인 APFS 표기를 재현한다.
+DG_PWD_ENV="$DG/nopy/pwd-env.sh"
+cat >"$DG_PWD_ENV" <<'PWD_ENV'
+pwd() {
+  local actual suffix
+  [[ "${1:-}" == -P ]] || { builtin pwd "$@"; return; }
+  actual="$(builtin pwd -P)"
+  case "$actual" in
+    "$DG_NFD_ROOT" | "$DG_NFC_ROOT") printf '%s\n' "$DG_NFC_ROOT" ;;
+    "$DG_NFD_ROOT"/*) suffix="${actual#"$DG_NFD_ROOT"/}"; printf '%s/%s\n' "$DG_NFD_ROOT" "$suffix" ;;
+    "$DG_NFC_ROOT"/*) suffix="${actual#"$DG_NFC_ROOT"/}"; printf '%s/%s\n' "$DG_NFD_ROOT" "$suffix" ;;
+    *) printf '%s\n' "$actual" ;;
+  esac
+}
+PWD_ENV
 direct_nfc_guard() { # $1=target, $2=transcript, [$3=without_python] -> exit code
   local target="$1" transcript="$2" without_python="${3:-0}" rc=0
   (
     export DG_NFD_ROOT DG_NFC_ROOT
     # shellcheck disable=SC2120,SC2329  # guard child가 export한 pwd를 -P 인자로 호출한다.
     pwd() {
-      if [[ "${1:-}" == -P && "$PWD" == "$DG_NFD_ROOT" ]]; then printf '%s\n' "$DG_NFC_ROOT"; else builtin pwd "$@"; fi
+      local actual suffix
+      [[ "${1:-}" == -P ]] || { builtin pwd "$@"; return; }
+      actual="$(builtin pwd -P)"
+      case "$actual" in
+        "$DG_NFD_ROOT" | "$DG_NFC_ROOT") printf '%s\n' "$DG_NFC_ROOT" ;;
+        "$DG_NFD_ROOT"/*) suffix="${actual#"$DG_NFD_ROOT"/}"; printf '%s/%s\n' "$DG_NFD_ROOT" "$suffix" ;;
+        "$DG_NFC_ROOT"/*) suffix="${actual#"$DG_NFC_ROOT"/}"; printf '%s/%s\n' "$DG_NFD_ROOT" "$suffix" ;;
+        *) printf '%s\n' "$actual" ;;
+      esac
     }
     export -f pwd
     jq -cn --arg cwd "$DG_NFD_ROOT" --arg f "$target" --arg t "$transcript" \
       '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}}' \
-      | if [[ "$without_python" == 1 ]]; then env PATH="$DG/nopy" /bin/bash "$DG_GUARD"; else bash "$DG_GUARD"; fi
+      | if [[ "$without_python" == 1 ]]; then BASH_ENV="$DG_PWD_ENV" PATH="$DG/nopy" /bin/bash "$DG_GUARD"; else bash "$DG_GUARD"; fi
   ) 2>"$DG/err" >/dev/null || rc=$?
   printf '%s\n' "$rc"
 }
@@ -926,7 +950,7 @@ assert_eq "2" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-no
 assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-read-nfd.jsonl")" "NFD target accepts an NFD Read record"
 assert_eq "2" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFC target without a Read is blocked in an NFD repository"
 assert_eq "0" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-read-nfc.jsonl")" "NFC target accepts an NFC Read record"
-assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 the direct guard keeps its prior fail-open result"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/missing/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 the direct guard keeps its prior fail-open result"
 pass "direct edit guard normalizes NFD and NFC paths"
 
 # 화면 검증 서버 수명: dev 서버를 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(실측). 계약과 러너가

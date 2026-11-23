@@ -795,6 +795,8 @@ assert_contains "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | conta
 assert_eq "Edit|Write|MultiEdit|NotebookEdit" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .matcher' "$ROOT/hooks/hooks.json")" "member edit guard matches Claude edit tools"
 assert_eq "3" "$(jq -r '.hooks.PreToolUse[] | select(.hooks[0].command | contains("member-edit-guard")) | .hooks[0].timeout' "$ROOT/hooks/hooks.json")" "member edit guard stays inside a short budget"
 GW="$TEST_TMP/guard-ws"
+HM_MEMBER_GUARD=1
+export HM_MEMBER_GUARD
 mkdir -p "$GW/jobda/.ai-harness/workflows" "$GW/jobda/src/main" "$GW/worktrees/NJ-1/jobda/.ai-harness/workflows" "$GW/worktrees/NJ-1/jobda/src/main" "$GW/plain/src/main" "$GW/t/sess"
 git -C "$GW/jobda" init -q
 printf '{"project_id":"jobda"}\n' >"$GW/jobda/.ai-harness/harness.json"

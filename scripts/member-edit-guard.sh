@@ -52,7 +52,9 @@ session_member="$(nfc "$session_member")"
 [[ "$member" == "$session_member" ]] && exit 0
 # 심볼릭 링크·`..`가 섞인 경로도 같은 저장소면 통과한다(문자열만 비교하면 다른 저장소로 오판한다).
 physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
-[[ -n "$session_member" && "$(physical_dir "$member")" == "$(physical_dir "$session_member")" ]] && exit 0
+member_physical="$(nfc "$(physical_dir "$member")")"
+session_physical="$(nfc "$(physical_dir "$session_member")")"
+[[ -n "$session_member" && "$member_physical" == "$session_physical" ]] && exit 0
 
 rel=""
 case "$member" in "$cwd"/*) rel="${member#"$cwd"/}" ;; esac
