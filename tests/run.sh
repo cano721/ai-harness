@@ -45,7 +45,12 @@ areas_for_file() {
   while [[ "$probe" == */* ]]; do
     hits="$(cd "$TESTS_DIR" && grep -lF -- "$probe" *.sh 2>/dev/null | grep -vxE 'run\.sh|lib\.sh' || true)"
     if [[ -n "$hits" ]]; then
-      while IFS= read -r hit; do printf '%s\n' "${hit%.sh}"; done <<<"$hits"
+      while IFS= read -r hit; do
+        case "$hit" in
+          lib-*.sh) areas_for_file "tests/$hit" ;; # 공용 헬퍼에만 적힌 경로는 그 헬퍼를 source하는 영역으로
+          *) printf '%s\n' "${hit%.sh}" ;;
+        esac
+      done <<<"$hits"
       return
     fi
     probe="${probe%/*}"

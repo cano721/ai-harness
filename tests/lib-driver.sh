@@ -28,6 +28,11 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   git -C "$DRIVER_REPO" config user.name t
   git -C "$DRIVER_REPO" commit -q --allow-empty -m init
   DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)"
+  if [[ -n "${NEW_REPO_LINKED:-}" ]]; then # 병합 뒤 worktree 판정 테스트용: 작업 저장소를 링크된 worktree로 둔다(원본은 DRIVER_MAIN)
+    DRIVER_MAIN="$DRIVER_REPO"
+    git -C "$DRIVER_MAIN" worktree add -q -b "wt-$1" "$DRIVER_TMP/wt-$1"
+    DRIVER_REPO="$(git -C "$DRIVER_TMP/wt-$1" rev-parse --show-toplevel)"
+  fi
   : >"$FAKE_LOG"
 }
 run_state() { jq -r "$1" "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"; }

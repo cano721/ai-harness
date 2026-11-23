@@ -230,6 +230,10 @@ finish() { # status exit_code message
   # 시작 때 남긴 설정 안내(더 이상 쓰지 않는 저장소 병합 설정 등)는 실행 결과에도 붙인다.
   [[ "$2" != 0 && "$2" != 20 ]] || message+="$(state '(.policy.notices // []) | map("; notice: " + .) | join("")')"
   state_set '.status = $s | .message = $m | .finished_at = $t' --arg s "$1" --arg m "$message" --arg t "$(now_utc)"
+  if [[ "$2" == 0 && -n "$(state '.merge.commit // ""')" ]]; then
+    cd "$HOME" 2>/dev/null || true
+    cleanup_merged_worktree
+  fi
   log "$1: $message"
   log "run: $RUN_ID ($RUN)"
   exit "$2"
@@ -1264,6 +1268,41 @@ rollback_hint() { # commit base
     printf 'the change is merged and was not reverted. To roll it back, revert the merge commit on a new branch (git revert -m 1 %s) and open a pull request' "$1"
   else
     printf 'the change is merged and was not reverted. To roll it back, revert %s on a new branch (git revert %s) and open a pull request' "$1" "$1"
+  fi
+}
+
+# 병합 확인과 후속 검증이 끝난 뒤 현재 작업 worktree가 정리 가능한지 판정만 한다(#454). 러너는 아무것도 지우지 않는다.
+# 살아 있는 세션(터미널·에이전트)을 러너는 알 수 없으므로, 실제 삭제는 보드 '끝난 일 정리'나 workspace 세션 정리가 세션을 확인한 뒤 한다.
+# 판정은 state.json의 worktree_cleanup {eligible, reason, path, branch}과 진행 로그 한 줄로 남긴다.
+cleanup_merged_worktree() {
+  local url facts dirty unpushed nested gitdir common branch reason=""
+  url="$(state '.publish.pr_url // ""')"
+  branch="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [[ -z "$url" ]] || ! facts="$(pr_facts "$url" 2>/dev/null)" || [[ "$(jq -r '.state // ""' <<<"$facts")" != MERGED ]]; then
+    reason="pull request merge is not confirmed"
+  elif ! dirty="$(git -C "$REPO" status --porcelain 2>/dev/null)" || [[ -n "$dirty" ]]; then
+    reason="working tree is not clean"
+  # `git log HEAD --not --remotes`와 같은 안전 검사: 어느 원격에도 없는 커밋이 있으면, 조회에 실패해도 보존한다.
+  elif ! unpushed="$(git -C "$REPO" log HEAD --not --remotes --oneline 2>/dev/null)" || [[ -n "$unpushed" ]]; then
+    reason="commits are absent from remotes"
+  elif ! nested="$(find "$REPO" -path "$REPO/.git" -prune -o -name .git -print -quit 2>/dev/null)" || [[ -n "$nested" ]]; then
+    reason="중첩 clone${nested:+ at $nested}"
+  else
+    # 메인 체크아웃은 git-dir이 common-dir과 같다. 상대 경로·심볼릭 링크 차이를 물리 경로로 맞춰 비교한다.
+    gitdir="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)"
+    common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    gitdir="$(cd "$gitdir" 2>/dev/null && pwd -P || true)"
+    common="$(cd "$common" 2>/dev/null && pwd -P || true)"
+    if [[ -z "$branch" || -z "$gitdir" || -z "$common" || "$gitdir" == "$common" ]]; then
+      reason="not a removable linked worktree"
+    fi
+  fi
+  if [[ -z "$reason" ]]; then
+    state_set '.worktree_cleanup = {eligible: true, reason: null, path: $p, branch: $b}' --arg p "$REPO" --arg b "$branch"
+    log "worktree cleanup: eligible ($REPO) — remove it with the board's finished-work cleanup or the workspace session cleanup"
+  else
+    state_set '.worktree_cleanup = {eligible: false, reason: $r, path: $p, branch: $b}' --arg r "$reason" --arg p "$REPO" --arg b "$branch"
+    log "worktree cleanup: kept ($reason)"
   fi
 }
 
@@ -2540,6 +2579,9 @@ case "$CMD" in
   status)
     jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
+    if [[ "$(state '.worktree_cleanup.eligible // ""')" == true ]]; then
+      printf 'worktree %s is merged and can be removed: use the board "finished work" cleanup or the workspace session cleanup\n' "$(state .worktree_cleanup.path)"
+    fi
     exit 0
     ;;
   revise)
