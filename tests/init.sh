@@ -947,9 +947,9 @@ direct_nfc_guard() { # $1=target, $2=transcript, [$3=without_python] -> exit cod
   printf '%s\n' "$rc"
 }
 assert_eq "2" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFD target without a Read is blocked when root is NFC"
-assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-read-nfd.jsonl")" "NFD target accepts an NFD Read record"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/main/App.java" "$DG/t/nfc-read-nfc.jsonl")" "NFD target accepts an NFC Read record"
 assert_eq "2" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-none.jsonl")" "NFC target without a Read is blocked in an NFD repository"
-assert_eq "0" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-read-nfc.jsonl")" "NFC target accepts an NFC Read record"
+assert_eq "0" "$(direct_nfc_guard "$DG_NFC_ROOT/src/main/App.java" "$DG/t/nfc-read-nfd.jsonl")" "NFC target accepts an NFD Read record"
 assert_eq "0" "$(direct_nfc_guard "$DG_NFD_ROOT/src/missing/App.java" "$DG/t/nfc-none.jsonl" 1)" "without python3 the direct guard keeps its prior fail-open result"
 pass "direct edit guard normalizes NFD and NFC paths"
 
