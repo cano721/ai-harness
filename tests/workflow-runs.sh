@@ -431,4 +431,61 @@ driver start --workflow bug-fix --runtime codex --request "total ignores tax" --
 assert_eq "2" "$DRIVER_RC" "an empty investigation report does not skip reproduce"
 pass "fix-bug starts from the brief with an investigation report"
 
+# --runtime이 없으면 러너를 부른 런타임을 따르고, 못 정하면 integrations·설치된 CLI 순으로 정한다.
+# codex가 PATH에 있다는 것만으로 codex를 고르지 않는다(#476).
+runtime_run() { # env... → DRIVER_RC, DRIVER_OUT (DRIVER_REPO는 new_driver_repo가 준비)
+  DRIVER_RC=0
+  DRIVER_OUT="$(env -u CLAUDECODE -u CODEX_THREAD_ID "$@" HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" \
+    CLAUDE_CONFIG_DIR="${RUNTIME_CFG:-$DRIVER_TMP/claude}" CODEX_HOME="$DRIVER_TMP/codex" FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK=true \
+    PATH="${RUNTIME_PATH:-$ROOT/tests/fixtures/driver:$PATH}" bash "$DRIVER" start --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+}
+with_integrations() { # json array → 저장소 manifest
+  mkdir -p "$DRIVER_REPO/.ai-harness"
+  jq -n --argjson i "$1" '{project_id:"rt", level:"standard", integrations:$i}' >"$DRIVER_REPO/.ai-harness/harness.json"
+  git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m manifest
+}
+new_driver_repo rt-claude-caller
+runtime_run CLAUDECODE=1
+assert_eq "claude" "$(run_state .runtime)" "a runner started from Claude Code runs claude sessions even when codex is installed"
+new_driver_repo rt-codex-caller
+runtime_run CODEX_THREAD_ID=t-1
+assert_eq "codex" "$(run_state .runtime)" "a runner started from Codex runs codex sessions"
+new_driver_repo rt-integrations
+with_integrations '["claude"]'
+runtime_run
+assert_eq "claude" "$(run_state .runtime)" "without a caller signal the repository integrations decide"
+new_driver_repo rt-both-signals
+with_integrations '["codex"]'
+runtime_run CLAUDECODE=1 CODEX_THREAD_ID=t-1
+assert_eq "codex" "$(run_state .runtime)" "a nested Claude/Codex environment does not guess the caller; integrations decide"
+# 설치된 CLI가 codex 하나뿐인 PATH. jq·git은 설치 위치가 머신마다 달라 링크로 넣는다.
+mkdir -p "$DRIVER_TMP/only-codex"
+ln -sf "$ROOT/tests/fixtures/driver/codex" "$DRIVER_TMP/only-codex/codex"
+for t in jq git; do ln -sf "$(command -v "$t")" "$DRIVER_TMP/only-codex/$t"; done
+new_driver_repo rt-only-codex
+RUNTIME_PATH="$DRIVER_TMP/only-codex:/usr/bin:/bin" runtime_run
+assert_eq "codex" "$(run_state .runtime)" "with one CLI installed and no other signal the installed one runs"
+new_driver_repo rt-integrations-missing
+with_integrations '["claude"]'
+RUNTIME_PATH="$DRIVER_TMP/only-codex:/usr/bin:/bin" runtime_run
+assert_eq "codex" "$(run_state .runtime)" "integrations naming an uninstalled CLI fall through to the installed one"
+new_driver_repo rt-integrations-both
+with_integrations '["claude", "codex"]'
+runtime_run
+assert_eq "2" "$DRIVER_RC" "integrations listing both installed CLIs do not pick one by list order"
+new_driver_repo rt-both-signals-undecided
+runtime_run CLAUDECODE=1 CODEX_THREAD_ID=t-1
+assert_eq "2" "$DRIVER_RC" "a nested Claude/Codex environment without integrations refuses to guess"
+# Claude Code에서 부르면 기본이 claude가 되므로, 저장소가 Claude 설정 폴더 안이면 시작 전에 거부하고 codex를 안내한다.
+new_driver_repo rt-claude-protected
+RUNTIME_CFG="$DRIVER_TMP" runtime_run CLAUDECODE=1
+assert_eq "2" "$DRIVER_RC" "a Claude Code caller with the repository inside the Claude configuration directory is refused"
+assert_contains "$DRIVER_OUT" "--runtime codex" "the refusal points to --runtime codex"
+new_driver_repo rt-undecided
+runtime_run
+assert_eq "2" "$DRIVER_RC" "both CLIs installed and nothing to decide refuses to guess"
+assert_contains "$DRIVER_OUT" "--runtime" "the refusal asks for --runtime"
+assert_eq "" "$(find "$DRIVER_TMP/runs" -path "*/repo-rt-undecided-*" -name state.json)" "no run is created when the runtime is undecided"
+pass "runner runtime follows the caller, then integrations, then the installed CLI"
+
 finish_tests

@@ -21,6 +21,9 @@
 
 ### 동작 변경
 
+- **러너가 codex가 깔려 있다는 이유만으로 codex를 고르지 않습니다** — `workflow-driver.sh start`에 `--runtime`이 없을 때 지금까지는 codex가 PATH에 있으면 항상 codex로 노드 세션을 띄워, Claude Code에서 부른 러너도 codex로 돌고 `harness.json` `integrations`도 무시했습니다. 이제 러너를 부른 런타임(Claude Code면 claude, Codex면 codex)을 따르고, 판별되지 않으면 `integrations`에 적힌 것 중 설치된 CLI가 하나면 그것, 아니면 설치된 CLI가 하나뿐일 때 그것을 씁니다. 둘 다 설치돼 있고 정할 근거가 없으면 고르지 않고 `--runtime`을 요구하며 exit 2로 끝납니다 — 터미널·스케줄러에서 `--runtime` 없이 부르던 스크립트는 `--runtime`을 붙여야 합니다. Claude Code에서 부른 러너는 이제 claude로 돌아, 저장소가 Claude 설정 폴더 안이면 시작 전에 거부됩니다(`--runtime codex`로 실행). (#476)
+  요약: 러너는 이제 부른 도구(Claude Code·Codex)를 따라 세션을 띄웁니다. 정할 수 없으면 `--runtime claude|codex`를 달라고 합니다.
+
 - **러너 리뷰 단계가 라운드마다 전체 회귀를 돌리지 않습니다** — `/implement-feature`·`/fix-bug` 러너의 Brief가 검증 명령을 둘로 나눕니다. `checks`(바뀐 영역 테스트·린트)는 리뷰·수리 때마다, `final_checks`(전체 회귀·전체 빌드)는 리뷰에서 blocking이 없을 때 한 번만 돕니다. 넓은 검사가 실패하면 blocking으로 수리하고, 수리 뒤 실패한 명령부터 다시 돌립니다. 예전처럼 `final_checks` 없이 만든 Brief는 동작이 같습니다. (#462)
 
 ### 버그 수정
