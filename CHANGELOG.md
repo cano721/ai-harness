@@ -6,8 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
-
+## v0.91.0 (2026-11-24)
 ### 새 기능
 
 - **러너 기본 런타임을 개인 설정으로 고정할 수 있습니다** — 러너가 노드 세션을 띄울 CLI를 `~/.ai-harness/config`의 `HM_RUNTIME`(claude|codex)과 저장소별 `HM_RUNTIME_REPOS`(`<project_id>=claude|codex`)로 정합니다. 우선순위는 `--runtime` > 저장소별 > 전체 > 자동 선택이고, 고른 출처를 start 출력과 run state(`policy.runtime_source`)에 남깁니다. 설정한 CLI가 없으면 다른 런타임으로 바꾸지 않고 이유와 함께 멈춥니다. 보드 설정 › 작업에서 바꿀 수 있습니다. (#488)
