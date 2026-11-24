@@ -462,7 +462,8 @@ run_agent() {
       # 답할 사람이 없는 세션이다. 보드 권한 훅이 이 세션의 권한 요청을 보드로 넘겨 붙잡지 않게 표시한다(없으면 바로 거부된다).
       (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
       if ((rc == 0)); then
-        jq -r 'if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
+        # 세션이 result를 여러 번 내도 .out은 마지막 result 하나에서 만든 문서 하나다(소비자가 jq -r·--slurpfile로 읽는다).
+        jq -rs 'last | if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
           "$RUN/$label.json" >"$out" 2>/dev/null || rc=1
       fi
       ;;
