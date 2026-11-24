@@ -21,10 +21,11 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 | `/investigate` | 프로젝트 로컬 | `.claude/commands/investigate.md` | `.agents/skills/investigate/` | `.ai-harness/workflows/investigate.md` + `investigate-graph.json` |
 | `/design-polish` | 프로젝트 로컬 | `.claude/commands/design-polish.md` | `.agents/skills/design-polish/` | `.ai-harness/workflows/design-polish.md` + `design-polish-graph.json` |
 | `/review` | 프로젝트 로컬 | `.claude/commands/review.md` | `.agents/skills/review/` | `.ai-harness/workflows/review.md` + `review-graph.json` |
+| `/release` | 프로젝트 로컬 | `.claude/commands/release.md` | `.agents/skills/release/` | `.ai-harness/workflows/release.md` + `release-graph.json` (manifest `release_policy`) |
 | `/ai-harness:understand-change` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | `.ai-harness/workflows/understand-change.md` (선택 정책) |
 | `/ai-harness:explain-for` | 플러그인 제공 스킬 | 플러그인 설치로 제공 | 플러그인 설치로 제공 | — |
 
-그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review|polish|investigate --request "<요청>"`. 승인 모드는 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human` 순으로 정한다. manifest의 기존 `approval`은 무시하며, 값이 있으면 러너가 개인 설정으로 옮기라는 안내를 남긴다.
+그래프 러너: `bash .ai-harness/workflows/workflow-driver.sh start --workflow feature|bug-fix|review|polish|investigate --request "<요청>"`, 릴리스는 `start --workflow release --version <x.y.z>`. 승인 모드는 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human` 순으로 정한다. manifest의 기존 `approval`은 무시하며, 값이 있으면 러너가 개인 설정으로 옮기라는 안내를 남긴다.
 
 ## 페르소나
 

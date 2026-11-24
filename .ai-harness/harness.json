@@ -23,7 +23,7 @@
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "065e577a72ea6e5aae2f163779fcc95b17ae48495f882529312ceb08bd6bc94a",
+      "content_sha256": "8898e2e9835df5b05c18e42a1dab29e3fca90db8b27ef62f6bd07ec0266fd30a",
       "template_version": "0.91.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -163,6 +163,41 @@
       "content_sha256": "1a619afd73b9520096780ce68f2ecc70d2961ea345019e8b51ff2d78a1c8a1b5",
       "template_version": "0.91.0",
       "renderer": 1
+    },
+    ".ai-harness/workflows/release-graph.json": {
+      "content_sha256": "9c220df0d8eb456fb5e9f40866688da0cf7b74cc3b6dee1cf72947fc34c3af3c",
+      "template_version": "0.91.0"
+    },
+    ".agents/skills/release/SKILL.md": {
+      "content_sha256": "91a724d8e20cfabf252676432d8da5bac7f32e57255ac09726d46ee4eaf6a859",
+      "template_version": "0.91.0",
+      "renderer": 1
+    },
+    ".claude/commands/release.md": {
+      "content_sha256": "2fdfec2cde58c516a51338e2c5a2de2d7fa51fc3e7114b6a03b06fb64cbb2168",
+      "template_version": "0.91.0",
+      "renderer": 1
     }
+  },
+  "release_policy": {
+    "flow": "tag",
+    "evidence": [
+      "origin has main and develop",
+      "vX.Y.Z tags on origin",
+      "version files .claude-plugin/plugin.json, .codex-plugin/plugin.json, release.json",
+      "CHANGELOG.md has ## vX.Y.Z sections"
+    ],
+    "base": "main",
+    "source": "develop",
+    "branch_prefix": "release/v",
+    "tag_prefix": "v",
+    "prepare_cmd": "scripts/release-prep.sh \"$HM_RELEASE_VERSION\"",
+    "notes_cmd": "scripts/changelog-section.sh \"$HM_RELEASE_VERSION\"",
+    "generate_notes": true,
+    "verify_cmd": "scripts/release-verify.sh \"$HM_RELEASE_VERSION\"",
+    "verify_timeout_minutes": 60,
+    "record_cmds": [
+      "scripts/release-milestone.sh \"$HM_RELEASE_VERSION\""
+    ]
   }
 }
