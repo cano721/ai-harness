@@ -381,7 +381,7 @@ driver start --runtime codex --request "add feature"
 assert_eq "10" "$DRIVER_RC" "the codex sandbox is not limited by the Claude configuration directory"
 new_driver_repo protected_runs
 DRIVER_RC=0
-DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/claude/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" \
+DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/claude/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" \
   PATH="$ROOT/tests/fixtures/driver:$PATH" bash "$DRIVER" start --runtime claude --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
 assert_eq "2" "$DRIVER_RC" "a run folder inside the Claude configuration directory is refused too"
 assert_contains "$DRIVER_OUT" "HM_FEATURE_RUNS_DIR" "the refusal names the setting that moves the run folder"
@@ -532,5 +532,15 @@ assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/investigate-graph
 assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/design-polish`·`/review`를 프로젝트 진입점으로' "AGENTS.md lists investigate and design-polish as project entry points"
 assert_contains "$(<"$ROOT/README.md")" "/investigate" "README documents investigate"
 pass "investigate graph adapters"
+
+# 개인 기본 런타임(#488): 어댑터가 습관적으로 --runtime을 넘기면 개인 설정이 무력해진다. 다섯 어댑터와 렌더 생성물이 우선순위를 안내한다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for wf in implement-feature fix-bug review design-polish investigate; do
+  for f in "$ROOT/templates/$wf/SKILL.md" "$ROOT/.agents/skills/$wf/SKILL.md" "$ROOT/.claude/commands/$wf.md"; do
+    assert_contains "$(<"$f")" 'then `HM_RUNTIME_REPOS` (matching repository), then `HM_RUNTIME` in `~/.ai-harness/config`' "$f explains the runtime precedence"
+    assert_contains "$(<"$f")" 'pass `--runtime` only when the user asks for a specific CLI' "$f keeps --runtime for explicit requests"
+  done
+done
+pass "workflow adapters explain the personal runtime precedence"
 
 finish_tests

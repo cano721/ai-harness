@@ -3,6 +3,8 @@
 자동화 단계(PR까지/병합까지/배포·검증까지)는 사람마다 다르므로 ~/.ai-harness/config의
 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS에 둔다(#242). 병합 여부는 이 개인 설정만 정한다(#248). 보드가 바로 쓴다.
 워크플로 승인 모드도 같은 파일의 HM_APPROVAL·HM_APPROVAL_REPOS만 정한다(#294) — manifest approval은 보지 않는다.
+러너가 노드 세션을 띄울 CLI도 사람마다 쓰는 도구가 달라 같은 파일의 HM_RUNTIME·HM_RUNTIME_REPOS에 둔다(#488) —
+값이 없으면 러너가 자동으로 고른다(부른 CLI > 저장소 integrations > 설치된 유일한 CLI).
 기준 브랜치·배포 확인·스모크 명령은 저장소 사실이라 harness.json에 있고, 보드는 직접 고치지 않는다 —
 그 저장소에서 /ai-harness:harness-init 설정 변경을 돌려 draft PR로 낸다.
 """
@@ -97,6 +99,7 @@ def read_repo(repo):
         "branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
         "level": level_of(m), "git_policy": m.get("git_policy"), "merge_policy": m.get("merge_policy"),
         **repo_approval(repo, m),
+        **repo_runtime(repo),
         "monitor_ready": bool(m.get("monitor") and m.get("project_id")),
         "suggest": suggest(repo),
         "key": project_key(repo), "runner": runner_state(repo),
@@ -110,6 +113,7 @@ LEVEL_KO = {"pr": "PR까지", "merge": "병합까지", "deploy": "배포·검증
 CONFIG = os.path.join(os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness"), "config")
 PERSONAL_KEYS = ("HM_DELIVERY_LEVEL", "HM_DELIVERY_LEVEL_REPOS",
                  "HM_APPROVAL", "HM_APPROVAL_REPOS",
+                 "HM_RUNTIME", "HM_RUNTIME_REPOS",
                  "HM_HARVEST_AUTO", "HM_SYNC_AUTO", "HM_HARVEST_AUTO_MERGE", "HM_SYNC_AUTO_MERGE",
                  "HM_HARVEST_AUTO_DAILY_MAX", "HM_SYNC_AUTO_DAILY_MAX")
 DAILY_DEFAULT = {"harvest": 2, "sync": 6}  # harvest-auto.sh 기본값
@@ -218,6 +222,50 @@ def set_approval(req, known):
     return None
 
 
+RUNTIMES = ("claude", "codex")
+
+
+def runtime_of(key, cfg):
+    """러너 runtime_setting과 같은 순서: HM_RUNTIME_REPOS(이 저장소) > HM_RUNTIME > none(러너가 자동 선택).
+    값이 claude·codex가 아니면 러너는 시작하지 않으므로 그대로 보여 준다."""
+    mine = repo_map(cfg, "HM_RUNTIME_REPOS").get(key) or None
+    if mine:
+        return {"runtime": mine, "runtime_source": "repo", "runtime_mine": mine}
+    if cfg.get("HM_RUNTIME"):
+        return {"runtime": cfg["HM_RUNTIME"], "runtime_source": "default", "runtime_mine": None}
+    return {"runtime": None, "runtime_source": "none", "runtime_mine": None}
+
+
+def repo_runtime(repo):
+    """이 저장소 러너가 쓸 런타임. #488 이전 러너(HM_RUNTIME을 모름)는 설정을 무시하고 자동 선택하므로
+    동기화 전까지 출처 legacy로 보인다. 고른 값(runtime_mine)은 그대로 두어 동기화 뒤 적용될 값을 보인다."""
+    personal = runtime_of(project_key(repo), user_config())
+    if runner_runtime(repo) == "old":
+        return {**personal, "runtime": None, "runtime_source": "legacy"}
+    return personal
+
+
+def set_runtime(req, known):
+    """{scope: "default"} 또는 {scope: "repo", repo}, runtime: claude|codex|"" (""=설정 지움 — 자동 선택·기본 따름)."""
+    rt = req.get("runtime") or ""
+    if rt and rt not in RUNTIMES:
+        return "알 수 없는 런타임"
+    if req.get("scope") == "default":
+        write_user_config({"HM_RUNTIME": rt})
+        return None
+    if req.get("repo") not in known:
+        return "하네스 저장소 목록에 없는 경로"
+    key = project_key(req["repo"])
+    if not re.fullmatch(r"[\w.-]+", key):
+        return f"이 저장소의 project_id({key})는 설정 키로 쓸 수 없음"
+    rts = repo_map(user_config(), "HM_RUNTIME_REPOS")
+    rts.pop(key, None)
+    if rt:
+        rts[key] = rt
+    write_user_config({"HM_RUNTIME_REPOS": ",".join(f"{k}={v}" for k, v in rts.items())})
+    return None
+
+
 def set_harness(req):
     """하네스 동작(자동 harvest·sync)의 내 설정: kind harvest|sync, stage off|run|merge."""
     kind, stage = req.get("kind"), req.get("stage")
@@ -286,6 +334,15 @@ def runner_approval(repo):
         return "none"
     with open(p, errors="replace") as f:
         return "personal" if "HM_APPROVAL" in f.read() else "old"
+
+
+def runner_runtime(repo):
+    """러너가 개인 기본 런타임(HM_RUNTIME)을 읽는지: personal | old(설정을 무시하고 자동 선택) | none."""
+    p = os.path.join(repo, ".ai-harness", "workflows", "workflow-driver.sh")
+    if not os.path.isfile(p):
+        return "none"
+    with open(p, errors="replace") as f:
+        return "personal" if "HM_RUNTIME" in f.read() else "old"
 
 
 def effective(row, cfg):

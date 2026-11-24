@@ -358,6 +358,65 @@ assert (row["approval"], row["approval_source"]) == ("auto", "legacy"), row
 assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "approval writes keep other config lines"
 pass "harness board approval mode follows personal settings"
 
+# 보드의 기본 런타임도 러너와 같은 개인 설정(HM_RUNTIME_REPOS > HM_RUNTIME > 자동 선택)에서 계산하고 같은 파일에 쓴다(#488).
+BOARD_RT_REPO="$BOARD_T/repos/rt"
+mkdir -p "$BOARD_RT_REPO/.ai-harness/workflows"
+git -C "$BOARD_RT_REPO" init -q
+printf '{"project_id":"rt-id","git_policy":"pr-only"}\n' >"$BOARD_RT_REPO/.ai-harness/harness.json"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$BOARD_RT_REPO/.ai-harness/workflows/workflow-driver.sh"
+HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert "HM_RUNTIME" in s.PERSONAL_KEYS and "HM_RUNTIME_REPOS" in s.PERSONAL_KEYS, s.PERSONAL_KEYS
+assert s.RUNTIMES == ("claude", "codex"), s.RUNTIMES
+assert s.runner_runtime(repo) == "personal"
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == (None, "none", None), row
+assert s.set_runtime({"scope": "default", "runtime": "claude"}, []) is None
+assert "HM_RUNTIME=\"claude\"" in open(s.CONFIG).read()
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == ("claude", "default", None), row
+s.write_user_config({"HM_RUNTIME_REPOS": "other-id=claude"})
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "codex"}, [repo]) is None
+assert s.user_config()["HM_RUNTIME_REPOS"] == "other-id=claude,rt-id=codex", s.user_config()
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == ("codex", "repo", "codex"), row
+before = open(s.CONFIG).read()
+assert s.set_runtime({"scope": "default", "runtime": "gemini"}, []) is not None
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "bogus"}, [repo]) is not None
+assert s.set_runtime({"scope": "repo", "repo": "/not/known", "runtime": "codex"}, [repo]) is not None
+assert open(s.CONFIG).read() == before, "rejected runtime writes change nothing"
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": ""}, [repo]) is None
+assert s.user_config()["HM_RUNTIME_REPOS"] == "other-id=claude", s.user_config()
+assert s.set_runtime({"scope": "default", "runtime": ""}, []) is None
+assert "HM_RUNTIME=" not in open(s.CONFIG).read()
+s.write_user_config({"HM_RUNTIME_REPOS": ""})
+# 러너 runtime_setting과 같은 규칙: 저장소 값 > 전체 값 > 없음, 같은 키는 마지막 값, 잘못된 값도 그대로 보인다.
+assert s.runtime_of("rt-id", {"HM_RUNTIME_REPOS": "rt-id=codex,rt-id=claude", "HM_RUNTIME": "codex"})["runtime"] == "claude"
+assert s.runtime_of("rt-id", {"HM_RUNTIME_REPOS": "rt-id=", "HM_RUNTIME": "codex"})["runtime_source"] == "default"
+assert s.runtime_of("rt-id", {"HM_RUNTIME": "gemini"})["runtime"] == "gemini"
+' "$ROOT/scripts/board" "$BOARD_RT_REPO" || fail "board runtime follows the personal settings"
+# HM_RUNTIME을 모르는 옛 러너는 설정을 무시하고 자동 선택하므로 legacy로 보이고, 고른 값은 남는다.
+printf '#!/usr/bin/env bash\n# HM_DELIVERY_LEVEL HM_APPROVAL only\n' >"$BOARD_RT_REPO/.ai-harness/workflows/workflow-driver.sh"
+HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert s.runner_runtime(repo) == "old"
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "claude"}, [repo]) is None
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == (None, "legacy", "claude"), row
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": ""}, [repo]) is None
+' "$ROOT/scripts/board" "$BOARD_RT_REPO" || fail "board shows legacy runtime for a runner that predates personal runtime"
+assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "runtime writes keep other config lines"
+for f in "const setRuntime = (body) => saveSetting('/settings/runtime'" "settingRow('set-runtime', '내 기본 런타임'" "[['', '자동 선택'], ...RUNTIMES]" "[['', '기본 따름'], ...RUNTIMES]" "rg.setAttribute('aria-labelledby'" "r.approval_mine || r.runtime_mine"; do
+  assert_contains "$BOARD_TPL" "$f" "the work settings tab has the runtime controls: $f"
+done
+pass "harness board runtime follows personal settings"
+
 # 권한 훅 연결은 setup이 물은 뒤 board.sh hook on|off로만: 백업을 남기고 다른 설정은 그대로 둔다.
 printf '{"env":{"KEEP":"1"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}\n' >"$BOARD_T/settings.json"
 assert_eq "false" "$(board_sh hook status | jq -r '.installed')" "hook not installed by default"
@@ -1328,6 +1387,12 @@ assert_eq "null" "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal
 assert_eq "true" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", mode: "auto"}')" "$BAF_BASE/settings/approval" | jq -r '.ok')" "the board sets the personal approval mode"
 assert_eq '"auto"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_APPROVAL')" "settings show the personal approval mode from config"
 assert_contains "$(<"$BAF_DATA/config")" 'HM_APPROVAL="auto"' "the approval mode is written to the personal config"
+# 기본 런타임도 같은 화면·같은 방식으로 config에 쓴다(#488).
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", runtime: "codex"}')" "$BAF_BASE/settings/runtime" | jq -r '.ok')" "the board sets the personal runtime"
+assert_eq '"codex"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_RUNTIME')" "settings show the personal runtime from config"
+assert_contains "$(<"$BAF_DATA/config")" 'HM_RUNTIME="codex"' "the runtime is written to the personal config"
+assert_eq "false" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", runtime: "gemini"}')" "$BAF_BASE/settings/runtime" | jq -r '.ok')" "the board rejects an unknown runtime"
+assert_contains "$(<"$BAF_DATA/config")" 'HM_RUNTIME="codex"' "a rejected runtime keeps the saved one"
 # 보드를 띄울 때 config에 있던 autofix 키(예산 7)를 지우면 기본값(10)으로 보인다 — 띄운 시점의 환경 값이 남지 않는다.
 grep -v '^HM_AUTOFIX_BUDGET_USD=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
 assert_eq "10" "$(baf_get | jq -r '.config.budget_usd')" "an autofix key removed from config falls back to its default, not the board's startup value"

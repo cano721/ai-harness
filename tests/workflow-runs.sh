@@ -210,7 +210,7 @@ assert_contains "$DRIVER_OUT" "start a new run" "the stop sends the change to a 
 
 # 예전 진입점도 같은 대조를 거친다.
 new_driver_repo baseline_shim
-shim() { DRIVER_RC=0; DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
+shim() { DRIVER_RC=0; DRIVER_OUT="$(HM_APPROVAL='' HM_APPROVAL_REPOS='' HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" CLAUDE_CONFIG_DIR="$DRIVER_TMP/claude" CODEX_HOME="$DRIVER_TMP/codex" \
   FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK=true PATH="$ROOT/tests/fixtures/driver:$PATH" \
   bash "$DRIVER_SHIM" "$@" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?; }
 shim start --runtime codex --request "add feature"
@@ -435,9 +435,9 @@ pass "fix-bug starts from the brief with an investigation report"
 # codex가 PATH에 있다는 것만으로 codex를 고르지 않는다(#476).
 runtime_run() { # env... → DRIVER_RC, DRIVER_OUT (DRIVER_REPO는 new_driver_repo가 준비)
   DRIVER_RC=0
-  DRIVER_OUT="$(env -u CLAUDECODE -u CODEX_THREAD_ID "$@" HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" \
+  DRIVER_OUT="$(env -u CLAUDECODE -u CODEX_THREAD_ID -u HM_RUNTIME -u HM_RUNTIME_REPOS "$@" HM_APPROVAL='' HM_APPROVAL_REPOS='' HARNESS_METRICS_DIR="$DRIVER_TMP/data" HM_FEATURE_RUNS_DIR="$DRIVER_TMP/runs" \
     CLAUDE_CONFIG_DIR="${RUNTIME_CFG:-$DRIVER_TMP/claude}" CODEX_HOME="$DRIVER_TMP/codex" FAKE_LOG="$FAKE_LOG" FAKE_SCENARIO="$FAKE_SCENARIO" FAKE_CHECK=true \
-    PATH="${RUNTIME_PATH:-$ROOT/tests/fixtures/driver:$PATH}" bash "$DRIVER" start --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
+    PATH="${RUNTIME_PATH:-$ROOT/tests/fixtures/driver:$PATH}" bash "$DRIVER" start ${RUNTIME_FLAG:+--runtime "$RUNTIME_FLAG"} --request "add feature" --repo "$DRIVER_REPO" 2>&1 </dev/null)" || DRIVER_RC=$?
 }
 with_integrations() { # json array → 저장소 manifest
   mkdir -p "$DRIVER_REPO/.ai-harness"
@@ -487,5 +487,64 @@ assert_eq "2" "$DRIVER_RC" "both CLIs installed and nothing to decide refuses to
 assert_contains "$DRIVER_OUT" "--runtime" "the refusal asks for --runtime"
 assert_eq "" "$(find "$DRIVER_TMP/runs" -path "*/repo-rt-undecided-*" -name state.json)" "no run is created when the runtime is undecided"
 pass "runner runtime follows the caller, then integrations, then the installed CLI"
+
+# 개인 기본 런타임(#488): --runtime > HM_RUNTIME_REPOS > HM_RUNTIME > 자동 선택. 설정이 고른 CLI가 없으면 바꾸지 않고 멈춘다.
+rt_config() { printf '%s\n' "$@" >"$DRIVER_TMP/data/config"; }
+new_driver_repo rt-flag
+with_integrations '[]'
+rt_config 'HM_RUNTIME=codex' 'HM_RUNTIME_REPOS="rt=claude"'
+RUNTIME_FLAG=codex runtime_run
+assert_eq "codex:flag" "$(run_state .runtime):$(run_state .policy.runtime_source)" "--runtime wins over the personal settings"
+assert_contains "$DRIVER_OUT" "runtime codex (flag)" "start prints the runtime and where it came from"
+new_driver_repo rt-repo-setting
+with_integrations '[]'
+rt_config 'HM_RUNTIME=codex' 'HM_RUNTIME_REPOS="other=codex,rt=claude"'
+runtime_run CODEX_THREAD_ID=t-1
+assert_eq "claude:HM_RUNTIME_REPOS:rt" "$(run_state .runtime):$(run_state .policy.runtime_source)" "the repository setting wins over HM_RUNTIME and the caller"
+assert_contains "$DRIVER_OUT" "runtime claude (HM_RUNTIME_REPOS:rt)" "start names the repository setting"
+# 저장소 설정을 바꿔도 이어 가는 실행은 start 때의 런타임을 쓴다.
+rt_config 'HM_RUNTIME_REPOS="rt=codex"'
+driver resume
+assert_eq "claude" "$(run_state .runtime)" "resume keeps the runtime chosen at start"
+new_driver_repo rt-user-setting
+with_integrations '[]'
+rt_config 'HM_RUNTIME=codex' 'HM_RUNTIME_REPOS="other=claude"'
+runtime_run CLAUDECODE=1
+assert_eq "codex:HM_RUNTIME" "$(run_state .runtime):$(run_state .policy.runtime_source)" "HM_RUNTIME applies when no repository entry matches"
+new_driver_repo rt-default-source
+RUNTIME_PATH="$DRIVER_TMP/only-codex:/usr/bin:/bin" runtime_run
+assert_eq "codex:default" "$(run_state .runtime):$(run_state .policy.runtime_source)" "without settings the automatic choice is recorded as default"
+assert_contains "$DRIVER_OUT" "runtime codex (default)" "start says the runtime was chosen automatically"
+new_driver_repo rt-bad-user
+rt_config 'HM_RUNTIME=gemini'
+runtime_run
+assert_eq "2" "$DRIVER_RC" "an unknown HM_RUNTIME stops the start"
+assert_contains "$DRIVER_OUT" "HM_RUNTIME in $DRIVER_TMP/data/config is \"gemini\"; runtime must be claude or codex" "the error names the setting and the file"
+assert_eq "" "$(find "$DRIVER_TMP/runs" -path "*/repo-rt-bad-user-*" -name state.json)" "no run is created for an invalid runtime setting"
+new_driver_repo rt-bad-repo
+with_integrations '[]'
+rt_config 'HM_RUNTIME_REPOS="rt=bogus"'
+runtime_run
+assert_eq "2" "$DRIVER_RC" "an unknown repository runtime stops the start"
+assert_contains "$DRIVER_OUT" "HM_RUNTIME_REPOS:rt in $DRIVER_TMP/data/config" "the error names the repository entry"
+new_driver_repo rt-bad-env
+runtime_run HM_RUNTIME=bogus
+assert_eq "2" "$DRIVER_RC" "an unknown HM_RUNTIME from the environment stops the start"
+assert_contains "$DRIVER_OUT" "in the environment" "the error says the value came from the environment"
+new_driver_repo rt-missing-user
+rt_config 'HM_RUNTIME=claude'
+RUNTIME_PATH="$DRIVER_TMP/only-codex:/usr/bin:/bin" runtime_run
+assert_eq "2" "$DRIVER_RC" "a chosen CLI that is not installed stops the start"
+assert_contains "$DRIVER_OUT" "HM_RUNTIME in $DRIVER_TMP/data/config chose claude, but claude is not installed" "the stop names the setting and the missing CLI"
+assert_eq "" "$(find "$DRIVER_TMP/runs" -path "*/repo-rt-missing-user-*" -name state.json)" "no run falls back to codex"
+[[ ! -s "$FAKE_LOG" ]] || fail "no session runs when the chosen CLI is missing"
+new_driver_repo rt-missing-repo
+with_integrations '[]'
+rt_config 'HM_RUNTIME_REPOS="rt=claude"'
+RUNTIME_PATH="$DRIVER_TMP/only-codex:/usr/bin:/bin" runtime_run
+assert_eq "2" "$DRIVER_RC" "a repository runtime that is not installed stops the start"
+assert_contains "$DRIVER_OUT" "HM_RUNTIME_REPOS:rt in $DRIVER_TMP/data/config chose claude" "the stop names the repository entry"
+: >"$DRIVER_TMP/data/config"
+pass "personal runtime settings pick the node runtime after --runtime and stop when the CLI is missing"
 
 finish_tests
