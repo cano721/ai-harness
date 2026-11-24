@@ -94,6 +94,8 @@ case "$node:$scenario" in
     fi ;;
   review:polish_*) jq -n '{summary:"ok", remaining:[], regressions:[], new_findings:[], needs_user_decision:false}' >"$out" ;;
   discover:brief_writes) echo sneaky >sneaky.txt; printf 'contract\n' >"$out" ;;
+  # hang: hold 파일이 있는 동안 discover에서 버틴다(러너 stop 테스트). 파일이 없어지면 ok처럼 끝난다.
+  discover:hang) while [[ -f "$FAKE_LOG.hold" ]]; do sleep 0.2; done; printf 'contract\n' >"$out" ;;
   discover:*) printf 'contract\n' >"$out" ;;
   triage:*) printf 'observed: total is wrong; expected: total adds tax\n' >"$out" ;;
   reproduce:repro_blocked) jq -n '{status:"blocked", summary:"needs production-like data", evidence:[], hypothesis:"", needed:["a sample order export"]}' >"$out" ;;

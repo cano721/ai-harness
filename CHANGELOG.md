@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 새 기능
+
+- 그래프 러너에 `stop [--run <id>]` 추가: 그 런이 기록한 프로세스만 TERM→KILL로 멈추고 `stopped`(노드·시각·사유)로 남겨 `resume`으로 잇는다. `status`가 밖에서 끊긴 런을 stale로 보인다. 러너·세션을 패턴 kill로 멈추지 말 것 (#495)
+
 ## v0.91.0 (2026-11-24)
 ### 새 기능
 
