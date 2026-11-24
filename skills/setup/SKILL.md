@@ -294,6 +294,20 @@ $ROOT/scripts/board/board.sh launcher install    # 지우기: launcher remove
 
 `~/Applications/Harness Board.app`(`swiftc`로 만든 창 앱, 없거나 빌드에 실패하면 `osacompile`로 만든 AppleScript 앱. 아이콘 포함. `launcher status`의 `kind`가 `window`/`applet`)과 `~/.ai-harness/board/bin/open-board`를 만든다. 같은 이름의 다른 앱이 있으면 건드리지 않고 멈춘다. v0.77.0에 만든 앱(Dock에 남지 않는 앱)은 다시 `install`하면 바뀐다.
 
+### 8-4. 내 일정 — 구글 캘린더 연결 (선택)
+
+보드의 '내 일정' 화면에 구글 캘린더 일정을 보이려면 사용자가 **직접 만든** OAuth 클라이언트가 필요하다. 플러그인에는 공용 client id·secret이 없고 중개 서버도 없다 — 토큰은 이 PC에만 남는다(`docs/privacy.md`). 사용자가 원할 때만 아래 순서를 안내한다. **대신 실행하거나 값을 묻지 않는다** — 구글 계정 로그인·약관 동의·파일 내려받기는 사용자가 한다. `~/.ai-harness/google-oauth-client.json`이 이미 있으면 7번만 안내한다.
+
+1. [Google Cloud 콘솔](https://console.cloud.google.com/)에서 새 프로젝트를 만든다(이름은 자유, 예: `my-board`).
+2. 그 프로젝트의 "API 및 서비스 → 라이브러리"에서 **Google Calendar API**를 찾아 사용 설정한다.
+3. "OAuth 동의 화면"(Google Auth Platform → 브랜딩)에서 사용자 유형을 **외부**로 고르고 앱 이름·지원 이메일을 적는다. 데이터 액세스(범위)에 `https://www.googleapis.com/auth/calendar.readonly` 하나만 더한다.
+4. 대상(사용자 유형·테스트 사용자): 게시 상태가 **테스트**이면 자기 구글 계정을 테스트 사용자로 더해야 하고, 이때 받은 갱신 토큰은 7일 뒤 만료돼 일주일마다 다시 연결해야 한다. 자기만 쓰는 앱이면 **프로덕션으로 게시**해 두면 이 만료가 없다(확인되지 않은 앱 경고는 본인 계정이므로 "계속"으로 넘긴다).
+5. "클라이언트 → 클라이언트 만들기"에서 애플리케이션 유형 **데스크톱 앱**으로 OAuth 클라이언트를 만든다. 웹 애플리케이션 유형은 쓰지 않는다.
+6. 만든 클라이언트의 JSON을 내려받아 `~/.ai-harness/google-oauth-client.json`에 두고 권한을 줄인다: `chmod 600 ~/.ai-harness/google-oauth-client.json`. 이 파일은 저장소·채팅에 붙이지 않는다.
+7. 보드(`/ai-harness:board`)의 **내 일정 → 연결한 곳**에서 구글 캘린더의 [연결]을 누르고, 열린 브라우저에서 허용한다. 구글 캘린더에서 "표시"로 고른 캘린더(팀 공유 캘린더 포함)의 오늘부터 7일 일정이 보인다. 끊으려면 같은 자리의 [끊기] — 이 PC의 토큰을 지우고 구글 쪽 권한도 철회를 시도한다.
+
+같은 화면의 할 일은 보드 입력 칸이나 `$ROOT/scripts/board/board.sh todo add <내용>`으로 적는다.
+
 ## 디자인 스킬 (`design`)
 
 ai-harness는 디자인 데이터셋을 담지 않고 절차만 둔다. 빈자리를 채우는 외부 디자인 스킬은 `catalog/design-skills.json`이 원본 저장소·고정 커밋·라이선스·실행 스크립트 검토 결과를 적고, 어느 작업에서 어느 스킬이 주도하는지는 디자인 스킬 지도(`$ROOT/templates/ui-review/references/design-skills.md`)가 정한다. 위 기본 카탈로그와 달리 사본을 들고 있지 않고 **원본 저장소의 고정 커밋에서 받는다**. 예외로 작고 안정적인 3종(`web-design-guidelines`·`emil-design-eng`·`design-system-patterns`)은 ai-harness에 고정 사본으로 내장돼 있어(`builtin: "ai-harness"`) 설치하지 않는다.
