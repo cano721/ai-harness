@@ -1,0 +1,1 @@
+`archive/jobs.py`에 매일 도는 배치 잡 `archive_stale_documents(conn, now: datetime) -> int`를 추가해줘. `active` 상태 문서 중 보관할 때가 된 것을 `archived`로 바꾸고, 바꾼 건수를 돌려줘. 보관할지는 `archive/policy.py`의 `is_stale`로 판정해줘(정책이 자주 바뀌어서 SQL로 옮겨 적지 않아). 끝나면 테스트가 통과하는지 확인해줘.

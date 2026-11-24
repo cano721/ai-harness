@@ -13,6 +13,14 @@
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
   요약: `/release` 또는 `workflow-driver.sh start --workflow release --version <x.y.z>`로 릴리스 PR부터 태그·노트 발행까지 러너에 맡깁니다. 어디까지 갈지는 개인 배포 단계가 정하고, `release_policy`가 없으면 `/ai-harness:harness-init --sync`로 먼저 감지합니다.
 
+- **리뷰가 배치 조회의 메모리 위험을 잡습니다** — 배치·스윕·일괄 API처럼 한 번에 여러 행을 읽는 경로에서, 판정·집계만 하는 조회가 큰 본문 컬럼(LONGTEXT·MEDIUMTEXT·TEXT·LOB 등)까지 행째 읽거나 건수 상한이 없으면 운영에서 메모리가 터집니다. 러너의 review·inspect·re_review 노드가 데이터 조회가 있는 변경에 한해 상한 없는 다건 조회, 대형 컬럼을 통째로 읽는 판정 조회, 컬렉션 fetch join + 페이징, 호출측·수신측 상한 불일치를 보고 "건수 상한 × 행 크기" 추정을 근거로 적으며(조회 정의가 diff 밖이어도 이번 변경이 호출 경로·건수를 바꾸면 대상이고, fetch join으로 딸려 오는 엔티티 컬럼까지 열어 행 크기를 잽니다), 가용성 위험이면 blocking으로 냅니다. 데이터 조회가 없는 변경(프론트 등)에는 적용하지 않습니다. `/harness-init`은 데이터 접근 계층이 있는 프로젝트에 `code-conventions.md` "대량 조회 메모리" 절과 reviewer 체크 항목을 씁니다 — 실측 규칙만 쓰는 원칙의 예외인 검증된 기본 규칙입니다(백엔드 저장소 2곳 리뷰 측정에서 검출 40% → 96%). A/B 과제 `archive-stale-docs`가 같은 결함을 구현 쪽에서 잽니다. (#499)
+  요약: 배치 판정 조회가 큰 컬럼까지 읽거나 상한이 없으면 러너 리뷰가 "건수 × 행 크기" 근거와 함께 blocking으로 짚습니다. 새로 초기화하는 백엔드 프로젝트는 같은 규칙이 컨벤션 문서와 reviewer에 들어갑니다.
+
+### 업데이트 후 해야 할 일
+
+- 러너 리뷰 점검은 `/ai-harness:harness-init --sync`로 `workflow-driver.sh`를 받으면 켜집니다. 이미 만든 프로젝트의 `code-conventions.md`·reviewer 페르소나는 사람 소유 파일이라 sync로 바뀌지 않습니다 — 데이터 조회가 있는 프로젝트는 `skills/harness-init/SKILL.md`의 "대량 조회 메모리" 절과 체크 항목을 직접 옮겨 넣으세요. (#499)
+  요약: `/ai-harness:harness-init --sync`로 러너를 받으면 리뷰 점검이 켜집니다. 기존 프로젝트의 컨벤션 문서와 reviewer에는 규칙을 직접 옮겨야 합니다.
+
 ## v0.91.0 (2026-11-24)
 ### 새 기능
 
