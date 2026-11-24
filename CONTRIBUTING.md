@@ -81,6 +81,22 @@ PR 본문에는 `Closes #38`을 쓴다. 이슈가 자동으로 닫히고, 릴리
 
 `develop`의 `## Unreleased`가 릴리스할 만큼 쌓였을 때 한다.
 
+### 러너로 릴리스 (1순위)
+
+```bash
+bash .ai-harness/workflows/workflow-driver.sh start --workflow release --version <version>
+```
+
+작업 브랜치나 worktree(`main`·`develop`이 아닌 곳)에서 시작한다. 러너가 `origin/develop`에서 `release/v<version>`을 따고 `scripts/release-prep.sh`(= manifest `release_policy.prepare_cmd`)·`chore: release v<version>` 커밋·검증을 한 뒤, `main`으로 PR을 열고 원격 CI를 기다린다. 그 뒤는 개인 배포 단계(`/ai-harness:setup`의 `HM_DELIVERY_LEVEL`)가 정한다.
+
+- `pr`(기본): PR에서 멈추고 남은 절차(아래 수동 절차의 병합·태그 단계)를 보고에 남긴다.
+- `merge`: merge commit으로 병합 → 병합 커밋 CI → CHANGELOG 절로 태그·릴리스(`--generate-notes`) → 마일스톤 정리(`scripts/release-milestone.sh`) → `develop` ff 명령 보고.
+- `deploy`: 여기에 `scripts/release-verify.sh`(태그의 `release` 워크플로 성공·`origin/main`의 `release.json` 버전)를 더한다.
+
+러너는 `develop`·`main`에 push하지 않는다. 마지막 동기화(`git switch develop && git merge --ff-only origin/main && git push origin develop`)는 보고에 남은 명령을 사람이 실행한다. 이 저장소의 사실은 `.ai-harness/workflows/release.md`에 있다.
+
+### 수동 절차 (대안)
+
 ```bash
 git switch develop && git pull
 scripts/release-prep.sh <version>          # Unreleased 절 확정 + 네 곳 동기화

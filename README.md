@@ -170,6 +170,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 | 원인 조사 | `.agents/skills/investigate/SKILL.md` | `.claude/commands/investigate.md` | 코드를 바꾸지 않고 원격 기준 코드·도메인 문서·재현 근거로 원인 보고를 씁니다. 수정이 필요하면 보고를 `/fix-bug`에 넘깁니다. |
 | 기존 화면 품질 개선 | `.agents/skills/design-polish/SKILL.md` | `.claude/commands/design-polish.md` | 이미 동작하는 화면을 브라우저로 측정·채점하고, 독립 비평의 고칠 목록에서 사람이 고른 항목만 고친 뒤 다시 측정·검토합니다. |
 | 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
+| 릴리스 | `.agents/skills/release/SKILL.md` | `.claude/commands/release.md` | 태그 방식 릴리스(manifest `release_policy`)를 러너로 실행합니다. 버전 확정 → 릴리스 브랜치·PR → 개인 단계에 따라 merge commit 병합·태그·노트·기록과 `main` → `develop` ff 안내까지 갑니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
 
@@ -300,7 +301,7 @@ stateDiagram-v2
 
 ### 그래프 러너: `workflow-driver.sh`
 
-러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
+러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate|release`(기본 feature)로 실행할 그래프를 고르고(`release`는 `start --workflow release --version <x.y.z>` — 태그 방식 릴리스를 PR까지, 개인 단계 `merge`·`deploy`면 merge commit 병합·태그·기록까지), 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
 
 ```text
 대화                                   러너 (.ai-harness/workflows/workflow-driver.sh --workflow feature)
