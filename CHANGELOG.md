@@ -13,6 +13,10 @@
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
   요약: `/release` 또는 `workflow-driver.sh start --workflow release --version <x.y.z>`로 릴리스 PR부터 태그·노트 발행까지 러너에 맡깁니다. 어디까지 갈지는 개인 배포 단계가 정하고, `release_policy`가 없으면 `/ai-harness:harness-init --sync`로 먼저 감지합니다.
 
+### 동작 변경
+
+- HM_APPROVAL=auto에서 Brief가 요청·이슈의 완료 조건을 항목별로 대응시키지 않으면 자동 승인하지 않고 다시 쓰며(2회 넘으면 user_decision), 리뷰는 원 요청의 빠진 조건을 blocking으로 낸다. deliver 중에도 `revise --feedback`으로 실행을 죽이지 않고 Brief로 돌아갈 수 있다. (#501)
+
 ## v0.91.0 (2026-11-24)
 ### 새 기능
 
