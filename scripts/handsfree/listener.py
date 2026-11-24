@@ -165,10 +165,12 @@ def keep_sample(text, cfg):
     folder = os.path.join(common.HOME_DIR, "samples")
     if count <= 0:
         return
-    os.makedirs(folder, exist_ok=True)
+    common.ensure_private_dir(folder)
     name = time.strftime("%H%M%S")
-    shutil.copy(WAV, os.path.join(folder, name + ".wav"))
-    with open(os.path.join(folder, name + ".txt"), "w", encoding="utf-8") as f:
+    sample_path = os.path.join(folder, name + ".wav")
+    with open(WAV, "rb") as source, common.open_private(sample_path, "wb") as target:
+        shutil.copyfileobj(source, target)
+    with common.open_private(os.path.join(folder, name + ".txt"), encoding="utf-8") as f:
         f.write(text)
     for old in sorted(os.listdir(folder))[:-count * 2]:
         os.remove(os.path.join(folder, old))
@@ -790,7 +792,7 @@ def shutdown(*_):
 
 
 def main():
-    os.makedirs(common.HOME_DIR, exist_ok=True)
+    common.ensure_private_dir(common.HOME_DIR)
     cfg = common.load_config()
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
@@ -809,7 +811,7 @@ def main():
                 proc.terminate()
         return
 
-    with open(common.PID_PATH, "w") as f:
+    with common.open_private(common.PID_PATH) as f:
         f.write(str(os.getpid()))
     common.set_paused(0)
     try:

@@ -9,7 +9,8 @@ import time
 
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 사용자 데이터는 하네스 공용 위치(~/.ai-harness) 아래에 둔다. 테스트는 HM_DATA_DIR 로 바꾼다.
-HOME_DIR = os.path.join(os.environ.get("HM_DATA_DIR") or os.path.expanduser("~/.ai-harness"), "handsfree")
+DATA_DIR = os.environ.get("HM_DATA_DIR") or os.path.expanduser("~/.ai-harness")
+HOME_DIR = os.path.join(DATA_DIR, "handsfree")
 CONFIG_PATH = os.path.join(HOME_DIR, "config.json")
 STATE_PATH = os.path.join(HOME_DIR, "state.json")
 PID_PATH = os.path.join(HOME_DIR, "listener.pid")
@@ -21,6 +22,26 @@ SESSION_DIR = os.path.join(HOME_DIR, "sessions")
 MODEL_DIR = os.path.join(HOME_DIR, "models")
 BIN_DIR = os.path.join(HOME_DIR, "bin")
 FOREVER = 9999999999
+
+
+def ensure_private_dir(path):
+    """handsfree 데이터 경로를 소유자 전용으로 만든다. 공용 ~/.ai-harness 는 새로 만들 때만 권한을 정한다."""
+    if not os.path.isdir(DATA_DIR):
+        os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
+        os.chmod(DATA_DIR, 0o700)
+    for folder in (HOME_DIR, path):
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
+
+
+def open_private(path, mode="w", encoding=None):
+    """새 사용자 데이터 파일은 umask와 무관하게 소유자 전용으로 연다."""
+    flags = {"w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+             "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+             "wb": os.O_WRONLY | os.O_CREAT | os.O_TRUNC}[mode]
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    return os.fdopen(fd, mode) if "b" in mode else os.fdopen(fd, mode, encoding=encoding)
 
 
 def whisper_binary():
@@ -37,9 +58,9 @@ def read_json(path, fallback):
 
 
 def write_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ensure_private_dir(os.path.dirname(path))
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open_private(tmp, encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp, path)
@@ -60,8 +81,8 @@ def user_config():
 @contextlib.contextmanager
 def locked(path):
     """읽고-고치고-쓰는 동안 다른 프로세스(세션마다 도는 훅, 상태 화면)가 끼어들지 못하게 한다."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".lock", "w") as handle:
+    ensure_private_dir(os.path.dirname(path))
+    with open_private(path + ".lock") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield
@@ -127,13 +148,13 @@ def update_session(handle, **changes):
 
 
 def log(message):
-    os.makedirs(HOME_DIR, exist_ok=True)
+    ensure_private_dir(HOME_DIR)
     try:
         if os.path.getsize(LOG_PATH) > 1000000:
             os.replace(LOG_PATH, LOG_PATH + ".1")
     except OSError:
         pass
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
+    with open_private(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(time.strftime("%m-%d %H:%M:%S ") + message + "\n")
 
 
@@ -195,7 +216,8 @@ def paused_until():
 
 def set_paused(until):
     if until:
-        with open(PAUSED_PATH, "w") as f:
+        ensure_private_dir(HOME_DIR)
+        with open_private(PAUSED_PATH) as f:
             f.write(str(int(until)))
     else:
         try:

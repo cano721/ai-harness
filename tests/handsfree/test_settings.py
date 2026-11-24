@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import stat
 import sys
 import time
 import unittest
@@ -12,6 +13,7 @@ sys.path.insert(0, CODE)
 import common  # noqa: E402
 import speak  # noqa: E402
 import ui  # noqa: E402
+ORIGINAL_LOG = common.log
 
 with open(os.path.join(CODE, "defaults.json"), encoding="utf-8") as f:
     CFG = json.load(f)
@@ -110,6 +112,43 @@ class MoreSettingsTest(unittest.TestCase):
 
 
 class LockTest(unittest.TestCase):
+    def test_user_data_permissions_ignore_umask(self):
+        path = os.path.join(common.HOME_DIR, "permission-check", "private.json")
+        previous = os.umask(0)
+        try:
+            common.write_json(path, {"prompt": "private"})
+            ORIGINAL_LOG("private transcript")
+        finally:
+            os.umask(previous)
+        self.assertEqual(stat.S_IMODE(os.stat(common.HOME_DIR).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(common.LOG_PATH).st_mode), 0o600)
+
+    def test_shared_data_dir_is_private_only_when_created(self):
+        import tempfile
+        base = tempfile.mkdtemp()
+        saved = common.DATA_DIR, common.HOME_DIR
+        try:
+            existing = os.path.join(base, "existing")
+            os.mkdir(existing, 0o755)
+            os.chmod(existing, 0o755)
+            common.DATA_DIR, common.HOME_DIR = existing, os.path.join(existing, "handsfree")
+            common.ensure_private_dir(common.HOME_DIR)
+            self.assertEqual(stat.S_IMODE(os.stat(existing).st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE(os.stat(common.HOME_DIR).st_mode), 0o700)
+
+            fresh = os.path.join(base, "fresh")
+            common.DATA_DIR, common.HOME_DIR = fresh, os.path.join(fresh, "handsfree")
+            previous = os.umask(0)
+            try:
+                common.ensure_private_dir(common.HOME_DIR)
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(os.stat(fresh).st_mode), 0o700)
+        finally:
+            common.DATA_DIR, common.HOME_DIR = saved
+
     def test_parallel_updates_are_not_lost(self):
         import tempfile
         from concurrent.futures import ThreadPoolExecutor
