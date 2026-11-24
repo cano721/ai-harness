@@ -28,7 +28,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "12" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "14" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/investigate/SKILL.md") | .action')" "missing investigate entrypoint is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
@@ -735,7 +735,7 @@ pass "unattended sync places copy artifacts byte for byte"
 # 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
 # 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
 RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
-assert_eq "10" "$(grep -c . <<<"$RD_PATHS")" "ten workflow entry points are render artifacts"
+assert_eq "12" "$(grep -c . <<<"$RD_PATHS")" "twelve workflow entry points are render artifacts"
 while IFS= read -r rd_path; do
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"
@@ -948,5 +948,14 @@ done
 assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFC edit path keeps the old fail-open verdict"
 assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFD edit path is still guarded"
 pass "direct edit guard compares paths across unicode normalization"
+
+# 릴리스 방식 감지(#493): harness-init이 태그 방식 근거를 보고 manifest release_policy에 근거와 확장점을 남기고, sync가 사람 확인 뒤에만 쓴다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '**릴리스 방식 감지**' '`git ls-remote --tags origin`' '`CHANGELOG.md`에 버전 절' 'flow:"unknown"' '`evidence`에 문장으로' \
+  '`release_policy`: §1 릴리스 방식 감지 결과' '"branch_prefix": "release/v"' '"record_cmds": ["<기록 명령>"]' '릴리스 병합 기준은 `release_policy.base`' \
+  '**릴리스 방식** (manifest 정책 필드 — **사람 확인 뒤에만** 쓴다)' '팀 전용 도구 이름은 템플릿·예시에 넣지 않고'; do
+  assert_contains "$HARNESS_INIT_CONTENT" "$phrase" "harness-init release detection: $phrase"
+done
+pass "harness-init detects tag-based releases into release_policy"
 
 finish_tests

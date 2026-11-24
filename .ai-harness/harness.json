@@ -23,8 +23,8 @@
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "ff7d908b5fe66705bf9da5a91e230525eed53b5a495d35a85b2d21d8135c1f22",
-      "template_version": "0.90.0"
+      "content_sha256": "d7a4689f7c5353a60bfc8b97b5cc43a71f21a234f0fc6f6d0e838458f2699c3e",
+      "template_version": "0.91.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
       "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
@@ -163,6 +163,41 @@
       "content_sha256": "7ce7725c2c9f9c44015ac16699c9ebfdd897a2ea5b342c1b182dcec4e8f83c21",
       "template_version": "0.83.0",
       "renderer": 1
+    },
+    ".ai-harness/workflows/release-graph.json": {
+      "content_sha256": "9c220df0d8eb456fb5e9f40866688da0cf7b74cc3b6dee1cf72947fc34c3af3c",
+      "template_version": "0.91.0"
+    },
+    ".agents/skills/release/SKILL.md": {
+      "content_sha256": "91a724d8e20cfabf252676432d8da5bac7f32e57255ac09726d46ee4eaf6a859",
+      "template_version": "0.91.0",
+      "renderer": 1
+    },
+    ".claude/commands/release.md": {
+      "content_sha256": "2fdfec2cde58c516a51338e2c5a2de2d7fa51fc3e7114b6a03b06fb64cbb2168",
+      "template_version": "0.91.0",
+      "renderer": 1
     }
+  },
+  "release_policy": {
+    "flow": "tag",
+    "evidence": [
+      "origin has main and develop",
+      "vX.Y.Z tags on origin",
+      "version files .claude-plugin/plugin.json, .codex-plugin/plugin.json, release.json",
+      "CHANGELOG.md has ## vX.Y.Z sections"
+    ],
+    "base": "main",
+    "source": "develop",
+    "branch_prefix": "release/v",
+    "tag_prefix": "v",
+    "prepare_cmd": "scripts/release-prep.sh \"$HM_RELEASE_VERSION\"",
+    "notes_cmd": "scripts/changelog-section.sh \"$HM_RELEASE_VERSION\"",
+    "generate_notes": true,
+    "verify_cmd": "scripts/release-verify.sh \"$HM_RELEASE_VERSION\"",
+    "verify_timeout_minutes": 60,
+    "record_cmds": [
+      "scripts/release-milestone.sh \"$HM_RELEASE_VERSION\""
+    ]
   }
 }

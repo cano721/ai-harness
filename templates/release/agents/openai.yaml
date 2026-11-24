@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release"
+  short_description: "Release the source branch as a tagged version with the graph runner."
+  default_prompt: "Use the generated $release entrypoint to release this repository with the graph runner (workflow-driver.sh start --workflow release): $ARGUMENTS"
