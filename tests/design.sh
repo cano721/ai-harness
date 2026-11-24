@@ -1168,4 +1168,19 @@ assert_contains "$LS_SKILL" 'Do not start your own server' "the skill forbids ad
 assert_contains "$(<"$ROOT/skills/landing-page/references/verify.md")" "never start \`python3 -m http.server\`" "verify points at serve instead of an ad hoc server"
 pass "landing pages are served through landing-run.sh serve, reused, stopped, and exit when idle"
 
+# 독립 디자인 검토가 정지 캡처로는 못 보는 것을 놓쳤다: OS가 그리는 기본 select 펼침 목록, 입력칸 스타일을 물려받은 정렬,
+# 목록 방향과 어긋난 더보기, 글자로 때운 아이콘·눈썹 글자·잘린 상품 사진, 디자인 시스템 파일을 불러오지도 않은 화면.
+# 사용자가 나중에야 지적했다. 검토자와 채점 루브릭이 이 항목을 명시적으로 보게 한다.
+DR_TEXT="$(cat agents/design-reviewer.md)"
+assert_contains "$DR_TEXT" "OS가 그리는 기본 컨트롤" "design-reviewer knows native select popups are not in headless captures"
+assert_contains "$DR_TEXT" "| 조작 요소 |" "design-reviewer checks control shape against its role"
+assert_contains "$DR_TEXT" "목록 방향" "design-reviewer checks see-more placement against list direction"
+assert_contains "$DR_TEXT" "| 만든 솜씨 (상품·서비스를 파는 화면일 때) |" "design-reviewer judges craft on product screens, not only landing pages"
+assert_contains "$DR_TEXT" "| 디자인 근거 사용 |" "design-reviewer checks the screen actually loads the design system"
+AUDIT_TEXT="$(cat templates/design-audit/SKILL.md)"
+assert_contains "$AUDIT_TEXT" "기본 \`<select>\`" "design-audit flags native selects as render-unverifiable"
+assert_contains "$AUDIT_TEXT" "공용 입력 스타일" "design-audit flags secondary controls inheriting the form field style"
+assert_contains "$AUDIT_TEXT" "공용 컴포넌트 파일을 불러오지 않는다" "design-audit flags screens that skip the design system component file"
+pass "design review covers native controls, control roles, see-more placement, craft, and design-system use"
+
 finish_tests
