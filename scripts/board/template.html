@@ -2620,6 +2620,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const APPROVAL_DESC = { human: 'Brief를 보이고 내가 승인해야 고치기 시작합니다. workspace에서 인계한 멤버는 workspace 대화로 물어 오고, "승인 <멤버>"로 답합니다.', auto: 'Brief와 결정 사항을 PR 본문에 남기고, 사람만 정할 것이 없으면 승인 없이 진행합니다.' };
   const badApproval = (v) => descLine(`승인 모드 값(${v})이 사람 확인·자동 통과가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
   const setApproval = (body) => saveSetting('/settings/approval', body, () => localSet(body.scope, body.repo, 'approval_mine', 'HM_APPROVAL', body.mode));
+  // 런타임: 러너와 같은 개인 설정(HM_RUNTIME_REPOS > HM_RUNTIME > 자동 선택). 값이 없으면 러너가 부른 CLI 등으로 고른다.
+  const RUNTIMES = [['claude', 'Claude'], ['codex', 'Codex']];
+  const RT = Object.fromEntries(RUNTIMES);
+  const badRuntime = (v) => descLine(`런타임 값(${v})이 Claude·Codex가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
+  const setRuntime = (body) => saveSetting('/settings/runtime', body, () => localSet(body.scope, body.repo, 'runtime_mine', 'HM_RUNTIME', body.runtime));
   function renderSettings() {
     const board = $('board');
     if (!SERVER) { board.replaceChildren(empty('설정은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
@@ -2639,6 +2644,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     descs.push(`승인: ${APPR[r.approval] || r.approval || '사람 확인'} (${asrc})`);
     if (r.approval_source === 'legacy') descs.push(descLine('이 저장소의 러너가 옛 버전이라 승인 모드는 하네스를 동기화하기 전까지 저장소 설정을 따릅니다. 여기서 고른 승인은 동기화 뒤부터 적용됩니다.', 'info'));
     else if (r.approval && !APPR[r.approval]) descs.push(badApproval(r.approval));
+    const rsrc = { repo: '이 저장소 내 설정', default: '내 기본', none: '기본값', legacy: '저장소 기본' }[r.runtime_source] || '';
+    descs.push(`런타임: ${RT[r.runtime] || r.runtime || '자동 선택'} (${rsrc})`);
+    if (r.runtime_source === 'legacy') descs.push(descLine('이 저장소의 러너가 옛 버전이라 런타임은 하네스를 동기화하기 전까지 자동으로 고릅니다. 여기서 고른 런타임은 동기화 뒤부터 적용됩니다.', 'info'));
+    else if (r.runtime && !RT[r.runtime]) descs.push(badRuntime(r.runtime));
     for (const note of (e.notes || []).filter((n) => !commonNotes.has(n))) descs.push(descLine(note, 'info'));
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const p = r.protection;
@@ -2659,6 +2668,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const ag = segment(aid, [['', '기본 따름'], ...APPROVALS], r.approval_mine || '', (k) => setApproval({ scope: 'repo', repo: r.repo, mode: k }));
     ag.setAttribute('aria-labelledby', `${id} ${aid}`); // 스크린리더가 어느 저장소의 승인인지 함께 읽는다
     ctl.push(alabel, ag);
+    const rid = id + '-runtime', rlabel = el('span', 'ds-caption', '런타임'); rlabel.id = rid;
+    const rg = segment(rid, [['', '기본 따름'], ...RUNTIMES], r.runtime_mine || '', (k) => setRuntime({ scope: 'repo', repo: r.repo, runtime: k }));
+    rg.setAttribute('aria-labelledby', `${id} ${rid}`); // 스크린리더가 어느 저장소의 런타임인지 함께 읽는다
+    ctl.push(rlabel, rg);
     const acts = el('div', 'ds-cluster');
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const b = btn(r.protection ? '보호 다시 확인' : '브랜치 보호 확인', 'ds-btn--sm');
@@ -2667,7 +2680,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     acts.append(btn('저장소 사실 고치기', 'ds-btn--sm', () => openFacts(r)));
     ctl.push(acts);
-    return settingRow(id, r.name, descs, ctl, !!(r.mine || r.approval_mine));
+    return settingRow(id, r.name, descs, ctl, !!(r.mine || r.approval_mine || r.runtime_mine));
   }
   let commonNotes = new Set();
   function workSettings(P) {
@@ -2691,8 +2704,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!APPR[appr]) adescs.push(badApproval(appr));
     if (appr === 'auto') adescs.push(descLine('내 모든 저장소에 적용됩니다. 신뢰하지 않는 저장소에서도 저장소가 정한 검증 명령이 사람 확인 없이 돕니다 — 신뢰하는 저장소만 저장소별로 켜기를 권합니다.', 'attention'));
     mine.append(settingRow('set-approval', '내 기본 승인', adescs, segment('set-approval', APPROVALS, appr, (k) => setApproval({ scope: 'default', mode: k })), appr !== 'human'));
+    const rt = P.HM_RUNTIME || '';
+    const rdescs = [rt ? '터미널·스케줄러·보드·자동 실행에서도 이 CLI로 돕니다. 설치돼 있지 않으면 러너가 시작하지 않습니다.' : '러너를 부른 CLI, 저장소 integrations에 든 설치된 CLI, 설치된 유일한 CLI 순으로 고릅니다. 기본값 자동 선택.'];
+    if (rt && !RT[rt]) rdescs.push(badRuntime(rt));
+    mine.append(settingRow('set-runtime', '내 기본 런타임', rdescs, segment('set-runtime', [['', '자동 선택'], ...RUNTIMES], rt, (k) => setRuntime({ scope: 'default', runtime: k })), !!rt));
     out.push(mine);
-    const special = repos.filter((r) => r.error || r.mine || r.approval_mine || r.change || ((r.effective && r.effective.notes) || []).some((n) => !commonNotes.has(n)));
+    const special = repos.filter((r) => r.error || r.mine || r.approval_mine || r.runtime_mine || r.change || ((r.effective && r.effective.notes) || []).some((n) => !commonNotes.has(n)));
     const rest = repos.filter((r) => !special.includes(r));
     const sec = el('section', 'ds-stack');
     const h = el('h2', 'ds-label b-sechead', '기본과 다르게 둔 저장소'); h.append(count(special.length, null, '곳')); sec.append(h);

@@ -1532,6 +1532,13 @@ def set_approval_mode(req):
     return {"ok": True, "message": "내 설정에 저장함 — 다음 러너 실행부터 적용"}
 
 
+def set_runtime_mode(req):
+    err = hsettings.set_runtime(req, harness_repos())
+    if err:
+        return {"ok": False, "message": err}
+    return {"ok": True, "message": "내 설정에 저장함 — 다음 러너 실행부터 적용"}
+
+
 def request_facts_change(req):
     repos = harness_repos()
     change, err = hsettings.validate_facts(req, repos)
@@ -2622,6 +2629,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings/approval":
             res = set_approval_mode(req)
             log({"action": "approval_mode", "scope": req.get("scope"), "repo": req.get("repo"), "mode": req.get("mode"), **res})
+            return self._send(200, res)
+        if path == "/settings/runtime":
+            res = set_runtime_mode(req)
+            log({"action": "runtime", "scope": req.get("scope"), "repo": req.get("repo"), "runtime": req.get("runtime"), **res})
             return self._send(200, res)
         if path == "/settings/protection":
             return self._send(200, check_protection(req.get("repo")))

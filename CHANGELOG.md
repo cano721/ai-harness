@@ -10,6 +10,9 @@
 
 ### 새 기능
 
+- **러너 기본 런타임을 개인 설정으로 고정할 수 있습니다** — 러너가 노드 세션을 띄울 CLI를 `~/.ai-harness/config`의 `HM_RUNTIME`(claude|codex)과 저장소별 `HM_RUNTIME_REPOS`(`<project_id>=claude|codex`)로 정합니다. 우선순위는 `--runtime` > 저장소별 > 전체 > 자동 선택이고, 고른 출처를 start 출력과 run state(`policy.runtime_source`)에 남깁니다. 설정한 CLI가 없으면 다른 런타임으로 바꾸지 않고 이유와 함께 멈춥니다. 보드 설정 › 작업에서 바꿀 수 있습니다. (#488)
+  요약: 러너가 어디서 불려도 내가 고른 CLI(Claude·Codex)로 돌게 할 수 있고, 저장소마다 다르게 둘 수도 있습니다.
+
 - **그래프 러너가 원인 조사를 실행합니다** — 그래프 러너가 `--workflow investigate`로 원인 조사를 실행합니다. 코드를 고치지 않으며 승인 대기 없이 끝납니다. 보고와 이슈 댓글 초안은 `~/.ai-harness/investigations/<저장소>/`에 남깁니다. 수정이 필요하면 `start --workflow bug-fix --investigation <보고>` 명령을 안내합니다. (#342)
   요약: 러너로 원인 조사를 돌리면 코드를 건드리지 않고 끝까지 가서 보고와 댓글 초안을 남기고, 고칠 것이 있으면 버그 수정 시작 명령을 알려 줍니다.
 

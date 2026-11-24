@@ -37,6 +37,9 @@
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
+#   - 런타임: 노드 세션을 띄울 CLI는 start의 --runtime > 사용자 설정 HM_RUNTIME_REPOS(저장소별) > HM_RUNTIME > 자동 선택(default_runtime) 순이다.
+#     어디서 부르든 개인이 고른 CLI로 돌게 하려고 설정이 부른 세션보다 앞선다. 설정이 고른 CLI가 없으면 조용히 바꾸지 않고 멈춘다.
+#     고른 출처는 run state의 policy.runtime_source에 남고, resume·approve·revise는 start 때의 런타임을 그대로 쓴다.
 # shellcheck disable=SC2016  # state_set·jq 인자의 $x는 셸이 아니라 jq 변수다
 set -euo pipefail
 
@@ -63,7 +66,9 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
           start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면·조사할 버그 보고다.
           investigate는 코드를 고치지 않고 승인 대기 없이 끝나며, 보고를 ~/.ai-harness/investigations/<저장소>/에 남긴다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
-        start에 --runtime이 없으면: 부른 런타임(Claude Code·Codex) > integrations에 설치된 것이 하나 > 설치된 CLI가 하나. 못 정하면 exit 2
+        start의 노드 런타임: --runtime > ~/.ai-harness/config의 HM_RUNTIME_REPOS(저장소별) > HM_RUNTIME(claude|codex)
+        > 부른 런타임(Claude Code·Codex) > integrations에 설치된 것이 하나 > 설치된 CLI가 하나. 못 정하면 exit 2.
+        설정이 고른 CLI가 설치돼 있지 않으면 다른 런타임으로 바꾸지 않고 exit 2. resume·approve·revise는 start 때의 런타임을 쓴다
 
   정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
@@ -2385,6 +2390,15 @@ approval_mode() {
   [[ "$mode" =~ ^(human|auto)$ ]] || { printf '%s %s is "%s"; approval must be human or auto\n' "$source" "$(config_origin "${source%%:*}")" "$mode" >&2; return 2; }
   printf '%s %s' "$mode" "$source"
 }
+# 개인 기본 런타임: 저장소별 설정 > 전체 설정. 출력: "<runtime> <출처>" 또는 빈 문자열(설정 없음 — 자동 선택).
+runtime_setting() {
+  local setting="" rt="" source=""
+  setting="$(repository_setting HM_RUNTIME_REPOS)"
+  if [[ -n "$setting" ]]; then read -r rt source <<<"$setting"; else rt="$(user_config HM_RUNTIME)"; [[ -z "$rt" ]] || source=HM_RUNTIME; fi
+  [[ -n "$rt" ]] || return 0
+  [[ "$rt" =~ ^(claude|codex)$ ]] || { printf '%s %s is "%s"; runtime must be claude or codex\n' "$source" "$(config_origin "${source%%:*}")" "$rt" >&2; return 2; }
+  printf '%s %s' "$rt" "$source"
+}
 
 # --runtime이 없을 때 노드 세션을 띄울 CLI: 러너를 부른 런타임 > 저장소 integrations 중 설치된 것이 하나면 그것 > 설치된 유일한 CLI.
 # integrations의 나열 순서는 우선순위가 아니고, 한쪽이 다른 쪽 안에서 돌면 두 신호가 함께 있어 호출자를 단정하지 않는다. 못 정하면 고르지 않는다.
@@ -2406,8 +2420,21 @@ default_runtime() {
 case "$CMD" in
   start)
     case "${RUNTIME:-}" in
-      "") RUNTIME="$(default_runtime)" || exit 2 ;;
-      codex|claude) ;;
+      "")
+        runtime_choice="$(runtime_setting)" || exit 2
+        if [[ -n "$runtime_choice" ]]; then
+          read -r RUNTIME runtime_source <<<"$runtime_choice"
+          command -v "$RUNTIME" >/dev/null || {
+            printf '%s %s chose %s, but %s is not installed (not on PATH); install it, change the setting, or pass --runtime\n' \
+              "$runtime_source" "$(config_origin "${runtime_source%%:*}")" "$RUNTIME" "$RUNTIME" >&2
+            exit 2
+          }
+        else
+          RUNTIME="$(default_runtime)" || exit 2
+          runtime_source=default
+        fi
+        ;;
+      codex|claude) runtime_source=flag ;;
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
@@ -2520,10 +2547,10 @@ case "$CMD" in
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
-      --arg appr "$approval" --arg appr_source "$approval_source" --arg inv "$INVESTIGATION_FILE" \
+      --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
-        policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate") | not)),
+        policy:{git:$git, approval:$appr, approval_source:$appr_source, runtime_source:$rt_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate") | not)),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     save_baseline
@@ -2544,6 +2571,7 @@ if [[ "$CMD" != status ]]; then
   log "run $RUN_ID · progress: $RUN/progress.log · follow with: bash $(printf '%q' "$SCRIPT_DIR/$(basename "$0")") watch --workflow $WORKFLOW --repo $(printf '%q' "$REPO")"
 fi
 if [[ "$CMD" == start ]]; then
+  log "runtime $(state .runtime) ($(state '.policy.runtime_source'))"
   while IFS= read -r notice; do
     [[ -z "$notice" ]] || log "notice: $notice"
   done <<<"$(state '(.policy.notices // [])[]')"
