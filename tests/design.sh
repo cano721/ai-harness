@@ -231,7 +231,7 @@ printf '{"tone":"old","kept":["tone-0"]}\n' >"$LP_I/reference-pick.json"; touch 
 assert_eq 4 "$(lpi_rc wait-pick --node reference_pick --timeout-min 0)" "wait-pick ignores a pick from before the node started"
 assert_eq 3 "$(lpi_rc wait-pick --node draft_pick --timeout-min 0)" "wait-pick waits only on the current node"
 if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-  lp_port=$((20000 + RANDOM % 20000))
+  lp_port="$(free_port)"
   assert_eq "http://127.0.0.1:$lp_port/board.html" "$(lpi board --port "$lp_port" --serve)" "board --serve starts the board server and prints the board URL"
   lp_post() { curl -s -o /dev/null -w '%{http_code}' -X "${2:-POST}" -H 'content-type: application/json' ${3:+-H "origin: $3"} --data "$1" "http://127.0.0.1:$lp_port${4:-/pick}"; }
   assert_eq 400 "$(lp_post '{"node":"reference_pick","tone":"이대로","kept":["nope"]}')" "the board server refuses unknown reference ids"
@@ -507,25 +507,26 @@ unset LANDING_MEASURE_CMD LP_STUB_RESULT_FILE LANDING_PREVIEW_CMD LANDING_CAPTUR
 # Real measure on fixed pages, only where a Playwright Chromium can start.
 LP_FIX="$ROOT/tests/fixtures/landing-measure"
 if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-  python3 -I -m http.server 8931 --bind 127.0.0.1 --directory "$LP_FIX/good" >/dev/null 2>&1 & LP_SRV1=$!
-  python3 -I -m http.server 8932 --bind 127.0.0.1 --directory "$LP_FIX/bad" >/dev/null 2>&1 & LP_SRV2=$!
+  lp_p1="$(free_port)"; lp_p2="$(free_port)"; lp_p3="$(free_port)"; lp_p4="$(free_port)"
+  python3 -I -m http.server "$lp_p1" --bind 127.0.0.1 --directory "$LP_FIX/good" >/dev/null 2>&1 & LP_SRV1=$!
+  python3 -I -m http.server "$lp_p2" --bind 127.0.0.1 --directory "$LP_FIX/bad" >/dev/null 2>&1 & LP_SRV2=$!
   sleep 1
-  node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-good.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
+  node "$ROOT/scripts/landing-measure.mjs" --url "http://127.0.0.1:$lp_p1/" --out "$TEST_TMP/lp-good.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
   if [[ "$(jq -r '.result' "$TEST_TMP/lp-good.json" 2>/dev/null)" == unverified ]] && jq -e '.checks | length == 0' "$TEST_TMP/lp-good.json" >/dev/null 2>&1; then
     printf '# skip landing-measure browser checks: %s\n' "$(jq -r '.reason' "$TEST_TMP/lp-good.json")"
   else
     assert_eq pass "$(jq -r '.result' "$TEST_TMP/lp-good.json")" "landing-measure passes a clean page"
-    node "$ROOT/scripts/landing-measure.mjs" --url http://127.0.0.1:8932/ --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
+    node "$ROOT/scripts/landing-measure.mjs" --url "http://127.0.0.1:$lp_p2/" --out "$TEST_TMP/lp-bad.json" --graph "$LP_GRAPH" --motion-level lively >/dev/null 2>&1 || true
     assert_eq "bar_backdrop contrast_solid destinations first_action ghost_layer moment_frame_rate overflow placeholders text_covered" \
       "$(jq -r '[.checks[] | select(.status == "fail") | .id] | sort | join(" ")' "$TEST_TMP/lp-bad.json")" "landing-measure catches each planted defect"
-    node "$ROOT/scripts/landing-capture.mjs" --url http://127.0.0.1:8931/ --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
+    node "$ROOT/scripts/landing-capture.mjs" --url "http://127.0.0.1:$lp_p1/" --out "$TEST_TMP/lp-caps" >/dev/null 2>&1 || true
     assert_eq "done" "$(jq -r '.result' "$TEST_TMP/lp-caps/captures.json")" "landing-capture takes the tour, states, and sheets at both widths"
     assert_file "$TEST_TMP/lp-caps/sheet-390.png"
     # Two local sites captured in one call (four at a time), a recording left in the background, a bot check flagged.
-    python3 -I -m http.server 8933 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/a" >/dev/null 2>&1 & LP_SRV3=$!
-    python3 -I -m http.server 8934 --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/b" >/dev/null 2>&1 & LP_SRV4=$!
+    python3 -I -m http.server "$lp_p3" --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/a" >/dev/null 2>&1 & LP_SRV3=$!
+    python3 -I -m http.server "$lp_p4" --bind 127.0.0.1 --directory "$ROOT/tests/fixtures/landing-refs/b" >/dev/null 2>&1 & LP_SRV4=$!
     sleep 1
-    printf '[{"id":"a","url":"http://127.0.0.1:8933/","record":true},{"id":"b","url":"http://127.0.0.1:8934/"},{"id":"cf","url":"http://127.0.0.1:8933/challenge/"},{"id":"w","url":"http://127.0.0.1:8933/widget/"}]\n' >"$LP_R/refs-to-capture.json"
+    printf '[{"id":"a","url":"http://127.0.0.1:%s/","record":true},{"id":"b","url":"http://127.0.0.1:%s/"},{"id":"cf","url":"http://127.0.0.1:%s/challenge/"},{"id":"w","url":"http://127.0.0.1:%s/widget/"}]\n' "$lp_p3" "$lp_p4" "$lp_p3" "$lp_p3" >"$LP_R/refs-to-capture.json"
     LANDING_RECORD_SECONDS=2 "$ROOT/scripts/landing-run.sh" capture-refs --work "$LP_R" --file "$LP_R/refs-to-capture.json" --background >/dev/null 2>&1 || true
     assert_eq "ok ok challenge" "$(for i in a b cf; do jq -r '.status' "$LP_R/refs/$i/capture.json"; done | tr '\n' ' ' | sed 's/ $//')" "capture-refs captures both sites and flags the bot check"
     assert_eq "Reference B" "$(jq -r '.title' "$LP_R/refs/b/capture.json")" "capture-refs records each page's title"
@@ -544,7 +545,7 @@ if command -v node >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     lpb submit --node brief --outcome brief_ready >/dev/null
     for f in references.json searches.json component-slots.json; do cp "$LP_I/$f" "$LP_B/$f"; done
     lpb submit --node references --outcome references_ready >/dev/null
-    lp_port=$((20000 + RANDOM % 20000))
+    lp_port="$(free_port)"
     lp_e2e="$(node "$ROOT/tests/fixtures/landing-board/primary-e2e.mjs" --url "$(lpb board --port "$lp_port" --serve)" --shots "$TEST_TMP/lp-board-shots")"
     assert_eq "done" "$(jq -r '.result' <<<"$lp_e2e")" "the board takes a moved star and an added slot in a browser"
     assert_eq "$(jq -r '.layout' <<<"$lp_e2e")|interaction-0|component-0|$(jq -r '.component' <<<"$lp_e2e")|연동" \
@@ -662,7 +663,7 @@ if command -v node >/dev/null 2>&1; then
   dr board >/dev/null
   assert_eq "$dr_created|AI interview practice|1" "$(jq -r '[.created_at, .topic] | join("|")' "$DR_REC")|$(find "$HARNESS_METRICS_DIR/board/references" -name '*.json' -exec grep -l "$(cd "$DR_W" && pwd)\"" {} + | wc -l | tr -d ' ')" "drawing again updates the same record"
   if command -v curl >/dev/null 2>&1; then
-    dr_port=$((20000 + RANDOM % 20000))
+    dr_port="$(free_port)"
     assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "design-references serves the board over http"
     assert_eq "true|false" "$(curl -s "http://127.0.0.1:$dr_port/pick" | jq -r '[.server, .run] | join("|")')" "a board served without a landing run is for looking; picks go through the terminal"
     assert_eq "http://127.0.0.1:$dr_port/board.html" "$(dr board --port "$dr_port" --serve)" "serving again on the same port reuses the running server"
@@ -674,7 +675,7 @@ if command -v node >/dev/null 2>&1; then
     printf 'import time\ntime.sleep(120)\n' >"$DR_FAKE/board-server.py"
     python3 "$DR_FAKE/board-server.py" & dr_fake_pid=$!
     jq -n --argjson p "$dr_fake_pid" '{port: 1, token: "x", pid: $p, url: "http://127.0.0.1:1/?t=tok", features: ["references"]}' >"$HARNESS_METRICS_DIR/board/server.json"
-    dr_port2=$((dr_port + 1))
+    dr_port2="$(free_port)"
     assert_eq "http://127.0.0.1:1/?t=tok&refs=$(dr run-id)" "$(dr board --port "$dr_port2" --serve 2>/dev/null)" "with the Harness Board up, the reference board is shown there"
     assert_eq 0 "$(pgrep -f "landing-board-server.mjs --work $(cd "$DR_W" && pwd) --port $dr_port2" | wc -l | tr -d ' ')" "no separate board server starts while the Harness Board shows it"
     assert_eq "null" "$(jq -r '.url' "$DR_REC")" "the run record keeps no tokened dashboard address"
@@ -1148,7 +1149,7 @@ if command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
   # 유휴 종료: 요청 없이 정한 시간이 지나면 미리보기·보드 서버가 스스로 끝난다(0.01분 = 0.6초).
   node "$ROOT/scripts/landing-serve.mjs" --root "$LS_W/site/a" --idle-minutes 0.01 >/dev/null 2>&1 &
   LS_PID=$!
-  ls_port=$((20000 + RANDOM % 20000))
+  ls_port="$(free_port)"
   node "$ROOT/scripts/landing-board-server.mjs" --work "$LS_W" --port "$ls_port" --idle-minutes 0.01 >/dev/null 2>&1 &
   LS_BPID=$!
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do

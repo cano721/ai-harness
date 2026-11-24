@@ -44,6 +44,9 @@ head="$(git rev-parse HEAD)"
 if [[ "$sub" == merge ]]; then
   [[ "$scenario" != merge_cmd_fail ]] || { echo "GraphQL: Pull request is not mergeable" >&2; exit 1; }
   touch "$FAKE_LOG.merged"
+  case "$scenario" in # 병합 뒤 worktree 판정 테스트: 병합 직후 작업 폴더에 미커밋 변경이 생긴다
+    wtc_dirty) printf 'stray\n' >"$PWD/stray.txt" ;;
+  esac
   exit 0
 fi
 [[ "$scenario" != merge_host_down ]] || { echo "HTTP 502" >&2; exit 1; }
@@ -68,6 +71,7 @@ esac
 state=OPEN; merge_commit=null; merged_at=""
 if [[ -f "$FAKE_LOG.merged" || "$scenario" == merge_outside ]]; then state=MERGED; merge_commit="{\"oid\":\"$MERGE_SHA\"}"; merged_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; fi
 [[ "$scenario" != merge_closed ]] || state=CLOSED
+[[ "$scenario" != wtc_unmerged || ! -f "$FAKE_LOG.reopen" ]] || state=OPEN  # 병합 뒤 검증이 표시를 남기면 호스트가 더는 MERGED로 답하지 않는다
 [[ "$scenario" != merge_headmoved ]] || head=2222222222222222222222222222222222222222
 mergeable=MERGEABLE
 [[ "$scenario" != merge_conflict ]] || mergeable=CONFLICTING

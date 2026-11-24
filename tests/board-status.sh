@@ -148,6 +148,7 @@ assert waits[0] >= 1 and waits == sorted(waits) and waits[-1] == 5, waits
 bs._build = fake_build
 bs.refresh_once()
 assert bs.refresh_wait() <= bs.REFRESH, bs.refresh_wait()
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 # 일괄 정리는 30초 안의 캐시라도 믿지 않고 그 자리에서 새로 모은 목록으로 한다(그새 다시 일하는 세션을 닫지 않게). 미리보기는 캐시로.
 bs._cache["data"] = {"items": []}; bs._cache["at"] = time.time() - 10
 n = len(calls)
@@ -279,6 +280,8 @@ HARNESS_METRICS_DIR="$WL_T/data" python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
 wt = sys.argv[2]
+# 이 블록은 세션 점유 판정만 확인한다. 병합 여부는 독립 조건이므로 여기서는 병합 확인을 고정한다.
+bs._merged_pr_state = lambda path, branch: (True, "")
 bs._cache["data"] = None
 item = {"section": "work", "sid": "s-mine", "id": "claude|s-mine", "kind": "bg", "cwd": wt, "title": "mine", "live": True, "status": "idle", "state": "idle"}
 base = bs.worktree_check(item)
@@ -603,6 +606,7 @@ items = [S("idle", state="idle", status="idle", live=True),
          S("perm", state="needs_human", status="waiting", live=True, permission={"pid": "p"}),
          {"section": "harness", "id": "sync|docs|" + now, "kind": "sync", "state": "done", "at": now, "title": "변경 없음", "project": "docs"},
          {"section": "harness", "id": "schedule|x|" + old, "kind": "schedule", "state": "blocked", "at": old, "title": "건너뜀", "project": "스케줄"}]
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 bs.worktree_check = lambda i: {"removable": False, "reason": "x", "path": "/nope"}
 bs.end_session = lambda i: True
 by = lambda left: {l["reason"]: l for l in left}
@@ -1227,6 +1231,7 @@ assert len(calls) == 3, calls  # 그 뒤에는 모은다
 bs._cache["at"] = time.time() - 5; bs._full["at"] = time.time() - bs.FULL_REFRESH - 1; bs._timing["dur"] = 0
 bs.refresh_once()
 assert len(calls) == 4, calls  # 지문이 같아도 최소 주기마다는 모은다
+bs.worktree_candidates = lambda items: []  # 개발 머신의 실제 Orca·git worktree를 읽지 않게
 # 정리(B1): 지문 확인은 캐시 시각만 새로 매기므로, 실제 일괄 정리는 나이와 관계없이 입력 캐시 없이 새로 모은다
 bs._cache["at"] = time.time() - 5; bs.refresh_once()  # 건너뛴 확인 직후
 n = len(calls)
@@ -1519,5 +1524,45 @@ assert sum(1 for i in items if i.get("reason") == "sync_pr_no_credentials") >= 2
 assert pv.status("empty")["queue_hidden"] == []
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server reproduces the #299 situations"
 pass "board preview fixture reproduces the #299 screens with fake data"
+
+# 위임한 세션의 결과 유지(#465): 대화형 세션은 살아 있는 동안만 claude agents 목록에 있다. 부모 대화 기록에서 띄운 것으로 확인된
+# 터미널(links.json scan handles → 짝지은 sid)의 세션이 탭을 닫아 목록에서 빠지면, transcript로 끝난 항목을 되살려 묶음·PR이 남게 한다.
+# 띄운 기록이 없는 세션(사람이 직접 연 탭)은 되살리지 않는다.
+WD_T="$(mkdir -p "$TEST_TMP/work-delegated" && cd "$TEST_TMP/work-delegated" && pwd -P)"
+mkdir -p "$WD_T/bin" "$WD_T/projects/parent" "$WD_T/projects/child" "$WD_T/metrics/board" "$WD_T/member"
+cat >"$WD_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_AGENTS"
+FAKE
+chmod +x "$WD_T/bin/claude"
+WD_PARENT="cccccccc-0000-4000-8000-000000000001"
+WD_CHILD="cccccccc-0000-4000-8000-000000000002"
+WD_SOLO="cccccccc-0000-4000-8000-000000000003"
+WD_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg sid "$WD_PARENT" --arg cwd "$WD_T" --argjson t "$(($(date +%s) * 1000))" \
+  '[{sessionId: $sid, id: $sid[0:8], kind: "interactive", status: "idle", pid: 4242, cwd: $cwd, startedAt: $t}]' >"$WD_T/agents.json"
+jq -cn --arg t "$WD_NOW" '{type: "user", message: {content: "작업 맡겨줘"}, timestamp: $t}' >"$WD_T/projects/parent/$WD_PARENT.jsonl"
+for WD_SID in "$WD_CHILD" "$WD_SOLO"; do
+  { jq -cn --arg t "$WD_NOW" --arg cwd "$WD_T/member" '{type: "user", cwd: $cwd, message: {content: "#12 고쳐줘"}, timestamp: $t}'
+    jq -cn '{type: "ai-title", aiTitle: "Fix the example issue"}'
+    jq -cn --arg t "$WD_NOW" '{type: "assistant", message: {content: [{type: "text", text: "PR을 열었습니다."}]}, timestamp: $t}'
+  } >"$WD_T/projects/child/$WD_SID.jsonl"
+done
+jq -cn --arg p "$WD_T/projects/parent/$WD_PARENT.jsonl" --arg c "$WD_CHILD" --arg s "$WD_SOLO" \
+  '{handles: {"term_11111111-2222-3333-4444-555555555555": $c, "term_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": $s},
+    scan: {($p): {v: 2, offset: 0, handles: ["term_11111111-2222-3333-4444-555555555555"]}}}' >"$WD_T/metrics/board/links.json"
+WD_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$WD_T/bin:$PATH" FAKE_AGENTS="$WD_T/agents.json" HARNESS_METRICS_DIR="$WD_T/metrics" \
+  HARNESS_CLAUDE_PROJECTS_DIR="$WD_T/projects" BOARD_CLAUDE_PROFILE_GLOBS="$WD_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
+assert_eq "done|false|member|Fix the example issue" \
+  "$(jq -r --arg s "$WD_CHILD" '.[] | select(.sid == $s) | "\(.state)|\(.live)|\(.project)|\(.title)"' <<<"$WD_OUT")" \
+  "a delegated session whose tab closed comes back as an ended item named after its own folder"
+assert_eq "" "$(jq -r --arg s "$WD_SOLO" '.[] | select(.sid == $s) | .sid' <<<"$WD_OUT")" "a closed session no parent spawned stays out"
+assert_eq "1" "$(jq -r --arg s "$WD_PARENT" '[.[] | select(.sid == $s)] | length' <<<"$WD_OUT")" "the parent is listed once"
+WD_TPL="$(<"$ROOT/scripts/board/template.html")"
+# shellcheck disable=SC2016  # 템플릿 리터럴을 글자 그대로 찾는다
+assert_contains "$WD_TPL" '`끝남 · PR #${n}`' "a finished worker in a group reads as ended with its PR, not as resting"
+assert_contains "$WD_TPL" "memberStatus(it), ago(it.at)" "group member rows use the worker status"
+pass "work.sh keeps a delegated session after its tab closes"
 
 finish_tests

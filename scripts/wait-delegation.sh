@@ -116,6 +116,13 @@ close_member() {
 }
 
 hash_of() { { shasum -a 256 2>/dev/null || sha256sum; } <<<"$1" | cut -d' ' -f1; }
+# 입력창 아래(상태 표시줄의 경과 시간·비용)는 일이 멈춰도 바뀐다 — 화면 전체로 변화를 보면 stalled가 잡히지 않는다(#465).
+# 입력창을 감싼 구분선 둘 중 위쪽 것 위의 내용만 본다. 구분선이 둘 미만이면 화면 전체.
+content_of() {
+  awk '{ line[NR] = $0; t = $0; gsub(/[[:space:]]/, "", t); u = t; gsub(/─|━|-/, "", u)
+         if (t != "" && u == "" && length(t) >= 30) rule[++n] = NR }
+       END { stop = (n >= 2) ? rule[n - 1] - 1 : NR; for (i = 1; i <= stop; i++) print line[i] }' <<<"$1"
+}
 
 start="$(date +%s)" last_hash="" changed_at="$start" failures=0
 while :; do
@@ -125,7 +132,7 @@ while :; do
     if read_screen; then
       failures=0
       [[ "$status" == exited ]] && finish exited 12
-      h="$(hash_of "$screen")"
+      h="$(hash_of "$(content_of "$screen")")"
       [[ "$h" == "$last_hash" ]] || { last_hash="$h"; changed_at="$now"; }
       idle=$((now - changed_at))
       if [[ $idle -ge $input_idle ]] && awaiting_input; then finish awaiting_input 10; fi

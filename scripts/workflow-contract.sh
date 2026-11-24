@@ -181,9 +181,12 @@ done
 
 # ── 편집 가드의 '읽음' 판정 ───────────────────────────────────────────────────
 # transcript를 문자열로 grep하는 옛 가드는 Edit·Write의 file_path에도 맞아 문서를 쓰기만 한 세션을 통과시킨다.
+# 읽음 판정이 맞아도 경로를 NFC로 맞추지 않으면 macOS NFD 폴더 이름 저장소에서 대상을 저장소 밖으로 보고 통과시킨다.
 guard="$root/.ai-harness/hooks/direct-edit-guard.sh"
 if [[ -f "$guard" ]] && ! grep -q -E '\.name *== *"Read"' "$guard"; then
   finding guard_read_by_grep medium ".ai-harness/hooks/direct-edit-guard.sh" "" "file_path" "" "편집 가드가 transcript를 문자열로 판정해 Edit·Write로 문서를 쓰기만 한 세션도 통과한다 — 플러그인 skills/harness-init/references/direct-edit-guard.sh처럼 jq로 줄을 파싱해 짝 결과가 성공인 Read 호출·읽기 형태 셸 명령만 인정하게 고친다"
+elif [[ -f "$guard" ]] && ! grep -q -E 'unicodedata|NFC' "$guard"; then
+  finding guard_no_nfc medium ".ai-harness/hooks/direct-edit-guard.sh" "" "NFC" "" "경로를 NFC로 맞추지 않아 macOS NFD 폴더 이름 저장소에서 대상이 저장소 밖으로 판정돼 통과한다 — 플러그인 skills/harness-init/references/direct-edit-guard.sh의 nfc()·physical()처럼 고친다"
 fi
 
 # ── 역할 매핑(harness.json roles)이 가리키는 기존 에이전트·라우터 ─────────────

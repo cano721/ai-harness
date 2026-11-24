@@ -41,13 +41,16 @@ harness_root() { # 경로에서 위로 올라가 .ai-harness/harness.json이 있
 
 member="$(harness_root "$(dirname "$file")")" || exit 0
 session_member="$(harness_root "$cwd")" || session_member=""
-[[ "$member" == "$session_member" ]] && exit 0
+# 탐색은 원래 경로로 하고 비교만 NFC로 맞춘다 — macOS는 폴더 이름을 NFD로 보존해 같은 저장소가 두 정규화로 들어온다.
+[[ "$(hm_nfc "$member")" == "$(hm_nfc "$session_member")" ]] && exit 0
 # 심볼릭 링크·`..`가 섞인 경로도 같은 저장소면 통과한다(문자열만 비교하면 다른 저장소로 오판한다).
-physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+physical_dir() { hm_nfc "$( (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1")"; }
 [[ -n "$session_member" && "$(physical_dir "$member")" == "$(physical_dir "$session_member")" ]] && exit 0
 
+member_nfc="$(hm_nfc "$member")"
+cwd_nfc="$(hm_nfc "$cwd")"
 rel=""
-case "$member" in "$cwd"/*) rel="${member#"$cwd"/}" ;; esac
+case "$member_nfc" in "$cwd_nfc"/*) rel="${member_nfc#"$cwd_nfc"/}" ;; esac
 shown="${rel:-$member}"
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 쓴다
 handoff() {

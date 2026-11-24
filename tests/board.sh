@@ -37,10 +37,9 @@ jq -cn --arg at "$NOW_ISO" '{event:"started", project:"svc", scope:"repo", at:$a
   >"$BOARD_DATA/harvest-auto/runs.jsonl"
 printf '# keep this comment\nHM_DIGEST=1\nOTHER_TOOL_SETTING=x\n' >"$BOARD_DATA/config"
 chmod 600 "$BOARD_DATA/config"
-free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 BOARD_PORT_T="$(free_port)"
 board_sh() {
-  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BOARD_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+  env PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BOARD_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="${BOARD_PORT_OVERRIDE:-$BOARD_PORT_T}" BOARD_NO_BROWSER=1 \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
@@ -358,6 +357,65 @@ assert (row["approval"], row["approval_source"]) == ("auto", "legacy"), row
 ' "$ROOT/scripts/board" "$BOARD_APPR_REPO" || fail "board shows the manifest approval for a runner that predates personal approval"
 assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "approval writes keep other config lines"
 pass "harness board approval mode follows personal settings"
+
+# 보드의 기본 런타임도 러너와 같은 개인 설정(HM_RUNTIME_REPOS > HM_RUNTIME > 자동 선택)에서 계산하고 같은 파일에 쓴다(#488).
+BOARD_RT_REPO="$BOARD_T/repos/rt"
+mkdir -p "$BOARD_RT_REPO/.ai-harness/workflows"
+git -C "$BOARD_RT_REPO" init -q
+printf '{"project_id":"rt-id","git_policy":"pr-only"}\n' >"$BOARD_RT_REPO/.ai-harness/harness.json"
+cp "$ROOT/templates/workflow-driver/workflow-driver.sh" "$BOARD_RT_REPO/.ai-harness/workflows/workflow-driver.sh"
+HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert "HM_RUNTIME" in s.PERSONAL_KEYS and "HM_RUNTIME_REPOS" in s.PERSONAL_KEYS, s.PERSONAL_KEYS
+assert s.RUNTIMES == ("claude", "codex"), s.RUNTIMES
+assert s.runner_runtime(repo) == "personal"
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == (None, "none", None), row
+assert s.set_runtime({"scope": "default", "runtime": "claude"}, []) is None
+assert "HM_RUNTIME=\"claude\"" in open(s.CONFIG).read()
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == ("claude", "default", None), row
+s.write_user_config({"HM_RUNTIME_REPOS": "other-id=claude"})
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "codex"}, [repo]) is None
+assert s.user_config()["HM_RUNTIME_REPOS"] == "other-id=claude,rt-id=codex", s.user_config()
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == ("codex", "repo", "codex"), row
+before = open(s.CONFIG).read()
+assert s.set_runtime({"scope": "default", "runtime": "gemini"}, []) is not None
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "bogus"}, [repo]) is not None
+assert s.set_runtime({"scope": "repo", "repo": "/not/known", "runtime": "codex"}, [repo]) is not None
+assert open(s.CONFIG).read() == before, "rejected runtime writes change nothing"
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": ""}, [repo]) is None
+assert s.user_config()["HM_RUNTIME_REPOS"] == "other-id=claude", s.user_config()
+assert s.set_runtime({"scope": "default", "runtime": ""}, []) is None
+assert "HM_RUNTIME=" not in open(s.CONFIG).read()
+s.write_user_config({"HM_RUNTIME_REPOS": ""})
+# 러너 runtime_setting과 같은 규칙: 저장소 값 > 전체 값 > 없음, 같은 키는 마지막 값, 잘못된 값도 그대로 보인다.
+assert s.runtime_of("rt-id", {"HM_RUNTIME_REPOS": "rt-id=codex,rt-id=claude", "HM_RUNTIME": "codex"})["runtime"] == "claude"
+assert s.runtime_of("rt-id", {"HM_RUNTIME_REPOS": "rt-id=", "HM_RUNTIME": "codex"})["runtime_source"] == "default"
+assert s.runtime_of("rt-id", {"HM_RUNTIME": "gemini"})["runtime"] == "gemini"
+' "$ROOT/scripts/board" "$BOARD_RT_REPO" || fail "board runtime follows the personal settings"
+# HM_RUNTIME을 모르는 옛 러너는 설정을 무시하고 자동 선택하므로 legacy로 보이고, 고른 값은 남는다.
+printf '#!/usr/bin/env bash\n# HM_DELIVERY_LEVEL HM_APPROVAL only\n' >"$BOARD_RT_REPO/.ai-harness/workflows/workflow-driver.sh"
+HM_RUNTIME='' HM_RUNTIME_REPOS='' HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import settings as s
+repo = sys.argv[2]
+assert s.runner_runtime(repo) == "old"
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": "claude"}, [repo]) is None
+row = s.read_repo(repo)
+assert (row["runtime"], row["runtime_source"], row["runtime_mine"]) == (None, "legacy", "claude"), row
+assert s.set_runtime({"scope": "repo", "repo": repo, "runtime": ""}, [repo]) is None
+' "$ROOT/scripts/board" "$BOARD_RT_REPO" || fail "board shows legacy runtime for a runner that predates personal runtime"
+assert_contains "$(<"$BOARD_DATA/config")" "# keep this comment" "runtime writes keep other config lines"
+for f in "const setRuntime = (body) => saveSetting('/settings/runtime'" "settingRow('set-runtime', '내 기본 런타임'" "[['', '자동 선택'], ...RUNTIMES]" "[['', '기본 따름'], ...RUNTIMES]" "rg.setAttribute('aria-labelledby'" "r.approval_mine || r.runtime_mine"; do
+  assert_contains "$BOARD_TPL" "$f" "the work settings tab has the runtime controls: $f"
+done
+pass "harness board runtime follows personal settings"
 
 # 권한 훅 연결은 setup이 물은 뒤 board.sh hook on|off로만: 백업을 남기고 다른 설정은 그대로 둔다.
 printf '{"env":{"KEEP":"1"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}\n' >"$BOARD_T/settings.json"
@@ -989,7 +1047,7 @@ EOF
 chmod +x "$BIMP_T/impact.sh"
 BIMP_PORT="$(free_port)"
 bimp_sh() {
-  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BIMP_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+  env PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BIMP_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BIMP_PORT" BOARD_NO_BROWSER=1 BOARD_IMPACT_SH="$BIMP_T/impact.sh" \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
@@ -1162,7 +1220,7 @@ EOF
 chmod +x "$BAF_T/monitor-fetch.sh" "$BAF_T/autofix-auto.sh" "$BAF_T/schedule.sh" "$BAF_T/bin/claude"
 BAF_PORT="$(free_port)"
 baf_sh() {
-  env PATH="$BAF_T/bin:$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BAF_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+  env PATH="$BAF_T/bin:$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BAF_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$BAF_T/no-settings.json" BOARD_PORT="$BAF_PORT" BOARD_NO_BROWSER=1 SENTRY_AUTH_TOKEN="$BAF_SECRET" \
     BOARD_AUTOFIX_SH="$BAF_T/autofix-auto.sh" BOARD_MONITOR_FETCH_SH="$BAF_T/monitor-fetch.sh" BOARD_SCHEDULE_SH="$BAF_T/schedule.sh" \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
@@ -1329,6 +1387,12 @@ assert_eq "null" "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal
 assert_eq "true" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", mode: "auto"}')" "$BAF_BASE/settings/approval" | jq -r '.ok')" "the board sets the personal approval mode"
 assert_eq '"auto"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_APPROVAL')" "settings show the personal approval mode from config"
 assert_contains "$(<"$BAF_DATA/config")" 'HM_APPROVAL="auto"' "the approval mode is written to the personal config"
+# 기본 런타임도 같은 화면·같은 방식으로 config에 쓴다(#488).
+assert_eq "true" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", runtime: "codex"}')" "$BAF_BASE/settings/runtime" | jq -r '.ok')" "the board sets the personal runtime"
+assert_eq '"codex"' "$(curl -s "$BAF_BASE/settings?t=$BAF_TOKEN" | jq -c '.personal.HM_RUNTIME')" "settings show the personal runtime from config"
+assert_contains "$(<"$BAF_DATA/config")" 'HM_RUNTIME="codex"' "the runtime is written to the personal config"
+assert_eq "false" "$(curl -s -X POST -H "Origin: $BAF_BASE" -d "$(jq -cn --arg t "$BAF_TOKEN" '{t: $t, scope: "default", runtime: "gemini"}')" "$BAF_BASE/settings/runtime" | jq -r '.ok')" "the board rejects an unknown runtime"
+assert_contains "$(<"$BAF_DATA/config")" 'HM_RUNTIME="codex"' "a rejected runtime keeps the saved one"
 # 보드를 띄울 때 config에 있던 autofix 키(예산 7)를 지우면 기본값(10)으로 보인다 — 띄운 시점의 환경 값이 남지 않는다.
 grep -v '^HM_AUTOFIX_BUDGET_USD=' "$BAF_DATA/config" >"$BAF_T/config.tmp" && mv "$BAF_T/config.tmp" "$BAF_DATA/config"
 assert_eq "10" "$(baf_get | jq -r '.config.budget_usd')" "an autofix key removed from config falls back to its default, not the board's startup value"
@@ -1432,6 +1496,9 @@ items = [S("busy", state="running", status="busy", live=True), S("asking", state
 closed, checked = [], []
 bs.end_session = lambda i: closed.append(i["sid"]) or True
 bs.worktree_check = lambda i: checked.append(i["sid"]) or {"removable": i["sid"] == "idle", "reason": None if i["sid"] == "idle" else "커밋 안 한 변경 2개", "path": "/nope"}
+# 이 벌크 동작 테스트는 아래 전용 worktree 후보 테스트와 분리한다. 기본 탐색이
+# 개발자 머신의 알려진 저장소를 읽어 테스트 계획에 끼워 넣지 않게 한다.
+bs.worktree_candidates = lambda items: []
 plan = bs.bulk_cleanup({"dry_run": True, "older_days": 1}, items)["plan"]
 assert sorted(r["id"] for r in plan) == sorted(["claude|idle", "claude|ended", "sync|docs|" + old, "autofix:shop:sentry:1"]), plan
 assert [r for r in plan if r["id"] == "claude|idle"][0]["close"] is True
@@ -1466,6 +1533,225 @@ assert bs.bulk_cleanup({}, items)["ok"] is False, "a second cleanup while one ru
 bs._bulk_lock.release()
 ' "$ROOT/scripts/board/board-server.py" "$BAF_T/kept.jsonl" || fail "finished work can be cleaned up in bulk: only finished items, worktrees only when chosen and removable, transcripts kept, reversible"
 assert_contains "$(<"$ROOT/scripts/board/board-server.py")" 'path == "/cleanup-bulk"' "the board serves bulk cleanup"
+# 세션에 연결되지 않은 worktree도 끝난 일 정리 후보로 보여 주며, 실행 직전에 다시 안전 조건을 본다 — 아래 동작 테스트가 검증한다.
+# 세션 카드가 없어도 linked worktree는 후보가 된다. PR 병합·깨끗함·미푸시 커밋 없음만 통과시키고,
+# 실행 직전 파일이 바뀌면 다시 판정해 보존한다. gh·orca는 실제 계정이나 worktree를 건드리지 않는 가짜다.
+BWT_SAFE="$BAF_T/independent-worktrees"; BWT_REMOTE="$BAF_T/independent-remote.git"; BWT_BIN="$BAF_T/independent-bin"
+mkdir -p "$BWT_SAFE/repo" "$BWT_BIN"
+git -C "$BWT_SAFE/repo" init -q
+git -C "$BWT_SAFE/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
+git init --bare -q "$BWT_REMOTE"
+git -C "$BWT_SAFE/repo" remote add origin "$BWT_REMOTE"
+git -C "$BWT_SAFE/repo" push -q -u origin HEAD
+for BWT_BRANCH in safe dirty unpushed nested unmerged; do
+  git -C "$BWT_SAFE/repo" worktree add -q -b "$BWT_BRANCH" "$BWT_SAFE/$BWT_BRANCH"
+  git -C "$BWT_SAFE/$BWT_BRANCH" push -q -u origin "$BWT_BRANCH"
+done
+printf 'changed\n' >"$BWT_SAFE/dirty/changed.txt"
+git -C "$BWT_SAFE/unpushed" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m unpushed
+mkdir -p "$BWT_SAFE/nested/child"; git -C "$BWT_SAFE/nested/child" init -q
+cat >"$BWT_BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+branch=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == --head ]]; then branch="$2"; break; fi
+  shift
+done
+if [[ "$branch" == unmerged ]]; then printf '[]\n';
+else printf '[{"state":"MERGED","headRefName":"%s","headRefOid":"%s"}]\n' "$branch" "$(git rev-parse HEAD)"; fi
+EOF
+cat >"$BWT_BIN/orca" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$BWT_SAFE/orca.log"
+if [[ "\$*" == *' worktree list '* ]]; then printf '{"ok":true,"result":{"worktrees":[]}}\\n'; else printf '{"ok":true,"message":"removed"}\\n'; fi
+EOF
+chmod +x "$BWT_BIN/gh" "$BWT_BIN/orca"
+PATH="$BWT_BIN:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+root, log = sys.argv[2:]
+bs._worktree_roots = lambda items: [root]
+bs._orca_worktree_paths = lambda: ([], "")
+bs._orca_live_worktree_paths = lambda: ([], "")
+bs._board_live_agent_cwds = lambda: ([], "")
+rows = {os.path.basename(r["path"]): r for r in bs.worktree_candidates([])}
+assert rows["safe"]["removable"], rows
+assert "커밋 안 한 변경" in rows["dirty"]["reason"], rows["dirty"]
+assert "원격에 올리지 않은 커밋" in rows["unpushed"]["reason"], rows["unpushed"]
+assert "중첩 clone" in rows["nested"]["reason"], rows["nested"]
+assert rows["unmerged"]["reason"] == "PR이 병합되지 않음", rows["unmerged"]
+safe = rows["safe"]
+res = bs.bulk_cleanup({"worktree": True, "ids": [safe["id"]]}, [])
+assert res["counts"]["worktrees"] == 1, res
+assert "--delete-branch" in open(log).read(), open(log).read()
+# 후보를 만든 뒤 변경이 생기면 실행 시 재판정이 삭제보다 먼저여야 한다.
+rows = {os.path.basename(r["path"]): r for r in bs.worktree_candidates([])}
+safe = rows["safe"]; original = bs.worktree_check_path; calls = [0]
+# bulk_cleanup은 후보를 다시 모을 때 safe를 한 번 판정하고, 삭제 직전에 한 번 더 판정한다 — 그 사이에 변경을 만든다.
+def changed(path, branch=None):
+    if os.path.realpath(path) == os.path.realpath(safe["path"]):
+        calls[0] += 1
+    if calls[0] == 2 and os.path.realpath(path) == os.path.realpath(safe["path"]):
+        with open(os.path.join(path, "changed-before-delete.txt"), "w") as f: f.write("changed")
+    return original(path, branch)
+bs.worktree_check_path = changed
+before = open(log).read().count("worktree rm")
+res = bs.bulk_cleanup({"worktree": True, "ids": [safe["id"]]}, [])
+assert res["counts"]["worktrees"] == 0, res
+assert "커밋 안 한 변경" in res["results"][0]["worktree_kept"], res
+assert open(log).read().count("worktree rm") == before, open(log).read()
+' "$ROOT/scripts/board/board-server.py" "$BWT_SAFE/repo" "$BWT_SAFE/orca.log" || fail "independent worktree candidates require merged, clean, pushed work and recheck before deletion"
+pass "board independently plans and safely rechecks worktree cleanup"
+# 브랜치 이름이 UTF-8로 읽히지 않아도(잘린 한글 등) 후보 수집이 죽지 않는다.
+BWT_BAD="$BAF_T/non-utf8-branch"
+git init -q "$BWT_BAD"
+# APFS는 그런 이름의 ref 파일을 만들지 못하고 커밋 메시지는 git이 재인코딩하므로, 같은 바이트를 config 값으로 재현한다.
+git -C "$BWT_BAD" config test.branch "$(printf 'wt/\xeb\xb3')"
+python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+rc, out = bs._git(sys.argv[2], "config", "test.branch")
+assert rc == 0 and out.startswith("wt/"), (rc, out)
+' "$ROOT/scripts/board/board-server.py" "$BWT_BAD" || fail "git output that is not valid UTF-8 does not crash worktree lookup"
+pass "board git lookups survive a branch name that is not valid UTF-8"
+# 독립 worktree 후보는 그 worktree를 쓰는 살아 있는 세션이 있으면 지울 수 없다(#454). 세션은 Orca(worktree ps)와 보드의 살아 있는 agents(숨긴 세션 포함)에서
+# 찾고, 둘 중 하나라도 조회에 실패하면 보존한다. 실행 직전 재판정에도 세션 확인이 들어간다. 조회 지점은 bs._orca_live_worktree_paths()·bs._board_live_agent_cwds()이고
+# 둘 다 (경로 목록, 오류 문자열)을 돌려준다 — 오류가 비어 있지 않으면 조회 실패다.
+BWS_BIN="$BAF_T/session-bin"; BWS_LOG="$BWT_SAFE/orca-session.log"
+mkdir -p "$BWS_BIN"
+cp "$BWT_BIN/gh" "$BWS_BIN/gh"
+cat >"$BWS_BIN/orca" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$BWS_LOG"
+case "\$*" in
+  *' worktree ps '*|'worktree ps '*) [[ -z "\${FAKE_ORCA_PS_FAIL:-}" ]] || { printf '{"ok":false,"error":{"message":"ps failed"}}\\n'; exit 1; }
+    if [[ -n "\${FAKE_ORCA_PS_JSON:-}" ]]; then printf '%s\\n' "\$FAKE_ORCA_PS_JSON"; else printf '{"ok":true,"result":{"worktrees":[]}}\\n'; fi ;;
+  *' worktree rm '*|'worktree rm '*) printf '{"ok":false,"error":{"message":"worktree not registered"}}\\n'; exit 1 ;;
+  *) printf '{"ok":true,"result":{"worktrees":[]}}\\n' ;;
+esac
+EOF
+chmod +x "$BWS_BIN/gh" "$BWS_BIN/orca"
+for BWS_BRANCH in orcalive hiddenlive idle fb1 fb2 race; do
+  git -C "$BWT_SAFE/repo" worktree add -q -b "$BWS_BRANCH" "$BWT_SAFE/$BWS_BRANCH"
+  git -C "$BWT_SAFE/$BWS_BRANCH" push -q -u origin "$BWS_BRANCH"
+done
+PATH="$BWS_BIN:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+root, base, log = sys.argv[2:]
+wt = lambda name: os.path.join(base, name)  # 일부러 realpath로 바꾸지 않는다 — 비교는 구현이 realpath로 해야 한다
+bs._worktree_roots = lambda items: [root]
+bs._orca_worktree_paths = lambda: ([], "")
+state = {"orca": ([], ""), "board": ([], "")}
+bs._orca_live_worktree_paths = lambda: state["orca"]
+bs._board_live_agent_cwds = lambda: state["board"]
+cands = lambda: {os.path.basename(r["path"]): r for r in bs.worktree_candidates([]) if r.get("path")}
+# 1) 세션이 없으면 지울 수 있다
+rows = cands()
+assert rows["idle"]["removable"], rows["idle"]
+# 2) Orca(worktree ps)가 보고한 세션 + 보드가 보는 숨긴 살아 있는 세션(하위 폴더에서 돌아도 그 worktree를 쓰는 것) → 둘 다 보존, 사유에 세션
+state["orca"] = ([wt("orcalive")], "")
+state["board"] = ([os.path.join(wt("hiddenlive"), "sub", "dir")], "")
+rows = cands()
+for name in ("orcalive", "hiddenlive"):
+    assert not rows[name]["removable"] and "세션" in rows[name]["reason"], (name, rows[name])
+assert rows["idle"]["removable"], "a worktree without a live session stays removable"
+# 3) 어느 조회든 실패하면 모두 보존한다
+for key in ("orca", "board"):
+    state.update({"orca": ([], ""), "board": ([], "")})
+    state[key] = ([], "조회 실패")
+    rows = cands()
+    assert not rows["idle"]["removable"] and "세션" in rows["idle"]["reason"], (key, rows["idle"])
+state.update({"orca": ([], ""), "board": ([], "")})
+' "$ROOT/scripts/board/board-server.py" "$BWT_SAFE/repo" "$BWT_SAFE" "$BWS_LOG" || fail "an independent worktree with a live session (Orca or hidden board session) or an unknown session lookup is kept"
+pass "independent worktree candidates keep worktrees that a live session still uses"
+
+# 실제 orca worktree ps가 실패하면(가짜 orca가 1을 돌려줌) 보드 쪽 조회가 멀쩡해도 보존한다 — Orca 조회 지점은 목킹하지 않는다.
+FAKE_ORCA_PS_FAIL=1 PATH="$BWS_BIN:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+root = sys.argv[2]
+bs._worktree_roots = lambda items: [root]
+bs._orca_worktree_paths = lambda: ([], "")
+bs._board_live_agent_cwds = lambda: ([], "")
+rows = {os.path.basename(r["path"]): r for r in bs.worktree_candidates([]) if r.get("path")}
+assert not rows["idle"]["removable"] and "세션" in rows["idle"]["reason"], rows["idle"]
+' "$ROOT/scripts/board/board-server.py" "$BWT_SAFE/repo" || fail "a failing orca worktree ps keeps every independent worktree"
+pass "an unknown Orca session lookup keeps worktrees"
+
+# orca worktree ps 응답 해석: 터미널·PTY·확인 못 한 터미널·에이전트 중 하나라도 있으면 쓰는 중이다. 목록이 잘렸거나 응답 안 한 호스트가 있으면
+# 빠진 행의 세션을 볼 수 없으니 조회 실패로 보존한다. Orca 안(ORCA_WORKSPACE_ID)인데 CLI가 없어도 확인 못 한 것으로 본다.
+PATH="$BWS_BIN:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, json, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+log = sys.argv[2]
+def ps(result):
+    os.environ["FAKE_ORCA_PS_JSON"] = json.dumps({"ok": True, "result": result})
+    return bs._orca_live_worktree_paths()
+rows = [{"path": "/w/term", "liveTerminalCount": 1}, {"path": "/w/pty", "hasAttachedPty": True},
+        {"path": "/w/unknown", "unverifiableTerminalCount": 2}, {"path": "/w/agent", "agents": [{"state": "working"}]},
+        {"path": "/w/idle", "liveTerminalCount": 0, "hasAttachedPty": False, "agents": []}]
+paths, error = ps({"worktrees": rows, "totalCount": 5, "truncated": False, "hostScope": {"omittedHostIds": []}})
+assert error == "" and paths == ["/w/agent", "/w/pty", "/w/term", "/w/unknown"], (paths, error)
+assert "worktree ps --limit" in open(log).read(), "asks for every row"
+paths, error = ps({"worktrees": rows[:1], "totalCount": 42, "truncated": True})
+assert error and paths == [], (paths, error)
+paths, error = ps({"worktrees": rows[:1], "truncated": False, "hostScope": {"omittedHostIds": ["remote-1"]}})
+assert error and paths == [], (paths, error)
+bs._orca_executable = lambda: None
+os.environ["ORCA_WORKSPACE_ID"] = "ws-test"
+paths, error = bs._orca_live_worktree_paths()
+assert error and paths == [], (paths, error)
+del os.environ["ORCA_WORKSPACE_ID"]
+assert bs._orca_live_worktree_paths() == ([], ""), "no Orca at all is not an error"
+' "$ROOT/scripts/board/board-server.py" "$BWS_LOG" || fail "orca worktree ps rows are read as busy, and a truncated or partial list keeps worktrees"
+pass "board reads busy Orca worktrees and keeps worktrees when the Orca list is incomplete"
+
+# Orca가 있어도 Orca 삭제가 실패하면(그 worktree를 모름 등) 강제 없이 git worktree remove로 넘어간다 — 세션 카드 경로(_finish_cleanup)와 독립 후보 경로 둘 다.
+# 재판정 때 새로 생긴 세션은 삭제 전에 잡아 보존한다.
+PATH="$BWS_BIN:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BCL_DATA" python3 -I -B -c '
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("bs", sys.argv[1]); bs = importlib.util.module_from_spec(spec); spec.loader.exec_module(bs)
+root, base, log = sys.argv[2:]
+wt = lambda name: os.path.join(base, name)
+branches = lambda: subprocess.run(["git", "-C", root, "branch", "--list"], capture_output=True, text=True).stdout
+bs._worktree_roots = lambda items: [root]
+bs._orca_worktree_paths = lambda: ([], "")
+bs._orca_live_worktree_paths = lambda: ([], "")
+live = {"cwds": []}
+bs._board_live_agent_cwds = lambda: (live["cwds"], "")
+# 세션 카드 정리 경로: orca rm이 실패해도 git으로 지우고 로컬 브랜치도 지운다
+item = {"section": "work", "sid": "fb-sid", "id": "claude|fb-sid", "kind": "bg", "live": False, "title": "fb", "cwd": wt("fb1")}
+res = bs._finish_cleanup(item, {"removable": True, "path": wt("fb1"), "branch": "fb1"})
+assert res["ok"], res
+assert not os.path.exists(wt("fb1")) and " fb1" not in branches(), (os.path.exists(wt("fb1")), branches())
+assert "worktree rm" in open(log).read(), "Orca was tried first"
+# 독립 후보 제거 함수도 같은 폴백
+ok, detail = bs.remove_worktree_candidate(wt("fb2"), "fb2")
+assert ok, detail
+assert not os.path.exists(wt("fb2")) and " fb2" not in branches(), (os.path.exists(wt("fb2")), branches())
+# 어디서도 지울 수 없으면(없는 경로) 실패로 남고 강제 옵션은 쓰지 않는다
+ok, detail = bs.remove_worktree_candidate(wt("no-such-worktree"), "x")
+assert not ok, detail
+# 후보를 만든 뒤 그 worktree를 쓰는 세션이 새로 생기면 실행 직전 재판정이 삭제보다 먼저 막는다
+rows = {os.path.basename(r["path"]): r for r in bs.worktree_candidates([]) if r.get("path")}
+race = rows["race"]; assert race["removable"], race
+original, seen = bs.worktree_check_path, [0]
+def check(path, branch=None):
+    out = original(path, branch)
+    if os.path.realpath(path) == os.path.realpath(race["path"]):
+        seen[0] += 1
+        if seen[0] == 1:
+            live["cwds"] = [os.path.join(wt("race"), "src")]  # 첫 판정이 끝난 뒤에 세션이 생긴다
+    return out
+bs.worktree_check_path = check
+before = open(log).read().count("worktree rm")
+res = bs.bulk_cleanup({"worktree": True, "ids": [race["id"]]}, [])
+assert res["counts"]["worktrees"] == 0, res
+assert "세션" in res["results"][0]["worktree_kept"], res
+assert os.path.isdir(wt("race")) and open(log).read().count("worktree rm") == before, "nothing was removed"
+' "$ROOT/scripts/board/board-server.py" "$BWT_SAFE/repo" "$BWT_SAFE" "$BWS_LOG" || fail "worktree removal falls back to git when Orca fails, never forces, and a session that appears before execution keeps the worktree"
+pass "board worktree removal falls back to git and rechecks sessions before deleting"
 # worktree에서 도는 세션(#291 4차): 폴더 이름이 아니라 원래 저장소로 묶고, worktree 이름은 보조 정보. 폴더마다 git은 한 번만.
 BWT="$BAF_T/wt"; mkdir -p "$BWT/shopper"
 git -C "$BWT/shopper" init -q
@@ -1581,7 +1867,7 @@ assert other["items"][0]["title"] == "newbie" and other["items"][0]["summary"] =
 BGUIDE_DATA="$TEST_TMP/guide-data"; mkdir -p "$BGUIDE_DATA"
 BGUIDE_PORT="$(free_port)"
 bguide_sh() {
-  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BGUIDE_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+  env PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BGUIDE_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BGUIDE_PORT" BOARD_NO_BROWSER=1 \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
@@ -1757,7 +2043,7 @@ assert guide.state(root, launch=some, skills_dir=skills)["launch"] == some
 BRUN_DATA="$TEST_TMP/guide-run-data"; mkdir -p "$BRUN_DATA/harvest-auto" "$BRUN_T/faketmp"
 BRUN_PORT="$(free_port)"
 brun_sh() {
-  env PATH="$BRUN_C/bin:$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BRUN_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BRUN_C/projects" \
+  env PATH="$BRUN_C/bin:$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BRUN_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BRUN_C/projects" \
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" HARNESS_CLAUDE_JSON="$BRUN_T/none.json" BOARD_LAUNCH_TTL=0 BOARD_TEMP_ROOTS="$BRUN_T/faketmp" \
     BOARD_PORT="$BRUN_PORT" BOARD_NO_BROWSER=1 HM_CLAUDE_SKILLS_DIR="$BRUN_T/server-skills" BOARD_JIRA_URL= JIRA_BASE_URL= \
     bash "$ROOT/scripts/board/board.sh" "$@"
@@ -1836,7 +2122,9 @@ pass "harness board guide: run a feature card from the guide with the new-sessio
 # 버전 바뀜 안내(#439): 확인한 플러그인 버전은 사용자 데이터(board/version-seen.json)에 두고, 보드와 세션 시작 안내가 같은 값을 본다.
 # 바뀐 것은 플러그인과 함께 배포되는 CHANGELOG.md에서 읽는다 — 확인한 버전 초과 ~ 현재 버전 이하의 절을 합치고(건너뛴 버전 포함),
 # Unreleased는 빼고, 해야 할 일 → 새 기능 → 동작 변경 → 버그 수정 → 기타 순으로 묶는다. 버전은 숫자로 견준다(0.9.1 < 0.10.0).
-BVER_ROOT="$ROOT/tests/fixtures/changelog"
+BVER_ROOT="$TEST_TMP/changelog"
+mkdir -p "$BVER_ROOT"
+cp -R "$ROOT/tests/fixtures/changelog/." "$BVER_ROOT"
 BVER_DATA="$TEST_TMP/version-notes"; mkdir -p "$BVER_DATA"
 python3 -c '
 import json, os, sys
@@ -1850,12 +2138,25 @@ assert st["current"] == "0.10.0" and st["unseen"] is False and st["seen"] == "0.
 assert json.load(open(seen))["seen"] == "0.10.0"
 # 최근 업데이트(다시 펼쳐 보기): 확인한 범위를 모르면 현재 버전 절 하나.
 assert [g["key"] for g in st["recent"]["groups"]] == ["todo", "feature", "fix"], st["recent"]
+# 릴리스 이력(#457): 확인 여부와 무관하게 버전마다 날짜·묶음별 개수·묶음을 최신부터 준다(Unreleased 제외).
+# 기능 카드의 최근 표시 기준(recent_from): 최신 릴리스 날짜에서 7일 안의 릴리스, 그보다 적으면 최근 3개 중 가장 오래된 버전.
+assert [r["version"] for r in st["releases"]] == ["0.10.0", "0.9.1", "0.9.0"] and st["recent_from"] == "0.9.0", st
+r0 = st["releases"][0]
+assert r0["date"] == "2026-01-03" and r0["unseen"] is False, r0
+assert r0["counts"] == {"todo": 1, "feature": 1, "change": 0, "fix": 1, "other": 0}, r0["counts"]
+assert [g["key"] for g in r0["groups"]] == ["todo", "feature", "fix"], r0["groups"]
+old_todo = st["releases"][2]["groups"][0]["items"][0]  # 굵은 제목 없는 항목에 요약이 있으면 요약이 제목, 원문은 펼친 곳
+assert old_todo["title"] == "설정을 한 번 다시 저장하세요." and old_todo["summary"] is None and old_todo["body"].startswith("예전 설정 파일을 열어"), old_todo
+rel = lambda v, d: {"version": v, "date": d}
+assert changes._recent_from([rel("0.5.0", "2026-03-20"), rel("0.4.0", "2026-03-14"), rel("0.3.0", "2026-03-13"), rel("0.2.0", "2026-03-12"), rel("0.1.0", "2026-03-01")]) == "0.3.0"
+assert changes._recent_from([rel("0.5.0", "2026-03-20"), rel("0.4.0", "2026-01-01"), rel("0.3.0", "2025-12-01"), rel("0.2.0", None)]) == "0.3.0"  # 7일 안이 적으면 최근 3개
 assert st["recent"]["versions"] == ["0.10.0"] and st["recent"]["from"] == "0.9.1", st["recent"]
 # 뒤처짐: 건너뛴 버전까지 합친다.
 json.dump({"seen": "0.9.0"}, open(seen, "w"))
 st = changes.state(root, data)
 assert st["unseen"] is True and st["from"] == "0.9.0" and st["to"] == "0.10.0", st
 assert st["versions"] == ["0.10.0", "0.9.1"], st["versions"]
+assert [r["unseen"] for r in st["releases"]] == [True, True, False], st["releases"]  # 확인한 버전 뒤의 릴리스만 새 버전
 keys = [g["key"] for g in st["groups"]]
 assert keys == ["todo", "feature", "change", "fix"], keys
 labels = {g["key"]: g["label"] for g in st["groups"]}
@@ -1863,15 +2164,25 @@ assert labels == {"todo": "업데이트 후 해야 할 일", "feature": "새 기
 by = {g["key"]: g["items"] for g in st["groups"]}
 assert [i["title"] for i in by["feature"]] == ["새 화면이 생겼습니다"], by["feature"]
 bt = chr(96)  # 백틱(셸 따옴표 안에 그대로 쓰지 않는다)
-assert by["feature"][0]["body"] == bt + "board" + bt + " 화면에서 **바로** 봅니다. (#12)" and by["feature"][0]["version"] == "0.10.0", by["feature"]
+# 최근 이력은 유형·요약·원문·릴리스 이미지 참조를 각각 제공한다. 요약·이미지가 없는 옛 항목은 기존 본문을 유지한다.
+feature = by["feature"][0]
+assert feature["type"] == "feature" and feature["summary"] == "보드 안내에서 최근 릴리스 이력을 바로 봅니다.", feature
+assert feature["body"] == bt + "board" + bt + " 화면에서 **바로** 봅니다. (#12)" and feature["version"] == "0.10.0", feature
+assert [(i["alt"], i["path"]) for i in feature["images"]] == [("릴리스 이력 안내 화면", "assets/release-notes/history.png")], feature
+assert feature["title"] == "새 화면이 생겼습니다" and "요약:" not in feature["body"] and "![" not in feature["body"], feature  # 요약·이미지는 원문에서 떼어 낸다
+legacy = by["change"][0]
+assert legacy["title"] == "기본값이 바뀌었습니다" and legacy["body"] == "이제 꺼져 있습니다. (#11, #10)\n이어지는 줄도 같은 항목입니다." and legacy["version"] == "0.9.1", legacy
+assert legacy["type"] == "change" and legacy["summary"] is None and legacy["images"] == [], legacy
 # 굵은 제목이 없는 항목은 첫 문장이 제목이고(마크다운 기호 없이), 남는 것이 이슈 번호뿐이면 제목에 붙이고 펼칠 것이 없다.
-assert by["todo"] == [{"title": "기존 프로젝트는 /harness-init --sync --apply로 받습니다. (#12)", "body": "", "version": "0.10.0"}], by["todo"]
+todo = by["todo"][0]
+assert todo["title"] == "기존 프로젝트는 /harness-init --sync --apply로 받습니다. (#12)" and todo["body"] == "" and todo["version"] == "0.10.0", todo
+assert todo["type"] == "todo" and todo["summary"] is None and todo["images"] == [], todo
 assert [i["title"] for i in by["change"]] == ["기본값이 바뀌었습니다", "빨라졌습니다", "굵은 제목 없는 항목입니다."], by["change"]
 assert by["change"][2]["body"] == "굵은 제목 없는 항목입니다. 펼치면 첫 문장도 함께 보입니다. (#8)", by["change"][2]  # 잘린 제목도 펼치면 전부 보인다
 assert by["change"][0]["body"] == "이제 꺼져 있습니다. (#11, #10)\n이어지는 줄도 같은 항목입니다.", by["change"][0]
 assert st["counts"] == {"todo": 1, "total": 6}, st["counts"]
 assert "아직 나가지 않은 기능" not in json.dumps(st, ensure_ascii=False)
-assert "처음 기능" not in json.dumps(st, ensure_ascii=False)
+assert "처음 기능" not in json.dumps(st["groups"], ensure_ascii=False)
 # 확인: 본 버전(to)까지만 기록한다 — 페이지를 연 뒤 플러그인이 또 올랐으면 그 버전은 남는다.
 assert changes.confirm("0.11.0", root, data)["ok"] is False
 assert changes.confirm("garbage", root, data)["ok"] is False
@@ -1925,7 +2236,7 @@ assert items["skills/harvest"]["since"] == "0.16.0" and items["skills/board"]["s
 mkdir -p "$BVER_DATA/srv/board"; printf '{"seen":"0.9.0"}' >"$BVER_DATA/srv/board/version-seen.json"
 BVER_PORT="$(free_port)"
 bver_sh() {
-  env PATH="$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BVER_DATA/srv" HM_PLUGIN_ROOT="$BVER_ROOT" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+  env PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BVER_DATA/srv" HM_PLUGIN_ROOT="$BVER_ROOT" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BVER_PORT" BOARD_NO_BROWSER=1 \
     BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
 }
@@ -1940,6 +2251,18 @@ assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $B
 assert_eq "0.9.0" "$(jq -r '.seen' "$BVER_DATA/srv/board/version-seen.json")" "a refused confirm writes nothing"
 assert_eq "true" "$(curl -s -X POST -H "Origin: $BVER_BASE" -H 'Content-Type: application/json' -d "$BVER_BODY" "$BVER_BASE/guide/changes/seen" | jq -r '.ok')" "confirming records the version"
 assert_eq "false 0.10.0" "$(curl -s "$BVER_BASE/guide/changes?t=$BVER_TOKEN" | jq -r '"\(.unseen) \(.seen)"')" "after confirming nothing is unseen"
+# 릴리스 캡처는 토큰을 가진 보드에서만 플러그인 assets/release-notes 안의 실제 이미지 하나를 읽는다.
+# 경로 이탈·심볼릭 링크·이미지가 아닌 파일은 모두 거절한다.
+printf 'not an image' >"$BVER_ROOT/assets/release-notes/notes.txt"
+ln -s /etc/hosts "$BVER_ROOT/assets/release-notes/linked.png"
+printf '<svg xmlns="http://www.w3.org/2000/svg"/>' >"$BVER_ROOT/assets/release-notes/drawn.svg"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/history.png")" "release image endpoint checks a missing token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/history.png?t=wrong")" "release image endpoint checks a wrong token"
+assert_eq "200 image/png" "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$BVER_BASE/release-notes/history.png?t=$BVER_TOKEN")" "release image endpoint serves an allowed release image"
+assert_eq "404" "$(curl --path-as-is -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/../CHANGELOG.md?t=$BVER_TOKEN")" "release image endpoint rejects a path outside release notes"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/linked.png?t=$BVER_TOKEN")" "release image endpoint rejects a symbolic link"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/drawn.svg?t=$BVER_TOKEN")" "release image endpoint does not serve SVG (scripts would run on the board origin)"
+assert_eq "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BVER_BASE/release-notes/notes.txt?t=$BVER_TOKEN")" "release image endpoint rejects a non-image file"
 # 플러그인이 업데이트되면(서버를 띄운 플러그인 폴더가 다르면) open이 옛 서버를 끄고 이 버전으로 다시 띄운다.
 BVER_PID="$(jq -r '.pid' "$BVER_DATA/srv/board/server.json")"
 assert_eq "$ROOT/scripts/board" "$(jq -r '.root' "$BVER_DATA/srv/board/server.json")" "the server records the plugin folder it runs from"
@@ -1957,8 +2280,17 @@ assert_contains "$BVER_FN" "post('/guide/changes/seen', { to: cdata.to })" "conf
 assert_contains "$BVER_FN" "에서 바뀐 것" "the panel names the version range"
 assert_contains "$BVER_FN" "'확인했습니다'" "the panel ends with a confirm button"
 assert_contains "$BVER_FN" "btn('확인했습니다', 'ds-btn--primary')" "confirm is the panel's primary action"
-assert_contains "$BVER_FN" "최근 업데이트 v" "a confirmed update folds into a recent-update row"
+assert_contains "$BVER_FN" "'릴리스 이력'" "the guide lists releases one row per version"
+assert_contains "$BVER_FN" "'이전 릴리스 접기'" "older releases fold behind one row"
+assert_contains "$BVER_FN" "badge(['info', '새 버전'])" "releases after the seen version say they are new"
 assert_contains "$BVER_FN" "badge(['info', '새 기능'])" "cards added after the seen version carry one info badge"
+assert_contains "$BVER_FN" "vcmp(it.since, cdata.recent_from) >= 0" "cards from recent releases stay marked new after the update is confirmed"
+assert_contains "$BVER_FN" "el('span', 'ds-chip', '변경됨')" "cards a recent release talks about say they changed"
+assert_contains "$BVER_FN" "'b-change__summary'" "an expanded item shows the plain summary first"
+assert_contains "$BVER_FN" "'자세히'" "release history keeps the full changelog item behind a details control"
+assert_contains "$BVER_FN" "setAttribute('aria-expanded', String(on))" "release history details expose their expanded state"
+assert_contains "$BVER_FN" "setAttribute('aria-controls', did)" "release history details control their content by id"
+assert_contains "$BVER_FN" "release-notes/" "release history builds image requests from approved release-note paths"
 assert_contains "$BVER_FN" "const out = [...guideChanges(), guideIntro()" "the version notes come before the introduction"
 assert_contains "$BVER_TPL" "badge(['info', '새 소식'])" "the sidebar says there is news when nothing needs doing"
 assert_contains "$BVER_TPL" "'건, 업데이트 후 해야 할 일'" "the sidebar counts the update to-dos as human work"

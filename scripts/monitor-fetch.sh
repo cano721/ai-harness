@@ -183,17 +183,25 @@ sentry_count() {
 }
 
 # ── Datadog: 로그를 직접 묶는다. 같은 버그가 수정 커밋 뒤 줄 번호만 바뀌어도 같은 묶음이 되게 줄 번호를 지운다 ──
+# shellcheck disable=SC2016  # jq 변수($l·$h)를 문자 그대로 쓴다
 DD_GROUP='
   def frame: (.stack // "") | split("\n") | map(select(test("^\\s*(at |File \")")))
     | (first // "") | gsub("^\\s+"; "") | gsub(":[0-9]+(:[0-9]+)?\\)"; ")") | gsub(", line [0-9]+"; "");
   def norm: gsub("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"; "<uuid>")
-    | gsub("0x[0-9a-fA-F]+"; "<hex>") | gsub("[0-9]+"; "<n>") | .[0:200];
+    | gsub("0x[0-9a-fA-F]+"; "<hex>") | gsub("\\b[0-9a-fA-F]{16,}\\b"; "<id>") | gsub("[0-9]+"; "<n>") | .[0:200];
+  # 로그 패턴을 message에 통째로 싣는 앱(#460): 첫 줄에서 시각·레벨·"key:value ... - " 꼴 추적 값 앞머리를 걷어 낸다.
+  # 걷어 내고 남는 게 없으면 원래 줄을 쓴다.
+  def headline: ((. // "") | split("\n") | first // "") as $l
+    | ($l | sub("^\\s*\\[?[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9:.,]+(Z|[+-][0-9]{2}:?[0-9]{2})?\\]?\\s*"; "")
+        | sub("^\\[?(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL|SEVERE)\\]?\\s+"; "")
+        | sub("^([A-Za-z_][A-Za-z0-9_.]*:\\S*\\s+)+-\\s+"; "")) as $h
+    | if ($h | test("\\S")) then $h else $l end;
   [.data[]?.attributes | {
       service: (.service // ""), ts: (.timestamp // ""),
       kind: (.attributes.error.kind // ""), message: (.attributes.error.message // .message // ""),
       stack: (.attributes.error.stack // "")
     }
-    | . + {key: ([.service, .kind, (if (.|frame) != "" then (.|frame) else (.message|norm) end)] | join("|"))}]'
+    | . + {key: ([.service, .kind, (if (.|frame) != "" then (.|frame) else (.message|headline|norm) end)] | join("|"))}]'
 
 datadog_setup() {
   query="$(cfg query)"
@@ -227,7 +235,7 @@ hash16() { { shasum 2>/dev/null || sha1sum; } | cut -c1-16; }
 datadog_list() {
   datadog_search "$query" "now-${HOURS}h" | jq -c --argjson min "$MIN_EVENTS" "$DD_GROUP"'
     | group_by(.key)[] | select(length >= $min)
-    | {provider: "datadog", key: .[0].key, title: ((.[0].kind | if . == "" then "" else . + ": " end) + .[0].message | .[0:200]),
+    | {provider: "datadog", key: .[0].key, title: ((.[0].kind | if . == "" then "" else . + ": " end) + (.[0].message | headline) | .[0:200]),
        culprit: .[0].service, count: length, first_seen: (map(.ts) | min), last_seen: (map(.ts) | max), link: null,
        meta: {kind: .[0].kind, service: .[0].service}}' \
     | while IFS= read -r row; do

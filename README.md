@@ -216,7 +216,7 @@ codex plugin add ai-harness@ai-harness
 
 초기화 결과는 `.ai-harness/harness.json`에 저장됩니다. 이미 하네스가 있는 프로젝트에서 다시 실행하면 수준 변경 모드로 동작하며, 변경 diff만 적용합니다. 다운그레이드로 파일을 지우는 경우에는 대상 목록을 먼저 확인합니다.
 
-**여러 저장소가 한 폴더에 있을 때** — 독립 git 저장소 여럿을 담는 상위 폴더에서 `/harness-init`을 실행하면 workspace 모드로 동작합니다. 하위 저장소를 감지해 라우팅 전용 `AGENTS.md`와 `.ai-harness/workspace.json`만 만들고, 각 저장소의 하네스는 건드리지 않습니다. 하네스가 없는 저장소는 표기만 하며, 원하면 고른 저장소만 이어서 초기화할 수 있습니다. 상위 폴더 세션은 시작 디렉토리의 `.claude/`를 로드하므로 그대로는 하위 저장소의 슬래시 커맨드·페르소나·편집 가드를 쓰지 못합니다. 여러 저장소를 훑어보거나 교차 변경을 조율할 때 쓰고, 한 저장소 안의 구현은 그 저장소에서 세션을 열거나 `/cd <저장소>`(Claude Code 2.1.246+, 저장소 설정·hook까지 로드)로 옮기세요. `/add-dir <저장소>`는 커맨드·페르소나만 로드하고 편집 가드는 로드하지 않습니다. 대신 플러그인의 편집 가드가 저장소 밖에서 연 세션(서브에이전트 포함)의 하네스 저장소 코드 편집에 워크플로를 읽었는지와 무관하게 사용자 확인 창을 띄웁니다. 허용하면 그 편집만 진행되고, 거부하면 그 저장소에서 새 세션을 열어 인계하거나 `/cd <저장소>`로 옮기라고 안내합니다(하네스 문서·설정 편집은 통과, `HM_MEMBER_GUARD=block`이면 확인 없이 차단, `0`이면 끔). 상위 폴더 세션은 이슈 전환·브랜치 준비·인계 프롬프트 작성까지만 합니다. 모노레포(git 루트 하나)는 단일 프로젝트로 그냥 초기화하면 됩니다.
+**여러 저장소가 한 폴더에 있을 때** — 독립 git 저장소 여럿을 담는 상위 폴더에서 `/harness-init`을 실행하면 workspace 모드로 동작합니다. 하위 저장소를 감지해 라우팅 전용 `AGENTS.md`와 `.ai-harness/workspace.json`만 만들고, 각 저장소의 하네스는 건드리지 않습니다. 하네스가 없는 저장소는 표기만 하며, 원하면 고른 저장소만 이어서 초기화할 수 있습니다. 상위 폴더 세션은 시작 디렉토리의 `.claude/`를 로드하므로 그대로는 하위 저장소의 슬래시 커맨드·페르소나·편집 가드를 쓰지 못합니다. 여러 저장소를 훑어보거나 교차 변경을 조율할 때 쓰고, 한 저장소 안의 구현은 그 저장소에서 세션을 열거나 `/cd <저장소>`(Claude Code 2.1.246+, 저장소 설정·hook까지 로드)로 옮기세요. `/add-dir <저장소>`는 커맨드·페르소나만 로드하고 편집 가드는 로드하지 않습니다. 대신 플러그인의 편집 가드가 저장소 밖에서 연 세션(서브에이전트 포함)의 하네스 저장소 코드 편집에 워크플로를 읽었는지와 무관하게 사용자 확인 창을 띄웁니다. 허용하면 그 편집만 진행되고, 거부하면 그 저장소에서 새 세션을 열어 인계하거나 `/cd <저장소>`로 옮기라고 안내합니다(하네스 문서·설정 편집은 통과, `HM_MEMBER_GUARD=block`이면 확인 없이 차단, `0`이면 끔). 상위 폴더 세션은 이슈 전환·브랜치 준비·인계 프롬프트 작성까지만 합니다. 맡긴 세션의 진행(작업 중·입력 대기·정체·완료와 PR)을 상위 폴더 세션 안에서 보려면 선택 mod `/plugin install harness-delegations@ai-harness`를 설치합니다 — 프롬프트 위 한 줄에 상태가 뜨고 누르면 그 탭으로 가며, 끝나거나 묻거나 멈추면 상위 폴더 세션에 알려 보고하게 합니다([mods/harness-delegations](mods/harness-delegations/README.md)). 모노레포(git 루트 하나)는 단일 프로젝트로 그냥 초기화하면 됩니다.
 
 ### 3. 평소처럼 개발
 
@@ -300,7 +300,7 @@ stateDiagram-v2
 
 ### 그래프 러너: `workflow-driver.sh`
 
-러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
+러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
 
 ```text
 대화                                   러너 (.ai-harness/workflows/workflow-driver.sh --workflow feature)
@@ -313,6 +313,8 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 ```
 
 `HM_APPROVAL=auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
+
+노드 세션을 띄울 CLI는 `--runtime claude|codex` > `~/.ai-harness/config`의 저장소별 `HM_RUNTIME_REPOS`(`<project_id>=claude|codex`) > 전체 `HM_RUNTIME`(`claude|codex`) > 자동 선택 순으로 정합니다. 개인 설정은 터미널·스케줄러·보드·자동 실행 어디서 불러도 적용되고(부른 런타임보다 앞섭니다), 설정이 고른 CLI가 설치돼 있지 않으면 다른 런타임으로 바꾸지 않고 이유와 함께 멈춥니다(exit 2). 고른 런타임과 출처는 start 출력(`runtime <rt> (<출처>)`)과 run state의 `policy.runtime_source`(`flag`·`HM_RUNTIME_REPOS:<id>`·`HM_RUNTIME`·`default`)에 남고, resume은 start 때의 런타임을 그대로 씁니다. 보드 설정 › 작업에서도 바꿀 수 있습니다. 자동 선택은 러너를 부른 런타임(Claude Code면 claude, Codex면 codex)을 따르고, 판별되지 않으면(터미널에서 직접 실행했거나 한쪽이 다른 쪽 안에서 돌아 신호가 둘 다 있을 때) `harness.json` `integrations`에 적힌 것 중 설치된 CLI가 하나면 그것(나열 순서는 우선순위가 아닙니다), 아니면 설치된 CLI가 하나뿐일 때 그것을 씁니다. 그래도 정할 수 없으면 고르지 않고 `--runtime`을 요구하며 끝납니다(exit 2). Claude Code에서 부르면 기본이 claude이므로, 저장소나 실행 폴더가 Claude 설정 폴더 안이면 시작 전에 거부되고 `--runtime codex`를 안내합니다.
 
 | 워크플로 | 러너가 실행하는 흐름 |
 |---|---|
@@ -483,7 +485,7 @@ stateDiagram-v2
 5. **원인 보고** — 가설별 검증 결과·근거(`path:line`, 명령 출력, 로그)·원인·수정 방향 제안을 Markdown 보고로 씁니다.
 6. **넘김** — 수정이 필요하면 `/fix-bug <보고 파일>`로 넘깁니다. Jira 댓글 같은 외부 쓰기는 보고 옆에 초안 파일로만 만들고 사람이 올립니다.
 
-[원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너는 아직 이 워크플로를 실행하지 않으므로 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
+[원인 조사 그래프 계약](templates/investigate/references/investigate-graph.json)은 `.ai-harness/workflows/investigate-graph.json`으로 복사됩니다. 그래프 러너가 `start --workflow investigate --request "<증상>"`로 실행합니다. 코드를 고치지 않고 승인 대기 없이 끝나며, 보고와 이슈 댓글 초안을 `~/.ai-harness/investigations/<저장소>/`에 남기고 수정이 필요하면 `start --workflow bug-fix --investigation <보고>` 명령을 안내합니다. 러너 없이 실행하면 현재 세션이 그래프를 따릅니다. `/metrics`는 investigate도 하네스 워크플로 경유로 셉니다.
 
 <a id="design-polish"></a>
 
@@ -656,7 +658,7 @@ scripts/harvest-queue.sh mark-reviewed --project <프로젝트> \
 - **적용 범위**: `add`와 수정되지 않은(`unchanged`) 관리 생성물 `refresh`만. 승인 필요·보호 파일(AGENTS.md·docs·워크플로 본문)·삭제·계약 drift는 고치지 않고 PR 본문의 "사람 확인 필요" 표로 넘깁니다. workspace 루트(매니페스트·라우팅 AGENTS.md)는 대상이 아니며 알림만 합니다
 - **비용**: 적용할 관리 생성물이 없으면 에이전트를 띄우지 않고 `no-change`로 끝냅니다(LLM 비용 0). 저장소·플러그인 버전 조합당 1회, 하루 `HM_SYNC_AUTO_DAILY_MAX`회(기본 6, 자동 harvest와 별도), 실행 lock·시간 제한·실행당 예산·실패 3회 포기·사용량 한도 휴지는 자동 harvest와 공유합니다. 동시에는 하나만 돌고 sweep에서는 harvest가 먼저입니다. 실행이 끝나면 같은 worker가 sweep과 같은 순서(harvest batch → sync)로 다음 실행을 이어서 띄워 상한까지 처리합니다 — 사용량 한도로 끝났거나 한도 휴지 중이거나 사용자가 다시 작업 중(`HM_IDLE_MINUTES`)이면 멈추고 다음 sweep이 이어받습니다. 무인 실행이 도는 동안의 정기 실행은 LLM 단계를 건너뜁니다
 - **에이전트**: Claude Code만. Codex 샌드박스는 `.git`이 읽기 전용이라 브랜치·PR까지 갈 수 없어 `needs_claude`로 건너뜁니다
-- **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다(Bitbucket 자격증명은 셸 환경변수 → `~/.claude/settings.json`의 `env` 순으로 찾고, 끝내 없으면 `sync_pr_no_credentials`). 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
+- **옛 PR 정리**: 새 sync PR이 열리면 같은 저장소의 이전 버전 sync PR(자동 sync 기록에 남은 PR과, 세션에서 직접 연 것을 포함해 브랜치 이름이 `harness-sync-<버전>`으로 끝나는 열린 PR) 중 아무도 손대지 않은(코멘트·리뷰·승인 0) 열린 PR을 "새 버전 PR로 대체" 코멘트와 함께 닫습니다(`runs.jsonl`에 `event:"superseded"`). 사람이 리뷰 중인 옛 sync PR이 있으면 새 sync를 띄우지 않고 `sync_pr_in_review`로 건너뜁니다 — 같은 파일을 고치는 두 PR은 함께 병합할 수 없습니다. PR 상태를 읽지 못하면 `sync_pr_status_unknown`으로 기다립니다(Bitbucket 자격증명은 셸 환경변수 → `~/.claude/settings.json`의 `env` 순으로 찾고, 끝내 없으면 `sync_pr_no_credentials`). 같은 저장소의 PR만 닫고, 새 PR이 열려 있음을 확인한 뒤에만 닫습니다. 한계: "손댐"은 코멘트·리뷰·승인으로만 봅니다(사람이 브랜치에 push만 한 PR은 닫힐 수 있고, Bitbucket은 봇 코멘트를 구분하지 못해 사람 활동으로 셉니다)
 - **기록**: `~/.ai-harness/harvest-auto/runs.jsonl`에 `scope:"sync"`로 남고(`harvest-auto.sh runs`), 저장소별 마지막 시도는 `~/.ai-harness/sync-auto/<프로젝트>.json`(플러그인 버전·결과)입니다
 
 <a id="auto-merge"></a>
@@ -711,7 +713,7 @@ scripts/board/board.sh launcher install|remove|status   # macOS: 눌러서 여�
 
 사이드바는 **작업 현황**·레퍼런스·하네스 효과·하네스 설정·하네스 안내 다섯입니다. 작업 현황은 한 목록 화면이고, 위쪽 탭 `전체 | 작업 | 하네스 동작 | 자동 수정`(탭마다 사람 필요 수 배지)으로 출처를 고릅니다. 세 출처의 항목은 같은 상태 열 — 사람 필요(답·검토, 결과 확인) → 진행 중 → 대기(대기·막힘) → 완료·쉬는 중(접힘) — 에 놓이고, 전체 탭에서는 카드마다 출처 칩(작업·하네스·자동 수정)이 붙습니다.
 
-- **작업**: `claude agents --json --all`과 세션 대화 기록으로 상태(사람 필요·진행 중·결과 확인·쉬는 중)를 보입니다. 대화 보기, 입력 보내기(실행 중인 백그라운드 세션은 `claude attach`로 원래 세션에 넣고, 멈춘 세션은 같은 ID로 이어 가며, 질문·권한 창에서 기다리는 백그라운드 세션은 attach 명령을 안내, Orca 터미널의 대화형 세션은 그 터미널에 입력), 질문 답 버튼, 권한 요청 허용/거부, 끝난 세션 정리(worktree는 변경·원격에 없는 커밋·다른 살아 있는 세션이 없을 때만, 강제 삭제 없음, 대화 기록은 지우지 않음).
+- **작업**: `claude agents --json --all`과 세션 대화 기록으로 상태(사람 필요·진행 중·결과 확인·쉬는 중)를 보입니다. 대화 보기, 입력 보내기(실행 중인 백그라운드 세션은 `claude attach`로 원래 세션에 넣고, 멈춘 세션은 같은 ID로 이어 가며, 질문·권한 창에서 기다리는 백그라운드 세션은 attach 명령을 안내, Orca 터미널의 대화형 세션은 그 터미널에 입력), 질문 답 버튼, 권한 요청 허용/거부, 끝난 세션 정리(worktree는 변경·원격에 없는 커밋·다른 살아 있는 세션이 없을 때만, 강제 삭제 없음, 대화 기록은 지우지 않음). 세션이 Orca 탭으로 띄운 세션(`orca terminal create`·`agent launch`·`worktree create`)은 띄운 세션 아래 묶이고, 맡긴 세션이 PR까지 내고 탭을 닫아도 48시간 동안 끝난 항목으로 묶음 안에 남습니다(대화형 세션은 살아 있는 동안만 `claude agents` 목록에 있어 예전에는 사라졌습니다).
 - **하네스 동작**: 자동 harvest·sync 실행 결과, 대기 중인 harvest(지금 돌리기), 정기 실행, 워크플로 러너, 자동 적용 규칙. 검토가 필요한 PR이 호스트에서 병합·거절되면 완료로 내립니다.
 - **하네스 설정**: 개인 자동화 단계(`HM_DELIVERY_LEVEL`·`HM_DELIVERY_LEVEL_REPOS`), 자동 harvest·sync의 실행/병합(`HM_*_AUTO`·`HM_*_AUTO_MERGE`)과 하루 상한을 `~/.ai-harness/config`에 바로 씁니다(다른 줄·권한 보존, 원자적 쓰기). 저장소 사실(기준 브랜치·배포·스모크 명령)은 `harness.json`을 직접 고치지 않고 그 저장소에서 `/harness-init` 설정 변경 세션을 띄워 draft PR로 냅니다.
 - **하네스 효과**: 저장소마다 `/harness-impact`와 같은 `impact.sh compare`를 뒤에서 하루 한 번 돌려(`~/.ai-harness/board/impact/`, 한 번에 한 저장소) 맨 위에 저장소별 한 줄 상태(효과 확인·엇갈림·재발/악화·관찰 중·데이터 부족, 모르면 왜 모르는지)를 두고, 세션당 교정·사실 부족의 설치 후 주별 추세를 주 지표로 보입니다. 설치 전후 비교는 표본이 충분할 때만 숫자로 보이고, 아니면 "비교 불가 — 설치 전 기록 없음"처럼 이유를 씁니다(상태·추세·비교 가능성은 리포트와 같은 `scripts/impact-assess.jq` 값). 그 아래 가드 차단·재작업 비율과 개선 카드(판정 배지·무엇을 고쳤는지·기대효과·PR·반영 뒤 관찰 세션·같은 유형 재발, 규칙 제거는 따로)를 보입니다. 판정은 `/harness-impact`가 마지막으로 맞춘 매칭(`~/.ai-harness/reports/highlights/`)을 그날까지의 세션에 다시 쓴 값이라 리포트와 같고, 매칭이 없는 개선은 관찰 세션 5개 미만이면 판단 보류, 아니면 판정 안 함입니다. "다시 계산", 실패 이유(설치일 모름 등), "전체 리포트 열기"(`impact.sh render`)가 있습니다. 읽기 전용입니다.
@@ -895,6 +897,8 @@ HM_HARVEST_GLOBAL_DAYS=7         # 전역 지침 분석 주기(일). 0이면 끔
 HM_HARVEST_AUTO_BUDGET_USD=5     # 자동 실행 1회 비용 상한 (Claude)
 HM_APPROVAL=human               # 승인 게이트: human|auto (기본 human). auto는 모든 저장소에 적용 — 신뢰하는 저장소만 아래 줄로 켜기를 권장
 HM_APPROVAL_REPOS=               # 저장소별 승인 모드(<project_id>=human|auto, 쉼표 구분). 전체 설정보다 우선
+HM_RUNTIME=                      # 러너 노드 세션의 기본 CLI: claude|codex. 비면 자동 선택(부른 CLI > integrations > 설치된 유일한 CLI). 고른 CLI가 없으면 러너가 멈춤
+HM_RUNTIME_REPOS=                # 저장소별 런타임(<project_id>=claude|codex, 쉼표 구분, 예: "acme-api=codex"). 전체 설정보다 우선, --runtime이 가장 우선
 HM_DELIVERY_LEVEL=               # 워크플로 자동화 단계 pr|merge|deploy. 비어 있으면 PR까지
 HM_DELIVERY_LEVEL_REPOS=         # 저장소별 단계(<project_id>=<단계>, 쉼표 구분)
 HM_AUTOFIX_AUTO=0                # 1이면 monitor 설정이 있는 저장소의 운영 에러를 자동 수정(draft PR)·해결 검증
