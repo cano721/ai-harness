@@ -23,7 +23,7 @@ merge_run() { # scenario merge-settings-json [host/owner/repo] → 저장소 사
   git -C "$DRIVER_REPO" commit -qam "repository facts"
   merge_config "$2"
   cp "$MR_DATA/config" "$DRIVER_TMP/data/config"
-  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime codex --request "add feature"
+  DRIVER_DATA_OVERRIDE="$MR_DATA" HARNESS_METRICS_DIR="$MR_DATA" driver start --runtime "${MERGE_RUNTIME:-codex}" --request "add feature"
 }
 # 병합 조건은 호스트 보호 규칙이다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
 export FAKE_PROTECTION=classic
@@ -271,5 +271,21 @@ assert_contains "$(run_state '.worktree_cleanup.reason')" "merge is not confirme
 wtc_assert_kept "unmerged worktree"
 unset ORCA_CLI_COMMAND
 pass "merge cleanup judges worktree eligibility without removing anything"
+
+# claude 세션이 result 이벤트를 두 번 내도(#487) 노드 .out은 JSON 문서 하나여야 한다. 둘이면 post-merge target_ci status가 "passed\npassed"가 되어 사람에게 멈춘다.
+export FAKE_PROTECTION=classic
+FAKE_CLAUDE_RESULTS=2 MERGE_RUNTIME=claude merge_run pm_claude_dup_result "$MP_BASIC"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a claude session that emits the result event twice still finishes the run"
+assert_eq "passed" "$(run_state .post_merge.target_ci.status)" "post-merge target_ci status is one word, not one per result event"
+PM_RUN_DIR="$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")"
+assert_eq "1" "$(jq -n --slurpfile r "$PM_RUN_DIR/post-merge-ci.out" '$r | length')" "the post-merge CI node output is a single JSON document"
+PM_REMOTE_OUTS="$(find "$PM_RUN_DIR" -maxdepth 1 -name 'remote-ci-[0-9]*.out')"
+[[ -n "$PM_REMOTE_OUTS" ]] || fail "the remote CI node wrote no output"
+while IFS= read -r f; do
+  assert_eq "1" "$(jq -n --slurpfile r "$f" '$r | length')" "the remote CI node output is a single JSON document ($(basename "$f"))"
+done <<<"$PM_REMOTE_OUTS"
+assert_eq "remote_ci,merge,post_merge_verify" "$(run_state '[.history[] | select(.from | IN("remote_ci", "merge", "post_merge_verify")) | .from] | join(",")')" "the run goes through remote CI, merge and post-merge verification"
+unset FAKE_PROTECTION
+pass "claude result emitted twice: node outputs stay a single document and post-merge target_ci passes"
 
 finish_tests
