@@ -1,0 +1,5 @@
+{
+  "id": "tz",
+  "name": "Example 시간대 캘린더",
+  "fetch": ["bash", "fetch.sh"]
+}

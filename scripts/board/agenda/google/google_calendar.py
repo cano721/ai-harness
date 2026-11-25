@@ -4,6 +4,7 @@
   connect          데스크톱 OAuth(루프백 + PKCE S256). 동의 URL을 브라우저로 열고 127.0.0.1 빈 포트에서 한 번만 받는다.
                    로그인한 계정(기본 캘린더 주소)으로 토큰을 남긴다. 이미 있는 계정이면 토큰을 바꾼다 — 계정 추가도 이것이다.
   fetch            연결한 모든 계정의 selected 캘린더 일정(--since ~ --until, 기본 오늘 0시부터 7일)을 kind:event JSONL로 낸다.
+                   내 것(accessRole owner)이 아닌 캘린더 일정에는 shared:true를 단다(#567).
                    여러 계정이 같은 캘린더를 보면 한 번만 낸다. 한 계정이 실패해도 다른 계정 일정은 내고, 모두 실패해야 실패한다.
   accounts         연결한 계정 목록 JSONL {id, name, error?}. 마지막 수집에서 실패한 계정은 error에 사유를 단다.
   disconnect [id]  그 계정(없으면 모든 계정)의 로컬 토큰을 지우고 revoke를 최선 노력으로 한 번 부른다.
@@ -369,6 +370,8 @@ def fetch(args):
                             "detail": cal.get("summaryOverride") or cal.get("summary") or ""}
                     if isinstance(ev.get("htmlLink"), str):
                         item["url"] = ev["htmlLink"]
+                    if cal.get("accessRole") and cal["accessRole"] != "owner":  # 팀·공유 캘린더(#567) — 화면이 접어 둔다
+                        item["shared"] = True
                     rows.append(item)
         except Fail as e:
             failures.append(e)
