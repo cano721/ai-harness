@@ -36,6 +36,10 @@
 #   - 병합: 개인 자동화 단계가 merge·deploy면 원격 CI 뒤 merge 노드에서 이 스크립트가 PR 호스트(gh·Bitbucket API)에서 직접 읽은 상태로
 #     저장소 호스트 규칙(브랜치 보호의 필수 승인·필수 체크)과 충돌 없음·draft 아님·변경 요청 없음을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
+#     막힘이 기준 브랜치 충돌뿐이고 그래프에 sync_base가 있으면(feature·bug-fix) sync_base가 최신 origin/<base>를 일반 merge로 들이고
+#     (충돌은 에이전트 세션이 풀고 커밋·push는 이 스크립트가), 런의 검사를 다시 통과해야 일반 push한 뒤 remote_ci → merge를 다시 거친다.
+#     remote_ci 도중 바깥에서 들어온 base 병합 커밋 하나도 같은 경로로 받는다. 한도(limits.max_base_syncs)·풀지 못한 충돌·검사 실패와
+#     충돌이 아닌 막힘은 사람에게 넘긴다.
 #     병합 뒤 post_merge_verify가 단계에 맞는 검증(타깃 CI·배포 확인 명령·스모크 명령)을 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
 #     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
 #   - 자동화 단계: 병합 여부는 사용자 설정(~/.ai-harness/config)의 HM_DELIVERY_LEVEL(pr|merge|deploy, 저장소별은 HM_DELIVERY_LEVEL_REPOS)만
@@ -266,6 +270,7 @@ jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>
 MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
 MAX_IDENTICAL_FAILURES="$(jq -r '.limits.max_identical_repair_failures // 2' "$GRAPH")"
 MAX_BRIEF_REWRITES="$(jq -r '.limits.max_brief_rewrites // 2' "$GRAPH")"
+MAX_BASE_SYNCS="$(jq -r '.limits.max_base_syncs // 3' "$GRAPH")"
 
 finish() { # status exit_code message
   local message="$3"
@@ -294,7 +299,10 @@ fingerprint() {
 guard_head() {
   local head
   head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf 'none')"
-  [[ "$head" == "$(state '.head // .start_head')" ]] || finish invariant_violation 40 "HEAD moved during $1; only the driver's checkpoints and the publish node may commit"
+  [[ "$head" == "$(state '.head // .start_head')" ]] && return 0
+  # remote_ci 도중 들어온 base 병합 커밋 하나는 remote_ci가 sync_base로 넘긴다(#508).
+  [[ "$1" == remote_ci ]] && outside_base_merge "$head" && return 0
+  finish invariant_violation 40 "HEAD moved during $1; only the driver's checkpoints and the publish node may commit"
 }
 
 # 화면을 그리는 파일(템플릿·스타일·컴포넌트)이 바뀌었는지. Brief가 화면 변경을 놓쳐도 화면 검증을 건너뛰지 않게 하는 결정적 백스톱이다.
@@ -414,7 +422,7 @@ check_baseline() {
   fi
   # 리뷰를 지난 변경만 push·병합된다. 그 뒤에 받아들인 변경은 검증·리뷰를 다시 거치지 않으므로 새 실행으로 보낸다.
   case "$node" in
-    publish|remote_ci|merge|post_merge_verify)
+    publish|remote_ci|merge|sync_base|post_merge_verify)
       finish baseline_changed 20 "the repository changed after the runner stopped at $node, past review; the change would skip verify and review. Undo it and resume, or start a new run for it (see $report)" ;;
   esac
   if [[ -z "$ACCEPT_CHANGES" ]]; then
@@ -617,7 +625,9 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
   else
     before="$(fingerprint)"
     run_agent "$@"
+    # remote_ci 도중 깨끗한 작업 트리에 base 병합 커밋 하나만 더해진 것은 remote_ci가 sync_base로 넘긴다(#508).
     [[ "$(fingerprint)" == "$before" ]] \
+      || { [[ "$node" == remote_ci ]] && outside_base_merge "$(git -C "$REPO" rev-parse HEAD)"; } \
       || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -). Remove those changes before starting again"
   fi
   guard_head "$node"
@@ -1065,7 +1075,7 @@ $(brief_context)" "$PUBLISH_SCHEMA"
 
 # remote_ci: push한 커밋의 원격 CI가 끝날 때까지 본다. 로컬과 원격 환경(OS·DB·시각 정밀도)이 달라 로컬 통과가 원격 통과를 보장하지 않는다.
 remote_ci() {
-  local head branch pr_url label out status commit
+  local head branch pr_url label out status commit remote local_head moved
   if [[ "$(state '.publish.skipped // ""')" != "" ]]; then
     state_set '.remote_ci = {status: "not_required", summary: "nothing was pushed"}'
     go remote_ci remote_ci_passed_or_not_required
@@ -1088,8 +1098,21 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
     and (.summary | type) == "string" and (.failures | type) == "array"' "$out" >/dev/null 2>&1 \
     || finish incomplete 30 "remote CI output does not match the schema ($out); run resume to check again"
   # 읽기 노드지만 네트워크·Bash가 있다. push한 브랜치가 원격에서 움직였으면(push·force push) 멈춘다.
-  [[ "$(git -C "$REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1)" == "$head" ]] \
-    || finish invariant_violation 40 "remote branch $branch moved during remote_ci; the node may only read CI"
+  # 단 바깥에서 들어온 base 병합 커밋 하나(GitHub "Update branch" 등)는 sync_base가 검사를 다시 돌려 받는다(#508).
+  remote="$(git -C "$REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1)"
+  local_head="$(git -C "$REPO" rev-parse HEAD)"
+  moved="$local_head"
+  [[ "$remote" == "$head" ]] || moved="$remote"
+  if [[ "$moved" != "$head" ]]; then
+    if [[ "$local_head" == "$head" || "$local_head" == "$moved" ]] && outside_base_merge "$moved"; then
+      state_set '.base_sync_outside = $c' --arg c "$moved"
+      log "a base merge commit ${moved:0:12} arrived from outside during remote_ci; syncing it"
+      go remote_ci base_merged_outside
+      return
+    fi
+    [[ "$remote" == "$head" ]] || finish invariant_violation 40 "remote branch $branch moved during remote_ci; the node may only read CI"
+    finish invariant_violation 40 "HEAD moved during remote_ci; only the driver's checkpoints and the publish node may commit"
+  fi
   status="$(jq -r .status "$out")"
   commit="$(jq -r .commit "$out")"
   unverified_because() { # reason
@@ -1301,7 +1324,7 @@ branch_protection() { # pr-url base
 
 # merge: 저장소 호스트 규칙(기준 브랜치 보호)과 PR 상태를 호스트에서 직접 읽어 판정하고, 모두 맞을 때만 head를 고정해 저장소의 방식으로 병합한다.
 merge() {
-  local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection
+  local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection conflict=""
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
@@ -1382,13 +1405,22 @@ merge() {
         fi ;;
       no_conflict)
         case "$(jq -r .mergeable <<<"$facts")" in
-          false) blocked="$(jq -c '. + ["the pull request has merge conflicts with its base"]' <<<"$blocked")" ;;
+          false)
+            conflict=yes
+            blocked="$(jq -c '. + ["the pull request has merge conflicts with its base"]' <<<"$blocked")" ;;
           pending) unmet="$(jq -c '. + ["the host has not finished checking for conflicts"]' <<<"$unmet")" ;;
         esac ;;
       not_draft)
         [[ "$(jq -r .draft <<<"$facts")" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
     esac
   done <<<"$(jq -r '.require[]?' <<<"$mp")"
+  # 충돌이 유일한 막힘이고 그래프에 sync_base가 있으면 base를 따라잡는다. 다른 막힘이 같이 있으면 어차피 사람이 풀어야 한다(#508).
+  if [[ -n "$conflict" && "$(jq length <<<"$blocked")" == 1 ]] && has_edge merge base_conflict; then
+    state_set '.findings = $b | .merge = {blocked: $b, facts: $f, base_conflict: true}' --argjson b "$blocked" --argjson f "$facts"
+    log "the pull request conflicts with its base; syncing the base"
+    go merge base_conflict
+    return
+  fi
   if [[ "$blocked" != "[]" ]]; then
     state_set '.findings = $b | .merge = {blocked: $b, facts: $f}' --argjson b "$blocked" --argjson f "$facts"
     go merge merge_blocked
@@ -1418,6 +1450,140 @@ merge() {
   state_set 'if .merge.merged_epoch == null then .merge.merged_epoch = ($n | tonumber) else . end' --arg n "$(date -u +%s)"
   log "merged $url as $(jq -r .merge_commit <<<"$facts") ($method)"
   go merge merged
+}
+
+# base 동기화(#508): 원격 base와 작업 브랜치 ref를 가져온다. 작업 브랜치 ref는 바깥에서 push된 커밋을 보려고 함께 가져온다.
+sync_fetch() { # base branch
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "+refs/heads/$1:refs/remotes/origin/$1" "+refs/heads/$2:refs/remotes/origin/$2" </dev/null
+}
+
+# commit이 리뷰·push한 head 위에 바깥에서 얹은 base 병합 커밋 하나인가: 부모가 둘이고, 첫 부모가 .head, 둘째 부모가 origin/<base>의 조상이며,
+# 작업 트리가 깨끗하다. 그 밖의 이동(일반 커밋·force push·여러 커밋)은 받지 않는다.
+outside_base_merge() { # commit
+  local c="$1" base branch second
+  base="$(state '.policy.merge.base // ""')"
+  branch="$(state '.publish.branch // ""')"
+  [[ -n "$c" && -n "$base" && -n "$branch" && "$(state '.policy.git')" == merge ]] || return 1
+  has_edge remote_ci base_merged_outside || return 1
+  sync_fetch "$base" "$branch" >/dev/null 2>&1 || return 1
+  [[ "$(git -C "$REPO" rev-parse -q --verify "$c^1" 2>/dev/null || true)" == "$(state .head)" ]] || return 1
+  second="$(git -C "$REPO" rev-parse -q --verify "$c^2" 2>/dev/null)" || return 1
+  if git -C "$REPO" rev-parse -q --verify "$c^3" >/dev/null 2>&1; then return 1; fi
+  git -C "$REPO" merge-base --is-ancestor "$second" "origin/$base" 2>/dev/null || return 1
+  [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]]
+}
+
+base_sync_fail() { # reason [findings-json]
+  state_set '.findings = ($f // [$r]) | .base_sync_failed = $r | del(.base_sync_outside)' --arg r "$1" --argjson f "${2:-null}"
+  log "base sync failed: $1"
+  go sync_base "$(edge_when sync_base user_decision)"
+}
+
+# sync_base: merge가 base 충돌로만 막혔거나 remote_ci 도중 바깥 base 병합 커밋이 들어왔을 때 최신 origin/<base>를 일반 merge로 들이고,
+# 런의 검사를 다시 통과해야 일반 push(fast-forward)한다. 충돌은 에이전트 세션이 풀고(commit·push 없이) 커밋·검사·push는 이 스크립트가 한다.
+# rebase·force push·base push는 하지 않는다. 한도(limits.max_base_syncs)·풀지 못한 충돌·검사 실패는 사람에게 넘긴다.
+sync_base() {
+  local base branch from n label log target files f markers="" unresolved status conflicts="[]" resolved_by=driver rc=0 to
+  base="$(state '.policy.merge.base // ""')"
+  branch="$(state '.publish.branch // ""')"
+  n="$(state '(.base_syncs // []) | length')"
+  label="sync-base-$((n + 1))"
+  log="$RUN/$label.log"
+  [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
+    || finish invariant_violation 40 "write node 'sync_base' reached without approval of the current brief"
+  if ((n >= MAX_BASE_SYNCS)); then
+    base_sync_fail "base sync limit ($MAX_BASE_SYNCS) reached: the pull request still cannot merge after syncing origin/${base:-base} $n time(s); merge the base by hand or start a new run"
+    return
+  fi
+  if [[ -z "$base" || -z "$branch" ]]; then
+    base_sync_fail "no base branch (merge_policy.base) or pushed branch to sync"
+    return
+  fi
+  # 앞 시도가 끊겨 남은 병합은 버리고 처음부터 한다.
+  if git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    git -C "$REPO" merge --abort >/dev/null 2>&1 || true
+  fi
+  from="$(state .head)"
+  if ! sync_fetch "$base" "$branch" >"$log" 2>&1; then
+    base_sync_fail "cannot fetch origin/$base: $(tail -c 300 "$log")"
+    return
+  fi
+  target="$(state '.base_sync_outside // ""')"
+  if [[ -n "$target" ]]; then
+    resolved_by=outside
+    if ! git -C "$REPO" merge --ff-only "$target" >>"$log" 2>&1; then
+      base_sync_fail "cannot fast-forward to the base merge $target pushed from outside: $(tail -c 300 "$log")"
+      return
+    fi
+  else
+    if git -C "$REPO" merge-base --is-ancestor "origin/$base" HEAD 2>/dev/null; then
+      base_sync_fail "the branch already contains origin/$base, but the host still reports a conflict with it"
+      return
+    fi
+    GIT_EDITOR=true git -C "$REPO" merge --no-edit "origin/$base" >>"$log" 2>&1 || rc=$?
+    if ((rc != 0)); then
+      files="$(git -C "$REPO" diff --name-only --diff-filter=U 2>/dev/null || true)"
+      if [[ -z "$files" ]]; then
+        git -C "$REPO" merge --abort >/dev/null 2>&1 || true
+        base_sync_fail "git merge origin/$base failed: $(tail -c 300 "$log")"
+        return
+      fi
+      conflicts="$(jq -Rnc '[inputs | select(length > 0)]' <<<"$files")"
+      resolved_by=agent
+      log "merging origin/$base conflicts in $(jq -r 'join(", ")' <<<"$conflicts"); an agent session resolves them"
+      run_node sync_base "$label" "$CONTEXT
+
+You are the sync_base node. The pull request for branch $branch cannot merge because it conflicts with its base $base. The driver ran git merge origin/$base on the reviewed commit $from and the merge stopped with conflicts in these files:
+$(jq -r '.[] | "- " + .' <<<"$conflicts")
+Resolve only these conflicts, without asking anyone anything:
+- Keep the intent of both sides: the approved change below and what origin/$base changed. Read both sides (git log --merge, git diff) before you edit.
+- Remove every conflict marker and git add each resolved file. Change nothing else beyond what the resolution needs.
+- Do not commit, abort the merge, rebase, push, or move HEAD or any ref: the driver commits the merge, runs the checks again, and pushes.
+- If a conflict needs a product decision or you cannot keep both intents, leave it, set status to unresolved, and list its files in unresolved.
+Return only JSON matching the schema.
+
+$(brief_context)" "$SYNC_BASE_SCHEMA"
+      status="$(jq -r '.status // ""' "$RUN/$label.out" 2>/dev/null || true)"
+      unresolved="$(git -C "$REPO" diff --name-only --diff-filter=U 2>/dev/null || true)"
+      while IFS= read -r f; do
+        if [[ -n "$f" && -f "$REPO/$f" ]] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$REPO/$f"; then
+          markers+="${markers:+, }$f"
+        fi
+      done <<<"$files"
+      if [[ "$status" != resolved || -n "$unresolved" || -n "$markers" ]]; then
+        git -C "$REPO" merge --abort >>"$log" 2>&1 || true
+        base_sync_fail "the conflicts with origin/$base were not resolved in $(jq -r --arg u "$unresolved" --arg m "$markers" --slurpfile o "$RUN/$label.out" '
+            ([$u | split("\n")[] | select(length > 0)] + ($m | split(", ") | map(select(length > 0))) + ($o[0].unresolved // [])) as $left
+            | (if ($left | length) > 0 then $left else . end | unique | join(", ")) + (if ($o[0].summary // "") != "" then " (" + $o[0].summary + ")" else "" end)' <<<"$conflicts"); the merge was aborted and nothing was pushed"
+        return
+      fi
+      if ! { git -C "$REPO" add -A && GIT_EDITOR=true git -C "$REPO" commit -q --no-edit; } >>"$log" 2>&1; then
+        git -C "$REPO" merge --abort >>"$log" 2>&1 || true
+        base_sync_fail "committing the merge with origin/$base failed: $(tail -c 300 "$log")"
+        return
+      fi
+    fi
+  fi
+  to="$(git -C "$REPO" rev-parse HEAD)"
+  # 러너 자신이 HEAD를 옮겼다. 검사가 실패해 멈춰도 기준점이 지금 저장소를 가리키게 한다.
+  state_set '.head = $h' --arg h "$to"
+  save_baseline
+  if ! run_checks "$label" "$(state '(.checks // []) + (.final_checks // [])')"; then
+    base_sync_fail "checks failed after merging origin/$base (the merge commit ${to:0:12} stays local and was not pushed): $(failed_check_commands "$RUN/$label.checks.json" | jq -r 'join("; ")')" \
+      "$(check_findings "$label")"
+    return
+  fi
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" push -q origin "HEAD:refs/heads/$branch" </dev/null >>"$log" 2>&1; then
+    base_sync_fail "pushing the merge with origin/$base to $branch failed (a normal push; nothing was forced): $(tail -c 300 "$log")"
+    return
+  fi
+  state_set '.publish.pushed_at = $t | .findings = [] | del(.remote_ci, .merge, .base_sync_outside, .base_sync_failed)
+      | .base_syncs = ((.base_syncs // []) + [{from: $f, to: $h, base_commit: $b, conflicts: $c, resolved_by: $r, at: $t}])' \
+    --arg t "$(now_utc)" --arg f "$from" --arg h "$to" --arg b "$(git -C "$REPO" rev-parse "origin/$base")" \
+    --argjson c "$conflicts" --arg r "$resolved_by"
+  save_baseline
+  log "synced origin/$base into $branch as ${to:0:12} ($resolved_by); checks passed; pushed"
+  go sync_base base_synced
 }
 
 repo_has_ci_config() {
@@ -1600,6 +1766,7 @@ SCOPE_SCHEMA="$RUN/scope-schema.json"
 REPRODUCE_SCHEMA="$RUN/reproduce-schema.json"
 PUBLISH_SCHEMA="$RUN/publish-schema.json"
 REMOTE_CI_SCHEMA="$RUN/remote-ci-schema.json"
+SYNC_BASE_SCHEMA="$RUN/sync-base-schema.json"
 UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 MEASURE_SCHEMA="$RUN/measure-schema.json"
 DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
@@ -2222,7 +2389,7 @@ execute() {
           elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide$(state 'if .repair_stall then " (" + .repair_stall + ")" else "" end')$(state 'if .release.blocked then " (release " + (.release.tag // "") + ": " + .release.blocked + ")" else "" end')$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .repair_stall then " (" + .repair_stall + ")" else "" end')$(state 'if .release.blocked then " (release " + (.release.tag // "") + ": " + .release.blocked + ")" else "" end')$(state 'if .base_sync_failed then " (base sync: " + .base_sync_failed + ")" else "" end')$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
       esac
     fi
     # review가 수리 동의를 기다리던 노드면 그 노드를 다시 실행하지 않고 동의만 확인한다.
@@ -2862,6 +3029,9 @@ $(brief_context)"
         fi
         merge
         ;;
+      sync_base)
+        sync_base
+        ;;
       post_merge_verify)
         post_merge_verify
         ;;
@@ -3405,6 +3575,11 @@ EOF
 cat >"$PUBLISH_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","branch","pr_url"],
  "properties":{"summary":{"type":"string"},"branch":{"type":"string"},"pr_url":{"type":"string"}}}
+EOF
+cat >"$SYNC_BASE_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["status","summary","unresolved"],
+ "properties":{"status":{"type":"string","enum":["resolved","unresolved"]},"summary":{"type":"string"},
+  "unresolved":{"type":"array","items":{"type":"string"}}}}
 EOF
 cat >"$REMOTE_CI_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","commit","summary","failures"],

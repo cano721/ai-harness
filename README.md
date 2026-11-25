@@ -274,7 +274,10 @@ stateDiagram-v2
     publish --> user_decision: push·PR 실패
     publish --> merge: 개인 단계 merge·deploy, 원격 CI 통과 뒤
     merge --> post_merge_verify: 병합 조건 충족·병합
-    merge --> user_decision: 변경 요청·충돌·head 이동
+    merge --> sync_base: 기준 브랜치 충돌만으로 막힘
+    merge --> user_decision: 변경 요청·head 이동 등
+    sync_base --> remote_ci: base 병합·검사 재통과·일반 push
+    sync_base --> user_decision: 한도·풀지 못한 충돌·검사 실패
     post_merge_verify --> done: 병합 후 검증 통과
     post_merge_verify --> user_decision: 병합 후 검증 실패 (되돌리지 않음)
 ```
@@ -368,7 +371,8 @@ deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --fe
 | 단계 | 동작 |
 |---|---|
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. 조건은 **저장소 호스트 규칙**입니다: 기준 브랜치 보호에 필수 승인이 있으면 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 그 수만큼(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), 필수 체크가 있으면 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님). 보호가 없으면 승인 없이 병합합니다. 충돌 없음·draft 아님·리뷰어의 변경 요청 없음은 항상 봅니다 |
-| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 기준 브랜치 충돌 (`sync_base`) | 막힘이 기준 브랜치와의 **충돌뿐**이면 사람에게 넘기지 않고 `sync_base` 노드로 갑니다(feature·bug-fix 그래프). 러너가 최신 `origin/<base>`를 일반 merge로 들이고, 충돌이 나면 에이전트 세션이 양쪽 의도를 살려 충돌만 풉니다(커밋·push는 하지 않음). 러너가 충돌 표식이 남지 않았는지 확인해 merge 커밋을 만들고, 런의 검사(`checks`·`final_checks`)를 다시 통과해야 일반 push(fast-forward)한 뒤 `remote_ci` → `merge`를 다시 거칩니다 — 새 head의 승인·CI를 다시 요구합니다. 원격 CI를 기다리는 동안 바깥에서 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 같은 경로로 받습니다. 반복 한도(그래프 `limits.max_base_syncs`, 기본 3)를 넘기거나, 풀지 못한 충돌(병합은 abort)이나 검사 실패(push하지 않음)가 남으면 `user_decision`입니다. 충돌과 다른 막힘이 같이 있으면 동기화하지 않고 사람에게 넘깁니다. rebase·force push·기준 브랜치 push는 하지 않습니다 |
 | 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) 저장소의 방식으로 병합합니다 — GitHub는 저장소가 허용한 방식 중 squash → merge → rebase 순(허용 방식을 읽지 못하면 사람에게), Bitbucket은 저장소 기본 전략. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신합니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |

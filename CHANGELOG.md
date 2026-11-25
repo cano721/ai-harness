@@ -7,13 +7,21 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
-
 ### 새 기능
 
-- 그래프 러너에 `stop [--run <id>]` 추가: 그 런이 기록한 프로세스만 TERM→KILL로 멈추고 `stopped`(노드·시각·사유)로 남겨 `resume`으로 잇는다. `status`가 밖에서 끊긴 런을 stale로 보인다. 러너·세션을 패턴 kill로 멈추지 말 것 (#495)
+- **러너 런을 `stop`으로 멈추고 `resume`으로 잇습니다** — `workflow-driver.sh stop [--run <id>] [--reason "<사유>"]`가 그 런이 기록한 러너 프로세스와 노드 자식 프로세스 그룹만 TERM→5초→KILL로 멈추고 `stopped`(노드·시각·사유)로 남깁니다. 같은 머신의 다른 런이나 러너를 부른 세션은 건드리지 않습니다. 러너가 밖에서 끊기면 `status`가 stale로 보이고, 러너만 죽고 노드 그룹이 남아 있으면 `resume`을 거부하고 `stop`이 그 그룹을 정리합니다. 터미널이 닫혀도(HUP) 노드 그룹을 정리합니다. 어댑터와 위임 지침은 러너·세션을 `pkill`·`killall` 같은 패턴 kill로 멈추지 말라고 안내합니다. (#495)
+  요약: 돌고 있는 러너 런은 `workflow-driver.sh stop --run <id>`로 멈추고 `resume`으로 이어 가세요. 패턴 kill은 다른 런까지 끕니다.
 
 - **보드에 '내 일정' 화면이 생겼습니다** — 보드에 작업 현황과 별개인 '내 일정' 화면이 생겼습니다. 구글 캘린더 일정과, 스킬이 제공하는 어댑터의 항목, 보드나 `board.sh todo`로 직접 적은 할 일을 한곳에서 봅니다. 구글 캘린더는 직접 만든 OAuth 클라이언트로 연결하며 `/ai-harness:setup`이 만드는 법을 안내합니다. 읽는 것과 저장 위치는 `docs/privacy.md`에 있습니다. (#492)
   요약: 보드의 '내 일정'에서 오늘·이번 주 일정, 답해야 할 것, 직접 적은 할 일을 한 화면에 봅니다.
+
+### 동작 변경
+
+- **병합이 기준 브랜치 충돌로 막혀도 사람에게 넘기지 않고 따라잡습니다** — 병합까지 자동화한 런(`HM_DELIVERY_LEVEL=merge`·`deploy`)에서 PR이 기준 브랜치와 충돌해 병합이 막히면, 새 `sync_base` 단계가 최신 기준 브랜치를 일반 merge로 들이고 충돌을 풉니다(충돌 해소만 에이전트가, 커밋·push는 러너가). 검사를 다시 통과해야 일반 push하고 원격 CI와 병합을 다시 거칩니다 — rebase·force push는 하지 않습니다. 3회(`limits.max_base_syncs`)를 넘기거나 풀지 못한 충돌·검사 실패가 남으면 그때 사람에게 넘깁니다. 원격 CI를 기다리는 동안 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 멈추지 않고 같은 경로로 잇습니다. 충돌이 아닌 막힘과, 충돌과 다른 막힘이 같이 있을 때는 지금처럼 사람에게 넘깁니다. feature·bug-fix 그래프에 적용되며, 기존 프로젝트는 `/ai-harness:harness-init --sync`로 그래프를 받습니다. (#508)
+  요약: 병합 단계 런이 기준 브랜치 충돌 한 번으로 멈추지 않고, 기준 브랜치를 병합·재검사·push한 뒤 병합까지 잇습니다.
+
+## v0.92.0 (2026-11-25)
+### 새 기능
 
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
   요약: `/release` 또는 `workflow-driver.sh start --workflow release --version <x.y.z>`로 릴리스 PR부터 태그·노트 발행까지 러너에 맡깁니다. 어디까지 갈지는 개인 배포 단계가 정하고, `release_policy`가 없으면 `/ai-harness:harness-init --sync`로 먼저 감지합니다.
@@ -33,6 +41,8 @@
 
 - 러너 리뷰 점검은 `/ai-harness:harness-init --sync`로 `workflow-driver.sh`를 받으면 켜집니다. 이미 만든 프로젝트의 `code-conventions.md`·reviewer 페르소나는 사람 소유 파일이라 sync로 바뀌지 않습니다 — 데이터 조회가 있는 프로젝트는 `skills/harness-init/SKILL.md`의 "대량 조회 메모리" 절과 체크 항목을 직접 옮겨 넣으세요. (#499)
   요약: `/ai-harness:harness-init --sync`로 러너를 받으면 리뷰 점검이 켜집니다. 기존 프로젝트의 컨벤션 문서와 reviewer에는 규칙을 직접 옮겨야 합니다.
+- 자동 승인 Brief의 완료 조건 대응표 인계(`brief_coverage_incomplete`)와 deliver 중 `revise`로 Brief 복귀는 그래프 엣지가 있어야 동작합니다. 기존 프로젝트는 `/ai-harness:harness-init --sync` 전까지 사람 승인 대기로 멈추고, deliver 중 `revise`는 exit 2로 거부됩니다. (#501)
+  요약: `/ai-harness:harness-init --sync`로 워크플로 그래프를 받아야 Brief 완료 조건 점검의 인계와 구현 중 계획 되돌리기가 켜집니다.
 
 ## v0.91.0 (2026-11-24)
 ### 새 기능
