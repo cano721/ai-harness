@@ -1,0 +1,7 @@
+{
+  "id": "inbox",
+  "name": "Example 요청함",
+  "fetch": ["bash", "fetch.sh"],
+  "done": ["bash", "act.sh", "done"],
+  "reopen": ["bash", "act.sh", "reopen"]
+}
