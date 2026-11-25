@@ -7,6 +7,13 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+### 새 기능
+
+- `HM_TARGET_CI=notify`(저장소별 `HM_TARGET_CI_REPOS`): 병합 뒤 병합 커밋 CI를 기다리지 않고, 실패하면 progress·상태·데스크톱 알림으로 알린다 (#557)
+
+### 동작 변경
+
+- 러너: 원격 CI가 있는 저장소에서는 final_checks(전체 회귀)를 로컬에서 돌리지 않고 원격 CI를 최종 관문으로 삼는다. 원격 CI가 없거나 push하지 않는 저장소는 지금처럼 로컬에서 돌린다 (#557)
 
 ## v0.95.0 (2026-11-25)
 ### 새 기능
