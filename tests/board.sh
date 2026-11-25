@@ -616,6 +616,86 @@ assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "board.sh launcher install" 
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh launcher" "board skill documents the launcher"
 pass "harness board launcher app"
 
+# 보드 열기는 창 앱 우선: macOS에 창 앱(kind=window)이 있으면 브라우저 대신 open -a로 그 창을 띄우거나 앞으로 가져온다.
+# 창 앱이 없거나 applet이거나 macOS가 아니면 지금처럼 브라우저로 연다. 진짜 open·xdg-open 대신 받은 인자를 남기는 가짜를 쓴다.
+BO_BIN="$BOARD_T/open-bin"
+BO_LOG="$BOARD_T/open.log"
+BO_XLOG="$BOARD_T/xdg-open.log"
+mkdir -p "$BO_BIN"
+cat >"$BO_BIN/open" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$BO_LOG"
+[[ "\${1:-}" == -a && "\${BO_STUB_FAIL_APP:-0}" == 1 ]] && exit 1
+exit 0
+EOF
+cat >"$BO_BIN/xdg-open" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$BO_XLOG"
+exit 0
+EOF
+chmod +x "$BO_BIN/open" "$BO_BIN/xdg-open"
+# board_sh는 BOARD_NO_BROWSER=1을 강제하므로 열기 분기를 보려면 따로 부른다.
+board_open_sh() {
+  env -u BOARD_NO_BROWSER PATH="$BO_BIN:$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BOARD_DATA" \
+    HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT="$BOARD_PORT_T" \
+    BOARD_LAUNCHER_DIR="$BL_APPS" BOARD_LAUNCHER_PLATFORM="${BO_PLATFORM:-Darwin}" BOARD_NO_BROWSER="${BO_NO_BROWSER:-0}" \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+bo_reset() { board_sh stop >/dev/null; : >"$BO_LOG"; : >"$BO_XLOG"; }
+# 창 앱을 PATH에 가짜 open이 앞선 상태로 설치한다 — shim이 install 때 PATH를 담으므로 G에서도 가짜가 먼저 잡힌다.
+BL_PATH="$BO_BIN:$BL_PATH" launcher_sh install >/dev/null
+assert_eq "window" "$(launcher_sh status | jq -r '.kind')" "open: window app installed"
+# A1: 서버가 꺼진 상태 → 서버를 띄운 뒤 창 앱만 연다.
+bo_reset
+BO_OUT="$(board_open_sh open)" || fail "open with the window app exits 0"
+assert_eq "1" "$(printf '%s\n' "$BO_OUT" | wc -l | tr -d ' ')" "open prints one JSON line"
+assert_eq "false" "$(jq -r '.reused' <<<"$BO_OUT")" "open starts a new server"
+assert_eq "-a $BL_APP" "$(<"$BO_LOG")" "open launches the window app instead of the browser"
+assert_eq "" "$(<"$BO_XLOG")" "open with the window app does not use xdg-open"
+# A2: 서버가 떠 있으면 재사용하고 다시 open -a — 떠 있는 창 앱은 reopen으로 앞으로 온다.
+: >"$BO_LOG"
+BO_OUT="$(board_open_sh open)" || fail "reopen with the window app exits 0"
+assert_eq "true" "$(jq -r '.reused' <<<"$BO_OUT")" "open reuses the running server"
+assert_eq "-a $BL_APP" "$(<"$BO_LOG")" "open brings the running window app forward"
+# E1·E2: --no-browser·BOARD_NO_BROWSER=1이면 창 앱도 브라우저도 열지 않는다.
+bo_reset
+BO_OUT="$(board_open_sh open --no-browser)" || fail "open --no-browser exits 0"
+assert_contains "$(jq -r '.url' <<<"$BO_OUT")" "http://" "open --no-browser still prints the url"
+assert_eq "|" "$(<"$BO_LOG")|$(<"$BO_XLOG")" "open --no-browser opens nothing"
+bo_reset
+BO_NO_BROWSER=1 board_open_sh open >/dev/null || fail "BOARD_NO_BROWSER=1 open exits 0"
+assert_eq "|" "$(<"$BO_LOG")|$(<"$BO_XLOG")" "BOARD_NO_BROWSER=1 opens nothing"
+# D: macOS가 아니면 창 앱이 있어도 xdg-open으로 브라우저를 연다.
+bo_reset
+BO_OUT="$(BO_PLATFORM=Linux board_open_sh open)" || fail "open on Linux exits 0"
+assert_eq "$(jq -r '.url' <<<"$BO_OUT")" "$(<"$BO_XLOG")" "open outside macOS uses xdg-open with the url"
+assert_eq "" "$(<"$BO_LOG")" "open outside macOS does not call open"
+# F: open -a가 실패하면 브라우저로 되돌아간다.
+bo_reset
+BO_OUT="$(BO_STUB_FAIL_APP=1 board_open_sh open)" || fail "open exits 0 when the window app fails"
+assert_eq "-a $BL_APP|$(jq -r '.url' <<<"$BO_OUT")" "$(paste -sd'|' "$BO_LOG")" "a failed window app falls back to the browser"
+# G: 창 앱이 부르는 shim open --app은 board.sh open --no-browser라 앱을 다시 띄우지 않는다(재귀 없음).
+bo_reset
+BO_OUT="$(env -i HOME="$HOME" PATH=/usr/bin:/bin HM_PLUGIN_SEARCH_HOME="$BOARD_T/no-plugins" HARNESS_METRICS_DIR="$BOARD_DATA" \
+  BOARD_PORT="$BOARD_PORT_T" BOARD_LAUNCHER_DIR="$BL_APPS" BOARD_LAUNCHER_PLATFORM=Darwin /bin/bash "$BL_SHIM" open --app)" \
+  || fail "the shim opens for the window app"
+assert_contains "$(printf '%s\n' "$BO_OUT" | tail -n 1 | jq -r '.url')" "http://" "the shim returns the board url to the window app"
+assert_eq "|" "$(<"$BO_LOG")|$(<"$BO_XLOG")" "the shim for the window app does not reopen the app or a browser"
+# C: applet 런처는 지금처럼 브라우저로 연다.
+launcher_sh remove >/dev/null
+BL_SWIFTC_OVERRIDE="$BOARD_T/no-swiftc" launcher_sh install >/dev/null 2>&1
+assert_eq "applet" "$(launcher_sh status | jq -r '.kind')" "open: applet installed"
+bo_reset
+BO_OUT="$(board_open_sh open)" || fail "open with the applet exits 0"
+assert_eq "$(jq -r '.url' <<<"$BO_OUT")" "$(<"$BO_LOG")" "open with the applet opens the url in the browser"
+# B: 창 앱이 없으면 지금처럼 브라우저로 연다.
+launcher_sh remove >/dev/null
+bo_reset
+BO_OUT="$(board_open_sh open)" || fail "open without a launcher exits 0"
+assert_eq "$(jq -r '.url' <<<"$BO_OUT")" "$(<"$BO_LOG")" "open without the window app opens the url in the browser"
+bo_reset
+pass "harness board open prefers the window app"
+
 # 보드 자동 종료(#355): 런처로 켜고 잊어도 서버가 남지 않게 BOARD_IDLE_EXIT분 동안 보는 사람이 없으면 스스로 꺼진다.
 # 붙잡은 권한 요청이 있으면 끄지 않는다(끄면 그 터미널 세션이 답을 잃는다). 0이면 끄지 않는다.
 board_alive() { [[ "$(board_sh status | jq -r '.running')" == true ]]; }

@@ -15,10 +15,10 @@ description: 하네스 대시보드(Harness Board)를 필요할 때 여는 로�
 $ROOT/scripts/board/board.sh open
 ```
 
-- 이미 떠 있으면(`~/.ai-harness/board/server.json`의 pid가 살아 있는 보드 서버) 그 주소를 다시 연다(`reused: true`). 없으면 백그라운드로 띄우고 브라우저를 연다.
+- 이미 떠 있으면(`~/.ai-harness/board/server.json`의 pid가 살아 있는 보드 서버) 그 주소를 다시 연다(`reused: true`). 없으면 백그라운드로 띄운다. 그다음 macOS 창 앱(`launcher status`의 `kind=window`)이 있으면 그 창으로, 없으면 브라우저로 연다.
 - 출력 한 줄 JSON의 `url`(토큰 포함)을 사용자에게 그대로 보여 준다. 브라우저가 열리지 않는 환경이면 그 주소를 직접 열라고 안내한다. 이 주소의 토큰은 보드를 조작할 수 있는 열쇠이므로 PR·이슈·공유 문서에는 적지 않는다.
 - 실패하면(종료 코드 1) stderr 이유를 그대로 전한다. `BOARD_PORT`를 정하지 않으면 8765가 막혀 있어도 다음 빈 포트(최대 8774)로 띄운다 — 실제 주소는 출력 JSON의 `url`을 쓴다. 10개가 모두 막혔거나 정한 `BOARD_PORT`가 막혔을 때만 멈춘다 — 그때 다른 포트로 띄울지 사용자에게 묻고, 원하면 `BOARD_PORT=<포트> $ROOT/scripts/board/board.sh open`. 이전 버전 서버가 주소 없이 떠 있다는 메시지면 `stop` 뒤 다시 열지 묻는다.
-- 브라우저를 열지 않고 주소만 원하면 `--no-browser`.
+- 창 앱도 브라우저도 열지 않고 주소만 원하면 `--no-browser`.
 
 ## 끄기 (`stop`) · 상태 (`status`)
 
@@ -37,7 +37,7 @@ $ROOT/scripts/board/board.sh status
 
 ## 런처 앱 (macOS, 선택)
 
-`/ai-harness:board` 없이 눌러서 여는 앱 `~/Applications/Harness Board.app`은 `/ai-harness:setup`의 자동화 옵션(8-3)으로 사용자가 고를 때만 만든다. 이 스킬은 몰래 만들지 않는다. 상태 확인·지우기는 `$ROOT/scripts/board/board.sh launcher status|remove`. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고, 그 스크립트가 열 때마다 가장 새 플러그인 설치본의 `board.sh open`을 부른다 — 플러그인을 업데이트해도 다시 설치할 필요가 없다. 열지 못하면 이유를 대화상자로 보이고 `~/.ai-harness/board/launcher.log`에 남긴다(보드 주소·토큰은 남기지 않는다). 앱은 보드를 자기 창(WKWebView) 하나에 띄우고 보드가 떠 있는 동안 Dock에 남는다 — Dock 아이콘을 다시 누르면 새 탭 없이 그 창을 앞으로 가져오고, 창을 닫거나 앱을 종료하면 보드 서버도 끄며, 보드가 자동 종료나 `board.sh stop`으로 꺼지면 몇 초 안에 따라 끝난다. 설치 때 `swiftc`가 없으면 누를 때마다 브라우저로 여는 AppleScript 앱이 대신 설치된다(`launcher status`의 `kind`: `window`/`applet`).
+`/ai-harness:board` 없이 눌러서 여는 앱 `~/Applications/Harness Board.app`은 `/ai-harness:setup`의 자동화 옵션(8-3)으로 사용자가 고를 때만 만든다. 이 스킬은 몰래 만들지 않는다. 상태 확인·지우기는 `$ROOT/scripts/board/board.sh launcher status|remove`. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고, 그 스크립트가 열 때마다 가장 새 플러그인 설치본의 `board.sh open`을 부른다 — 플러그인을 업데이트해도 다시 설치할 필요가 없다. 열지 못하면 이유를 대화상자로 보이고 `~/.ai-harness/board/launcher.log`에 남긴다(보드 주소·토큰은 남기지 않는다). 앱은 보드를 자기 창(WKWebView) 하나에 띄우고 보드가 떠 있는 동안 Dock에 남는다 — Dock 아이콘을 다시 누르면 새 탭 없이 그 창을 앞으로 가져오고, 창을 닫거나 앱을 종료하면 보드 서버도 끄며, 보드가 자동 종료나 `board.sh stop`으로 꺼지면 몇 초 안에 따라 끝난다. 설치 때 `swiftc`가 없으면 누를 때마다 브라우저로 여는 AppleScript 앱이 대신 설치된다(`launcher status`의 `kind`: `window`/`applet`). `kind=window`가 설치돼 있으면 `/ai-harness:board`·`board.sh open`도 그 창으로 연다(떠 있으면 앞으로).
 
 ## 보드가 하는 일과 하지 않는 일
 

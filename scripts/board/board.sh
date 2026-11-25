@@ -31,7 +31,7 @@ LAUNCHER_SRC="$BOARD_DIR/bin/launcher.applescript"
 
 usage() {
   cat >&2 <<'EOF'
-usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, 없으면 띄운 뒤 주소를 연다
+usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, 없으면 띄운 뒤 연다 — macOS 창 앱(Harness Board.app, kind=window)이 있으면 그 창, 없으면 브라우저. --no-browser면 열지 않는다
        board.sh stop                    서버를 끈다(상주 세션 호스트는 그대로)
        board.sh host-stop               상주 세션 호스트를 끈다(대화 기록 유지, 다음 호스트가 같은 id로 이어 쥠)
        board.sh status                  떠 있는지와 주소
@@ -78,9 +78,17 @@ port_holder() { # 사람이 읽을 점유 프로세스 설명(알 수 없으면 
   lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $1 " (pid " $2 ")"; exit }'
 }
 
-open_browser() {
+# 보드를 사용자 앞에 연다. macOS에 창 앱(kind=window)이 있으면 브라우저 탭 대신 그 창을 쓴다 — 이미 떠 있으면
+# open -a가 reopen 이벤트를 보내 기존 창이 앞으로 오고, 꺼져 있으면 새로 뜬 앱이 shim `open --app`으로 같은 서버를 다시 쓴다.
+# shim `--app`은 board.sh open --no-browser를 부르므로 여기로 되돌아오지 않는다(재귀 없음).
+# 창 앱이 없거나 applet이거나 macOS가 아니거나 open -a가 실패하면 브라우저로 연다. 플랫폼은 install과 같은 테스트 손잡이로 본다.
+open_board() { # url
   [[ "${BOARD_NO_BROWSER:-0}" == 1 ]] && return 0
-  if [[ "$(uname -s)" == Darwin ]] && command -v open >/dev/null 2>&1; then
+  local platform="${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}"
+  if [[ "$platform" == Darwin ]] && command -v open >/dev/null 2>&1; then
+    if [[ "$(launcher_kind)" == window ]] && open -a "$LAUNCHER_APP" >/dev/null 2>&1; then
+      return 0
+    fi
     open "$1" >/dev/null 2>&1 || true
   elif command -v xdg-open >/dev/null 2>&1; then
     xdg-open "$1" >/dev/null 2>&1 || true
@@ -117,7 +125,7 @@ command_open() {
   if pid="$(board_pid)"; then
     url="$(conf_field url)"
     [[ -n "$url" ]] || die "보드 서버(pid $pid)가 떠 있지만 주소를 남기지 않는 이전 버전입니다. board.sh stop 뒤 다시 여세요."
-    ((browser)) && open_browser "$url"
+    ((browser)) && open_board "$url"
     running_json "$pid" true
     return 0
   fi
@@ -161,7 +169,7 @@ subprocess.Popen([sys.executable, "-B", sys.argv[1], "--no-open"], stdin=subproc
     conf_port="$(conf_field port)"
     if pid="$(board_pid)" && [[ "$conf_port" =~ ^[0-9]+$ ]] && ((conf_port >= PORT && conf_port <= PORT_LAST)) && [[ -n "$(conf_field url)" ]]; then
       url="$(conf_field url)"
-      ((browser)) && open_browser "$url"
+      ((browser)) && open_board "$url"
       running_json "$pid" false
       return 0
     fi
@@ -458,12 +466,16 @@ PLIST
 
 launcher_ours() { grep -q "<string>$LAUNCHER_ID</string>" "$LAUNCHER_APP/Contents/Info.plist" 2>/dev/null; }
 
+# 설치된 런처 종류: window(Swift 창 앱), applet(AppleScript 애플릿), 빈 값(없음). launcher status와 보드 열기가 같은 판정을 쓴다.
+launcher_kind() {
+  if ! launcher_ours || [[ ! -x "$LAUNCHER_SHIM" ]]; then return 0; fi
+  if [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]]; then echo window; else echo applet; fi
+}
+
 launcher_json() { # action
-  local installed=false kind=""
-  launcher_ours && [[ -x "$LAUNCHER_SHIM" ]] && installed=true
-  if [[ "$installed" == true ]]; then
-    if [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]]; then kind=window; else kind=applet; fi
-  fi
+  local installed=false kind
+  kind="$(launcher_kind)"
+  [[ -n "$kind" ]] && installed=true
   jq -cn --arg a "$1" --argjson i "$installed" --arg app "$LAUNCHER_APP" --arg shim "$LAUNCHER_SHIM" --arg k "$kind" \
     '{installed: $i, app: $app, shim: $shim} + (if $k == "" then {} else {kind: $k} end) + (if $a == "" then {} else {action: $a} end)'
 }
