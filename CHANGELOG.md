@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.94.0 (2026-11-25)
 ### 새 기능
 
 - **디자인 규칙 문서 `## 원칙`에 `### 서비스`, 문구 규칙 원본은 `ux-writing.md` 하나** — `design-system-builder`가 서비스의 사용자와 상황·핵심 일·성격('A보다 B' 대비 쌍)·피할 것·근거를 `### 서비스`에 기록하고, `design-screen`·`landing-page`·`design-polish`·`design-audit`가 이를 근거로 읽어 다시 묻지 않습니다. `ux-writing.md`가 없으면 builder가 "문구 규칙도 같이 만들까요?"라고 묻고 `ux-writing-builder` 절차로 만들며, 디자인 `## 문구`는 `원본: <경로>`를 가리키는 형태가 됩니다. 문구 규칙 문서 감지는 `ux-writing-audit`의 규칙 하나를 저장소 기준으로 씁니다. (#514 #516)
