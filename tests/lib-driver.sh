@@ -8,6 +8,14 @@ DRIVER="$ROOT/templates/workflow-driver/workflow-driver.sh"
 DRIVER_SHIM="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
 DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
+# macOS 기본 /usr/bin/git은 xcrun으로 실제 git을 띄우는 껍데기라 호출마다 프로세스가 하나 더 든다. 러너처럼 테스트 셸의
+# 저장소 준비도 실제 git을 부른다(#569). 함수라서 러너·가짜 CLI에는 넘어가지 않는다.
+if [[ "${OSTYPE:-}" == darwin* && "$(command -v git)" == /usr/bin/git ]]; then
+  TEST_GIT_REAL="$(xcrun -f git 2>/dev/null || true)"
+  if [[ -n "$TEST_GIT_REAL" && "$TEST_GIT_REAL" != /usr/bin/git && -x "$TEST_GIT_REAL" ]]; then
+    git() { "$TEST_GIT_REAL" "$@"; }
+  fi
+fi
 driver() { # args... → DRIVER_RC, DRIVER_OUT
   DRIVER_RC=0
   DRIVER_DATA="${DRIVER_DATA_OVERRIDE:-$DRIVER_TMP/data}"
@@ -24,10 +32,10 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   : >"$DRIVER_TMP/data/config"
   mkdir -p "$DRIVER_REPO"
   git -C "$DRIVER_REPO" init -q
-  git -C "$DRIVER_REPO" config user.email t@t
-  git -C "$DRIVER_REPO" config user.name t
+  # git config user.email·user.name과 같은 내용을 프로세스 없이 쓴다.
+  printf '[user]\n\temail = t@t\n\tname = t\n' >>"$DRIVER_REPO/.git/config"
   git -C "$DRIVER_REPO" commit -q --allow-empty -m init
-  DRIVER_REPO="$(git -C "$DRIVER_REPO" rev-parse --show-toplevel)"
+  DRIVER_REPO="$(cd "$DRIVER_REPO" && pwd -P)"
   if [[ -n "${NEW_REPO_LINKED:-}" ]]; then # 병합 뒤 worktree 판정 테스트용: 작업 저장소를 링크된 worktree로 둔다(원본은 DRIVER_MAIN)
     DRIVER_MAIN="$DRIVER_REPO"
     git -C "$DRIVER_MAIN" worktree add -q -b "wt-$1" "$DRIVER_TMP/wt-$1"
@@ -54,7 +62,12 @@ with_policy() { # git_policy 개인 승인 모드 → 저장소 manifest와 개�
   jq -n --arg g "$1" --arg id "$(basename "$DRIVER_REPO")" '{project_id:$id, level:"standard", git_policy:$g}' >"$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" add .ai-harness && git -C "$DRIVER_REPO" commit -q -m manifest
   git init -q --bare "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
-  git -C "$DRIVER_REPO" remote add origin "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+  # git remote add origin과 같은 내용을 프로세스 없이 쓴다. 링크된 worktree(.git이 파일)는 공용 설정이라 git에 맡긴다.
+  if [[ -d "$DRIVER_REPO/.git" ]]; then
+    printf '[remote "origin"]\n\turl = %s\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n' "$DRIVER_TMP/remote-$FAKE_SCENARIO.git" >>"$DRIVER_REPO/.git/config"
+  else
+    git -C "$DRIVER_REPO" remote add origin "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"
+  fi
   if [[ -n "$2" ]]; then printf 'HM_APPROVAL=%s\n' "$2" >"$DRIVER_TMP/data/config"; else : >"$DRIVER_TMP/data/config"; fi
 }
 as_host_repo() { # host/owner/repo → origin을 그 호스트 주소로 두고 실제 push는 bare 저장소로 보낸다(insteadOf)
