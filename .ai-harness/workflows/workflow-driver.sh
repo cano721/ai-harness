@@ -2251,7 +2251,7 @@ release_plan_prompt() { # latest-version
   fi
   printf '%s\n\n%s\n%s\n%s\n\n%s' "$CONTEXT" "You are the plan node of the release graph. Do not edit any file.
 The release ships origin/$(state .policy.release.source) into $(state .policy.release.base) as the tag $(state .policy.release.tag_prefix)<version>. The latest tag on origin is $(if [[ -n "$1" ]]; then printf '%s%s' "$(state .policy.release.tag_prefix)" "$1"; else printf 'none'; fi). $fixed
-The driver itself cuts $(state .policy.release.branch_prefix)<version> from origin/$(state .policy.release.source), runs the prepare command ($(state '.policy.release.prepare_cmd // "" | if . == "" then "none" else . end')), commits it, and opens the release pull request; the personal delivery level is $(state .release.stage), so the run $(case "$(state .release.stage)" in pr) printf 'stops at the pull request' ;; merge) printf 'merges it with a merge commit, tags it with notes, runs the record commands, and reports the main to develop fast-forward' ;; *) printf 'merges it with a merge commit, tags it with notes, checks the deployment, runs the record commands, and reports the main to develop fast-forward' ;; esac).
+The driver itself cuts $(state .policy.release.branch_prefix)<version> from origin/$(state .policy.release.source), runs the prepare command ($(state '.policy.release.prepare_cmd // "" | if . == "" then "none" else . end')), commits it, and opens the release pull request; the personal delivery level is $(state .release.stage), so the run $(case "$(state .release.stage)" in (pr) printf 'stops at the pull request' ;; (merge) printf 'merges it with a merge commit, tags it with notes, runs the record commands, and reports the main to develop fast-forward' ;; (*) printf 'merges it with a merge commit, tags it with notes, checks the deployment, runs the record commands, and reports the main to develop fast-forward' ;; esac).
 Write the release plan in brief as Markdown: the version and why, what the release contains (the CHANGELOG Unreleased entries or the commits since the latest tag), and anything a person should check before approving.
 Put the exact shell commands that must pass on the release branch after the prepare command in checks and final_checks, as the project's release document says. checks: the fast commands; final_checks: the broad ones the project runs once before a release. The driver runs both after the release commit and again whenever the release branch catches up with the source branch. All commands run from the repository root with bash -c." "$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOT'
 approval is auto: no person reads this plan before the release branch is cut, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one and record it in decisions as {question, choice, rationale}.
@@ -2316,7 +2316,8 @@ release_prepare() {
   fi
   go prepare prepared
 }
-# source가 움직였다: push 전에는 rebase, push 뒤에는 merge(force push를 피한다)로 따라잡고 prepare_cmd·checks를 다시 돈다.
+# source가 움직였다: push 전에는 rebase, push 뒤에는 merge(force push를 피한다)로 따라잡고 checks만 다시 돈다.
+# prepare_cmd는 다시 돌리지 않는다: 재실행에 안전하다는 보장이 없고 릴리스 커밋이 이미 확정했다.
 release_revalidate() {
   local src branch from method files rc=0 n
   release_require_approval revalidate
@@ -2338,13 +2339,13 @@ release_revalidate() {
   fi
   state_set '.head = $h' --arg h "$(git -C "$REPO" rev-parse HEAD)"
   n="$(state '.release.revalidated // [] | length')"
-  if ! release_prepare_commit "revalidate-$n" || ! release_checks "revalidate-$n"; then
+  if ! release_checks "revalidate-$n"; then
     release_fail revalidate catch_up_failed "after catching up with origin/$src: $(<"$RUN/release-step.why")"
     return
   fi
   state_set '.release.revalidated = ((.release.revalidated // []) + [{from: $f, to: $h, method: $m, source_commit: $s, at: $t}])' \
     --arg f "$from" --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg m "$method" --arg s "$(git -C "$REPO" rev-parse "origin/$src")" --arg t "$(now_utc)"
-  log "caught up with origin/$src by $method; checks passed again"
+  log "caught up with origin/$src by $method; prepare_cmd was not run again; checks passed again"
   go revalidate caught_up
 }
 # 태그·릴리스 발행. 노트가 비거나 노트 명령이 실패하면 아무것도 만들지 않는다. 같은 태그가 있으면 다시 만들지 않는다.

@@ -11,6 +11,10 @@
 
 - 러너 deliver·repair 노드가 넓은 회귀는 러너 checks에 맡기고 바꾼 영역 테스트만 포그라운드로 돌리게 하고, `workflow-driver.sh status`가 정규화된 `git_policy`(`pr-only`)와 개인 단계(`delivery`)를 따로 보이게 한다 (#534)
 
+### 버그 수정
+
+- 러너 release가 릴리스 도중 develop이 움직여 따라잡을(push 전 rebase, push 뒤 merge) 때 `prepare_cmd`를 다시 돌리지 않고 checks만 다시 돌립니다. 같은 버전 절이 이미 있어 `scripts/release-prep.sh`가 `changelog already carries`로 실패하고 릴리스가 사람 판단에서 멈추던 문제가 없어집니다. 따라잡을 때 새로 들어온 Unreleased 항목은 다음 릴리스에 들어갑니다. 또 macOS 기본 bash 3.2에서 release plan 프롬프트의 단계 문장이 `syntax error`로 깨지던 문제를 고쳤습니다. (#554)
+
 ## v0.95.0 (2026-11-25)
 ### 새 기능
 
