@@ -49,17 +49,26 @@ chore/bump-ci-shellcheck
 
 버전 메타데이터는 네 곳(`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `release.json`, `CHANGELOG.md`)에 있다. PR마다 이걸 올리면 동시에 열린 PR이 **반드시** 네 곳에서 충돌한다.
 
-그래서 기능 PR은 `CHANGELOG.md`의 `## Unreleased` 절에만 항목을 남긴다. 버전 파일은 릴리스 커밋 하나만 건드린다.
+그래서 기능 PR은 `CHANGELOG.md`를 건드리지 않고, PR마다 조각 파일 하나 `changelog.d/<이슈>-<요약>.md`에만 항목을 남긴다. 모든 PR이 같은 `## Unreleased` 줄에 쓰면 동시에 열린 PR끼리 맨 위에서 충돌하기 때문이다. 버전 파일과 CHANGELOG 버전 절은 릴리스 커밋 하나만 건드린다.
 
 ```markdown
-## Unreleased
-
+<!-- changelog.d/38-error-filter.md -->
 ### 버그 수정
 
-- **무엇이 어떻게 달라지는가** — 왜 그게 문제였는지 한 줄.
+- **무엇이 어떻게 달라지는가** — 왜 그게 문제였는지 한 줄. (#38)
+  요약: 사용자가 처음 읽는 한두 문장.
 ```
 
-절의 소제목은 `### 새 기능` / `### 버그 수정` / `### 동작 변경` / `### 업데이트 후 해야 할 일`을 쓴다. 사용자가 읽고 판단할 수 있게 쓰고, 내부 리팩터링만 있는 PR은 항목을 남기지 않아도 된다.
+조각 규칙(`scripts/release-prep.sh --check`가 검사한다):
+
+- 파일명은 `<이슈번호>-<요약>.md`이고 요약은 영문 소문자·숫자·하이픈(`^[0-9]+-[a-z0-9][a-z0-9-]*\.md$`). 규칙에 맞지 않는 `.md`는 실패다.
+- 소제목은 `### 새 기능` / `### 버그 수정` / `### 동작 변경` / `### 업데이트 후 해야 할 일` 넷만 쓴다. 주석·빈 줄을 빼고 첫 줄은 소제목이어야 하고, 소제목마다 항목이 하나 이상 있어야 한다. 한 파일에 소제목을 여러 개 둘 수 있다.
+- 항목은 `- `로 시작한다. 항목에 딸린 줄(`요약:`, 이미지, 이어지는 문단, 코드 울타리)은 공백이나 탭으로 들여쓴다. 빈 줄과 HTML 주석(`<!-- … -->`)은 써도 되고 주석은 합칠 때 버린다.
+- `## ` 머리, 소제목 없는 항목, 들여쓰지 않은 자유 문단은 형식 오류다.
+
+릴리스 때 `scripts/release-prep.sh <version>`이 조각들과 `## Unreleased`에 남은 항목(옛 방식으로 쓴 PR)을 합쳐 버전 절을 만들고 조각 파일을 지운다. 소제목은 `업데이트 후 해야 할 일` → `새 기능` → `동작 변경` → `버그 수정` 순으로 한 번씩 나오고, 소제목 안에서는 `## Unreleased` 항목이 먼저, 그 뒤에 조각이 파일명 앞 이슈 번호의 숫자 오름차순(같으면 파일명순)으로 온다. 한 파일 안의 항목 순서는 그대로다. 결과 CHANGELOG 형식은 이전과 같다.
+
+사용자가 읽고 판단할 수 있게 쓰고, 내부 리팩터링만 있는 PR은 조각을 남기지 않아도 된다.
 
 항목 바로 아래에 들여쓴 `요약:` 줄을 둔다. 보드 하네스 안내는 항목을 펼치면 이 요약을 먼저 보이고 원문은 "자세히"에 접는다. 요약은 사용자가 처음 읽는 설명이다 — 제목을 되풀이하지 말고, 한두 문장으로 "무엇이 생겼고 어떻게 쓰는지" 또는 "무엇을 해야 하는지"를 말한다. 배경·실측·구현은 원문에 남긴다. 화면을 봐야 이해되는 항목은 `요약:` 아래에 `![무엇을 보여 주는지](assets/release-notes/<버전>-<이름>.png)`를 들여써 두고, 이미지는 `.ai-harness/docs/ui.md`의 격리 보드 절차로 찍어 플러그인 루트 `assets/release-notes/`에 넣는다(png·jpg·webp·gif, SVG는 받지 않는다).
 
@@ -79,7 +88,7 @@ PR 본문에는 `Closes #38`을 쓴다. 이슈가 자동으로 닫히고, 릴리
 
 ## 릴리스
 
-`develop`의 `## Unreleased`가 릴리스할 만큼 쌓였을 때 한다.
+`develop`에 쌓인 `changelog.d/` 조각(과 `## Unreleased`에 남은 항목)이 릴리스할 만큼 쌓였을 때 한다.
 
 ### 러너로 릴리스 (1순위)
 
@@ -99,7 +108,7 @@ bash .ai-harness/workflows/workflow-driver.sh start --workflow release --version
 
 ```bash
 git switch develop && git pull
-scripts/release-prep.sh <version>          # Unreleased 절 확정(+ 빈 Unreleased 머리) + 네 곳 동기화
+scripts/release-prep.sh <version>          # 조각 + Unreleased 절을 합쳐 확정(+ 빈 Unreleased 머리), 조각 삭제, 네 곳 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>" && git push
 gh pr create --base main --head develop --title "chore: release v<version>" --milestone "v<version>"
@@ -164,4 +173,4 @@ shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh     # 미설치 시 npx
 
 CI의 shellcheck는 **info 레벨도 실패로 다룬다**. 로컬 버전이 CI보다 관대할 수 있으니 경고가 나오면 구조를 바꿔 없앤다 — `# shellcheck disable`은 근거를 주석으로 남길 수 있을 때만 쓴다.
 
-`scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지만 본다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다. `## Unreleased` 머리가 없으면 실패하지 않고 stderr에 경고만 한다.
+`scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지와 `changelog.d/` 조각 형식을 본다. 형식이 틀린 조각은 `changelog.d/<file>: <이유>`로 알리고 실패한다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다. `## Unreleased` 머리가 없으면 실패하지 않고 stderr에 경고만 한다.

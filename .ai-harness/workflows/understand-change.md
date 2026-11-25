@@ -6,7 +6,7 @@
 
 - `.ai-harness/docs/architecture.md` — 변경이 어느 층(hook·script·Skill·템플릿·생성물)인지
 - 변경이 템플릿이면 `skills/harness-init/SKILL.md`의 해당 절과 `templates/managed-files.json`
-- 사용자 영향은 `CHANGELOG.md`의 `## Unreleased` 항목
+- 사용자 영향은 `changelog.d/` 조각(전환기에는 `CHANGELOG.md`의 `## Unreleased` 항목도)
 
 ## 직접 검증
 

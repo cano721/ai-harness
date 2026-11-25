@@ -1882,6 +1882,7 @@ BULK_READ_RULE="Bulk reads: apply this only when the change adds or changes serv
 
 # 화면 검증·재현 세션의 앱 서버 수명. dev 서버를 명령 안에서 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(#435).
 APP_SERVER_RULE="App server: start any server with the tool's background run, not with &, nohup, or setsid inside the command, and poll the port or a health URL with a time limit instead of ending your turn to wait for it. Reuse a server already running for this working tree instead of starting another on the same port. Before you finish, stop the whole process group of every server you started (TERM, a few seconds, then KILL) and confirm no process of that group is left; a free port does not mean it stopped, because dev workers close the port and survive TERM."
+NODE_TEST_RULE="Tests: the driver runs the broad regression itself after you finish (the checks it lists); do not run the full suite yourself. Run only the tests for the areas you changed (for example bash tests/run.sh <area> where the project has it) in the foreground and wait for them to finish. Never start tests or other long-running commands in the background and end your reply while they are still running."
 # 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
 APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
 
@@ -2246,12 +2247,12 @@ release_plan_prompt() { # latest-version
   if [[ "$(state '.release.version_source // ""')" == flag ]]; then
     fixed="The person fixed the version at $version; put exactly $version in version."
   else
-    fixed="Propose the next version and put it in version as x.y.z. Follow the project's documented versioning rule first (CONTRIBUTING, .ai-harness/workflows/release.md). When the project documents none, choose MINOR when the CHANGELOG Unreleased section (or the commits since the latest tag) has a new feature or a behavior change, otherwise PATCH."
+    fixed="Propose the next version and put it in version as x.y.z. Follow the project's documented versioning rule first (CONTRIBUTING, .ai-harness/workflows/release.md). When the project documents none, choose MINOR when the CHANGELOG Unreleased section or pending changelog fragment files such as changelog.d/ (or the commits since the latest tag) have a new feature or a behavior change, otherwise PATCH."
   fi
   printf '%s\n\n%s\n%s\n%s\n\n%s' "$CONTEXT" "You are the plan node of the release graph. Do not edit any file.
 The release ships origin/$(state .policy.release.source) into $(state .policy.release.base) as the tag $(state .policy.release.tag_prefix)<version>. The latest tag on origin is $(if [[ -n "$1" ]]; then printf '%s%s' "$(state .policy.release.tag_prefix)" "$1"; else printf 'none'; fi). $fixed
-The driver itself cuts $(state .policy.release.branch_prefix)<version> from origin/$(state .policy.release.source), runs the prepare command ($(state '.policy.release.prepare_cmd // "" | if . == "" then "none" else . end')), commits it, and opens the release pull request; the personal delivery level is $(state .release.stage), so the run $(case "$(state .release.stage)" in pr) printf 'stops at the pull request' ;; merge) printf 'merges it with a merge commit, tags it with notes, runs the record commands, and reports the main to develop fast-forward' ;; *) printf 'merges it with a merge commit, tags it with notes, checks the deployment, runs the record commands, and reports the main to develop fast-forward' ;; esac).
-Write the release plan in brief as Markdown: the version and why, what the release contains (the CHANGELOG Unreleased entries or the commits since the latest tag), and anything a person should check before approving.
+The driver itself cuts $(state .policy.release.branch_prefix)<version> from origin/$(state .policy.release.source), runs the prepare command ($(state '.policy.release.prepare_cmd // "" | if . == "" then "none" else . end')), commits it, and opens the release pull request; the personal delivery level is $(state .release.stage), so the run $(case "$(state .release.stage)" in (pr) printf 'stops at the pull request' ;; (merge) printf 'merges it with a merge commit, tags it with notes, runs the record commands, and reports the main to develop fast-forward' ;; (*) printf 'merges it with a merge commit, tags it with notes, checks the deployment, runs the record commands, and reports the main to develop fast-forward' ;; esac).
+Write the release plan in brief as Markdown: the version and why, what the release contains (the CHANGELOG Unreleased section or pending changelog fragment files such as changelog.d/, or the commits since the latest tag), and anything a person should check before approving.
 Put the exact shell commands that must pass on the release branch after the prepare command in checks and final_checks, as the project's release document says. checks: the fast commands; final_checks: the broad ones the project runs once before a release. The driver runs both after the release commit and again whenever the release branch catches up with the source branch. All commands run from the repository root with bash -c." "$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOT'
 approval is auto: no person reads this plan before the release branch is cut, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one and record it in decisions as {question, choice, rationale}.
 Put in needs_human only what a person alone can decide, such as a version that breaks the documented rule. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
@@ -2315,7 +2316,8 @@ release_prepare() {
   fi
   go prepare prepared
 }
-# source가 움직였다: push 전에는 rebase, push 뒤에는 merge(force push를 피한다)로 따라잡고 prepare_cmd·checks를 다시 돈다.
+# source가 움직였다: push 전에는 rebase, push 뒤에는 merge(force push를 피한다)로 따라잡고 checks만 다시 돈다.
+# prepare_cmd는 다시 돌리지 않는다: 재실행에 안전하다는 보장이 없고 릴리스 커밋이 이미 확정했다.
 release_revalidate() {
   local src branch from method files rc=0 n
   release_require_approval revalidate
@@ -2337,13 +2339,13 @@ release_revalidate() {
   fi
   state_set '.head = $h' --arg h "$(git -C "$REPO" rev-parse HEAD)"
   n="$(state '.release.revalidated // [] | length')"
-  if ! release_prepare_commit "revalidate-$n" || ! release_checks "revalidate-$n"; then
+  if ! release_checks "revalidate-$n"; then
     release_fail revalidate catch_up_failed "after catching up with origin/$src: $(<"$RUN/release-step.why")"
     return
   fi
   state_set '.release.revalidated = ((.release.revalidated // []) + [{from: $f, to: $h, method: $m, source_commit: $s, at: $t}])' \
     --arg f "$from" --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg m "$method" --arg s "$(git -C "$REPO" rev-parse "origin/$src")" --arg t "$(now_utc)"
-  log "caught up with origin/$src by $method; checks passed again"
+  log "caught up with origin/$src by $method; prepare_cmd was not run again; checks passed again"
   go revalidate caught_up
 }
 # 태그·릴리스 발행. 노트가 비거나 노트 명령이 실패하면 아무것도 만들지 않는다. 같은 태그가 있으면 다시 만들지 않는다.
@@ -2790,6 +2792,7 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         run_node deliver deliver "$CONTEXT
 
 You are the deliver node. Implement the approved Implementation Brief below in this repository. Follow the project workflow and test policy (Red -> Green -> Refactor only when TDD is required), delegating to the project's role agents when the workflow says so.
+$NODE_TEST_RULE
 Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 $FULL_REGRESSION_RULE
 Return a concise summary of changed areas and the commands you ran.
@@ -3097,6 +3100,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
 You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
+$NODE_TEST_RULE
+After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 
 Blocking findings:
 $(state '.findings')
@@ -3707,7 +3712,7 @@ EOF
 
 case "$CMD" in
   status)
-    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(if .policy.git == "merge" then "pr-only" else (.policy.git // "") end)\((.policy.delivery.level // (if .policy.git == "merge" then "merge" else null end)) | if . then " · delivery \(.)" else "" end)\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state '.release // null')" == null ]] || state '.release | "release \(.tag // "(version pending)") · stage \(.stage)" + (if .published then " · released \(.published.status)" else "" end)
       + (if .blocked then " · blocked: " + .blocked elif .stopped_because then " · stopped: " + .stopped_because else "" end)
       + (if .sync then "\nsync (run by a person): " + .sync.command else "" end)'

@@ -1000,6 +1000,17 @@ for phrase in '`### 서비스`가 없으면 지금처럼 `## 문구`만으로 �
 done
 pass "design-audit axis E reads the service section and hands copy style to ux-writing-audit"
 
+# deliver·repair 노드가 전체 회귀를 백그라운드로 띄우고 답을 끝내면 러너 검사와 겹치거나 테스트가 죽는다. 공용 규칙으로
+# 전체 회귀는 러너가 돌리고 노드는 바뀐 영역만 포그라운드로 돌리게 지시한다. (#534)
+assert_eq "deliver repair" "$(rule_nodes NODE_TEST_RULE)" "deliver and repair prompts carry the node test rule"
+NTR_LINE="$(grep '^NODE_TEST_RULE=' "$ROOT/templates/workflow-driver/workflow-driver.sh" || true)"
+assert_contains "$NTR_LINE" "foreground" "the node test rule runs changed-area tests in the foreground"
+assert_contains "$NTR_LINE" "background" "the node test rule forbids leaving tests in the background"
+assert_contains "$NTR_LINE" "tests/run.sh <area>" "the node test rule names the per-area test command"
+NTR_REPAIR="$(awk '/You are the repair node/ { on = 1 } on { print } on && /brief_context/ { exit }' "$ROOT/templates/workflow-driver/workflow-driver.sh")"
+assert_contains "$NTR_REPAIR" "the driver itself runs these checks" "the repair prompt tells which checks the driver runs afterwards"
+pass "deliver and repair prompts say who runs the broad regression"
+
 # 디자인 스킬 지도는 Terms 절에서 디자인 용어 8개를 한 줄 정의와 담당 스킬 하나로 정한다(#514).
 # 기존 제품 화면 다듬기는 design-polish가 주도하고 impeccable은 비평 보조로 남으며, 랜딩 보조에 design-references가 있다.
 TM_SRC="$ROOT/templates/ui-review/references/design-skills.md"

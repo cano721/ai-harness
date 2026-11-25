@@ -4,8 +4,8 @@
 
 ## 1. 버전
 
-- SemVer. `CHANGELOG.md`의 `## Unreleased`에 `### 새 기능`이나 `### 동작 변경`이 있으면 MINOR, 버그 수정·문서만이면 PATCH. MAJOR는 사람이 정한다(`--version`).
-- 버전 파일 네 곳(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`, `CHANGELOG.md` 버전 절)은 릴리스 커밋의 `scripts/release-prep.sh <version>`(= `prepare_cmd`)만 바꾼다. Unreleased가 비어 있으면 `release-prep.sh`가 실패하고 러너는 사람에게 넘긴다.
+- SemVer. `changelog.d/` 조각과 `CHANGELOG.md`의 `## Unreleased`의 소제목에 `### 새 기능`이나 `### 동작 변경`이 있으면 MINOR, 버그 수정·문서만이면 PATCH. MAJOR는 사람이 정한다(`--version`).
+- 버전 파일 네 곳(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`, `CHANGELOG.md` 버전 절)은 릴리스 커밋의 `scripts/release-prep.sh <version>`(= `prepare_cmd`)만 바꾼다. `release-prep.sh`가 조각과 Unreleased 본문을 합쳐 버전 절을 만들고 조각을 지운다. 조각도 Unreleased 본문도 없거나 조각 형식이 틀리면 실패하고 러너는 사람에게 넘긴다.
 
 ## 2. 검증 명령
 
