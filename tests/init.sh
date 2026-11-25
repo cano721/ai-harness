@@ -958,4 +958,10 @@ for phrase in '**릴리스 방식 감지**' '`git ls-remote --tags origin`' '`CH
 done
 pass "harness-init detects tag-based releases into release_policy"
 
+# 데이터 접근 계층이 있는 프로젝트는 측정으로 검증된 대량 조회 메모리 규칙을 실측 원칙의 예외로 받는다. (#499)
+for phrase in "대량 조회 메모리" "검증된 기본 규칙" "projection 조회" "건수 상한 × 행 크기" "판정·집계용 읽기 경로" "호출부가 diff 안이면 제외하지 않는다" "딸려 오는 엔티티·테이블의 컬럼 정의"; do
+  assert_contains "$HARNESS_INIT_CONTENT" "$phrase" "harness-init bulk read rule: $phrase"
+done
+pass "harness-init writes the bulk read memory rule for projects with data access"
+
 finish_tests

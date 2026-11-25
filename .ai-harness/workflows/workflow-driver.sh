@@ -1535,6 +1535,9 @@ LAYOUT_PROBE_ID="layout-probe/1"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
+# 대량 조회 메모리(#499): 판정·집계만 하는 다건 조회가 대형 본문 컬럼까지 읽거나 상한이 없어 운영 OOM이 난다. 리뷰 노드가 데이터 조회가 있는 변경에서만 본다.
+BULK_READ_RULE="Bulk reads: apply this only when the change adds or changes server-side code that reads from a database or another data store (an ORM or query layer, SQL, a repository or DAO method); skip it for changes without such data access, such as front-end code. On paths that read many rows in one run or request (batch jobs, sweeps, scheduled jobs, bulk or internal batch APIs), look for a multi-row query with no bound (no limit, chunk, or keyset paging); a query that only decides or aggregates but loads whole rows or entities with large columns (LONGTEXT, MEDIUMTEXT, TEXT, LOB/BLOB/CLOB, large JSON) instead of only the columns it needs; a collection fetch join combined with paging (JPA/Hibernate, for example, then pages in memory); and, on such decide-or-aggregate read paths, a caller's per-request count that does not match the receiving API's bound. An existing query counts when this change alters its call path, call conditions, or row count: do not leave it out because its definition is outside the diff when its caller is inside it. Open the column definitions of every entity or table the query loads, including those pulled in by fetch joins or association loading and those in other modules, to size the row. For each, estimate the memory as row-count bound × row size and write the estimate in the finding. It is blocking when the estimate puts availability at risk (out of memory, a stalled job); a bounded query that already reads only the columns it needs is not a finding, and neither is a caller/receiver count mismatch on a write path or when the receiving query reads only the small columns it needs."
+
 # 화면 검증·재현 세션의 앱 서버 수명. dev 서버를 명령 안에서 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(#435).
 APP_SERVER_RULE="App server: start any server with the tool's background run, not with &, nohup, or setsid inside the command, and poll the port or a health URL with a time limit instead of ending your turn to wait for it. Reuse a server already running for this working tree instead of starting another on the same port. Before you finish, stop the whole process group of every server you started (TERM, a few seconds, then KILL) and confirm no process of that group is left; a free port does not mean it stopped, because dev workers close the port and survive TERM."
 # 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
@@ -2595,6 +2598,7 @@ else
   printf 'A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation.'
 fi) A completion condition of the original request or a quoted or linked issue that the change does not meet is blocking unless the approved brief put it out of scope with a reason, even when the brief left the condition out. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 Return only JSON matching the schema.
 
 Original request:
@@ -2637,6 +2641,7 @@ $(state .request)" "$SCOPE_SCHEMA"
 You are the inspect node of the change-review graph. Do not edit any file. Review every change since $(state .diff_base) (git diff $(state .diff_base), including uncommitted changes and untracked files) against the review scope below.
 Check behavior, required checks, security and data, compatibility, scope, and generated files. A blocking finding is incorrect or missing behavior, a regression, security or data risk, a broken required check, or a material scope violation; give each with its file and line. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 $UI_SCENARIO_RULE
 Return only JSON matching the schema.
 
@@ -2654,6 +2659,7 @@ $(brief_context)" "$INSPECT_SCHEMA"
 You are the re_review node of the change-review graph. Do not edit any file. The blocking findings below were repaired and the driver's required checks passed. Review every change since $(state .diff_base) (git diff $(state .diff_base), including uncommitted changes and untracked files) again: confirm each previous blocking finding is resolved and look for new ones the repair introduced.
 A blocking finding is incorrect or missing behavior, a regression, security or data risk, a broken required check, or a material scope violation. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 Return only JSON matching the schema.
 
 Previous blocking findings:

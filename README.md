@@ -544,7 +544,7 @@ stateDiagram-v2
     re_review --> repair: blocking finding 남음
 ```
 
-초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow review`로 실행하고(수리는 사용자 승인 뒤, 커밋하지 않고 남김), 없으면 같은 흐름을 현재 세션에서 수행합니다.
+초기 검토는 read-only입니다. 데이터 조회가 있는 변경이면 러너의 검토 노드(feature·bug-fix의 review, review 그래프의 inspect·re_review)가 배치·일괄 경로의 상한 없는 다건 조회, 판정·집계용인데 대형 컬럼(LONGTEXT·MEDIUMTEXT·TEXT·LOB 등)까지 읽는 조회, 컬렉션 fetch join + 페이징, 호출측·수신측 상한 불일치를 "건수 상한 × 행 크기" 추정과 함께 보고(이번 변경이 호출 경로·건수를 바꾼 기존 조회도 포함, 딸려 오는 엔티티 컬럼까지 확인), 가용성 위험이면 blocking으로 냅니다. `/harness-init`은 데이터 접근 계층이 있는 프로젝트에 같은 규칙을 `code-conventions.md` "대량 조회 메모리" 절과 reviewer 체크 항목으로 씁니다(실측 원칙의 예외인 검증된 기본 규칙). blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow review`로 실행하고(수리는 사용자 승인 뒤, 커밋하지 않고 남김), 없으면 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 

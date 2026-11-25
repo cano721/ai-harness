@@ -177,6 +177,23 @@ CLAUDE.md                    # Claude 또는 둘 다를 선택했을 때만; 내
 - **AGENTS.md 구성**: Preflight(작업 시작 절차) / Hard constraints / Direct edit guard 룰(선택 시) / 워크플로·페르소나 표 / docs 목록 / Quick Commands(감지된 명령) / Git 컨벤션(실측 + 인터뷰 답)
 - **Hard constraints는 틀만 만들고 비워둔다** — "실측으로 검증된 룰만 추가. 추측 금지" 주석 한 줄. 이 섹션은 `/harvest`가 시간을 들여 채우는 영역
 - docs는 실측 내용만. 확인 못 한 건 쓰지 말고 "코드를 source of truth로 확인" 문구로 대체
+- **예외 — 대량 조회 메모리 규칙**(측정으로 검증된 기본 규칙, #499): §1에서 데이터 접근 계층(ORM·쿼리 빌더·SQL 매퍼·repository/DAO)을 감지한 프로젝트면 실측 규칙이 없어도 아래를 쓴다. 판정만 하는 다건 조회가 대형 본문 컬럼까지 읽거나 상한이 없어 운영 OOM이 나는 결함은 규칙 없는 리뷰가 자주 놓치고, 이 문구를 넣은 리뷰는 대부분 잡았다(백엔드 저장소 2곳 측정: 검출 40% → 96%, 정상 코드 오탐 0/30 → 1/30. 놓친 원인 — diff 밖 조회 정의, 딸려 오는 엔티티 컬럼 미확인, 쓰기 경로 상한 오탐 — 을 아래 문구로 막은 소규모 재측정에서 실제 사고 케이스 5/5, 오탐 0/3). 문구의 예시(엔티티·컬럼 타입·ORM 이름)만 프로젝트 스택에 맞게 바꾸고 규칙 자체를 실측으로 약하게 고치지 않는다. 데이터 접근이 없는 프로젝트(프론트·CLI 등)에는 쓰지 않는다.
+  - `code-conventions.md`에 `### 대량 조회 메모리` 절:
+    ```markdown
+    ### 대량 조회 메모리
+
+    배치·스윕·스케줄 잡·내부 일괄 API처럼 한 실행·요청이 다건을 읽는 경로에 적용한다. 메모리는 "건수 상한 × 행 크기"로 커진다.
+
+    - 판정·집계만 하는 다건 조회는 엔티티·행을 통째로 읽지 않는다. 필요한 컬럼만 프로젝트의 projection 조회(DTO/record constructor expression·QueryDSL `Projections`·SELECT 컬럼 목록 등)로 읽는다.
+    - LONGTEXT/MEDIUMTEXT/TEXT/LOB(`@Lob`·BLOB·CLOB)·큰 JSON 같은 대형 컬럼이 있는 엔티티를 목록으로 읽어야 하면, 그 컬럼이 필요한 근거를 조회 메서드 주석에 남긴다.
+    - 일괄 조회는 항상 상한(limit·청크·keyset)을 둔다. 조건 없는 무제한 전체 조회 금지.
+    - 컬렉션 fetch join + 페이징 금지 — ORM이 전체를 메모리에 올린 뒤 자를 수 있다(예: JPA/Hibernate).
+    - 다른 서버가 호출하는 일괄 API는 수신측 상한과 호출측 건수 상한을 함께 맞춘다. 판정·집계용 읽기 경로의 상한값은 수신측 행 크기 기준으로 정한다(쓰기·작은 projection 조회는 이 조항 대상 아님).
+    - 기존 조회라도 이번 변경이 호출 경로·호출 조건·건수를 바꾸면 대상이다 — 조회 정의가 diff 밖이어도 호출부가 diff 안이면 제외하지 않는다.
+    - fetch join·연관 로딩으로 딸려 오는 엔티티·테이블의 컬럼 정의까지 열어 행 크기를 확인한다(다른 모듈 포함).
+    ```
+  - reviewer 페르소나 체크 항목(blocking): "배치·스윕·일괄 API 경로의 다건 조회 — '건수 상한 × 행 크기'를 추정해 근거로 적는다. 판정·집계용인데 대형 컬럼이 딸려 오거나, 상한 없는 전체 조회, 컬렉션 fetch join + 페이징이면 blocking(`code-conventions.md` '대량 조회 메모리'). 기존 조회라도 이번 변경이 호출 경로·호출 조건·건수를 바꾸면 대상이다 — 조회 정의가 diff 밖이어도 호출부가 diff 안이면 제외하지 않는다. fetch join·연관 로딩으로 딸려 오는 엔티티·테이블의 컬럼 정의까지 열어 확인한다(다른 모듈 포함). 수신측 상한 조항은 판정·집계용 읽기 경로에만 적용한다 — 쓰기 경로와 필요한 컬럼만 읽는 작은 projection 조회의 상한은 지적하지 않는다."
+  - 생성 뒤 보고에 이 절이 실측이 아니라 기본 규칙이라는 점을 적는다. 기존 프로젝트는 `--sync`가 사람 소유 docs·페르소나를 바꾸지 않으므로, 이 절과 체크 항목을 diff로 보여 승인받은 뒤에만 넣는다(러너 리뷰 노드의 같은 점검은 `workflow-driver.sh` 갱신으로 sync가 넣는다).
 - 페르소나 write scope는 좁게 (test-engineer는 테스트 디렉토리만 등). 경로는 **실측 모듈 구조**로 쓴다 — 멀티모듈이면 루트 `src/**`가 아니라 `<module>/src/main/**`·`<module>/src/test/**`처럼. 생성 뒤 각 패턴이 저장소 파일에 하나 이상 매칭되는지 확인한다. 매칭이 없는 범위는 역할을 아무 일도 못 하게 만들거나, 우회 편집을 낳는다
 - settings.json allowlist는 read-only·빌드·테스트 명령만. deny에 force push
 - direct-edit-guard.sh는 소스 경로 수정 전 code-conventions.md(테스트면 testing.md 추가)를 **실제로 읽었는지** transcript에서 판정한다 — 미Read 시 exit 2 + 안내. transcript 접근 불가 시 fail-open(exit 0). 판정은 jq로 transcript 줄을 파싱하고, 짝 결과가 성공인 호출만 읽음으로 인정한다: (1) assistant `tool_use` 중 `name == "Read"`이고 같은 `tool_use_id`의 `tool_result`가 `is_error != true`인 호출의 `input.file_path`, (2) 읽기 형태 셸 명령(`cat`·`head`·`tail`·`nl`·`less`·`more`·`bat`·`grep`·`rg`·`sed -n`)이 그 문서를 대상으로 하고(`grep`·`rg`의 검색어 자리는 대상이 아니다. 상대 경로는 그 줄의 `cwd`·`workdir` 기준) 문서로의 쓰기가 아니며(리다이렉트·`tee`·`sponge`·`sed -i`·명령 연결·명령 치환이 있으면 제외 — `git add` 등 다른 명령은 읽기 형태가 아니다) 짝 결과가 성공인 호출(Claude는 `Bash`, Codex는 `exec_command`·`shell`의 `function_call_output`이 0이 아닌 종료 코드를 보이지 않을 때). Edit·Write·MultiEdit·`apply_patch`, 실패하거나 결과가 없는 읽기는 읽음이 아니다 — transcript를 `"file_path":"…/code-conventions.md"` 같은 문자열로 grep하지 않는다(쓰기 도구 호출·사용자 메시지 속 경로에도 맞아 문서를 쓰기만 한 세션이 통과한다). 서브에이전트(hook 입력에 `agent_id`)는 부모 transcript와 자기 transcript(`<세션>/subagents/agent-<id>.jsonl`)를 함께 본다. root·대상·읽음 경로는 NFC로 맞춰 비교한다(macOS는 폴더 이름을 NFD로 보존한다. python3가 없으면 그대로). 생성은 플러그인의 `skills/harness-init/references/direct-edit-guard.sh`를 바탕으로 `SOURCE_RE`·`TEST_RE`만 실측 소스·테스트 경로로 바꾼다
