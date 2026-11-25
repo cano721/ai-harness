@@ -194,5 +194,60 @@ class FollowKeyboardTest(unittest.TestCase):
         self.assertEqual(self.state["current"], "t1")
 
 
+class ServerGuardTest(unittest.TestCase):
+    """다른 웹 페이지(DNS rebinding 포함)가 상태 화면 서버의 기록을 읽거나 설정을 바꾸지 못한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        import socket
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            cls.port = sock.getsockname()[1]
+        ui.serve({"ui_port": cls.port}, {"level": 0.0, "phase": "idle"})
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", cls.port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+
+    def request(self, method, path, host=None, headers=None, body=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        conn.putrequest(method, path, skip_host=True)
+        conn.putheader("Host", host or "127.0.0.1:%d" % self.port)
+        for key, value in (headers or {}).items():
+            conn.putheader(key, value)
+        data = body.encode("utf-8") if body is not None else None
+        if data is not None:
+            conn.putheader("Content-Length", str(len(data)))
+        conn.endheaders(data)
+        status = conn.getresponse().status
+        conn.close()
+        return status
+
+    def test_get_from_own_host_is_served(self):
+        self.assertEqual(self.request("GET", "/level"), 200)
+        self.assertEqual(self.request("GET", "/level", host="localhost:%d" % self.port), 200)
+
+    def test_get_from_other_host_is_refused(self):
+        for path in ("/state", "/config", "/", "/level"):
+            self.assertEqual(self.request("GET", path, host="evil.example:%d" % self.port), 403, path)
+        self.assertEqual(self.request("GET", "/state", host="127.0.0.1:1"), 403)
+
+    def test_post_guards(self):
+        ok = {"Origin": "http://127.0.0.1:%d" % self.port, "X-Handsfree": "1", "Content-Type": "application/json"}
+        body = json.dumps({"tts": True})
+        cases = {
+            "other origin": dict(ok, Origin="http://evil.example"),
+            "no X-Handsfree": {k: v for k, v in ok.items() if k != "X-Handsfree"},
+            "not json": dict(ok, **{"Content-Type": "text/plain"}),
+        }
+        for name, headers in cases.items():
+            self.assertEqual(self.request("POST", "/config", headers=headers, body=body), 403, name)
+        self.assertEqual(self.request("POST", "/config", host="evil.example:%d" % self.port, headers=ok, body=body), 403,
+                         "other host")
+
+
 if __name__ == "__main__":
     unittest.main()

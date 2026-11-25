@@ -384,7 +384,17 @@ def snapshot(mem):
 
 def serve(cfg, mem):
     class Handler(BaseHTTPRequestHandler):
+        def own_host(self):
+            # DNS rebinding으로 다른 웹 페이지가 127.0.0.1에 붙으면 Host가 그 페이지의 도메인이다.
+            # 받아쓴 말·승인 요청 원문을 읽히지 않게 GET도 이 주소로 온 요청만 받는다.
+            if self.headers.get("Host", "") in ("127.0.0.1:%d" % port, "localhost:%d" % port):
+                return True
+            self.send_error(403)
+            return False
+
         def do_GET(self):
+            if not self.own_host():
+                return
             if self.path == "/state":
                 watch["seen"] = time.time()
                 self.reply(json.dumps(snapshot(mem), ensure_ascii=False).encode("utf-8"), "application/json")
@@ -401,6 +411,8 @@ def serve(cfg, mem):
                 self.send_error(404)
 
         def do_POST(self):
+            if not self.own_host():
+                return
             # 다른 웹 페이지가 이 주소로 설정을 바꾸지 못하게: 같은 출처, JSON, 우리만 붙이는 헤더를 요구한다.
             origin = self.headers.get("Origin", "")
             allowed = ("http://127.0.0.1:%d" % port, "http://localhost:%d" % port)
