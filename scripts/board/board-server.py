@@ -31,7 +31,8 @@ GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ �
 POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
                                  랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
 GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) 상태와 종류별 항목. 주기가 지난 소스는 이때·뒤 타이머가 다시 모음
-POST /agenda/connect {t, source} · /agenda/disconnect {t, source}  소스 연결·끊기(connect는 뒤에서, 최대 5분)
+POST /agenda/connect {t, source} · /agenda/disconnect {t, source, account?}  소스 연결·끊기(connect는 뒤에서, 최대 5분).
+                                    계정을 여럿 잇는 소스는 연결된 뒤 connect가 계정을 더하고, account를 주면 그 계정만 끊는다
 POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text}  직접 적는 할 일
 GET  /settings/skills?t=...      하네스 설정 > 스킬(#494): setup.sh list·design list 상태 + 진행 중 setup 세션. 끝난 세션은 지우고 다시 읽음
@@ -2713,7 +2714,8 @@ class Handler(BaseHTTPRequestHandler):
         elif kind == "connect":
             code, res = AGENDA.connect(source)
         elif kind == "disconnect":
-            code, res = AGENDA.disconnect(source)
+            account = req.get("account") if isinstance(req.get("account"), str) and req.get("account") else None
+            code, res = AGENDA.disconnect(source, account)
         elif kind == "refresh":
             code, res = AGENDA.refresh(source)
         else:

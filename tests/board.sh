@@ -158,6 +158,26 @@ assert_contains "$BREF_TPL" '<div class="b-refhead" id="refhead" hidden></div>
 assert_contains "$BREF_TPL" "copyBtn('경로 복사', d.work" "the work folder path is shortened with a copy button"
 pass "the Harness Board lists reference boards, serves only their media, and takes a pick for a waiting landing run (#336)"
 
+# 레퍼런스 보드의 매체(#518): 작업 폴더의 medium.json이 탭·분석 라벨을 정하고, 이미지 레퍼런스는 원본 주소를 첫 매체로 싣는다.
+# medium.json이 없는 실행은 web-page 라벨 그대로다.
+BREF_PRINT="$BOARD_T/refs-print"; mkdir -p "$BREF_PRINT"
+printf '{"medium":"print"}\n' >"$BREF_PRINT/medium.json"
+jq -n '[{id:"img-a",kind:"layout",title:"포스터",image:"https://img.example/a.jpg",recommended:"layout"}]' >"$BREF_PRINT/references.json"
+bref_rec dddddddddddd "$BREF_PRINT" "인쇄물 보드"
+BREF_PRUN="$(curl -s "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=dddddddddddd")"
+assert_eq 'print|판면 구성|전하는 메시지|{"remote":"https://img.example/a.jpg"}|https://img.example/a.jpg' \
+  "$(jq -r '.run | [.medium, .labels.tabs.layout, .labels.analysis.claim, (.refs[0].captures[0] | tojson), .refs[0].image] | join("|")' <<<"$BREF_PRUN")" \
+  "a print run carries its medium, its labels, and the image as its first medium"
+assert_eq print "$(curl -s "$BOARD_BASE/references?t=$BOARD_TOKEN" | jq -r '.runs[] | select(.run_id == "dddddddddddd") | .medium')" "the list carries each run's medium"
+assert_eq 'web-page|레이아웃|경쟁사 분석|첫 화면에서 내세우는 것' \
+  "$(curl -s "$BOARD_BASE/references/run?t=$BOARD_TOKEN&run=aaaaaaaaaaaa" | jq -r '.run | [.medium, .labels.tabs.layout, .labels.tabs.competitor, .labels.analysis.leads_with] | join("|")')" \
+  "a run without medium.json keeps the web page labels"
+assert_contains "$BREF_TPL" "d && d.labels && d.labels.tabs ? REF_TABS.map(" "the board draws the run's tab labels"
+assert_contains "$BREF_TPL" "d.labels.analysis[k] || l]) : REF_ANALYSIS" "the board draws the run's analysis labels and falls back to the web page labels"
+assert_contains "$BREF_TPL" "refCounts(r)" "the list card counts tabs with the run's labels"
+rm -f "$BREF_DIR/dddddddddddd.json"
+pass "reference boards follow the run's medium: tab and analysis labels, image references (#518)"
+
 # 권한 훅: 서버가 붙잡은 요청에 사람이 보드에서 허용하면 그 답을 Claude Code 형식으로 돌려준다.
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}' \
   | env -u AI_HARNESS_HEADLESS -u CLAUDE_PID CLAUDE_CODE_ENTRYPOINT=cli HARNESS_METRICS_DIR="$BOARD_DATA" python3 -I "$ROOT/scripts/board/permission-hook.py" >"$BOARD_T/hook.out" &
