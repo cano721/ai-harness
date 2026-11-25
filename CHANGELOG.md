@@ -6,6 +6,11 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 버그 수정
+
+- **디자인 규칙 문서의 여백 단계를 실제 CSS 값에 맞췄습니다** — `docs/design-system.md` `## 레이아웃`이 본문 가로 여백 `--space-6`·페이지 머리 아래와 열 사이 `--space-4`·목록 항목 사이 `--space-2`로 적고 있었지만 `components.css`는 `--space-8`·`--space-5`·`--space-3`(`.ds-stack`)을 씁니다. 문서를 CSS에 맞췄고 화면은 바뀌지 않습니다. 테스트가 이제 문서와 CSS 값을 직접 비교합니다. (#524)
+
 ## v0.94.0 (2026-11-25)
 ### 새 기능
 
