@@ -23,7 +23,7 @@
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "e78aa0d9e31dfdec51f9837066813cbfafd5a36b4b3df82cbfa86fbee476a0a1",
+      "content_sha256": "a0d5882d8742c41d0819b3598e2d34dc4433121abb48685b1b793fd4c4de182b",
       "template_version": "0.91.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -127,8 +127,8 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/design-audit/SKILL.md": {
-      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
-      "template_version": "0.83.0"
+      "content_sha256": "c58070a4e0c3c1bd1d5886099970d03afc6b08cc58bca03ebe456098e53d6435",
+      "template_version": "0.92.0"
     },
     ".agents/skills/design-audit/references/design-skills.md": {
       "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
@@ -139,8 +139,8 @@
       "template_version": "0.83.0"
     },
     ".claude/skills/design-audit/SKILL.md": {
-      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
-      "template_version": "0.83.0"
+      "content_sha256": "c58070a4e0c3c1bd1d5886099970d03afc6b08cc58bca03ebe456098e53d6435",
+      "template_version": "0.92.0"
     },
     ".claude/skills/design-audit/references/design-skills.md": {
       "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",

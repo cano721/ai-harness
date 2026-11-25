@@ -63,6 +63,23 @@ Compute every documented pair in every theme. A failing pair is not documented a
 - Density modes (compact / standard / comfortable) only when the product has dense data screens and roomy ones. Implement density by re-mapping the spacing and control-height tokens, not by new components.
 - Control heights (button, input, row) are part of the size ladder in `components.md` and reference spacing tokens.
 
+## Spacing relationships
+
+A scale says which gaps exist; it does not say which gap goes where. The rule document records that under `## 레이아웃` as `### 여백 관계` and `### 묶기` (`output-format.md`).
+
+**Fixed invariants** — set by the plugin; a project does not change them:
+
+- **Inner < outer.** At every level, inner spacing is always smaller than outer spacing: inside an element < between items in a group < between groups < between sections. Equal counts as a violation — if two levels share a step, the eye cannot tell where a group ends.
+- **One means per boundary.** Mark one boundary with space, a divider, or a surface (card) — only one of them. A card that also has a divider and an extra gap at the same edge says the same thing three times.
+
+**Project decisions** — the builder proposes defaults, the user confirms:
+
+- The spacing step for each relationship (inside an element, between items in a group, between groups, between sections).
+- The grouping ladder — space → divider → surface (card) → collapse — when each rung is used, and the nesting limit (how many surfaces may sit inside one another).
+- Alignment: shared start lines for titles and body, numeric alignment, primary action position.
+
+**Procedure.** After the scale is set, map each of the four relationships to one step, then check the mapping against the invariants. In extract mode, group the measured gaps by relationship and propose the most-used step for each as the default. When one relationship uses several steps, or an inner gap is equal to or larger than an outer one somewhere, list the places with `file:line` and put them in `확인 대기` instead of writing a rule.
+
 ## Typography
 
 - Name sizes by role: `display`, `heading`, `title`, `body`, `label`, `caption`. Add a step suffix only when a role needs two sizes (`--font-size-heading-1`).

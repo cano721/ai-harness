@@ -448,6 +448,14 @@ runner_alive() { # → 기록된 러너가 살아 있으면 0. lstart가 다르�
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null \
     && [[ "$(proc_lstart "$pid")" == "$(state '.process.lstart // ""')" ]]
 }
+child_alive() { # → 기록된 노드 자식 그룹이 살아 있으면 0. 러너만 밖에서 죽으면(그룹 SIGKILL·터미널 닫힘) 이 그룹은 고아로 남아 작업 트리를 계속 쓴다.
+  local g l
+  g="$(state '.process.child_pgid // ""')"
+  [[ -n "$g" ]] && kill -0 -- "-$g" 2>/dev/null || return 1
+  # 리더가 살아 있으면 시작 시각으로 같은 그룹인지 본다. 리더가 끝났어도 그룹이 남아 있는 동안 그 ID는 다시 쓰이지 않는다.
+  l="$(proc_lstart "$g")"
+  [[ -z "$l" || "$l" == "$(state '.process.child_lstart // ""')" ]]
+}
 terminate() { # target... (pid 또는 -pgid) → TERM, 최대 5초 기다린 뒤 남은 것만 KILL
   local t alive
   kill -TERM -- "$@" 2>/dev/null || true
@@ -468,10 +476,10 @@ run_in_group() { # command... → 그 명령의 종료 코드
   "$@" &
   CHILD_PGID=$!
   set +m
-  state_set '.process.child_pgid = $g' --argjson g "$CHILD_PGID"
+  state_set '.process.child_pgid = $g | .process.child_lstart = $l' --argjson g "$CHILD_PGID" --arg l "$(proc_lstart "$CHILD_PGID")"
   wait "$CHILD_PGID" || rc=$?
   CHILD_PGID=""
-  state_set 'del(.process.child_pgid)'
+  state_set 'del(.process.child_pgid, .process.child_lstart)'
   return "$rc"
 }
 on_stop_signal() {
@@ -496,15 +504,19 @@ stop_run() { # reason
   [[ "$status" == running ]] || { printf 'run %s is not running (status %s)\n' "$RUN_ID" "$status" >&2; exit 2; }
   pid="$(state '.process.pid // ""')"
   [[ -n "$pid" ]] || { printf 'run %s has no process record (started by an older runner), so stop cannot tell its processes apart; wait for it to end\n' "$RUN_ID" >&2; exit 2; }
+  targets=()
   if runner_alive; then
     pgid="$(state '.process.pgid // ""')"
-    child="$(state '.process.child_pgid // ""')"
     targets=("$pid")
-    [[ -z "$child" ]] || targets+=("-$child")
     # 러너가 자기 그룹의 리더일 때만 그 그룹을 함께 끈다. 아니면 그 그룹은 부른 쪽의 것이다.
     [[ "$pgid" != "$pid" ]] || targets+=("-$pgid")
-    terminate "${targets[@]}"
   fi
+  # 러너가 이미 없어도 고아로 남은 노드 자식 그룹은 끈다. 그대로 두면 resume한 새 노드와 같은 작업 트리에서 겹쳐 돈다.
+  if child_alive; then
+    child="$(state '.process.child_pgid')"
+    targets+=("-$child")
+  fi
+  [[ ${#targets[@]} -eq 0 ]] || terminate "${targets[@]}"
   node="$(state .node)"
   state_set '.status = "stopped" | .stopped = {node: .node, at: $t, reason: $r} | del(.process)' --arg t "$(now_utc)" --arg r "$1"
   # 멈춘 노드가 하다 만 쓰기는 러너 자신의 작업이다. 기준점에 넣어 resume이 그 노드부터 이어 가게 한다.
@@ -3345,6 +3357,10 @@ case "$CMD" in
       printf 'run %s is already running (pid %s); stop it first: stop --run %s\n' "$RUN_ID" "$(state .process.pid)" "$RUN_ID" >&2
       exit 2
     fi
+    if [[ "$CMD" != status ]] && ! runner_alive && child_alive; then
+      printf 'run %s: the runner is gone but its node process group %s is still running; stop it first: stop --run %s\n' "$RUN_ID" "$(state .process.child_pgid)" "$RUN_ID" >&2
+      exit 2
+    fi
     ;;
   *) usage ;;
 esac
@@ -3600,7 +3616,11 @@ case "$CMD" in
     if [[ "$(state .status)" == stopped ]]; then
       state '"stopped at \(.stopped.node) \(.stopped.at): \(.stopped.reason); continue with resume"'
     elif [[ "$(state .status)" == running && -n "$(state '.process.pid // ""')" ]] && ! runner_alive; then
-      printf 'stale: runner process %s is gone (stopped outside the runner); continue with resume\n' "$(state .process.pid)"
+      if child_alive; then
+        printf 'stale: runner process %s is gone but its node process group %s is still running; stop it first: stop --run %s\n' "$(state .process.pid)" "$(state .process.child_pgid)" "$RUN_ID"
+      else
+        printf 'stale: runner process %s is gone (stopped outside the runner); continue with resume\n' "$(state .process.pid)"
+      fi
     fi
     if [[ "$(state '.worktree_cleanup.eligible // ""')" == true ]]; then
       printf 'worktree %s is merged and can be removed: use the board "finished work" cleanup or the workspace session cleanup\n' "$(state .worktree_cleanup.path)"
@@ -3661,8 +3681,8 @@ esac
 # 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
 # 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
 trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
-# stop은 러너 PID와 노드 자식 그룹을 끈다. 러너는 자식 그룹을 정리하고 30(미완료·resume)으로 끝난다 — 상태는 stop이 남긴다.
-trap on_stop_signal TERM INT
+# stop은 러너 PID와 노드 자식 그룹을 끈다. 터미널이 닫혀도(HUP) 같은 정리를 한다. 러너는 자식 그룹을 정리하고 30(미완료·resume)으로 끝난다 — 상태는 stop이 남긴다.
+trap on_stop_signal TERM INT HUP
 state_set '.status = "running" | .process = {pid: $p, pgid: $g, lstart: $l}' --argjson p "$$" \
   --argjson g "$(ps -o pgid= -p $$ | tr -d ' ')" --arg l "$(proc_lstart $$)"
 execute

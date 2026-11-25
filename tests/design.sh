@@ -1183,4 +1183,32 @@ assert_contains "$AUDIT_TEXT" "공용 입력 스타일" "design-audit flags seco
 assert_contains "$AUDIT_TEXT" "공용 컴포넌트 파일을 불러오지 않는다" "design-audit flags screens that skip the design system component file"
 pass "design review covers native controls, control roles, see-more placement, craft, and design-system use"
 
+# 디자인 규칙 문서의 `## 레이아웃`이 여백 관계(요소 안·그룹 안 항목 사이·그룹 사이·구획 사이)와 묶기(여백·구획선·면·접기)를
+# 하위 절로 갖게 한다. 불변식은 플러그인이, 관계별 단계·사다리·정렬은 프로젝트가 정한다. 필수 절 13개는 그대로다. (#514)
+SR_TOKENS="$(<"$ROOT/skills/design-system-builder/references/tokens.md")"
+assert_contains "$SR_TOKENS" "## Spacing relationships" "tokens.md has a spacing relationships section"
+SR_DENSITY_LINE="$(grep -n '^## Spacing and density' "$ROOT/skills/design-system-builder/references/tokens.md" | cut -d: -f1)"
+SR_REL_LINE="$(grep -n '^## Spacing relationships' "$ROOT/skills/design-system-builder/references/tokens.md" | cut -d: -f1)"
+[ -n "$SR_DENSITY_LINE" ] && [ -n "$SR_REL_LINE" ] && [ "$SR_REL_LINE" -gt "$SR_DENSITY_LINE" ] \
+  || fail "Spacing relationships must follow Spacing and density in tokens.md (density=$SR_DENSITY_LINE relationships=$SR_REL_LINE)"
+for phrase in "Fixed invariants" "Project decisions" "inner spacing is always smaller than outer spacing" "one boundary" "group the measured gaps by relationship"; do
+  assert_contains "$SR_TOKENS" "$phrase" "tokens.md spacing relationships: $phrase"
+done
+assert_contains "$(<"$ROOT/skills/design-system-builder/references/extract.md")" "Spacing relationships" "extract.md points axis A at the spacing relationships procedure"
+SR_OUT="$(<"$ROOT/skills/design-system-builder/references/output-format.md")"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '`### 여백 관계`' '`### 묶기`' '요소 안' '그룹 안 항목 사이' '그룹 사이' '구획 사이' 'propose adding' '| `## 레이아웃` |'; do
+  assert_contains "$SR_OUT" "$phrase" "output-format.md layout subsections: $phrase"
+done
+assert_eq '### 여백 관계|### 묶기|' "$(awk '/^## 레이아웃/{f=1;next} /^## /{f=0} f && /^### /' "$ROOT/docs/design-system.md" | tr '\n' '|')" "docs/design-system.md layout has spacing and grouping subsections in order"
+SR_DOC_SPACING="$(awk '/^### 여백 관계/{f=1;next} /^##/{f=0} f' "$ROOT/docs/design-system.md")"
+for tok in --space-1 --space-2 --space-4 --space-12; do
+  assert_contains "$SR_DOC_SPACING" "$tok" "docs/design-system.md spacing relationships names $tok"
+done
+SR_DOC_GROUP="$(awk '/^### 묶기/{f=1;next} /^##/{f=0} f' "$ROOT/docs/design-system.md")"
+for tok in --color-border --color-surface --color-surface-sunken .ds-num; do
+  assert_contains "$SR_DOC_GROUP" "$tok" "docs/design-system.md grouping names $tok"
+done
+pass "design rule documents carry spacing relationships and grouping under the layout section"
+
 finish_tests

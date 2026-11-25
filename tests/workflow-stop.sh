@@ -81,6 +81,26 @@ driver resume
 assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "a stale run resumes to approval ($DRIVER_OUT)"
 pass "a run killed outside the runner shows as stale and resumes"
 
+# 3-1. 러너만 밖에서 죽고 노드 자식 그룹이 남으면, resume은 겹쳐 돌지 않게 거부하고 stop이 그 그룹을 끈다.
+start_hang orphan
+O_ID="$(run_state .run_id)" O_PID="$(run_state .process.pid)" O_CHILD="$(run_state .process.child_pgid)"
+kill -KILL "$O_PID" 2>/dev/null || true
+for _ in $(seq 1 25); do kill -0 "$O_PID" 2>/dev/null || break; sleep 0.2; done
+kill -0 -- "-$O_CHILD" 2>/dev/null || fail "the node process group outlives a runner killed alone"
+driver status
+assert_contains "$DRIVER_OUT" "node process group $O_CHILD is still running" "status shows the orphaned node group"
+driver resume
+assert_eq "2" "$DRIVER_RC" "resume is refused while the orphaned node group runs"
+assert_contains "$DRIVER_OUT" "stop it first: stop --run $O_ID" "the refusal points to stop"
+kill -0 -- "-$O_CHILD" 2>/dev/null || fail "a refused resume leaves the node group alone"
+driver stop --run "$O_ID"
+assert_eq "0:stopped" "$DRIVER_RC:$(run_state .status)" "stop of a run whose runner is gone exits 0 and records stopped"
+! kill -0 -- "-$O_CHILD" 2>/dev/null || fail "stop ends the orphaned node process group"
+rm -f "$FAKE_LOG.hold"
+driver resume
+assert_eq "10:approval" "$DRIVER_RC:$(run_state .node)" "the run resumes after stop ($DRIVER_OUT)"
+pass "a node group orphaned by a runner killed alone blocks resume until stop ends it"
+
 # 4. --reason은 stop에만, 런이 없으면 2.
 use_repo stopa
 driver status --reason x

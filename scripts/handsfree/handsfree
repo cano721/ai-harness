@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""handsfree start | stop | status | setup | hooks | statusline | unhook | ui | log | check <wav...>"""
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import common  # noqa: E402
+import orca  # noqa: E402
+
+WHISPER_REPO = "https://github.com/ggml-org/whisper.cpp.git"
+MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+SETTINGS = os.environ.get("HANDSFREE_CLAUDE_SETTINGS") or os.path.expanduser("~/.claude/settings.json")
+# settings.json 에는 플러그인 설치 경로 대신 고정 경로의 연결 스크립트를 넣는다. 플러그인을 업데이트하면
+# 설치 경로가 바뀌어 훅이 끊기기 때문이다. 연결 스크립트는 start·hooks·statusline 때마다 지금 경로로 다시 쓴다.
+SPEAK_SHIM = os.path.join(common.HOME_DIR, "bin", "speak")
+STATUS_SHIM = os.path.join(common.HOME_DIR, "bin", "statusline")
+HOOK_COMMAND = SPEAK_SHIM
+MARKS = ("handsfree/bin/speak", "handsfree/scripts/speak.py")
+STATUS_MARKS = ("handsfree/bin/statusline", "handsfree/scripts/statusline")
+
+
+def write_shims():
+    os.makedirs(os.path.dirname(SPEAK_SHIM), exist_ok=True)
+    speak = os.path.join(HERE, "speak.py")
+    status = os.path.join(HERE, "statusline.sh")
+    shims = {
+        # 지금 설치본이 없으면(업데이트 직후 start 전) 아무것도 하지 않는다. 훅이 세션을 붙잡지 않게.
+        SPEAK_SHIM: '#!/bin/sh\nif [ -f "%s" ]; then exec python3 "%s" "$@"; fi\ncat >/dev/null\nexit 0\n' % (speak, speak),
+        STATUS_SHIM: '#!/bin/sh\nif [ -f "%s" ]; then exec bash "%s" "$@"; fi\ncat >/dev/null\n' % (status, status),
+    }
+    for path, body in shims.items():
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, 0o755)
+
+
+def missing():
+    cfg = common.load_config()
+    problems = [] if shutil.which("rec") else ["rec"]
+    if not common.whisper_binary():
+        problems.append("whisper-server")
+    if not os.path.exists(os.path.join(common.MODEL_DIR, cfg["model"])):
+        problems.append("model")
+    if not os.path.exists(orca.ORCA):
+        problems.append("orca")
+    return problems
+
+
+def build_whisper():
+    """brew 의 whisper-cpp 는 의존성이 많아 오래 걸린다. 소스에서 서버만 빌드한다."""
+    source = os.path.join(common.HOME_DIR, "build", "whisper.cpp")
+    if not os.path.isdir(source):
+        os.makedirs(os.path.dirname(source), exist_ok=True)
+        subprocess.check_call(["git", "clone", "--depth", "1", WHISPER_REPO, source])
+    subprocess.check_call(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF",
+                           "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_SDL2=OFF"], cwd=source)
+    subprocess.check_call(["cmake", "--build", "build", "-j", "8", "--target", "whisper-server"], cwd=source)
+    os.makedirs(common.BIN_DIR, exist_ok=True)
+    shutil.copy(os.path.join(source, "build", "bin", "whisper-server"), common.BIN_DIR)
+
+
+def setup():
+    cfg = common.load_config()
+    os.makedirs(common.MODEL_DIR, exist_ok=True)
+    formulas = [f for f, tool in (("sox", "rec"), ("cmake", "cmake")) if not shutil.which(tool)]
+    if formulas:
+        subprocess.check_call(["brew", "install"] + formulas)
+    if not common.whisper_binary():
+        build_whisper()
+    model = os.path.join(common.MODEL_DIR, cfg["model"])
+    if not os.path.exists(model):
+        subprocess.check_call(["curl", "-L", "--fail", "-o", model + ".part", MODEL_URL + cfg["model"]])
+        os.replace(model + ".part", model)
+    if not os.path.exists(common.CONFIG_PATH):
+        common.write_json(common.CONFIG_PATH, {"macros": {}, "commands": {}})
+    print("준비 완료" if not missing() else "남은 문제: %s" % ", ".join(missing()))
+
+
+def start():
+    write_shims()
+    if common.listener_pid():
+        print("이미 듣는 중 (pid %d)" % common.listener_pid())
+        return
+    problems = missing()
+    if problems:
+        sys.exit("준비 안 됨: %s → handsfree setup" % ", ".join(problems))
+    handle = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if handle:
+        common.update_state(current=handle)
+    out_path = os.path.join(common.HOME_DIR, "listener.out")
+    out = open(out_path, "w")
+    since = time.strftime("%m-%d %H:%M:%S")
+    child = subprocess.Popen(
+        [sys.executable, os.path.join(HERE, "listener.py")],
+        stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True,
+    )
+    for _ in range(120):
+        time.sleep(0.5)
+        if child.poll() is not None:
+            with open(out_path, encoding="utf-8", errors="replace") as f:
+                sys.exit("시작 실패: %s%s" % (f.read().strip()[-300:], tail(2)))
+        if any("듣기 시작" in line and line[:14] >= since for line in tail(5).splitlines()):
+            break
+    status()
+
+
+def stop():
+    pid = common.listener_pid()
+    if not pid:
+        print("듣고 있지 않음")
+        return
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(20):
+        if not common.listener_pid():
+            break
+        time.sleep(0.25)
+    print("듣기 종료" if not common.listener_pid() else "종료 신호를 보냈지만 아직 살아 있음")
+
+
+def tail(count):
+    try:
+        with open(common.LOG_PATH, encoding="utf-8") as f:
+            return "".join(f.readlines()[-count:])
+    except OSError:
+        return ""
+
+
+def status():
+    cfg = common.load_config()
+    pid = common.listener_pid()
+    paused = common.paused_until()
+    print("듣기: %s%s" % ("켜짐 (pid %d)" % pid if pid else "꺼짐", " · 쉬는 중" if pid and paused else ""))
+    print("호출어: %s" % ", ".join(cfg["wake_words"]))
+    print("읽어 주기: %s · 보내기 전 확인: %s · AI 분류: %s" % tuple(
+        "켬" if cfg.get(k) else "끔" for k in ("tts", "confirm_before_send", "ai_fallback")))
+    problems = missing()
+    if problems:
+        print("준비 안 됨: %s" % ", ".join(problems))
+    if "orca" in problems:
+        return
+    current = common.load_state().get("current")
+    for i, s in enumerate(orca.sessions()):
+        print("%s %d번 %s" % ("▶" if s["handle"] == current else " ", i + 1, orca.label(s)))
+
+
+def backup():
+    """처음 손대기 전의 settings.json 한 벌만 남긴다."""
+    target = SETTINGS + ".handsfree.bak"
+    if not os.path.exists(target):
+        shutil.copy(SETTINGS, target)
+
+
+def hooks():
+    """읽어 주기용 훅을 settings.json 에 넣는다. 여러 번 실행해도 한 번만 들어간다."""
+    write_shims()
+    with open(SETTINGS, encoding="utf-8") as f:
+        settings = json.load(f)
+    added = []
+    for event in ("Stop", "PermissionRequest", "Notification", "UserPromptSubmit"):
+        groups = settings.setdefault("hooks", {}).setdefault(event, [])
+        if any(any(m in str(h.get("command", "")) for m in MARKS) for g in groups for h in g.get("hooks", [])):
+            continue
+        groups.append({"hooks": [{"type": "command", "command": HOOK_COMMAND, "timeout": 10}]})
+        added.append(event)
+    if added:
+        backup()
+        common.write_json(SETTINGS, settings)
+    print("훅 추가: %s" % ", ".join(added) if added else "훅 이미 있음")
+
+
+def statusline():
+    """상태 표시줄에 듣기 표시를 붙인다. 원래 명령은 보관했다가 그대로 이어 실행한다."""
+    write_shims()
+    wrapper = STATUS_SHIM
+    with open(SETTINGS, encoding="utf-8") as f:
+        settings = json.load(f)
+    current = settings.get("statusLine") or {}
+    if any(m in str(current.get("command", "")) for m in STATUS_MARKS):
+        print("상태 표시줄 이미 설정됨")
+        return
+    os.makedirs(common.HOME_DIR, exist_ok=True)
+    with open(os.path.join(common.HOME_DIR, "statusline.orig"), "w", encoding="utf-8") as f:
+        f.write(current.get("command", ""))
+    backup()
+    settings["statusLine"] = dict(current, type="command", command=wrapper)
+    common.write_json(SETTINGS, settings)
+    print("상태 표시줄 설정 완료")
+
+
+def open_ui():
+    """상태 화면을 Orca 탭으로 연다. 안 되면 기본 브라우저로."""
+    if not common.listener_pid():
+        sys.exit("듣기가 꺼져 있습니다. 먼저 handsfree start")
+    url = "http://127.0.0.1:%d/" % int(common.load_config().get("ui_port", 8179))
+    done = subprocess.run([orca.ORCA, "tab", "create", "--url", url], capture_output=True, text=True)
+    if done.returncode != 0:
+        subprocess.run(["open", url])
+    print(url)
+
+
+def unhook():
+    """settings.json 에 넣은 훅과 상태 표시줄을 걷어 낸다."""
+    with open(SETTINGS, encoding="utf-8") as f:
+        settings = json.load(f)
+    for event, groups in list(settings.get("hooks", {}).items()):
+        kept = []
+        for group in groups:
+            inner = [h for h in group.get("hooks", []) if not any(m in str(h.get("command", "")) for m in MARKS)]
+            if inner:
+                kept.append(dict(group, hooks=inner))
+        if kept:
+            settings["hooks"][event] = kept
+        else:
+            del settings["hooks"][event]
+    line = settings.get("statusLine") or {}
+    if any(m in str(line.get("command", "")) for m in STATUS_MARKS):
+        orig_path = os.path.join(common.HOME_DIR, "statusline.orig")
+        original = open(orig_path, encoding="utf-8").read().strip() if os.path.exists(orig_path) else ""
+        if original:
+            settings["statusLine"] = dict(line, command=original)
+        else:
+            del settings["statusLine"]
+    common.write_json(SETTINGS, settings)
+    print("훅과 상태 표시줄을 원래대로 돌렸습니다")
+
+
+def main():
+    command = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if command == "check":
+        os.execv(sys.executable, [sys.executable, os.path.join(HERE, "listener.py"), "--file", "--dry"] + sys.argv[2:])
+    if command == "log":
+        print(tail(30), end="")
+        return
+    table = {"start": start, "stop": stop, "status": status, "setup": setup, "hooks": hooks,
+             "statusline": statusline, "unhook": unhook, "ui": open_ui}
+    if command not in table:
+        sys.exit(__doc__)
+    table[command]()
+
+
+if __name__ == "__main__":
+    main()
