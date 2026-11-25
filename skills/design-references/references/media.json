@@ -1,0 +1,41 @@
+{
+  "default": "web-page",
+  "media": {
+    "web-page": {
+      "widths": [1440, 390],
+      "record_size": {"width": 1440, "height": 900},
+      "tabs": {"tone": "톤앤매너", "component": "구성요소", "layout": "레이아웃", "interaction": "인터랙션", "competitor": "경쟁사 분석"},
+      "analysis": {
+        "labels": {"leads_with": "첫 화면에서 내세우는 것", "claim": "주장", "cta": "주 버튼", "gap": "우리와 다른 점"},
+        "required": ["leads_with", "claim", "cta", "gap"]
+      }
+    },
+    "mobile-page": {
+      "widths": [390],
+      "record_size": {"width": 390, "height": 844},
+      "tabs": {"tone": "톤앤매너", "component": "구성요소", "layout": "화면 구성", "interaction": "인터랙션", "competitor": "경쟁사 분석"},
+      "analysis": {
+        "labels": {"leads_with": "첫 화면에서 내세우는 것", "claim": "주장", "cta": "주 버튼", "gap": "우리와 다른 점"},
+        "required": ["leads_with", "claim", "cta", "gap"]
+      }
+    },
+    "print": {
+      "widths": [1440],
+      "record_size": {"width": 1440, "height": 900},
+      "tabs": {"tone": "톤앤매너", "component": "요소", "layout": "판면 구성", "interaction": "인터랙션", "competitor": "비교작 분석"},
+      "analysis": {
+        "labels": {"leads_with": "가장 먼저 눈에 띄는 것", "claim": "전하는 메시지", "cta": "행동 유도(연락처·QR 등)", "gap": "우리와 다른 점"},
+        "required": ["leads_with", "claim", "gap"]
+      }
+    },
+    "graphic": {
+      "widths": [1440],
+      "record_size": {"width": 1440, "height": 900},
+      "tabs": {"tone": "톤앤매너", "component": "요소", "layout": "구도", "interaction": "모션", "competitor": "비교작 분석"},
+      "analysis": {
+        "labels": {"leads_with": "가장 먼저 눈에 띄는 것", "claim": "전하는 메시지", "cta": "행동 유도(연락처·QR 등)", "gap": "우리와 다른 점"},
+        "required": ["leads_with", "claim", "gap"]
+      }
+    }
+  }
+}

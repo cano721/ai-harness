@@ -1183,6 +1183,121 @@ assert_contains "$AUDIT_TEXT" "공용 입력 스타일" "design-audit flags seco
 assert_contains "$AUDIT_TEXT" "공용 컴포넌트 파일을 불러오지 않는다" "design-audit flags screens that skip the design system component file"
 pass "design review covers native controls, control roles, see-more placement, craft, and design-system use"
 
+# design-references 매체(#518): 웹페이지 밖의 매체(mobile-page·print·graphic)는 매체별 최소치·캡처 폭·탭 라벨을 쓴다.
+# medium.json이 없으면 web-page다 — 위의 design-references·landing-run.sh 블록이 바뀌지 않고 통과하는 것이 회귀 확인이다.
+MD_W="$TEST_TMP/md-run"; mkdir -p "$MD_W"
+md() { "$ROOT/scripts/design-refs.sh" "$@" --work "$MD_W" 2>"$TEST_TMP/md.err"; }
+md_rc() { local rc=0; md "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+cp "$TEST_TMP/lp-searches.json" "$MD_W/searches.json"; cp "$TEST_TMP/lp-slots.json" "$MD_W/component-slots.json"
+jq 'map(select(.kind != "interaction" and .kind != "competitor"))' "$TEST_TMP/lp-refs.json" >"$TEST_TMP/md-print.json"
+cp "$TEST_TMP/md-print.json" "$MD_W/references.json"
+# 매체 값은 네 가지뿐이고, 정하면 작업 폴더의 medium.json에 남아 다음 명령이 읽는다.
+assert_eq 2 "$(md_rc check --mode unattended --medium tape)" "an unknown medium is refused"
+assert_not_file "$MD_W/medium.json"
+assert_eq ok "$(md check --mode unattended --medium print)" "print passes without interaction or competitor references"
+assert_eq '{"medium":"print"}' "$(jq -c . "$MD_W/medium.json")" "--medium is kept in the work folder's medium.json"
+assert_eq ok "$(md check --mode unattended)" "the work folder's medium holds without --medium"
+printf '{"medium":' >"$MD_W/medium.json"
+assert_eq 2 "$(md_rc check --mode unattended)" "a broken medium.json is refused"
+printf '{"medium":"tape"}\n' >"$MD_W/medium.json"
+assert_eq 2 "$(md_rc check --mode unattended)" "an unknown medium in medium.json is refused"
+assert_eq 4 "$(md_rc check --mode unattended --medium web-page)" "the same set is short as a web page"
+assert_contains "$(cat "$TEST_TMP/md.err")" "interaction has 0" "a web page still needs an interaction reference"
+assert_contains "$(cat "$TEST_TMP/md.err")" "recommend exactly one interaction" "a web page still needs a recommended interaction"
+# 인쇄물의 비교작은 선택이고 행동 유도(cta)도 선택이다 — 도메인 2곳 검사도 없다. 웹페이지는 cta가 빠지면 거부한다.
+jq '. + [{"id":"P1","kind":"competitor","title":"c","url":"https://rival-e.example/","source":"search","captures":["refs/p1.png"],"analysis":{"leads_with":"a","claim":"b","gap":"d"}}]' \
+  "$TEST_TMP/md-print.json" >"$MD_W/references.json"
+assert_eq ok "$(md check --mode unattended --medium print)" "print takes one comparison piece without a call to action"
+jq 'map(if .id == "R5" then del(.analysis.cta) else . end)' "$TEST_TMP/lp-refs.json" >"$MD_W/references.json"
+assert_eq 4 "$(md_rc check --mode unattended --medium web-page)" "a web page competitor without a call to action is refused"
+assert_contains "$(cat "$TEST_TMP/md.err")" "competitor needs analysis" "the check names the missing analysis"
+# 모바일 페이지는 대화형에서 인터랙션 2개가 필요하다.
+cp "$TEST_TMP/lp-refs.json" "$MD_W/references.json"
+assert_eq 4 "$(md_rc check --mode interactive --medium mobile-page)" "an interactive mobile page with one interaction is refused"
+assert_contains "$(cat "$TEST_TMP/md.err")" "interaction has 1, needs at least 2" "a mobile page needs two interactions when looked at"
+# rules 파일: 매체 규칙은 tone·component·layout만 1 이상, 최상위(web-page)는 지금 그대로다.
+cp "$TEST_TMP/md-print.json" "$MD_W/references.json"
+jq '.media.print.interactive.per_kind.tone = 0' "$DR_RULES" >"$TEST_TMP/md-rules.json"
+assert_eq 2 "$(DESIGN_REFS_RULES="$TEST_TMP/md-rules.json" md_rc check --mode unattended --medium print)" "a medium rule without tone references is invalid"
+assert_contains "$(cat "$TEST_TMP/md.err")" "invalid rules file" "the check says the rules file is invalid"
+jq '.media.print.interactive.competitor_domains = 1' "$DR_RULES" >"$TEST_TMP/md-rules.json"
+assert_eq ok "$(DESIGN_REFS_RULES="$TEST_TMP/md-rules.json" md check --mode unattended --medium print)" "a medium without competitors may ask for fewer competitor sites"
+jq '.media.print.interactive.per_kind.competitor = 1' "$DR_RULES" >"$TEST_TMP/md-rules.json"
+assert_eq 2 "$(DESIGN_REFS_RULES="$TEST_TMP/md-rules.json" md_rc check --mode unattended --medium print)" "a medium asking for competitors needs two competitor sites"
+jq '.interactive.per_kind.interaction = 0 | .interactive.interaction_video = 0' "$DR_RULES" >"$TEST_TMP/md-rules.json"
+assert_eq 2 "$(DESIGN_REFS_RULES="$TEST_TMP/md-rules.json" md_rc check --mode unattended --medium print)" "the web page rules still need interactions"
+# 모음 사이트(behance·dribbble·pinterest·notefolio)의 작품은 작품 단위로 센다. 작품이 아닌 주소는 도메인 단위 그대로다.
+md_urls() { jq --arg a "$1" --arg b "$2" 'map(if .id == "R1" then .url = $a elif .id == "R3" then .url = $b else . end)' "$TEST_TMP/md-print.json" >"$MD_W/references.json"; }
+md_urls https://www.behance.net/gallery/111/a https://www.behance.net/gallery/222/b
+assert_eq ok "$(md check --mode unattended)" "two works on behance are two sites"
+md_urls https://www.behance.net/gallery/111/a https://behance.net/gallery/111/other-title
+assert_eq 4 "$(md_rc check --mode unattended)" "one behance work in two kinds is refused"
+assert_contains "$(cat "$TEST_TMP/md.err")" "behance.net/gallery/111 is used in" "the check names the reused work"
+md_urls https://dribbble.com/shots/123-a https://dribbble.com/shots/456-b
+assert_eq ok "$(md check --mode unattended)" "two dribbble shots are two sites"
+md_urls https://dribbble.com/shots/123-a https://dribbble.com/shots/123
+assert_contains "$(md_rc check --mode unattended; cat "$TEST_TMP/md.err")" "dribbble.com/shots/123 is used in" "one dribbble shot in two kinds is refused"
+md_urls https://www.pinterest.com/pin/1/ https://pinterest.com/pin/2/
+assert_eq ok "$(md check --mode unattended)" "two pins are two sites"
+md_urls https://www.pinterest.com/pin/1/ https://pinterest.com/pin/1/
+assert_contains "$(md_rc check --mode unattended; cat "$TEST_TMP/md.err")" "pinterest.com/pin/1 is used in" "one pin in two kinds is refused"
+md_urls https://notefolio.net/someone/123 https://notefolio.net/other/456
+assert_eq ok "$(md check --mode unattended)" "two notefolio works are two sites"
+md_urls 'https://www.behance.net/search/projects?search=poster' 'https://www.behance.net/search/projects?search=flyer'
+assert_eq 4 "$(md_rc check --mode unattended)" "a gallery search page still counts as the gallery's domain"
+assert_contains "$(cat "$TEST_TMP/md.err")" "behance.net is used in" "the check names the gallery domain"
+# 이미지 레퍼런스: 원본 이미지 주소(http(s))만 있어도 캡처를 대신한다.
+jq 'map(if .id == "R1" or .id == "R3" then del(.captures) | .image = "https://img.example/\(.id).jpg" else . end)' "$TEST_TMP/md-print.json" >"$MD_W/references.json"
+assert_eq ok "$(md check --mode unattended)" "an image reference needs no capture"
+jq 'map(if .id == "R1" then .image = "file:///etc/passwd" else . end)' "$TEST_TMP/md-print.json" >"$MD_W/references.json"
+assert_eq 4 "$(md_rc check --mode unattended)" "an image that is not an http(s) URL is refused"
+assert_contains "$(cat "$TEST_TMP/md.err")" "image must be an http(s) URL" "the check names the bad image"
+jq 'map(if .id == "R4" then del(.video) | .image = "https://img.example/motion.gif" else . end)' "$TEST_TMP/lp-refs.json" >"$MD_W/references.json"
+assert_eq ok "$(md check --mode unattended --medium web-page)" "an image stands in for an interaction capture"
+# capture: 호출 인자는 그대로고 매체만 medium.json에 남는다. 기본 폭은 매체를 따르고, 항목의 widths가 이긴다.
+printf '[{"id":"a","url":"https://a.example/"},{"id":"b","url":"https://b.example/","widths":[800],"record":true}]\n' >"$MD_W/refs-to-capture.json"
+assert_eq "--work $(cd "$MD_W" && pwd) --file $(cd "$MD_W" && pwd)/refs-to-capture.json --phase all" \
+  "$(LANDING_CAPTURE_REFS_CMD="echo" md capture --medium mobile-page --file "$MD_W/refs-to-capture.json")" "capture passes the same arguments with a medium"
+assert_eq '{"medium":"mobile-page"}' "$(jq -c . "$MD_W/medium.json")" "capture --medium keeps the medium"
+if command -v node >/dev/null 2>&1; then
+  MD_C="$TEST_TMP/md-capture"; mkdir -p "$MD_C"
+  md_plan() { node "$ROOT/scripts/landing-capture-refs.mjs" --work "$MD_C" --file "$MD_W/refs-to-capture.json" --dry-run; }
+  assert_eq '[1440,390]|[800]' "$(md_plan | jq -r '[(.[0].widths | tojson), (.[1].widths | tojson)] | join("|")')" "a web page is captured at 1440 and 390 by default"
+  assert_not_file "$MD_C/refs/capture-refs.json"
+  printf '{"medium":"mobile-page"}\n' >"$MD_C/medium.json"
+  assert_eq '[390]|{"width":390,"height":844}' "$(md_plan | jq -r '[(.[0].widths | tojson), (.[1].record | tojson)] | join("|")')" "a mobile page is captured and recorded at phone width"
+  printf '{"medium":"print"}\n' >"$MD_C/medium.json"
+  assert_eq '[1440]|{"width":1440,"height":900}' "$(md_plan | jq -r '[(.[0].widths | tojson), (.[1].record | tojson)] | join("|")')" "print is captured at 1440"
+  printf '{"medium":"graphic"}\n' >"$MD_C/medium.json"
+  assert_eq '[1440]' "$(md_plan | jq -c '.[0].widths')" "graphic is captured at 1440"
+  # 보드: print는 매체 라벨, 인터랙션 탭 없음, 레이아웃 대표만. 이미지 레퍼런스는 원본 이미지로 싣는다.
+  jq 'map(if .id == "R3" then .image = "https://img.example/a.jpg" else . end)' "$TEST_TMP/md-print.json" \
+    | jq '. + [{"id":"P1","kind":"competitor","title":"c","url":"https://rival-e.example/","source":"search","captures":["refs/p1.png"],"analysis":{"leads_with":"a","claim":"b","gap":"d"}}]' >"$MD_W/references.json"
+  cp "$TEST_TMP/lp-tone.json" "$MD_W/tone.json"
+  md board --medium print >/dev/null
+  MD_HTML="$(cat "$MD_W/board.html")"
+  for md_s in "판면 구성" "비교작 분석" "전하는 메시지" "레이아웃 대표를 ★로 골라 주세요" '<img src="https://img.example/a.jpg"'; do
+    assert_contains "$MD_HTML" "$md_s" "a print board shows $md_s"
+  done
+  case "$MD_HTML" in *'data-tab="interaction"'*) fail "a print board without interaction references has no interaction tab" ;; esac
+  case "$MD_HTML" in *"<dt>행동 유도"*) fail "a print board leaves out an empty call to action" ;; esac
+  MD_D="$TEST_TMP/md-default"; mkdir -p "$MD_D"
+  cp "$TEST_TMP/lp-refs.json" "$MD_D/references.json"; cp "$TEST_TMP/lp-slots.json" "$MD_D/component-slots.json"
+  "$ROOT/scripts/design-refs.sh" board --work "$MD_D" >/dev/null 2>&1
+  MD_HTML="$(cat "$MD_D/board.html")"
+  for md_s in "경쟁사 분석" "첫 화면에서 내세우는 것" "레이아웃·인터랙션 대표를 ★로 골라 주세요" 'data-tab="interaction"'; do
+    assert_contains "$MD_HTML" "$md_s" "a board without a medium still shows $md_s"
+  done
+  assert_not_file "$MD_D/medium.json"
+fi
+MD_SKILL="$(cat "$ROOT/skills/design-references/SKILL.md")"
+for md_s in mobile-page print graphic --medium "\`image\`" behance media.json; do
+  assert_contains "$MD_SKILL" "$md_s" "design-references documents $md_s"
+done
+assert_contains "$(sed -n '3p' "$ROOT/skills/design-references/SKILL.md")" "print" "the description reaches print requests"
+assert_contains "$(sed -n '3p' "$ROOT/skills/design-references/SKILL.md")" "mobile" "the description reaches mobile pages"
+pass "design-references media: per-medium minimums, capture widths, tab labels, image references, and gallery works (#518)"
+
 # 디자인 규칙 문서의 `## 레이아웃`이 여백 관계(요소 안·그룹 안 항목 사이·그룹 사이·구획 사이)와 묶기(여백·구획선·면·접기)를
 # 하위 절로 갖게 한다. 불변식은 플러그인이, 관계별 단계·사다리·정렬은 프로젝트가 정한다. 필수 절 13개는 그대로다. (#514)
 SR_TOKENS="$(<"$ROOT/skills/design-system-builder/references/tokens.md")"
