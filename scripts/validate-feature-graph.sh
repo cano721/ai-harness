@@ -38,6 +38,8 @@ has_transition discover brief
 has_transition brief approval
 has_transition approval deliver user_explicitly_approved
 has_transition approval deliver auto_approved_by_policy
+has_transition approval user_decision brief_coverage_incomplete
+has_transition deliver brief brief_revised
 has_transition review publish no_blocking_findings
 has_transition review repair blocking_findings
 has_transition repair review required_checks_pass

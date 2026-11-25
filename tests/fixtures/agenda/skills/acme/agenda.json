@@ -1,0 +1,9 @@
+{
+  "id": "acme",
+  "name": "Acme 메신저",
+  "fetch": ["bash", "fetch.sh"],
+  "connect": ["bash", "mark.sh", "connected"],
+  "disconnect": ["bash", "mark.sh", "disconnected"],
+  "done": ["bash", "done.sh"],
+  "interval_minutes": 15
+}
