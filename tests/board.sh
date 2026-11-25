@@ -247,6 +247,33 @@ assert_contains "$BOARD_BUSY_OUT" "다른 프로세스" "board open says why it 
 kill "$BOARD_BUSY_PID" 2>/dev/null || true
 wait "$BOARD_BUSY_PID" 2>/dev/null || true
 assert_not_file "$BOARD_DATA/board/server.json"
+# BOARD_PORT를 정하지 않았을 때 시작 포트를 다른 프로세스가 쓰면 멈추지 않고 다음 빈 포트(최대 +9)에 띄운다.
+BPF_DATA="$BOARD_T/port-fallback"; mkdir -p "$BPF_DATA"
+BPF_P="$(free_port)"
+bpf_sh() {
+  env -u BOARD_PORT PATH="$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BPF_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$BOARD_T/projects" \
+    HARNESS_CLAUDE_SETTINGS="$BOARD_T/settings.json" BOARD_PORT_BASE="$BPF_P" BOARD_NO_BROWSER=1 \
+    BOARD_JIRA_URL= JIRA_BASE_URL= bash "$ROOT/scripts/board/board.sh" "$@"
+}
+python3 -I -c 'import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(30)' "$BPF_P" "$BPF_DATA" &
+BPF_PID=$!
+for _ in $(seq 50); do python3 -I -c 'import socket, sys; sys.exit(socket.socket().connect_ex(("127.0.0.1", int(sys.argv[1]))))' "$BPF_P" && break; sleep 0.1; done
+if ! BPF_OUT="$(bpf_sh open --no-browser 2>&1)"; then
+  kill "$BPF_PID" 2>/dev/null || true; wait "$BPF_PID" 2>/dev/null || true
+  bpf_sh stop >/dev/null 2>&1 || true
+  fail "board open falls back to a free port when the default is taken: $BPF_OUT"
+fi
+BPF_PORT="$(jq -r '.port' "$BPF_DATA/board/server.json")"
+BPF_TOKEN="$(jq -r '.url' <<<"$BPF_OUT" | sed 's/.*[?&]t=//')"
+assert_eq "true" "$(jq -r '.running' <<<"$BPF_OUT")" "fallback board reports running"
+assert_eq "true" "$([ "$BPF_PORT" -gt "$BPF_P" ] && [ "$BPF_PORT" -le "$((BPF_P + 9))" ] && echo true || echo false)" "server.json records a port within the next 9 of the busy one (port=$BPF_PORT base=$BPF_P)"
+assert_contains "$(jq -r '.url' <<<"$BPF_OUT")" ":$BPF_PORT/" "open output url carries the actual port"
+assert_eq "200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$BPF_PORT/status.json?t=$BPF_TOKEN")" "fallback board serves status.json on the actual port"
+bpf_sh stop >/dev/null 2>&1 || true
+kill "$BPF_PID" 2>/dev/null || true
+wait "$BPF_PID" 2>/dev/null || true
+assert_not_file "$BPF_DATA/board/server.json"
 pass "harness board server, tokens, status and permission hook"
 
 # 보드 설정 쓰기: 개인 단계·하네스 동작은 ~/.ai-harness/config의 해당 키만 바꾸고 다른 줄·권한은 그대로 둔다.
