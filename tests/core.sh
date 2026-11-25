@@ -779,6 +779,24 @@ assert_eq "2" "$jobs_rc" "an invalid HM_TEST_JOBS is rejected like an invalid -j
 assert_contains "$(<"$TEST_TMP/jobs-env.out")" "HM_TEST_JOBS" "the rejection names HM_TEST_JOBS"
 pass "run.sh takes HM_TEST_JOBS as its default concurrency"
 
+# 에이전트가 베끼는 문서에 리터럴 `bash tests/run.sh -j N`이 있으면 러너가 넘기는 HM_TEST_JOBS가 무시된다.
+# 문서는 `-j` 없는 `bash tests/run.sh`만 적고 병렬 수는 환경변수에 맡긴다. (#544)
+JOBS_DOC_FILES="AGENTS.md .ai-harness/docs/testing.md .ai-harness/workflows/release.md .ai-harness/workflows/implement-feature.md .ai-harness/workflows/fix-bug.md templates/fix-bug/SKILL.md templates/implement-feature/SKILL.md .agents/skills/fix-bug/SKILL.md .agents/skills/implement-feature/SKILL.md .claude/commands/fix-bug.md .claude/commands/implement-feature.md skills/harness-init/SKILL.md"
+JOBS_DOC_PATHS=""
+for jobs_doc in $JOBS_DOC_FILES; do
+  [[ -f "$ROOT/$jobs_doc" ]] || fail "doc missing: $jobs_doc"
+  JOBS_DOC_PATHS="$JOBS_DOC_PATHS $ROOT/$jobs_doc"
+done
+# shellcheck disable=SC2086
+jobs_hits="$(grep -nE '^bash tests/run\.sh -j' $JOBS_DOC_PATHS || true)"
+[[ -z "$jobs_hits" ]] || fail "docs must not start a line with a literal 'bash tests/run.sh -j': $jobs_hits"
+# shellcheck disable=SC2086,SC2016
+jobs_hits="$(grep -nF 'run.sh -j "${HM_TEST_JOBS' $JOBS_DOC_PATHS || true)"
+[[ -z "$jobs_hits" ]] || fail "docs must not pass \$HM_TEST_JOBS to -j by hand: $jobs_hits"
+grep -Eq '^bash tests/run\.sh$' "$ROOT/.ai-harness/workflows/release.md" || fail "release.md lists a bare 'bash tests/run.sh' line"
+grep -Eq '^bash tests/run\.sh +#' "$ROOT/AGENTS.md" || fail "AGENTS.md Quick Commands has a 'bash tests/run.sh   # ...' line without -j"
+pass "docs tell agents to run bash tests/run.sh without a literal -j"
+
 # -j도 HM_TEST_JOBS도 없으면 동시 실행 수는 max(1, min(ncpu/2, 4))다. ncpu는 러너 resolve_check_jobs처럼 getconf부터 구한다. (#556)
 fake_cpu="$TEST_TMP/fake-cpu"
 mkdir -p "$fake_cpu"

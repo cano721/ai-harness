@@ -30,10 +30,10 @@
 
 ## 4. 검증 명령
 
-라운드마다(리뷰·수리 때마다, Brief의 `checks`). 러너는 모든 검사에 동시 실행 수 `HM_TEST_JOBS`를 넘기므로 `-j`에 그 값을 준다(러너 밖에서는 2):
+라운드마다(리뷰·수리 때마다, Brief의 `checks`). 러너가 모든 검사에 동시 실행 수 `HM_TEST_JOBS`를 넘기고 `-j` 없는 `run.sh`가 그 값을 쓰므로 `-j`를 적지 않는다. 러너 밖에서 병렬로 돌리려면 사람이 `-j N`을 붙인다:
 
 ```bash
-bash tests/run.sh -j "${HM_TEST_JOBS:-2}" --changed
+bash tests/run.sh --changed
 bash tests/run.sh --lint
 ```
 

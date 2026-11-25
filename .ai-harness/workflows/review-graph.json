@@ -33,7 +33,7 @@
     {"from": "ui_review", "to": "repair", "when": "ui_issues_and_repair_authorized"},
     {"from": "ui_review", "to": "user_decision", "when": "ui_issues_need_user_decision_or_ui_unverified"}
   ],
-  "limits": {"max_repair_attempts": 10},
+  "limits": {"max_repair_attempts": 10, "max_identical_repair_failures": 2},
   "invariants": [
     "Initial review nodes are read-only.",
     "A blocking finding cannot transition directly to done.",

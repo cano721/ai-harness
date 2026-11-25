@@ -2,6 +2,7 @@
 # Harness Board 상태: ~/.ai-harness 데이터와 작업 세션(work.sh)을 칸반 항목 JSON으로 바꾼다.
 # 출력: {generated_at, window_days, quiet_runs:[{kind, count, last_at}], items:[{section, kind, project, state, at, title, detail, link, log, cmd, id, actions}]}
 # state: queued | running | needs_human | blocked | done
+# 러너 칸은 state.json status마다 따로 나누고(#564), 모르는 status를 '작업 중'으로 두지 않는다. 오래된 결정 대기는 막힘으로 내린다.
 set -euo pipefail
 
 DATA="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
@@ -56,7 +57,7 @@ hkey=""
 if [ "$CACHE_SECS" -gt 0 ]; then
   if stat -c %s /dev/null >/dev/null 2>&1; then keys_of() { stat --printf '%s:%Y\t%n\n' "$@" 2>/dev/null; }
   else keys_of() { stat -f '%z:%m%t%N' "$@" 2>/dev/null; }; fi
-  hkey=$({ printf '%s %s %s %s\n' "$DAYS" "$STALE_HOURS" "${BOARD_RUNNER_STALE_MIN:-}" "$SCRIPTS_DIR"
+  hkey=$({ printf '%s %s %s %s %s\n' "$DAYS" "$STALE_HOURS" "${BOARD_RUNNER_STALE_MIN:-}" "${BOARD_DECISION_STALE_DAYS:-}" "$SCRIPTS_DIR"
     keys_of "$DATA/harvest-auto/runs.jsonl" "$DATA/autofix/runs.jsonl" "$DATA/logs/schedule.jsonl" "$DATA/applied/applied.jsonl" \
       "$DATA"/runs/*/*/* "$DATA"/harvest-queue/*/analysis-batch.json "$DATA"/harvest-queue/*/auto-attempted-batch || true
   } | cksum | tr -d ' \t')
@@ -222,9 +223,13 @@ fi
 
 # 3) 워크플로 러너: state.json 상태로 판정. state.json에는 프로세스 기록(pid)이 없어, 실행 폴더에 최근
 # RUNNER_STALE_MIN분 안에 바뀐 파일이 있는지로 살아 있는지 본다(노드 로그·progress.log가 도구 호출마다 쌓인다).
-# running인데 그 사이 기록이 없거나, 러너가 중간에 끝낸 incomplete는 '중단됨'(stall)이고 resume으로 이어 간다.
+# running인데 그 사이 기록이 없거나, 러너가 중간에 끝낸 incomplete·stop으로 멈춘 stopped는 '중단됨'(stall)이고 resume으로 이어 간다.
+# 결정 대기(needs_user_decision·await 노드·user_decision·waiting_approval)는 사람 필요지만, presented_at부터
+# DECISION_STALE_DAYS일이 지나면 막힘(decision_stale)으로 내린다. 모르는 status는 '작업 중'이 아니라 막힘으로 둔다(#564).
 RUNNER_STALE_MIN="${BOARD_RUNNER_STALE_MIN:-60}"
 case "$RUNNER_STALE_MIN" in ''|*[!0-9]*) RUNNER_STALE_MIN=60 ;; esac
+DECISION_STALE_DAYS="${BOARD_DECISION_STALE_DAYS:-7}"
+case "$DECISION_STALE_DAYS" in ''|*[!0-9]*) DECISION_STALE_DAYS=7 ;; esac
 : > "$tmp/runner.jsonl"
 for s in "$DATA"/runs/*/*/state.json; do
   [ -f "$s" ] || continue
@@ -233,35 +238,57 @@ for s in "$DATA"/runs/*/*/state.json; do
     && [ -z "$(find "${s%/*}" -maxdepth 1 -type f -mmin "-$RUNNER_STALE_MIN" 2>/dev/null | head -n 1)" ]; then
     quiet=true
   fi
-  jq -c --arg since "$since" --arg path "$s" --argjson quiet "$quiet" --arg stale_min "$RUNNER_STALE_MIN" '
+  jq -c --arg since "$since" --arg path "$s" --argjson quiet "$quiet" --arg stale_min "$RUNNER_STALE_MIN" \
+    --argjson now "$now_e" --argjson decision_days "$DECISION_STALE_DAYS" '
+    def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     (.repo | split("/") | map(select(. != "")) | .[-1]) as $proj
     | ((.repo | capture("worktrees/(?<k>[A-Z]+-[0-9]+)/") | .k)? // null) as $issue
     | (.request // "" | split("\n")[0] | sub("^#+ *"; "")) as $title0
     | (if $issue != null and ($title0 | startswith($issue) | not) then "\($issue) \($title0)" else $title0 end) as $title
-    | if .status == "done" then
+    | (.workflow // "feature") as $wf
+    | if .status == "done" or .status == "abandoned" or .status == "fix_list" then
         if (.finished_at // .started_at) >= $since then
           {kind: "runner", project: $proj, cwd: .repo, state: "done", at: (.finished_at // .started_at), title: $title,
-           detail: "워크플로 완료 · 정책 \(.policy.git // "?")", link: (.publish.pr_url? // null), log: $path, cmd: null}
+           detail: (if .status == "done" then "워크플로 완료 · 정책 \(.policy.git // "?")"
+                    else "워크플로 끝남(\(.status)) · 노드 \(.node)" end),
+           link: (.publish.pr_url? // null), log: $path, cmd: null}
         else empty end
       elif .status == "baseline_changed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "멈춘 뒤 저장소가 바뀌어 이어 가지 않음: \(.message // .node)", link: null, log: $path, cmd: null}
-      elif (.needs_user_decision // false) or (.node | tostring | test("^await")) then
-        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.presented_at // .started_at), title: $title,
-         detail: "노드 \(.node)에서 사람 결정을 기다림", link: null, log: $path,
-         cmd: "workflow-driver.sh approve --run \(.run_id)"}
+      elif .status == "invariant_violation" then
+        {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
+         detail: "불변식 위반: \(.message // .node)", link: null, log: $path, cmd: null}
+      elif (.needs_user_decision // false) or (.node | tostring | test("^await"))
+           or .status == "user_decision" or .status == "waiting_approval" then
+        (.presented_at // .finished_at // .started_at) as $at
+        | (try (($now - ($at | epoch)) / 86400 | floor) catch null) as $age
+        | (if .status == "user_decision" then null else "workflow-driver.sh approve --run \(.run_id)" end) as $cmd
+        | (if .status == "user_decision" then "결정 필요: \(.message // "노드 \(.node)")"
+           else "노드 \(.node)에서 사람 결정을 기다림" end) as $why
+        | if $age != null and $age >= $decision_days then
+            {kind: "runner", project: $proj, cwd: .repo, state: "blocked", stall: "decision_stale", at: $at, title: $title,
+             detail: "\($why) — \($age)일째 응답 없음", link: null, log: $path, cmd: $cmd}
+          else
+            {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: $at, title: $title,
+             detail: $why, link: null, log: $path, cmd: $cmd}
+          end
       elif .status == "failed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
          detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}
-      elif .status == "incomplete" or (.status == "running" and $quiet) then
-        (if .status == "incomplete" then "incomplete" else "no_activity" end) as $why
+      elif .status == "incomplete" or .status == "stopped" or (.status == "running" and $quiet) then
+        (if .status == "running" then "no_activity" else .status end) as $why
         | {kind: "runner", project: $proj, cwd: .repo, state: "blocked", stall: $why, at: (.finished_at // .started_at), title: $title,
            detail: (if $why == "incomplete" then "노드 \(.node)에서 중단됨: \(.message // "이유 기록 없음")"
+                    elif $why == "stopped" then "노드 \(.node)에서 stop으로 멈춤"
                     else "노드 \(.node)에서 \($stale_min)분 넘게 기록이 없음 — 러너 프로세스가 끝난 것으로 보임" end),
-           link: null, log: $path, cmd: "workflow-driver.sh resume --workflow \(.workflow // "feature")"}
-      else
+           link: null, log: $path, cmd: "workflow-driver.sh resume --workflow \($wf)"}
+      elif .status == "running" then
         {kind: "runner", project: $proj, cwd: .repo, state: "running", at: .started_at, title: $title,
          detail: "현재 노드: \(.node)", link: null, log: $path, cmd: null}
+      else
+        {kind: "runner", project: $proj, cwd: .repo, state: "blocked", at: (.finished_at // .started_at), title: $title,
+         detail: "알 수 없는 상태: \(.status) (노드 \(.node))", link: null, log: $path, cmd: null}
       end' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
 done
 jq -s . "$tmp/runner.jsonl" > "$tmp/runner.json"

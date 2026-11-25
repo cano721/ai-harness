@@ -16,166 +16,166 @@
   ],
   "edit_guard": false,
   "initialized": "2026-11-07",
-  "harness_version": "0.83.0",
+  "harness_version": "0.96.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
       "content_sha256": "6a2c8132b335f170a83de3d4df707ece3c060fa01167697a2b128db2daf6bb39",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "644bd4b0722c202c1b1fef4a0e467a8636cb1b4b4a5e5824dc2147ac5e3d3e9f",
-      "template_version": "0.91.0"
+      "content_sha256": "6b396832099a6bd87b365ac0b56d097e86478613d770dc273bdbb843b7a007b5",
+      "template_version": "0.96.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
       "content_sha256": "425b37945a1a45744705e1ec3f832c0f3271e58539c8599e9f6081391e3f56d3",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
       "content_sha256": "c366c1ce869b9f99340fa2a5404830f0003f75d4b7a0d1c1c41f3c8a6e902ded",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".ai-harness/workflows/review-graph.json": {
-      "content_sha256": "84f6c23d91da9f16f6e03c41dcdb7b5ce3726945539293639fea03426be79170",
-      "template_version": "0.83.0"
+      "content_sha256": "045e6c2ef978aa0261e2b5a89f3b4840965663e22c253f6ba901b153a793bfb9",
+      "template_version": "0.96.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "064138d7c1adcc3a309aa4a8651b4b5705220d44e8b79e156240e5ab168f7f48",
-      "template_version": "0.91.0",
+      "content_sha256": "d767588f2ad011eaf7512e934c271e87d70cfe010ac5022abb6b9a890d5b95ea",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "93411be618c1a28a52c7397b21ea0141309f7e905986deef28e3b38cdbd26d16",
-      "template_version": "0.91.0",
+      "content_sha256": "763c3f8a8eb3bf4abd34de4fcdbc81fe90d93340329d7bff80940f15e4554797",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".agents/skills/review/SKILL.md": {
       "content_sha256": "af2dde9e6543ee4782db2e641f71404ede74ee0fb9cc47b936430700d1f07b9b",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "8958d6e202f6991dc325baf51fa8e6f818f93bf852fa5c009d065605dba5fbd6",
-      "template_version": "0.91.0",
+      "content_sha256": "f06e0ca06aaf78ff8c6149f719cdfb22fc5780593ca7d79f101df7c5008eb78e",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "bd010fa1eaca3b1decc09138fcc7fdf1203ccbc211bb935878569c47e0beea1b",
-      "template_version": "0.91.0",
+      "content_sha256": "70a5ef3ee7fcb78f650bac03d15b14746cd370d950af51e90bad0d00cbfc8cd4",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/review.md": {
       "content_sha256": "e76fe66f484a4b17663a1c2b576a531a9dc90ad4e1bec5047d5e066154fbad4c",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".ai-harness/workflows/investigate-graph.json": {
       "content_sha256": "f66073cb4cc343282a8c0884208caca52ac93a7658306b8f532ac3eae31eece9",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/investigate/SKILL.md": {
       "content_sha256": "83b5bce7d5f6e9f5fa0d223304e0e74a95261d652ab4d2473a44dd6f93698fbe",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/investigate.md": {
       "content_sha256": "729b22cf4cd826a7430a3aeb9a30b3a53a5e1a27a758c075b2df0ee14eec4402",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".ai-harness/workflows/ui-review-graph.json": {
-      "content_sha256": "956966be420bc7edadcd7009f0cf48b1f8a6d0a648139eb4965dd4e4a97f46a0",
-      "template_version": "0.83.0"
+      "content_sha256": "55d69ca4212da6cdabe3eab31bf2e05d651a467aaedf6ff967d8006786ea8143",
+      "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/SKILL.md": {
-      "content_sha256": "e28b867542c7cf01a9ac26eef7b07774dbb6d62ec4e1f79a251de1bdc88d68e6",
-      "template_version": "0.83.0"
+      "content_sha256": "09866b1fd7939a575b4fbad17f20f9cd26653c47f9fad052cf73e4df343bbcfc",
+      "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/references/checklist.md": {
       "content_sha256": "b6490525052c85c7b605b318b23f88dddb618cb5285f0452c12360d18370377d",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/SKILL.md": {
-      "content_sha256": "e28b867542c7cf01a9ac26eef7b07774dbb6d62ec4e1f79a251de1bdc88d68e6",
-      "template_version": "0.83.0"
+      "content_sha256": "09866b1fd7939a575b4fbad17f20f9cd26653c47f9fad052cf73e4df343bbcfc",
+      "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/references/checklist.md": {
       "content_sha256": "b6490525052c85c7b605b318b23f88dddb618cb5285f0452c12360d18370377d",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/references/design-handoff.md": {
       "content_sha256": "a779a4ba895551a813a5b261b2e2d9b88e58e4fed3b9da7709854cb7d9ba7bec",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/references/design-skills.md": {
       "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/references/web-interface-guidelines.md": {
       "content_sha256": "d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/references/design-handoff.md": {
       "content_sha256": "a779a4ba895551a813a5b261b2e2d9b88e58e4fed3b9da7709854cb7d9ba7bec",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/references/design-skills.md": {
       "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/references/web-interface-guidelines.md": {
       "content_sha256": "d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/design-audit/SKILL.md": {
       "content_sha256": "20e6af168affc82c62d795783b24b4f860a41779844506d14ed911c22256cc9e",
-      "template_version": "0.92.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/design-audit/references/design-skills.md": {
       "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/design-audit/references/figma-mcp.md": {
       "content_sha256": "c8109b03efa0311a556c08b0e91bb6b2cdf4fc60b4ef620e55c7efebb95f9e0d",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/design-audit/SKILL.md": {
       "content_sha256": "20e6af168affc82c62d795783b24b4f860a41779844506d14ed911c22256cc9e",
-      "template_version": "0.92.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/design-audit/references/design-skills.md": {
       "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".claude/skills/design-audit/references/figma-mcp.md": {
       "content_sha256": "c8109b03efa0311a556c08b0e91bb6b2cdf4fc60b4ef620e55c7efebb95f9e0d",
-      "template_version": "0.83.0"
+      "template_version": "0.96.0"
     },
     ".ai-harness/workflows/design-polish-graph.json": {
-      "content_sha256": "5c40c5175cb6d54f4048c2c87ff4d3eb6b2e3a1b267c1ff2bbfa494b8a8d195d",
-      "template_version": "0.83.0"
+      "content_sha256": "685e42c11dee418be0d6af857b45e40426937841e2b627d634eff45991662874",
+      "template_version": "0.96.0"
     },
     ".agents/skills/design-polish/SKILL.md": {
       "content_sha256": "c6d5eb3d799c7cead4d668ca8a0db0993d4f4b7bc26a402f849ad4fb10bcfa29",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/design-polish.md": {
       "content_sha256": "684f8c7f7f1a6767ecf17f4c3375bc75c6418a0a975b2611948ed8ae659c3b71",
-      "template_version": "0.91.0",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".ai-harness/workflows/release-graph.json": {
       "content_sha256": "9c220df0d8eb456fb5e9f40866688da0cf7b74cc3b6dee1cf72947fc34c3af3c",
-      "template_version": "0.91.0"
+      "template_version": "0.96.0"
     },
     ".agents/skills/release/SKILL.md": {
-      "content_sha256": "91a724d8e20cfabf252676432d8da5bac7f32e57255ac09726d46ee4eaf6a859",
-      "template_version": "0.91.0",
+      "content_sha256": "8f7c7804b59ac73c283db254a5428899e6f1f811e94a689af27d4429d2a777a5",
+      "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/release.md": {
-      "content_sha256": "2fdfec2cde58c516a51338e2c5a2de2d7fa51fc3e7114b6a03b06fb64cbb2168",
-      "template_version": "0.91.0",
+      "content_sha256": "625fddd090c893af5ac5c66e156f5ae806fb604cce6fc337f11e7b03eb9d65bb",
+      "template_version": "0.96.0",
       "renderer": 1
     }
   },

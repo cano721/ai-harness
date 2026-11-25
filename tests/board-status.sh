@@ -1454,6 +1454,63 @@ assert_eq "running" "$(ba_status BOARD_RUNNER_STALE_MIN=99999999 | jq -r '.items
   "BOARD_RUNNER_STALE_MIN sets how long a quiet runner still counts as working"
 pass "board status shows a dead or incomplete workflow runner as stopped"
 
+# 러너 상태(#564): 아는 status마다 알맞은 칸·명령으로 분류한다. 사람 결정·승인·불변식 위반은 사람 필요, stopped는 이어 가기, 포기·fix_list는 끝남, 모르는 status는 막힘이고 어느 것도 '작업 중'이 아니다.
+B5_T="$BA_T/data564"
+b5_run() { # $1=데이터 폴더 $2=run 폴더 $3=status $4=node $5=추가 jq
+  mkdir -p "$1/runs/$2"
+  jq -cn --arg s "$3" --arg n "$4" --arg r "$BA_T/repo-$2" '{run_id: "r1", workflow: "feature", status: $s, node: $n, repo: $r, request: "가짜 요청", started_at: "2026-11-01T00:00:00Z"}' \
+    | jq -c "${5:-.}" >"$1/runs/$2/state.json"
+  printf 'x\n' >"$1/runs/$2/progress.log"
+}
+b5_item() { # $1=데이터 폴더 $2=run 폴더 $3=jq 출력식 나머지는 ba_status 환경
+  local d="$1" r="$2" f="$3"
+  shift 3
+  ba_status HARNESS_METRICS_DIR="$d" "$@" | jq -r --arg r "repo-$r" ".items[] | select(.kind == \"runner\" and (.cwd | endswith(\$r))) | $f"
+}
+B5_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p "$B5_T"
+b5_run "$B5_T" ud/1 user_decision user_decision ".message = \"결정 필요 이유\" | .finished_at = \"$B5_NOW\""
+b5_run "$B5_T" wa/1 waiting_approval approval ".presented_at = \"$B5_NOW\""
+b5_run "$B5_T" iv/1 invariant_violation invariant_violation ".message = \"불변식 위반\" | .finished_at = \"$B5_NOW\""
+b5_run "$B5_T" st/1 stopped fix ".finished_at = \"$B5_NOW\""
+b5_run "$B5_T" ab/1 abandoned brief ".started_at = \"$B5_NOW\""
+b5_run "$B5_T" zz/1 weird_unknown review ".started_at = \"$B5_NOW\""
+b5_run "$B5_T" fl/1 fix_list brief ".started_at = \"$B5_NOW\""
+B5_ITEMS="$(ba_status HARNESS_METRICS_DIR="$B5_T" | jq -c '[.items[] | select(.kind == "runner")]')"
+b5_get() { jq -r --arg r "repo-$1" ".[] | select(.cwd | endswith(\$r)) | $2" <<<"$B5_ITEMS"; }
+assert_eq "needs_human|null" "$(b5_get ud/1 '"\(.state)|\(.cmd)"')" "a user_decision runner waits for a person with no command"
+assert_contains "$(b5_get ud/1 .detail)" "결정 필요 이유" "a user_decision runner shows its message"
+assert_eq "needs_human|workflow-driver.sh approve --run r1" "$(b5_get wa/1 '"\(.state)|\(.cmd)"')" "a waiting_approval runner offers approve"
+assert_eq "needs_human|null" "$(b5_get iv/1 '"\(.state)|\(.cmd)"')" "an invariant_violation runner waits for a person"
+assert_contains "$(b5_get iv/1 .detail)" "불변식 위반" "an invariant_violation runner shows its message"
+assert_eq "blocked|stopped|workflow-driver.sh resume --workflow feature" "$(b5_get st/1 '"\(.state)|\(.stall)|\(.cmd)"')" "a stopped runner is stopped and offers resume"
+assert_eq "done" "$(b5_get ab/1 .state)" "a recent abandoned runner is done"
+assert_contains "$(b5_get ab/1 .detail)" "abandoned" "an abandoned runner detail keeps the original status"
+assert_eq "done" "$(b5_get fl/1 .state)" "a recent fix_list runner is done"
+assert_contains "$(b5_get fl/1 .detail)" "fix_list" "a fix_list runner detail keeps the original status"
+assert_eq "blocked|null" "$(b5_get zz/1 '"\(.state)|\(.cmd)"')" "an unknown runner status is blocked, not working"
+assert_contains "$(b5_get zz/1 .detail)" "weird_unknown" "an unknown runner status shows the original value"
+assert_eq "0" "$(jq '[.[] | select(.state == "running")] | length' <<<"$B5_ITEMS")" "none of these runner statuses count as running"
+pass "board status classifies each workflow runner status instead of calling it running"
+
+# 결정 대기 나이(#564): 오래 방치된 결정 대기는 '사람 필요'로 계속 두지 않고 막힘(decision_stale)으로 내린다. 기준은 BOARD_DECISION_STALE_DAYS(기본 7).
+B5_OLD="$BA_T/data564-old"
+b5_run "$B5_OLD" old/1 await_approval await_approval '.needs_user_decision = true | .presented_at = "2026-01-01T00:00:00Z"'
+b5_run "$B5_OLD" new/1 await_approval await_approval ".needs_user_decision = true | .presented_at = \"$B5_NOW\""
+assert_eq "blocked|decision_stale|workflow-driver.sh approve --run r1" "$(b5_item "$B5_OLD" old/1 '"\(.state)|\(.stall)|\(.cmd)"')" \
+  "a decision wait older than the limit is stale but still offers approve"
+assert_eq "needs_human" "$(b5_item "$B5_OLD" new/1 .state)" "a decision wait presented just now still waits for a person"
+assert_eq "needs_human" "$(b5_item "$B5_OLD" old/1 .state BOARD_DECISION_STALE_DAYS=99999)" "BOARD_DECISION_STALE_DAYS raises how long a decision wait stays with a person"
+pass "board status marks a long-waiting runner decision as stale"
+
+# 입력 캐시(#564): BOARD_DECISION_STALE_DAYS가 판정을 바꾸므로 캐시 키에 들어가야 한다. 같은 캐시 아래에서 이 값만 바꿔도 결과가 바뀐다.
+B5_CACHE="$BA_T/data564-cache"
+b5_run "$B5_CACHE" old/1 await_approval await_approval '.needs_user_decision = true | .presented_at = "2026-01-01T00:00:00Z"'
+assert_eq "blocked" "$(b5_item "$B5_CACHE" old/1 .state BOARD_CACHE_SECONDS=600)" "the first run with the cache on sees the stale decision"
+assert_eq "needs_human" "$(b5_item "$B5_CACHE" old/1 .state BOARD_CACHE_SECONDS=600 BOARD_DECISION_STALE_DAYS=99999)" \
+  "changing only BOARD_DECISION_STALE_DAYS does not reuse the cached result"
+pass "board status input cache key includes BOARD_DECISION_STALE_DAYS"
+
 # 세션: 마지막 답이 API 오류인 세션은 '멈춤 — 다시 시작 필요', 작업 중인데 프로세스가 없는 세션은 '중단됨'. 정상 작업 중은 그대로.
 mkdir -p "$BA_T/projects/p"
 BA_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
