@@ -841,11 +841,11 @@ Claude Code에서 마켓플레이스 자동 업데이트를 켜 두면(`/plugin`
 
 작업은 `develop`에 쌓이고, `main`은 릴리스된 상태만 담습니다. 설치(`plugin marketplace add`)와 업데이트 확인(`check-update.sh`)이 모두 `main`을 읽으므로, `main`에 릴리스되지 않은 변경이 섞이면 사용자가 그대로 받습니다.
 
-기능·수정 PR은 버전을 올리지 않습니다. `CHANGELOG.md`의 `## Unreleased` 절에만 항목을 남기고, 버전 메타데이터 네 곳은 릴리스 커밋 하나가 한 번에 맞춥니다.
+기능·수정 PR은 버전을 올리지 않습니다. `CHANGELOG.md` 대신 PR마다 `changelog.d/<이슈>-<요약>.md` 조각에 항목을 남기고(형식은 [CONTRIBUTING.md](CONTRIBUTING.md)), 버전 메타데이터 네 곳과 CHANGELOG 버전 절은 릴리스 커밋 하나가 한 번에 맞춥니다.
 
 ```bash
 # develop에서
-scripts/release-prep.sh <version>    # Unreleased 절 확정(+ 빈 Unreleased 머리) + plugin.json ×2 + release.json 동기화
+scripts/release-prep.sh <version>    # 조각 + Unreleased 절을 합쳐 확정(+ 빈 Unreleased 머리), 조각 삭제 + plugin.json ×2 + release.json 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>"
 gh pr create --base main --head develop --title "chore: release v<version>"

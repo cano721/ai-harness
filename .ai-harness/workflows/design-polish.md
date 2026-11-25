@@ -34,4 +34,4 @@ bash scripts/design-system.sh lint
 
 ## 5. 내보내기 (publish)
 
-`AGENTS.md`의 Git 규칙: 작업 브랜치 `<타입>/<한-일-요약>`, Conventional Commits에 `(#<이슈>)`, `gh pr create --base develop`. 사용자에게 보이는 변경이면 `CHANGELOG.md`의 `## Unreleased`에 항목을 남긴다.
+`AGENTS.md`의 Git 규칙: 작업 브랜치 `<타입>/<한-일-요약>`, Conventional Commits에 `(#<이슈>)`, `gh pr create --base develop`. 사용자에게 보이는 변경이면 `changelog.d/<이슈>-<요약>.md` 조각에 항목을 남긴다(형식은 `CONTRIBUTING.md`, `CHANGELOG.md`는 건드리지 않는다).
