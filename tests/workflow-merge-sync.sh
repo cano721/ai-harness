@@ -99,6 +99,23 @@ git --git-dir "$(sy_remote)" rev-parse -q --verify "refs/heads/feat/add-feature^
 assert_contains "$DRIVER_OUT" "test ! -f broken.txt" "the failed check is named"
 pass "a check failure after the base sync is not pushed"
 
+# A6: sync_base는 checks와 final_checks를 함께 다시 돌린다. 전체 회귀(bash tests/run.sh -j 2)가 같이 있으면
+# 그에 포함되는 --changed는 건너뛰고 전체 회귀만 한 번 돈다. (#513)
+sync_repo merge_conflict_covered
+COVER_LOG="$DRIVER_TMP/covered-run-args.log"
+: >"$COVER_LOG"
+mkdir -p "$DRIVER_REPO/tests"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>%q\n' "$COVER_LOG" >"$DRIVER_REPO/tests/run.sh"
+git -C "$DRIVER_REPO" add tests && git -C "$DRIVER_REPO" commit -qm "fake test runner"
+git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main
+base_commit base.txt base
+FAKE_CHECK='bash tests/run.sh --changed' FAKE_FINAL_CHECK='bash tests/run.sh -j 2' sync_start
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state '.base_syncs | length')" "a run with a full regression in final_checks syncs the base and merges"
+assert_eq "--changed;-j 2;-j 2" "$(paste -sd ';' "$COVER_LOG")" "sync_base runs the full regression once and not the --changed it covers"
+assert_contains "$(<"$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")/progress.log")" \
+  "check skipped (covered by bash tests/run.sh -j 2): bash tests/run.sh --changed" "the covered check is logged as skipped"
+pass "sync_base skips a narrow tests/run.sh check covered by the full regression"
+
 # A7: 충돌과 다른 막힘(변경 요청)이 같이 있으면 sync하지 않고 사람에게 넘긴다.
 sync_repo merge_conflict_changes
 base_commit base.txt base
@@ -147,5 +164,13 @@ sync_start bug-fix
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a bug fix blocked only by a base conflict syncs and merges"
 assert_eq "remote_ci,merge,sync_base,remote_ci,merge,post_merge_verify" "$(sync_path)" "the bug-fix graph goes through sync_base"
 pass "the bug-fix graph syncs the base on a conflict"
+
+# A11: 충돌 여부를 호스트가 아직 계산 중(UNKNOWN)이어도 다시 물어본 뒤 충돌이면 sync_base로 간다(#542). resume 없이 끝나야 한다.
+sync_repo merge_conflict_pending
+base_commit base.txt base
+FAKE_UNKNOWN_N=1 HM_MERGE_PENDING_POLL_SECONDS=0 sync_start
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a conflict the host reports late still syncs the base and merges"
+assert_contains "$(sync_path)" "sync_base" "the late conflict result goes through sync_base"
+pass "a pending conflict check is asked again and then syncs the base"
 
 finish_tests

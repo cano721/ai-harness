@@ -1319,14 +1319,41 @@ for phrase in '`### 여백 관계`' '`### 묶기`' '요소 안' '그룹 안 항�
 done
 assert_eq '### 여백 관계|### 묶기|' "$(awk '/^## 레이아웃/{f=1;next} /^## /{f=0} f && /^### /' "$ROOT/docs/design-system.md" | tr '\n' '|')" "docs/design-system.md layout has spacing and grouping subsections in order"
 SR_DOC_SPACING="$(awk '/^### 여백 관계/{f=1;next} /^##/{f=0} f' "$ROOT/docs/design-system.md")"
-for tok in --space-1 --space-2 --space-4 --space-12; do
+for tok in --space-1 --space-2 --space-3 --space-5 --space-12; do
   assert_contains "$SR_DOC_SPACING" "$tok" "docs/design-system.md spacing relationships names $tok"
 done
+case "$SR_DOC_SPACING" in
+  *--space-4*) fail "docs/design-system.md spacing relationships must not name --space-4 (the layout uses --space-3 and --space-5)" ;;
+esac
+# 문서 여백 값과 components.css를 잇는 검사가 없어 둘이 표류했다(#524). CSS에서 뽑은 값을 문서가 그대로 말해야 한다.
+SR_CSS="$ROOT/docs/design-system/components.css"
+SR_MAIN_X="$(sed -n 's/^\.ds-main {.*padding: var(--space-[0-9]*) var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+SR_NARROW_X="$(sed -n 's/^  \.ds-main {.*padding: var(--space-[0-9]*) var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+SR_HEAD_GAP="$(sed -n 's/^\.ds-pagehead {.*margin-bottom: var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+SR_COLUMNS_GAP="$(sed -n 's/^\.ds-columns {.*gap: var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+SR_SPLIT_GAP="$(sed -n 's/^\.ds-split {.*gap: var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+SR_STACK_GAP="$(sed -n 's/^\.ds-stack {.*gap: var(\(--space-[0-9]*\)).*/\1/p' "$SR_CSS" | head -n1)"
+for sr_pair in "main padding x:$SR_MAIN_X" "narrow main padding x:$SR_NARROW_X" "pagehead margin-bottom:$SR_HEAD_GAP" \
+  "columns gap:$SR_COLUMNS_GAP" "split gap:$SR_SPLIT_GAP" "stack gap:$SR_STACK_GAP"; do
+  [ -n "${sr_pair#*:}" ] || fail "components.css spacing extraction is empty: ${sr_pair%%:*}"
+done
+assert_eq "$SR_COLUMNS_GAP" "$SR_SPLIT_GAP" "components.css .ds-columns and .ds-split share one gap"
+SR_DOC_BONE="$(grep '^공통 뼈대:' "$ROOT/docs/design-system.md")"
+SR_DOC_LIST="$(grep -F -- '- **목록**' "$ROOT/docs/design-system.md")"
+SR_DOC_ROW_IN="$(printf '%s\n' "$SR_DOC_SPACING" | grep -F -- '| 그룹 안 항목 사이 |' | head -n1)"
+SR_DOC_ROW_BETWEEN="$(printf '%s\n' "$SR_DOC_SPACING" | grep -F -- '| 그룹 사이 |' | head -n1)"
+assert_contains "$SR_DOC_BONE" "(\`$SR_MAIN_X\`," "docs/design-system.md layout skeleton names the .ds-main horizontal padding ($SR_MAIN_X)"
+assert_contains "$SR_DOC_BONE" "좁은 폭에서 \`$SR_NARROW_X\`" "docs/design-system.md layout skeleton names the narrow-width padding ($SR_NARROW_X)"
+assert_contains "$SR_DOC_BONE" "아래 \`$SR_HEAD_GAP\`" "docs/design-system.md layout skeleton names the page head gap ($SR_HEAD_GAP)"
+assert_contains "$SR_DOC_LIST" "항목 사이 \`$SR_STACK_GAP\`" "docs/design-system.md list layout names the .ds-stack gap ($SR_STACK_GAP)"
+assert_contains "$SR_DOC_LIST" "열 사이 \`$SR_COLUMNS_GAP\`" "docs/design-system.md list layout names the .ds-columns gap ($SR_COLUMNS_GAP)"
+assert_contains "$SR_DOC_ROW_IN" "\`$SR_STACK_GAP\`" "docs/design-system.md spacing table row for items within a group matches .ds-stack ($SR_STACK_GAP)"
+assert_contains "$SR_DOC_ROW_BETWEEN" "\`$SR_COLUMNS_GAP\`" "docs/design-system.md spacing table row between groups matches .ds-columns ($SR_COLUMNS_GAP)"
 SR_DOC_GROUP="$(awk '/^### 묶기/{f=1;next} /^##/{f=0} f' "$ROOT/docs/design-system.md")"
 for tok in --color-border --color-surface --color-surface-sunken .ds-num; do
   assert_contains "$SR_DOC_GROUP" "$tok" "docs/design-system.md grouping names $tok"
 done
-pass "design rule documents carry spacing relationships and grouping under the layout section"
+pass "design rule documents carry spacing relationships and grouping under the layout section, and their spacing steps match components.css (#524)"
 
 # 디자인 규칙 문서 `## 원칙` 첫머리에 `### 서비스`(사용자와 상황·핵심 일·성격·피할 것·근거)를 둔다. 서비스 성격이 문서에
 # 없어 디자인 Skill마다 다시 묻거나 화면마다 톤이 갈렸다. builder가 기록하고 design-screen·landing-page·design-polish·

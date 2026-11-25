@@ -645,18 +645,91 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
   guard_head "$node"
 }
 
+# 검사 프로세스에 넘기는 테스트 동시 실행 수(HM_TEST_JOBS, #513). 사용자 설정이 1 이상의 정수가 아니면 max(1, min(ncpu/2, 4)).
+# 테스트 실행기가 병렬 옵션의 기본값으로 읽거나, Brief의 checks가 그 옵션에 넘긴다. 러너는 명령 문자열을 고쳐 쓰지 않는다.
+# 값은 이 프로세스에서 한 번 정해 CHECK_JOBS에 둔다(잘못된 설정 안내도 한 번). 서브셸에서 부르지 않는다.
+CHECK_JOBS=""
+resolve_check_jobs() {
+  local value ncpu
+  if [[ -z "$CHECK_JOBS" ]]; then
+    value="$(user_config HM_TEST_JOBS)"
+    while [[ "$value" == 0* && "$value" != 0 ]]; do value="${value#0}"; done
+    if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+      CHECK_JOBS="$value"
+    else
+      ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+      [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+      [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(nproc 2>/dev/null || true)"
+      [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu=1
+      CHECK_JOBS=$((ncpu / 2))
+      ((CHECK_JOBS <= 4)) || CHECK_JOBS=4
+      ((CHECK_JOBS >= 1)) || CHECK_JOBS=1
+      [[ -z "$(user_config HM_TEST_JOBS)" ]] \
+        || log "HM_TEST_JOBS $(config_origin HM_TEST_JOBS) is not a positive integer; checks use $CHECK_JOBS"
+    fi
+  fi
+}
+
+# 포함 관계(#513): 전체 회귀(`bash tests/run.sh` 뒤에 없음 또는 `-j <값>`만)는 같은 목록의 좁은 run.sh 검사(--changed·--fast·영역 이름)를 덮는다.
+is_full_regression() { [[ "$1" =~ ^[[:space:]]*bash[[:space:]]+tests/run\.sh([[:space:]]+-j[[:space:]]+[^[:space:]]+)?[[:space:]]*$ ]]; }
+is_narrow_regression() {
+  local words word expect_jobs=0 narrow=0
+  [[ "$1" =~ ^[[:space:]]*bash[[:space:]]+tests/run\.sh[[:space:]] ]] || return 1
+  read -r -a words <<<"$1"
+  for word in "${words[@]:2}"; do
+    if ((expect_jobs)); then expect_jobs=0; continue; fi
+    case "$word" in
+      -j) expect_jobs=1 ;;
+      --changed | --fast) narrow=1 ;;
+      -*) return 1 ;;
+      *) [[ "$word" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1; narrow=1 ;;
+    esac
+  done
+  ((narrow && !expect_jobs))
+}
+
 run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문자열은 한 번만 실행한다
-  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]"
+  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]" full="" tree after start seconds
   commands="$(jq -c 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end)' <<<"$commands")"
   while IFS= read -r cmd; do
+    if is_full_regression "$cmd"; then full="$cmd"; break; fi
+  done <<<"$(jq -r '.[]' <<<"$commands")"
+  resolve_check_jobs
+  tree=""
+  while IFS= read -r cmd; do
     i=$((i + 1))
+    if [[ -n "$full" ]] && is_narrow_regression "$cmd"; then
+      results="$(jq --arg cmd "$cmd" --arg full "$full" '. + [{command:$cmd, exit:0, tail:"", seconds:0, skipped:"covered", covered_by:$full}]' <<<"$results")"
+      log "check skipped (covered by $full): $cmd"
+      continue
+    fi
+    # 같은 트리에서 러너가 이미 통과시킨 같은 명령은 다시 돌리지 않는다(실패·트리를 바꾼 실행은 기록하지 않는다).
+    [[ -n "$tree" ]] || tree="$(worktree_tree 2>/dev/null || true)"
+    if [[ -n "$tree" ]] && jq -e --arg t "$tree" --arg c "$cmd" 'any((.check_passes // [])[]; .tree == $t and .command == $c)' "$STATE" >/dev/null; then
+      results="$(jq --arg cmd "$cmd" '. + [{command:$cmd, exit:0, tail:"", seconds:0, reused:true}]' <<<"$results")"
+      log "check reused: $cmd (tree ${tree:0:12})"
+      continue
+    fi
     rc=0
-    run_in_group in_repo bash -c "$cmd" >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
-    results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
-      '. + [{command:$cmd, exit:$rc, tail:$tail}]' <<<"$results")"
-    if ((rc != 0)); then failed=1; log "check failed: $cmd (exit $rc)"; else log "check passed: $cmd"; fi
+    start="$(date +%s)"
+    run_in_group in_repo env HM_TEST_JOBS="$CHECK_JOBS" bash -c "$cmd" >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
+    seconds=$(($(date +%s) - start))
+    results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --argjson s "$seconds" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
+      '. + [{command:$cmd, exit:$rc, tail:$tail, seconds:$s}]' <<<"$results")"
+    after="$(worktree_tree 2>/dev/null || true)"
+    if ((rc != 0)); then
+      failed=1
+      log "check failed: $cmd (exit $rc, ${seconds}s)"
+    else
+      log "check passed: $cmd (${seconds}s)"
+      if [[ -n "$tree" && "$after" == "$tree" ]]; then
+        state_set '.check_passes = ((.check_passes // []) + [{tree: $t, command: $c}] | unique)' --arg t "$tree" --arg c "$cmd"
+      fi
+    fi
+    tree="$after"
   done < <(jq -r '.[]' <<<"$commands")
   printf '%s\n' "$results" >"$RUN/$label.checks.json"
+  state_set '.last_checks = $l' --arg l "$label"
   return "$failed"
 }
 
@@ -1337,17 +1410,30 @@ branch_protection() { # pr-url base
 # merge: 저장소 호스트 규칙(기준 브랜치 보호)과 PR 상태를 호스트에서 직접 읽어 판정하고, 모두 맞을 때만 head를 고정해 저장소의 방식으로 병합한다.
 merge() {
   local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection conflict=""
+  local pending_max="${HM_MERGE_PENDING_RETRIES:-8}" pending_wait="${HM_MERGE_PENDING_POLL_SECONDS:-15}" pending_try=0
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
   [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
-  if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
-    err="$(head -c 300 "$RUN/merge.err")"
-    state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "cannot read the pull request state from its host: ${err:-no output}"
-    go merge merge_blocked
-    return
-  fi
+  # push 직후에는 호스트가 충돌 여부를 아직 계산 중(pending)일 때가 많다. 사람의 resume 없이 잠깐 기다렸다 다시 읽는다(#542).
+  [[ "$pending_max" =~ ^[0-9]+$ ]] || pending_max=8
+  [[ "$pending_wait" =~ ^[0-9]+$ ]] || pending_wait=15
+  pending_max=$((10#$pending_max))
+  while :; do
+    if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
+      err="$(head -c 300 "$RUN/merge.err")"
+      state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "cannot read the pull request state from its host: ${err:-no output}"
+      go merge merge_blocked
+      return
+    fi
+    if ((pending_try >= pending_max)) || [[ "$(jq -r '"\(.state)/\(.mergeable)"' <<<"$facts")" != OPEN/pending ]]; then
+      break
+    fi
+    pending_try=$((pending_try + 1))
+    log "the host has not finished checking for conflicts on $url; asking again in ${pending_wait}s ($pending_try/$pending_max)"
+    sleep "$pending_wait"
+  done
   printf '%s\n' "$facts" >"$RUN/merge-facts.json"
   # 병합할 PR은 publish가 보고한 URL이다. 이 저장소·이 실행이 push한 브랜치·시작 때 정한 기준 브랜치의 PR인지 확인한다.
   origin="$(git -C "$REPO" config --get remote.origin.url || true)"
@@ -1800,12 +1886,18 @@ NODE_TEST_RULE="Tests: the driver runs the broad regression itself after you fin
 # 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
 APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
 
+# 구현 노드(deliver·fix)가 전체 회귀를 직접 돌리지 않게 한다(#513). 전체 회귀는 리뷰 뒤 final_checks로 드라이버가 한 번 돈다.
+FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking."
+# checks가 테스트 실행기의 병렬 옵션에 드라이버가 넘기는 동시 실행 수를 쓰게 한다(#513).
+TEST_JOBS_RULE="When the project's test runner takes a parallelism option (for example -j, -n, --workers, --parallel), pass it the \$HM_TEST_JOBS the driver exports to every check (for example \"\${HM_TEST_JOBS:-2}\" with a fallback for runs outside the driver)."
+
 brief_prompt() {
   local role inputs
   if [[ "$WORKFLOW" == bug-fix ]]; then
     role="You are the brief node of the bug-fix graph. Do not edit any file.
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
-Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
+Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
+$TEST_JOBS_RULE"
     inputs="Bug report:
 $(state .request)
 
@@ -1817,7 +1909,8 @@ $(cat "$RUN/reproduce.out")"
   else
     role="You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
-Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
+Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
+$TEST_JOBS_RULE"
     inputs="Request:
 $(state .request)
 
@@ -2696,6 +2789,7 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
 You are the deliver node. Implement the approved Implementation Brief below in this repository. Follow the project workflow and test policy (Red -> Green -> Refactor only when TDD is required), delegating to the project's role agents when the workflow says so.
 $NODE_TEST_RULE
 Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
+$FULL_REGRESSION_RULE
 Return a concise summary of changed areas and the commands you ran.
 
 $(brief_context)"
@@ -2758,6 +2852,7 @@ $(brief_context)"
 
 You are the fix node of the bug-fix graph. Fix the cause in production code within the approved scope, delegating to the project's role agents when the workflow says so. Do not weaken, skip, or delete the regression verification.
 Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
+$FULL_REGRESSION_RULE
 Return a concise summary of the cause, the changed areas, and the commands you ran.
 
 $(brief_context)"
@@ -3617,6 +3712,10 @@ case "$CMD" in
       + (if .blocked then " · blocked: " + .blocked elif .stopped_because then " · stopped: " + .stopped_because else "" end)
       + (if .sync then "\nsync (run by a person): " + .sync.command else "" end)'
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
+    # 가장 최근 검사의 명령별 결과와 소요 시간(#513). 전체 이력은 progress.log에 있다.
+    latest_checks="$(state '.last_checks // ""')"
+    [[ -z "$latest_checks" || ! -f "$RUN/$latest_checks.checks.json" ]] || jq -r --arg l "$latest_checks" '.[]
+      | "checks \($l): \(.command) \(if .skipped then "skipped" elif .reused then "reused" elif .exit == 0 then "passed" else "failed" end) \(.seconds // 0)s"' "$RUN/$latest_checks.checks.json"
     if [[ "$(state .status)" == stopped ]]; then
       state '"stopped at \(.stopped.node) \(.stopped.at): \(.stopped.reason); continue with resume"'
     elif [[ "$(state .status)" == running && -n "$(state '.process.pid // ""')" ]] && ! runner_alive; then

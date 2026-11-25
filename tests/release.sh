@@ -174,17 +174,47 @@ fi
 assert_eq "1.3.0 1.3.0 1.3.0" "$(jq -r '.version' "$REL/.claude-plugin/plugin.json" "$REL/.codex-plugin/plugin.json" "$REL/release.json" | paste -sd " " -)" "one command moves every manifest to the new version"
 assert_eq "https://github.com/cano721/ai-harness/releases/tag/v1.3.0" "$(jq -r '.notes_url' "$REL/release.json")" "the release urls follow the new tag"
 assert_eq "1" "$(grep -c '^## v1.3.0 (2026-02-02)$' "$REL/CHANGELOG.md")" "the Unreleased section becomes the version section"
-assert_eq "0" "$(grep -c '^## Unreleased' "$REL/CHANGELOG.md")" "no Unreleased section survives the release"
+# 확정 뒤에도 빈 Unreleased 머리가 남아야 다음 PR들이 각자 머리를 만들다 맨 위에서 충돌하지 않는다 (#527).
+assert_eq "1" "$(grep -c '^## Unreleased' "$REL/CHANGELOG.md")" "a fresh empty Unreleased heading is left above the new version"
+REL_HEAD_LINE="$(grep -n '^## Unreleased' "$REL/CHANGELOG.md" | head -1 | cut -d: -f1)"
+REL_VER_LINE="$(grep -n '^## v1.3.0 (2026-02-02)$' "$REL/CHANGELOG.md" | head -1 | cut -d: -f1)"
+[[ -n "$REL_HEAD_LINE" && -n "$REL_VER_LINE" && "$REL_HEAD_LINE" -lt "$REL_VER_LINE" ]] || fail "the Unreleased heading should sit above the new version heading (unreleased=$REL_HEAD_LINE version=$REL_VER_LINE)"
+REL_BETWEEN="$(awk '/^## Unreleased/ { inside = 1; next } /^## v1\.3\.0 / { inside = 0 } inside' "$REL/CHANGELOG.md" | tr -d '[:space:]')"
+assert_eq "" "$REL_BETWEEN" "the new Unreleased heading has no body"
 assert_eq "0" "$(grep -c '<!--' "$REL/CHANGELOG.md")" "the guidance comment does not reach the release notes"
 assert_eq "1" "$(grep -c '무언가 고쳤다' "$REL/CHANGELOG.md")" "the entries written during development are kept"
-"$ROOT/scripts/release-prep.sh" --check --root "$REL" >/dev/null || fail "the prepared release should be consistent"
-if "$ROOT/scripts/release-prep.sh" 1.4.0 --root "$REL" >/dev/null 2>&1; then
+REL_CHECK_ERR="$TEST_TMP/release-check.err"
+"$ROOT/scripts/release-prep.sh" --check --root "$REL" >/dev/null 2>"$REL_CHECK_ERR" || fail "the prepared release should be consistent"
+if grep -q 'Unreleased' "$REL_CHECK_ERR"; then
+  fail "--check should not warn when the Unreleased heading is present"
+fi
+REL_AGAIN_ERR="$TEST_TMP/release-again.err"
+if "$ROOT/scripts/release-prep.sh" 1.4.0 --root "$REL" >/dev/null 2>"$REL_AGAIN_ERR"; then
   fail "releasing again with an empty Unreleased section should be refused"
 fi
+assert_contains "$(cat "$REL_AGAIN_ERR")" "the Unreleased section is empty" "the leftover empty Unreleased heading is refused as empty"
 if "$ROOT/scripts/release-prep.sh" 1.3.0 --root "$REL" >/dev/null 2>&1; then
   fail "reusing a version already in the changelog should be refused"
 fi
 pass "release preparation moves version metadata in one step"
+
+# 머리가 사라진 브랜치(main 등)에서도 --check는 통과하되, 다음 PR 전에 머리를 만들라고 경고한다 (#527).
+REL_NOHEAD="$TEST_TMP/release-nohead"
+mkdir -p "$REL_NOHEAD/.claude-plugin" "$REL_NOHEAD/.codex-plugin"
+printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$REL_NOHEAD/.claude-plugin/plugin.json"
+printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$REL_NOHEAD/.codex-plugin/plugin.json"
+jq '.version = "1.2.3" | .release_url = "https://github.com/cano721/ai-harness/releases/tag/v1.2.3" | .notes_url = .release_url' "$REL/release.json" >"$REL_NOHEAD/release.json"
+cat >"$REL_NOHEAD/CHANGELOG.md" <<'DOC'
+# Changelog
+
+## v1.2.3 (2026-01-01)
+
+- 이전 릴리스.
+DOC
+REL_NOHEAD_ERR="$TEST_TMP/release-nohead.err"
+"$ROOT/scripts/release-prep.sh" --check --root "$REL_NOHEAD" >/dev/null 2>"$REL_NOHEAD_ERR" || fail "--check should keep passing when only the Unreleased heading is missing"
+assert_contains "$(cat "$REL_NOHEAD_ERR")" "Unreleased" "--check warns when the changelog has no Unreleased heading"
+pass "release consistency check warns about a missing Unreleased heading"
 
 # 릴리스 노트의 단일 출처. 절이 없으면 발행할 노트도, 오프라인 설명도 없다.
 CHANGELOG_SECTION="$("$ROOT/scripts/changelog-section.sh" "$RELEASE_VERSION" 2>/dev/null || true)"

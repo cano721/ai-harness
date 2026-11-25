@@ -97,6 +97,14 @@ case "$scenario" in
   merge_conflict_limit) mergeable=CONFLICTING ;;
   merge_conflict*) git rev-parse -q --verify HEAD^2 >/dev/null || mergeable=CONFLICTING ;;
 esac
+# FAKE_UNKNOWN_N=n: 처음 n번의 pr view는 호스트가 아직 충돌 여부를 계산 중인 것처럼 UNKNOWN을 답한다(조회 횟수는 $FAKE_LOG.views).
+if [[ -n "${FAKE_UNKNOWN_N:-}" ]]; then
+  views=0
+  [[ ! -f "$FAKE_LOG.views" ]] || views="$(<"$FAKE_LOG.views")"
+  views=$((views + 1))
+  printf '%s\n' "$views" >"$FAKE_LOG.views"
+  [[ "$views" -gt "$FAKE_UNKNOWN_N" ]] || mergeable=UNKNOWN
+fi
 base=main
 [[ "$scenario" != merge_otherbase ]] || base=release
 head_ref=feat/add-feature
