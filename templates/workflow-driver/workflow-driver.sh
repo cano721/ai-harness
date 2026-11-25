@@ -1410,17 +1410,30 @@ branch_protection() { # pr-url base
 # merge: 저장소 호스트 규칙(기준 브랜치 보호)과 PR 상태를 호스트에서 직접 읽어 판정하고, 모두 맞을 때만 head를 고정해 저장소의 방식으로 병합한다.
 merge() {
   local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection conflict=""
+  local pending_max="${HM_MERGE_PENDING_RETRIES:-8}" pending_wait="${HM_MERGE_PENDING_POLL_SECONDS:-15}" pending_try=0
   url="$(state '.publish.pr_url // ""')"
   head="$(state .head)"
   mp="$(jq -c '.policy.merge' "$STATE")"
   [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
-  if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
-    err="$(head -c 300 "$RUN/merge.err")"
-    state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "cannot read the pull request state from its host: ${err:-no output}"
-    go merge merge_blocked
-    return
-  fi
+  # push 직후에는 호스트가 충돌 여부를 아직 계산 중(pending)일 때가 많다. 사람의 resume 없이 잠깐 기다렸다 다시 읽는다(#542).
+  [[ "$pending_max" =~ ^[0-9]+$ ]] || pending_max=8
+  [[ "$pending_wait" =~ ^[0-9]+$ ]] || pending_wait=15
+  pending_max=$((10#$pending_max))
+  while :; do
+    if ! facts="$(pr_facts "$url" 2>"$RUN/merge.err")" || [[ -z "$facts" ]]; then
+      err="$(head -c 300 "$RUN/merge.err")"
+      state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "cannot read the pull request state from its host: ${err:-no output}"
+      go merge merge_blocked
+      return
+    fi
+    if ((pending_try >= pending_max)) || [[ "$(jq -r '"\(.state)/\(.mergeable)"' <<<"$facts")" != OPEN/pending ]]; then
+      break
+    fi
+    pending_try=$((pending_try + 1))
+    log "the host has not finished checking for conflicts on $url; asking again in ${pending_wait}s ($pending_try/$pending_max)"
+    sleep "$pending_wait"
+  done
   printf '%s\n' "$facts" >"$RUN/merge-facts.json"
   # 병합할 PR은 publish가 보고한 URL이다. 이 저장소·이 실행이 push한 브랜치·시작 때 정한 기준 브랜치의 PR인지 확인한다.
   origin="$(git -C "$REPO" config --get remote.origin.url || true)"
