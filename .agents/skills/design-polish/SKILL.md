@@ -1,6 +1,6 @@
 ---
 name: design-polish
-description: Start a project-local quality pass on existing screens. Use when a screen that already works should look and read better as a whole — hierarchy, spacing, color, consistency with its sibling screens and the design rules ("이 화면 전반적으로 다듬어줘", "polish this page"); not for a new screen or mockup (design-screen), a missing feature or behavior (implement-feature), a broken behavior (fix-bug), or a review-only critique (the design-reviewer agent).
+description: Start a project-local quality pass on existing screens. Use when a screen that already works should look and read better as a whole — hierarchy, spacing, color, consistency with its sibling screens and the design rules ("이 화면 전반적으로 다듬어줘", "polish this page"); not for a new screen or mockup (design-screen), a missing feature or behavior (implement-feature), a broken behavior (fix-bug), or a critique (the design-reviewer agent).
 ---
 
 # Design Polish

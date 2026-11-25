@@ -148,9 +148,9 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 | 작업 | 주도 | 보조(영역) |
 |---|---|---|
 | 지표 리포트·대시보드 | `impeccable` | `dataviz`(차트·지표 카드·차트 색), `ui-ux-pro-max`(토큰 없을 때 팔레트·폰트) |
-| 랜딩·소개 | `/landing-page` | `design-taste-frontend`(방향 후보), `motion`(모션 API), `web-design-guidelines`(최종 점검) |
+| 랜딩·소개 | `/landing-page` | `design-references`(레퍼런스 수집), `design-taste-frontend`(방향 후보), `motion`(모션 API), `web-design-guidelines`(최종 점검) |
 | 디자인 시스템 | `/design-system-builder` | 내장 `references/theme-and-components.md`(테마 전환·컴포넌트 구조, `design-system-patterns` 흡수), `awesome-design`(참고 명세) |
-| 제품 화면 다듬기 | `impeccable` | `emil-design-eng`(마감), `motion` |
+| 제품 화면 다듬기 | `/design-polish` | `impeccable`(비평), `emil-design-eng`(마감), `motion` |
 | 하네스 저장소 화면 변경 | `ui-review`·`frontend-team` | `impeccable`(비평), `web-design-guidelines`(접근성) |
 | 독립 디자인 검토 | 새 검토 세션 또는 `ai-harness:design-reviewer` 에이전트 | 새 검토 세션에서만 `impeccable`(비평), `web-design-guidelines`(점검) — 에이전트는 외부 스킬을 쓰지 않고 내장 가이드라인 규칙 파일만 읽는다 |
 

@@ -4,6 +4,21 @@ Which design skill leads a design job, and which ones may help in which lane. ai
 
 This file is the single source. ai-harness keeps byte-identical copies next to each skill that reads it (`landing-page`, `design-system-builder`, `ui-review`, `frontend-team`, `design-audit`); a test fails if they drift.
 
+## Terms
+
+Design skills and this map use these words in one sense each.
+
+| Term | Meaning | Owner |
+|---|---|---|
+| 디자인 시스템 (design system) | One project's rule document, token files, shared components, and reference screen | `design-system-builder` |
+| 규칙 문서 (rule document) | The project's design rules in fixed sections; the input every audit scores against | `design-system-builder` |
+| 기준 화면 (reference screen) | A screen you can open and operate that shows the design system in use (example page, Storybook) | `design-system-builder` |
+| 형제 화면 (sibling screen) | An existing screen of the same kind; a new or changed screen matches its values | `design-audit` (axis D) |
+| 채점 (audit) | A fixed score against the rule document; it reports and never fixes | `design-audit` |
+| 검토 (review) | The gate for a UI change: render the screen and operate it | `ui-review` |
+| 비평 (critique) | A read-only opinion on a finished screen's design quality; the writer fixes | `ai-harness:design-reviewer` (`impeccable` helps only in a fresh reviewer session) |
+| 다듬기 (polish) | Improving a screen that already works as a whole (hierarchy, spacing, color, sibling fit) | `design-polish` |
+
 ## Rules
 
 1. **Precedence stays as it was.** The user's explicit instruction → the project's design rules (design document, tokens, shared components, reference screen, `.ai-harness/docs/`) → the ai-harness skill or contract running the job → the lead skill below → supporting skills. A skill on this map never overrides a project value.
@@ -19,10 +34,10 @@ This file is the single source. ai-harness keeps byte-identical copies next to e
 | Job | Lead | Supporting (lane) |
 |---|---|---|
 | Data report, metrics dashboard, admin or analytics screen — including a single-file HTML report | `impeccable` | `dataviz` (chart form, stat tiles, chart palette validation) · `ui-ux-pro-max` (palette and type lookup, only when the project has no tokens) |
-| Landing, introduction, marketing, launch page | `landing-page` | `design-taste-frontend` (references and direction candidates in the direction step only) · `awesome-design` (the specification of a site the user names as a reference; never values to import) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
+| Landing, introduction, marketing, launch page | `landing-page` | `design-references` (the reference collection step) · `design-taste-frontend` (references and direction candidates in the direction step only) · `awesome-design` (the specification of a site the user names as a reference; never values to import) · `motion` (Motion library API in the motion step) · `web-design-guidelines` (final interface check after browser verification) |
 | Draw or extend a product screen from the design system, in Figma or in code | `design-screen` | Figma target: Figma's own MCP skills (`figma-use` and what it requires) for Plugin API patterns only — ai-harness rules decide what is written (`figma-mcp.md`) · code target: `web-design-guidelines` (interface check after the captures) |
 | Create or extend a design system | `design-system-builder` | its own `references/theme-and-components.md` (theme switching and component structure, absorbed from `design-system-patterns`) · `awesome-design` (reference specifications to study, never to copy) |
-| Polish an existing product screen | `impeccable` | `emil-design-eng` (finishing details) · `motion` (Motion library API) |
+| Polish an existing product screen | `design-polish` | `impeccable` (critique only; fixes stay with `design-polish`) · `emil-design-eng` (finishing details) · `motion` (Motion library API) |
 | UI change in a repository with an ai-harness UI contract (`ui-review`, `frontend-team`, `design-audit`) | the contract (`ui-review` or the `frontend-team` route) | `impeccable` (critique only during review; fixes go back to the writer) · `web-design-guidelines` (interface and accessibility check) |
 | Independent review of a finished screen or page, with or without a harness | a fresh reviewer session or the `ai-harness:design-reviewer` agent (Claude) | in a fresh reviewer session only: `impeccable` (critique) · `web-design-guidelines` (interface check) — read-only use. The agent cannot load skills; it reviews with its own criteria plus the built-in interface guideline rules file |
 
@@ -34,7 +49,7 @@ Native apps follow `native-ui`; none of the web skills above lead there.
 
 | Lane | Owner when installed |
 |---|---|
-| Visual direction for a product screen | lead of the job (`impeccable`) |
+| Visual direction for a product screen | lead of the job (`impeccable` on a data screen, `design-polish` on a polish pass) |
 | Visual direction for a marketing page | `landing-page`, with `design-taste-frontend` supplying candidates |
 | Chart form, stat tiles, chart colors | `dataviz` |
 | Palette and type lookup when the project has no tokens | `ui-ux-pro-max` |
@@ -46,7 +61,7 @@ Native apps follow `native-ui`; none of the web skills above lead there.
 
 ## Forbidden pairs
 
-- `impeccable` and `design-taste-frontend` both leading direction in one job. On a marketing page `landing-page` leads and `design-taste-frontend` only supplies candidates; on a product screen `impeccable` leads and `design-taste-frontend` is not used.
+- `impeccable` and `design-taste-frontend` both leading direction in one job. On a marketing page `landing-page` leads and `design-taste-frontend` only supplies candidates; on a product screen the job's lead decides direction and `design-taste-frontend` is not used.
 - `ui-ux-pro-max` palette or fonts next to project tokens, or next to a direction another skill already chose.
 - Chart colors from anywhere but `dataviz` when `dataviz` is installed.
 - An old separately installed copy of a built-in skill (`web-design-guidelines`, `emil-design-eng`, `design-system-patterns`) used instead of the built-in one. The old `web-design-guidelines` fetches its rules at run time, so results drift; the old `design-system-patterns` names tokens its own way. `/ai-harness:setup design list` shows such copies as `superseded`.
