@@ -560,4 +560,31 @@ for wf in implement-feature fix-bug review design-polish investigate release; do
 done
 pass "workflow adapters explain the personal runtime precedence"
 
+
+# 완료 조건 대응표(#501): 그래프는 대응 없는 Brief의 사람 인계와 deliver → brief 복귀를 선언하고, 문서는 게이트와 revise를 안내한다.
+BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+for graph in "$FEATURE_GRAPH" "$BUG_FIX_GRAPH"; do
+  assert_eq "2" "$(jq -r '.limits.max_brief_rewrites' "$graph")" "$(basename "$graph") limits brief rewrites"
+  assert_contains "$(jq -r '.invariants[0]' "$graph")" "acceptance_map" "$(basename "$graph") states the coverage gate in its approval invariant"
+done
+assert_eq "user_decision" "$(jq -r 'first(.transitions[] | select(.from == "approval" and .when == "brief_coverage_incomplete") | .to)' "$BUG_FIX_GRAPH")" "bug-fix hands an uncovered brief to a person"
+COVERAGE_GRAPH="$TEST_TMP/coverage-graph.json"
+jq 'del(.transitions[] | select(.when == "brief_revised"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without deliver -> brief is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without the coverage hand-off is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$BUG_FIX_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-bug-fix-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a bug-fix graph without the coverage hand-off is invalid"; fi
+for f in "$ROOT/.ai-harness/workflows/feature-delivery-graph.json:$FEATURE_GRAPH" "$ROOT/.ai-harness/workflows/bug-fix-graph.json:$BUG_FIX_GRAPH"; do
+  cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md"; do
+  assert_contains "$(<"$f")" "acceptance_map" "$(basename "$(dirname "$f")")/$(basename "$f") documents the completion-condition map"
+  assert_contains "$(<"$f")" "brief_coverage_incomplete" "$(basename "$(dirname "$f")")/$(basename "$f") documents the coverage gate"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md"; do
+  assert_contains "$(<"$f")" "brief_revised" "$(basename "$(dirname "$f")")/$(basename "$f") documents revise during deliver"
+done
+pass "completion-condition map: graphs, validators, and docs"
+
 finish_tests
