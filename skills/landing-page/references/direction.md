@@ -4,6 +4,10 @@ Decide what the page argues and how it should feel before choosing any value. A 
 
 ## 1. Brief
 
+Before the brief, read `### 서비스` at the top of the design rule document's `## 원칙` when the repository has one (`docs/design-system.md`, `DESIGN.md`, or the path `.ai-harness/docs/frontend.md`/`ui.md` names) — who uses the product, its core job, its character, and what to avoid. It fills Audience, Identity, and Tone and manner below; what it already answers, do not ask again, and keep the page's tone inside its character and avoid list. A service-level fact you learn during the work that it lacks (an audience, a context, something to avoid) goes into the report as a proposal: name the fact and propose adding it to `### 서비스`. Do not write it into the rule document; that goes through `design-system-builder`.
+
+Find the UX writing rule document before writing copy, with the detection rule in `ux-writing-audit` (`.ai-harness/docs/ux-writing.md` by default); if it exists, the page's interface copy (buttons, form labels, errors) follows it, and its voice informs the page's voice.
+
 Collect, from the request, the repository, and existing pages:
 
 | Item | Question | If unknown |
