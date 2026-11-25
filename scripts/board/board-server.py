@@ -31,12 +31,14 @@ GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ �
 POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
                                  랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
 GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) 상태와 종류별 항목. 주기가 지난 소스는 이때·뒤 타이머가 다시 모음
-POST /agenda/connect {t, source} · /agenda/disconnect {t, source}  소스 연결·끊기(connect는 뒤에서, 최대 5분)
+POST /agenda/connect {t, source} · /agenda/disconnect {t, source, account?}  소스 연결·끊기(connect는 뒤에서, 최대 5분).
+                                    계정을 여럿 잇는 소스는 연결된 뒤 connect가 계정을 더하고, account를 주면 그 계정만 끊는다
 POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text}  직접 적는 할 일
 GET  /settings/skills?t=...      하네스 설정 > 스킬(#494): setup.sh list·design list 상태 + 진행 중 setup 세션. 끝난 세션은 지우고 다시 읽음
 POST /settings/skills/check {t, name}  setup.sh check(외부 API) — 버튼으로만, 결과(ok·at·error)만 기록
-POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 스킬 하나에 setup 세션(install·setup·remove)을 띄움
+POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 스킬 하나에 setup 세션(install·setup·remove)을 띄움.
+                                 kind=agenda면 name은 내 일정 소스 id, action은 setup만(#525) — 설정이 필요한 소스에 서버가 만든 지시문으로 띄우고, GET /agenda의 소스에 session을 붙임
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -1584,9 +1586,9 @@ def request_facts_change(req):
     return {"ok": True, "message": "저장소 사실 변경 세션을 띄움 — draft PR을 병합해야 반영됨"}
 
 
-def skills_state():
-    """스킬 상태에 진행 중인 setup 세션을 붙인다. 작업 목록에 없거나(gone) 실행 중이 아닌 세션은 끝난 것으로 보고
-    기록을 지운 뒤(연결 확인 기록·상태 캐시도) 실제 폴더 상태를 다시 읽는다."""
+def live_skill_sessions():
+    """skill-sessions.json 기록(스킬·내 일정 소스)을 작업 목록과 대조해 진행 중인 것만 {key: {state, action, item_id}}로.
+    작업 목록에 없거나(gone) 실행 중이 아닌 세션은 끝난 것으로 보고 기록을 지운다(연결 확인 기록·상태 캐시도)."""
     recs = SKILLS.sessions()
     live, ended = {}, []
     if recs:
@@ -1601,21 +1603,55 @@ def skills_state():
             else:
                 ended.append(key)
     SKILLS.end_sessions(ended)
-    return SKILLS.view(live)
+    return live
+
+
+def skills_state():
+    """스킬 상태에 진행 중인 setup 세션을 붙인다. 끝난 세션을 지운 뒤 실제 폴더 상태를 다시 읽는다."""
+    return SKILLS.view(live_skill_sessions())
+
+
+def agenda_state():
+    """내 일정 상태에 소스별 설정 세션(#525)을 붙인다. agenda 상태는 캐시 없이 requires를 다시 보므로 세션이 끝난 뒤 읽으면 실제 상태다."""
+    live = live_skill_sessions()
+    res = AGENDA.state()
+    for s in res.get("sources") or []:
+        s["session"] = live.get(f"agenda:{s.get('id')}")
+    return res
 
 
 SKILL_SESSION_GRACE = 120
 
 
+def agenda_setup_prompt(source_id, action):
+    """내 일정 [설정하기] 세션 검사(#525). 발견된 유효 소스 id만(화이트리스트), 설정이 필요하고 지시문이 있을 때만. (지시문, 사유)"""
+    if action != "setup":
+        return None, "내 일정 소스는 설정 세션만 띄울 수 있습니다."
+    src = AGENDA.find(source_id) if isinstance(source_id, str) else None
+    if not src:
+        return None, "등록된 일정 소스가 아닙니다."
+    if not AGENDA.missing(src):
+        return None, "이미 설정을 마친 소스입니다. 연결한 곳에서 [연결]을 누르세요."
+    prompt = AGENDA.setup_prompt(src)
+    if not prompt:
+        return None, "이 소스는 설정 세션을 제공하지 않습니다. 펼친 안내대로 준비하세요."
+    return prompt, None
+
+
 def skill_session(req):
     """하네스 설정 > 스킬의 [설치]·[설정하기]·[제거]. 다른 화면도 같은 요청 형태로 쓴다(공용 장치)."""
     kind, name, action = req.get("kind"), req.get("name"), req.get("action")
-    row, err = SKILLS.validate(kind, name, action)
+    if kind == "agenda":
+        prompt, err = agenda_setup_prompt(name, action)
+        label = f"내 일정: 소스 설정 {name}" if not err else None
+    else:
+        row, err = SKILLS.validate(kind, name, action)
+        if not err:
+            prompt, label = SKILLS.prompt(kind, name, action, row), SKILLS.session_name(action, name)
     if err:
         return {"ok": False, "message": err}
-    label = SKILLS.session_name(action, name)
     home = os.path.expanduser("~")
-    res = new_bg(home, SKILLS.prompt(kind, name, action, row), name=label)
+    res = new_bg(home, prompt, name=label)
     if not res["ok"]:
         return res
     sid = None
@@ -2581,7 +2617,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/launch":
             return self._send(200, launch_state())
         if u.path == "/agenda":
-            return self._send(200, AGENDA.state())
+            return self._send(200, agenda_state())
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":
@@ -2678,7 +2714,8 @@ class Handler(BaseHTTPRequestHandler):
         elif kind == "connect":
             code, res = AGENDA.connect(source)
         elif kind == "disconnect":
-            code, res = AGENDA.disconnect(source)
+            account = req.get("account") if isinstance(req.get("account"), str) and req.get("account") else None
+            code, res = AGENDA.disconnect(source, account)
         elif kind == "refresh":
             code, res = AGENDA.refresh(source)
         else:
