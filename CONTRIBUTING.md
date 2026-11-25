@@ -99,7 +99,7 @@ bash .ai-harness/workflows/workflow-driver.sh start --workflow release --version
 
 ```bash
 git switch develop && git pull
-scripts/release-prep.sh <version>          # Unreleased 절 확정 + 네 곳 동기화
+scripts/release-prep.sh <version>          # Unreleased 절 확정(+ 빈 Unreleased 머리) + 네 곳 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>" && git push
 gh pr create --base main --head develop --title "chore: release v<version>" --milestone "v<version>"
@@ -164,4 +164,4 @@ shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh     # 미설치 시 npx
 
 CI의 shellcheck는 **info 레벨도 실패로 다룬다**. 로컬 버전이 CI보다 관대할 수 있으니 경고가 나오면 구조를 바꿔 없앤다 — `# shellcheck disable`은 근거를 주석으로 남길 수 있을 때만 쓴다.
 
-`scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지만 본다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다.
+`scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지만 본다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다. `## Unreleased` 머리가 없으면 실패하지 않고 stderr에 경고만 한다.

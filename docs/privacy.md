@@ -21,7 +21,8 @@ ai-harness 보드의 '내 일정' 화면이 무엇을 읽고 어디에 두는지
 | `~/.ai-harness/board/agenda/sources.json` | 어느 소스를 연결했는지 |
 | `~/.ai-harness/board/agenda/cache/<소스>.json` | 마지막으로 가져온 항목 |
 | `~/.ai-harness/board/agenda/done.json` | 보드에서만 완료로 표시한 항목 |
-| `~/.ai-harness/board/agenda/todos.json` | 직접 적은 할 일 |
+| `~/.ai-harness/board/agenda/todos.json` | 직접 적은 할 일(기한 포함) |
+| `~/.ai-harness/board/agenda/brief.json` | 정기 작업이 남긴 마지막 아침 요약 글 |
 
 일정·메시지 내용은 하네스 자동 개선(harvest)이나 사용 지표 수집 대상이 아닙니다.
 

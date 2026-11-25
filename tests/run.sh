@@ -4,16 +4,22 @@
 #   bash tests/run.sh                  전체 (CI·PR 직전)
 #   bash tests/run.sh board init       고른 영역만
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
-#   bash tests/run.sh --fast           느린 영역(SLOW_AREAS)을 뺀다. 다른 선택과 같이 쓸 수 있다
-#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다
+#   bash tests/run.sh --fast           느린 영역(tests/slow-areas.txt)을 뺀다. 다른 선택과 같이 쓸 수 있다
+#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 직렬)
 #   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x + bash 3.2 중괄호 검사 (파일마다 따로)
 #   bash tests/run.sh --list           영역 목록
 set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-# 그래프 러너·자동 실행 흐름을 실제로 돌리는 느린 영역. --fast에서 빼고, -j에서는 이 순서(긴 것부터, macOS 실측)로 먼저 시작한다.
-SLOW_AREAS="automation workflow-merge workflow-merge-sync workflow-runs workflow-stop design workflow-feature workflow-publish workflow init workflow-investigate workflow-release board-agenda"
+SLOW_AREAS_FILE="$TESTS_DIR/slow-areas.txt"
+
+# 느린 영역 목록(한 줄에 하나, # 주석·빈 줄 무시). --fast에서 빼고, -j에서는 이 순서(긴 것부터)로 먼저 시작한다. 파일이 없으면 빈 목록.
+slow_area_lines() { # file
+  [[ -f "$1" ]] || return 0
+  sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$' || true
+}
+SLOW_AREAS="$(slow_area_lines "$SLOW_AREAS_FILE" | tr '\n' ' ')"
 
 usage() {
   sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -34,6 +40,7 @@ areas_for_file() {
   local file="$1" probe="$1" hits hit n
   case "$file" in
     tests/lib.sh | tests/run.sh | scripts/lib.sh) all_areas; return ;;
+    tests/slow-areas.txt) slow_list_areas; return ;;
     tests/fixtures/*) ;;
     tests/lib-*.sh)
       # 공용 헬퍼는 그 파일 이름을 언급(source)하는 영역들로 잇는다.
@@ -60,6 +67,23 @@ areas_for_file() {
   printf 'run.sh: 이 파일을 다루는 영역이 없음 — PR 전 전체 실행으로 확인: %s\n' "$file" >&2
 }
 
+# 느린 영역 목록이 바뀌면 추가·삭제된 줄의 영역만 고른다(실제 영역만). 미추적 새 파일이면 적힌 영역 전체.
+slow_list_areas() {
+  local names name all
+  if git -C "$ROOT" ls-files --error-unmatch tests/slow-areas.txt >/dev/null 2>&1 \
+    || git -C "$ROOT" cat-file -e "$MERGE_BASE:tests/slow-areas.txt" 2>/dev/null; then
+    names="$(git -C "$ROOT" diff --no-color -U0 "$MERGE_BASE" -- tests/slow-areas.txt \
+      | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)( |$)' | cut -c2- | sed -e 's/#.*//' -e 's/[[:space:]]//g' | grep -v '^$' || true)"
+  else
+    names="$(slow_area_lines "$SLOW_AREAS_FILE")"
+  fi
+  [[ -n "$names" ]] || return 0
+  all=" $(all_areas | tr '\n' ' ') "
+  while IFS= read -r name; do
+    case "$all" in *" $name "*) printf '%s\n' "$name" ;; esac
+  done <<<"$names"
+}
+
 changed_areas() {
   local merge_base files file
   merge_base="$(merge_base_or_fail)" || {
@@ -67,6 +91,7 @@ changed_areas() {
     all_areas
     return
   }
+  MERGE_BASE="$merge_base"
   files="$(changed_files "$merge_base")"
   [[ -n "$files" ]] || return 0
   while IFS= read -r file; do
@@ -141,6 +166,13 @@ for arg in "$@"; do
   esac
 done
 [[ "$expect_jobs" == 0 ]] || { printf 'run.sh: -j 뒤에 동시 실행 수를 지정하세요\n' >&2; usage >&2; exit 2; }
+# -j가 없으면 HM_TEST_JOBS(그래프 러너가 검사에 넘긴다)를 기본 동시 실행 수로 쓴다. -j가 이긴다.
+if [[ "$parallel" == 0 && -n "${HM_TEST_JOBS:-}" ]]; then
+  jobs="$HM_TEST_JOBS"
+  while [[ "$jobs" == 0* && "$jobs" != 0 ]]; do jobs="${jobs#0}"; done
+  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'run.sh: -j 값은 1 이상의 정수여야 합니다 (HM_TEST_JOBS=%s)\n' "$HM_TEST_JOBS" >&2; exit 2; }
+  [[ "$jobs" == 1 ]] || parallel=1
+fi
 [[ "$changed" == 0 ]] || selected="$selected $(changed_areas | tr '\n' ' ')"
 [[ -n "${selected// /}" || "$changed" == 1 ]] || selected="$(all_areas | tr '\n' ' ')"
 

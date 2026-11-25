@@ -10,12 +10,15 @@
 - 발견 순서: 플러그인 scripts/board/agenda/*/ → HM_CLAUDE_SKILLS_DIR/*/ → HM_CODEX_SKILLS_DIR/*/. 같은 id는 먼저 찾은
   쪽이 쓴다(기본 어댑터를 사용자 파일이 가로채지 못한다). 잘못된 선언은 그 소스만 '선언 오류'로 보인다.
 - fetch는 `--since ISO --until ISO`를 덧붙여 부르고, stdout JSONL 한 줄이 항목 하나다
-  {id, kind: event|reply|todo, title, start?, end?, url?, detail?, done?}. 잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
+  {id, kind: event|reply|todo, title, start?, end?, due?, url?, detail?, done?}. 잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
+  due(#539)는 reply·todo의 기한: 날짜(YYYY-MM-DD) 또는 날짜·시각(ISO 8601). 읽을 수 없는 기한은 버리고 항목은 남긴다.
 - done은 argv 뒤에 항목 id를 붙여 부른다. done이 없는 소스는 보드가 done.json에만 적고 숨긴다. event는 완료 대상이 아니다.
 - 선택 accounts(argv, #519): 한 소스에 계정을 여럿 잇는 어댑터. stdout JSONL 한 줄이 계정 하나 {id, name, error?}.
   선언한 소스는 연결된 뒤에도 connect를 다시 불러 계정을 더하고, 끊기는 disconnect argv 뒤에 계정 id를 붙여 그 계정만 끊는다
   (마지막 계정을 끊으면 소스 연결도 끊긴다). 계정 목록은 연결·끊기·수집 뒤에 다시 읽어 sources.json에 둔다.
-데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json, 모두 600)에 둔다.
+데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json·brief.json, 모두 600)에 둔다.
+아침 요약(#539): 스킬의 정기 작업이 `board.sh brief set`으로 요약 글을 남기면 화면 맨 위에 보이고, `board.sh agenda summary`는
+그 요약을 만들 재료(오늘 일정·답할 것·기한순 할 일)를 JSON으로 낸다.
 메일·채팅·일정 본문은 이 폴더에만 있고 harvest·지표 수집 대상(events/)에 쓰지 않는다.
 설정 세션 지시문(setup_prompt())은 서버가 만든다: 소스 선언의 setup_prompt를 고정 머리말·꼬리말(비밀 값은 대화로 받지 않음)로
 감싼다. 없으면 None — 화면은 setup_hint만 펼친다. 플러그인 구글 소스는 공용 클라이언트(#519)로 준비물이 없어 설정 세션이 없다.
@@ -31,6 +34,7 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 TODO_ID = "todo"
 MAX_ITEMS = 500
 SETUP_PROMPT_MAX = 1000
+BRIEF_MAX = 4000
 DEFAULT_INTERVAL = 15
 # 테스트 전용 시간 한도(사용자 설정 아님) — 실패 격리 테스트가 시간 초과를 몇 초 안에 보게 한다.
 FETCH_TIMEOUT = float(os.environ.get("BOARD_AGENDA_FETCH_TIMEOUT") or 60)
@@ -48,6 +52,24 @@ def _epoch(iso):
         return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
     except (TypeError, ValueError):
         return 0.0
+
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def parse_due(value):
+    """기한 문자열 → (정규화한 문자열, 비교용 epoch). 날짜만이면 그날 끝(이 PC 시간대)으로 본다. 못 읽으면 (None, None)."""
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 40:
+        return None, None
+    v = value.strip()
+    try:
+        if DATE_RE.match(v):
+            d = datetime.strptime(v, "%Y-%m-%d")
+            return v, d.replace(hour=23, minute=59, second=59).astimezone().timestamp()
+        d = datetime.fromisoformat(v[:-1] + "+00:00" if v.endswith("Z") else v)
+    except ValueError:
+        return None, None
+    return v, (d if d.tzinfo else d.astimezone()).timestamp()
 
 
 def window(now=None):
@@ -194,6 +216,9 @@ def _normalize(raw, source_id):
     for k in ("start", "end"):
         if isinstance(raw.get(k), str) and raw[k].strip():
             item[k] = raw[k].strip()[:40]
+    due, _ = parse_due(raw.get("due"))
+    if due and kind != "event":
+        item["due"] = due
     url = raw.get("url") if isinstance(raw.get("url"), str) else raw.get("link")
     if isinstance(url, str) and re.match(r"^https?://", url):
         item["url"] = url[:2000]
@@ -236,6 +261,7 @@ class Store:
         self.sources_path = os.path.join(self.dir, "sources.json")
         self.done_path = os.path.join(self.dir, "done.json")
         self.todos_path = os.path.join(self.dir, "todos.json")
+        self.brief_path = os.path.join(self.dir, "brief.json")
         self.warn = warn or (lambda m: print(m, file=sys.stderr, flush=True))
         self._warned = set()
         self.lock = threading.Lock()
@@ -483,11 +509,57 @@ class Store:
         todos = self._todos()
         for t in todos:
             if not t.get("done_at"):
-                items["todo"].append({"source": TODO_ID, "source_name": "할 일", "id": t["id"], "kind": "todo",
-                                      "title": t["title"], "start": t.get("created_at"), "local": True})
+                row = {"source": TODO_ID, "source_name": "할 일", "id": t["id"], "kind": "todo",
+                       "title": t["title"], "start": t.get("created_at"), "local": True}
+                if parse_due(t.get("due"))[0]:
+                    row["due"] = t["due"]
+                items["todo"].append(row)
         items["event"].sort(key=lambda i: (i.get("start") or "", i["title"]))
-        return {"ok": True, "now": utc(), "sources": sources, "items": items,
-                "todo_total": len(todos), "window": dict(zip(("since", "until"), window()))}
+        for k in ("reply", "todo"):  # 기한 있는 것이 먼저(이른 순), 기한 없는 것은 원래 순서
+            items[k].sort(key=lambda i: parse_due(i.get("due"))[1] or float("inf"))
+        res = {"ok": True, "now": utc(), "sources": sources, "items": items,
+               "todo_total": len(todos), "window": dict(zip(("since", "until"), window()))}
+        brief = self.brief()
+        if brief:
+            res["brief"] = brief
+        return res
+
+    def summary(self, wait=10.0):
+        """아침 요약 재료: 오늘 일정, 답할 것, 기한순 할 일(지난 것 표시). 본문은 요약에만 쓰고 기록에 남기지 않는다."""
+        st = self.state(wait=wait)
+        now, today = time.time(), datetime.now().astimezone().strftime("%Y-%m-%d")
+        pick = ("source", "source_name", "id", "title", "start", "end", "due", "detail", "url")
+
+        def row(it):
+            r = {k: it[k] for k in pick if k in it}
+            ts = parse_due(it.get("due"))[1]
+            if ts:
+                r["overdue"] = ts < now
+            return r
+
+        events = [row(e) for e in st["items"]["event"] if (e.get("start") or "")[:10] <= today]
+        todos = [row(t) for t in st["items"]["todo"]]
+        return {"ok": True, "now": st["now"], "today": today, "events_today": events,
+                "replies": [row(r) for r in st["items"]["reply"]], "todos": todos,
+                "counts": {"events_today": len(events), "replies": len(st["items"]["reply"]), "todos": len(todos),
+                           "overdue": sum(1 for t in todos if t.get("overdue"))},
+                "sources": [{"id": s["id"], "name": s["name"], "state": s["state"], "error": s.get("error")}
+                            for s in st["sources"] if s.get("connected") or s.get("invalid")]}
+
+    # ---- 아침 요약 글 ----
+    def brief(self):
+        d = _read_json(self.brief_path, {})
+        if not isinstance(d, dict) or not isinstance(d.get("text"), str) or not d["text"].strip():
+            return None
+        return {"text": d["text"], "source": d.get("source") or "", "at": d.get("at")}
+
+    def brief_set(self, text, source=""):
+        text = (text or "").replace("\r\n", "\n").strip()[:BRIEF_MAX]
+        if not text:
+            return False
+        with _FileLock(self.brief_path):
+            _write_private(self.brief_path, {"text": text, "source": _short(source or "", 60), "at": utc()})
+        return True
 
     # ---- 동작 ----
     def connect(self, source_id):
@@ -593,7 +665,7 @@ class Store:
             return 400, {"ok": False, "message": "완료할 항목이 없습니다."}
         if source_id == TODO_ID:
             ok = self.todo_done(item_id)
-            return (200, {"ok": True, "message": "할 일을 완료로 표시했습니다."}) if ok else (404, {"ok": False, "message": "그 할 일을 찾지 못했습니다."})
+            return (200, {"ok": True, "message": "할 일을 완료로 표시했습니다.", "undo": True}) if ok else (404, {"ok": False, "message": "그 할 일을 찾지 못했습니다."})
         src = self.find(source_id)
         if not src:
             return 404, {"ok": False, "message": "등록된 일정 소스가 아닙니다."}
@@ -610,12 +682,34 @@ class Store:
             item["done"] = True
             if self.is_connected(source_id):
                 _write_private(self.cache_path(source_id), c)
-            return 200, {"ok": True, "message": f"{src['name']}에 완료로 표시했습니다."}
+            return 200, {"ok": True, "message": f"{src['name']}에 완료로 표시했습니다.", "undo": False}
         with _FileLock(self.done_path):
             d = self._done_local()
             d.setdefault(source_id, {})[item_id] = utc()
             _write_private(self.done_path, d)
-        return 200, {"ok": True, "message": "완료로 표시했습니다. 이 보드에서만 숨깁니다."}
+        return 200, {"ok": True, "message": "완료로 표시했습니다. 이 보드에서만 숨깁니다.", "undo": True}
+
+    def reopen(self, source_id, item_id):
+        """방금 누른 완료를 되돌린다(#539). 직접 적은 할 일과 보드에만 숨긴 항목만 — 어댑터 done으로 알린 것은 되돌리지 못한다."""
+        if not isinstance(item_id, str) or not item_id:
+            return 400, {"ok": False, "message": "되돌릴 항목이 없습니다."}
+        if source_id == TODO_ID:
+            with _FileLock(self.todos_path):
+                items = self._todos()
+                hit = next((t for t in items if t["id"] == item_id and t.get("done_at")), None)
+                if hit:
+                    hit["done_at"] = None
+                    _write_private(self.todos_path, {"items": items})
+            return (200, {"ok": True, "message": "할 일을 다시 열었습니다."}) if hit else \
+                (404, {"ok": False, "message": "되돌릴 할 일을 찾지 못했습니다."})
+        with _FileLock(self.done_path):
+            d = self._done_local()
+            hidden = d.get(source_id) if isinstance(d.get(source_id), dict) else {}
+            if item_id not in hidden:
+                return 409, {"ok": False, "message": "원본에 완료로 알린 항목은 여기서 되돌릴 수 없습니다. 원본에서 다시 여세요."}
+            hidden.pop(item_id)
+            _write_private(self.done_path, d)
+        return 200, {"ok": True, "message": "다시 목록에 올렸습니다."}
 
     # ---- 할 일 ----
     def _todos(self):
@@ -623,17 +717,24 @@ class Store:
         items = d.get("items") if isinstance(d, dict) else None
         return [t for t in items or [] if isinstance(t, dict) and isinstance(t.get("id"), str) and isinstance(t.get("title"), str)]
 
-    def todo_add(self, text):
+    def todo_add(self, text, due=None):
         title = _short(text or "", 300)
         if not title:
             return None
+        if due:
+            due = parse_due(due)[0]
+            if not due:
+                return None
         with _FileLock(self.todos_path):
             items = self._todos()
             ids = {t["id"] for t in items}
             tid = secrets.token_hex(4)
             while tid in ids:
                 tid = secrets.token_hex(4)
-            items.append({"id": tid, "title": title, "created_at": utc(), "done_at": None})
+            row = {"id": tid, "title": title, "created_at": utc(), "done_at": None}
+            if due:
+                row["due"] = due
+            items.append(row)
             _write_private(self.todos_path, {"items": items})
         return tid
 
@@ -651,7 +752,7 @@ class Store:
         return [t for t in self._todos() if include_done or not t.get("done_at")]
 
 
-TODO_USAGE = """usage: board.sh todo add <내용...>     할 일을 적고 새 id를 출력한다
+TODO_USAGE = """usage: board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>   할 일을 적고 새 id를 출력한다
        board.sh todo list [--all]        열린 할 일을 'id<TAB>내용'으로 (--all은 끝낸 것도, 셋째 칸에 완료 시각)
        board.sh todo done <id>           할 일을 완료로 표시한다"""
 
@@ -666,7 +767,13 @@ def _cli_todo(args, data_dir):
     store = Store(data_dir)
     cmd, rest = args[0], args[1:]
     if cmd == "add":
-        tid = store.todo_add(" ".join(rest))
+        due = None
+        if rest[:1] == ["--due"]:
+            if len(rest) < 2 or not parse_due(rest[1])[0]:
+                print("board: --due는 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 합니다", file=sys.stderr)
+                return 2
+            due, rest = rest[1], rest[2:]
+        tid = store.todo_add(" ".join(rest), due)
         if not tid:
             return usage()
         print(tid)
@@ -688,11 +795,37 @@ def _cli_todo(args, data_dir):
     return usage()
 
 
+BRIEF_USAGE = """usage: board.sh brief set [--source <이름>] < 글   아침 요약 글을 보드 '내 일정' 맨 위에 남긴다(앞의 것을 바꾼다)
+       board.sh brief show                       남긴 요약 글을 출력한다
+       board.sh agenda summary                   오늘 일정·답할 것·기한순 할 일을 JSON으로 낸다(아침 요약 재료)"""
+
+
+def _cli_brief(args, data_dir):
+    store = Store(data_dir)
+    if args[:1] == ["show"] and len(args) == 1:
+        b = store.brief()
+        if b:
+            print(b["text"])
+        return 0
+    if args[:1] == ["set"] and (len(args) == 1 or (len(args) == 3 and args[1] == "--source")):
+        if not store.brief_set(sys.stdin.read(), args[2] if len(args) == 3 else ""):
+            print("board: 요약 글이 비어 있습니다", file=sys.stderr)
+            return 2
+        return 0
+    print(BRIEF_USAGE, file=sys.stderr)
+    return 2
+
+
 def main(argv):
     data_dir = os.environ.get("HARNESS_METRICS_DIR") or os.environ.get("HM_DATA_DIR") or os.path.expanduser("~/.ai-harness")
     if len(argv) >= 2 and argv[1] == "todo":
         return _cli_todo(argv[2:], data_dir)
-    print("usage: agenda.py todo <add|list|done> ...", file=sys.stderr)
+    if len(argv) >= 2 and argv[1] == "brief":
+        return _cli_brief(argv[2:], data_dir)
+    if argv[1:] == ["agenda", "summary"]:
+        print(json.dumps(Store(data_dir).summary(), ensure_ascii=False))
+        return 0
+    print("usage: agenda.py todo|brief|agenda summary ...", file=sys.stderr)
     return 2
 
 

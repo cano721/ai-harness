@@ -340,7 +340,7 @@ deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --fe
 | git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다. 러너가 멈출 때(그리고 체크포인트 커밋·publish가 HEAD를 옮길 때) 기준점(HEAD + 작업 트리 지문)도 남기고, `resume`·`approve`·`revise`는 에이전트를 부르기 전에 그 기준점과 지금을 대조합니다. 멈춘 뒤 커밋이나 미커밋 수정이 생겼으면 아무것도 실행하지 않고 바뀐 커밋·파일과 남은 노드·검사를 보여 준 뒤 `20`으로 멈춥니다(실행 디렉터리 `baseline-changes.txt`). 되돌린 뒤 `resume`하거나, 바뀐 것을 이 실행에 넣을 때만 `resume --accept-changes`로 기준점을 옮깁니다(러너가 강제 종료돼 기준점을 남기지 못했으면 바뀐 것이 러너의 하다 만 작업일 수 있다고 안내합니다). 불변식 위반(`40`)으로 멈춘 상태는 기준점이 되지 않습니다. 리뷰를 지난 노드(publish·remote_ci·merge·post_merge_verify)와 끝난 실행(`done`·`user_decision`·polish `fix_list`)은 받아들인 변경이 검증·리뷰를 건너뛰므로 `--accept-changes`도 거부하고(`20`) 새 실행으로 검사하라고 안내합니다. 이미 `done`인 실행은 성공을 다시 돌려주지 않습니다 |
-| 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다 |
+| 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다. 모든 검사에 동시 실행 수 `HM_TEST_JOBS`(기본 `min(ncpu/2, 4)`, `~/.ai-harness/config`로 조정)를 넘기고, 같은 트리에서 이미 통과한 검사는 재사용하며, 검사별 소요 시간을 progress.log와 `status`에 남깁니다 |
 | 종료 | review의 blocking finding이 0개이고 publish가 확인되고, push했으면 원격 CI가 통과(또는 원격 CI 없음)일 때만 done. 수정은 `limits.max_repair_attempts`회까지, 제품 판단이 필요하면 바로 `user_decision`. 러너의 체크포인트와 publish 밖에서 HEAD가 움직이면 멈춥니다 |
 
 종료 코드: `0` done · `10` 승인 대기 · `20` 사람 판단 · `30` 미완료(원인을 고친 뒤 `resume`) · `40` 불변식 위반. `status`로 현재 노드와 이력을 봅니다.
@@ -373,7 +373,7 @@ deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --fe
 | 단계 | 동작 |
 |---|---|
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. 조건은 **저장소 호스트 규칙**입니다: 기준 브랜치 보호에 필수 승인이 있으면 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 그 수만큼(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), 필수 체크가 있으면 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님). 보호가 없으면 승인 없이 병합합니다. 충돌 없음·draft 아님·리뷰어의 변경 요청 없음은 항상 봅니다 |
-| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 대기·막힘 | 충돌 계산 중은 약 2분(15초 간격) 동안 다시 묻고, 그래도 판정이 없거나 승인 대기·draft이면 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
 | 기준 브랜치 충돌 (`sync_base`) | 막힘이 기준 브랜치와의 **충돌뿐**이면 사람에게 넘기지 않고 `sync_base` 노드로 갑니다(feature·bug-fix 그래프). 러너가 최신 `origin/<base>`를 일반 merge로 들이고, 충돌이 나면 에이전트 세션이 양쪽 의도를 살려 충돌만 풉니다(커밋·push는 하지 않음). 러너가 충돌 표식이 남지 않았는지 확인해 merge 커밋을 만들고, 런의 검사(`checks`·`final_checks`)를 다시 통과해야 일반 push(fast-forward)한 뒤 `remote_ci` → `merge`를 다시 거칩니다 — 새 head의 승인·CI를 다시 요구합니다. 원격 CI를 기다리는 동안 바깥에서 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 같은 경로로 받습니다. 반복 한도(그래프 `limits.max_base_syncs`, 기본 3)를 넘기거나, 풀지 못한 충돌(병합은 abort)이나 검사 실패(push하지 않음)가 남으면 `user_decision`입니다. 충돌과 다른 막힘이 같이 있으면 동기화하지 않고 사람에게 넘깁니다. rebase·force push·기준 브랜치 push는 하지 않습니다 |
 | 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) 저장소의 방식으로 병합합니다 — GitHub는 저장소가 허용한 방식 중 squash → merge → rebase 순(허용 방식을 읽지 못하면 사람에게), Bitbucket은 저장소 기본 전략. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신합니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
@@ -736,7 +736,7 @@ scripts/board/board.sh launcher install|remove|status   # macOS: 눌러서 여�
 - **런처 앱 (선택, macOS)**: `/setup` 자동화 옵션에서 고르면 `~/Applications/Harness Board.app`을 만듭니다(`board.sh launcher install|remove|status`). 누르면 `board.sh open`과 같습니다 — 떠 있으면 그 화면, 없으면 띄워서 엽니다. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고 그 스크립트가 열 때마다 가장 새 플러그인 설치본을 찾으므로, 플러그인을 업데이트해도 다시 설치하지 않습니다. Finder로 연 앱은 셸 환경을 물려받지 않아 설치 때의 PATH(와 정했다면 `BOARD_IDLE_EXIT`)를 기억합니다. 열지 못하면 이유를 대화상자로 보입니다. 앱은 보드를 자기 창 하나에 띄우고 보드가 떠 있는 동안 Dock에 남아, 다시 누르면 새 브라우저 탭 없이 그 창을 앞으로 가져오고 창을 닫거나 종료하면 보드 서버도 끕니다. 실행 로그·리포트 링크는 앱 안의 새 창으로, 외부 링크는 기본 브라우저로 엽니다. 창 앱은 설치 때 `swiftc`(Xcode Command Line Tools)로 만들며, 없으면 브라우저로 여는 앱을 대신 설치합니다.
 - **자동 종료**: 보는 사람(열린 보드 화면)이 `BOARD_IDLE_EXIT`분(기본 30, `0`이면 끄지 않음) 동안 없으면 서버가 스스로 꺼집니다. 붙잡은 권한 요청·열린 이벤트 연결이 있으면 끄지 않습니다.
 - **상주 세션 호스트**: 보드의 '새 세션'(상주 세션)은 보드와 따로 사는 호스트 프로세스가 쥡니다. `stop`·플러그인 업데이트 뒤 재기동에도 세션과 붙잡은 권한·질문이 그대로이고, 다시 연 보드에 바로 보입니다. 호스트는 쥔 세션도 보드 연결도 없으면 몇 분(`BOARD_HOST_IDLE`초, 기본 300) 뒤 스스로 끝나며 로그인 항목은 만들지 않습니다. 재부팅 뒤 보드를 처음 열면 사람이 끝내지 않은 48시간 안 세션을 같은 id로 이어 쥐어 입력을 기다립니다. 즉 상주 세션은 사람이 끝내기 전까지 살고, 재부팅 뒤 보드를 열면 최대 8개가 다시 뜹니다(각자 SessionStart 훅이 돌지만 입력 전에는 모델을 부르지 않습니다). 호스트를 끄려면 `board.sh host-stop`(대화 기록 유지, 다음에 같은 id로 이어 쥠). 플러그인 업데이트 뒤 이전 버전 호스트가 세션을 쥐고 있으면 화면에 알리고, 세션이 끝나면 새 버전으로 바꿉니다.
-- **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`·`autofix/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`(기본 8765)이고, 다른 프로세스가 쓰고 있으면 띄우지 않고 이유를 알립니다.
+- **상태 파일**: `~/.ai-harness/board/`(`server.json`·`seen.json`·`hidden.json`·`links.json`·`settings-changes.json`·`actions.jsonl`·`impact/`·`autofix/`). 플러그인이 업데이트돼 경로가 바뀌어도 그대로 이어 씁니다. 포트는 `BOARD_PORT`를 정하지 않으면 8765부터 8774까지 처음 빈 포트를 쓰고 실제 주소를 `server.json`에 남깁니다. `BOARD_PORT`를 정했으면 그 포트만 쓰고, 그 포트나 10개 포트가 모두 다른 프로세스에 잡혀 있으면 띄우지 않고 이유를 알립니다.
 
 <a id="autofix"></a>
 
@@ -845,7 +845,7 @@ Claude Code에서 마켓플레이스 자동 업데이트를 켜 두면(`/plugin`
 
 ```bash
 # develop에서
-scripts/release-prep.sh <version>    # Unreleased 절 확정 + plugin.json ×2 + release.json 동기화
+scripts/release-prep.sh <version>    # Unreleased 절 확정(+ 빈 Unreleased 머리) + plugin.json ×2 + release.json 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>"
 gh pr create --base main --head develop --title "chore: release v<version>"
