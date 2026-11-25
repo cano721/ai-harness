@@ -8,6 +8,7 @@
 
 ## Unreleased
 
+## v0.96.1 (2026-11-25)
 ### 버그 수정
 
 - 보드 작업 현황이 결정·승인 대기(`user_decision`·`waiting_approval`)와 불변식 위반을 '사람 필요'로 보여 줍니다. 멈춘 런(`stopped`)은 resume 명령과 함께 '대기·막힘'으로, `abandoned`는 끝남으로 보여 줍니다. 알 수 없는 상태는 더 이상 '진행 중'으로 보이지 않습니다. 7일(`BOARD_DECISION_STALE_DAYS`)을 넘긴 결정 대기는 '대기·막힘'으로 내립니다. (#564)
