@@ -7,6 +7,8 @@
 작업 중인 변경은 PR마다 `changelog.d/<이슈>-<요약>.md` 조각으로 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 조각과 `## Unreleased`에 남은 항목을 소제목별로 합쳐 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+
+## v0.96.0 (2026-11-25)
 ### 새 기능
 
 - `HM_TARGET_CI=notify`(저장소별 `HM_TARGET_CI_REPOS`): 병합 뒤 병합 커밋 CI를 기다리지 않고, 실패하면 progress·상태·데스크톱 알림으로 알린다 (#557)
@@ -14,16 +16,15 @@
 ### 동작 변경
 
 - 러너: 원격 CI가 있는 저장소에서는 final_checks(전체 회귀)를 로컬에서 돌리지 않고 원격 CI를 최종 관문으로 삼는다. 원격 CI가 없거나 push하지 않는 저장소는 지금처럼 로컬에서 돌린다 (#557)
+- **회귀 테스트가 기본으로 CPU 수에 맞춰 병렬로 돕니다** — `bash tests/run.sh`는 `-j`도 `HM_TEST_JOBS`도 없으면 `max(1, min(CPU/2, 4))`개 영역을 동시에 돌립니다. 직렬은 `-j 1`로 고릅니다. 블록별 시간을 보는 `--profile`, CI 샤딩용 `--shard i/n`을 추가했고, GitHub Actions는 lint job과 4개 샤드로 나눠 돕니다. 느린 세 영역(automation·workflow-merge·workflow-runs)은 고정 대기를 조건 대기로 바꾸고 여러 영역으로 나눠 병렬로 돕니다. (#556)
+  요약: ai-harness 저장소를 개발할 때 `bash tests/run.sh`가 기본으로 병렬로 돌고 `--profile`로 느린 블록을 찾습니다.
+- **기능 PR의 변경 항목을 `changelog.d/` 조각 파일에 씁니다** — PR마다 `changelog.d/<이슈>-<요약>.md`에 소제목과 항목을 쓰고, 릴리스 때 `scripts/release-prep.sh <version>`이 소제목별로 합쳐 버전 절을 만든 뒤 조각을 지웁니다. `--check`는 조각 형식도 검사합니다. 동시에 열린 PR들이 `CHANGELOG.md` 맨 위에서 충돌하지 않습니다. (#558)
+  요약: 변경 항목은 이제 `CHANGELOG.md` 대신 `changelog.d/` 아래 PR별 파일에 적습니다. 릴리스 노트 형식은 그대로입니다.
 
 ### 버그 수정
 
 - 러너 deliver·repair 노드가 넓은 회귀는 러너 checks에 맡기고 바꾼 영역 테스트만 포그라운드로 돌리게 하고, `workflow-driver.sh status`가 정규화된 `git_policy`(`pr-only`)와 개인 단계(`delivery`)를 따로 보이게 한다 (#534)
 - 러너 release가 릴리스 도중 develop이 움직여 따라잡을(push 전 rebase, push 뒤 merge) 때 `prepare_cmd`를 다시 돌리지 않고 checks만 다시 돌립니다. 같은 버전 절이 이미 있어 `scripts/release-prep.sh`가 `changelog already carries`로 실패하고 릴리스가 사람 판단에서 멈추던 문제가 없어집니다. 따라잡을 때 새로 들어온 Unreleased 항목은 다음 릴리스에 들어갑니다. 또 macOS 기본 bash 3.2에서 release plan 프롬프트의 단계 문장이 `syntax error`로 깨지던 문제를 고쳤습니다. (#554)
-
-### 동작 변경
-
-- **회귀 테스트가 기본으로 CPU 수에 맞춰 병렬로 돕니다** — `bash tests/run.sh`는 `-j`도 `HM_TEST_JOBS`도 없으면 `max(1, min(CPU/2, 4))`개 영역을 동시에 돌립니다. 직렬은 `-j 1`로 고릅니다. 블록별 시간을 보는 `--profile`, CI 샤딩용 `--shard i/n`을 추가했고, GitHub Actions는 lint job과 4개 샤드로 나눠 돕니다. 느린 세 영역(automation·workflow-merge·workflow-runs)은 고정 대기를 조건 대기로 바꾸고 여러 영역으로 나눠 병렬로 돕니다. (#556)
-  요약: ai-harness 저장소를 개발할 때 `bash tests/run.sh`가 기본으로 병렬로 돌고 `--profile`로 느린 블록을 찾습니다.
 
 ## v0.95.0 (2026-11-25)
 ### 새 기능
