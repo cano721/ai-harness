@@ -71,7 +71,10 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
   approve [--accept-changes]                            터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
           resume·approve·revise는 에이전트를 부르기 전에 러너가 멈춘 때의 기준점(HEAD·작업 트리)과 지금을 대조한다.
           바뀌었으면 차이와 남은 검사를 보이고 20으로 멈춘다. 바뀐 것을 이 실행에 넣을 때만 --accept-changes로 기준점을 옮긴다
-  status                                                현재 노드·이력·다음 행동을 보인다
+  status                                                현재 노드·이력·다음 행동을 보인다. 멈춘 런(stopped)과 밖에서 끊긴 런(stale)도 보이며 둘 다 resume으로 잇는다
+  stop    [--reason "<사유>"]                            실행 중인 런을 멈춘다. 그 런이 기록한 러너 PID·노드 자식 프로세스 그룹만 TERM → 5초 → KILL로 끄고
+                                                        stopped(노드·시각·사유)로 남긴다. 실행 중인 러너는 stop으로만 멈춘다 —
+                                                        pkill·killall·pgrep -f 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선) · investigate(수정 전 원인 조사)
@@ -87,6 +90,7 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
   자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)만 병합 여부를 정한다. 없으면 PR까지다.
 
+exit(stop): 0 멈춤(이미 끊긴 런은 stopped로만 기록) · 2 런이 없거나 실행 중이 아님. 실행 중인 런에 resume·approve·revise는 2로 거부한다
 exit: 0 done(push했으면 원격 CI 통과까지, 단계 merge·deploy면 병합 후 검증까지. polish는 규칙 문서가 없어 고칠 목록까지만 낸 fix_list 포함) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
@@ -106,6 +110,7 @@ MONITOR_ERROR=""
 INVESTIGATION_FILE=""
 ACCEPT_CHANGES=""
 SELECT=""
+REASON=""
 VERSION_ARG=""
 while (($#)); do
   case "$1" in
@@ -118,6 +123,7 @@ while (($#)); do
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
     --accept-changes) ACCEPT_CHANGES=1; shift ;;
     --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
+    --reason) [[ $# -ge 2 ]] || usage; REASON="$2"; shift 2 ;;
     --version) [[ $# -ge 2 ]] || usage; VERSION_ARG="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
@@ -145,6 +151,7 @@ fi
 
 [[ -z "$ACCEPT_CHANGES" || "$CMD" == resume || "$CMD" == approve ]] \
   || { printf -- '--accept-changes is an option of resume and approve\n' >&2; exit 2; }
+[[ -z "$REASON" || "$CMD" == stop ]] || { printf -- '--reason is an option of stop\n' >&2; exit 2; }
 
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
@@ -316,13 +323,6 @@ coverage_gap() { # brief-json
 # revise를 받는 노드: 승인 대기와, 그래프가 brief로 돌아가는 brief_revised 엣지를 둔 노드.
 revise_nodes() { jq -r '["approval"] + [.transitions[] | select(.when == "brief_revised") | .from] | unique | join(", ")' "$GRAPH"; }
 
-# 이 실행을 돌리는 러너 프로세스가 살아 있는가. pid가 재사용됐을 수 있어 명령 줄까지 본다.
-runner_alive() {
-  local pid
-  pid="$(state '.driver_pid // ""')"
-  [[ -n "$pid" && "$pid" != "$$" ]] && kill -0 "$pid" 2>/dev/null && [[ "$(ps -o command= -p "$pid" 2>/dev/null)" == *workflow-driver* ]]
-}
-
 # 실행 중에 다른 세션이 남긴 revise 요청을 받는다. 받았으면 0.
 take_revise_request() {
   local req="$RUN/revise-request.json"
@@ -429,6 +429,83 @@ check_baseline() {
   log "accepted the changes since the baseline (--accept-changes); continuing at $node"
 }
 
+# 실행 중인 런의 프로세스: 러너는 실행에 들어갈 때 .process{pid, pgid, lstart}를, 노드 자식을 띄울 때 .process.child_pgid를 남긴다.
+# stop은 이 기록에 있는 프로세스만 끈다. 패턴 kill(pkill -f 등)은 같은 머신의 다른 런·세션까지 끈다(#495).
+proc_lstart() { # pid → 시작 시각. ps lstart는 로케일·TZ를 따르므로 고정해야 다른 환경에서 부른 stop·resume과 비교된다.
+  LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null
+}
+runner_alive() { # → 기록된 러너가 살아 있으면 0. lstart가 다르면 PID를 다른 프로세스가 다시 쓴 것이다.
+  local pid
+  pid="$(state '.process.pid // ""')"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null \
+    && [[ "$(proc_lstart "$pid")" == "$(state '.process.lstart // ""')" ]]
+}
+terminate() { # target... (pid 또는 -pgid) → TERM, 최대 5초 기다린 뒤 남은 것만 KILL
+  local t alive
+  kill -TERM -- "$@" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+    alive=""
+    for t in "$@"; do kill -0 -- "$t" 2>/dev/null && alive=1; done
+    [[ -n "$alive" ]] || return 0
+    sleep 0.2
+  done
+  kill -KILL -- "$@" 2>/dev/null || true
+}
+# 노드 자식을 새 프로세스 그룹에 띄우고 기다린다. 포그라운드 자식이 도는 동안 bash는 trap을 미루므로 wait로 기다려야 TERM trap이 바로 돈다.
+# 러너 자신의 그룹은 부른 쪽(에이전트 세션·터미널)과 같을 수 있어 건드리지 않는다. setsid는 macOS에 없다.
+CHILD_PGID=""
+run_in_group() { # command... → 그 명령의 종료 코드
+  local rc=0
+  set -m
+  "$@" &
+  CHILD_PGID=$!
+  set +m
+  state_set '.process.child_pgid = $g' --argjson g "$CHILD_PGID"
+  wait "$CHILD_PGID" || rc=$?
+  CHILD_PGID=""
+  state_set 'del(.process.child_pgid)'
+  return "$rc"
+}
+on_stop_signal() {
+  [[ -z "$CHILD_PGID" ]] || terminate "-$CHILD_PGID"
+  log "runner stopped by a signal at $(state .node); continue with resume"
+  exit 30
+}
+run_tee() { # log command... → 출력을 사람이 보는 stderr와 로그에 함께
+  local file="$1"
+  shift
+  "$@" 2>&1 | tee "$file" >&2
+}
+in_repo() { cd "$REPO" && "$@"; }
+claude_session() { # label args... — 세션 출력은 도구 호출 줄과 result만 남긴다(stream_progress)
+  local label="$1"
+  shift
+  (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "$@" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json"
+}
+stop_run() { # reason
+  local status node pid pgid child targets
+  status="$(state .status)"
+  [[ "$status" == running ]] || { printf 'run %s is not running (status %s)\n' "$RUN_ID" "$status" >&2; exit 2; }
+  pid="$(state '.process.pid // ""')"
+  [[ -n "$pid" ]] || { printf 'run %s has no process record (started by an older runner), so stop cannot tell its processes apart; wait for it to end\n' "$RUN_ID" >&2; exit 2; }
+  if runner_alive; then
+    pgid="$(state '.process.pgid // ""')"
+    child="$(state '.process.child_pgid // ""')"
+    targets=("$pid")
+    [[ -z "$child" ]] || targets+=("-$child")
+    # 러너가 자기 그룹의 리더일 때만 그 그룹을 함께 끈다. 아니면 그 그룹은 부른 쪽의 것이다.
+    [[ "$pgid" != "$pid" ]] || targets+=("-$pgid")
+    terminate "${targets[@]}"
+  fi
+  node="$(state .node)"
+  state_set '.status = "stopped" | .stopped = {node: .node, at: $t, reason: $r} | del(.process)' --arg t "$(now_utc)" --arg r "$1"
+  # 멈춘 노드가 하다 만 쓰기는 러너 자신의 작업이다. 기준점에 넣어 resume이 그 노드부터 이어 가게 한다.
+  save_baseline
+  log "stopped run $RUN_ID at $node: $1; continue with resume"
+  printf 'stopped run %s at %s\n' "$RUN_ID" "$node"
+  exit 0
+}
+
 go() { # from outcome → 그래프에 선언된 전이만 따른다
   local from="$1" outcome="$2" to
   to="$(jq -r --arg f "$from" --arg o "$outcome" \
@@ -491,9 +568,9 @@ run_agent() {
       [[ -d "$RUN/$label" ]] && args+=(--add-dir "$RUN/$label")
       # codex 출력은 원본(명령 출력·파일 내용)이다. 사람이 보는 터미널일 때만 함께 흘리고, 에이전트가 받는 stderr에는 넣지 않는다.
       if [[ -t 2 ]]; then
-        codex "${args[@]}" - <"$RUN/$label.prompt" 2>&1 | tee "$RUN/$label.log" >&2 || rc=$?
+        run_in_group run_tee "$RUN/$label.log" codex "${args[@]}" - <"$RUN/$label.prompt" || rc=$?
       else
-        codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
+        run_in_group codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
       fi
       ;;
     claude)
@@ -519,7 +596,7 @@ run_agent() {
         done <<<"$(state '(.measurements // [])[].evidence_dir')"
       fi
       # 답할 사람이 없는 세션이다. 보드 권한 훅이 이 세션의 권한 요청을 보드로 넘겨 붙잡지 않게 표시한다(없으면 바로 거부된다).
-      (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
+      run_in_group claude_session "$label" "${args[@]}" || rc=$?
       if ((rc == 0)); then
         # 세션이 result를 여러 번 내도 .out은 마지막 result 하나에서 만든 문서 하나다(소비자가 jq -r·--slurpfile로 읽는다).
         jq -rs 'last | if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
@@ -552,7 +629,7 @@ run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문�
   while IFS= read -r cmd; do
     i=$((i + 1))
     rc=0
-    (cd "$REPO" && bash -c "$cmd") >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
+    run_in_group in_repo bash -c "$cmd" >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
     results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
       '. + [{command:$cmd, exit:$rc, tail:$tail}]' <<<"$results")"
     if ((rc != 0)); then failed=1; log "check failed: $cmd (exit $rc)"; else log "check passed: $cmd"; fi
@@ -3086,9 +3163,18 @@ case "$CMD" in
     touch "$RUN/progress.log"
     exec tail -n 50 -f "$RUN/progress.log"
     ;;
+  stop)
+    [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
+    stop_run "${REASON:-stopped with the stop command}"
+    ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
     [[ "$CMD" == status ]] || refuse_claude_protected "$(state .runtime)"
+    # 살아 있는 러너를 두 번 실행하지 않는다. revise는 실행 중이면 요청 파일만 남기므로 아래 revise 분기가 판단한다.
+    if [[ "$CMD" != status && "$CMD" != revise ]] && runner_alive; then
+      printf 'run %s is already running (pid %s); stop it first: stop --run %s\n' "$RUN_ID" "$(state .process.pid)" "$RUN_ID" >&2
+      exit 2
+    fi
     ;;
   *) usage ;;
 esac
@@ -3336,6 +3422,11 @@ case "$CMD" in
       + (if .blocked then " · blocked: " + .blocked elif .stopped_because then " · stopped: " + .stopped_because else "" end)
       + (if .sync then "\nsync (run by a person): " + .sync.command else "" end)'
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
+    if [[ "$(state .status)" == stopped ]]; then
+      state '"stopped at \(.stopped.node) \(.stopped.at): \(.stopped.reason); continue with resume"'
+    elif [[ "$(state .status)" == running && -n "$(state '.process.pid // ""')" ]] && ! runner_alive; then
+      printf 'stale: runner process %s is gone (stopped outside the runner); continue with resume\n' "$(state .process.pid)"
+    fi
     if [[ "$(state '.worktree_cleanup.eligible // ""')" == true ]]; then
       printf 'worktree %s is merged and can be removed: use the board "finished work" cleanup or the workspace session cleanup\n' "$(state .worktree_cleanup.path)"
     fi
@@ -3357,7 +3448,7 @@ case "$CMD" in
     if [[ "$revise_edge" == brief_revised && "$(state .status)" == running ]] && runner_alive; then
       jq -n --arg f "$FEEDBACK" --arg t "$(now_utc)" '{feedback: $f, at: $t}' >"$RUN/revise-request.json.$$"
       mv "$RUN/revise-request.json.$$" "$RUN/revise-request.json"
-      log "the runner (pid $(state .driver_pid)) is in $node; when the current $node session ends it returns to the brief with this feedback. Nothing was stopped"
+      log "the runner (pid $(state .process.pid)) is in $node; when the current $node session ends it returns to the brief with this feedback. Nothing was stopped"
       exit 0
     fi
     check_baseline
@@ -3395,5 +3486,8 @@ esac
 # 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
 # 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
 trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
-state_set '.status = "running" | .driver_pid = $p' --argjson p "$$"
+# stop은 러너 PID와 노드 자식 그룹을 끈다. 러너는 자식 그룹을 정리하고 30(미완료·resume)으로 끝난다 — 상태는 stop이 남긴다.
+trap on_stop_signal TERM INT
+state_set '.status = "running" | .process = {pid: $p, pgid: $g, lstart: $l}' --argjson p "$$" \
+  --argjson g "$(ps -o pgid= -p $$ | tr -d ' ')" --arg l "$(proc_lstart $$)"
 execute

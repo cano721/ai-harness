@@ -22,7 +22,7 @@
 
 ## 4. 검증 (verify)
 
-러너가 수정마다 직접 실행하는 검사는 화면 기계 검사 셋이다(측정 노드가 `checks`로 낸다).
+러너가 수정마다 직접 실행하는 검사는 화면 기계 검사 셋이다(측정 노드가 `checks`로 낸다). 실행 중인 런은 `workflow-driver.sh stop [--run <id>]`로만 멈춘다(그 런이 기록한 프로세스만 끈다). `pkill`·`killall`·`pgrep -f` 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다. 멈춘 런(stopped)과 밖에서 끊긴 런(stale)은 `status`에 보이고 `resume`으로 잇는다.
 
 ```bash
 bash scripts/design-system.sh check
