@@ -1000,4 +1000,38 @@ for phrase in '`### 서비스`가 없으면 지금처럼 `## 문구`만으로 �
 done
 pass "design-audit axis E reads the service section and hands copy style to ux-writing-audit"
 
+# 디자인 스킬 지도는 Terms 절에서 디자인 용어 8개를 한 줄 정의와 담당 스킬 하나로 정한다(#514).
+# 기존 제품 화면 다듬기는 design-polish가 주도하고 impeccable은 비평 보조로 남으며, 랜딩 보조에 design-references가 있다.
+TM_SRC="$ROOT/templates/ui-review/references/design-skills.md"
+TM_ROWS="$(awk '/^## Terms/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Term/ && !/^\|---/' "$TM_SRC")"
+assert_eq "8" "$(grep -c . <<<"$TM_ROWS")" "map Terms lists eight terms"
+for TM_PAIR in '디자인 시스템 (design system)=design-system-builder' '규칙 문서 (rule document)=design-system-builder' \
+  '기준 화면 (reference screen)=design-system-builder' '형제 화면 (sibling screen)=design-audit' '채점 (audit)=design-audit' \
+  '검토 (review)=ui-review' '비평 (critique)=ai-harness:design-reviewer' '다듬기 (polish)=design-polish'; do
+  TM_TERM="${TM_PAIR%%=*}"
+  TM_OWNER="${TM_PAIR#*=}"
+  assert_eq "1" "$(grep -cF "| $TM_TERM |" <<<"$TM_ROWS")" "map Terms defines $TM_TERM once"
+  TM_CELL="$(grep -F "| $TM_TERM |" <<<"$TM_ROWS" | awk -F'|' '{print $4}')"
+  assert_contains "$TM_CELL" "\`$TM_OWNER\`" "map Terms owner of $TM_TERM"
+done
+TM_JOBS="$(awk '/^## Jobs/{f=1;next} /^## /{f=0} f && /^\| / && !/^\| Job/ && !/^\|---/' "$TM_SRC")"
+TM_POLISH="$(grep '^| Polish an existing product screen |' <<<"$TM_JOBS")"
+assert_eq " \`design-polish\` " "$(awk -F'|' '{print $3}' <<<"$TM_POLISH")" "design-polish leads polishing an existing product screen"
+TM_POLISH_SUP="$(awk -F'|' '{print $4}' <<<"$TM_POLISH")"
+assert_contains "$TM_POLISH_SUP" "\`impeccable\`" "impeccable supports polishing"
+assert_contains "$TM_POLISH_SUP" "critique" "impeccable supports polishing with critique only"
+assert_contains "$(grep '^| Landing, ' <<<"$TM_JOBS" | awk -F'|' '{print $4}')" "\`design-references\`" "design-references supports landing pages"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+if grep -qF 'on a product screen `impeccable` leads' "$TM_SRC"; then fail "map still says impeccable leads every product screen"; fi
+for TM_COPY in skills/landing-page/references/design-skills.md skills/design-system-builder/references/design-skills.md \
+  .claude/skills/ui-review/references/design-skills.md .agents/skills/ui-review/references/design-skills.md \
+  .claude/skills/design-audit/references/design-skills.md .agents/skills/design-audit/references/design-skills.md; do
+  cmp -s "$ROOT/$TM_COPY" "$TM_SRC" || fail "$TM_COPY must match templates/ui-review/references/design-skills.md byte for byte"
+done
+TM_README="$(grep '^| 제품 화면 다듬기 |' "$ROOT/README.md")"
+assert_contains "$TM_README" "| \`/design-polish\` |" "README polish row is led by /design-polish"
+assert_contains "$TM_README" "\`impeccable\`(비평)" "README polish row keeps impeccable as critique"
+assert_contains "$(grep '^| 랜딩·소개 |' "$ROOT/README.md")" "\`design-references\`" "README landing row lists design-references"
+pass "design skill map defines design terms and design-polish leads polishing (#514)"
+
 finish_tests

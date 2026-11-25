@@ -153,20 +153,18 @@ body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 1
 main { max-width: 26rem; padding: 2rem; text-align: center; }
 h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
 p { margin: 0 0 1.25rem; opacity: .75; }
-button { font: inherit; padding: .5rem 1rem; border-radius: .5rem; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+kbd { font: inherit; padding: 0 .3rem; border: 1px solid currentColor; border-radius: .25rem; }
 </style></head>
-<body><main><h1>%(title)s</h1><p id="msg">%(body)s</p><button type="button" id="close">이 탭 닫기</button></main>
+<body><main><h1>%(title)s</h1><p id="msg">%(body)s</p><p id="hint"%(hidden)s>이 탭은 <kbd id="key">⌘W</kbd>로 닫으세요.</p></main>
 <script>
-// 주소창·방문 기록에 남은 일회용 code·state를 지우고, 이 탭을 닫아 본다(스크립트가 연 탭이 아니면 브라우저가 막는다).
+// 주소창·방문 기록에 남은 일회용 code·state를 지우고, 이 탭을 닫아 본다.
+// 브라우저는 스크립트가 연 탭만 닫게 한다 — 보드가 OS로 연 이 탭은 대개 막히므로 누를 수 없는 닫기 버튼 대신 단축키를 알린다.
 history.replaceState(null, "", "/");
-document.getElementById("close").onclick = function () {
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) document.getElementById("key").textContent = "Ctrl+W";
+setTimeout(function () {
   window.close();
-  setTimeout(function () {
-    if (!window.closed) document.getElementById("msg").textContent = "브라우저가 이 탭을 대신 닫지 못하게 합니다. 탭을 직접 닫아 주세요.";
-  }, 300);
-};
-setTimeout(function () { window.close(); }, %(delay)d);
+  setTimeout(function () { if (!window.closed) document.getElementById("hint").hidden = false; }, 300);
+}, %(delay)d);
 </script></body></html>
 """
 
@@ -175,9 +173,10 @@ def done_page(ok):
     """루프백이 브라우저에 돌려주는 마지막 화면. 받은 값(code·state)은 싣지 않는다."""
     return (DONE_PAGE % {
         "title": "구글 캘린더를 연결했습니다" if ok else "연결하지 못했습니다",
-        "body": "보드의 내 일정에 곧 일정이 보입니다. 이 탭은 닫아도 됩니다." if ok
-        else "보드의 내 일정에서 다시 [연결]을 누르세요. 이 탭은 닫아도 됩니다.",
+        "body": "보드의 내 일정에 곧 일정이 보입니다." if ok
+        else "보드의 내 일정에서 다시 [연결]을 누르세요.",
         "delay": 1500 if ok else 60000,
+        "hidden": " hidden" if ok else "",  # 실패 화면은 읽을 시간을 두고, 닫는 법을 바로 보인다
     }).encode("utf-8")
 
 
