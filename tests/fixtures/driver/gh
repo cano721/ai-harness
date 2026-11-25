@@ -5,7 +5,22 @@ set -euo pipefail
 MERGE_SHA=1111111111111111111111111111111111111111
 scenario="${FAKE_SCENARIO:-ok}"
 # gh api: 기준 브랜치 보호 규칙. FAKE_PROTECTION=classic|ruleset|none|checks_only|denied (기본 none)
-#   저장소 설정(허용 병합 방식): FAKE_MERGE_METHODS=all|merge_only|rebase_only|unknown|denied (기본 all)
+#   저장소 설정(허용 병합 방식): FAKE_MERGE_METHODS=all|merge_only|squash_only|rebase_only|unknown|denied (기본 all)
+#   릴리스(rel_* 시나리오): gh release create는 태그를 원격(bare)에 push하고, pr merge는 원격 main을 릴리스 브랜치 head로 옮긴다.
+#   rel_release_fail은 release create가 실패한다. gh run list는 FAKE_RUN_STATUS(completed:success 기본)를 답한다.
+if [[ "${1:-}" == release ]]; then
+  printf 'gh release %s\n' "${*:2}" >>"$FAKE_LOG"
+  [[ "${2:-}" == create ]] || exit 64
+  [[ "${FAKE_SCENARIO:-}" != rel_release_fail ]] || { echo "HTTP 422: Validation Failed" >&2; exit 1; }
+  git push -q origin "HEAD:refs/tags/$3"
+  exit 0
+fi
+if [[ "${1:-} ${2:-}" == "run list" ]]; then
+  printf 'gh run list %s\n' "${*:3}" >>"$FAKE_LOG"
+  status="${FAKE_RUN_STATUS:-completed:success}"
+  jq -cn --arg s "${status%%:*}" --arg c "${status#*:}" '[{status:$s, conclusion:(if $c == "" then null else $c end), headBranch:"v1.3.0"}]'
+  exit 0
+fi
 if [[ "${1:-}" == api ]]; then
   printf 'gh api %s\n' "$2" >>"$FAKE_LOG"
   protection="${FAKE_PROTECTION:-none}"
@@ -28,6 +43,7 @@ if [[ "${1:-}" == api ]]; then
       case "${FAKE_MERGE_METHODS:-all}" in
         all) echo '{"allow_squash_merge":true,"allow_merge_commit":true,"allow_rebase_merge":true}' ;;
         merge_only) echo '{"allow_squash_merge":false,"allow_merge_commit":true,"allow_rebase_merge":false}' ;;
+        squash_only) echo '{"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}' ;;
         rebase_only) echo '{"allow_squash_merge":false,"allow_merge_commit":false,"allow_rebase_merge":true}' ;;
         unknown) echo '{"name":"app"}' ;;
         denied) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
@@ -44,6 +60,8 @@ head="$(git rev-parse HEAD)"
 if [[ "$sub" == merge ]]; then
   [[ "$scenario" != merge_cmd_fail ]] || { echo "GraphQL: Pull request is not mergeable" >&2; exit 1; }
   touch "$FAKE_LOG.merged"
+  # 릴리스: 호스트가 병합한 것처럼 원격 main을 릴리스 브랜치 head로 옮긴다(main → develop ff 판정이 실제 ref를 본다).
+  case "$scenario" in rel_*) git push -q origin HEAD:refs/heads/main ;; esac
   case "$scenario" in # 병합 뒤 worktree 판정 테스트: 병합 직후 작업 폴더에 미커밋 변경이 생긴다
     wtc_dirty) printf 'stray\n' >"$PWD/stray.txt" ;;
   esac
@@ -77,11 +95,13 @@ mergeable=MERGEABLE
 [[ "$scenario" != merge_conflict ]] || mergeable=CONFLICTING
 base=main
 [[ "$scenario" != merge_otherbase ]] || base=release
+head_ref=feat/add-feature
+case "$scenario" in rel_*) head_ref="$(git rev-parse --abbrev-ref HEAD)" ;; esac
 checks='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
 [[ "$scenario" != merge_hostci_fail ]] || checks='[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"StatusContext","state":"SUCCESS"}]'
 draft=false
 [[ "$scenario" != merge_draft ]] || draft=true
 jq -n --arg s "$state" --argjson d "$draft" --arg m "$mergeable" --arg h "$head" --argjson r "$reviews" --argjson mc "$merge_commit" \
-  --arg b "$base" --arg ma "$merged_at" --argjson c "$checks" \
-  '{state:$s, isDraft:$d, mergeable:$m, headRefOid:$h, headRefName:"feat/add-feature", baseRefName:$b, reviews:$r, author:{login:"me"},
+  --arg b "$base" --arg ma "$merged_at" --argjson c "$checks" --arg hr "$head_ref" \
+  '{state:$s, isDraft:$d, mergeable:$m, headRefOid:$h, headRefName:$hr, baseRefName:$b, reviews:$r, author:{login:"me"},
     mergeCommit:$mc, mergedAt:(if $ma == "" then null else $ma end), statusCheckRollup:$c}'

@@ -40,6 +40,7 @@ jq -e '[.transitions[] | select(.from == "triage" and .to != "reproduce")] | all
 has_transition brief approval
 has_transition approval regression user_explicitly_approved
 has_transition approval regression auto_approved_by_policy
+has_transition approval user_decision brief_coverage_incomplete
 has_transition regression fix
 has_transition fix verify
 has_transition verify review required_checks_pass

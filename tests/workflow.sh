@@ -529,18 +529,62 @@ assert_eq "copy" "$(jq -r '.artifacts[] | select(.path == ".ai-harness/workflows
 assert_contains "$HARNESS_INIT_CONTENT" "templates/investigate/" "harness init uses the local investigate template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/investigate-graph.json" "harness init copies the investigate graph"
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/design-polish`·`/review`를 프로젝트 진입점으로' "AGENTS.md lists investigate and design-polish as project entry points"
+assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/design-polish`·`/review`·`/release`를 프로젝트 진입점으로' "AGENTS.md lists investigate and design-polish as project entry points"
 assert_contains "$(<"$ROOT/README.md")" "/investigate" "README documents investigate"
 pass "investigate graph adapters"
 
+# release 템플릿은 태그 방식 릴리스 진입점이다. 그래프·두 진입점이 standard에 항상 설치되고, 러너가 release_policy로 시작 여부를 정한다. (#493)
+RELEASE_SKILL_CONTENT="$(<"$ROOT/templates/release/SKILL.md")"
+assert_file "$ROOT/templates/release/agents/openai.yaml"
+assert_eq "3" "$(jq '[.artifacts[] | select(.workflow == "release" and .level == "standard")] | length' "$ROOT/templates/managed-files.json")" "release ships its graph and both entry points"
+assert_eq "copy" "$(jq -r '.artifacts[] | select(.path == ".ai-harness/workflows/release-graph.json") | .mode' "$ROOT/templates/managed-files.json")" "the release graph is copied as is"
+assert_contains "$RELEASE_SKILL_CONTENT" "This is a project adapter" "release skill is a thin adapter"
+assert_contains "$RELEASE_SKILL_CONTENT" ".ai-harness/workflows/release.md" "release skill references the project workflow"
+assert_contains "$RELEASE_SKILL_CONTENT" "start --workflow release --version <x.y.z>" "release skill starts the runner"
+assert_contains "$RELEASE_SKILL_CONTENT" "release_policy" "release skill names the manifest facts"
+assert_contains "$RELEASE_SKILL_CONTENT" "merge commit only" "release skill keeps merge commits only"
+assert_contains "$HARNESS_INIT_CONTENT" "templates/release/" "harness init uses the local release template"
+assert_contains "$(<"$ROOT/README.md")" "--workflow release" "README documents the release runner"
+for f in "$ROOT/.ai-harness/workflows/release-graph.json:$ROOT/templates/release/references/release-graph.json" "$ROOT/.ai-harness/workflows/workflow-driver.sh:$ROOT/templates/workflow-driver/workflow-driver.sh"; do
+  cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
+done
+pass "release graph adapters"
+
 # 개인 기본 런타임(#488): 어댑터가 습관적으로 --runtime을 넘기면 개인 설정이 무력해진다. 다섯 어댑터와 렌더 생성물이 우선순위를 안내한다.
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-for wf in implement-feature fix-bug review design-polish investigate; do
+for wf in implement-feature fix-bug review design-polish investigate release; do
   for f in "$ROOT/templates/$wf/SKILL.md" "$ROOT/.agents/skills/$wf/SKILL.md" "$ROOT/.claude/commands/$wf.md"; do
     assert_contains "$(<"$f")" 'then `HM_RUNTIME_REPOS` (matching repository), then `HM_RUNTIME` in `~/.ai-harness/config`' "$f explains the runtime precedence"
     assert_contains "$(<"$f")" 'pass `--runtime` only when the user asks for a specific CLI' "$f keeps --runtime for explicit requests"
   done
 done
 pass "workflow adapters explain the personal runtime precedence"
+
+
+# 완료 조건 대응표(#501): 그래프는 대응 없는 Brief의 사람 인계와 deliver → brief 복귀를 선언하고, 문서는 게이트와 revise를 안내한다.
+BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+for graph in "$FEATURE_GRAPH" "$BUG_FIX_GRAPH"; do
+  assert_eq "2" "$(jq -r '.limits.max_brief_rewrites' "$graph")" "$(basename "$graph") limits brief rewrites"
+  assert_contains "$(jq -r '.invariants[0]' "$graph")" "acceptance_map" "$(basename "$graph") states the coverage gate in its approval invariant"
+done
+assert_eq "user_decision" "$(jq -r 'first(.transitions[] | select(.from == "approval" and .when == "brief_coverage_incomplete") | .to)' "$BUG_FIX_GRAPH")" "bug-fix hands an uncovered brief to a person"
+COVERAGE_GRAPH="$TEST_TMP/coverage-graph.json"
+jq 'del(.transitions[] | select(.when == "brief_revised"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without deliver -> brief is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without the coverage hand-off is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$BUG_FIX_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-bug-fix-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a bug-fix graph without the coverage hand-off is invalid"; fi
+for f in "$ROOT/.ai-harness/workflows/feature-delivery-graph.json:$FEATURE_GRAPH" "$ROOT/.ai-harness/workflows/bug-fix-graph.json:$BUG_FIX_GRAPH"; do
+  cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md"; do
+  assert_contains "$(<"$f")" "acceptance_map" "$(basename "$(dirname "$f")")/$(basename "$f") documents the completion-condition map"
+  assert_contains "$(<"$f")" "brief_coverage_incomplete" "$(basename "$(dirname "$f")")/$(basename "$f") documents the coverage gate"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md"; do
+  assert_contains "$(<"$f")" "brief_revised" "$(basename "$(dirname "$f")")/$(basename "$f") documents revise during deliver"
+done
+pass "completion-condition map: graphs, validators, and docs"
 
 finish_tests

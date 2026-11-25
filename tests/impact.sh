@@ -428,12 +428,12 @@ pass "impact review regressions"
 # A/B: 하네스 있는 저장소와 없는 저장소에서 같은 과제를 돌려 숨긴 검사로 채점한다. 가짜 에이전트로 채점·집계·비용 상한을 검사한다.
 AB_DATA="$TEST_TMP/ab-data"
 AB_STUB="$ROOT/tests/fixtures/ab/stub-agent.sh"
-assert_eq "8" "$(HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" estimate --runs 2 | jq -r '.agent_runs')" "ab estimate counts cases x 2 arms x runs"
+assert_eq "12" "$(HARNESS_METRICS_DIR="$AB_DATA" "$ROOT/scripts/ab.sh" estimate --runs 2 | jq -r '.agent_runs')" "ab estimate counts cases x 2 arms x runs"
 AB_OUT="$(HARNESS_METRICS_DIR="$AB_DATA" HM_AB_AGENT_CMD="$AB_STUB" "$ROOT/scripts/ab.sh" run --runs 1 --out "$TEST_TMP/ab.json" 2>/dev/null)"
 assert_eq "$TEST_TMP/ab.json" "$AB_OUT" "ab run prints the result path"
-assert_eq "apply-coupon:1:0.25 cancel-order:1:0.43" "$(jq -r '[.cases[] | "\(.name):\(.arms.harness.mean_score):\(.arms.bare.mean_score)"] | join(" ")' "$TEST_TMP/ab.json")" \
+assert_eq "apply-coupon:1:0.25 archive-stale-docs:1:0.5 cancel-order:1:0.43" "$(jq -r '[.cases[] | "\(.name):\(.arms.harness.mean_score):\(.arms.bare.mean_score)"] | join(" ")' "$TEST_TMP/ab.json")" \
   "ab grades the rule-following implementation fully and the naive one partially"
-assert_eq "0 0 1.4 stub false" "$(jq -r '"\([.cases[].arms[].errors] | add) \([.cases[].arms.bare.full_pass_runs] | add) \(.total_cost_usd) \(.agent) \(.partial)"' "$TEST_TMP/ab.json")" \
+assert_eq "0 0 2.1 stub false" "$(jq -r '"\([.cases[].arms[].errors] | add) \([.cases[].arms.bare.full_pass_runs] | add) \(.total_cost_usd) \(.agent) \(.partial)"' "$TEST_TMP/ab.json")" \
   "ab runs the agent as an internal session and sums cost"
 assert_eq "7일 뒤 환불 90% 내림:0" "$(jq -r '.cases[] | select(.name == "cancel-order") | .arms.bare.checks[] | select(.kind == "project_rule") | "\(.name):\(.passed)"' "$TEST_TMP/ab.json" | head -1)" \
   "ab keeps the case's check order and marks project rules"

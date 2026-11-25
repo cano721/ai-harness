@@ -11,8 +11,10 @@ import traceback
 def run(ws, checks):
     sys.path.insert(0, ws)
     results = []
+    # 검사마다 작업 폴더의 패키지(orders·archive 등)를 새로 import해 앞 검사의 모듈 상태가 남지 않게 한다.
+    pkgs = tuple(d for d in os.listdir(ws) if os.path.isfile(os.path.join(ws, d, "__init__.py")) and d != "tests")
     for name, kind, fn in checks:
-        for mod in [m for m in list(sys.modules) if m == "orders" or m.startswith("orders.")]:
+        for mod in [m for m in list(sys.modules) if m.split(".")[0] in pkgs]:
             del sys.modules[mod]
         try:
             fn()

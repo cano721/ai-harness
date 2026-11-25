@@ -338,6 +338,14 @@ assert_eq "10:1" "$DRIVER_RC:$(grep -c '^inspect ' "$FAKE_LOG")" "resume without
 say_in_claude "승인"
 driver resume
 assert_eq "0:done:1:claude-transcript" "$DRIVER_RC:$(run_state .status):$(run_state .attempts):$(run_state .approval.source)" "an approved repair goes through verify and re-review to done"
+# 리뷰 노드는 데이터 조회가 있는 변경에서 대량 조회의 "건수 상한 × 행 크기"를 근거로 적는다. 조회가 없는 변경(프론트 등)에는 적용하지 않는다. (#499)
+for node in inspect re_review; do
+  assert_contains "$(<"$FAKE_LOG.$node.prompt")" "row-count bound × row size" "$node checks bulk reads by row-count bound × row size"
+  assert_contains "$(<"$FAKE_LOG.$node.prompt")" "skip it for changes without such data access" "$node skips the bulk read check without data access"
+  assert_contains "$(<"$FAKE_LOG.$node.prompt")" "neither is a caller/receiver count mismatch on a write path or when the receiving query reads only the small columns it needs" "$node does not flag the bound of a write path or a small projection"
+  assert_contains "$(<"$FAKE_LOG.$node.prompt")" "do not leave it out because its definition is outside the diff when its caller is inside it" "$node keeps an existing query whose caller changed"
+  assert_contains "$(<"$FAKE_LOG.$node.prompt")" "pulled in by fetch joins or association loading and those in other modules" "$node sizes rows from the entities a query pulls in"
+done
 assert_eq "repair;re_review" "$(tail -n 2 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "every repair is followed by checks and re-review"
 assert_eq "fixed:1" "$(<"$DRIVER_REPO/feature.txt"):$(git -C "$DRIVER_REPO" rev-list --count HEAD)" "the repair stays uncommitted in the working tree"
 assert_contains "$DRIVER_OUT" "left uncommitted" "the outcome says the repair is not committed"
