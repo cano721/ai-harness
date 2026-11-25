@@ -35,7 +35,7 @@ Extraction produces a migration list, not a migration. Order it by user-visible 
 
 Extraction also feeds the axis sections of the rule document (`output-format.md`):
 
-- **Screen classes (axis A)** — group routes or templates by structure. For each class record its skeleton: columns, max and min width, vertical rhythm, title size token, toolbar position.
+- **Screen classes (axis A)** — group routes or templates by structure. For each class record its skeleton: columns, max and min width, vertical rhythm, title size token, toolbar position. Group the measured gaps by relationship (`tokens.md` Spacing relationships).
 - **Siblings (axis D)** — within each class, list the screens that must look the same in the same places.
 - **Copy (axis E)** — collect the product's real strings: error and empty-state messages, button and field labels, confirmations, number formats. Derive the patterns actually in use and flag the inconsistent ones as decisions for the user.
 

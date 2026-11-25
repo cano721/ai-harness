@@ -902,6 +902,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--primary" value="ok">변경 PR 만들기</button></div>
   </form>
 </dialog>
+<dialog class="b-dialog" id="kdlg" aria-labelledby="ktitle" aria-describedby="kdesc">
+  <form method="dialog">
+    <h2 class="ds-title" id="ktitle">스킬 제거</h2>
+    <p class="b-line" id="kdesc"></p>
+    <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="kcancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" value="ok">제거 세션 띄우기</button></div>
+  </form>
+</dialog>
 <dialog class="b-dialog" id="mdlg" aria-labelledby="mtitle">
   <form method="dialog" id="mform">
     <h2 class="ds-title" id="mtitle"></h2>
@@ -1102,7 +1109,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   if (firstOpen) store('hb-view', 'guide');
   let tab = ['work', 'harness', 'autofix'].includes(savedView) ? savedView : (TABS.some(([k]) => k === store('hb-tab')) ? store('hb-tab') : 'all');
   if (['work', 'harness', 'autofix'].includes(savedView)) { store('hb-view', 'list'); store('hb-tab', tab); }
-  let stab = ['harness', 'autofix'].includes(store('hb-stab')) ? store('hb-stab') : 'work';
+  let stab = ['harness', 'autofix', 'skills'].includes(store('hb-stab')) ? store('hb-stab') : 'work';
   const linkRun = new URLSearchParams(location.search).get('refs');  // design-refs.sh가 안내하는 주소: ?refs=<run id>
   if (linkRun && /^[0-9a-f]{12}$/.test(linkRun)) view = 'refs';
   let filter = 'all';
@@ -2795,6 +2802,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     ['work', '작업', '에이전트가 PR 뒤 어디까지 스스로 갈지 정합니다(내 설정이라 다른 사람에게 영향이 없습니다).'],
     ['harness', '하네스 동작', '하네스가 스스로 돌리는 자동 개선·동기화를 켜고 끕니다.'],
     ['autofix', '자동 수정', '운영 에러 자동 수정의 무인 실행·대상·상한·예산을 정합니다(후보와 진행은 작업 현황에 있습니다).'],
+    ['skills', '스킬', '기본 스킬과 디자인 스킬의 설치·토큰·연결 상태를 보고, 버튼으로 그 스킬 하나만 설정하는 세션을 띄웁니다.'],
   ];
   const LEVELS = [['pr', 'PR까지'], ['merge', '병합까지'], ['deploy', '배포·검증까지']];
   const LVL = Object.fromEntries(LEVELS);
@@ -2865,6 +2873,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   function renderSettings() {
     const board = $('board');
     if (!SERVER) { board.replaceChildren(empty('설정은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
+    if (stab === 'skills') return renderSkills(board);
     if (!sdata) { board.replaceChildren(...(serr ? [errorBox('설정을 불러오지 못했습니다', `보드 서버가 설정을 읽지 못했습니다(${serr}).`, () => loadSettings(true))] : loading('설정을 불러오는 중'))); if (!serr) loadSettings(true); return; }
     loadSettings(false);
     if (stab === 'harness') return board.replaceChildren(...harnessSettings(sdata.personal || {}));
@@ -3096,6 +3105,139 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     out.push(sec);
     return out;
   }
+  // ---- 하네스 설정 > 스킬 (이슈 494) ----
+  // 상태는 서버가 setup.sh로 읽는다. 버튼은 그 스킬 하나에 setup 세션을 띄우고, 세션이 끝나면 서버가 상태를 다시 읽는다.
+  let kdata = null, kerr = null, kfetchedAt = 0;
+  const khint = {};  // 연결 확인 실패 사유(hint) — 응답에만 오고 기록에는 남지 않는다
+  const kLive = () => !!kdata && [...kdata.catalog, ...kdata.design].some((r) => r.session);
+  async function loadSkills(force) {
+    if (!SERVER) return;
+    if (!force && kdata && Date.now() - kfetchedAt < (kLive() ? 4000 : 30000)) return;
+    kfetchedAt = Date.now();
+    try {
+      const r = await fetch('/settings/skills?t=' + encodeURIComponent(TOKEN)); if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json(); if (!d.ok) throw new Error(d.message || '스킬 상태를 읽지 못했습니다');
+      kdata = d; kerr = null;
+    } catch (e) { kerr = e.message; }
+    if (view === 'settings' && stab === 'skills') renderAll();
+  }
+  // 공용 장치: 카탈로그·디자인 스킬 하나에 setup 세션을 띄운다. 다른 화면도 {kind, name, action}으로 부른다.
+  async function startSetupSession(body, b) {
+    if (b) busy(b, '띄우는 중');
+    let res; try { res = await post('/settings/skills/session', body); } catch (e) { res = { ok: false, message: '보드 서버에 닿지 못했습니다.' }; }
+    if (b && b.isConnected) unbusy(b);
+    if (res.ok) toast(`${res.message}${body.action === 'setup' ? '. 토큰은 세션 안내에 따라 별도 터미널에서 입력합니다.' : ''}`, true, goLink('작업 현황 열기', 'list'));
+    else toast(`설정 세션을 띄우지 못했습니다. ${res.message}`, false);
+    refresh().catch(() => {});
+    await loadSkills(true);
+    return res;
+  }
+  const K_TOOL = { current: '설치됨', outdated: '새 버전 있음', modified: '고친 사본', foreign: '직접 둔 폴더', absent: '없음', builtin: '내장', unavailable: '이 도구엔 없음', manual: '직접 설치', superseded: '내장으로 대체됨' };
+  const K_BADGE = {
+    missing: ['info', '미설치'], no_token: ['attention', '설치됨 · 토큰 없음', 'soft'], unverified: ['info', '설치됨 · 연결 미확인'],
+    verified: ['success', '설치됨 · 연결 확인됨'], installed: ['success', '설치됨'], builtin: ['info', '내장'],
+    unavailable: ['info', '설치 불가'], superseded: ['info', '내장으로 대체됨'],
+  };
+  const kId = (kind, name) => `set-skill-${kind}-${String(name).replace(/[^\w-]/g, '_')}`;
+  function skillRow(kind, r) {
+    const id = kId(kind, r.name), descs = [];
+    if (r.summary) descs.push(r.summary);
+    const st = r.status || {};
+    descs.push(el('p', 'ds-setting__desc ds-caption', `Claude: ${K_TOOL[st.claude] || '모름'} · Codex: ${K_TOOL[st.codex] || '모름'}`));
+    if (r.flags && r.flags.some((f) => f.status === 'foreign' || f.status === 'modified')) descs.push(descLine('직접 두었거나 고친 사본이 있습니다. 세션은 내가 명시하지 않으면 바꾸거나 지우지 않습니다.', 'info'));
+    if (kind === 'catalog' && r.state === 'no_token' && (r.missing || []).length) descs.push(descLine(`필요한 연결 정보 ${r.missing.length}개가 없습니다. [설정하기]로 세션을 띄워 넣습니다.`, 'attention'));
+    if (kind === 'design' && r.state === 'superseded') descs.push(descLine('하네스에 같은 스킬이 내장돼 예전에 받은 사본은 지워도 됩니다.', 'info'));
+    if (kind === 'design' && r.state === 'unavailable' && r.note) descs.push(r.note);
+    const c = r.check;
+    if (c && c.ok === false) {
+      const p = el('p', 'ds-setting__desc ds-cluster'); p.append(icon('danger'), el('span', null, `연결 확인 실패 ${ago(c.at)}: ${c.error || '원인 모름'}`));
+      const h = khint[r.name];
+      if (h) {
+        const hid = id + '-hint', more = btn('사유 보기', 'ds-btn--sm ds-btn--ghost'), box = el('p', 'ds-setting__desc', h);
+        box.id = hid; box.hidden = !expanded.has(hid); more.setAttribute('aria-expanded', String(!box.hidden)); more.setAttribute('aria-controls', hid); more.dataset.key = hid;
+        more.onclick = () => { if (expanded.has(hid)) expanded.delete(hid); else expanded.add(hid); renderAll(); };
+        p.append(more); descs.push(p, box);
+      } else descs.push(p);
+    } else if (c && c.ok) descs.push(`연결 확인 ${ago(c.at)}`);
+    const live = r.session;
+    if (live) {
+      const p = el('p', 'ds-setting__desc ds-cluster'); p.append(icon('progress'), el('span', null, '설정 세션 진행 중 — 끝나면 상태를 다시 읽습니다.'));
+      const it = live.item_id && itemsAll().find((i) => i.id === live.item_id);
+      if (it) { const b = btn('세션 열기', 'ds-btn--sm ds-btn--ghost', () => openItem(it)); b.dataset.session = it.id; p.append(b); }
+      else p.append(goLink('작업 현황 열기', 'list'));
+      descs.push(p);
+    }
+    const acts = el('div', 'ds-cluster');
+    const act = (label, action, cls) => {
+      const b = btn(label, 'ds-btn--sm' + (cls ? ' ' + cls : '')); b.dataset.key = `${id}:${action}`;
+      if (live) b.disabled = true;
+      b.onclick = () => (action === 'remove' ? openSkillRemove(kind, r, b) : startSetupSession({ kind, name: r.name, action }, b));
+      return b;
+    };
+    if (kind === 'catalog') {
+      if (r.state === 'unverified') {
+        const b = btn(c ? '다시 연결 확인' : '연결 확인', 'ds-btn--sm'); b.dataset.key = `${id}:check`; if (live) b.disabled = true;
+        b.onclick = async () => {
+          busy(b, '확인하는 중');
+          let res; try { res = await post('/settings/skills/check', { name: r.name }); } catch (e) { res = { ok: false, message: '연결을 확인하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+          if (res.hint) khint[r.name] = res.hint; else delete khint[r.name];
+          toast(res.message, !!res.ok && !!(res.check && res.check.ok));
+          await loadSkills(true);
+        };
+        acts.append(b);
+      }
+      if (r.state === 'missing') acts.append(act('설치', 'install'));
+      else {
+        if (r.has_env) acts.append(act('설정하기', 'setup'));
+        acts.append(act('제거', 'remove'));
+      }
+    } else if (r.state === 'missing') acts.append(act('설치', 'install'));
+    else if (r.state === 'installed' || r.state === 'superseded') acts.append(act('제거', 'remove'));
+    const ctl = [badge(K_BADGE[r.state] || ['info', '상태 모름'])];
+    if (acts.childNodes.length) ctl.push(acts);
+    const row = settingRow(id, r.name, descs, ctl, false); row.dataset.key = id;
+    return row;
+  }
+  function renderSkills(board) {
+    if (!kdata) {
+      board.replaceChildren(...(kerr ? [errorBox('스킬 상태를 불러오지 못했습니다', `${kerr}. 플러그인 설치가 온전한지 확인하세요.`, () => loadSkills(true))] : loading('스킬 상태를 불러오는 중')));
+      if (!kerr) loadSkills(true);
+      return;
+    }
+    loadSkills(false);
+    const out = [];
+    if (kerr) out.push(notice('danger', `스킬 상태를 다시 읽지 못했습니다: ${kerr}. 아래는 지난 상태입니다.`));
+    out.push(notice('info', '토큰은 보드나 대화에 적지 않습니다. 세션이 안내하면 별도 터미널에서 숨김 입력으로 넣습니다.'));
+    const sec = (key, title, rows, kind, desc) => {
+      const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'sec-' + key);
+      const h = el('h2', 'ds-label b-sechead', title); h.id = 'sec-' + key; h.append(count(rows.length, null, '개')); s.append(h, el('p', 'ds-caption', desc));
+      const box = el('div', 'ds-rows'); box.append(...rows.map((r) => skillRow(kind, r))); s.append(box);
+      return s;
+    };
+    out.push(sec('skills-catalog', '기본 스킬', kdata.catalog, 'catalog', '외부 도구(Jira·Datadog 등)를 부르는 스킬입니다. 설치한 뒤 연결 정보를 넣어야 쓸 수 있습니다.'));
+    out.push(sec('skills-design', '디자인 스킬', kdata.design, 'design', '화면 설계·검토를 돕는 외부 스킬입니다. 연결 정보는 없습니다.'));
+    board.replaceChildren(...out);
+  }
+  let kremove = null;
+  function openSkillRemove(kind, r, b) {
+    kremove = { kind, name: r.name, key: b.dataset.key };
+    const odd = (r.flags || []).some((f) => f.status === 'foreign' || f.status === 'modified');
+    $('ktitle').textContent = `${r.name} 제거`;
+    $('kdesc').textContent = `${r.name}을 지우는 setup 세션을 띄웁니다. 실제 삭제는 세션이 어느 도구에서 지울지 다시 물은 뒤에 합니다.`
+      + (odd ? ' 직접 둔 사본이나 고친 사본은 세션이 다시 확인하고, 내가 명시하지 않으면 지우지 않습니다.' : '');
+    $('kdlg').returnValue = '';
+    $('kdlg').showModal();
+    $('kcancel').focus();
+  }
+  $('kdlg').addEventListener('click', (e) => { if (e.target === $('kdlg')) $('kdlg').close(); });
+  $('kdlg').addEventListener('close', async () => {
+    const k = kremove; kremove = null;
+    const back = () => { const t = k && document.querySelector(`[data-key="${CSS.escape(k.key)}"]`); if (t) t.focus(); };
+    if (!k || $('kdlg').returnValue !== 'ok') { back(); return; }
+    await startSetupSession({ kind: k.kind, name: k.name, action: 'remove' }, null);
+    back();
+  });
+
   let sfacts = null;
   function openFacts(r) {
     sfacts = r;
@@ -4127,6 +4269,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   if (SERVER) {
     renderAll();
     setInterval(() => { if (((view === 'list' && tab === 'autofix') || (view === 'settings' && stab === 'autofix')) && !document.hidden) loadAutofix(false); }, 15000);
+    setInterval(() => { if (view === 'settings' && stab === 'skills' && !document.hidden) loadSkills(false); }, 4000);
     refresh().then(() => { loadSettings(true); loadAutofix(true); loadRefs(true); }).catch(fail);
     loadChanges();
     setInterval(() => { if (view === 'refs' && !document.hidden) { if (rrun) loadRefDetail(false); else loadRefs(false); } }, 5000);
