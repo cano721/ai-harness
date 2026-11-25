@@ -47,4 +47,18 @@ assert_contains "$(<"$FAKE_LOG")" "--squash --match-head-commit" "an old persona
 assert_contains "$DRIVER_OUT" "notice: HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used" "the ignored personal merge settings are named"
 pass "delivery level: personal stage, repository facts, host rules (levels pr, merge, deploy)"
 
+# status 줄은 저장소 git_policy와 개인 단계를 나눠 보인다. 내부 .policy.git이 merge여도 저장소 값은 pr-only다. 병합 동작은 그대로다. (#534)
+export FAKE_PROTECTION=classic
+for dl_repo_git in pr-only merge; do
+  delivery_run "dl_status_$dl_repo_git" "$dl_repo_git" "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
+  assert_eq "0:done:1:merge" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git)" "repository $dl_repo_git with level merge still merges and keeps the internal policy merge"
+  driver status
+  assert_contains "$DRIVER_OUT" "git_policy pr-only" "status shows the repository git_policy pr-only for repository $dl_repo_git"
+  assert_contains "$DRIVER_OUT" "delivery merge" "status shows the personal delivery level for repository $dl_repo_git"
+  [[ "$DRIVER_OUT" != *"git_policy merge"* ]] || fail "status shows the internal merge as git_policy for repository $dl_repo_git: $DRIVER_OUT"
+done
+unset FAKE_PROTECTION
+rm -f "$DL_DATA/config"
+pass "status separates the repository git_policy from the personal delivery level"
+
 finish_tests

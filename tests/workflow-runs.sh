@@ -39,18 +39,4 @@ bug_run repro_writes
 assert_eq "40:invariant_violation" "$DRIVER_RC:$(run_state .status)" "reproduce that writes into the repository stops the run"
 pass "resume compares the saved baseline before any agent runs (bug-fix approval and reproduction)"
 
-# status 줄은 저장소 git_policy와 개인 단계를 나눠 보인다. 내부 .policy.git이 merge여도 저장소 값은 pr-only다. 병합 동작은 그대로다. (#534)
-export FAKE_PROTECTION=classic
-for dl_repo_git in pr-only merge; do
-  delivery_run "dl_status_$dl_repo_git" "$dl_repo_git" "$DL_FACTS" 'HM_DELIVERY_LEVEL=merge'
-  assert_eq "0:done:1:merge" "$DRIVER_RC:$(run_state .status):$(gh_merges):$(run_state .policy.git)" "repository $dl_repo_git with level merge still merges and keeps the internal policy merge"
-  driver status
-  assert_contains "$DRIVER_OUT" "git_policy pr-only" "status shows the repository git_policy pr-only for repository $dl_repo_git"
-  assert_contains "$DRIVER_OUT" "delivery merge" "status shows the personal delivery level for repository $dl_repo_git"
-  [[ "$DRIVER_OUT" != *"git_policy merge"* ]] || fail "status shows the internal merge as git_policy for repository $dl_repo_git: $DRIVER_OUT"
-done
-unset FAKE_PROTECTION
-rm -f "$DL_DATA/config"
-pass "status separates the repository git_policy from the personal delivery level"
-
 finish_tests
