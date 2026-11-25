@@ -4,7 +4,7 @@
 
 플러그인과 함께 배포되므로 네트워크 없이도 `/harness-update`가 변경점을 설명할 수 있습니다.
 
-작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+작업 중인 변경은 PR마다 `changelog.d/<이슈>-<요약>.md` 조각으로 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 조각과 `## Unreleased`에 남은 항목을 소제목별로 합쳐 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
 
