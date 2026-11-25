@@ -177,7 +177,7 @@ def _positive_env(name, default):
 
 REFRESH = _positive_env("BOARD_REFRESH_SECONDS", 2.0)
 REFRESH_IDLE = 60
-STALE_SYNC = 30
+STALE_SYNC = _positive_env("BOARD_STALE_SYNC_SECONDS", 30)  # 테스트는 작게 준다(기본값 그대로)
 FAIL_BACKOFF_MAX = 5.0
 # 갱신 비용(#380): 다음 갱신은 max(REFRESH, 직전 갱신 시간 × 2) 뒤 — 바쁜 Mac에서 수집이 시간의 절반을 넘게 차지하지 않게.
 # 값싼 변경 지문(fingerprint)이 같으면 전체 수집을 건너뛰되, FULL_REFRESH마다는 모은다(지문에 없는 입력·시각에 따른 판정).

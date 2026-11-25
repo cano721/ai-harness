@@ -956,7 +956,8 @@ assert_eq "2" "$meta_rc" "--explain without --changed is a usage error"
 assert_contains "$(<"$TEST_TMP/meta.err")" "run.sh: --explain은 --changed와 함께 씁니다" "--explain without --changed explains itself"
 pass "--changed skips meta files and --explain shows why each file selects areas"
 
-# 실제 영역 파일 기준 회귀: 디자인 Skill 문서와 CHANGELOG만 바꾼 변경은 design·init만 고른다. (#559)
+# 실제 영역 파일 기준 회귀: 디자인 Skill 문서와 CHANGELOG만 바꾼 변경은 그 Skill을 다루는 design·init 영역만 고른다. (#559)
+# #570에서 그 블록이 design-references·init-native-design 영역으로 옮겨졌다.
 # core.sh 자신이 그 경로를 통째로 언급하면 core도 걸리므로 경로를 나눠 적는다.
 REAL_FIXTURE="$TEST_TMP/changed-meta-real"
 dsb_dir="skills/design-system-builder"
@@ -978,7 +979,7 @@ assert_contains "$real_out" "CHANGELOG.md -> 제외 (메타: changelog)" "CHANGE
 real_line="$(grep "^$dsb_dir/SKILL.md -> " <<<"$real_out" || true)"
 assert_contains "$real_line" "design" "the design Skill selects design"
 assert_contains "$real_line" "init" "the design Skill selects init"
-assert_eq "# 선택: design init" "$(tail -n 1 <<<"$real_out")" "a design Skill + CHANGELOG change selects only design and init"
+assert_eq "# 선택: design-references init-native-design" "$(tail -n 1 <<<"$real_out")" "a design Skill + CHANGELOG change selects only the design and init areas that cover it"
 [[ "$(<"$TEST_TMP/real.err")" != *"영역이 없음"* ]] || fail "meta files must not warn about unmapped files: $(<"$TEST_TMP/real.err")"
 pass "a design Skill + CHANGELOG change stays within design and init"
 
