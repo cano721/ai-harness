@@ -35,7 +35,7 @@ Claude Code·Codex CLI 공용 플러그인 ai-harness의 원본 저장소다. `s
 |---|---|---|---|
 | explorer | 없음 (read-only) | haiku | gpt-5.6-terra · low |
 | test-engineer | `tests/**` | sonnet | gpt-5.6-terra · medium |
-| developer | `scripts/**`·`skills/**`·`templates/**`·`agents/**`·`hooks/**`·`catalog/**`·`evals/**`·`docs/**`·README·CONTRIBUTING·`CHANGELOG.md`(`## Unreleased`만) 등 | sonnet | gpt-5.6 · medium |
+| developer | `scripts/**`·`skills/**`·`templates/**`·`agents/**`·`hooks/**`·`catalog/**`·`evals/**`·`docs/**`·README·CONTRIBUTING·`changelog.d/*.md`(CHANGELOG 조각) 등 | sonnet | gpt-5.6 · medium |
 | reviewer | 없음 (read-only) | opus | gpt-5.6 · high |
 | docs-updater | `.ai-harness/docs/**` | sonnet | gpt-5.6-terra · medium |
 
@@ -57,7 +57,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 ```bash
 bash tests/run.sh --changed                                                   # 작업 중: 바뀐 파일을 다루는 영역만
 bash tests/run.sh --lint                                                      # 작업 중: 바뀐 셸 파일만 bash -n + shellcheck
-bash tests/run.sh -j 2                                                        # 전체 회귀 — PR 직전 한 번 (CI와 같음). 메모리가 빠듯하면 -j 없이 직렬
+bash tests/run.sh                                                             # 전체 회귀 — PR 직전 한 번. 기본 동시 실행 수 max(1, min(CPU/2, 4)), 메모리가 빠듯하면 -j 1
 bash -n scripts/*.sh scripts/board/*.sh tests/*.sh                            # 문법 (PR 직전)
 npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh   # PR 직전, CI와 같은 수준 (apt shellcheck는 SC2015도 실패)
 scripts/release-prep.sh --check                                               # 버전 네 곳 정합성
@@ -67,7 +67,7 @@ scripts/release-prep.sh --check                                               # 
 
 - `main`은 릴리스된 상태만, `develop`이 통합 브랜치. 작업 브랜치 `<타입>/<한-일-요약>`은 `develop`에서 따고 `gh pr create --base develop`으로 PR한다(`--base` 생략 시 `main`으로 열린다).
 - 커밋은 Conventional Commits(`feat:`·`fix(<scope>):`·`docs(<scope>):`·`chore:`), 끝에 `(#<이슈>)`. PR 본문에 `Closes #<이슈>`.
-- **기능 PR은 버전 파일을 올리지 않는다**: `.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`과 CHANGELOG 버전 절은 릴리스 커밋의 `scripts/release-prep.sh <version>`만 바꾼다. 기능 PR은 사용자 영향이 있으면 `CHANGELOG.md`의 `## Unreleased`에만 항목을 남긴다.
+- **기능 PR은 버전 파일을 올리지 않는다**: `.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`과 CHANGELOG 버전 절은 릴리스 커밋의 `scripts/release-prep.sh <version>`만 바꾼다. 기능 PR은 `CHANGELOG.md`를 건드리지 않고, 사용자 영향이 있으면 `changelog.d/<이슈>-<요약>.md` 조각에 항목을 남긴다(형식은 `CONTRIBUTING.md`). 릴리스 커밋의 `release-prep.sh`가 조각을 합쳐 버전 절을 만든다.
 - 듀얼 매니페스트: `.claude-plugin/plugin.json`과 `.codex-plugin/plugin.json`(그리고 `release.json`)의 버전·라이선스를 같이 유지한다.
 - 공개 저장소다: 회사·개인 식별자(회사명·사내 도메인·이름·이메일)·토큰을 커밋하지 않는다.
 - 에이전트는 커밋·일반 push·PR 생성까지(`git_policy: pr-only`). 병합은 사람, 또는 사용자가 개인 자동화 단계를 고른 경우 러너의 `merge` 노드. force push와 `develop`·`main` 직접 push는 하지 않는다.

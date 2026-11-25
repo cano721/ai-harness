@@ -619,4 +619,68 @@ done
 assert_contains "$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")" "max_base_syncs" "the runner reads the base sync limit from the graph"
 pass "base sync: graphs, validators, and docs"
 
+# #543: base 대비 '건드리지 않았다' 검사는 merge-base 기준(origin/<base>...HEAD)이어야 런 도중 develop 릴리스로 거짓 실패하지 않는다.
+MB_DOC="$(<"$ROOT/.ai-harness/workflows/implement-feature.md")"
+# shellcheck disable=SC2016  # 백틱은 문서 속 명령을 찾는 literal이다
+MB_CMD="$(printf '%s\n' "$MB_DOC" | grep -o '`git diff --quiet origin/develop\.\.\.HEAD -- [^`]*`' | head -n 1 || true)"
+MB_CMD="${MB_CMD#\`}"
+MB_CMD="${MB_CMD%\`}"
+[[ -n "$MB_CMD" ]] || fail "implement-feature.md states the merge-base version check"
+MB_DIR="$TEST_TMP/mb-$$"
+MB_FILES=".claude-plugin/plugin.json .codex-plugin/plugin.json release.json"
+mb_write_version() {
+  local dir="$1" v="$2" f
+  mkdir -p "$dir/.claude-plugin" "$dir/.codex-plugin"
+  for f in $MB_FILES; do printf '{"version":"%s"}\n' "$v" >"$dir/$f"; done
+}
+mb_git_setup() {
+  git -C "$1" config user.email test@example.com
+  git -C "$1" config user.name test
+  git -C "$1" config commit.gpgsign false
+}
+mkdir -p "$MB_DIR"
+git init --bare -q "$MB_DIR/remote.git"
+git init -q "$MB_DIR/repo"
+mb_git_setup "$MB_DIR/repo"
+git -C "$MB_DIR/repo" checkout -q -b develop
+mb_write_version "$MB_DIR/repo" 0.91.0
+git -C "$MB_DIR/repo" add -A
+git -C "$MB_DIR/repo" commit -q -m "release 0.91.0"
+git -C "$MB_DIR/repo" remote add origin "$MB_DIR/remote.git"
+git -C "$MB_DIR/repo" push -q origin develop
+git -C "$MB_DIR/repo" checkout -q -b fix/work
+printf 'unrelated\n' >"$MB_DIR/repo/unrelated.txt"
+git -C "$MB_DIR/repo" add -A
+git -C "$MB_DIR/repo" commit -q -m "unrelated change"
+git clone -q "$MB_DIR/remote.git" "$MB_DIR/other"
+mb_git_setup "$MB_DIR/other"
+git -C "$MB_DIR/other" checkout -q develop
+mb_write_version "$MB_DIR/other" 0.92.0
+git -C "$MB_DIR/other" add -A
+git -C "$MB_DIR/other" commit -q -m "release 0.92.0"
+git -C "$MB_DIR/other" push -q origin develop
+git -C "$MB_DIR/repo" fetch -q origin
+# ① 작업 브랜치는 버전 파일을 건드리지 않았고 develop만 앞서 갔다 → 통과해야 한다.
+# shellcheck disable=SC2086  # 파일 목록을 단어로 나눈다
+if (cd "$MB_DIR/repo" && git diff --quiet origin/develop -- $MB_FILES); then
+  fail "base tip comparison sees the moved base as a difference"
+fi
+(cd "$MB_DIR/repo" && bash -c "$MB_CMD") || fail "merge-base version check passes when only the base moved"
+# ② 작업 브랜치가 버전 파일을 직접 고쳤다 → 실패해야 한다.
+printf '{"version":"0.93.0"}\n' >"$MB_DIR/repo/release.json"
+git -C "$MB_DIR/repo" add -A
+git -C "$MB_DIR/repo" commit -q -m "bump version on the work branch"
+if (cd "$MB_DIR/repo" && bash -c "$MB_CMD"); then
+  fail "merge-base version check fails when the work branch touched a version file"
+fi
+MB_RULE_LINE="$(grep -m 1 '^MERGE_BASE_RULE=' "$ROOT/templates/workflow-driver/workflow-driver.sh" || true)"
+[[ -n "$MB_RULE_LINE" ]] || fail "workflow-driver.sh defines MERGE_BASE_RULE"
+assert_contains "$MB_RULE_LINE" 'origin/<base>...HEAD' "MERGE_BASE_RULE names the three-dot diff"
+assert_contains "$MB_RULE_LINE" "merge base" "MERGE_BASE_RULE explains the merge base"
+MB_BRIEF_BODY="$(sed -n '/^brief_prompt() {/,/^}/p' "$ROOT/templates/workflow-driver/workflow-driver.sh")"
+# shellcheck disable=SC2016  # literal $MERGE_BASE_RULE를 센다
+MB_BRIEF_USES="$(printf '%s\n' "$MB_BRIEF_BODY" | grep -o '\$MERGE_BASE_RULE' | wc -l | tr -d ' ' || true)"
+assert_eq "2" "$MB_BRIEF_USES" "both brief roles append MERGE_BASE_RULE"
+pass "merge-base version check: document command and brief rule (#543)"
+
 finish_tests

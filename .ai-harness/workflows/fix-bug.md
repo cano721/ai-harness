@@ -11,12 +11,12 @@
 
 ## 2. Bug Fix Brief (승인 게이트)
 
-관찰된 동작 / 기대 동작, 영향(누가·어떤 설정에서), 재현 증거, 원인 가설과 반증 방법, 회귀 검증, 최소 변경 범위, `CHANGELOG.md` `## Unreleased`의 `### 버그 수정` 항목 초안. 승인은 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(저장소별 매칭) > `HM_APPROVAL` > 기본 `human` 순으로 결정한다. manifest의 기존 `approval` 값은 무시하며, 값이 있으면 개인 설정으로 옮기라는 안내를 한 번 남긴다. 재현도 안전한 관측 계획도 없으면 고치지 않고 필요한 환경·로그·기대 동작을 요청한다.
+관찰된 동작 / 기대 동작, 영향(누가·어떤 설정에서), 재현 증거, 원인 가설과 반증 방법, 회귀 검증, 최소 변경 범위, CHANGELOG 조각 `changelog.d/<이슈>-<요약>.md`의 `### 버그 수정` 항목 초안(형식은 `CONTRIBUTING.md`). 승인은 사용자 설정 `~/.ai-harness/config`의 `HM_APPROVAL_REPOS`(저장소별 매칭) > `HM_APPROVAL` > 기본 `human` 순으로 결정한다. manifest의 기존 `approval` 값은 무시하며, 값이 있으면 개인 설정으로 옮기라는 안내를 한 번 남긴다. 재현도 안전한 관측 계획도 없으면 고치지 않고 필요한 환경·로그·기대 동작을 요청한다.
 
 ## 3. 회귀 → 수정
 
 - **회귀 테스트는 test-engineer**(영역 파일 `tests/<영역>.sh`의 블록, `bash tests/run.sh <영역>`으로 수정 전 실패 확인), **수정은 developer**(`scripts/`·`skills/`·`templates/` 등). developer는 `tests/**`를 고치지 않는다.
-- 러너의 regression·fix 노드는 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 리뷰가 깨끗해진 뒤 러너가 한 번 돌린다.
+- 러너의 regression·fix 노드는 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 러너가 push하는 런이면 원격 CI(`test` 워크플로)가 최종 관문으로 돌리고, 원격 CI가 없거나 push하지 않는 런만 리뷰가 깨끗해진 뒤 러너가 로컬에서 한 번 돌린다.
 - 리뷰 → 원인별 수정 → 검증 → 재리뷰. 한도는 그래프 수리 한도, 넘거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 
 ## 4. 검증 명령 (PR 직전 한 번. 작업 중에는 `bash tests/run.sh -j "${HM_TEST_JOBS:-2}" --changed`·`--lint`)
@@ -32,7 +32,7 @@ scripts/release-prep.sh --check
 
 ## 5. publish 노드가 쓸 사실
 
-`implement-feature.md` 5절과 같다: 기준 `develop`, 브랜치 `fix/<요약>`(이슈가 있으면 `fix/<이슈번호>-<요약>`), 커밋 `fix(<scope>): ... (#<이슈>)`, `gh pr create --base develop`(일반 PR, 본문 `Closes #<이슈>`), 원격 CI `gh pr checks <PR> --watch`, 병합이 `develop`과의 충돌만으로 막히면 `sync_base`가 `origin/develop`을 일반 merge로 들이고 검사를 다시 통과해야 push한다. 버전 파일은 올리지 않는다. 이미 릴리스된 버전의 치명적 문제(hotfix)만 `main`에서 따고 `main`으로 PR한다 — 이 판단은 사람에게 묻는다.
+`implement-feature.md` 5절과 같다: 기준 `develop`, 브랜치 `fix/<요약>`(이슈가 있으면 `fix/<이슈번호>-<요약>`), 커밋 `fix(<scope>): ... (#<이슈>)`, `gh pr create --base develop`(일반 PR, 본문 `Closes #<이슈>`), 원격 CI `gh pr checks <PR> --watch`, 병합이 `develop`과의 충돌만으로 막히면 `sync_base`가 `origin/develop`을 일반 merge로 들이고 검사를 다시 통과해야 push한다. 버전 파일은 올리지 않는다(검사는 `implement-feature.md` 4절의 merge-base 명령 `git diff --quiet origin/develop...HEAD -- <버전 파일>`). 이미 릴리스된 버전의 치명적 문제(hotfix)만 `main`에서 따고 `main`으로 PR한다 — 이 판단은 사람에게 묻는다.
 
 ## 6. 이슈 트래커
 

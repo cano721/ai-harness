@@ -225,4 +225,174 @@ if "$ROOT/scripts/changelog-section.sh" "99.9.9" >/dev/null 2>&1; then
 fi
 pass "changelog carries the shipped version"
 
+# CHANGELOG 조각(#558): 기능 PR은 changelog.d/<이슈>-<요약>.md에만 쓰고, 릴리스가 소제목별로 합친 뒤 조각을 지운다.
+# 동시에 열린 PR들이 CHANGELOG.md 맨 위 한 줄에서 충돌하지 않게 하면서, 결과 형식은 보드·changelog-section.sh가 읽던 그대로다.
+make_fragment_fixture() {
+  local dir="$1"
+  rm -rf "$dir"
+  mkdir -p "$dir/.claude-plugin" "$dir/.codex-plugin" "$dir/changelog.d"
+  printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$dir/.claude-plugin/plugin.json"
+  printf '{"name":"ai-harness","version":"1.2.3"}\n' >"$dir/.codex-plugin/plugin.json"
+  jq '.version = "1.2.3" | .release_url = "https://github.com/cano721/ai-harness/releases/tag/v1.2.3" | .notes_url = .release_url' "$REL/release.json" >"$dir/release.json"
+  cat >"$dir/CHANGELOG.md" <<'DOC'
+# Changelog
+
+머리말.
+
+## Unreleased
+
+<!-- 안내 주석 -->
+
+## v1.2.3 (2026-01-01)
+### 새 기능
+
+- 이전 릴리스.
+DOC
+}
+fragment_sums() {
+  local dir="$1"
+  cksum "$dir/CHANGELOG.md" "$dir/.claude-plugin/plugin.json" "$dir/.codex-plugin/plugin.json" "$dir/release.json" "$dir"/changelog.d/*.md 2>/dev/null
+}
+
+# A·B·C: Unreleased 본문과 조각 두 개를 소제목별로 한 번씩, 고정 순서·이슈 번호 숫자순으로 합치고 조각을 지운다.
+FRAG="$TEST_TMP/release-fragments"
+make_fragment_fixture "$FRAG"
+cat >"$FRAG/CHANGELOG.md" <<'DOC'
+# Changelog
+
+머리말.
+
+## Unreleased
+
+### 버그 수정
+
+- 옛 PR이 Unreleased에 쓴 수정. (#90)
+
+## v1.2.3 (2026-01-01)
+### 새 기능
+
+- 이전 릴리스.
+DOC
+cat >"$FRAG/changelog.d/120-b.md" <<'DOC'
+<!-- 조각 안내 주석은 버린다 -->
+### 새 기능
+
+- 백이십 기능. (#120)
+
+### 버그 수정
+
+- 백이십 수정. (#120)
+DOC
+cat >"$FRAG/changelog.d/99-a.md" <<'DOC'
+### 업데이트 후 해야 할 일
+
+- **구십구 할 일** — 설정을 다시 엽니다. (#99)
+  요약: 구십구 요약 줄.
+
+### 새 기능
+- 구십구 기능. (#99)
+DOC
+"$ROOT/scripts/release-prep.sh" 1.3.0 --date 2026-02-02 --root "$FRAG" >/dev/null 2>&1 || fail "fragments and the Unreleased body should merge into a release"
+assert_eq "1" "$(grep -c '^## v1.3.0 (2026-02-02)$' "$FRAG/CHANGELOG.md")" "the merged release heading appears once"
+FRAG_SECTION="$(awk '/^## v1\.3\.0 /{inside=1; next} inside && /^## /{exit} inside' "$FRAG/CHANGELOG.md")"
+assert_eq "### 업데이트 후 해야 할 일|### 새 기능|### 버그 수정" "$(printf '%s\n' "$FRAG_SECTION" | grep '^### ' | paste -sd '|' -)" "each heading appears once in the fixed order"
+FRAG_FEATURES="$(printf '%s\n' "$FRAG_SECTION" | grep -E '^- (구십구|백이십) 기능' | paste -sd '|' -)"
+assert_eq "- 구십구 기능. (#99)|- 백이십 기능. (#120)" "$FRAG_FEATURES" "fragments merge by numeric issue order"
+FRAG_FIXES="$(printf '%s\n' "$FRAG_SECTION" | grep -E '수정\. \(#' | paste -sd '|' -)"
+assert_eq "- 옛 PR이 Unreleased에 쓴 수정. (#90)|- 백이십 수정. (#120)" "$FRAG_FIXES" "Unreleased entries come before fragment entries"
+assert_contains "$FRAG_SECTION" "$(printf -- '- **구십구 할 일** — 설정을 다시 엽니다. (#99)\n  요약: 구십구 요약 줄.')" "indented summary lines move with their entry"
+assert_eq "## v1.3.0 (2026-02-02)|### 업데이트 후 해야 할 일|" "$(grep -A2 '^## v1.3.0 ' "$FRAG/CHANGELOG.md" | paste -sd '|' -)" "the first heading follows the version heading with one blank line before entries"
+assert_eq "0" "$(grep -c '<!--' "$FRAG/CHANGELOG.md")" "fragment comments do not reach the release notes"
+assert_eq "1" "$(grep -c '^## Unreleased$' "$FRAG/CHANGELOG.md")" "an empty Unreleased heading stays"
+FRAG_BETWEEN="$(awk '/^## Unreleased/ { inside = 1; next } /^## v1\.3\.0 / { inside = 0 } inside' "$FRAG/CHANGELOG.md" | tr -d '[:space:]')"
+assert_eq "" "$FRAG_BETWEEN" "the Unreleased heading left above the release has no body"
+assert_eq "|## v1.2.3 (2026-01-01)" "$(grep -B1 '^## v1.2.3 ' "$FRAG/CHANGELOG.md" | paste -sd '|' -)" "one blank line separates the merged section from the previous release"
+if compgen -G "$FRAG/changelog.d/*.md" >/dev/null; then
+  fail "released fragments should be deleted"
+fi
+FRAG_NOTES="$("$ROOT/scripts/changelog-section.sh" 1.3.0 "$FRAG/CHANGELOG.md")"
+assert_eq "### 업데이트 후 해야 할 일" "$(printf '%s\n' "$FRAG_NOTES" | head -1)" "changelog-section.sh extracts the merged section"
+FRAG_PARSED="$(cd "$ROOT/scripts/board" && python3 -I -c '
+import json, sys
+sys.path.insert(0, ".")
+import changes
+v = [x for x in changes.parse(open(sys.argv[1], encoding="utf-8").read()) if x["version"] == "1.3.0"][0]
+buckets = {}
+for b, it in v["items"]:
+    buckets[b] = buckets.get(b, 0) + 1
+todo = [it for b, it in v["items"] if b == "todo"][0]
+print(json.dumps({"total": len(v["items"]), "buckets": buckets, "summary": bool(todo.get("summary"))}, sort_keys=True))
+' "$FRAG/CHANGELOG.md")"
+assert_eq '{"buckets": {"feature": 2, "fix": 2, "todo": 1}, "summary": true, "total": 5}' "$FRAG_PARSED" "the board reads the merged section like any release"
+pass "release preparation merges changelog fragments by heading and deletes them"
+
+# D: --check가 조각 형식을 검사한다. 잘못된 조각은 파일 경로와 함께 exit 1.
+FRAG_CHECK="$TEST_TMP/release-fragment-check"
+for FRAG_CASE in unknown-heading empty-heading entry-first bad-name; do
+  make_fragment_fixture "$FRAG_CHECK"
+  FRAG_FILE="7-case.md"
+  case "$FRAG_CASE" in
+    unknown-heading) printf '### 기타\n\n- 무언가. (#7)\n' >"$FRAG_CHECK/changelog.d/$FRAG_FILE" ;;
+    empty-heading) printf '### 새 기능\n\n### 버그 수정\n\n- 고침. (#7)\n' >"$FRAG_CHECK/changelog.d/$FRAG_FILE" ;;
+    entry-first) printf -- '- 소제목 없는 항목. (#7)\n\n### 새 기능\n\n- 기능. (#7)\n' >"$FRAG_CHECK/changelog.d/$FRAG_FILE" ;;
+    bad-name) FRAG_FILE="notes.md"; printf '### 새 기능\n\n- 기능. (#7)\n' >"$FRAG_CHECK/changelog.d/$FRAG_FILE" ;;
+  esac
+  FRAG_CHECK_ERR="$TEST_TMP/release-fragment-check.err"
+  if "$ROOT/scripts/release-prep.sh" --check --root "$FRAG_CHECK" >/dev/null 2>"$FRAG_CHECK_ERR"; then
+    fail "--check should reject the $FRAG_CASE fragment"
+  fi
+  assert_contains "$(cat "$FRAG_CHECK_ERR")" "changelog.d/$FRAG_FILE" "--check names the $FRAG_CASE fragment"
+done
+make_fragment_fixture "$FRAG_CHECK"
+cat >"$FRAG_CHECK/changelog.d/7-case.md" <<'DOC'
+### 새 기능
+
+- 기능. (#7)
+  요약: 요약.
+
+  이어지는 문단.
+
+  ```bash
+  echo hi
+  ```
+DOC
+FRAG_CHECK_OUT="$("$ROOT/scripts/release-prep.sh" --check --root "$FRAG_CHECK" 2>&1)" || fail "--check should accept a well-formed fragment: $FRAG_CHECK_OUT"
+assert_contains "$FRAG_CHECK_OUT" "release metadata consistent at v1.2.3" "--check keeps its consistency message with fragments"
+pass "release consistency check validates changelog fragments"
+
+# E: 형식 오류 조각이 있으면 릴리스는 아무 파일도 바꾸지 않고 거부한다. 조각도 본문도 없으면 기존 문구로 거부한다.
+FRAG_BAD="$TEST_TMP/release-fragment-bad"
+make_fragment_fixture "$FRAG_BAD"
+printf '### 새 기능\n\n- 좋은 기능. (#8)\n' >"$FRAG_BAD/changelog.d/8-good.md"
+printf '### 기타\n\n- 나쁜 소제목. (#9)\n' >"$FRAG_BAD/changelog.d/9-bad.md"
+FRAG_BAD_BEFORE="$(fragment_sums "$FRAG_BAD")"
+FRAG_BAD_ERR="$TEST_TMP/release-fragment-bad.err"
+FRAG_BAD_STATUS=0
+"$ROOT/scripts/release-prep.sh" 1.3.0 --date 2026-02-02 --root "$FRAG_BAD" >/dev/null 2>"$FRAG_BAD_ERR" || FRAG_BAD_STATUS=$?
+assert_eq "2" "$FRAG_BAD_STATUS" "a malformed fragment refuses the release"
+assert_contains "$(cat "$FRAG_BAD_ERR")" "changelog.d/9-bad.md" "the refusal names the malformed fragment"
+assert_eq "$FRAG_BAD_BEFORE" "$(fragment_sums "$FRAG_BAD")" "a refused release changes no file"
+make_fragment_fixture "$FRAG_BAD"
+FRAG_EMPTY_STATUS=0
+"$ROOT/scripts/release-prep.sh" 1.3.0 --root "$FRAG_BAD" >/dev/null 2>"$FRAG_BAD_ERR" || FRAG_EMPTY_STATUS=$?
+assert_eq "2" "$FRAG_EMPTY_STATUS" "nothing to release is refused"
+assert_contains "$(cat "$FRAG_BAD_ERR")" "the Unreleased section is empty" "the empty refusal keeps its wording"
+pass "release preparation refuses malformed or missing changelog entries"
+
+# F: Unreleased 본문이 비어 있어도 조각이 있으면 릴리스한다.
+FRAG_ONLY="$TEST_TMP/release-fragment-only"
+make_fragment_fixture "$FRAG_ONLY"
+printf '### 동작 변경\n\n- 조각만 있는 변경. (#10)\n' >"$FRAG_ONLY/changelog.d/10-only.md"
+"$ROOT/scripts/release-prep.sh" 1.3.0 --date 2026-02-02 --root "$FRAG_ONLY" >/dev/null 2>&1 || fail "fragments alone should be enough to release"
+assert_eq "### 동작 변경|- 조각만 있는 변경. (#10)" "$("$ROOT/scripts/changelog-section.sh" 1.3.0 "$FRAG_ONLY/CHANGELOG.md" | grep -v '^$' | paste -sd '|' -)" "the fragment becomes the release section"
+assert_eq "1.3.0" "$(jq -r '.version' "$FRAG_ONLY/release.json")" "fragment-only release moves the manifests"
+pass "release preparation accepts fragments with an empty Unreleased body"
+
+# G: 저장소 자신의 조각이 형식을 지키고, 지시 문서가 조각 파일을 가리킨다.
+for FRAG_DOC in AGENTS.md CONTRIBUTING.md .ai-harness/workflows/implement-feature.md .ai-harness/workflows/fix-bug.md \
+  .ai-harness/workflows/review.md .ai-harness/workflows/release.md .ai-harness/agents/developer.md; do
+  grep -q 'changelog\.d/' "$ROOT/$FRAG_DOC" || fail "$FRAG_DOC should direct entries to changelog.d/ fragments"
+done
+pass "contributor instructions point at changelog fragments"
+
 finish_tests
