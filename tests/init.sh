@@ -964,4 +964,25 @@ for phrase in "대량 조회 메모리" "검증된 기본 규칙" "projection �
 done
 pass "harness-init writes the bulk read memory rule for projects with data access"
 
+# design-audit가 축 A에서 여백 관계와 묶기를 잰다. 규칙 문서에 하위 절이 없으면 감점하지 않고 규칙 결정 필요로 올리고,
+# 소스로 못 정하는 여백은 렌더 확인으로 보낸다. 사본 세 곳과 harness.json hash도 맞춘다. (#514)
+SR_AUDIT="$(<"$ROOT/templates/design-audit/SKILL.md")"
+for phrase in "여백 관계와 묶기는 축 A에서 잰다" "관계에 맞지 않는 단계" "안쪽이 바깥쪽보다 크거나 같은 역전" "중첩 한도" "하위 절이 없으면 감점하지 않고"; do
+  assert_contains "$SR_AUDIT" "$phrase" "design-audit spacing and grouping: $phrase"
+done
+SR_PARA="$(awk '/^\*\*여백 관계와 묶기는 축 A에서 잰다/{f=1} f&&/^$/{exit} f' "$ROOT/templates/design-audit/SKILL.md")"
+assert_contains "$SR_PARA" "렌더 확인 필요" "design-audit sends unresolvable spacing to render check"
+assert_contains "$SR_PARA" "규칙 결정 필요" "design-audit holds missing subsections as rule decisions"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+SR_AROW="$(grep '^| A\. 골격·위계 | 30 | `## 레이아웃`:' "$ROOT/templates/design-audit/SKILL.md")"
+assert_contains "$SR_AROW" "여백 관계" "design-audit axis A row names spacing relationships"
+for SR_COPY in skills/design-screen/references/design-audit.md .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/SKILL.md; do
+  cmp -s "$ROOT/$SR_COPY" "$ROOT/templates/design-audit/SKILL.md" || fail "$SR_COPY must match templates/design-audit/SKILL.md byte for byte"
+done
+for SR_COPY in .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/SKILL.md; do
+  SR_SUM="$( (shasum -a 256 "$ROOT/$SR_COPY" 2>/dev/null || sha256sum "$ROOT/$SR_COPY") | cut -d' ' -f1)"
+  assert_eq "$SR_SUM" "$(jq -r --arg p "$SR_COPY" '.managed_files[$p].content_sha256' "$ROOT/.ai-harness/harness.json")" "harness.json records the current hash of $SR_COPY"
+done
+pass "design-audit scores spacing relationships and grouping under axis A and its copies stay in sync"
+
 finish_tests

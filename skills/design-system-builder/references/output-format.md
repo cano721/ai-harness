@@ -14,7 +14,7 @@ Widths, breakpoints, and viewports in the document are referenced by token or co
 |---|---|---|---|
 | 1 | `## 메타` | — | Status, sources, token file paths, themes, viewports (below) |
 | 2 | `## 원칙` | all | 3–5 principles, each a decision a reviewer can apply ("one primary action per screen"), not an adjective |
-| 3 | `## 레이아웃` | **A** skeleton & hierarchy | Screen class table, skeleton per class, minimum width, breakpoints |
+| 3 | `## 레이아웃` | **A** skeleton & hierarchy | Screen class table, skeleton per class, minimum width, breakpoints; subsections `### 여백 관계` and `### 묶기` (below) |
 | 4 | `## 색과 상태` | **B** color, emphasis & state | Role table, where the accent may appear and its share, status colors with their text/icon pairing, selection and open indicators, floating surfaces, elevation, dark-theme principle |
 | 5 | `## 타이포그래피` | A (title sizes), C | Type role table (size, line-height, weight token triples), language-specific rules |
 | 6 | `## 컴포넌트` | **C** component grammar | Purpose → component, size ladder, states, icons, focus, empty states (`components.md`) |
@@ -64,6 +64,23 @@ A screen class table, then one skeleton block per class:
 | e.g. list | a collection with filters and row actions | `<route or template>` |
 
 Per class: columns, content max width, minimum supported width, vertical rhythm (spacing tokens between header, toolbar, body), title type role, toolbar position, and which container holds the horizontal padding. Breakpoints are named here and defined as tokens or constants.
+
+Then two subsections, in this order, at the end of `## 레이아웃`. They are `###` headings, so the 13 required sections keep their names and order. The invariants and the decisions behind them are in `tokens.md` (Spacing relationships).
+
+`### 여백 관계` — relationship → spacing token:
+
+| 관계 | 예 | 토큰 |
+|---|---|---|
+| 요소 안 | icon and label, pieces of one meta line | `--space-…` |
+| 그룹 안 항목 사이 | rows of a list, fields of a form group | `--space-…` |
+| 그룹 사이 | columns, page header to body | `--space-…` |
+| 구획 사이 | sections of a summary page | `--space-…` |
+
+Each step is larger than the one above it. State the two fixed invariants (inner < outer; one boundary, one means) in a sentence.
+
+`### 묶기` — when each rung of the ladder is used: space (default), divider (token), surface/card (token, elevation), collapse (which content folds). Then the nesting limit (how many surfaces may sit inside one another) and alignment (shared start line for titles and body, numeric alignment, primary action position).
+
+When `refresh` or `merge` meets an existing rule document whose `## 레이아웃` has no `### 여백 관계` or `### 묶기`, do not overwrite the section: propose adding the missing subsection with the extracted defaults and list it in `확인 대기`.
 
 ### `## 형제 목록` (axis D)
 
