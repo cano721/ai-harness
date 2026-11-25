@@ -254,6 +254,39 @@ assert_eq "" "$(ag_board todo list)" "a to-do finished on the board leaves the C
 assert_eq "2" "$(ag_get | jq -r '.todo_total')" "the board knows how many to-dos were ever written"
 pass "to-dos are shared between board.sh todo and the board"
 
+# 11. 기한·아침 요약·한 번에 보는 요약(#539): 할 일 기한은 CLI·보드·어댑터 셋 다 받고, 요약은 아침 알림이 읽는다.
+AG_DID="$(ag_board todo add --due 2026-12-01 기한 있는 일)"
+assert_eq "2026-12-01" "$(ag_get | jq -r --arg i "$AG_DID" '.items.todo[] | select(.id == $i) | .due')" "todo add --due keeps the due date"
+assert_eq "기한 있는 일" "$(ag_get | jq -r --arg i "$AG_DID" '.items.todo[] | select(.id == $i) | .title')" "--due is not part of the title"
+ag_board todo add --due 2026-13-45 잘못된 기한 >/dev/null 2>&1 && fail "todo add refuses an impossible due date"
+AG_RES="$(ag_post todo '{"text":"보드에서 기한 적은 일","due":"2026-12-02T18:00"}')"
+assert_eq "200" "$(ag_code "$AG_RES")" "the board adds a to-do with a due time"
+assert_eq "2026-12-02T18:00" "$(ag_get | jq -r --arg i "$(ag_body "$AG_RES" | jq -r .id)" '.items.todo[] | select(.id == $i) | .due')" "the board keeps the due time"
+assert_eq "400" "$(ag_code "$(ag_post todo '{"text":"x","due":"내일"}')")" "the board refuses a due that is not a date"
+ag_post connect '{"source":"acme"}' >/dev/null
+AG_OUT="$(ag_wait '[.items.todo[] | select(.source == "acme")] | length == 1')" || fail "acme to-do came back"
+assert_eq "2026-01-02T09:00:00+09:00" "$(jq -r '.items.todo[] | select(.source == "acme") | .due' <<<"$AG_OUT")" "an adapter to-do keeps its due"
+AG_SUM="$(ag_board agenda summary)"
+assert_eq "true" "$(jq -r '.ok' <<<"$AG_SUM")" "agenda summary prints JSON"
+assert_eq "t1" "$(jq -r '.todos[0].id' <<<"$AG_SUM")" "summary puts the earliest due first"
+assert_eq "true" "$(jq -r '.todos[0].overdue' <<<"$AG_SUM")" "summary marks a past due as overdue"
+assert_eq "true" "$(jq -r '(.replies | length) >= 1 and (.events_today | type) == "array"' <<<"$AG_SUM")" "summary carries replies and today's events"
+printf '오늘 할 일 3건\n- 첫째\n' | ag_board brief set --source "아침 요약" >/dev/null || fail "brief set reads stdin"
+AG_OUT="$(ag_get)"
+assert_eq "오늘 할 일 3건" "$(jq -r '.brief.text | split("\n")[0]' <<<"$AG_OUT")" "the board shows the latest brief"
+assert_eq "아침 요약" "$(jq -r '.brief.source' <<<"$AG_OUT")" "the brief names where it came from"
+assert_eq "600" "$(filemode "$AG_DATA/board/agenda/brief.json")" "brief.json is private"
+assert_contains "$(ag_board brief show)" "- 첫째" "brief show prints the text"
+printf '' | ag_board brief set >/dev/null 2>&1 && fail "brief set refuses empty text"
+AG_RES="$(ag_post "done" "$(jq -cn --arg i "$AG_DID" '{source: "todo", id: $i}')")"
+assert_eq "true" "$(ag_body "$AG_RES" | jq -r '.undo')" "finishing a written to-do can be undone"
+assert_eq "200" "$(ag_code "$(ag_post reopen "$(jq -cn --arg i "$AG_DID" '{source: "todo", id: $i}')")")" "reopen brings a finished to-do back"
+assert_eq "기한 있는 일" "$(ag_get | jq -r --arg i "$AG_DID" '.items.todo[] | select(.id == $i) | .title')" "the reopened to-do is listed again"
+assert_eq "false" "$(ag_body "$(ag_post "done" '{"source":"acme","id":"r2"}')" | jq -r '.undo')" "an adapter completion says it cannot be undone"
+assert_eq "409" "$(ag_code "$(ag_post reopen '{"source":"acme","id":"r2"}')")" "reopen refuses what the adapter already finished"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $AG_BASE" -d '{"t":"wrong","source":"todo","id":"x"}' "$AG_BASE/agenda/reopen")" "reopen needs the board token"
+pass "to-dos carry due dates and the morning brief lands on the board"
+
 # 8. 구글 OAuth: 루프백 + PKCE. 가짜 동의 화면이 code+state로 돌려보내고, 가짜 토큰 엔드포인트가 PKCE를 확인한다.
 AG_GD="$AG_T/google-data"; mkdir -p "$AG_GD"
 cp "$AG_DATA/google-oauth-client.json" "$AG_GD/"
@@ -279,6 +312,8 @@ assert_contains "$(cat "$AG_T/done.headers")" "text/html" "the loopback answers 
 assert_contains "$AG_DONE" "구글 캘린더를 연결했습니다" "the page says the connection is done"
 assert_contains "$AG_DONE" "history.replaceState" "the page clears code and state from the address bar"
 assert_contains "$AG_DONE" "window.close()" "the page tries to close its own tab"
+case "$AG_DONE" in *"<button"*) fail "the page has no close button the browser would block" ;; esac
+assert_contains "$AG_DONE" "⌘W" "the page tells how to close the tab when the browser blocks it"
 assert_contains "$AG_DONE" "Content-Security-Policy" "the page allows only its own inline script and style"
 case "$AG_DONE" in *code-*) fail "the page does not echo the authorization code" ;; esac
 wait "$AG_CPID" || fail "connect finishes after the redirect: $(cat "$AG_T/connect.err")"

@@ -678,8 +678,26 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 @media (max-width: 760px) {
   .b-agev__title { white-space: normal; }
 }
-.b-agform__row { display: flex; gap: var(--space-2); min-width: 0; }
-.b-agform__row > .ds-input { flex: 1 1 auto; min-width: 0; }
+.b-agform__row { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.b-agform__row > .ds-input { flex: 1 1 8rem; min-width: 0; }
+.b-agform__row > .b-agdue { flex: 0 1 9.5rem; }
+/* 오늘 한 줄 결론(이슈 539): 숫자가 소식이라 숫자를 앞에 둔다 */
+.b-agsum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin: 0; }
+.b-agsum > span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.b-agbrief__text { margin: 0; white-space: pre-line; }
+.b-agbrief__text--folded { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+/* 답해야 할 것·할 일은 카드가 아니라 체크 줄: 완료 원 | 제목·메타 | 원본 열기 */
+.b-agtasks { list-style: none; margin: 0; padding: 0; }
+.b-agtask { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); min-width: 0; }
+.b-agtask:first-child { border-top: 0; }
+.b-agcheck { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin: 0; padding: 0; border: 1.5px solid var(--color-border-control); border-radius: var(--radius-full); background: transparent; color: transparent; cursor: pointer; }
+.b-agcheck > .ds-icon { width: var(--size-icon-sm); height: var(--size-icon-sm); }
+.b-agcheck:hover, .b-agcheck:focus-visible { color: var(--color-text-muted); background: var(--color-surface-hover); }
+.b-agcheck[aria-busy="true"] { color: var(--color-text); cursor: progress; }
+.b-agtask__main { min-width: 0; display: grid; gap: var(--space-1); }
+.b-agtask__title { margin: 0; font-weight: var(--font-weight-label); }
+.b-agtask__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); min-width: 0; }
+.b-agtask__meta > .b-agtask__detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .b-agsrc .ds-row__side { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
 .b-line { margin: 0; }
 .b-steps { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-3); }
@@ -857,6 +875,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5"/></symbol>
   <symbol id="i-close" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
   <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M4.5 8.2l2.4 2.4 4.6-5"/></symbol>
   <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></symbol>
   <symbol id="i-external" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 7.5 8.5"/><path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></symbol>
 </svg>
@@ -1624,7 +1643,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 
   // ---- 내 일정: 일정 · 답해야 할 것 · 할 일, 그 아래 연결한 곳 ----
   // 서버(/agenda)가 소스 상태와 종류별 열린 항목을 준다. 연결 중이거나 모으는 중인 소스가 있으면 2초, 아니면 30초마다 다시 읽는다.
-  let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftErr = false;
+  let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftDue = '', agDraftErr = false;
   const agOpen = new Set();        // 펼친 설정 안내(소스 id)
   const agConnecting = new Set();  // 연결을 누르고 결과를 기다리는 소스 — 끝나면 토스트 한 번
   const agRefreshing = new Set();  // [다시 가져오기]를 누르고 기다리는 소스 — 다시 그려도 버튼이 바쁜 상태를 잃지 않게
@@ -1645,9 +1664,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         if (s.connect_error || !s.connected) toast(s.connect_error || s.error || `${s.name}에 연결하지 못했습니다.`, false);
         else toast(`${s.name} 연결을 마쳤습니다.`, true);
       }
-      const sig = JSON.stringify([next.sources, next.items, next.todo_total]);
-      agData = next;
-      if (sig !== agSig) { agSig = sig; if (view === 'agenda') renderBoard(); }
+      const sig = JSON.stringify([next.sources, next.items, next.todo_total, next.brief]);
+      agData = next; agSeenInit();
+      if (sig !== agSig) { agSig = sig; if (view === 'agenda') renderBoard(); else renderSidebar(); }
     } catch (e) {
       agErr = '보드 서버에 닿지 않습니다. 보드가 꺼졌으면 터미널에서 다시 여세요.'; agAt = Date.now(); agSig = '';
       if (view === 'agenda') renderBoard();
@@ -1667,7 +1686,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   // 분이 바뀌면 다시 그린다 — 데이터가 그대로여도 '진행 중'·지난 일정 표시는 시각에 따라 바뀐다.
   let agMinute = Math.floor(Date.now() / 60000);
   setInterval(() => {
-    if (view !== 'agenda' || document.hidden) return;
+    if (document.hidden) return;
+    if (view !== 'agenda') { agFresh.clear(); loadAgenda(false); return; }  // 다른 화면에서도 30초마다 읽어 사이드바에 새로 온 수를 단다
     loadAgenda(false);
     const m = Math.floor(Date.now() / 60000);
     if (m !== agMinute) { agMinute = m; if (agData) renderBoard(); }
@@ -1690,37 +1710,124 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const a = clock(it.start), b = it.end && dayKey(it.end) === dayKey(it.start) ? clock(it.end) : '';
     return a && b && a !== b ? `${a}–${b}` : a;
   };
-  function agendaCard(it) {
-    const c = el('article', 'ds-card'); c.dataset.key = `ag:${it.source}:${it.id}`;
-    const meta = el('div', 'ds-card__meta');
+  // 기한(이슈 539): 날짜만이면 그날 끝까지. 지났으면 사람 필요(기한 지남), 오늘까지면 윤곽 배지, 그 뒤는 날짜 글자만.
+  const dueAt = (due) => {
+    if (!due) return NaN;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(due)) { const [y, m, d] = due.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59).getTime(); }
+    return new Date(due).getTime();
+  };
+  function dueInfo(due, now) {
+    const at = dueAt(due); if (Number.isNaN(at)) return null;
+    const key = /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : dayKey(due);
+    const time = /^\d{4}-\d{2}-\d{2}$/.test(due) ? '' : ' ' + clock(due);
+    const when = `${dayLabel(key)}${time}까지`;
+    if (at < now) return { overdue: true, badge: ['attention', '기한 지남'], text: when };
+    if (key === dayOffset(0)) return { today: true, badge: ['attention', '오늘까지', 'soft'], text: time ? clock(due) + '까지' : '' };
+    return { text: when };
+  }
+  const agKey = (it) => `${it.source}:${it.id}`;
+  function taskRow(it, now) {
+    const r = el('li', 'b-agtask'); r.dataset.key = `ag:${it.source}:${it.id}`;
+    const check = el('button', 'b-agcheck'); check.type = 'button'; check.dataset.key = `agdone:${it.source}:${it.id}`;
+    check.setAttribute('aria-label', `완료: ${it.title}`); check.title = '완료로 표시'; check.append(icon('check'));
+    check.onclick = async () => {
+      if (check.getAttribute('aria-busy')) return;
+      check.setAttribute('aria-busy', 'true');
+      let res; try { res = await post('/agenda/done', { source: it.source, id: it.id }); } catch (e) { res = { ok: false, message: '완료로 표시하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+      if (!res.ok) { check.removeAttribute('aria-busy'); toast(res.message, false); return; }
+      const undo = res.undo ? btn('되돌리기', 'ds-btn--sm', async (e) => {
+        const b = e.currentTarget; if (b.getAttribute('aria-busy')) return; busy(b, '되돌리는 중');
+        let back; try { back = await post('/agenda/reopen', { source: it.source, id: it.id }); } catch (x) { back = { ok: false, message: '되돌리지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+        const t = b.closest('.ds-toast'); if (t) t.remove();
+        toast(back.message, !!back.ok); loadAgenda(true);
+      }) : null;
+      toast(it.local ? `'${it.title}'을(를) 마쳤습니다.` : res.message, true, undo);
+      loadAgenda(true);
+    };
+    const main = el('div', 'b-agtask__main');
+    const t = el('p', 'b-agtask__title b-clamp2', it.title); t.title = it.title;
+    const meta = el('div', 'b-agtask__meta');
+    if (agFresh.has(agKey(it))) meta.append(badge(['info', '새로']));
+    const d = dueInfo(it.due, now);
+    if (d && d.badge) meta.append(badge(d.badge));
+    if (d && d.text) meta.append(el('span', 'ds-num', d.text));
     if (!it.local) meta.append(chip(it.source_name));
-    const when = it.kind === 'event' ? eventTime(it) : it.local ? (it.start ? `${ago(it.start)} 적음` : '') : stamp(it.start);
-    if (when) meta.append(el('span', 'ds-card__when ds-num', when));
-    const h = el('h3', 'ds-card__title b-clamp2', it.title); h.title = it.title;
-    c.append(meta, h);
-    if (it.detail) c.append(el('p', 'ds-card__body', it.detail));
-    const acts = el('div', 'ds-card__actions');
-    if (it.kind !== 'event' && SERVER) {
-      const b = btn('완료', 'ds-btn--sm'); b.dataset.key = `agdone:${it.source}:${it.id}`; b.setAttribute('aria-label', `완료: ${it.title}`);
-      b.onclick = async () => {
-        if (b.getAttribute('aria-busy')) return;
-        busy(b, '완료하는 중');
-        let res; try { res = await post('/agenda/done', { source: it.source, id: it.id }); } catch (e) { res = { ok: false, message: '완료로 표시하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
-        toast(res.ok ? (it.local ? '할 일을 마쳤습니다.' : res.message) : res.message, !!res.ok);
-        if (!res.ok) unbusy(b);
-        loadAgenda(true);
-      };
-      acts.append(b);
+    if (it.detail) { const x = el('span', 'b-agtask__detail', it.detail); x.title = it.detail; meta.append(x); }
+    if (it.local && it.start && !d) meta.append(el('span', 'ds-num', `${ago(it.start)} 적음`));
+    main.append(t); if (meta.childNodes.length) main.append(meta);
+    const side = el('div', 'b-agev__side');
+    if (it.url && safeHref(it.url)) {
+      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
+      side.append(a);
     }
-    if (it.url) acts.append(textLink('원본에서 보기', it.url));
-    if (acts.childNodes.length) c.append(acts);
-    return c;
+    r.append(SERVER ? check : el('span'), main, side);
+    return r;
+  }
+  function taskList(list, label) {
+    const now = Date.now(), ul = el('ul', 'ds-rows b-agtasks'); ul.setAttribute('aria-label', `${label} ${list.length}건`);
+    ul.append(...list.map((it) => taskRow(it, now)));
+    return ul;
   }
   function agendaColumn(key, dot, label, n, body) {
     const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'agsec-' + key);
     const h = sectionHead(dot, label, n); h.id = 'agsec-' + key;
     s.append(h, ...body);
     return s;
+  }
+  // 새로 들어온 것(이슈 539): 이 브라우저가 본 적 없는 답할 것·할 일. 처음 읽을 때는 전부 본 것으로 둔다(첫 화면이 '새로'로 덮이지 않게).
+  let agSeen = null; const agFresh = new Set();
+  const agTaskKeys = () => (agData ? [...(agData.items.reply || []), ...(agData.items.todo || [])].map(agKey) : []);
+  function agSeenInit() {
+    if (agSeen) return;
+    let raw = null; try { raw = JSON.parse(store('hb-ag-seen') || 'null'); } catch (e) { raw = null; }
+    agSeen = new Set(Array.isArray(raw) ? raw : agTaskKeys());
+    if (!Array.isArray(raw)) store('hb-ag-seen', JSON.stringify([...agSeen]));
+  }
+  const agUnseen = () => (agSeen ? agTaskKeys().filter((k) => !agSeen.has(k)).length : 0);
+  function agMarkSeen() {
+    const keys = agTaskKeys();
+    for (const k of keys) if (!agSeen.has(k)) agFresh.add(k);
+    agSeen = new Set(keys);
+    store('hb-ag-seen', JSON.stringify(keys));
+  }
+  const agOverdue = () => { const now = Date.now(); return (agData ? [...(agData.items.reply || []), ...(agData.items.todo || [])] : []).filter((it) => dueAt(it.due) < now).length; };
+  // 오늘 한 줄: 기한 지남 → 답할 것 → 오늘 남은 일정(다음 하나).
+  function todayLine(events, replies, todos) {
+    const now = Date.now(), p = el('p', 'b-agsum'); p.setAttribute('aria-label', '오늘 요약');
+    const overdue = [...replies, ...todos].filter((it) => dueAt(it.due) < now).length;
+    const dueToday = [...replies, ...todos].filter((it) => { const d = dueInfo(it.due, now); return d && d.today; }).length;
+    const part = (n, unit, status) => { const x = el('span'); if (status) x.append(icon(status)); const t = el('span'); t.append(el('strong', 'ds-num', String(n)), unit); x.append(t); return x; };
+    if (overdue) p.append(part(overdue, '건 기한 지남', 'attention'));
+    if (dueToday) p.append(part(dueToday, '건 오늘까지'));
+    p.append(part(replies.length, '건 답할 것'), part(todos.length, '건 할 일'));
+    const today = dayOffset(0);
+    const left = events.filter((e) => (dayKey(e.start) || today) <= today && eventPhase(e, now) !== 'past');
+    const next = left.find((e) => !allDay(e) && eventPhase(e, now) === '');
+    const ev = left.length ? part(left.length, '개 남은 일정') : el('span', 'ds-muted', '오늘 남은 일정 없음');
+    if (next) ev.append(el('span', 'ds-caption', `· 다음 ${clock(next.start)} ${next.title}`));
+    p.append(ev);
+    return p;
+  }
+  // 아침 요약(이슈 539): 정기 작업이 board.sh brief set으로 남긴 글. 오늘 쓴 것만, 여섯 줄 넘으면 접는다.
+  let agBriefOpen = false;
+  function briefCard(b) {
+    if (!b || !b.text || dayKey(b.at) !== dayOffset(0)) return null;
+    const c = el('article', 'ds-card'); c.dataset.key = 'agbrief'; c.setAttribute('aria-labelledby', 'agbrief-title');
+    const meta = el('div', 'ds-card__meta');
+    if (b.source) meta.append(chip(b.source));
+    meta.append(el('span', 'ds-card__when ds-num', `${clock(b.at)} 받음`));
+    const h = el('h3', 'ds-card__title', '아침 요약'); h.id = 'agbrief-title';
+    const long = b.text.split('\n').length > 6 || b.text.length > 360;
+    const body = el('p', 'b-agbrief__text' + (long && !agBriefOpen ? ' b-agbrief__text--folded' : ''), b.text); body.id = 'agbrief-text';
+    c.append(meta, h, body);
+    if (long) {
+      const t = btn(agBriefOpen ? '접기' : '전체 보기', 'ds-btn--sm ds-btn--ghost'); t.dataset.key = 'agbrief-toggle';
+      t.setAttribute('aria-expanded', String(agBriefOpen)); t.setAttribute('aria-controls', 'agbrief-text');
+      t.onclick = () => { agBriefOpen = !agBriefOpen; renderBoard(); };
+      const acts = el('div', 'ds-card__actions'); acts.append(t); c.append(acts);
+    }
+    return c;
   }
   // 일정은 카드가 아니라 날짜별 줄 목록이다: 시간 | 제목·캘린더 | (진행 중 배지·원본 열기). 출처 칩은 소스가 둘 이상일 때만 단다.
   const allDay = (it) => /^\d{4}-\d{2}-\d{2}$/.test(it.start || '');
@@ -1797,6 +1904,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const inp = el('input', 'ds-input'); inp.id = 'ag-todo'; inp.type = 'text'; inp.autocomplete = 'off'; inp.maxLength = 300; inp.placeholder = '예: 회의록 정리'; inp.value = agDraft;
     const err = el('span', 'ds-field__error'); err.id = 'ag-todo-err'; err.append(icon('danger'), '할 일 내용을 적어 주세요.'); err.hidden = !agDraftErr;
     inp.setAttribute('aria-describedby', 'ag-todo-err'); if (agDraftErr) inp.setAttribute('aria-invalid', 'true');
+    const due = el('input', 'ds-input b-agdue'); due.id = 'ag-todo-due'; due.type = 'date'; due.value = agDraftDue; due.setAttribute('aria-label', '기한(선택)'); due.title = '기한(선택)';
+    due.oninput = () => { agDraftDue = due.value; };
     const add = el('button', 'ds-btn', '추가'); add.type = 'submit'; add.id = 'ag-todo-add';
     const setErr = (on) => { agDraftErr = on; err.hidden = !on; if (on) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid'); };
     inp.oninput = () => { agDraft = inp.value; if (agDraftErr && inp.value.trim()) setErr(false); };
@@ -1806,15 +1915,15 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (!text) { setErr(true); inp.focus(); return; }
       if (add.getAttribute('aria-busy')) return;
       busy(add, '추가하는 중');
-      let res; try { res = await post('/agenda/todo', { text }); } catch (x) { res = { ok: false, message: '할 일을 추가하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+      let res; try { res = await post('/agenda/todo', due.value ? { text, due: due.value } : { text }); } catch (x) { res = { ok: false, message: '할 일을 추가하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
       unbusy(add);
       if (!res.ok) { toast(res.message, false); return; }
-      agDraft = ''; inp.value = ''; setErr(false);
+      agDraft = ''; agDraftDue = ''; inp.value = ''; due.value = ''; setErr(false);
       toast('할 일을 추가했습니다.', true);
       await loadAgenda(true);
       const again = $('ag-todo'); if (again) again.focus();
     };
-    const row = el('div', 'b-agform__row'); row.append(inp, add);
+    const row = el('div', 'b-agform__row'); row.append(inp, due, add);
     f.append(lab, row, err);
     return f;
   }
@@ -1958,13 +2067,18 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     for (const s of srcs.filter((x) => x.state === 'error' && !x.invalid)) nodes.push(fetchFailNotice(s));
     const linked = srcs.some((x) => x.connected && !x.invalid);
     const events = items.event || [], replies = items.reply || [], todos = items.todo || [];
+    agMarkSeen();
+    const top = el('section', 'ds-stack'); top.setAttribute('aria-label', '오늘');
+    top.append(todayLine(events, replies, todos));
+    const bc = briefCard(agData.brief); if (bc) top.append(bc);
+    nodes.push(top);
     const cols = el('div', 'ds-columns b-agcols');
     cols.append(
       agendaColumn('event', 'info', '일정', events.length, eventBody(events, linked, new Set(events.map((x) => x.source)).size > 1)),
-      agendaColumn('reply', 'attention', '답해야 할 것', replies.length, replies.length ? replies.map(agendaCard) : [linked
+      agendaColumn('reply', 'attention', '답해야 할 것', replies.length, replies.length ? [taskList(replies, '답해야 할 것')] : [linked
         ? empty('지금 답해야 할 것이 없습니다.', '연결한 곳에서 답할 메시지가 오면 여기에 모입니다.')
         : empty('아직 연결한 곳이 없어 답해야 할 것이 비어 있습니다.', '메신저·메일 어댑터를 주는 스킬을 설치하면 아래 연결한 곳에 나타납니다.')]),
-      agendaColumn('todo', null, '할 일', todos.length, [todoForm(), ...(todos.length ? todos.map(agendaCard) : [agData.todo_total
+      agendaColumn('todo', null, '할 일', todos.length, [todoForm(), ...(todos.length ? [taskList(todos, '할 일')] : [agData.todo_total
         ? empty('열린 할 일이 없습니다.', '적어 둔 일을 모두 마쳤습니다. 새로 할 일은 위 칸에 적습니다.')
         : empty('아직 적은 할 일이 없습니다.', '위 칸에 적거나 터미널에서 board.sh todo add로 추가합니다.')])]),
     );
@@ -2757,6 +2871,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       const v = VIEWS[key];
       let n = null;
       if (key === 'list') { const t = todoCount('all', view === 'list' ? filter : 'all'); if (t) n = count(t, 'attention', '건, 지금 할 일'); }
+      if (key === 'agenda') { const u = agUnseen(), od = agOverdue(); if (u) n = count(u, 'attention', '건, 새로 들어온 할 일·답할 것'); else if (od) n = count(od, 'attention', '건, 기한 지난 할 일'); }
       if (key === 'impact') { const rec = ((idata && idata.repos) || []).reduce((s, r) => s + (r.improvements || []).filter((x) => x.result && x.result.verdict === 'recurred').length, 0); if (rec) n = badge(['danger', `재발 ${rec}`]); }
       if (key === 'refs') { const w = (rdata || []).filter((r) => r.can_pick).length; if (w) n = count(w, 'attention', '건, 고르기 대기'); }
       // 확인 안 한 업데이트(이슈 439): 해야 할 일이 있으면 그 수(사람 필요), 없으면 정보 배지 하나.
@@ -2876,7 +2991,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
       if (view === 'settings') { $('vdesc').textContent = STABS.find(([k]) => k === stab)[2]; return renderSettings(); }
-      if (view === 'agenda') { $('vdesc').textContent = '오늘과 이번 주 일정, 답해야 할 것, 직접 적은 할 일을 한곳에서 봅니다. 작업 현황과는 따로입니다.'; return renderAgenda(); }
+      if (view === 'agenda') { $('vdesc').textContent = '오늘과 이번 주 일정, 답해야 할 것, 할 일(직접 적은 것·연결한 곳에서 온 것)과 아침 요약을 한곳에서 봅니다.'; return renderAgenda(); }
       if (view === 'guide') { $('vdesc').textContent = '하네스가 무엇이고 어떤 기능이 있는지, 어떻게 부르는지 봅니다.'; return renderGuide(); }
       if (view === 'refs') { $('vdesc').textContent = rrun ? '' : '이 맥에서 그린 레퍼런스 보드입니다. 열면 탭 5개로 보고, 랜딩 실행이 기다리면 여기서 골라 시작합니다.'; $('vdesc').hidden = !!rrun; return renderRefs(); }
       $('vdesc').textContent = TABS.find(([k]) => k === tab)[2];

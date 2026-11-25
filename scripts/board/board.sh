@@ -29,7 +29,9 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
-       board.sh todo add <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
+       board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
+       board.sh brief set [--source <이름>] < 글 | brief show   '내 일정' 맨 위 아침 요약 글을 남기고·본다
+       board.sh agenda summary                 오늘 일정·답할 것·기한순 할 일을 JSON으로(아침 요약 재료)
 env:   BOARD_PORT (기본 8765), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
 EOF
   exit 2
@@ -533,6 +535,20 @@ command_todo() {
   HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I "$DIR/agenda.py" todo "$@"
 }
 
+# 아침 요약 글(#539): 정기 작업이 stdin으로 남기고 보드가 '내 일정' 맨 위에 보인다. 검사는 agenda.py가 한다.
+command_brief() {
+  case "${1:-}" in
+    set | show) ;;
+    *) usage ;;
+  esac
+  HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I "$DIR/agenda.py" brief "$@"
+}
+
+command_agenda() {
+  [[ $# -eq 1 && "$1" == summary ]] || usage
+  HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I "$DIR/agenda.py" agenda summary
+}
+
 cmd="${1:-open}"
 (($#)) && shift
 case "$cmd" in
@@ -543,6 +559,8 @@ case "$cmd" in
   hook) command_hook "$@" ;;
   launcher) command_launcher "$@" ;;
   todo) command_todo "$@" ;;
+  brief) command_brief "$@" ;;
+  agenda) command_agenda "$@" ;;
   -h | --help | help) usage ;;
   *) usage ;;
 esac
