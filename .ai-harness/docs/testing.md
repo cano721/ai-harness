@@ -13,6 +13,7 @@
 
 ```bash
 bash tests/run.sh --changed       # 작업 중: origin/develop 대비 바뀐 파일을 다루는 영역만
+bash tests/run.sh --changed --explain   # 실행하지 않고 파일별 선택 근거(`<파일> -> <결과>`)와 마지막 줄 `# 선택: <영역들>`만
 bash tests/run.sh <영역>...       # Red/Green 반복: 그 블록이 있는 영역만 (예: board init)
 bash tests/run.sh --lint          # 바뀐 셸 파일만 bash -n + shellcheck (파일마다 따로)
 bash tests/run.sh --fast          # 느린 영역(tests/slow-areas.txt: 실제 러너·서버를 띄우는 영역) 제외
@@ -26,7 +27,7 @@ scripts/release-prep.sh --check                                          # 버�
 - **평소에는 바뀐 영역만, 전체 실행은 PR을 만들기 직전에 한 번.** 전체는 수 분 걸리고 그래프 러너·보드 서버를 실제로 띄운다. 여러 세션이 동시에 전체를 돌리면 메모리가 그만큼 곱으로 든다.
 - `-j N`은 영역을 최대 N개까지 동시에 돌린다(1 이상의 정수, 영역 수보다 크면 영역 수로 줄인다). `--fast`·`--changed`·영역 이름과 같이 쓸 수 있다. `-j`가 없으면 환경변수 `HM_TEST_JOBS`(1 이상의 정수, 아니면 `-j`와 같은 오류로 exit 2)를 동시 실행 수로 쓰고, `-j`가 있으면 `-j`가 이긴다. 그래프 러너는 모든 검사에 `HM_TEST_JOBS`(사용자 `~/.ai-harness/config`의 `HM_TEST_JOBS`, 없으면 `max(1, min(ncpu/2, 4))`)를 넘기므로 러너 아래의 `--changed`는 병렬로 돈다. 둘 다 없으면 직렬이다 — 영역마다 그래프 러너·보드 서버를 띄우고 다른 세션도 같은 머신에서 테스트를 돌릴 수 있어, 동시 실행 수만큼 메모리가 든다. `run.sh`는 메모리를 재거나 동시 실행 수를 알아서 줄이지 않으므로, 다른 세션이 테스트를 돌리는 중이거나 메모리가 빠듯하면 `-j` 없이 직렬로 돌린다.
 - `-j`일 때 느린 영역(`tests/slow-areas.txt`에 적힌 순서, 긴 것부터)을 먼저 시작하고, 출력은 영역별로 모았다가 블록째 시작 순서로 낸다(앞 영역을 기다리는 동안 끝난 영역은 stderr에 `# <영역> finished in Ns`). 실패 요약·종료 코드는 직렬과 같다. Ctrl-C·TERM으로 끊으면 돌던 영역에 TERM을 보내 서버·`$TEST_TMP`를 치우게 하고, 이미 끝난 영역의 출력만 내보낸 뒤 `# interrupted: <끝난 수> of <전체> areas finished`와 함께 130(INT)·143(TERM)으로 끝난다.
-- `--changed`는 바뀐 경로(없으면 상위 폴더)를 언급하는 영역 파일을 고른다. `tests/lib.sh`·`tests/run.sh`·`scripts/lib.sh`가 바뀌면 전체를 고른다. `tests/slow-areas.txt`(한 줄에 영역 하나, `#` 주석·빈 줄 무시)가 바뀌면 기준 대비 추가·삭제된 줄의 영역만(실제 영역만, 미추적 새 파일이면 적힌 영역 전체) 고른다 — 느린 영역을 추가·삭제할 때는 `run.sh`가 아니라 이 파일을 고친다. 파일이 없으면 느린 영역은 없다. 어느 영역에도 걸리지 않은 파일은 stderr에 적는다 — 그 파일은 전체 실행으로 확인한다.
+- `--changed`는 바뀐 경로(없으면 상위 폴더)를 언급하는 영역 파일을 고른다. `--explain`을 붙이면 테스트를 돌리지 않고 근거만 낸다(`--changed` 없이 쓰면 exit 2, `-j`는 무시). `tests/lib.sh`·`tests/run.sh`·`scripts/lib.sh`가 바뀌면 전체를 고른다. `tests/slow-areas.txt`(한 줄에 영역 하나, `#` 주석·빈 줄 무시)가 바뀌면 기준 대비 추가·삭제된 줄의 영역만(실제 영역만, 미추적 새 파일이면 적힌 영역 전체) 고른다 — 느린 영역을 추가·삭제할 때는 `run.sh`가 아니라 이 파일을 고친다. 파일이 없으면 느린 영역은 없다. 메타 파일은 영역을 넓히지 않는다: `CHANGELOG.md`·`changelog.d/*`는 고르지 않고, `.ai-harness/harness.json`은 기준 대비 `harness_version`·`managed_files.*`의 `content_sha256`·`template_version`만 바뀌었으면 고르지 않는다(다른 키·항목 추가/삭제·비교 불가면 경로로 고른다). `templates/managed-files.json`의 `artifacts[].path`와 같은 생성물 사본은 같은 항목의 `source`(원본) 경로로 고른다. 어느 영역에도 걸리지 않은 파일은 stderr에 적는다 — 그 파일은 전체 실행으로 확인한다.
 - CI(`.github/workflows/test.yml`)는 apt의 `shellcheck -x`를 기본 심각도(style 포함)로 돌린다. CI 버전은 로컬 Homebrew 버전보다 엄격할 수 있다 — 예: `A && B || C` 패턴의 SC2015도 실패로 본다. 로컬에서는 `-S style`을 붙여 같은 수준으로 확인한다.
 - 영역 파일 하나는 위에서 아래로 돌고 첫 실패에서 멈춘다(`fail` → exit 1). `tests/run.sh`는 실패한 영역이 있어도 나머지 영역을 마저 돌리고 끝에 `# FAILED: <영역>`을 낸다. 실패 메시지 `FAIL: <설명> (expected=... actual=...)`로 위치를 찾는다.
 - 셸 스크립트가 아닌 파일만 바꿨어도 테스트는 돌린다 — 템플릿 바이트 일치·Skill 본문 문구·카탈로그를 검사하는 블록이 있다(`--changed`가 경로로 찾아 준다).

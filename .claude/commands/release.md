@@ -35,7 +35,7 @@ Steps, as the graph defines them:
 7. **record** — each `record_cmds` entry in order with the same variables; a failure stops the rest and goes to a person.
 8. **sync** — whether `source` can fast-forward to `base`. The runner never pushes `source` or `base`: it leaves the command (`git switch <source> && git merge --ff-only origin/<base> && git push origin <source>`) in the report for a person.
 
-When `source` moves during the run, the runner catches up before publishing or merging: a rebase before the first push, a merge after it (never a force push), then `prepare_cmd` and the checks again. A conflict aborts the rebase or merge and goes to a person with the conflicting files.
+When `source` moves during the run, the runner catches up before publishing or merging: a rebase before the first push, a merge after it (never a force push), then the checks again (`prepare_cmd` is not run again; Unreleased entries that arrive with the catch-up stay for the next release). A conflict aborts the rebase or merge and goes to a person with the conflicting files.
 
 Delivery level `pr` (or no level) stops after remote CI and leaves the remaining manual steps in the report: `gh pr merge <PR> --merge`, then the tag and notes. `status` shows the stage, what was published, and why the run stopped. The runner picks the node runtime from `--runtime`, then `HM_RUNTIME_REPOS` (matching repository), then `HM_RUNTIME` in `~/.ai-harness/config`, then the calling CLI and integrations; pass `--runtime` only when the user asks for a specific CLI.
 

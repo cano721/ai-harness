@@ -23,7 +23,7 @@
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "f972abb3f0644c6af7351aba8acdd77f3fee81cd4b4af85cca1a0feeb3356c6d",
+      "content_sha256": "644bd4b0722c202c1b1fef4a0e467a8636cb1b4b4a5e5824dc2147ac5e3d3e9f",
       "template_version": "0.91.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
