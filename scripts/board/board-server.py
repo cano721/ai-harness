@@ -34,6 +34,9 @@ GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) �
 POST /agenda/connect {t, source} · /agenda/disconnect {t, source}  소스 연결·끊기(connect는 뒤에서, 최대 5분)
 POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text}  직접 적는 할 일
+GET  /settings/skills?t=...      하네스 설정 > 스킬(#494): setup.sh list·design list 상태 + 진행 중 setup 세션. 끝난 세션은 지우고 다시 읽음
+POST /settings/skills/check {t, name}  setup.sh check(외부 API) — 버튼으로만, 결과(ok·at·error)만 기록
+POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 스킬 하나에 setup 세션(install·setup·remove)을 띄움
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -57,6 +60,7 @@ import impact as himpact  # noqa: E402
 import prstate  # noqa: E402
 import references as hrefs  # noqa: E402
 import settings as hsettings  # noqa: E402
+import skills as hskills  # noqa: E402
 import resident as hresident  # noqa: E402
 import resident_host as hhost  # noqa: E402
 
@@ -1408,6 +1412,7 @@ def impact_refresh(repo):
 AUTOFIX = hautofix.Store(DATA)
 REFS = hrefs.Store(DATA)
 AGENDA = hagenda.Store(DATA)
+SKILLS = hskills.Store(DATA)
 AGENDA_TICK = 60  # 연결된 일정 소스를 주기가 지났는지 보는 간격(초). 소스마다 자기 스레드로 모은다
 
 
@@ -1577,6 +1582,51 @@ def request_facts_change(req):
         _save(CHANGES, changes)
     _cache["data"] = None
     return {"ok": True, "message": "저장소 사실 변경 세션을 띄움 — draft PR을 병합해야 반영됨"}
+
+
+def skills_state():
+    """스킬 상태에 진행 중인 setup 세션을 붙인다. 작업 목록에 없거나(gone) 실행 중이 아닌 세션은 끝난 것으로 보고
+    기록을 지운 뒤(연결 확인 기록·상태 캐시도) 실제 폴더 상태를 다시 읽는다."""
+    recs = SKILLS.sessions()
+    live, ended = {}, []
+    if recs:
+        by_sid = {i.get("sid"): i for i in (status() or {}).get("items", []) if i.get("sid")}
+        for key, rec in recs.items():
+            it = by_sid.get(rec.get("sid"))
+            state = it.get("state") if it else "gone"
+            if not it and not rec.get("sid") and time.time() - (rec.get("at") or 0) < SKILL_SESSION_GRACE:
+                state = "starting"  # 이름으로 sid를 아직 못 찾음 — 잠깐 기다린다
+            if state in ("running", "needs_human", "starting"):
+                live[key] = {"state": state, "action": rec.get("action"), "item_id": it.get("id") if it else None}
+            else:
+                ended.append(key)
+    SKILLS.end_sessions(ended)
+    return SKILLS.view(live)
+
+
+SKILL_SESSION_GRACE = 120
+
+
+def skill_session(req):
+    """하네스 설정 > 스킬의 [설치]·[설정하기]·[제거]. 다른 화면도 같은 요청 형태로 쓴다(공용 장치)."""
+    kind, name, action = req.get("kind"), req.get("name"), req.get("action")
+    row, err = SKILLS.validate(kind, name, action)
+    if err:
+        return {"ok": False, "message": err}
+    label = SKILLS.session_name(action, name)
+    home = os.path.expanduser("~")
+    res = new_bg(home, SKILLS.prompt(kind, name, action, row), name=label)
+    if not res["ok"]:
+        return res
+    sid = None
+    try:  # 방금 띄운 세션 찾기(이름으로)
+        agents = json.loads(claude(["agents", "--json", "--all"], home, timeout=15).stdout)
+        sid = next((a["sessionId"] for a in sorted(agents, key=lambda a: -(a.get("startedAt") or 0)) if a.get("name") == label), None)
+    except Exception:
+        pass
+    SKILLS.record_session(kind, name, action, sid, label)
+    _cache["data"] = None
+    return {"ok": True, "message": "설정 세션을 띄움 — 작업 화면에서 답하세요"}
 
 
 # ---- 대화(transcript) ----
@@ -2505,6 +2555,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "level": level, "worktree": wt})
         if u.path == "/settings":
             return self._send(200, settings_state())
+        if u.path == "/settings/skills":
+            return self._send(200, skills_state())
         if u.path == "/repos":
             return self._send(200, known_repos())
         if u.path == "/impact":
@@ -2673,6 +2725,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, res)
         if path == "/settings/protection":
             return self._send(200, check_protection(req.get("repo")))
+        if path == "/settings/skills/check":
+            res = SKILLS.check(req.get("name"))
+            log({"action": "skill_check", "name": req.get("name") if isinstance(req.get("name"), str) else None,
+                 "ok": res["ok"], "passed": (res.get("check") or {}).get("ok")})
+            return self._send(200, res)
+        if path == "/settings/skills/session":
+            res = skill_session(req)
+            log({"action": "skill_session", **{k: req.get(k) if isinstance(req.get(k), str) else None for k in ("kind", "name", "action")}, **res})
+            return self._send(200, res)
         if path == "/settings":
             res = request_facts_change(req)
             log({"action": "settings_facts", "repo": req.get("repo"), **res})
