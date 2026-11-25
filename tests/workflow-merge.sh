@@ -291,4 +291,21 @@ assert_eq "remote_ci,merge,post_merge_verify" "$(run_state '[.history[] | select
 unset FAKE_PROTECTION
 pass "claude result emitted twice: node outputs stay a single document and post-merge target_ci passes"
 
+# 호스트가 충돌 여부를 아직 계산 중이면(mergeable UNKNOWN) 곧바로 incomplete로 끝내지 않고 몇 번 다시 물어본다(#542). resume 없이 병합돼야 한다.
+export FAKE_PROTECTION=classic HM_MERGE_PENDING_POLL_SECONDS=0
+rm -f "$DRIVER_TMP/merge_pending_ok.log.views"
+FAKE_UNKNOWN_N=2 merge_run merge_pending_ok "$MP_BASIC"
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a conflict check the host finishes after two asks merges without resume"
+[[ "$(<"$FAKE_LOG.views")" -ge 3 ]] || fail "the runner asked the host again (views=$(<"$FAKE_LOG.views"))"
+assert_contains "$(wtc_progress)" "has not finished checking for conflicts" "the wait for the conflict check is logged"
+# 재시도 한도(HM_MERGE_PENDING_RETRIES)까지 기다려도 UNKNOWN이면 기존처럼 incomplete 30이다: 처음 한 번 + 재시도 3번 = 4번만 묻는다.
+rm -f "$DRIVER_TMP/merge_pending_limit.log.views"
+FAKE_UNKNOWN_N=99 HM_MERGE_PENDING_RETRIES=3 merge_run merge_pending_limit "$MP_BASIC"
+assert_eq "30:incomplete:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a conflict check that never finishes leaves the run resumable without merging"
+assert_contains "$DRIVER_OUT" "the host has not finished checking for conflicts" "the incomplete message names the pending conflict check"
+assert_eq "4" "$(<"$FAKE_LOG.views")" "the runner asks the host once plus the retry limit"
+assert_contains "$(wtc_progress)" "has not finished checking for conflicts on" "each wait names the pull request"
+unset FAKE_PROTECTION HM_MERGE_PENDING_POLL_SECONDS
+pass "merge waits for the host's conflict check and gives up after the retry limit"
+
 finish_tests
