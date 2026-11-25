@@ -1809,7 +1809,7 @@ assert any(i.get("ask") for i in items) and any(i.get("in_repo") is False for i 
 ' "$ROOT/tests/fixtures/board-preview/serve.py" || fail "the board preview server has a real-scale scenario"
 assert_contains "$BOARD_TPL" "['all', '전체'," "the board list has an all tab"
 assert_contains "$BOARD_TPL" "['autofix', '자동 수정'," "the board list has an autofix tab"
-assert_contains "$BOARD_TPL" "for (const key of ['list', 'refs', 'impact', 'settings', 'guide'])" "the sidebar keeps the list, reference boards, impact, settings and the guide"
+assert_contains "$BOARD_TPL" "for (const key of ['list', 'agenda', 'refs', 'impact', 'settings', 'guide'])" "the sidebar keeps the list, my agenda, reference boards, impact, settings and the guide"
 # 3차: 작업 현황은 카드와 한 줄 상황만, 저장소별 연결은 하네스 설정의 '자동 수정' 탭(개인 설정보다 위)으로.
 BOARD_STRIP="$(sed -n '/function renderStrip()/,/^  }$/p' "$ROOT/scripts/board/template.html")"
 case "$BOARD_STRIP" in *afRepoRow*|*autofix/check*|*autofix/candidates*|*autofix/setup*) fail "the work list keeps no per-repo connection controls" ;; esac
@@ -1882,7 +1882,7 @@ BGUIDE_TPL="$(<"$ROOT/scripts/board/template.html")"
 assert_contains "$BGUIDE_TPL" "guide: { label: '하네스 안내'" "the board has a harness guide view"
 assert_contains "$BGUIDE_TPL" "'/guide?t='" "the guide view loads the feature list from the server"
 assert_contains "$BGUIDE_TPL" "copyBtn('명령 복사', it.cmd" "each feature offers its command to copy"
-assert_contains "$BGUIDE_TPL" "['settings', 'impact', 'refs', 'guide'].includes(saved)" "the board reopens the guide view after a reload"
+assert_contains "$BGUIDE_TPL" "['agenda', 'settings', 'impact', 'refs', 'guide'].includes(saved)" "the board reopens the guide view after a reload"
 assert_contains "$BGUIDE_TPL" "view === 'guide' || !names.length" "the guide view hides the project filter"
 assert_contains "$BGUIDE_TPL" "function goLink(text, v, st, lt)" "guide links can open a tab of the work list"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 안내" "board skill documents the guide view"
@@ -1968,6 +1968,7 @@ for g in raw["groups"]:
 by = {i["id"]: i.get("run") for g in raw["groups"] for i in g["items"] if not i["id"].startswith(("catalog/", "agents/", "templates/"))}
 want = {
   "skills/setup": "global", "skills/harness-update": "global", "skills/metrics": "global", "skills/board": None,
+  "skills/handsfree": "global", "skills/handsfree-ui": "global",
   "skills/harvest": "harness", "skills/harness-impact": "harness",
   "skills/diagram": "optional", "skills/design-references": "optional", "skills/landing-page": "optional", "skills/explain-for": "optional",
   "skills/harness-init": "repo", "skills/autofix": "repo", "skills/understand-change": "repo", "skills/design-system-builder": "repo",
