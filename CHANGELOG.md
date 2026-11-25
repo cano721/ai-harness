@@ -9,6 +9,9 @@
 ## Unreleased
 ### 새 기능
 
+- **디자인 규칙 문서 `## 원칙`에 `### 서비스`, 문구 규칙 원본은 `ux-writing.md` 하나** — `design-system-builder`가 서비스의 사용자와 상황·핵심 일·성격('A보다 B' 대비 쌍)·피할 것·근거를 `### 서비스`에 기록하고, `design-screen`·`landing-page`·`design-polish`·`design-audit`가 이를 근거로 읽어 다시 묻지 않습니다. `ux-writing.md`가 없으면 builder가 "문구 규칙도 같이 만들까요?"라고 묻고 `ux-writing-builder` 절차로 만들며, 디자인 `## 문구`는 `원본: <경로>`를 가리키는 형태가 됩니다. 문구 규칙 문서 감지는 `ux-writing-audit`의 규칙 하나를 저장소 기준으로 씁니다. (#514 #516)
+  요약: 서비스 성격을 한 번 적어 두면 디자인 Skill들이 같은 근거로 화면을 만들고 잽니다. 문구 규칙은 `ux-writing.md` 한 곳에 둡니다.
+
 - **design-references가 모바일 페이지·인쇄물·그래픽 레퍼런스도 모읍니다** — design-references가 모바일 페이지·인쇄물·그래픽 레퍼런스도 모은다(매체별 최소치·캡처 폭·탭 라벨, 이미지 레퍼런스, 모음 사이트 작품 단위). `design-refs.sh capture|check|board --medium mobile-page|print|graphic`으로 정하면 작업 폴더의 `medium.json`에 남고, 정하지 않으면 지금처럼 웹페이지입니다. 인쇄물·그래픽은 인터랙션·비교작이 선택이고, 모바일 페이지는 폰 폭(390)으로 캡처하며, 보드 탭·분석 라벨이 매체에 맞게 바뀝니다. 레퍼런스에 이미지 원본 주소(`image`)를 바로 둘 수 있고, Pinterest·Behance·Dribbble·Notefolio 작품은 작품마다 다른 사이트로 셉니다. (#518)
   요약: 청첩장·포스터처럼 웹페이지가 아닌 레퍼런스는 `--medium mobile-page|print|graphic`으로 모으세요. 랜딩 페이지 실행은 그대로 웹페이지입니다.
 
@@ -29,6 +32,9 @@
 - design-references: 직접 연 경쟁사(`source: "direct"`)와 같은 도메인의 다른 경로를 검색 근거로 인정하고, `design-refs.sh check`가 절차 4의 필수 필드·매체별 layout 폭을 `<id>: <필드>`로 거부하며, 새 `landing-board-check.mjs`가 보드를 탭마다 열어 이미지·영상 로드 실패를 잡는다 (#529)
 
 ### 동작 변경
+
+- **`design-audit` 축 E는 `ux-writing.md`가 있으면 말투·어미·용어·금지어로 감점하지 않습니다** — 이 항목들은 `ux-writing-audit`로 넘긴다고 보고하고, E는 정직성과 `### 서비스` 톤 일관성만 잽니다. 가리키기 형태의 `## 문구`는 절 없음으로 보지 않고, 두 문서가 다 가득하면 감점 없이 `규칙 결정 필요: 문구 규칙 중복`을 올립니다. `### 서비스`와 `ux-writing.md`가 없는 프로젝트는 지금과 같습니다. (#516)
+  요약: 문구 규칙 문서가 있는 프로젝트에서는 디자인 점수가 말투·용어로 깎이지 않고, 그 검사는 `ux-writing-audit`가 맡습니다.
 
 - **병합이 기준 브랜치 충돌로 막혀도 사람에게 넘기지 않고 따라잡습니다** — 병합까지 자동화한 런(`HM_DELIVERY_LEVEL=merge`·`deploy`)에서 PR이 기준 브랜치와 충돌해 병합이 막히면, 새 `sync_base` 단계가 최신 기준 브랜치를 일반 merge로 들이고 충돌을 풉니다(충돌 해소만 에이전트가, 커밋·push는 러너가). 검사를 다시 통과해야 일반 push하고 원격 CI와 병합을 다시 거칩니다 — rebase·force push는 하지 않습니다. 3회(`limits.max_base_syncs`)를 넘기거나 풀지 못한 충돌·검사 실패가 남으면 그때 사람에게 넘깁니다. 원격 CI를 기다리는 동안 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 멈추지 않고 같은 경로로 잇습니다. 충돌이 아닌 막힘과, 충돌과 다른 막힘이 같이 있을 때는 지금처럼 사람에게 넘깁니다. feature·bug-fix 그래프에 적용되며, 기존 프로젝트는 `/ai-harness:harness-init --sync`로 그래프를 받습니다. (#508)
   요약: 병합 단계 런이 기준 브랜치 충돌 한 번으로 멈추지 않고, 기준 브랜치를 병합·재검사·push한 뒤 병합까지 잇습니다.

@@ -62,6 +62,18 @@ Ask only what inspection cannot answer. At most **three questions per round**, e
 
 Never ask for something the code already answers. Values the user does not confirm stay marked as proposals and keep the document in `draft`.
 
+Record the answers to questions 1 and 5, and the reason given for each, in `### 서비스` — the first subsection of `## 원칙` (`references/output-format.md`): who uses the product and where, its one core job, its character as contrast pairs, what to avoid, and where each line came from. When the user only accepted a default without confirming it, write that line as a proposal in the report, not in `### 서비스`, and keep the document in `draft`.
+
+### Copy rules
+
+The UX writing rule document is the one source of copy rules. Find it with the detection rule in `ux-writing-audit` (`.ai-harness/docs/ux-writing.md` by default).
+
+- **It exists** — write `## 문구` in the pointer form (`references/output-format.md`).
+- **It does not exist** — ask once, in the same round as other questions: "문구 규칙도 같이 만들까요?" (recommended default: yes — one source keeps screens and copy reviews on the same rules).
+  - **Yes** — run the `ux-writing-builder` procedure (its `SKILL.md`); do not reimplement it here. Pass the `성격` of `### 서비스` as the Voice default for its Voice question. Then write `## 문구` in the pointer form.
+  - **No** — write the minimum rules in `## 문구` (full form) and add `문구 규칙 미분리` to `## 메타`.
+- **`refresh` or `merge` with both** — when the UX writing rule document exists and `## 문구` is the full form, propose reducing `## 문구` to the pointer form and list it in `확인 대기`.
+
 ## 4. Build the outputs
 
 Follow the references in this order — later steps reference earlier names:
