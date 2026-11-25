@@ -3,6 +3,7 @@
   "media": {
     "web-page": {
       "widths": [1440, 390],
+      "layout": {"widths": [1440, 390], "image": false},
       "record_size": {"width": 1440, "height": 900},
       "tabs": {"tone": "톤앤매너", "component": "구성요소", "layout": "레이아웃", "interaction": "인터랙션", "competitor": "경쟁사 분석"},
       "analysis": {
@@ -12,6 +13,7 @@
     },
     "mobile-page": {
       "widths": [390],
+      "layout": {"widths": [390], "image": false},
       "record_size": {"width": 390, "height": 844},
       "tabs": {"tone": "톤앤매너", "component": "구성요소", "layout": "화면 구성", "interaction": "인터랙션", "competitor": "경쟁사 분석"},
       "analysis": {
@@ -21,6 +23,7 @@
     },
     "print": {
       "widths": [1440],
+      "layout": {"widths": [], "image": true},
       "record_size": {"width": 1440, "height": 900},
       "tabs": {"tone": "톤앤매너", "component": "요소", "layout": "판면 구성", "interaction": "인터랙션", "competitor": "비교작 분석"},
       "analysis": {
@@ -30,6 +33,7 @@
     },
     "graphic": {
       "widths": [1440],
+      "layout": {"widths": [], "image": true},
       "record_size": {"width": 1440, "height": 900},
       "tabs": {"tone": "톤앤매너", "component": "요소", "layout": "구도", "interaction": "모션", "competitor": "비교작 분석"},
       "analysis": {

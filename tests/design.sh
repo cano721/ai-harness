@@ -135,10 +135,10 @@ assert_contains "$(cat "$TEST_TMP/lp.err")" "mood needs exactly three words" "th
 cp "$TEST_TMP/lp-tone.json" "$LP_W/tone.json"
 assert_eq references "$(lp submit --node brief --outcome brief_ready)" "landing-run follows the declared edge"
 cat >"$LP_W/references.json" <<'EOF'
-[{"id":"R1","kind":"tone","title":"Tone ref","url":"https://tone-a.example/","source":"search","take":"t","tone_part":"palette","captures":["refs/r1.png"]},
- {"id":"R2","kind":"component","title":"Component ref","url":"https://comp-b.example/","source":"library","take":"t","captures":["refs/r2.png"],"recommended":"hero"},
- {"id":"R3","kind":"layout","title":"Layout ref","url":"https://layout-c.example/","source":"user","take":"t","captures":["refs/r3.png"],"recommended":"layout"},
- {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://motion-d.example/","source":"gallery","take":"t","video":"refs/r4.mp4","recommended":"interaction"},
+[{"id":"R1","kind":"tone","title":"Tone ref","url":"https://tone-a.example/","source":"search","take":"t","keep_strength":"k","must_not_shrink_to":"m","tone_part":"palette","captures":["refs/r1.png"]},
+ {"id":"R2","kind":"component","title":"Component ref","url":"https://comp-b.example/","source":"library","take":"t","keep_strength":"k","must_not_shrink_to":"m","captures":["refs/r2.png"],"recommended":"hero"},
+ {"id":"R3","kind":"layout","title":"Layout ref","url":"https://layout-c.example/","source":"user","take":"t","keep_strength":"k","must_not_shrink_to":"m","captures":["refs/r3/w1440-00.png","refs/r3/w390-00.png"],"recommended":"layout"},
+ {"id":"R4","kind":"interaction","title":"Interaction ref","url":"https://motion-d.example/","source":"gallery","take":"t","keep_strength":"k","must_not_shrink_to":"m","video":"refs/r4.mp4","recommended":"interaction"},
  {"id":"R5","kind":"competitor","title":"Competitor","url":"https://rival-e.example/","source":"search","captures":["refs/r5.png"],
   "analysis":{"leads_with":"a demo","claim":"fast","cta":"Start free","gap":"no practice"}},
  {"id":"R6","kind":"competitor","title":"Competitor 2","url":"https://www.rival-f.example/pricing","source":"search","captures":["refs/r6.png"],
@@ -197,7 +197,9 @@ lpi submit --node brief --outcome brief_ready >/dev/null
 cp "$TEST_TMP/lp-slots.json" "$LP_I/component-slots.json"
 lp_refs() { # tone component layout interaction videos competitor → references.json
   jq -n --argjson t "$1" --argjson c "$2" --argjson l "$3" --argjson i "$4" --argjson v "$5" --argjson p "$6" '
-    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://\($k)-\($n).example/", source: "search", take: "t", captures: ["refs/x.png"]}
+    def ref($k; $n): {id: "\($k)-\($n)", kind: $k, title: "x", url: "https://\($k)-\($n).example/", source: "search", take: "t", captures: (if $k == "layout" then ["refs/x/w1440-00.png", "refs/x/w390-00.png"] else ["refs/x.png"] end)}
+      + (if $k != "competitor" then {keep_strength: "k", must_not_shrink_to: "m"} else {} end)
+      + (if $k == "tone" then {tone_part: "palette"} else {} end)
       + (if $n == 0 and ($k == "layout" or $k == "interaction") then {recommended: $k} elif $n == 0 and $k == "component" then {recommended: "hero"} else {} end);
     [range($t) | ref("tone"; .)] + [range($c) | ref("component"; .)] + [range($l) | ref("layout"; .)]
     + [range($i) | ref("interaction"; .) + (if . < $v then {video: "https://example.com/v\(.).mp4"} else {} end)]
@@ -1325,5 +1327,123 @@ for tok in --color-border --color-surface --color-surface-sunken .ds-num; do
   assert_contains "$SR_DOC_GROUP" "$tok" "docs/design-system.md grouping names $tok"
 done
 pass "design rule documents carry spacing relationships and grouping under the layout section"
+
+# design-references 검사 틈(#529) (1): 검색 근거는 사용자가 직접 준 경쟁사(source user·direct)를 면제하고, 나머지는 도메인으로 맞춘다.
+# 같은 도메인의 다른 경로·www. 서브도메인은 같은 사이트다. 검색에 없는 search 경쟁사는 여전히 거부한다.
+RG_W="$TEST_TMP/rg-run"; mkdir -p "$RG_W"
+rg() { "$ROOT/scripts/design-refs.sh" "$@" --work "$RG_W" 2>"$TEST_TMP/rg.err"; }
+rg_rc() { local rc=0; rg "$@" >/dev/null || rc=$?; printf '%s' "$rc"; }
+cp "$TEST_TMP/lp-slots.json" "$RG_W/component-slots.json"
+rg_refs() { jq "$1" "${2:-$TEST_TMP/lp-refs.json}" >"$RG_W/references.json"; } # jq 필터 [입력] → references.json
+rg_found() { jq -n --argjson r "$1" '[{"query":"q1","purpose":"category","engine_or_gallery":"web search","results":$r,"picked":[]},{"query":"q2","purpose":"gallery","engine_or_gallery":"codrops hub","results":["https://motion-d.example/"],"picked":["R4"]}]' >"$RG_W/searches.json"; } # 카테고리 검색 결과 목록
+rg_refs '.'; rg_found '["https://rival-e.example/","https://rival-f.example/pricing"]'
+assert_eq ok "$(rg check --mode unattended)" "the top-up fixture passes the check"
+rg_found '["https://rival-f.example/pricing","https://z.example/"]'
+rg_refs 'map(if .id == "R5" then .source = "direct" else . end)'
+assert_eq ok "$(rg check --mode unattended)" "a competitor the user gave directly needs no search result"
+rg_found '["https://rival-e.example/pricing","https://rival-f.example/pricing"]'
+rg_refs '.'
+assert_eq ok "$(rg check --mode unattended)" "a competitor's root page matches a result on another path of the same domain"
+rg_found '["https://www.rival-e.example/features","https://rival-f.example/pricing"]'
+assert_eq ok "$(rg check --mode unattended)" "a www. result matches the competitor on the bare domain"
+rg_found '["https://z.example/","https://rival-f.example/pricing"]'
+assert_eq 4 "$(rg_rc check --mode unattended)" "a search competitor whose domain is not among the results is refused"
+assert_contains "$(cat "$TEST_TMP/rg.err")" "R5: competitor https://rival-e.example/ is not among the search results" "the check names the competitor missing from the searches"
+rg_found '["https://rival-e.example/","https://rival-f.example/pricing"]'
+pass "design-references search check: direct competitors exempt, same-domain matches, search competitors still need results (#529)"
+
+# design-references 검사 틈(#529) (2): 보드가 쓰는 필드(title·url·source·take 계열·tone_part·캡처)가 비면 거부하고, 메시지는 "<id>: <field> is required"다.
+# 캡처 폭은 매체의 layout 규칙(media.json)을 따른다. 경쟁사는 take 계열이 없어도 된다.
+rg_missing() { # <jq 필터> <기대 메시지> <설명> [매체] [입력 파일]
+  local f="$1" msg="$2" what="$3" medium="${4:-}" src="${5:-$TEST_TMP/lp-refs.json}"
+  rg_refs "$f" "$src"
+  if [[ -n "$medium" ]]; then
+    assert_eq 4 "$(rg_rc check --mode unattended --medium "$medium")" "$what"
+  else
+    assert_eq 4 "$(rg_rc check --mode unattended)" "$what"
+  fi
+  assert_contains "$(cat "$TEST_TMP/rg.err")" "$msg" "$what: message"
+}
+rg_ok() { # <jq 필터> <설명> [매체] [입력 파일]
+  rg_refs "$1" "${4:-$TEST_TMP/lp-refs.json}"
+  assert_eq ok "$(rg check --mode unattended --medium "${3:-web-page}")" "$2"
+}
+for rg_f in keep_strength must_not_shrink_to take title tone_part url source; do
+  rg_missing "map(if .id == \"R1\" then del(.$rg_f) else . end)" "R1: $rg_f is required" "a tone reference without $rg_f is refused"
+done
+rg_missing 'map(if .id == "R1" then .keep_strength = "" else . end)' "R1: keep_strength is required" "an empty string counts as missing"
+rg_missing 'map(if .id == "R1" then .take = 5 else . end)' "R1: take is required" "a non-string counts as missing"
+rg_missing 'map(if .id == "R2" then del(.must_not_shrink_to) else . end)' "R2: must_not_shrink_to is required" "a component without must_not_shrink_to is refused"
+rg_missing 'map(if .id == "R2" then del(.captures) else . end)' "R2: captures or image is required" "a component without captures or image is refused"
+rg_missing 'map(if .id == "R1" then del(.captures) else . end)' "R1: captures or image is required" "a tone reference without captures or image is refused"
+rg_missing 'map(if .id == "R5" then del(.captures) else . end)' "R5: captures or image is required" "a competitor without captures or image is refused"
+rg_missing 'map(if .id == "R5" then del(.title) else . end)' "R5: title is required" "a competitor without a title is refused"
+rg_missing 'map(if .id == "R3" then .captures = ["refs/r3/w1440-00.png"] else . end)' "R3: captures at w390 are required for a web-page layout" "a web page layout captured only at 1440 is refused"
+rg_missing 'map(if .id == "R3" then del(.captures) | .image = "https://img.example/r3.jpg" else . end)' "R3: captures at w1440" "an image alone does not stand in for a web page layout's captures"
+rg_missing 'map(if .id == "R3" then .captures = ["refs/r3/w1440-00.png", "refs/r3/w390-00.png.bak"] else . end)' "captures at w390 are required" "a capture name must match w<width>-<n>.png"
+rg_ok 'map(if .id == "R5" then del(.take) else . end)' "a competitor needs no take"
+rg_ok 'map(if .id == "R3" then .captures = ["refs/r3/w390-00.png"] else . end)' "a mobile page layout needs only the 390 capture" mobile-page
+rg_missing 'map(if .id == "R3" then .captures = ["refs/r3/w1440-00.png"] else . end)' "R3: captures at w390 are required for a mobile-page layout" "a mobile page layout without the 390 capture is refused" mobile-page
+for rg_m in print graphic; do
+  rg_ok 'map(if .id == "R3" then del(.captures) | .image = "https://img.example/r3.jpg" else . end)' "a $rg_m layout may be an image alone" "$rg_m" "$TEST_TMP/md-print.json"
+  rg_ok 'map(if .id == "R3" then .captures = ["refs/r3/page-00.png"] else . end)' "a $rg_m layout may be a single capture" "$rg_m" "$TEST_TMP/md-print.json"
+  rg_missing 'map(if .id == "R3" then del(.captures) else . end)' "R3: captures or image is required" "a $rg_m layout without captures or image is refused" "$rg_m" "$TEST_TMP/md-print.json"
+done
+rg_refs '.'
+rm -f "$RG_W/medium.json"
+pass "design-references reference check: required fields, per-medium layout captures, competitor take optional (#529)"
+
+# design-references 검사 틈(#529): media.json이 매체별 layout 규칙(캡처 폭·이미지 대체 가능 여부)의 단일 출처다.
+RG_MEDIA="$ROOT/skills/design-references/references/media.json"
+for rg_m in web-page:1440,390:false mobile-page:390:false print::true graphic::true; do
+  rg_name="${rg_m%%:*}"; rg_rest="${rg_m#*:}"; rg_w="${rg_rest%%:*}"; rg_img="${rg_rest#*:}"
+  assert_eq "$rg_w|$rg_img" "$(jq -r --arg m "$rg_name" '.media[$m].layout | [(.widths | map(tostring) | join(",")), (.image | tostring)] | join("|")' "$RG_MEDIA")" "media.json gives $rg_name a layout rule"
+done
+pass "media.json carries a layout capture rule per medium (#529)"
+
+# design-references 검사 틈(#529) (3): 보드를 실제 브라우저로 열어 탭마다 이미지·영상이 뜨는지 본다(landing-board-check.mjs).
+# 브라우저가 없으면 unverified로 끝나고 건너뛴다.
+if command -v node >/dev/null 2>&1; then
+  BC_W="$TEST_TMP/bc-work"; BC_O="$TEST_TMP/bc-out"; mkdir -p "$BC_W/refs/r3" "$BC_W/refs/r5"
+  printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' | base64 -d >"$TEST_TMP/bc-1x1.png"
+  for bc_f in r1 r2 r4 r6 r3/w1440-00 r3/w390-00; do mkdir -p "$BC_W/refs/$(dirname "$bc_f")"; cp "$TEST_TMP/bc-1x1.png" "$BC_W/refs/$bc_f.png"; done
+  cp "$TEST_TMP/bc-1x1.png" "$BC_W/refs/r5.png"
+  jq 'map(if .id == "R4" then del(.video) | .captures = ["refs/r4.png"] else . end)' "$TEST_TMP/lp-refs.json" >"$BC_W/references.json"
+  cp "$TEST_TMP/lp-slots.json" "$BC_W/component-slots.json"; cp "$TEST_TMP/lp-tone.json" "$BC_W/tone.json"
+  node "$ROOT/scripts/landing-board.mjs" --work "$BC_W" --kind references >/dev/null
+  assert_file "$BC_W/board.html"
+  bc_rc=0; node "$ROOT/scripts/landing-board-check.mjs" --work "$BC_W" --out "$BC_O" >"$TEST_TMP/bc.out" 2>"$TEST_TMP/bc.err" || bc_rc=$?
+  if [[ "$(jq -r '.result' "$BC_O/board-check.json" 2>/dev/null)" == unverified ]]; then
+    printf '# skip landing-board-check browser checks: %s\n' "$(jq -r '.reason' "$BC_O/board-check.json")"
+  else
+    assert_eq 0 "$bc_rc" "a board whose images all load passes the board check"
+    assert_eq pass "$(jq -r '.result' "$BC_O/board-check.json")" "board-check.json says pass"
+    assert_eq pass "$(jq -r '.result' "$TEST_TMP/bc.out")" "stdout says pass"
+    assert_eq "tone component layout interaction competitor" "$(jq -r '[.tabs[].tab] | join(" ")' "$BC_O/board-check.json")" "every tab is checked"
+    assert_file "$BC_O/tab-layout.png"
+    rm -f "$BC_W/refs/r3/w390-00.png"
+    bc_rc=0; node "$ROOT/scripts/landing-board-check.mjs" --work "$BC_W" --out "$BC_O" >"$TEST_TMP/bc.out" 2>"$TEST_TMP/bc.err" || bc_rc=$?
+    assert_eq 4 "$bc_rc" "a missing image fails the board check"
+    assert_eq fail "$(jq -r '.result' "$BC_O/board-check.json")" "board-check.json says fail"
+    assert_eq "layout" "$(jq -r '[.tabs[] | select((.failed | length) > 0) | .tab] | join(",")' "$BC_O/board-check.json")" "only the tab with the missing image fails"
+    assert_contains "$(jq -r '[.tabs[].failed[].src] | join(" ")' "$BC_O/board-check.json")" "w390-00.png" "the failure names the missing image"
+    assert_eq 1 "$(jq -r '.failed' "$TEST_TMP/bc.out")" "stdout counts the failed items"
+    cp "$TEST_TMP/bc-1x1.png" "$BC_W/refs/r3/w390-00.png"
+    jq 'map(if .id == "R4" then .video = "refs/missing.mp4" else . end)' "$BC_W/references.json" >"$BC_W/references.tmp" && mv "$BC_W/references.tmp" "$BC_W/references.json"
+    node "$ROOT/scripts/landing-board.mjs" --work "$BC_W" --kind references >/dev/null
+    bc_rc=0; node "$ROOT/scripts/landing-board-check.mjs" --work "$BC_W" --out "$BC_O" >"$TEST_TMP/bc.out" 2>"$TEST_TMP/bc.err" || bc_rc=$?
+    assert_eq 4 "$bc_rc" "a video that does not load fails the board check"
+    assert_eq video "$(jq -r '[.tabs[] | select(.tab == "interaction") | .failed[].tag] | join(",")' "$BC_O/board-check.json")" "the failed item is the video"
+    assert_contains "$(jq -r '[.tabs[].failed[].src] | join(" ")' "$BC_O/board-check.json")" "missing.mp4" "the failure names the missing video"
+  fi
+  bc_rc=0; node "$ROOT/scripts/landing-board-check.mjs" --out "$BC_O" >/dev/null 2>&1 || bc_rc=$?
+  assert_eq 2 "$bc_rc" "the board check without --work or --url is a usage error"
+fi
+pass "board check opens every tab and fails on an image or video that does not load (#529)"
+
+MD_SKILL="$(cat "$ROOT/skills/design-references/SKILL.md")"
+assert_contains "$MD_SKILL" 'source: "direct"' "design-references documents the direct source"
+assert_contains "$MD_SKILL" "landing-board-check.mjs" "design-references documents the board check"
+pass "design-references skill names the direct source and the board check (#529)"
 
 finish_tests
