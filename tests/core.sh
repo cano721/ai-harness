@@ -530,8 +530,8 @@ python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files 
 pass "bash 3.2 brace expansion safety"
 
 # 병렬 실행은 영역 출력·실패 요약을 섞지 않고, -j 인자 오류도 기존 사용법처럼 거부한다.
-# 그래프 러너가 넘기는 HM_TEST_JOBS가 바깥에 있어도 이 블록의 직렬·병렬 기대가 바뀌지 않게 한다.
-unset HM_TEST_JOBS
+# 그래프 러너가 넘기는 HM_TEST_JOBS·CPU 기본값과 상관없이 -j 없는 실행은 직렬로 둔다.
+export HM_TEST_JOBS=1
 RUNNER_FIXTURE="$TEST_TMP/parallel-runner"
 mkdir -p "$RUNNER_FIXTURE/tests"
 cp "$ROOT/tests/run.sh" "$RUNNER_FIXTURE/tests/run.sh"
@@ -709,7 +709,7 @@ pass "parallel test runner buffers areas and preserves failures"
 
 # 느린 영역 목록은 tests/slow-areas.txt에 있다. 그 파일만 바뀌면 --changed는 추가·삭제된 줄의 영역만 고르고,
 # run.sh 본문이 바뀌면 지금처럼 전체를 고른다. --fast는 이 목록을 빼고, 파일이 없으면 아무것도 빼지 않는다. (#513)
-unset HM_TEST_JOBS
+export HM_TEST_JOBS=1
 SLOW_FIXTURE="$TEST_TMP/slow-list-runner"
 mkdir -p "$SLOW_FIXTURE/tests"
 cp "$ROOT/tests/run.sh" "$SLOW_FIXTURE/tests/run.sh"
@@ -778,6 +778,104 @@ HM_TEST_JOBS=x bash "$SLOW_FIXTURE/tests/run.sh" pa >"$TEST_TMP/jobs-env.out" 2>
 assert_eq "2" "$jobs_rc" "an invalid HM_TEST_JOBS is rejected like an invalid -j"
 assert_contains "$(<"$TEST_TMP/jobs-env.out")" "HM_TEST_JOBS" "the rejection names HM_TEST_JOBS"
 pass "run.sh takes HM_TEST_JOBS as its default concurrency"
+
+# -j도 HM_TEST_JOBS도 없으면 동시 실행 수는 max(1, min(ncpu/2, 4))다. ncpu는 러너 resolve_check_jobs처럼 getconf부터 구한다. (#556)
+fake_cpu="$TEST_TMP/fake-cpu"
+mkdir -p "$fake_cpu"
+cpu_jobs() { # ncpu args... → jobs_rc
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %s\n' "$1" >"$fake_cpu/getconf"
+  chmod +x "$fake_cpu/getconf"
+  shift
+  rm -f "$TEST_TMP"/jobs-mark-*
+  jobs_rc=0
+  env -u HM_TEST_JOBS PATH="$fake_cpu:$PATH" bash "$SLOW_FIXTURE/tests/run.sh" "$@" >"$TEST_TMP/jobs-cpu.out" 2>&1 || jobs_rc=$?
+}
+cpu_jobs 4 pa pb
+assert_eq "0" "$jobs_rc" "4 CPUs run two areas at once by default: $(<"$TEST_TMP/jobs-cpu.out")"
+cpu_jobs 1 pa pb
+assert_eq "1" "$jobs_rc" "1 CPU runs the areas one at a time by default"
+cpu_jobs 4 -j 1 pa pb
+assert_eq "1" "$jobs_rc" "-j 1 wins over the CPU default"
+printf '#!/usr/bin/env bash\nprintf "4\\n"\n' >"$fake_cpu/getconf"
+rm -f "$TEST_TMP"/jobs-mark-*
+jobs_rc=0
+HM_TEST_JOBS=1 PATH="$fake_cpu:$PATH" bash "$SLOW_FIXTURE/tests/run.sh" pa pb >"$TEST_TMP/jobs-cpu.out" 2>&1 || jobs_rc=$?
+assert_eq "1" "$jobs_rc" "HM_TEST_JOBS=1 wins over the CPU default"
+pass "run.sh defaults its concurrency to the CPU count"
+
+# --profile은 영역 출력을 그대로 흘리고, 끝에 블록(직전 ok부터 그 ok까지) 시간을 느린 순서로 낸다. 없으면 출력이 그대로다. (#556)
+PROFILE_FIXTURE="$TEST_TMP/profile-runner"
+mkdir -p "$PROFILE_FIXTURE/tests"
+cp "$ROOT/tests/run.sh" "$PROFILE_FIXTURE/tests/run.sh"
+[[ ! -f "$ROOT/tests/profile-blocks.py" ]] || cp "$ROOT/tests/profile-blocks.py" "$PROFILE_FIXTURE/tests/profile-blocks.py"
+cat >"$PROFILE_FIXTURE/tests/pfa.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'ok 1 - quick one\n'
+sleep 0.3
+printf 'ok 2 - sleepy block\n'
+printf 'ok 3 - quick two\n'
+EOF
+cat >"$PROFILE_FIXTURE/tests/pfb.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'ok 1 - other area\n'
+EOF
+profile_rc=0
+HM_TEST_JOBS=1 bash "$PROFILE_FIXTURE/tests/run.sh" --profile pfa pfb >"$TEST_TMP/profile.out" 2>&1 || profile_rc=$?
+assert_eq "0" "$profile_rc" "--profile passes: $(<"$TEST_TMP/profile.out")"
+profile_out="$(<"$TEST_TMP/profile.out")"
+assert_contains "$profile_out" "ok 2 - sleepy block" "--profile streams the area output"
+assert_contains "$profile_out" "# all passed: 4 tests in pfa pfb" "--profile keeps the summary count"
+assert_contains "$profile_out" "# profile: slowest blocks" "--profile prints a slowest-blocks section"
+first="$(sed -n '/^# profile: slowest blocks$/{n;p;}' "$TEST_TMP/profile.out")"
+[[ "$first" =~ ^\#\ \ \ ([0-9]+\.[0-9])s\ pfa\ ok\ 2\ -\ sleepy\ block$ ]] || fail "the slowest block comes first as '#   <s>s <area> ok <n> - <desc>': $first"
+secs="${BASH_REMATCH[1]}"
+[[ "${secs%.*}${secs#*.}" -ge 3 ]] || fail "the sleepy block takes at least 0.3s: $first"
+HM_TEST_JOBS=1 bash "$PROFILE_FIXTURE/tests/run.sh" -j 2 --profile pfa pfb >"$TEST_TMP/profile-j.out" 2>&1 || fail "-j 2 --profile passes: $(<"$TEST_TMP/profile-j.out")"
+first="$(sed -n '/^# profile: slowest blocks$/{n;p;}' "$TEST_TMP/profile-j.out")"
+assert_contains "$first" "pfa ok 2 - sleepy block" "-j 2 --profile ranks the same slow block first"
+assert_contains "$(<"$TEST_TMP/profile-j.out")" "# all passed: 4 tests in pfa pfb" "-j 2 --profile keeps the summary count"
+plain="$(HM_TEST_JOBS=1 bash "$PROFILE_FIXTURE/tests/run.sh" pfa pfb 2>&1)"
+[[ "$plain" != *profile* ]] || fail "without --profile the output has no profile section: $plain"
+assert_contains "$plain" "# all passed: 4 tests in pfa pfb" "without --profile the summary count is the same"
+pass "run.sh --profile reports the slowest blocks"
+
+# --shard i/n은 고른 영역을 느린 영역 순서 다음 나머지 순서로 놓고 i번째 몫(k % n == i-1)만 돌린다 — CI matrix 샤딩용. (#556)
+SHARD_FIXTURE="$TEST_TMP/shard-runner"
+mkdir -p "$SHARD_FIXTURE/tests"
+cp "$ROOT/tests/run.sh" "$SHARD_FIXTURE/tests/run.sh"
+printf 's2\ns4\n' >"$SHARD_FIXTURE/tests/slow-areas.txt"
+for n in s1 s2 s3 s4 s5; do
+  printf '#!/usr/bin/env bash\nprintf "ok 1 - %s\\n"\n' "$n" >"$SHARD_FIXTURE/tests/$n.sh"
+done
+shard_areas() { sed -n 's/^# all passed: [0-9]* tests in //p' <<<"$1" | tr ' ' '\n' | grep -v '^$' | sort; }
+one="$(HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard 1/2 2>&1)" || fail "--shard 1/2 passes: $one"
+two="$(HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard 2/2 2>&1)" || fail "--shard 2/2 passes: $two"
+assert_eq "" "$(comm -12 <(shard_areas "$one") <(shard_areas "$two") | tr '\n' ' ')" "shards do not overlap"
+assert_eq "s1 s2 s3 s4 s5 " "$( { shard_areas "$one"; shard_areas "$two"; } | sort | tr '\n' ' ')" "shards together cover every area"
+assert_contains " $(shard_areas "$one" | tr '\n' ' ')" " s2 " "the first slow area goes to shard 1"
+assert_contains " $(shard_areas "$two" | tr '\n' ' ')" " s4 " "the second slow area goes to shard 2"
+assert_contains "$(HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard 2/2 s2 2>&1)" "돌릴 영역이 없음" "an empty shard runs nothing"
+for bad in 0/2 3/2 x 1/0; do
+  shard_rc=0
+  HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard "$bad" >"$TEST_TMP/shard-bad.out" 2>&1 || shard_rc=$?
+  assert_eq "2" "$shard_rc" "--shard $bad is rejected"
+done
+shard_rc=0
+HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard >"$TEST_TMP/shard-bad.out" 2>&1 || shard_rc=$?
+assert_eq "2" "$shard_rc" "--shard without a value is rejected"
+pass "run.sh --shard splits the selected areas into disjoint shards"
+
+# CI는 lint job과 test matrix 샤드로 나뉜다: matrix shard 목록은 1..N이고 run.sh --shard가 같은 N을 쓴다. (#556)
+CI_YML="$ROOT/.github/workflows/test.yml"
+shard_line="$(grep -E -- '--shard \$\{\{ *matrix\.shard *\}\}/[0-9]+' "$CI_YML" || true)"
+[[ -n "$shard_line" ]] || fail "test.yml runs run.sh --shard \${{ matrix.shard }}/N"
+shard_n="$(sed -E 's/.*\}\}\/([0-9]+).*/\1/' <<<"$shard_line")"
+matrix_list="$(sed -nE 's/^[[:space:]]*shard:[[:space:]]*\[(.*)\][[:space:]]*$/\1/p' "$CI_YML" | tr -d ' ')"
+assert_eq "$(seq -s, 1 "$shard_n" | sed 's/,$//')" "$matrix_list" "matrix shard list is 1..N"
+lint_job="$(sed -n '/^  lint:/,/^  [a-z]/p' "$CI_YML")"
+assert_contains "$lint_job" "bash -n" "the lint job checks bash syntax"
+assert_contains "$lint_job" "shellcheck -x" "the lint job runs shellcheck"
+pass "CI shards the regression tests with a separate lint job"
 
 # CHANGELOG·changelog.d·harness.json 해시 스탬프·생성물 사본은 메타 파일이다. --changed가 이 파일들 때문에
 # 영역을 넓히지 않아야 평소 검사가 바뀐 코드에 맞게 좁게 돈다. 사본은 원본의 영역으로 옮긴다. (#559)

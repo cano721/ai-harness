@@ -57,7 +57,7 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 ```bash
 bash tests/run.sh --changed                                                   # 작업 중: 바뀐 파일을 다루는 영역만
 bash tests/run.sh --lint                                                      # 작업 중: 바뀐 셸 파일만 bash -n + shellcheck
-bash tests/run.sh -j 2                                                        # 전체 회귀 — PR 직전 한 번 (CI와 같음). 메모리가 빠듯하면 -j 없이 직렬
+bash tests/run.sh                                                             # 전체 회귀 — PR 직전 한 번. 기본 동시 실행 수 max(1, min(CPU/2, 4)), 메모리가 빠듯하면 -j 1
 bash -n scripts/*.sh scripts/board/*.sh tests/*.sh                            # 문법 (PR 직전)
 npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh   # PR 직전, CI와 같은 수준 (apt shellcheck는 SC2015도 실패)
 scripts/release-prep.sh --check                                               # 버전 네 곳 정합성

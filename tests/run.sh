@@ -6,7 +6,9 @@
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
 #   bash tests/run.sh --changed --explain  실행하지 않고 파일별 선택 근거와 최종 선택만 낸다
 #   bash tests/run.sh --fast           느린 영역(tests/slow-areas.txt)을 뺀다. 다른 선택과 같이 쓸 수 있다
-#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 직렬)
+#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 max(1, min(CPU/2, 4))). 직렬은 -j 1
+#   bash tests/run.sh --profile        끝에 블록(직전 ok부터 그 ok까지)별 시간을 느린 순서로 30개 낸다
+#   bash tests/run.sh --shard 1/4      고른 영역을 느린 영역 먼저 순서로 4몫에 번갈아 나눈 첫째 몫만 (CI matrix용)
 #   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x + bash 3.2 중괄호 검사 (파일마다 따로)
 #   bash tests/run.sh --list           영역 목록
 set -euo pipefail
@@ -23,7 +25,7 @@ slow_area_lines() { # file
 SLOW_AREAS="$(slow_area_lines "$SLOW_AREAS_FILE" | tr '\n' ' ')"
 
 usage() {
-  sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 all_areas() {
@@ -182,14 +184,35 @@ lint_changed() {
   return "$rc"
 }
 
+# CPU 수 기반 기본 동시 실행 수. 그래프 러너 resolve_check_jobs와 같은 순서·식이다.
+default_jobs() {
+  local ncpu jobs
+  ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+  [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(nproc 2>/dev/null || true)"
+  [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu=1
+  jobs=$((ncpu / 2))
+  ((jobs <= 4)) || jobs=4
+  ((jobs >= 1)) || jobs=1
+  printf '%s\n' "$jobs"
+}
+
 selected=""
 fast=0
 changed=0
+profile=0
+shard=""
 explain=0
 jobs=1
 parallel=0
 expect_jobs=0
+expect_shard=0
 for arg in "$@"; do
+  if [[ "$expect_shard" == 1 ]]; then
+    shard="$arg"
+    expect_shard=0
+    continue
+  fi
   if [[ "$expect_jobs" == 1 ]]; then
     [[ "$arg" =~ ^[0-9]+$ ]] || { printf 'run.sh: -j 값은 1 이상의 정수여야 합니다\n' >&2; exit 2; }
     jobs="$arg"
@@ -205,6 +228,8 @@ for arg in "$@"; do
     --lint) lint_changed; exit $? ;;
     --fast) fast=1 ;;
     --changed) changed=1 ;;
+    --profile) profile=1 ;;
+    --shard) expect_shard=1 ;;
     --explain) explain=1 ;;
     -j) expect_jobs=1 ;;
     -*) printf 'run.sh: 모르는 옵션 %s\n' "$arg" >&2; usage >&2; exit 2 ;;
@@ -215,11 +240,26 @@ for arg in "$@"; do
   esac
 done
 [[ "$expect_jobs" == 0 ]] || { printf 'run.sh: -j 뒤에 동시 실행 수를 지정하세요\n' >&2; usage >&2; exit 2; }
+[[ "$expect_shard" == 0 ]] || { printf 'run.sh: --shard 뒤에 i/n을 지정하세요\n' >&2; usage >&2; exit 2; }
+shard_i=0
+shard_n=0
+if [[ -n "$shard" ]]; then
+  if [[ "$shard" =~ ^0*([1-9][0-9]{0,5})/0*([1-9][0-9]{0,5})$ ]] && [[ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ]]; then
+    shard_i="${BASH_REMATCH[1]}"
+    shard_n="${BASH_REMATCH[2]}"
+  else
+    printf 'run.sh: --shard 값은 1<=i<=n인 i/n이어야 합니다 (%s)\n' "$shard" >&2
+    exit 2
+  fi
+fi
 # -j가 없으면 HM_TEST_JOBS(그래프 러너가 검사에 넘긴다)를 기본 동시 실행 수로 쓴다. -j가 이긴다.
 if [[ "$parallel" == 0 && -n "${HM_TEST_JOBS:-}" ]]; then
   jobs="$HM_TEST_JOBS"
   while [[ "$jobs" == 0* && "$jobs" != 0 ]]; do jobs="${jobs#0}"; done
   [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'run.sh: -j 값은 1 이상의 정수여야 합니다 (HM_TEST_JOBS=%s)\n' "$HM_TEST_JOBS" >&2; exit 2; }
+  [[ "$jobs" == 1 ]] || parallel=1
+elif [[ "$parallel" == 0 ]]; then
+  jobs="$(default_jobs)"
   [[ "$jobs" == 1 ]] || parallel=1
 fi
 if [[ "$explain" == 1 ]]; then
@@ -244,10 +284,44 @@ if [[ "$explain" == 1 ]]; then
   printf '# 선택: %s\n' "$chosen"
   exit 0
 fi
+# 샤드: 느린 영역(SLOW_AREAS 순서) 다음 나머지 순서로 놓고 위치 k가 k % n == i-1인 영역만 남긴다. 실행 순서는 위 선택 순서다.
+if [[ "$shard_n" -gt 0 ]]; then
+  k=0
+  in_shard=" "
+  for s in $SLOW_AREAS; do
+    case " $areas " in *" $s "*) ;; *) continue ;; esac
+    [[ $((k % shard_n)) != $((shard_i - 1)) ]] || in_shard="$in_shard$s "
+    k=$((k + 1))
+  done
+  for a in $areas; do
+    case " $SLOW_AREAS " in *" $a "*) continue ;; esac
+    [[ $((k % shard_n)) != $((shard_i - 1)) ]] || in_shard="$in_shard$a "
+    k=$((k + 1))
+  done
+  kept=""
+  for a in $areas; do
+    case "$in_shard" in *" $a "*) kept="$kept $a" ;; esac
+  done
+  areas="$kept"
+fi
 if [[ -z "${areas// /}" ]]; then
   printf 'run.sh: 돌릴 영역이 없음\n'
   exit 0
 fi
+
+# --profile: 영역마다 tests/profile-blocks.py 하나가 영역을 띄워 출력을 그대로 흘리며 ok 줄 도착 시각을 기록한다.
+PROFILE_DIR=""
+if [[ "$profile" == 1 ]]; then
+  PROFILE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-test-profile.XXXXXX")"
+  trap 'rm -rf "$PROFILE_DIR"' EXIT
+fi
+run_area() { # area — 영역을 돌린다(stderr는 stdout으로)
+  if [[ -n "$PROFILE_DIR" ]]; then
+    python3 -I "$TESTS_DIR/profile-blocks.py" run "$1" "$PROFILE_DIR/$1.tsv" bash "$TESTS_DIR/$1.sh" 2>&1
+  else
+    bash "$TESTS_DIR/$1.sh" 2>&1
+  fi
+}
 
 failed=""
 total=0
@@ -256,7 +330,7 @@ if [[ "$parallel" == 0 ]]; then
     printf '# %s\n' "$a"
     start="$(date +%s)"
     out_file="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
-    if bash "$TESTS_DIR/$a.sh" 2>&1 | tee "$out_file"; then
+    if run_area "$a" | tee "$out_file"; then
       :
     else
       failed="$failed $a"
@@ -312,6 +386,7 @@ else
       [[ -z "${out_files[$j]:-}" ]] || rm -f "${out_files[$j]}"
       j=$((j + 1))
     done
+    [[ -z "$PROFILE_DIR" ]] || rm -rf "$PROFILE_DIR"
     printf '# interrupted: %d of %d areas finished\n' "$shown" "$area_count" >&2
     exit "$code"
   }
@@ -323,7 +398,12 @@ else
       out_files[next]="$(mktemp "${TMPDIR:-/tmp}/ai-harness-test-out.XXXXXX")"
       starts[next]="$(date +%s)"
       ends[next]=""
-      bash "$TESTS_DIR/${area_list[$next]}.sh" >"${out_files[$next]}" 2>&1 &
+      if [[ -n "$PROFILE_DIR" ]]; then
+        python3 -I "$TESTS_DIR/profile-blocks.py" run "${area_list[$next]}" "$PROFILE_DIR/${area_list[$next]}.tsv" \
+          bash "$TESTS_DIR/${area_list[$next]}.sh" >"${out_files[$next]}" 2>&1 &
+      else
+        bash "$TESTS_DIR/${area_list[$next]}.sh" >"${out_files[$next]}" 2>&1 &
+      fi
       pids[next]=$!
       running=$((running + 1))
       next=$((next + 1))
@@ -364,8 +444,16 @@ else
   done
 fi
 
+print_profile() {
+  [[ -n "$PROFILE_DIR" ]] || return 0
+  python3 -I "$TESTS_DIR/profile-blocks.py" report 30 "$PROFILE_DIR" || true
+  rm -rf "$PROFILE_DIR"
+}
+
 if [[ -n "$failed" ]]; then
   printf '# FAILED:%s (%d passed)\n' "$failed" "$total" >&2
+  print_profile
   exit 1
 fi
 printf '# all passed: %d tests in%s\n' "$total" "$areas"
+print_profile
