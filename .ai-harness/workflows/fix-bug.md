@@ -16,7 +16,7 @@
 ## 3. 회귀 → 수정
 
 - **회귀 테스트는 test-engineer**(영역 파일 `tests/<영역>.sh`의 블록, `bash tests/run.sh <영역>`으로 수정 전 실패 확인), **수정은 developer**(`scripts/`·`skills/`·`templates/` 등). developer는 `tests/**`를 고치지 않는다.
-- 러너의 regression·fix 노드는 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 리뷰가 깨끗해진 뒤 러너가 한 번 돌린다.
+- 러너의 regression·fix 노드는 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 러너가 push하는 런이면 원격 CI(`test` 워크플로)가 최종 관문으로 돌리고, 원격 CI가 없거나 push하지 않는 런만 리뷰가 깨끗해진 뒤 러너가 로컬에서 한 번 돌린다.
 - 리뷰 → 원인별 수정 → 검증 → 재리뷰. 한도는 그래프 수리 한도, 넘거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 
 ## 4. 검증 명령 (PR 직전 한 번. 작업 중에는 `bash tests/run.sh -j "${HM_TEST_JOBS:-2}" --changed`·`--lint`)

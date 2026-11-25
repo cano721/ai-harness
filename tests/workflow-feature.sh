@@ -377,7 +377,7 @@ assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run whose check records 
 [[ "$(<"$JOBS_FILE")" =~ ^[1-4]$ ]] || fail "the default HM_TEST_JOBS is an integer from 1 to 4 (actual=$(<"$JOBS_FILE"))"
 assert_contains "$(<"$FAKE_LOG.brief.prompt")" "\$HM_TEST_JOBS" "the brief node is told to pass HM_TEST_JOBS to the test runner's parallelism option"
 assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "run only the tests for the areas your Red/Green steps target" "deliver runs only the Red/Green target areas"
-assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "the driver runs the full regression (final_checks)" "deliver is told the driver runs the full regression"
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "the driver runs the full regression (final_checks) once after the review finds nothing blocking, or leaves it to the remote CI" "deliver is told who runs the full regression"
 new_driver_repo check_jobs_config
 printf 'HM_TEST_JOBS=3\n' >"$DRIVER_TMP/data/config"
 FAKE_CHECK="$JOBS_CHECK" driver start --runtime codex --request "add feature"
@@ -419,5 +419,58 @@ FAKE_CHECK="printf 'F\\n' >>'$FAIL_LOG'; false" start_and_approve check_fail_rer
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a check that keeps failing goes to a person"
 assert_eq "3" "$(grep -c '^F$' "$FAIL_LOG")" "a failing check runs again on the same tree (the second repair left the tree unchanged)"
 pass "the runner reuses a check that passed on the same tree and records each check's seconds"
+
+# 원격 CI가 있는 저장소(러너가 push하는 git_policy + CI 설정 파일)에서는 final_checks를 로컬에서 돌리지 않고
+# 원격 CI를 최종 관문으로 삼는다. 시작 때 .policy.final_gate로 고정하고, 미룬 검사는 progress·상태·publish 프롬프트에 따로 남긴다. (#557)
+GATE_LOG="$DRIVER_TMP/final-gate.log"
+gate_repo() { # scenario git_policy(빈 값이면 manifest 없음) ci(yes면 CI 설정 파일을 커밋)
+  new_driver_repo "$1"
+  [[ -z "$2" ]] || with_policy "$2" ""
+  if [[ "$3" == yes ]]; then
+    mkdir -p "$DRIVER_REPO/.github/workflows"
+    printf 'on: push\n' >"$DRIVER_REPO/.github/workflows/test.yml"
+    git -C "$DRIVER_REPO" add .github && git -C "$DRIVER_REPO" commit -qm ci
+  fi
+  : >"$GATE_LOG"
+}
+gate_run() {
+  FAKE_FINAL_CHECK="printf 'final\\n' >>'$GATE_LOG'" driver start --runtime codex --request "add feature"
+  say_in_claude "승인"
+  FAKE_FINAL_CHECK="printf 'final\\n' >>'$GATE_LOG'" driver resume
+}
+gate_repo gate_remote pr-only yes
+gate_run
+assert_eq "0:done:remote_ci" "$DRIVER_RC:$(run_state .status):$(run_state .policy.final_gate)" "a pushed run in a repository with CI fixes the final gate to remote CI"
+assert_eq "" "$(cat "$GATE_LOG")" "the final checks do not run locally when remote CI is the final gate"
+assert_contains "$(<"$(run_dir)/progress.log")" "final checks left to remote CI: printf 'final" "the deferred final checks are logged"
+assert_eq "remote_ci:1" "$(run_state '"\(.final_gate.mode):\(.final_gate.deferred | length)"')" "the state records the deferred final checks"
+GATE_PUBLISH="$(<"$FAKE_LOG.publish.prompt")"
+assert_eq "Checks the driver ran: true" "$(grep '^Checks the driver ran:' <<<"$GATE_PUBLISH")" "publish lists only the checks the driver ran"
+assert_contains "$GATE_PUBLISH" "Final checks left to remote CI: printf 'final" "publish names the final checks left to remote CI"
+pass "remote CI is the final gate: final checks do not run locally"
+
+gate_repo gate_no_ci pr-only no
+gate_run
+assert_eq "0:done:local" "$DRIVER_RC:$(run_state .status):$(run_state .policy.final_gate)" "a repository without CI configuration keeps the local final gate"
+assert_eq "final" "$(cat "$GATE_LOG")" "the final checks run locally without remote CI"
+assert_contains "$(<"$FAKE_LOG.publish.prompt")" "Checks the driver ran: true ; printf 'final" "publish lists the final checks the driver ran"
+gate_repo gate_no_push "" yes
+gate_run
+assert_eq "0:done:local" "$DRIVER_RC:$(run_state .status):$(run_state .policy.final_gate)" "a git_policy that does not push keeps the local final gate even with CI configuration"
+assert_eq "final" "$(cat "$GATE_LOG")" "the final checks run locally when nothing is pushed"
+pass "the final checks run locally when the run cannot reach remote CI"
+
+# 원격 CI가 실패하면 repair → 재리뷰를 거치고, 그 뒤에도 로컬 final_checks 없이 publish → remote_ci로 다시 간다.
+gate_repo gate_ci_fail_once pr-only yes
+gate_run
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a remote CI failure is repaired and pushed again"
+assert_eq "" "$(cat "$GATE_LOG")" "the final checks do not run locally after the repair either"
+assert_eq "remote_ci,repair,publish,remote_ci" "$(run_state '[.history[] | select(.from | IN("remote_ci", "repair", "publish")) | .from] | join(",")' | sed 's/^publish,//')" "the repair goes back through publish and remote CI"
+pass "a remote CI failure goes back to remote CI without local final checks"
+
+# 구현 노드와 brief 노드는 원격 CI가 있으면 그것이 최종 관문이라는 안내를 받는다.
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "the remote CI is the final gate" "deliver is told remote CI is the final gate"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "the remote CI is the final gate" "the brief node is told remote CI is the final gate"
+pass "deliver and brief prompts name remote CI as the final gate"
 
 finish_tests

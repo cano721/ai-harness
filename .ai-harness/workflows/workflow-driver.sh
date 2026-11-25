@@ -33,6 +33,8 @@
 #     publish 밖에서 이 스크립트가 아닌 누군가 HEAD를 움직이면 멈춘다.
 #   - 원격 CI: push했으면 remote_ci 노드가 그 커밋의 원격 CI가 끝날 때까지 본다. 실패는 repair로 돌아가 다시 push하고,
 #     볼 수단이 없으면 done이 아니라 사람에게 미확인으로 넘긴다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못한다.
+#     그래서 push하는 feature·bug-fix 런이 CI 설정이 있는 저장소에서 돌면 원격 CI가 최종 관문이고(policy.final_gate=remote_ci),
+#     Brief의 final_checks(전체 회귀 같은 넓은 검사)는 로컬에서 돌리지 않는다. 원격 CI가 없거나 push하지 않으면 지금처럼 로컬에서 돈다.
 #   - 병합: 개인 자동화 단계가 merge·deploy면 원격 CI 뒤 merge 노드에서 이 스크립트가 PR 호스트(gh·Bitbucket API)에서 직접 읽은 상태로
 #     저장소 호스트 규칙(브랜치 보호의 필수 승인·필수 체크)과 충돌 없음·draft 아님·변경 요청 없음을 판정하고, 모두 맞을 때만 head를 고정해 병합한다.
 #     조건이 아직 안 맞으면 exit 30으로 멈추고 resume이 다시 본다. 무인 실행(HM_INTERNAL_SESSION=1)은 병합하지 않는다.
@@ -41,6 +43,8 @@
 #     remote_ci 도중 바깥에서 들어온 base 병합 커밋 하나도 같은 경로로 받는다. 한도(limits.max_base_syncs)·풀지 못한 충돌·검사 실패와
 #     충돌이 아닌 막힘은 사람에게 넘긴다.
 #     병합 뒤 post_merge_verify가 단계에 맞는 검증(타깃 CI·배포 확인 명령·스모크 명령)을 확인한다. 실패는 되돌리지 않고 사람에게 넘긴다.
+#     개인 설정 HM_TARGET_CI=notify(저장소별 HM_TARGET_CI_REPOS)면 타깃 CI를 기다리지 않고 한 번만 읽는다. 진행 중이면 분리 감시
+#     (watch-target-ci)를 띄우고 다음 단계로 가며, 감시가 실패를 progress.log ALERT·상태 alerts·데스크톱 알림으로 남긴다.
 #     모니터링 재발 확인(monitor)은 관찰 창이 길어 실행 안에서 끝나지 않는다 — start --monitor-error로 받은 에러를 /autofix 추적에 올리는 데까지다.
 #   - 자동화 단계: 병합 여부는 사용자 설정(~/.ai-harness/config)의 HM_DELIVERY_LEVEL(pr|merge|deploy, 저장소별은 HM_DELIVERY_LEVEL_REPOS)만
 #     정하고, 없으면 PR까지다. git_policy는 커밋·PR 범위만 정한다 — 예전 값 merge는 pr-only로 읽고 안내를 남긴다. 기준 브랜치·배포·스모크
@@ -80,6 +84,8 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
                                                         stopped(노드·시각·사유)로 남긴다. 실행 중인 러너는 stop으로만 멈춘다 —
                                                         pkill·killall·pgrep -f 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
+  watch-target-ci                                       병합된 런의 병합 커밋 CI를 기다려 .post_merge.target_ci에 남긴다(HM_TARGET_CI=notify가 띄우는 분리 감시).
+                                                        실패·미확인은 progress.log ALERT·상태 alerts·데스크톱 알림(HM_DESKTOP_NOTIFY=0이면 끔). 런의 status는 바꾸지 않는다
 
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선) · investigate(수정 전 원인 조사)
           · release(태그 방식 릴리스 — manifest release_policy가 있어야 시작한다).
@@ -93,6 +99,9 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
   정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
   자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)만 병합 여부를 정한다. 없으면 PR까지다.
+        병합 뒤 병합 커밋 CI: HM_TARGET_CI_REPOS(저장소별) > HM_TARGET_CI(wait|notify, 기본 wait). notify는 한 번만 읽고, 진행 중이면
+        분리 감시(watch-target-ci)에 맡기고 끝난다.
+  최종 관문: feature·bug-fix 런이 push하고 저장소에 CI 설정이 있으면 원격 CI가 최종 관문이고 final_checks는 로컬에서 돌지 않는다.
 
 exit(stop): 0 멈춤(이미 끊긴 런은 stopped로만 기록) · 2 런이 없거나 실행 중이 아님. 실행 중인 런에 resume·approve·revise는 2로 거부한다
 exit: 0 done(push했으면 원격 CI 통과까지, 단계 merge·deploy면 병합 후 검증까지. polish는 규칙 문서가 없어 고칠 목록까지만 낸 fix_list 포함) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
@@ -238,7 +247,8 @@ state() { jq -r "$1" "$STATE"; }
 state_set() { # jq-filter [jq args...]
   local filter="$1"
   shift
-  jq "$@" "$filter" "$STATE" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+  # 분리 감시(watch-target-ci)도 같은 상태를 쓴다. 임시 파일을 프로세스마다 따로 둬 서로의 반쯤 쓴 파일을 옮기지 않게 한다.
+  jq "$@" "$filter" "$STATE" >"$STATE.tmp.$$" && mv "$STATE.tmp.$$" "$STATE"
 }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -414,7 +424,7 @@ check_baseline() {
     else
       git -C "$REPO" status --short --untracked-files=all | sed 's/^/  /'
     fi
-    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) + (.final_checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
+    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.policy.final_gate // "local") as $gate | (.checks // []) + ((.final_checks // []) | if $gate == "remote_ci" then map(. + " (left to remote CI)") else . end) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
   } >"$report"
   while IFS= read -r line; do log "$line"; done <"$report"
   if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
@@ -838,7 +848,9 @@ print_brief() {
   cat "$RUN/brief.md"
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
   state '.checks[] | "- " + .'
-  state 'if (.final_checks // [] | length) > 0 then "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) else empty end'
+  state 'if (.final_checks // [] | length) == 0 then empty
+    elif .policy.final_gate == "remote_ci" then "\n== 원격 CI에 맡기는 넓은 검증 (로컬에서 돌리지 않음) ==\n" + (.final_checks | map("- " + . + " (left to remote CI)") | join("\n"))
+    else "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) end'
   jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
@@ -1012,6 +1024,14 @@ ui_backstop() {
 final_gate() { # → 통과(또는 넓은 검사 없음)면 0, 실패면 findings를 기록하고 1
   local label before after changed
   [[ "$(state '.final_checks // [] | length')" -gt 0 ]] || return 0
+  # 원격 CI가 최종 관문인 런(.policy.final_gate, #557)은 로컬에서 돌리지 않는다. push한 커밋은 remote_ci가 끝까지 본다.
+  if [[ "$(state '.policy.final_gate // "local"')" == remote_ci ]]; then
+    if [[ "$(state '(.final_gate.deferred // null) == .final_checks')" != true ]]; then
+      log "final checks left to remote CI: $(state '.final_checks | join(" ; ")')"
+      state_set '.final_gate = {mode: "remote_ci", deferred: .final_checks}'
+    fi
+    return 0
+  fi
   before="$(worktree_tree)"
   [[ "$(state '.final_checked_tree // ""')" != "$before" ]] || return 0
   label="final-$(state .attempts)"
@@ -1031,6 +1051,13 @@ final_gate() { # → 통과(또는 넓은 검사 없음)면 0, 실패면 finding
     --argjson f "$(check_findings "$label")" --argjson c "$(failed_check_commands "$RUN/$label.checks.json")"
   note_check_failure "$RUN/$label.checks.json"
   return 1
+}
+
+# publish 프롬프트에 싣는 검사: 드라이버가 실제로 돌린 것과 원격 CI에 맡긴 것을 나눈다(#557).
+checks_ran_text() {
+  state 'if .policy.final_gate == "remote_ci" then "Checks the driver ran: " + (.checks | join(" ; "))
+      + (if (.final_checks // [] | length) > 0 then "\nFinal checks left to remote CI: " + (.final_checks | join(" ; ")) else "" end)
+    else "Checks the driver ran: " + (.checks + (.final_checks // []) | join(" ; ")) end'
 }
 
 # 리뷰 노드(review·classify·re_review)의 출구. findings·needs_user_decision·ui_scenarios는 상태에 있다.
@@ -1111,7 +1138,7 @@ You are the publish node of the release graph. The driver cut the release branch
 - Never merge (the driver merges later with a merge commit when the delivery level allows), never force-push, and never push to $(state .policy.release.source) or $(state .policy.release.base).
 Return only JSON matching the schema; pr_url is the release pull request.
 
-Checks the driver ran: $(state '.checks + (.final_checks // []) | join(" ; ")')
+$(checks_ran_text)
 
 $(brief_context)" "$PUBLISH_SCHEMA"
   else
@@ -1126,7 +1153,7 @@ You are the publish node. The approved change below passed the checks the driver
 - Never merge (under merge the driver merges later, once the merge conditions hold), never force-push, never push to the base branch under pr-only or merge, and do not change file contents: the committed tree must equal the reviewed one.
 Return only JSON matching the schema; pr_url is empty when no PR was opened.
 
-Checks the driver ran: $(state '.checks + (.final_checks // []) | join(" ; ")')
+$(checks_ran_text)
 
 $(brief_context)" "$PUBLISH_SCHEMA"
   fi
@@ -1666,7 +1693,8 @@ $(brief_context)" "$SYNC_BASE_SCHEMA"
   # 러너 자신이 HEAD를 옮겼다. 검사가 실패해 멈춰도 기준점이 지금 저장소를 가리키게 한다.
   state_set '.head = $h' --arg h "$to"
   save_baseline
-  if ! run_checks "$label" "$(state '(.checks // []) + (.final_checks // [])')"; then
+  # 원격 CI가 최종 관문이면 push한 merge 커밋이 remote_ci를 다시 거치므로 checks만 다시 돈다(#557).
+  if ! run_checks "$label" "$(state '(.checks // []) + (if .policy.final_gate == "remote_ci" then [] else (.final_checks // []) end)')"; then
     base_sync_fail "checks failed after merging origin/$base (the merge commit ${to:0:12} stays local and was not pushed): $(failed_check_commands "$RUN/$label.checks.json" | jq -r 'join("; ")')" \
       "$(check_findings "$label")"
     return
@@ -1717,6 +1745,112 @@ rollback_hint() { # commit base
   fi
 }
 
+# post_merge_verify target_ci와 분리 감시(watch-target-ci)가 쓰는 프롬프트. notify의 한 번 읽기는 기다리지 않는다(#557).
+target_ci_prompt() { # commit base wait|notify
+  local wait_rule="- Wait until every check or pipeline for the commit reaches a final state, polling about once a minute. A fresh merge commit can take a few minutes before its checks appear."
+  local pending_rule="pending: checks are still running after about 60 minutes."
+  if [[ "$3" == notify ]]; then
+    wait_rule="- Do not wait and do not poll: read the current state of the checks once and report it."
+    pending_rule="pending: some checks have not finished yet, or none has appeared yet."
+  fi
+  printf '%s' "$CONTEXT
+
+You are the post_merge_verify node. Do not edit any file, commit, or push. The pull request $(state .publish.pr_url) was merged into $2 as commit $1. Find out whether the remote CI for exactly that commit on $2 passed, without asking anyone anything:
+- Use the PR or CI tool that AGENTS.md and the project workflow name (for example gh run list --commit, or the Bitbucket pipelines API through /bitbucket).
+$wait_rule
+- passed: every check finished successfully. failed: any check failed; put each failing check in failures with the decisive lines of its log. none: the repository runs no CI on $2. $pending_rule unverified: you cannot read the CI result; say why in summary.
+- A local run of the CI commands is not a remote result. Never report passed from it.
+Return only JSON matching the schema; commit is the SHA the result belongs to."
+}
+
+# 세션의 보고를 병합 커밋에 대한 결과로 판정한다. 다른 커밋의 통과·CI 설정이 있는데 "없음"은 미확인이다(요약을 고쳐 쓴다).
+target_ci_status() { # out-file commit → stdout: passed|failed|none|pending|unverified
+  local out="$1" commit="$2" status reported
+  status="$(jq -r .status "$out")"
+  reported="$(jq -r .commit "$out")"
+  if [[ "$status" == passed || "$status" == none ]] && [[ ${#reported} -lt 7 || ( "$commit" != "$reported"* && "$reported" != "$commit"* ) ]]; then
+    status=unverified
+    jq '.summary = "the CI result is not for the merge commit"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+  fi
+  if [[ "$status" == none ]] && repo_has_ci_config; then
+    status=unverified
+    jq '.summary = "the session reported no CI on the base branch, but the repository has CI configuration"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
+  fi
+  printf '%s' "$status"
+}
+
+# 분리 감시: 러너가 끝나도 남도록 nohup으로 자기 프로세스 그룹에서 띄운다(러너 그룹을 끄는 stop에 휩쓸리지 않게). 같은 런에 살아 있는 감시가 있으면 다시 띄우지 않는다.
+start_target_ci_watcher() {
+  local pid
+  pid="$(state '.post_merge.target_ci.watcher.pid // ""')"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && [[ "$(proc_lstart "$pid")" == "$(state '.post_merge.target_ci.watcher.lstart // ""')" ]]; then
+    return 0
+  fi
+  set -m
+  nohup bash "$SCRIPT_DIR/$(basename "$0")" watch-target-ci --workflow "$WORKFLOW" --repo "$REPO" --run "$RUN_ID" \
+    </dev/null >"$RUN/post-merge-ci-watch.runner.log" 2>&1 &
+  pid=$!
+  set +m
+  state_set '.post_merge.target_ci.watcher = {pid: $p, lstart: $l, log: $f, started_at: $t}' \
+    --argjson p "$pid" --arg l "$(proc_lstart "$pid")" --arg f "$RUN/post-merge-ci-watch.runner.log" --arg t "$(now_utc)"
+}
+
+# 데스크톱 알림은 최선을 다할 뿐이다: osascript(macOS) 또는 notify-send(Linux)가 있을 때만, HM_DESKTOP_NOTIFY=0이면 보내지 않는다.
+desktop_notify() { # title message
+  [[ "$(user_config HM_DESKTOP_NOTIFY)" != 0 ]] || return 0
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' "$1" "$2" </dev/null >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "$1" "$2" </dev/null >/dev/null 2>&1 || true
+  fi
+}
+
+# watch-target-ci: 끝난(또는 끝나 가는) 런의 병합 커밋 CI를 기다려 결과를 .post_merge.target_ci에 남긴다.
+# 런의 status·결과 코드·프로세스 기록은 바꾸지 않는다. 실패·미확인은 progress.log ALERT·상태 .alerts·데스크톱 알림으로 알린다.
+watch_target_ci() {
+  local commit base label="post-merge-ci-watch" out before status="" summary="" waited=0
+  commit="$(state '.merge.commit // ""')"
+  base="$(state '.merge.base // ""')"
+  [[ -n "$commit" ]] || { printf 'run %s has no merge commit to watch\n' "$RUN_ID" >&2; exit 2; }
+  out="$RUN/$label.out"
+  # 감시 프로세스는 노드 자식 그룹을 상태에 기록하지 않고(stop이 런의 자식으로 보지 않게), 세션 실패를 런의 종료로 바꾸지 않는다.
+  run_in_group() { "$@"; }
+  finish() { status=unverified; summary="$3"; return 0; }
+  log "watching CI on $base for merge commit $commit (HM_TARGET_CI=notify)"
+  if [[ -d "$REPO" ]]; then
+    before="$(fingerprint)"
+    ( run_agent post_merge_verify "$label" "$(target_ci_prompt "$commit" "$base" wait)" "$REMOTE_CI_SCHEMA" ) || true
+    if ! jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string" and (.summary | type) == "string"' "$out" >/dev/null 2>&1; then
+      status=unverified summary="the watcher session failed or its output does not match the schema (see $RUN/$label.log)"
+    elif [[ "$(fingerprint)" != "$before" ]]; then
+      status=unverified summary="the watcher session changed the working tree, so its result is not trusted"
+    else
+      status="$(target_ci_status "$out" "$commit")"
+      summary="$(jq -r '.summary + (if (.failures // []) | length > 0 then " — " + (.failures | join("; ")) else "" end)' "$out")"
+      [[ "$status" != pending ]] || { status=unverified; summary="checks were still running after about 60 minutes: $summary"; }
+      [[ "$status" != none ]] || status=passed
+    fi
+  else
+    status=unverified summary="the working tree $REPO is gone, so the watcher could not read the CI"
+  fi
+  # 러너가 아직 뒤 단계(deploy·smoke)를 도는 중이면 상태 파일을 함께 쓰지 않게 끝나기를 잠시 기다린다.
+  while runner_alive && ((waited < 600)); do sleep 1; waited=$((waited + 1)); done
+  state_set '.post_merge.target_ci = ((.post_merge.target_ci // {}) + {status: $s, summary: $m, watched_at: $t} | del(.note))' \
+    --arg s "$status" --arg m "$summary" --arg t "$(now_utc)"
+  if [[ "$status" == passed ]]; then
+    log "CI on $base for merge commit $commit passed (watched after the run)"
+    return 0
+  fi
+  local message hint
+  message="CI on $base for merge commit $commit $status: $summary"
+  hint="$(rollback_hint "$commit" "$base")"
+  log "ALERT: $message"
+  log "ALERT: $hint"
+  state_set '.alerts = ((.alerts // []) + [{kind: "target_ci", status: $s, commit: $c, base: $b, message: $m, rollback_hint: $h, at: $t}])' \
+    --arg s "$status" --arg c "$commit" --arg b "$base" --arg m "$message" --arg h "$hint" --arg t "$(now_utc)"
+  desktop_notify "ai-harness: CI $status after merge" "$message"
+}
+
 # 병합 확인과 후속 검증이 끝난 뒤 현재 작업 worktree가 정리 가능한지 판정만 한다(#454). 러너는 아무것도 지우지 않는다.
 # 살아 있는 세션(터미널·에이전트)을 러너는 알 수 없으므로, 실제 삭제는 보드 '끝난 일 정리'나 workspace 세션 정리가 세션을 확인한 뒤 한다.
 # 판정은 state.json의 worktree_cleanup {eligible, reason, path, branch}과 진행 로그 한 줄로 남긴다.
@@ -1755,7 +1889,7 @@ cleanup_merged_worktree() {
 # post_merge_verify: 시작 때 정한 검증(policy.merge.verify)을 순서대로(타깃 CI → 배포 확인 → 스모크) 확인한다. 끝난 단계는 resume에서 다시 하지 않는다.
 # 실패해도 되돌리지 않는다. 되돌릴지는 사람이 정한다.
 post_merge_verify() {
-  local commit base step label out status rc fail="" hint="" cmd waited timeout reported af project
+  local commit base step label out status rc fail="" hint="" cmd waited timeout af project mode
   commit="$(state '.merge.commit // ""')"
   base="$(state '.merge.base // ""')"
   [[ -n "$commit" ]] || fail="the host did not report a merge commit, so nothing can be verified against it"
@@ -1765,31 +1899,22 @@ post_merge_verify() {
     case "$step" in
       target_ci)
         label="post-merge-ci"
-        run_node post_merge_verify "$label" "$CONTEXT
-
-You are the post_merge_verify node. Do not edit any file, commit, or push. The pull request $(state .publish.pr_url) was merged into $base as commit $commit. Find out whether the remote CI for exactly that commit on $base passed, without asking anyone anything:
-- Use the PR or CI tool that AGENTS.md and the project workflow name (for example gh run list --commit, or the Bitbucket pipelines API through /bitbucket).
-- Wait until every check or pipeline for the commit reaches a final state, polling about once a minute. A fresh merge commit can take a few minutes before its checks appear.
-- passed: every check finished successfully. failed: any check failed; put each failing check in failures with the decisive lines of its log. none: the repository runs no CI on $base. pending: checks are still running after about 60 minutes. unverified: you cannot read the CI result; say why in summary.
-- A local run of the CI commands is not a remote result. Never report passed from it.
-Return only JSON matching the schema; commit is the SHA the result belongs to." "$REMOTE_CI_SCHEMA"
+        mode="$(state '.policy.merge.target_ci // "wait"')"
+        run_node post_merge_verify "$label" "$(target_ci_prompt "$commit" "$base" "$mode")" "$REMOTE_CI_SCHEMA"
         out="$RUN/$label.out"
         jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string" and (.summary | type) == "string"' \
           "$out" >/dev/null 2>&1 || finish incomplete 30 "post-merge CI output does not match the schema ($out); run resume to check again"
-        status="$(jq -r .status "$out")"
-        reported="$(jq -r .commit "$out")"
-        if [[ "$status" == passed || "$status" == none ]] && [[ ${#reported} -lt 7 || ( "$commit" != "$reported"* && "$reported" != "$commit"* ) ]]; then
-          status=unverified
-          jq '.summary = "the CI result is not for the merge commit"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
-        fi
-        if [[ "$status" == none ]] && repo_has_ci_config; then
-          status=unverified
-          jq '.summary = "the session reported no CI on the base branch, but the repository has CI configuration"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
-        fi
+        status="$(target_ci_status "$out" "$commit")"
         state_set '.post_merge.target_ci = ($r[0] + {status: $s, at: $t})' --slurpfile r "$out" --arg s "$status" --arg t "$(now_utc)"
         case "$status" in
           passed|none) state_set '.post_merge.target_ci.status = "passed" | .post_merge.target_ci.reported = $s' --arg s "$status" ;;
-          pending) finish incomplete 30 "CI for the merge commit $commit is still running; run resume to check again" ;;
+          pending)
+            [[ "$mode" == notify ]] || finish incomplete 30 "CI for the merge commit $commit is still running; run resume to check again"
+            # HM_TARGET_CI=notify: 기다리지 않는다. 분리 감시가 결과를 상태에 남기고 실패를 알린다. 러너는 되돌리지 않는다.
+            start_target_ci_watcher
+            state_set '.post_merge.target_ci.status = "tracked"
+              | .post_merge.target_ci.note = "CI for the merge commit is still running; a detached watcher (pid \(.post_merge.target_ci.watcher.pid)) records the result and alerts on a failure (progress.log ALERT, state alerts, desktop notification)"'
+            log "CI for the merge commit $commit is still running; not waiting (HM_TARGET_CI=notify) — watcher pid $(state .post_merge.target_ci.watcher.pid) alerts on a failure" ;;
           *) fail="CI on $base for the merge commit $commit is $status: $(jq -r '.summary + (if (.failures // []) | length > 0 then " — " + (.failures | join("; ")) else "" end)' "$out")" ;;
         esac ;;
       deploy|smoke)
@@ -1887,7 +2012,7 @@ NODE_TEST_RULE="Tests: the driver runs the broad regression itself after you fin
 APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
 
 # 구현 노드(deliver·fix)가 전체 회귀를 직접 돌리지 않게 한다(#513). 전체 회귀는 리뷰 뒤 final_checks로 드라이버가 한 번 돈다.
-FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking."
+FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking, or leaves it to the remote CI: when the run pushes to a repository with remote CI, the remote CI is the final gate and the driver does not run final_checks locally."
 # checks가 테스트 실행기의 병렬 옵션에 드라이버가 넘기는 동시 실행 수를 쓰게 한다(#513).
 TEST_JOBS_RULE="When the project's test runner takes a parallelism option (for example -j, -n, --workers, --parallel), pass it the \$HM_TEST_JOBS the driver exports to every check (for example \"\${HM_TEST_JOBS:-2}\" with a fallback for runs outside the driver)."
 # base 대비 '건드리지 않았다' 검사를 merge-base 기준으로 쓰게 한다(#543). base tip 비교는 런 도중 base에 들어온 커밋을 브랜치 변경으로 센다.
@@ -1898,7 +2023,7 @@ brief_prompt() {
   if [[ "$WORKFLOW" == bug-fix ]]; then
     role="You are the brief node of the bug-fix graph. Do not edit any file.
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
-Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
+Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. When the run pushes to a repository with remote CI, the remote CI is the final gate and the driver leaves final_checks to it instead of running them locally; list them anyway, because they still run locally where there is no remote CI. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
 $TEST_JOBS_RULE
 $MERGE_BASE_RULE"
     inputs="Bug report:
@@ -1912,7 +2037,7 @@ $(cat "$RUN/reproduce.out")"
   else
     role="You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
-Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
+Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. When the run pushes to a repository with remote CI, the remote CI is the final gate and the driver leaves final_checks to it instead of running them locally; list them anyway, because they still run locally where there is no remote CI. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
 $TEST_JOBS_RULE
 $MERGE_BASE_RULE"
     inputs="Request:
@@ -3251,6 +3376,16 @@ runtime_setting() {
   printf '%s %s' "$rt" "$source"
 }
 
+# 병합 뒤 병합 커밋 CI를 기다릴지: 저장소별 설정 > 전체 설정 > wait 기본값. notify는 한 번만 읽고, 진행 중이면 분리 감시가 실패를 알린다(#557).
+target_ci_setting() {
+  local setting="" mode="" source=""
+  setting="$(repository_setting HM_TARGET_CI_REPOS)"
+  if [[ -n "$setting" ]]; then read -r mode source <<<"$setting"; else mode="$(user_config HM_TARGET_CI)"; fi
+  if [[ -z "$source" ]]; then if [[ -n "$mode" ]]; then source=HM_TARGET_CI; else mode="wait"; source=default; fi; fi
+  [[ "$mode" =~ ^(wait|notify)$ ]] || { printf '%s %s is "%s"; target CI must be wait or notify\n' "$source" "$(config_origin "${source%%:*}")" "$mode" >&2; return 2; }
+  printf '%s %s' "$mode" "$source"
+}
+
 # --runtime이 없을 때 노드 세션을 띄울 CLI: 러너를 부른 런타임 > 저장소 integrations 중 설치된 것이 하나면 그것 > 설치된 유일한 CLI.
 # integrations의 나열 순서는 우선순위가 아니고, 한쪽이 다른 쪽 안에서 돌면 두 신호가 함께 있어 호출자를 단정하지 않는다. 못 정하면 고르지 않는다.
 default_runtime() {
@@ -3338,6 +3473,11 @@ case "$CMD" in
     fi
     approval_setting="$(approval_mode)" || exit 2
     read -r approval approval_source <<<"$approval_setting"
+    target_ci="wait" target_ci_source="default"
+    if [[ -n "$commits_workflow" ]]; then
+      target_ci_choice="$(target_ci_setting)" || exit 2
+      read -r target_ci target_ci_source <<<"$target_ci_choice"
+    fi
     # 병합 여부는 개인 자동화 단계만 정한다. 없으면 PR까지다. 저장소 git_policy는 커밋·PR 범위만 정한다:
     # pr-only → PR(단계가 merge·deploy면 러너가 병합), direct → PR 없이 push(병합할 PR이 없다), 그 밖 → 커밋하지 않는다.
     delivery=null
@@ -3380,7 +3520,7 @@ case "$CMD" in
     merge_policy=null
     if [[ "$WORKFLOW" == release && "$git_policy" == merge ]]; then
       # 릴리스 병합의 기준은 release_policy.base다(merge_policy.base는 기능 PR의 기준). 병합 뒤에는 병합 커밋의 CI만 보고, 배포 확인은 verify 노드가 한다.
-      merge_policy="$(jq -c '{verify: ["target_ci"], deploy_check_cmd: "", deploy_timeout_minutes: 60, smoke_cmd: "", base: .base}' <<<"$release_policy")"
+      merge_policy="$(jq -c '{verify: ["target_ci"], deploy_check_cmd: "", deploy_timeout_minutes: 60, smoke_cmd: "", base: .base, target_ci: "wait", target_ci_source: "release"}' <<<"$release_policy")"
     elif [[ "$git_policy" == merge && -n "$commits_workflow" ]]; then
       # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. 병합 조건·방식은 merge 노드가 호스트에서 읽는다.
       # merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
@@ -3390,7 +3530,8 @@ case "$CMD" in
            else [(if $deploy != "" then "deploy" else empty end), (if $smoke != "" then "smoke" else empty end)] end) as $avail
         | [$avail[] | select(IN("deploy", "smoke", "monitor")) | select((. != "deploy" or $deploy != "") and (. != "smoke" or $smoke != ""))] as $post
         | {verify: (["target_ci"] + (if $lvl == "deploy" then $post else [] end)),
-           deploy_check_cmd: $deploy, deploy_timeout_minutes: ($r.deploy_timeout_minutes // 60), smoke_cmd: $smoke, base: ($r.base // "")}' \
+           deploy_check_cmd: $deploy, deploy_timeout_minutes: ($r.deploy_timeout_minutes // 60), smoke_cmd: $smoke, base: ($r.base // ""),
+           target_ci: $tci, target_ci_source: $tci_source}' --arg tci "$target_ci" --arg tci_source "$target_ci_source" \
         "$REPO/.ai-harness/harness.json")"
       if [[ "$level" == deploy ]] && ! jq -e '.verify | index("deploy") or index("smoke")' <<<"$merge_policy" >/dev/null; then
         delivery="$(jq -c '.note = "the repository has no deploy or smoke check (merge_policy.deploy_check_cmd, smoke_cmd), so the run stops after the merge and target CI"' <<<"$delivery")"
@@ -3417,6 +3558,11 @@ case "$CMD" in
         fi
       fi
     fi
+    # 최종 관문(#557): 러너가 push해 원격 CI를 볼 수 있는 feature·bug-fix 런은 원격 CI가 final_checks를 대신한다. 그 밖에는 로컬에서 돈다.
+    final_gate_mode=local
+    if [[ "$WORKFLOW" == feature || "$WORKFLOW" == bug-fix ]] && [[ "$git_policy" =~ ^(pr-only|direct|merge)$ ]] && repo_has_ci_config; then
+      final_gate_mode=remote_ci
+    fi
     monitor_error=null
     if [[ -n "$MONITOR_ERROR" ]]; then
       monitor_error="$(jq -cs 'if length == 1 and (.[0] | type == "object" and (.signature | type == "string") and (.signature | length > 0)) then .[0] else empty end' <<<"$MONITOR_ERROR" 2>/dev/null || true)"
@@ -3433,16 +3579,22 @@ case "$CMD" in
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
-      --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" \
+      --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" --arg gate "$final_gate_mode" \
       --argjson rel "$release_policy" --arg ver "$VERSION_ARG" --arg stage "$release_stage" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
         policy:{git:$git, approval:$appr, approval_source:$appr_source, runtime_source:$rt_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate", "release") | not)),
-          merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1"), release:$rel},
+          merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1"), release:$rel, final_gate:$gate},
         release:(if $wf == "release" then {version:(if $ver == "" then null else $ver end), version_source:(if $ver == "" then null else "flag" end), stage:$stage,
           tag:(if $ver == "" then null else $rel.tag_prefix + $ver end), branch:(if $ver == "" then null else $rel.branch_prefix + $ver end)} else null end),
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     save_baseline
+    ;;
+  watch-target-ci)
+    # 스키마는 런이 이미 써 두었다. 아래의 스키마 재작성·진행 안내를 건너뛰어 아직 도는 러너가 읽는 파일을 건드리지 않는다.
+    [[ -f "$STATE" && -f "$REMOTE_CI_SCHEMA" ]] || { printf 'run not found or not started: %s\n' "$RUN" >&2; exit 2; }
+    watch_target_ci
+    exit 0
     ;;
   watch)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
@@ -3730,6 +3882,7 @@ case "$CMD" in
         printf 'stale: runner process %s is gone (stopped outside the runner); continue with resume\n' "$(state .process.pid)"
       fi
     fi
+    state '(.alerts // [])[] | "ALERT \(.at): \(.message) — \(.rollback_hint)"'
     if [[ "$(state '.worktree_cleanup.eligible // ""')" == true ]]; then
       printf 'worktree %s is merged and can be removed: use the board "finished work" cleanup or the workspace session cleanup\n' "$(state .worktree_cleanup.path)"
     fi
