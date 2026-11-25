@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.93.0 (2026-11-25)
 ### 새 기능
 
 - **보드 하네스 설정에 '스킬' 탭이 생겼습니다** — 카탈로그 스킬(jira·confluence·datadog·sentry·langfuse)과 디자인 스킬의 설치·토큰·연결 상태를 `~/.claude/skills`·`~/.agents/skills` 실제 상태 그대로 보고, [설치]·[설정하기]·[제거]·[연결 확인]으로 그 스킬 하나만 다루는 setup 세션을 띄웁니다. 세션은 작업 현황에 보이고, 끝나면 상태를 다시 읽습니다. 토큰은 대화·보드에 남기지 않고 별도 터미널의 숨김 입력으로 저장합니다. (#494)
