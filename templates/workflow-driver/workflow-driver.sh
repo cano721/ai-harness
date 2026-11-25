@@ -62,6 +62,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# macOS 기본 /usr/bin/git은 xcrun으로 실제 git을 찾아 띄우는 껍데기라 호출마다 프로세스가 하나 더 든다(#569).
+# 껍데기가 고를 실제 git을 한 번 찾아 이 러너 안에서만 그것을 부른다. PATH 앞에 다른 git(Homebrew 등)이 있으면 그대로 둔다.
+if [[ "${OSTYPE:-}" == darwin* && "$(command -v git)" == /usr/bin/git ]]; then
+  GIT_REAL="$(xcrun -f git 2>/dev/null || true)"
+  if [[ -n "$GIT_REAL" && "$GIT_REAL" != /usr/bin/git && -x "$GIT_REAL" ]]; then
+    git() { "$GIT_REAL" "$@"; }
+  fi
+fi
 
 usage() {
   cat >&2 <<'EOF'
@@ -244,13 +252,36 @@ RUN="$RUNS_DIR/$RUN_ID"
 STATE="$RUN/state.json"
 
 state() { jq -r "$1" "$STATE"; }
+# 한 줄짜리 값 여러 개를 jq 한 번에 읽는다(#569): IFS=$'\037' read -r a b <<<"$(state_fields '.a, (.b // "")')".
+# 값마다 state와 같은 문자열(문자열은 그대로, null은 "null")이다. 줄바꿈이 들어갈 수 있는 값에는 쓰지 않는다.
+state_fields() { jq -r "[$1] | map(tostring) | join(\"\\u001f\")" "$STATE"; }
+json_fields() { jq -r "[$1] | map(tostring) | join(\"\\u001f\")" <<<"$2"; } # filter json-text
+# 다음 state_set이 같은 쓰기에서 먼저 적용할 필터(#569). 노드 자식 그룹 기록을 지우는 것처럼 바로 쓰지 않아도 되는 것만 둔다.
+STATE_PENDING=""
 state_set() { # jq-filter [jq args...]
   local filter="$1"
   shift
+  if [[ -n "$STATE_PENDING" ]]; then filter="($STATE_PENDING) | ($filter)"; STATE_PENDING=""; fi
   # 분리 감시(watch-target-ci)도 같은 상태를 쓴다. 임시 파일을 프로세스마다 따로 둬 서로의 반쯤 쓴 파일을 옮기지 않게 한다.
   jq "$@" "$filter" "$STATE" >"$STATE.tmp.$$" && mv "$STATE.tmp.$$" "$STATE"
 }
-now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# UTC 시각(#569): 쓸 때마다 date를 띄우지 않고, 처음 한 번 읽은 epoch에 셸의 SECONDS(같은 time() 시계의 정수 초)를 더해 계산한다.
+# 기준을 잡는 동안 초가 바뀌었으면 기준을 두지 않고 date를 그대로 부른다. SECONDS는 서브셸에서도 같은 기준으로 센다.
+CLOCK_BASE=""
+clock_s0="$SECONDS"
+clock_epoch="$(date -u +%s)"
+[[ "$SECONDS" != "$clock_s0" || ! "$clock_epoch" =~ ^[0-9]+$ ]] || CLOCK_BASE=$((clock_epoch - clock_s0))
+unset clock_s0 clock_epoch
+epoch_now() { if [[ -n "$CLOCK_BASE" ]]; then printf '%s' $((CLOCK_BASE + SECONDS)); else date -u +%s; fi; }
+now_utc() {
+  [[ -n "$CLOCK_BASE" ]] || { date -u +%Y-%m-%dT%H:%M:%SZ; return; }
+  # 날짜는 1970-01-01부터 센 일수를 그레고리력으로 바꾼다(civil_from_days).
+  local t=$((CLOCK_BASE + SECONDS)) z era doe yoe doy mp y m d
+  z=$((t / 86400 + 719468)); era=$((z / 146097)); doe=$((z - era * 146097))
+  yoe=$(((doe - doe / 1460 + doe / 36524 - doe / 146096) / 365)); doy=$((doe - (365 * yoe + yoe / 4 - yoe / 100)))
+  mp=$(((5 * doy + 2) / 153)); d=$((doy - (153 * mp + 2) / 5 + 1)); m=$((mp < 10 ? mp + 3 : mp - 9)); y=$((yoe + era * 400 + (m <= 2 ? 1 : 0)))
+  printf '%04d-%02d-%02dT%02d:%02d:%02dZ' "$y" "$m" "$d" $((t % 86400 / 3600)) $((t % 3600 / 60)) $((t % 60))
+}
 
 # 이어 가는 실행은 그 실행의 워크플로를 따른다. 워크플로를 바꾸면 다른 그래프로 같은 상태를 해석하게 된다.
 if [[ "$CMD" != start && -f "$STATE" ]]; then
@@ -276,11 +307,39 @@ esac
 GRAPH="$REPO/.ai-harness/workflows/$GRAPH_NAME"
 [[ -f "$GRAPH" ]] || GRAPH="$SCRIPT_DIR/$GRAPH_NAME"
 [[ -f "$GRAPH" ]] || GRAPH="$SCRIPT_DIR/../$TEMPLATE/references/$GRAPH_NAME"
-jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>&1 || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
-MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
-MAX_IDENTICAL_FAILURES="$(jq -r '.limits.max_identical_repair_failures // 2' "$GRAPH")"
-MAX_BRIEF_REWRITES="$(jq -r '.limits.max_brief_rewrites // 2' "$GRAPH")"
-MAX_BASE_SYNCS="$(jq -r '.limits.max_base_syncs // 3' "$GRAPH")"
+# 그래프는 실행 중에 바뀌지 않는다. 노드마다 jq로 다시 읽지 않게 한 번에 읽어 표로 둔다(#569).
+# GRAPH_EDGES "\n<from>\t<when>\t<to>", GRAPH_EDGE_WHEN "\n<from>\t<to>\t<when>", GRAPH_NODES "\n<node>\t<write>\t<browser>\t<network>\t<commands>\t<reads_run>",
+# GRAPH_TERMINALS "\n<terminal>" — 줄 순서는 그래프의 선언 순서라 first(...)와 같은 전이를 고른다.
+graph_table="$(jq -r 'if .entry and .nodes and .transitions and .terminals then
+    ["L", (.limits.max_repair_attempts // 10), (.limits.max_identical_repair_failures // 2), (.limits.max_brief_rewrites // 2), (.limits.max_base_syncs // 3), .entry],
+    (.transitions[] | ["E", .from, (.when // ""), (.to // "")]),
+    (.terminals[] | ["T", .]),
+    (.nodes | to_entries[] | .value as $v | ["N", .key, $v.write, ($v.browser // false), ($v.network // $v.browser // false),
+      ($v.commands // $v.network // $v.browser // false), ($v.reads_run // false)])
+    | map(tostring) | join("\u001f")
+  else error("invalid") end' "$GRAPH" 2>/dev/null)" || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
+GRAPH_EDGES=$'\n' GRAPH_EDGE_WHEN=$'\n' GRAPH_NODES=$'\n' GRAPH_TERMINALS=$'\n'
+while IFS=$'\037' read -r kind a b c d e f; do
+  case "$kind" in
+    L) MAX_REPAIR="$a" MAX_IDENTICAL_FAILURES="$b" MAX_BRIEF_REWRITES="$c" MAX_BASE_SYNCS="$d" GRAPH_ENTRY="$e" ;;
+    E) GRAPH_EDGES+="$a"$'\t'"$b"$'\t'"$c"$'\n' GRAPH_EDGE_WHEN+="$a"$'\t'"$c"$'\t'"$b"$'\n' ;;
+    T) GRAPH_TERMINALS+="$a"$'\n' ;;
+    N) GRAPH_NODES+="$a"$'\t'"$b"$'\t'"$c"$'\t'"$d"$'\t'"$e"$'\t'"$f"$'\n' ;;
+  esac
+done <<<"$graph_table"
+unset graph_table
+is_terminal() { [[ "$GRAPH_TERMINALS" == *$'\n'"$1"$'\n'* ]]; }
+has_node() { [[ "$GRAPH_NODES" == *$'\n'"$1"$'\t'* ]]; }
+node_attrs() { # node → stdout "<write> <browser> <network> <commands> <reads_run>" (그래프에 없는 노드는 jq의 null·false 기본값과 같다)
+  local rest
+  if has_node "$1"; then
+    rest="${GRAPH_NODES#*$'\n'"$1"$'\t'}"
+    rest="${rest%%$'\n'*}"
+    printf '%s' "${rest//$'\t'/ }"
+  else
+    printf 'null false false false false'
+  fi
+}
 
 finish() { # status exit_code message
   local message="$3"
@@ -297,18 +356,25 @@ finish() { # status exit_code message
 }
 
 # 추적 파일 diff + 미추적 파일 내용까지 포함한 작업 트리 지문. .gitignore 대상(빌드 산출물)은 제외된다.
-fingerprint() {
+fingerprint() { # [rev-parse HEAD 출력] — 방금 read_head로 읽은 값을 넘기면 HEAD를 다시 읽지 않는다
   {
-    git -C "$REPO" rev-parse HEAD 2>/dev/null || true
+    if (($#)); then [[ -z "$1" ]] || printf '%s\n' "$1"; else git -C "$REPO" rev-parse HEAD 2>/dev/null || true; fi
     git -C "$REPO" diff HEAD --binary 2>/dev/null || true
     git -C "$REPO" ls-files --others --exclude-standard -z \
       | while IFS= read -r -d '' f; do printf '%s\0' "$f"; git -C "$REPO" hash-object -- "$f"; done
   } | git hash-object --stdin
 }
 
-guard_head() {
+# HEAD를 한 번 읽어 둘 다 남긴다: REPO_HEAD_OUT은 rev-parse 출력 그대로(지문용), REPO_HEAD는 실패면 none을 붙인 값
+# (예전 "$(git rev-parse HEAD 2>/dev/null || printf none)"과 같은 값). 서브셸 없이 불러야 값이 남는다.
+REPO_HEAD_OUT="" REPO_HEAD=""
+read_head() {
+  if REPO_HEAD_OUT="$(git -C "$REPO" rev-parse HEAD 2>/dev/null)"; then REPO_HEAD="$REPO_HEAD_OUT"; else REPO_HEAD="${REPO_HEAD_OUT:+$REPO_HEAD_OUT$'\n'}none"; fi
+}
+
+guard_head() { # node [read_head로 방금 읽은 REPO_HEAD]
   local head
-  head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf 'none')"
+  if (($# > 1)); then head="$2"; else head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf 'none')"; fi
   [[ "$head" == "$(state '.head // .start_head')" ]] && return 0
   # remote_ci 도중 들어온 base 병합 커밋 하나는 remote_ci가 sync_base로 넘긴다(#508).
   [[ "$1" == remote_ci ]] && outside_base_merge "$head" && return 0
@@ -324,11 +390,20 @@ ui_files_changed() {
 }
 
 has_edge() { # from outcome
-  jq -e --arg f "$1" --arg o "$2" 'any(.transitions[]; .from == $f and (.when // "") == $o)' "$GRAPH" >/dev/null
+  [[ "$GRAPH_EDGES" == *$'\n'"$1"$'\t'"$2"$'\t'* ]]
+}
+edge_to() { # from outcome → 그 결과로 가는 첫 전이의 목적지(없으면 빈 값)
+  local rest
+  has_edge "$1" "$2" || return 0
+  rest="${GRAPH_EDGES#*$'\n'"$1"$'\t'"$2"$'\t'}"
+  printf '%s' "${rest%%$'\n'*}"
 }
 
 edge_when() { # from to → 그 전이의 when. 결과 이름은 그래프마다 다르므로(ui_issues, ui_issues_and_repair_authorized 등) 목적지로 찾는다.
-  jq -r --arg f "$1" --arg t "$2" 'first(.transitions[] | select(.from == $f and .to == $t) | .when // "") // empty' "$GRAPH"
+  local rest
+  [[ "$GRAPH_EDGE_WHEN" == *$'\n'"$1"$'\t'"$2"$'\t'* ]] || return 0
+  rest="${GRAPH_EDGE_WHEN#*$'\n'"$1"$'\t'"$2"$'\t'}"
+  printf '%s\n' "${rest%%$'\n'*}"
 }
 
 # Brief 완료 조건 대응표의 빈틈(없으면 빈 값). 빈 표는 조건을 뽑지 않은 것이다 — 어떤 요청이든 요청 자체가 완료 조건이다.
@@ -358,7 +433,7 @@ take_revise_request() {
 # 작업 트리 전체(미추적 포함, .gitignore 제외)를 트리 객체로. 리뷰한 내용과 publish가 커밋한 내용을 비교한다.
 worktree_tree() {
   local idx="$RUN/tree.index"
-  rm -f "$idx"
+  [[ ! -e "$idx" && ! -L "$idx" ]] || rm -f "$idx"
   GIT_INDEX_FILE="$idx" git -C "$REPO" read-tree HEAD 2>/dev/null || true
   GIT_INDEX_FILE="$idx" git -C "$REPO" add -A
   GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree
@@ -384,16 +459,20 @@ checkpoint() { # node
   [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] || return 0
   { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "wip($TEMPLATE): $1 · run $RUN_ID"; } >"$RUN/checkpoint.log" 2>&1 \
     || finish incomplete 30 "checkpoint commit after $1 failed; see $RUN/checkpoint.log. Fix the cause and run resume"
-  state_set '.head = $h | .checkpoints += [$h]' --arg h "$(git -C "$REPO" rev-parse HEAD)"
-  save_baseline
+  read_head
+  save_baseline --have-head '.head = $h | .checkpoints += [$h]' --arg h "$REPO_HEAD_OUT"
   log "checkpoint commit after $1: $(git -C "$REPO" rev-parse --short HEAD)"
 }
 
 # 기준점: 러너가 마지막으로 본 저장소 상태(HEAD·작업 트리 지문, 차이를 보일 트리 객체). 러너가 멈출 때(종료 trap)와
 # 러너 자신이 HEAD를 옮길 때(체크포인트·publish) 남긴다. 그 뒤의 변경은 러너가 모르는 변경이다.
-save_baseline() {
-  state_set '.repo_baseline = {head: $h, fingerprint: $f, tree: $tr, at: $t}' --arg h "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" \
-    --arg f "$(fingerprint)" --arg tr "$(worktree_tree 2>/dev/null || true)" --arg t "$(now_utc)"
+save_baseline() { # [--have-head] [jq-filter [jq args...]]
+  # --have-head: 부른 쪽이 HEAD를 옮기는 단계 없이 방금 read_head를 불렀다. 필터를 주면 기준점과 같은 쓰기에서 먼저 적용한다($bl_* 이름은 쓰지 않는다).
+  local pre=.
+  if [[ "${1:-}" == --have-head ]]; then shift; else read_head; fi
+  if (($#)); then pre="$1"; shift; fi
+  state_set "($pre) | .repo_baseline = {head: \$bl_head, fingerprint: \$bl_fp, tree: \$bl_tree, at: \$bl_at}" --arg bl_head "$REPO_HEAD" \
+    --arg bl_fp "$(fingerprint "$REPO_HEAD_OUT")" --arg bl_tree "$(worktree_tree 2>/dev/null || true)" --arg bl_at "$(now_utc)" "$@"
 }
 
 # 이어 가기 전에 기준점과 지금을 대조한다. 같으면 그대로, 다르면 에이전트를 부르기 전에 차이·남은 검사를 보이고 멈춘다.
@@ -427,7 +506,7 @@ check_baseline() {
     printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.policy.final_gate // "local") as $gate | (.checks // []) + ((.final_checks // []) | if $gate == "remote_ci" then map(. + " (left to remote CI)") else . end) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
   } >"$report"
   while IFS= read -r line; do log "$line"; done <"$report"
-  if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
+  if is_terminal "$node"; then
     finish baseline_changed 20 "the repository changed after the run ended at $node, so its result no longer covers the code; undo the change and resume, or start a new run to check it (see $report)"
   fi
   # 리뷰를 지난 변경만 push·병합된다. 그 뒤에 받아들인 변경은 검증·리뷰를 다시 거치지 않으므로 새 실행으로 보낸다.
@@ -489,7 +568,8 @@ run_in_group() { # command... → 그 명령의 종료 코드
   state_set '.process.child_pgid = $g | .process.child_lstart = $l' --argjson g "$CHILD_PGID" --arg l "$(proc_lstart "$CHILD_PGID")"
   wait "$CHILD_PGID" || rc=$?
   CHILD_PGID=""
-  state_set 'del(.process.child_pgid, .process.child_lstart)'
+  # 끝난 자식 그룹 기록은 다음 상태 쓰기와 함께 지운다. 그 사이에 stop·resume이 보아도 child_alive가 그룹이 없다고 판정한다.
+  STATE_PENDING='del(.process.child_pgid, .process.child_lstart)'
   return "$rc"
 }
 on_stop_signal() {
@@ -536,14 +616,19 @@ stop_run() { # reason
   exit 0
 }
 
-go() { # from outcome → 그래프에 선언된 전이만 따른다
-  local from="$1" outcome="$2" to
-  to="$(jq -r --arg f "$from" --arg o "$outcome" \
-    'first(.transitions[] | select(.from == $f and ((.when // "") == $o)) | .to) // empty' "$GRAPH")"
-  [[ -n "$to" ]] || finish invariant_violation 40 "graph declares no transition from '$from' on '${outcome:-<always>}'"
+go() { # from outcome [jq-filter [jq args...]] → 그래프에 선언된 전이만 따른다
+  # 필터를 주면 그 노드의 마지막 상태 쓰기와 전이를 한 번에 쓴다(#569). 필터는 전이보다 먼저 적용되고 $go_* 이름은 쓰지 않는다.
+  local from="$1" outcome="$2" to pre=.
+  shift 2
+  if (($#)); then pre="$1"; shift; fi
+  to="$(edge_to "$from" "$outcome")"
+  if [[ -z "$to" ]]; then
+    [[ "$pre" == . ]] || state_set "$pre" "$@"
+    finish invariant_violation 40 "graph declares no transition from '$from' on '${outcome:-<always>}'"
+  fi
   # 어떤 전이든 수리 동의 대기를 끝낸다. 같은 노드를 다시 지날 때(re_review) 남은 대기가 노드 실행을 건너뛰게 하지 않는다.
-  state_set '.node = $to | .awaiting = null | .history += [{from:$f, outcome:$o, to:$to, at:$t}]' \
-    --arg to "$to" --arg f "$from" --arg o "$outcome" --arg t "$(now_utc)"
+  state_set "($pre) | .node = \$go_to | .awaiting = null | .history += [{from:\$go_from, outcome:\$go_outcome, to:\$go_to, at:\$go_at}]" \
+    --arg go_to "$to" --arg go_from "$from" --arg go_outcome "$outcome" --arg go_at "$(now_utc)" "$@"
   log "$from --${outcome:-next}--> $to"
 }
 
@@ -575,20 +660,18 @@ stream_progress() { # label → stdout: result 이벤트 한 줄
 # run_agent <node> <label> <prompt> [schema] → $RUN/<label>.out. 쓰기 권한은 그래프의 nodes.<node>.write가 정한다.
 run_agent() {
   local node="$1" label="$2" prompt="$3" schema="${4:-}" rc=0 writable
-  local out="$RUN/$label.out" network browser commands
-  writable="$(jq -r --arg n "$node" '.nodes[$n].write' "$GRAPH")"
+  local out="$RUN/$label.out" network browser commands reads_run runtime
   # 화면 검증(browser)은 앱 서버를 띄우고 브라우저를 조종해야 하므로 네트워크 노드처럼 명령과 로컬 네트워크를 연다.
   # 재현(commands)은 테스트·명령을 실행해야 하므로 명령만 연다. 둘 다 쓰기는 지문 비교가 막는다.
-  browser="$(jq -r --arg n "$node" '.nodes[$n].browser // false' "$GRAPH")"
-  network="$(jq -r --arg n "$node" '.nodes[$n].network // .nodes[$n].browser // false' "$GRAPH")"
-  commands="$(jq -r --arg n "$node" '.nodes[$n].commands // .nodes[$n].network // .nodes[$n].browser // false' "$GRAPH")"
+  read -r writable browser network commands reads_run <<<"$(node_attrs "$node")"
+  runtime="$(state .runtime)"
   # 같은 label을 다시 쓰는 노드(publish 재실행·resume)가 이전 결과를 이번 결과로 읽지 않게 한다.
-  rm -f "$out"
+  [[ ! -e "$out" && ! -L "$out" ]] || rm -f "$out"
   printf '%s\n' "$prompt" >"$RUN/$label.prompt"
   # 명령을 실행하는 읽기 노드의 산출물(캡처·로그·임시 스크립트)은 저장소가 아니라 이 노드의 증거 디렉터리에 남긴다.
   [[ "$writable" != true && "$commands" == true && "$network" != true || "$browser" == true ]] && mkdir -p "$RUN/$label"
-  log "$label ($([[ "$writable" == true ]] && echo write || echo read-only), $(state .runtime))"
-  case "$(state .runtime)" in
+  log "$label ($([[ "$writable" == true ]] && echo write || echo read-only), $runtime)"
+  case "$runtime" in
     codex)
       # read-only sandbox는 명령의 쓰기·네트워크를 열 수 없다. 명령을 실행하는 읽기 노드는 workspace-write로 띄우고 run_node의 지문 비교로 쓰기를 막는다.
       local args=(exec -C "$REPO" -s "$([[ "$writable" == true || "$commands" == true ]] && echo workspace-write || echo read-only)" -o "$out")
@@ -619,7 +702,7 @@ run_agent() {
       [[ -d "$RUN/$label" ]] && args+=(--add-dir "$RUN/$label")
       # 측정 증거(캡처·채점 보고)를 읽어 판정하는 읽기 노드(reads_run). 읽기 도구만 있고, 측정 디렉터리만 연다 —
       # 수정 쪽 요약(fix-N.out)·이전 판정·state.json을 보지 않아야 독립 판정이다.
-      if [[ "$writable" != true && "$commands" != true && "$(jq -r --arg n "$node" '.nodes[$n].reads_run // false' "$GRAPH")" == true ]]; then
+      if [[ "$writable" != true && "$commands" != true && "$reads_run" == true ]]; then
         local ev
         while IFS= read -r ev; do
           [[ -n "$ev" && -d "$ev" ]] && args+=(--add-dir "$ev")
@@ -639,20 +722,23 @@ run_agent() {
 
 run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로, 쓰기 노드는 승인으로 지킨다
   local node="$1" before writable
-  writable="$(jq -r --arg n "$node" '.nodes[$n].write' "$GRAPH")"
+  read -r writable _ <<<"$(node_attrs "$node")"
   if [[ "$writable" == true ]]; then
-    [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
+    [[ "$(state '(.approval.brief_hash // "" | tostring) == (.brief_hash | tostring)')" == true ]] \
       || finish invariant_violation 40 "write node '$node' reached without approval of the current brief"
     run_agent "$@"
+    guard_head "$node"
   else
     before="$(fingerprint)"
     run_agent "$@"
+    # 에이전트가 끝난 뒤 HEAD를 한 번 읽어 지문 비교와 HEAD 감시에 같이 쓴다.
+    read_head
     # remote_ci 도중 깨끗한 작업 트리에 base 병합 커밋 하나만 더해진 것은 remote_ci가 sync_base로 넘긴다(#508).
-    [[ "$(fingerprint)" == "$before" ]] \
-      || { [[ "$node" == remote_ci ]] && outside_base_merge "$(git -C "$REPO" rev-parse HEAD)"; } \
+    [[ "$(fingerprint "$REPO_HEAD_OUT")" == "$before" ]] \
+      || { [[ "$node" == remote_ci ]] && outside_base_merge "$REPO_HEAD_OUT"; } \
       || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -). Remove those changes before starting again"
+    guard_head "$node" "$REPO_HEAD"
   fi
-  guard_head "$node"
 }
 
 # 검사 프로세스에 넘기는 테스트 동시 실행 수(HM_TEST_JOBS, #513). 사용자 설정이 1 이상의 정수가 아니면 max(1, min(ncpu/2, 4)).
@@ -699,11 +785,13 @@ is_narrow_regression() {
 }
 
 run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문자열은 한 번만 실행한다
-  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]" full="" tree after start seconds
-  commands="$(jq -c 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end)' <<<"$commands")"
+  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]" full="" tree after start seconds lines
+  # 중복을 뺀 명령 줄을 jq 한 번에 얻는다. 끝의 x는 명령 치환이 지우는 마지막 줄바꿈을 지킨다.
+  lines="$(jq -r 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end) | .[]' <<<"$commands" && printf x)"
+  lines="${lines%x}"
   while IFS= read -r cmd; do
     if is_full_regression "$cmd"; then full="$cmd"; break; fi
-  done <<<"$(jq -r '.[]' <<<"$commands")"
+  done <<<"$lines"
   resolve_check_jobs
   tree=""
   while IFS= read -r cmd; do
@@ -721,9 +809,9 @@ run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문�
       continue
     fi
     rc=0
-    start="$(date +%s)"
+    start="$SECONDS"
     run_in_group in_repo env HM_TEST_JOBS="$CHECK_JOBS" bash -c "$cmd" >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
-    seconds=$(($(date +%s) - start))
+    seconds=$((SECONDS - start))
     results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --argjson s "$seconds" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
       '. + [{command:$cmd, exit:$rc, tail:$tail, seconds:$s}]' <<<"$results")"
     after="$(worktree_tree 2>/dev/null || true)"
@@ -737,7 +825,7 @@ run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문�
       fi
     fi
     tree="$after"
-  done < <(jq -r '.[]' <<<"$commands")
+  done < <(printf '%s' "$lines")
   printf '%s\n' "$results" >"$RUN/$label.checks.json"
   state_set '.last_checks = $l' --arg l "$label"
   return "$failed"
@@ -785,10 +873,10 @@ failed_check_commands() { jq -c '[.[] | select(.exit != 0) | .command] | reduce 
 
 # 노드가 부르는 필수 검사. repair 뒤에는 직전에 실패한 check만 먼저 돌리고, 통과하면 전체를 한 번 돌려 확정한다.
 verify_checks() { # label → 통과면 0. 실패면 findings·다음에 다시 돌릴 check·실패 시그니처를 기록하고 1
-  local label="$1" commands file
-  commands="$(state '.repair_checks // []')"
+  local label="$1" commands file attempts
+  IFS=$'\037' read -r commands attempts <<<"$(state_fields '(.repair_checks // [] | tojson), .attempts')"
   local before_failed=""
-  [[ "$(state .attempts)" -gt 0 && "$commands" != "[]" ]] && before_failed="$(worktree_tree)"
+  [[ "$attempts" -gt 0 && "$commands" != "[]" ]] && before_failed="$(worktree_tree)"
   if [[ -n "$before_failed" ]] && ! run_checks "$label-failed" "$commands"; then
     file="$RUN/$label-failed.checks.json"
   elif {
@@ -847,12 +935,12 @@ print_brief() {
   printf '== %s · run %s ==\n\n' "$BRIEF_TITLE" "$RUN_ID"
   cat "$RUN/brief.md"
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
-  state '.checks[] | "- " + .'
-  state 'if (.final_checks // [] | length) == 0 then empty
+  state '(.checks[] | "- " + .),
+    (if (.final_checks // [] | length) == 0 then empty
     elif .policy.final_gate == "remote_ci" then "\n== 원격 CI에 맡기는 넓은 검증 (로컬에서 돌리지 않음) ==\n" + (.final_checks | map("- " + . + " (left to remote CI)") | join("\n"))
-    else "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) end'
-  jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
-  jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
+    else "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) end)'
+  jq -r '(if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end),
+    (if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end)' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
     if [[ "$WORKFLOW" == review ]]; then
       printf '\n== 정책 승인 (HM_APPROVAL=auto) ==\n수리 범위는 %s에 남는다. 수리는 커밋하지 않고 작업 트리에 남긴다.\n' "$RUN/brief.md"
@@ -1010,7 +1098,7 @@ await_repair() { # node edge
 # Brief가 화면 시나리오를 놓쳤는데 화면 파일이 바뀌었으면 파일마다 시나리오를 넣는다.
 ui_backstop() {
   local ui_files
-  [[ "$(state '.findings | length')" -eq 0 && "$(state '.ui_scenarios // [] | length')" -eq 0 ]] || return 0
+  [[ "$(state '(.findings | length) == 0 and (.ui_scenarios // [] | length) == 0')" == true ]] || return 0
   ui_files="$(ui_files_changed)"
   [[ -n "$ui_files" ]] || return 0
   log "no UI scenarios were listed, but screen files changed; verifying them anyway"
@@ -1022,11 +1110,12 @@ ui_backstop() {
 # 실패하면 그 출력이 blocking finding이 되어 수리로 간다. 수리 뒤에는 실패한 명령을 먼저 다시 돌린다(repair_checks).
 # 검사가 파일을 만들거나 고치면 그 변경은 리뷰를 받지 않았으므로 통과로 치지 않고 수리·재리뷰로 보낸다.
 final_gate() { # → 통과(또는 넓은 검사 없음)면 0, 실패면 findings를 기록하고 1
-  local label before after changed
-  [[ "$(state '.final_checks // [] | length')" -gt 0 ]] || return 0
+  local label before after changed n_final gate deferred
+  IFS=$'\037' read -r n_final gate deferred <<<"$(state_fields '(.final_checks // [] | length), (.policy.final_gate // "local"), ((.final_gate.deferred // null) == .final_checks)')"
+  [[ "$n_final" -gt 0 ]] || return 0
   # 원격 CI가 최종 관문인 런(.policy.final_gate, #557)은 로컬에서 돌리지 않는다. push한 커밋은 remote_ci가 끝까지 본다.
-  if [[ "$(state '.policy.final_gate // "local"')" == remote_ci ]]; then
-    if [[ "$(state '(.final_gate.deferred // null) == .final_checks')" != true ]]; then
+  if [[ "$gate" == remote_ci ]]; then
+    if [[ "$deferred" != true ]]; then
       log "final checks left to remote CI: $(state '.final_checks | join(" ; ")')"
       state_set '.final_gate = {mode: "remote_ci", deferred: .final_checks}'
     fi
@@ -1062,20 +1151,22 @@ checks_ran_text() {
 
 # 리뷰 노드(review·classify·re_review)의 출구. findings·needs_user_decision·ui_scenarios는 상태에 있다.
 route_review() { # node
-  local node="$1"
+  local node="$1" n_findings n_ui needs attempts
   if [[ "$(state '.findings | length')" -eq 0 ]]; then final_gate || true; fi
   ui_backstop
-  if [[ "$(state '.findings | length')" -gt 0 ]]; then
+  # final_gate·ui_backstop이 상태를 고친 뒤에 한 번 읽는다.
+  IFS=$'\037' read -r n_findings n_ui needs attempts <<<"$(state_fields '(.findings | length), (.ui_scenarios // [] | length), (.needs_user_decision // false), .attempts')"
+  if [[ "$n_findings" -gt 0 ]]; then
     case "$node" in
       classify)
-        if [[ "$(state '.needs_user_decision // false')" == true ]]; then
+        if [[ "$needs" == true ]]; then
           go classify "$(edge_when classify user_decision)"
         else
           await_repair classify "$(edge_when classify repair)"
         fi
         ;;
       re_review)
-        if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
+        if [[ "$needs" == true || "$attempts" -ge "$MAX_REPAIR" ]]; then
           go re_review "$(edge_when re_review user_decision)"
         else
           await_repair re_review "$(edge_when re_review repair)"
@@ -1083,7 +1174,7 @@ route_review() { # node
         ;;
       *) go "$node" "$(edge_when "$node" repair)" ;;
     esac
-  elif [[ "$(state '.ui_scenarios // [] | length')" -gt 0 ]]; then
+  elif [[ "$n_ui" -gt 0 ]]; then
     # 화면 검증 노드가 없는 그래프(동기화 전)로는 화면을 검증할 수 없다. 코드가 끝났어도 done이 아니다.
     if ! has_edge "$node" no_blocking_findings_ui_affected; then
       local legacy="$UI_UNVERIFIED: the project graph has no ui_review node, so the screens were not verified; nothing was published. Sync the harness (/harness-init --sync), then start a new run or verify the screens and publish by hand"
@@ -1093,8 +1184,7 @@ route_review() { # node
     fi
     go "$node" no_blocking_findings_ui_affected
   else
-    state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
-    go "$node" no_blocking_findings
+    go "$node" no_blocking_findings '.reviewed_tree = $t' --arg t "$(worktree_tree)"
   fi
 }
 
@@ -1116,7 +1206,8 @@ publish() {
     go publish changed_after_review
     return
   fi
-  policy="$(state '.policy.git // ""')"
+  local approved start_head head_now
+  IFS=$'\037' read -r policy approved <<<"$(state_fields '(.policy.git // ""), ((.approval.brief_hash // "" | tostring) == (.brief_hash | tostring))')"
   case "$policy" in
     pr-only|direct|merge) ;;
     *)
@@ -1125,7 +1216,7 @@ publish() {
       return
       ;;
   esac
-  [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
+  [[ "$approved" == true ]] \
     || finish invariant_violation 40 "write node 'publish' reached without approval of the current brief"
   if [[ "$WORKFLOW" == release ]]; then
     run_agent publish publish "$CONTEXT
@@ -1166,17 +1257,20 @@ $(brief_context)" "$PUBLISH_SCHEMA"
     || problems="$(jq -c '. + ["uncommitted changes remain after publish"]' <<<"$problems")"
   tree_unchanged_since reviewed_tree \
     || problems="$(jq -c '. + ["the committed tree differs from the reviewed tree"]' <<<"$problems")"
-  if [[ "$(state .start_head)" != none ]] && ! git -C "$REPO" merge-base --is-ancestor "$(state .start_head)" HEAD 2>/dev/null; then
+  start_head="$(state .start_head)"
+  if [[ "$start_head" != none ]] && ! git -C "$REPO" merge-base --is-ancestor "$start_head" HEAD 2>/dev/null; then
     problems="$(jq -c '. + ["history before the run was rewritten"]' <<<"$problems")"
   fi
-  [[ "$(git -C "$REPO" rev-parse '@{upstream}' 2>/dev/null || true)" == "$(git -C "$REPO" rev-parse HEAD)" ]] \
+  # 세션이 끝난 뒤 HEAD를 한 번 읽어 upstream 비교·상태·기준점에 같이 쓴다. 그 사이에 HEAD를 옮기는 단계는 없다.
+  read_head
+  head_now="$REPO_HEAD_OUT"
+  [[ "$(git -C "$REPO" rev-parse '@{upstream}' 2>/dev/null || true)" == "$head_now" ]] \
     || problems="$(jq -c '. + ["HEAD is not pushed to its upstream"]' <<<"$problems")"
   [[ "$policy" == direct || -n "$pr_url" ]] \
     || problems="$(jq -c --arg g "$policy" '. + ["git_policy \($g) requires a pull request, but pr_url is empty"]' <<<"$problems")"
-  state_set '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
-    --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg u "$pr_url" \
+  save_baseline --have-head '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
+    --arg h "$head_now" --arg u "$pr_url" \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
-  save_baseline
   if [[ "$problems" == "[]" ]]; then
     go publish published_or_not_required
   else
@@ -1187,16 +1281,16 @@ $(brief_context)" "$PUBLISH_SCHEMA"
 
 # remote_ci: push한 커밋의 원격 CI가 끝날 때까지 본다. 로컬과 원격 환경(OS·DB·시각 정밀도)이 달라 로컬 통과가 원격 통과를 보장하지 않는다.
 remote_ci() {
-  local head branch pr_url label out status commit remote local_head moved
-  if [[ "$(state '.publish.skipped // ""')" != "" ]]; then
+  local head branch pr_url label out status commit remote local_head moved skipped attempts hb git_pol unattended
+  IFS=$'\037' read -r skipped pr_url attempts <<<"$(state_fields '(.publish.skipped // ""), (.publish.pr_url // ""), .attempts')"
+  if [[ "$skipped" != "" ]]; then
     state_set '.remote_ci = {status: "not_required", summary: "nothing was pushed"}'
     go remote_ci remote_ci_passed_or_not_required
     return
   fi
-  head="$(git -C "$REPO" rev-parse HEAD)"
-  branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
-  pr_url="$(state '.publish.pr_url // ""')"
-  label="remote-ci-$(state .attempts)"
+  hb="$(git -C "$REPO" rev-parse HEAD --abbrev-ref HEAD)"
+  head="${hb%%$'\n'*}" branch="${hb#*$'\n'}"
+  label="remote-ci-$attempts"
   run_node remote_ci "$label" "$CONTEXT
 
 You are the remote_ci node. Do not edit any file, commit, or push. The publish node pushed commit $head on branch $branch${pr_url:+ (pull request $pr_url)}. Find out whether the remote CI for exactly that commit passed, without asking anyone anything:
@@ -1239,11 +1333,23 @@ Return only JSON matching the schema; commit is the SHA the result belongs to." 
   if [[ "$status" == none ]] && repo_has_ci_config; then
     unverified_because "the session reported no remote CI, but the repository has CI configuration"
   fi
-  state_set '.remote_ci = ($r[0] + {head: $h, pr_url: $u, at: $t})' --slurpfile r "$out" --arg h "$head" --arg u "$pr_url" --arg t "$(now_utc)"
+  local rci_filter='.remote_ci = ($r[0] + {head: $h, pr_url: $u, at: $t})' rci_to
+  local rci_args=(--slurpfile r "$out" --arg h "$head" --arg u "$pr_url" --arg t "$(now_utc)")
+  if [[ "$status" == passed || "$status" == none ]]; then
+    IFS=$'\037' read -r git_pol unattended <<<"$(state_fields '.policy.git, (.policy.unattended // false)')"
+    rci_to="$(edge_when remote_ci merge)"
+    if [[ "$git_pol" == merge && -n "$pr_url" && "$unattended" != true && -n "$rci_to" ]]; then
+      # 원격 CI 결과와 merge로 가는 전이를 한 번에 쓴다.
+      go remote_ci "$rci_to" "$rci_filter" "${rci_args[@]}"
+      return
+    fi
+  fi
+  state_set "$rci_filter" "${rci_args[@]}"
   case "$status" in
     passed|none)
-      if [[ "$(state '.policy.git')" == merge && -n "$pr_url" ]]; then
-        if [[ "$(state '.policy.unattended // false')" == true ]]; then
+      IFS=$'\037' read -r git_pol unattended <<<"$(state_fields '.policy.git, (.policy.unattended // false)')"
+      if [[ "$git_pol" == merge && -n "$pr_url" ]]; then
+        if [[ "$unattended" == true ]]; then
           state_set '.merge = {skipped: "unattended run; merging is left to a person"}'
         elif [[ -n "$(edge_when remote_ci merge)" ]]; then
           go remote_ci "$(edge_when remote_ci merge)"
@@ -1438,10 +1544,10 @@ branch_protection() { # pr-url base
 merge() {
   local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection conflict=""
   local pending_max="${HM_MERGE_PENDING_RETRIES:-8}" pending_wait="${HM_MERGE_PENDING_POLL_SECONDS:-15}" pending_try=0
-  url="$(state '.publish.pr_url // ""')"
-  head="$(state .head)"
-  mp="$(jq -c '.policy.merge' "$STATE")"
-  [[ "$(state '.policy.git')" == merge && "$mp" != null && "$(state '.policy.unattended // false')" != true ]] \
+  local git_pol unattended branch mp_base mp_min f_state f_mergeable f_base f_head_ref f_head f_changes f_ci f_draft f_commit f_merged_at f_approvals f_napprovals
+  # 이 노드가 읽는 상태 값은 jq 한 번에 읽는다. 아래 state_set 전에만 쓴다.
+  IFS=$'\037' read -r url head git_pol unattended branch mp <<<"$(state_fields '(.publish.pr_url // ""), .head, .policy.git, (.policy.unattended // false), (.publish.branch // ""), (.policy.merge | tojson)')"
+  [[ "$git_pol" == merge && "$mp" != null && "$unattended" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
   # push 직후에는 호스트가 충돌 여부를 아직 계산 중(pending)일 때가 많다. 사람의 resume 없이 잠깐 기다렸다 다시 읽는다(#542).
   [[ "$pending_max" =~ ^[0-9]+$ ]] || pending_max=8
@@ -1454,7 +1560,9 @@ merge() {
       go merge merge_blocked
       return
     fi
-    if ((pending_try >= pending_max)) || [[ "$(jq -r '"\(.state)/\(.mergeable)"' <<<"$facts")" != OPEN/pending ]]; then
+    IFS=$'\037' read -r f_state f_mergeable f_base f_head_ref f_head f_changes f_ci f_draft f_commit f_merged_at f_approvals f_napprovals \
+      <<<"$(json_fields '.state, .mergeable, .base, .head_ref, .head, .changes_requested, .ci, .draft, .merge_commit, .merged_at, (.approvals | tojson), (.approvals | length)' "$facts")"
+    if ((pending_try >= pending_max)) || [[ "$f_state/$f_mergeable" != OPEN/pending ]]; then
       break
     fi
     pending_try=$((pending_try + 1))
@@ -1466,21 +1574,22 @@ merge() {
   origin="$(git -C "$REPO" config --get remote.origin.url || true)"
   [[ -n "$origin" && "$(repo_slug "$origin")" == "$(repo_slug "$url")" ]] \
     || blocked="$(jq -c --arg u "$url" --arg o "${origin:-none}" '. + ["the pull request \($u) is not in this repository (origin \($o))"]' <<<"$blocked")"
-  [[ "$(jq -r .base <<<"$facts")" == "$(jq -r .base <<<"$mp")" ]] \
-    || blocked="$(jq -c --argjson f "$facts" --arg b "$(jq -r .base <<<"$mp")" '. + ["the pull request targets \($f.base), not the base branch \($b) the merge policy allows"]' <<<"$blocked")"
-  [[ "$(jq -r .head_ref <<<"$facts")" == "$(state '.publish.branch // ""')" ]] \
-    || blocked="$(jq -c --argjson f "$facts" --arg b "$(state '.publish.branch // ""')" '. + ["the pull request comes from \($f.head_ref), not the pushed branch \($b)"]' <<<"$blocked")"
+  mp_base="$(jq -r .base <<<"$mp")"
+  [[ "$f_base" == "$mp_base" ]] \
+    || blocked="$(jq -c --argjson f "$facts" --arg b "$mp_base" '. + ["the pull request targets \($f.base), not the base branch \($b) the merge policy allows"]' <<<"$blocked")"
+  [[ "$f_head_ref" == "$branch" ]] \
+    || blocked="$(jq -c --argjson f "$facts" --arg b "$branch" '. + ["the pull request comes from \($f.head_ref), not the pushed branch \($b)"]' <<<"$blocked")"
   if [[ "$blocked" == "[]" ]]; then
-    case "$(jq -r .state <<<"$facts")" in
+    case "$f_state" in
       MERGED)
         # 사람이 먼저 병합했거나, 지난 시도의 병합이 늦게 반영됐다. 병합 후 검증은 그 병합 커밋으로 이어 간다.
-        merged_epoch="$(iso_epoch "$(jq -r .merged_at <<<"$facts")")"
-        [[ -n "$(jq -r .merge_commit <<<"$facts")" ]] \
+        merged_epoch="$(iso_epoch "$f_merged_at")"
+        [[ -n "$f_commit" ]] \
           || finish incomplete 30 "the pull request is merged but the host has not reported the merge commit yet; run resume to check again"
         state_set '.merge = {commit: $f.merge_commit, base: $f.base, method: (if .merge.requested then (.merge.method // "by the runner") else "outside the runner" end),
             approvals: (.merge.approvals // []), merged_at: $f.merged_at, merged_epoch: ($e | tonumber)}' \
-          --argjson f "$facts" --arg e "${merged_epoch:-$(date -u +%s)}"
-        log "the pull request is merged: $(jq -r .merge_commit <<<"$facts")"
+          --argjson f "$facts" --arg e "${merged_epoch:-$(epoch_now)}"
+        log "the pull request is merged: $f_commit"
         go merge merged
         return ;;
       CLOSED) blocked='["the pull request was closed without merging"]' ;;
@@ -1490,8 +1599,8 @@ merge() {
   # 호스트가 강제하지 않아도 러너가 직접 판정한다. 규칙을 읽지 못하면 모르는 채로 병합하지 않는다. 방식은 저장소 설정을 따른다.
   # 이전 버전이 시작 때 정한 require·min_approvals·method(개인 HM_MERGE_* 또는 기본값)는 resume에서도 쓰지 않는다.
   if [[ "$blocked" == "[]" ]]; then
-    if ! protection="$(branch_protection "$url" "$(jq -r .base <<<"$mp")" 2>"$RUN/protection.why")"; then
-      blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" --arg e "$(head -c 300 "$RUN/protection.why")" \
+    if ! protection="$(branch_protection "$url" "$mp_base" 2>"$RUN/protection.why")"; then
+      blocked="$(jq -c --arg b "$mp_base" --arg e "$(head -c 300 "$RUN/protection.why")" \
         '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only by the rules the repository sets — merge by hand or let the runner read the protection"]' <<<"$blocked")"
     elif [[ "$WORKFLOW" == release ]] && ! method="$(release_merge_method "$url" 2>"$RUN/method.why")"; then
       blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" '. + [$e]' <<<"$blocked")"
@@ -1499,44 +1608,48 @@ merge() {
       blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" \
         '. + ["cannot read which merge methods the repository allows (\($e)); merge by hand"]' <<<"$blocked")"
     else
-      state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$(jq -r .base <<<"$mp")" --arg t "$(now_utc)"
+      state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$mp_base" --arg t "$(now_utc)"
       mp="$(jq -c --argjson p "$protection" '.min_approvals = $p.approvals
         | .require = ([if $p.approvals > 0 then "human_approval" else empty end, if $p.checks > 0 then "remote_ci" else empty end]
             + ["no_conflict", "not_draft"])' <<<"$mp")"
     fi
   fi
   # 리뷰어의 변경 요청은 저장소 규칙과 상관없이 넘어가지 않는다.
-  [[ "$(jq -r .changes_requested <<<"$facts")" != true ]] || blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
+  [[ "$f_changes" != true ]] || blocked="$(jq -c '. + ["a reviewer requested changes"]' <<<"$blocked")"
   # 승인·CI는 리뷰하고 push한 그 커밋에 대한 것이어야 한다. head가 움직였으면 누군가 push했다.
-  [[ ${#head} -ge 7 && "$(jq -r .head <<<"$facts")" =~ ^[0-9a-f]{7,}$ && "$head" == "$(jq -r .head <<<"$facts")"* ]] \
-    || blocked="$(jq -c --arg h "$head" --arg p "$(jq -r .head <<<"$facts")" '. + ["the pull request head \($p) is not the pushed and reviewed commit \($h)"]' <<<"$blocked")"
+  [[ ${#head} -ge 7 && "$f_head" =~ ^[0-9a-f]{7,}$ && "$head" == "$f_head"* ]] \
+    || blocked="$(jq -c --arg h "$head" --arg p "$f_head" '. + ["the pull request head \($p) is not the pushed and reviewed commit \($h)"]' <<<"$blocked")"
+  # require 목록 다음 줄에 min_approvals를 둔다. mp는 위에서 보호 규칙으로 바뀌었을 수 있어 여기서 읽는다.
+  mp_min="$(jq -r '.min_approvals' <<<"$mp")"
   while IFS= read -r cond; do
     case "$cond" in
       human_approval)
-        if (( $(jq '.approvals | length' <<<"$facts") < $(jq -r '.min_approvals' <<<"$mp") )); then
-          unmet="$(jq -c --argjson f "$facts" --argjson n "$(jq -r .min_approvals <<<"$mp")" \
+        if (( f_napprovals < mp_min )); then
+          unmet="$(jq -c --argjson f "$facts" --argjson n "$mp_min" \
             '. + ["human approval: \($f.approvals | length) of \($n) on the current head\(if ($f.approvals | length) > 0 then " (" + ($f.approvals | join(", ")) + ")" else "" end)"]' <<<"$unmet")"
         fi ;;
       remote_ci)
         # remote_ci 노드의 보고만으로 정하지 않는다. 호스트가 그 head에 대해 보고한 체크도 통과여야 한다.
-        if [[ "$(state '.remote_ci.status // ""')" != passed || "$(state '.remote_ci.head // ""')" != "$head" ]]; then
-          blocked="$(jq -c --arg s "$(state '.remote_ci.status // "missing"')" '. + ["remote CI for the head is \($s), not passed"]' <<<"$blocked")"
+        local rci_status rci_head rci_shown
+        IFS=$'\037' read -r rci_status rci_head rci_shown <<<"$(state_fields '(.remote_ci.status // ""), (.remote_ci.head // ""), (.remote_ci.status // "missing")')"
+        if [[ "$rci_status" != passed || "$rci_head" != "$head" ]]; then
+          blocked="$(jq -c --arg s "$rci_shown" '. + ["remote CI for the head is \($s), not passed"]' <<<"$blocked")"
         else
-          case "$(jq -r .ci <<<"$facts")" in
+          case "$f_ci" in
             passed) ;;
             pending) unmet="$(jq -c '. + ["the host still reports checks running on the head"]' <<<"$unmet")" ;;
-            *) blocked="$(jq -c --arg c "$(jq -r .ci <<<"$facts")" '. + ["the host reports the checks on the head as \($c), not passed"]' <<<"$blocked")" ;;
+            *) blocked="$(jq -c --arg c "$f_ci" '. + ["the host reports the checks on the head as \($c), not passed"]' <<<"$blocked")" ;;
           esac
         fi ;;
       no_conflict)
-        case "$(jq -r .mergeable <<<"$facts")" in
+        case "$f_mergeable" in
           false)
             conflict=yes
             blocked="$(jq -c '. + ["the pull request has merge conflicts with its base"]' <<<"$blocked")" ;;
           pending) unmet="$(jq -c '. + ["the host has not finished checking for conflicts"]' <<<"$unmet")" ;;
         esac ;;
       not_draft)
-        [[ "$(jq -r .draft <<<"$facts")" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
+        [[ "$f_draft" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
     esac
   done <<<"$(jq -r '.require[]?' <<<"$mp")"
   # 충돌이 유일한 막힘이고 그래프에 sync_base가 있으면 base를 따라잡는다. 다른 막힘이 같이 있으면 어차피 사람이 풀어야 한다(#508).
@@ -1560,21 +1673,21 @@ merge() {
     go merge merge_blocked
     return
   fi
-  state_set '.merge = {requested: true, method: $m, approvals: $a, requested_at: $t}' --argjson a "$(jq -c .approvals <<<"$facts")" --arg m "$method" --arg t "$(now_utc)"
+  state_set '.merge = {requested: true, method: $m, approvals: $a, requested_at: $t}' --argjson a "$f_approvals" --arg m "$method" --arg t "$(now_utc)"
   log "merge requested for $url ($method)"
   # 호스트가 병합(과 병합 커밋)을 보고하기까지 잠깐 걸릴 수 있다. 끝내 안 보이면 resume이 다시 읽는다.
   for i in 1 2 3 4 5; do
     facts="$(pr_facts "$url" 2>/dev/null || printf '{}')"
-    [[ "$(jq -r '.state // ""' <<<"$facts")" == MERGED && -n "$(jq -r '.merge_commit // ""' <<<"$facts")" ]] && break
+    IFS=$'\037' read -r f_state f_commit f_merged_at <<<"$(json_fields '(.state // ""), (.merge_commit // ""), .merged_at' "$facts")"
+    [[ "$f_state" == MERGED && -n "$f_commit" ]] && break
     ((i == 5)) || sleep "${HM_MERGE_POLL_SECONDS:-5}"
   done
-  [[ "$(jq -r '.state // ""' <<<"$facts")" == MERGED && -n "$(jq -r '.merge_commit // ""' <<<"$facts")" ]] \
+  [[ "$f_state" == MERGED && -n "$f_commit" ]] \
     || finish incomplete 30 "the merge of $url was requested but the host does not report it merged yet; run resume to check again"
-  state_set '.merge = (.merge + {commit: $f.merge_commit, base: $f.base, method: $m, merged_at: $f.merged_at, merged_epoch: ($e | tonumber)})' \
-    --argjson f "$facts" --arg m "$method" --arg e "$(iso_epoch "$(jq -r .merged_at <<<"$facts")" || true)"
-  state_set 'if .merge.merged_epoch == null then .merge.merged_epoch = ($n | tonumber) else . end' --arg n "$(date -u +%s)"
-  log "merged $url as $(jq -r .merge_commit <<<"$facts") ($method)"
-  go merge merged
+  log "merged $url as $f_commit ($method)"
+  go merge merged '.merge = (.merge + {commit: $f.merge_commit, base: $f.base, method: $m, merged_at: $f.merged_at, merged_epoch: ($e | tonumber)})
+    | if .merge.merged_epoch == null then .merge.merged_epoch = ($n | tonumber) else . end' \
+    --argjson f "$facts" --arg m "$method" --arg e "$(iso_epoch "$f_merged_at" || true)" --arg n "$(epoch_now)"
 }
 
 # base 동기화(#508): 원격 base와 작업 브랜치 ref를 가져온다. 작업 브랜치 ref는 바깥에서 push된 커밋을 보려고 함께 가져온다.
@@ -1766,8 +1879,7 @@ Return only JSON matching the schema; commit is the SHA the result belongs to."
 # 세션의 보고를 병합 커밋에 대한 결과로 판정한다. 다른 커밋의 통과·CI 설정이 있는데 "없음"은 미확인이다(요약을 고쳐 쓴다).
 target_ci_status() { # out-file commit → stdout: passed|failed|none|pending|unverified
   local out="$1" commit="$2" status reported
-  status="$(jq -r .status "$out")"
-  reported="$(jq -r .commit "$out")"
+  IFS=$'\037' read -r status reported <<<"$(jq -r '[.status, .commit] | map(tostring) | join("\u001f")' "$out")"
   if [[ "$status" == passed || "$status" == none ]] && [[ ${#reported} -lt 7 || ( "$commit" != "$reported"* && "$reported" != "$commit"* ) ]]; then
     status=unverified
     jq '.summary = "the CI result is not for the merge commit"' "$out" >"$out.tmp" && mv "$out.tmp" "$out"
@@ -1869,8 +1981,8 @@ cleanup_merged_worktree() {
     reason="중첩 clone${nested:+ at $nested}"
   else
     # 메인 체크아웃은 git-dir이 common-dir과 같다. 상대 경로·심볼릭 링크 차이를 물리 경로로 맞춰 비교한다.
-    gitdir="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)"
-    common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    gitdir="$(git -C "$REPO" rev-parse --absolute-git-dir --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    common="${gitdir#*$'\n'}" gitdir="${gitdir%%$'\n'*}"
     gitdir="$(cd "$gitdir" 2>/dev/null && pwd -P || true)"
     common="$(cd "$common" 2>/dev/null && pwd -P || true)"
     if [[ -z "$branch" || -z "$gitdir" || -z "$common" || "$gitdir" == "$common" ]]; then
@@ -1889,11 +2001,10 @@ cleanup_merged_worktree() {
 # post_merge_verify: 시작 때 정한 검증(policy.merge.verify)을 순서대로(타깃 CI → 배포 확인 → 스모크) 확인한다. 끝난 단계는 resume에서 다시 하지 않는다.
 # 실패해도 되돌리지 않는다. 되돌릴지는 사람이 정한다.
 post_merge_verify() {
-  local commit base step label out status rc fail="" hint="" cmd waited timeout af project mode
-  commit="$(state '.merge.commit // ""')"
-  base="$(state '.merge.base // ""')"
+  local commit base step label out status rc fail="" hint="" cmd waited timeout af project mode steps
+  IFS=$'\037' read -r commit base steps <<<"$(state_fields '(.merge.commit // ""), (.merge.base // ""), ((.policy.merge.verify // []) | join(" "))')"
   [[ -n "$commit" ]] || fail="the host did not report a merge commit, so nothing can be verified against it"
-  for step in $(jq -r '.policy.merge.verify[]' "$STATE"); do
+  for step in $steps; do
     [[ -z "$fail" ]] || break
     ! [[ "$(jq -r --arg s "$step" '.post_merge[$s].status // ""' "$STATE")" =~ ^(passed|tracked|skipped)$ ]] || continue
     case "$step" in
@@ -1905,9 +2016,12 @@ post_merge_verify() {
         jq -e '(.status | IN("passed", "failed", "none", "pending", "unverified")) and (.commit | type) == "string" and (.summary | type) == "string"' \
           "$out" >/dev/null 2>&1 || finish incomplete 30 "post-merge CI output does not match the schema ($out); run resume to check again"
         status="$(target_ci_status "$out" "$commit")"
-        state_set '.post_merge.target_ci = ($r[0] + {status: $s, at: $t})' --slurpfile r "$out" --arg s "$status" --arg t "$(now_utc)"
+        # 결과 기록과 통과 표시는 한 번에 쓴다.
+        state_set '.post_merge.target_ci = ($r[0] + {status: $s, at: $t})
+          | if $s == "passed" or $s == "none" then .post_merge.target_ci.status = "passed" | .post_merge.target_ci.reported = $s else . end' \
+          --slurpfile r "$out" --arg s "$status" --arg t "$(now_utc)"
         case "$status" in
-          passed|none) state_set '.post_merge.target_ci.status = "passed" | .post_merge.target_ci.reported = $s' --arg s "$status" ;;
+          passed|none) ;;
           pending)
             [[ "$mode" == notify ]] || finish incomplete 30 "CI for the merge commit $commit is still running; run resume to check again"
             # HM_TARGET_CI=notify: 기다리지 않는다. 분리 감시가 결과를 상태에 남기고 실패를 알린다. 러너는 되돌리지 않는다.
@@ -1935,7 +2049,7 @@ post_merge_verify() {
           if [[ "$step" == deploy && ( "$rc" == 126 || "$rc" == 127 ) ]]; then
             fail="the deploy check could not run (exit $rc — command not found or not executable): $cmd"
           elif [[ "$step" == deploy ]]; then
-            waited=$(( ($(date -u +%s) - $(state '.merge.merged_epoch // 0')) / 60 ))
+            waited=$(( ($(epoch_now) - $(state '.merge.merged_epoch // 0')) / 60 ))
             timeout="$(state '.policy.merge.deploy_timeout_minutes')"
             ((waited >= timeout)) \
               || finish incomplete 30 "the merge commit $commit is not deployed yet (deploy check exit $rc, ${waited} of ${timeout} minutes); run resume to check again"
@@ -2536,7 +2650,7 @@ release_verify() {
     release_fail verify verify_failed "verify_cmd could not run (exit $rc — command not found or not executable): $cmd"
     return
   fi
-  waited=$(( ($(date -u +%s) - $(state '.merge.merged_epoch // 0')) / 60 ))
+  waited=$(( ($(epoch_now) - $(state '.merge.merged_epoch // 0')) / 60 ))
   timeout="$(state '.policy.release.verify_timeout_minutes')"
   ((waited >= timeout)) \
     || finish incomplete 30 "the release $(state .release.tag) is not verified yet (verify_cmd exit $rc, ${waited} of ${timeout} minutes); run resume to check again"
@@ -2598,10 +2712,11 @@ release_finish() {
 }
 
 execute() {
-  local node brief gap
+  local node awaiting_node brief gap
   while :; do
-    node="$(state .node)"
-    if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
+    # 노드와 수리 동의 대기 노드를 jq 한 번에 읽는다. 둘 다 이 반복 안에서만 쓴다.
+    IFS=$'\037' read -r node awaiting_node <<<"$(state_fields '.node, (.awaiting.node // "")')"
+    if is_terminal "$node"; then
       case "$node" in
         fix_list)
           finish fix_list 0 "critique only — the project has no design rule document and reference screen to score against, so nothing was changed. Fix list: $RUN/brief.md (captures: $(state .baseline.evidence_dir)). To polish with scoring, create the rules with /ai-harness:design-system-builder, or when they already exist enable the design-system stack with /harness-init --reconfigure, then start again" ;;
@@ -2619,17 +2734,22 @@ execute() {
           if [[ "$WORKFLOW" == review ]]; then
             finish "done" 0 "no blocking findings remain$(state 'if .attempts > 0 then "; \(.attempts) repair round(s) passed the required checks (run by the driver) and re-review; the repairs are left uncommitted — commit and push them as git_policy allows" else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary else "" end')"
           fi
-          finish "done" 0 "$(if [[ "$WORKFLOW" == polish ]]; then printf '%s; required checks passed (run by the driver) and the independent review found no remaining selected item, regression, or lower audit axis' "$(polish_summary)"; else printf 'required checks passed (run by the driver) and no blocking findings remain'; fi)$(state 'if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end')$(state 'if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
-          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end')$(state 'if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
+          finish "done" 0 "$(if [[ "$WORKFLOW" == polish ]]; then printf '%s; required checks passed (run by the driver) and the independent review found no remaining selected item, regression, or lower audit axis' "$(polish_summary)"; else printf 'required checks passed (run by the driver) and no blocking findings remain'; fi)$(state '[(if (.publish.pr_url // "") != "" then "; PR: " + .publish.pr_url elif .publish.skipped then "; " + .publish.skipped else "" end),
+          (if .remote_ci then (if .remote_ci.status != "not_required" then "; remote CI: " + .remote_ci.status + " — " + .remote_ci.summary else "" end)
+          elif (.publish // {} | has("pr_url")) then "; remote CI: unverified — the project graph has no remote_ci node; sync the harness (/harness-init --sync)" else "" end),
+          (if .merge.commit then "; merged: " + .merge.commit[:12] + " (" + .merge.method + ")"
             + (if (.post_merge // {} | length) > 0 then "; after merge: " + ([.post_merge | to_entries[] | select(.value | type == "object") | .key + " " + .value.status + (if .value.note then " (" + .value.note + ")" else "" end)] | join(", ")) else "" end)
-          elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
-          elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
+          elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end),
+          (if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end),
+          (if .ui_review then "; UI: verified — " + .ui_review.summary
+          elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end)]
+          | map(sub("\\n+\\z"; "")) | join("")')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
            finish "$node" 20 "a person must decide$(state 'if .repair_stall then " (" + .repair_stall + ")" else "" end')$(state 'if .release.blocked then " (release " + (.release.tag // "") + ": " + .release.blocked + ")" else "" end')$(state 'if .base_sync_failed then " (base sync: " + .base_sync_failed + ")" else "" end')$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
       esac
     fi
     # review가 수리 동의를 기다리던 노드면 그 노드를 다시 실행하지 않고 동의만 확인한다.
-    if [[ "$(state '.awaiting.node // ""')" == "$node" ]]; then
+    if [[ "$awaiting_node" == "$node" ]]; then
       await_repair "$node" "$(state .awaiting.edge)"
       continue
     fi
@@ -2825,8 +2945,10 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         go handoff ""
         ;;
       brief)
-        run_node brief "brief-$(state '.history | length')" "$(brief_prompt)" "$BRIEF_SCHEMA"
-        brief="$RUN/brief-$(state '.history | length').out"
+        local b_label
+        b_label="brief-$(state '.history | length')"
+        run_node brief "$b_label" "$(brief_prompt)" "$BRIEF_SCHEMA"
+        brief="$RUN/$b_label.out"
         # human은 open_questions, auto는 decisions·needs_human을 낸다. auto에서 예전 형식이 오면 승인 노드가 사람을 기다린다.
         jq -e '(.brief | type) == "string" and (.checks | type) == "array" and ((.final_checks // []) | type) == "array"
           and ((.open_questions | type) == "array"
@@ -2844,7 +2966,9 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
             | join("\n")) else "" end
           + if (.ui_scenarios // [] | length) > 0
           then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
-        printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
+        local a_mode a_source
+        IFS=$'\037' read -r a_mode a_source <<<"$(state_fields '(.policy.approval // "human"), (.policy.approval_source // "legacy")')"
+        printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$a_mode" "$a_source" >>"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
           | .final_checks = (($b[0].final_checks // []) | map(select(length > 0)) | unique) - .checks
@@ -2857,7 +2981,9 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         go brief ""
         ;;
       approval)
-        if [[ "$(state '.approval.brief_hash // ""')" != "$(state .brief_hash)" && "$(state '.policy.approval // "human"')" == auto ]]; then
+        local a_approved a_mode
+        IFS=$'\037' read -r a_approved a_mode <<<"$(state_fields '((.approval.brief_hash // "" | tostring) == (.brief_hash | tostring)), (.policy.approval // "human")')"
+        if [[ "$a_approved" != true && "$a_mode" == auto ]]; then
           # auto는 사람 대신 정책이 승인한다. 사람만 정할 것이 있거나, 결정을 남기지 않은 예전 형식이거나, 그래프가 auto 엣지를 지웠으면 사람을 기다린다.
           if [[ "$(jq '.needs_human // [] | length' "$RUN/brief.json")" -gt 0 ]]; then
             log "approval is auto, but the brief lists decisions only a person can make; waiting for a person"
@@ -2881,8 +3007,10 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
             log "approval is auto, but the graph declares no auto_approved_by_policy edge; waiting for a person"
           else
             print_brief auto >&2
-            record_approval "$(jq -n --arg t "$(now_utc)" --arg b "$RUN/brief.md" '{source:"auto-policy", at:$t, brief:$b}')"
-            go approval auto_approved_by_policy
+            # record_approval과 같은 기록·로그를 전이와 한 번에 쓴다.
+            log "approved by auto-policy"
+            go approval auto_approved_by_policy '.approval = {source: "auto-policy", at: $t, brief: $b, brief_hash: .brief_hash, recorded_at: $t}' \
+              --arg t "$(now_utc)" --arg b "$RUN/brief.md"
             continue
           fi
         fi
@@ -3063,18 +3191,20 @@ Design-audit: baseline $(state '.baseline.audit | if .scored then "\(.total) (A 
           continue
         fi
         # 그래프에 verify 노드가 있으면 검증은 이미 그 노드가 했다. 없으면(feature) 리뷰 전에 이 스크립트가 실행한다.
-        local review_checks_ok=true
-        if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null; then
-          if [[ "$(state '.checks_verified_attempt // -1')" == "$(state .attempts)" ]]; then
+        local review_checks_ok=true rv_verified rv_attempts rv_label rv_start
+        if ! has_node verify; then
+          IFS=$'\037' read -r rv_verified rv_attempts <<<"$(state_fields '(.checks_verified_attempt // -1), .attempts')"
+          if [[ "$rv_verified" == "$rv_attempts" ]]; then
             state_set '.checks_verified_attempt = null'
-          elif ! verify_checks "review-$(state .attempts)"; then
+          elif ! verify_checks "review-$rv_attempts"; then
             review_checks_ok=false
           fi
         fi
         if [[ "$review_checks_ok" == true ]]; then
-          run_node review "review-$(state .attempts)" "$CONTEXT
+          IFS=$'\037' read -r rv_label rv_start <<<"$(state_fields '"review-\(.attempts)", .start_head')"
+          run_node review "$rv_label" "$CONTEXT
 
-You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief, including its completion-condition map, and against every completion condition of the original request below and of any issue it quotes or links. The driver already ran the required checks and they passed.
+You are the review node. Do not edit any file. Review every change since $rv_start (git diff $rv_start, which includes the driver's checkpoint commits, and untracked files) against the approved brief, including its completion-condition map, and against every completion condition of the original request below and of any issue it quotes or links. The driver already ran the required checks and they passed.
 $(if [[ "$WORKFLOW" == bug-fix ]]; then
   printf 'A blocking finding is incorrect or missing behavior, missing or unconvincing reproduction or regression evidence, a regression, security or data risk, or a material scope violation.'
 else
@@ -3088,7 +3218,7 @@ Original request:
 $(state .request)
 
 $(brief_context)" "$REVIEW_SCHEMA"
-          review_output "$RUN/review-$(state .attempts).out"
+          review_output "$RUN/$rv_label.out"
         fi
         route_review review
         ;;
@@ -3325,7 +3455,9 @@ monitor_settings() { # $1=project_id
   jq -c '.monitor // empty' "$REPO/.ai-harness/harness.json" 2>/dev/null || true
 }
 # 저장소별 설정의 키. lib.sh project_id_for_cwd(HM_AUTOFIX_REPOS·/metrics가 쓰는 project_id)와 같은 순서로 정한다.
-project_key() {
+PROJECT_KEY=""
+project_key() { # start가 한 번 정해 PROJECT_KEY에 두면 설정 함수(서브셸)마다 다시 읽지 않는다
+  [[ -z "$PROJECT_KEY" ]] || { printf '%s' "$PROJECT_KEY"; return 0; }
   local id common
   id="$(jq -r '.project_id // empty' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
   if [[ -z "$id" ]]; then
@@ -3405,6 +3537,7 @@ default_runtime() {
 
 case "$CMD" in
   start)
+    PROJECT_KEY="$(project_key)"
     case "${RUNTIME:-}" in
       "")
         runtime_choice="$(runtime_setting)" || exit 2
@@ -3450,7 +3583,11 @@ case "$CMD" in
         exit 2
       fi
     fi
-    git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+    # manifest에서 시작 판단에 쓰는 값을 jq 한 번에 읽는다. 읽지 못하면(파일 없음·객체 아님) 모두 빈 값·false다.
+    manifest_git_policy="" manifest_has_approval="" manifest_legacy_merge=""
+    IFS=$'\037' read -r manifest_git_policy manifest_has_approval manifest_legacy_merge <<<"$(jq -r '[(.git_policy // ""), (has("approval") and .approval != null),
+      ((.merge_policy | objects | has("require") or has("min_approvals") or has("method")) // false)] | map(tostring) | join("\u001f")' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+    git_policy="$manifest_git_policy"
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
@@ -3458,14 +3595,14 @@ case "$CMD" in
     # 쓰기는 노드마다 하는 지문 비교가 막는다.
     commits_workflow=1
     [[ "$WORKFLOW" != review && "$WORKFLOW" != investigate ]] || commits_workflow=""
-    if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
+    if [[ "$manifest_has_approval" == true ]]; then
       notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
     fi
     if [[ "$git_policy" == merge ]]; then
       git_policy="pr-only"
       notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
-    if [[ -n "$commits_workflow" ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
+    if [[ -n "$commits_workflow" && "$manifest_legacy_merge" == true ]]; then
       notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
     if [[ -n "$commits_workflow" && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
@@ -3490,7 +3627,7 @@ case "$CMD" in
         direct) [[ "$level" == pr ]] || note="git_policy direct pushes without a pull request, so there is nothing to merge" ;;
         *) [[ "$level" == pr ]] || note="git_policy '${git_policy:-unset}' does not let the agent commit, so there is nothing to merge" ;;
       esac
-      delivery="$(jq -cn --arg l "$level" --arg s "$level_source" --arg g "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" --arg n "$note" \
+      delivery="$(jq -cn --arg l "$level" --arg s "$level_source" --arg g "$manifest_git_policy" --arg n "$note" \
         '{level: $l, source: $s, repo_git_policy: $g} + (if $n == "" then {} else {note: $n} end)')"
     fi
     # 릴리스는 늘 PR로 나간다: 저장소 git_policy와 상관없이 PR 범위(pr-only)이고, 개인 단계가 merge·deploy면 러너가 병합한다.
@@ -3577,7 +3714,7 @@ case "$CMD" in
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
     printf '%s\n' "$RUN_ID" >"$(latest_file "$WORKFLOW")"
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
-      --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
+      --arg node "$GRAPH_ENTRY" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
       --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" --arg gate "$final_gate_mode" \
       --argjson rel "$release_policy" --arg ver "$VERSION_ARG" --arg stage "$release_stage" \
@@ -3624,14 +3761,17 @@ esac
 if [[ "$CMD" != status ]]; then
   log "run $RUN_ID · progress: $RUN/progress.log · follow with: bash $(printf '%q' "$SCRIPT_DIR/$(basename "$0")") watch --workflow $WORKFLOW --repo $(printf '%q' "$REPO")"
 fi
+run_approval=""
 if [[ "$CMD" == start ]]; then
-  log "runtime $(state .runtime) ($(state '.policy.runtime_source'))"
+  IFS=$'\037' read -r start_runtime start_runtime_source run_approval <<<"$(state_fields '.runtime, .policy.runtime_source, (.policy.approval // "human")')"
+  log "runtime $start_runtime ($start_runtime_source)"
   while IFS= read -r notice; do
     [[ -z "$notice" ]] || log "notice: $notice"
   done <<<"$(state '(.policy.notices // [])[]')"
 fi
 
-if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
+[[ -n "$run_approval" ]] || run_approval="$(state '.policy.approval // "human"')" || true
+if [[ "$run_approval" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","acceptance_map","decisions","needs_human"],
  "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
