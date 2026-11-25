@@ -11,7 +11,15 @@ source "$DIR/../lib.sh"
 
 BOARD_DIR="$HM_DATA_DIR/board"
 CONF="$BOARD_DIR/server.json"
-PORT="${BOARD_PORT:-8765}"
+# BOARD_PORT를 정하면 그 포트만, 안 정하면(빈 값 포함) 시작 포트부터 10개 안에서 처음 빈 포트에 띄운다.
+# BOARD_PORT_BASE는 사용자 설정 아님 — 테스트가 사용자 8765와 부딪히지 않게 시작 포트만 옮기는 손잡이다.
+if [[ -n "${BOARD_PORT:-}" ]]; then
+  PORT_EXPLICIT=1
+  PORT="$BOARD_PORT"
+else
+  PORT_EXPLICIT=0
+  PORT="${BOARD_PORT_BASE:-8765}"
+fi
 CLAUDE_SETTINGS="${HARNESS_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 HOOK_COPY="$BOARD_DIR/bin/permission-hook.py"
 HOOK_TIMEOUT=3600
@@ -30,7 +38,7 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
        board.sh todo add <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
-env:   BOARD_PORT (기본 8765), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
+env:   BOARD_PORT (정하면 그 포트만, 안 정하면 8765부터 빈 포트 10개 안에서), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
 EOF
   exit 2
 }
@@ -40,6 +48,9 @@ die() { printf 'board: %s\n' "$*" >&2; exit 1; }
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
   die "BOARD_PORT가 포트 번호가 아님: $PORT"
 fi
+PORT_LAST="$PORT"
+((PORT_EXPLICIT)) || PORT_LAST=$((PORT + 9))
+((PORT_LAST <= 65535)) || die "BOARD_PORT가 포트 번호가 아님: $PORT_LAST"
 
 conf_field() { jq -r --arg k "$1" '.[$k] // empty | tostring' "$CONF" 2>/dev/null || true; }
 
@@ -86,7 +97,7 @@ refresh_hook_copy() { # 훅을 연결해 둔 사용자만: 플러그인이 업�
 }
 
 command_open() {
-  local browser=1 pid url holder i
+  local browser=1 pid url holder i port conf_port
   while (($#)); do
     case "$1" in
       --no-browser) browser=0 ;;
@@ -111,9 +122,25 @@ command_open() {
   if [[ -f "$CONF" ]]; then # 죽은 서버가 남긴 파일. 권한 훅이 엉뚱한 포트로 보내지 않게 지운다
     rm -f "$CONF"
   fi
-  if port_busy "$PORT"; then
-    holder="$(port_holder "$PORT")"
-    die "포트 ${PORT}을 다른 프로세스${holder:+($holder)}가 쓰고 있어 띄우지 않았습니다. 그 프로세스를 끄거나 BOARD_PORT로 다른 포트를 정하세요."
+  if ((PORT_EXPLICIT)); then
+    if port_busy "$PORT"; then
+      holder="$(port_holder "$PORT")"
+      die "포트 ${PORT}을 다른 프로세스${holder:+($holder)}가 쓰고 있어 띄우지 않았습니다. 그 프로세스를 끄거나 BOARD_PORT로 다른 포트를 정하세요."
+    fi
+    port="$PORT"
+  else
+    # bind만으로는 못 본다: macOS는 *:port에 묶인 포트에도 127.0.0.1 bind가 성공할 수 있어 connect로 점유를 본다.
+    port=""
+    for ((i = PORT; i <= PORT_LAST; i++)); do
+      if ! port_busy "$i"; then
+        port="$i"
+        break
+      fi
+    done
+    if [[ -z "$port" ]]; then
+      holder="$(port_holder "$PORT")"
+      die "포트 ${PORT}–${PORT_LAST}를 모두 다른 프로세스가 쓰고 있어 띄우지 않았습니다${holder:+(포트 ${PORT}: $holder)}. 그 프로세스를 끄거나 BOARD_PORT로 다른 포트를 정하세요."
+    fi
   fi
   # lib.sh가 ~/.ai-harness/config의 HM_·HARNESS_ 키를 이 셸에 export했다. 그대로 물려주면 오래 떠 있는 서버와 그 자식
   # (autofix-auto.sh·status.sh·새 세션)이 띄운 시점의 값을 계속 보고, config에서 키를 지워도 반영되지 않는다.
@@ -124,12 +151,13 @@ command_open() {
     [[ -n "$key" ]] && unset_cfg+=(-u "$key")
   done <<<"$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?(HM_[A-Z0-9_]*)=.*/\2/p' "$HM_DATA_DIR/config" 2>/dev/null | sort -u)"
   # 새 세션으로 떼어 띄운다: 이 명령을 부른 셸·에이전트 턴이 끝나도 서버는 남는다.
-  env ${unset_cfg[@]+"${unset_cfg[@]}"} BOARD_PORT="$PORT" HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I -c 'import subprocess, sys
+  env ${unset_cfg[@]+"${unset_cfg[@]}"} BOARD_PORT="$port" BOARD_PORT_LAST="$PORT_LAST" HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I -c 'import subprocess, sys
 log = open(sys.argv[2], "ab")
 subprocess.Popen([sys.executable, "-B", sys.argv[1], "--no-open"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                  start_new_session=True, close_fds=True)' "$DIR/board-server.py" "$BOARD_DIR/server.log"
   for ((i = 0; i < 100; i++)); do
-    if pid="$(board_pid)" && [[ "$(conf_field port)" == "$PORT" && -n "$(conf_field url)" ]]; then
+    conf_port="$(conf_field port)"
+    if pid="$(board_pid)" && [[ "$conf_port" =~ ^[0-9]+$ ]] && ((conf_port >= PORT && conf_port <= PORT_LAST)) && [[ -n "$(conf_field url)" ]]; then
       url="$(conf_field url)"
       ((browser)) && open_browser "$url"
       running_json "$pid" false

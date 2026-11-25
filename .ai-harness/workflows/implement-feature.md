@@ -20,6 +20,8 @@
 2. **Green** — developer가 최소 변경으로 통과시킨다.
 3. **Refactor** — 테스트를 바꾸지 않고 정리, `bash tests/run.sh --changed` 재통과.
 
+러너의 deliver 노드는 Red/Green 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 리뷰가 깨끗해진 뒤 러너가 한 번 돌리므로 deliver가 직접 돌리지 않는다.
+
 역할 분리는 작업 위험이 뒷받침할 때만 쓴다. 역할 도구가 없으면 현재 세션에서 페르소나(`.ai-harness/agents/`)를 바꿔 가며 진행한다.
 
 ## 3. 리뷰·수리
@@ -28,10 +30,10 @@
 
 ## 4. 검증 명령
 
-라운드마다(리뷰·수리 때마다, Brief의 `checks`):
+라운드마다(리뷰·수리 때마다, Brief의 `checks`). 러너는 모든 검사에 동시 실행 수 `HM_TEST_JOBS`를 넘기므로 `-j`에 그 값을 준다(러너 밖에서는 2):
 
 ```bash
-bash tests/run.sh --changed
+bash tests/run.sh -j "${HM_TEST_JOBS:-2}" --changed
 bash tests/run.sh --lint
 ```
 
