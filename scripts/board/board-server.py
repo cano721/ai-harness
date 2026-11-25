@@ -30,12 +30,14 @@ GET  /references/run?t&run       실행 하나의 탭 5개 내용(references.jso
 GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ 아래 이미지·영상만(realpath로 밖을 막음)
 POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
                                  랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
-GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) 상태와 종류별 항목. 주기가 지난 소스는 이때·뒤 타이머가 다시 모음
+GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) 상태와 종류별 항목(일정은 실제 시각순, #567),
+                                 completed(최근 7일 완료함, 최신순, 줄마다 can_reopen). 주기가 지난 소스는 이때·뒤 타이머가 다시 모음
 POST /agenda/connect {t, source} · /agenda/disconnect {t, source, account?}  소스 연결·끊기(connect는 뒤에서, 최대 5분).
                                     계정을 여럿 잇는 소스는 연결된 뒤 connect가 계정을 더하고, account를 주면 그 계정만 끊는다
 POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text, due?}  직접 적는 할 일(#539 기한)
-                                 · POST /agenda/reopen {t, source, id}  방금 한 완료 되돌리기(직접 적은 할 일·보드에만 숨긴 항목)
+                                 · POST /agenda/reopen {t, source, id}  완료 되돌리기(직접 적은 할 일·보드에만 숨긴 항목,
+                                   reopen을 선언한 어댑터 — 그 argv에 항목 id를 붙여 부름). 완료함에서 그 줄을 지움
 GET  /settings/skills?t=...      하네스 설정 > 스킬(#494): setup.sh list·design list 상태 + 진행 중 setup 세션. 끝난 세션은 지우고 다시 읽음
 POST /settings/skills/check {t, name}  setup.sh check(외부 API) — 버튼으로만, 결과(ok·at·error)만 기록
 POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 스킬 하나에 setup 세션(install·setup·remove)을 띄움.
@@ -177,7 +179,7 @@ def _positive_env(name, default):
 
 REFRESH = _positive_env("BOARD_REFRESH_SECONDS", 2.0)
 REFRESH_IDLE = 60
-STALE_SYNC = 30
+STALE_SYNC = _positive_env("BOARD_STALE_SYNC_SECONDS", 30)  # 테스트는 작게 준다(기본값 그대로)
 FAIL_BACKOFF_MAX = 5.0
 # 갱신 비용(#380): 다음 갱신은 max(REFRESH, 직전 갱신 시간 × 2) 뒤 — 바쁜 Mac에서 수집이 시간의 절반을 넘게 차지하지 않게.
 # 값싼 변경 지문(fingerprint)이 같으면 전체 수집을 건너뛰되, FULL_REFRESH마다는 모은다(지문에 없는 입력·시각에 따른 판정).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — 그래프 러너 — merge 노드: 병합 성공·승인 대기·현재 head/작성자/권한 승인 조건·러너 노드 실행 비용
+# 회귀 테스트 — 그래프 러너 — merge 노드: 병합 성공·승인 대기 후 resume, HM_TARGET_CI_REPOS 우선·잘못된 값·러너 노드 실행 비용
 # 실행: bash tests/run.sh workflow-merge
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -7,6 +7,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib-driver.sh"
 # shellcheck source=tests/lib-merge.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-merge.sh"
+# shellcheck source=tests/lib-merge-tci.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-merge-tci.sh"
 
 # 병합 노드: 병합 조건·방식은 저장소 호스트 규칙(브랜치 보호·허용 병합 방식), 기준 브랜치·검증 명령은 저장소 사실이고, 러너가 PR 호스트에서 직접 읽은 상태로 판정한다.
 # 병합 조건은 호스트 보호 규칙이다. 여기서는 승인 1·체크 1의 classic 보호를 둔다.
@@ -27,15 +29,17 @@ assert_eq "0" "$(grep -c '^gh merge' "$FAKE_LOG" || true)" "nothing is merged wh
 touch "$FAKE_LOG.approved"
 driver resume
 assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG")" "resume merges once the approval arrives"
-# 승인은 지금 head에 대한 것이고 작성자 본인이 아니어야 한다.
-merge_run merge_stale "$MP_BASIC"
-assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "an approval of an older commit does not count"
-merge_run merge_self "$MP_BASIC"
-assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "the author's own approval does not count"
-merge_run merge_outsider "$MP_BASIC"
-assert_eq "30:merge" "$DRIVER_RC:$(run_state .node)" "an approval from an account without write access does not count"
-unset FAKE_PROTECTION
-pass "merge node: host rules, repository facts, merge by the runner (approval conditions)"
+pass "merge node: merges by the runner and waits for a missing approval until resume"
+
+# B5: 저장소별 설정이 전체 설정보다 우선하고, 잘못된 값은 start를 막는다.
+FAKE_TCI_ONCE=passed tci_run pm_tci_repos "HM_TARGET_CI=wait
+HM_TARGET_CI_REPOS=repo-pm_tci_repos=notify"
+assert_eq "notify:HM_TARGET_CI_REPOS:repo-pm_tci_repos" "$(run_state .policy.merge.target_ci):$(run_state .policy.merge.target_ci_source)" "HM_TARGET_CI_REPOS wins over HM_TARGET_CI"
+tci_run pm_tci_bogus "HM_TARGET_CI=bogus"
+assert_eq "2" "$DRIVER_RC" "an unknown HM_TARGET_CI stops start"
+assert_contains "$DRIVER_OUT" "HM_TARGET_CI in $MR_DATA/config is \"bogus\"; target CI must be wait or notify" "the error names the setting and the allowed values"
+unset FAKE_PROTECTION HM_DESKTOP_NOTIFY
+pass "HM_TARGET_CI_REPOS wins and an invalid HM_TARGET_CI is refused"
 
 # 러너 노드 실행 비용(#569): merge_ok와 같은 시나리오에서 러너(workflow-driver.sh와 그 서브셸)가 띄우는 jq 수에 상한을 둔다.
 # 상태·그래프를 노드마다 jq 한 번으로 묶어 읽은 것이 다시 늘지 않게 한다. 가짜 CLI·테스트 준비가 부르는 jq는 세지 않는다.

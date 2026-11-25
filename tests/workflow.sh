@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — SessionStart 안내·워크플로 진입점 계약(feature·bug-fix·review·investigate 어댑터)
+# 회귀 테스트 — SessionStart 안내·워크플로 진입점 계약(feature·bug-fix·review·investigate 어댑터) (design-polish 러너는 workflow-polish*)
 # 실행: bash tests/run.sh workflow
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -243,6 +243,7 @@ for adapter in implement-feature fix-bug review; do
   assert_contains "$(<"$ROOT/templates/$adapter/SKILL.md")" "workflow-driver.sh" "$adapter adapter runs the graph through the shared runner"
 done
 pass "feature delivery graph adapters"
+
 
 # fix-bug 템플릿은 standard 초기화가 만드는 프로젝트 로컬 재현·수정·검증 게이트의 원본이다.
 BUG_FIX_SKILL="$ROOT/templates/fix-bug/SKILL.md"

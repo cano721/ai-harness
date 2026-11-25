@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — 그래프 러너 — 자동 승인 완료 조건·리뷰 대조·revise(feature)
-# 실행: bash tests/run.sh workflow-feature-brief
+# 회귀 테스트 — 그래프 러너 — 자동 승인 완료 조건 대응·리뷰 완료 조건 대조(feature)
+# 실행: bash tests/run.sh workflow-feature-auto-approval
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/lib-driver.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-driver.sh"
+# shellcheck source=tests/lib-workflow-feature.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-workflow-feature.sh"
 
 # 자동 승인 Brief는 요청·이슈의 완료 조건을 항목마다 대응시켜야 한다(#501). 대응도 사유도 없는 조건이 있으면 러너가 다시 쓰게 하고,
 # 한도(limits.max_brief_rewrites)를 넘으면 사람에게 넘긴다. 쓰기 노드는 그동안 돌지 않는다.
-run_dir() { dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)"; }
-brief_history() { run_state '.history | map("\(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join(";")'; }
 new_driver_repo auto_uncovered
 with_policy pr-only auto
 driver start --runtime codex --request "add feature"
@@ -69,50 +69,5 @@ assert_contains "$(<"$FAKE_LOG.review.prompt")" "completion condition" "review i
 assert_contains "$(brief_history)" "review --blocking_findings--> repair" "a missing completion condition goes to repair"
 assert_contains "$(<"$(run_dir)/review-0.out")" "completion condition CSV export not met" "the finding names the missing condition"
 pass "review blocks on a completion condition the change does not meet"
-
-# 멈춘 deliver에서 revise하면 그래프의 deliver → brief 엣지로 Brief를 다시 만든다. 이전 승인은 무효다.
-new_driver_repo revise_stopped
-FAKE_SCENARIO=noop
-driver start --runtime codex --request "add feature"
-say_in_claude "승인"
-driver resume
-assert_eq "30:incomplete:deliver" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "deliver stopped without a change"
-rm -f "$DRIVER_TMP/claude/projects/p/noop.jsonl"
-driver revise --feedback "CSV 내보내기가 빠졌다"
-assert_eq "10:waiting_approval:approval" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "revise at a stopped deliver rebuilds the brief and waits again"
-assert_contains "$(brief_history)" "deliver --brief_revised--> brief" "revise follows the deliver -> brief edge"
-assert_contains "$(<"$FAKE_LOG.revise")" "CSV 내보내기가 빠졌다" "the new brief gets the feedback"
-assert_eq "null" "$(run_state .approval)" "the earlier approval no longer holds"
-
-# 실행 중인 deliver에서 revise하면 러너를 죽이지 않고 요청 파일만 남긴다. 러너는 세션이 끝난 뒤 review 대신 brief로 간다.
-new_driver_repo revise_midway
-driver start --runtime codex --request "add feature"
-say_in_claude "승인"
-driver resume
-assert_eq "0" "$(<"$FAKE_LOG.midway.rc")" "revise during a running deliver ends with 0"
-assert_contains "$(<"$FAKE_LOG.midway.out")" "brief" "revise says the run returns to the brief after the session"
-assert_file "$FAKE_LOG.midway.requested"
-assert_contains "$(brief_history)" "deliver --brief_revised--> brief" "the runner returns to the brief after the deliver session"
-assert_eq "10:waiting_approval:approval" "$DRIVER_RC:$(run_state .status):$(run_state .node)" "the new brief waits for its own approval"
-assert_eq "discover;brief;deliver;brief" "$(cut -d' ' -f1 "$FAKE_LOG" | paste -sd ';' -)" "no review runs between the revised deliver and the new brief"
-assert_not_file "$(run_dir)/revise-request.json"
-assert_contains "$(<"$FAKE_LOG.revise")" "CSV 내보내기가 빠졌다" "the new brief gets the feedback written during deliver"
-assert_contains "$(<"$FAKE_LOG.revise")" "Changes already made in this run" "the new brief sees what deliver already changed"
-assert_contains "$(<"$FAKE_LOG.revise")" "feature.txt" "the changes deliver made stay"
-say_in_claude "승인"
-driver resume
-assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "the run continues after the new brief is approved"
-
-# brief_revised 엣지가 없는 노드에서는 revise를 받지 않는다.
-new_driver_repo revise_refused
-FAKE_SCENARIO=bad_review
-driver start --runtime codex --request "add feature"
-say_in_claude "승인"
-driver resume
-assert_eq "30:review" "$DRIVER_RC:$(run_state .node)" "review stopped on a broken output"
-driver revise --feedback "x"
-assert_eq "2" "$DRIVER_RC" "revise is refused at a node without a brief_revised edge"
-assert_contains "$DRIVER_OUT" "approval, deliver" "the refusal names the nodes that take revise"
-pass "revise returns from deliver to the brief without killing the runner"
 
 finish_tests

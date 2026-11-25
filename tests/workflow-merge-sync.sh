@@ -1,42 +1,12 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — 그래프 러너 — sync_base 노드: 충돌만 막힘 → base 병합·재검사·push·remote_ci → merge, 반복 한도·미해결·검사 실패·변경 요청 (#508)
+# 회귀 테스트 — 그래프 러너 — sync_base 노드(#508): 충돌만 막힘·텍스트 충돌·한도·미해결
 # 실행: bash tests/run.sh workflow-merge-sync
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/lib-driver.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-driver.sh"
-
-# 병합 단계 사용자(HM_DELIVERY_LEVEL=merge), 승인 auto, 호스트 보호는 승인 1·체크 1(classic).
-export HM_SMOKE_RETRY_SECONDS=0 FAKE_PROTECTION=classic
-SY_DATA="$DRIVER_TMP/sync-data"
-mkdir -p "$SY_DATA"
-printf 'HM_APPROVAL=auto\nHM_DELIVERY_LEVEL=merge\n' >"$SY_DATA/config"
-sync_repo() { # scenario → 병합 정책이 있는 저장소. 원격 main은 작업 시작 커밋이다.
-  new_driver_repo "$1"
-  with_policy pr-only auto
-  as_host_repo github.com/acme/app
-  jq '.merge_policy = {"verify":["target_ci"],"base":"main"}' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_REPO/m.json" \
-    && mv "$DRIVER_REPO/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-  git -C "$DRIVER_REPO" commit -qam "repository facts"
-  git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main
-}
-sy_remote() { printf '%s' "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"; }
-base_commit() { # file content → 원격 main에만 커밋 하나를 더한다(작업 브랜치에는 없다)
-  local clone="$DRIVER_TMP/base-$FAKE_SCENARIO"
-  rm -rf "$clone"
-  git clone -q -b main "$(sy_remote)" "$clone"
-  git -C "$clone" config user.email t@t
-  git -C "$clone" config user.name t
-  printf '%s\n' "$2" >"$clone/$1"
-  git -C "$clone" add "$1"
-  git -C "$clone" commit -qm "base: $1"
-  git -C "$clone" push -q origin HEAD:refs/heads/main
-}
-sync_start() { # [workflow]
-  DRIVER_DATA_OVERRIDE="$SY_DATA" HARNESS_METRICS_DIR="$SY_DATA" driver start --workflow "${1:-feature}" --runtime codex --request "add feature"
-}
-remote_head() { git --git-dir "$(sy_remote)" rev-parse "refs/heads/feat/add-feature${1:-}" 2>/dev/null || true; }
-sync_path() { run_state '[.history[] | select(.from | IN("remote_ci", "merge", "sync_base", "post_merge_verify")) | .from] | join(",")'; }
+# shellcheck source=tests/lib-merge-sync.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-merge-sync.sh"
 
 # A1: 충돌만으로 막히면 sync_base가 origin/main을 병합하고, 재검사·push 뒤 remote_ci → merge를 다시 거쳐 병합한다.
 sync_repo merge_conflict
@@ -89,41 +59,5 @@ assert_eq "$(run_state .head)" "$(git -C "$DRIVER_REPO" rev-parse HEAD)" "the lo
 assert_contains "$DRIVER_OUT" "feature.txt" "the unresolved file is named"
 assert_eq "0" "$(run_state '.base_syncs // [] | length')" "an aborted sync is not recorded as done"
 pass "an unresolved conflict aborts the merge and goes to a person"
-
-# A5: 동기화 뒤 검사가 실패하면 push하지 않고 user_decision.
-sync_repo merge_conflict_checkfail
-base_commit broken.txt broken
-FAKE_CHECK='test ! -f broken.txt' sync_start
-assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a check failing after the base sync goes to a person"
-git --git-dir "$(sy_remote)" rev-parse -q --verify "refs/heads/feat/add-feature^2" >/dev/null && fail "the failing sync was pushed"
-assert_contains "$DRIVER_OUT" "test ! -f broken.txt" "the failed check is named"
-pass "a check failure after the base sync is not pushed"
-
-# A6: sync_base는 checks와 final_checks를 함께 다시 돌린다. 전체 회귀(bash tests/run.sh -j 2)가 같이 있으면
-# 그에 포함되는 --changed는 건너뛰고 전체 회귀만 한 번 돈다. (#513)
-sync_repo merge_conflict_covered
-COVER_LOG="$DRIVER_TMP/covered-run-args.log"
-: >"$COVER_LOG"
-mkdir -p "$DRIVER_REPO/tests"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>%q\n' "$COVER_LOG" >"$DRIVER_REPO/tests/run.sh"
-git -C "$DRIVER_REPO" add tests && git -C "$DRIVER_REPO" commit -qm "fake test runner"
-git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main
-base_commit base.txt base
-FAKE_CHECK='bash tests/run.sh --changed' FAKE_FINAL_CHECK='bash tests/run.sh -j 2' sync_start
-assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state '.base_syncs | length')" "a run with a full regression in final_checks syncs the base and merges"
-assert_eq "--changed;-j 2;-j 2" "$(paste -sd ';' "$COVER_LOG")" "sync_base runs the full regression once and not the --changed it covers"
-assert_contains "$(<"$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")/progress.log")" \
-  "check skipped (covered by bash tests/run.sh -j 2): bash tests/run.sh --changed" "the covered check is logged as skipped"
-pass "sync_base skips a narrow tests/run.sh check covered by the full regression"
-
-# A7: 충돌과 다른 막힘(변경 요청)이 같이 있으면 sync하지 않고 사람에게 넘긴다.
-sync_repo merge_conflict_changes
-base_commit base.txt base
-sync_start
-assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(run_state '.base_syncs // [] | length')" "a conflict with another blocker does not sync"
-assert_contains "$DRIVER_OUT" "merge conflicts" "the conflict is named"
-assert_contains "$DRIVER_OUT" "a reviewer requested changes" "the other blocker is named"
-[[ "$(sync_path)" != *sync_base* ]] || fail "sync_base ran although another blocker was present"
-pass "a conflict together with another blocker goes to a person"
 
 finish_tests

@@ -1,46 +1,12 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — 그래프 러너 — release 워크플로(#493): 시작 가드·단계 pr·단계 merge·merge commit만·노트 없음·그래프 계약·릴리스 확인 스크립트
+# 회귀 테스트 — 그래프 러너 — release 워크플로(#493): 시작 검사·버전 확정·단계 pr·단계 merge
 # 실행: bash tests/run.sh workflow-release
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/lib-driver.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-driver.sh"
-
-RELEASE_GRAPH="$ROOT/templates/release/references/release-graph.json"
-export FAKE_PROTECTION=none HM_MERGE_POLL_SECONDS=0
-
-# 릴리스 저장소: bare 원격에 main(릴리스된 상태)·develop(다음 릴리스)·태그 v1.2.0을 두고, 작업 브랜치 work에서 시작한다.
-# release_policy는 manifest에, 단계는 개인 config에 둔다. origin은 github.com/acme/app 주소이고 실제 push는 bare로 간다.
-rel_repo() { # scenario [release_policy-jq-filter] [delivery level]
-  local s="$1" filter="${2:-.}" level="${3:-}"
-  new_driver_repo "$s"
-  with_policy pr-only auto
-  as_host_repo github.com/acme/app
-  jq --arg t "$DRIVER_TMP" --arg s "$s" '.release_policy = {flow:"tag", evidence:["test"], base:"main", source:"develop", branch_prefix:"release/v", tag_prefix:"v",
-      prepare_cmd:"printf \"%s\\n\" \"$HM_RELEASE_VERSION\" >VERSION", notes_cmd:"printf \"notes for %s\\n\" \"$HM_RELEASE_TAG\"",
-      generate_notes:true, verify_cmd:"", verify_timeout_minutes:60, record_cmds:["touch " + $t + "/recorded-" + $s]}' \
-    "$DRIVER_REPO/.ai-harness/harness.json" | jq "$filter" >"$DRIVER_TMP/m.json"
-  mv "$DRIVER_TMP/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-  git -C "$DRIVER_REPO" commit -q --allow-empty -am "release policy"
-  git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main HEAD:refs/tags/v1.2.0
-  printf 'feature\n' >"$DRIVER_REPO/feature.txt"
-  git -C "$DRIVER_REPO" add feature.txt
-  git -C "$DRIVER_REPO" commit -qm "feat: feature"
-  git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/develop
-  git -C "$DRIVER_REPO" checkout -q -b work
-  { printf 'HM_APPROVAL=auto\n'; [[ -z "$level" ]] || printf 'HM_DELIVERY_LEVEL=%s\n' "$level"; } >"$DRIVER_TMP/data/config"
-  REL_CHECKS="$DRIVER_TMP/checks-$s.log"
-  : >"$REL_CHECKS"
-  export FAKE_CHECK="echo run >>$REL_CHECKS"
-}
-remote_of() { printf '%s' "$DRIVER_TMP/remote-$FAKE_SCENARIO.git"; }
-# 다른 사람이 원격 develop에 커밋을 push한다(bare 원격을 직접 클론해서). file content
-move_develop_cmd() {
-  # shellcheck disable=SC2016  # $d는 나중에 그 명령을 실행하는 셸이 펼친다
-  printf 'd=$(mktemp -d "%s/mv.XXXX") && git clone -q -b develop %q "$d/c" && cd "$d/c" && git config user.email t@t && git config user.name t && printf %%s %q >%q && git add -A && git commit -qm "feat: moved" && git push -q origin develop' \
-    "$DRIVER_TMP" "$(remote_of)" "$2" "$1"
-}
-remote_ref() { git --git-dir="$(remote_of)" rev-parse --verify --quiet "$1" || true; }
+# shellcheck source=tests/lib-release.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-release.sh"
 
 # 1. 인자 검사: --version은 start --workflow release에서 semver만 받는다. release_policy가 없거나 flow가 tag가 아니면 시작하지 않는다.
 rel_repo rel_args
@@ -60,6 +26,24 @@ git -C "$DRIVER_REPO" checkout -q -b develop
 driver start --runtime codex --workflow release --version 1.3.0
 assert_eq "2" "$DRIVER_RC" "a release does not start on the source branch"
 pass "release start guards"
+
+# 2. 버전: --version은 state에 남고 승인을 기다린다. 없으면 plan의 제안을 쓰고, 이미 있는 태그는 사람에게 넘긴다.
+rel_repo rel_version
+: >"$DRIVER_TMP/data/config"
+driver start --runtime codex --workflow release --version 1.3.0
+assert_eq "10:1.3.0:release v1.3.0" "$DRIVER_RC:$(run_state .release.version):$(run_state .request)" "--version is kept and the plan waits for approval"
+rel_repo rel_proposed
+: >"$DRIVER_TMP/data/config"
+driver start --runtime codex --workflow release
+assert_eq "10:1.3.0" "$DRIVER_RC:$(run_state .release.version)" "the version the plan proposes is kept"
+rel_repo rel_tag_exists
+FAKE_RELEASE_VERSION=1.2.0 driver start --runtime codex --workflow release
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a version whose tag already exists goes to a person"
+assert_contains "$DRIVER_OUT" "v1.2.0" "the existing tag is named"
+rel_repo rel_older
+FAKE_RELEASE_VERSION=1.1.9 driver start --runtime codex --workflow release
+assert_eq "20" "$DRIVER_RC" "a version below the latest tag goes to a person"
+pass "release version is fixed by --version or the plan and checked against the tags"
 
 # 3. 단계 pr(설정 없음): 릴리스 브랜치·PR·원격 CI까지. 병합·태그는 하지 않고 남은 수동 절차를 남긴다.
 rel_repo rel_pr
@@ -94,53 +78,5 @@ assert_contains "$(run_state .release.sync.command)" "git merge --ff-only origin
 assert_contains "$DRIVER_OUT" "git merge --ff-only origin/main" "the done report shows the sync command"
 assert_eq "$dev_before" "$(remote_ref refs/heads/develop)" "the runner never pushes develop"
 pass "release stage merge publishes, records, and leaves the sync"
-
-# 10. 그래프 계약과 검증 스크립트.
-bash "$ROOT/scripts/validate-release-graph.sh" "$RELEASE_GRAPH" >/dev/null || fail "the release graph is valid"
-jq 'del(.nodes.revalidate)' "$RELEASE_GRAPH" >"$DRIVER_TMP/bad-graph.json"
-if bash "$ROOT/scripts/validate-release-graph.sh" "$DRIVER_TMP/bad-graph.json" >/dev/null 2>&1; then fail "a release graph without revalidate is invalid"; fi
-jq '.transitions += [{"from":"plan","to":"prepare","when":"x"}]' "$RELEASE_GRAPH" >"$DRIVER_TMP/bad-graph.json"
-if bash "$ROOT/scripts/validate-release-graph.sh" "$DRIVER_TMP/bad-graph.json" >/dev/null 2>&1; then fail "a release graph that writes before approval is invalid"; fi
-jq '.invariants |= map(select(startswith("No tag or release") | not))' "$RELEASE_GRAPH" >"$DRIVER_TMP/bad-graph.json"
-if bash "$ROOT/scripts/validate-release-graph.sh" "$DRIVER_TMP/bad-graph.json" >/dev/null 2>&1; then fail "a release graph without the notes invariant is invalid"; fi
-pass "release graph contract"
-
-# 11. ai-harness 자신의 릴리스 확인·마일스톤 스크립트: GitHub 결과를 읽고, 진행 중이면 실패(재시도)한다.
-REL_VERIFY_REPO="$DRIVER_TMP/verify-repo"
-git init -q --bare "$DRIVER_TMP/verify-remote.git"
-git init -q "$REL_VERIFY_REPO"
-git -C "$REL_VERIFY_REPO" config user.email t@t && git -C "$REL_VERIFY_REPO" config user.name t
-printf '{"version":"1.3.0"}\n' >"$REL_VERIFY_REPO/release.json"
-git -C "$REL_VERIFY_REPO" add release.json && git -C "$REL_VERIFY_REPO" commit -qm init
-git -C "$REL_VERIFY_REPO" remote add origin "$DRIVER_TMP/verify-remote.git"
-git -C "$REL_VERIFY_REPO" push -q origin HEAD:refs/heads/main
-rv() { (cd "$REL_VERIFY_REPO" && FAKE_LOG="$DRIVER_TMP/verify.log" PATH="$ROOT/tests/fixtures/driver:$PATH" bash "$ROOT/scripts/release-verify.sh" "$@" >/dev/null 2>&1); }
-FAKE_RUN_STATUS=completed:success rv 1.3.0 || fail "release-verify passes when the release workflow succeeded and main has the version"
-if FAKE_RUN_STATUS=in_progress: rv 1.3.0; then fail "release-verify fails while the release workflow runs"; fi
-if FAKE_RUN_STATUS=completed:success rv 1.4.0; then fail "release-verify fails when main has another version"; fi
-assert_contains "$(<"$DRIVER_TMP/verify.log")" "--workflow release" "release-verify reads the release workflow runs"
-pass "release-verify checks the release workflow and main"
-
-# 6. merge commit만: 호스트가 squash를 허용해도 --merge, merge commit이 허용되지 않으면 병합 호출 없이 사람에게.
-rel_repo rel_method_all '.' merge
-FAKE_MERGE_METHODS=all driver start --runtime codex --workflow release --version 1.3.0
-assert_contains "$(<"$FAKE_LOG")" "gh merge https://github.com/acme/app/pull/7 --merge" "the release is merged with a merge commit"
-assert_eq "0" "$(grep -c -- '--squash\|--rebase' "$FAKE_LOG" || true)" "never squash or rebase a release"
-rel_repo rel_squash_only '.' merge
-FAKE_MERGE_METHODS=squash_only driver start --runtime codex --workflow release --version 1.3.0
-assert_eq "20:0" "$DRIVER_RC:$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a repository without merge commits is not merged"
-assert_contains "$(run_state '.merge.blocked | join(" ")')" "merge commit" "merge_blocked names the missing merge commit"
-pass "release merges only with a merge commit"
-
-# 7. 노트가 없으면 태그·릴리스를 만들지 않는다.
-for n in 'exit 1' "printf '  \\n'"; do
-  rel_repo "rel_nonotes_$( [[ "$n" == 'exit 1' ]] && echo fail || echo blank)" '.' merge
-  jq --arg n "$n" '.release_policy.notes_cmd = $n' "$DRIVER_REPO/.ai-harness/harness.json" >"$DRIVER_TMP/m.json" && mv "$DRIVER_TMP/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
-  git -C "$DRIVER_REPO" commit -qam notes && git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/develop
-  driver start --runtime codex --workflow release --version 1.3.0
-  assert_eq "20:0" "$DRIVER_RC:$(grep -c '^gh release' "$FAKE_LOG" || true)" "notes '$n': no release is created"
-  assert_eq "" "$(remote_ref refs/tags/v1.3.0)" "notes '$n': no tag is pushed"
-done
-pass "a release without notes is not tagged"
 
 finish_tests

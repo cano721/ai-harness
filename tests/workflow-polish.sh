@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 회귀 테스트 — 그래프 러너 — design-polish 러너(측정·선택·거부)
+# 회귀 테스트 — design-polish 러너 — 그래프 검증기·승인 목록 선택·무인 승인·규칙 문서 없음·축 하락 수리 한도
 # 실행: bash tests/run.sh workflow-polish
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -64,64 +64,6 @@ driver resume
 assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .node)" "a polish that keeps lowering an axis ends with a person"
 assert_eq "3" "$(grep -c '^fix ' "$FAKE_LOG")" "fix runs at most limits.max_repair_attempts times"
 assert_contains "$(run_state '.findings | join(";")')" "axis E fell below the baseline: 15 -> 12" "the driver, not the reviewer, compares each axis with the baseline"
-
-# 측정 뒤 바뀐 파일은 검토하지 않는다: 검사(verify)·측정을 다시 거친다.
-new_driver_repo polish_bad_review_once
-driver start --workflow polish --runtime codex --request "다듬어줘"
-say_in_claude "승인"
-driver resume
-assert_eq "30:review" "$DRIVER_RC:$(run_state .node)" "an unreadable review stops at review"
-echo 'tweak' >>"$DRIVER_REPO/screen.css"
-driver resume
-assert_eq "20:review" "$DRIVER_RC:$(run_state .node)" "a hand edit after the stop halts resume until it is accepted (#371)"
-driver resume --accept-changes
-assert_contains "$DRIVER_OUT" "refused: files changed after the measurement (screen.css)" "a change after the measurement is refused"
-assert_eq "0" "$DRIVER_RC" "the changed tree is measured and reviewed again, then passes"
-assert_eq "review;measure;review" "$(tail -n 3 "$FAKE_LOG" | cut -d' ' -f1 | paste -sd ';' -)" "the refused change is measured again before review"
-
-# 검토 뒤 바뀐 파일은 내보내지 않는다: publish 앞에서 거부하고 다시 측정·검토한다.
-STATE_FILE="$(find "$DRIVER_TMP/runs" -path "*repo-polish_bad_review_once-*" -name state.json | head -n 1)"
-jq '.node = "publish" | .status = "running"' "$STATE_FILE" >"$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-echo 'after review' >>"$DRIVER_REPO/screen.css"
-driver resume --accept-changes
-assert_eq "20:publish" "$DRIVER_RC:$(run_state .node)" "a hand edit after a stop past review is not taken in, even with --accept-changes (#371)"
-# 기준점 대조를 통과한 변경(기준점이 없는 이전 실행)도 publish 앞의 그래프 가드가 막는다.
-jq 'del(.repo_baseline) | .status = "running"' "$STATE_FILE" >"$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-driver resume
-assert_contains "$DRIVER_OUT" "refused: files changed after the review (screen.css)" "a change after the review is refused before publish"
-assert_eq "publish:changed_after_review:verify" "$(run_state '[.history[] | select(.outcome == "changed_after_review")] | last | "\(.from):\(.outcome):\(.to)"')" "the refusal goes back through the checks"
-assert_eq "review:changed_after_measure:verify" "$(run_state '[.history[] | select(.outcome == "changed_after_measure")] | last | "\(.from):\(.outcome):\(.to)"')" "a change after the measurement goes back through the checks"
-assert_eq "0" "$DRIVER_RC" "after a new measure and review the run finishes"
-
-# 화면을 띄우지 못하면 측정이 아니다. 측정 노드가 저장소에 쓰면 멈춘다.
-new_driver_repo polish_unmeasured
-driver start --workflow polish --runtime codex --request "다듬어줘"
-assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .node)" "unmeasured screens go to a person"
-new_driver_repo polish_measure_writes
-driver start --workflow polish --runtime codex --request "다듬어줘"
-assert_eq "40" "$DRIVER_RC" "measure may not write into the repository"
-driver start --runtime codex --request "add feature" --select P1
-assert_eq "2" "$DRIVER_RC" "--select belongs to polish only"
-# 측정 세션이 고른 검사 명령은 승인 전에 실행하지 않는다.
-new_driver_repo polish_ok
-# shellcheck disable=SC2016  # 검사 명령 문자열이라 $PWD는 러너가 실행할 때 펼친다
-FAKE_CHECK='touch "$PWD/ran-before-approval"' driver start --workflow polish --runtime codex --request "다듬어줘"
-assert_eq "10" "$DRIVER_RC" "the run waits for the person"
-[[ ! -e "$DRIVER_REPO/ran-before-approval" ]] || fail "checks found by measure do not run before approval"
-driver revise --select P1 --feedback "x"
-assert_eq "2" "$DRIVER_RC" "--select and --feedback are separate revisions"
-
-# 고칠 것이 없으면 아무것도 바꾸지 않고 끝낸다.
-new_driver_repo polish_nothing
-driver start --workflow polish --runtime codex --request "다듬어줘"
-assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "nothing to fix ends without a change"
-assert_contains "$DRIVER_OUT" "nothing to polish" "the result says nothing needed polishing"
-
-# claude 런타임: 진단·검토는 측정 증거 디렉터리만 읽는다(수정 쪽 요약·상태 파일은 열지 않는다).
-new_driver_repo polish_claude
-driver start --workflow polish --runtime claude --request "다듬어줘"
-assert_eq "10" "$DRIVER_RC" "the claude runtime reaches the fix list"
-assert_eq "measure-baseline;measure-baseline" "$(sed 's#.*/##' "$FAKE_LOG.adddirs" | paste -sd ';' -)" "measure writes its evidence directory and diagnose reads only that directory"
-pass "design-polish graph runner measures, lets the person choose, and refuses unmeasured changes"
+pass "design-polish graph runner: validators, fix list selection, auto approval, missing rules, axis drop"
 
 finish_tests
