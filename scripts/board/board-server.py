@@ -45,7 +45,7 @@ POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 �
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
 상태 파일은 플러그인 경로가 아니라 $HARNESS_METRICS_DIR/board/에 둔다 — 플러그인이 업데이트돼도 그대로 이어 쓴다.
 """
-import atexit, base64, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
+import atexit, base64, errno, fcntl, glob, hashlib, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time, unicodedata, webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,6 +70,7 @@ import resident_host as hhost  # noqa: E402
 DIR = os.path.dirname(os.path.abspath(__file__))
 TOKEN = secrets.token_urlsafe(24)
 HOST, PORT = "127.0.0.1", int(os.environ.get("BOARD_PORT", "8765"))
+PORT_LAST = int(os.environ.get("BOARD_PORT_LAST", str(PORT)))  # board.sh가 정한 탐색 끝. 직접 띄우면 PORT 하나만
 DATA = os.environ.get("HARNESS_METRICS_DIR") or os.path.expanduser("~/.ai-harness")
 LOG = os.environ.get("BOARD_ACTION_LOG") or os.path.join(DATA, "board", "actions.jsonl")
 INITIAL_BYTES = 1536 * 1024
@@ -2863,11 +2864,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    try:
-        srv = ThreadingHTTPServer((HOST, PORT), Handler)
-    except OSError as e:
-        print(f"board: {HOST}:{PORT}에 묶지 못함 — {e.strerror or e}", file=sys.stderr, flush=True)
-        sys.exit(3)
+    srv = None
+    for port in range(PORT, max(PORT, PORT_LAST) + 1):  # board.sh가 확인한 뒤 누가 먼저 잡았으면 다음 포트로
+        try:
+            srv = ThreadingHTTPServer((HOST, port), Handler)
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE and port < PORT_LAST:
+                continue
+            print(f"board: {HOST}:{port}에 묶지 못함 — {e.strerror or e}", file=sys.stderr, flush=True)
+            sys.exit(3)
+        PORT = port  # url·server.json·Host/Origin 검사가 실제로 묶은 포트를 쓴다
+        break
     srv.daemon_threads = True
     url = f"http://{HOST}:{PORT}/?t={TOKEN}"
     write_hook_conf(url)
