@@ -1890,6 +1890,8 @@ APP_BUILD_RULE="For a one-shot render prefer the project's production build and 
 FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking."
 # checks가 테스트 실행기의 병렬 옵션에 드라이버가 넘기는 동시 실행 수를 쓰게 한다(#513).
 TEST_JOBS_RULE="When the project's test runner takes a parallelism option (for example -j, -n, --workers, --parallel), pass it the \$HM_TEST_JOBS the driver exports to every check (for example \"\${HM_TEST_JOBS:-2}\" with a fallback for runs outside the driver)."
+# base 대비 '건드리지 않았다' 검사를 merge-base 기준으로 쓰게 한다(#543). base tip 비교는 런 도중 base에 들어온 커밋을 브랜치 변경으로 센다.
+MERGE_BASE_RULE="A check that the branch did not change certain files (version files, generated files) compares against the merge base: git diff --quiet origin/<base>...HEAD -- <files> (three dots), never the base tip, so commits that land on the base during the run do not count as branch changes."
 
 brief_prompt() {
   local role inputs
@@ -1897,7 +1899,8 @@ brief_prompt() {
     role="You are the brief node of the bug-fix graph. Do not edit any file.
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
 Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
-$TEST_JOBS_RULE"
+$TEST_JOBS_RULE
+$MERGE_BASE_RULE"
     inputs="Bug report:
 $(state .request)
 
@@ -1910,7 +1913,8 @@ $(cat "$RUN/reproduce.out")"
     role="You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
 Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
-$TEST_JOBS_RULE"
+$TEST_JOBS_RULE
+$MERGE_BASE_RULE"
     inputs="Request:
 $(state .request)
 
