@@ -46,7 +46,7 @@ npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh
 scripts/release-prep.sh --check
 ```
 
-버전 파일(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`, CHANGELOG 버전 절)이 diff에 있으면 실패로 본다 — 기능 PR은 버전을 올리지 않는다.
+버전 파일(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`, CHANGELOG 버전 절)이 diff에 있으면 실패로 본다 — 기능 PR은 버전을 올리지 않는다. 검사는 merge-base 기준이다: `git diff --quiet origin/develop...HEAD -- .claude-plugin/plugin.json .codex-plugin/plugin.json release.json`(점 세 개). base 최신 커밋과 비교하면 런 도중 develop에 들어온 릴리스를 브랜치 변경으로 세므로, 세 점으로 브랜치가 바꾼 것만 센다. CHANGELOG 버전 절도 같은 기준으로 `git diff origin/develop...HEAD -- CHANGELOG.md`에 `## v` 줄 추가가 없어야 한다. "이 파일들을 건드리지 않았다" 형태의 다른 검사도 `origin/develop...HEAD`로 쓴다.
 
 ## 5. publish 노드가 쓸 사실
 
