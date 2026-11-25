@@ -696,6 +696,33 @@ assert_contains "$AG_TPL" "Array.isArray(raw)" "hb-ag-seen migrates the old arra
 case "$AG_TPL" in *"<h3>연결한 곳</h3>"*|*"sec('연결한 곳'"*) fail "the connected sources section moves into the header" ;; esac
 pass "agenda screen leads with now and next and folds the rest"
 
+# #581: 할 일 기한은 폼 줄의 [기한] 버튼 → 팝오버(빠른 선택 넷 + 날짜 직접 고르기). date 칸은 팝오버 안에만 있다.
+AG_FORM="$(sed -n '/function todoForm(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+[ -n "$AG_FORM" ] || fail "todoForm is found in the template"
+case "$AG_FORM" in *"type = 'date'"*) fail "the to-do form row has no date input" ;; esac
+AG_POP="$(sed -n '/function duePop(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$AG_POP" "type = 'date'" "the date input lives in the due popover"
+for AG_W in "ag-due-btn" "aria-expanded" "aria-controls" "'기한'" "오늘" "내일" "이번 주 금요일" "다음 주 월요일" "날짜 직접 고르기" "기한 지우기" "Escape"; do
+  assert_contains "$AG_TPL" "$AG_W" "the due button has $AG_W"
+done
+# WebKit은 버튼을 눌러도 포커스를 주지 않고 기존 포커스만 푼다 — 팝오버 안을 누르는 동안엔 focusout으로 닫지 않는다.
+AG_DISMISS="$(sed -n '/function agDueDismiss(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+assert_contains "$AG_DISMISS" "agDuePress" "focusout does not close the popover while a pointer is pressed inside it"
+assert_contains "$AG_TPL" "agDuePress = agDueOpen && inside" "pointerdown inside the popover marks the press"
+if command -v node >/dev/null 2>&1; then
+  AG_DQ="$(sed -n '/function dueQuick(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+  [ -n "$AG_DQ" ] || fail "dueQuick is found in the template"
+  AG_DQOUT="$(AG_DQ="$AG_DQ" node -e 'const p2 = (n) => String(n).padStart(2, "0"); eval(process.env.AG_DQ);
+    for (const d of ["2026-11-26", "2026-11-23", "2026-11-27", "2026-11-29", "2026-12-31"]) { const [y, m, dd] = d.split("-").map(Number);
+      console.log(dueQuick(new Date(y, m - 1, dd, 10)).map((q) => q.label + "=" + q.key).join(",")); }')"
+  assert_eq "오늘=2026-11-26,내일=2026-11-27,이번 주 금요일=2026-11-27,다음 주 월요일=2026-11-30
+오늘=2026-11-23,내일=2026-11-24,이번 주 금요일=2026-11-27,다음 주 월요일=2026-11-30
+오늘=2026-11-27,내일=2026-11-28,다음 주 월요일=2026-11-30
+오늘=2026-11-29,내일=2026-11-30,다음 주 월요일=2026-11-30
+오늘=2026-12-31,내일=2027-01-01,이번 주 금요일=2027-01-01,다음 주 월요일=2027-01-04" "$AG_DQOUT" "dueQuick picks today, tomorrow, this Friday (Mon-Thu only) and next Monday"
+fi
+pass "the to-do due date is a button with quick picks"
+
 ag_board stop >/dev/null
 unset TZ
 finish_tests
