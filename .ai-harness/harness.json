@@ -19,11 +19,11 @@
   "harness_version": "0.83.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
-      "content_sha256": "1e1d6c0aacf90a9b901d2f523fe4b31ac88051e8d177de12ddecbc683079e9c8",
+      "content_sha256": "6a2c8132b335f170a83de3d4df707ece3c060fa01167697a2b128db2daf6bb39",
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "a7044e7cc3d280ebbd4436959914825e4a9569dd8cc7e009e287148f5647290f",
+      "content_sha256": "644bd4b0722c202c1b1fef4a0e467a8636cb1b4b4a5e5824dc2147ac5e3d3e9f",
       "template_version": "0.91.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -31,7 +31,7 @@
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
-      "content_sha256": "3762595feb3d902d1cef6c19e2e2fa5cf1bddd4600e180d3a9b9216ec1f8b851",
+      "content_sha256": "c366c1ce869b9f99340fa2a5404830f0003f75d4b7a0d1c1c41f3c8a6e902ded",
       "template_version": "0.83.0"
     },
     ".ai-harness/workflows/review-graph.json": {
@@ -39,12 +39,12 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "f9d04cf0eeab0b2d6470dde190e5b8a88a5b4181fed7c2dacf30d05edd591ea2",
+      "content_sha256": "064138d7c1adcc3a309aa4a8651b4b5705220d44e8b79e156240e5ab168f7f48",
       "template_version": "0.91.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "f35030fd13b5ce7134a9c9f77f21738fc064d8a243c17828cab630d87f9100f3",
+      "content_sha256": "93411be618c1a28a52c7397b21ea0141309f7e905986deef28e3b38cdbd26d16",
       "template_version": "0.91.0",
       "renderer": 1
     },
@@ -54,12 +54,12 @@
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "f63899e9bfdf29cbf7afff2d5be16af45543ea8a912a9cd888c490843b91887c",
+      "content_sha256": "8958d6e202f6991dc325baf51fa8e6f818f93bf852fa5c009d065605dba5fbd6",
       "template_version": "0.91.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "0addaee13dc62b44ecc5a683f3281100249ba214775125455b5e0d25ff635257",
+      "content_sha256": "bd010fa1eaca3b1decc09138fcc7fdf1203ccbc211bb935878569c47e0beea1b",
       "template_version": "0.91.0",
       "renderer": 1
     },

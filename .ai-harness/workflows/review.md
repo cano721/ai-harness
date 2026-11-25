@@ -16,7 +16,7 @@
 - 회사·개인 식별자, 토큰, 사내 URL
 - 기능 PR이 버전 파일(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json` `version`, CHANGELOG 버전 절)을 바꿈
 - 템플릿 원본을 바꿨는데 `templates/managed-files.json`·바이트 동일 사본·`skills/harness-init/SKILL.md` 서술이 어긋남
-- 사용자 영향이 있는데 `CHANGELOG.md` `## Unreleased` 항목이 없음
+- 사용자 영향이 있는데 `changelog.d/<이슈>-<요약>.md` 조각이 없음, 또는 조각 형식 위반(`scripts/release-prep.sh --check`)
 
 ## 수리
 

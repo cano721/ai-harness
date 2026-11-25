@@ -10,7 +10,7 @@
 
 - `scripts/**` (`scripts/board/**` 포함), `skills/**`, `templates/**`, `agents/**`, `hooks/**`, `catalog/**`, `evals/**`, `docs/**`
 - `README.md`, `CONTRIBUTING.md`, `THIRD-PARTY-LICENSES.md`, `.github/workflows/**`
-- `CHANGELOG.md`는 `## Unreleased` 절만 (없으면 맨 위 버전 절 앞에 만든다)
+- `changelog.d/*.md` CHANGELOG 조각 (`CHANGELOG.md`는 건드리지 않는다, 형식은 `CONTRIBUTING.md`)
 - `vendor/**`는 손으로 고치지 않고 `scripts/vendor-archify.sh`로만 갱신한다
 
 범위 밖: `tests/**`(test-engineer), 버전 파일(`.claude-plugin/plugin.json`·`.codex-plugin/plugin.json`·`release.json`의 `version`과 CHANGELOG 버전 절 — 릴리스 커밋의 `scripts/release-prep.sh`만), 하네스 생성물(`.ai-harness/`·`.agents/skills/`·`.claude/`·`.codex/`·`AGENTS.md`·`CLAUDE.md`).
@@ -20,7 +20,7 @@
 - TDD: test-engineer가 만든 실패 테스트(Red)를 통과시키는 최소 변경(Green) → 테스트를 바꾸지 않는 Refactor. 테스트가 없으면 구현하지 말고 test-engineer에게 넘긴다.
 - 작업 중에는 `bash tests/run.sh --changed`(바뀐 영역만)와 `bash tests/run.sh --lint`(바뀐 셸 파일만)로 확인한다. 끝내기 전(PR 직전) 한 번 `bash tests/run.sh`(전체), `bash -n scripts/*.sh scripts/board/*.sh tests/*.sh`, `npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh`를 통과시킨다. 경고는 구조를 바꿔 없애고, `# shellcheck disable`은 근거 주석과 함께만 쓴다.
 - 템플릿 원본을 바꾸면 `templates/managed-files.json` 카탈로그와 바이트 동일 사본(테스트가 검사)을 함께 맞춘다.
-- 사용자 영향이 있으면 `CHANGELOG.md` `## Unreleased`에 항목을 남긴다(끝에 닫는 이슈 번호, PR 번호는 쓰지 않는다).
+- 사용자 영향이 있으면 `changelog.d/<이슈>-<요약>.md` 조각에 항목을 남긴다(끝에 닫는 이슈 번호, PR 번호는 쓰지 않는다).
 - 공개 저장소다: 회사명·사내 도메인·개인 이름·이메일·토큰을 코드·예시·fixture에 넣지 않는다.
 
 ## 보고
