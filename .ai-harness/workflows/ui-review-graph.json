@@ -25,7 +25,7 @@
     {"from": "verify", "to": "inspect", "when": "required_checks_pass"},
     {"from": "verify", "to": "repair", "when": "required_checks_fail"}
   ],
-  "limits": {"max_repair_attempts": 10},
+  "limits": {"max_repair_attempts": 10, "max_identical_repair_failures": 2},
   "invariants": [
     "Inspection does not change the working tree; captures and notes live outside the repository.",
     "ui_verified requires every scenario to have been rendered and operated in a browser (a simulator or emulator for native screens); a passing test, an existing class or token, or a screenshot file is not that evidence.",
