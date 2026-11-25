@@ -11,6 +11,9 @@
 - fetch는 `--since ISO --until ISO`를 덧붙여 부르고, stdout JSONL 한 줄이 항목 하나다
   {id, kind: event|reply|todo, title, start?, end?, url?, detail?, done?}. 잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
 - done은 argv 뒤에 항목 id를 붙여 부른다. done이 없는 소스는 보드가 done.json에만 적고 숨긴다. event는 완료 대상이 아니다.
+- 선택 accounts(argv, #519): 한 소스에 계정을 여럿 잇는 어댑터. stdout JSONL 한 줄이 계정 하나 {id, name, error?}.
+  선언한 소스는 연결된 뒤에도 connect를 다시 불러 계정을 더하고, 끊기는 disconnect argv 뒤에 계정 id를 붙여 그 계정만 끊는다
+  (마지막 계정을 끊으면 소스 연결도 끊긴다). 계정 목록은 연결·끊기·수집 뒤에 다시 읽어 sources.json에 둔다.
 데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json, 모두 600)에 둔다.
 메일·채팅·일정 본문은 이 폴더에만 있고 harvest·지표 수집 대상(events/)에 쓰지 않는다.
 """
@@ -120,9 +123,11 @@ def parse_declaration(path):
         return None, "name이 없습니다."
     if not _argv(d.get("fetch")):
         return None, "fetch 명령(문자열 배열)이 없습니다."
-    for k in ("connect", "disconnect", "done"):
+    for k in ("connect", "disconnect", "done", "accounts"):
         if k in d and not _argv(d[k]):
             return None, f"{k} 명령이 문자열 배열이 아닙니다."
+    if "accounts" in d and "disconnect" not in d:
+        return None, "accounts를 선언하면 계정을 끊을 disconnect 명령도 있어야 합니다."
     interval = d.get("interval_minutes", DEFAULT_INTERVAL)
     if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
         return None, "interval_minutes는 1 이상의 정수여야 합니다."
@@ -137,6 +142,7 @@ def parse_declaration(path):
     return {
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
+        "accounts": d.get("accounts"),
         "interval": interval, "requires": req, "setup_hint": _short(hint, 300) if hint else None,
     }, None
 
@@ -226,6 +232,7 @@ class Store:
         self._warned = set()
         self.lock = threading.Lock()
         self.fetching = {}  # id -> Thread
+        self.refetch = set()  # 수집 중에 다시 모아야 할 일이 생긴 소스(계정을 끊음 등)
         self.connecting = {}  # id -> 시작 시각
         self.connect_error = {}  # id -> 사람 말 오류(연결 실패)
 
@@ -290,10 +297,54 @@ class Store:
         with _FileLock(self.sources_path):
             d = self._connected()
             if on:
-                d[source_id] = {"connected": True, "at": utc()}
+                prev = d.get(source_id) if isinstance(d.get(source_id), dict) else {}
+                d[source_id] = dict(prev, connected=True, at=prev.get("at") or utc())
             else:
                 d.pop(source_id, None)
             _write_private(self.sources_path, d)
+
+    # ---- 계정(accounts를 선언한 소스) ----
+    def _read_accounts(self, src):
+        """accounts 명령 → [{id, name, error?}]. 실행하지 못하면 None(이전 목록을 그대로 둔다)."""
+        code, out, _err = self._run(src, src["accounts"], [], ACTION_TIMEOUT)
+        if code != 0:
+            return None
+        rows, ids = [], set()
+        for line in (out or "").splitlines():
+            try:
+                raw = json.loads(line)
+            except ValueError:
+                continue
+            aid = raw.get("id") if isinstance(raw, dict) else None
+            if not isinstance(aid, str) or not aid.strip() or len(aid) > 200 or aid in ids:
+                continue
+            ids.add(aid)
+            row = {"id": aid, "name": _short(raw.get("name") if isinstance(raw.get("name"), str) and raw["name"].strip() else aid, 120)}
+            if isinstance(raw.get("error"), str) and raw["error"].strip():
+                row["error"] = _short(raw["error"], 300)
+            rows.append(row)
+            if len(rows) >= 50:
+                break
+        return rows
+
+    def _sync_accounts(self, src):
+        """계정 목록을 다시 읽어 sources.json에 둔다. 반환: 목록(읽지 못하면 None)."""
+        if not src.get("accounts"):
+            return None
+        rows = self._read_accounts(src)
+        if rows is None:
+            return None
+        with _FileLock(self.sources_path):
+            d = self._connected()
+            if isinstance(d.get(src["id"]), dict):
+                d[src["id"]]["accounts"] = rows
+                _write_private(self.sources_path, d)
+        return rows
+
+    def accounts_of(self, source_id):
+        entry = self._connected().get(source_id)
+        rows = entry.get("accounts") if isinstance(entry, dict) else None
+        return rows if isinstance(rows, list) else []
 
     def is_connected(self, source_id):
         return bool((self._connected().get(source_id) or {}).get("connected"))
@@ -325,12 +376,16 @@ class Store:
                      "error": "가져오기 " + err, "skipped": prev.get("skipped", 0)}
         if self.is_connected(src["id"]):  # 수집 도중 끊었으면 캐시를 되살리지 않는다
             _write_private(self.cache_path(src["id"]), entry)
+            self._sync_accounts(src)  # 수집이 남긴 계정별 실패를 목록에 비춘다
         return entry
 
-    def _start_fetch(self, src):
+    def _start_fetch(self, src, again=False):
+        """수집 스레드를 띄운다. 이미 돌고 있으면 그것을 돌려주고, again이면 끝난 뒤 한 번 더 모으게 표시한다."""
         with self.lock:
             t = self.fetching.get(src["id"])
             if t and t.is_alive():
+                if again:
+                    self.refetch.add(src["id"])
                 return t
             t = threading.Thread(target=self._fetch_guarded, args=(src,), daemon=True)
             self.fetching[src["id"]] = t
@@ -338,10 +393,15 @@ class Store:
         return t
 
     def _fetch_guarded(self, src):
-        try:
-            self.fetch(src)
-        except Exception as e:  # 한 소스의 예외가 다른 소스·서버를 막지 않게
-            self.warn(f"agenda: {src['id']} 수집 중 예외 — {type(e).__name__}")
+        while True:
+            try:
+                self.fetch(src)
+            except Exception as e:  # 한 소스의 예외가 다른 소스·서버를 막지 않게
+                self.warn(f"agenda: {src['id']} 수집 중 예외 — {type(e).__name__}")
+            with self.lock:
+                if src["id"] not in self.refetch:
+                    return
+                self.refetch.discard(src["id"])
 
     def refresh_due(self, wait=0.0):
         """연결된 소스 중 주기가 지난 것을 소스마다 자기 스레드로 수집한다. wait초까지만 기다린다."""
@@ -386,7 +446,9 @@ class Store:
                 st = "disconnected"
             sources.append({"id": sid, "name": src["name"], "state": st, "connected": on, "fetching": fetching,
                             "fetched_at": c.get("fetched_at"), "error": c.get("error") or self.connect_error.get(sid),
-                            "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"])})
+                            "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"]),
+                            "multi": bool(src["accounts"]), "accounts": self.accounts_of(sid) if on else [],
+                            "connect_error": self.connect_error.get(sid)})
             if not on or st == "needs_setup":
                 continue
             hidden = local_done.get(sid) or {}
@@ -410,7 +472,8 @@ class Store:
             return 404, {"ok": False, "message": "등록된 일정 소스가 아닙니다."}
         if self.missing(src):
             return 409, {"ok": False, "message": f"{src['name']} 연결에 필요한 설정이 아직 없습니다. 연결한 곳의 [설정하기] 안내를 따르세요."}
-        if self.is_connected(source_id):
+        adding = self.is_connected(source_id)
+        if adding and not src["accounts"]:
             return 200, {"ok": True, "state": "connected", "message": f"{src['name']} 연결이 이미 돼 있습니다."}
         with self.lock:
             if source_id in self.connecting:
@@ -424,7 +487,8 @@ class Store:
             self._start_fetch(src)
             return 200, {"ok": True, "state": "connected", "message": f"{src['name']} 연결을 마쳤습니다."}
         threading.Thread(target=self._connect_bg, args=(src,), daemon=True).start()
-        return 200, {"ok": True, "state": "connecting", "message": f"{src['name']}에 연결하는 중입니다. 브라우저에서 허용을 마치면 연결됩니다."}
+        what = "계정을 더하는 중입니다" if adding else "연결하는 중입니다"
+        return 200, {"ok": True, "state": "connecting", "message": f"{src['name']}에 {what}. 브라우저에서 허용을 마치면 연결됩니다."}
 
     def _connect_bg(self, src):
         """브라우저 동의처럼 오래 걸리는 connect는 뒤에서 돌린다(최대 5분)."""
@@ -433,6 +497,7 @@ class Store:
             code, _out, err = self._run(src, src["connect"], [], CONNECT_TIMEOUT)
             if code == 0:
                 self._set_connected(src["id"], True)
+                self._sync_accounts(src)
             else:
                 self.connect_error[src["id"]] = "연결하지 못했습니다. " + err
         finally:
@@ -441,10 +506,12 @@ class Store:
         if code == 0:
             self._fetch_guarded(src)
 
-    def disconnect(self, source_id):
+    def disconnect(self, source_id, account=None):
         src = self.find(source_id)
         if not src:
             return 404, {"ok": False, "message": "등록된 일정 소스가 아닙니다."}
+        if account is not None:
+            return self._disconnect_account(src, account)
         note = ""
         if src["disconnect"]:
             code, _out, err = self._run(src, src["disconnect"], [], ACTION_TIMEOUT)
@@ -457,6 +524,32 @@ class Store:
         except OSError:
             pass
         return 200, {"ok": True, "state": "disconnected", "message": f"{src['name']} 연결을 끊었습니다." + note}
+
+    def _disconnect_account(self, src, account):
+        """계정 하나만 끊는다. 마지막 계정이면 소스 연결도 끊는다."""
+        known = self._sync_accounts(src)
+        if known is None:
+            known = self.accounts_of(src["id"])
+        row = next((a for a in known if a["id"] == account), None) if src["accounts"] else None
+        if not row:
+            return 404, {"ok": False, "message": f"{src['name']}에 연결된 계정이 아닙니다."}
+        if src["disconnect"]:
+            code, _out, err = self._run(src, src["disconnect"], [account], ACTION_TIMEOUT)
+            if code != 0:
+                return 502, {"ok": False, "message": f"{row['name']} 연결을 끊지 못했습니다. " + err}
+        left = self._sync_accounts(src)
+        if left is None:
+            left = [a for a in known if a["id"] != account]
+        if not left:
+            self._set_connected(src["id"], False)
+            self.connect_error.pop(src["id"], None)
+            try:
+                os.remove(self.cache_path(src["id"]))
+            except OSError:
+                pass
+            return 200, {"ok": True, "state": "disconnected", "message": f"{row['name']} 연결을 끊었습니다. 남은 계정이 없어 {src['name']} 연결도 끊었습니다."}
+        self._start_fetch(src, again=True)  # 끊은 계정의 일정을 바로 걷어 낸다(돌던 수집은 끝난 뒤 한 번 더)
+        return 200, {"ok": True, "state": "connected", "message": f"{row['name']} 연결을 끊었습니다."}
 
     def refresh(self, source_id):
         """사람이 [다시 가져오기]를 누르면 주기와 상관없이 그 소스 하나만 바로 다시 모은다."""

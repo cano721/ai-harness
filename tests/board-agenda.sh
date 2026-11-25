@@ -81,14 +81,17 @@ assert_eq "Acme 메신저|1" "$(ag_get | jq -r '[.sources[] | select(.id == "acm
 rm -rf "$HM_CODEX_SKILLS_DIR/acme-copy"
 pass "agenda keeps the first source for a duplicate id"
 
-# 2. 설정하기: 구글 OAuth 클라이언트 파일이 없으면 needs_setup + 안내, 파일을 두면 연결할 수 있다.
-assert_eq "needs_setup" "$(ag_src "$AG_OUT" google state)" "google needs setup without a client file"
-assert_contains "$(ag_src "$AG_OUT" google setup_hint)" "/ai-harness:setup" "the setup hint points at the setup guide"
-assert_eq "409" "$(ag_code "$(ag_post connect '{"source":"google"}')")" "a source that needs setup cannot connect"
+# 2. 설정하기: requires 파일이 없으면 needs_setup + 안내, 파일을 두면 연결할 수 있다.
+# 구글은 플러그인에 든 공용 클라이언트로 바로 연결할 수 있다(사용자 클라이언트 파일 없이).
+assert_eq "disconnected" "$(ag_src "$AG_OUT" google state)" "google is connectable without a user client file"
+assert_eq "needs_setup" "$(ag_src "$AG_OUT" duo state)" "a source whose required file is missing needs setup"
+assert_contains "$(ag_src "$AG_OUT" duo setup_hint)" "Duo 앱에서 연동을 켠 뒤" "the setup hint comes from the declaration"
+assert_eq "409" "$(ag_code "$(ag_post connect '{"source":"duo"}')")" "a source that needs setup cannot connect"
+: >"$AG_DATA/fixture-duo-ready"
+assert_eq "disconnected" "$(ag_src "$(ag_get)" duo state)" "the source becomes connectable once the required file exists"
 jq -n '{installed: {client_id: "fake-client-id", client_secret: "fake-client-SECRET-xyz", redirect_uris: ["http://localhost"]}}' >"$AG_DATA/google-oauth-client.json"
 chmod 600 "$AG_DATA/google-oauth-client.json"
-assert_eq "disconnected" "$(ag_src "$(ag_get)" google state)" "google becomes connectable once the client file exists"
-pass "agenda asks for setup until the OAuth client file exists"
+pass "agenda asks for setup until the required file exists"
 
 # 3. 연결·끊기와 요청 검사.
 assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$AG_BASE/agenda?t=wrong")" "agenda read needs the board token"
@@ -179,6 +182,39 @@ assert_eq "disconnected|0" "$(ag_src "$AG_OUT" acme state)|$(jq -r '[.items[][] 
 assert_not_file "$AG_DATA/board/agenda/cache/acme.json"
 pass "agenda disconnects a source"
 
+# 3-1. 여러 계정: accounts를 선언한 소스는 연결된 뒤에도 connect로 계정을 더하고, 끊기는 계정 하나씩 한다.
+AG_RES="$(ag_post connect '{"source":"duo"}')"
+assert_eq "200" "$(ag_code "$AG_RES")" "the first account connects"
+AG_OUT="$(ag_wait '(.sources[] | select(.id == "duo") | .accounts | length) == 1 and ([.items.event[] | select(.source == "duo")] | length) == 1')" || fail "duo connects one account: $AG_OUT"
+assert_eq "connected|true|a@example.com" "$(jq -r '.sources[] | select(.id == "duo") | "\(.state)|\(.multi)|\([.accounts[].id] | join(","))"' <<<"$AG_OUT")" "the source lists its account"
+assert_eq "false" "$(ag_src "$AG_OUT" acme multi)" "a source without accounts is a single connection"
+mkdir -p "$HM_CODEX_SKILLS_DIR/nodisc"
+jq -n '{id: "nodisc", name: "끊기 없음", fetch: ["true"], accounts: ["true"]}' >"$HM_CODEX_SKILLS_DIR/nodisc/agenda.json"
+assert_contains "$(ag_src "$(ag_get)" nodisc error)" "disconnect 명령도 있어야" "accounts without disconnect is a declaration error"
+rm -rf "$HM_CODEX_SKILLS_DIR/nodisc"
+printf 'b@example.com' >"$AG_DATA/fixture-duo/next"
+AG_RES="$(ag_post connect '{"source":"duo"}')"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "connect on a connected multi-account source adds an account"
+AG_OUT="$(ag_wait '(.sources[] | select(.id == "duo") | .accounts | length) == 2 and ([.items.event[] | select(.source == "duo")] | length) == 2')" || fail "duo adds a second account: $AG_OUT"
+assert_eq "a@example.com,b@example.com" "$(jq -r '[.sources[] | select(.id == "duo") | .accounts[].id] | join(",")' <<<"$AG_OUT")" "both accounts are listed"
+: >"$AG_DATA/fixture-duo/expired-b@example.com"
+ag_post refresh '{"source":"duo"}' >/dev/null
+AG_OUT="$(ag_get)"
+assert_eq "connected" "$(ag_src "$AG_OUT" duo state)" "one expired account does not fail the source"
+assert_eq "로그인이 만료됐습니다." "$(jq -r '.sources[] | select(.id == "duo") | .accounts[] | select(.id == "b@example.com") | .error' <<<"$AG_OUT")" "the expired account carries its reason"
+assert_eq "a@example.com 일정" "$(jq -r '[.items.event[] | select(.source == "duo") | .title] | join(",")' <<<"$AG_OUT")" "the healthy account's events stay"
+assert_eq "404" "$(ag_code "$(ag_post disconnect '{"source":"duo","account":"nobody@example.com"}')")" "an unknown account cannot be disconnected"
+AG_RES="$(ag_post disconnect '{"source":"duo","account":"b@example.com"}')"
+assert_eq "200|connected" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.state')" "disconnecting one account keeps the source connected"
+assert_eq "b@example.com" "$(tail -n 1 "$AG_DATA/fixture-duo/disconnect-args")" "the disconnect command receives the account id"
+assert_eq "a@example.com" "$(jq -r '[.sources[] | select(.id == "duo") | .accounts[].id] | join(",")' <<<"$(ag_get)")" "only the other account remains"
+AG_RES="$(ag_post disconnect '{"source":"duo","account":"a@example.com"}')"
+assert_eq "200|disconnected" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.state')" "disconnecting the last account disconnects the source"
+AG_OUT="$(ag_get)"
+assert_eq "disconnected|0|0" "$(ag_src "$AG_OUT" duo state)|$(jq -r '[.sources[] | select(.id == "duo") | .accounts[]?] | length' <<<"$AG_OUT")|$(jq -r '[.items.event[] | select(.source == "duo")] | length' <<<"$AG_OUT")" "no accounts or items remain"
+assert_not_file "$AG_DATA/board/agenda/cache/duo.json"
+pass "agenda adds and removes accounts of a multi-account source"
+
 # 10. 할 일: board.sh todo와 보드가 같은 저장을 쓴다.
 AG_TID="$(ag_board todo add 회의록 정리)"
 [[ "$AG_TID" =~ ^[0-9a-f]{8}$ ]] || fail "todo add prints a new id (got $AG_TID)"
@@ -230,10 +266,28 @@ assert_contains "$AG_AUTH" "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcale
 assert_contains "$AG_AUTH" "redirect_uri=http%3A%2F%2F127.0.0.1%3A" "connect listens on a 127.0.0.1 loopback"
 curl -s -L -o /dev/null "$AG_AUTH"
 wait "$AG_CPID" || fail "connect finishes after the redirect: $(cat "$AG_T/connect.err")"
-assert_contains "$(cat "$AG_GSTATE/token-calls")" "pkce-ok" "the token endpoint verified the code verifier"
-assert_eq "600" "$(filemode "$AG_GD/board/agenda/google-token.json")" "the token file is private"
+assert_contains "$(cat "$AG_GSTATE/token-calls")" "pkce-ok client=fake-client-id" "the token endpoint verified the code verifier with the user's own client"
+AG_GTOK="$AG_GD/board/agenda/google-accounts/me@example.com.json"
+assert_eq "600" "$(filemode "$AG_GTOK")" "the account token file is private"
+assert_eq "700" "$(filemode "$AG_GD/board/agenda/google-accounts")" "the account folder is private"
 case "$(cat "$AG_T/connect.err")" in *SECRET*) fail "connect does not print tokens or the client secret" ;; esac
+assert_eq '{"id":"me@example.com","name":"me@example.com"}' "$(google_run accounts)" "accounts lists the connected account by its address"
 pass "google connect runs a loopback PKCE flow"
+
+# 공용 클라이언트: 사용자 클라이언트 파일이 없으면 플러그인에 든 클라이언트로 연결한다.
+AG_GD3="$AG_T/google-data-3"; mkdir -p "$AG_GD3"
+: >"$AG_GSTATE/token-calls"
+google_env HM_DATA_DIR="$AG_GD3" BOARD_NO_BROWSER=1 python3 -I "$AG_GOOGLE" connect 2>"$AG_T/connect3.err" &
+AG_CPID=$!
+track_test_process "$AG_CPID"
+AG_AUTH="$(google_auth_url "$AG_T/connect3.err")" || fail "connect with the built-in client prints the consent URL"
+AG_BUILTIN_ID="$(jq -r '.installed.client_id' "$ROOT/scripts/board/agenda/google/client.json")"
+assert_contains "$AG_AUTH" "client_id=$AG_BUILTIN_ID" "connect uses the built-in client id"
+curl -s -L -o /dev/null "$AG_AUTH"
+wait "$AG_CPID" || fail "connect with the built-in client finishes: $(cat "$AG_T/connect3.err")"
+assert_contains "$(cat "$AG_GSTATE/token-calls")" "pkce-ok client=$AG_BUILTIN_ID" "the token exchange uses the built-in client"
+case "$(cat "$AG_T/connect3.err")" in *"$(jq -r '.installed.client_secret' "$ROOT/scripts/board/agenda/google/client.json")"*) fail "connect does not print the built-in client secret" ;; esac
+pass "google connects with the built-in client when the user has none"
 
 # state가 다르면 거부하고 토큰을 만들지 않는다.
 AG_GD2="$AG_T/google-data-2"; mkdir -p "$AG_GD2"; cp "$AG_DATA/google-oauth-client.json" "$AG_GD2/"
@@ -253,21 +307,72 @@ AG_EV="$(google_run fetch --since 2026-11-24T00:00:00+09:00 --until 2026-12-01T0
 assert_eq "team@example.com:ev1|event|주간 회의" "$(jq -rs 'map("\(.id)|\(.kind)|\(.title)") | join(",")' <<<"$AG_EV")" "only selected calendars' live events are listed"
 assert_contains "$(cat "$AG_GSTATE/events-calls")" '"singleEvents": "true"' "events expand recurring series"
 assert_contains "$(cat "$AG_GSTATE/events-calls")" '"timeMin": "2026-11-24T00:00:00+09:00"' "events start at the requested window"
-jq '.expires_at = 0' "$AG_GD/board/agenda/google-token.json" >"$AG_T/tok.json"; mv "$AG_T/tok.json" "$AG_GD/board/agenda/google-token.json"
+gexpire() { jq '.expires_at = 0' "$1" >"$AG_T/tok.json"; mv "$AG_T/tok.json" "$1"; chmod 600 "$1"; }
+gexpire "$AG_GTOK"
 google_run fetch >/dev/null || fail "google fetch refreshes an expired token"
 assert_contains "$(cat "$AG_GSTATE/token-calls")" "refresh_token" "the refresh endpoint was called"
-assert_eq "fake-access-SECRET-2|fake-refresh-SECRET-1" "$(jq -r '"\(.access_token)|\(.refresh_token)"' "$AG_GD/board/agenda/google-token.json")" "a refresh keeps the refresh token"
-jq '.expires_at = 0' "$AG_GD/board/agenda/google-token.json" >"$AG_T/tok.json"; mv "$AG_T/tok.json" "$AG_GD/board/agenda/google-token.json"
+assert_eq "fake-access-SECRET-2|fake-refresh-SECRET-1" "$(jq -r '"\(.access_token)|\(.refresh_token)"' "$AG_GTOK")" "a refresh keeps the refresh token"
+gexpire "$AG_GTOK"
 : >"$AG_GSTATE/refresh-fail"
-if google_run fetch >/dev/null 2>"$AG_T/fetch.err"; then fail "google fetch fails when the refresh is refused"; fi
+if google_run fetch >/dev/null 2>"$AG_T/fetch.err"; then fail "google fetch fails when every account's refresh is refused"; fi
 assert_contains "$(cat "$AG_T/fetch.err")" "다시 연결하세요" "a refused refresh asks to reconnect"
+assert_contains "$(google_run accounts)" '"error"' "the refused account shows its error in the account list"
 rm -f "$AG_GSTATE/refresh-fail"
 if google_env HM_DATA_DIR="$AG_GD2" python3 -I "$AG_GOOGLE" fetch >/dev/null 2>"$AG_T/fetch2.err"; then fail "google fetch fails without a token"; fi
 assert_contains "$(cat "$AG_T/fetch2.err")" "연결돼 있지 않습니다" "fetch without a token explains it"
-google_run disconnect || fail "google disconnect succeeds"
-assert_not_file "$AG_GD/board/agenda/google-token.json"
-assert_contains "$(cat "$AG_GSTATE/revoke-calls")" "revoke" "disconnect revokes the token"
 pass "google fetch lists selected calendars and refreshes tokens"
+
+# 9-1. 여러 구글 계정: 계정을 더하면 일정이 합쳐지고(같은 캘린더는 한 번), 한 계정이 만료돼도 나머지는 보이며, 하나씩 끊는다.
+gconnect() { # 계정 → 그 계정으로 연결
+  printf '%s' "$1" >"$AG_GSTATE/next-account"
+  google_run connect 2>"$AG_T/connect-$1.err" &
+  local pid=$!
+  track_test_process "$pid"
+  local url; url="$(google_auth_url "$AG_T/connect-$1.err")" || fail "connect for $1 prints the consent URL"
+  curl -s -L -o /dev/null "$url"
+  wait "$pid" || fail "connect for $1 finishes: $(cat "$AG_T/connect-$1.err")"
+}
+gconnect me@example.com
+gconnect work@example.com
+rm -f "$AG_GSTATE/next-account"
+assert_eq "me@example.com,work@example.com" "$(google_run accounts | jq -rs 'map(.id) | join(",")')" "two accounts are connected"
+AG_EV="$(google_run fetch)" || fail "fetch with two accounts succeeds"
+assert_eq "team@example.com:ev1,work@example.com:ev1" "$(jq -rs 'map(.id) | sort | join(",")' <<<"$AG_EV")" "events from both accounts are merged and a shared calendar shows once"
+gexpire "$AG_GD/board/agenda/google-accounts/work@example.com.json"
+: >"$AG_GSTATE/refresh-fail-work@example.com"
+AG_EV="$(google_run fetch 2>"$AG_T/fetch3.err")" || fail "one expired account does not fail the fetch: $(cat "$AG_T/fetch3.err")"
+assert_eq "team@example.com:ev1" "$(jq -rs 'map(.id) | join(",")' <<<"$AG_EV")" "the healthy account's events stay"
+assert_eq "work@example.com" "$(google_run accounts | jq -rs 'map(select(.error)) | map(.id) | join(",")')" "only the expired account shows an error"
+rm -f "$AG_GSTATE/refresh-fail-work@example.com"
+gconnect work@example.com
+rm -f "$AG_GSTATE/next-account"
+assert_eq "" "$(google_run accounts | jq -rs 'map(select(.error)) | map(.id) | join(",")')" "reconnecting the account clears its error"
+: >"$AG_GSTATE/revoke-calls"
+if google_run disconnect nobody@example.com 2>/dev/null; then fail "disconnect refuses an unknown account"; fi
+if google_run disconnect ../google-token 2>/dev/null; then fail "disconnect refuses a path-like account"; fi
+google_run disconnect work@example.com || fail "google disconnects one account"
+assert_eq "me@example.com" "$(google_run accounts | jq -rs 'map(.id) | join(",")')" "the other account remains"
+assert_contains "$(cat "$AG_GSTATE/revoke-calls")" "revoke" "disconnecting an account revokes its token"
+google_run disconnect || fail "google disconnect without an account removes all"
+assert_eq "" "$(google_run accounts)" "no accounts remain"
+pass "google connects several accounts, merges their calendars, and disconnects one at a time"
+
+# 9-2. 예전 단일 토큰(google-token.json)은 그대로 이어 쓰고, 처음 수집할 때 계정 주소로 옮긴다.
+jq -n --argjson e "$(($(date +%s) + 3600))" '{access_token: "fake-access-SECRET-1", refresh_token: "fake-refresh-SECRET-1", expires_at: $e}' >"$AG_GD/board/agenda/google-token.json"
+chmod 600 "$AG_GD/board/agenda/google-token.json"
+assert_eq "1" "$(google_run accounts | jq -s 'length')" "a legacy token shows as one account"
+google_run fetch >/dev/null || fail "fetch works with a legacy token"
+assert_not_file "$AG_GD/board/agenda/google-token.json"
+assert_eq "me@example.com" "$(google_run accounts | jq -rs 'map(.id) | join(",")')" "the legacy token moved to its account address"
+# 같은 계정 파일이 이미 있으면 예전 토큰만 지우고 계정 파일은 그대로 둔다.
+cp "$AG_GD/board/agenda/google-accounts/me@example.com.json" "$AG_T/me-before.json"
+jq -n --argjson e "$(($(date +%s) + 3600))" '{access_token: "fake-access-SECRET-1", refresh_token: "fake-refresh-SECRET-legacy", expires_at: $e}' >"$AG_GD/board/agenda/google-token.json"
+chmod 600 "$AG_GD/board/agenda/google-token.json"
+google_run fetch >/dev/null || fail "fetch with a legacy token and an existing account file"
+assert_not_file "$AG_GD/board/agenda/google-token.json"
+assert_eq "fake-refresh-SECRET-1" "$(jq -r '.refresh_token' "$AG_GD/board/agenda/google-accounts/me@example.com.json")" "the existing account file is kept"
+google_run disconnect || fail "disconnect after migration"
+pass "google keeps a legacy single token working and moves it to its account"
 
 # 11. 보드를 거친 구글 수집: 응답·로그에 토큰과 client secret이 없다.
 jq -n --argjson e "$(($(date +%s) + 3600))" '{access_token: "fake-access-SECRET-1", refresh_token: "fake-refresh-SECRET-1", expires_at: $e}' >"$AG_DATA/board/agenda/google-token.json"
@@ -281,22 +386,30 @@ for AG_SECRET in fake-client-SECRET-xyz fake-access-SECRET fake-refresh-SECRET; 
 done
 pass "agenda keeps tokens and the client secret out of responses and logs"
 
-# 공개 저장소: 새 파일에 OAuth 클라이언트 값·조직 식별자가 없다.
-if grep -rqiE 'apps\.googleusercontent\.com|GOCSPX-|midas|jobda|khb1122' "$ROOT/scripts/board/agenda.py" "$ROOT/scripts/board/agenda" "$ROOT/docs/privacy.md" "$AG_FIX"; then
-  fail "agenda files carry no OAuth client values or organization identifiers"
+# 공개 저장소: 공용 OAuth 클라이언트 값은 client.json 하나에만 있고, 조직 식별자는 어디에도 없다.
+AG_CLIENT="$ROOT/scripts/board/agenda/google/client.json"
+assert_eq "true" "$(jq -r '.installed | (.client_id | endswith(".apps.googleusercontent.com")) and (.client_secret | length > 0)' "$AG_CLIENT")" "the built-in client is a desktop (installed) client"
+AG_LEAK="$(grep -rlE 'apps\.googleusercontent\.com|GOCSPX-' "$ROOT/scripts" "$ROOT/skills" "$ROOT/docs" "$ROOT/tests" "$ROOT/README.md" | grep -vxF "$AG_CLIENT" | grep -v '/tests/board-agenda.sh$' || true)"
+assert_eq "" "$AG_LEAK" "client values live only in client.json"
+if grep -rqiE 'midas|jobda|khb1122' "$ROOT/scripts/board/agenda.py" "$ROOT/scripts/board/agenda" "$ROOT/docs/privacy.md" "$AG_FIX"; then
+  fail "agenda files carry no organization identifiers"
 fi
-pass "agenda files carry no client values or identifiers"
+pass "agenda files keep client values in one place and carry no identifiers"
 
 # 12. 안내 문서: setup이 직접 만드는 OAuth 클라이언트를, privacy가 읽는 것·저장 위치·중개 서버 없음을 말한다.
 AG_SETUP="$(<"$ROOT/skills/setup/SKILL.md")"
 assert_contains "$AG_SETUP" "8-4. 내 일정 — 구글 캘린더 연결 (선택)" "setup has the calendar section"
 assert_contains "$AG_SETUP" "google-oauth-client.json" "setup names the client file"
 assert_contains "$AG_SETUP" "calendar.readonly" "setup names the scope"
-assert_contains "$AG_SETUP" "데스크톱 앱" "setup asks for a desktop app client"
+assert_contains "$AG_SETUP" "데스크톱 앱" "setup explains an optional desktop app client"
+assert_contains "$AG_SETUP" "[계정 추가]" "setup explains adding accounts"
+assert_contains "$AG_SETUP" "따로 준비할 것은 없다" "setup says the built-in client needs no preparation"
 AG_PRIV="$(<"$ROOT/docs/privacy.md")"
 assert_contains "$AG_PRIV" "calendar.readonly" "privacy names the scope"
 assert_contains "$AG_PRIV" ".ai-harness/board/agenda" "privacy names where data is stored"
 assert_contains "$AG_PRIV" "중개 서버" "privacy says there is no relay server"
+assert_contains "$AG_PRIV" "google-accounts/<계정>.json" "privacy names the per-account token files"
+assert_contains "$AG_PRIV" "PKCE" "privacy explains why the built-in client value is not a secret"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh todo" "board skill describes the to-do CLI"
 pass "agenda guides and privacy notes are in place"
 
