@@ -235,7 +235,7 @@ assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a
 # repair는 직전 실패 check만 다시 실행하고, 통과 뒤 전체 required set을 한 번 확정한다.
 REPAIR_CHECK_LOG="$DRIVER_TMP/repair-checks.log"
 FAKE_CHECK="printf 'A\\n' >>'$REPAIR_CHECK_LOG'; grep -q fixed feature.txt" start_and_approve repair_failed_checks_only --check "printf 'B\\n' >>'$REPAIR_CHECK_LOG'" --check "printf 'B\\n' >>'$REPAIR_CHECK_LOG'"
-assert_eq "3" "$(grep -c '^A$' "$REPAIR_CHECK_LOG")" "the failed check runs for the initial failure, repair, and final confirmation"
+assert_eq "2" "$(grep -c '^A$' "$REPAIR_CHECK_LOG")" "the failed check runs for the initial failure and after repair; the final confirmation reuses that pass on the same tree"
 assert_eq "2" "$(grep -c '^B$' "$REPAIR_CHECK_LOG")" "a passing duplicated command runs once initially and once in final confirmation"
 start_and_approve review_blocks
 assert_eq "20:user_decision:$(jq -r '.limits.max_repair_attempts' "$FEATURE_GRAPH")" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "blocking findings stop at user_decision after the graph's repair limit"
@@ -365,5 +365,59 @@ driver revise --feedback "x"
 assert_eq "2" "$DRIVER_RC" "revise is refused at a node without a brief_revised edge"
 assert_contains "$DRIVER_OUT" "approval, deliver" "the refusal names the nodes that take revise"
 pass "revise returns from deliver to the brief without killing the runner"
+
+# 러너는 모든 검사에 HM_TEST_JOBS를 넘긴다: 설정이 없으면 max(1, min(ncpu/2, 4)), ~/.ai-harness/config의 값이 있으면 그 값,
+# 1 이상의 정수가 아니면 기본값을 쓰고 안내를 남긴다. Brief는 병렬 옵션에 이 값을 넘기라는 안내를, deliver는 전체 회귀를 직접
+# 돌리지 말라는 안내를 받는다. (#513)
+unset HM_TEST_JOBS
+JOBS_FILE="$DRIVER_TMP/check-jobs"
+JOBS_CHECK="printf %s \"\$HM_TEST_JOBS\" >'$JOBS_FILE'"
+FAKE_CHECK="$JOBS_CHECK" start_and_approve check_jobs_default
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run whose check records HM_TEST_JOBS reaches done"
+[[ "$(<"$JOBS_FILE")" =~ ^[1-4]$ ]] || fail "the default HM_TEST_JOBS is an integer from 1 to 4 (actual=$(<"$JOBS_FILE"))"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "\$HM_TEST_JOBS" "the brief node is told to pass HM_TEST_JOBS to the test runner's parallelism option"
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "run only the tests for the areas your Red/Green steps target" "deliver runs only the Red/Green target areas"
+assert_contains "$(<"$FAKE_LOG.deliver.prompt")" "the driver runs the full regression (final_checks)" "deliver is told the driver runs the full regression"
+new_driver_repo check_jobs_config
+printf 'HM_TEST_JOBS=3\n' >"$DRIVER_TMP/data/config"
+FAKE_CHECK="$JOBS_CHECK" driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+FAKE_CHECK="$JOBS_CHECK" driver resume
+assert_eq "0:3" "$DRIVER_RC:$(<"$JOBS_FILE")" "HM_TEST_JOBS in ~/.ai-harness/config sets the value checks receive"
+new_driver_repo check_jobs_invalid
+printf 'HM_TEST_JOBS=lots\n' >"$DRIVER_TMP/data/config"
+FAKE_CHECK="$JOBS_CHECK" driver start --runtime codex --request "add feature"
+say_in_claude "승인"
+FAKE_CHECK="$JOBS_CHECK" driver resume
+assert_eq "0" "$DRIVER_RC" "an invalid HM_TEST_JOBS does not stop the run"
+[[ "$(<"$JOBS_FILE")" =~ ^[1-4]$ ]] || fail "an invalid HM_TEST_JOBS falls back to the default (actual=$(<"$JOBS_FILE"))"
+assert_contains "$(<"$(run_dir)/progress.log")" "HM_TEST_JOBS in $DRIVER_TMP/data/config is not a positive integer" "an invalid HM_TEST_JOBS is reported once in the log"
+: >"$DRIVER_TMP/data/config"
+pass "the runner passes HM_TEST_JOBS to every check"
+
+# 같은 트리에서 러너가 이미 통과시킨 같은 명령은 다시 돌리지 않고 재사용으로 남긴다. 트리가 바뀌면(미추적 파일 포함) 다시 돌고,
+# 실패는 같은 트리에서도 다시 돈다. 명령마다 걸린 초를 progress.log·checks.json·status에 남긴다. (#513)
+REUSE_LOG="$DRIVER_TMP/check-reuse.log"
+: >"$REUSE_LOG"
+REUSE_D="printf 'D\\n' >>'$REUSE_LOG'; grep -q fixed feature.txt"
+FAKE_CHECK="printf 'C\\n' >>'$REUSE_LOG'" start_and_approve check_reuse --check "$REUSE_D"
+assert_eq "0:done:1" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "a run with a repaired check reaches done"
+git -C "$DRIVER_REPO" ls-files --error-unmatch feature.txt >/dev/null 2>&1 && fail "feature.txt should stay untracked for this case"
+assert_eq "2" "$(grep -c '^C$' "$REUSE_LOG")" "a passing check runs again after an untracked file changed the tree"
+assert_eq "2" "$(grep -c '^D$' "$REUSE_LOG")" "a check that passed on this tree is not run again"
+assert_contains "$(<"$(run_dir)/progress.log")" "check reused: $REUSE_D (tree " "the reuse is logged with the tree"
+assert_eq "1" "$(jq -s '[.[][] | select(.reused == true and .command == $c)] | length' --arg c "$REUSE_D" "$(run_dir)"/*.checks.json)" "checks.json marks the reused check"
+grep -Eq "check passed: printf 'C.* \([0-9]+s\)$" "$(run_dir)/progress.log" || fail "progress.log records the seconds a passing check took: $(<"$(run_dir)/progress.log")"
+grep -Eq "check failed: printf 'D.* \(exit 1, [0-9]+s\)$" "$(run_dir)/progress.log" || fail "progress.log records the exit code and seconds of a failing check"
+assert_eq "true" "$(jq -s 'map(.[] | select(.reused != true) | .seconds | type == "number" and . == floor) | all' "$(run_dir)"/*.checks.json)" "every run check records whole seconds"
+driver status
+assert_contains "$DRIVER_OUT" "printf 'D\\n' >>'$REUSE_LOG'; grep -q fixed feature.txt reused 0s" "status shows the latest checks with their outcome and seconds"
+printf '%s\n' "$DRIVER_OUT" | grep -Eq "^checks [^:]+: printf 'C.* passed [0-9]+s$" || fail "status shows a passed check with its seconds: $DRIVER_OUT"
+FAIL_LOG="$DRIVER_TMP/check-fail-rerun.log"
+: >"$FAIL_LOG"
+FAKE_CHECK="printf 'F\\n' >>'$FAIL_LOG'; false" start_and_approve check_fail_rerun
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a check that keeps failing goes to a person"
+assert_eq "3" "$(grep -c '^F$' "$FAIL_LOG")" "a failing check runs again on the same tree (the second repair left the tree unchanged)"
+pass "the runner reuses a check that passed on the same tree and records each check's seconds"
 
 finish_tests
