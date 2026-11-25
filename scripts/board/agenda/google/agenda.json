@@ -1,0 +1,10 @@
+{
+  "id": "google",
+  "name": "구글 캘린더",
+  "fetch": ["python3", "-I", "google_calendar.py", "fetch"],
+  "connect": ["python3", "-I", "google_calendar.py", "connect"],
+  "disconnect": ["python3", "-I", "google_calendar.py", "disconnect"],
+  "interval_minutes": 15,
+  "requires": ["$HM_DATA_DIR/google-oauth-client.json"],
+  "setup_hint": "구글 클라우드에서 직접 만든 데스크톱 앱 OAuth 클라이언트 파일이 필요합니다. 터미널에서 /ai-harness:setup을 실행하면 만드는 순서를 안내합니다."
+}

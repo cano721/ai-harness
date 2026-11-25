@@ -7,7 +7,11 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+
 ### 새 기능
+
+- **보드에 '내 일정' 화면이 생겼습니다** — 보드에 작업 현황과 별개인 '내 일정' 화면이 생겼습니다. 구글 캘린더 일정과, 스킬이 제공하는 어댑터의 항목, 보드나 `board.sh todo`로 직접 적은 할 일을 한곳에서 봅니다. 구글 캘린더는 직접 만든 OAuth 클라이언트로 연결하며 `/ai-harness:setup`이 만드는 법을 안내합니다. 읽는 것과 저장 위치는 `docs/privacy.md`에 있습니다. (#492)
+  요약: 보드의 '내 일정'에서 오늘·이번 주 일정, 답해야 할 것, 직접 적은 할 일을 한 화면에 봅니다.
 
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
   요약: `/release` 또는 `workflow-driver.sh start --workflow release --version <x.y.z>`로 릴리스 PR부터 태그·노트 발행까지 러너에 맡깁니다. 어디까지 갈지는 개인 배포 단계가 정하고, `release_policy`가 없으면 `/ai-harness:harness-init --sync`로 먼저 감지합니다.

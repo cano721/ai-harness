@@ -30,6 +30,10 @@ GET  /references/run?t&run       실행 하나의 탭 5개 내용(references.jso
 GET  /references/file?t&run&p    그 실행 작업 폴더의 refs/·captures/ 아래 이미지·영상만(realpath로 밖을 막음)
 POST /references/pick {t, run, tone, kept, dropped, add_sites, primary, user_words}
                                  랜딩 실행이 reference_pick일 때만 landing-pick.mjs로 reference-pick.json을 씀
+GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) 상태와 종류별 항목. 주기가 지난 소스는 이때·뒤 타이머가 다시 모음
+POST /agenda/connect {t, source} · /agenda/disconnect {t, source}  소스 연결·끊기(connect는 뒤에서, 최대 5분)
+POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
+POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text}  직접 적는 할 일
 
 브라우저에서 명령 문자열은 받지 않는다. 항목 id로 status를 다시 찾아 서버가 인자를 만든다.
 127.0.0.1에만 묶고, 실행마다 새 URL 토큰·Origin·Host(DNS rebinding)를 검사한다. 권한 훅 엔드포인트는 별도 토큰을 쓴다.
@@ -46,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groups
 import asks as hasks  # noqa: E402
 import autofix as hautofix  # noqa: E402
+import agenda as hagenda  # noqa: E402
 import changes as hchanges  # noqa: E402
 import guide as hguide  # noqa: E402
 import impact as himpact  # noqa: E402
@@ -1402,6 +1407,17 @@ def impact_refresh(repo):
 
 AUTOFIX = hautofix.Store(DATA)
 REFS = hrefs.Store(DATA)
+AGENDA = hagenda.Store(DATA)
+AGENDA_TICK = 60  # 연결된 일정 소스를 주기가 지났는지 보는 간격(초). 소스마다 자기 스레드로 모은다
+
+
+def agenda_ticker():
+    while True:
+        time.sleep(AGENDA_TICK)
+        try:
+            AGENDA.refresh_due()
+        except Exception:
+            pass
 
 
 def autofix_key(repo):
@@ -2512,6 +2528,8 @@ class Handler(BaseHTTPRequestHandler):
                 return None
         if u.path == "/launch":
             return self._send(200, launch_state())
+        if u.path == "/agenda":
+            return self._send(200, AGENDA.state())
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":
@@ -2597,6 +2615,25 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             HUB.unsubscribe(q)
 
+    def _agenda_post(self, kind, req):
+        """내 일정 동작. 기록에는 소스·항목 id와 결과만 남긴다(제목·토큰은 남기지 않는다)."""
+        source = req.get("source") if isinstance(req.get("source"), str) else ""
+        if kind == "todo":
+            text = req.get("text") if isinstance(req.get("text"), str) else ""
+            tid = AGENDA.todo_add(text)
+            code, res = (200, {"ok": True, "id": tid, "message": "할 일을 추가했습니다."}) if tid else \
+                (400, {"ok": False, "message": "할 일 내용을 적어 주세요."})
+        elif kind == "connect":
+            code, res = AGENDA.connect(source)
+        elif kind == "disconnect":
+            code, res = AGENDA.disconnect(source)
+        elif kind == "refresh":
+            code, res = AGENDA.refresh(source)
+        else:
+            code, res = AGENDA.done(source, req.get("id"))
+        log({"action": "agenda_" + kind, "source": source or None, "ok": res["ok"]})
+        return self._send(code, res)
+
     def do_POST(self):
         if not self._host_ok():
             return self._send(403, {"error": "host"})
@@ -2675,6 +2712,8 @@ class Handler(BaseHTTPRequestHandler):
                 _cache["data"] = None
             log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
             return self._send(code, res)
+        if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/done", "/agenda/todo"):
+            return self._agenda_post(path.rsplit("/", 1)[1], req)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))
             log({"action": "impact_refresh", "repo": req.get("repo"), **res})
@@ -2734,6 +2773,7 @@ if __name__ == "__main__":
     RESIDENTS.start_watch()
     atexit.register(RESIDENTS.shutdown)  # 꺼질 때 호스트 연결만 닫는다 — 세션과 붙잡은 요청은 호스트에 남는다(#364)
     threading.Thread(target=refresher, daemon=True).start()
+    threading.Thread(target=agenda_ticker, daemon=True).start()
     if IDLE_EXIT:
         threading.Thread(target=idle_watch, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
