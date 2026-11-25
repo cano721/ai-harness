@@ -8,8 +8,12 @@
 //        1440 and 390 (preview-<id>.json) with its first_viewport line, one to go ahead with
 // Served by landing-board-server.mjs, the start button writes reference-pick.json or draft-pick.json; served statically,
 // the board shows a summary to paste into the terminal instead. Media paths stay relative to DIR.
+// Tab and competitor-analysis labels follow the work folder's medium (DIR/medium.json, web-page without it) from
+// skills/design-references/references/media.json; a medium whose rules ask for no interaction drops that tab when it
+// holds no reference, and then only the layout needs a primary.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
+import { dirname, join, relative, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const argv = process.argv.slice(2);
 const opt = (k) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : "");
@@ -20,6 +24,16 @@ if (!work || !["references", "drafts"].includes(kind)) {
   process.exit(2);
 }
 const read = (f) => JSON.parse(readFileSync(join(work, f), "utf8"));
+const REFS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "design-references", "references");
+const MEDIA = JSON.parse(readFileSync(join(REFS_DIR, "media.json"), "utf8"));
+const medium = existsSync(join(work, "medium.json")) ? read("medium.json")?.medium : MEDIA.default;
+if (!Object.hasOwn(MEDIA.media, medium ?? "")) {
+  console.error(`unknown medium in medium.json: ${medium} (${Object.keys(MEDIA.media).join("|")})`);
+  process.exit(2);
+}
+const MEDIUM = MEDIA.media[medium];
+const RULES = JSON.parse(readFileSync(process.env.DESIGN_REFS_RULES || join(REFS_DIR, "refs-rules.json"), "utf8"));
+const interactionOptional = ["interactive", "unattended"].every((m) => ((RULES.media?.[medium]?.[m] ?? RULES[m])?.per_kind?.interaction ?? 1) === 0);
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const remote = (s) => /^https?:\/\//i.test(s);
@@ -34,7 +48,9 @@ const hex = (v) => (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(String(v ??
 const link = (u) => (remote(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>` : `<span class="src">${esc(u)}</span>`);
 
 function shots(r) {
-  const caps = (r.captures ?? []).map(media).filter(Boolean).map((c) => `<img src="${esc(c)}" alt="${esc(r.title ?? r.id)} 캡처" loading="lazy">`);
+  const img = (src, what) => `<img src="${esc(src)}" alt="${esc(r.title ?? r.id)} ${what}" loading="lazy" referrerpolicy="no-referrer">`;
+  const image = remote(String(r.image ?? "")) ? [img(r.image, "원본 이미지")] : [];
+  const caps = image.concat((r.captures ?? []).map(media).filter(Boolean).map((c) => img(c, "캡처")));
   const v = r.video ? media(r.video) : "";
   const video = v ? `<video src="${esc(v)}" muted loop autoplay playsinline></video>` : "";
   return caps.length || video ? `<div class="shots">${video}${caps.join("")}</div>` : `<p class="missing">캡처 없음</p>`;
@@ -136,12 +152,16 @@ function referencesBoard() {
     console.error("references.json must be an array");
     process.exit(4);
   }
-  const TABS = [["tone", "톤앤매너"], ["component", "구성요소"], ["layout", "레이아웃"], ["interaction", "인터랙션"], ["competitor", "경쟁사 분석"]];
+  // A medium whose rules drop interaction (print, graphic) shows the tab only when it holds a reference, and its pick
+  // needs no interaction primary.
+  const showInteraction = !interactionOptional || refs.some((r) => r.kind === "interaction");
+  const TABS = ["tone", "component", "layout", "interaction", "competitor"]
+    .filter((k) => k !== "interaction" || showInteraction)
+    .map((k) => [k, MEDIUM.tabs[k]]);
   const card = (r) => {
     const a = r.analysis;
-    const analysis = a
-      ? `<dl class="analysis"><dt>첫 화면에서 내세우는 것</dt><dd>${esc(a.leads_with)}</dd><dt>주장</dt><dd>${esc(a.claim)}</dd><dt>주 버튼</dt><dd>${esc(a.cta)}</dd><dt>우리와 다른 점</dt><dd>${esc(a.gap)}</dd></dl>`
-      : "";
+    const rows = a && typeof a === "object" ? Object.entries(MEDIUM.analysis.labels).filter(([k]) => a[k] != null && a[k] !== "") : [];
+    const analysis = rows.length ? `<dl class="analysis">${rows.map(([k, label]) => `<dt>${esc(label)}</dt><dd>${esc(a[k])}</dd>`).join("")}</dl>` : "";
     const lines = [
       r.tone_part && `<p class="tag">톤에서 맡는 것 · ${esc(r.tone_part)}</p>`,
       r.take && `<p><b>가져올 것</b> ${esc(r.take)}</p>`,
@@ -192,7 +212,7 @@ ${tone.avoid ? `<p class="avoid"><b>피할 느낌</b> ${esc(tone.avoid)}</p>` : 
     return `<section class="panel" id="tab-${k}" role="tabpanel" hidden>${body}</section>`;
   }).join("");
   const nav = TABS.map(([k, label]) => `<button role="tab" data-tab="${k}" aria-controls="tab-${k}">${label}<small>${of(k).length || ""}</small></button>`).join("");
-  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">레이아웃·인터랙션은 ★ 대표 하나, 구성요소는 섹션마다 대표 하나예요. 추천이 미리 ★로 찍혀 있어 그대로 시작해도 돼요. ★가 아닌 레퍼런스는 참고로 남고, 절대 쓰지 않을 것만 오른쪽 위 ×로 제외해요(되돌릴 수 있어요). <span class="ask-run" hidden>톤앤매너를 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</span></p>
+  const body = `<header class="top"><h1>레퍼런스 보드</h1><p class="ask">${showInteraction ? `레이아웃·${esc(MEDIUM.tabs.interaction)}은` : "레이아웃은"} ★ 대표 하나, 구성요소는 섹션마다 대표 하나예요. 추천이 미리 ★로 찍혀 있어 그대로 시작해도 돼요. ★가 아닌 레퍼런스는 참고로 남고, 절대 쓰지 않을 것만 오른쪽 위 ×로 제외해요(되돌릴 수 있어요). <span class="ask-run" hidden>톤앤매너를 정한 뒤 아래 「이 레퍼런스로 시작」을 누르면 돼요.</span></p>
 <nav role="tablist">${nav}</nav></header><main>${panels}</main>
 ${pickBar("이 레퍼런스로 시작", `<label>추가로 볼 사이트 (URL, 여러 개면 줄바꿈)<textarea id="add-sites" rows="1" placeholder="https://"></textarea></label>
 <label>하고 싶은 말<textarea id="memo" rows="1" placeholder="예: 3D는 과하지 않게"></textarea></label>`)}`;
@@ -202,6 +222,7 @@ const show=(k)=>{if(!keys.includes(k))k=keys[0];document.querySelectorAll('.pane
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{show(b.dataset.tab);history.replaceState(null,'','#'+b.dataset.tab);});
 addEventListener('hashchange',()=>show(location.hash.slice(1)));show(location.hash.slice(1));
 const BOARD_NODE='reference_pick';
+const NEED_INTERACTION=${JSON.stringify(!interactionOptional)},SHOW_INTERACTION=${JSON.stringify(showInteraction)};
 const TITLES=${JSON.stringify(Object.fromEntries(refs.map((r) => [r.id, r.title ?? r.id])))};
 const BASE_SLOTS=${JSON.stringify(slots.map((x) => ({ id: x.id, label: x.label })))};
 let added=[];const star={layout:null,interaction:null};const comp={};
@@ -242,8 +263,9 @@ const applyPicked=(p)=>{(p.dropped||[]).forEach(id=>{const a=document.getElement
 added=(pr.added_slots||[]).slice();star.layout=pr.layout||null;star.interaction=pr.interaction||null;Object.keys(comp).forEach(k=>delete comp[k]);
 allSlots().forEach(x=>comp[x.id]=(pr.components||{})[x.id]||null);renderPrimary();};
 const summary=()=>{const p=payload(),pr=p.primary,filled=Object.values(pr.components).filter(Boolean).length,total=allSlots().length;
-return {ready:p.kept.length>0&&!!pr.layout&&!!pr.interaction,count:(pr.layout&&pr.interaction?'대표 레이아웃 '+pr.layout+' · 인터랙션 '+pr.interaction:'레이아웃·인터랙션 대표를 ★로 골라 주세요')+' · 구성요소 '+filled+'/'+total+'칸 · '+p.dropped.length+'개 제외',
-text:'톤앤매너: '+p.tone+'\\n대표 레이아웃: '+(pr.layout||'미정')+'\\n대표 인터랙션: '+(pr.interaction||'미정')+'\\n구성요소: '+(allSlots().map(x=>x.label+'='+(pr.components[x.id]||'없음')).join(', ')||'없음')+'\\n제외: '+(p.dropped.join(', ')||'없음')+(p.add_sites.length?'\\n추가로 볼 사이트: '+p.add_sites.join(' '):'')+(val('memo')?'\\n하고 싶은 말: '+val('memo'):'')};};`;
+const starred=!!pr.layout&&(!NEED_INTERACTION||!!pr.interaction);
+return {ready:p.kept.length>0&&starred,count:(starred?'대표 레이아웃 '+pr.layout+(pr.interaction?' · 인터랙션 '+pr.interaction:''):NEED_INTERACTION?'레이아웃·인터랙션 대표를 ★로 골라 주세요':'레이아웃 대표를 ★로 골라 주세요')+' · 구성요소 '+filled+'/'+total+'칸 · '+p.dropped.length+'개 제외',
+text:'톤앤매너: '+p.tone+'\\n대표 레이아웃: '+(pr.layout||'미정')+(SHOW_INTERACTION?'\\n대표 인터랙션: '+(pr.interaction||'미정'):'')+'\\n구성요소: '+(allSlots().map(x=>x.label+'='+(pr.components[x.id]||'없음')).join(', ')||'없음')+'\\n제외: '+(p.dropped.join(', ')||'없음')+(p.add_sites.length?'\\n추가로 볼 사이트: '+p.add_sites.join(' '):'')+(val('memo')?'\\n하고 싶은 말: '+val('memo'):'')};};`;
   return ["board.html", page("레퍼런스 보드", "", body, script)];
 }
 
