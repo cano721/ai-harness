@@ -43,6 +43,13 @@
       "mode": "copy"
     },
     {
+      "path": ".ai-harness/workflows/release-graph.json",
+      "level": "standard",
+      "workflow": "release",
+      "source": "templates/release/references/release-graph.json",
+      "mode": "copy"
+    },
+    {
       "path": ".ai-harness/workflows/design-polish-graph.json",
       "level": "standard",
       "workflow": "design-polish",
@@ -79,6 +86,14 @@
       "integration": "codex",
       "workflow": "investigate",
       "source": "templates/investigate/SKILL.md",
+      "mode": "render"
+    },
+    {
+      "path": ".agents/skills/release/SKILL.md",
+      "level": "standard",
+      "integration": "codex",
+      "workflow": "release",
+      "source": "templates/release/SKILL.md",
       "mode": "render"
     },
     {
@@ -124,6 +139,15 @@
       "source": "templates/investigate/SKILL.md",
       "mode": "render",
       "argument_hint": "<증상 설명 또는 이슈 번호>"
+    },
+    {
+      "path": ".claude/commands/release.md",
+      "level": "standard",
+      "integration": "claude",
+      "workflow": "release",
+      "source": "templates/release/SKILL.md",
+      "mode": "render",
+      "argument_hint": "[버전 x.y.z]"
     },
     {
       "path": ".claude/commands/design-polish.md",
@@ -797,15 +821,15 @@
     },
     {
       "path": ".claude/workflows/implement-feature.js",
-      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토·화면 다듬기·원인 조사 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
     },
     {
       "path": ".claude/workflows/fix-bug.js",
-      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토·화면 다듬기·원인 조사 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
     },
     {
       "path": ".claude/workflows/review.js",
-      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
+      "reason": "그래프 러너(.ai-harness/workflows/workflow-driver.sh)가 기능·버그·검토·화면 다듬기·원인 조사 그래프를 모두 실행한다. Dynamic Workflow 사본은 러너와 다른 게이트로 같은 그래프를 실행한다."
     }
   ]
 }

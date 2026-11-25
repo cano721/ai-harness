@@ -380,6 +380,13 @@ CONTRACT_OK_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_
 assert_eq "false 0" "$(jq -r '"\(.contract_drift) \(.findings|length)"' <<<"$CONTRACT_OK_SCAN")" "a body consistent with the graph and tools reports nothing"
 assert_contains "$(<"$ROOT/skills/harness-init/SKILL.md")" "scripts/workflow-contract.sh scan --root ." "harness init sync runs the contract scan"
 
+# Read 판정(.name == "Read")을 쓰는 새 가드라도 NFC 정규화 흔적이 없으면 macOS NFD 경로에서 fail-open한다 — guard_no_nfc(#479).
+CONTRACT_NFC="$TEST_TMP/contract-nfc"
+mkdir -p "$CONTRACT_NFC/.ai-harness/hooks"
+sed 's/unicodedata/uni_code_data/g; s/NFC/N_F_C/g' "$ROOT/skills/harness-init/references/direct-edit-guard.sh" >"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh"
+assert_contains "$(<"$CONTRACT_NFC/.ai-harness/hooks/direct-edit-guard.sh")" '.name == "Read"' "the no-NFC fixture guard keeps the Read judgment"
+assert_eq "guard_no_nfc" "$(contract_checks "$("$ROOT/scripts/workflow-contract.sh" scan --root "$CONTRACT_NFC")")" "a Read-judging guard without NFC handling is flagged guard_no_nfc only"
+
 # PR 단계는 manifest git_policy가 허용하면 계약 위반이 아니다. git_policy를 모르는 이전 어댑터는 갱신 대상으로 짚는다.
 CONTRACT_PR="$TEST_TMP/contract-pr"
 mkdir -p "$CONTRACT_PR/.ai-harness/workflows" "$CONTRACT_PR/.claude/commands"
@@ -418,7 +425,18 @@ assert_contains "$HARNESS_INIT_CONTENT" "**팀 규칙 원본**" "harness init as
 assert_contains "$HARNESS_INIT_CONTENT" "harness:false" "harness init marks members without a harness"
 assert_contains "$HARNESS_INIT_CONTENT" "지금 init할 멤버" "member init is an opt-in follow-up"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-list --count HEAD..origin/<base>" "workspace preflight checks member checkout freshness"
-assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑤" "workspace sync proposes the freshness step for existing AGENTS.md"
+# Preflight 번호는 ⑤ 병합된 worktree 정리, ⑥ 멤버 최신 여부 확인이다. 본문의 번호 참조가 실제 단계와 어긋나면 안 된다.
+HARNESS_INIT_PREFLIGHT="$(grep -F -- '- **Preflight**: ①' <<<"$HARNESS_INIT_CONTENT")"
+assert_contains "$HARNESS_INIT_PREFLIGHT" "⑤ 각 멤버의 \`git worktree list --porcelain\`" "workspace preflight step 5 is the merged-worktree cleanup"
+assert_contains "$HARNESS_INIT_PREFLIGHT" "⑥ 멤버 코드로 \"현재 상태\"" "workspace preflight step 6 is the member freshness check"
+assert_contains "$HARNESS_INIT_CONTENT" "Preflight ⑥ 멤버 최신 여부 확인이 없음" "workspace sync proposes the freshness step (6) for an existing AGENTS.md"
+assert_contains "$HARNESS_INIT_CONTENT" "체크아웃 최신화는 Preflight ⑥ 조건에서만" "the scan note points to the freshness step by its current number"
+[[ "$HARNESS_INIT_CONTENT" != *"Preflight ⑤ 조건"* ]] || fail "no reference still calls the freshness step 5"
+assert_contains "$HARNESS_INIT_CONTENT" "병합된 worktree" "workspace preflight cleans a safely merged worktree"
+assert_contains "$HARNESS_INIT_CONTENT" "git log HEAD --not --remotes" "workspace preflight keeps worktrees with commits absent from every remote"
+assert_contains "$HARNESS_INIT_CONTENT" "git worktree remove" "workspace preflight has a non-Orca cleanup path"
+assert_contains "$HARNESS_INIT_CONTENT" "orca worktree rm --delete-branch" "workspace preflight removes a merged Orca worktree and its local branch"
+assert_contains "$HARNESS_INIT_CONTENT" "중첩 clone" "workspace preflight preserves a nested clone"
 assert_contains "$HARNESS_INIT_CONTENT" "/cd <member>" "workspace routing moves implementation into the member with /cd or a member session"
 assert_contains "$HARNESS_INIT_CONTENT" "rev-parse --show-toplevel\`)로 멤버를 정한다" "workspace preflight resolves the member by git root, not the first path segment"
 assert_contains "$HARNESS_INIT_CONTENT" "같은 이름의 사용자 전역 페르소나" "workspace preflight warns that delegation can hit a same-named user persona"
@@ -438,6 +456,7 @@ assert_contains "$HARNESS_INIT_CONTENT" "진행 방식의 **첫 지시**는 멤�
 assert_contains "$HARNESS_INIT_CONTENT" '러너 시작 명령(`bash .ai-harness/workflows/workflow-driver.sh start' "workspace handoff names the runner start command when the member has one"
 assert_contains "$HARNESS_INIT_CONTENT" 'Preflight 의 워크플로 선택을 건너뛴다' "workspace handoff explains why a workflow name alone is not enough"
 assert_contains "$HARNESS_INIT_CONTENT" '③ 인계 프롬프트에 멤버 워크플로 파일 Read 지시가 없음' "workspace sync flags a Preflight whose handoff omits the workflow file read"
+assert_contains "$HARNESS_INIT_CONTENT" '병합된 worktree 정리 단계가 없음' "workspace sync recognizes an old preflight without merged worktree cleanup"
 [[ "$HARNESS_INIT_CONTENT" != *'respawn --all 후'* ]] || fail "handoff does not restart every background session"
 assert_contains "$HARNESS_INIT_CONTENT" '메시지 없이 — 구독만 하고 worker 를 방해하지 않는다' "the turn-end subscription sends no message to the worker"
 assert_contains "$HARNESS_INIT_CONTENT" '사용자가 Orca 감독을 요청했거나 재시도·의존 관계 관리가 필요하면' "Orca supervision is an opt-in path, not the default"
@@ -565,6 +584,26 @@ printf '# changed for --changed selection\n' >>"$RUNNER_FIXTURE/tests/beta.sh"
 changed_out="$TEST_TMP/parallel-changed.out"
 HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 --changed >"$changed_out" 2>&1
 assert_contains "$(<"$changed_out")" "# all passed: 1 tests in beta" "--changed selects only changed areas before parallel scheduling"
+# 여러 영역이 쓰는 공용 헬퍼(tests/lib-*.sh)는 영역이 아니고, 바뀌면 그 헬퍼를 source하는 영역만 고른다. (#467)
+printf '# shared helper\n' >"$RUNNER_FIXTURE/tests/lib-shared.sh"
+printf '# source lib-shared.sh\n' >>"$RUNNER_FIXTURE/tests/alpha.sh"
+git -C "$RUNNER_FIXTURE" add tests && git -C "$RUNNER_FIXTURE" commit -q -m helper
+assert_eq "" "$(bash "$RUNNER_FIXTURE/tests/run.sh" --list | grep -x 'lib-shared' || true)" "a lib-*.sh helper is not listed as an area"
+printf '# changed helper\n' >>"$RUNNER_FIXTURE/tests/lib-shared.sh"
+helper_out="$TEST_TMP/parallel-helper.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" --changed >"$helper_out" 2>&1
+assert_contains "$(<"$helper_out")" "# all passed: 1 tests in alpha" "a changed lib-*.sh helper selects the areas that source it"
+git -C "$RUNNER_FIXTURE" checkout -q -- tests
+# 경로가 공용 헬퍼에만 적혀 있어도 그 헬퍼를 source하는 영역을 고른다(러너 경로는 lib-driver.sh에만 있다).
+mkdir -p "$RUNNER_FIXTURE/scripts"
+printf 'x\n' >"$RUNNER_FIXTURE/scripts/helper-only.sh"
+printf '# runs scripts/helper-only.sh\n' >>"$RUNNER_FIXTURE/tests/lib-shared.sh"
+git -C "$RUNNER_FIXTURE" add tests scripts && git -C "$RUNNER_FIXTURE" commit -q -m helper-path
+printf 'y\n' >>"$RUNNER_FIXTURE/scripts/helper-only.sh"
+helper_path_out="$TEST_TMP/parallel-helper-path.out"
+HM_TEST_BASE=HEAD bash "$RUNNER_FIXTURE/tests/run.sh" --changed >"$helper_path_out" 2>&1
+assert_contains "$(<"$helper_path_out")" "# all passed: 1 tests in alpha" "a path named only in a lib-*.sh helper selects the areas that source it"
+git -C "$RUNNER_FIXTURE" checkout -q -- scripts
 parallel_fail_out="$TEST_TMP/parallel-fail.out"
 parallel_fail_rc=0
 bash "$RUNNER_FIXTURE/tests/run.sh" -j 2 fail after >"$parallel_fail_out" 2>&1 || parallel_fail_rc=$?

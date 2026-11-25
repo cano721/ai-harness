@@ -7,6 +7,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-tests.XXXXXX")"
 TESTS=0
+# bash 3.2 supports indexed arrays; keep process IDs registered by background tests.
+TEST_TRACKED_PIDS=("")
+TEST_TRACKED_PGIDS=("")
+# Non-interactive Bash otherwise puts background jobs in this test shell's process group,
+# where killing the group would also kill the test runner. Monitor mode isolates each job.
+set -m
 # bash 3.2 can leave $? at 0 inside the EXIT trap after a `set -u` abort, so the run
 # only counts as passed when it reached the final line.
 TESTS_FINISHED=0
@@ -25,6 +31,36 @@ cleanup() {
       done
     fi
   done
+  # 등록 프로세스와 영역 셸의 백그라운드 job을 직접 종료한다. Monitor mode가 job별
+  # process group을 만들기 때문에 jobs에서 얻은 PID로 손자까지 포함해 끌 수 있다.
+  # 일부 서버 테스트는 track_test_process를 호출하지 않으므로 jobs도 수집한다.
+  local tracked_pid tracked_pgid job_pid
+  for job_pid in $(jobs -pr); do
+    if [[ "$job_pid" =~ ^[0-9]+$ ]]; then
+      TEST_TRACKED_PIDS+=("$job_pid")
+      TEST_TRACKED_PGIDS+=("$job_pid")
+    fi
+  done
+  for tracked_pgid in "${TEST_TRACKED_PGIDS[@]}"; do
+    [[ "$tracked_pgid" =~ ^[0-9]+$ ]] && kill -TERM -- "-$tracked_pgid" 2>/dev/null || true
+  done
+  for tracked_pid in "${TEST_TRACKED_PIDS[@]}"; do
+    [[ "$tracked_pid" =~ ^[0-9]+$ ]] && kill -TERM "$tracked_pid" 2>/dev/null || true
+  done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    local tracked_alive=0
+    for tracked_pid in "${TEST_TRACKED_PIDS[@]}"; do
+      if [[ "$tracked_pid" =~ ^[0-9]+$ ]] && kill -0 "$tracked_pid" 2>/dev/null; then tracked_alive=1; fi
+    done
+    [[ "$tracked_alive" == 1 ]] || break
+    sleep 0.1
+  done
+  for tracked_pid in "${TEST_TRACKED_PIDS[@]}"; do
+    [[ "$tracked_pid" =~ ^[0-9]+$ ]] && kill -KILL "$tracked_pid" 2>/dev/null || true
+  done
+  for tracked_pgid in "${TEST_TRACKED_PGIDS[@]}"; do
+    [[ "$tracked_pgid" =~ ^[0-9]+$ ]] && kill -KILL -- "-$tracked_pgid" 2>/dev/null || true
+  done
   # 테스트가 띄우고 놓친 서버(landing-board-server 등)는 인자에 $TEST_TMP가 들어 있다 — 폴더를 지우기 전에 모두 끈다.
   case "$TEST_TMP" in */ai-harness-tests.*) pkill -f "$TEST_TMP" 2>/dev/null || true ;; esac
   case "$TEST_TMP" in
@@ -37,6 +73,16 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+track_test_process() { # pid [pgid] — cleanup에서 직접 종료한다.
+  local pid="$1" pgid="${2:-}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 2
+  TEST_TRACKED_PIDS+=("$pid")
+  if [[ -n "$pgid" ]]; then
+    [[ "$pgid" =~ ^[0-9]+$ ]] || return 2
+    TEST_TRACKED_PGIDS+=("$pgid")
+  fi
+}
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -117,6 +163,9 @@ make_repo() {
   git -C "$dir" commit -q --allow-empty -m init
   [[ -z "$origin" ]] || git -C "$dir" remote add origin "$origin"
 }
+
+# 테스트 서버 포트는 커널이 bind 0으로 고른 빈 포트를 쓴다 (병렬·동시 세션 충돌 방지)
+free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 
 # 여러 영역이 같이 읽는 고정 값
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"

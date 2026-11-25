@@ -4,6 +4,78 @@
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# cleanup은 프로세스 목록을 볼 수 없어도 이 영역이 띄운 자식을 직접 종료해야 한다.
+CLEANUP_BIN="$TEST_TMP/cleanup-bin"
+CLEANUP_RESULT="$TEST_TMP/cleanup-result"
+mkdir -p "$CLEANUP_BIN"
+cat >"$CLEANUP_BIN/pkill" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+cat >"$TEST_TMP/cleanup-child.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+PATH="$1:$PATH"
+result="$2"
+# shellcheck source=tests/lib.sh
+source "$3/tests/lib.sh"
+bash -c 'while :; do sleep 1; done' "$TEST_TMP/cleanup-child" &
+child_pid=$!
+track_test_process "$child_pid"
+# PGID도 직접 종료해야 한다. perl setpgrp은 macOS Bash 3.2에서도 독립 그룹을 만든다.
+perl -e 'setpgrp(0, 0); exec @ARGV' bash -c 'while :; do sleep 1; done' "$TEST_TMP/cleanup-group" &
+group_pid=$!
+track_test_process "$group_pid" "$group_pid"
+# 등록 API를 호출하지 않은 일반 영역 백그라운드 job의 셸과 손자 프로세스도 cleanup이 종료해야 한다.
+bash -c 'bash -c "while :; do sleep 1; done" "$1/cleanup-grandchild" & echo $! >"$1/cleanup-grandchild.pid"; wait' _ "$TEST_TMP" &
+unregistered_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$TEST_TMP/cleanup-grandchild.pid" ]] && break; sleep 0.1; done
+unregistered_grandchild_pid="$(<"$TEST_TMP/cleanup-grandchild.pid")"
+printf '%s|%s|%s|%s\n' "$child_pid" "$group_pid" "$unregistered_pid" "$unregistered_grandchild_pid" >"$result"
+EOF
+chmod +x "$CLEANUP_BIN/pkill" "$TEST_TMP/cleanup-child.sh"
+set +e
+TMPDIR="$TEST_TMP" "$TEST_TMP/cleanup-child.sh" "$CLEANUP_BIN" "$CLEANUP_RESULT" "$ROOT"
+CLEANUP_CHILD_RC=$?
+set -e
+assert_eq "1" "$CLEANUP_CHILD_RC" "the isolated cleanup run reports its intentionally unfinished test"
+CLEANUP_CHILD_RECORD="$(<"$CLEANUP_RESULT")"
+IFS='|' read -r CLEANUP_CHILD_PID CLEANUP_GROUP_PGID CLEANUP_UNREGISTERED_PID CLEANUP_UNREGISTERED_GRANDCHILD_PID <<<"$CLEANUP_CHILD_RECORD"
+sleep 0.1
+CLEANUP_CHILD_ALIVE="$(kill -0 "$CLEANUP_CHILD_PID" 2>/dev/null && echo true || echo false)"
+[[ "$CLEANUP_CHILD_ALIVE" != true ]] || kill -KILL "$CLEANUP_CHILD_PID" 2>/dev/null || true
+assert_eq "false" "$CLEANUP_CHILD_ALIVE" "cleanup kills a started child when pkill cannot inspect processes"
+cleanup_group_alive="$(kill -0 -- "-$CLEANUP_GROUP_PGID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_group_alive" != true ]] || kill -KILL -- "-$CLEANUP_GROUP_PGID" 2>/dev/null || true
+assert_eq "false" "$cleanup_group_alive" "cleanup kills a tracked process group when pkill cannot inspect processes"
+cleanup_unregistered_alive="$(kill -0 "$CLEANUP_UNREGISTERED_PID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_unregistered_alive" != true ]] || kill -KILL "$CLEANUP_UNREGISTERED_PID" 2>/dev/null || true
+assert_eq "false" "$cleanup_unregistered_alive" "cleanup kills an unregistered background job when pkill cannot inspect processes"
+cleanup_grandchild_alive="$(kill -0 "$CLEANUP_UNREGISTERED_GRANDCHILD_PID" 2>/dev/null && echo true || echo false)"
+[[ "$cleanup_grandchild_alive" != true ]] || kill -KILL "$CLEANUP_UNREGISTERED_GRANDCHILD_PID" 2>/dev/null || true
+assert_eq "false" "$cleanup_grandchild_alive" "cleanup kills a grandchild of an unregistered background job when pkill cannot inspect processes"
+pass "cleanup kills background processes without pkill"
+
+# ps 권한이 없으면 watchdog의 실프로세스 검사 묶음을 실행하지 않아야 한다.
+WATCHDOG_PS_BIN="$TEST_TMP/watchdog-ps-bin"
+WATCHDOG_PS_PROBE="$TEST_TMP/watchdog-ps-probe.sh"
+mkdir -p "$WATCHDOG_PS_BIN"
+cat >"$WATCHDOG_PS_BIN/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$WATCHDOG_PS_BIN/ps"
+# 실제 if/else 검사 묶음을 실패하는 ps와 함께 실행하고, 뒤의 sentinel도 도달하는지 확인한다.
+{
+  awk '/^if ! ps -A -o pid=,ppid=,pgid=,args=/{copy=1} copy {print} copy && /pass "background watchdog cleans the process group"/{getline; print; exit}' "$ROOT/tests/automation.sh"
+  printf '%s\n' 'printf "%s\\n" "watchdog-test-continued"'
+} >"$WATCHDOG_PS_PROBE"
+WATCHDOG_PS_OUTPUT="$(PATH="$WATCHDOG_PS_BIN:$PATH" bash "$WATCHDOG_PS_PROBE")"
+assert_contains "$WATCHDOG_PS_OUTPUT" '# skip: background watchdog process tests need ps access' "watchdog skips the real process checks when ps fails"
+assert_eq "0" "$(grep -c -F 'background watchdog cleans the process group' <<<"$WATCHDOG_PS_OUTPUT" || true)" "watchdog does not run the real process-check completion"
+assert_contains "$WATCHDOG_PS_OUTPUT" 'watchdog-test-continued' "automation checks continue after watchdog process tests are skipped"
+pass "background watchdog skips process checks without ps"
+
 # 자동 harvest: opt-in, 재귀 차단, batch당 1회, 하네스 없는 곳 skip, 일일 상한, 결과 기록
 AUTO_DATA="$TEST_TMP/auto-data"
 AUTO_REPO="$TEST_TMP/auto-repo"
@@ -738,11 +810,13 @@ guard_line Bash '{"command":"cat worktrees/NJ-1/jobda/.ai-harness/workflows/impl
 cp "$GW/t/read.jsonl" "$GW/t/sess.jsonl"
 mkdir -p "$GW/t/sess/subagents"
 cp "$GW/t/read.jsonl" "$GW/t/sess/subagents/agent-a1.jsonl"
+# 테스트 실행 셸의 개인 설정이 기본 guard 동작 검사를 끄지 않게 한다.
+unset HM_MEMBER_GUARD
 member_guard() { # $1=cwd, $2=file, $3=transcript, [$4=agent_id] -> ask(확인 요청) | exit code; stdout $GW/out, stderr $GW/err
-  local agent="${4:-}" rc=0
+  local agent="${4:-}" rc=0 member_guard_mode="${HM_MEMBER_GUARD:-1}"
   jq -cn --arg cwd "$1" --arg f "$2" --arg t "$3" --arg a "$agent" \
     '{tool_name:"Edit", cwd:$cwd, transcript_path:$t, tool_input:{file_path:$f}} + (if $a=="" then {} else {agent_id:$a} end)' \
-    | "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
+    | HM_MEMBER_GUARD="$member_guard_mode" "$ROOT/scripts/member-edit-guard.sh" 2>"$GW/err" >"$GW/out" || rc=$?
   if [[ "$rc" == 0 && "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$GW/out" 2>/dev/null)" == ask ]]; then echo ask; else echo "$rc"; fi
 }
 guard_reason() { jq -r '.hookSpecificOutput.permissionDecisionReason' "$GW/out"; }
@@ -789,6 +863,19 @@ assert_contains "$(<"$GW/err")" '/cd jobda' "hard block still hands off to the m
 assert_contains "$(<"$GW/err")" "Bash로 파일을 써서 우회하지 마세요" "hard block still forbids writing around it with Bash"
 assert_eq "" "$(<"$GW/out")" "hard block prints no ask decision"
 assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/jobda" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "block mode still passes a session opened in the member"
+# 같은 저장소를 NFC(cwd)와 NFD(파일, git 표기) 두 정규화 형태로 가리켜도 다른 멤버로 오판하지 않는다(#479).
+MG_NFC="$(printf '\355\224\204\353\241\234\354\240\235\355\212\270')"
+MG_NFD="$(printf '\341\204\221\341\205\263\341\204\205\341\205\251\341\204\214\341\205\246\341\206\250\341\204\220\341\205\263')"
+mkdir -p "$GW/$MG_NFD/.ai-harness" "$GW/$MG_NFD/src"
+printf '{"project_id":"uni"}\n' >"$GW/$MG_NFD/.ai-harness/harness.json"
+if [[ -d "$GW/$MG_NFC" ]]; then
+  assert_eq "0" "$(member_guard "$GW/$MG_NFC" "$GW/$MG_NFD/src/a.sh" "$GW/t/none.jsonl")" "the same repo named in NFC (cwd) and NFD (file) is one member"
+  assert_eq "" "$(<"$GW/out")" "a normalization-only difference prints no ask decision"
+  assert_eq "0" "$(HM_MEMBER_GUARD=block member_guard "$GW/$MG_NFC" "$GW/$MG_NFD/src/a.sh" "$GW/t/none.jsonl")" "block mode does not block the same repo under another normalization"
+  assert_eq "ask" "$(member_guard "$GW/$MG_NFC" "$GW/jobda/src/main/App.java" "$GW/t/none.jsonl")" "a genuinely different repo still asks next to the normalization case"
+else
+  pass "skip on normalization-sensitive fs"
+fi
 pass "member edit guard"
 
 # 인계 대기는 완료 파일만 보지 않는다 — 멤버 터미널이 승인·질문에서 멈추거나 끝나면 바로 끝내고 이유를 알린다.
@@ -1304,6 +1391,74 @@ assert_eq "bitbucket|x" \
   "$(HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://bitbucket.org/ws/repo/pull-requests/4 --comment x | jq -r '"\(.provider)|\(.message)"')" "Bitbucket decline request"
 if HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --decline https://example.com/pr/1 >/dev/null 2>&1; then fail "unknown PR hosts are refused"; fi
 pass "auto sync supersedes its own older PRs"
+
+# 세션에서 사람이 직접 연 sync PR은 runs.jsonl에 기록되지 않아, 새 sync PR이 열려도 열린 채 남았다(#474).
+# 원격의 열린 PR 중 브랜치 이름이 harness-sync-<버전>으로 끝나는 것도 같은 규칙(같은 저장소·열림·사람 활동 0)으로
+# 정리하고, 사람이 리뷰 중이면 새 sync를 띄우지 않는다. 새 PR보다 나중에 열린 PR은 옛 PR이 아니다.
+cat >"$PRS_STUB_DIR/pr" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  --status) id="${2##*/}"; cat "$PRS_STUB_DIR/state-$id.json" 2>/dev/null || echo '{"state":"open","activity":0}' ;;
+  --decline) printf '%s|%s\n' "$2" "$4" >>"$PRS_STUB_DIR/declined" ;;
+  --list-open) printf '%s\n' "${2:-}" >>"$PRS_STUB_DIR/listed"; cat "$PRS_STUB_DIR/open.jsonl" 2>/dev/null ;;
+  *) exit 2 ;;
+esac
+STUB
+: >"$PRS_STUB_DIR/declined"
+printf '%s\n' '{"state":"open","activity":0,"created":"2026-06-01T00:00:00"}' >"$PRS_STUB_DIR/state-15.json"
+printf '%s\n' '{"state":"open","activity":0,"created":"2026-05-01T00:00:00"}' >"$PRS_STUB_DIR/state-60.json"
+printf '%s\n' '{"state":"open","activity":0,"created":"2026-07-01T00:00:00"}' >"$PRS_STUB_DIR/state-61.json"
+cat >"$PRS_STUB_DIR/open.jsonl" <<'JSONL'
+{"url":"https://example.com/pr/60","head":"feature/EX-1-harness-sync-0.69.0"}
+{"url":"https://example.com/pr/61","head":"feature/EX-2-harness-sync-9.9.9"}
+{"url":"https://example.com/pr/62","head":"feature/EX-3-login"}
+{"url":"https://other.example/pr/63","head":"chore/harness-sync-0.69.0"}
+{"url":"https://example.com/pr/15","head":"chore/harness-sync-1.0.0"}
+JSONL
+SYNC_STUB_PR=15 prs_sweep
+assert_contains "$(cat "$PRS_STUB_DIR/declined")" "https://example.com/pr/60|" "an untouched sync PR opened in a session is declined"
+assert_eq "https://example.com/pr/60|https://example.com/pr/15" \
+  "$(sync_runs '[.[] | select(.event=="superseded")] | last | "\(.artifact)|\(.by)"')" "the session sync PR is recorded as superseded"
+assert_contains "$(cat "$PRS_STUB_DIR/listed")" "https://example.com/pr" "open PRs are listed for the new PR's repository"
+for PRS_KEEP in pr/61 pr/62 other.example pr/15; do
+  if grep -q "$PRS_KEEP|" "$PRS_STUB_DIR/declined"; then fail "$PRS_KEEP must stay open"; fi
+done
+# 사람이 리뷰 중인 수동 sync PR이 열려 있으면 그 PR과 같은 파일을 고치는 새 sync를 띄우지 않는다.
+printf '%s\n' '{"state":"open","activity":1}' >"$PRS_STUB_DIR/state-64.json"
+printf '%s\n' '{"url":"https://example.com/pr/64","head":"feature/EX-4-harness-sync-0.70.0"}' >>"$PRS_STUB_DIR/open.jsonl"
+PRS_LAUNCHED="$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')"
+SYNC_STUB_PR=16 prs_sweep
+assert_eq "$PRS_LAUNCHED" "$(wc -l <"$TEST_TMP/sync-stub.out" | tr -d ' ')" "sync waits while a person reviews a session sync PR"
+assert_eq "sync_pr_in_review" "$(sync_runs 'last | .reason')" "the hold names the review"
+# open-pr.sh --list-open: 저장소 URL(없으면 현재 저장소 origin)의 열린 PR을 {url, head} 한 줄씩 낸다.
+PRS_LIST_BIN="$TEST_TMP/pr-list-bin"
+mkdir -p "$PRS_LIST_BIN"
+cat >"$PRS_LIST_BIN/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$PRS_GH_ARGS"
+echo '[{"url":"https://github.com/acme/svc/pull/5","headRefName":"chore/harness-sync-0.1.0"}]'
+STUB
+cat >"$PRS_LIST_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n' "$*" >"$PRS_CURL_ARGS"
+printf '%s\n200' '{"values":[{"links":{"html":{"href":"https://bitbucket.org/ws/repo/pull-requests/8"}},"source":{"branch":{"name":"feature/EX-1-harness-sync-0.69.0"}}}]}'
+STUB
+chmod +x "$PRS_LIST_BIN/gh" "$PRS_LIST_BIN/curl"
+export PRS_GH_ARGS="$TEST_TMP/prs-gh-args" PRS_CURL_ARGS="$TEST_TMP/prs-curl-args"
+assert_eq "https://github.com/acme/svc/pull/5|chore/harness-sync-0.1.0" \
+  "$(PATH="$PRS_LIST_BIN:$PATH" "$ROOT/scripts/open-pr.sh" --list-open https://github.com/acme/svc | jq -r '"\(.url)|\(.head)"')" "GitHub open PRs with their branches"
+assert_contains "$(cat "$PRS_GH_ARGS")" "--repo acme/svc --state open" "GitHub list asks the named repository for open PRs"
+assert_eq "https://bitbucket.org/ws/repo/pull-requests/8|feature/EX-1-harness-sync-0.69.0" \
+  "$(PATH="$PRS_LIST_BIN:$PATH" ATLASSIAN_USER=u BITBUCKET_API_TOKEN=t "$ROOT/scripts/open-pr.sh" --list-open https://bitbucket.org/ws/repo | jq -r '"\(.url)|\(.head)"')" "Bitbucket open PRs with their branches"
+assert_contains "$(cat "$PRS_CURL_ARGS")" "repositories/ws/repo/pullrequests?state=OPEN" "Bitbucket list asks for open PRs"
+PRS_LIST_REPO="$TEST_TMP/prs-list-repo"
+make_repo "$PRS_LIST_REPO" https://github.com/acme/origin-svc.git
+(cd "$PRS_LIST_REPO" && PATH="$PRS_LIST_BIN:$PATH" "$ROOT/scripts/open-pr.sh" --list-open >/dev/null)
+assert_contains "$(cat "$PRS_GH_ARGS")" "--repo acme/origin-svc" "without a URL the current repository's origin is listed"
+if (cd "$PRS_LIST_REPO" && env -u ATLASSIAN_USER -u BITBUCKET_API_TOKEN HARNESS_CLAUDE_SETTINGS=/nonexistent \
+  "$ROOT/scripts/open-pr.sh" --list-open https://bitbucket.org/ws/repo >/dev/null 2>&1); then fail "Bitbucket list needs credentials"; fi
+pass "auto sync also supersedes sync PRs opened in a session"
 
 # 자동 병합(opt-in): 내용 판정은 로컬 git 객체로, 병합은 호스트 상태(같은 head·대상 브랜치·CI 통과·사람 활동 없음)를 본 뒤에.
 AM_REPO="$TEST_TMP/am-repo"
@@ -1849,6 +2004,10 @@ assert_eq "|0" "$(jq -cn '{tool_input:{command:["a"],run_in_background:true}}' |
 pass "background command watchdog hook"
 
 # 감시자는 실제 프로세스 그룹에서: 가짜 에이전트가 hook을 부르고, Claude Code처럼 명령을 eval '…'로 넣은 셸을 새 그룹 리더로 띄운다.
+# 이 검사는 ps를 통한 실프로세스 관찰이 가능할 때만 유효하다.
+if ! ps -A -o pid=,ppid=,pgid=,args= >/dev/null 2>&1; then
+  printf '%s\n' '# skip: background watchdog process tests need ps access'
+else
 # 띄우는 프로세스는 인자에 $TEST_TMP를 넣어 실패해도 cleanup이 끈다.
 BG_LOOP='while :; do sleep 1; done'
 cat >"$TEST_TMP/bg-agent.sh" <<'EOF'
@@ -1870,8 +2029,10 @@ bg_start() { # 이름 hook명령 [실행명령] → BG_AGENT, BG_GROUP
   BG_HOOK_CMD="$(jq -r '.hooks[0].command' <<<"$BG_HOOK")${BG_HOOK_SUFFIX:-}" CLAUDE_PLUGIN_ROOT="$ROOT" \
     bash "$TEST_TMP/bg-agent.sh" "$2" "${3:-$2}" "$TEST_TMP/$1" &
   BG_AGENT=$!
+  track_test_process "$BG_AGENT"
   for _ in $(seq 1 50); do [[ -s "$TEST_TMP/$1.pid" ]] && break; sleep 0.1; done
   BG_GROUP="$(<"$TEST_TMP/$1.pid")"
+  track_test_process "$BG_GROUP" "$BG_GROUP"
 }
 bg_watching() { pgrep -f "background-watchdog.sh $BG_AGENT " >/dev/null && echo true || echo false; }
 bg_claimed() { [[ -d "$HARNESS_METRICS_DIR/bg-watchdog/$BG_GROUP" ]] && echo true || echo false; }
@@ -1951,11 +2112,22 @@ BG_START=$SECONDS
 "$ROOT/scripts/background-watchdog.sh" "$BG_GONE" " " "sleep 100" "$TEST_TMP/bg-claims"
 assert_eq "0" "$((SECONDS - BG_START > 1))" "watchdog exits at once when the agent is already gone"
 pass "background watchdog cleans the process group"
+fi
 
 # 무거운 명령 슬롯(#436): 병렬 세션의 빌드·dev 서버·전체 테스트를 메모리 기준 동시 수로 줄 세운다.
 # hook은 이 테스트 셸에서 직접(명령 치환 없이) 불러 부모 pid(=에이전트)가 살아 있게 한다.
 HS="$ROOT/scripts/heavy-slot-hook.sh"
 HS_DIR="$HARNESS_METRICS_DIR/heavy-slots"
+HS_PS_BIN="$TEST_TMP/hs-ps-bin"
+mkdir -p "$HS_PS_BIN"
+cat >"$HS_PS_BIN/ps" <<'EOF'
+#!/usr/bin/env bash
+# Codex sandbox may deny process enumeration. The hook needs only its direct
+# shell parent's command name in these foreground tests; all other queries stay
+# empty, as an inaccessible process list would be.
+if [[ "$*" == "-o comm= -p "* ]]; then printf '%s\n' bash; fi
+EOF
+chmod +x "$HS_PS_BIN/ps"
 HS_REG_PRE="$(jq -c '.hooks.PreToolUse[] | select(.matcher == "Bash" and (.hooks[0].command | contains("heavy-slot")))' "$ROOT/hooks/hooks.json")"
 assert_eq "$LITERAL_PLUGIN_ROOT/scripts/heavy-slot-hook.sh\" pre" "$(jq -r '.hooks[0].command' <<<"$HS_REG_PRE")" "Bash PreToolUse registers the heavy slot hook"
 assert_eq "600" "$(jq -r '.hooks[0].timeout' <<<"$HS_REG_PRE")" "the heavy slot hook may wait up to its timeout"
@@ -1967,7 +2139,7 @@ hs_in() { # tool_use_id 명령 [bg] [transcript]
     '{tool_name:"Bash", tool_use_id:$id, transcript_path:$t, tool_input:{command:$c, run_in_background:$bg}}'
 }
 hs_call() { # 모드 입력 → $TEST_TMP/hs.out, $TEST_TMP/hs.rc
-  printf '%s' "$2" | "$HS" "$1" >"$TEST_TMP/hs.out" 2>"$TEST_TMP/hs.err"
+  printf '%s' "$2" | PATH="$HS_PS_BIN:$PATH" "$HS" "$1" >"$TEST_TMP/hs.out" 2>"$TEST_TMP/hs.err"
   echo $? >"$TEST_TMP/hs.rc"
 }
 hs_slots() { find "$HS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | sed 's#.*/##; s#\.json$##' | sort | paste -sd' ' -; }
@@ -2071,6 +2243,10 @@ unset HM_HEAVY_SLOTS HM_HEAVY_MEM_FREE_PCT HM_HEAVY_WAIT
 pass "heavy command slots"
 
 # 백그라운드 서버: PostToolUse는 띄운 직후 오므로 반환하지 않고, 감시자가 찾은 그룹이 사는 동안 쥔다.
+# 이 하위 검사는 위 watchdog 검사와 같은 실프로세스 관찰 도구를 쓴다.
+if ! ps -A -o pid=,ppid=,pgid=,args= >/dev/null 2>&1; then
+  printf '%s\n' '# skip: background heavy process test needs ps access'
+else
 mkdir -p "$TEST_TMP/hs-bin"
 printf '%s\n' '#!/bin/bash' 'while :; do sleep 1; done' >"$TEST_TMP/hs-bin/yarn"
 chmod +x "$TEST_TMP/hs-bin/yarn"
@@ -2093,10 +2269,15 @@ hs_call pre "$(hs_in bg2 "yarn build")"
 [[ "$(hs_slots)" == bg2 ]] || fail "the background slot frees once its group is gone: slots=$(hs_slots) claims=$(find "$HARNESS_METRICS_DIR/bg-watchdog" 2>/dev/null | tr '\n' ' ') slot=$(cat "$HS_DIR"/*.json 2>/dev/null) out=$(cat "$TEST_TMP/hs.out")"
 bg_stop_agent
 rm -f "$HS_DIR"/*.json
+fi
 
 # 감시자가 KILL로 죽어 선점 디렉토리만 남으면(그룹은 없음) 슬롯을 쥐지 않는다.
+# ps가 막혀 위 실프로세스 검사가 건너뛰어도 이후 합성 슬롯 검사는 계속 켠다.
+export HM_HEAVY_SLOTS=1 HM_HEAVY_MEM_FREE_PCT=80 HM_HEAVY_WAIT=0
 jq -cn --argjson a "$$" '{tool_use_id:"bg3", agent:$a, cmd:"yarn dev", bg:true, transcript:"", started:((now|floor) - 600)}' >"$HS_DIR/bg3.json"
-HS_DEAD_GROUP="$(bash -c 'echo $$')"
+# 이 환경의 PID 한계보다 큰 수라 어떤 살아 있는 프로세스 그룹도 가리키지 않는다.
+HS_DEAD_GROUP=2147483647
+kill -0 -- "-$HS_DEAD_GROUP" 2>/dev/null && fail "the orphan claim fixture group must be absent"
 mkdir -p "$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP" && printf bg3 >"$HARNESS_METRICS_DIR/bg-watchdog/$HS_DEAD_GROUP/tool_use_id"
 hs_call pre "$(hs_in bg4 "yarn build")"
 assert_eq "bg4" "$(hs_slots)" "a leftover claim whose group is gone does not hold the slot"

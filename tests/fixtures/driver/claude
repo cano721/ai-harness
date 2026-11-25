@@ -30,8 +30,10 @@ codex exec -C "$PWD" -s "$sandbox" -o "$out" ${schema:+--output-schema "$schema"
 denials='[]'
 [[ "${FAKE_SCENARIO:-}" == polish_denied && "$sandbox" == workspace-write ]] \
   && denials="$(jq -nc --arg f "$PWD/screen.css" '[{tool_name:"Edit", tool_use_id:"t1", tool_input:{file_path:$f}}]')"
+# FAKE_CLAUDE_RESULTS=N: 한 세션이 result 이벤트를 N번 내는 경우(#487)를 흉내 낸다. 기본 1.
 if [[ -n "$schema" ]]; then
-  jq -c --argjson d "$denials" '{type:"result", subtype:"success", result:tojson, structured_output:., permission_denials:$d}' "$out"
+  result_line="$(jq -c --argjson d "$denials" '{type:"result", subtype:"success", result:tojson, structured_output:., permission_denials:$d}' "$out")"
 else
-  jq -Rsc --argjson d "$denials" '{type:"result", subtype:"success", result:., permission_denials:$d}' "$out"
+  result_line="$(jq -Rsc --argjson d "$denials" '{type:"result", subtype:"success", result:., permission_denials:$d}' "$out")"
 fi
+for ((i = 0; i < ${FAKE_CLAUDE_RESULTS:-1}; i++)); do printf '%s\n' "$result_line"; done

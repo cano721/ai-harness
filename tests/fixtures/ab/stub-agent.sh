@@ -5,10 +5,19 @@ set -euo pipefail
 [[ "${HM_INTERNAL_SESSION:-}" == "1" ]] || { echo "HM_INTERNAL_SESSION not set" >&2; exit 9; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f AGENTS.md ]]; then
-  cp "$here/good_service.py" orders/service.py
-  cp "$here/good_tests.py" tests/test_new.py
+  if [[ -d archive ]]; then
+    cp "$here/good_jobs.py" archive/jobs.py
+    cp "$here/good_jobs_tests.py" tests/test_jobs.py
+  else
+    cp "$here/good_service.py" orders/service.py
+    cp "$here/good_tests.py" tests/test_new.py
+  fi
   printf '{"type":"result","is_error":false,"num_turns":6,"total_cost_usd":0.4,"duration_ms":30000,"usage":{"input_tokens":10,"output_tokens":200,"cache_read_input_tokens":1000}}\n'
 else
-  cp "$here/naive_service.py" orders/service.py
+  if [[ -d archive ]]; then
+    cp "$here/naive_jobs.py" archive/jobs.py
+  else
+    cp "$here/naive_service.py" orders/service.py
+  fi
   printf '{"type":"result","is_error":false,"num_turns":9,"total_cost_usd":0.3,"duration_ms":40000,"usage":{"input_tokens":12,"output_tokens":250,"cache_read_input_tokens":900}}\n'
 fi

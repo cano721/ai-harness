@@ -25,7 +25,9 @@
     {"from": "approval", "to": "brief", "when": "brief_changed_or_not_approved"},
     {"from": "approval", "to": "deliver", "when": "user_explicitly_approved"},
     {"from": "approval", "to": "deliver", "when": "auto_approved_by_policy"},
+    {"from": "approval", "to": "user_decision", "when": "brief_coverage_incomplete"},
     {"from": "deliver", "to": "review"},
+    {"from": "deliver", "to": "brief", "when": "brief_revised"},
     {"from": "review", "to": "publish", "when": "no_blocking_findings"},
     {"from": "review", "to": "repair", "when": "blocking_findings"},
     {"from": "review", "to": "ui_review", "when": "no_blocking_findings_ui_affected"},
@@ -46,9 +48,9 @@
     {"from": "post_merge_verify", "to": "done", "when": "post_merge_verified"},
     {"from": "post_merge_verify", "to": "user_decision", "when": "post_merge_failed_or_unverified"}
   ],
-  "limits": {"max_repair_attempts": 10},
+  "limits": {"max_repair_attempts": 10, "max_identical_repair_failures": 2, "max_brief_rewrites": 2},
   "invariants": [
-    "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when the user setting HM_APPROVAL or HM_APPROVAL_REPOS resolves to auto and the brief records its choices as decisions with nothing left in needs_human or open_questions.",
+    "No write-capable node is reachable before the current brief is approved: user_explicitly_approved, or auto_approved_by_policy when the user setting HM_APPROVAL or HM_APPROVAL_REPOS resolves to auto and the brief records its choices as decisions with nothing left in needs_human or open_questions. Auto approval also needs every acceptance_map criterion covered or out of scope with a reason; deliver returns to brief only through revise, and the new brief needs approval again.",
     "A blocking finding cannot transition directly to done.",
     "Every repair is followed by required checks and re-review.",
     "publish commits, pushes, and opens a PR only as .ai-harness/harness.json git_policy allows; it never merges, force-pushes, or pushes to the base branch.",

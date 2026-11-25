@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review·design-polish)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
-#   - 워크플로: --workflow feature|bug-fix|review|polish(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+# 프로젝트 워크플로 그래프(feature-delivery·bug-fix·review·design-polish·investigate·release)를 실행하는 그래프 러너. 모델이 아니라 이 스크립트가 전이를 정한다.
+#   - 워크플로: --workflow feature|bug-fix|review|polish|investigate|release(기본 feature)가 실행할 그래프를 고른다. resume·status는 실행 상태의 워크플로를 따른다.
+#   - release(태그 방식 릴리스, manifest release_policy): plan(버전 확정) → approval → prepare(러너가 origin/<source>에서 릴리스 브랜치를 따고
+#     prepare_cmd·커밋·checks) → publish(PR, base는 release_policy.base) → remote_ci. 개인 단계 merge·deploy면 merge(merge commit만) →
+#     post_merge_verify → release(notes_cmd 노트로 태그·릴리스, 노트가 비면 만들지 않는다) → verify(deploy만) → record → sync(main → develop
+#     ff 판정, 명령은 사람 몫) → done. source가 움직이면 revalidate가 push 전에는 rebase, push 뒤에는 merge로 따라잡고 checks를 다시 돈다.
+#     실패는 수리하지 않고 사람에게 넘긴다. 러너는 force push와 source·base 직접 push를 하지 않는다.
+#   - investigate(원인 조사): 코드를 고치지 않고 승인 대기 없이 끝난다. baseline(기준 커밋)·handoff(fix-bug 시작 명령)는 이 스크립트가 직접 정하고,
+#     report 노드가 낸 보고는 이 스크립트가 저장소 밖(~/.ai-harness/investigations/<저장소>/)에 쓴다.
 #   - polish(기존 화면 품질 개선): measure(브라우저 캡처·design-audit 채점) → diagnose(독립 비평, 고칠 목록) → approval(사람이 항목 선택,
 #     revise --select) → fix → verify → measure → review. 통과 판정(고른 주요 항목 0·audit 기준·기준선보다 나빠진 축 없음)은
 #     이 스크립트가 측정 결과로 한다. 측정 뒤 바뀐 파일은 review가, 검토 뒤 바뀐 파일은 publish가 거부하고 verify(검사)부터 다시 돈다.
@@ -14,6 +21,11 @@
 #     저장소별 HM_APPROVAL_REPOS > HM_APPROVAL > 기본 human 순으로 결정한다. 기존 manifest approval은 무시하고 한 번 안내한다.
 #     auto면 Brief가 열린 질문 대신 decisions(추천안과 근거)를 내고, 사람만 정할 수 있는 것
 #     (needs_human)이 비어 있을 때 그래프의 auto_approved_by_policy 엣지로 통과한다. decisions는 brief.md와 PR 본문에 남는다.
+#     feature·bug-fix Brief는 요청·이슈의 완료 조건을 항목마다 대응표(acceptance_map)로 낸다. auto는 대응표가 비었거나 대응도 범위 밖 사유도 없는
+#     조건이 있으면 승인하지 않고 Brief를 다시 쓰게 하며(limits.max_brief_rewrites, 기본 2), 넘으면 brief_coverage_incomplete 엣지로 사람에게 넘긴다.
+#     review는 원 요청의 완료 조건과도 대조해 빠진 조건을 blocking으로 낸다.
+#   - revise: 승인 대기(approval)와 그래프에 <노드> → brief brief_revised 엣지가 있는 노드(feature의 deliver)에서 받는다.
+#     러너가 그 노드를 실행 중이면 상태를 건드리지 않고 $RUN/revise-request.json만 남기고, 러너가 세션이 끝난 뒤 Brief로 돌아간다.
 #     review 그래프에는 승인 노드가 없다. blocking finding을 고치는 repair는 같은 승인(또는 HM_APPROVAL=auto)을 받은 뒤에만 시작한다.
 #   - 검증: Brief(review는 수리 범위)에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
 #   - git: harness.json의 git_policy가 pr-only·direct면 쓰기 노드 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
@@ -35,6 +47,9 @@
 #   - 화면 검증: 화면 시나리오(ui_scenarios)가 있으면 리뷰 뒤 ui_review 노드가 ui-review 계약대로 화면을 실제로 렌더링·조작한다.
 #     캡처는 실행 디렉터리의 ui-review-<시도>/에 남는다. 주요 문제는 repair로 돌아가 다시 리뷰·ui_review를 거치고,
 #     검증하지 못하면 done이 아니라 사람에게 미검증으로 넘긴다.
+#   - 런타임: 노드 세션을 띄울 CLI는 start의 --runtime > 사용자 설정 HM_RUNTIME_REPOS(저장소별) > HM_RUNTIME > 자동 선택(default_runtime) 순이다.
+#     어디서 부르든 개인이 고른 CLI로 돌게 하려고 설정이 부른 세션보다 앞선다. 설정이 고른 CLI가 없으면 조용히 바꾸지 않고 멈춘다.
+#     고른 출처는 run state의 policy.runtime_source에 남고, resume·approve·revise는 start 때의 런타임을 그대로 쓴다.
 # shellcheck disable=SC2016  # state_set·jq 인자의 $x는 셸이 아니라 jq 변수다
 set -euo pipefail
 
@@ -42,28 +57,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish] [options]
+usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|investigate|release] [options]
 
   start   --request "<요청>" | --request-file <file>   계획 노드를 실행하고 승인 대기에서 멈춘다
           [--check "<검증 명령>"]...                    Brief(review는 수리 범위)가 제안한 검증에 더할 명령
           [--monitor-error <file>]                      고치는 모니터링 에러(/autofix candidates의 한 줄). 단계 deploy에서 merge_policy.verify의 monitor가 병합 뒤 재발 추적에 올린다
           [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
-  revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
+          [--version <x.y.z>]                           release만: 릴리스할 버전. 없으면 plan 노드가 제안한다. release는 --request를 생략할 수 있다
+  revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다. 그래프에 deliver → brief(brief_revised)가 있으면
+                                                        deliver에서도 받는다 — 실행 중이면 러너를 멈추지 않고 그 세션이 끝난 뒤 Brief로 돌아간다(0)
           --select "<ID,ID...>"                         polish만: 고칠 목록에서 고칠 항목을 바꾼다(모델을 부르지 않는다). 다시 승인을 기다린다
   resume  [--accept-changes]                            승인을 확인하고 멈춘 노드부터 이어 간다
   approve [--accept-changes]                            터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
           resume·approve·revise는 에이전트를 부르기 전에 러너가 멈춘 때의 기준점(HEAD·작업 트리)과 지금을 대조한다.
           바뀌었으면 차이와 남은 검사를 보이고 20으로 멈춘다. 바뀐 것을 이 실행에 넣을 때만 --accept-changes로 기준점을 옮긴다
-  status                                                현재 노드·이력·다음 행동을 보인다
+  status                                                현재 노드·이력·다음 행동을 보인다. 멈춘 런(stopped)과 밖에서 끊긴 런(stale)도 보이며 둘 다 resume으로 잇는다
+  stop    [--reason "<사유>"]                            실행 중인 런을 멈춘다. 그 런이 기록한 러너 PID·노드 자식 프로세스 그룹만 TERM → 5초 → KILL로 끄고
+                                                        stopped(노드·시각·사유)로 남긴다. 실행 중인 러너는 stop으로만 멈춘다 —
+                                                        pkill·killall·pgrep -f 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
 
-  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선). start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면이다.
+  워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선) · investigate(수정 전 원인 조사)
+          · release(태그 방식 릴리스 — manifest release_policy가 있어야 시작한다).
+          start의 --request는 각각 기능 요청·버그 보고·검토 대상(PR, 브랜치, diff)·다듬을 화면·조사할 버그 보고다.
+          investigate는 코드를 고치지 않고 승인 대기 없이 끝나며, 보고를 ~/.ai-harness/investigations/<저장소>/에 남긴다.
   공통: [--run <id>] (기본: 이 저장소의 최근 실행, --workflow가 있으면 그 워크플로의 최근 실행) [--repo <dir>] [--runtime codex|claude]
+        start의 노드 런타임: --runtime > ~/.ai-harness/config의 HM_RUNTIME_REPOS(저장소별) > HM_RUNTIME(claude|codex)
+        > 부른 런타임(Claude Code·Codex) > integrations에 설치된 것이 하나 > 설치된 CLI가 하나. 못 정하면 exit 2.
+        설정이 고른 CLI가 설치돼 있지 않으면 다른 런타임으로 바꾸지 않고 exit 2. resume·approve·revise는 start 때의 런타임을 쓴다
 
   정책: HM_APPROVAL_REPOS(저장소별) > HM_APPROVAL(human|auto, 기본 human)과 git_policy(pr-only|direct|그 밖 — 예전 merge는 pr-only로 읽는다),
         merge_policy(기준 브랜치·배포·스모크 명령 같은 저장소 사실)를 start 때 읽는다.
   자동화 단계: ~/.ai-harness/config의 HM_DELIVERY_LEVEL·HM_DELIVERY_LEVEL_REPOS(pr|merge|deploy)만 병합 여부를 정한다. 없으면 PR까지다.
 
+exit(stop): 0 멈춤(이미 끊긴 런은 stopped로만 기록) · 2 런이 없거나 실행 중이 아님. 실행 중인 런에 resume·approve·revise는 2로 거부한다
 exit: 0 done(push했으면 원격 CI 통과까지, 단계 merge·deploy면 병합 후 검증까지. polish는 규칙 문서가 없어 고칠 목록까지만 낸 fix_list 포함) · 10 승인 대기 · 20 사람 판단 필요(원격 CI·화면 미검증, 병합 막힘·병합 후 검증 실패 포함) · 30 미완료(원격 CI 진행 중·병합 조건 대기·배포 미관측이면 resume) · 40 불변식 위반 · 2 사용법
 EOF
   exit 2
@@ -83,6 +110,8 @@ MONITOR_ERROR=""
 INVESTIGATION_FILE=""
 ACCEPT_CHANGES=""
 SELECT=""
+REASON=""
+VERSION_ARG=""
 while (($#)); do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || usage; REPO="$2"; shift 2 ;;
@@ -94,6 +123,8 @@ while (($#)); do
     --feedback) [[ $# -ge 2 ]] || usage; FEEDBACK="$2"; shift 2 ;;
     --accept-changes) ACCEPT_CHANGES=1; shift ;;
     --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
+    --reason) [[ $# -ge 2 ]] || usage; REASON="$2"; shift 2 ;;
+    --version) [[ $# -ge 2 ]] || usage; VERSION_ARG="$2"; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
     --investigation) [[ $# -ge 2 && -s "$2" ]] || usage; INVESTIGATION_FILE="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"; shift 2 ;;
@@ -106,14 +137,21 @@ case "$WORKFLOW" in
   bug-fix|fix-bug) WORKFLOW=bug-fix ;;
   review) ;;
   polish|design-polish) WORKFLOW=polish ;;
+  investigate|release) ;;
   *) printf 'unknown workflow: %s\n' "$WORKFLOW" >&2; usage ;;
 esac
+# 릴리스 버전은 릴리스를 시작할 때만 받는다. 형식은 x.y.z(태그 접두어는 release_policy.tag_prefix가 붙인다).
+if [[ -n "$VERSION_ARG" ]]; then
+  [[ "$CMD" == start && "$WORKFLOW" == release ]] || { printf -- '--version is an option of start --workflow release\n' >&2; exit 2; }
+  [[ "$VERSION_ARG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf -- '--version must be x.y.z (for example 1.4.0), not %s\n' "$VERSION_ARG" >&2; exit 2; }
+fi
 # 조사 보고는 버그 수정을 시작할 때만 받는다. 다른 워크플로에는 그 보고를 대신할 노드가 없다.
 [[ -z "$INVESTIGATION_FILE" || ( "$CMD" == start && "$WORKFLOW" == bug-fix ) ]] \
   || { printf -- '--investigation is an option of start --workflow bug-fix\n' >&2; exit 2; }
 
 [[ -z "$ACCEPT_CHANGES" || "$CMD" == resume || "$CMD" == approve ]] \
   || { printf -- '--accept-changes is an option of resume and approve\n' >&2; exit 2; }
+[[ -z "$REASON" || "$CMD" == stop ]] || { printf -- '--reason is an option of stop\n' >&2; exit 2; }
 
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
@@ -166,6 +204,7 @@ log() {
 }
 
 if [[ "$CMD" == start ]]; then
+  if [[ "$WORKFLOW" == release && -z "$REQUEST" ]]; then REQUEST="release${VERSION_ARG:+ v$VERSION_ARG}"; fi
   [[ -n "$REQUEST" ]] || usage
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 elif [[ -z "$RUN_ID" ]]; then
@@ -212,6 +251,8 @@ case "$WORKFLOW" in
   bug-fix) GRAPH_NAME=bug-fix-graph.json TEMPLATE=fix-bug BRIEF_TITLE="Bug Fix Brief" UI_UNVERIFIED="implementation done, UI unverified" ;;
   review) GRAPH_NAME=review-graph.json TEMPLATE=review BRIEF_TITLE="Repair scope" UI_UNVERIFIED="code review clean, UI unverified" ;;
   polish) GRAPH_NAME=design-polish-graph.json TEMPLATE=design-polish BRIEF_TITLE="Polish fix list" UI_UNVERIFIED="screens unmeasured" ;;
+  investigate) GRAPH_NAME=investigate-graph.json TEMPLATE=investigate BRIEF_TITLE="Investigation report" UI_UNVERIFIED="investigation" ;;
+  release) GRAPH_NAME=release-graph.json TEMPLATE=release BRIEF_TITLE="Release plan" UI_UNVERIFIED="release" ;;
 esac
 # 고칠 항목 선택은 polish의 고칠 목록에만 있다.
 [[ -z "$SELECT" || ( "$CMD" == revise && "$WORKFLOW" == polish ) ]] \
@@ -223,12 +264,18 @@ GRAPH="$REPO/.ai-harness/workflows/$GRAPH_NAME"
 [[ -f "$GRAPH" ]] || GRAPH="$SCRIPT_DIR/../$TEMPLATE/references/$GRAPH_NAME"
 jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>&1 || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
 MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
+MAX_IDENTICAL_FAILURES="$(jq -r '.limits.max_identical_repair_failures // 2' "$GRAPH")"
+MAX_BRIEF_REWRITES="$(jq -r '.limits.max_brief_rewrites // 2' "$GRAPH")"
 
 finish() { # status exit_code message
   local message="$3"
   # 시작 때 남긴 설정 안내(더 이상 쓰지 않는 저장소 병합 설정 등)는 실행 결과에도 붙인다.
   [[ "$2" != 0 && "$2" != 20 ]] || message+="$(state '(.policy.notices // []) | map("; notice: " + .) | join("")')"
   state_set '.status = $s | .message = $m | .finished_at = $t' --arg s "$1" --arg m "$message" --arg t "$(now_utc)"
+  if [[ "$2" == 0 && -n "$(state '.merge.commit // ""')" ]]; then
+    cd "$HOME" 2>/dev/null || true
+    cleanup_merged_worktree
+  fi
   log "$1: $message"
   log "run: $RUN_ID ($RUN)"
   exit "$2"
@@ -264,6 +311,30 @@ has_edge() { # from outcome
 
 edge_when() { # from to → 그 전이의 when. 결과 이름은 그래프마다 다르므로(ui_issues, ui_issues_and_repair_authorized 등) 목적지로 찾는다.
   jq -r --arg f "$1" --arg t "$2" 'first(.transitions[] | select(.from == $f and .to == $t) | .when // "") // empty' "$GRAPH"
+}
+
+# Brief 완료 조건 대응표의 빈틈(없으면 빈 값). 빈 표는 조건을 뽑지 않은 것이다 — 어떤 요청이든 요청 자체가 완료 조건이다.
+coverage_gap() { # brief-json
+  jq -r 'if (.acceptance_map // [] | length) == 0 then "acceptance_map is empty"
+    else [.acceptance_map[] | select(((.covered_by // "") | test("\\S") | not) and ((.out_of_scope_reason // "") | test("\\S") | not)) | .criterion]
+      | if length == 0 then "" else "completion conditions with neither covered_by nor out_of_scope_reason: " + join("; ") end end' "$1"
+}
+
+# revise를 받는 노드: 승인 대기와, 그래프가 brief로 돌아가는 brief_revised 엣지를 둔 노드.
+revise_nodes() { jq -r '["approval"] + [.transitions[] | select(.when == "brief_revised") | .from] | unique | join(", ")' "$GRAPH"; }
+
+# 실행 중에 다른 세션이 남긴 revise 요청을 받는다. 받았으면 0.
+take_revise_request() {
+  local req="$RUN/revise-request.json"
+  [[ -f "$req" ]] || return 1
+  if ! jq -e '(.feedback | type) == "string"' "$req" >/dev/null 2>&1; then
+    rm -f "$req"
+    log "ignored a malformed revise request"
+    return 1
+  fi
+  state_set '.feedback = $r[0].feedback | .brief_rewrites = 0' --slurpfile r "$req"
+  rm -f "$req"
+  log "revise requested during $(state .node); returning to the brief"
 }
 
 # 작업 트리 전체(미추적 포함, .gitignore 제외)를 트리 객체로. 리뷰한 내용과 publish가 커밋한 내용을 비교한다.
@@ -335,7 +406,7 @@ check_baseline() {
     else
       git -C "$REPO" status --short --untracked-files=all | sed 's/^/  /'
     fi
-    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
+    printf 'remaining: node %s · checks: %s\n' "$node" "$(state '(.checks // []) + (.final_checks // []) | if length == 0 then "(decided by the brief)" else join(" ; ") end')"
   } >"$report"
   while IFS= read -r line; do log "$line"; done <"$report"
   if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
@@ -356,6 +427,95 @@ check_baseline() {
   state_set '.head = $h | .baseline_accepted += [{from: (.repo_baseline.head // .head), to: $h, at: $t}]' --arg h "$head" --arg t "$(now_utc)"
   save_baseline
   log "accepted the changes since the baseline (--accept-changes); continuing at $node"
+}
+
+# 실행 중인 런의 프로세스: 러너는 실행에 들어갈 때 .process{pid, pgid, lstart}를, 노드 자식을 띄울 때 .process.child_pgid를 남긴다.
+# stop은 이 기록에 있는 프로세스만 끈다. 패턴 kill(pkill -f 등)은 같은 머신의 다른 런·세션까지 끈다(#495).
+proc_lstart() { # pid → 시작 시각. ps lstart는 로케일·TZ를 따르므로 고정해야 다른 환경에서 부른 stop·resume과 비교된다.
+  LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null
+}
+runner_alive() { # → 기록된 러너가 살아 있으면 0. lstart가 다르면 PID를 다른 프로세스가 다시 쓴 것이다.
+  local pid
+  pid="$(state '.process.pid // ""')"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null \
+    && [[ "$(proc_lstart "$pid")" == "$(state '.process.lstart // ""')" ]]
+}
+child_alive() { # → 기록된 노드 자식 그룹이 살아 있으면 0. 러너만 밖에서 죽으면(그룹 SIGKILL·터미널 닫힘) 이 그룹은 고아로 남아 작업 트리를 계속 쓴다.
+  local g l
+  g="$(state '.process.child_pgid // ""')"
+  [[ -n "$g" ]] && kill -0 -- "-$g" 2>/dev/null || return 1
+  # 리더가 살아 있으면 시작 시각으로 같은 그룹인지 본다. 리더가 끝났어도 그룹이 남아 있는 동안 그 ID는 다시 쓰이지 않는다.
+  l="$(proc_lstart "$g")"
+  [[ -z "$l" || "$l" == "$(state '.process.child_lstart // ""')" ]]
+}
+terminate() { # target... (pid 또는 -pgid) → TERM, 최대 5초 기다린 뒤 남은 것만 KILL
+  local t alive
+  kill -TERM -- "$@" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+    alive=""
+    for t in "$@"; do kill -0 -- "$t" 2>/dev/null && alive=1; done
+    [[ -n "$alive" ]] || return 0
+    sleep 0.2
+  done
+  kill -KILL -- "$@" 2>/dev/null || true
+}
+# 노드 자식을 새 프로세스 그룹에 띄우고 기다린다. 포그라운드 자식이 도는 동안 bash는 trap을 미루므로 wait로 기다려야 TERM trap이 바로 돈다.
+# 러너 자신의 그룹은 부른 쪽(에이전트 세션·터미널)과 같을 수 있어 건드리지 않는다. setsid는 macOS에 없다.
+CHILD_PGID=""
+run_in_group() { # command... → 그 명령의 종료 코드
+  local rc=0
+  set -m
+  "$@" &
+  CHILD_PGID=$!
+  set +m
+  state_set '.process.child_pgid = $g | .process.child_lstart = $l' --argjson g "$CHILD_PGID" --arg l "$(proc_lstart "$CHILD_PGID")"
+  wait "$CHILD_PGID" || rc=$?
+  CHILD_PGID=""
+  state_set 'del(.process.child_pgid, .process.child_lstart)'
+  return "$rc"
+}
+on_stop_signal() {
+  [[ -z "$CHILD_PGID" ]] || terminate "-$CHILD_PGID"
+  log "runner stopped by a signal at $(state .node); continue with resume"
+  exit 30
+}
+run_tee() { # log command... → 출력을 사람이 보는 stderr와 로그에 함께
+  local file="$1"
+  shift
+  "$@" 2>&1 | tee "$file" >&2
+}
+in_repo() { cd "$REPO" && "$@"; }
+claude_session() { # label args... — 세션 출력은 도구 호출 줄과 result만 남긴다(stream_progress)
+  local label="$1"
+  shift
+  (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "$@" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json"
+}
+stop_run() { # reason
+  local status node pid pgid child targets
+  status="$(state .status)"
+  [[ "$status" == running ]] || { printf 'run %s is not running (status %s)\n' "$RUN_ID" "$status" >&2; exit 2; }
+  pid="$(state '.process.pid // ""')"
+  [[ -n "$pid" ]] || { printf 'run %s has no process record (started by an older runner), so stop cannot tell its processes apart; wait for it to end\n' "$RUN_ID" >&2; exit 2; }
+  targets=()
+  if runner_alive; then
+    pgid="$(state '.process.pgid // ""')"
+    targets=("$pid")
+    # 러너가 자기 그룹의 리더일 때만 그 그룹을 함께 끈다. 아니면 그 그룹은 부른 쪽의 것이다.
+    [[ "$pgid" != "$pid" ]] || targets+=("-$pgid")
+  fi
+  # 러너가 이미 없어도 고아로 남은 노드 자식 그룹은 끈다. 그대로 두면 resume한 새 노드와 같은 작업 트리에서 겹쳐 돈다.
+  if child_alive; then
+    child="$(state '.process.child_pgid')"
+    targets+=("-$child")
+  fi
+  [[ ${#targets[@]} -eq 0 ]] || terminate "${targets[@]}"
+  node="$(state .node)"
+  state_set '.status = "stopped" | .stopped = {node: .node, at: $t, reason: $r} | del(.process)' --arg t "$(now_utc)" --arg r "$1"
+  # 멈춘 노드가 하다 만 쓰기는 러너 자신의 작업이다. 기준점에 넣어 resume이 그 노드부터 이어 가게 한다.
+  save_baseline
+  log "stopped run $RUN_ID at $node: $1; continue with resume"
+  printf 'stopped run %s at %s\n' "$RUN_ID" "$node"
+  exit 0
 }
 
 go() { # from outcome → 그래프에 선언된 전이만 따른다
@@ -420,9 +580,9 @@ run_agent() {
       [[ -d "$RUN/$label" ]] && args+=(--add-dir "$RUN/$label")
       # codex 출력은 원본(명령 출력·파일 내용)이다. 사람이 보는 터미널일 때만 함께 흘리고, 에이전트가 받는 stderr에는 넣지 않는다.
       if [[ -t 2 ]]; then
-        codex "${args[@]}" - <"$RUN/$label.prompt" 2>&1 | tee "$RUN/$label.log" >&2 || rc=$?
+        run_in_group run_tee "$RUN/$label.log" codex "${args[@]}" - <"$RUN/$label.prompt" || rc=$?
       else
-        codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
+        run_in_group codex "${args[@]}" - <"$RUN/$label.prompt" >"$RUN/$label.log" 2>&1 || rc=$?
       fi
       ;;
     claude)
@@ -448,9 +608,10 @@ run_agent() {
         done <<<"$(state '(.measurements // [])[].evidence_dir')"
       fi
       # 답할 사람이 없는 세션이다. 보드 권한 훅이 이 세션의 권한 요청을 보드로 넘겨 붙잡지 않게 표시한다(없으면 바로 거부된다).
-      (cd "$REPO" && AI_HARNESS_HEADLESS=1 claude "${args[@]}" <"$RUN/$label.prompt") 2>"$RUN/$label.log" | stream_progress "$label" >"$RUN/$label.json" || rc=$?
+      run_in_group claude_session "$label" "${args[@]}" || rc=$?
       if ((rc == 0)); then
-        jq -r 'if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
+        # 세션이 result를 여러 번 내도 .out은 마지막 result 하나에서 만든 문서 하나다(소비자가 jq -r·--slurpfile로 읽는다).
+        jq -rs 'last | if .structured_output then (.structured_output | tojson) else (.result // empty) end' \
           "$RUN/$label.json" >"$out" 2>/dev/null || rc=1
       fi
       ;;
@@ -474,22 +635,110 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
   guard_head "$node"
 }
 
-run_checks() { # label → $RUN/<label>.checks.json, 하나라도 실패하면 1
-  local label="$1" i=0 failed=0 cmd rc results="[]"
+run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문자열은 한 번만 실행한다
+  local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]"
+  commands="$(jq -c 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end)' <<<"$commands")"
   while IFS= read -r cmd; do
     i=$((i + 1))
     rc=0
-    (cd "$REPO" && bash -c "$cmd") >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
+    run_in_group in_repo bash -c "$cmd" >"$RUN/$label.check$i.log" 2>&1 </dev/null || rc=$?
     results="$(jq --arg cmd "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 40 "$RUN/$label.check$i.log")" \
       '. + [{command:$cmd, exit:$rc, tail:$tail}]' <<<"$results")"
     if ((rc != 0)); then failed=1; log "check failed: $cmd (exit $rc)"; else log "check passed: $cmd"; fi
-  done < <(state '.checks[]')
+  done < <(jq -r '.[]' <<<"$commands")
   printf '%s\n' "$results" >"$RUN/$label.checks.json"
   return "$failed"
 }
 
+# 실패한 check 명령과 출력 꼬리(요약줄 뺀 모든 줄)를 정규화한 값. 테스트 이름 줄에는 오류 낱말이 없고 바뀐 실패가 뒤쪽에 있을 수 있어
+# 줄을 고르거나 자르지 않는다. 빌드 도구의 꼬리 요약줄(BUILD FAILED·report 경로 등)은 실패가 달라도 같아서 뺀다.
+# 경로 앞부분·시각·소요 시간·주소·UUID·숫자는 라운드마다 바뀌는 잡음이라 지우고, 병렬 실행의 출력 순서가 바뀌어도 같게 줄을 정렬한다.
+check_signature() { # checks.json → JSON 배열 [{command, error}]
+  jq -c '
+    def summary: test("(?i)^[[:space:]]*(BUILD FAILED|FAILURE: |\\* What went wrong|\\* Try:|Execution failed for task|> There were failing tests|npm ERR!|[0-9]+ tests? completed)|See the report at|file://");
+    [.[] | select(.exit != 0) | {command, error:(.tail | split("\n") | map(sub("[[:space:]]+$"; "")) | map(select(length > 0 and (summary | not)))
+      | map(gsub("/Users/[^/[:space:]]+|/home/[^/[:space:]]+|/private/var/[^[:space:]]+/|/var/folders/[^[:space:]]+/"; "<path>/")
+        | gsub("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"; "<uuid>")
+        | gsub("0x[0-9a-fA-F]+"; "<addr>") | gsub("@[0-9a-f]{6,}\\b"; "@<hash>")
+        | gsub("[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+-]+Z?"; "<time>")
+        | gsub("[0-9]+([.][0-9]+)?[[:space:]]*(ms|msec|seconds?|secs?|s)\\b"; "<duration>")
+        | gsub("[0-9]+"; "<n>")) | sort | join("\n"))}]' "$1"
+}
+
+# 실패 원인 위치가 전부 변경 파일 밖의 의존 산출물(node_modules·가상환경·site-packages·vendor)이면 그 위치를 낸다.
+# 원인 위치는 줄 맨 앞의 `경로:줄[:열]` 또는 `경로(줄,열)` 바로 뒤에 심각도 error(fatal error)가 오는 진단만 본다. 스택 프레임(`at ... (node_modules/...)`)·
+# 보고서 경로(`See the report at .../build/reports/...`)는 원인 위치가 아니고, build·dist는 프로젝트 자신의 산출물이라 넣지 않는다.
+dependency_failure_location() { # checks.json → 위치(쉼표 구분) 또는 빈 값
+  local locations changed location
+  locations="$(jq -r '[.[] | select(.exit != 0) | .tail | split("\n")[]
+    | capture("^[[:space:]]*(?<loc>[^[:space:]():]+)(:[0-9]+(:[0-9]+)?|[(][0-9]+,[0-9]+[)])[[:space:]:-]+(?i:(fatal[[:space:]]+)?error)\\b")?
+    | .loc | sub("^[.]/"; "")] | unique | .[]' "$1")"
+  [[ -n "$locations" ]] || return 0
+  changed="$(git -C "$REPO" diff --name-only "$(state '.diff_base // .start_head')" --; git -C "$REPO" ls-files --others --exclude-standard)"
+  while IFS= read -r location; do
+    [[ "$location" =~ (^|/)(node_modules|\.venv|venv|site-packages|vendor)/ ]] || return 0
+    if [[ -n "$changed" ]] && printf '%s\n' "$changed" | awk -v l="$location" 'length($0) > 0 && (l == $0 || substr(l, length(l) - length($0)) == "/" $0) { found = 1 } END { exit !found }'; then
+      return 0
+    fi
+  done <<<"$locations"
+  printf '%s\n' "$locations" | head -n 3 | paste -sd ',' - | sed 's/,/, /g'
+}
+
 check_findings() {
   jq -c '[.[] | select(.exit != 0) | "required check failed: \(.command) (exit \(.exit))\n\(.tail)"]' "$RUN/$1.checks.json"
+}
+
+failed_check_commands() { jq -c '[.[] | select(.exit != 0) | .command] | reduce .[] as $c ([]; if index($c) then . else . + [$c] end)' "$1"; }
+
+# 노드가 부르는 필수 검사. repair 뒤에는 직전에 실패한 check만 먼저 돌리고, 통과하면 전체를 한 번 돌려 확정한다.
+verify_checks() { # label → 통과면 0. 실패면 findings·다음에 다시 돌릴 check·실패 시그니처를 기록하고 1
+  local label="$1" commands file
+  commands="$(state '.repair_checks // []')"
+  local before_failed=""
+  [[ "$(state .attempts)" -gt 0 && "$commands" != "[]" ]] && before_failed="$(worktree_tree)"
+  if [[ -n "$before_failed" ]] && ! run_checks "$label-failed" "$commands"; then
+    file="$RUN/$label-failed.checks.json"
+  elif {
+    # 수리 뒤 다시 돌린 명령이 넓은 검사를 모두 덮고 파일을 바꾸지 않았으면, 같은 트리에서 넓은 검사를 또 돌리지 않는다.
+    if [[ -n "$before_failed" && "$(worktree_tree)" == "$before_failed" ]] \
+      && jq -e --argjson r "$commands" '(.final_checks // []) as $f | ($f | length) > 0 and ($f - $r | length) == 0' "$STATE" >/dev/null; then
+      state_set '.final_checked_tree = $t' --arg t "$before_failed"
+    fi
+    run_checks "$label"
+  }; then
+    state_set '.repair_checks = [] | .repair_failure_signature = "" | .repair_failure_streak = 0'
+    return 0
+  else
+    file="$RUN/$label.checks.json"
+  fi
+  state_set '.findings = $f | .needs_user_decision = false | .repair_checks = $c' \
+    --argjson f "$(check_findings "$(basename "$file" .checks.json)")" --argjson c "$(failed_check_commands "$file")"
+  note_check_failure "$file"
+  return 1
+}
+
+# 검사 실패마다 부른다(findings를 기록한 뒤). repair 뒤의 실패는 시그니처 연속 횟수를 센다.
+# 확정된 환경 오류이거나 같은 실패가 그래프 limit만큼 이어지면 사람의 판단을 요청한다 — 전이는 그래프의 repair 단계가 고른다.
+note_check_failure() { # checks.json
+  local checks="$1" signature streak=1 location
+  signature="$(check_signature "$checks")"
+  if [[ "$(state .attempts)" -gt 0 ]]; then
+    if [[ "$signature" == "$(state '.repair_failure_signature // ""')" ]]; then
+      streak=$(( $(state '.repair_failure_streak // 0') + 1 ))
+    fi
+    state_set '.repair_failure_signature = $s | .repair_failure_streak = $n' --arg s "$signature" --argjson n "$streak"
+  fi
+  location="$(dependency_failure_location "$checks")"
+  if [[ -n "$location" ]]; then
+    request_user_decision "a required check failed at a dependency outside the changed files ($location); fix the environment (install or rebuild dependencies), not the code"
+  elif [[ "$(state .attempts)" -gt 0 ]] && ((streak >= MAX_IDENTICAL_FAILURES)); then
+    request_user_decision "the same required-check failure repeated in $streak consecutive repair rounds (limit $MAX_IDENTICAL_FAILURES): $(jq -r 'map(.command + ": " + (.error | gsub("\n"; " / "))) | join(" | ")' <<<"$signature")"
+  fi
+}
+
+request_user_decision() { # reason → 다음 repair 단계가 그래프의 user_decision 전이로 넘긴다
+  state_set '.needs_user_decision = true | .repair_stall = $r | .findings = [$r] + (.findings // [])' --arg r "$1"
+  log "repair stopped: $1"
 }
 
 # 리뷰·수리·화면 검증 노드가 받는 기준 문서. review는 승인된 Brief 대신 검토 범위다.
@@ -506,6 +755,7 @@ print_brief() {
   cat "$RUN/brief.md"
   printf '\n== 드라이버가 직접 실행할 검증 ==\n'
   state '.checks[] | "- " + .'
+  state 'if (.final_checks // [] | length) > 0 then "\n== 리뷰가 깨끗해진 뒤 한 번 실행할 검증 ==\n" + (.final_checks | map("- " + .) | join("\n")) else empty end'
   jq -r 'if (.open_questions // [] | length) > 0 then "\n== 확인이 필요한 점 ==\n" + (.open_questions | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   jq -r 'if (.needs_human // [] | length) > 0 then "\n== 사람이 정할 점 ==\n" + (.needs_human | map("- " + .) | join("\n")) else empty end' "$RUN/brief.json"
   if [[ "${1:-}" == auto ]]; then
@@ -642,7 +892,7 @@ await_repair() { # node edge
       state '{findings, checks}' >"$RUN/brief.json"
       state '"## 수리할 blocking finding\n\n" + (.findings | map("- " + (split("\n") | first)) | join("\n"))' >"$RUN/brief.md"
       state_set '.presented_at = $t | .brief_hash = $h' --arg t "$(now_utc)" \
-        --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+        --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
     fi
     if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
       print_brief auto >&2
@@ -673,9 +923,37 @@ ui_backstop() {
     | "Screen rendered by \(.): open the page that uses it; derive the user role, entry -> key action -> success check -> return, and the states from the brief or review scope"))' --arg f "$ui_files"
 }
 
+# 넓은 검사(final_checks, #462): 라운드마다 돌리지 않고 리뷰가 blocking 없이 끝난 트리에서 한 번만 돌린다(feature·bug-fix의 brief만 낸다).
+# 실패하면 그 출력이 blocking finding이 되어 수리로 간다. 수리 뒤에는 실패한 명령을 먼저 다시 돌린다(repair_checks).
+# 검사가 파일을 만들거나 고치면 그 변경은 리뷰를 받지 않았으므로 통과로 치지 않고 수리·재리뷰로 보낸다.
+final_gate() { # → 통과(또는 넓은 검사 없음)면 0, 실패면 findings를 기록하고 1
+  local label before after changed
+  [[ "$(state '.final_checks // [] | length')" -gt 0 ]] || return 0
+  before="$(worktree_tree)"
+  [[ "$(state '.final_checked_tree // ""')" != "$before" ]] || return 0
+  label="final-$(state .attempts)"
+  if run_checks "$label" "$(state '.final_checks')"; then
+    after="$(worktree_tree)"
+    if [[ "$after" == "$before" ]]; then
+      state_set '.final_checked_tree = $t' --arg t "$after"
+      return 0
+    fi
+    changed="$(git -C "$REPO" diff --name-only "$before" "$after" | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+    log "final checks changed files that were not reviewed: $changed"
+    state_set '.findings = [$m] | .needs_user_decision = false | .repair_checks = []' \
+      --arg m "the final checks changed files that were not reviewed: $changed. Keep the change if it belongs to the work (it is reviewed next), otherwise make the checks leave the tree as it was or ignore their output"
+    return 1
+  fi
+  state_set '.findings = $f | .needs_user_decision = false | .repair_checks = $c' \
+    --argjson f "$(check_findings "$label")" --argjson c "$(failed_check_commands "$RUN/$label.checks.json")"
+  note_check_failure "$RUN/$label.checks.json"
+  return 1
+}
+
 # 리뷰 노드(review·classify·re_review)의 출구. findings·needs_user_decision·ui_scenarios는 상태에 있다.
 route_review() { # node
   local node="$1"
+  if [[ "$(state '.findings | length')" -eq 0 ]]; then final_gate || true; fi
   ui_backstop
   if [[ "$(state '.findings | length')" -gt 0 ]]; then
     case "$node" in
@@ -739,6 +1017,21 @@ publish() {
   esac
   [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
     || finish invariant_violation 40 "write node 'publish' reached without approval of the current brief"
+  if [[ "$WORKFLOW" == release ]]; then
+    run_agent publish publish "$CONTEXT
+
+You are the publish node of the release graph. The driver cut the release branch $(state .release.branch) from origin/$(state .policy.release.source), committed the release preparation, and ran the checks below; they passed. Deliver it without asking anyone anything:
+- Do not change, add, amend, rebase, or squash any commit: the committed tree must equal the checked one, and the release commits stay as the driver made them.
+- Push the release branch with a normal push that sets its upstream. If a pull request for this branch is already open (the driver caught up with $(state .policy.release.source) after it was opened), push to it and return its URL instead of opening another.
+- Otherwise open a pull request from the release branch into $(state .policy.release.base) with the title \"chore: release v$(state .release.version)\", using the PR tool that AGENTS.md and the project workflow name (for example gh pr create --base $(state .policy.release.base)). When an open milestone named v$(state .release.version) exists, set it on the pull request. Put the approved release plan and the checks below in the body.
+- If the plan has a \"결정 사항\" section, copy it unchanged into a PR body section titled \"결정 사항\" so a person can overturn the choices before merging.
+- Never merge (the driver merges later with a merge commit when the delivery level allows), never force-push, and never push to $(state .policy.release.source) or $(state .policy.release.base).
+Return only JSON matching the schema; pr_url is the release pull request.
+
+Checks the driver ran: $(state '.checks + (.final_checks // []) | join(" ; ")')
+
+$(brief_context)" "$PUBLISH_SCHEMA"
+  else
   run_agent publish publish "$CONTEXT
 
 You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
@@ -750,9 +1043,10 @@ You are the publish node. The approved change below passed the checks the driver
 - Never merge (under merge the driver merges later, once the merge conditions hold), never force-push, never push to the base branch under pr-only or merge, and do not change file contents: the committed tree must equal the reviewed one.
 Return only JSON matching the schema; pr_url is empty when no PR was opened.
 
-Checks the driver ran: $(state '.checks | join(" ; ")')
+Checks the driver ran: $(state '.checks + (.final_checks // []) | join(" ; ")')
 
 $(brief_context)" "$PUBLISH_SCHEMA"
+  fi
   out="$RUN/publish.out"
   jq -e '(.pr_url | type) == "string" and (.branch | type) == "string"' "$out" >/dev/null 2>&1 \
     || problems="$(jq -c '. + ["publish output does not match the schema"]' <<<"$problems")"
@@ -919,7 +1213,12 @@ pr_merge() { # url method head
     github) (cd "$REPO" && gh pr merge "$1" "--$2" --match-head-commit "$3") ;;
     bitbucket)
       # Bitbucket merge API는 head를 고정할 수 없다. 판정 직전에 head를 다시 읽었다. 전략을 넘기지 않아 저장소 기본 전략으로 병합한다.
-      bb_api POST "$(bb_path "$1")/merge" '{"close_source_branch": false}' >/dev/null ;;
+      # 릴리스는 merge commit만 쓴다 — squash는 main과 develop을 영구히 갈라놓는다.
+      if [[ "$2" == merge ]]; then
+        bb_api POST "$(bb_path "$1")/merge" '{"close_source_branch": false, "merge_strategy": "merge_commit"}' >/dev/null
+      else
+        bb_api POST "$(bb_path "$1")/merge" '{"close_source_branch": false}' >/dev/null
+      fi ;;
   esac
 }
 # 저장소가 정한 병합 방식. GitHub는 기본 방식이 없어 저장소가 허용한 방식 중 squash → merge → rebase 순으로 고른다.
@@ -934,6 +1233,21 @@ merge_method() { # pr-url
         elif .allow_rebase_merge == true then "rebase" else empty end' <<<"$out" \
         || { echo "the repository settings do not say which merge methods are allowed" >&2; return 1; } ;;
     bitbucket) echo "repository default" ;;
+    *) echo "unsupported pull request host: $1" >&2; return 1 ;;
+  esac
+}
+# 릴리스의 병합 방식은 merge commit으로 고정이다. 호스트가 squash를 허용해도 쓰지 않고, merge commit을 허용하지 않으면 병합하지 않는다.
+release_merge_method() { # pr-url → "merge" 또는 실패(stderr에 이유)
+  local slug out
+  case "$(pr_provider "$1")" in
+    github)
+      slug="$(repo_slug "$1")"
+      out="$(cd "$REPO" && gh api "repos/${slug#*/}" 2>&1)" \
+        || { printf 'cannot read whether the repository allows merge commits (%s); merge the release by hand with a merge commit\n' "$(head -c 200 <<<"$out")" >&2; return 1; }
+      jq -e '.allow_merge_commit == true' <<<"$out" >/dev/null \
+        || { echo "the repository does not allow merge commits; a release must be merged with a merge commit (squash or rebase would split main from develop for good) — allow merge commits or merge by hand" >&2; return 1; }
+      echo merge ;;
+    bitbucket) echo merge ;;
     *) echo "unsupported pull request host: $1" >&2; return 1 ;;
   esac
 }
@@ -1043,7 +1357,9 @@ merge() {
     if ! protection="$(branch_protection "$url" "$(jq -r .base <<<"$mp")" 2>"$RUN/protection.why")"; then
       blocked="$(jq -c --arg b "$(jq -r .base <<<"$mp")" --arg e "$(head -c 300 "$RUN/protection.why")" \
         '. + ["cannot read the branch protection of \($b) from the host (\($e)); the runner merges only by the rules the repository sets — merge by hand or let the runner read the protection"]' <<<"$blocked")"
-    elif ! method="$(merge_method "$url" 2>"$RUN/method.why")"; then
+    elif [[ "$WORKFLOW" == release ]] && ! method="$(release_merge_method "$url" 2>"$RUN/method.why")"; then
+      blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" '. + [$e]' <<<"$blocked")"
+    elif [[ "$WORKFLOW" != release ]] && ! method="$(merge_method "$url" 2>"$RUN/method.why")"; then
       blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" \
         '. + ["cannot read which merge methods the repository allows (\($e)); merge by hand"]' <<<"$blocked")"
     else
@@ -1146,6 +1462,41 @@ rollback_hint() { # commit base
     printf 'the change is merged and was not reverted. To roll it back, revert the merge commit on a new branch (git revert -m 1 %s) and open a pull request' "$1"
   else
     printf 'the change is merged and was not reverted. To roll it back, revert %s on a new branch (git revert %s) and open a pull request' "$1" "$1"
+  fi
+}
+
+# 병합 확인과 후속 검증이 끝난 뒤 현재 작업 worktree가 정리 가능한지 판정만 한다(#454). 러너는 아무것도 지우지 않는다.
+# 살아 있는 세션(터미널·에이전트)을 러너는 알 수 없으므로, 실제 삭제는 보드 '끝난 일 정리'나 workspace 세션 정리가 세션을 확인한 뒤 한다.
+# 판정은 state.json의 worktree_cleanup {eligible, reason, path, branch}과 진행 로그 한 줄로 남긴다.
+cleanup_merged_worktree() {
+  local url facts dirty unpushed nested gitdir common branch reason=""
+  url="$(state '.publish.pr_url // ""')"
+  branch="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [[ -z "$url" ]] || ! facts="$(pr_facts "$url" 2>/dev/null)" || [[ "$(jq -r '.state // ""' <<<"$facts")" != MERGED ]]; then
+    reason="pull request merge is not confirmed"
+  elif ! dirty="$(git -C "$REPO" status --porcelain 2>/dev/null)" || [[ -n "$dirty" ]]; then
+    reason="working tree is not clean"
+  # `git log HEAD --not --remotes`와 같은 안전 검사: 어느 원격에도 없는 커밋이 있으면, 조회에 실패해도 보존한다.
+  elif ! unpushed="$(git -C "$REPO" log HEAD --not --remotes --oneline 2>/dev/null)" || [[ -n "$unpushed" ]]; then
+    reason="commits are absent from remotes"
+  elif ! nested="$(find "$REPO" -path "$REPO/.git" -prune -o -name .git -print -quit 2>/dev/null)" || [[ -n "$nested" ]]; then
+    reason="중첩 clone${nested:+ at $nested}"
+  else
+    # 메인 체크아웃은 git-dir이 common-dir과 같다. 상대 경로·심볼릭 링크 차이를 물리 경로로 맞춰 비교한다.
+    gitdir="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null || true)"
+    common="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    gitdir="$(cd "$gitdir" 2>/dev/null && pwd -P || true)"
+    common="$(cd "$common" 2>/dev/null && pwd -P || true)"
+    if [[ -z "$branch" || -z "$gitdir" || -z "$common" || "$gitdir" == "$common" ]]; then
+      reason="not a removable linked worktree"
+    fi
+  fi
+  if [[ -z "$reason" ]]; then
+    state_set '.worktree_cleanup = {eligible: true, reason: null, path: $p, branch: $b}' --arg p "$REPO" --arg b "$branch"
+    log "worktree cleanup: eligible ($REPO) — remove it with the board's finished-work cleanup or the workspace session cleanup"
+  else
+    state_set '.worktree_cleanup = {eligible: false, reason: $r, path: $p, branch: $b}' --arg r "$reason" --arg p "$REPO" --arg b "$branch"
+    log "worktree cleanup: kept ($reason)"
   fi
 }
 
@@ -1265,18 +1616,28 @@ UI_REVIEW_SCHEMA="$RUN/ui-review-schema.json"
 MEASURE_SCHEMA="$RUN/measure-schema.json"
 DIAGNOSE_SCHEMA="$RUN/diagnose-schema.json"
 POLISH_REVIEW_SCHEMA="$RUN/polish-review-schema.json"
+REPORT_SCHEMA="$RUN/report-schema.json"
+RELEASE_PLAN_SCHEMA="$RUN/release-plan-schema.json"
 # 측정 세션이 캡처마다 같은 페이지 상태에서 평가하는 레이아웃 검사. 결과는 측정 JSON의 screens[].layout으로 받는다.
 LAYOUT_PROBE="$RUN/layout-probe.js"
 LAYOUT_PROBE_ID="layout-probe/1"
 
 UI_SCENARIO_RULE="If the change alters what users see or operate (markup, styles, server-rendered templates, user-facing text, or the behavior of buttons, links, disclosures, forms, and dialogs), put one entry per scenario in ui_scenarios: the user role, entry -> key action -> success check -> return, the states to see (default and collapsed, empty, error, permission), the viewports and themes the project supports, and the mockup source (file, frame, or node) when a mockup exists. Follow the analysis step of the project ui-review skill (.agents/skills/ui-review or .claude/skills/ui-review) when it exists. Leave ui_scenarios empty for changes users cannot see."
 
+# 대량 조회 메모리(#499): 판정·집계만 하는 다건 조회가 대형 본문 컬럼까지 읽거나 상한이 없어 운영 OOM이 난다. 리뷰 노드가 데이터 조회가 있는 변경에서만 본다.
+BULK_READ_RULE="Bulk reads: apply this only when the change adds or changes server-side code that reads from a database or another data store (an ORM or query layer, SQL, a repository or DAO method); skip it for changes without such data access, such as front-end code. On paths that read many rows in one run or request (batch jobs, sweeps, scheduled jobs, bulk or internal batch APIs), look for a multi-row query with no bound (no limit, chunk, or keyset paging); a query that only decides or aggregates but loads whole rows or entities with large columns (LONGTEXT, MEDIUMTEXT, TEXT, LOB/BLOB/CLOB, large JSON) instead of only the columns it needs; a collection fetch join combined with paging (JPA/Hibernate, for example, then pages in memory); and, on such decide-or-aggregate read paths, a caller's per-request count that does not match the receiving API's bound. An existing query counts when this change alters its call path, call conditions, or row count: do not leave it out because its definition is outside the diff when its caller is inside it. Open the column definitions of every entity or table the query loads, including those pulled in by fetch joins or association loading and those in other modules, to size the row. For each, estimate the memory as row-count bound × row size and write the estimate in the finding. It is blocking when the estimate puts availability at risk (out of memory, a stalled job); a bounded query that already reads only the columns it needs is not a finding, and neither is a caller/receiver count mismatch on a write path or when the receiving query reads only the small columns it needs."
+
+# 화면 검증·재현 세션의 앱 서버 수명. dev 서버를 명령 안에서 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(#435).
+APP_SERVER_RULE="App server: start any server with the tool's background run, not with &, nohup, or setsid inside the command, and poll the port or a health URL with a time limit instead of ending your turn to wait for it. Reuse a server already running for this working tree instead of starting another on the same port. Before you finish, stop the whole process group of every server you started (TERM, a few seconds, then KILL) and confirm no process of that group is left; a free port does not mean it stopped, because dev workers close the port and survive TERM."
+# 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
+APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
+
 brief_prompt() {
   local role inputs
   if [[ "$WORKFLOW" == bug-fix ]]; then
     role="You are the brief node of the bug-fix graph. Do not edit any file.
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
-Put the exact shell commands that must pass before the fix is done in checks, including the regression check. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check."
+Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
     inputs="Bug report:
 $(state .request)
 
@@ -1288,19 +1649,31 @@ $(cat "$RUN/reproduce.out")"
   else
     role="You are the brief node of the feature-delivery graph. Do not edit any file.
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
-Put the exact shell commands that must pass before the feature is done in checks. They run from the repository root with bash -c. Prefer targeted tests plus the project's required broad check."
+Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c."
     inputs="Request:
 $(state .request)
 
 Project contract from the discover node:
 $(cat "$RUN/discover.out")"
   fi
+  role+="
+acceptance_map: list every completion condition of the request and of any issue it quotes or links (each scope item, each done or acceptance criterion, each required test), one entry per condition in the request's words. Do not drop or merge conditions. For each, name in covered_by the acceptance case or verification command of this brief that covers it, or, when the brief leaves it out of scope, give the reason in out_of_scope_reason; use an empty string for the other field. The driver shows this map in the brief and the review checks the change against it."
   printf '%s\n\n%s\n%s\n%s\n\n%s\n%s' "$CONTEXT" "$role" "$UI_SCENARIO_RULE" "$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOF'
 approval is auto: no person reads this brief before the change is made, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one, write the brief to follow it, and record it in decisions as {question, choice, rationale}.
 Put in needs_human only what a person alone can decide: a product judgment that changes the scope of the request; a hard-to-reverse choice such as deleting data, a migration, creating or dropping an index, or a deployment; a write to an external system. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
+The driver does not approve a brief whose acceptance_map is empty or leaves a condition with neither covered_by nor out_of_scope_reason; it asks for the brief again.
 EOF
 else printf 'Put anything the person must decide in open_questions.\n'; fi)" "$inputs" \
-    "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)"
+    "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)$(brief_changes_so_far)"
+}
+
+# revise로 쓰기 노드에서 Brief로 돌아왔으면 그 실행이 이미 바꾼 것을 Brief에 알린다. 되돌리지 않고 그 위에서 이어 간다.
+brief_changes_so_far() {
+  local stat
+  [[ "$(state '[.history[] | select(.outcome == "brief_revised")] | length')" -gt 0 ]] || return 0
+  stat="$(git -C "$REPO" diff --stat "$(state .start_head)" "$(worktree_tree)" 2>/dev/null || true)"
+  [[ -n "$stat" ]] || return 0
+  printf '\nChanges already made in this run (git diff --stat %s, untracked files included). They stay; write the brief so delivery continues from them:\n%s\n' "$(state .start_head)" "$stat"
 }
 
 # ---- polish(기존 화면 품질 개선) ----
@@ -1329,7 +1702,9 @@ $(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.th
     same="This is the baseline before any change. Choose the screens: every target screen the request names, plus the screens that share the components or tokens those screens use (role sibling; .ai-harness/docs/ui.md may list them, otherwise find them in the code) — a later fix to a shared component is checked on them."
   fi
   printf '%s\n\n%s' "$CONTEXT" "You are the measure node of the design-polish graph. Do not edit, create, or delete any file in the repository; save captures, audit reports, and notes only under $ev.
-Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository and stop any server you started before you finish.
+Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .agents/skills/ui-review or .claude/skills/ui-review, when it exists) documents, with the local or test configuration, never production credentials; point anything it writes outside the repository.
+$APP_SERVER_RULE
+$APP_BUILD_RULE
 $same
 Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
 Layout check: in the same page and state, right before each capture and scrolled to the top, evaluate the expression in $LAYOUT_PROBE in the page (for example Playwright: await page.evaluate(fs.readFileSync('$LAYOUT_PROBE', 'utf8'))) and put the object it returns, unchanged, in that screen's layout. Do not edit, filter, or explain away its issues; the driver reads them. A screen without the probe's result is unmeasured.
@@ -1360,7 +1735,7 @@ polish_brief() { # selected-ids-json
     "$RUN/brief.json" >"$RUN/brief.md"
   printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
   state_set '.selected = $s | .presented_at = $t | .feedback = null | .approval = null' --argjson s "$1" --arg t "$(now_utc)"
-  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
 }
 
 # 측정의 레이아웃 검사 결과를 프롬프트용 문구로. baseline 또는 last(마지막 측정).
@@ -1403,8 +1778,436 @@ polish_summary() {
     + "; captures: baseline " + .baseline.evidence_dir + ", after " + ((.measurements | last).evidence_dir)'
 }
 
+# ---- investigate(수정 전 원인 조사) ----
+# 기준 커밋: 원격 기준 확정은 결정적인 git 연산이라 세션을 띄우지 않는다. fetch가 실패하거나 origin이 없어도 멈추지 않는다.
+investigate_baseline() {
+  local fetch=ok base="" cand base_commit="" head behind=0 ahead=0 read_from=working_tree note=""
+  if ! git -C "$REPO" remote get-url origin >/dev/null 2>&1; then
+    fetch=no_remote
+    note="the repository has no origin remote; "
+  elif ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch --quiet origin >"$RUN/baseline-fetch.log" 2>&1 </dev/null; then
+    fetch=failed
+    note="git fetch origin failed (see $RUN/baseline-fetch.log), so the origin refs may be stale; "
+  fi
+  base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  base="${base#origin/}"
+  for cand in "$base" "$(jq -r '.merge_policy.base // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" develop main master; do
+    [[ -n "$cand" ]] || continue
+    if base_commit="$(git -C "$REPO" rev-parse --verify --quiet "refs/remotes/origin/$cand^{commit}")"; then base="$cand"; break; fi
+    base_commit=""
+  done
+  head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$base_commit" ]]; then
+    behind="$(git -C "$REPO" rev-list --count "HEAD..$base_commit" 2>/dev/null || printf 0)"
+    ahead="$(git -C "$REPO" rev-list --count "$base_commit..HEAD" 2>/dev/null || printf 0)"
+    [[ "$behind" == 0 ]] || read_from="origin/$base"
+  else
+    base=""
+    note+="no origin base branch was found (origin/HEAD, merge_policy.base, develop, main, master), so the code is read from the working tree"
+  fi
+  note="${note%; }"
+  state_set '.code_baseline = {base: $b, base_commit: $c, head: $h, behind: $bh, ahead: $ah, read_from: $r, fetch: $f, note: $n}' \
+    --arg b "$base" --arg c "$base_commit" --arg h "$head" --argjson bh "$behind" --argjson ah "$ahead" --arg r "$read_from" --arg f "$fetch" --arg n "$note"
+  {
+    printf 'base: %s\nbase_commit: %s\nlocal HEAD: %s (behind %s, ahead %s)\nfetch: %s\nread_from: %s\n' \
+      "${base:+origin/$base}" "${base_commit:-none}" "${head:-none}" "$behind" "$ahead" "$fetch" "$read_from"
+    [[ -z "$note" ]] || printf 'note: %s\n' "$note"
+    if [[ "$read_from" == working_tree ]]; then
+      printf 'Read the code from the working tree.\n'
+    else
+      printf 'The local checkout is %s commit(s) behind origin/%s. Read the code at the remote base, not from the working tree: git show origin/%s:<path>, git grep <pattern> origin/%s, git log origin/%s. Name commit %s in the report.\n' \
+        "$behind" "$base" "$base" "$base" "$base" "$base_commit"
+    fi
+  } >"$RUN/baseline.out"
+  log "baseline: ${base:+origin/$base }${base_commit:0:12} · behind $behind · read from $read_from · fetch $fetch"
+}
+
+# 경로의 실제 위치(심볼릭 링크를 푼 것). 아직 없는 끝부분은 그대로 붙인다.
+physical_path() { # path
+  local p="$1" rest=""
+  [[ "$p" == /* ]] || p="$PWD/$p"
+  while [[ "$p" != / && "$p" == */ ]]; do p="${p%/}"; done
+  while [[ ! -d "$p" ]]; do
+    rest="/${p##*/}$rest"
+    p="${p%/*}"
+    [[ -n "$p" ]] || p=/
+  done
+  p="$(cd "$p" && pwd -P)"
+  printf '%s%s' "${p%/}" "$rest"
+}
+
+# 보고 디렉터리의 저장소 이름: manifest project_id, 없으면 main checkout 폴더 이름. worktree가 달라도 한곳에 모인다.
+investigation_repo_name() {
+  local name
+  name="$(jq -r '.project_id // "" | tostring' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+  [[ -n "$name" ]] || name="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && cd .. && pwd -P || true)"
+  [[ -n "$name" ]] || name="$REPO"
+  name="$(printf '%s' "${name##*/}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed 's/^[.-]*//')"
+  printf '%s' "${name:-repo}"
+}
+
+# report 노드는 읽기 전용이다. 그 출력으로 이 스크립트가 보고·댓글 초안을 저장소 밖에 쓴다. 같은 이름이 있으면 덮지 않고 -2, -3…을 붙인다.
+write_investigation_report() {
+  local out="$RUN/report.out" dir repo_dir slug ts name n=1 path comment="" slug_re='^[a-z0-9][a-z0-9-]{0,40}$'
+  dir="$(physical_path "${HARNESS_METRICS_DIR:-$HOME/.ai-harness}/investigations/$(investigation_repo_name)")"
+  repo_dir="$(cd "$REPO" && pwd -P)"
+  case "$dir/" in
+    "$repo_dir"/*) finish incomplete 30 "the investigation folder $dir is inside the repository; set HARNESS_METRICS_DIR to a folder outside it and start again" ;;
+  esac
+  mkdir -p "$dir" 2>/dev/null || finish incomplete 30 "cannot create the investigation folder $dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  slug="$(jq -r .slug "$out")"
+  [[ "$slug" =~ $slug_re ]] || slug=investigation
+  ts="$(date +%Y%m%d-%H%M)"
+  name="$ts-$slug"
+  while [[ -e "$dir/$name.md" || -e "$dir/$name.comment.md" ]]; do
+    n=$((n + 1))
+    name="$ts-$slug-$n"
+  done
+  path="$dir/$name.md"
+  { state '"기준 커밋: \(.code_baseline.base_commit // "" | if . == "" then "none" else . end) (\(.code_baseline.read_from // "working_tree"), behind \(.code_baseline.behind // 0))"'
+    printf '\n'
+    jq -r .report "$out"; } >"$path"
+  if jq -e '.comment | test("\\S")' "$out" >/dev/null; then
+    comment="$dir/$name.comment.md"
+    jq -r .comment "$out" >"$comment"
+  fi
+  state_set '.investigation_report = {path: $p, comment: $c, outcome: $r[0].outcome, summary: ($r[0].summary | gsub("[\r\n]+"; " "))}' \
+    --arg p "$path" --arg c "$comment" --slurpfile r "$out"
+  log "investigation report: $path${comment:+ (comment draft: $comment)}"
+}
+
+investigate_inputs() { # 조사 노드가 함께 읽는 앞 노드 결과(있는 것만)
+  printf 'Bug report:\n%s' "$(state .request)"
+  [[ ! -s "$RUN/triage.out" ]] || printf '\n\nTriage from the triage node:\n%s' "$(<"$RUN/triage.out")"
+  [[ ! -s "$RUN/baseline.out" ]] || printf '\n\nCode baseline from the baseline node:\n%s' "$(<"$RUN/baseline.out")"
+  [[ ! -s "$RUN/domain_docs.out" ]] || printf '\n\nDomain contract from the domain_docs node:\n%s' "$(<"$RUN/domain_docs.out")"
+  [[ ! -s "$RUN/reproduce.out" ]] || printf '\n\nReproduction from the reproduce node:\n%s' "$(<"$RUN/reproduce.out")"
+}
+
+# ---- release(태그 방식 릴리스) ----
+# 버전 비교: a > b (x.y.z, 앞의 0은 10진수로 읽는다).
+semver_gt() { # a b
+  local a b i
+  IFS=. read -r -a a <<<"$1"
+  IFS=. read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    ((10#${a[i]} > 10#${b[i]})) && return 0
+    ((10#${a[i]} < 10#${b[i]})) && return 1
+  done
+  return 1
+}
+# origin의 <tag_prefix>x.y.z 태그를 접두어를 뺀 버전으로 한 줄씩. 원격을 읽지 못하면 실패(stderr에 이유).
+release_tags() {
+  local out t prefix
+  prefix="$(state .policy.release.tag_prefix)"
+  out="$(GIT_TERMINAL_PROMPT=0 git -C "$REPO" ls-remote --tags --refs origin 2>&1 </dev/null)" || { printf '%s\n' "$(head -c 200 <<<"$out")" >&2; return 1; }
+  while IFS= read -r t; do
+    t="${t##*refs/tags/}"
+    [[ -n "$t" && "$t" == "$prefix"* ]] || continue
+    t="${t#"$prefix"}"
+    if [[ "$t" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then printf '%s\n' "$t"; fi
+  done <<<"$out"
+  return 0
+}
+latest_version() { printf '%s\n' "$1" | grep . | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true; }
+# plan 뒤 러너가 확인할 수 있는 사실만 강제한다: 형식, 같은 태그 없음, 최신 태그보다 큼.
+release_version_problem() { # version tags → stdout: 문제(없으면 빈 값)
+  local v="$1" latest prefix
+  prefix="$(state .policy.release.tag_prefix)"
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'the version %s is not x.y.z' "${v:-(none)}"; return 0; }
+  if printf '%s\n' "$2" | grep -qxF "$v"; then printf 'the tag %s%s already exists on origin' "$prefix" "$v"; return 0; fi
+  latest="$(latest_version "$2")"
+  if [[ -n "$latest" ]] && ! semver_gt "$v" "$latest"; then printf 'the version %s is not above the latest tag %s%s' "$v" "$prefix" "$latest"; fi
+  return 0
+}
+# 릴리스 확장점 명령(prepare·notes·verify·record)을 저장소 루트에서 같은 환경변수로 실행한다.
+release_run() { # command
+  (cd "$REPO" && HM_RELEASE_VERSION="$(state .release.version)" HM_RELEASE_TAG="$(state .release.tag)" \
+    HM_MERGE_COMMIT="$(state '.merge.commit // ""')" HM_BASE_BRANCH="$(state .policy.release.base)" bash -c "$1") </dev/null
+}
+# 릴리스는 코드를 고치지 않는다. 실패는 이유를 남기고 그래프의 user_decision 전이로 보낸다.
+release_fail() { # node outcome reason
+  state_set '.findings = [$r] | .release.blocked = $r' --arg r "$3"
+  log "release stopped at $1: $3"
+  save_baseline
+  go "$1" "$2"
+}
+release_require_approval() { # node
+  [[ "$(state '.approval.brief_hash // ""')" == "$(state .brief_hash)" ]] \
+    || finish invariant_violation 40 "write node '$1' reached without approval of the current release plan"
+}
+# prepare_cmd를 실행하고 바뀐 것이 있으면 릴리스 커밋으로 남긴다. 실패 이유는 $RUN/release-step.why.
+release_prepare_commit() { # label
+  local cmd rc=0
+  cmd="$(state '.policy.release.prepare_cmd // ""')"
+  if [[ -n "$cmd" ]]; then
+    release_run "$cmd" >"$RUN/$1-prepare.log" 2>&1 || rc=$?
+    ((rc == 0)) || { printf 'prepare_cmd failed (exit %s): %s — %s' "$rc" "$cmd" "$(tail -n 5 "$RUN/$1-prepare.log" | paste -sd ' ' -)" >"$RUN/release-step.why"; return 1; }
+  fi
+  if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]]; then
+    { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "chore: release v$(state .release.version)"; } >"$RUN/$1-commit.log" 2>&1 \
+      || { printf 'the release commit failed: %s' "$(tail -c 300 "$RUN/$1-commit.log")" >"$RUN/release-step.why"; return 1; }
+  fi
+  state_set '.head = $h' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  return 0
+}
+# checks와 final_checks를 릴리스 브랜치에서 실행한다. 통과한 트리를 publish가 비교할 기준으로 남긴다.
+release_checks() { # label
+  local before
+  before="$(worktree_tree)"
+  if ! run_checks "$1" "$(state '(.checks // []) + (.final_checks // [])')"; then
+    printf 'required checks failed on the release branch: %s' "$(jq -r '[.[] | select(.exit != 0) | "\(.command) (exit \(.exit))"] | join("; ")' "$RUN/$1.checks.json")" >"$RUN/release-step.why"
+    return 1
+  fi
+  if [[ "$(worktree_tree)" != "$before" ]]; then
+    printf 'the checks changed files on the release branch: %s' "$(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -)" >"$RUN/release-step.why"
+    return 1
+  fi
+  state_set '.reviewed_tree = $t' --arg t "$before"
+  save_baseline
+  return 0
+}
+# origin/<source>를 받아 와 릴리스 브랜치가 그것을 조상으로 갖는지 본다. 0이면 따라잡아야 한다.
+release_source_moved() { # node
+  local src
+  src="$(state .policy.release.source)"
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "$src" >"$RUN/source-fetch.log" 2>&1 </dev/null \
+    || finish incomplete 30 "git fetch origin $src failed before $1; run resume to check again (see $RUN/source-fetch.log)"
+  ! git -C "$REPO" merge-base --is-ancestor "origin/$src" HEAD
+}
+release_plan_prompt() { # latest-version
+  local fixed version
+  version="$(state '.release.version // ""')"
+  if [[ "$(state '.release.version_source // ""')" == flag ]]; then
+    fixed="The person fixed the version at $version; put exactly $version in version."
+  else
+    fixed="Propose the next version and put it in version as x.y.z. Follow the project's documented versioning rule first (CONTRIBUTING, .ai-harness/workflows/release.md). When the project documents none, choose MINOR when the CHANGELOG Unreleased section (or the commits since the latest tag) has a new feature or a behavior change, otherwise PATCH."
+  fi
+  printf '%s\n\n%s\n%s\n%s\n\n%s' "$CONTEXT" "You are the plan node of the release graph. Do not edit any file.
+The release ships origin/$(state .policy.release.source) into $(state .policy.release.base) as the tag $(state .policy.release.tag_prefix)<version>. The latest tag on origin is $(if [[ -n "$1" ]]; then printf '%s%s' "$(state .policy.release.tag_prefix)" "$1"; else printf 'none'; fi). $fixed
+The driver itself cuts $(state .policy.release.branch_prefix)<version> from origin/$(state .policy.release.source), runs the prepare command ($(state '.policy.release.prepare_cmd // "" | if . == "" then "none" else . end')), commits it, and opens the release pull request; the personal delivery level is $(state .release.stage), so the run $(case "$(state .release.stage)" in pr) printf 'stops at the pull request' ;; merge) printf 'merges it with a merge commit, tags it with notes, runs the record commands, and reports the main to develop fast-forward' ;; *) printf 'merges it with a merge commit, tags it with notes, checks the deployment, runs the record commands, and reports the main to develop fast-forward' ;; esac).
+Write the release plan in brief as Markdown: the version and why, what the release contains (the CHANGELOG Unreleased entries or the commits since the latest tag), and anything a person should check before approving.
+Put the exact shell commands that must pass on the release branch after the prepare command in checks and final_checks, as the project's release document says. checks: the fast commands; final_checks: the broad ones the project runs once before a release. The driver runs both after the release commit and again whenever the release branch catches up with the source branch. All commands run from the repository root with bash -c." "$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOT'
+approval is auto: no person reads this plan before the release branch is cut, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one and record it in decisions as {question, choice, rationale}.
+Put in needs_human only what a person alone can decide, such as a version that breaks the documented rule. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
+EOT
+else printf 'Put anything the person must decide in open_questions.\n'; fi)" "Request:
+$(state .request)" "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious plan:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)"
+}
+release_plan() {
+  local label out tags latest version problem
+  label="plan-$(state '.history | length')"
+  if ! tags="$(release_tags 2>"$RUN/tags.err")"; then
+    release_fail plan plan_invalid "cannot read the tags on origin: $(head -c 200 "$RUN/tags.err")"
+    return
+  fi
+  latest="$(latest_version "$tags")"
+  run_node plan "$label" "$(release_plan_prompt "$latest")" "$RELEASE_PLAN_SCHEMA"
+  out="$RUN/$label.out"
+  jq -e '(.version | type) == "string" and (.brief | type) == "string" and (.checks | type) == "array" and ((.final_checks // []) | type) == "array"
+    and ((.open_questions | type) == "array" or ((.needs_human | type) == "array" and (.decisions | type) == "array"
+      and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))' \
+    "$out" >/dev/null 2>&1 || finish incomplete 30 "plan output does not match the schema ($out)"
+  version="$(state '.release.version // ""')"
+  [[ -n "$version" && "$(state '.release.version_source // ""')" == flag ]] || version="$(jq -r .version "$out")"
+  problem="$(release_version_problem "$version" "$tags")"
+  state_set '.release.version = $v | .release.version_source = (.release.version_source // "plan")
+    | .release.tag = (.policy.release.tag_prefix + $v) | .release.branch = (.policy.release.branch_prefix + $v)
+    | .release.latest_tag = (if $l == "" then null else .policy.release.tag_prefix + $l end)' --arg v "$version" --arg l "$latest"
+  cp "$out" "$RUN/brief.json"
+  jq -r --arg v "$version" --arg tag "$(state .release.tag)" --arg br "$(state .release.branch)" --arg stage "$(state .release.stage)" \
+    '"# Release v\($v)\n\n태그 \($tag) · 릴리스 브랜치 \($br) · 단계 \($stage)\n\n" + .brief + if (.decisions // [] | length) > 0
+    then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end' "$out" >"$RUN/brief.md"
+  printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
+  state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
+    | .final_checks = (($b[0].final_checks // []) | map(select(length > 0)) | unique) - .checks
+    | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
+  state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
+  if [[ -n "$problem" ]]; then
+    release_fail plan plan_invalid "$problem"
+  else
+    go plan plan_valid
+  fi
+}
+release_prepare() {
+  local src branch
+  release_require_approval prepare
+  src="$(state .policy.release.source)"
+  branch="$(state .release.branch)"
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "$src" >"$RUN/prepare-fetch.log" 2>&1 </dev/null; then
+    release_fail prepare prepare_failed "git fetch origin $src failed: $(tail -c 300 "$RUN/prepare-fetch.log")"
+    return
+  fi
+  if ! git -C "$REPO" switch -q -C "$branch" "origin/$src" >"$RUN/prepare-switch.log" 2>&1; then
+    release_fail prepare prepare_failed "cannot cut $branch from origin/$src: $(tail -c 300 "$RUN/prepare-switch.log")"
+    return
+  fi
+  state_set '.start_head = $h | .head = $h | .release.source_commit = $h' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  log "cut $branch from origin/$src ($(git -C "$REPO" rev-parse --short HEAD))"
+  if ! release_prepare_commit prepare || ! release_checks prepare; then
+    release_fail prepare prepare_failed "$(<"$RUN/release-step.why")"
+    return
+  fi
+  go prepare prepared
+}
+# source가 움직였다: push 전에는 rebase, push 뒤에는 merge(force push를 피한다)로 따라잡고 prepare_cmd·checks를 다시 돈다.
+release_revalidate() {
+  local src branch from method files rc=0 n
+  release_require_approval revalidate
+  src="$(state .policy.release.source)"
+  branch="$(state .release.branch)"
+  from="$(git -C "$REPO" rev-parse HEAD)"
+  if [[ -n "$(GIT_TERMINAL_PROMPT=0 git -C "$REPO" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null </dev/null)" ]]; then
+    method=merge
+    GIT_EDITOR=true git -C "$REPO" merge --no-edit "origin/$src" >"$RUN/revalidate.log" 2>&1 || rc=$?
+  else
+    method=rebase
+    GIT_EDITOR=true git -C "$REPO" rebase "origin/$src" >"$RUN/revalidate.log" 2>&1 || rc=$?
+  fi
+  if ((rc != 0)); then
+    files="$(git -C "$REPO" diff --name-only --diff-filter=U 2>/dev/null | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+    git -C "$REPO" "$method" --abort >>"$RUN/revalidate.log" 2>&1 || true
+    release_fail revalidate catch_up_failed "origin/$src moved and the release branch cannot catch up with a $method: conflict in ${files:-(see $RUN/revalidate.log)}; the $method was aborted. Resolve it on $src with a feature pull request, then start the release again"
+    return
+  fi
+  state_set '.head = $h' --arg h "$(git -C "$REPO" rev-parse HEAD)"
+  n="$(state '.release.revalidated // [] | length')"
+  if ! release_prepare_commit "revalidate-$n" || ! release_checks "revalidate-$n"; then
+    release_fail revalidate catch_up_failed "after catching up with origin/$src: $(<"$RUN/release-step.why")"
+    return
+  fi
+  state_set '.release.revalidated = ((.release.revalidated // []) + [{from: $f, to: $h, method: $m, source_commit: $s, at: $t}])' \
+    --arg f "$from" --arg h "$(git -C "$REPO" rev-parse HEAD)" --arg m "$method" --arg s "$(git -C "$REPO" rev-parse "origin/$src")" --arg t "$(now_utc)"
+  log "caught up with origin/$src by $method; checks passed again"
+  go revalidate caught_up
+}
+# 태그·릴리스 발행. 노트가 비거나 노트 명령이 실패하면 아무것도 만들지 않는다. 같은 태그가 있으면 다시 만들지 않는다.
+release_publish() {
+  local tag commit base notes="$RUN/release-notes.md" rc=0 cmd out how args
+  tag="$(state .release.tag)"
+  commit="$(state '.merge.commit // ""')"
+  base="$(state .policy.release.base)"
+  [[ "$(state .release.stage)" == deploy ]] \
+    || state_set '.release.verify = {status: "skipped", note: ("delivery level " + .release.stage + " does not run verify_cmd")}'
+  [[ -n "$commit" ]] || { release_fail release release_failed "no merge commit was recorded, so there is nothing to tag"; return; }
+  if ! out="$(GIT_TERMINAL_PROMPT=0 git -C "$REPO" ls-remote --tags origin "refs/tags/$tag" 2>&1 </dev/null)"; then
+    release_fail release release_failed "cannot read the tags on origin: $(head -c 200 <<<"$out")"
+    return
+  fi
+  if [[ -n "$out" ]]; then
+    state_set '.release.published = {status: "existing", tag: $g, at: $t}' --arg g "$tag" --arg t "$(now_utc)"
+    log "the tag $tag already exists on origin; it is not created again"
+  else
+    cmd="$(state '.policy.release.notes_cmd // ""')"
+    if [[ -z "$cmd" ]]; then
+      release_fail release release_failed "release_policy.notes_cmd is empty, so the release has no notes; no tag or release was created"
+      return
+    fi
+    release_run "$cmd" >"$notes" 2>"$RUN/release-notes.err" || rc=$?
+    state_set '.release.notes = $f' --arg f "$notes"
+    if ((rc != 0)) || ! grep -q '[^[:space:]]' "$notes"; then
+      release_fail release release_failed "the notes command gave no notes (exit $rc): $cmd — $(tail -n 3 "$RUN/release-notes.err" | paste -sd ' ' -); no tag or release was created"
+      return
+    fi
+    if [[ "$(pr_provider "$(state '.publish.pr_url // ""')")" == github ]]; then
+      how=github
+      args=(release create "$tag" --target "$commit" --title "$tag" --notes-file "$notes" --latest)
+      [[ "$(state '.policy.release.generate_notes // false')" != true ]] || args+=(--generate-notes)
+      (cd "$REPO" && gh "${args[@]}") >"$RUN/release-publish.log" 2>&1 </dev/null || rc=$?
+    else
+      how=tag
+      { GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "$base" && git -C "$REPO" tag -a "$tag" "$commit" -F "$notes" \
+        && GIT_TERMINAL_PROMPT=0 git -C "$REPO" push -q origin "refs/tags/$tag"; } >"$RUN/release-publish.log" 2>&1 </dev/null || rc=$?
+    fi
+    if ((rc != 0)); then
+      release_fail release release_failed "publishing $tag failed (exit $rc): $(tail -c 300 "$RUN/release-publish.log")"
+      return
+    fi
+    state_set '.release.published = {status: "created", tag: $g, method: $m, target: $c, at: $t}' --arg g "$tag" --arg m "$how" --arg c "$commit" --arg t "$(now_utc)"
+    log "released $tag at ${commit:0:12} ($how)"
+  fi
+  if [[ "$(state .release.stage)" == deploy ]]; then go release released_and_deploy_level; else go release released; fi
+}
+release_verify() {
+  local cmd rc=0 waited timeout
+  cmd="$(state '.policy.release.verify_cmd // ""')"
+  if [[ -z "$cmd" ]]; then
+    state_set '.release.verify = {status: "skipped", note: "release_policy.verify_cmd is empty"}'
+    go verify verified_or_skipped
+    return
+  fi
+  release_run "$cmd" >"$RUN/release-verify.log" 2>&1 || rc=$?
+  state_set '.release.verify = {status: (if $rc == 0 then "passed" else "failed" end), command: $c, exit: $rc, tail: $tail, at: $t}' \
+    --arg c "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 20 "$RUN/release-verify.log")" --arg t "$(now_utc)"
+  if ((rc == 0)); then go verify verified_or_skipped; return; fi
+  if [[ "$rc" == 126 || "$rc" == 127 ]]; then
+    release_fail verify verify_failed "verify_cmd could not run (exit $rc — command not found or not executable): $cmd"
+    return
+  fi
+  waited=$(( ($(date -u +%s) - $(state '.merge.merged_epoch // 0')) / 60 ))
+  timeout="$(state '.policy.release.verify_timeout_minutes')"
+  ((waited >= timeout)) \
+    || finish incomplete 30 "the release $(state .release.tag) is not verified yet (verify_cmd exit $rc, ${waited} of ${timeout} minutes); run resume to check again"
+  release_fail verify verify_failed "the release $(state .release.tag) was not verified within $timeout minutes (verify_cmd: $cmd); it is tagged and was not reverted"
+}
+release_record() {
+  local n i cmd rc results="[]"
+  n="$(state '.policy.release.record_cmds // [] | length')"
+  for ((i = 0; i < n; i++)); do
+    cmd="$(jq -r --argjson i "$i" '.policy.release.record_cmds[$i]' "$STATE")"
+    rc=0
+    release_run "$cmd" >"$RUN/release-record-$i.log" 2>&1 || rc=$?
+    results="$(jq -c --arg c "$cmd" --argjson rc "$rc" --arg tail "$(tail -n 10 "$RUN/release-record-$i.log")" '. + [{command: $c, exit: $rc, tail: $tail}]' <<<"$results")"
+    state_set '.release.record = $r' --argjson r "$results"
+    if ((rc != 0)); then
+      release_fail record record_failed "the record command failed (exit $rc): $cmd; the remaining record commands did not run"
+      return
+    fi
+  done
+  state_set '.release.record = $r' --argjson r "$results"
+  go record recorded
+}
+# main → develop 동기화는 사람이 한다. 러너는 ff 가능 여부를 판정하고 실행할 명령만 남긴다.
+release_sync() {
+  local src base
+  src="$(state .policy.release.source)"
+  base="$(state .policy.release.base)"
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "$src" "$base" >"$RUN/sync-fetch.log" 2>&1 </dev/null; then
+    state_set '.release.sync = {fast_forward: null, reason: $r, command: $c}' --arg r "git fetch failed, so the fast-forward was not checked (see $RUN/sync-fetch.log)" \
+      --arg c "git fetch origin && git switch $src && git merge --ff-only origin/$base && git push origin $src"
+  elif git -C "$REPO" merge-base --is-ancestor "origin/$src" "origin/$base"; then
+    state_set '.release.sync = {fast_forward: true, command: $c}' --arg c "git switch $src && git merge --ff-only origin/$base && git push origin $src"
+  else
+    state_set '.release.sync = {fast_forward: false, reason: $r, command: $c}' \
+      --arg r "origin/$src has commits that are not in origin/$base, so $src cannot fast-forward to the release" \
+      --arg c "git switch $src && git merge --no-ff origin/$base && git push origin $src"
+  fi
+  go sync ""
+}
+# 병합하지 않고 멈췄으면(단계 pr·무인 실행·병합 노드 없음) 이유와 남은 수동 절차를 남긴다.
+release_finish() {
+  local why="" url tag
+  url="$(state '.publish.pr_url // ""')"
+  tag="$(state .release.tag)"
+  if [[ -z "$(state '.merge.commit // ""')" ]]; then
+    if [[ -n "$(state '.merge.skipped // ""')" ]]; then why="$(state .merge.skipped)"; else why="delivery level $(state .release.stage) stops at the pull request"; fi
+    why+="; finish by hand: gh pr merge ${url:-<release PR>} --merge (a merge commit, never squash), then publish $tag at the merge commit with the notes of \`$(state '.policy.release.notes_cmd // "<notes command>"')\` (gh release create $tag --target <merge commit> --notes-file <notes>, or git tag -a $tag <merge commit> -F <notes> && git push origin $tag)"
+  fi
+  state_set '.release.stopped_because = (if $w == "" then null else $w end) | .release.pr_url = $u | .release.merge_commit = (.merge.commit // null)' --arg w "$why" --arg u "$url"
+  finish "done" 0 "$(state '.release as $r | "release \($r.tag) (stage \($r.stage))"
+    + (if ($r.pr_url // "") != "" then "; PR: " + $r.pr_url else "" end)
+    + (if .remote_ci then "; remote CI: " + .remote_ci.status else "" end)
+    + (if $r.merge_commit then "; merged: " + $r.merge_commit[:12] + " (" + (.merge.method // "merge") + ")" else "" end)
+    + (if $r.published then "; released: " + $r.published.tag + " (" + $r.published.status + ")" else "" end)
+    + (if $r.verify then "; verify: " + $r.verify.status else "" end)
+    + (if $r.record then "; record: \($r.record | length) command(s)" else "" end)
+    + (if $r.sync then "; sync (run by a person): " + $r.sync.command + (if $r.sync.reason then " — " + $r.sync.reason else "" end) else "" end)
+    + (if $r.stopped_because then "; stopped: " + $r.stopped_because else "" end)')"
+}
+
 execute() {
-  local node brief
+  local node brief gap
   while :; do
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
@@ -1412,6 +2215,13 @@ execute() {
         fix_list)
           finish fix_list 0 "critique only — the project has no design rule document and reference screen to score against, so nothing was changed. Fix list: $RUN/brief.md (captures: $(state .baseline.evidence_dir)). To polish with scoring, create the rules with /ai-harness:design-system-builder, or when they already exist enable the design-system stack with /harness-init --reconfigure, then start again" ;;
         done)
+          [[ "$WORKFLOW" != release ]] || release_finish
+          if [[ "$WORKFLOW" == investigate ]]; then
+            finish "done" 0 "$(state '(.investigation_report // {}) as $r
+              | ("investigation report: " + ($r.path // "") + (if ($r.comment // "") != "" then "; comment draft: " + $r.comment else "" end)) as $files
+              | if $r.outcome == "code_fix_needed" then $files + "; code fix needed — next: " + (.handoff.command // "")
+                else "no code fix needed; " + $files end')"
+          fi
           if [[ "$WORKFLOW" == polish && "$(state '.polish_outcome // ""')" == nothing_to_fix ]]; then
             finish "done" 0 "nothing to polish$(state 'if (.items // [] | length) > 0 then ": no major item (approval auto selects major items only); the minor items are listed" else ": the critique found nothing to fix" end') in $RUN/brief.md; nothing was changed"
           fi
@@ -1424,7 +2234,7 @@ execute() {
           elif .merge.skipped then "; merge: not done — " + .merge.skipped else "" end')$(state 'if .policy.delivery.note then "; delivery level " + .policy.delivery.level + ": " + .policy.delivery.note else "" end')$(state 'if .ui_review then "; UI: verified — " + .ui_review.summary
           elif (.ui_scenarios // [] | length) > 0 then "; UI: unverified — the project graph has no ui_review node; sync the harness (/harness-init --sync)" else "" end')" ;;
         *) printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
-           finish "$node" 20 "a person must decide$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
+           finish "$node" 20 "a person must decide$(state 'if .repair_stall then " (" + .repair_stall + ")" else "" end')$(state 'if .release.blocked then " (release " + (.release.tag // "") + ": " + .release.blocked + ")" else "" end')$(state 'if .post_merge.failed then " (merged as " + .merge.commit[:12] + ", post-merge check failed: " + .post_merge.failed + "; not reverted)" elif .merge.blocked then " (merge blocked: " + (.merge.blocked | join("; ")) + ")" else "" end')$(state 'if .remote_ci.status == "unverified" then " (remote CI unverified: " + .remote_ci.summary + (if (.remote_ci.pr_url // "") != "" then "; PR: " + .remote_ci.pr_url else "" end) + ")" else "" end')$(jq -r --arg u "$UI_UNVERIFIED" 'if .ui_review.status == "unverified" then " (" + $u + ": " + .ui_review.summary + "; evidence: " + .ui_review.evidence_dir + "; nothing was published — make verification possible, then start a new run or verify and publish by hand)" else "" end' "$STATE"); see $RUN/unresolved.json" ;;
       esac
     fi
     # review가 수리 동의를 기다리던 노드면 그 노드를 다시 실행하지 않고 동의만 확인한다.
@@ -1540,7 +2350,7 @@ $(state .request)"
           || log "the project graph has no triage -> brief edge for an investigation report; triage and reproduce run again with the report. Sync the harness (/harness-init --sync)"
         run_node triage triage "$CONTEXT
 
-You are the triage node of the bug-fix graph. Do not edit any file.
+You are the triage node of the $WORKFLOW graph. Do not edit any file.
 From the bug report below, state the observed behavior, the expected behavior, the impact, the relevant modules and files, the project test policy, and the exact commands that verify a change (build, targeted tests, broad tests, lint).
 
 Bug report:
@@ -1548,7 +2358,7 @@ $(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvesti
         go triage ""
         ;;
       reproduce)
-        local repro
+        local repro next
         repro="$RUN/reproduce"
         rm -rf "${RUN:?}/reproduce"
         mkdir -p "$repro"
@@ -1556,8 +2366,9 @@ $(state .request)$(if [[ -f "$RUN/investigation.md" ]]; then printf '\n\nInvesti
           || log "the project graph does not let reproduce run commands; it reads code and logs only. Sync the harness (/harness-init --sync)"
         run_node reproduce reproduce "$CONTEXT
 
-You are the reproduce node of the bug-fix graph. Do not edit, create, or delete any file in the repository; keep scratch scripts, logs, and notes under $repro.
-Reproduce the bug below with the smallest safe steps: a test or command run, or a request against a local server started with the local or test configuration the project documents. Never use production data or credentials, and point anything the app writes at $repro or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
+You are the reproduce node of the $WORKFLOW graph. Do not edit, create, or delete any file in the repository; keep scratch scripts, logs, and notes under $repro.
+Reproduce the bug below with the smallest safe steps: a test or command run, or a request against a local server started with the local or test configuration the project documents. Never use production data or credentials, and point anything the app writes at $repro or a temporary directory: a new file in the repository stops the run.
+$APP_SERVER_RULE
 status: reproduced when you observed the failure yourself; evidence_sufficient when you could not run it but logs, a stack trace, or code reading with a falsifiable hypothesis show the failure, or a safe observation plan will confirm the fix; blocked when neither is possible. Put what you observed (commands and their decisive output, or the log lines and code paths) in evidence. When blocked, put in needed what a person must provide: an environment, logs, or the expected behavior.
 Return only JSON matching the schema.
 
@@ -1565,37 +2376,91 @@ Bug report:
 $(state .request)
 
 Triage from the triage node:
-$(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
+$(cat "$RUN/triage.out")$(if [[ "$WORKFLOW" == investigate ]]; then
+  printf '\n\nCode baseline from the baseline node:\n%s\n\nDomain contract from the domain_docs node:\n%s' "$(cat "$RUN/baseline.out")" "$(cat "$RUN/domain_docs.out")"
+fi)" "$REPRODUCE_SCHEMA"
         jq -e '(.status | IN("reproduced", "evidence_sufficient", "blocked")) and (.evidence | type) == "array" and (.needed | type) == "array"' \
           "$RUN/reproduce.out" >/dev/null 2>&1 || finish incomplete 30 "reproduce output does not match the schema ($RUN/reproduce.out)"
         # 근거 없는 "재현됨"은 재현이 아니다. 근거가 비면 사람에게 넘긴다.
         if jq -e '.status != "blocked" and (.evidence | length) > 0' "$RUN/reproduce.out" >/dev/null; then
-          go reproduce "$(edge_when reproduce brief)"
+          # bug-fix는 brief로, investigate는 report로 간다.
+          next="$(edge_when reproduce brief)"
+          [[ -n "$next" ]] || next="$(edge_when reproduce report)"
+          go reproduce "$next"
         else
           state_set '.findings = (["could not reproduce: " + $r[0].summary] + $r[0].needed) | .needs_user_decision = true' --slurpfile r "$RUN/reproduce.out"
           go reproduce "$(edge_when reproduce user_decision)"
         fi
         ;;
+      baseline)
+        investigate_baseline
+        go baseline ""
+        ;;
+      domain_docs)
+        run_node domain_docs domain_docs "$CONTEXT
+
+You are the domain_docs node of the investigate graph. Do not edit any file.
+Summarize the contracts that bear on the bug below from the project's domain documents (.ai-harness/docs/domain.md and the documents it indexes) and from the source documents of user-facing behavior (README, user guides, specs, API docs): the expected behavior, where it is defined (file and section), and any rule that says the observed behavior is intended. Say so when no document defines it. Read the code at the base the baseline below names.
+
+$(investigate_inputs)"
+        go domain_docs ""
+        ;;
+      report)
+        run_node report report "$CONTEXT
+
+You are the report node of the investigate graph. Do not edit, create, or delete any file; the driver writes the report and the comment draft outside the repository from your output.
+report: the investigation report in Markdown — the symptom, the reproduction or equivalent evidence, the root cause with file:line references at the base commit the baseline names, why it happens, the impact, and the direction of a fix (not the fix itself); when no code fix is needed, why the observed behavior is expected or which non-code action resolves it.
+outcome: code_fix_needed when the cause is in the code and needs a change; otherwise no_code_fix_needed.
+slug: a short file name in lowercase letters, digits, and hyphens (for example total-ignores-tax).
+summary: one line a bug fix can start from.
+comment: a draft comment for the issue tracker in the language of the bug report, or an empty string when there is nothing to post. Nobody posts it automatically.
+Return only JSON matching the schema.
+
+$(investigate_inputs)" "$REPORT_SCHEMA"
+        jq -e '(.outcome | IN("code_fix_needed", "no_code_fix_needed")) and (.slug | type) == "string"
+          and (.summary | type) == "string" and (.summary | test("\\S")) and (.report | type) == "string" and (.report | test("\\S"))
+          and (.comment | type) == "string"' "$RUN/report.out" >/dev/null 2>&1 \
+          || finish incomplete 30 "report output does not match the schema ($RUN/report.out)"
+        write_investigation_report
+        go report "$(jq -r .outcome "$RUN/report.out")"
+        ;;
+      handoff)
+        # 다음 bug-fix 실행의 시작 명령. 보고 경로와 요약으로 완전히 정해지므로 세션을 띄우지 않는다.
+        local inv_path handoff_cmd
+        inv_path="$(state .investigation_report.path)"
+        handoff_cmd="bash .ai-harness/workflows/workflow-driver.sh start --workflow bug-fix --request $(printf '%q' "$(state .investigation_report.summary)") --investigation $(printf '%q' "$inv_path")"
+        printf 'Start the fix from the investigation report:\n  %s\nor, in a conversation: /fix-bug %s\n' "$handoff_cmd" "$inv_path" >"$RUN/handoff.out"
+        state_set '.handoff = {command: $c, skill: $s}' --arg c "$handoff_cmd" --arg s "/fix-bug $inv_path"
+        go handoff ""
+        ;;
       brief)
         run_node brief "brief-$(state '.history | length')" "$(brief_prompt)" "$BRIEF_SCHEMA"
         brief="$RUN/brief-$(state '.history | length').out"
         # human은 open_questions, auto는 decisions·needs_human을 낸다. auto에서 예전 형식이 오면 승인 노드가 사람을 기다린다.
-        jq -e '(.brief | type) == "string" and (.checks | type) == "array"
+        jq -e '(.brief | type) == "string" and (.checks | type) == "array" and ((.final_checks // []) | type) == "array"
           and ((.open_questions | type) == "array"
             or ((.needs_human | type) == "array" and (.decisions | type) == "array"
-              and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))' \
+              and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))
+          and ((has("acceptance_map") | not) or ((.acceptance_map | type) == "array"
+            and all(.acceptance_map[]; (.criterion | type) == "string" and (.covered_by | type) == "string" and (.out_of_scope_reason | type) == "string")))' \
           "$brief" >/dev/null 2>&1 || finish incomplete 30 "brief output does not match the schema ($brief)"
         cp "$brief" "$RUN/brief.json"
         jq -r '.brief + if (.decisions // [] | length) > 0
           then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end
+          + if (.acceptance_map // [] | length) > 0
+          then "\n\n## 완료 조건 대응\n\n" + (.acceptance_map | map("- \(.criterion) → "
+            + if (.covered_by | test("\\S")) then .covered_by elif (.out_of_scope_reason | test("\\S")) then "범위 밖: " + .out_of_scope_reason else "(대응 없음)" end)
+            | join("\n")) else "" end
           + if (.ui_scenarios // [] | length) > 0
           then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
         printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
         # 승인 대상은 Brief 본문(결정 사항 포함)과 검증 명령 전체다. 둘 중 하나라도 바뀌면 이전 승인은 무효다.
         state_set '.checks = ([.cli_checks[], $b[0].checks[]] | map(select(length > 0)) | unique)
+          | .final_checks = (($b[0].final_checks // []) | map(select(length > 0)) | unique) - .checks
+          | .final_checked_tree = null
           | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
-        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[]'; } | git hash-object --stdin)"
+        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
         [[ "$(state '.checks | length')" -gt 0 ]] \
           || finish incomplete 30 "the brief has no verification command; revise with a check or start again with --check"
         go brief ""
@@ -1607,6 +2472,20 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
             log "approval is auto, but the brief lists decisions only a person can make; waiting for a person"
           elif ! jq -e '(.decisions | type) == "array" and (.open_questions // [] | length) == 0' "$RUN/brief.json" >/dev/null; then
             log "approval is auto, but the brief left open questions instead of recording decisions; waiting for a person"
+          elif [[ "$WORKFLOW" == feature || "$WORKFLOW" == bug-fix ]] && gap="$(coverage_gap "$RUN/brief.json")" && [[ -n "$gap" ]]; then
+            # 완료 조건을 빠뜨린 Brief는 정책이 승인하지 않는다. 한도까지는 러너가 다시 쓰게 하고, 넘으면 사람에게 넘긴다.
+            if [[ "$(state '.brief_rewrites // 0')" -lt "$MAX_BRIEF_REWRITES" ]]; then
+              state_set '.brief_rewrites = ((.brief_rewrites // 0) + 1) | .feedback = $f' \
+                --arg f "[runner] $gap. Map every completion condition of the request and of any issue it quotes or links to an acceptance case or verification command of the brief, or give the reason it is out of scope."
+              log "approval is auto, but the brief does not map every completion condition ($gap); rewriting the brief ($(state .brief_rewrites)/$MAX_BRIEF_REWRITES)"
+              go approval brief_changed_or_not_approved
+              continue
+            elif has_edge approval brief_coverage_incomplete; then
+              go approval brief_coverage_incomplete
+              finish user_decision 20 "approval is auto, but after $MAX_BRIEF_REWRITES rewrites the brief still does not map every completion condition ($gap); nothing was changed. Start again with the completion conditions spelled out in the request, or with HM_APPROVAL=human to judge the brief yourself (see $RUN/brief.md)"
+            else
+              log "approval is auto, but the brief does not map every completion condition ($gap) after $MAX_BRIEF_REWRITES rewrites and the graph declares no brief_coverage_incomplete edge; waiting for a person"
+            fi
           elif ! has_edge approval auto_approved_by_policy; then
             log "approval is auto, but the graph declares no auto_approved_by_policy edge; waiting for a person"
           else
@@ -1638,6 +2517,11 @@ $(cat "$RUN/triage.out")" "$REPRODUCE_SCHEMA"
         ;;
       deliver)
         local before
+        # 다른 세션의 revise 요청(revise-request.json)은 세션 전후에 받는다. 세션을 중간에 끊지 않는다.
+        if take_revise_request; then
+          go deliver brief_revised
+          continue
+        fi
         before="$(fingerprint)"
         run_node deliver deliver "$CONTEXT
 
@@ -1646,6 +2530,12 @@ Do not commit, push, create a PR, or change scope. After you finish, the driver 
 Return a concise summary of changed areas and the commands you ran.
 
 $(brief_context)"
+        if take_revise_request; then
+          # 바뀐 것은 되돌리지 않고 남긴다. 새 Brief가 승인되기 전에는 쓰기 노드로 돌아오지 않는다.
+          checkpoint deliver
+          go deliver brief_revised
+          continue
+        fi
         [[ "$(fingerprint)" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
         checkpoint deliver
         go deliver ""
@@ -1666,7 +2556,7 @@ $(brief_context)"
         if [[ "$WORKFLOW" == polish ]]; then
           [[ "$(state '.selected | length')" -gt 0 ]] \
             || finish incomplete 30 "no item is selected to fix; choose with revise --select \"P1,P3\" and approve again"
-          if [[ "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
+          if [[ "$(state '.needs_user_decision // false')" == true || "$(state .attempts)" -ge "$MAX_REPAIR" ]]; then
             go fix "$(edge_when fix user_decision)"
             continue
           fi
@@ -1710,12 +2600,21 @@ $(brief_context)"
         checkpoint fix
         go fix ""
         ;;
+      plan) release_plan ;;
+      prepare) release_prepare ;;
+      revalidate) release_revalidate ;;
+      release) release_publish ;;
+      record) release_record ;;
+      sync) release_sync ;;
       verify)
+        if [[ "$WORKFLOW" == release ]]; then
+          release_verify
+          continue
+        fi
         # 검증은 모델이 아니라 이 스크립트가 직접 실행한다.
-        if run_checks "verify-$(state .attempts)"; then
+        if verify_checks "verify-$(state .attempts)"; then
           go verify required_checks_pass
         else
-          state_set '.findings = $f | .needs_user_decision = false' --argjson f "$(check_findings "verify-$(state .attempts)")"
           if ! has_edge verify required_checks_fail; then
             # 실패 엣지가 없는 그래프(동기화 전)는 실패를 고칠 경로가 없다.
             printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
@@ -1770,19 +2669,29 @@ Design-audit: baseline $(state '.baseline.audit | if .scored then "\(.total) (A 
           continue
         fi
         # 그래프에 verify 노드가 있으면 검증은 이미 그 노드가 했다. 없으면(feature) 리뷰 전에 이 스크립트가 실행한다.
-        if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null && ! run_checks "review-$(state .attempts)"; then
-          state_set '.findings = $f | .needs_user_decision = false' --argjson f "$(check_findings "review-$(state .attempts)")"
-        else
+        local review_checks_ok=true
+        if ! jq -e '.nodes | has("verify")' "$GRAPH" >/dev/null; then
+          if [[ "$(state '.checks_verified_attempt // -1')" == "$(state .attempts)" ]]; then
+            state_set '.checks_verified_attempt = null'
+          elif ! verify_checks "review-$(state .attempts)"; then
+            review_checks_ok=false
+          fi
+        fi
+        if [[ "$review_checks_ok" == true ]]; then
           run_node review "review-$(state .attempts)" "$CONTEXT
 
-You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief. The driver already ran the required checks and they passed.
+You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief, including its completion-condition map, and against every completion condition of the original request below and of any issue it quotes or links. The driver already ran the required checks and they passed.
 $(if [[ "$WORKFLOW" == bug-fix ]]; then
-  printf 'A blocking finding is incorrect or missing behavior, missing or unconvincing reproduction or regression evidence, a regression, security or data risk, or a material scope violation. Everything else is non-blocking.'
+  printf 'A blocking finding is incorrect or missing behavior, missing or unconvincing reproduction or regression evidence, a regression, security or data risk, or a material scope violation.'
 else
-  printf 'A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation. Everything else is non-blocking.'
-fi)
+  printf 'A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation.'
+fi) A completion condition of the original request or a quoted or linked issue that the change does not meet is blocking unless the approved brief put it out of scope with a reason, even when the brief left the condition out. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 Return only JSON matching the schema.
+
+Original request:
+$(state .request)
 
 $(brief_context)" "$REVIEW_SCHEMA"
           review_output "$RUN/review-$(state .attempts).out"
@@ -1821,6 +2730,7 @@ $(state .request)" "$SCOPE_SCHEMA"
 You are the inspect node of the change-review graph. Do not edit any file. Review every change since $(state .diff_base) (git diff $(state .diff_base), including uncommitted changes and untracked files) against the review scope below.
 Check behavior, required checks, security and data, compatibility, scope, and generated files. A blocking finding is incorrect or missing behavior, a regression, security or data risk, a broken required check, or a material scope violation; give each with its file and line. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 $UI_SCENARIO_RULE
 Return only JSON matching the schema.
 
@@ -1838,6 +2748,7 @@ $(brief_context)" "$INSPECT_SCHEMA"
 You are the re_review node of the change-review graph. Do not edit any file. The blocking findings below were repaired and the driver's required checks passed. Review every change since $(state .diff_base) (git diff $(state .diff_base), including uncommitted changes and untracked files) again: confirm each previous blocking finding is resolved and look for new ones the repair introduced.
 A blocking finding is incorrect or missing behavior, a regression, security or data risk, a broken required check, or a material scope violation. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
+$BULK_READ_RULE
 Return only JSON matching the schema.
 
 Previous blocking findings:
@@ -1859,7 +2770,9 @@ $(brief_context)" "$REVIEW_SCHEMA"
 You are the ui_review node. Do not edit, create, or delete any file in the repository. Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with its references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first.
 If the project has a native-ui skill (.agents/skills/native-ui/SKILL.md or .claude/skills/native-ui/SKILL.md) and the screens belong to a native app, follow it: render and operate them in a simulator or emulator instead of a browser, with the same evidence rules.
 A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser (a simulator or emulator for native screens, as above), and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
-Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run. Stop any server you started before you finish.
+Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run.
+$APP_SERVER_RULE
+$APP_BUILD_RULE
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
 Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence.
@@ -1908,7 +2821,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
             # review 그래프는 repair에서 사람에게 가는 엣지가 없다(한도는 re_review가 본다). 검증 실패가 한도까지 반복되면 여기서 넘긴다.
             printf '%s\n' "$(state '.findings')" >"$RUN/unresolved.json"
             state_set '.node = "user_decision"'
-            finish user_decision 20 "a person must decide: the repair limit ($MAX_REPAIR) was reached with blocking findings left; see $RUN/unresolved.json"
+            finish user_decision 20 "a person must decide: $(state '.repair_stall // empty' | grep . || printf 'the repair limit (%s) was reached with blocking findings left' "$MAX_REPAIR"); see $RUN/unresolved.json"
           fi
           go repair "$escalate"
           continue
@@ -1934,20 +2847,31 @@ $(brief_context)"
         # 그래프가 repair 뒤 verify 노드로 가면(bug-fix·review) 검증은 그 노드가 한다. 아니면(feature) 여기서 실행한다.
         if has_edge repair ""; then
           go repair ""
-        elif run_checks "repair-$(state .attempts)"; then
+        elif verify_checks "repair-$(state .attempts)"; then
+          # 리뷰는 같은 트리의 검사를 다시 돌리지 않는다.
+          state_set '.checks_verified_attempt = .attempts'
           go repair required_checks_pass
         else
-          state_set '.findings = $f' --argjson f "$(check_findings "repair-$(state .attempts)")"
           go repair required_checks_fail
         fi
         ;;
       publish)
+        # 릴리스: push·PR 전에 source가 움직였으면 따라잡고 checks를 다시 돈다.
+        if [[ "$WORKFLOW" == release ]] && release_source_moved publish; then
+          go publish source_moved
+          continue
+        fi
         publish
         ;;
       remote_ci)
         remote_ci
         ;;
       merge)
+        # 릴리스: 병합 요청 전에 source가 움직였으면 merge로 따라잡고 checks·push·원격 CI를 다시 거친다.
+        if [[ "$WORKFLOW" == release && "$(state '.merge.requested // false')" != true ]] && release_source_moved merge; then
+          go merge source_moved
+          continue
+        fi
         merge
         ;;
       post_merge_verify)
@@ -2043,20 +2967,88 @@ approval_mode() {
   [[ "$mode" =~ ^(human|auto)$ ]] || { printf '%s %s is "%s"; approval must be human or auto\n' "$source" "$(config_origin "${source%%:*}")" "$mode" >&2; return 2; }
   printf '%s %s' "$mode" "$source"
 }
+# 개인 기본 런타임: 저장소별 설정 > 전체 설정. 출력: "<runtime> <출처>" 또는 빈 문자열(설정 없음 — 자동 선택).
+runtime_setting() {
+  local setting="" rt="" source=""
+  setting="$(repository_setting HM_RUNTIME_REPOS)"
+  if [[ -n "$setting" ]]; then read -r rt source <<<"$setting"; else rt="$(user_config HM_RUNTIME)"; [[ -z "$rt" ]] || source=HM_RUNTIME; fi
+  [[ -n "$rt" ]] || return 0
+  [[ "$rt" =~ ^(claude|codex)$ ]] || { printf '%s %s is "%s"; runtime must be claude or codex\n' "$source" "$(config_origin "${source%%:*}")" "$rt" >&2; return 2; }
+  printf '%s %s' "$rt" "$source"
+}
+
+# --runtime이 없을 때 노드 세션을 띄울 CLI: 러너를 부른 런타임 > 저장소 integrations 중 설치된 것이 하나면 그것 > 설치된 유일한 CLI.
+# integrations의 나열 순서는 우선순위가 아니고, 한쪽이 다른 쪽 안에서 돌면 두 신호가 함께 있어 호출자를 단정하지 않는다. 못 정하면 고르지 않는다.
+default_runtime() {
+  local rt="" picked=() installed=()
+  if [[ -n "${CLAUDECODE:-}" && -z "${CODEX_THREAD_ID:-}" ]]; then printf claude; return 0; fi
+  if [[ -n "${CODEX_THREAD_ID:-}" && -z "${CLAUDECODE:-}" ]]; then printf codex; return 0; fi
+  for rt in $(jq -r '(.integrations // [])[] | select(. == "claude" or . == "codex")' "$REPO/.ai-harness/harness.json" 2>/dev/null | sort -u || true); do
+    if command -v "$rt" >/dev/null; then picked+=("$rt"); fi
+  done
+  if [[ ${#picked[@]} -eq 1 ]]; then printf '%s' "${picked[0]}"; return 0; fi
+  for rt in claude codex; do if command -v "$rt" >/dev/null; then installed+=("$rt"); fi; done
+  if [[ ${#installed[@]} -eq 1 ]]; then printf '%s' "${installed[0]}"; return 0; fi
+  if [[ ${#installed[@]} -eq 0 ]]; then printf 'neither claude nor codex found\n' >&2; return 1; fi
+  printf 'cannot choose a runtime: both claude and codex are installed, the runner was not started from exactly one of them, and .ai-harness/harness.json integrations do not name exactly one. Pass --runtime claude or --runtime codex\n' >&2
+  return 1
+}
 
 case "$CMD" in
   start)
     case "${RUNTIME:-}" in
-      "") if command -v codex >/dev/null; then RUNTIME=codex; else RUNTIME=claude; fi ;;
-      codex|claude) ;;
+      "")
+        runtime_choice="$(runtime_setting)" || exit 2
+        if [[ -n "$runtime_choice" ]]; then
+          read -r RUNTIME runtime_source <<<"$runtime_choice"
+          command -v "$RUNTIME" >/dev/null || {
+            printf '%s %s chose %s, but %s is not installed (not on PATH); install it, change the setting, or pass --runtime\n' \
+              "$runtime_source" "$(config_origin "${runtime_source%%:*}")" "$RUNTIME" "$RUNTIME" >&2
+            exit 2
+          }
+        else
+          RUNTIME="$(default_runtime)" || exit 2
+          runtime_source=default
+        fi
+        ;;
+      codex|claude) runtime_source=flag ;;
       *) usage ;;
     esac
     command -v "$RUNTIME" >/dev/null || { printf '%s not found\n' "$RUNTIME" >&2; exit 2; }
     refuse_claude_protected "$RUNTIME"
+    # 릴리스는 manifest release_policy(태그 방식)가 있어야 시작한다. 릴리스 브랜치는 러너가 origin/<source>에서 따므로
+    # 미커밋 변경이 없어야 하고, base·source 브랜치 위에서는 시작하지 않는다(그 브랜치에 커밋을 쌓지 않는다).
+    release_policy=null
+    if [[ "$WORKFLOW" == release ]]; then
+      release_policy="$(jq -c '.release_policy // null' "$REPO/.ai-harness/harness.json" 2>/dev/null || printf null)"
+      if [[ "$(jq -r 'if type == "object" then .flow // "" else "" end' <<<"$release_policy")" != tag ]]; then
+        printf 'release: .ai-harness/harness.json has no release_policy with flow "tag" (found: %s). The release runner handles tag-based releases only; run /ai-harness:harness-init --sync to detect how this repository releases\n' \
+          "$(jq -c 'if type == "object" then .flow // "no flow" else "no release_policy" end' <<<"$release_policy")" >&2
+        exit 2
+      fi
+      release_policy="$(jq -c '{flow, evidence: (.evidence // []), base: (.base // "main"), source: (.source // "develop"),
+        branch_prefix: (.branch_prefix // "release/v"), tag_prefix: (.tag_prefix // "v"), prepare_cmd: (.prepare_cmd // ""), notes_cmd: (.notes_cmd // ""),
+        generate_notes: (.generate_notes // false), verify_cmd: (.verify_cmd // ""), verify_timeout_minutes: (.verify_timeout_minutes // 60),
+        record_cmds: ([(.record_cmds // [])[] | select(type == "string" and length > 0)])}' <<<"$release_policy")"
+      jq -e '.verify_timeout_minutes | type == "number" and . > 0' <<<"$release_policy" >/dev/null \
+        || { printf 'release_policy.verify_timeout_minutes in .ai-harness/harness.json must be a number above 0\n' >&2; exit 2; }
+      [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
+        || { printf 'release: commit or stash the existing changes first; the runner cuts the release branch from origin/%s\n' "$(jq -r .source <<<"$release_policy")" >&2; exit 2; }
+      current_branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      if [[ "$current_branch" == "$(jq -r .base <<<"$release_policy")" || "$current_branch" == "$(jq -r .source <<<"$release_policy")" ]]; then
+        printf 'release: start on a work branch or worktree, not %s; the runner cuts %s<version> from origin/%s itself\n' \
+          "$current_branch" "$(jq -r .branch_prefix <<<"$release_policy")" "$(jq -r .source <<<"$release_policy")" >&2
+        exit 2
+      fi
+    fi
     git_policy="$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
     notices="[]"
+    # review·investigate는 커밋하지 않는다. 병합·자동화 단계·시작 검사(깨끗한 트리·기준 브랜치)는 체크포인트 커밋을 위한 것이라 건너뛴다.
+    # 쓰기는 노드마다 하는 지문 비교가 막는다.
+    commits_workflow=1
+    [[ "$WORKFLOW" != review && "$WORKFLOW" != investigate ]] || commits_workflow=""
     if jq -e 'has("approval") and .approval != null' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + [".ai-harness/harness.json approval is ignored; set HM_APPROVAL or HM_APPROVAL_REPOS in ~/.ai-harness/config (/ai-harness:setup)"]' <<<"$notices")"
     fi
@@ -2064,10 +3056,10 @@ case "$CMD" in
       git_policy="pr-only"
       notices="$(jq -c '. + ["the repository git_policy merge is no longer used and is read as pr-only; choose how far runs go with a personal delivery level (/ai-harness:setup)"]' <<<"$notices")"
     fi
-    if [[ "$WORKFLOW" != review ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
+    if [[ -n "$commits_workflow" ]] && jq -e '.merge_policy | objects | has("require") or has("min_approvals") or has("method")' "$REPO/.ai-harness/harness.json" >/dev/null 2>&1; then
       notices="$(jq -c '. + ["merge_policy require, min_approvals, and method in .ai-harness/harness.json are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
-    if [[ "$WORKFLOW" != review && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
+    if [[ -n "$commits_workflow" && -n "$(user_config HM_MERGE_REQUIRE)$(user_config HM_MERGE_MIN_APPROVALS)$(user_config HM_MERGE_METHOD)" ]]; then
       notices="$(jq -c '. + ["HM_MERGE_REQUIRE, HM_MERGE_MIN_APPROVALS, and HM_MERGE_METHOD in ~/.ai-harness/config are no longer used; merges follow the branch protection and merge settings on the host"]' <<<"$notices")"
     fi
     approval_setting="$(approval_mode)" || exit 2
@@ -2075,7 +3067,7 @@ case "$CMD" in
     # 병합 여부는 개인 자동화 단계만 정한다. 없으면 PR까지다. 저장소 git_policy는 커밋·PR 범위만 정한다:
     # pr-only → PR(단계가 merge·deploy면 러너가 병합), direct → PR 없이 push(병합할 PR이 없다), 그 밖 → 커밋하지 않는다.
     delivery=null
-    if [[ "$WORKFLOW" != review ]] && read -r level level_source <<<"$(delivery_level)" && [[ -n "$level" ]]; then
+    if [[ -n "$commits_workflow" ]] && read -r level level_source <<<"$(delivery_level)" && [[ -n "$level" ]]; then
       [[ "$level" =~ ^(pr|merge|deploy)$ ]] \
         || { printf '%s in ~/.ai-harness/config is "%s"; the delivery level must be pr, merge, or deploy\n' "${level_source%%:*}" "$level" >&2; exit 2; }
       note=""
@@ -2087,9 +3079,16 @@ case "$CMD" in
       delivery="$(jq -cn --arg l "$level" --arg s "$level_source" --arg g "$(jq -r '.git_policy // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)" --arg n "$note" \
         '{level: $l, source: $s, repo_git_policy: $g} + (if $n == "" then {} else {note: $n} end)')"
     fi
+    # 릴리스는 늘 PR로 나간다: 저장소 git_policy와 상관없이 PR 범위(pr-only)이고, 개인 단계가 merge·deploy면 러너가 병합한다.
+    release_stage="pr"
+    if [[ "$WORKFLOW" == release ]]; then
+      git_policy="pr-only"
+      if [[ "${level:-}" == merge || "${level:-}" == deploy ]]; then git_policy=merge; release_stage="$level"; fi
+      delivery="$(jq -c 'if . == null then . else del(.note) end' <<<"$delivery")"
+    fi
     # 체크포인트는 git add -A로 커밋한다. 실행 전 변경이 섞이거나 기준 브랜치에 커밋이 쌓이지 않게 시작 조건을 막는다.
-    # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다.
-    if [[ "$WORKFLOW" != review ]]; then
+    # review는 커밋하지 않으며, 커밋 전의 변경이 곧 검토 대상일 수 있다. investigate는 기준 브랜치·더러운 트리에서도 조사만 한다.
+    if [[ -n "$commits_workflow" ]]; then
       case "$git_policy" in
         pr-only|direct|merge)
           [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] \
@@ -2105,7 +3104,10 @@ case "$CMD" in
     # 병합 조건과 병합 후 검증은 시작 때 정한다. 실행 중 설정·manifest가 바뀌어도 시작 때의 정책을 따른다.
     # 여기서 git_policy merge는 개인 단계가 merge·deploy라는 뜻이다(저장소 값 merge는 위에서 pr-only로 읽었다).
     merge_policy=null
-    if [[ "$git_policy" == merge && "$WORKFLOW" != review ]]; then
+    if [[ "$WORKFLOW" == release && "$git_policy" == merge ]]; then
+      # 릴리스 병합의 기준은 release_policy.base다(merge_policy.base는 기능 PR의 기준). 병합 뒤에는 병합 커밋의 CI만 보고, 배포 확인은 verify 노드가 한다.
+      merge_policy="$(jq -c '{verify: ["target_ci"], deploy_check_cmd: "", deploy_timeout_minutes: 60, smoke_cmd: "", base: .base}' <<<"$release_policy")"
+    elif [[ "$git_policy" == merge && -n "$commits_workflow" ]]; then
       # 기준 브랜치·배포·스모크 명령과 쓸 수 있는 검증은 저장소 사실이다. 병합 조건·방식은 merge 노드가 호스트에서 읽는다.
       # merge는 타깃 CI까지, deploy는 저장소에 있는 배포·스모크(·재발 추적)까지.
       merge_policy="$(jq -c --arg lvl "$level" '(.merge_policy // {}) as $r
@@ -2157,11 +3159,14 @@ case "$CMD" in
     jq -n --arg id "$RUN_ID" --arg wf "$WORKFLOW" --arg repo "$REPO" --arg rt "$RUNTIME" --arg req "$REQUEST" --arg graph "$GRAPH" \
       --arg node "$(jq -r .entry "$GRAPH")" --arg head "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)" --arg t "$(now_utc)" \
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
-      --arg appr "$approval" --arg appr_source "$approval_source" --arg inv "$INVESTIGATION_FILE" \
+      --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" \
+      --argjson rel "$release_policy" --arg ver "$VERSION_ARG" --arg stage "$release_stage" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
-        policy:{git:$git, approval:$appr, approval_source:$appr_source, commits:(($git | IN("pr-only", "direct", "merge")) and $wf != "review"),
-          merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1")},
+        policy:{git:$git, approval:$appr, approval_source:$appr_source, runtime_source:$rt_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate", "release") | not)),
+          merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1"), release:$rel},
+        release:(if $wf == "release" then {version:(if $ver == "" then null else $ver end), version_source:(if $ver == "" then null else "flag" end), stage:$stage,
+          tag:(if $ver == "" then null else $rel.tag_prefix + $ver end), branch:(if $ver == "" then null else $rel.branch_prefix + $ver end)} else null end),
         monitor_error:$mon, investigation:(if $inv == "" then null else $inv end), status:"running", attempts:0, cli_checks:$cli, checks:[], checkpoints:[], findings:[], history:[]}' >"$STATE"
     save_baseline
     ;;
@@ -2170,9 +3175,22 @@ case "$CMD" in
     touch "$RUN/progress.log"
     exec tail -n 50 -f "$RUN/progress.log"
     ;;
+  stop)
+    [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
+    stop_run "${REASON:-stopped with the stop command}"
+    ;;
   resume|approve|revise|status)
     [[ -f "$STATE" ]] || { printf 'run not found: %s\n' "$RUN" >&2; exit 2; }
     [[ "$CMD" == status ]] || refuse_claude_protected "$(state .runtime)"
+    # 살아 있는 러너를 두 번 실행하지 않는다. revise는 실행 중이면 요청 파일만 남기므로 아래 revise 분기가 판단한다.
+    if [[ "$CMD" != status && "$CMD" != revise ]] && runner_alive; then
+      printf 'run %s is already running (pid %s); stop it first: stop --run %s\n' "$RUN_ID" "$(state .process.pid)" "$RUN_ID" >&2
+      exit 2
+    fi
+    if [[ "$CMD" != status ]] && ! runner_alive && child_alive; then
+      printf 'run %s: the runner is gone but its node process group %s is still running; stop it first: stop --run %s\n' "$RUN_ID" "$(state .process.child_pgid)" "$RUN_ID" >&2
+      exit 2
+    fi
     ;;
   *) usage ;;
 esac
@@ -2181,6 +3199,7 @@ if [[ "$CMD" != status ]]; then
   log "run $RUN_ID · progress: $RUN/progress.log · follow with: bash $(printf '%q' "$SCRIPT_DIR/$(basename "$0")") watch --workflow $WORKFLOW --repo $(printf '%q' "$REPO")"
 fi
 if [[ "$CMD" == start ]]; then
+  log "runtime $(state .runtime) ($(state '.policy.runtime_source'))"
   while IFS= read -r notice; do
     [[ -z "$notice" ]] || log "notice: $notice"
   done <<<"$(state '(.policy.notices // [])[]')"
@@ -2188,19 +3207,26 @@ fi
 
 if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","decisions","needs_human"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","acceptance_map","decisions","needs_human"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+  "acceptance_map":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","covered_by","out_of_scope_reason"],
+   "properties":{"criterion":{"type":"string"},"covered_by":{"type":"string"},"out_of_scope_reason":{"type":"string"}}}},
   "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["question","choice","rationale"],
    "properties":{"question":{"type":"string"},"choice":{"type":"string"},"rationale":{"type":"string"}}}},
   "needs_human":{"type":"array","items":{"type":"string"}}}}
 EOF
 else
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","ui_scenarios","open_questions"],
- "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","acceptance_map","open_questions"],
+ "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+  "acceptance_map":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","covered_by","out_of_scope_reason"],
+   "properties":{"criterion":{"type":"string"},"covered_by":{"type":"string"},"out_of_scope_reason":{"type":"string"}}}},
   "open_questions":{"type":"array","items":{"type":"string"}}}}
 EOF
 fi
+# release plan은 Brief와 같은 승인 형식에 버전을 더한다(화면 시나리오·완료 조건 대응표는 없다 — 이슈가 아니라 버전·노트를 승인한다).
+[[ "$WORKFLOW" != release ]] || jq '.required = ((.required - ["ui_scenarios", "acceptance_map"]) + ["version"]) | del(.properties.ui_scenarios, .properties.acceptance_map) | .properties.version = {"type": "string"}' \
+  "$BRIEF_SCHEMA" >"$RELEASE_PLAN_SCHEMA"
 cat >"$REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","blocking_findings","non_blocking_findings","needs_user_decision"],
  "properties":{"summary":{"type":"string"},"blocking_findings":{"type":"array","items":{"type":"string"}},
@@ -2216,6 +3242,11 @@ cat >"$SCOPE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","base","files","checks"],
  "properties":{"summary":{"type":"string"},"base":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},
   "checks":{"type":"array","items":{"type":"string"}}}}
+EOF
+cat >"$REPORT_SCHEMA" <<'EOF'
+{"type":"object","additionalProperties":false,"required":["outcome","slug","summary","report","comment"],
+ "properties":{"outcome":{"type":"string","enum":["code_fix_needed","no_code_fix_needed"]},"slug":{"type":"string"},
+  "summary":{"type":"string"},"report":{"type":"string"},"comment":{"type":"string"}}}
 EOF
 cat >"$REPRODUCE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","evidence","hypothesis","needed"],
@@ -2403,13 +3434,43 @@ EOF
 case "$CMD" in
   status)
     jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    [[ "$(state '.release // null')" == null ]] || state '.release | "release \(.tag // "(version pending)") · stage \(.stage)" + (if .published then " · released \(.published.status)" else "" end)
+      + (if .blocked then " · blocked: " + .blocked elif .stopped_because then " · stopped: " + .stopped_because else "" end)
+      + (if .sync then "\nsync (run by a person): " + .sync.command else "" end)'
     [[ "$(state .status)" == waiting_approval && -f "$RUN/brief.json" ]] && print_brief
+    if [[ "$(state .status)" == stopped ]]; then
+      state '"stopped at \(.stopped.node) \(.stopped.at): \(.stopped.reason); continue with resume"'
+    elif [[ "$(state .status)" == running && -n "$(state '.process.pid // ""')" ]] && ! runner_alive; then
+      if child_alive; then
+        printf 'stale: runner process %s is gone but its node process group %s is still running; stop it first: stop --run %s\n' "$(state .process.pid)" "$(state .process.child_pgid)" "$RUN_ID"
+      else
+        printf 'stale: runner process %s is gone (stopped outside the runner); continue with resume\n' "$(state .process.pid)"
+      fi
+    fi
+    if [[ "$(state '.worktree_cleanup.eligible // ""')" == true ]]; then
+      printf 'worktree %s is merged and can be removed: use the board "finished work" cleanup or the workspace session cleanup\n' "$(state .worktree_cleanup.path)"
+    fi
     exit 0
     ;;
   revise)
     [[ -n "$FEEDBACK" || -n "$SELECT" ]] || usage
-    [[ "$(state .node)" == approval ]] || { printf 'revise works only while waiting for approval of a brief (node: %s)\n' "$(state .node)" >&2; exit 2; }
+    node="$(state .node)"
+    if [[ "$node" == approval ]]; then
+      revise_edge=brief_changed_or_not_approved
+    elif [[ -z "$SELECT" ]] && has_edge "$node" brief_revised; then
+      revise_edge=brief_revised
+    else
+      printf 'revise works only while waiting for approval of a brief or at a node the graph returns to the brief from (accepts: %s; node: %s)\n' "$(revise_nodes)" "$node" >&2
+      exit 2
+    fi
     [[ -z "$SELECT" || -z "$FEEDBACK" ]] || { printf -- '--select and --feedback are separate revisions; run one, then the other\n' >&2; exit 2; }
+    # 러너가 그 노드를 실행 중이면 멈추지 않는다. 상태는 러너만 쓰므로 요청 파일만 남기고, 러너가 세션이 끝난 뒤 받는다.
+    if [[ "$revise_edge" == brief_revised && "$(state .status)" == running ]] && runner_alive; then
+      jq -n --arg f "$FEEDBACK" --arg t "$(now_utc)" '{feedback: $f, at: $t}' >"$RUN/revise-request.json.$$"
+      mv "$RUN/revise-request.json.$$" "$RUN/revise-request.json"
+      log "the runner (pid $(state .process.pid)) is in $node; when the current $node session ends it returns to the brief with this feedback. Nothing was stopped"
+      exit 0
+    fi
     check_baseline
     if [[ -n "$SELECT" ]]; then
       # 고칠 항목 선택은 결정적이다: 목록에 있는 ID만 받고, 바뀐 목록을 다시 보여 주며 새 승인을 기다린다.
@@ -2423,8 +3484,8 @@ case "$CMD" in
       log "selection changed to $(jq -r 'join(", ")' <<<"$sel"); waiting for approval: run $RUN_ID"
       exit 10
     fi
-    state_set '.feedback = $f' --arg f "$FEEDBACK"
-    go approval brief_changed_or_not_approved
+    state_set '.feedback = $f | .brief_rewrites = 0' --arg f "$FEEDBACK"
+    go "$node" "$revise_edge"
     ;;
   approve)
     [[ "$(state .status)" == waiting_approval ]] || { printf 'nothing to approve (node: %s)\n' "$(state .node)" >&2; exit 2; }
@@ -2445,5 +3506,8 @@ esac
 # 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
 # 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
 trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
-state_set '.status = "running"'
+# stop은 러너 PID와 노드 자식 그룹을 끈다. 터미널이 닫혀도(HUP) 같은 정리를 한다. 러너는 자식 그룹을 정리하고 30(미완료·resume)으로 끝난다 — 상태는 stop이 남긴다.
+trap on_stop_signal TERM INT HUP
+state_set '.status = "running" | .process = {pid: $p, pgid: $g, lstart: $l}' --argjson p "$$" \
+  --argjson g "$(ps -o pgid= -p $$ | tr -d ' ')" --arg l "$(proc_lstart $$)"
 execute

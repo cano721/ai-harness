@@ -1,6 +1,6 @@
 # Implement Feature — ai-harness
 
-노드·전이·수리 한도의 계약은 `.ai-harness/workflows/feature-delivery-graph.json`이 단일 출처다. 이 문서는 그 그래프를 이 저장소에서 실행할 때 쓰는 **프로젝트 사실**만 적는다. 러너(`.ai-harness/workflows/workflow-driver.sh --workflow feature`)가 있으면 러너로 실행한다.
+노드·전이·수리 한도의 계약은 `.ai-harness/workflows/feature-delivery-graph.json`이 단일 출처다. 이 문서는 그 그래프를 이 저장소에서 실행할 때 쓰는 **프로젝트 사실**만 적는다. 러너(`.ai-harness/workflows/workflow-driver.sh --workflow feature`)가 있으면 러너로 실행한다. 실행 중인 런은 `workflow-driver.sh stop [--run <id>]`로만 멈춘다(그 런이 기록한 프로세스만 끈다). `pkill`·`killall`·`pgrep -f` 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다. 멈춘 런(stopped)과 밖에서 끊긴 런(stale)은 `status`에 보이고 `resume`으로 잇는다.
 
 ## 1. Implementation Brief (승인 게이트)
 

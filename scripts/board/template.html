@@ -647,6 +647,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-sechead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 .b-sechead > .b-sechead__end { margin-left: auto; }
 .b-content { max-width: var(--size-content-max); min-width: 0; }
+.b-clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.b-agday { margin: var(--space-2) 0 0; color: var(--color-text-muted); font-weight: var(--font-weight-label); }
+.b-agform__row { display: flex; gap: var(--space-2); min-width: 0; }
+.b-agform__row > .ds-input { flex: 1 1 auto; min-width: 0; }
+.b-agsrc .ds-row__side { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
 .b-line { margin: 0; }
 .b-steps { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-3); }
 .b-stephead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
@@ -934,6 +939,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   // ---- 화면 정의 ----
   const VIEWS = {
     list: { label: '작업 현황', sub: '지금 할 일과 진행' },
+    agenda: { label: '내 일정', sub: '일정과 할 일' },
     refs: { label: '레퍼런스', sub: '레퍼런스 보드 보고 고르기' },
     impact: { label: '하네스 효과', sub: '개선과 재발 여부' },
     settings: { label: '하네스 설정', sub: '내 자동화 단계' },
@@ -1090,7 +1096,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const savedView = store('hb-view');
   // 보드를 처음 연 사람(저장한 화면·탭이 하나도 없음)과 ?view=guide 주소는 하네스 안내로 시작한다. 쓰던 사람은 마지막 화면 그대로.
   const startView = (search, saved, used) => new URLSearchParams(search).get('view') === 'guide' ? 'guide'
-    : ['settings', 'impact', 'refs', 'guide'].includes(saved) ? saved : (saved === null && !used ? 'guide' : 'list');
+    : ['agenda', 'settings', 'impact', 'refs', 'guide'].includes(saved) ? saved : (saved === null && !used ? 'guide' : 'list');
   const firstOpen = savedView === null && store('hb-tab') === null && store('hb-stab') === null;
   let view = startView(location.search, savedView, !firstOpen);
   if (firstOpen) store('hb-view', 'guide');
@@ -1579,6 +1585,236 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     board.replaceChildren(...nodes);
   }
 
+  // ---- 내 일정: 일정 · 답해야 할 것 · 할 일, 그 아래 연결한 곳 ----
+  // 서버(/agenda)가 소스 상태와 종류별 열린 항목을 준다. 연결 중이거나 모으는 중인 소스가 있으면 2초, 아니면 30초마다 다시 읽는다.
+  let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftErr = false;
+  const agOpen = new Set();        // 펼친 설정 안내(소스 id)
+  const agConnecting = new Set();  // 연결을 누르고 결과를 기다리는 소스 — 끝나면 토스트 한 번
+  const agRefreshing = new Set();  // [다시 가져오기]를 누르고 기다리는 소스 — 다시 그려도 버튼이 바쁜 상태를 잃지 않게
+  const AG_STATE = {
+    needs_setup: ['attention', '설정 필요', 'soft'], disconnected: ['info', '연결 안 됨'], connecting: ['progress', '연결하는 중'],
+    connected: ['success', '연결됨'], error: ['danger', '가져오기 실패'],
+  };
+  async function fetchAgenda() {
+    try {
+      const r = await fetch('/agenda?t=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const next = await r.json();
+      agErr = null; agAt = Date.now();
+      for (const id of [...agConnecting]) {
+        const s = (next.sources || []).find((x) => x.id === id);
+        if (!s || s.state === 'connecting') continue;
+        agConnecting.delete(id);
+        if (s.connected) toast(`${s.name} 연결을 마쳤습니다.`, true);
+        else toast(s.error || `${s.name}에 연결하지 못했습니다.`, false);
+      }
+      const sig = JSON.stringify([next.sources, next.items, next.todo_total]);
+      agData = next;
+      if (sig !== agSig) { agSig = sig; if (view === 'agenda') renderBoard(); }
+    } catch (e) {
+      agErr = '보드 서버에 닿지 않습니다. 보드가 꺼졌으면 터미널에서 다시 여세요.'; agAt = Date.now(); agSig = '';
+      if (view === 'agenda') renderBoard();
+    }
+  }
+  function loadAgenda(force) {
+    if (!SERVER) return Promise.resolve();
+    if (agLoad && !force) return agLoad;
+    if (!agLoad && !force) {
+      const waiting = agConnecting.size || (agData && (agData.sources || []).some((x) => x.state === 'connecting' || x.fetching));
+      if (agAt && Date.now() - agAt < (waiting ? 2000 : 30000)) return Promise.resolve();
+    }
+    const p = (agLoad || Promise.resolve()).then(fetchAgenda);
+    agLoad = p; p.finally(() => { if (agLoad === p) agLoad = null; });
+    return p;
+  }
+  setInterval(() => { if (view === 'agenda' && !document.hidden) loadAgenda(false); }, 2000);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const dayKey = (iso) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return iso;
+    const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  };
+  const dayOffset = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+  const dayLabel = (key) => {
+    if (key === dayOffset(0)) return '오늘';
+    if (key === dayOffset(1)) return '내일';
+    const [y, m, d] = key.split('-').map(Number); const dt = new Date(y, m - 1, d);
+    return Number.isNaN(dt.getTime()) ? '날짜 모름' : `${m}월 ${d}일 (${'일월화수목금토'[dt.getDay()]})`;
+  };
+  const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+  const eventTime = (it) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(it.start || '')) return '종일';
+    const a = clock(it.start), b = it.end && dayKey(it.end) === dayKey(it.start) ? clock(it.end) : '';
+    return a && b && a !== b ? `${a}–${b}` : a;
+  };
+  function agendaCard(it) {
+    const c = el('article', 'ds-card'); c.dataset.key = `ag:${it.source}:${it.id}`;
+    const meta = el('div', 'ds-card__meta');
+    if (!it.local) meta.append(chip(it.source_name));
+    const when = it.kind === 'event' ? eventTime(it) : it.local ? (it.start ? `${ago(it.start)} 적음` : '') : stamp(it.start);
+    if (when) meta.append(el('span', 'ds-card__when ds-num', when));
+    const h = el('h3', 'ds-card__title b-clamp2', it.title); h.title = it.title;
+    c.append(meta, h);
+    if (it.detail) c.append(el('p', 'ds-card__body', it.detail));
+    const acts = el('div', 'ds-card__actions');
+    if (it.kind !== 'event' && SERVER) {
+      const b = btn('완료', 'ds-btn--sm'); b.dataset.key = `agdone:${it.source}:${it.id}`; b.setAttribute('aria-label', `완료: ${it.title}`);
+      b.onclick = async () => {
+        if (b.getAttribute('aria-busy')) return;
+        busy(b, '완료하는 중');
+        let res; try { res = await post('/agenda/done', { source: it.source, id: it.id }); } catch (e) { res = { ok: false, message: '완료로 표시하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+        toast(res.ok ? (it.local ? '할 일을 마쳤습니다.' : res.message) : res.message, !!res.ok);
+        if (!res.ok) unbusy(b);
+        loadAgenda(true);
+      };
+      acts.append(b);
+    }
+    if (it.url) acts.append(textLink('원본에서 보기', it.url));
+    if (acts.childNodes.length) c.append(acts);
+    return c;
+  }
+  function agendaColumn(key, dot, label, n, body) {
+    const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'agsec-' + key);
+    const h = sectionHead(dot, label, n); h.id = 'agsec-' + key;
+    s.append(h, ...body);
+    return s;
+  }
+  function eventBody(events, linked) {
+    if (!events.length) return [linked ? empty('오늘과 이번 주에 잡힌 일정이 없습니다.', '연결한 캘린더에 일정이 생기면 여기에 뜹니다.')
+      : empty('아직 연결한 곳이 없어 일정이 비어 있습니다.', '아래 연결한 곳에서 캘린더를 연결하면 오늘과 이번 주 일정이 여기에 뜹니다.')];
+    const days = new Map([[dayOffset(0), []]]);
+    for (const it of events) { const k = dayKey(it.start) || dayOffset(0); if (!days.has(k)) days.set(k, []); days.get(k).push(it); }
+    const out = [];
+    for (const [k, list] of [...days.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      out.push(el('h3', 'ds-caption b-agday', dayLabel(k)));
+      if (!list.length) out.push(el('p', 'ds-caption b-line', '오늘은 남은 일정이 없습니다.'));
+      out.push(...list.map(agendaCard));
+    }
+    return out;
+  }
+  function todoForm() {
+    const f = el('form', 'ds-field'); f.noValidate = true;
+    const lab = el('label', 'ds-label', '할 일 적기'); lab.htmlFor = 'ag-todo';
+    const inp = el('input', 'ds-input'); inp.id = 'ag-todo'; inp.type = 'text'; inp.autocomplete = 'off'; inp.maxLength = 300; inp.placeholder = '예: 회의록 정리'; inp.value = agDraft;
+    const err = el('span', 'ds-field__error'); err.id = 'ag-todo-err'; err.append(icon('danger'), '할 일 내용을 적어 주세요.'); err.hidden = !agDraftErr;
+    inp.setAttribute('aria-describedby', 'ag-todo-err'); if (agDraftErr) inp.setAttribute('aria-invalid', 'true');
+    const add = el('button', 'ds-btn', '추가'); add.type = 'submit'; add.id = 'ag-todo-add';
+    const setErr = (on) => { agDraftErr = on; err.hidden = !on; if (on) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid'); };
+    inp.oninput = () => { agDraft = inp.value; if (agDraftErr && inp.value.trim()) setErr(false); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const text = inp.value.trim();
+      if (!text) { setErr(true); inp.focus(); return; }
+      if (add.getAttribute('aria-busy')) return;
+      busy(add, '추가하는 중');
+      let res; try { res = await post('/agenda/todo', { text }); } catch (x) { res = { ok: false, message: '할 일을 추가하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+      unbusy(add);
+      if (!res.ok) { toast(res.message, false); return; }
+      agDraft = ''; inp.value = ''; setErr(false);
+      toast('할 일을 추가했습니다.', true);
+      await loadAgenda(true);
+      const again = $('ag-todo'); if (again) again.focus();
+    };
+    const row = el('div', 'b-agform__row'); row.append(inp, add);
+    f.append(lab, row, err);
+    return f;
+  }
+  function sourceButton(s) {
+    if (s.invalid) return null;
+    if (s.state === 'needs_setup') {
+      const b = btn('설정하기', 'ds-btn--sm'); b.dataset.key = 'agbtn:' + s.id;
+      b.setAttribute('aria-expanded', String(agOpen.has(s.id))); b.setAttribute('aria-controls', 'agsetup-' + s.id);
+      b.onclick = () => { if (agOpen.has(s.id)) agOpen.delete(s.id); else agOpen.add(s.id); b.setAttribute('aria-expanded', String(agOpen.has(s.id))); $('agsetup-' + s.id).hidden = !agOpen.has(s.id); };
+      return b;
+    }
+    if (s.state === 'connecting') { const b = btn('연결', 'ds-btn--sm'); b.dataset.key = 'agbtn:' + s.id; busy(b, '연결하는 중'); return b; }
+    const on = s.connected;
+    const b = btn(on ? '끊기' : '연결', on ? 'ds-btn--sm ds-btn--ghost' : 'ds-btn--sm'); b.dataset.key = 'agbtn:' + s.id;
+    b.setAttribute('aria-label', `${s.name} ${on ? '연결 끊기' : '연결'}`);
+    b.onclick = async () => {
+      if (b.getAttribute('aria-busy')) return;
+      busy(b, on ? '끊는 중' : '연결하는 중');
+      let res; try { res = await post(on ? '/agenda/disconnect' : '/agenda/connect', { source: s.id }); } catch (e) { res = { ok: false, message: `${s.name}에 닿지 못했습니다. 보드 서버가 꺼졌는지 확인하세요.` }; }
+      if (!res.ok) { unbusy(b); toast(res.message, false); return; }
+      if (on) toast(`${s.name} 연결을 끊었습니다.`, true);
+      else if (res.state === 'connecting') agConnecting.add(s.id);
+      else toast(`${s.name} 연결을 마쳤습니다.`, true);
+      loadAgenda(true);
+    };
+    return b;
+  }
+  function sourceRow(s) {
+    const row = el('div', 'ds-row'); row.dataset.key = 'agsrc:' + s.id;
+    const head = el('div', 'ds-row__head');
+    const title = el('span', 'ds-row__title', s.name); title.title = s.name;
+    const side = el('span', 'ds-row__side');
+    side.append(badge(s.invalid ? ['danger', '선언 오류'] : AG_STATE[s.state] || ['info', '확인 못 함']));
+    const when = s.fetched_at ? `${ago(s.fetched_at)} 가져옴` : s.connected && s.state !== 'connecting' ? '아직 가져오지 않음' : '';
+    if (when) side.append(el('span', 'ds-num', when));
+    const b = sourceButton(s); if (b) side.append(b);
+    head.append(title, side); row.append(head);
+    if (s.state === 'needs_setup') {
+      const d = el('div', 'ds-row__detail'); d.id = 'agsetup-' + s.id; d.hidden = !agOpen.has(s.id);
+      d.append(el('p', 'b-line', s.setup_hint || '이 소스를 제공한 스킬의 안내대로 준비한 뒤 다시 여세요.'));
+      row.append(d);
+    } else if (s.invalid || (!s.connected && s.error)) {
+      const d = el('div', 'ds-row__detail'); d.append(el('p', 'ds-caption b-line', s.error)); row.append(d);
+    }
+    return row;
+  }
+  // 무엇을 못 했는지 → 원인 → 할 일 + 동작 하나([다시 가져오기]).
+  function fetchFailNotice(s) {
+    const n = el('div', 'ds-notice'); n.dataset.status = 'danger'; n.setAttribute('role', 'alert'); n.dataset.key = 'agfail:' + s.id;
+    const inner = el('div', 'ds-stack');
+    inner.append(el('p', 'b-line', `${s.name}에서 새 항목을 가져오지 못했습니다. ${s.error || '원인을 알 수 없습니다.'} 이전에 가져온 항목은 그대로 둡니다.`),
+      el('p', 'b-line', '원인을 해결한 뒤 [다시 가져오기]를 누르세요. 로그인이 풀렸다면 그 소스를 준 스킬의 안내대로 다시 로그인하거나, 아래 연결한 곳에서 끊고 다시 연결하세요.'));
+    const b = btn('다시 가져오기', 'ds-btn--sm'); b.dataset.key = 'agretry:' + s.id; b.setAttribute('aria-label', `${s.name}에서 다시 가져오기`);
+    if (agRefreshing.has(s.id)) busy(b, '가져오는 중');
+    b.onclick = async () => {
+      if (b.getAttribute('aria-busy')) return;
+      agRefreshing.add(s.id); busy(b, '가져오는 중');
+      let res; try { res = await post('/agenda/refresh', { source: s.id }); } catch (e) { res = { ok: false, message: `${s.name}에서 다시 가져오지 못했습니다. 보드 서버에 닿지 못했습니다.` }; }
+      agRefreshing.delete(s.id); unbusy(b);
+      toast(res.message, !!res.ok);
+      loadAgenda(true);
+    };
+    const row = el('div', 'ds-cluster'); row.append(b);
+    inner.append(row);
+    n.append(icon('danger'), inner);
+    return n;
+  }
+  function renderAgenda() {
+    const board = $('board');
+    if (!SERVER) { board.replaceChildren(empty('내 일정은 보드 서버에서만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
+    loadAgenda(false);
+    if (!agData) {
+      board.replaceChildren(...(agErr ? [errorBox('내 일정을 불러오지 못했습니다', agErr, () => { agErr = null; renderBoard(); loadAgenda(true); })] : loading('내 일정을 불러오는 중')));
+      return;
+    }
+    const nodes = [];
+    if (agErr) nodes.push(notice('danger', `내 일정을 새로 읽지 못했습니다. ${agErr} 마지막으로 읽은 내용을 보입니다.`));
+    const srcs = agData.sources || [], items = agData.items || {};
+    for (const s of srcs.filter((x) => x.state === 'error' && !x.invalid)) nodes.push(fetchFailNotice(s));
+    const linked = srcs.some((x) => x.connected && !x.invalid);
+    const events = items.event || [], replies = items.reply || [], todos = items.todo || [];
+    const cols = el('div', 'ds-columns');
+    cols.append(
+      agendaColumn('event', 'info', '일정', events.length, eventBody(events, linked)),
+      agendaColumn('reply', 'attention', '답해야 할 것', replies.length, replies.length ? replies.map(agendaCard) : [linked
+        ? empty('지금 답해야 할 것이 없습니다.', '연결한 곳에서 답할 메시지가 오면 여기에 모입니다.')
+        : empty('아직 연결한 곳이 없어 답해야 할 것이 비어 있습니다.', '메신저·메일 어댑터를 주는 스킬을 설치하면 아래 연결한 곳에 나타납니다.')]),
+      agendaColumn('todo', null, '할 일', todos.length, [todoForm(), ...(todos.length ? todos.map(agendaCard) : [agData.todo_total
+        ? empty('열린 할 일이 없습니다.', '적어 둔 일을 모두 마쳤습니다. 새로 할 일은 위 칸에 적습니다.')
+        : empty('아직 적은 할 일이 없습니다.', '위 칸에 적거나 터미널에서 board.sh todo add로 추가합니다.')])]),
+    );
+    nodes.push(cols);
+    const sec = el('section', 'ds-stack'); sec.setAttribute('aria-labelledby', 'agsec-sources');
+    const h = sectionHead(null, '연결한 곳', srcs.filter((x) => x.connected).length, '곳 연결됨'); h.id = 'agsec-sources';
+    const rows = el('div', 'ds-rows b-agsrc'); rows.append(...srcs.map(sourceRow));
+    sec.append(h, srcs.length ? rows : empty('연결할 수 있는 곳이 없습니다.', '일정 어댑터(agenda.json)를 주는 스킬을 설치하면 여기에 나타납니다.'));
+    nodes.push(sec);
+    board.replaceChildren(...nodes);
+  }
+
   // ---- 자동 수정 탭: 한 줄 상황 + 후보 ----
   const AF_FAIL = { usage_limit: '사용량 한도', auth_expired: '로그인 만료 — claude auth login 또는 claude setup-token', missing_pr_url: '이 저장소 PR 주소를 남기지 않음', agent_error: '에이전트 오류' };
   const AF_RESULT = { pr_opened: 'PR을 열었음', left_for_user: '사람 판단 필요', not_code_bug: '코드 버그 아님', not_reproducible: '재현 불가', no_result: '결과 없음' };
@@ -1783,7 +2019,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const leftNote = (left) => el('p', 'ds-caption b-line', left.map((l) => l.label).join(' · '));
   function renderCleanup() {
     $('dtitle').textContent = '끝난 일 정리';
-    $('dsub').textContent = '목록에서 숨기고 쉬는 세션을 닫습니다. 대화 기록은 남고, 숨긴 항목은 다시 보이게 할 수 있습니다.';
+    $('dsub').textContent = '끝난 일과 세션에 연결되지 않은 worktree를 확인합니다. 조건을 만족한 worktree만 선택해 지웁니다.';
     const body = $('dbody'), foot = $('dfoot'); foot.replaceChildren(); foot.hidden = false;
     const parts = [];
     const rangeLabel = el('h3', 'ds-label', '범위'); rangeLabel.id = 'cl-range';
@@ -1801,17 +2037,23 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (tool.err) parts.push(notice('danger', tool.err));
     if (!tool.plan) { const sr = el('p', 'ds-sr', '정리할 항목을 확인하는 중'); sr.setAttribute('role', 'status'); parts.push(sr, skeleton(2)); body.replaceChildren(...parts); return; }
-    const plan = tool.plan, left = tool.left || [], sessions = plan.filter((x) => x.session), closing = plan.filter((x) => x.close).length;
-    const can = sessions.filter((x) => x.worktree && x.worktree.removable).length, cannot = sessions.length - can;
+    const plan = tool.plan, left = tool.left || [], ordinary = plan.filter((x) => !x.worktree_candidate), sessions = ordinary.filter((x) => x.session), candidates = plan.filter((x) => x.worktree_candidate), closing = plan.filter((x) => x.close).length;
+    const can = sessions.filter((x) => x.worktree && x.worktree.removable).length + candidates.filter((x) => x.removable).length;
+    const cannot = sessions.filter((x) => x.worktree && !x.worktree.removable).length + candidates.filter((x) => !x.removable).length;
     if (!plan.length) parts.push(empty('정리할 끝난 일이 없습니다.', tool.older ? '범위를 넓히면 더 최근에 끝난 일도 정리할 수 있습니다.' : '작업 중·답 대기 세션은 정리하지 않습니다.'));
     else {
-      parts.push(el('p', 'b-line', `${plan.length}개를 목록에서 숨깁니다${closing ? ` · 쉬는 세션 ${closing}개를 닫습니다` : ''}.`));
+      parts.push(el('p', 'b-line', `${ordinary.length}개 항목을 목록에서 숨깁니다${closing ? ` · 쉬는 세션 ${closing}개를 닫습니다` : ''}${candidates.length ? ` · 세션과 무관한 worktree 후보 ${candidates.length}개` : ''}.`));
       const lab = el('label', 'b-check'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = tool.worktree; cb.disabled = !can; cb.dataset.key = 'cl-wt';
       cb.onchange = () => { tool.worktree = cb.checked; toolDone(); };
-      lab.append(cb, el('span', null, can ? `worktree도 삭제 — 지울 수 있는 ${can}개만(변경·올리지 않은 커밋 없음)${cannot ? `, 나머지 ${cannot}개는 이유와 함께 건너뜁니다` : ''}` : 'worktree 삭제 — 지울 수 있는 worktree가 없습니다'));
+      lab.append(cb, el('span', null, can ? `worktree도 삭제 — 조건을 통과한 ${can}개만${cannot ? `, 나머지 ${cannot}개는 이유와 함께 보존` : ''}` : 'worktree 삭제 — 조건을 통과한 worktree가 없습니다'));
       parts.push(lab);
       const rows = el('div', 'ds-rows');
       for (const x of plan) {
+        if (x.worktree_candidate) {
+          const d = el('div', 'ds-row'), h = el('div', 'ds-row__head'); const t = el('span', 'ds-row__title', shortTitle(x.title || '') || '(worktree 이름 없음)'); t.title = x.path || '';
+          const detail = tool.worktree ? (x.removable ? 'worktree 삭제' : `보존 — ${x.reason || '안전 조건을 통과하지 못함'}`) : (x.removable ? '삭제 조건 통과' : `보존 — ${x.reason || '안전 조건을 통과하지 못함'}`);
+          h.append(t, el('span', 'ds-row__side', `${scopeName(x.project)} · ${x.branch || '브랜치 확인 불가'} · ${detail}`)); d.append(h); rows.append(d); continue;
+        }
         const what = ['숨김'];
         if (x.close) what.push('세션 닫기');
         if (tool.worktree && x.worktree) what.push(x.worktree.removable ? 'worktree 삭제' : `worktree 유지(${x.worktree.reason || '지울 수 없음'})`);
@@ -1822,7 +2064,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (left.length) parts.push(leftNote(left));
     body.replaceChildren(...parts);
-    const go = btn(plan.length ? `${plan.length}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
+    const actionCount = ordinary.length + (tool.worktree ? candidates.filter((x) => x.removable).length : 0);
+    const go = btn(actionCount ? `${actionCount}개 정리` : '정리할 것 없음', tool.worktree && can ? 'ds-btn--danger' : 'ds-btn--primary');
     if (!plan.length) go.setAttribute('aria-disabled', 'true');
     go.onclick = async () => {
       if (!plan.length || go.getAttribute('aria-busy') === 'true') return;
@@ -2348,7 +2591,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   function renderSidebar() {
     const views = $('views'); views.replaceChildren();
-    for (const key of ['list', 'refs', 'impact', 'settings', 'guide']) {
+    for (const key of ['list', 'agenda', 'refs', 'impact', 'settings', 'guide']) {
       const v = VIEWS[key];
       let n = null;
       if (key === 'list') { const t = todoCount('all', view === 'list' ? filter : 'all'); if (t) n = count(t, 'attention', '건, 지금 할 일'); }
@@ -2465,12 +2708,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       $('newbtn').hidden = !(SERVER && view === 'list');
       renderTabs();
       const board = $('board');
-      board.classList.toggle('b-content', view !== 'list');
+      board.classList.toggle('b-content', view !== 'list' && view !== 'agenda');
       if (view !== 'guide') delete board.dataset.gsig;  // 다른 화면을 그렸으면 돌아올 때 안내를 새로 그린다
       $('refhead').hidden = !(view === 'refs' && rrun);
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
       if (view === 'settings') { $('vdesc').textContent = STABS.find(([k]) => k === stab)[2]; return renderSettings(); }
+      if (view === 'agenda') { $('vdesc').textContent = '오늘과 이번 주 일정, 답해야 할 것, 직접 적은 할 일을 한곳에서 봅니다. 작업 현황과는 따로입니다.'; return renderAgenda(); }
       if (view === 'guide') { $('vdesc').textContent = '하네스가 무엇이고 어떤 기능이 있는지, 어떻게 부르는지 봅니다.'; return renderGuide(); }
       if (view === 'refs') { $('vdesc').textContent = rrun ? '' : '이 맥에서 그린 레퍼런스 보드입니다. 열면 탭 5개로 보고, 랜딩 실행이 기다리면 여기서 골라 시작합니다.'; $('vdesc').hidden = !!rrun; return renderRefs(); }
       $('vdesc').textContent = TABS.find(([k]) => k === tab)[2];
@@ -2613,6 +2857,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const APPROVAL_DESC = { human: 'Brief를 보이고 내가 승인해야 고치기 시작합니다. workspace에서 인계한 멤버는 workspace 대화로 물어 오고, "승인 <멤버>"로 답합니다.', auto: 'Brief와 결정 사항을 PR 본문에 남기고, 사람만 정할 것이 없으면 승인 없이 진행합니다.' };
   const badApproval = (v) => descLine(`승인 모드 값(${v})이 사람 확인·자동 통과가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
   const setApproval = (body) => saveSetting('/settings/approval', body, () => localSet(body.scope, body.repo, 'approval_mine', 'HM_APPROVAL', body.mode));
+  // 런타임: 러너와 같은 개인 설정(HM_RUNTIME_REPOS > HM_RUNTIME > 자동 선택). 값이 없으면 러너가 부른 CLI 등으로 고른다.
+  const RUNTIMES = [['claude', 'Claude'], ['codex', 'Codex']];
+  const RT = Object.fromEntries(RUNTIMES);
+  const badRuntime = (v) => descLine(`런타임 값(${v})이 Claude·Codex가 아니라 러너가 시작하지 않습니다. 다시 고르세요.`, 'danger');
+  const setRuntime = (body) => saveSetting('/settings/runtime', body, () => localSet(body.scope, body.repo, 'runtime_mine', 'HM_RUNTIME', body.runtime));
   function renderSettings() {
     const board = $('board');
     if (!SERVER) { board.replaceChildren(empty('설정은 보드 서버로 열었을 때만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
@@ -2632,6 +2881,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     descs.push(`승인: ${APPR[r.approval] || r.approval || '사람 확인'} (${asrc})`);
     if (r.approval_source === 'legacy') descs.push(descLine('이 저장소의 러너가 옛 버전이라 승인 모드는 하네스를 동기화하기 전까지 저장소 설정을 따릅니다. 여기서 고른 승인은 동기화 뒤부터 적용됩니다.', 'info'));
     else if (r.approval && !APPR[r.approval]) descs.push(badApproval(r.approval));
+    const rsrc = { repo: '이 저장소 내 설정', default: '내 기본', none: '기본값', legacy: '저장소 기본' }[r.runtime_source] || '';
+    descs.push(`런타임: ${RT[r.runtime] || r.runtime || '자동 선택'} (${rsrc})`);
+    if (r.runtime_source === 'legacy') descs.push(descLine('이 저장소의 러너가 옛 버전이라 런타임은 하네스를 동기화하기 전까지 자동으로 고릅니다. 여기서 고른 런타임은 동기화 뒤부터 적용됩니다.', 'info'));
+    else if (r.runtime && !RT[r.runtime]) descs.push(badRuntime(r.runtime));
     for (const note of (e.notes || []).filter((n) => !commonNotes.has(n))) descs.push(descLine(note, 'info'));
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const p = r.protection;
@@ -2652,6 +2905,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const ag = segment(aid, [['', '기본 따름'], ...APPROVALS], r.approval_mine || '', (k) => setApproval({ scope: 'repo', repo: r.repo, mode: k }));
     ag.setAttribute('aria-labelledby', `${id} ${aid}`); // 스크린리더가 어느 저장소의 승인인지 함께 읽는다
     ctl.push(alabel, ag);
+    const rid = id + '-runtime', rlabel = el('span', 'ds-caption', '런타임'); rlabel.id = rid;
+    const rg = segment(rid, [['', '기본 따름'], ...RUNTIMES], r.runtime_mine || '', (k) => setRuntime({ scope: 'repo', repo: r.repo, runtime: k }));
+    rg.setAttribute('aria-labelledby', `${id} ${rid}`); // 스크린리더가 어느 저장소의 런타임인지 함께 읽는다
+    ctl.push(rlabel, rg);
     const acts = el('div', 'ds-cluster');
     if (e.level && e.level !== 'pr' && e.source !== 'team') {
       const b = btn(r.protection ? '보호 다시 확인' : '브랜치 보호 확인', 'ds-btn--sm');
@@ -2660,7 +2917,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     acts.append(btn('저장소 사실 고치기', 'ds-btn--sm', () => openFacts(r)));
     ctl.push(acts);
-    return settingRow(id, r.name, descs, ctl, !!(r.mine || r.approval_mine));
+    return settingRow(id, r.name, descs, ctl, !!(r.mine || r.approval_mine || r.runtime_mine));
   }
   let commonNotes = new Set();
   function workSettings(P) {
@@ -2684,8 +2941,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!APPR[appr]) adescs.push(badApproval(appr));
     if (appr === 'auto') adescs.push(descLine('내 모든 저장소에 적용됩니다. 신뢰하지 않는 저장소에서도 저장소가 정한 검증 명령이 사람 확인 없이 돕니다 — 신뢰하는 저장소만 저장소별로 켜기를 권합니다.', 'attention'));
     mine.append(settingRow('set-approval', '내 기본 승인', adescs, segment('set-approval', APPROVALS, appr, (k) => setApproval({ scope: 'default', mode: k })), appr !== 'human'));
+    const rt = P.HM_RUNTIME || '';
+    const rdescs = [rt ? '터미널·스케줄러·보드·자동 실행에서도 이 CLI로 돕니다. 설치돼 있지 않으면 러너가 시작하지 않습니다.' : '러너를 부른 CLI, 저장소 integrations에 든 설치된 CLI, 설치된 유일한 CLI 순으로 고릅니다. 기본값 자동 선택.'];
+    if (rt && !RT[rt]) rdescs.push(badRuntime(rt));
+    mine.append(settingRow('set-runtime', '내 기본 런타임', rdescs, segment('set-runtime', [['', '자동 선택'], ...RUNTIMES], rt, (k) => setRuntime({ scope: 'default', runtime: k })), !!rt));
     out.push(mine);
-    const special = repos.filter((r) => r.error || r.mine || r.approval_mine || r.change || ((r.effective && r.effective.notes) || []).some((n) => !commonNotes.has(n)));
+    const special = repos.filter((r) => r.error || r.mine || r.approval_mine || r.runtime_mine || r.change || ((r.effective && r.effective.notes) || []).some((n) => !commonNotes.has(n)));
     const rest = repos.filter((r) => !special.includes(r));
     const sec = el('section', 'ds-stack');
     const h = el('h2', 'ds-label b-sechead', '기본과 다르게 둔 저장소'); h.append(count(special.length, null, '곳')); sec.append(h);

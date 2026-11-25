@@ -222,6 +222,14 @@ $ROOT/scripts/setup.sh team list
 2. 그래서 전체 설정은 `HM_APPROVAL=human`(기본, 줄 없음과 같다)으로 두고, 신뢰하는 저장소만 `HM_APPROVAL_REPOS="<project_id>=auto,…"`로 골라 켜기를 권한다. 일치하는 저장소별 항목이 전체 설정보다 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다. 사용자가 그래도 전체 `auto`를 고르면 위 위험을 다시 확인받은 뒤 기록하고, 예외로 둘 저장소는 `HM_APPROVAL_REPOS`에 `=human`으로 남긴다.
 3. 설정 파일의 다른 줄·주석·권한을 보존한다. 기존 manifest에 `approval`이 있으면 자동 삭제하지 말고 사용자에게 개인 설정으로 옮기도록 안내한다.
 
+### 8-0b. 워크플로 기본 런타임 (선택)
+
+워크플로 러너가 노드 세션을 띄울 CLI(`claude`·`codex`)를 사용자 개인 설정으로 고른다. `~/.ai-harness/config`를 읽어 현재 값을 보여 주고 선택한 키만 기록한다. 고르지 않으면 건드리지 않는다 — 값이 없으면 러너가 자동으로 고른다(러너를 부른 CLI > 저장소 `integrations` 중 설치된 것 하나 > 설치된 유일한 CLI).
+
+1. 전체 기본 `HM_RUNTIME=claude|codex`. 값이 있으면 터미널·스케줄러·보드·자동 실행 등 어디서 러너를 불러도 그 CLI로 돈다(부른 세션보다 앞선다).
+2. 저장소마다 다르게 하고 싶으면 `HM_RUNTIME_REPOS="<project_id>=claude|codex,…"`로 덮어쓴다. 일치하는 저장소별 항목이 전체 설정보다 우선하고, 실행할 때 넘긴 `--runtime`이 가장 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다.
+3. 고른 CLI가 설치돼 있지 않으면 러너는 다른 런타임으로 바꾸지 않고 이유와 함께 멈춘다(exit 2)고 알린다. 설정 파일의 다른 줄·주석·권한을 보존한다.
+
 ### 8-1. 워크플로 자동화 단계 (선택)
 
 워크플로 러너(기능 개발·버그 수정)가 PR 뒤 어디까지 스스로 갈지를 **사용자마다** 고른다. 저장소 설정이 아니라 `~/.ai-harness/config`에 남으므로 팀 PR 없이 바로 바뀌고, 같은 저장소의 다른 사람에게 영향이 없다. 같은 파일을 Read해 현재 값을 보여 주고 묻는다. 고르지 않으면 건드리지 않는다 — 값이 없으면 러너는 PR까지만 한다. 병합 여부를 정하는 곳은 이 설정뿐이다(저장소의 예전 `git_policy:"merge"`·`merge_policy` 병합 조건은 더 이상 쓰지 않는다).
@@ -285,6 +293,20 @@ $ROOT/scripts/board/board.sh launcher install    # 지우기: launcher remove
 ```
 
 `~/Applications/Harness Board.app`(`swiftc`로 만든 창 앱, 없거나 빌드에 실패하면 `osacompile`로 만든 AppleScript 앱. 아이콘 포함. `launcher status`의 `kind`가 `window`/`applet`)과 `~/.ai-harness/board/bin/open-board`를 만든다. 같은 이름의 다른 앱이 있으면 건드리지 않고 멈춘다. v0.77.0에 만든 앱(Dock에 남지 않는 앱)은 다시 `install`하면 바뀐다.
+
+### 8-4. 내 일정 — 구글 캘린더 연결 (선택)
+
+보드의 '내 일정' 화면에 구글 캘린더 일정을 보이려면 사용자가 **직접 만든** OAuth 클라이언트가 필요하다. 플러그인에는 공용 client id·secret이 없고 중개 서버도 없다 — 토큰은 이 PC에만 남는다(`docs/privacy.md`). 사용자가 원할 때만 아래 순서를 안내한다. **대신 실행하거나 값을 묻지 않는다** — 구글 계정 로그인·약관 동의·파일 내려받기는 사용자가 한다. `~/.ai-harness/google-oauth-client.json`이 이미 있으면 7번만 안내한다.
+
+1. [Google Cloud 콘솔](https://console.cloud.google.com/)에서 새 프로젝트를 만든다(이름은 자유, 예: `my-board`).
+2. 그 프로젝트의 "API 및 서비스 → 라이브러리"에서 **Google Calendar API**를 찾아 사용 설정한다.
+3. "OAuth 동의 화면"(Google Auth Platform → 브랜딩)에서 사용자 유형을 **외부**로 고르고 앱 이름·지원 이메일을 적는다. 데이터 액세스(범위)에 `https://www.googleapis.com/auth/calendar.readonly` 하나만 더한다.
+4. 대상(사용자 유형·테스트 사용자): 게시 상태가 **테스트**이면 자기 구글 계정을 테스트 사용자로 더해야 하고, 이때 받은 갱신 토큰은 7일 뒤 만료돼 일주일마다 다시 연결해야 한다. 자기만 쓰는 앱이면 **프로덕션으로 게시**해 두면 이 만료가 없다(확인되지 않은 앱 경고는 본인 계정이므로 "계속"으로 넘긴다).
+5. "클라이언트 → 클라이언트 만들기"에서 애플리케이션 유형 **데스크톱 앱**으로 OAuth 클라이언트를 만든다. 웹 애플리케이션 유형은 쓰지 않는다.
+6. 만든 클라이언트의 JSON을 내려받아 `~/.ai-harness/google-oauth-client.json`에 두고 권한을 줄인다: `chmod 600 ~/.ai-harness/google-oauth-client.json`. 이 파일은 저장소·채팅에 붙이지 않는다.
+7. 보드(`/ai-harness:board`)의 **내 일정 → 연결한 곳**에서 구글 캘린더의 [연결]을 누르고, 열린 브라우저에서 허용한다. 구글 캘린더에서 "표시"로 고른 캘린더(팀 공유 캘린더 포함)의 오늘부터 7일 일정이 보인다. 끊으려면 같은 자리의 [끊기] — 이 PC의 토큰을 지우고 구글 쪽 권한도 철회를 시도한다.
+
+같은 화면의 할 일은 보드 입력 칸이나 `$ROOT/scripts/board/board.sh todo add <내용>`으로 적는다.
 
 ## 디자인 스킬 (`design`)
 

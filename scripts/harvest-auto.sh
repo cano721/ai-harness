@@ -337,11 +337,31 @@ prior_sync_prs() { # $1=project [$2=제외할 URL]
     | .[-5:][]' "$RUNS_FILE" 2>/dev/null || true
 }
 
+# 원격에 열린 sync PR(브랜치 이름이 harness-sync-<버전>으로 끝난다). 사람이 세션에서 /harness-init --sync로 연 PR은
+# runs.jsonl에 없어, 기록만 보면 새 sync PR이 열려도 열린 채 남는다(#474). 목록을 못 읽으면 기록만 쓴다.
+remote_sync_prs() { # $1=저장소 URL(비우면 현재 디렉토리의 origin) [$2=제외할 URL]
+  local out=""
+  out="$(pr_cmd --list-open ${1:+"$1"} 2>/dev/null)" || return 0
+  jq -r --arg skip "${2:-}" 'select((.head // "") | test("harness-sync-v?[0-9]+[.][0-9]+[.][0-9]+$"))
+    | .url // "" | select(startswith("https://") and . != $skip)' <<<"$out" 2>/dev/null || true
+}
+
+# 정리·차단 판정 대상: 자동 sync 기록 + 원격의 열린 sync PR(중복 제거).
+sync_pr_candidates() { # $1=project $2=저장소 URL 또는 로컬 저장소 경로 [$3=제외할 URL]
+  {
+    prior_sync_prs "$1" "${3:-}"
+    case "$2" in
+      https://*) remote_sync_prs "$2" "${3:-}" ;;
+      ?*) (cd "$2" 2>/dev/null && remote_sync_prs "" "${3:-}") ;;
+    esac
+  } | awk 'NF && !seen[$0]++'
+}
+
 # 새 sync를 띄우지 않을 이유. 사람이 코멘트·리뷰·승인을 남긴 열린 sync PR이 있으면 그 PR을 기준으로 이야기가
 # 진행 중이고, 같은 파일을 고치는 두 PR은 함께 병합할 수 없다. 상태를 못 읽으면 PR이 다시 쌓이지 않게 기다린다.
 # open-pr.sh는 셸에 없는 Bitbucket 자격증명을 Claude settings.json env에서 찾는다. 그래도 없으면(종료 코드 4) 로그인
 # 풀림·권한과 원인이 달라 이유를 가른다 — 보드가 고칠 곳(자격증명 설정)을 보인다.
-sync_blocked_reason() { # $1=project
+sync_blocked_reason() { # $1=project $2=로컬 저장소 경로
   local url="" st="" rc=0
   while IFS= read -r url; do
     [[ -n "$url" ]] || continue
@@ -355,24 +375,27 @@ sync_blocked_reason() { # $1=project
     if jq -e '.state == "open" and (.activity // 0) > 0' <<<"$st" >/dev/null 2>&1; then
       printf 'sync_pr_in_review\n'; return 0
     fi
-  done <<<"$(prior_sync_prs "$1")"
+  done <<<"$(sync_pr_candidates "$1" "${2:-}")"
 }
 
 # 새 sync PR이 실제로 열려 있으면, 같은 저장소의 옛 sync PR 중 아무도 손대지 않은 열린 PR을 닫는다.
 # 같은 project_id를 쓰는 다른 저장소의 PR은 건드리지 않는다.
 supersede_sync_prs() { # $1=project $2=새 PR URL
-  local url="" st="" repo=""
+  local url="" st="" repo="" created=""
   st="$(pr_cmd --status "$2" 2>/dev/null)" || return 0
   jq -e '.state == "open"' <<<"$st" >/dev/null 2>&1 || return 0
+  created="$(jq -r '.created // empty' <<<"$st" 2>/dev/null)"
   repo="$(pr_repo "$2")"
   while IFS= read -r url; do
     [[ -n "$url" && "$(pr_repo "$url")" == "$repo" ]] || continue
     st="$(pr_cmd --status "$url" 2>/dev/null)" || continue
-    jq -e '.state == "open" and (.activity // 0) == 0' <<<"$st" >/dev/null 2>&1 || continue
+    # 새 PR보다 나중에 열린 PR(더 새 플러그인으로 사람이 연 sync)은 옛 PR이 아니다.
+    jq -e --arg c "$created" '.state == "open" and (.activity // 0) == 0
+      and ($c == "" or (.created // "") == "" or .created <= $c)' <<<"$st" >/dev/null 2>&1 || continue
     pr_cmd --decline "$url" --comment "자동 sync가 새 플러그인 버전 PR로 대체했습니다: $2" >/dev/null 2>&1 || continue
     append_run "$(jq -cn --arg at "$(now_iso)" --arg project "$1" --arg artifact "$url" --arg by "$2" \
       '{at:$at,event:"superseded",project:$project,scope:"sync",artifact:$artifact,by:$by}')"
-  done <<<"$(prior_sync_prs "$1" "$2")"
+  done <<<"$(sync_pr_candidates "$1" "$repo" "$2")"
 }
 
 # 기준 브랜치의 harness_version이 플러그인보다 낮은 하네스 저장소를 /harness-init --sync로 따라오게 한다.
@@ -396,7 +419,7 @@ maybe_sync_run() {
       (( fails < MAX_FAILS )) || continue
     fi
     local blocked=""
-    blocked="$(sync_blocked_reason "$project")"
+    blocked="$(sync_blocked_reason "$project" "$repo")"
     if [[ -n "$blocked" ]]; then
       log_skip "$project" "sync-$plugin" "$blocked"
       continue
