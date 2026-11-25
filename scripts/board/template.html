@@ -670,9 +670,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 @media (max-width: 760px) {
   .b-agev__title { white-space: normal; }
 }
-.b-agform__row { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.b-agform__row { position: relative; display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
 .b-agform__row > .ds-input { flex: 1 1 8rem; min-width: 0; }
-.b-agform__row > .b-agdue { flex: 0 1 9.5rem; }
+.b-agform__row > .b-agdue { flex: 0 0 auto; }
+/* 기한 팝오버: 폼 줄 오른쪽 끝 아래로 연다. 폭을 줄 안으로 막아 360폭에서도 넘치지 않는다 */
+.b-agdue-pop { position: absolute; right: 0; top: calc(100% + var(--space-1)); width: min(16rem, 100%); z-index: var(--z-popover); display: grid; gap: var(--space-1); padding: var(--space-2);
+  background: var(--color-surface-overlay); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-overlay); }
+.b-agdue-pop > .ds-btn { width: 100%; justify-content: flex-start; }
+.b-agdue-pop > .ds-label { margin-top: var(--space-1); }
 /* 내 일정: 편집기 옆 좁은 폭에 띄워 두는 1단. 머리(시각·연결) → 지금·다음 카드 → 할 일 절 → 접힌 버튼 */
 .b-agpage { display: grid; gap: var(--space-5); max-width: 46rem; min-width: 0; }
 .b-aghead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -1668,7 +1673,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 
   // ---- 내 일정: 머리(시각·[⚙ 연결 N]) → 지금·다음 카드 → 답할 것·새로 맡겨진 요청·기한 있음 → 접힌 쌓인 요청·이번 주·완료함 ----
   // 서버(/agenda)가 소스 상태와 종류별 열린 항목을 준다. 연결 중이거나 모으는 중인 소스가 있으면 2초, 아니면 30초마다 다시 읽는다.
-  let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftDue = '', agDraftErr = false;
+  let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftDue = '', agDueOpen = false, agDraftErr = false;
   const agOpen = new Set();        // 펼친 설정 안내(소스 id)
   const agConnecting = new Set();  // 연결을 누르고 결과를 기다리는 소스 — 끝나면 토스트 한 번
   const agRefreshing = new Set();  // [다시 가져오기]를 누르고 기다리는 소스 — 다시 그려도 버튼이 바쁜 상태를 잃지 않게
@@ -2051,15 +2056,73 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       return [ul];
     }, true);
   }
+  // 기한 빠른 선택: 오늘·내일·이번 주 금요일(월~목만 — 금은 오늘과 겹치고 토·일엔 이미 지났다)·다음 주 월요일(오늘 다음의 첫 월요일)
+  function dueQuick(base) {
+    const at = (n) => { const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + n); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+    const w = base.getDay(), out = [{ label: '오늘', key: at(0) }, { label: '내일', key: at(1) }];
+    if (w >= 1 && w <= 4) out.push({ label: '이번 주 금요일', key: at(5 - w) });
+    out.push({ label: '다음 주 월요일', key: at((8 - w) % 7 || 7) });
+    return out;
+  }
+  // 기한 팝오버: 빠른 선택 버튼 목록(Tab 이동) + 날짜 직접 고르기. 날짜 칸 change는 값만 반영하고 열어 둔다(연도를 치는 중간값에 닫히지 않게).
+  function duePop(onPick, onClose) {
+    const pop = el('div', 'b-agdue-pop'); pop.id = 'ag-due-pop'; pop.setAttribute('role', 'group'); pop.setAttribute('aria-label', '기한 고르기');
+    dueQuick(new Date()).forEach((q, n) => {
+      const b = el('button', 'ds-btn ds-btn--ghost', `${q.label} · ${dayShort(q.key)}`); b.type = 'button'; b.id = 'ag-due-q' + n;
+      b.onclick = () => onPick(q.key, true);
+      pop.append(b);
+    });
+    const lab = el('label', 'ds-label', '날짜 직접 고르기'); lab.htmlFor = 'ag-due-date';
+    const date = el('input', 'ds-input'); date.id = 'ag-due-date'; date.type = 'date'; date.value = /^\d{4}-\d{2}-\d{2}$/.test(agDraftDue) ? agDraftDue : '';
+    date.onchange = () => { if (/^\d{4}-\d{2}-\d{2}$/.test(date.value) && !Number.isNaN(new Date(date.value).getTime())) onPick(date.value, false); };
+    date.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); onClose(true); } };
+    pop.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(true); } };
+    pop.append(lab, date);
+    return pop;
+  }
+  // 팝오버 바깥 클릭·포커스 이탈: 다시 그려진 폼이 있을 수 있어 지금 화면의 [기한] 버튼에 닫기를 맡긴다.
+  // WebKit(창 앱·Safari)은 버튼을 눌러도 포커스를 주지 않고 기존 포커스만 푼다 — 팝오버·[기한]을 누르는 동안(agDuePress)엔 focusout으로 닫지 않는다. 바깥 클릭은 pointerdown이 닫는다.
+  let agDuePress = false;
+  function agDueDismiss() {
+    if (!agDueOpen || agDuePress) return;
+    const a = document.activeElement;
+    if (a && (a.id === 'ag-due-btn' || (a.closest && a.closest('#ag-due-pop')))) return;
+    const b = $('ag-due-btn'); if (b) b.dispatchEvent(new Event('agdueclose')); else agDueOpen = false;
+  }
+  document.addEventListener('pointerdown', (e) => {
+    const inside = !!(e.target.closest && e.target.closest('#ag-due-pop, #ag-due-btn'));
+    agDuePress = agDueOpen && inside;
+    if (agDueOpen && !inside) { const b = $('ag-due-btn'); if (b) b.dispatchEvent(new Event('agdueclose')); else agDueOpen = false; }
+  }, true);
+  const agDueRelease = () => { if (agDuePress) setTimeout(() => { agDuePress = false; }); };
+  document.addEventListener('pointerup', agDueRelease, true);
+  document.addEventListener('pointercancel', agDueRelease, true);
   function todoForm() {
     const f = el('form', 'ds-field'); f.noValidate = true;
     const lab = el('label', 'ds-label', '할 일 적기'); lab.htmlFor = 'ag-todo';
     const inp = el('input', 'ds-input'); inp.id = 'ag-todo'; inp.type = 'text'; inp.autocomplete = 'off'; inp.maxLength = 300; inp.placeholder = '예: 회의록 정리'; inp.value = agDraft;
     const err = el('span', 'ds-field__error'); err.id = 'ag-todo-err'; err.append(icon('danger'), '할 일 내용을 적어 주세요.'); err.hidden = !agDraftErr;
     inp.setAttribute('aria-describedby', 'ag-todo-err'); if (agDraftErr) inp.setAttribute('aria-invalid', 'true');
-    const due = el('input', 'ds-input b-agdue'); due.id = 'ag-todo-due'; due.type = 'date'; due.value = agDraftDue; due.setAttribute('aria-label', '기한(선택)'); due.title = '기한(선택)';
-    due.oninput = () => { agDraftDue = due.value; };
+    const dueBtn = el('button', 'ds-btn b-agdue'); dueBtn.type = 'button'; dueBtn.id = 'ag-due-btn'; dueBtn.setAttribute('aria-controls', 'ag-due-pop');
+    const clear = el('button', 'ds-btn ds-btn--ghost ds-btn--icon'); clear.type = 'button'; clear.id = 'ag-due-clear'; clear.setAttribute('aria-label', '기한 지우기'); clear.title = '기한 지우기'; clear.append(icon('close'));
     const add = el('button', 'ds-btn', '추가'); add.type = 'submit'; add.id = 'ag-todo-add';
+    const row = el('div', 'b-agform__row');
+    let pop = null;
+    const paint = () => {
+      dueBtn.textContent = agDraftDue ? dayShort(agDraftDue) : '기한';
+      if (agDraftDue) dueBtn.setAttribute('aria-label', `기한 ${dayShort(agDraftDue)}, 바꾸기`); else dueBtn.removeAttribute('aria-label');
+      dueBtn.setAttribute('aria-expanded', String(agDueOpen));
+      if (agDraftDue) { if (!clear.isConnected) add.before(clear); } else clear.remove();
+      if (agDueOpen && !pop) { pop = duePop(pick, close); pop.addEventListener('focusout', () => setTimeout(agDueDismiss)); dueBtn.after(pop); }
+      else if (!agDueOpen && pop) { pop.remove(); pop = null; }
+    };
+    function close(focusBtn) { agDueOpen = false; paint(); if (focusBtn) dueBtn.focus(); }
+    function pick(key, done) { agDraftDue = key; if (done) close(true); else paint(); }
+    dueBtn.onclick = () => { if (agDueOpen) { close(true); return; } agDueOpen = true; paint(); $('ag-due-q0').focus(); };
+    dueBtn.onkeydown = (e) => { if (e.key === 'Escape' && agDueOpen) { e.preventDefault(); e.stopPropagation(); close(true); } };
+    dueBtn.addEventListener('focusout', () => setTimeout(agDueDismiss));
+    dueBtn.addEventListener('agdueclose', () => close(false));
+    clear.onclick = () => { agDraftDue = ''; paint(); dueBtn.focus(); };
     const setErr = (on) => { agDraftErr = on; err.hidden = !on; if (on) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid'); };
     inp.oninput = () => { agDraft = inp.value; if (agDraftErr && inp.value.trim()) setErr(false); };
     f.onsubmit = async (e) => {
@@ -2068,15 +2131,15 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (!text) { setErr(true); inp.focus(); return; }
       if (add.getAttribute('aria-busy')) return;
       busy(add, '추가하는 중');
-      let res; try { res = await post('/agenda/todo', due.value ? { text, due: due.value } : { text }); } catch (x) { res = { ok: false, message: '할 일을 추가하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+      let res; try { res = await post('/agenda/todo', agDraftDue ? { text, due: agDraftDue } : { text }); } catch (x) { res = { ok: false, message: '할 일을 추가하지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
       unbusy(add);
       if (!res.ok) { toast(res.message, false); return; }
-      agDraft = ''; agDraftDue = ''; inp.value = ''; due.value = ''; setErr(false);
+      agDraft = ''; agDraftDue = ''; agDueOpen = false; inp.value = ''; paint(); setErr(false);
       toast('할 일을 추가했습니다.', true);
       await loadAgenda(true);
       const again = $('ag-todo'); if (again) again.focus();
     };
-    const row = el('div', 'b-agform__row'); row.append(inp, due, add);
+    row.append(inp, dueBtn, add); paint();
     f.append(lab, row, err);
     return f;
   }
