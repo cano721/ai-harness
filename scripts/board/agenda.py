@@ -4,19 +4,26 @@
 일정·답할 것·할 일은 캘린더·메신저·메일에 흩어져 있다. 보드는 이것들을 '어댑터'(명령)로 받아 한 화면에 모은다.
 어댑터 계약(#492):
 - 소스 선언 agenda.json: id(소문자·숫자·-), name, fetch(argv). 선택 interval_minutes(기본 15, 최소 1),
-  connect·disconnect·done(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침), setup_hint(사람 말 한 줄),
+  connect·disconnect·done·reopen(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침), setup_hint(사람 말 한 줄),
   setup_prompt(#525. requires가 없을 때 보드 [설정하기]가 띄우는 설정 세션에 넘길 안내. 공백을 정리해 1000자까지).
   argv의 상대 경로는 agenda.json 폴더 기준이다(그 폴더를 작업 폴더로 삼아 실행한다).
 - 발견 순서: 플러그인 scripts/board/agenda/*/ → HM_CLAUDE_SKILLS_DIR/*/ → HM_CODEX_SKILLS_DIR/*/. 같은 id는 먼저 찾은
   쪽이 쓴다(기본 어댑터를 사용자 파일이 가로채지 못한다). 잘못된 선언은 그 소스만 '선언 오류'로 보인다.
 - fetch는 `--since ISO --until ISO`를 덧붙여 부르고, stdout JSONL 한 줄이 항목 하나다
-  {id, kind: event|reply|todo, title, start?, end?, due?, url?, detail?, done?}. 잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
+  {id, kind: event|reply|todo, title, start?, end?, due?, created?, from?, shared?, url?, detail?, done?}.
+  잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
   due(#539)는 reply·todo의 기한: 날짜(YYYY-MM-DD) 또는 날짜·시각(ISO 8601). 읽을 수 없는 기한은 버리고 항목은 남긴다.
+  created(#567)는 받은·만든 시각(ISO 8601, 읽을 수 없으면 버린다), from은 요청자(60자까지), shared는 event가 팀·공유
+  캘린더 일정이면 true. 화면이 할 일을 새로 맡겨진 것·쌓인 것으로 가르고 경과일·요청자를 보이며 공유 일정을 접는 데 쓴다.
 - done은 argv 뒤에 항목 id를 붙여 부른다. done이 없는 소스는 보드가 done.json에만 적고 숨긴다. event는 완료 대상이 아니다.
+  reopen(#567)은 argv 뒤에 항목 id를 붙여 원본의 완료를 되돌린다. 선언한 소스만 완료 토스트·완료함에서 다시 열 수 있다.
+- 일정은 실제 시각순이다: (로컬 날짜, 종일 먼저, 시각, 제목). 종일(YYYY-MM-DD)은 그날 0시, 읽을 수 없는 start는 맨 뒤.
 - 선택 accounts(argv, #519): 한 소스에 계정을 여럿 잇는 어댑터. stdout JSONL 한 줄이 계정 하나 {id, name, error?}.
   선언한 소스는 연결된 뒤에도 connect를 다시 불러 계정을 더하고, 끊기는 disconnect argv 뒤에 계정 id를 붙여 그 계정만 끊는다
   (마지막 계정을 끊으면 소스 연결도 끊긴다). 계정 목록은 연결·끊기·수집 뒤에 다시 읽어 sources.json에 둔다.
-데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json·brief.json, 모두 600)에 둔다.
+데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json·brief.json·completed.json, 모두 600)에 둔다.
+완료함(#567) completed.json은 최근 7일 완료(직접 적은 할 일·보드에만 숨긴 항목·어댑터 done)의 출처·id·제목·url·시각만
+남기고 본문(detail)은 남기지 않는다. 7일이 지난 줄은 읽고 쓸 때 지우고, 다시 열면 그 줄을 지운다.
 아침 요약(#539): 스킬의 정기 작업이 `board.sh brief set`으로 요약 글을 남기면 화면 맨 위에 보이고, `board.sh agenda summary`는
 그 요약을 만들 재료(오늘 일정·답할 것·기한순 할 일)를 JSON으로 낸다.
 메일·채팅·일정 본문은 이 폴더에만 있고 harvest·지표 수집 대상(events/)에 쓰지 않는다.
@@ -34,6 +41,8 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 TODO_ID = "todo"
 MAX_ITEMS = 500
 SETUP_PROMPT_MAX = 1000
+FROM_MAX = 60
+COMPLETED_DAYS = 7
 BRIEF_MAX = 4000
 DEFAULT_INTERVAL = 15
 # 테스트 전용 시간 한도(사용자 설정 아님) — 실패 격리 테스트가 시간 초과를 몇 초 안에 보게 한다.
@@ -70,6 +79,29 @@ def parse_due(value):
     except ValueError:
         return None, None
     return v, (d if d.tzinfo else d.astimezone()).timestamp()
+
+
+def parse_when(value):
+    """일정 start 같은 시각 → epoch. 날짜만이면 그날 0시(이 PC 시간대), 시간대 없는 시각은 이 PC 시간대. 못 읽으면 None."""
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 40:
+        return None
+    v = value.strip()
+    try:
+        if DATE_RE.match(v):
+            return datetime.strptime(v, "%Y-%m-%d").astimezone().timestamp()
+        d = datetime.fromisoformat(v[:-1] + "+00:00" if v.endswith("Z") else v)
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.astimezone()).timestamp()
+
+
+def event_key(it):
+    """(로컬 날짜, 종일 먼저, 시각, 제목). 소스·계정·오프셋이 섞여도 실제 시각순이다. 읽을 수 없는 start는 맨 뒤."""
+    ts = parse_when(it.get("start"))
+    if ts is None:
+        return (1, "", 0, 0.0, it.get("title") or "")
+    day = datetime.fromtimestamp(ts).astimezone().strftime("%Y-%m-%d")
+    return (0, day, 0 if DATE_RE.match(it["start"].strip()) else 1, ts, it.get("title") or "")
 
 
 def window(now=None):
@@ -149,7 +181,7 @@ def parse_declaration(path):
         return None, "name이 없습니다."
     if not _argv(d.get("fetch")):
         return None, "fetch 명령(문자열 배열)이 없습니다."
-    for k in ("connect", "disconnect", "done", "accounts"):
+    for k in ("connect", "disconnect", "done", "reopen", "accounts"):
         if k in d and not _argv(d[k]):
             return None, f"{k} 명령이 문자열 배열이 아닙니다."
     if "accounts" in d and "disconnect" not in d:
@@ -171,7 +203,7 @@ def parse_declaration(path):
     return {
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
-        "accounts": d.get("accounts"),
+        "reopen": d.get("reopen"), "accounts": d.get("accounts"),
         "interval": interval, "requires": req, "setup_hint": _short(hint, 300) if hint else None,
         "setup_prompt": _short(prompt, SETUP_PROMPT_MAX) if prompt and prompt.strip() else None,
     }, None
@@ -219,6 +251,13 @@ def _normalize(raw, source_id):
     due, _ = parse_due(raw.get("due"))
     if due and kind != "event":
         item["due"] = due
+    created, _ = parse_due(raw.get("created"))
+    if created:
+        item["created"] = created
+    if isinstance(raw.get("from"), str) and raw["from"].strip():
+        item["from"] = _short(raw["from"], FROM_MAX)
+    if kind == "event" and raw.get("shared") is True:
+        item["shared"] = True
     url = raw.get("url") if isinstance(raw.get("url"), str) else raw.get("link")
     if isinstance(url, str) and re.match(r"^https?://", url):
         item["url"] = url[:2000]
@@ -262,6 +301,7 @@ class Store:
         self.done_path = os.path.join(self.dir, "done.json")
         self.todos_path = os.path.join(self.dir, "todos.json")
         self.brief_path = os.path.join(self.dir, "brief.json")
+        self.completed_path = os.path.join(self.dir, "completed.json")
         self.warn = warn or (lambda m: print(m, file=sys.stderr, flush=True))
         self._warned = set()
         self.lock = threading.Lock()
@@ -470,13 +510,53 @@ class Store:
         d = _read_json(self.done_path, {})
         return d if isinstance(d, dict) else {}
 
+    # ---- 완료함(#567) ----
+    def _completed_rows(self):
+        d = _read_json(self.completed_path, {})
+        rows = d.get("items") if isinstance(d, dict) else None
+        return [r for r in rows or [] if isinstance(r, dict) and isinstance(r.get("source"), str) and isinstance(r.get("id"), str)]
+
+    def _completed_update(self, change=None):
+        """잠근 채 읽고 7일 지난 줄을 지운 뒤 change(rows)로 고친다. 바뀐 게 있을 때만 쓴다. 반환: 남은 줄."""
+        with _FileLock(self.completed_path):
+            rows = self._completed_rows()
+            cutoff = time.time() - COMPLETED_DAYS * 86400
+            kept = [r for r in rows if _epoch(r.get("done_at")) >= cutoff]
+            if change:
+                kept = change(kept)
+            if kept != rows or (change and not os.path.exists(self.completed_path)):
+                _write_private(self.completed_path, {"items": kept})
+            return kept
+
+    def _completed_add(self, source, source_name, item):
+        row = {"source": source, "source_name": source_name, "id": item["id"], "kind": item.get("kind") or "todo",
+               "title": item.get("title") or "", "done_at": utc()}
+        if item.get("url"):
+            row["url"] = item["url"]
+        self._completed_update(lambda rows: [r for r in rows if (r["source"], r["id"]) != (source, item["id"])] + [row])
+
+    def _completed_remove(self, source, item_id):
+        self._completed_update(lambda rows: [r for r in rows if (r["source"], r["id"]) != (source, item_id)])
+
+    def completed(self, sources=None):
+        """최근 7일 완료, 최신순. can_reopen: 할 일·보드 숨김은 늘, 어댑터는 소스가 지금 reopen을 선언했을 때만."""
+        by_id = {s["id"]: s for s in (sources if sources is not None else self.sources()) if not s.get("invalid")}
+        hidden = self._done_local()
+        out = []
+        for r in sorted(self._completed_update(), key=lambda r: _epoch(r.get("done_at")), reverse=True):
+            src = by_id.get(r["source"])
+            local = r["source"] == TODO_ID or r["id"] in (hidden.get(r["source"]) or {})
+            out.append(dict(r, can_reopen=bool(local or (src and src.get("reopen")))))
+        return out
+
     # ---- 화면용 상태 ----
     def state(self, wait=WAIT_ON_READ):
         self.refresh_due(wait)
         local_done = self._done_local()
         connected = self._connected()
         sources, items = [], {k: [] for k in KINDS}
-        for src in self.sources():
+        declared = self.sources()
+        for src in declared:
             if src.get("invalid"):
                 sources.append({"id": src["id"], "name": src["name"], "state": "error", "connected": False,
                                 "invalid": True, "error": "선언 오류: " + src["invalid"], "fetched_at": None, "setup_hint": None,
@@ -511,14 +591,17 @@ class Store:
             if not t.get("done_at"):
                 row = {"source": TODO_ID, "source_name": "할 일", "id": t["id"], "kind": "todo",
                        "title": t["title"], "start": t.get("created_at"), "local": True}
+                if t.get("created_at"):
+                    row["created"] = t["created_at"]
                 if parse_due(t.get("due"))[0]:
                     row["due"] = t["due"]
                 items["todo"].append(row)
-        items["event"].sort(key=lambda i: (i.get("start") or "", i["title"]))
+        items["event"].sort(key=event_key)
         for k in ("reply", "todo"):  # 기한 있는 것이 먼저(이른 순), 기한 없는 것은 원래 순서
             items[k].sort(key=lambda i: parse_due(i.get("due"))[1] or float("inf"))
         res = {"ok": True, "now": utc(), "sources": sources, "items": items,
-               "todo_total": len(todos), "window": dict(zip(("since", "until"), window()))}
+               "todo_total": len(todos), "window": dict(zip(("since", "until"), window())),
+               "completed": self.completed(declared)}
         brief = self.brief()
         if brief:
             res["brief"] = brief
@@ -682,15 +765,19 @@ class Store:
             item["done"] = True
             if self.is_connected(source_id):
                 _write_private(self.cache_path(source_id), c)
-            return 200, {"ok": True, "message": f"{src['name']}에 완료로 표시했습니다.", "undo": False}
+            self._completed_add(source_id, src["name"], item)
+            if src["reopen"]:
+                return 200, {"ok": True, "message": f"{src['name']}에 완료로 표시했습니다.", "undo": True}
+            return 200, {"ok": True, "message": f"{src['name']}에 완료로 표시했습니다. 되돌리려면 원본에서 다시 여세요.", "undo": False}
         with _FileLock(self.done_path):
             d = self._done_local()
             d.setdefault(source_id, {})[item_id] = utc()
             _write_private(self.done_path, d)
+        self._completed_add(source_id, src["name"], item)
         return 200, {"ok": True, "message": "완료로 표시했습니다. 이 보드에서만 숨깁니다.", "undo": True}
 
     def reopen(self, source_id, item_id):
-        """방금 누른 완료를 되돌린다(#539). 직접 적은 할 일과 보드에만 숨긴 항목만 — 어댑터 done으로 알린 것은 되돌리지 못한다."""
+        """완료를 되돌린다(#539·#567). 직접 적은 할 일·보드에만 숨긴 항목, reopen을 선언한 어댑터의 done 항목."""
         if not isinstance(item_id, str) or not item_id:
             return 400, {"ok": False, "message": "되돌릴 항목이 없습니다."}
         if source_id == TODO_ID:
@@ -700,16 +787,41 @@ class Store:
                 if hit:
                     hit["done_at"] = None
                     _write_private(self.todos_path, {"items": items})
+            if hit:
+                self._completed_remove(TODO_ID, item_id)
             return (200, {"ok": True, "message": "할 일을 다시 열었습니다."}) if hit else \
                 (404, {"ok": False, "message": "되돌릴 할 일을 찾지 못했습니다."})
         with _FileLock(self.done_path):
             d = self._done_local()
             hidden = d.get(source_id) if isinstance(d.get(source_id), dict) else {}
-            if item_id not in hidden:
-                return 409, {"ok": False, "message": "원본에 완료로 알린 항목은 여기서 되돌릴 수 없습니다. 원본에서 다시 여세요."}
-            hidden.pop(item_id)
-            _write_private(self.done_path, d)
-        return 200, {"ok": True, "message": "다시 목록에 올렸습니다."}
+            was_hidden = item_id in hidden
+            if was_hidden:
+                hidden.pop(item_id)
+                _write_private(self.done_path, d)
+        if was_hidden:
+            self._completed_remove(source_id, item_id)
+            return 200, {"ok": True, "message": "다시 목록에 올렸습니다."}
+        return self._reopen_adapter(source_id, item_id)
+
+    def _reopen_adapter(self, source_id, item_id):
+        src = self.find(source_id)
+        if not src or not src["reopen"]:
+            return 409, {"ok": False, "message": "원본에 완료로 알린 항목은 여기서 되돌릴 수 없습니다. 원본에서 다시 여세요."}
+        c = self.cache(source_id)
+        cached = next((i for i in c.get("items") or [] if i.get("id") == item_id), None)
+        known = any((r["source"], r["id"]) == (source_id, item_id) for r in self._completed_rows())
+        if not known and not (cached and cached.get("done")):
+            return 404, {"ok": False, "message": "되돌릴 항목을 찾지 못했습니다."}
+        code, _out, err = self._run(src, src["reopen"], [item_id], ACTION_TIMEOUT)
+        if code != 0:
+            return 200, {"ok": False, "message": f"{src['name']}에서 다시 열지 못했습니다. " + err}
+        if cached and cached.get("done") and self.is_connected(source_id):
+            cached.pop("done", None)
+            _write_private(self.cache_path(source_id), c)
+        self._completed_remove(source_id, item_id)
+        if self.is_connected(source_id) and not self.missing(src):
+            self._start_fetch(src, again=True)
+        return 200, {"ok": True, "message": f"{src['name']}에서 다시 열었습니다."}
 
     # ---- 할 일 ----
     def _todos(self):
@@ -746,6 +858,7 @@ class Store:
                 return False
             hit["done_at"] = utc()
             _write_private(self.todos_path, {"items": items})
+        self._completed_add(TODO_ID, "할 일", dict(hit, kind="todo"))
         return True
 
     def todo_list(self, include_done=False):

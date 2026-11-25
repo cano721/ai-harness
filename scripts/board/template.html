@@ -658,18 +658,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agev__time > span { display: block; }
 .b-agev__time > span:first-child { color: var(--color-text); }
 .b-agev--past .b-agev__time > span:first-child { color: var(--color-text-muted); }
-/* 오늘 목록에서 지난 일정과 다가올 일정 사이의 '지금' 줄 */
-.b-agnow { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-5); border-top: 1px solid var(--color-border-control); color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
 .b-agev__main { min-width: 0; display: grid; gap: var(--space-1); padding: var(--space-1) 0; }
 .b-agev__title { font-weight: var(--font-weight-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .b-agev__cal { color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .b-agev__side { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-1); }
-/* 넓은 폭에서는 일정이 주 내용이라 왼쪽 넓은 열 하나를 쓰고, 답해야 할 것·할 일은 오른쪽 열에 위아래로 선다.
-   좁으면 공용 열 규칙(.ds-columns)대로 접힌다. */
-@media (min-width: 1024px) {
-  .b-agcols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-template-rows: auto 1fr; }
-  .b-agcols > :first-child { grid-row: span 2; }
-}
 .b-agev--past .b-agev__title { color: var(--color-text-muted); font-weight: var(--font-weight-body); }
 .b-agaccs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
 .b-agacc { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-width: 0; }
@@ -681,23 +673,56 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agform__row { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
 .b-agform__row > .ds-input { flex: 1 1 8rem; min-width: 0; }
 .b-agform__row > .b-agdue { flex: 0 1 9.5rem; }
-/* 오늘 한 줄 결론(이슈 539): 숫자가 소식이라 숫자를 앞에 둔다 */
-.b-agsum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin: 0; }
-.b-agsum > span { display: inline-flex; align-items: center; gap: var(--space-1); }
+/* 내 일정: 편집기 옆 좁은 폭에 띄워 두는 1단. 머리(시각·연결) → 지금·다음 카드 → 할 일 절 → 접힌 버튼 */
+.b-agpage { display: grid; gap: var(--space-5); max-width: 46rem; min-width: 0; }
+.b-aghead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.b-aghead__now { margin: 0; color: var(--color-text-muted); }
+.b-agnow { display: grid; gap: var(--space-2); }
+.b-agnow__line { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; min-width: 0; }
+.b-agnow__lab { flex: none; font-weight: var(--font-weight-strong); }
+.b-agnow__time { flex: none; }
+.b-agnow__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-agnow__tail { flex: none; color: var(--color-text-muted); }
+.b-agnow__none { margin: 0; color: var(--color-text-muted); }
+/* 접힌 줄(disclosure): 한 줄 글자 + 화살표. 펼치면 화살표가 아래를 본다 */
+.b-agfold { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0; max-width: 100%; min-height: var(--size-control-sm); margin: 0; padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-text-muted); font: inherit; font-size: var(--font-size-caption); line-height: var(--font-line-caption); text-align: left; cursor: pointer; }
+.b-agfold:hover { background: var(--color-surface-hover); }
+.b-agfold__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-agfold > .ds-icon { flex: none; transition: transform var(--motion-duration-medium) var(--motion-ease-standard); }
+.b-agfold[aria-expanded="true"] > .ds-icon { transform: rotate(90deg); }
+.b-agfold--more { min-height: var(--size-control-md); color: var(--color-text); font-size: var(--font-size-label); line-height: var(--font-line-label); font-weight: var(--font-weight-label); }
+.b-agfoldbody { display: grid; gap: var(--space-2); min-width: 0; padding-left: var(--space-3); }
+.b-agsec__head--accent { color: var(--color-accent); }
+.b-agsep { margin: 0; border: 0; border-top: 1px solid var(--color-border); }
+.b-agbottom { display: grid; gap: var(--space-1); }
+.b-agdone { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-3); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-border); min-width: 0; }
+.b-agdone:first-child { border-top: 0; }
+.b-agdone__main { min-width: 0; display: grid; }
+.b-agdone__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-agdone__meta { color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-agdone__side { display: flex; align-items: center; gap: var(--space-1); color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
 .b-agbrief__text { margin: 0; white-space: pre-line; }
-.b-agbrief__text--folded { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
-/* 답해야 할 것·할 일은 카드가 아니라 체크 줄: 완료 원 | 제목·메타 | 원본 열기 */
+/* 답해야 할 것·할 일은 카드가 아니라 한 줄 체크 줄: 완료 원 | 제목 | 요청자·경과일 또는 기한 | 원본 열기(hover·포커스 때만) */
 .b-agtasks { list-style: none; margin: 0; padding: 0; }
-.b-agtask { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); min-width: 0; }
+.b-agtask { display: grid; grid-template-columns: auto minmax(5rem, 1fr) minmax(0, max-content) auto; align-items: center; column-gap: var(--space-3); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-border); min-width: 0; }
 .b-agtask:first-child { border-top: 0; }
 .b-agcheck { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin: 0; padding: 0; border: 1.5px solid var(--color-border-control); border-radius: var(--radius-full); background: transparent; color: transparent; cursor: pointer; }
 .b-agcheck > .ds-icon { width: var(--size-icon-sm); height: var(--size-icon-sm); }
 .b-agcheck:hover, .b-agcheck:focus-visible { color: var(--color-text-muted); background: var(--color-surface-hover); }
 .b-agcheck[aria-busy="true"] { color: var(--color-text); cursor: progress; }
-.b-agtask__main { min-width: 0; display: grid; gap: var(--space-1); }
-.b-agtask__title { margin: 0; font-weight: var(--font-weight-label); }
-.b-agtask__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); min-width: 0; }
-.b-agtask__meta > .b-agtask__detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.b-agtask__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--font-weight-label); }
+.b-agtask__meta { display: flex; align-items: center; gap: var(--space-2); max-width: 16rem; min-width: 0; overflow: hidden; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap; }
+.b-agtask__meta > * { flex: none; }
+.b-agtask__meta > .b-agtask__who, .b-agtask__meta > .ds-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.b-agtask__meta > .ds-chip { display: block; max-width: 7rem; }
+.b-agtask__open { opacity: 0; }
+.b-agtask:hover .b-agtask__open, .b-agtask:focus-within .b-agtask__open { opacity: 1; }
+@media (hover: none) { .b-agtask__open { opacity: 1; } }
+@media (max-width: 760px) {
+  .b-agtask { column-gap: var(--space-2); padding-left: var(--space-3); padding-right: var(--space-3); }
+  .b-agtask__meta > .ds-chip { max-width: 4.5rem; }
+}
+.b-agwho { margin: var(--space-2) 0 0; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-label); }
 .b-agsrc .ds-row__side { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
 .b-line { margin: 0; }
 .b-steps { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-3); }
@@ -1641,7 +1666,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     board.replaceChildren(...nodes);
   }
 
-  // ---- 내 일정: 일정 · 답해야 할 것 · 할 일, 그 아래 연결한 곳 ----
+  // ---- 내 일정: 머리(시각·[⚙ 연결 N]) → 지금·다음 카드 → 답할 것·새로 맡겨진 요청·기한 있음 → 접힌 쌓인 요청·이번 주·완료함 ----
   // 서버(/agenda)가 소스 상태와 종류별 열린 항목을 준다. 연결 중이거나 모으는 중인 소스가 있으면 2초, 아니면 30초마다 다시 읽는다.
   let agData = null, agSig = '', agAt = 0, agErr = null, agLoad = null, agDraft = '', agDraftDue = '', agDraftErr = false;
   const agOpen = new Set();        // 펼친 설정 안내(소스 id)
@@ -1664,7 +1689,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         if (s.connect_error || !s.connected) toast(s.connect_error || s.error || `${s.name}에 연결하지 못했습니다.`, false);
         else toast(`${s.name} 연결을 마쳤습니다.`, true);
       }
-      const sig = JSON.stringify([next.sources, next.items, next.todo_total, next.brief]);
+      const sig = JSON.stringify([next.sources, next.items, next.todo_total, next.brief, next.completed]);
       agData = next; agSeenInit();
       if (sig !== agSig) { agSig = sig; if (view === 'agenda') renderBoard(); else renderSidebar(); }
     } catch (e) {
@@ -1711,22 +1736,40 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     return a && b && a !== b ? `${a}–${b}` : a;
   };
   // 기한(이슈 539): 날짜만이면 그날 끝까지. 지났으면 사람 필요(기한 지남), 오늘까지면 윤곽 배지, 그 뒤는 날짜 글자만.
+  // 빨강은 실제 실패에만 쓰므로 기한 지남은 사람 필요 색이다(아이콘+글자).
   const dueAt = (due) => {
     if (!due) return NaN;
     if (/^\d{4}-\d{2}-\d{2}$/.test(due)) { const [y, m, d] = due.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59).getTime(); }
     return new Date(due).getTime();
   };
+  const dayShort = (key) => {
+    const [y, m, d] = key.split('-').map(Number); const dt = new Date(y, m - 1, d);
+    return Number.isNaN(dt.getTime()) ? '날짜 모름' : `${m}/${d} (${'일월화수목금토'[dt.getDay()]})`;
+  };
   function dueInfo(due, now) {
     const at = dueAt(due); if (Number.isNaN(at)) return null;
     const key = /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : dayKey(due);
     const time = /^\d{4}-\d{2}-\d{2}$/.test(due) ? '' : ' ' + clock(due);
-    const when = `${dayLabel(key)}${time}까지`;
-    if (at < now) return { overdue: true, badge: ['attention', '기한 지남'], text: when };
-    if (key === dayOffset(0)) return { today: true, badge: ['attention', '오늘까지', 'soft'], text: time ? clock(due) + '까지' : '' };
-    return { text: when };
+    if (at < now) return { overdue: true, badge: ['attention', '기한 지남'], text: dayShort(key).split(' ')[0] + time };
+    if (key === dayOffset(0)) return { today: true, badge: ['attention', '오늘까지', 'soft'], text: time.trim() };
+    return { text: `${key === dayOffset(1) ? '내일' : dayShort(key)}${time}까지` };
   }
   const agKey = (it) => `${it.source}:${it.id}`;
-  function taskRow(it, now) {
+  // 받은 시각: 어댑터의 created, 없으면 이 브라우저가 처음 본 시각(hb-ag-seen). 0은 '오래전에 본 것'.
+  function agReceived(it) {
+    const c = it.created ? Date.parse(it.created) : NaN;
+    if (!Number.isNaN(c)) return c;
+    const s = agSeen && agSeen.get(agKey(it));
+    return s === undefined ? Date.now() : s;
+  }
+  const localDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  function agAge(it, now) {
+    const at = agReceived(it); if (!at) return '';
+    const days = Math.round((localDay(now) - localDay(at)) / 86400000);
+    return days <= 0 ? '오늘' : `${days}일 전`;
+  }
+  // 할 일 줄은 한 줄: 완료 원 | 제목 | 요청자·경과일 또는 기한 | ↗(hover·포커스 때만). 출처 칩은 o.sources일 때만.
+  function taskRow(it, now, o) {
     const r = el('li', 'b-agtask'); r.dataset.key = `ag:${it.source}:${it.id}`;
     const check = el('button', 'b-agcheck'); check.type = 'button'; check.dataset.key = `agdone:${it.source}:${it.id}`;
     check.setAttribute('aria-label', `완료: ${it.title}`); check.title = '완료로 표시'; check.append(icon('check'));
@@ -1744,90 +1787,99 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       toast(it.local ? `'${it.title}'을(를) 마쳤습니다.` : res.message, true, undo);
       loadAgenda(true);
     };
-    const main = el('div', 'b-agtask__main');
-    const t = el('p', 'b-agtask__title b-clamp2', it.title); t.title = it.title;
-    const meta = el('div', 'b-agtask__meta');
+    const t = el('span', 'b-agtask__title', it.title); t.title = it.detail ? `${it.title}\n${it.detail}` : it.title;
+    const meta = el('span', 'b-agtask__meta');
     if (agFresh.has(agKey(it))) meta.append(badge(['info', '새로']));
     const d = dueInfo(it.due, now);
-    if (d && d.badge) meta.append(badge(d.badge));
-    if (d && d.text) meta.append(el('span', 'ds-num', d.text));
-    if (!it.local) meta.append(chip(it.source_name));
-    if (it.detail) { const x = el('span', 'b-agtask__detail', it.detail); x.title = it.detail; meta.append(x); }
-    if (it.local && it.start && !d) meta.append(el('span', 'ds-num', `${ago(it.start)} 적음`));
-    main.append(t); if (meta.childNodes.length) main.append(meta);
-    const side = el('div', 'b-agev__side');
+    if (d) {
+      if (d.badge) meta.append(badge(d.badge));
+      if (d.text) meta.append(el('span', 'ds-num', d.text));
+    } else {
+      const who = [it.from, agAge(it, now)].filter(Boolean).join(' · ');
+      if (who) { const w = el('span', 'b-agtask__who', who); w.title = who; meta.append(w); }
+    }
+    if (o && o.sources) meta.append(chip(it.source_name));
+    const side = el('span', 'b-agev__side');
     if (it.url && safeHref(it.url)) {
-      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon b-agtask__open'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
       a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
       side.append(a);
     }
-    r.append(SERVER ? check : el('span'), main, side);
+    r.append(SERVER ? check : el('span'), t, meta, side);
     return r;
   }
-  function taskList(list, label) {
+  function taskList(list, label, o) {
     const now = Date.now(), ul = el('ul', 'ds-rows b-agtasks'); ul.setAttribute('aria-label', `${label} ${list.length}건`);
-    ul.append(...list.map((it) => taskRow(it, now)));
+    ul.append(...list.map((it) => taskRow(it, now, o)));
     return ul;
   }
-  function agendaColumn(key, dot, label, n, body) {
+  // 절: 0건이면 그리지 않는다. 수는 제목 옆에만. strong은 답할 것 — 강조색 글자와 아이콘(면 채움 아님).
+  function agSection(key, label, list, o, strong) {
+    if (!list.length) return null;
     const s = el('section', 'ds-stack'); s.setAttribute('aria-labelledby', 'agsec-' + key);
-    const h = sectionHead(dot, label, n); h.id = 'agsec-' + key;
-    s.append(h, ...body);
+    const h = el('h2', 'ds-label b-sechead' + (strong ? ' b-agsec__head--accent' : '')); h.id = 'agsec-' + key;
+    if (strong) h.append(icon('attention'));
+    h.append(label, count(list.length, null, '건'));
+    s.append(h, taskList(list, label, o));
     return s;
   }
+  // 접힌 줄(disclosure). 펼침 상태는 화면을 옮겨도 남는다(agExp).
+  const agExp = new Set();
+  function agFold(key, text, controls, more) {
+    const open = agExp.has(key);
+    const b = el('button', 'b-agfold' + (more ? ' b-agfold--more' : '')); b.type = 'button'; b.dataset.key = 'agfold:' + key;
+    b.setAttribute('aria-expanded', String(open)); b.setAttribute('aria-controls', controls);
+    const t = el('span', 'b-agfold__text', text); t.title = text;
+    b.append(t, icon('chevron'));
+    b.onclick = () => { if (agExp.has(key)) agExp.delete(key); else agExp.add(key); renderBoard(); };
+    return b;
+  }
+  function agFoldBlock(key, text, body, more) {
+    const id = 'agfb-' + key.replace(/[^a-z0-9-]/gi, '-');
+    const wrap = el('div', 'ds-stack');
+    wrap.append(agFold(key, text, id, more));
+    const box = el('div', 'b-agfoldbody'); box.id = id; box.hidden = !agExp.has(key);
+    if (agExp.has(key)) box.append(...body());
+    wrap.append(box);
+    return wrap;
+  }
   // 새로 들어온 것(이슈 539): 이 브라우저가 본 적 없는 답할 것·할 일. 처음 읽을 때는 전부 본 것으로 둔다(첫 화면이 '새로'로 덮이지 않게).
+  // hb-ag-seen은 {key: 처음 본 epoch(ms)} — created가 없는 항목의 받은 시각으로 쓴다. 예전 배열과 첫 방문의 항목은 0(오래전 본 것).
   let agSeen = null; const agFresh = new Set();
   const agTaskKeys = () => (agData ? [...(agData.items.reply || []), ...(agData.items.todo || [])].map(agKey) : []);
+  function agSeenLoad(raw) {
+    const m = new Map();
+    if (Array.isArray(raw)) { for (const k of raw) if (typeof k === 'string') m.set(k, 0); return m; }
+    if (raw && typeof raw === 'object') { for (const [k, v] of Object.entries(raw)) if (Number.isFinite(v) && v >= 0) m.set(k, v); return m; }
+    return null;
+  }
+  const agSeenSave = () => store('hb-ag-seen', JSON.stringify(Object.fromEntries(agSeen)));
   function agSeenInit() {
     if (agSeen) return;
     let raw = null; try { raw = JSON.parse(store('hb-ag-seen') || 'null'); } catch (e) { raw = null; }
-    agSeen = new Set(Array.isArray(raw) ? raw : agTaskKeys());
-    if (!Array.isArray(raw)) store('hb-ag-seen', JSON.stringify([...agSeen]));
+    agSeen = agSeenLoad(raw);
+    if (!agSeen) { agSeen = new Map(agTaskKeys().map((k) => [k, 0])); agSeenSave(); }
+    else if (Array.isArray(raw)) agSeenSave();
   }
   const agUnseen = () => (agSeen ? agTaskKeys().filter((k) => !agSeen.has(k)).length : 0);
   function agMarkSeen() {
-    const keys = agTaskKeys();
-    for (const k of keys) if (!agSeen.has(k)) agFresh.add(k);
-    agSeen = new Set(keys);
-    store('hb-ag-seen', JSON.stringify(keys));
+    const keys = agTaskKeys(), now = Date.now(), next = new Map();
+    for (const k of keys) {
+      if (!agSeen.has(k)) agFresh.add(k);
+      next.set(k, agSeen.has(k) ? agSeen.get(k) : now);
+    }
+    agSeen = next;
+    agSeenSave();
   }
   const agOverdue = () => { const now = Date.now(); return (agData ? [...(agData.items.reply || []), ...(agData.items.todo || [])] : []).filter((it) => dueAt(it.due) < now).length; };
-  // 오늘 한 줄: 기한 지남 → 답할 것 → 오늘 남은 일정(다음 하나).
-  function todayLine(events, replies, todos) {
-    const now = Date.now(), p = el('p', 'b-agsum'); p.setAttribute('aria-label', '오늘 요약');
-    const overdue = [...replies, ...todos].filter((it) => dueAt(it.due) < now).length;
-    const dueToday = [...replies, ...todos].filter((it) => { const d = dueInfo(it.due, now); return d && d.today; }).length;
-    const part = (n, unit, status) => { const x = el('span'); if (status) x.append(icon(status)); const t = el('span'); t.append(el('strong', 'ds-num', String(n)), unit); x.append(t); return x; };
-    if (overdue) p.append(part(overdue, '건 기한 지남', 'attention'));
-    if (dueToday) p.append(part(dueToday, '건 오늘까지'));
-    p.append(part(replies.length, '건 답할 것'), part(todos.length, '건 할 일'));
-    const today = dayOffset(0);
-    const left = events.filter((e) => (dayKey(e.start) || today) <= today && eventPhase(e, now) !== 'past');
-    const next = left.find((e) => !allDay(e) && eventPhase(e, now) === '');
-    const ev = left.length ? part(left.length, '개 남은 일정') : el('span', 'ds-muted', '오늘 남은 일정 없음');
-    if (next) ev.append(el('span', 'ds-caption', `· 다음 ${clock(next.start)} ${next.title}`));
-    p.append(ev);
-    return p;
-  }
-  // 아침 요약(이슈 539): 정기 작업이 board.sh brief set으로 남긴 글. 오늘 쓴 것만, 여섯 줄 넘으면 접는다.
-  let agBriefOpen = false;
-  function briefCard(b) {
+  // 아침 요약(이슈 539): 정기 작업이 board.sh brief set으로 남긴 글. 오늘 쓴 것만, 접힌 한 줄(첫 줄 미리보기)로 둔다.
+  function briefFold(b) {
     if (!b || !b.text || dayKey(b.at) !== dayOffset(0)) return null;
-    const c = el('article', 'ds-card'); c.dataset.key = 'agbrief'; c.setAttribute('aria-labelledby', 'agbrief-title');
-    const meta = el('div', 'ds-card__meta');
-    if (b.source) meta.append(chip(b.source));
-    meta.append(el('span', 'ds-card__when ds-num', `${clock(b.at)} 받음`));
-    const h = el('h3', 'ds-card__title', '아침 요약'); h.id = 'agbrief-title';
-    const long = b.text.split('\n').length > 6 || b.text.length > 360;
-    const body = el('p', 'b-agbrief__text' + (long && !agBriefOpen ? ' b-agbrief__text--folded' : ''), b.text); body.id = 'agbrief-text';
-    c.append(meta, h, body);
-    if (long) {
-      const t = btn(agBriefOpen ? '접기' : '전체 보기', 'ds-btn--sm ds-btn--ghost'); t.dataset.key = 'agbrief-toggle';
-      t.setAttribute('aria-expanded', String(agBriefOpen)); t.setAttribute('aria-controls', 'agbrief-text');
-      t.onclick = () => { agBriefOpen = !agBriefOpen; renderBoard(); };
-      const acts = el('div', 'ds-card__actions'); acts.append(t); c.append(acts);
-    }
-    return c;
+    const first = b.text.split('\n').find((x) => x.trim()) || '';
+    return agFoldBlock('brief', `아침 요약 · ${first.trim()}`, () => {
+      const meta = el('p', 'ds-caption b-line ds-num', [b.source, `${clock(b.at)} 받음`].filter(Boolean).join(' · '));
+      return [el('p', 'b-agbrief__text', b.text), meta];
+    });
   }
   // 일정은 카드가 아니라 날짜별 줄 목록이다: 시간 | 제목·캘린더 | (진행 중 배지·원본 열기). 출처 칩은 소스가 둘 이상일 때만 단다.
   const allDay = (it) => /^\d{4}-\d{2}-\d{2}$/.test(it.start || '');
@@ -1869,34 +1921,135 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     r.append(time, main, side);
     return r;
   }
-  function eventBody(events, linked, manySources) {
-    if (!events.length) return [linked ? empty('오늘과 이번 주에 잡힌 일정이 없습니다.', '연결한 캘린더에 일정이 생기면 여기에 뜹니다.')
-      : empty('아직 연결한 곳이 없어 일정이 비어 있습니다.', '아래 연결한 곳에서 캘린더를 연결하면 오늘과 이번 주 일정이 여기에 뜹니다.')];
-    const today = dayOffset(0), days = new Map([[today, []]]);
-    for (const it of events) {  // 어제 시작해 오늘까지 걸친 일정(여러 날 종일 등)은 오늘에 둔다
-      let k = dayKey(it.start) || today; if (k < today) k = today;
-      if (!days.has(k)) days.set(k, []); days.get(k).push(it);
+  // 지금·다음 카드: 오늘의 시각 있는 일정 가운데 팀 공유가 아닌 것만. 남은 게 없으면 '오늘 남은 일정 없음 / 내일 첫 일정'.
+  const isToday = (e, today) => (dayKey(e.start) || today) <= today;  // 어제 시작해 오늘까지 걸친 일정은 오늘에 둔다
+  function nowNextCard(events, now) {
+    const today = dayOffset(0), tomorrow = dayOffset(1);
+    const mine = events.filter((e) => !e.shared && !allDay(e) && isToday(e, today));
+    const cur = mine.filter((e) => eventPhase(e, now) === 'now');
+    const next = mine.find((e) => eventPhase(e, now) === '' && new Date(e.start).getTime() > now);
+    const c = el('article', 'ds-card b-agnow'); c.dataset.key = 'agnow'; c.setAttribute('aria-label', '지금과 다음 일정');
+    const line = (lab, time, it, tail) => {
+      const p = el('p', 'b-agnow__line');
+      p.append(el('span', 'b-agnow__lab', lab), el('span', 'ds-num b-agnow__time', time));
+      const t = el('span', 'b-agnow__title', it.title); t.title = it.title; p.append(t);
+      if (tail) p.append(el('span', 'ds-caption ds-num b-agnow__tail', tail));
+      return p;
+    };
+    for (const e of cur.slice(0, 2)) c.append(line('지금', eventTime(e), e));
+    if (next) {
+      const mins = Math.max(1, Math.round((new Date(next.start).getTime() - now) / 60000));
+      c.append(line('다음', clock(next.start), next, mins > 60 ? `${Math.floor(mins / 60)}시간 뒤` : `${mins}분 뒤`));
     }
-    const now = Date.now(), out = [];
-    for (const [k, list] of [...days.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      const label = dayLabel(k), h = el('h3', 'ds-caption b-agday');
-      h.append(el('span', null, label));
-      if (label === '오늘' || label === '내일') h.append(el('span', 'b-agday__date', dayLabel(k, true)));
-      out.push(h);
-      if (!list.length) { out.push(el('p', 'ds-caption b-line', '오늘은 남은 일정이 없습니다.')); continue; }
-      const ul = el('ul', 'ds-rows b-agevents'); ul.setAttribute('aria-label', `${label} 일정 ${list.length}개`);
-      const rows = list.map((it) => eventRow(it, manySources, now));
-      ul.append(...rows);
-      // 오늘: 마지막 지난 일정 바로 뒤에 '지금' 줄 하나(그 뒤에 일정이 남아 있을 때만)
-      const lastPast = rows.map((r) => r.classList.contains('b-agev--past')).lastIndexOf(true);
-      const firstAhead = lastPast + 1;
-      if (k === today && lastPast >= 0 && firstAhead < rows.length) {
-        const n = el('li', 'b-agnow'); n.setAttribute('role', 'presentation'); n.append(el('span', 'ds-num', `지금 ${clock(new Date(now).toISOString())}`));
-        ul.insertBefore(n, rows[firstAhead]);
+    if (!cur.length && !next) {
+      c.append(el('p', 'b-agnow__none', '오늘 남은 일정 없음'));
+      const tm = events.filter((e) => !e.shared && dayKey(e.start) === tomorrow);
+      const first = tm.find((e) => !allDay(e)) || tm[0];
+      if (first) c.append(line('내일 첫 일정', allDay(first) ? '종일' : clock(first.start), first));
+    }
+    return c;
+  }
+  // 카드 아래 회색 한 줄: 종일 · 팀 부재 · 지난 일정. 0인 조각은 빼고, 모두 0이면 그리지 않는다.
+  function todayFold(events, now, many) {
+    const today = dayOffset(0), list = events.filter((e) => isToday(e, today));
+    const allDays = list.filter((e) => !e.shared && allDay(e));
+    const shared = list.filter((e) => e.shared);
+    const past = list.filter((e) => !e.shared && !allDay(e) && eventPhase(e, now) === 'past');
+    const parts = [];
+    if (allDays.length) parts.push(`종일 · ${allDays[0].title}${allDays.length > 1 ? ` 외 ${allDays.length - 1}` : ''}`);
+    if (shared.length) parts.push(`팀 부재 ${shared.length}`);
+    if (past.length) parts.push(`지난 일정 ${past.length}`);
+    if (!parts.length) return null;
+    return agFoldBlock('today', parts.join(' · '), () => {
+      const out = [];
+      for (const [label, rows] of [['종일', allDays], ['팀 부재', shared], ['지난 일정', past]]) {
+        if (!rows.length) continue;
+        out.push(el('h3', 'b-agwho', label));
+        const ul = el('ul', 'ds-rows b-agevents'); ul.setAttribute('aria-label', `${label} ${rows.length}개`);
+        ul.append(...rows.map((e) => eventRow(e, many, now)));
+        out.push(ul);
       }
-      out.push(ul);
-    }
-    return out;
+      return out;
+    });
+  }
+  // 내일·이번 주: 오늘 다음 날부터 수집 기간 끝까지. 펼치면 날짜별 한 줄, 날짜를 펼치면 그날 일정(서버가 시각순으로 준다).
+  function weekFold(events, now, many) {
+    const today = dayOffset(0), tomorrow = dayOffset(1);
+    const later = events.filter((e) => dayKey(e.start) > today);
+    if (!later.length) return null;
+    const tm = later.filter((e) => !e.shared && dayKey(e.start) === tomorrow);
+    const first = tm.find((e) => !allDay(e)) || tm[0];
+    const head = (first ? `내일 ${allDay(first) ? '종일' : clock(first.start)} ${first.title} · ` : '') + `이번 주 ${later.length}`;
+    return agFoldBlock('week', head, () => {
+      const days = new Map();
+      for (const e of later) { const k = dayKey(e.start); if (!days.has(k)) days.set(k, []); days.get(k).push(e); }
+      return [...days.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, rows]) => {
+        const timed = rows.find((e) => !allDay(e));
+        const text = `${dayShort(k)} ${rows.length}건 · 첫 일정 ${timed ? clock(timed.start) : '종일'}`;
+        return agFoldBlock('day:' + k, text, () => {
+          const ul = el('ul', 'ds-rows b-agevents'); ul.setAttribute('aria-label', `${dayLabel(k, true)} 일정 ${rows.length}개`);
+          ul.append(...rows.map((e) => eventRow(e, many, now)));
+          return [ul];
+        });
+      });
+    }, true);
+  }
+  // 쌓인 요청: 오래된 순 + 경과일. 요청자가 있는 항목이 하나라도 있으면 [요청자별 묶기](hb-ag-group).
+  function staleFold(list, o) {
+    if (!list.length) return null;
+    return agFoldBlock('stale', `쌓인 요청 ${list.length}`, () => {
+      const out = [];
+      if (list.some((it) => it.from)) {
+        const on = store('hb-ag-group') === '1';
+        const g = el('button', 'ds-chip', '요청자별 묶기'); g.type = 'button'; g.dataset.key = 'aggroup';
+        g.setAttribute('aria-pressed', String(on));
+        g.onclick = () => { store('hb-ag-group', on ? '0' : '1'); renderBoard(); };
+        const row = el('div', 'ds-cluster'); row.append(g); out.push(row);
+        if (on) {
+          const by = new Map();
+          for (const it of list) { const k = it.from || ''; if (!by.has(k)) by.set(k, []); by.get(k).push(it); }
+          for (const [who, rows] of by) { out.push(el('h3', 'b-agwho', `${who || '요청자 모름'} ${rows.length}`)); out.push(taskList(rows, `${who || '요청자 모름'} 쌓인 요청`, o)); }
+          return out;
+        }
+      }
+      out.push(taskList(list, '쌓인 요청', o));
+      return out;
+    }, true);
+  }
+  // 완료함: 최근 7일, 최신순. can_reopen이면 [다시 열기], 아니면 원본에서 다시 열기 안내(↗).
+  function completedFold(rows) {
+    if (!rows.length) return null;
+    return agFoldBlock('done', `완료함 ${rows.length}`, () => {
+      const ul = el('ul', 'ds-rows b-agtasks'); ul.setAttribute('aria-label', `완료함 ${rows.length}건`);
+      for (const r of rows) {
+        const li = el('li', 'b-agdone'); li.dataset.key = `agc:${r.source}:${r.id}`;
+        const main = el('div', 'b-agdone__main');
+        const t = el('span', 'b-agdone__title', r.title); t.title = r.title;
+        main.append(t, el('span', 'b-agdone__meta ds-num', `${r.source_name || r.source} · ${ago(r.done_at)} 완료`));
+        const side = el('div', 'b-agdone__side');
+        if (r.can_reopen) {
+          const b = btn('다시 열기', 'ds-btn--sm'); b.dataset.key = `agreopen:${r.source}:${r.id}`; b.setAttribute('aria-label', `다시 열기: ${r.title}`);
+          b.onclick = async () => {
+            if (b.getAttribute('aria-busy')) return;
+            busy(b, '여는 중');
+            let res; try { res = await post('/agenda/reopen', { source: r.source, id: r.id }); } catch (e) { res = { ok: false, message: '다시 열지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+            if (!res.ok) unbusy(b);
+            toast(res.message, !!res.ok);
+            loadAgenda(true);
+          };
+          side.append(b);
+        } else {
+          side.append(el('span', null, '원본에서 다시 열기'));
+          if (r.url && safeHref(r.url)) {
+            const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+            a.setAttribute('aria-label', `원본에서 다시 열기(새 창): ${r.title}`); a.title = '원본에서 다시 열기(새 창)'; a.append(icon('external'));
+            side.append(a);
+          }
+        }
+        li.append(main, side); ul.append(li);
+      }
+      return [ul];
+    }, true);
   }
   function todoForm() {
     const f = el('form', 'ds-field'); f.noValidate = true;
@@ -2037,7 +2190,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const n = el('div', 'ds-notice'); n.dataset.status = 'danger'; n.setAttribute('role', 'alert'); n.dataset.key = 'agfail:' + s.id;
     const inner = el('div', 'ds-stack');
     inner.append(el('p', 'b-line', `${s.name}에서 새 항목을 가져오지 못했습니다. ${s.error || '원인을 알 수 없습니다.'} 이전에 가져온 항목은 그대로 둡니다.`),
-      el('p', 'b-line', '원인을 해결한 뒤 [다시 가져오기]를 누르세요. 로그인이 풀렸다면 그 소스를 준 스킬의 안내대로 다시 로그인하거나, 아래 연결한 곳에서 끊고 다시 연결하세요.'));
+      el('p', 'b-line', '원인을 해결한 뒤 [다시 가져오기]를 누르세요. 로그인이 풀렸다면 그 소스를 준 스킬의 안내대로 다시 로그인하거나, 위 [⚙ 연결]에서 끊고 다시 연결하세요.'));
     const b = btn('다시 가져오기', 'ds-btn--sm'); b.dataset.key = 'agretry:' + s.id; b.setAttribute('aria-label', `${s.name}에서 다시 가져오기`);
     if (agRefreshing.has(s.id)) busy(b, '가져오는 중');
     b.onclick = async () => {
@@ -2053,6 +2206,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     n.append(icon('danger'), inner);
     return n;
   }
+  // 연결이 안 된 소스의 연결 실패(connect_error)도 본문 위 한 줄 알림으로 — [다시 연결]은 머리의 연결 영역에서.
+  function connectFailNotice(s) {
+    const n = el('div', 'ds-notice'); n.dataset.status = 'danger'; n.setAttribute('role', 'alert'); n.dataset.key = 'agcfail:' + s.id;
+    n.append(icon('danger'), el('p', 'b-line', `${s.name}에 연결하지 못했습니다. ${s.connect_error} 위 [⚙ 연결]에서 다시 연결하세요.`));
+    return n;
+  }
+  let agSrcOpen = null;  // 머리 [⚙ 연결 N] 영역. null이면 연결된 소스가 없을 때만 펼친다
   function renderAgenda() {
     const board = $('board');
     if (!SERVER) { board.replaceChildren(empty('내 일정은 보드 서버에서만 볼 수 있습니다.', '터미널에서 /ai-harness:board로 보드를 여세요.')); return; }
@@ -2061,34 +2221,59 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       board.replaceChildren(...(agErr ? [errorBox('내 일정을 불러오지 못했습니다', agErr, () => { agErr = null; renderBoard(); loadAgenda(true); })] : loading('내 일정을 불러오는 중')));
       return;
     }
-    const nodes = [];
-    if (agErr) nodes.push(notice('danger', `내 일정을 새로 읽지 못했습니다. ${agErr} 마지막으로 읽은 내용을 보입니다.`));
+    const page = el('div', 'b-agpage'), now = Date.now();
     const srcs = agData.sources || [], items = agData.items || {};
-    for (const s of srcs.filter((x) => x.state === 'error' && !x.invalid)) nodes.push(fetchFailNotice(s));
-    const linked = srcs.some((x) => x.connected && !x.invalid);
+    const linked = srcs.filter((x) => x.connected && !x.invalid).length;
+    // 머리: 로컬 날짜·시각(폴링마다 다시 그림) · [⚙ 연결 N]
+    const d = new Date(now);
+    const head = el('div', 'b-aghead');
+    head.append(el('p', 'b-aghead__now ds-num', `${d.getMonth() + 1}월 ${d.getDate()}일 (${'일월화수목금토'[d.getDay()]}) ${clock(d.toISOString())}`));
+    const open = agSrcOpen === null ? !linked : agSrcOpen;
+    const sb = btn('', 'ds-btn--sm ds-btn--ghost'); sb.dataset.key = 'agsrcbtn';
+    sb.append(el('span', null, '⚙ 연결 ' + linked)); sb.setAttribute('aria-label', `연결한 곳 ${linked}곳`);
+    sb.setAttribute('aria-expanded', String(open)); sb.setAttribute('aria-controls', 'ag-sources');
+    sb.onclick = () => { agSrcOpen = !open; renderBoard(); };
+    head.append(sb);
+    page.append(head);
+    const panel = el('section', 'ds-stack'); panel.id = 'ag-sources'; panel.setAttribute('aria-label', '연결한 곳'); panel.hidden = !open;
+    if (open) {
+      const rows = el('div', 'ds-rows b-agsrc'); rows.append(...srcs.map(sourceRow));
+      panel.append(srcs.length ? rows : empty('연결할 수 있는 곳이 없습니다.', '일정 어댑터(agenda.json)를 주는 스킬을 설치하면 여기에 나타납니다.'));
+    }
+    page.append(panel);
+    if (agErr) page.append(notice('danger', `내 일정을 새로 읽지 못했습니다. ${agErr} 마지막으로 읽은 내용을 보입니다.`));
+    for (const s of srcs) {
+      if (s.invalid) continue;
+      if (s.state === 'error') page.append(fetchFailNotice(s));
+      else if (s.connect_error) page.append(connectFailNotice(s));
+    }
     const events = items.event || [], replies = items.reply || [], todos = items.todo || [];
     agMarkSeen();
+    const many = new Set(events.map((x) => x.source)).size > 1;
     const top = el('section', 'ds-stack'); top.setAttribute('aria-label', '오늘');
-    top.append(todayLine(events, replies, todos));
-    const bc = briefCard(agData.brief); if (bc) top.append(bc);
-    nodes.push(top);
-    const cols = el('div', 'ds-columns b-agcols');
-    cols.append(
-      agendaColumn('event', 'info', '일정', events.length, eventBody(events, linked, new Set(events.map((x) => x.source)).size > 1)),
-      agendaColumn('reply', 'attention', '답해야 할 것', replies.length, replies.length ? [taskList(replies, '답해야 할 것')] : [linked
-        ? empty('지금 답해야 할 것이 없습니다.', '연결한 곳에서 답할 메시지가 오면 여기에 모입니다.')
-        : empty('아직 연결한 곳이 없어 답해야 할 것이 비어 있습니다.', '메신저·메일 어댑터를 주는 스킬을 설치하면 아래 연결한 곳에 나타납니다.')]),
-      agendaColumn('todo', null, '할 일', todos.length, [todoForm(), ...(todos.length ? [taskList(todos, '할 일')] : [agData.todo_total
-        ? empty('열린 할 일이 없습니다.', '적어 둔 일을 모두 마쳤습니다. 새로 할 일은 위 칸에 적습니다.')
-        : empty('아직 적은 할 일이 없습니다.', '위 칸에 적거나 터미널에서 board.sh todo add로 추가합니다.')])]),
-    );
-    nodes.push(cols);
-    const sec = el('section', 'ds-stack'); sec.setAttribute('aria-labelledby', 'agsec-sources');
-    const h = sectionHead(null, '연결한 곳', srcs.filter((x) => x.connected).length, '곳 연결됨'); h.id = 'agsec-sources';
-    const rows = el('div', 'ds-rows b-agsrc'); rows.append(...srcs.map(sourceRow));
-    sec.append(h, srcs.length ? rows : empty('연결할 수 있는 곳이 없습니다.', '일정 어댑터(agenda.json)를 주는 스킬을 설치하면 여기에 나타납니다.'));
-    nodes.push(sec);
-    board.replaceChildren(...nodes);
+    top.append(nowNextCard(events, now));
+    const tf = todayFold(events, now, many); if (tf) top.append(tf);
+    const bf = briefFold(agData.brief); if (bf) top.append(bf);
+    page.append(top);
+    // 할 일 셋으로 가르기: 기한 있음 > 받은 지 24시간 이내(새로 맡겨진 요청) > 나머지(쌓인 요청)
+    const due = [], fresh = [], stale = [];
+    for (const it of todos) {
+      if (!Number.isNaN(dueAt(it.due))) due.push(it);
+      else if (now - agReceived(it) < 86400000) fresh.push(it);
+      else stale.push(it);
+    }
+    due.sort((a, b) => dueAt(a.due) - dueAt(b.due));
+    fresh.sort((a, b) => agReceived(b) - agReceived(a));
+    stale.sort((a, b) => agReceived(a) - agReceived(b));
+    const o = { sources: new Set(todos.map((x) => x.source)).size > 1 };
+    for (const sec of [agSection('reply', '답할 것', replies, { sources: true }, true), agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)]) if (sec) page.append(sec);
+    page.append(todoForm());
+    const bottom = [staleFold(stale, o), weekFold(events, now, many), completedFold(agData.completed || [])].filter(Boolean);
+    if (bottom.length) {
+      page.append(el('hr', 'b-agsep'));
+      const b = el('div', 'b-agbottom'); b.append(...bottom); page.append(b);
+    }
+    board.replaceChildren(page);
   }
 
   // ---- 자동 수정 탭: 한 줄 상황 + 후보 ----
@@ -2991,7 +3176,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       $('vdesc').hidden = false;
       if (view === 'impact') { $('vdesc').textContent = '저장소마다 하네스가 효과가 있었는지, 아직 모르면 왜 모르는지를 봅니다.'; return renderImpact(); }
       if (view === 'settings') { $('vdesc').textContent = STABS.find(([k]) => k === stab)[2]; return renderSettings(); }
-      if (view === 'agenda') { $('vdesc').textContent = '오늘과 이번 주 일정, 답해야 할 것, 할 일(직접 적은 것·연결한 곳에서 온 것)과 아침 요약을 한곳에서 봅니다.'; return renderAgenda(); }
+      if (view === 'agenda') { $('vdesc').textContent = '지금·다음 일정과 답할 것, 새로 맡겨진 요청·기한 있는 할 일을 먼저 봅니다. 쌓인 요청·이번 주·완료함은 아래에 접어 둡니다.'; return renderAgenda(); }
       if (view === 'guide') { $('vdesc').textContent = '하네스가 무엇이고 어떤 기능이 있는지, 어떻게 부르는지 봅니다.'; return renderGuide(); }
       if (view === 'refs') { $('vdesc').textContent = rrun ? '' : '이 맥에서 그린 레퍼런스 보드입니다. 열면 탭 5개로 보고, 랜딩 실행이 기다리면 여기서 골라 시작합니다.'; $('vdesc').hidden = !!rrun; return renderRefs(); }
       $('vdesc').textContent = TABS.find(([k]) => k === tab)[2];

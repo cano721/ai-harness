@@ -570,4 +570,132 @@ pass "agenda screen launches setup sessions through the shared launcher"
 rm -rf "$HM_CLAUDE_SKILLS_DIR/needsetup" "$HM_CLAUDE_SKILLS_DIR/hintonly" "$HM_CLAUDE_SKILLS_DIR/badprompt" "$HM_CLAUDE_SKILLS_DIR/badprompt2"
 
 ag_board stop >/dev/null
+
+# 14. '지금·다음' 재구성(#567): 실제 시각순 일정, created·from·shared, reopen 계약, 완료함.
+# 시간대를 고정한 새 보드(새 데이터 디렉터리)로 띄운다 — 앞 블록의 연결·완료 기록과 섞이지 않게.
+AG_DATA="$AG_T/data-567"; mkdir -p "$AG_DATA"
+AG_PORT="$(free_port)"
+export TZ=Asia/Seoul
+AG_OPEN="$(ag_board open)"
+AG_URL="$(jq -r '.url' <<<"$AG_OPEN")"
+AG_TOKEN="${AG_URL#*t=}"
+AG_BASE="http://127.0.0.1:$AG_PORT"
+track_test_process "$(jq -r '.pid' "$AG_DATA/board/server.json")"
+
+# AC1: 같은 날 일정은 오프셋과 무관하게 종일 → 10:00 → 19:00(10:00Z) → 19:15(21:15+11:00) → 19:30, 다음 날 일정은 맨 뒤.
+ag_post connect '{"source":"tz"}' >/dev/null
+AG_OUT="$(ag_wait '[.items.event[] | select(.source == "tz")] | length == 6')" || fail "tz fetches its events: $AG_OUT"
+assert_eq "z-allday z-morning z-utc z-east z-late z-next" "$(jq -r '[.items.event[] | select(.source == "tz") | .id] | join(" ")' <<<"$AG_OUT")" "events sort by real time across offsets, all-day first"
+# AC2(shared): 팀·공유 캘린더 일정 표시가 남는다. 없는 일정에는 붙지 않는다.
+assert_eq "true|null" "$(jq -r '[(.items.event[] | select(.id == "z-allday") | .shared), (.items.event[] | select(.id == "z-morning") | .shared)] | map(tostring) | join("|")' <<<"$AG_OUT")" "shared stays on a shared calendar event only"
+pass "agenda sorts events by real time and keeps the shared flag"
+
+# AC2: created(ISO)·from은 남고, 읽을 수 없는 created는 필드만 빠진다.
+ag_post connect '{"source":"inbox"}' >/dev/null
+AG_OUT="$(ag_wait '[.items.todo[] | select(.source == "inbox")] | length == 4')" || fail "inbox fetches its items: $AG_OUT"
+AG_NEWC="$(jq -r '.items.todo[] | select(.id == "i-new") | .created' <<<"$AG_OUT")"
+[[ "$AG_NEWC" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail "created stays as ISO 8601 (got $AG_NEWC)"
+assert_eq "예시 담당자" "$(jq -r '.items.todo[] | select(.id == "i-new") | .from' <<<"$AG_OUT")" "from stays on the item"
+assert_eq "받은 시각을 모르는 요청|null" "$(jq -r '.items.todo[] | select(.id == "i-bad") | "\(.title)|\(.created)"' <<<"$AG_OUT")" "an unreadable created is dropped but the item stays"
+pass "agenda keeps created and from on adapter items"
+
+# AC3: 직접 적은 할 일은 만든 시각을 created로 낸다.
+AG_TID="$(ag_board todo add 예시 할 일)"
+AG_TC="$(ag_get | jq -r --arg i "$AG_TID" '.items.todo[] | select(.source == "todo" and .id == $i) | .created')"
+[[ "$AG_TC" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || fail "a written to-do carries created (got $AG_TC)"
+pass "a written to-do carries its creation time"
+
+# AC4: reopen을 선언한 어댑터의 done은 되돌릴 수 있고, 완료함에 제목·시각만 남는다(본문 없음).
+AG_RES="$(ag_post "done" '{"source":"inbox","id":"i-new"}')"
+assert_eq "200|true|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')|$(ag_body "$AG_RES" | jq -r '.undo')" "done on a reopen source can be undone"
+assert_eq "done i-new" "$(tail -n 1 "$AG_DATA/fixture-inbox/calls")" "the adapter done command ran with the item id"
+AG_OUT="$(ag_get)"
+assert_eq "예시 검토 요청|true|todo|Example 요청함" "$(jq -r '.completed[] | select(.source == "inbox" and .id == "i-new") | "\(.title)|\(.can_reopen)|\(.kind)|\(.source_name)"' <<<"$AG_OUT")" "the completion lands in the completed list"
+[[ -n "$(jq -r '.completed[] | select(.id == "i-new") | .done_at // empty' <<<"$AG_OUT")" ]] || fail "the completed row carries done_at"
+assert_eq "null" "$(jq -r '.completed[] | select(.id == "i-new") | .detail' <<<"$AG_OUT")" "the completed row carries no body"
+assert_eq "600" "$(filemode "$AG_DATA/board/agenda/completed.json")" "completed.json is private"
+pass "agenda records adapter completions in the completed list"
+
+# AC5: reopen은 선언한 argv에 항목 id를 붙여 부르고, 완료함에서 빼고 항목을 되살린다.
+AG_RES="$(ag_post reopen '{"source":"inbox","id":"i-new"}')"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "reopen on a reopen source succeeds"
+assert_eq "reopen i-new" "$(tail -n 1 "$AG_DATA/fixture-inbox/calls")" "the adapter reopen command ran with the item id"
+AG_OUT="$(ag_wait '[.items.todo[] | select(.id == "i-new")] | length == 1')" || fail "the reopened item is listed again: $AG_OUT"
+assert_eq "0" "$(jq -r '[.completed[] | select(.id == "i-new")] | length' <<<"$AG_OUT")" "the reopened item leaves the completed list"
+# reopen 명령이 실패하면 ok:false와 어댑터 사유를 돌려주고 완료함에 남긴다.
+ag_post "done" '{"source":"inbox","id":"i-old"}' >/dev/null
+: >"$AG_DATA/fixture-inbox/fail-reopen"
+AG_RES="$(ag_post reopen '{"source":"inbox","id":"i-old"}')"
+assert_eq "false" "$(ag_body "$AG_RES" | jq -r '.ok')" "a failing reopen command reports failure"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "원본 요청함에 닿지 못했습니다" "a failing reopen explains why"
+assert_eq "1" "$(ag_get | jq -r '[.completed[] | select(.id == "i-old")] | length')" "a failed reopen keeps the completed row"
+rm -f "$AG_DATA/fixture-inbox/fail-reopen"
+assert_eq "404" "$(ag_code "$(ag_post reopen '{"source":"inbox","id":"never-done"}')")" "reopen refuses an item that was never finished"
+pass "agenda reopens an adapter item through its reopen command"
+
+# AC6: reopen이 없는 어댑터 done은 되돌릴 수 없고 원본에서 다시 열라고 안내한다.
+ag_post connect '{"source":"acme"}' >/dev/null
+ag_wait '[.items.reply[] | select(.source == "acme")] | length == 2' >/dev/null || fail "acme fetches on the new board"
+AG_RES="$(ag_post "done" '{"source":"acme","id":"r1"}')"
+assert_eq "false" "$(ag_body "$AG_RES" | jq -r '.undo')" "an adapter without reopen cannot undo"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "원본에서 다시 여세요" "the done message points to the original"
+AG_RES="$(ag_post reopen '{"source":"acme","id":"r1"}')"
+assert_eq "409" "$(ag_code "$AG_RES")" "reopen is refused without a reopen command"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "원본에서 다시 여세요" "the refusal points to the original"
+assert_eq "false" "$(ag_get | jq -r '.completed[] | select(.source == "acme" and .id == "r1") | .can_reopen')" "the completed row cannot be reopened"
+pass "agenda keeps adapter completions without reopen in the original"
+
+# AC7: 직접 적은 할 일(화면 API·board.sh todo done)과 보드에만 숨긴 항목도 완료함에 남고 다시 열 수 있다.
+AG_TID2="$(ag_board todo add 예시 정리)"
+ag_post "done" "$(jq -cn --arg i "$AG_TID" '{source: "todo", id: $i}')" >/dev/null
+ag_board todo "done" "$AG_TID2"
+ag_post connect '{"source":"localdone"}' >/dev/null
+ag_wait '[.items.reply[] | select(.id == "n1")] | length == 1' >/dev/null || fail "localdone fetches on the new board"
+ag_post "done" '{"source":"localdone","id":"n1"}' >/dev/null
+AG_OUT="$(ag_get)"
+for AG_K in "todo:$AG_TID" "todo:$AG_TID2" "localdone:n1"; do
+  assert_eq "true" "$(jq -r --arg s "${AG_K%%:*}" --arg i "${AG_K#*:}" '.completed[] | select(.source == $s and .id == $i) | .can_reopen' <<<"$AG_OUT")" "$AG_K is in the completed list and can be reopened"
+done
+assert_eq "예시 할 일" "$(jq -r --arg i "$AG_TID" '.completed[] | select(.id == $i) | .title' <<<"$AG_OUT")" "a written to-do keeps its title in the completed list"
+for AG_K in "todo:$AG_TID" "todo:$AG_TID2" "localdone:n1"; do
+  assert_eq "200" "$(ag_code "$(ag_post reopen "$(jq -cn --arg s "${AG_K%%:*}" --arg i "${AG_K#*:}" '{source: $s, id: $i}')")")" "$AG_K reopens"
+done
+AG_OUT="$(ag_get)"
+assert_eq "0" "$(jq -r '[.completed[] | select(.source == "todo" or .source == "localdone")] | length' <<<"$AG_OUT")" "reopened rows leave the completed list"
+assert_eq "1|1" "$(jq -r --arg i "$AG_TID2" '"\([.items.todo[] | select(.id == $i)] | length)|\([.items.reply[] | select(.id == "n1")] | length)"' <<<"$AG_OUT")" "reopened items are listed again"
+pass "agenda keeps written and board-hidden completions in the completed list"
+
+# AC8: 7일이 지난 줄은 응답에서 빠지고 파일에서도 정리된다.
+AG_OLD="$(python3 -I -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+jq --arg at "$AG_OLD" '.items += [{source: "todo", source_name: "할 일", id: "oldrow", kind: "todo", title: "오래된 완료", done_at: $at}]' \
+  "$AG_DATA/board/agenda/completed.json" >"$AG_T/completed.json"
+mv "$AG_T/completed.json" "$AG_DATA/board/agenda/completed.json"
+assert_eq "0" "$(ag_get | jq -r '[.completed[] | select(.id == "oldrow")] | length')" "a completion older than 7 days is not listed"
+assert_eq "0" "$(jq -r '[.items[] | select(.id == "oldrow")] | length' "$AG_DATA/board/agenda/completed.json")" "a completion older than 7 days is pruned from the file"
+assert_eq "600" "$(filemode "$AG_DATA/board/agenda/completed.json")" "the pruned completed.json stays private"
+pass "agenda prunes completions older than 7 days"
+
+# AC9: reopen이 문자열 배열이 아니면 그 소스만 선언 오류다.
+mkdir -p "$HM_CLAUDE_SKILLS_DIR/badreopen"
+jq -n '{id: "badreopen", name: "되돌리기 오류", fetch: ["true"], reopen: "reopen.sh"}' >"$HM_CLAUDE_SKILLS_DIR/badreopen/agenda.json"
+AG_OUT="$(ag_get)"
+assert_eq "true" "$(ag_src "$AG_OUT" badreopen invalid)" "a non-array reopen is a declaration error"
+assert_contains "$(ag_src "$AG_OUT" badreopen error)" "reopen" "the error names reopen"
+assert_eq "connected" "$(ag_src "$AG_OUT" inbox state)" "other sources are unaffected"
+rm -rf "$HM_CLAUDE_SKILLS_DIR/badreopen"
+pass "agenda rejects a non-array reopen declaration"
+
+# AC11: 화면 — 숫자 줄 없이 지금·다음 카드, 머리 연결 버튼, 할 일 세 갈래, 접힌 버튼 셋, hb-ag-seen 객체 형식.
+AG_TPL="$(<"$ROOT/scripts/board/template.html")"
+case "$AG_TPL" in *todayLine*) fail "the agenda has no today count line" ;; esac
+for AG_W in "line('지금'" "line('다음'" "오늘 남은 일정 없음" "내일 첫 일정" "'⚙ 연결 '" "새로 맡겨진 요청" "기한 있음" "쌓인 요청" "완료함" \
+  "다시 열기" "이번 주" "요청자별 묶기" "hb-ag-group" "원본에서 다시 열기" "agSeenLoad"; do
+  assert_contains "$AG_TPL" "$AG_W" "the agenda screen has $AG_W"
+done
+assert_contains "$AG_TPL" "Array.isArray(raw)" "hb-ag-seen migrates the old array form"
+case "$AG_TPL" in *"<h3>연결한 곳</h3>"*|*"sec('연결한 곳'"*) fail "the connected sources section moves into the header" ;; esac
+pass "agenda screen leads with now and next and folds the rest"
+
+ag_board stop >/dev/null
+unset TZ
 finish_tests
