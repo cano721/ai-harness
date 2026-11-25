@@ -530,9 +530,12 @@ python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files 
 pass "bash 3.2 brace expansion safety"
 
 # 병렬 실행은 영역 출력·실패 요약을 섞지 않고, -j 인자 오류도 기존 사용법처럼 거부한다.
+# 그래프 러너가 넘기는 HM_TEST_JOBS가 바깥에 있어도 이 블록의 직렬·병렬 기대가 바뀌지 않게 한다.
+unset HM_TEST_JOBS
 RUNNER_FIXTURE="$TEST_TMP/parallel-runner"
 mkdir -p "$RUNNER_FIXTURE/tests"
 cp "$ROOT/tests/run.sh" "$RUNNER_FIXTURE/tests/run.sh"
+cp "$ROOT/tests/slow-areas.txt" "$RUNNER_FIXTURE/tests/slow-areas.txt"
 cat >"$RUNNER_FIXTURE/tests/alpha.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'alpha: begin\n'
@@ -703,5 +706,77 @@ bash "$RUNNER_FIXTURE/tests/run.sh" -j 0 >"$TEST_TMP/parallel-invalid.out" 2>&1 
 assert_eq "2" "$parallel_invalid_rc" "-j rejects zero concurrency"
 assert_contains "$(<"$TEST_TMP/parallel-invalid.out")" "-j" "invalid concurrency explains the option"
 pass "parallel test runner buffers areas and preserves failures"
+
+# 느린 영역 목록은 tests/slow-areas.txt에 있다. 그 파일만 바뀌면 --changed는 추가·삭제된 줄의 영역만 고르고,
+# run.sh 본문이 바뀌면 지금처럼 전체를 고른다. --fast는 이 목록을 빼고, 파일이 없으면 아무것도 빼지 않는다. (#513)
+unset HM_TEST_JOBS
+SLOW_FIXTURE="$TEST_TMP/slow-list-runner"
+mkdir -p "$SLOW_FIXTURE/tests"
+cp "$ROOT/tests/run.sh" "$SLOW_FIXTURE/tests/run.sh"
+printf '# slow areas\nworkflow\nbeta\n' >"$SLOW_FIXTURE/tests/slow-areas.txt"
+for n in alpha beta gamma workflow; do
+  printf '#!/usr/bin/env bash\nprintf "ok 1 - %s\\n"\n' "$n" >"$SLOW_FIXTURE/tests/$n.sh"
+done
+git -C "$SLOW_FIXTURE" init -q
+git -C "$SLOW_FIXTURE" config user.email test@example.com
+git -C "$SLOW_FIXTURE" config user.name test
+git -C "$SLOW_FIXTURE" add tests
+git -C "$SLOW_FIXTURE" commit -q -m baseline
+slow_base="$(git -C "$SLOW_FIXTURE" rev-parse HEAD)"
+printf 'gamma\n' >>"$SLOW_FIXTURE/tests/slow-areas.txt"
+git -C "$SLOW_FIXTURE" commit -q -am "gamma is slow"
+slow_out="$(HM_TEST_BASE="$slow_base" bash "$SLOW_FIXTURE/tests/run.sh" --changed 2>&1)"
+assert_contains "$slow_out" "# all passed: 1 tests in gamma" "adding one line to slow-areas.txt selects only that area"
+[[ "$slow_out" != *"# alpha"* && "$slow_out" != *"# beta"* && "$slow_out" != *"# workflow"* ]] || fail "a slow-areas.txt line selected other areas: $slow_out"
+git -C "$SLOW_FIXTURE" reset -q --hard "$slow_base"
+printf '# slow areas\nworkflow\nno-such-area\n' >"$SLOW_FIXTURE/tests/slow-areas.txt"
+slow_out="$(HM_TEST_BASE=HEAD bash "$SLOW_FIXTURE/tests/run.sh" --changed 2>&1)"
+assert_contains "$slow_out" "# all passed: 1 tests in beta" "removing one line selects only that area and an unknown name is ignored"
+git -C "$SLOW_FIXTURE" checkout -q -- tests
+printf '# a logic change\n' >>"$SLOW_FIXTURE/tests/run.sh"
+slow_out="$(HM_TEST_BASE=HEAD bash "$SLOW_FIXTURE/tests/run.sh" --changed 2>&1)"
+assert_contains "$slow_out" "# all passed: 4 tests in alpha beta gamma workflow" "a run.sh body change still selects every area"
+git -C "$SLOW_FIXTURE" checkout -q -- tests
+slow_out="$(bash "$SLOW_FIXTURE/tests/run.sh" --fast 2>&1)"
+assert_contains "$slow_out" "# all passed: 2 tests in alpha gamma" "--fast leaves out the areas slow-areas.txt lists"
+git -C "$SLOW_FIXTURE" rm -q tests/slow-areas.txt
+git -C "$SLOW_FIXTURE" commit -q -m "no slow list"
+slow_rc=0
+slow_out="$(bash "$SLOW_FIXTURE/tests/run.sh" --fast 2>&1)" || slow_rc=$?
+assert_eq "0" "$slow_rc" "--fast runs without slow-areas.txt"
+assert_contains "$slow_out" "# all passed: 4 tests in alpha beta gamma workflow" "--fast without slow-areas.txt leaves out nothing"
+printf 'gamma\n' >"$SLOW_FIXTURE/tests/slow-areas.txt"
+slow_out="$(HM_TEST_BASE=HEAD bash "$SLOW_FIXTURE/tests/run.sh" --changed 2>&1)"
+assert_contains "$slow_out" "# all passed: 1 tests in gamma" "an untracked new slow-areas.txt selects every area it lists"
+pass "slow-areas.txt drives --fast and a narrow --changed selection"
+
+# -j가 없으면 run.sh는 HM_TEST_JOBS를 동시 실행 수로 쓰고, -j가 이긴다. 두 영역은 서로의 표지를 기다리므로 병렬일 때만 통과한다. (#513)
+for n in pa pb; do
+  other=pb
+  [[ "$n" == pa ]] || other=pa
+  cat >"$SLOW_FIXTURE/tests/$n.sh" <<AREA
+#!/usr/bin/env bash
+: >"$TEST_TMP/jobs-mark-$n"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  [[ -f "$TEST_TMP/jobs-mark-$other" ]] && { printf 'ok 1 - $n\n'; exit 0; }
+  sleep 0.2
+done
+printf '$n: $other never started\n'
+exit 1
+AREA
+done
+rm -f "$TEST_TMP"/jobs-mark-*
+jobs_rc=0
+HM_TEST_JOBS=2 bash "$SLOW_FIXTURE/tests/run.sh" pa pb >"$TEST_TMP/jobs-env.out" 2>&1 || jobs_rc=$?
+assert_eq "0" "$jobs_rc" "HM_TEST_JOBS=2 runs areas in parallel without -j: $(<"$TEST_TMP/jobs-env.out")"
+rm -f "$TEST_TMP"/jobs-mark-*
+jobs_rc=0
+HM_TEST_JOBS=2 bash "$SLOW_FIXTURE/tests/run.sh" -j 1 pa pb >"$TEST_TMP/jobs-env.out" 2>&1 || jobs_rc=$?
+assert_eq "1" "$jobs_rc" "-j 1 wins over HM_TEST_JOBS and runs the areas one at a time"
+jobs_rc=0
+HM_TEST_JOBS=x bash "$SLOW_FIXTURE/tests/run.sh" pa >"$TEST_TMP/jobs-env.out" 2>&1 || jobs_rc=$?
+assert_eq "2" "$jobs_rc" "an invalid HM_TEST_JOBS is rejected like an invalid -j"
+assert_contains "$(<"$TEST_TMP/jobs-env.out")" "HM_TEST_JOBS" "the rejection names HM_TEST_JOBS"
+pass "run.sh takes HM_TEST_JOBS as its default concurrency"
 
 finish_tests
