@@ -32,7 +32,7 @@ scripts/release-prep.sh --check
 
 ## 5. publish 노드가 쓸 사실
 
-`implement-feature.md` 5절과 같다: 기준 `develop`, 브랜치 `fix/<요약>`(이슈가 있으면 `fix/<이슈번호>-<요약>`), 커밋 `fix(<scope>): ... (#<이슈>)`, `gh pr create --base develop`(일반 PR, 본문 `Closes #<이슈>`), 원격 CI `gh pr checks <PR> --watch`, 병합이 `develop`과의 충돌만으로 막히면 `sync_base`가 `origin/develop`을 일반 merge로 들이고 검사를 다시 통과해야 push한다. 버전 파일은 올리지 않는다. 이미 릴리스된 버전의 치명적 문제(hotfix)만 `main`에서 따고 `main`으로 PR한다 — 이 판단은 사람에게 묻는다.
+`implement-feature.md` 5절과 같다: 기준 `develop`, 브랜치 `fix/<요약>`(이슈가 있으면 `fix/<이슈번호>-<요약>`), 커밋 `fix(<scope>): ... (#<이슈>)`, `gh pr create --base develop`(일반 PR, 본문 `Closes #<이슈>`), 원격 CI `gh pr checks <PR> --watch`, 병합이 `develop`과의 충돌만으로 막히면 `sync_base`가 `origin/develop`을 일반 merge로 들이고 검사를 다시 통과해야 push한다. 버전 파일은 올리지 않는다(검사는 `implement-feature.md` 4절의 merge-base 명령 `git diff --quiet origin/develop...HEAD -- <버전 파일>`). 이미 릴리스된 버전의 치명적 문제(hotfix)만 `main`에서 따고 `main`으로 PR한다 — 이 판단은 사람에게 묻는다.
 
 ## 6. 이슈 트래커
 
