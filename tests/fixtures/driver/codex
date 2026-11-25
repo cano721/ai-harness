@@ -209,7 +209,7 @@ case "$node:$scenario" in
       *) url="https://example.test/pr/7" ;;
     esac
     jq -n --arg u "$url" '{summary:"opened", branch:"feat/add-feature", pr_url:$u}' >"$out" ;;
-  remote_ci:ci_fail_once)
+  remote_ci:ci_fail_once|remote_ci:gate_ci_fail_once)
     if [[ -f "$FAKE_LOG.ci_failed" ]]; then
       jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out"
     else
@@ -236,6 +236,11 @@ case "$node:$scenario" in
       git add -- "$f"
     done <<<"$(git diff --name-only --diff-filter=U)"
     jq -n '{status:"resolved", summary:"kept both sides", unresolved:[]}' >"$out" ;;
+  # HM_TARGET_CI(#557): notify의 한 번 읽기(Do not wait)는 FAKE_TCI_ONCE(기본 pending), 기다리는 읽기(wait 모드·분리 감시)는 FAKE_TCI_WATCH(기본 passed).
+  post_merge_verify:pm_tci_*)
+    tci="${FAKE_TCI_WATCH:-passed}"
+    case "$prompt" in *"Do not wait"*) tci="${FAKE_TCI_ONCE:-pending}" ;; esac
+    jq -n --arg s "$tci" '{status:$s, commit:"1111111111111111111111111111111111111111", summary:("main is " + $s), failures:(if $s == "failed" then ["integration: db migration timed out"] else [] end)}' >"$out" ;;
   post_merge_verify:pm_ci_fail) jq -n '{status:"failed", commit:"1111111111111111111111111111111111111111", summary:"build on main failed", failures:["integration: db migration timed out"]}' >"$out" ;;
   post_merge_verify:pm_ci_other) jq -n '{status:"passed", commit:"3333333", summary:"green", failures:[]}' >"$out" ;;
   post_merge_verify:*) jq -n '{status:"passed", commit:"1111111111111111111111111111111111111111", summary:"main is green", failures:[]}' >"$out" ;;

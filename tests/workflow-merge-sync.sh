@@ -173,7 +173,6 @@ assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a conflict the host report
 assert_contains "$(sync_path)" "sync_base" "the late conflict result goes through sync_base"
 pass "a pending conflict check is asked again and then syncs the base"
 
-
 # A12: A6과 같은 동작을 -j 없는 전체 회귀로 잠근다 — 문서가 `bash tests/run.sh`만 적게 된 뒤에도
 # 그에 포함되는 --changed는 건너뛰고 전체 회귀만 한 번 돈다. (#544)
 sync_repo merge_conflict_covered_nojobs
@@ -190,5 +189,21 @@ assert_eq "--changed;;" "$(paste -sd ';' "$COVER_LOG")" "sync_base runs the -j-l
 assert_contains "$(<"$(dirname "$(find "$DRIVER_TMP/runs" -path "*/$(basename "$DRIVER_REPO")-*/*" -name state.json | head -n 1)")/progress.log")" \
   "check skipped (covered by bash tests/run.sh): bash tests/run.sh --changed" "the covered check is logged as skipped"
 pass "sync_base skips a narrow tests/run.sh check covered by a -j-less full regression"
+
+# 원격 CI가 최종 관문인 런(.policy.final_gate == remote_ci)에서 sync_base는 checks만 다시 돌린다.
+# push한 merge 커밋은 remote_ci를 다시 거치므로 로컬 final_checks는 돌지 않는다. (#557)
+sync_repo merge_conflict_remote_gate
+mkdir -p "$DRIVER_REPO/.github/workflows"
+printf 'on: push\n' >"$DRIVER_REPO/.github/workflows/test.yml"
+git -C "$DRIVER_REPO" add .github && git -C "$DRIVER_REPO" commit -qm ci
+git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main
+GATE_SYNC_LOG="$DRIVER_TMP/remote-gate-sync.log"
+: >"$GATE_SYNC_LOG"
+base_commit base.txt base
+FAKE_CHECK="printf 'C\\n' >>'$GATE_SYNC_LOG'" FAKE_FINAL_CHECK="printf 'F\\n' >>'$GATE_SYNC_LOG'" sync_start
+assert_eq "0:done:1:remote_ci" "$DRIVER_RC:$(run_state .status):$(run_state '.base_syncs | length'):$(run_state .policy.final_gate)" "a remote-gated run syncs the base and merges"
+assert_eq "0" "$(grep -c '^F$' "$GATE_SYNC_LOG" || true)" "neither the final gate nor sync_base runs the final checks locally"
+[[ "$(grep -c '^C$' "$GATE_SYNC_LOG")" -ge 2 ]] || fail "sync_base runs the checks again (log=$(paste -sd ';' "$GATE_SYNC_LOG"))"
+pass "sync_base runs only the checks when remote CI is the final gate"
 
 finish_tests

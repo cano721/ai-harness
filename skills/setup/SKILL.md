@@ -248,6 +248,7 @@ $ROOT/scripts/setup.sh team list
 - 보호 규칙을 읽을 수 없으면 병합하지 않고 사람에게 넘긴다. GitHub 예전 브랜치 보호와 Bitbucket branch restrictions는 저장소 관리자 권한이 있어야 읽히므로, 권한이 없으면 GitHub 규칙 세트로 보호하거나 직접 병합한다.
 - 무인 실행(자동 harvest·sync 등)은 이 설정으로 병합하지 않는다.
 - 기준 브랜치·배포·스모크 명령은 저장소 사실이라 `/harness-init`에서 PR로 바꾼다.
+- 병합 커밋의 원격 CI를 기다릴지도 고를 수 있다(`HM_TARGET_CI`, 저장소별 `HM_TARGET_CI_REPOS="<project_id>=wait|notify,…"`가 우선). `wait`(기본, 줄 없음과 같다)는 끝날 때까지 기다린다. `notify`는 기다리지 않고 한 번만 읽어, 실패가 이미 보이면 사람에게 넘기고 진행 중이면 런을 끝낸 뒤 분리 감시가 실패를 progress.log `ALERT:`·런 상태 `alerts`·데스크톱 알림으로 알린다(`HM_DESKTOP_NOTIFY=0`이면 데스크톱 알림만 끈다). 묻고 고르지 않으면 건드리지 않는다. 그 밖의 값이면 러너가 시작하지 않는다.
 
 ### 8-2. 보드에서 권한 요청 답하기 (선택)
 

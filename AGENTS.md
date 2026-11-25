@@ -57,13 +57,13 @@ TDD: test-engineer가 Red(실패 확인) → developer가 Green → Refactor. �
 ```bash
 bash tests/run.sh --changed                                                   # 작업 중: 바뀐 파일을 다루는 영역만
 bash tests/run.sh --lint                                                      # 작업 중: 바뀐 셸 파일만 bash -n + shellcheck
-bash tests/run.sh                                                             # 전체 회귀 — PR 직전 한 번. 러너가 HM_TEST_JOBS로 병렬 실행
+bash tests/run.sh                                                             # 전체 회귀 — PR 직전 한 번. 러너가 HM_TEST_JOBS로 병렬 실행, 러너 밖 기본 동시 실행 수 max(1, min(CPU/2, 4))
 bash -n scripts/*.sh scripts/board/*.sh tests/*.sh                            # 문법 (PR 직전)
 npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh   # PR 직전, CI와 같은 수준 (apt shellcheck는 SC2015도 실패)
 scripts/release-prep.sh --check                                               # 버전 네 곳 정합성
 ```
 
-검사 명령(Brief의 `checks`·`final_checks`)에는 `-j`를 적지 않는다 — 러너가 넘기는 `HM_TEST_JOBS`를 `-j`가 덮는다. 러너 밖에서 사람이 직접 병렬로 돌리려면 `-j N`(예: `-j 2`)을 붙인다. CI는 `-j 2`로 고정돼 있다(`.github/workflows/test.yml`).
+검사 명령(Brief의 `checks`·`final_checks`)에는 `-j`를 적지 않는다 — 러너가 넘기는 `HM_TEST_JOBS`를 `-j`가 덮는다. 러너 밖에서 사람이 직접 칠 때 직렬은 `-j 1`, 동시 실행 수를 직접 고르려면 `-j N`(예: `-j 2`)을 붙인다. CI는 `-j` 대신 matrix 샤드(`--shard i/4`)로 나눠 돈다(`.github/workflows/test.yml`).
 
 ## Git
 

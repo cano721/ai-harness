@@ -20,7 +20,7 @@
 2. **Green** — developer가 최소 변경으로 통과시킨다.
 3. **Refactor** — 테스트를 바꾸지 않고 정리, `bash tests/run.sh --changed` 재통과.
 
-러너의 deliver 노드는 Red/Green 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 리뷰가 깨끗해진 뒤 러너가 한 번 돌리므로 deliver가 직접 돌리지 않는다.
+러너의 deliver 노드는 Red/Green 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 deliver가 직접 돌리지 않는다. 이 저장소는 러너가 push하고 GitHub Actions(`.github/workflows/test.yml`)가 있으므로 원격 CI가 최종 관문이고, 러너는 `final_checks`를 로컬에서 돌리지 않는다(원격 CI가 없거나 push하지 않는 런만 리뷰가 깨끗해진 뒤 로컬에서 한 번 돈다).
 
 역할 분리는 작업 위험이 뒷받침할 때만 쓴다. 역할 도구가 없으면 현재 세션에서 페르소나(`.ai-harness/agents/`)를 바꿔 가며 진행한다.
 
@@ -37,7 +37,7 @@ bash tests/run.sh --changed
 bash tests/run.sh --lint
 ```
 
-리뷰가 깨끗해진 뒤 한 번(완료 증거 — PR 직전, Brief의 `final_checks`):
+리뷰가 깨끗해진 뒤 한 번(완료 증거 — PR 직전, Brief의 `final_checks`. 러너가 push하는 런은 원격 CI `test` 워크플로가 같은 전체 회귀·shellcheck를 돌리는 최종 관문이라 러너는 로컬에서 돌리지 않는다):
 
 ```bash
 bash tests/run.sh

@@ -1,9 +1,6 @@
 # 그래프 러너·자동 실행 흐름을 실제로 돌리는 느린 영역. 한 줄에 영역 하나, 긴 것부터(macOS 실측).
-# tests/run.sh --fast가 빼고, -j가 이 순서로 먼저 시작한다. 이 파일만 바뀌면 --changed는 추가·삭제된 줄의 영역만 고른다.
-automation
-workflow-merge
+# tests/run.sh --fast가 빼고, -j·--shard가 이 순서로 먼저 놓는다. 이 파일만 바뀌면 --changed는 추가·삭제된 줄의 영역만 고른다.
 workflow-merge-sync
-workflow-runs
 workflow-stop
 design
 workflow-feature
@@ -13,3 +10,35 @@ init
 workflow-investigate
 workflow-release
 board-agenda
+automation-sync
+workflow-merge-approval
+automation-merge
+automation-chain-auth
+automation-chain-global
+workflow-merge-host
+workflow-merge-cleanup
+workflow-merge-monitor
+workflow-runs-delivery
+workflow-runs-bugfix-verify
+workflow-merge
+automation-chain-cap
+automation-watchdog
+workflow-runs-delivery-host
+workflow-runs-delivery-legacy
+workflow-runs-review-limits
+workflow-merge-blocked
+workflow-runs-baseline-runner
+workflow-merge-deploy
+workflow-merge-unreadable
+workflow-runs-bugfix-graph
+workflow-runs-delivery-bitbucket
+automation-chain-guard
+workflow-merge-pending
+workflow-merge-post
+workflow-runs-baseline
+automation
+workflow-runs-runtime
+automation-chain-order
+workflow-runs-review
+automation-guards
+workflow-runs
