@@ -7,6 +7,9 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
+### 버그 수정
+
+- 러너 deliver·repair 노드가 넓은 회귀는 러너 checks에 맡기고 바꾼 영역 테스트만 포그라운드로 돌리게 하고, `workflow-driver.sh status`가 정규화된 `git_policy`(`pr-only`)와 개인 단계(`delivery`)를 따로 보이게 한다 (#534)
 
 ## v0.95.0 (2026-11-25)
 ### 새 기능

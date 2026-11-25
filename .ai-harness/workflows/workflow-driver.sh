@@ -1882,6 +1882,7 @@ BULK_READ_RULE="Bulk reads: apply this only when the change adds or changes serv
 
 # 화면 검증·재현 세션의 앱 서버 수명. dev 서버를 명령 안에서 nohup &로 띄우고 포트로 끄면 워커가 고아로 남아 수 GB를 쥔다(#435).
 APP_SERVER_RULE="App server: start any server with the tool's background run, not with &, nohup, or setsid inside the command, and poll the port or a health URL with a time limit instead of ending your turn to wait for it. Reuse a server already running for this working tree instead of starting another on the same port. Before you finish, stop the whole process group of every server you started (TERM, a few seconds, then KILL) and confirm no process of that group is left; a free port does not mean it stopped, because dev workers close the port and survive TERM."
+NODE_TEST_RULE="Tests: the driver runs the broad regression itself after you finish (the checks it lists); do not run the full suite yourself. Run only the tests for the areas you changed (for example bash tests/run.sh <area> where the project has it) in the foreground and wait for them to finish. Never start tests or other long-running commands in the background and end your reply while they are still running."
 # 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
 APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
 
@@ -2790,6 +2791,7 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         run_node deliver deliver "$CONTEXT
 
 You are the deliver node. Implement the approved Implementation Brief below in this repository. Follow the project workflow and test policy (Red -> Green -> Refactor only when TDD is required), delegating to the project's role agents when the workflow says so.
+$NODE_TEST_RULE
 Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 $FULL_REGRESSION_RULE
 Return a concise summary of changed areas and the commands you ran.
@@ -3097,6 +3099,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
 You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
+$NODE_TEST_RULE
+After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 
 Blocking findings:
 $(state '.findings')
@@ -3707,7 +3711,7 @@ EOF
 
 case "$CMD" in
   status)
-    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(.policy.git // "")\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
+    jq -r '"run \(.run_id) · workflow \(.workflow // "feature") · node \(.node) · status \(.status) · repair \(.attempts) · approval \(.policy.approval // "human") (\(.policy.approval_source // "legacy")) · git_policy \(if .policy.git == "merge" then "pr-only" else (.policy.git // "") end)\((.policy.delivery.level // (if .policy.git == "merge" then "merge" else null end)) | if . then " · delivery \(.)" else "" end)\n" + (.history | map("  \(.from) --\(if .outcome == "" then "next" else .outcome end)--> \(.to)") | join("\n"))' "$STATE"
     [[ "$(state '.release // null')" == null ]] || state '.release | "release \(.tag // "(version pending)") · stage \(.stage)" + (if .published then " · released \(.published.status)" else "" end)
       + (if .blocked then " · blocked: " + .blocked elif .stopped_because then " · stopped: " + .stopped_because else "" end)
       + (if .sync then "\nsync (run by a person): " + .sync.command else "" end)'
