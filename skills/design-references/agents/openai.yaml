@@ -1,4 +1,4 @@
 interface:
   display_name: "Design References"
-  short_description: "Collect, capture, and check design references and competitors, then serve them as a five-tab board."
+  short_description: "Collect, capture, and check design references and competitors, for a web page, mobile page, print piece, or graphic, then serve them as a board with tabs named for the medium."
   default_prompt: "Use $design-references to collect references and competitors for: $ARGUMENTS"

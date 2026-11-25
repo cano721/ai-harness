@@ -84,15 +84,19 @@ case "$scenario" in
   merge_bot) reviews="[$(r helper[bot] MEMBER APPROVED 2026-10-30T01:00:00Z "$head")]" ;;
   merge_dismissed) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z "$head"),$(r alice MEMBER DISMISSED 2026-10-30T02:00:00Z "$head")]" ;;
   merge_rereviewed) reviews="[$(r alice MEMBER CHANGES_REQUESTED 2026-10-30T01:00:00Z "$head"),$(r alice MEMBER APPROVED 2026-10-30T02:00:00Z "$head")]" ;;
-  merge_changes) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z "$head"),$(r bob COLLABORATOR CHANGES_REQUESTED 2026-10-30T02:00:00Z "$head")]" ;;
+  merge_changes|merge_conflict_changes) reviews="[$(r alice MEMBER APPROVED 2026-10-30T01:00:00Z "$head"),$(r bob COLLABORATOR CHANGES_REQUESTED 2026-10-30T02:00:00Z "$head")]" ;;
 esac
 state=OPEN; merge_commit=null; merged_at=""
 if [[ -f "$FAKE_LOG.merged" || "$scenario" == merge_outside ]]; then state=MERGED; merge_commit="{\"oid\":\"$MERGE_SHA\"}"; merged_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; fi
 [[ "$scenario" != merge_closed ]] || state=CLOSED
 [[ "$scenario" != wtc_unmerged || ! -f "$FAKE_LOG.reopen" ]] || state=OPEN  # 병합 뒤 검증이 표시를 남기면 호스트가 더는 MERGED로 답하지 않는다
 [[ "$scenario" != merge_headmoved ]] || head=2222222222222222222222222222222222222222
+# merge_conflict*: base와 충돌한다. sync_base가 base를 병합해 head가 merge 커밋이 되면 풀린다(merge_conflict_limit은 계속 충돌).
 mergeable=MERGEABLE
-[[ "$scenario" != merge_conflict ]] || mergeable=CONFLICTING
+case "$scenario" in
+  merge_conflict_limit) mergeable=CONFLICTING ;;
+  merge_conflict*) git rev-parse -q --verify HEAD^2 >/dev/null || mergeable=CONFLICTING ;;
+esac
 base=main
 [[ "$scenario" != merge_otherbase ]] || base=release
 head_ref=feat/add-feature

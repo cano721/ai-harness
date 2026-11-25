@@ -6,8 +6,13 @@
 #   - retake:  challenge·failed 캡처를 실제 브라우저에서 다시 찍은 PNG로 바꾸고 capture.json을 ok(via browser)로 고친다.
 #   - check:   references.json·searches.json·component-slots.json을 검사한다. 종류별 개수(refs-rules.json), 검색 근거,
 #              경쟁사 서로 다른 도메인 2곳 이상, 한 도메인은 한 kind에만, challenge·failed 캡처가 남은 레퍼런스 거부.
+#              절차 4 표의 필수 필드(매체별 layout 캡처 폭 포함)는 "<id>: <필드>"로 거부하고, 경쟁사의 검색 근거는 도메인으로
+#              맞추며 source "user"(사용자가 준 곳)·"direct"(검색 밖에서 직접 연 곳)만 면제한다(#529).
 #              v0.69.0 무인 실행이 bot check 사이트를 다시 열지 않고 빼고, 같은 사이트를 여러 탭에 돌려 써서 실제 사이트
 #              4곳으로 "다섯 종류 각 1개"를 통과했다.
+#   - 매체(--medium web-page|mobile-page|print|graphic, #518): capture·check·board가 받아 WORK/medium.json에 남기고, 주지
+#              않으면 그 파일을 읽는다(없으면 web-page — landing-run.sh 호출은 그대로 웹페이지다). 최소치는 refs-rules.json의
+#              media.<매체>.<mode>(없으면 최상위), 캡처 폭·탭·분석 라벨·분석 필수 키는 references/media.json이 단일 출처다.
 #   - board:   tone.json·references.json으로 탭 5개 보드(board.html)를 그리고(--kind drafts면 시안 보드), --serve면 보드
 #              서버를 분리 실행한다. 레퍼런스 보드를 만들 때마다 실행 기록을 <data>/board/references/<run-id>.json에 남긴다.
 #              Harness Board가 떠 있고 레퍼런스 화면을 지원하면(server.json의 features) 따로 서버를 띄우지 않고 대시보드
@@ -17,23 +22,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RULES="${DESIGN_REFS_RULES:-$ROOT/skills/design-references/references/refs-rules.json}"
+MEDIA="$ROOT/skills/design-references/references/media.json"
 DATA_DIR="${HARNESS_METRICS_DIR:-$HOME/.ai-harness}"
 
 die() { local code="$1"; shift; printf 'design-refs: %s\n' "$*" >&2; exit "$code"; }
 usage() {
   cat >&2 <<'EOF'
 usage:
-  design-refs.sh capture --work DIR --file REFS-TO-CAPTURE.json [--background]
+  design-refs.sh capture --work DIR --file REFS-TO-CAPTURE.json [--background] [--medium M]
   design-refs.sh retake  --work DIR --id CAPTURE_ID --shot WIDTH:PNG [--shot WIDTH:PNG]
-  design-refs.sh check   --work DIR [--mode interactive|unattended]
-  design-refs.sh board   --work DIR [--kind references|drafts] [--topic TEXT] [--port N --serve]
+  design-refs.sh check   --work DIR [--mode interactive|unattended] [--medium M]
+  design-refs.sh board   --work DIR [--kind references|drafts] [--topic TEXT] [--port N --serve] [--medium M]
+  M: web-page (default) | mobile-page | print | graphic — kept in DIR/medium.json
   design-refs.sh run-id  --work DIR
 EOF
   exit 2
 }
 
 cmd="${1:-}"; [[ -n "$cmd" ]] || usage; shift
-WORK="" FILE="" BACKGROUND="" ID="" MODE="interactive" KIND="references" TOPIC="" PORT="" SERVE=""
+WORK="" FILE="" BACKGROUND="" ID="" MODE="interactive" KIND="references" TOPIC="" PORT="" SERVE="" MEDIUM=""
 SHOTS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,17 +54,40 @@ while [[ $# -gt 0 ]]; do
     --topic) TOPIC="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --serve) SERVE=1; shift ;;
+    --medium) MEDIUM="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ -n "$WORK" ]] || usage
 WORK="$(cd "$WORK" 2>/dev/null && pwd)" || die 2 "work directory not found"
 
+# The medium of this work folder: --medium (checked, then kept in medium.json), else medium.json, else web-page.
+resolve_medium() {
+  local known
+  if [[ -n "$MEDIUM" ]]; then
+    jq -e --arg m "$MEDIUM" '.media | has($m)' "$MEDIA" >/dev/null 2>&1 \
+      || die 2 "--medium is one of $(jq -r '.media | keys_unsorted | join("|")' "$MEDIA") (got $MEDIUM)"
+    jq -cn --arg m "$MEDIUM" '{medium: $m}' >"$WORK/medium.json"
+  elif [[ -f "$WORK/medium.json" ]]; then
+    MEDIUM="$(jq -r 'if type == "object" and (.medium | type) == "string" then .medium else error end' "$WORK/medium.json" 2>/dev/null)" \
+      || die 2 "medium.json is not {\"medium\": \"...\"}: $WORK/medium.json"
+    known="$(jq -r --arg m "$MEDIUM" '.media | has($m)' "$MEDIA" 2>/dev/null || true)"
+    [[ "$known" == true ]] || die 2 "unknown medium in medium.json: $MEDIUM ($(jq -r '.media | keys_unsorted | join("|")' "$MEDIA"))"
+  else
+    MEDIUM="$(jq -r '.default' "$MEDIA")"
+  fi
+}
+
 # Same id for the same work folder: a board drawn again updates its record instead of adding one.
 run_id() { printf '%s' "$WORK" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12; }
 
+# Every field the board shows (procedure 4's table) must be there: "<id>: <field> is required". Layout captures follow the
+# medium's layout rule in media.json ($layout: widths each needing a w<width>-NN.png capture; image: an image may stand in).
 REFS_CHECK='
   def str: type == "string" and length > 0;
+  def capstrs: (.captures // []) | if type == "array" then .[] | strings else empty end;
+  def caps: (.captures | type == "array" and length > 0 and all(str));
+  def need($f): select((.[$f] | str) | not) | "\(.id // "?"): \($f) is required";
   ["tone", "component", "layout", "interaction", "competitor"] as $kinds
   | if type != "array" then "must be an array of references" else
     . as $refs
@@ -68,17 +98,30 @@ REFS_CHECK='
       ([.[] | select(.kind == "competitor")] | length) as $c | (if $c > ($min.competitor_max // 4) then "competitor has \($c), at most \($min.competitor_max // 4)" else empty end),
       ([.[] | select(.kind == "interaction" and (.video | str))] | length) as $v
          | (if $v >= ($min.interaction_video // 0) then empty else "interaction has \($v) with a video, needs at least \($min.interaction_video)" end),
-      (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis.leads_with, .analysis.claim, .analysis.cta, .analysis.gap] | all(str) | not)))
-           | "\(.id // "?"): competitor needs analysis {leads_with, claim, cta, gap}"),
-      (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0))
-           | "\(.id // "?"): interaction needs a video (recording URL or path) or captures")
+      (.[] | select(.kind == "competitor" and ((.analysis | type) != "object" or ([.analysis[$required[]]] | all(str) | not)))
+           | "\(.id // "?"): competitor needs analysis {\($required | join(", "))}"),
+      (.[] | select(has("image") and ((.image | type) != "string" or (.image | test("^https?://"; "i") | not)))
+           | "\(.id // "?"): image must be an http(s) URL (the original image, not a local file)"),
+      (.[] | select(.kind == "interaction" and ((.video | str) | not) and (((.captures // []) | length) == 0) and ((.image | str) | not))
+           | "\(.id // "?"): interaction needs a video (recording URL or path), captures, or an image"),
+      (.[] | ("title", "url", "source") as $f | need($f)),
+      (.[] | select(.kind != "competitor") | ("take", "keep_strength", "must_not_shrink_to") as $f | need($f)),
+      (.[] | select(.kind == "tone") | need("tone_part")),
+      (.[] | select(.kind | IN("tone", "component", "competitor")) | select((caps or (.image | str)) | not)
+           | "\(.id // "?"): captures or image is required"),
+      (.[] | select(.kind == "layout" and ($layout.widths | length) == 0) | select((caps or ($layout.image and (.image | str))) | not)
+           | "\(.id // "?"): captures or image is required"),
+      (.[] | select(.kind == "layout" and ($layout.widths | length) > 0 and (($layout.image and (.image | str)) | not)) | . as $r
+           | $layout.widths[] as $w
+           | select([$r | capstrs | select(test("(^|/)w\($w)-[0-9]+\\.png$"))] | length == 0)
+           | "\($r.id // "?"): captures at w\($w) are required for a \($medium) layout")
     ] | join("; ") end'
 
 # One site is evidence for one kind: a board whose tabs repeat the same few sites gives the user nothing to choose from.
 # The product's own site is no exception — it is the brand source behind tone.json, so at most it is a tone reference.
 # Domain: the host without www and port, cut to its registrable part (two labels; three under co.kr-style suffixes and
 # hosting suffixes such as pages.dev or vercel.app, where each subdomain is someone else's site).
-DOMAIN_CHECK='
+DOMAIN_DEF='
   def domain: ascii_downcase | sub("^[a-z][a-z0-9+.-]*://"; "") | sub("[/?#].*$"; "") | sub("^[^@]*@"; "")
     | if test("^[0-9.]+(:[0-9]+)?$") or test("^localhost(:[0-9]+)?$") then . else
         sub(":[0-9]+$"; "") | sub("^www\\."; "") | split(".") as $p
@@ -87,9 +130,19 @@ DOMAIN_CHECK='
              or ($p[-2:] | join(".") | IN("pages.dev","vercel.app","netlify.app","lovable.app","github.io","web.app",
                "firebaseapp.com","herokuapp.com","webflow.io","framer.website","framer.app","notion.site","wixsite.com",
                "onrender.com","fly.dev","glitch.me","replit.app","surge.sh")))
-          then $p[-3:] | join(".") elif ($p | length) >= 2 then $p[-2:] | join(".") else $p | join(".") end end;
+          then $p[-3:] | join(".") elif ($p | length) >= 2 then $p[-2:] | join(".") else $p | join(".") end end;'
+DOMAIN_CHECK="$DOMAIN_DEF"'
+  # A work on a collection site (a pin, a gallery project, a shot) is a site of its own: many designers post there.
+  def site: domain as $d
+    | (ascii_downcase | sub("^[a-z][a-z0-9+.-]*://"; "") | sub("[?#].*$"; "") | (capture("^[^/]*(?<p>/.*)$").p // "")) as $path
+    | (if ($d | test("^pinterest\\.")) then ($path | capture("^/pin/(?<w>[0-9]+)") | "pin/\(.w)")
+       elif $d == "behance.net" then ($path | capture("^/gallery/(?<w>[0-9]+)") | "gallery/\(.w)")
+       elif $d == "dribbble.com" then ($path | capture("^/shots/(?<w>[0-9]+)") | "shots/\(.w)")
+       elif $d == "notefolio.net" then ($path | capture("^/(?<u>[^/]+)/(?<w>[0-9]+)(/|$)") | "\(.u)/\(.w)")
+       else null end // null) as $w
+    | if $w then "\($d)/\($w)" else $d end;
   if type != "array" then empty else
-  [ ( [.[] | select((.url | type) == "string" and (.url | test("^https?://"))) | {d: (.url | domain), kind, id}]
+  [ ( [.[] | select((.url | type) == "string" and (.url | test("^https?://"))) | {d: (.url | site), kind, id}]
       | group_by(.d)[] | select(([.[].kind] | unique | length) > 1)
       | "\(.[0].d) is used in \([.[].kind] | unique | join(" and ")) (\([.[].id] | join(", "))); one site serves one kind — find another site for the rest"),
     ([.[] | select(.kind == "competitor" and (.url | type) == "string") | .url | domain] | unique | length) as $n
@@ -109,20 +162,21 @@ CAPTURE_CHECK='
   ] | join("; ") end'
 
 # The references come from a search, not from memory: a category search and a gallery search at least, and every
-# competitor (unless the user named it) among the results. $refs is references.json.
-SEARCH_CHECK='
+# competitor among the results by domain (another path on the same site counts) — unless the user named it (source "user")
+# or it was opened directly as a known site in the category (source "direct", procedure 1.3). $refs is references.json.
+SEARCH_CHECK="$DOMAIN_DEF"'
   def str: type == "string" and length > 0;
-  def norm: ascii_downcase | sub("^https?://"; "") | sub("^www\\."; "") | sub("/+$"; "");
   if type != "array" then "must be an array of searches" else
-    ([.[] | .results // [] | .[] | strings | norm]) as $found
+    ([.[] | .results // [] | .[] | strings | domain] | unique) as $found
     | [ (if length >= 2 then empty else "\(length) searches, needs at least 2" end),
         (.[] | select(((.query | str) and (.engine_or_gallery | str) and ((.results // []) | length) > 0) | not)
              | "\(.query // "?"): a search needs query, engine_or_gallery, and its results"),
         (.[] | select((.purpose | IN("category", "gallery")) | not) | "\(.query // "?"): purpose must be category or gallery"),
         (if any(.[]; .purpose == "category") then empty else "no category search (pages in the same category)" end),
         (if any(.[]; .purpose == "gallery") then empty else "no gallery search (interaction references)" end),
-        ($refs[0][] | select(.kind == "competitor" and .source != "user" and (((.url // "") | norm) as $u | $found | index($u)) == null)
-             | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named may skip search)")
+        ($refs[0][] | select(.kind == "competitor" and ((.source | IN("user", "direct")) | not)
+                             and (((.url // "") | strings | domain) as $u | $found | index($u)) == null)
+             | "\(.id // "?"): competitor \(.url // "?") is not among the search results (only a site the user named (source \"user\") or one opened directly (source \"direct\") may skip search)")
       ] | join("; ") end'
 
 # The sections that need a reference of their own (component-slots.json): each becomes a column in the components tab.
@@ -143,18 +197,28 @@ RECO_CHECK='
                      or (.kind == "component" and (.recommended as $r | $sids | index($r)) != null)) | not)
            | "\(.id): recommended must be layout (on a layout reference), interaction (on an interaction reference), or a slot id from component-slots.json (on a component reference)"),
       (if ([.[] | select(.recommended == "layout")] | length) == 1 then empty else "recommend exactly one layout reference (recommended: \"layout\")" end),
-      (if ([.[] | select(.recommended == "interaction")] | length) == 1 then empty else "recommend exactly one interaction reference (recommended: \"interaction\")" end),
+      ([.[] | select(.recommended == "interaction")] | length) as $ri
+        | (if ($min.per_kind.interaction // 1) == 0 then (if $ri <= 1 then empty else "recommend at most one interaction reference (recommended: \"interaction\")" end)
+           elif $ri == 1 then empty else "recommend exactly one interaction reference (recommended: \"interaction\")" end),
       ([.[] | select(.kind == "component" and .recommended != null) | .recommended] | group_by(.)[] | select(length > 1)
          | "slot \(.[0]) has more than one recommended component")
     ] | join("; ")'
 
+# The top level is the web page and needs every kind; a medium (media.<medium>.<mode>) may drop interaction and competitor.
 RULES_CHECK='
-  ["interactive", "unattended"] | all(. as $m | $rules[0][$m] as $r
-    | ($r | type) == "object"
-    and (["tone","component","layout","interaction","competitor"] | all(. as $k | ($r.per_kind[$k] | type) == "number" and $r.per_kind[$k] >= 1))
-    and ($r.interaction_video | type) == "number" and $r.interaction_video <= $r.per_kind.interaction
-    and ($r.competitor_max | type) == "number" and $r.competitor_max >= $r.per_kind.competitor
-    and ($r.competitor_domains | type) == "number" and $r.competitor_domains >= 2 and $r.competitor_domains <= $r.competitor_max)'
+  def num: type == "number" and . >= 0;
+  def valid($optional): . as $r
+    | ($r | type) == "object" and ($r.per_kind | type) == "object"
+    and (["tone","component","layout","interaction","competitor"] | all(. as $k | ($r.per_kind[$k] | num)
+           and $r.per_kind[$k] >= (if ($optional | index($k)) != null then 0 else 1 end)))
+    and ($r.interaction_video | num) and $r.interaction_video <= $r.per_kind.interaction
+    and ($r.competitor_max | num) and $r.competitor_max >= $r.per_kind.competitor
+    and ($r.competitor_domains | num) and $r.competitor_domains <= $r.competitor_max
+    and $r.competitor_domains >= (if $r.per_kind.competitor >= 1 then 2 else 0 end);
+  ($rules[0] | type) == "object"
+  and (["interactive", "unattended"] | all(. as $m | $rules[0][$m] | valid([])))
+  and (($rules[0].media // {}) | type == "object" and all(.[];
+         type == "object" and (to_entries | all((.key | IN("interactive", "unattended")) and (.value | valid(["interaction", "competitor"]))))))'
 
 capture_statuses() {
   local f d out="{}"
@@ -168,15 +232,17 @@ capture_statuses() {
 
 # Print every problem, one "file: problems" line each; nothing when the reference set passes.
 run_check() {
-  local min bad caps f
+  local min required layout bad caps f
   jq -e -n --slurpfile rules "$RULES" "$RULES_CHECK" >/dev/null 2>&1 || die 2 "invalid rules file: $RULES"
   [[ "$MODE" == interactive || "$MODE" == unattended ]] || die 2 "mode is interactive or unattended"
-  min="$(jq -c --arg m "$MODE" '.[$m]' "$RULES")"
+  min="$(jq -c --arg md "$MEDIUM" --arg m "$MODE" '(.media // {})[$md][$m] // .[$m]' "$RULES")"
+  required="$(jq -c --arg md "$MEDIUM" '.media[$md].analysis.required' "$MEDIA")"
+  layout="$(jq -c --arg md "$MEDIUM" '.media[$md].layout' "$MEDIA")"
   for f in references.json searches.json component-slots.json; do
     [[ -f "$WORK/$f" ]] || printf '%s: missing\n' "$f"
   done
   [[ -f "$WORK/references.json" && -f "$WORK/searches.json" && -f "$WORK/component-slots.json" ]] || return 0
-  bad="$(jq -r --argjson min "$min" "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || bad="not valid JSON"
+  bad="$(jq -r --argjson min "$min" --argjson required "$required" --argjson layout "$layout" --arg medium "$MEDIUM" "$REFS_CHECK" "$WORK/references.json" 2>/dev/null)" || bad="not valid JSON"
   [[ -z "$bad" ]] || printf 'references.json: %s\n' "$bad"
   bad="$(jq -r --argjson min "$min" "$DOMAIN_CHECK" "$WORK/references.json" 2>/dev/null)" || bad=""
   [[ -z "$bad" ]] || printf 'references.json: %s\n' "$bad"
@@ -187,7 +253,7 @@ run_check() {
   [[ -z "$bad" ]] || printf 'searches.json: %s\n' "$bad"
   bad="$(jq -r "$SLOTS_CHECK" "$WORK/component-slots.json" 2>/dev/null)" || bad="not valid JSON"
   [[ -z "$bad" ]] || printf 'component-slots.json: %s\n' "$bad"
-  bad="$(jq -r --slurpfile slots "$WORK/component-slots.json" "$RECO_CHECK" "$WORK/references.json" 2>/dev/null)" || bad=""
+  bad="$(jq -r --argjson min "$min" --slurpfile slots "$WORK/component-slots.json" "$RECO_CHECK" "$WORK/references.json" 2>/dev/null)" || bad=""
   [[ -z "$bad" ]] || printf 'references.json: %s\n' "$bad"
   return 0
 }
@@ -230,6 +296,7 @@ case "$cmd" in
   run-id) run_id; printf '\n' ;;
   capture)
     [[ -n "$FILE" ]] || usage
+    resolve_medium
     [[ -f "$FILE" ]] || die 2 "refs list not found: $FILE"
     list="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
     recs="$(jq '[.[]? | select(.record == true)] | length' "$list" 2>/dev/null)" || die 2 "$FILE is not valid JSON"
@@ -266,6 +333,7 @@ case "$cmd" in
     printf '%s\n' "$cdir/capture.json"
     ;;
   check)
+    resolve_medium
     out="$(run_check)"
     if [[ -n "$out" ]]; then printf '%s\n' "$out" >&2; exit 4; fi
     printf 'ok\n'
@@ -276,6 +344,7 @@ case "$cmd" in
       drafts) [[ -f "$WORK/candidates.json" ]] || die 4 "candidates.json is missing in $WORK"; page=draft-board.html ;;
       *) usage ;;
     esac
+    resolve_medium
     [[ -z "$PORT" || "$PORT" =~ ^[0-9]+$ ]] || die 2 "port is a number"
     [[ -z "$SERVE" || -n "$PORT" ]] || die 2 "--serve needs --port"
     read -r -a board_cmd <<<"${LANDING_BOARD_CMD:-node $ROOT/scripts/landing-board.mjs}"
