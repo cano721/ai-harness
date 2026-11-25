@@ -66,10 +66,12 @@ flowchart LR
 | `/understand-change` | AI가 만든 변경이나 낯선 PR·브랜치를 사람이 이해해야 할 때 | 변경의 배경·직관·실행 흐름·위험·직접 검증을 설명하고, 필요하면 이해 확인 문제를 냅니다. 하네스가 있으면 `.ai-harness/workflows/understand-change.md`의 프로젝트 정책을 우선합니다. | 사용자 실행, 읽기 전용 |
 | `/explain-for` | 이미 이해한 내용을 다른 청자(매니저·PM·주니어·비개발 직군·가족·친구)에게 전달해야 할 때 | 청자의 역할과 숙련도에 맞춰 프레이밍·용어·깊이를 조정해 다시 씁니다. 청자를 적지 않으면 어린아이도 이해할 수준으로 설명합니다. 사실은 그대로 두고 전달 방식만 바꿉니다. | 사용자 실행, 읽기 전용 |
 | `/board` | 작업 세션·하네스 자동 실행·개인 자동화 설정을 한 화면에서 보고 답하고 싶을 때 ("보드 열어줘") | [Harness Board](#board)를 필요할 때 띄워 브라우저로 엽니다. 이미 떠 있으면 그 주소를 다시 열고, `stop`·`status`로 끄거나 확인합니다. 세션 대화 보기·입력 보내기·질문과 권한 요청 답하기·끝난 세션 정리, 자동 harvest·sync 결과와 대기 harvest 실행, `~/.ai-harness/config` 개인 설정 변경, 저장소별 하네스 효과(반영한 개선의 재발 여부·설치 전후 지표)와 `/autofix` 진행·실행 이력 보기를 합니다. 데몬 없이 `127.0.0.1`에만 뜹니다. Python 3(표준 라이브러리)이 필요합니다. | 사용자 실행 |
+| `/handsfree` | 손을 쓸 수 없을 때(아이를 안고 있을 때 등) 말로 Claude Code 세션을 부리고 싶을 때 ("핸즈프리 켜줘") | "헤이 클로드, ~"로 시작한 말만 기기 안에서 받아써(whisper.cpp) 승인·거절·번호·중단·세션 이동·읽어 주기 같은 조작을 하고, 나머지는 현재 Orca 세션에 프롬프트로 보냅니다. 입력 칸이 보일 때만 보내고, "앞으로 묻지 않음" 선택지와 위험 명령은 음성 한마디로 통과시키지 않습니다. `setup`이 녹음 도구·받아쓰기 서버·모델을 설치하고, `hooks`·`statusline`(선택)이 읽어 주기 훅과 상태 표시줄을 넣습니다. macOS·Orca·Python 3이 필요합니다. | 사용자 실행 |
+| `/handsfree-ui` | 핸즈프리가 무엇을 들었는지 보거나 설정을 바꿀 때 ("핸즈프리 화면 열어줘") | 듣기 프로그램이 `127.0.0.1`에 띄운 상태 화면을 Orca 탭으로 엽니다. 지금 상태·마이크 음량·방금 들은 말과 결과·세션별 상태·기록을 보고, 말 끝 기다림·읽어 주기·소리·조용한 시간·호출어(알아듣지 못한 호출 추천)·세션 별명·단축 명령을 바꿉니다. | 사용자 실행 |
 | `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
-| `/design-references` | 페이지·화면을 만들기 전에 같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 모아 보고 싶을 때 ("경쟁사랑 레퍼런스 모아줘") | 검색을 한 턴에 동시에 보내고, 모든 페이지를 한 번에 캡처하며(봇 확인 화면은 실제 브라우저로 다시 열어 바꾸거나 다른 사이트로 교체), 톤·구성요소·레이아웃·인터랙션·경쟁사 다섯 종류로 나눠 테이크 라인과 경쟁사 분석을 붙입니다. 경쟁사는 서로 다른 도메인 2곳 이상, 한 사이트는 한 종류에만, 캡처가 비거나 막힌 레퍼런스는 남기지 않는 검사(`scripts/design-refs.sh check`)를 통과해야 탭 5개 보드를 http로 띄웁니다. `/landing-page`의 레퍼런스 단계도 같은 절차·검사를 씁니다. Node.js와 Playwright Chromium이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
+| `/design-references` | 페이지·화면·모바일 청첩장·인쇄물·그래픽을 만들기 전에 같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 모아 보고 싶을 때 ("경쟁사랑 레퍼런스 모아줘", "모바일 청첩장 레퍼런스 모아줘") | 검색을 한 턴에 동시에 보내고, 모든 페이지를 한 번에 캡처하며(봇 확인 화면은 실제 브라우저로 다시 열어 바꾸거나 다른 사이트로 교체), 톤·구성요소·레이아웃·인터랙션·경쟁사 다섯 종류로 나눠 테이크 라인과 경쟁사 분석을 붙입니다. 매체(`--medium web-page|mobile-page|print|graphic`, 기본 웹페이지)에 따라 캡처 폭·종류별 최소치·탭 이름이 바뀌고, 이미지 원본 주소를 그대로 레퍼런스로 쓰며, Pinterest·Behance 같은 모음 사이트는 작품 단위로 셉니다. 한 사이트는 한 종류에만, 캡처가 비거나 막힌 레퍼런스는 남기지 않는 검사(`scripts/design-refs.sh check`)를 통과해야 보드를 http로 띄웁니다. `/landing-page`의 레퍼런스 단계도 같은 절차·검사를 씁니다. Node.js와 Playwright Chromium이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
 | `/design-system-builder` | 프로젝트의 디자인 시스템을 처음 만들거나, 흩어진 값을 정리하거나, 시안에서 토큰을 뽑을 때 | 기존 코드 추출(같은 의도로 3회 이상 쓰인 값만, 기존 이름 유지)·새로 설계(질문 라운드당 3개 이하, 추천 기본값 제시)·시안 추출(확인 전까지 draft) 중 하나로 디자인 규칙 문서·스택별 토큰 파일(CSS 변수·Tailwind·theme.ts·Flutter·Compose·SwiftUI)·반복된 공통 컴포넌트·기준 화면을 만듭니다. 규칙 문서의 필수 절이 `design-audit`의 채점 입력입니다. 기존 문서는 덮어쓰지 않고 refresh/merge를 묻고, 하네스 보호 파일은 diff 승인 후에만 고칩니다. 요청하면 토큰 파일을 원본으로 Figma 라이브러리(Variables·Text style·컴포넌트 variant)를 생성하고, 이후에는 Figma와 토큰 값의 어긋남을 보고합니다(Figma 원격 MCP 쓰기 권한 필요). 랜딩·업무 화면 구현에는 쓰지 않습니다. | 사용자 실행, 하네스 없이도 동작 |
 | `/design-screen` | 디자인 시스템으로 새 화면 시안을 그리거나 기존 화면에 요구사항을 붙일 때 — Figma든 코드든 | 디자인 시스템이 가진 것(Figma 라이브러리·코드 토큰과 공통 컴포넌트)과 요청으로 그릴 곳을 고릅니다. 둘 다 있고 요청이 말하지 않으면 한 번 묻습니다. 기획을 화면 분류·형제·상태(빈·로딩·에러 등)·컴포넌트 매핑으로 정리한 뒤, Figma면 라이브러리 인스턴스와 Variables만으로 프레임을, 코드면 프로젝트 스택으로 토큰·공통 컴포넌트만 쓴 화면과 상태별 목 데이터를 만들어 브라우저로 캡처합니다. 디자인 시스템에 없는 요소는 `제안 / …`으로 따로 둡니다. 그 다음 `design-audit` 기준으로 독립 채점하고 감점 순으로 고쳐 다시 재는 루프를 통과(90+·절반 미만 축 없음)까지, 최대 3회 돕니다. 요구사항을 깎거나 디자인 시스템을 고쳐 점수를 올리지 않습니다. 코드 시안은 커밋하지 않고, 실데이터 연동·테스트·PR은 프로젝트 기능 워크플로(`implement-feature`)로 넘깁니다. 규칙 문서가 필요하고, Figma 대상은 Figma 라이브러리와 Figma 원격 MCP 쓰기 권한이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
 | `/design-polish` | 이미 동작하는 화면을 전반적으로 다듬을 때 — 위계·간격·색·형제 화면과의 일관성 | 화면을 실제 브라우저로 뷰포트·테마마다 캡처하고 독립 비평으로 근거(캡처·규칙 문서 절) 달린 고칠 목록을 냅니다. 하네스에 `design-polish` 워크플로가 있으면 그 진입점으로 넘겨 고른 항목을 고치고 다시 측정·검토하며, 없으면 비평과 고칠 목록까지만 하고 파일을 바꾸지 않습니다. | 요청 시 자동 선택·사용자 실행 |
@@ -157,7 +159,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 - **권유 시점**: `/harness-init`이 웹 UI 계약(`ui`·`frontend-team`·`design-system`)을 생성해 지도가 있는 저장소에서만, 필수 묶음이 없을 때 한 줄로 권합니다.
 - **독립 검토**: `ai-harness:design-reviewer`(Claude 플러그인 에이전트)는 하네스 없는 저장소·단일 HTML 리포트도 실제로 렌더링·조작해 비평합니다. 편집 도구가 없고 Bash는 렌더링(저장소 밖 임시 디렉터리)에만 쓰며, 외부 디자인 스킬은 쓰지 않습니다(Skill 도구 없음). 인터페이스 가이드라인은 내장 규칙 파일을 읽어 기준에 더합니다. `ui-review` 계약이 있는 저장소에서는 그 계약이 우선합니다.
 
-하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/board`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`·`/ux-writing-builder`·`/ux-writing-audit`)과 `/landing-page`·`/design-references`·`/design-screen`·`/design-polish`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
+하네스 라이프사이클 Skill(`/harness-init`·`/setup`·`/board`·`/handsfree`·`/handsfree-ui`·`/harness-update`·`/harvest`·`/metrics`·`/harness-impact`·`/understand-change`·`/explain-for`·`/diagram`·`/design-system-builder`·`/ux-writing-builder`·`/ux-writing-audit`)과 `/landing-page`·`/design-references`·`/design-screen`·`/design-polish`, 내장 디자인 스킬 `web-design-guidelines`·`emil-design-eng`은 플러그인 설치만으로 사용할 수 있습니다. `/understand-change`와 `/explain-for`는 코드를 수정하지 않는 설명 전용이라 프로젝트 계약을 담지 않으므로 하네스가 없는 저장소에서도 그대로 동작합니다. `/landing-page`도 프로젝트에 파일을 깔지 않고, 저장소의 디자인 시스템·브랜드를 실행 시점에 읽어 쓰므로 하네스가 없어도 동작합니다. 반면 코드를 바꾸는 기능 개발·버그 수정·검토 Skill은 프로젝트 규칙(테스트 정책·Git 정책·검증 명령) 없이는 노출하지 않고, 아래처럼 `/harness-init`이 생성합니다.
 
 ### `/harness-init`이 프로젝트에 생성하는 진입점
 
@@ -170,6 +172,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 | 원인 조사 | `.agents/skills/investigate/SKILL.md` | `.claude/commands/investigate.md` | 코드를 바꾸지 않고 원격 기준 코드·도메인 문서·재현 근거로 원인 보고를 씁니다. 수정이 필요하면 보고를 `/fix-bug`에 넘깁니다. |
 | 기존 화면 품질 개선 | `.agents/skills/design-polish/SKILL.md` | `.claude/commands/design-polish.md` | 이미 동작하는 화면을 브라우저로 측정·채점하고, 독립 비평의 고칠 목록에서 사람이 고른 항목만 고친 뒤 다시 측정·검토합니다. |
 | 코드 검토 | `.agents/skills/review/SKILL.md` | `.claude/commands/review.md` | 내부 템플릿의 risk 기반 검토·수정·재검토 규칙으로 구체화해 생성합니다. |
+| 릴리스 | `.agents/skills/release/SKILL.md` | `.claude/commands/release.md` | 태그 방식 릴리스(manifest `release_policy`)를 러너로 실행합니다. 버전 확정 → 릴리스 브랜치·PR → 개인 단계에 따라 merge commit 병합·태그·노트·기록과 `main` → `develop` ff 안내까지 갑니다. |
 
 `AGENTS.md`, `.ai-harness/workflows/`, `.ai-harness/docs/`, 역할 agent 설정도 함께 생성되며, 이들이 프로젝트 특화 규칙의 단일 출처입니다. 프로젝트 진입점은 내부 템플릿을 프로젝트에 맞게 연결한 결과물이며, 전역으로 제공되는 공용 Skill이 아닙니다.
 
@@ -273,7 +276,10 @@ stateDiagram-v2
     publish --> user_decision: push·PR 실패
     publish --> merge: 개인 단계 merge·deploy, 원격 CI 통과 뒤
     merge --> post_merge_verify: 병합 조건 충족·병합
-    merge --> user_decision: 변경 요청·충돌·head 이동
+    merge --> sync_base: 기준 브랜치 충돌만으로 막힘
+    merge --> user_decision: 변경 요청·head 이동 등
+    sync_base --> remote_ci: base 병합·검사 재통과·일반 push
+    sync_base --> user_decision: 한도·풀지 못한 충돌·검사 실패
     post_merge_verify --> done: 병합 후 검증 통과
     post_merge_verify --> user_decision: 병합 후 검증 실패 (되돌리지 않음)
 ```
@@ -300,7 +306,7 @@ stateDiagram-v2
 
 ### 그래프 러너: `workflow-driver.sh`
 
-러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate`(기본 feature)로 실행할 그래프를 고르고, 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
+러너 없이 세션이 그래프를 따르면 승인 여부는 모델이 대화를 읽고 판단하고, 검증은 작업 에이전트의 보고를 믿습니다. 러너는 그래프를 **모델 밖에서 실행**합니다. `--workflow feature|bug-fix|review|polish|investigate|release`(기본 feature)로 실행할 그래프를 고르고(`release`는 `start --workflow release --version <x.y.z>` — 태그 방식 릴리스를 PR까지, 개인 단계 `merge`·`deploy`면 merge commit 병합·태그·기록까지), 예전 경로 `implement-feature-driver.sh`는 `--workflow feature`로 넘기는 호환 진입점입니다.
 
 ```text
 대화                                   러너 (.ai-harness/workflows/workflow-driver.sh --workflow feature)
@@ -310,9 +316,12 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 "승인"                   ──────────▶  resume  트랜스크립트에서 사용자 메시지 확인
                                                deliver → review ⇄ repair → publish → remote_ci → done / user_decision
                                                (remote_ci 실패 → repair → … → publish로 다시 push)
+"Y가 빠졌다" (deliver 중) ─────────▶  revise  deliver → brief → approval (brief_revised, 실행 중이면 그 세션이 끝난 뒤)
 ```
 
-`HM_APPROVAL=auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있으면 멈춤) `start` 한 번이 publish까지 갑니다.
+`HM_APPROVAL=auto`면 approval에서 멈추지 않고(Brief의 `needs_human`이 있거나 완료 조건 대응표가 비면 멈춤) `start` 한 번이 publish까지 갑니다.
+
+deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --feedback "<빠진 점>"`으로 Brief로 돌아갑니다(그래프의 `deliver → brief` `brief_revised` 엣지). 러너가 deliver를 실행 중이면 러너를 멈추지 않고 실행 디렉터리에 `revise-request.json`만 남기고 0으로 끝나며, 러너는 그 deliver 세션이 끝나면 review로 가지 않고 Brief로 돌아갑니다. 러너가 멈춰 있으면 바로 Brief를 다시 만듭니다. deliver가 만든 변경은 되돌리지 않고 남기며(git_policy가 허용하면 체크포인트), 새 Brief는 그 변경을 보고 다시 승인을 받아야 쓰기 노드로 갑니다.
 
 노드 세션을 띄울 CLI는 `--runtime claude|codex` > `~/.ai-harness/config`의 저장소별 `HM_RUNTIME_REPOS`(`<project_id>=claude|codex`) > 전체 `HM_RUNTIME`(`claude|codex`) > 자동 선택 순으로 정합니다. 개인 설정은 터미널·스케줄러·보드·자동 실행 어디서 불러도 적용되고(부른 런타임보다 앞섭니다), 설정이 고른 CLI가 설치돼 있지 않으면 다른 런타임으로 바꾸지 않고 이유와 함께 멈춥니다(exit 2). 고른 런타임과 출처는 start 출력(`runtime <rt> (<출처>)`)과 run state의 `policy.runtime_source`(`flag`·`HM_RUNTIME_REPOS:<id>`·`HM_RUNTIME`·`default`)에 남고, resume은 start 때의 런타임을 그대로 씁니다. 보드 설정 › 작업에서도 바꿀 수 있습니다. 자동 선택은 러너를 부른 런타임(Claude Code면 claude, Codex면 codex)을 따르고, 판별되지 않으면(터미널에서 직접 실행했거나 한쪽이 다른 쪽 안에서 돌아 신호가 둘 다 있을 때) `harness.json` `integrations`에 적힌 것 중 설치된 CLI가 하나면 그것(나열 순서는 우선순위가 아닙니다), 아니면 설치된 CLI가 하나뿐일 때 그것을 씁니다. 그래도 정할 수 없으면 고르지 않고 `--runtime`을 요구하며 끝납니다(exit 2). Claude Code에서 부르면 기본이 claude이므로, 저장소나 실행 폴더가 Claude 설정 폴더 안이면 시작 전에 거부되고 `--runtime codex`를 안내합니다.
 
@@ -327,7 +336,7 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 노드 | `write:false` 노드는 Codex `-s read-only` / Claude `--tools Read,Grep,Glob --strict-mcp-config` 세션으로 띄우고, 세션 전후 작업 트리 지문(diff + 미추적 파일)이 다르면 멈춥니다. 쓰기 노드는 현재 Brief가 승인된 경우에만 실행합니다 |
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
-| 정책 승인 | 개인 설정이 `HM_APPROVAL=auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. 승인 모드는 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human`으로 정하고, run state의 출처를 실행 끝까지 유지합니다. manifest의 기존 `approval`은 무시하며 러너가 개인 설정으로 옮기라는 notice를 남깁니다 |
+| 정책 승인 | 개인 설정이 `HM_APPROVAL=auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. feature·bug-fix Brief는 요청과 요청이 인용·링크한 이슈의 완료 조건을 항목마다 `acceptance_map`(`{criterion, covered_by, out_of_scope_reason}`)으로 내고, `brief.md`의 "완료 조건 대응"에 남습니다. auto에서 대응표가 비었거나 대응(`covered_by`)도 범위 밖 사유도 없는 조건이 있으면 승인하지 않고 그 조건을 적어 Brief를 다시 쓰게 하며, 그래프 `limits.max_brief_rewrites`(기본 2)를 넘으면 `brief_coverage_incomplete` 엣지로 `user_decision`에 넘깁니다(엣지가 없는 예전 그래프는 사람 승인을 기다립니다). review는 승인된 Brief와 함께 원 요청의 완료 조건과 대조해, Brief가 사유와 함께 범위 밖으로 두지 않은 빠진 조건을 blocking으로 냅니다. 승인 모드는 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human`으로 정하고, run state의 출처를 실행 끝까지 유지합니다. manifest의 기존 `approval`은 무시하며 러너가 개인 설정으로 옮기라는 notice를 남깁니다 |
 | git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다. 러너가 멈출 때(그리고 체크포인트 커밋·publish가 HEAD를 옮길 때) 기준점(HEAD + 작업 트리 지문)도 남기고, `resume`·`approve`·`revise`는 에이전트를 부르기 전에 그 기준점과 지금을 대조합니다. 멈춘 뒤 커밋이나 미커밋 수정이 생겼으면 아무것도 실행하지 않고 바뀐 커밋·파일과 남은 노드·검사를 보여 준 뒤 `20`으로 멈춥니다(실행 디렉터리 `baseline-changes.txt`). 되돌린 뒤 `resume`하거나, 바뀐 것을 이 실행에 넣을 때만 `resume --accept-changes`로 기준점을 옮깁니다(러너가 강제 종료돼 기준점을 남기지 못했으면 바뀐 것이 러너의 하다 만 작업일 수 있다고 안내합니다). 불변식 위반(`40`)으로 멈춘 상태는 기준점이 되지 않습니다. 리뷰를 지난 노드(publish·remote_ci·merge·post_merge_verify)와 끝난 실행(`done`·`user_decision`·polish `fix_list`)은 받아들인 변경이 검증·리뷰를 건너뛰므로 `--accept-changes`도 거부하고(`20`) 새 실행으로 검사하라고 안내합니다. 이미 `done`인 실행은 성공을 다시 돌려주지 않습니다 |
@@ -364,7 +373,8 @@ Brief·검증 명령을 보여 줌  ◀──────────           
 | 단계 | 동작 |
 |---|---|
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. 조건은 **저장소 호스트 규칙**입니다: 기준 브랜치 보호에 필수 승인이 있으면 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 그 수만큼(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), 필수 체크가 있으면 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님). 보호가 없으면 승인 없이 병합합니다. 충돌 없음·draft 아님·리뷰어의 변경 요청 없음은 항상 봅니다 |
-| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·충돌·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 대기·막힘 | 승인 대기·draft·충돌 계산 중은 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 기준 브랜치 충돌 (`sync_base`) | 막힘이 기준 브랜치와의 **충돌뿐**이면 사람에게 넘기지 않고 `sync_base` 노드로 갑니다(feature·bug-fix 그래프). 러너가 최신 `origin/<base>`를 일반 merge로 들이고, 충돌이 나면 에이전트 세션이 양쪽 의도를 살려 충돌만 풉니다(커밋·push는 하지 않음). 러너가 충돌 표식이 남지 않았는지 확인해 merge 커밋을 만들고, 런의 검사(`checks`·`final_checks`)를 다시 통과해야 일반 push(fast-forward)한 뒤 `remote_ci` → `merge`를 다시 거칩니다 — 새 head의 승인·CI를 다시 요구합니다. 원격 CI를 기다리는 동안 바깥에서 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 같은 경로로 받습니다. 반복 한도(그래프 `limits.max_base_syncs`, 기본 3)를 넘기거나, 풀지 못한 충돌(병합은 abort)이나 검사 실패(push하지 않음)가 남으면 `user_decision`입니다. 충돌과 다른 막힘이 같이 있으면 동기화하지 않고 사람에게 넘깁니다. rebase·force push·기준 브랜치 push는 하지 않습니다 |
 | 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) 저장소의 방식으로 병합합니다 — GitHub는 저장소가 허용한 방식 중 squash → merge → rebase 순(허용 방식을 읽지 못하면 사람에게), Bitbucket은 저장소 기본 전략. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신합니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
 | 실패 | 되돌리지 않습니다. 되돌리는 명령을 안내하고 사람에게 넘깁니다 |
@@ -540,7 +550,7 @@ stateDiagram-v2
     re_review --> repair: blocking finding 남음
 ```
 
-초기 검토는 read-only입니다. blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow review`로 실행하고(수리는 사용자 승인 뒤, 커밋하지 않고 남김), 없으면 같은 흐름을 현재 세션에서 수행합니다.
+초기 검토는 read-only입니다. 데이터 조회가 있는 변경이면 러너의 검토 노드(feature·bug-fix의 review, review 그래프의 inspect·re_review)가 배치·일괄 경로의 상한 없는 다건 조회, 판정·집계용인데 대형 컬럼(LONGTEXT·MEDIUMTEXT·TEXT·LOB 등)까지 읽는 조회, 컬렉션 fetch join + 페이징, 호출측·수신측 상한 불일치를 "건수 상한 × 행 크기" 추정과 함께 보고(이번 변경이 호출 경로·건수를 바꾼 기존 조회도 포함, 딸려 오는 엔티티 컬럼까지 확인), 가용성 위험이면 blocking으로 냅니다. `/harness-init`은 데이터 접근 계층이 있는 프로젝트에 같은 규칙을 `code-conventions.md` "대량 조회 메모리" 절과 reviewer 체크 항목으로 씁니다(실측 원칙의 예외인 검증된 기본 규칙). blocking finding은 대상 workflow에서 수리한 뒤 targeted/필수 검증과 재검토를 모두 통과해야 완료됩니다. 그래프의 수리 한도(`limits.max_repair_attempts`)에 이르거나 제품 판단이 필요하면 사용자에게 넘깁니다. 수리의 커밋·push는 `git_policy`를 따르며, 검토에서 새 PR을 열지는 않습니다. [review 그래프 계약](templates/review/references/review-graph.json)은 프로젝트 생성 시 `.ai-harness/workflows/review-graph.json`으로 복사됩니다. 러너가 있으면 `workflow-driver.sh --workflow review`로 실행하고(수리는 사용자 승인 뒤, 커밋하지 않고 남김), 없으면 같은 흐름을 현재 세션에서 수행합니다.
 
 ### 역할별 기본 모델
 

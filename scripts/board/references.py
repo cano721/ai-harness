@@ -6,6 +6,8 @@ skills/design-references/SKILL.md의 "Run record")을 읽어 목록·상세를 �
 
 - 파일 서빙: 등록된 실행 기록의 작업 폴더 안, refs/·captures/ 아래 이미지·영상만. realpath로 정규화해 작업 폴더
   밖(.. ·심볼릭 링크)으로 나가면 거부한다.
+- 매체(#518): 작업 폴더의 medium.json(없으면 web-page)이 탭·경쟁사 분석 라벨을 정한다. 라벨은
+  skills/design-references/references/media.json이 단일 출처다. 이미지 레퍼런스(image, 원본 http(s) 주소)는 첫 매체로 싣는다.
 - 고르기: 작업 폴더의 랜딩 실행(.landing-run/state.json)이 reference_pick에 있을 때만. 검사·쓰기·기록 갱신은
   landing-pick.mjs(보드 서버와 같은 명령)가 한다 — 같은 규칙을 두 곳에 두지 않는다.
 """
@@ -13,6 +15,7 @@ import json, os, re, subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PICK_CMD = os.path.join(ROOT, "landing-pick.mjs")
+MEDIA_FILE = os.path.join(os.path.dirname(ROOT), "skills", "design-references", "references", "media.json")
 RUN_ID = re.compile(r"^[0-9a-f]{12}$")
 KINDS = ("tone", "component", "layout", "interaction", "competitor")
 MEDIA_DIRS = ("refs", "captures")
@@ -28,9 +31,28 @@ def _json(path):
         return None
 
 
+def _media_defs():
+    """media.json: {default, media: {<매체>: {tabs, analysis: {labels}}}}. 읽지 못하면 None(라벨 없이 화면 기본값)."""
+    m = _json(MEDIA_FILE)
+    return m if isinstance(m, dict) and isinstance(m.get("media"), dict) and m.get("default") in m["media"] else None
+
+
+def _medium(work, defs):
+    """작업 폴더의 매체와 그 라벨. medium.json이 없거나 알 수 없는 값이면 기본 매체(web-page)."""
+    if not defs:
+        return "web-page", None
+    m = _json(os.path.join(work, "medium.json"))
+    name = m.get("medium") if isinstance(m, dict) else None
+    if name not in defs["media"]:
+        name = defs["default"]
+    d = defs["media"][name]
+    return name, {"tabs": d.get("tabs") or {}, "analysis": (d.get("analysis") or {}).get("labels") or {}}
+
+
 class Store:
     def __init__(self, data_dir):
         self.dir = os.path.join(data_dir, "board", "references")
+        self.media_defs = _media_defs()
 
     # ---- 실행 기록 ----
     def record(self, run_id):
@@ -90,7 +112,9 @@ class Store:
             if isinstance(r, dict) and r.get("kind") in counts:
                 counts[r["kind"]] += 1
         landing = None if missing else self._landing(work)
+        medium, labels = _medium(work, self.media_defs)
         return {"run_id": rec["run_id"], "topic": rec.get("topic") or os.path.basename(work), "work": work,
+                "medium": medium, "labels": labels,
                 "status": "picked" if rec.get("status") == "picked" else "ready",
                 "created_at": rec.get("created_at"), "updated_at": rec.get("updated_at"),
                 "missing": missing, "counts": counts, "landing_node": landing and landing["node"],
@@ -129,10 +153,12 @@ class Store:
         for r in refs if isinstance(refs, list) else []:
             if not isinstance(r, dict) or r.get("kind") not in KINDS:
                 continue
-            caps = [m for m in (self._media(work, run_id, c) for c in (r.get("captures") or [])[:12]) if m]
+            image = r.get("image") if isinstance(r.get("image"), str) and re.match(r"^https?://", r["image"], re.I) else None
+            caps = ([{"remote": image}] if image else []) + \
+                [m for m in (self._media(work, run_id, c) for c in (r.get("captures") or [])[:12]) if m]
             video = self._media(work, run_id, r.get("video")) if r.get("video") else None
             keep = {k: r.get(k) for k in ("id", "kind", "title", "url", "source", "take", "tone_part", "keep_strength",
-                                         "must_not_shrink_to", "recommended", "analysis") if r.get(k) is not None}
+                                         "must_not_shrink_to", "recommended", "analysis", "image") if r.get(k) is not None}
             out.append({**keep, "captures": caps, "video": video})
         slots = _json(os.path.join(work, "component-slots.json"))
         slots = [{"id": s.get("id"), "label": s.get("label")} for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []

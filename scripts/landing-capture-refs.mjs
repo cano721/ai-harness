@@ -7,23 +7,43 @@
 //   refs/capture-refs.json      the index of this call;  refs/record.done  written when every recording has finished
 // A Cloudflare or bot check is reported as challenge: the agent reopens that page in a real browser tab (direction.md, References).
 // --phase stills|record|all picks what runs; the runner starts the record phase detached when asked to (--background).
+// The default widths and recording size follow the work folder's medium (WORK/medium.json, web-page without it) as
+// skills/design-references/references/media.json defines it; an entry's own widths win. --dry-run prints the plan
+// [{id, widths, record}] without starting a browser.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, readdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { launchBrowser } from "./landing-browser.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, v, i, a) => (v.startsWith("--") ? [...acc, [v.slice(2), a[i + 1]]] : acc), []),
 );
 if (!args.work || !args.file) {
-  console.error("usage: landing-capture-refs.mjs --work DIR --file refs-to-capture.json [--phase stills|record|all] [--concurrency 4]");
+  console.error("usage: landing-capture-refs.mjs --work DIR --file refs-to-capture.json [--phase stills|record|all] [--concurrency 4] [--dry-run]");
   process.exit(2);
 }
 const work = resolve(args.work);
 const phase = args.phase ?? "all";
 const concurrency = Math.max(1, Number(args.concurrency ?? 4));
 const recordSeconds = Number(args["record-seconds"] ?? process.env.LANDING_RECORD_SECONDS ?? 9);
+const dryRun = process.argv.includes("--dry-run");
 const refsDir = join(work, "refs");
-mkdirSync(refsDir, { recursive: true });
+
+const MEDIA = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "design-references", "references", "media.json"), "utf8"));
+let medium = MEDIA.default;
+if (existsSync(join(work, "medium.json"))) {
+  try {
+    medium = JSON.parse(readFileSync(join(work, "medium.json"), "utf8")).medium;
+  } catch (e) {
+    console.error(`landing-capture-refs: medium.json is not valid JSON (${e.message})`);
+    process.exit(2);
+  }
+  if (!Object.hasOwn(MEDIA.media, medium ?? "")) {
+    console.error(`landing-capture-refs: unknown medium in medium.json: ${medium} (${Object.keys(MEDIA.media).join("|")})`);
+    process.exit(2);
+  }
+}
+const { widths: defaultWidths, record_size: recordSize } = MEDIA.media[medium];
 
 let list;
 try {
@@ -46,6 +66,12 @@ if (bad.length) {
   console.error(`landing-capture-refs: ${bad.join("; ")}`);
   process.exit(2);
 }
+const widthsOf = (ref) => ref.widths ?? defaultWidths;
+if (dryRun) {
+  console.log(JSON.stringify(list.map((r) => ({ id: r.id, widths: widthsOf(r), record: r.record ? recordSize : null }))));
+  process.exit(0);
+}
+mkdirSync(refsDir, { recursive: true });
 
 const heightFor = (w) => (w <= 430 ? 844 : w <= 900 ? 1024 : 900);
 const CHALLENGE_TITLE = /just a moment|attention required|checking your (browser|connection)|verify(ing)? you are (a )?human|are you a robot|access denied|security check|잠시만 기다리|보안 확인/i;
@@ -94,7 +120,7 @@ async function challengeOf(page, response) {
 async function stills(browser, ref) {
   const dir = join(refsDir, ref.id);
   mkdirSync(dir, { recursive: true });
-  const widths = ref.widths ?? [1440, 390];
+  const widths = widthsOf(ref);
   const entry = { id: ref.id, url: ref.url, status: "ok", title: "", http_status: null, widths, captures: [], errors: [] };
   const started = Date.now();
   for (const w of widths) {
@@ -139,7 +165,7 @@ async function record(browser, ref) {
   const tmp = join(dir, "rec-tmp");
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
-  const size = { width: 1440, height: 900 };
+  const size = { ...recordSize };
   const result = { id: ref.id, record: "failed" };
   const ctx = await browser.newContext({ viewport: size, deviceScaleFactor: 1, recordVideo: { dir: tmp, size } });
   try {
@@ -148,10 +174,13 @@ async function record(browser, ref) {
     await page.waitForLoadState("load", { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(600);
     const steps = Math.max(8, Math.round(recordSeconds * 4));
+    // The pointer sweeps across the page at any width (a phone recording stays inside its 390 pixels).
+    const pointerX0 = size.width >= 1240 ? 200 : 30;
+    const pointerSpan = Math.min(1000, size.width - 2 * pointerX0);
     const end = Date.now() + recordSeconds * 1000;
     for (let i = 0; i < steps && Date.now() < end; i++) {
       const t = i / steps;
-      await page.mouse.move(200 + Math.round(1000 * Math.abs(Math.sin(t * Math.PI * 2))), 200 + Math.round(400 * t), { steps: 4 });
+      await page.mouse.move(pointerX0 + Math.round(pointerSpan * Math.abs(Math.sin(t * Math.PI * 2))), 200 + Math.round(400 * t), { steps: 4 });
       await page.mouse.wheel(0, i < steps * 0.7 ? 450 : -900);
       await page.waitForTimeout(200);
     }

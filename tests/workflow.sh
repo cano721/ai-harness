@@ -213,7 +213,7 @@ jq 'del(.transitions[] | select(.from == "remote_ci" and .to == "repair"))' "$FE
 if "$ROOT/scripts/validate-feature-graph.sh" "$INVALID_GRAPH" >/dev/null 2>&1; then fail "a graph whose remote CI failure cannot be repaired is invalid"; fi
 for graph in "$FEATURE_GRAPH" "$ROOT/templates/fix-bug/references/bug-fix-graph.json"; do
   assert_eq "false:true:remote_ci" "$(jq -r '"\(.nodes.remote_ci.write):\(.nodes.remote_ci.network):\(first(.transitions[] | select(.from == "publish" and .when == "published_or_not_required") | .to))"' "$graph")" "$(basename "$graph") checks remote CI after publish without writing"
-  assert_eq "done repair user_decision merge" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, unverified, and merge under git_policy merge"
+  assert_eq "done repair user_decision merge sync_base" "$(jq -r '[.transitions[] | select(.from == "remote_ci") | .to] | join(" ")' "$graph")" "$(basename "$graph") routes remote CI pass, failure, unverified, and merge under git_policy merge"
 done
 # ui_review는 선택 노드다. 옛 그래프(노드 없음)도 유효하고, 노드가 있으면 화면 검증을 건너뛰는 경로가 없어야 한다. (#150)
 UI_GRAPH="$ROOT/templates/ui-review/references/ui-review-graph.json"
@@ -529,18 +529,94 @@ assert_eq "copy" "$(jq -r '.artifacts[] | select(.path == ".ai-harness/workflows
 assert_contains "$HARNESS_INIT_CONTENT" "templates/investigate/" "harness init uses the local investigate template"
 assert_contains "$HARNESS_INIT_CONTENT" ".ai-harness/workflows/investigate-graph.json" "harness init copies the investigate graph"
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/design-polish`·`/review`를 프로젝트 진입점으로' "AGENTS.md lists investigate and design-polish as project entry points"
+assert_contains "$HARNESS_INIT_CONTENT" '`/implement-feature`·`/fix-bug`·`/investigate`·`/design-polish`·`/review`·`/release`를 프로젝트 진입점으로' "AGENTS.md lists investigate and design-polish as project entry points"
 assert_contains "$(<"$ROOT/README.md")" "/investigate" "README documents investigate"
 pass "investigate graph adapters"
 
+# release 템플릿은 태그 방식 릴리스 진입점이다. 그래프·두 진입점이 standard에 항상 설치되고, 러너가 release_policy로 시작 여부를 정한다. (#493)
+RELEASE_SKILL_CONTENT="$(<"$ROOT/templates/release/SKILL.md")"
+assert_file "$ROOT/templates/release/agents/openai.yaml"
+assert_eq "3" "$(jq '[.artifacts[] | select(.workflow == "release" and .level == "standard")] | length' "$ROOT/templates/managed-files.json")" "release ships its graph and both entry points"
+assert_eq "copy" "$(jq -r '.artifacts[] | select(.path == ".ai-harness/workflows/release-graph.json") | .mode' "$ROOT/templates/managed-files.json")" "the release graph is copied as is"
+assert_contains "$RELEASE_SKILL_CONTENT" "This is a project adapter" "release skill is a thin adapter"
+assert_contains "$RELEASE_SKILL_CONTENT" ".ai-harness/workflows/release.md" "release skill references the project workflow"
+assert_contains "$RELEASE_SKILL_CONTENT" "start --workflow release --version <x.y.z>" "release skill starts the runner"
+assert_contains "$RELEASE_SKILL_CONTENT" "release_policy" "release skill names the manifest facts"
+assert_contains "$RELEASE_SKILL_CONTENT" "merge commit only" "release skill keeps merge commits only"
+assert_contains "$HARNESS_INIT_CONTENT" "templates/release/" "harness init uses the local release template"
+assert_contains "$(<"$ROOT/README.md")" "--workflow release" "README documents the release runner"
+for f in "$ROOT/.ai-harness/workflows/release-graph.json:$ROOT/templates/release/references/release-graph.json" "$ROOT/.ai-harness/workflows/workflow-driver.sh:$ROOT/templates/workflow-driver/workflow-driver.sh"; do
+  cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
+done
+pass "release graph adapters"
+
 # 개인 기본 런타임(#488): 어댑터가 습관적으로 --runtime을 넘기면 개인 설정이 무력해진다. 다섯 어댑터와 렌더 생성물이 우선순위를 안내한다.
 # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
-for wf in implement-feature fix-bug review design-polish investigate; do
+for wf in implement-feature fix-bug review design-polish investigate release; do
   for f in "$ROOT/templates/$wf/SKILL.md" "$ROOT/.agents/skills/$wf/SKILL.md" "$ROOT/.claude/commands/$wf.md"; do
     assert_contains "$(<"$f")" 'then `HM_RUNTIME_REPOS` (matching repository), then `HM_RUNTIME` in `~/.ai-harness/config`' "$f explains the runtime precedence"
     assert_contains "$(<"$f")" 'pass `--runtime` only when the user asks for a specific CLI' "$f keeps --runtime for explicit requests"
   done
 done
 pass "workflow adapters explain the personal runtime precedence"
+
+
+# 완료 조건 대응표(#501): 그래프는 대응 없는 Brief의 사람 인계와 deliver → brief 복귀를 선언하고, 문서는 게이트와 revise를 안내한다.
+BUG_FIX_GRAPH="$ROOT/templates/fix-bug/references/bug-fix-graph.json"
+for graph in "$FEATURE_GRAPH" "$BUG_FIX_GRAPH"; do
+  assert_eq "2" "$(jq -r '.limits.max_brief_rewrites' "$graph")" "$(basename "$graph") limits brief rewrites"
+  assert_contains "$(jq -r '.invariants[0]' "$graph")" "acceptance_map" "$(basename "$graph") states the coverage gate in its approval invariant"
+done
+assert_eq "user_decision" "$(jq -r 'first(.transitions[] | select(.from == "approval" and .when == "brief_coverage_incomplete") | .to)' "$BUG_FIX_GRAPH")" "bug-fix hands an uncovered brief to a person"
+COVERAGE_GRAPH="$TEST_TMP/coverage-graph.json"
+jq 'del(.transitions[] | select(.when == "brief_revised"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without deliver -> brief is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$FEATURE_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-feature-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a feature graph without the coverage hand-off is invalid"; fi
+jq 'del(.transitions[] | select(.when == "brief_coverage_incomplete"))' "$BUG_FIX_GRAPH" >"$COVERAGE_GRAPH"
+if "$ROOT/scripts/validate-bug-fix-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; then fail "a bug-fix graph without the coverage hand-off is invalid"; fi
+for f in "$ROOT/.ai-harness/workflows/feature-delivery-graph.json:$FEATURE_GRAPH" "$ROOT/.ai-harness/workflows/bug-fix-graph.json:$BUG_FIX_GRAPH"; do
+  cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md"; do
+  assert_contains "$(<"$f")" "acceptance_map" "$(basename "$(dirname "$f")")/$(basename "$f") documents the completion-condition map"
+  assert_contains "$(<"$f")" "brief_coverage_incomplete" "$(basename "$(dirname "$f")")/$(basename "$f") documents the coverage gate"
+done
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md"; do
+  assert_contains "$(<"$f")" "brief_revised" "$(basename "$(dirname "$f")")/$(basename "$f") documents revise during deliver"
+done
+pass "completion-condition map: graphs, validators, and docs"
+
+# base 충돌 동기화(#508): feature·bug-fix 그래프는 merge가 충돌로만 막히면 쓰기 노드 sync_base로 가고, sync_base는 remote_ci나 사람에게만 간다.
+for pair in "validate-feature-graph.sh:$FEATURE_GRAPH" "validate-bug-fix-graph.sh:$BUG_FIX_GRAPH"; do
+  validator="$ROOT/scripts/${pair%%:*}"
+  graph="${pair#*:}"
+  name="$(basename "$graph")"
+  "$validator" "$graph" >/dev/null || fail "$name with sync_base is valid"
+  assert_eq "true:true:3" "$(jq -r '"\(.nodes.sync_base.write):\(.nodes.sync_base.network):\(.limits.max_base_syncs)"' "$graph")" "$name: sync_base writes, needs the network, and is limited to 3"
+  assert_eq "sync_base:base_conflict" "$(jq -r 'first(.transitions[] | select(.from == "merge" and .to == "sync_base")) | "\(.to):\(.when)"' "$graph")" "$name: a base conflict goes to sync_base"
+  assert_eq "base_merged_outside" "$(jq -r 'first(.transitions[] | select(.from == "remote_ci" and .to == "sync_base")) | .when' "$graph")" "$name: an outside base merge goes to sync_base"
+  assert_eq "remote_ci:base_synced,user_decision:base_sync_failed_or_limit_reached" "$(jq -r '[.transitions[] | select(.from == "sync_base") | "\(.to):\(.when)"] | sort | join(",")' "$graph")" "$name: sync_base goes back to remote CI or to a person"
+  assert_contains "$(jq -r '.invariants | join(" ")' "$graph")" "sync_base" "$name states the sync_base invariant"
+  jq '.nodes.sync_base.write = false' "$graph" >"$TEST_TMP/sync-graph.json"
+  if "$validator" "$TEST_TMP/sync-graph.json" >/dev/null 2>&1; then fail "$name: a read-only sync_base is invalid"; fi
+  jq '.transitions += [{"from": "sync_base", "to": "done", "when": "base_synced_done"}]' "$graph" >"$TEST_TMP/sync-graph.json"
+  if "$validator" "$TEST_TMP/sync-graph.json" >/dev/null 2>&1; then fail "$name: sync_base -> done is invalid"; fi
+  jq '.transitions += [{"from": "review", "to": "sync_base", "when": "x"}]' "$graph" >"$TEST_TMP/sync-graph.json"
+  if "$validator" "$TEST_TMP/sync-graph.json" >/dev/null 2>&1; then fail "$name: sync_base is reached only from merge and remote_ci"; fi
+  jq 'del(.nodes.sync_base) | .transitions |= map(select(.from != "sync_base" and .to != "sync_base")) | del(.limits.max_base_syncs)' "$graph" >"$TEST_TMP/sync-graph.json"
+  "$validator" "$TEST_TMP/sync-graph.json" >/dev/null || fail "$name: a graph synced before sync_base stays valid"
+done
+README_CONTENT="$(<"$ROOT/README.md")"
+assert_contains "$README_CONTENT" "merge --> sync_base" "README graph shows merge -> sync_base"
+assert_contains "$README_CONTENT" "sync_base --> remote_ci" "README graph shows sync_base -> remote_ci"
+assert_contains "$README_CONTENT" "sync_base --> user_decision" "README graph shows sync_base -> user_decision"
+[[ "$(grep -E 'merge -->.*user_decision' "$ROOT/README.md")" != *충돌* ]] || fail "README graph no longer sends a conflict from merge straight to a person"
+for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md" \
+  "$ROOT/.ai-harness/workflows/implement-feature.md" "$ROOT/.ai-harness/workflows/fix-bug.md"; do
+  assert_contains "$(<"$f")" "sync_base" "$(basename "$(dirname "$f")")/$(basename "$f") documents sync_base"
+done
+assert_contains "$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")" "max_base_syncs" "the runner reads the base sync limit from the graph"
+pass "base sync: graphs, validators, and docs"
 
 finish_tests

@@ -17,6 +17,7 @@ while (($#)); do
 done
 prompt="$(cat)"
 case "$prompt" in
+  *"You are the plan node"*) node=plan ;;
   *"You are the measure node"*) node=measure ;;
   *"You are the diagnose node"*) node=diagnose ;;
   *"You are the discover node"*) node=discover ;;
@@ -37,6 +38,7 @@ case "$prompt" in
   *"You are the publish node"*) node=publish ;;
   *"You are the remote_ci node"*) node=remote_ci ;;
   *"You are the post_merge_verify node"*) node=post_merge_verify ;;
+  *"You are the sync_base node"*) node=sync_base ;;
   *) node=unknown ;;
 esac
 printf '%s %s schema=%s%s%s\n' "$node" "$sandbox" "${schema:+yes}" "${net:+ net=yes}" "${adddir:+ add-dir=yes}" >>"$FAKE_LOG"
@@ -48,6 +50,9 @@ printf '%s\n' "$prompt" >"$FAKE_LOG.$node.prompt"
 # approval auto면 러너가 decisions·needs_human 스키마를 준다. 기본 응답은 받은 스키마를 따른다.
 auto=""
 [[ -n "$schema" ]] && jq -e '.properties.decisions' "$schema" >/dev/null 2>&1 && auto=yes
+# auto Brief의 완료 조건 대응표: 기본은 요청 하나를 검증 명령에 대응시킨다. uncovered는 대응도 사유도 없는 조건이 하나 있다.
+covered='[{"criterion":"add feature","covered_by":"feature.txt exists (checks)","out_of_scope_reason":""}]'
+uncovered='[{"criterion":"add feature","covered_by":"feature.txt exists (checks)","out_of_scope_reason":""},{"criterion":"CSV export","covered_by":"","out_of_scope_reason":" "}]'
 # design-polish: 기준선 80점(축 A16 B18 C16 D15 E15), 수정 뒤 93점. polish_axis_drop은 총점은 넘지만 E가 기준선보다 낮다.
 # 레이아웃 검사(layout-probe): polish_layout_band는 대상 화면의 본문 앞 빈 띠가 수정 뒤에도 남는다(채점·검토는 통과).
 # polish_layout_sibling은 형제 화면의 잘린 글자가 기준선부터 있었다(회귀 아님). polish_layout_sibling_new는 수정 뒤에 생겼다.
@@ -78,8 +83,24 @@ polish_measure() {
             else {scored:true, total:$t, axes:{A:(if $t == 80 then 16 else 20 end), B:18, C:(if $t == 80 then 16 else 19 end), D:(if $t == 80 then 15 else 19 end), E:$e}, report:$r} end),
      checks:[$c]}' >"$out"
 }
+# 원격 CI를 보는 동안 다른 사람이 기준 브랜치에 push한 상황: FAKE_ON_REMOTE_CI 명령을 실행당 한 번만 실행한다.
+if [[ "$node" == remote_ci && -n "${FAKE_ON_REMOTE_CI:-}" && ! -f "$FAKE_LOG.on_remote_ci" ]]; then
+  touch "$FAKE_LOG.on_remote_ci"
+  bash -c "$FAKE_ON_REMOTE_CI" >/dev/null 2>&1
+fi
 case "$node:$scenario" in
   measure:*) polish_measure ;;
+  # release plan: FAKE_RELEASE_VERSION(기본 1.3.0)을 제안한다. 검증 명령은 FAKE_CHECK.
+  plan:*)
+    if [[ -n "$auto" ]]; then
+      jq -n --arg v "${FAKE_RELEASE_VERSION:-1.3.0}" --arg c "$check" '{version:$v, brief:"# Release plan\n- Unreleased has a new feature", checks:[$c], final_checks:[], decisions:[], needs_human:[]}' >"$out"
+    else
+      jq -n --arg v "${FAKE_RELEASE_VERSION:-1.3.0}" --arg c "$check" '{version:$v, brief:"# Release plan\n- Unreleased has a new feature", checks:[$c], final_checks:[], open_questions:[]}' >"$out"
+    fi ;;
+  # release publish: 러너가 만든 릴리스 브랜치를 그대로 일반 push한다(이미 열린 PR이면 같은 URL).
+  publish:rel_*)
+    git push -q -u origin HEAD 2>/dev/null
+    jq -n --arg b "$(git rev-parse --abbrev-ref HEAD)" '{summary:"opened", branch:$b, pr_url:"https://github.com/acme/app/pull/7"}' >"$out" ;;
   diagnose:polish_nothing) jq -n '{summary:"ok", items:[], needs_decision:[]}' >"$out" ;;
   diagnose:*) jq -n '{summary:"두 가지", needs_decision:["빈 상태 문구를 바꿀지"], items:[
     {id:"P1", severity:"major", title:"카드 사이 간격이 형제 화면과 다르다", evidence:["board-1280-light.png", "docs/design-system.md ## 레이아웃"], fix:"--space-2로 맞춘다", mechanical:false},
@@ -94,6 +115,8 @@ case "$node:$scenario" in
     fi ;;
   review:polish_*) jq -n '{summary:"ok", remaining:[], regressions:[], new_findings:[], needs_user_decision:false}' >"$out" ;;
   discover:brief_writes) echo sneaky >sneaky.txt; printf 'contract\n' >"$out" ;;
+  # hang: hold 파일이 있는 동안 discover에서 버틴다(러너 stop 테스트). 파일이 없어지면 ok처럼 끝난다.
+  discover:hang) while [[ -f "$FAKE_LOG.hold" ]]; do sleep 0.2; done; printf 'contract\n' >"$out" ;;
   discover:*) printf 'contract\n' >"$out" ;;
   triage:*) printf 'observed: total is wrong; expected: total adds tax\n' >"$out" ;;
   reproduce:repro_blocked) jq -n '{status:"blocked", summary:"needs production-like data", evidence:[], hypothesis:"", needed:["a sample order export"]}' >"$out" ;;
@@ -132,10 +155,18 @@ case "$node:$scenario" in
   re_review:rv_always_blocks) jq -n '{summary:"x", blocking_findings:["still missing"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   re_review:*) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   brief:auto_questions) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:["which plan tier?"]}' >"$out" ;;
-  brief:auto_decisions) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c],
+  brief:auto_decisions) jq -n --arg c "$check" --argjson m "$covered" '{brief:"# Brief\n- add feature.txt", checks:[$c], acceptance_map:$m,
     decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope that meets the request"}], needs_human:[]}' >"$out" ;;
-  brief:auto_needs_human) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c],
+  brief:auto_needs_human) jq -n --arg c "$check" --argjson m "$covered" '{brief:"# Brief", checks:[$c], acceptance_map:$m,
     decisions:[{question:"which plan tier?", choice:"free tier only", rationale:"smallest scope"}], needs_human:["drop the legacy plans table?"]}' >"$out" ;;
+  # 완료 조건 대응표(#501): auto_uncovered는 대응도 사유도 없는 조건, auto_empty_map은 빈 표, auto_out_of_scope는 사유 있는 범위 밖,
+  # auto_uncovered_once는 러너가 다시 쓰게 하면(Revise it with this feedback) 대응을 채운다.
+  brief:auto_uncovered|brief:auto_empty_map|brief:auto_out_of_scope|brief:auto_uncovered_once)
+    map="$uncovered"
+    [[ "$scenario" == auto_empty_map ]] && map='[]'
+    [[ "$scenario" == auto_out_of_scope ]] && map='[{"criterion":"add feature","covered_by":"feature.txt exists (checks)","out_of_scope_reason":""},{"criterion":"CSV export","covered_by":"","out_of_scope_reason":"tracked in a follow-up issue"}]'
+    [[ "$scenario" == auto_uncovered_once && "$prompt" == *"Revise it with this feedback"* ]] && map="$covered"
+    jq -n --arg c "$check" --argjson m "$map" '{brief:"# Brief\n- add feature.txt", checks:[$c], acceptance_map:$m, decisions:[], needs_human:[]}' >"$out" ;;
   brief:auto_legacy) jq -n --arg c "$check" '{brief:"# Brief", checks:[$c], open_questions:[]}' >"$out" ;;
   brief:nocheck) jq -n '{brief:"# Brief", checks:[], open_questions:[]}' >"$out" ;;
   brief:ui_*) jq -n --arg c "$check" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[],
@@ -143,13 +174,24 @@ case "$node:$scenario" in
   brief:*)
     # FAKE_FINAL_CHECK: 리뷰가 깨끗해진 뒤 한 번 도는 넓은 검사(final_checks). 없으면 예전 brief 모양 그대로.
     if [[ -n "$auto" ]]; then
-      jq -n --arg c "$check" --arg f "${FAKE_FINAL_CHECK:-}" '{brief:"# Brief\n- add feature.txt", checks:[$c], decisions:[], needs_human:[]}
+      jq -n --arg c "$check" --arg f "${FAKE_FINAL_CHECK:-}" --argjson m "$covered" '{brief:"# Brief\n- add feature.txt", checks:[$c], acceptance_map:$m, decisions:[], needs_human:[]}
         + if $f == "" then {} else {final_checks:[$f]} end' >"$out"
     else
       jq -n --arg c "$check" --arg f "${FAKE_FINAL_CHECK:-}" '{brief:"# Brief\n- add feature.txt", checks:[$c], open_questions:[]}
         + if $f == "" then {} else {final_checks:[$f]} end' >"$out"
     fi ;;
   deliver:noop) printf 'nothing\n' >"$out" ;;
+  # deliver 세션 도중 다른 세션이 revise한다(#501). 실행당 한 번만, revise 종료 코드를 남긴다.
+  deliver:revise_midway)
+    if [[ -f "$FAKE_LOG.midway" ]]; then echo v2 >feature.txt; else echo v1 >feature.txt; fi
+    if [[ ! -f "$FAKE_LOG.midway" ]]; then
+      touch "$FAKE_LOG.midway"
+      rc=0
+      bash "$FAKE_DRIVER" revise --feedback "CSV 내보내기가 빠졌다" --repo "$dir" >"$FAKE_LOG.midway.out" 2>&1 || rc=$?
+      printf '%s' "$rc" >"$FAKE_LOG.midway.rc"
+      [[ -f "$(dirname "$out")/revise-request.json" ]] && touch "$FAKE_LOG.midway.requested"
+    fi
+    printf 'delivered\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
   deliver:screen_backstop) mkdir -p templates; echo '<summary>반려하기</summary>' >templates/approve.html; printf 'delivered\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
@@ -184,10 +226,27 @@ case "$node:$scenario" in
   remote_ci:merge_ci_none) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
   remote_ci:ci_none*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
   remote_ci:*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
+  # sync_base: 충돌 파일을 양쪽 내용으로 풀고 git add한다. merge_conflict_unresolved는 풀지 못했다고 보고한다.
+  sync_base:merge_conflict_unresolved)
+    jq -n --arg f "$(git diff --name-only --diff-filter=U | paste -sd ',' -)" '{status:"unresolved", summary:"both sides rewrote the same line", unresolved:($f | split(","))}' >"$out" ;;
+  sync_base:*)
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      printf 'v1\nbase\n' >"$f"
+      git add -- "$f"
+    done <<<"$(git diff --name-only --diff-filter=U)"
+    jq -n '{status:"resolved", summary:"kept both sides", unresolved:[]}' >"$out" ;;
   post_merge_verify:pm_ci_fail) jq -n '{status:"failed", commit:"1111111111111111111111111111111111111111", summary:"build on main failed", failures:["integration: db migration timed out"]}' >"$out" ;;
   post_merge_verify:pm_ci_other) jq -n '{status:"passed", commit:"3333333", summary:"green", failures:[]}' >"$out" ;;
   post_merge_verify:*) jq -n '{status:"passed", commit:"1111111111111111111111111111111111111111", summary:"main is green", failures:[]}' >"$out" ;;
   review:bad_review) printf 'looks good to me\n' >"$out" ;;
+  review:missing_criterion)
+    if [[ -f "$FAKE_LOG.missing_criterion" ]]; then
+      jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out"
+    else
+      touch "$FAKE_LOG.missing_criterion"
+      jq -n '{summary:"x", blocking_findings:["completion condition CSV export not met"], non_blocking_findings:[], needs_user_decision:false}' >"$out"
+    fi ;;
   review:review_blocks) jq -n '{summary:"x", blocking_findings:["missing case"], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;
   review:decision) jq -n '{summary:"x", blocking_findings:["pricing rule unclear"], non_blocking_findings:[], needs_user_decision:true}' >"$out" ;;
   review:*) jq -n '{summary:"ok", blocking_findings:[], non_blocking_findings:[], needs_user_decision:false}' >"$out" ;;

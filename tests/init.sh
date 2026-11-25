@@ -28,7 +28,7 @@ printf '%s\n' '# Review workflow body' >"$SYNC_ROOT/.ai-harness/workflows/review
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# sync-project' '| `/implement-feature` | feature | workflow |' >"$SYNC_ROOT/AGENTS.md"
 SYNC_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$SYNC_ROOT" --catalog "$ROOT/templates/managed-files.json")"
-assert_eq "12" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
+assert_eq "14" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items | length')" "catalog selects standard Codex artifacts"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/investigate/SKILL.md") | .action')" "missing investigate entrypoint is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".ai-harness/workflows/review-graph.json") | .action')" "missing managed artifact is added"
 assert_eq "add" "$(printf '%s' "$SYNC_PLAN" | jq -r '.items[] | select(.path==".agents/skills/fix-bug/SKILL.md") | .action')" "missing fix-bug entrypoint is added"
@@ -735,7 +735,7 @@ pass "unattended sync places copy artifacts byte for byte"
 # 워크플로 진입점(mode:render)은 LLM이 손으로 써서 결과가 흔들렸고 자동 병합이 검증하지 못했다(#316).
 # 스크립트가 같은 입력에서 바이트 같은 결과를 내고, 이 저장소 생성물이 그 결과(golden)와 같아야 한다.
 RD_PATHS="$(jq -r '.artifacts[] | select(.mode == "render") | .path' "$ROOT/templates/managed-files.json")"
-assert_eq "10" "$(grep -c . <<<"$RD_PATHS")" "ten workflow entry points are render artifacts"
+assert_eq "12" "$(grep -c . <<<"$RD_PATHS")" "twelve workflow entry points are render artifacts"
 while IFS= read -r rd_path; do
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-1" || fail "render $rd_path"
   "$ROOT/scripts/render-managed-file.sh" --path "$rd_path" >"$TEST_TMP/render-2" || fail "render $rd_path again"
@@ -948,5 +948,56 @@ done
 assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFC edit path keeps the old fail-open verdict"
 assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFD edit path is still guarded"
 pass "direct edit guard compares paths across unicode normalization"
+
+# 릴리스 방식 감지(#493): harness-init이 태그 방식 근거를 보고 manifest release_policy에 근거와 확장점을 남기고, sync가 사람 확인 뒤에만 쓴다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '**릴리스 방식 감지**' '`git ls-remote --tags origin`' '`CHANGELOG.md`에 버전 절' 'flow:"unknown"' '`evidence`에 문장으로' \
+  '`release_policy`: §1 릴리스 방식 감지 결과' '"branch_prefix": "release/v"' '"record_cmds": ["<기록 명령>"]' '릴리스 병합 기준은 `release_policy.base`' \
+  '**릴리스 방식** (manifest 정책 필드 — **사람 확인 뒤에만** 쓴다)' '팀 전용 도구 이름은 템플릿·예시에 넣지 않고'; do
+  assert_contains "$HARNESS_INIT_CONTENT" "$phrase" "harness-init release detection: $phrase"
+done
+pass "harness-init detects tag-based releases into release_policy"
+
+# 데이터 접근 계층이 있는 프로젝트는 측정으로 검증된 대량 조회 메모리 규칙을 실측 원칙의 예외로 받는다. (#499)
+for phrase in "대량 조회 메모리" "검증된 기본 규칙" "projection 조회" "건수 상한 × 행 크기" "판정·집계용 읽기 경로" "호출부가 diff 안이면 제외하지 않는다" "딸려 오는 엔티티·테이블의 컬럼 정의"; do
+  assert_contains "$HARNESS_INIT_CONTENT" "$phrase" "harness-init bulk read rule: $phrase"
+done
+pass "harness-init writes the bulk read memory rule for projects with data access"
+
+# design-audit가 축 A에서 여백 관계와 묶기를 잰다. 규칙 문서에 하위 절이 없으면 감점하지 않고 규칙 결정 필요로 올리고,
+# 소스로 못 정하는 여백은 렌더 확인으로 보낸다. 사본 세 곳과 harness.json hash도 맞춘다. (#514)
+SR_AUDIT="$(<"$ROOT/templates/design-audit/SKILL.md")"
+for phrase in "여백 관계와 묶기는 축 A에서 잰다" "관계에 맞지 않는 단계" "안쪽이 바깥쪽보다 크거나 같은 역전" "중첩 한도" "하위 절이 없으면 감점하지 않고"; do
+  assert_contains "$SR_AUDIT" "$phrase" "design-audit spacing and grouping: $phrase"
+done
+SR_PARA="$(awk '/^\*\*여백 관계와 묶기는 축 A에서 잰다/{f=1} f&&/^$/{exit} f' "$ROOT/templates/design-audit/SKILL.md")"
+assert_contains "$SR_PARA" "렌더 확인 필요" "design-audit sends unresolvable spacing to render check"
+assert_contains "$SR_PARA" "규칙 결정 필요" "design-audit holds missing subsections as rule decisions"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+SR_AROW="$(grep '^| A\. 골격·위계 | 30 | `## 레이아웃`:' "$ROOT/templates/design-audit/SKILL.md")"
+assert_contains "$SR_AROW" "여백 관계" "design-audit axis A row names spacing relationships"
+for SR_COPY in skills/design-screen/references/design-audit.md .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/SKILL.md; do
+  cmp -s "$ROOT/$SR_COPY" "$ROOT/templates/design-audit/SKILL.md" || fail "$SR_COPY must match templates/design-audit/SKILL.md byte for byte"
+done
+for SR_COPY in .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/SKILL.md; do
+  SR_SUM="$( (shasum -a 256 "$ROOT/$SR_COPY" 2>/dev/null || sha256sum "$ROOT/$SR_COPY") | cut -d' ' -f1)"
+  assert_eq "$SR_SUM" "$(jq -r --arg p "$SR_COPY" '.managed_files[$p].content_sha256' "$ROOT/.ai-harness/harness.json")" "harness.json records the current hash of $SR_COPY"
+done
+pass "design-audit scores spacing relationships and grouping under axis A and its copies stay in sync"
+
+# design-audit 축 E는 `## 원칙`의 `### 서비스`(성격·피할 것)를 톤 근거로 함께 읽는다(#514). 문구 규칙 원본이 ux-writing.md면
+# 말투·어미·용어·금지어는 ux-writing-audit로 넘기고 E는 정직성과 서비스 톤 일관성만 잰다. 가리키기 형태 `## 문구`는
+# 절 없음이 아니고, 두 문서가 다 가득하면 감점 없이 규칙 결정으로 올린다. (#516)
+SV_AUDIT_FILE="$ROOT/templates/design-audit/SKILL.md"
+SV_AUDIT="$(<"$SV_AUDIT_FILE")"
+SV_EREAD="$(grep '^   | E\. 톤·정직성 |' "$SV_AUDIT_FILE")"
+assert_contains "$SV_EREAD" "### 서비스" "design-audit axis E reads the service section"
+assert_contains "$(grep '^| E\. 톤·정직성 | 15 |' "$SV_AUDIT_FILE")" "### 서비스" "design-audit axis E score row names the service section"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '`### 서비스`가 없으면 지금처럼 `## 문구`만으로 잰다' '`원본: <경로>`' '절 없음으로 보지 않는다' '말투·어미·용어·금지어' \
+  '`ux-writing-audit`로 넘긴다' 'E는 정직성과 `### 서비스` 톤 일관성만' '규칙 결정 필요: 문구 규칙 중복' '`ux-writing-audit`의 감지 규칙'; do
+  assert_contains "$SV_AUDIT" "$phrase" "design-audit axis E copy source: $phrase"
+done
+pass "design-audit axis E reads the service section and hands copy style to ux-writing-audit"
 
 finish_tests

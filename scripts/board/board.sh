@@ -37,6 +37,7 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
+       board.sh todo add <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
 env:   BOARD_PORT (정하면 그 포트만, 안 정하면 8765부터 빈 포트 10개 안에서), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
 EOF
   exit 2
@@ -546,6 +547,20 @@ command_launcher() {
   esac
 }
 
+# 할 일 저장(fcntl 잠금·600)은 보드 서버와 같은 agenda.py가 한다 — 셸과 서버가 동시에 써도 깨지지 않는다.
+command_todo() {
+  case "${1:-}" in
+    add)
+      local text="${*:2}"
+      [[ -n "${text//[[:space:]]/}" ]] || usage
+      ;;
+    list) [[ $# -eq 1 || ($# -eq 2 && "$2" == --all) ]] || usage ;;
+    done) [[ $# -eq 2 && -n "$2" ]] || usage ;;
+    *) usage ;;
+  esac
+  HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I "$DIR/agenda.py" todo "$@"
+}
+
 cmd="${1:-open}"
 (($#)) && shift
 case "$cmd" in
@@ -555,6 +570,7 @@ case "$cmd" in
   status) command_status ;;
   hook) command_hook "$@" ;;
   launcher) command_launcher "$@" ;;
+  todo) command_todo "$@" ;;
   -h | --help | help) usage ;;
   *) usage ;;
 esac

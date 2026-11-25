@@ -1,0 +1,5 @@
+{
+  "id": "slow",
+  "name": "Slow 그룹웨어",
+  "fetch": ["bash", "fetch.sh"]
+}

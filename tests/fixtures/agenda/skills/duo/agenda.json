@@ -1,0 +1,25 @@
+{
+  "id": "duo",
+  "name": "Duo 캘린더",
+  "fetch": [
+    "bash",
+    "fetch.sh"
+  ],
+  "connect": [
+    "bash",
+    "connect.sh"
+  ],
+  "disconnect": [
+    "bash",
+    "disconnect.sh"
+  ],
+  "accounts": [
+    "bash",
+    "accounts.sh"
+  ],
+  "interval_minutes": 15,
+  "requires": [
+    "$HM_DATA_DIR/fixture-duo-ready"
+  ],
+  "setup_hint": "Duo 앱에서 연동을 켠 뒤 다시 여세요."
+}

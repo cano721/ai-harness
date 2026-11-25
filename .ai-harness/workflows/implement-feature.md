@@ -1,6 +1,6 @@
 # Implement Feature — ai-harness
 
-노드·전이·수리 한도의 계약은 `.ai-harness/workflows/feature-delivery-graph.json`이 단일 출처다. 이 문서는 그 그래프를 이 저장소에서 실행할 때 쓰는 **프로젝트 사실**만 적는다. 러너(`.ai-harness/workflows/workflow-driver.sh --workflow feature`)가 있으면 러너로 실행한다.
+노드·전이·수리 한도의 계약은 `.ai-harness/workflows/feature-delivery-graph.json`이 단일 출처다. 이 문서는 그 그래프를 이 저장소에서 실행할 때 쓰는 **프로젝트 사실**만 적는다. 러너(`.ai-harness/workflows/workflow-driver.sh --workflow feature`)가 있으면 러너로 실행한다. 실행 중인 런은 `workflow-driver.sh stop [--run <id>]`로만 멈춘다(그 런이 기록한 프로세스만 끈다). `pkill`·`killall`·`pgrep -f` 같은 패턴 kill은 다른 런·세션까지 끄므로 쓰지 않는다. 멈춘 런(stopped)과 밖에서 끊긴 런(stale)은 `status`에 보이고 `resume`으로 잇는다.
 
 ## 1. Implementation Brief (승인 게이트)
 
@@ -54,6 +54,7 @@ scripts/release-prep.sh --check
 - PR: `gh pr create --base develop` (기본값이 `main`이라 `--base` 생략 금지). draft가 아닌 일반 PR. 본문에 `Closes #<이슈>`, 열린 다음 릴리스 마일스톤이 있으면 `--milestone`으로 단다
 - 원격 CI: GitHub Actions `test` 워크플로 — `gh pr checks <PR> --watch`
 - 병합: 하지 않는다(사람, 또는 개인 자동화 단계를 고른 사용자의 러너 `merge` 노드). 기능 PR은 squash 병합이 저장소 규칙이다
+- 기준 브랜치 충돌: 병합이 `develop`과의 충돌만으로 막히면 러너의 `sync_base` 노드가 `origin/develop`을 일반 merge로 들이고(충돌은 에이전트가 풀되 커밋·push하지 않는다), 4절 검사를 다시 통과해야 일반 push한 뒤 원격 CI → 병합을 다시 거친다. rebase·force push는 하지 않는다. 한도(`limits.max_base_syncs`)·풀지 못한 충돌·검사 실패는 사람에게 넘긴다
 
 ## 6. 이슈 트래커
 

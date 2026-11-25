@@ -1,0 +1,9 @@
+{
+  "id": "google",
+  "name": "구글 캘린더",
+  "fetch": ["python3", "-I", "google_calendar.py", "fetch"],
+  "connect": ["python3", "-I", "google_calendar.py", "connect"],
+  "disconnect": ["python3", "-I", "google_calendar.py", "disconnect"],
+  "accounts": ["python3", "-I", "google_calendar.py", "accounts"],
+  "interval_minutes": 15
+}

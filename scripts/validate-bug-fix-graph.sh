@@ -40,6 +40,7 @@ jq -e '[.transitions[] | select(.from == "triage" and .to != "reproduce")] | all
 has_transition brief approval
 has_transition approval regression user_explicitly_approved
 has_transition approval regression auto_approved_by_policy
+has_transition approval user_decision brief_coverage_incomplete
 has_transition regression fix
 has_transition fix verify
 has_transition verify review required_checks_pass
@@ -81,9 +82,26 @@ if jq -e '.nodes | has("merge")' "$graph_path" >/dev/null; then
   jq -e '.nodes.merge.write == false and .nodes.post_merge_verify.write == false
     and (.invariants | any(startswith("Only the merge node merges")))
     and ([.transitions[] | select(.to == "merge") | .from] == ["remote_ci"])
-    and ([.transitions[] | select(.from == "merge") | .to] | sort == ["post_merge_verify", "user_decision"])
+    and ([.transitions[] | select(.from == "merge") | .to] | unique | . == ["post_merge_verify", "user_decision"] or . == ["post_merge_verify", "sync_base", "user_decision"])
     and ([.transitions[] | select(.to == "post_merge_verify") | .from] == ["merge"])' "$graph_path" >/dev/null || {
     printf 'invalid merge node\n' >&2
+    exit 1
+  }
+fi
+
+# sync_base는 선택 노드다(#508). 있으면 merge가 충돌로만 막혔을 때와 remote_ci 도중 바깥 base 병합 커밋을 받을 때만 닿는 쓰기 노드이고,
+# 다시 remote_ci(→ merge)를 거치거나 사람에게만 간다 — 병합·완료로 곧장 가는 길이 없다.
+if jq -e '.nodes | has("sync_base") or any(.transitions[]; .from == "sync_base" or .to == "sync_base")' "$graph_path" >/dev/null; then
+  has_transition merge sync_base base_conflict
+  has_transition remote_ci sync_base base_merged_outside
+  has_transition sync_base remote_ci base_synced
+  has_transition sync_base user_decision base_sync_failed_or_limit_reached
+  jq -e '.nodes.sync_base.write == true and .nodes.merge.write == false
+    and (.invariants | any(startswith("sync_base")))
+    and ([.transitions[] | select(.to == "sync_base") | .from] | unique == ["merge", "remote_ci"])
+    and ([.transitions[] | select(.from == "sync_base") | .to] | unique == ["remote_ci", "user_decision"])
+    and ((.limits.max_base_syncs | type) == "number" and .limits.max_base_syncs >= 1)' "$graph_path" >/dev/null || {
+    printf 'invalid sync_base node\n' >&2
     exit 1
   }
 fi
