@@ -420,6 +420,13 @@ assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "a check that kee
 assert_eq "3" "$(grep -c '^F$' "$FAIL_LOG")" "a failing check runs again on the same tree (the second repair left the tree unchanged)"
 pass "the runner reuses a check that passed on the same tree and records each check's seconds"
 
+# Brief는 병렬 옵션을 checks·final_checks에 숫자로 적지 말라는 안내를 받는다 — 리터럴 -j N은 러너의 HM_TEST_JOBS를 무시한다. (#544)
+unset HM_TEST_JOBS
+start_and_approve brief_jobs_guidance
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "leave its parallelism option out of checks and final_checks" "the brief node is told to leave the parallelism option out of checks"
+assert_contains "$(<"$FAKE_LOG.brief.prompt")" "never a literal number" "the brief node is told never to write a literal parallelism number"
+pass "the brief prompt forbids a literal parallelism number in checks"
+
 # 원격 CI가 있는 저장소(러너가 push하는 git_policy + CI 설정 파일)에서는 final_checks를 로컬에서 돌리지 않고
 # 원격 CI를 최종 관문으로 삼는다. 시작 때 .policy.final_gate로 고정하고, 미룬 검사는 progress·상태·publish 프롬프트에 따로 남긴다. (#557)
 GATE_LOG="$DRIVER_TMP/final-gate.log"

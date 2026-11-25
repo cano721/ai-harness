@@ -25,6 +25,10 @@
 - **회귀 테스트가 기본으로 CPU 수에 맞춰 병렬로 돕니다** — `bash tests/run.sh`는 `-j`도 `HM_TEST_JOBS`도 없으면 `max(1, min(CPU/2, 4))`개 영역을 동시에 돌립니다. 직렬은 `-j 1`로 고릅니다. 블록별 시간을 보는 `--profile`, CI 샤딩용 `--shard i/n`을 추가했고, GitHub Actions는 lint job과 4개 샤드로 나눠 돕니다. 느린 세 영역(automation·workflow-merge·workflow-runs)은 고정 대기를 조건 대기로 바꾸고 여러 영역으로 나눠 병렬로 돕니다. (#556)
   요약: ai-harness 저장소를 개발할 때 `bash tests/run.sh`가 기본으로 병렬로 돌고 `--profile`로 느린 블록을 찾습니다.
 
+### 버그 수정
+
+- 러너 Brief가 전체 회귀를 `tests/run.sh -j 2`로 고정해 `HM_TEST_JOBS`(사용자 설정·기본값)가 적용되지 않던 문제를 고쳤습니다. 문서·템플릿·Brief 프롬프트가 `-j` 없이 적고, `HM_TEST_JOBS`를 스스로 읽지 않는 실행기에는 리터럴 숫자 대신 `$HM_TEST_JOBS`를 넘기라고 안내합니다. (#544)
+
 ## v0.95.0 (2026-11-25)
 ### 새 기능
 
