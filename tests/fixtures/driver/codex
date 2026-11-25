@@ -38,6 +38,7 @@ case "$prompt" in
   *"You are the publish node"*) node=publish ;;
   *"You are the remote_ci node"*) node=remote_ci ;;
   *"You are the post_merge_verify node"*) node=post_merge_verify ;;
+  *"You are the sync_base node"*) node=sync_base ;;
   *) node=unknown ;;
 esac
 printf '%s %s schema=%s%s%s\n' "$node" "$sandbox" "${schema:+yes}" "${net:+ net=yes}" "${adddir:+ add-dir=yes}" >>"$FAKE_LOG"
@@ -225,6 +226,16 @@ case "$node:$scenario" in
   remote_ci:merge_ci_none) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
   remote_ci:ci_none*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"none", commit:$c, summary:"no CI configuration in the repository", failures:[]}' >"$out" ;;
   remote_ci:*) jq -n --arg c "$(git rev-parse HEAD)" '{status:"passed", commit:$c, summary:"2 checks passed", failures:[]}' >"$out" ;;
+  # sync_base: 충돌 파일을 양쪽 내용으로 풀고 git add한다. merge_conflict_unresolved는 풀지 못했다고 보고한다.
+  sync_base:merge_conflict_unresolved)
+    jq -n --arg f "$(git diff --name-only --diff-filter=U | paste -sd ',' -)" '{status:"unresolved", summary:"both sides rewrote the same line", unresolved:($f | split(","))}' >"$out" ;;
+  sync_base:*)
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      printf 'v1\nbase\n' >"$f"
+      git add -- "$f"
+    done <<<"$(git diff --name-only --diff-filter=U)"
+    jq -n '{status:"resolved", summary:"kept both sides", unresolved:[]}' >"$out" ;;
   post_merge_verify:pm_ci_fail) jq -n '{status:"failed", commit:"1111111111111111111111111111111111111111", summary:"build on main failed", failures:["integration: db migration timed out"]}' >"$out" ;;
   post_merge_verify:pm_ci_other) jq -n '{status:"passed", commit:"3333333", summary:"green", failures:[]}' >"$out" ;;
   post_merge_verify:*) jq -n '{status:"passed", commit:"1111111111111111111111111111111111111111", summary:"main is green", failures:[]}' >"$out" ;;

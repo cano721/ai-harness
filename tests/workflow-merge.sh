@@ -61,19 +61,22 @@ merge_run merge_draft "$MP_BASIC"
 assert_contains "$DRIVER_RC:$DRIVER_OUT" "30:" "a draft pull request waits"
 assert_contains "$DRIVER_OUT" "the pull request is a draft" "the draft condition is named"
 # 고를 수 없는 상태는 사람에게 넘긴다.
-for s in merge_changes:"a reviewer requested changes" merge_conflict:"merge conflicts" merge_closed:"closed without merging" \
+# 충돌만으로 막힌 경우(merge_conflict)는 sync_base가 base를 따라잡는다(tests/workflow-merge-sync.sh). 그 밖의 막힘은 sync하지 않는다.
+for s in merge_changes:"a reviewer requested changes" merge_closed:"closed without merging" \
   merge_otherbase:"targets release, not the base branch main" merge_hostci_fail:"the host reports the checks on the head as failed" \
   merge_headmoved:"is not the pushed and reviewed commit" merge_host_down:"cannot read the pull request state" merge_cmd_fail:"merging failed"; do
   merge_run "${s%%:*}" "$MP_BASIC"
   assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "${s%%:*} goes to a person"
   assert_contains "$DRIVER_OUT" "merge blocked: " "${s%%:*} says the merge was blocked"
   assert_contains "$DRIVER_OUT" "${s#*:}" "${s%%:*} names the reason"
+  assert_eq "0" "$(run_state '.base_syncs // [] | length')" "${s%%:*} does not sync the base"
 done
 assert_eq "0" "$(grep -c '^gh merge' "$DRIVER_TMP/merge_changes.log" || true)" "requested changes are never merged over"
 # 다른 저장소의 PR은 병합하지 않는다.
 merge_run merge_otherrepo "$MP_BASIC" github.com/acme/other
 assert_eq "20:user_decision:0" "$DRIVER_RC:$(run_state .status):$(grep -c '^gh merge' "$FAKE_LOG" || true)" "a pull request outside this repository is never merged"
 assert_contains "$DRIVER_OUT" "is not in this repository" "the repository mismatch is named"
+assert_eq "0" "$(run_state '.base_syncs // [] | length')" "a pull request outside this repository does not sync the base"
 # Bitbucket: 승인은 마지막 push 뒤의 것만 센다. 자격증명은 stdin으로 넘긴다.
 export ATLASSIAN_USER='me@example.com' BITBUCKET_API_TOKEN='tok"en' FAKE_PROTECTION=bb_glob
 merge_run bb_merge "$(jq -c '.verify = []' <<<"$MP_BASIC")" bitbucket.org/acme/app
