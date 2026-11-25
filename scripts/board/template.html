@@ -1627,7 +1627,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!SERVER) return Promise.resolve();
     if (agLoad && !force) return agLoad;
     if (!agLoad && !force) {
-      const waiting = agConnecting.size || (agData && (agData.sources || []).some((x) => x.state === 'connecting' || x.fetching));
+      const waiting = agConnecting.size || (agData && (agData.sources || []).some((x) => x.state === 'connecting' || x.fetching || x.session));
       if (agAt && Date.now() - agAt < (waiting ? 2000 : 30000)) return Promise.resolve();
     }
     const p = (agLoad || Promise.resolve()).then(fetchAgenda);
@@ -1727,6 +1727,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   function sourceButton(s) {
     if (s.invalid) return null;
+    if (s.state === 'needs_setup' && s.setup_session) {
+      const b = btn('설정하기', 'ds-btn--sm'); b.dataset.key = 'agbtn:' + s.id;
+      b.setAttribute('aria-label', `${s.name} 설정 세션 띄우기`);
+      if (s.session) b.disabled = true;
+      b.onclick = () => startSetupSession({ kind: 'agenda', name: s.id, action: 'setup' }, b, () => loadAgenda(true));
+      return b;
+    }
     if (s.state === 'needs_setup') {
       const b = btn('설정하기', 'ds-btn--sm'); b.dataset.key = 'agbtn:' + s.id;
       b.setAttribute('aria-expanded', String(agOpen.has(s.id))); b.setAttribute('aria-controls', 'agsetup-' + s.id);
@@ -1759,7 +1766,18 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (when) side.append(el('span', 'ds-num', when));
     const b = sourceButton(s); if (b) side.append(b);
     head.append(title, side); row.append(head);
-    if (s.state === 'needs_setup') {
+    if (s.state === 'needs_setup' && s.setup_session) {
+      const d = el('div', 'ds-row__detail');
+      if (s.setup_hint) d.append(el('p', 'ds-caption b-line', s.setup_hint));
+      if (s.session) {
+        const p = el('p', 'b-line ds-cluster'); p.append(icon('progress'), el('span', null, '설정 세션 진행 중 — 끝나면 상태를 다시 읽습니다.'));
+        const it = s.session.item_id && itemsAll().find((i) => i.id === s.session.item_id);
+        if (it) { const o = btn('세션 열기', 'ds-btn--sm ds-btn--ghost', () => openItem(it)); o.dataset.session = it.id; p.append(o); }
+        else p.append(goLink('작업 현황 열기', 'list'));
+        d.append(p);
+      }
+      if (d.childNodes.length) row.append(d);
+    } else if (s.state === 'needs_setup') {
       const d = el('div', 'ds-row__detail'); d.id = 'agsetup-' + s.id; d.hidden = !agOpen.has(s.id);
       d.append(el('p', 'b-line', s.setup_hint || '이 소스를 제공한 스킬의 안내대로 준비한 뒤 다시 여세요.'));
       row.append(d);
@@ -3122,14 +3140,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (view === 'settings' && stab === 'skills') renderAll();
   }
   // 공용 장치: 카탈로그·디자인 스킬 하나에 setup 세션을 띄운다. 다른 화면도 {kind, name, action}으로 부른다.
-  async function startSetupSession(body, b) {
+  // reload: 끝난 뒤 다시 읽을 화면(기본 스킬 탭). 내 일정 소스는 { kind: 'agenda', name: <소스 id>, action: 'setup' }과 loadAgenda를 넘긴다.
+  async function startSetupSession(body, b, reload = () => loadSkills(true)) {
     if (b) busy(b, '띄우는 중');
     let res; try { res = await post('/settings/skills/session', body); } catch (e) { res = { ok: false, message: '보드 서버에 닿지 못했습니다.' }; }
     if (b && b.isConnected) unbusy(b);
-    if (res.ok) toast(`${res.message}${body.action === 'setup' ? '. 토큰은 세션 안내에 따라 별도 터미널에서 입력합니다.' : ''}`, true, goLink('작업 현황 열기', 'list'));
+    const note = body.kind === 'agenda' ? '. 비밀 값과 파일은 세션 안내에 따라 직접 둡니다.' : body.action === 'setup' ? '. 토큰은 세션 안내에 따라 별도 터미널에서 입력합니다.' : '';
+    if (res.ok) toast(`${res.message}${note}`, true, goLink('작업 현황 열기', 'list'));
     else toast(`설정 세션을 띄우지 못했습니다. ${res.message}`, false);
     refresh().catch(() => {});
-    await loadSkills(true);
+    await reload();
     return res;
   }
   const K_TOOL = { current: '설치됨', outdated: '새 버전 있음', modified: '고친 사본', foreign: '직접 둔 폴더', absent: '없음', builtin: '내장', unavailable: '이 도구엔 없음', manual: '직접 설치', superseded: '내장으로 대체됨' };

@@ -11,6 +11,8 @@
 - setup 세션의 지시문은 서버가 카탈로그 이름과 고정 문구로만 만든다. 브라우저가 보낸 문자열은 넣지 않는다.
   비밀 값은 대화로 받지 않고 별도 터미널의 `setup.sh set`(숨김 입력)으로 안내한다(setup SKILL 5-4).
 - 띄운 세션은 board/skill-sessions.json에 {"<kind>:<name>": {sid, action, name, at}}로 남기고, 보드가 세션 상태를 붙인다.
+  내 일정 소스의 [설정하기] 세션(#525)도 같은 파일에 "agenda:<소스 id>"로 남는다 — 검사·지시문은 보드 서버가 agenda.py로 만들고
+  (kind agenda는 KINDS·validate를 거치지 않는다), 기록·끝난 세션 지우기만 여기를 같이 쓴다.
 """
 import json, os, re, subprocess, threading, time
 from datetime import datetime, timezone

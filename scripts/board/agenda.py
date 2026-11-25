@@ -4,7 +4,8 @@
 일정·답할 것·할 일은 캘린더·메신저·메일에 흩어져 있다. 보드는 이것들을 '어댑터'(명령)로 받아 한 화면에 모은다.
 어댑터 계약(#492):
 - 소스 선언 agenda.json: id(소문자·숫자·-), name, fetch(argv). 선택 interval_minutes(기본 15, 최소 1),
-  connect·disconnect·done(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침), setup_hint(사람 말 한 줄).
+  connect·disconnect·done(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침), setup_hint(사람 말 한 줄),
+  setup_prompt(#525. requires가 없을 때 보드 [설정하기]가 띄우는 설정 세션에 넘길 안내. 공백을 정리해 1000자까지).
   argv의 상대 경로는 agenda.json 폴더 기준이다(그 폴더를 작업 폴더로 삼아 실행한다).
 - 발견 순서: 플러그인 scripts/board/agenda/*/ → HM_CLAUDE_SKILLS_DIR/*/ → HM_CODEX_SKILLS_DIR/*/. 같은 id는 먼저 찾은
   쪽이 쓴다(기본 어댑터를 사용자 파일이 가로채지 못한다). 잘못된 선언은 그 소스만 '선언 오류'로 보인다.
@@ -13,6 +14,8 @@
 - done은 argv 뒤에 항목 id를 붙여 부른다. done이 없는 소스는 보드가 done.json에만 적고 숨긴다. event는 완료 대상이 아니다.
 데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json, 모두 600)에 둔다.
 메일·채팅·일정 본문은 이 폴더에만 있고 harvest·지표 수집 대상(events/)에 쓰지 않는다.
+설정 세션 지시문(setup_prompt())은 서버가 만든다: 플러그인 기본 구글 소스는 setup 스킬 8-4절을 가리키는 고정 문구,
+스킬 소스는 setup_prompt를 고정 머리말·꼬리말(비밀 값은 대화로 받지 않음)로 감싼다. 둘 다 없으면 None — 화면은 setup_hint만 펼친다.
 """
 import fcntl, glob, json, os, re, secrets, signal, subprocess, sys, threading, time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +27,8 @@ KIND_ALIAS = {"message": "reply"}  # 이슈 초안의 이름도 받는다
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 TODO_ID = "todo"
 MAX_ITEMS = 500
+SETUP_PROMPT_MAX = 1000
+GOOGLE_SETUP_SECTION = "8-4. 내 일정 — 구글 캘린더 연결"
 DEFAULT_INTERVAL = 15
 # 테스트 전용 시간 한도(사용자 설정 아님) — 실패 격리 테스트가 시간 초과를 몇 초 안에 보게 한다.
 FETCH_TIMEOUT = float(os.environ.get("BOARD_AGENDA_FETCH_TIMEOUT") or 60)
@@ -134,10 +139,14 @@ def parse_declaration(path):
     hint = d.get("setup_hint")
     if hint is not None and not isinstance(hint, str):
         return None, "setup_hint는 문자열이어야 합니다."
+    prompt = d.get("setup_prompt")
+    if prompt is not None and not isinstance(prompt, str):
+        return None, "setup_prompt는 문자열이어야 합니다."
     return {
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
         "interval": interval, "requires": req, "setup_hint": _short(hint, 300) if hint else None,
+        "setup_prompt": _short(prompt, SETUP_PROMPT_MAX) if prompt and prompt.strip() else None,
     }, None
 
 
@@ -247,6 +256,32 @@ class Store:
 
     def missing(self, src):
         return [p for p in src["requires"] if not os.path.exists(self._expand(p))]
+
+    def setup_prompt(self, src):
+        """[설정하기] 세션 지시문. 브라우저 문자열은 받지 않고 소스 선언·고정 문구로만 만든다. 없으면 None."""
+        if src.get("invalid"):
+            return None
+        builtin = os.path.dirname(src["folder"]) == BUILTIN_DIR
+        if builtin and src["id"] == "google":
+            client = os.path.join(self.data, "google-oauth-client.json")
+            return "\n".join([
+                "/ai-harness:setup 보드 '내 일정 > 연결한 곳'에서 구글 캘린더의 [설정하기]로 띄운 세션입니다.",
+                f"전체 셋업이 아니라 '{GOOGLE_SETUP_SECTION}' 절만 진행합니다. 다른 단계·스킬은 건드리지 않고, 마무리(setup.sh done)·사용자 규칙·자동화 옵션 단계는 건너뜁니다.",
+                "- 그 절의 순서대로 사용자가 직접 OAuth 클라이언트를 만들도록 안내합니다. 대신 실행하거나 값을 묻지 않습니다 — 구글 로그인·약관 동의·파일 내려받기는 사용자가 합니다.",
+                f"- 클라이언트 파일 위치: {client} (이 보드의 데이터 폴더). 이미 있으면 7번(보드에서 [연결])만 안내합니다.",
+                "- 내려받은 JSON 내용·client secret은 대화에 붙이지 말라고 안내합니다. 파일을 두고 권한(chmod 600)을 줄이는 것도 사용자가 합니다.",
+                "- 끝나면 결과를 짧게 요약합니다. 보드는 세션이 끝나면 상태를 다시 읽습니다.",
+            ])
+        if not src.get("setup_prompt"):
+            return None
+        return "\n".join([
+            f"보드 '내 일정 > 연결한 곳'에서 일정 소스 {src['id']}의 [설정하기]로 띄운 세션입니다. 아래는 그 소스를 제공한 스킬의 안내입니다.",
+            "",
+            src["setup_prompt"],
+            "",
+            "비밀 값(토큰·키·client secret)은 대화로 받지 않고, 사용자가 직접 파일·별도 터미널에 둡니다. 다른 스킬·소스는 바꾸지 않습니다. "
+            "끝나면 결과를 짧게 요약합니다. 보드는 세션이 끝나면 상태를 다시 읽습니다.",
+        ])
 
     def _env(self):
         env = dict(os.environ)
@@ -370,7 +405,8 @@ class Store:
         for src in self.sources():
             if src.get("invalid"):
                 sources.append({"id": src["id"], "name": src["name"], "state": "error", "connected": False,
-                                "invalid": True, "error": "선언 오류: " + src["invalid"], "fetched_at": None, "setup_hint": None})
+                                "invalid": True, "error": "선언 오류: " + src["invalid"], "fetched_at": None, "setup_hint": None,
+                                "setup_session": False})
                 continue
             sid = src["id"]
             on = bool((connected.get(sid) or {}).get("connected"))
@@ -386,7 +422,8 @@ class Store:
                 st = "disconnected"
             sources.append({"id": sid, "name": src["name"], "state": st, "connected": on, "fetching": fetching,
                             "fetched_at": c.get("fetched_at"), "error": c.get("error") or self.connect_error.get(sid),
-                            "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"])})
+                            "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"]),
+                            "setup_session": bool(self.setup_prompt(src))})
             if not on or st == "needs_setup":
                 continue
             hidden = local_done.get(sid) or {}

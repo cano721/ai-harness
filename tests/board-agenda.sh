@@ -12,9 +12,19 @@ AG_GOOGLE="$ROOT/scripts/board/agenda/google/google_calendar.py"
 mkdir -p "$AG_T/bin" "$AG_DATA" "$HM_CLAUDE_SKILLS_DIR" "$HM_CODEX_SKILLS_DIR"
 cp -R "$AG_FIX/skills/." "$HM_CLAUDE_SKILLS_DIR/"
 # 보드 상태 수집이 실제 claude·orca를 부르지 않게 가짜를 둔다.
-cat >"$AG_T/bin/claude" <<'EOF'
+# 가짜 claude: agents는 agents.json을 그대로, --bg는 인자(호출마다 한 줄)·cwd를 남기고 busy 세션 하나를 agents.json에 더한다(#525).
+printf '[]\n' >"$AG_T/agents.json"
+cat >"$AG_T/bin/claude" <<EOF
 #!/usr/bin/env bash
-if [[ "$1" == agents ]]; then echo '[]'; exit 0; fi
+if [[ "\$1" == agents ]]; then cat "$AG_T/agents.json"; exit 0; fi
+if [[ "\$1" == --bg ]]; then
+  { printf '%s' "\$*" | tr '\n' ' '; echo; } >>"$AG_T/claude.log"; printf '%s\n' "\$PWD" >>"$AG_T/claude-cwd.log"
+  n="\$(wc -l <"$AG_T/claude.log" | tr -d ' ')"
+  jq --arg n "\$3" --arg sid "\$(printf 'cccccccc-0000-0000-0000-%012d' "\$n")" --argjson at "\$(date +%s)000" --arg cwd "\$PWD" \
+    '. + [{sessionId:\$sid, id:\$sid[0:8], kind:"background", status:"busy", state:"running", pid:4242, cwd:\$cwd, name:\$n, startedAt:\$at}]' \
+    "$AG_T/agents.json" >"$AG_T/agents.tmp" && mv "$AG_T/agents.tmp" "$AG_T/agents.json"
+  echo "backgrounded"; exit 0
+fi
 exit 1
 EOF
 cat >"$AG_T/bin/orca" <<'EOF'
@@ -39,7 +49,7 @@ AG_PORT="$(free_port)"
 ag_board() {
   google_env PATH="$AG_T/bin:$PATH" HARNESS_METRICS_DIR="$AG_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$AG_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$AG_T/settings.json" BOARD_PORT="$AG_PORT" BOARD_NO_BROWSER=1 BOARD_IDLE_EXIT=0 \
-    BOARD_AGENDA_FETCH_TIMEOUT=3 bash "$ROOT/scripts/board/board.sh" "$@"
+    BOARD_AGENDA_FETCH_TIMEOUT=3 BOARD_FULL_REFRESH_SECONDS=2 bash "$ROOT/scripts/board/board.sh" "$@"
 }
 AG_OPEN="$(ag_board open)"
 AG_URL="$(jq -r '.url' <<<"$AG_OPEN")"
@@ -299,6 +309,128 @@ assert_contains "$AG_PRIV" ".ai-harness/board/agenda" "privacy names where data 
 assert_contains "$AG_PRIV" "중개 서버" "privacy says there is no relay server"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh todo" "board skill describes the to-do CLI"
 pass "agenda guides and privacy notes are in place"
+
+# 13. [설정하기] 설정 세션(#525): #494 장치(POST /settings/skills/session, kind agenda)를 재사용한다.
+# 지시문은 서버가 만들고(구글은 setup 8-4절, 스킬 소스는 agenda.json setup_prompt), 소스 id는 발견된 목록만 받는다.
+ag_sess() { # 세션 요청 본문(JSON) → 응답 본문
+  curl -s -X POST -H "Origin: $AG_BASE" -d "$(jq -cn --arg t "$AG_TOKEN" --argjson b "$1" '$b + {t: $t}')" "$AG_BASE/settings/skills/session"
+}
+ag_log_lines() { if [[ -f "$AG_T/claude.log" ]]; then wc -l <"$AG_T/claude.log" | tr -d ' '; else echo 0; fi; }
+AG_SESS_JSON="$AG_DATA/board/skill-sessions.json"
+AG_RESPONSES="$AG_T/session-responses.txt"; : >"$AG_RESPONSES"
+# 앞 블록이 연결해 둔 구글을 끊고, 클라이언트 파일을 잠시 옮겨 '설정 필요'를 재현한다.
+jq 'del(.google)' "$AG_DATA/board/agenda/sources.json" >"$AG_T/src.json"; mv "$AG_T/src.json" "$AG_DATA/board/agenda/sources.json"
+rm -f "$AG_DATA/board/agenda/google-token.json" "$AG_DATA/board/agenda/cache/google.json"
+mv "$AG_DATA/google-oauth-client.json" "$AG_T/google-oauth-client.json.bak"
+mkdir -p "$HM_CLAUDE_SKILLS_DIR/needsetup" "$HM_CLAUDE_SKILLS_DIR/hintonly" "$HM_CLAUDE_SKILLS_DIR/badprompt" "$HM_CLAUDE_SKILLS_DIR/badprompt2"
+AG_PAD="$(head -c 1100 /dev/zero | tr '\0' x)"
+jq -n --arg p "MARKER-525-PROMPT  준비 순서를 안내합니다. $AG_PAD TAIL-525" \
+  '{id: "needsetup", name: "설정 세션 소스", fetch: ["true"], requires: ["$HM_DATA_DIR/needsetup-missing"], setup_prompt: $p}' >"$HM_CLAUDE_SKILLS_DIR/needsetup/agenda.json"
+jq -n '{id: "hintonly", name: "안내만 있는 소스", fetch: ["true"], requires: ["$HM_DATA_DIR/hintonly-missing"], setup_hint: "HINT-525 안내대로 준비합니다."}' >"$HM_CLAUDE_SKILLS_DIR/hintonly/agenda.json"
+jq -n '{id: "badprompt", name: "숫자 지시문", fetch: ["true"], setup_prompt: 5}' >"$HM_CLAUDE_SKILLS_DIR/badprompt/agenda.json"
+jq -n '{id: "badprompt2", name: "배열 지시문", fetch: ["true"], setup_prompt: ["a"]}' >"$HM_CLAUDE_SKILLS_DIR/badprompt2/agenda.json"
+
+AG_OUT="$(ag_wait '(.sources[] | select(.id == "google") | .state) == "needs_setup"')" || fail "google needs setup again without the client file: $AG_OUT"
+echo "$AG_OUT" >>"$AG_RESPONSES"
+assert_eq "true|null" "$(ag_src "$AG_OUT" google setup_session)|$(ag_src "$AG_OUT" google session)" "google offers a setup session and none is running yet"
+
+# A1 구글: 서버가 만든 setup 8-4 지시문으로 홈에서 claude --bg
+AG_RES="$(ag_sess '{"kind":"agenda","name":"google","action":"setup"}')"; echo "$AG_RES" >>"$AG_RESPONSES"
+assert_eq "true" "$(jq -r '.ok' <<<"$AG_RES")" "a google setup session starts"
+AG_LOG="$(sed -n 1p "$AG_T/claude.log")"
+assert_contains "$AG_LOG" "--bg --name 내 일정: 소스 설정 google" "the session is named for the source id"
+assert_contains "$AG_LOG" "/ai-harness:setup" "the google session runs the setup skill"
+assert_contains "$AG_LOG" "8-4. 내 일정 — 구글 캘린더 연결" "the google session names the calendar section"
+assert_contains "$AG_LOG" "대신 실행하거나 값을 묻지 않습니다" "the google session does not ask for values"
+assert_contains "$AG_LOG" "$AG_DATA/google-oauth-client.json" "the google session names this board's client file"
+assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "### 8-4. 내 일정 — 구글 캘린더 연결" "the section named in the prompt exists in the setup skill"
+assert_eq "$HOME" "$(sed -n 1p "$AG_T/claude-cwd.log")" "the agenda setup session runs in the home folder"
+
+# A2 기록과 상태: skill-sessions.json의 agenda:<id>, /agenda 소스의 session
+assert_eq "cccccccc-0000-0000-0000-000000000001 setup" "$(jq -r '.["agenda:google"] | "\(.sid) \(.action)"' "$AG_SESS_JSON")" "the session is recorded under agenda:google"
+AG_OUT="$(ag_wait '(.sources[] | select(.id == "google") | .session.state) == "running"')" || fail "a running setup session shows on the google source: $AG_OUT"
+echo "$AG_OUT" >>"$AG_RESPONSES"
+assert_eq "setup|true" "$(ag_src "$AG_OUT" google session.action)|$(ag_src "$AG_OUT" google setup_session)" "the source carries the session action"
+pass "agenda google setup starts a recorded setup session"
+
+# A4·A7 스킬 소스: setup_prompt를 고정 머리말·꼬리말로 감싸고 1000자로 자른다. 브라우저 문자열은 넣지 않는다.
+AG_RES="$(ag_sess '{"kind":"agenda","name":"needsetup","action":"setup","prompt":"INJECTED-525","hint":"INJECTED-525"}')"; echo "$AG_RES" >>"$AG_RESPONSES"
+assert_eq "true" "$(jq -r '.ok' <<<"$AG_RES")" "a skill source setup session starts"
+AG_LOG="$(sed -n 2p "$AG_T/claude.log")"
+assert_contains "$AG_LOG" "--bg --name 내 일정: 소스 설정 needsetup" "the skill source session is named for its id"
+assert_contains "$AG_LOG" "MARKER-525-PROMPT 준비 순서를 안내합니다." "the declared setup_prompt reaches the session (whitespace collapsed)"
+assert_contains "$AG_LOG" "일정 소스 needsetup의 [설정하기]로 띄운 세션입니다" "the server adds a fixed header"
+assert_contains "$AG_LOG" "대화로 받지 않" "the server adds the secret rule footer"
+case "$AG_LOG" in *TAIL-525*) fail "a setup_prompt over 1000 characters is cut" ;; esac
+case "$(<"$AG_T/claude.log")" in *INJECTED-525*) fail "browser text never reaches the agenda session prompt" ;; esac
+AG_OUT="$(ag_get)"; echo "$AG_OUT" >>"$AG_RESPONSES"
+assert_eq "true" "$(ag_src "$AG_OUT" needsetup setup_session)" "a source with setup_prompt offers a setup session"
+case "$AG_OUT" in *MARKER-525*) fail "the agenda response never carries the setup_prompt text" ;; esac
+pass "agenda skill sources wrap their setup_prompt in server text"
+
+# A5 지시문 없는 소스: setup_hint 펼침만, 세션 요청은 거부
+assert_eq "false|HINT-525 안내대로 준비합니다." "$(ag_src "$AG_OUT" hintonly setup_session)|$(ag_src "$AG_OUT" hintonly setup_hint)" "a source without setup_prompt keeps only its hint"
+AG_N="$(ag_log_lines)"
+AG_RES="$(ag_sess '{"kind":"agenda","name":"hintonly","action":"setup"}')"; echo "$AG_RES" >>"$AG_RESPONSES"
+assert_eq "false" "$(jq -r '.ok' <<<"$AG_RES")" "a source without a setup prompt starts no session"
+assert_eq "$AG_N" "$(ag_log_lines)" "no claude session is started for a hint-only source"
+pass "agenda sources without setup_prompt keep the hint"
+
+# A6 화이트리스트: 모르는 id·경로·숫자·null, 설정이 필요 없는 소스, 다른 동작, 선언 오류는 모두 거부. 토큰·Origin은 403.
+for AG_BODY in '{"kind":"agenda","name":"nope","action":"setup"}' '{"kind":"agenda","name":"../x","action":"setup"}' \
+  '{"kind":"agenda","name":5,"action":"setup"}' '{"kind":"agenda","name":null,"action":"setup"}' \
+  '{"kind":"agenda","name":"acme","action":"setup"}' '{"kind":"agenda","name":"needsetup","action":"install"}' \
+  '{"kind":"agenda","name":"needsetup","action":"remove"}' '{"kind":"agenda","name":"bad","action":"setup"}' \
+  '{"kind":"agenda","name":"badprompt","action":"setup"}'; do
+  AG_RES="$(ag_sess "$AG_BODY")"; echo "$AG_RES" >>"$AG_RESPONSES"
+  assert_eq "false" "$(jq -r '.ok' <<<"$AG_RES")" "agenda session request is refused: $AG_BODY"
+done
+assert_eq "$AG_N" "$(ag_log_lines)" "refused requests start no claude session"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $AG_BASE" -d '{"t":"wrong","kind":"agenda","name":"needsetup","action":"setup"}' "$AG_BASE/settings/skills/session")" "an agenda session needs the board token"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$(jq -cn --arg t "$AG_TOKEN" '{t: $t, kind: "agenda", name: "needsetup", action: "setup"}')" "$AG_BASE/settings/skills/session")" "an agenda session refuses a foreign Origin"
+assert_eq "$AG_N" "$(ag_log_lines)" "forbidden requests start no claude session"
+pass "agenda setup sessions accept only discovered sources that need setup"
+
+# A9 선언 검사: setup_prompt가 문자열이 아니면 선언 오류
+for AG_BP in badprompt badprompt2; do
+  assert_eq "true" "$(ag_src "$AG_OUT" "$AG_BP" invalid)" "$AG_BP is a declaration error"
+  assert_contains "$(ag_src "$AG_OUT" "$AG_BP" error)" "setup_prompt" "the $AG_BP error names setup_prompt"
+done
+pass "agenda rejects a non-string setup_prompt"
+
+# A3 종료와 재조회: 세션이 끝나면 기록을 지우고, 클라이언트 파일이 생겼으면 연결할 수 있는 상태로 보인다.
+mv "$AG_T/google-oauth-client.json.bak" "$AG_DATA/google-oauth-client.json"
+printf '[]\n' >"$AG_T/agents.json"
+# 작업 목록은 보는 화면이 있을 때만 뒤에서 다시 모은다(/status.json이 표시) — 화면처럼 작업 현황도 함께 읽는다.
+# 지문에 없는 가짜 agents.json 변화는 전체 수집 주기(위 ag_board의 BOARD_FULL_REFRESH_SECONDS=2)마다 보인다.
+AG_OUT=""
+for _ in $(seq 1 75); do
+  curl -s -o /dev/null "$AG_BASE/status.json?t=$AG_TOKEN"
+  AG_OUT="$(ag_get)"
+  if jq -e '(.sources[] | select(.id == "google")) | .session == null and .state == "disconnected"' >/dev/null 2>&1 <<<"$AG_OUT"; then break; fi
+  AG_OUT=""; sleep 0.2
+done
+[[ -n "$AG_OUT" ]] || fail "a finished session refreshes the google source"
+echo "$AG_OUT" >>"$AG_RESPONSES"
+assert_eq "null|null" "$(jq -c '.["agenda:google"]' "$AG_SESS_JSON")|$(jq -c '.["agenda:needsetup"]' "$AG_SESS_JSON")" "finished agenda session records are dropped"
+pass "agenda refreshes a source after its setup session ends"
+
+# A8 비밀 미노출: client secret이 지시문·기록·응답 어디에도 없다.
+for AG_F in "$AG_T/claude.log" "$AG_SESS_JSON" "$AG_DATA/board/actions.jsonl" "$AG_RESPONSES"; do
+  if grep -qs "fake-client-SECRET-xyz" "$AG_F"; then fail "the client secret never reaches $AG_F"; fi
+done
+pass "agenda setup sessions keep the client secret out of prompts, records and responses"
+
+# A10 화면: 설정 세션 소스는 공용 장치로 띄우고 내 일정을 다시 읽는다. 지시문 없는 소스는 펼침을 유지한다.
+AG_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$AG_TPL" "s.state === 'needs_setup' && s.setup_session" "the source button branches on setup_session"
+assert_contains "$AG_TPL" "startSetupSession({ kind: 'agenda', name: s.id, action: 'setup' }, b, () => loadAgenda(true))" "the source button launches the shared setup session and reloads the agenda"
+assert_contains "$AG_TPL" "async function startSetupSession(body, b, reload" "the launcher takes a reload callback"
+assert_contains "$AG_TPL" "aria-controls', 'agsetup-' + s.id" "hint-only sources keep the expandable hint"
+assert_contains "$AG_TPL" "x.fetching || x.session" "the agenda polls faster while a setup session runs"
+pass "agenda screen launches setup sessions through the shared launcher"
+
+rm -rf "$HM_CLAUDE_SKILLS_DIR/needsetup" "$HM_CLAUDE_SKILLS_DIR/hintonly" "$HM_CLAUDE_SKILLS_DIR/badprompt" "$HM_CLAUDE_SKILLS_DIR/badprompt2"
 
 ag_board stop >/dev/null
 finish_tests
