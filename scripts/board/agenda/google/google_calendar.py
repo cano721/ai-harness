@@ -143,6 +143,44 @@ def list_accounts():
 
 
 # ---- connect ----
+DONE_PAGE = """<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>%(title)s</title>
+<style>
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Pretendard", sans-serif; background: Canvas; color: CanvasText; word-break: keep-all; }
+main { max-width: 26rem; padding: 2rem; text-align: center; }
+h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+p { margin: 0 0 1.25rem; opacity: .75; }
+button { font: inherit; padding: .5rem 1rem; border-radius: .5rem; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+</style></head>
+<body><main><h1>%(title)s</h1><p id="msg">%(body)s</p><button type="button" id="close">이 탭 닫기</button></main>
+<script>
+// 주소창·방문 기록에 남은 일회용 code·state를 지우고, 이 탭을 닫아 본다(스크립트가 연 탭이 아니면 브라우저가 막는다).
+history.replaceState(null, "", "/");
+document.getElementById("close").onclick = function () {
+  window.close();
+  setTimeout(function () {
+    if (!window.closed) document.getElementById("msg").textContent = "브라우저가 이 탭을 대신 닫지 못하게 합니다. 탭을 직접 닫아 주세요.";
+  }, 300);
+};
+setTimeout(function () { window.close(); }, %(delay)d);
+</script></body></html>
+"""
+
+
+def done_page(ok):
+    """루프백이 브라우저에 돌려주는 마지막 화면. 받은 값(code·state)은 싣지 않는다."""
+    return (DONE_PAGE % {
+        "title": "구글 캘린더를 연결했습니다" if ok else "연결하지 못했습니다",
+        "body": "보드의 내 일정에 곧 일정이 보입니다. 이 탭은 닫아도 됩니다." if ok
+        else "보드의 내 일정에서 다시 [연결]을 누르세요. 이 탭은 닫아도 됩니다.",
+        "delay": 1500 if ok else 60000,
+    }).encode("utf-8")
+
+
 def pkce_pair():
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
@@ -167,10 +205,11 @@ def connect():
                 return
             got.update({k: v[0] for k, v in q.items()})
             ok = "code" in q and secrets.compare_digest(q.get("state", [""])[0], state)
-            body = ("구글 캘린더를 연결했습니다. 이 창을 닫고 보드로 돌아가세요." if ok else
-                    "연결하지 못했습니다. 보드에서 다시 [연결]을 누르세요.").encode()
+            body = done_page(ok)
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
