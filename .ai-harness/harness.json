@@ -127,8 +127,8 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/design-audit/SKILL.md": {
-      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
-      "template_version": "0.83.0"
+      "content_sha256": "c58070a4e0c3c1bd1d5886099970d03afc6b08cc58bca03ebe456098e53d6435",
+      "template_version": "0.92.0"
     },
     ".agents/skills/design-audit/references/design-skills.md": {
       "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
@@ -139,8 +139,8 @@
       "template_version": "0.83.0"
     },
     ".claude/skills/design-audit/SKILL.md": {
-      "content_sha256": "6a875c530853514fa18aeb49e2b7545fdd7e581a5b258ec45794159a44076697",
-      "template_version": "0.83.0"
+      "content_sha256": "c58070a4e0c3c1bd1d5886099970d03afc6b08cc58bca03ebe456098e53d6435",
+      "template_version": "0.92.0"
     },
     ".claude/skills/design-audit/references/design-skills.md": {
       "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
