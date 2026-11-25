@@ -15,6 +15,7 @@
 
 ### 동작 변경
 
+- 보드 열기(`/ai-harness:board`·`board.sh open`)가 macOS 창 앱(Harness Board.app, `kind=window`)이 설치돼 있으면 브라우저 대신 그 창으로 엽니다 — 이미 떠 있으면 새로 띄우지 않고 앞으로 가져옵니다. 창 앱이 없거나 AppleScript 앱(`applet`)이거나 macOS가 아니면 지금처럼 브라우저로 엽니다.
 - 러너: 원격 CI가 있는 저장소에서는 final_checks(전체 회귀)를 로컬에서 돌리지 않고 원격 CI를 최종 관문으로 삼는다. 원격 CI가 없거나 push하지 않는 저장소는 지금처럼 로컬에서 돌린다 (#557)
 - **회귀 테스트가 기본으로 CPU 수에 맞춰 병렬로 돕니다** — `bash tests/run.sh`는 `-j`도 `HM_TEST_JOBS`도 없으면 `max(1, min(CPU/2, 4))`개 영역을 동시에 돌립니다. 직렬은 `-j 1`로 고릅니다. 블록별 시간을 보는 `--profile`, CI 샤딩용 `--shard i/n`을 추가했고, GitHub Actions는 lint job과 4개 샤드로 나눠 돕니다. 느린 세 영역(automation·workflow-merge·workflow-runs)은 고정 대기를 조건 대기로 바꾸고 여러 영역으로 나눠 병렬로 돕니다. (#556)
   요약: ai-harness 저장소를 개발할 때 `bash tests/run.sh`가 기본으로 병렬로 돌고 `--profile`로 느린 블록을 찾습니다.
@@ -23,6 +24,7 @@
 
 ### 버그 수정
 
+- 러너 Brief와 기능 워크플로 문서가 '버전 파일을 바꾸지 않았다' 같은 base 대비 변경 검사를 merge-base(`origin/<base>...HEAD`) 기준으로 씁니다. 런 도중 develop에 릴리스가 들어와도 거짓 실패하지 않고, repair가 버전 파일을 base 값으로 맞춰 PR에 버전 변경이 생기던 문제가 없어집니다. (#543)
 - 러너 deliver·repair 노드가 넓은 회귀는 러너 checks에 맡기고 바꾼 영역 테스트만 포그라운드로 돌리게 하고, `workflow-driver.sh status`가 정규화된 `git_policy`(`pr-only`)와 개인 단계(`delivery`)를 따로 보이게 한다 (#534)
 - 러너 release가 릴리스 도중 develop이 움직여 따라잡을(push 전 rebase, push 뒤 merge) 때 `prepare_cmd`를 다시 돌리지 않고 checks만 다시 돌립니다. 같은 버전 절이 이미 있어 `scripts/release-prep.sh`가 `changelog already carries`로 실패하고 릴리스가 사람 판단에서 멈추던 문제가 없어집니다. 따라잡을 때 새로 들어온 Unreleased 항목은 다음 릴리스에 들어갑니다. 또 macOS 기본 bash 3.2에서 release plan 프롬프트의 단계 문장이 `syntax error`로 깨지던 문제를 고쳤습니다. (#554)
 
@@ -35,13 +37,8 @@
 - **아침 요약을 보드에 남기고, 요약 재료를 한 번에 꺼냅니다** — 정기 작업이 `board.sh brief set [--source 이름] < 글`로 남긴 요약이 '내 일정' 맨 위 '아침 요약' 카드로 보입니다(오늘 받은 것만, 길면 접힘). `board.sh agenda summary`는 오늘 일정·답할 것·기한순 할 일(지난 것 표시)을 JSON으로 내어, 메신저 아침 요약 같은 스킬이 보드에 모인 일정·할 일까지 합쳐 요약하게 합니다. (#539)
   요약: 아침 요약을 보내던 작업이 보드의 일정·할 일까지 합쳐 요약하고, 그 글을 보드에서 바로 보고 대응합니다.
 
-### 동작 변경
-
-- 보드 열기(`/ai-harness:board`·`board.sh open`)가 macOS 창 앱(Harness Board.app, `kind=window`)이 설치돼 있으면 브라우저 대신 그 창으로 엽니다 — 이미 떠 있으면 새로 띄우지 않고 앞으로 가져옵니다. 창 앱이 없거나 AppleScript 앱(`applet`)이거나 macOS가 아니면 지금처럼 브라우저로 엽니다.
-
 ### 버그 수정
 
-- 러너 Brief와 기능 워크플로 문서가 '버전 파일을 바꾸지 않았다' 같은 base 대비 변경 검사를 merge-base(`origin/<base>...HEAD`) 기준으로 씁니다. 런 도중 develop에 릴리스가 들어와도 거짓 실패하지 않고, repair가 버전 파일을 base 값으로 맞춰 PR에 버전 변경이 생기던 문제가 없어집니다. (#543)
 - `scripts/release-prep.sh <version>`이 릴리스 절을 확정한 뒤 그 위에 빈 `## Unreleased` 머리를 남깁니다. `--check`는 머리가 없으면 경고합니다. (#527)
 
 - 보드: `BOARD_PORT`를 정하지 않았을 때 기본 포트 8765를 다른 프로세스가 쓰고 있으면 보드가 뜨지 않던 문제를 고쳤습니다. 이제 8765부터 8774까지 빈 포트를 찾아 띄우고 실제 주소를 `server.json`에 남깁니다. `BOARD_PORT`를 정했으면 지금처럼 그 포트만 씁니다.
