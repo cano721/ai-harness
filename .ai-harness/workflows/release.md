@@ -19,7 +19,7 @@ bash tests/run.sh --lint
 `final_checks`(같은 시점에 한 번 — 이 저장소의 PR 직전 검사와 같다):
 
 ```bash
-bash tests/run.sh -j 2
+bash tests/run.sh
 bash -n scripts/*.sh scripts/board/*.sh tests/*.sh
 npx --yes shellcheck -S style -x scripts/*.sh scripts/board/*.sh tests/*.sh
 ```

@@ -19,9 +19,9 @@
 - 러너의 regression·fix 노드는 대상 영역(`bash tests/run.sh <영역>`)만 돌린다. 전체 회귀(`final_checks`)는 리뷰가 깨끗해진 뒤 러너가 한 번 돌린다.
 - 리뷰 → 원인별 수정 → 검증 → 재리뷰. 한도는 그래프 수리 한도, 넘거나 제품·환경 판단이 필요하면 사용자에게 넘긴다.
 
-## 4. 검증 명령 (PR 직전 한 번. 작업 중에는 `bash tests/run.sh -j "${HM_TEST_JOBS:-2}" --changed`·`--lint`)
+## 4. 검증 명령 (PR 직전 한 번. 작업 중에는 `bash tests/run.sh --changed`·`--lint`)
 
-러너는 모든 검사에 동시 실행 수 `HM_TEST_JOBS`를 넘기고, `-j`가 없는 `tests/run.sh`는 그 값을 동시 실행 수로 쓴다.
+러너가 모든 검사에 동시 실행 수 `HM_TEST_JOBS`를 넘기고 `-j` 없는 `run.sh`가 그 값을 쓰므로 `-j`를 적지 않는다. 러너 밖에서 병렬로 돌리려면 사람이 `-j N`을 붙인다.
 
 ```bash
 bash tests/run.sh

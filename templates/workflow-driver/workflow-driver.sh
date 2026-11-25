@@ -1888,7 +1888,7 @@ APP_BUILD_RULE="For a one-shot render prefer the project's production build and 
 # 구현 노드(deliver·fix)가 전체 회귀를 직접 돌리지 않게 한다(#513). 전체 회귀는 리뷰 뒤 final_checks로 드라이버가 한 번 돈다.
 FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking."
 # checks가 테스트 실행기의 병렬 옵션에 드라이버가 넘기는 동시 실행 수를 쓰게 한다(#513).
-TEST_JOBS_RULE="When the project's test runner takes a parallelism option (for example -j, -n, --workers, --parallel), pass it the \$HM_TEST_JOBS the driver exports to every check (for example \"\${HM_TEST_JOBS:-2}\" with a fallback for runs outside the driver)."
+TEST_JOBS_RULE="The driver decides the test runner's concurrency and exports it as \$HM_TEST_JOBS to every check. When the runner reads HM_TEST_JOBS itself (as a tests/run.sh does when -j is absent), leave its parallelism option out of checks and final_checks; otherwise pass it \"\${HM_TEST_JOBS:-2}\" (for example -n, --workers, --parallel), never a literal number."
 # base 대비 '건드리지 않았다' 검사를 merge-base 기준으로 쓰게 한다(#543). base tip 비교는 런 도중 base에 들어온 커밋을 브랜치 변경으로 센다.
 MERGE_BASE_RULE="A check that the branch did not change certain files (version files, generated files) compares against the merge base: git diff --quiet origin/<base>...HEAD -- <files> (three dots), never the base tip, so commits that land on the base during the run do not count as branch changes."
 
