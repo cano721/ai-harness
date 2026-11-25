@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- 보드: `BOARD_PORT`를 정하지 않았을 때 기본 포트 8765를 다른 프로세스가 쓰고 있으면 보드가 뜨지 않던 문제를 고쳤습니다. 이제 8765부터 8774까지 빈 포트를 찾아 띄우고 실제 주소를 `server.json`에 남깁니다. `BOARD_PORT`를 정했으면 지금처럼 그 포트만 씁니다.
+
 ## v0.94.0 (2026-11-25)
 ### 새 기능
 

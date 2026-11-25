@@ -17,7 +17,7 @@ $ROOT/scripts/board/board.sh open
 
 - 이미 떠 있으면(`~/.ai-harness/board/server.json`의 pid가 살아 있는 보드 서버) 그 주소를 다시 연다(`reused: true`). 없으면 백그라운드로 띄우고 브라우저를 연다.
 - 출력 한 줄 JSON의 `url`(토큰 포함)을 사용자에게 그대로 보여 준다. 브라우저가 열리지 않는 환경이면 그 주소를 직접 열라고 안내한다. 이 주소의 토큰은 보드를 조작할 수 있는 열쇠이므로 PR·이슈·공유 문서에는 적지 않는다.
-- 실패하면(종료 코드 1) stderr 이유를 그대로 전한다. 포트가 다른 프로세스에 잡혀 있으면 띄우지 않고 멈춘다 — 다른 포트로 띄울지 사용자에게 묻고, 원하면 `BOARD_PORT=<포트> $ROOT/scripts/board/board.sh open`. 이전 버전 서버가 주소 없이 떠 있다는 메시지면 `stop` 뒤 다시 열지 묻는다.
+- 실패하면(종료 코드 1) stderr 이유를 그대로 전한다. `BOARD_PORT`를 정하지 않으면 8765가 막혀 있어도 다음 빈 포트(최대 8774)로 띄운다 — 실제 주소는 출력 JSON의 `url`을 쓴다. 10개가 모두 막혔거나 정한 `BOARD_PORT`가 막혔을 때만 멈춘다 — 그때 다른 포트로 띄울지 사용자에게 묻고, 원하면 `BOARD_PORT=<포트> $ROOT/scripts/board/board.sh open`. 이전 버전 서버가 주소 없이 떠 있다는 메시지면 `stop` 뒤 다시 열지 묻는다.
 - 브라우저를 열지 않고 주소만 원하면 `--no-browser`.
 
 ## 끄기 (`stop`) · 상태 (`status`)
