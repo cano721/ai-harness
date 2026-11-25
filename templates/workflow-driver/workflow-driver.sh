@@ -21,6 +21,11 @@
 #     저장소별 HM_APPROVAL_REPOS > HM_APPROVAL > 기본 human 순으로 결정한다. 기존 manifest approval은 무시하고 한 번 안내한다.
 #     auto면 Brief가 열린 질문 대신 decisions(추천안과 근거)를 내고, 사람만 정할 수 있는 것
 #     (needs_human)이 비어 있을 때 그래프의 auto_approved_by_policy 엣지로 통과한다. decisions는 brief.md와 PR 본문에 남는다.
+#     feature·bug-fix Brief는 요청·이슈의 완료 조건을 항목마다 대응표(acceptance_map)로 낸다. auto는 대응표가 비었거나 대응도 범위 밖 사유도 없는
+#     조건이 있으면 승인하지 않고 Brief를 다시 쓰게 하며(limits.max_brief_rewrites, 기본 2), 넘으면 brief_coverage_incomplete 엣지로 사람에게 넘긴다.
+#     review는 원 요청의 완료 조건과도 대조해 빠진 조건을 blocking으로 낸다.
+#   - revise: 승인 대기(approval)와 그래프에 <노드> → brief brief_revised 엣지가 있는 노드(feature의 deliver)에서 받는다.
+#     러너가 그 노드를 실행 중이면 상태를 건드리지 않고 $RUN/revise-request.json만 남기고, 러너가 세션이 끝난 뒤 Brief로 돌아간다.
 #     review 그래프에는 승인 노드가 없다. blocking finding을 고치는 repair는 같은 승인(또는 HM_APPROVAL=auto)을 받은 뒤에만 시작한다.
 #   - 검증: Brief(review는 수리 범위)에 담겨 함께 승인된 검증 명령을 이 스크립트가 직접 실행해 종료 코드로 판정한다.
 #   - git: harness.json의 git_policy가 pr-only·direct면 쓰기 노드 뒤 로컬 체크포인트 커밋을 남기고, publish 노드가
@@ -59,7 +64,8 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
           [--monitor-error <file>]                      고치는 모니터링 에러(/autofix candidates의 한 줄). 단계 deploy에서 merge_policy.verify의 monitor가 병합 뒤 재발 추적에 올린다
           [--investigation <file>]                      bug-fix만: /investigate의 조사 보고. 그래프에 triage → brief 전이가 있으면 triage·reproduce를 건너뛴다
           [--version <x.y.z>]                           release만: 릴리스할 버전. 없으면 plan 노드가 제안한다. release는 --request를 생략할 수 있다
-  revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다
+  revise  --feedback "<바꿀 점>"                         승인 대기 중인 Brief를 피드백으로 다시 만든다. 그래프에 deliver → brief(brief_revised)가 있으면
+                                                        deliver에서도 받는다 — 실행 중이면 러너를 멈추지 않고 그 세션이 끝난 뒤 Brief로 돌아간다(0)
           --select "<ID,ID...>"                         polish만: 고칠 목록에서 고칠 항목을 바꾼다(모델을 부르지 않는다). 다시 승인을 기다린다
   resume  [--accept-changes]                            승인을 확인하고 멈춘 노드부터 이어 간다
   approve [--accept-changes]                            터미널에서 사람이 Brief(review는 수리 범위)를 보고 승인한 뒤 이어 간다
@@ -252,6 +258,7 @@ GRAPH="$REPO/.ai-harness/workflows/$GRAPH_NAME"
 jq -e '.entry and .nodes and .transitions and .terminals' "$GRAPH" >/dev/null 2>&1 || { printf 'invalid graph: %s\n' "$GRAPH" >&2; exit 2; }
 MAX_REPAIR="$(jq -r '.limits.max_repair_attempts // 10' "$GRAPH")"
 MAX_IDENTICAL_FAILURES="$(jq -r '.limits.max_identical_repair_failures // 2' "$GRAPH")"
+MAX_BRIEF_REWRITES="$(jq -r '.limits.max_brief_rewrites // 2' "$GRAPH")"
 
 finish() { # status exit_code message
   local message="$3"
@@ -297,6 +304,37 @@ has_edge() { # from outcome
 
 edge_when() { # from to → 그 전이의 when. 결과 이름은 그래프마다 다르므로(ui_issues, ui_issues_and_repair_authorized 등) 목적지로 찾는다.
   jq -r --arg f "$1" --arg t "$2" 'first(.transitions[] | select(.from == $f and .to == $t) | .when // "") // empty' "$GRAPH"
+}
+
+# Brief 완료 조건 대응표의 빈틈(없으면 빈 값). 빈 표는 조건을 뽑지 않은 것이다 — 어떤 요청이든 요청 자체가 완료 조건이다.
+coverage_gap() { # brief-json
+  jq -r 'if (.acceptance_map // [] | length) == 0 then "acceptance_map is empty"
+    else [.acceptance_map[] | select(((.covered_by // "") | test("\\S") | not) and ((.out_of_scope_reason // "") | test("\\S") | not)) | .criterion]
+      | if length == 0 then "" else "completion conditions with neither covered_by nor out_of_scope_reason: " + join("; ") end end' "$1"
+}
+
+# revise를 받는 노드: 승인 대기와, 그래프가 brief로 돌아가는 brief_revised 엣지를 둔 노드.
+revise_nodes() { jq -r '["approval"] + [.transitions[] | select(.when == "brief_revised") | .from] | unique | join(", ")' "$GRAPH"; }
+
+# 이 실행을 돌리는 러너 프로세스가 살아 있는가. pid가 재사용됐을 수 있어 명령 줄까지 본다.
+runner_alive() {
+  local pid
+  pid="$(state '.driver_pid // ""')"
+  [[ -n "$pid" && "$pid" != "$$" ]] && kill -0 "$pid" 2>/dev/null && [[ "$(ps -o command= -p "$pid" 2>/dev/null)" == *workflow-driver* ]]
+}
+
+# 실행 중에 다른 세션이 남긴 revise 요청을 받는다. 받았으면 0.
+take_revise_request() {
+  local req="$RUN/revise-request.json"
+  [[ -f "$req" ]] || return 1
+  if ! jq -e '(.feedback | type) == "string"' "$req" >/dev/null 2>&1; then
+    rm -f "$req"
+    log "ignored a malformed revise request"
+    return 1
+  fi
+  state_set '.feedback = $r[0].feedback | .brief_rewrites = 0' --slurpfile r "$req"
+  rm -f "$req"
+  log "revise requested during $(state .node); returning to the brief"
 }
 
 # 작업 트리 전체(미추적 포함, .gitignore 제외)를 트리 객체로. 리뷰한 내용과 publish가 커밋한 내용을 비교한다.
@@ -1529,12 +1567,24 @@ $(state .request)
 Project contract from the discover node:
 $(cat "$RUN/discover.out")"
   fi
+  role+="
+acceptance_map: list every completion condition of the request and of any issue it quotes or links (each scope item, each done or acceptance criterion, each required test), one entry per condition in the request's words. Do not drop or merge conditions. For each, name in covered_by the acceptance case or verification command of this brief that covers it, or, when the brief leaves it out of scope, give the reason in out_of_scope_reason; use an empty string for the other field. The driver shows this map in the brief and the review checks the change against it."
   printf '%s\n\n%s\n%s\n%s\n\n%s\n%s' "$CONTEXT" "$role" "$UI_SCENARIO_RULE" "$(if [[ "$(state '.policy.approval // "human"')" == auto ]]; then cat <<'EOF'
 approval is auto: no person reads this brief before the change is made, so do not leave open questions. Wherever reasonable options diverge, choose the recommended one, write the brief to follow it, and record it in decisions as {question, choice, rationale}.
 Put in needs_human only what a person alone can decide: a product judgment that changes the scope of the request; a hard-to-reverse choice such as deleting data, a migration, creating or dropping an index, or a deployment; a write to an external system. Leave needs_human empty otherwise. Any entry stops the run until a person approves.
+The driver does not approve a brief whose acceptance_map is empty or leaves a condition with neither covered_by nor out_of_scope_reason; it asks for the brief again.
 EOF
 else printf 'Put anything the person must decide in open_questions.\n'; fi)" "$inputs" \
-    "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)"
+    "$(if [[ "$(state '.feedback // ""')" != "" ]]; then printf '\nPrevious brief:\n%s\n\nRevise it with this feedback from the person:\n%s\n' "$(<"$RUN/brief.md")" "$(state .feedback)"; fi)$(brief_changes_so_far)"
+}
+
+# revise로 쓰기 노드에서 Brief로 돌아왔으면 그 실행이 이미 바꾼 것을 Brief에 알린다. 되돌리지 않고 그 위에서 이어 간다.
+brief_changes_so_far() {
+  local stat
+  [[ "$(state '[.history[] | select(.outcome == "brief_revised")] | length')" -gt 0 ]] || return 0
+  stat="$(git -C "$REPO" diff --stat "$(state .start_head)" "$(worktree_tree)" 2>/dev/null || true)"
+  [[ -n "$stat" ]] || return 0
+  printf '\nChanges already made in this run (git diff --stat %s, untracked files included). They stay; write the brief so delivery continues from them:\n%s\n' "$(state .start_head)" "$stat"
 }
 
 # ---- polish(기존 화면 품질 개선) ----
@@ -2068,7 +2118,7 @@ release_finish() {
 }
 
 execute() {
-  local node brief
+  local node brief gap
   while :; do
     node="$(state .node)"
     if jq -e --arg n "$node" '.terminals | index($n)' "$GRAPH" >/dev/null; then
@@ -2301,11 +2351,17 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         jq -e '(.brief | type) == "string" and (.checks | type) == "array" and ((.final_checks // []) | type) == "array"
           and ((.open_questions | type) == "array"
             or ((.needs_human | type) == "array" and (.decisions | type) == "array"
-              and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))' \
+              and all(.decisions[]; (.question | type) == "string" and (.choice | type) == "string" and (.rationale | type) == "string")))
+          and ((has("acceptance_map") | not) or ((.acceptance_map | type) == "array"
+            and all(.acceptance_map[]; (.criterion | type) == "string" and (.covered_by | type) == "string" and (.out_of_scope_reason | type) == "string")))' \
           "$brief" >/dev/null 2>&1 || finish incomplete 30 "brief output does not match the schema ($brief)"
         cp "$brief" "$RUN/brief.json"
         jq -r '.brief + if (.decisions // [] | length) > 0
           then "\n\n## 결정 사항\n\n" + (.decisions | map("- \(.question) → \(.choice) — \(.rationale)") | join("\n")) else "" end
+          + if (.acceptance_map // [] | length) > 0
+          then "\n\n## 완료 조건 대응\n\n" + (.acceptance_map | map("- \(.criterion) → "
+            + if (.covered_by | test("\\S")) then .covered_by elif (.out_of_scope_reason | test("\\S")) then "범위 밖: " + .out_of_scope_reason else "(대응 없음)" end)
+            | join("\n")) else "" end
           + if (.ui_scenarios // [] | length) > 0
           then "\n\n## 화면 검증 시나리오\n\n" + (.ui_scenarios | map("- " + .) | join("\n")) else "" end' "$brief" >"$RUN/brief.md"
         printf '\n\n---\n승인 모드: %s (출처: %s)\n' "$(state '.policy.approval // "human"')" "$(state '.policy.approval_source // "legacy"')" >>"$RUN/brief.md"
@@ -2327,6 +2383,20 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
             log "approval is auto, but the brief lists decisions only a person can make; waiting for a person"
           elif ! jq -e '(.decisions | type) == "array" and (.open_questions // [] | length) == 0' "$RUN/brief.json" >/dev/null; then
             log "approval is auto, but the brief left open questions instead of recording decisions; waiting for a person"
+          elif [[ "$WORKFLOW" == feature || "$WORKFLOW" == bug-fix ]] && gap="$(coverage_gap "$RUN/brief.json")" && [[ -n "$gap" ]]; then
+            # 완료 조건을 빠뜨린 Brief는 정책이 승인하지 않는다. 한도까지는 러너가 다시 쓰게 하고, 넘으면 사람에게 넘긴다.
+            if [[ "$(state '.brief_rewrites // 0')" -lt "$MAX_BRIEF_REWRITES" ]]; then
+              state_set '.brief_rewrites = ((.brief_rewrites // 0) + 1) | .feedback = $f' \
+                --arg f "[runner] $gap. Map every completion condition of the request and of any issue it quotes or links to an acceptance case or verification command of the brief, or give the reason it is out of scope."
+              log "approval is auto, but the brief does not map every completion condition ($gap); rewriting the brief ($(state .brief_rewrites)/$MAX_BRIEF_REWRITES)"
+              go approval brief_changed_or_not_approved
+              continue
+            elif has_edge approval brief_coverage_incomplete; then
+              go approval brief_coverage_incomplete
+              finish user_decision 20 "approval is auto, but after $MAX_BRIEF_REWRITES rewrites the brief still does not map every completion condition ($gap); nothing was changed. Start again with the completion conditions spelled out in the request, or with HM_APPROVAL=human to judge the brief yourself (see $RUN/brief.md)"
+            else
+              log "approval is auto, but the brief does not map every completion condition ($gap) after $MAX_BRIEF_REWRITES rewrites and the graph declares no brief_coverage_incomplete edge; waiting for a person"
+            fi
           elif ! has_edge approval auto_approved_by_policy; then
             log "approval is auto, but the graph declares no auto_approved_by_policy edge; waiting for a person"
           else
@@ -2358,6 +2428,11 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
         ;;
       deliver)
         local before
+        # 다른 세션의 revise 요청(revise-request.json)은 세션 전후에 받는다. 세션을 중간에 끊지 않는다.
+        if take_revise_request; then
+          go deliver brief_revised
+          continue
+        fi
         before="$(fingerprint)"
         run_node deliver deliver "$CONTEXT
 
@@ -2366,6 +2441,12 @@ Do not commit, push, create a PR, or change scope. After you finish, the driver 
 Return a concise summary of changed areas and the commands you ran.
 
 $(brief_context)"
+        if take_revise_request; then
+          # 바뀐 것은 되돌리지 않고 남긴다. 새 Brief가 승인되기 전에는 쓰기 노드로 돌아오지 않는다.
+          checkpoint deliver
+          go deliver brief_revised
+          continue
+        fi
         [[ "$(fingerprint)" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
         checkpoint deliver
         go deliver ""
@@ -2510,15 +2591,18 @@ Design-audit: baseline $(state '.baseline.audit | if .scored then "\(.total) (A 
         if [[ "$review_checks_ok" == true ]]; then
           run_node review "review-$(state .attempts)" "$CONTEXT
 
-You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief. The driver already ran the required checks and they passed.
+You are the review node. Do not edit any file. Review every change since $(state .start_head) (git diff $(state .start_head), which includes the driver's checkpoint commits, and untracked files) against the approved brief, including its completion-condition map, and against every completion condition of the original request below and of any issue it quotes or links. The driver already ran the required checks and they passed.
 $(if [[ "$WORKFLOW" == bug-fix ]]; then
-  printf 'A blocking finding is incorrect or missing behavior, missing or unconvincing reproduction or regression evidence, a regression, security or data risk, or a material scope violation. Everything else is non-blocking.'
+  printf 'A blocking finding is incorrect or missing behavior, missing or unconvincing reproduction or regression evidence, a regression, security or data risk, or a material scope violation.'
 else
-  printf 'A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation. Everything else is non-blocking.'
-fi)
+  printf 'A blocking finding is incorrect or missing behavior, a regression, security or data risk, or a material scope violation.'
+fi) A completion condition of the original request or a quoted or linked issue that the change does not meet is blocking unless the approved brief put it out of scope with a reason, even when the brief left the condition out. Everything else is non-blocking.
 Set needs_user_decision to true only when a blocking finding needs a product or scope decision from a person.
 $BULK_READ_RULE
 Return only JSON matching the schema.
+
+Original request:
+$(state .request)
 
 $(brief_context)" "$REVIEW_SCHEMA"
           review_output "$RUN/review-$(state .attempts).out"
@@ -3021,21 +3105,25 @@ fi
 
 if [[ "$(state '.policy.approval // "human"')" == auto ]]; then
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","decisions","needs_human"],
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","acceptance_map","decisions","needs_human"],
  "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+  "acceptance_map":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","covered_by","out_of_scope_reason"],
+   "properties":{"criterion":{"type":"string"},"covered_by":{"type":"string"},"out_of_scope_reason":{"type":"string"}}}},
   "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["question","choice","rationale"],
    "properties":{"question":{"type":"string"},"choice":{"type":"string"},"rationale":{"type":"string"}}}},
   "needs_human":{"type":"array","items":{"type":"string"}}}}
 EOF
 else
   cat >"$BRIEF_SCHEMA" <<'EOF'
-{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","open_questions"],
+{"type":"object","additionalProperties":false,"required":["brief","checks","final_checks","ui_scenarios","acceptance_map","open_questions"],
  "properties":{"brief":{"type":"string"},"checks":{"type":"array","items":{"type":"string"}},"final_checks":{"type":"array","items":{"type":"string"}},"ui_scenarios":{"type":"array","items":{"type":"string"}},
+  "acceptance_map":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","covered_by","out_of_scope_reason"],
+   "properties":{"criterion":{"type":"string"},"covered_by":{"type":"string"},"out_of_scope_reason":{"type":"string"}}}},
   "open_questions":{"type":"array","items":{"type":"string"}}}}
 EOF
 fi
-# release plan은 Brief와 같은 승인 형식에 버전을 더한다(화면 시나리오는 없다).
-[[ "$WORKFLOW" != release ]] || jq '.required = ((.required - ["ui_scenarios"]) + ["version"]) | del(.properties.ui_scenarios) | .properties.version = {"type": "string"}' \
+# release plan은 Brief와 같은 승인 형식에 버전을 더한다(화면 시나리오·완료 조건 대응표는 없다 — 이슈가 아니라 버전·노트를 승인한다).
+[[ "$WORKFLOW" != release ]] || jq '.required = ((.required - ["ui_scenarios", "acceptance_map"]) + ["version"]) | del(.properties.ui_scenarios, .properties.acceptance_map) | .properties.version = {"type": "string"}' \
   "$BRIEF_SCHEMA" >"$RELEASE_PLAN_SCHEMA"
 cat >"$REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["summary","blocking_findings","non_blocking_findings","needs_user_decision"],
@@ -3255,8 +3343,23 @@ case "$CMD" in
     ;;
   revise)
     [[ -n "$FEEDBACK" || -n "$SELECT" ]] || usage
-    [[ "$(state .node)" == approval ]] || { printf 'revise works only while waiting for approval of a brief (node: %s)\n' "$(state .node)" >&2; exit 2; }
+    node="$(state .node)"
+    if [[ "$node" == approval ]]; then
+      revise_edge=brief_changed_or_not_approved
+    elif [[ -z "$SELECT" ]] && has_edge "$node" brief_revised; then
+      revise_edge=brief_revised
+    else
+      printf 'revise works only while waiting for approval of a brief or at a node the graph returns to the brief from (accepts: %s; node: %s)\n' "$(revise_nodes)" "$node" >&2
+      exit 2
+    fi
     [[ -z "$SELECT" || -z "$FEEDBACK" ]] || { printf -- '--select and --feedback are separate revisions; run one, then the other\n' >&2; exit 2; }
+    # 러너가 그 노드를 실행 중이면 멈추지 않는다. 상태는 러너만 쓰므로 요청 파일만 남기고, 러너가 세션이 끝난 뒤 받는다.
+    if [[ "$revise_edge" == brief_revised && "$(state .status)" == running ]] && runner_alive; then
+      jq -n --arg f "$FEEDBACK" --arg t "$(now_utc)" '{feedback: $f, at: $t}' >"$RUN/revise-request.json.$$"
+      mv "$RUN/revise-request.json.$$" "$RUN/revise-request.json"
+      log "the runner (pid $(state .driver_pid)) is in $node; when the current $node session ends it returns to the brief with this feedback. Nothing was stopped"
+      exit 0
+    fi
     check_baseline
     if [[ -n "$SELECT" ]]; then
       # 고칠 항목 선택은 결정적이다: 목록에 있는 ID만 받고, 바뀐 목록을 다시 보여 주며 새 승인을 기다린다.
@@ -3270,8 +3373,8 @@ case "$CMD" in
       log "selection changed to $(jq -r 'join(", ")' <<<"$sel"); waiting for approval: run $RUN_ID"
       exit 10
     fi
-    state_set '.feedback = $f' --arg f "$FEEDBACK"
-    go approval brief_changed_or_not_approved
+    state_set '.feedback = $f | .brief_rewrites = 0' --arg f "$FEEDBACK"
+    go "$node" "$revise_edge"
     ;;
   approve)
     [[ "$(state .status)" == waiting_approval ]] || { printf 'nothing to approve (node: %s)\n' "$(state .node)" >&2; exit 2; }
@@ -3292,5 +3395,5 @@ esac
 # 러너가 어떻게 멈추든(완료·대기·실패·중단) 그때의 상태를 기준점으로 남긴다. 불변식 위반은 러너가 허용하지 않은 변경이라
 # 기준점으로 삼지 않는다 — 다음 resume이 에이전트를 부르기 전에 그 차이로 멈춘다.
 trap '[[ "$(state .status 2>/dev/null)" == invariant_violation ]] || save_baseline || true' EXIT
-state_set '.status = "running"'
+state_set '.status = "running" | .driver_pid = $p' --argjson p "$$"
 execute
