@@ -1968,6 +1968,7 @@ for g in raw["groups"]:
 by = {i["id"]: i.get("run") for g in raw["groups"] for i in g["items"] if not i["id"].startswith(("catalog/", "agents/", "templates/"))}
 want = {
   "skills/setup": "global", "skills/harness-update": "global", "skills/metrics": "global", "skills/board": None,
+  "skills/handsfree": "global", "skills/handsfree-ui": "global",
   "skills/harvest": "harness", "skills/harness-impact": "harness",
   "skills/diagram": "optional", "skills/design-references": "optional", "skills/landing-page": "optional", "skills/explain-for": "optional",
   "skills/harness-init": "repo", "skills/autofix": "repo", "skills/understand-change": "repo", "skills/design-system-builder": "repo",
