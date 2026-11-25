@@ -6,7 +6,7 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
-## Unreleased
+## v0.92.0 (2026-11-25)
 ### 새 기능
 
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
@@ -27,6 +27,8 @@
 
 - 러너 리뷰 점검은 `/ai-harness:harness-init --sync`로 `workflow-driver.sh`를 받으면 켜집니다. 이미 만든 프로젝트의 `code-conventions.md`·reviewer 페르소나는 사람 소유 파일이라 sync로 바뀌지 않습니다 — 데이터 조회가 있는 프로젝트는 `skills/harness-init/SKILL.md`의 "대량 조회 메모리" 절과 체크 항목을 직접 옮겨 넣으세요. (#499)
   요약: `/ai-harness:harness-init --sync`로 러너를 받으면 리뷰 점검이 켜집니다. 기존 프로젝트의 컨벤션 문서와 reviewer에는 규칙을 직접 옮겨야 합니다.
+- 자동 승인 Brief의 완료 조건 대응표 인계(`brief_coverage_incomplete`)와 deliver 중 `revise`로 Brief 복귀는 그래프 엣지가 있어야 동작합니다. 기존 프로젝트는 `/ai-harness:harness-init --sync` 전까지 사람 승인 대기로 멈추고, deliver 중 `revise`는 exit 2로 거부됩니다. (#501)
+  요약: `/ai-harness:harness-init --sync`로 워크플로 그래프를 받아야 Brief 완료 조건 점검의 인계와 구현 중 계획 되돌리기가 켜집니다.
 
 ## v0.91.0 (2026-11-24)
 ### 새 기능
