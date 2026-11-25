@@ -1,0 +1,4 @@
+interface:
+  display_name: "Handsfree"
+  short_description: "Control Claude Code sessions in Orca by voice: start, stop, set up, or check the listener."
+  default_prompt: "Use $handsfree to manage the voice listener (status, start, stop, setup, hooks, ui) as asked: $ARGUMENTS"

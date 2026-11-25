@@ -7,15 +7,22 @@
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
 ## Unreleased
-
 ### 새 기능
 
-- 보드 하네스 설정에 '스킬' 탭 — 카탈로그·디자인 스킬의 설치·토큰·연결 상태를 보고 [설치]·[설정하기]·[제거]로 setup 세션을 띄운다 (#494)
+- **보드 하네스 설정에 '스킬' 탭이 생겼습니다** — 카탈로그 스킬(jira·confluence·datadog·sentry·langfuse)과 디자인 스킬의 설치·토큰·연결 상태를 `~/.claude/skills`·`~/.agents/skills` 실제 상태 그대로 보고, [설치]·[설정하기]·[제거]·[연결 확인]으로 그 스킬 하나만 다루는 setup 세션을 띄웁니다. 세션은 작업 현황에 보이고, 끝나면 상태를 다시 읽습니다. 토큰은 대화·보드에 남기지 않고 별도 터미널의 숨김 입력으로 저장합니다. (#494)
+  요약: `/ai-harness:setup`을 대화로 돌리지 않아도 보드에서 스킬을 설치하고 토큰을 설정할 수 있습니다.
 
-- 그래프 러너에 `stop [--run <id>]` 추가: 그 런이 기록한 프로세스만 TERM→KILL로 멈추고 `stopped`(노드·시각·사유)로 남겨 `resume`으로 잇는다. `status`가 밖에서 끊긴 런을 stale로 보인다. 러너·세션을 패턴 kill로 멈추지 말 것 (#495)
+- **말로 Claude Code 세션을 부리는 음성 입력 `/handsfree`와 상태 화면 `/handsfree-ui`** — 손을 쓸 수 없을 때 "헤이 클로드, ~"로 시작한 말을 기기 안에서 받아써(whisper.cpp) 승인·거절·번호·중단·세션 이동·답변 읽어 주기·요약·긴 말 받아쓰기·"끝나면 알려 줘" 같은 조작을 하고, 나머지는 현재 Orca 세션에 프롬프트로 보냅니다. 세션이 자동 승인 모드여도 사고가 나지 않게 입력 칸이 보일 때만 글자를 보내고, 승인 창이 떠 있으면 보내지 않으며, "앞으로 묻지 않음" 선택지·위험 명령은 음성 한마디로 통과시키지 않습니다. 상태 화면은 방금 들은 말과 결과·마이크 음량·세션별 승인 대기를 보여 주고 말 끝 기다림·소리·조용한 시간·호출어·세션 별명·단축 명령을 바꿉니다. macOS·Orca 전용이고 `handsfree setup`이 녹음 도구·받아쓰기 서버·모델을 설치합니다. (#472)
+  요약: "헤이 클로드, ~"라고 말하면 손을 쓰지 않고 Orca 세션에 지시하고 승인 창에 답합니다. 상태 화면에서 무엇을 들었는지 보고 설정을 바꿉니다.
+
+- **러너 런을 `stop`으로 멈추고 `resume`으로 잇습니다** — `workflow-driver.sh stop [--run <id>] [--reason "<사유>"]`가 그 런이 기록한 러너 프로세스와 노드 자식 프로세스 그룹만 TERM→5초→KILL로 멈추고 `stopped`(노드·시각·사유)로 남깁니다. 같은 머신의 다른 런이나 러너를 부른 세션은 건드리지 않습니다. 러너가 밖에서 끊기면 `status`가 stale로 보이고, 러너만 죽고 노드 그룹이 남아 있으면 `resume`을 거부하고 `stop`이 그 그룹을 정리합니다. 터미널이 닫혀도(HUP) 노드 그룹을 정리합니다. 어댑터와 위임 지침은 러너·세션을 `pkill`·`killall` 같은 패턴 kill로 멈추지 말라고 안내합니다. (#495)
+  요약: 돌고 있는 러너 런은 `workflow-driver.sh stop --run <id>`로 멈추고 `resume`으로 이어 가세요. 패턴 kill은 다른 런까지 끕니다.
 
 - **보드에 '내 일정' 화면이 생겼습니다** — 보드에 작업 현황과 별개인 '내 일정' 화면이 생겼습니다. 구글 캘린더 일정과, 스킬이 제공하는 어댑터의 항목, 보드나 `board.sh todo`로 직접 적은 할 일을 한곳에서 봅니다. 구글 캘린더는 직접 만든 OAuth 클라이언트로 연결하며 `/ai-harness:setup`이 만드는 법을 안내합니다. 읽는 것과 저장 위치는 `docs/privacy.md`에 있습니다. (#492)
   요약: 보드의 '내 일정'에서 오늘·이번 주 일정, 답해야 할 것, 직접 적은 할 일을 한 화면에 봅니다.
+
+## v0.92.0 (2026-11-25)
+### 새 기능
 
 - **릴리스를 그래프 러너로 실행합니다** — `workflow-driver.sh start --workflow release --version <x.y.z>`가 버전을 확정하고(없으면 plan이 제안하고 러너가 태그 중복·최신 태그보다 큰지 확인), `origin/develop`에서 릴리스 브랜치를 따 PR을 열고 원격 CI를 기다립니다. 개인 배포 단계(`HM_DELIVERY_LEVEL`)가 `pr`이면 PR에서 멈추고 남은 수동 절차를 남기며, `merge`·`deploy`면 merge commit으로만 병합하고(호스트가 squash를 허용해도 쓰지 않음) CHANGELOG 노트로 태그·릴리스를 발행합니다(노트가 비면 만들지 않음). `deploy`는 배포 확인 명령을 더하고, 끝에 기록 명령과 `main` → `develop` fast-forward 명령을 남깁니다 — `develop`에는 러너가 push하지 않습니다. 실행 중 `develop`이 움직이면 push 전에는 rebase, push 뒤에는 merge로 따라잡고 검증을 다시 돕니다. `harness-init`이 태그 방식 릴리스를 감지해 manifest `release_policy`에 근거와 함께 남기고, `/release` 진입점을 설치합니다. (#493)
   요약: `/release` 또는 `workflow-driver.sh start --workflow release --version <x.y.z>`로 릴리스 PR부터 태그·노트 발행까지 러너에 맡깁니다. 어디까지 갈지는 개인 배포 단계가 정하고, `release_policy`가 없으면 `/ai-harness:harness-init --sync`로 먼저 감지합니다.
@@ -35,6 +42,8 @@
 
 - 러너 리뷰 점검은 `/ai-harness:harness-init --sync`로 `workflow-driver.sh`를 받으면 켜집니다. 이미 만든 프로젝트의 `code-conventions.md`·reviewer 페르소나는 사람 소유 파일이라 sync로 바뀌지 않습니다 — 데이터 조회가 있는 프로젝트는 `skills/harness-init/SKILL.md`의 "대량 조회 메모리" 절과 체크 항목을 직접 옮겨 넣으세요. (#499)
   요약: `/ai-harness:harness-init --sync`로 러너를 받으면 리뷰 점검이 켜집니다. 기존 프로젝트의 컨벤션 문서와 reviewer에는 규칙을 직접 옮겨야 합니다.
+- 자동 승인 Brief의 완료 조건 대응표 인계(`brief_coverage_incomplete`)와 deliver 중 `revise`로 Brief 복귀는 그래프 엣지가 있어야 동작합니다. 기존 프로젝트는 `/ai-harness:harness-init --sync` 전까지 사람 승인 대기로 멈추고, deliver 중 `revise`는 exit 2로 거부됩니다. (#501)
+  요약: `/ai-harness:harness-init --sync`로 워크플로 그래프를 받아야 Brief 완료 조건 점검의 인계와 구현 중 계획 되돌리기가 켜집니다.
 
 ## v0.91.0 (2026-11-24)
 ### 새 기능

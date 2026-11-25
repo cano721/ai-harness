@@ -1,0 +1,4 @@
+interface:
+  display_name: "Handsfree Status"
+  short_description: "Open the local status and settings page of the handsfree voice listener."
+  default_prompt: "Use $handsfree-ui to open the handsfree status page: $ARGUMENTS"
