@@ -845,7 +845,7 @@ Claude Code에서 마켓플레이스 자동 업데이트를 켜 두면(`/plugin`
 
 ```bash
 # develop에서
-scripts/release-prep.sh <version>    # Unreleased 절 확정 + plugin.json ×2 + release.json 동기화
+scripts/release-prep.sh <version>    # Unreleased 절 확정(+ 빈 Unreleased 머리) + plugin.json ×2 + release.json 동기화
 bash tests/run.sh
 git commit -am "chore: release v<version>"
 gh pr create --base main --head develop --title "chore: release v<version>"

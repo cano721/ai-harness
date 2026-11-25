@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 릴리스 준비. develop에 쌓인 `## Unreleased` 절을 버전 절로 확정하고 메타데이터 네 곳을 한 번에 맞춘다.
+# 릴리스 준비. develop에 쌓인 `## Unreleased` 절을 버전 절로 확정하고, 그 위에 빈 `## Unreleased` 머리를 남기며,
+# 메타데이터 네 곳을 한 번에 맞춘다.
 #   release-prep.sh <version> [--date YYYY-MM-DD] [--root <dir>]
 #   release-prep.sh --check [--root <dir>]   : 쓰지 않고 네 곳의 정합성만 검사
 #
@@ -62,6 +63,8 @@ if [[ "$check_only" == true ]]; then
     printf 'changelog has no section for v%s\n' "$release_v" >&2
     status=1
   }
+  grep -q '^## Unreleased' "$changelog" ||
+    printf 'warning: changelog has no "## Unreleased" heading — add one before the next PR entry\n' >&2
   [[ "$status" -eq 0 ]] && printf 'release metadata consistent at v%s\n' "$release_v"
   exit "$status"
 fi
@@ -98,9 +101,10 @@ release_date="${date_arg:-$(date +%Y-%m-%d)}"
 tmp="$(mktemp "${TMPDIR:-/tmp}/release-prep.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 
-# Unreleased 헤더를 버전 헤더로 바꾸고, 그 아래 안내 주석은 릴리스 노트에 남기지 않는다.
+# Unreleased 헤더를 버전 헤더로 확정하고 그 위에 빈 Unreleased 머리를 남긴다(다음 PR들이 맨 위에서 충돌하지 않게).
+# 확정된 절 아래 안내 주석은 릴리스 노트에 남기지 않는다.
 awk -v header="## v$version ($release_date)" '
-  /^## Unreleased/ { print header; promoted = 1; next }
+  /^## Unreleased/ { print "## Unreleased"; print ""; print header; promoted = 1; next }
   promoted && /<!--/ { inc = 1 }
   inc { if (/-->/) { inc = 0; promoted = 0 }; next }
   promoted && /^[[:space:]]*$/ { next }

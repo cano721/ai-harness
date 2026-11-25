@@ -6,6 +6,12 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+
+### 버그 수정
+
+- `scripts/release-prep.sh <version>`이 릴리스 절을 확정한 뒤 그 위에 빈 `## Unreleased` 머리를 남깁니다. `--check`는 머리가 없으면 경고합니다. (#527)
+
 ## v0.94.0 (2026-11-25)
 ### 새 기능
 
