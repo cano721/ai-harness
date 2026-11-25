@@ -10,6 +10,7 @@
 ### 버그 수정
 
 - 러너 deliver·repair 노드가 넓은 회귀는 러너 checks에 맡기고 바꾼 영역 테스트만 포그라운드로 돌리게 하고, `workflow-driver.sh status`가 정규화된 `git_policy`(`pr-only`)와 개인 단계(`delivery`)를 따로 보이게 한다 (#534)
+- 보드 작업 현황이 결정·승인 대기(`user_decision`·`waiting_approval`)와 불변식 위반을 '사람 필요'로 보여 줍니다. 멈춘 런(`stopped`)은 resume 명령과 함께 '대기·막힘'으로, `abandoned`는 끝남으로 보여 줍니다. 알 수 없는 상태는 더 이상 '진행 중'으로 보이지 않습니다. 7일(`BOARD_DECISION_STALE_DAYS`)을 넘긴 결정 대기는 '대기·막힘'으로 내립니다. (#564)
 
 ### 버그 수정
 
