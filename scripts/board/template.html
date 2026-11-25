@@ -2810,7 +2810,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       tabs(box, STABS, stab, (k) => { if (stab === k) return; stab = k; store('hb-stab', k); renderAll(); });
     } else if (view === 'refs' && rrun && rdetail && rdetail.run_id === rrun && !rdetail.missing) {
       box.hidden = false; box.setAttribute('aria-label', '레퍼런스 종류');
-      tabs(box, REF_TABS, rtab, (k) => { if (rtab === k) return; rtab = k; renderAll(); }, (k) => rdetail.refs.filter((r) => r.kind === k).length, null);
+      tabs(box, refTabs(rdetail), rtab, (k) => { if (rtab === k) return; rtab = k; renderAll(); }, (k) => rdetail.refs.filter((r) => r.kind === k).length, null);
     } else { box.hidden = true; $('panel').removeAttribute('role'); $('panel').removeAttribute('aria-labelledby'); }
     $('panel').classList.toggle('ds-tabpanel', !box.hidden);
   }
@@ -4096,6 +4096,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   // design-refs.sh board가 남긴 실행 기록을 목록으로, 하나를 열면 탭 5개로 다시 그린다. 고르기는 랜딩 실행이
   // reference_pick에서 기다릴 때만 보이고(그 밖에는 보기 전용), 쓰기는 서버가 landing-pick.mjs로 한다.
   const REF_TABS = [['tone', '톤앤매너'], ['component', '구성요소'], ['layout', '레이아웃'], ['interaction', '인터랙션'], ['competitor', '경쟁사 분석']];
+  const REF_ANALYSIS = [['leads_with', '첫 화면에서 내세우는 것'], ['claim', '주장'], ['cta', '주 버튼'], ['gap', '우리와 다른 점']];
+  // 실행의 매체(medium.json)가 정한 라벨(서버의 labels). 없는 실행·이전 서버는 웹페이지 라벨 그대로.
+  const refTabs = (d) => (d && d.labels && d.labels.tabs ? REF_TABS.map(([k, l]) => [k, d.labels.tabs[k] || l]) : REF_TABS);
+  const refAnalysis = (d) => (d && d.labels && d.labels.analysis ? REF_ANALYSIS.map(([k, l]) => [k, d.labels.analysis[k] || l]) : REF_ANALYSIS);
   const REF_HINT = {
     tone: '분위기 낱말·피할 느낌·색·서체·말투, 그리고 그 톤을 맡는 레퍼런스입니다.',
     component: '섹션마다 대표 구성요소 하나를 고릅니다. 고르지 않은 것은 참고로 남습니다.',
@@ -4135,7 +4139,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const refMedia = (run, m) => (m && m.remote ? m.remote : m && m.path ? `/references/file?t=${encodeURIComponent(TOKEN)}&run=${encodeURIComponent(run)}&p=${encodeURIComponent(m.path)}` : '');
   // 고르기 대기는 랜딩 실행이 reference_pick에서 기다릴 때만. 보기 전용(랜딩 실행 없음)·다른 단계는 중립 '준비됨'.
   const refStatus = (r) => (r.missing ? ['info', '폴더 없음'] : r.status === 'picked' ? ['success', '고름'] : r.can_pick ? ['attention', '고르기 대기'] : ['info', '준비됨']);
-  const refCounts = (c) => REF_TABS.map(([k, label]) => `${label} ${(c || {})[k] || 0}`).join(' · ');
+  const refCounts = (r) => refTabs(r).map(([k, label]) => `${label} ${(r.counts || {})[k] || 0}`).join(' · ');
   const hexColor = (v) => (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(String(v || '')) ? v : 'transparent');
 
   function renderRefsList() {
@@ -4157,7 +4161,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         c.classList.add('ds-card--interactive');
         const o = el('button', 'ds-card__open', r.topic); o.type = 'button'; o.dataset.refrun = r.run_id; o.title = r.topic; o.onclick = () => openRefs(r.run_id); h.append(o);
       }
-      c.append(meta, h, el('p', 'ds-caption b-line ds-num', refCounts(r.counts)));
+      c.append(meta, h, el('p', 'ds-caption b-line ds-num', refCounts(r)));
       if (r.missing) c.append(el('p', 'ds-caption b-line', `작업 폴더가 없어 열 수 없습니다: ${r.work}`));
       else if (r.can_pick) c.append(el('p', 'ds-card__body', '랜딩 실행이 고르기를 기다립니다. 열어서 대표를 고르고 시작하세요.'));
       cols.append(c);
@@ -4228,7 +4232,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const a = r.analysis;
     if (a) {
       const dl = el('dl', 'ds-kv b-kv');
-      for (const [k, label] of [['leads_with', '첫 화면에서 내세우는 것'], ['claim', '주장'], ['cta', '주 버튼'], ['gap', '우리와 다른 점']]) if (a[k]) dl.append(el('dt', null, label), el('dd', null, a[k]));
+      for (const [k, label] of refAnalysis(d)) if (a[k]) dl.append(el('dt', null, label), el('dd', null, a[k]));
       c.append(dl);
     }
     for (const [k, label] of [['tone_part', '톤에서 맡는 것'], ['take', '가져올 것'], ['keep_strength', '지킬 강도'], ['must_not_shrink_to', '이렇게 줄이지 않기']]) {

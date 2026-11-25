@@ -9,6 +9,9 @@
 ## Unreleased
 ### 새 기능
 
+- **design-references가 모바일 페이지·인쇄물·그래픽 레퍼런스도 모읍니다** — design-references가 모바일 페이지·인쇄물·그래픽 레퍼런스도 모은다(매체별 최소치·캡처 폭·탭 라벨, 이미지 레퍼런스, 모음 사이트 작품 단위). `design-refs.sh capture|check|board --medium mobile-page|print|graphic`으로 정하면 작업 폴더의 `medium.json`에 남고, 정하지 않으면 지금처럼 웹페이지입니다. 인쇄물·그래픽은 인터랙션·비교작이 선택이고, 모바일 페이지는 폰 폭(390)으로 캡처하며, 보드 탭·분석 라벨이 매체에 맞게 바뀝니다. 레퍼런스에 이미지 원본 주소(`image`)를 바로 둘 수 있고, Pinterest·Behance·Dribbble·Notefolio 작품은 작품마다 다른 사이트로 셉니다. (#518)
+  요약: 청첩장·포스터처럼 웹페이지가 아닌 레퍼런스는 `--medium mobile-page|print|graphic`으로 모으세요. 랜딩 페이지 실행은 그대로 웹페이지입니다.
+
 - **보드 하네스 설정에 '스킬' 탭이 생겼습니다** — 카탈로그 스킬(jira·confluence·datadog·sentry·langfuse)과 디자인 스킬의 설치·토큰·연결 상태를 `~/.claude/skills`·`~/.agents/skills` 실제 상태 그대로 보고, [설치]·[설정하기]·[제거]·[연결 확인]으로 그 스킬 하나만 다루는 setup 세션을 띄웁니다. 세션은 작업 현황에 보이고, 끝나면 상태를 다시 읽습니다. 토큰은 대화·보드에 남기지 않고 별도 터미널의 숨김 입력으로 저장합니다. (#494)
   요약: `/ai-harness:setup`을 대화로 돌리지 않아도 보드에서 스킬을 설치하고 토큰을 설정할 수 있습니다.
 

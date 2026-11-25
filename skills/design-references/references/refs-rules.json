@@ -22,5 +22,85 @@
     "interaction_video": 0,
     "competitor_max": 4,
     "competitor_domains": 2
+  },
+  "media": {
+    "mobile-page": {
+      "interactive": {
+        "per_kind": {
+          "tone": 3,
+          "component": 3,
+          "layout": 3,
+          "interaction": 2,
+          "competitor": 2
+        },
+        "interaction_video": 1,
+        "competitor_max": 4,
+        "competitor_domains": 2
+      },
+      "unattended": {
+        "per_kind": {
+          "tone": 1,
+          "component": 1,
+          "layout": 1,
+          "interaction": 1,
+          "competitor": 2
+        },
+        "interaction_video": 0,
+        "competitor_max": 4,
+        "competitor_domains": 2
+      }
+    },
+    "print": {
+      "interactive": {
+        "per_kind": {
+          "tone": 3,
+          "component": 3,
+          "layout": 3,
+          "interaction": 0,
+          "competitor": 0
+        },
+        "interaction_video": 0,
+        "competitor_max": 4,
+        "competitor_domains": 0
+      },
+      "unattended": {
+        "per_kind": {
+          "tone": 1,
+          "component": 1,
+          "layout": 1,
+          "interaction": 0,
+          "competitor": 0
+        },
+        "interaction_video": 0,
+        "competitor_max": 4,
+        "competitor_domains": 0
+      }
+    },
+    "graphic": {
+      "interactive": {
+        "per_kind": {
+          "tone": 3,
+          "component": 3,
+          "layout": 3,
+          "interaction": 0,
+          "competitor": 0
+        },
+        "interaction_video": 0,
+        "competitor_max": 4,
+        "competitor_domains": 0
+      },
+      "unattended": {
+        "per_kind": {
+          "tone": 1,
+          "component": 1,
+          "layout": 1,
+          "interaction": 0,
+          "competitor": 0
+        },
+        "interaction_video": 0,
+        "competitor_max": 4,
+        "competitor_domains": 0
+      }
+    }
   }
 }
