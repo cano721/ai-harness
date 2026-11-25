@@ -877,4 +877,91 @@ assert_contains "$lint_job" "bash -n" "the lint job checks bash syntax"
 assert_contains "$lint_job" "shellcheck -x" "the lint job runs shellcheck"
 pass "CI shards the regression tests with a separate lint job"
 
+# CHANGELOG·changelog.d·harness.json 해시 스탬프·생성물 사본은 메타 파일이다. --changed가 이 파일들 때문에
+# 영역을 넓히지 않아야 평소 검사가 바뀐 코드에 맞게 좁게 돈다. 사본은 원본의 영역으로 옮긴다. (#559)
+META_FIXTURE="$TEST_TMP/changed-meta"
+mkdir -p "$META_FIXTURE/tests" "$META_FIXTURE/templates/x" "$META_FIXTURE/.claude/commands" "$META_FIXTURE/.ai-harness"
+cp "$ROOT/tests/run.sh" "$META_FIXTURE/tests/run.sh"
+printf '#!/usr/bin/env bash\n# checks templates/x/SKILL.md and .ai-harness/harness.json\nprintf "ok 1 - alpha\\n"\n' >"$META_FIXTURE/tests/alpha.sh"
+printf '#!/usr/bin/env bash\n# checks .claude/commands/x.md\nprintf "ok 1 - beta\\n"\n' >"$META_FIXTURE/tests/beta.sh"
+jq -n '{artifacts:[{path:".claude/commands/x.md", source:"templates/x/SKILL.md", mode:"copy"}]}' >"$META_FIXTURE/templates/managed-files.json"
+printf 'skill\n' >"$META_FIXTURE/templates/x/SKILL.md"
+printf 'skill\n' >"$META_FIXTURE/.claude/commands/x.md"
+jq -n '{harness_version:"1.0.0", test_policy:"tdd", managed_files:{x:{content_sha256:"aaa", template_version:"1.0.0"}}}' >"$META_FIXTURE/.ai-harness/harness.json"
+printf '# Changelog\n' >"$META_FIXTURE/CHANGELOG.md"
+git -C "$META_FIXTURE" init -q
+git -C "$META_FIXTURE" config user.email test@example.com
+git -C "$META_FIXTURE" config user.name test
+git -C "$META_FIXTURE" add -A
+git -C "$META_FIXTURE" commit -q -m baseline
+meta_explain() { HM_TEST_BASE=HEAD bash "$META_FIXTURE/tests/run.sh" --changed --explain 2>"$TEST_TMP/meta.err"; }
+# changelog.d/ 아래 새 조각은 영역을 고르지 않고, explain 없이 돌리면 기존처럼 돌릴 영역이 없다.
+mkdir -p "$META_FIXTURE/changelog.d"
+printf -- '- note\n' >"$META_FIXTURE/changelog.d/559.md"
+meta_out="$(meta_explain)"
+assert_contains "$meta_out" "changelog.d/559.md -> 제외 (메타: changelog)" "a changelog.d fragment is reported as meta"
+assert_eq "# 선택: (없음)" "$(tail -n 1 <<<"$meta_out")" "a changelog.d fragment selects no area"
+meta_rc=0
+meta_out="$(HM_TEST_BASE=HEAD bash "$META_FIXTURE/tests/run.sh" --changed 2>&1)" || meta_rc=$?
+assert_eq "0" "$meta_rc" "meta-only changes still exit 0"
+assert_contains "$meta_out" "run.sh: 돌릴 영역이 없음" "meta-only changes leave nothing to run"
+[[ "$meta_out" != *"영역이 없음 —"* ]] || fail "meta-only changes must not warn about unmapped files: $meta_out"
+rm -rf "$META_FIXTURE/changelog.d"
+# harness.json은 해시·template_version·harness_version만 바뀌면 메타다. 다른 키나 새 항목은 지금처럼 경로로 고른다.
+jq '.harness_version = "1.1.0" | .managed_files.x.content_sha256 = "bbb" | .managed_files.x.template_version = "1.1.0"' \
+  "$META_FIXTURE/.ai-harness/harness.json" >"$TEST_TMP/harness.json" && mv "$TEST_TMP/harness.json" "$META_FIXTURE/.ai-harness/harness.json"
+meta_out="$(meta_explain)"
+assert_contains "$meta_out" ".ai-harness/harness.json -> 제외 (메타: harness.json 해시만)" "a hash-only harness.json change is meta"
+assert_eq "# 선택: (없음)" "$(tail -n 1 <<<"$meta_out")" "a hash-only harness.json change selects no area"
+jq '.test_policy = "none"' "$META_FIXTURE/.ai-harness/harness.json" >"$TEST_TMP/harness.json" && mv "$TEST_TMP/harness.json" "$META_FIXTURE/.ai-harness/harness.json"
+assert_eq "# 선택: alpha" "$(meta_explain | tail -n 1)" "another harness.json key change selects by path"
+git -C "$META_FIXTURE" checkout -q -- .ai-harness
+jq '.managed_files.y = {content_sha256:"ccc", template_version:"1.0.0"}' "$META_FIXTURE/.ai-harness/harness.json" >"$TEST_TMP/harness.json" && mv "$TEST_TMP/harness.json" "$META_FIXTURE/.ai-harness/harness.json"
+assert_eq "# 선택: alpha" "$(meta_explain | tail -n 1)" "a new managed_files entry selects by path"
+git -C "$META_FIXTURE" checkout -q -- .ai-harness
+# 생성물 사본만 바뀌면 사본을 언급하는 영역(beta)이 아니라 원본을 검사하는 영역(alpha)을 고른다.
+printf 'drift\n' >>"$META_FIXTURE/.claude/commands/x.md"
+meta_out="$(meta_explain)"
+assert_contains "$meta_out" ".claude/commands/x.md -> alpha (생성물 사본, 원본 templates/x/SKILL.md)" "a generated copy is mapped to its source"
+assert_eq "# 선택: alpha" "$(tail -n 1 <<<"$meta_out")" "a generated copy selects only the source's areas"
+git -C "$META_FIXTURE" checkout -q -- .claude
+# --explain은 실행하지 않는 선택 확인이고, --changed 없이 쓰면 사용법 오류다.
+printf 'changed\n' >>"$META_FIXTURE/templates/x/SKILL.md"
+meta_out="$(meta_explain)"
+assert_contains "$meta_out" "templates/x/SKILL.md -> alpha" "explain shows the areas a path selects"
+[[ "$meta_out" != *"# all passed"* && "$meta_out" != *"ok 1 - alpha"* ]] || fail "--changed --explain must not run areas: $meta_out"
+assert_eq "# 선택: alpha beta" "$(HM_TEST_BASE=HEAD bash "$META_FIXTURE/tests/run.sh" --changed --explain -j 2 beta 2>/dev/null | tail -n 1)" "explain merges named areas into the final selection in area order and ignores -j"
+git -C "$META_FIXTURE" checkout -q -- templates
+meta_rc=0
+HM_TEST_BASE=HEAD bash "$META_FIXTURE/tests/run.sh" --explain >"$TEST_TMP/meta.out" 2>"$TEST_TMP/meta.err" || meta_rc=$?
+assert_eq "2" "$meta_rc" "--explain without --changed is a usage error"
+assert_contains "$(<"$TEST_TMP/meta.err")" "run.sh: --explain은 --changed와 함께 씁니다" "--explain without --changed explains itself"
+pass "--changed skips meta files and --explain shows why each file selects areas"
+
+# 실제 영역 파일 기준 회귀: 디자인 Skill 문서와 CHANGELOG만 바꾼 변경은 design·init만 고른다. (#559)
+# core.sh 자신이 그 경로를 통째로 언급하면 core도 걸리므로 경로를 나눠 적는다.
+REAL_FIXTURE="$TEST_TMP/changed-meta-real"
+dsb_dir="skills/design-system-builder"
+mkdir -p "$REAL_FIXTURE/tests" "$REAL_FIXTURE/$dsb_dir"
+cp "$ROOT"/tests/*.sh "$REAL_FIXTURE/tests/"
+printf 'skill\n' >"$REAL_FIXTURE/$dsb_dir/SKILL.md"
+printf '# Changelog\n' >"$REAL_FIXTURE/CHANGELOG.md"
+git -C "$REAL_FIXTURE" init -q
+git -C "$REAL_FIXTURE" config user.email test@example.com
+git -C "$REAL_FIXTURE" config user.name test
+git -C "$REAL_FIXTURE" add -A
+git -C "$REAL_FIXTURE" commit -q -m baseline
+printf 'more\n' >>"$REAL_FIXTURE/$dsb_dir/SKILL.md"
+printf -- '- entry\n' >>"$REAL_FIXTURE/CHANGELOG.md"
+real_rc=0
+real_out="$(HM_TEST_BASE=HEAD bash "$REAL_FIXTURE/tests/run.sh" --changed --explain 2>"$TEST_TMP/real.err")" || real_rc=$?
+assert_eq "0" "$real_rc" "--changed --explain exits 0"
+assert_contains "$real_out" "CHANGELOG.md -> 제외 (메타: changelog)" "CHANGELOG.md is reported as meta"
+real_line="$(grep "^$dsb_dir/SKILL.md -> " <<<"$real_out" || true)"
+assert_contains "$real_line" "design" "the design Skill selects design"
+assert_contains "$real_line" "init" "the design Skill selects init"
+assert_eq "# 선택: design init" "$(tail -n 1 <<<"$real_out")" "a design Skill + CHANGELOG change selects only design and init"
+[[ "$(<"$TEST_TMP/real.err")" != *"영역이 없음"* ]] || fail "meta files must not warn about unmapped files: $(<"$TEST_TMP/real.err")"
+pass "a design Skill + CHANGELOG change stays within design and init"
+
 finish_tests

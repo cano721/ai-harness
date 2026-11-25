@@ -4,6 +4,7 @@
 #   bash tests/run.sh                  전체 (CI·PR 직전)
 #   bash tests/run.sh board init       고른 영역만
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
+#   bash tests/run.sh --changed --explain  실행하지 않고 파일별 선택 근거와 최종 선택만 낸다
 #   bash tests/run.sh --fast           느린 영역(tests/slow-areas.txt)을 뺀다. 다른 선택과 같이 쓸 수 있다
 #   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 max(1, min(CPU/2, 4))). 직렬은 -j 1
 #   bash tests/run.sh --profile        끝에 블록(직전 ok부터 그 ok까지)별 시간을 느린 순서로 30개 낸다
@@ -24,7 +25,7 @@ slow_area_lines() { # file
 SLOW_AREAS="$(slow_area_lines "$SLOW_AREAS_FILE" | tr '\n' ' ')"
 
 usage() {
-  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 all_areas() {
@@ -86,6 +87,52 @@ slow_list_areas() {
   done <<<"$names"
 }
 
+# harness-init 재생성 스탬프(최상위 harness_version, managed_files.*의 content_sha256·template_version)만
+# 바뀌었으면 참. 다른 키·항목 추가/삭제·기준에 없음·삭제됨·jq 실패는 거짓(경로로 고른다).
+harness_stamp_only() {
+  local f=".ai-harness/harness.json" old new
+  local filter='del(.harness_version) | .managed_files = ((.managed_files // {}) | map_values(del(.content_sha256, .template_version)))'
+  [[ -f "$ROOT/$f" ]] || return 1
+  old="$(git -C "$ROOT" show "$MERGE_BASE:$f" 2>/dev/null | jq -S "$filter" 2>/dev/null)" || return 1
+  new="$(jq -S "$filter" "$ROOT/$f" 2>/dev/null)" || return 1
+  [[ -n "$old" && "$old" == "$new" ]]
+}
+
+# 생성물 사본(templates/managed-files.json의 artifacts[].path와 같은 경로)이면 그 원본 경로를 낸다.
+copy_source() { # file
+  local manifest="$ROOT/templates/managed-files.json"
+  [[ -f "$manifest" ]] || return 0
+  jq -r --arg p "$1" 'first((.artifacts // [])[] | select(.path == $p) | .source // empty) // empty' "$manifest" 2>/dev/null || true
+}
+
+# 바뀐 파일 하나의 영역. 메타 파일은 고르지 않고, 생성물 사본은 원본의 영역을 고른다.
+# --explain이면 근거 한 줄을 fd 3(원래 stdout)에 낸다.
+changed_file_areas() { # file
+  local file="$1" src="" note="" meta="" areas
+  case "$file" in
+    CHANGELOG.md | changelog.d/*) meta="changelog" ;;
+    .ai-harness/harness.json) harness_stamp_only && meta="harness.json 해시만" ;;
+  esac
+  if [[ -n "$meta" ]]; then
+    [[ "$explain" == 0 ]] || printf '%s -> 제외 (메타: %s)\n' "$file" "$meta" >&3
+    return 0
+  fi
+  src="$(copy_source "$file")"
+  if [[ -n "$src" ]]; then
+    areas="$(areas_for_file "$src" | awk '!seen[$0]++')"
+    note=" (생성물 사본, 원본 $src)"
+  else
+    areas="$(areas_for_file "$file" | awk '!seen[$0]++')"
+  fi
+  [[ -z "$areas" ]] || printf '%s\n' "$areas"
+  [[ "$explain" == 0 ]] && return 0
+  if [[ -n "$areas" ]]; then
+    printf '%s -> %s%s\n' "$file" "$(tr '\n' ' ' <<<"$areas" | sed 's/ $//')" "$note" >&3
+  else
+    printf '%s -> 영역 없음 — PR 전 전체 실행으로 확인\n' "$file" >&3
+  fi
+}
+
 changed_areas() {
   local merge_base files file
   merge_base="$(merge_base_or_fail)" || {
@@ -97,7 +144,7 @@ changed_areas() {
   files="$(changed_files "$merge_base")"
   [[ -n "$files" ]] || return 0
   while IFS= read -r file; do
-    [[ -n "$file" ]] && areas_for_file "$file"
+    [[ -n "$file" ]] && changed_file_areas "$file"
   done <<<"$files"
 }
 
@@ -155,6 +202,7 @@ fast=0
 changed=0
 profile=0
 shard=""
+explain=0
 jobs=1
 parallel=0
 expect_jobs=0
@@ -182,6 +230,7 @@ for arg in "$@"; do
     --changed) changed=1 ;;
     --profile) profile=1 ;;
     --shard) expect_shard=1 ;;
+    --explain) explain=1 ;;
     -j) expect_jobs=1 ;;
     -*) printf 'run.sh: 모르는 옵션 %s\n' "$arg" >&2; usage >&2; exit 2 ;;
     *)
@@ -213,6 +262,10 @@ elif [[ "$parallel" == 0 ]]; then
   jobs="$(default_jobs)"
   [[ "$jobs" == 1 ]] || parallel=1
 fi
+if [[ "$explain" == 1 ]]; then
+  [[ "$changed" == 1 ]] || { printf 'run.sh: --explain은 --changed와 함께 씁니다\n' >&2; exit 2; }
+  exec 3>&1
+fi
 [[ "$changed" == 0 ]] || selected="$selected $(changed_areas | tr '\n' ' ')"
 [[ -n "${selected// /}" || "$changed" == 1 ]] || selected="$(all_areas | tr '\n' ' ')"
 
@@ -225,6 +278,12 @@ for a in $(all_areas); do
   fi
   areas="$areas $a"
 done
+if [[ "$explain" == 1 ]]; then
+  chosen="${areas# }"
+  [[ -n "$chosen" ]] || chosen="(없음)"
+  printf '# 선택: %s\n' "$chosen"
+  exit 0
+fi
 # 샤드: 느린 영역(SLOW_AREAS 순서) 다음 나머지 순서로 놓고 위치 k가 k % n == i-1인 영역만 남긴다. 실행 순서는 위 선택 순서다.
 if [[ "$shard_n" -gt 0 ]]; then
   k=0
