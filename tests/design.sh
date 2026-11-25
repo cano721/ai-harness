@@ -1499,4 +1499,20 @@ assert_contains "$MD_SKILL" 'source: "direct"' "design-references documents the 
 assert_contains "$MD_SKILL" "landing-board-check.mjs" "design-references documents the board check"
 pass "design-references skill names the direct source and the board check (#529)"
 
+# design-audit 축 E 우선순위(#533): UX 라이팅 규칙 문서가 있으면 카탈로그에서도 용어는 ux-writing-audit로 넘기고,
+# `## 문구`가 없어도 절 없음으로 감점하지 않고 정직성과 `### 서비스` 톤 일관성으로 잰다.
+# design-system-builder의 문구 규칙 질문은 라운드당 세 질문 상한 안에 든다.
+EP_AUDIT_FILE="$ROOT/templates/design-audit/SKILL.md"
+EP_AUDIT="$(<"$EP_AUDIT_FILE")"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '카탈로그에서도 용어는 감점하지 않고 `ux-writing-audit`로 넘긴다' 'UX 라이팅 규칙 문서는 있고 `## 문구`가 없으면' \
+  'E는 정직성과 `### 서비스` 톤 일관성으로 잰다'; do
+  assert_contains "$EP_AUDIT" "$phrase" "design-audit axis E precedence: $phrase"
+done
+for EP_COPY in skills/design-screen/references/design-audit.md .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/SKILL.md; do
+  cmp -s "$ROOT/$EP_COPY" "$EP_AUDIT_FILE" || fail "$EP_COPY must match templates/design-audit/SKILL.md byte for byte"
+done
+assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "inside the three-question limit of a round" "design-system-builder asks the copy rule question inside the round limit"
+pass "design-audit axis E precedence with a UX writing rule document and the copy rule question limit (#533)"
+
 finish_tests

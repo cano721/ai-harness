@@ -107,7 +107,7 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/ui-review/references/design-skills.md": {
-      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
       "template_version": "0.83.0"
     },
     ".agents/skills/ui-review/references/web-interface-guidelines.md": {
@@ -119,7 +119,7 @@
       "template_version": "0.83.0"
     },
     ".claude/skills/ui-review/references/design-skills.md": {
-      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
       "template_version": "0.83.0"
     },
     ".claude/skills/ui-review/references/web-interface-guidelines.md": {
@@ -127,11 +127,11 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/design-audit/SKILL.md": {
-      "content_sha256": "34cce61916c1f23d25dbac3d3ae20d39b4bcdb133dcfe1ac638a484949641e1d",
+      "content_sha256": "20e6af168affc82c62d795783b24b4f860a41779844506d14ed911c22256cc9e",
       "template_version": "0.92.0"
     },
     ".agents/skills/design-audit/references/design-skills.md": {
-      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
       "template_version": "0.83.0"
     },
     ".agents/skills/design-audit/references/figma-mcp.md": {
@@ -139,11 +139,11 @@
       "template_version": "0.83.0"
     },
     ".claude/skills/design-audit/SKILL.md": {
-      "content_sha256": "34cce61916c1f23d25dbac3d3ae20d39b4bcdb133dcfe1ac638a484949641e1d",
+      "content_sha256": "20e6af168affc82c62d795783b24b4f860a41779844506d14ed911c22256cc9e",
       "template_version": "0.92.0"
     },
     ".claude/skills/design-audit/references/design-skills.md": {
-      "content_sha256": "d91a53df384de3a33ac6a557ab37c7a8db7ab711da5e2ada30d51113a627ed4e",
+      "content_sha256": "a496e77ce1be3a8a39fd1d50e742929e89c731d87db1f8d076f7f9bc27badfd0",
       "template_version": "0.83.0"
     },
     ".claude/skills/design-audit/references/figma-mcp.md": {
@@ -155,12 +155,12 @@
       "template_version": "0.83.0"
     },
     ".agents/skills/design-polish/SKILL.md": {
-      "content_sha256": "227bbf20b42df84307092a33f097a835d879436fc65328c0a5c479455ed734a0",
+      "content_sha256": "c6d5eb3d799c7cead4d668ca8a0db0993d4f4b7bc26a402f849ad4fb10bcfa29",
       "template_version": "0.91.0",
       "renderer": 1
     },
     ".claude/commands/design-polish.md": {
-      "content_sha256": "1a619afd73b9520096780ce68f2ecc70d2961ea345019e8b51ff2d78a1c8a1b5",
+      "content_sha256": "684f8c7f7f1a6767ecf17f4c3375bc75c6418a0a975b2611948ed8ae659c3b71",
       "template_version": "0.91.0",
       "renderer": 1
     },

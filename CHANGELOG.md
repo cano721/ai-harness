@@ -6,6 +6,10 @@
 
 작업 중인 변경은 `## Unreleased`에 쌓이고, 릴리스할 때 `scripts/release-prep.sh <version>`이 그 절을 버전 절로 확정합니다. 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 
+## Unreleased
+### 동작 변경
+- 디자인 스킬 지도에 용어 절(디자인 시스템·규칙 문서·기준 화면·형제 화면·채점·검토·비평·다듬기)을 두고, 기존 화면 다듬기는 `/design-polish`가 주도하며 `impeccable`은 비평 보조로 바뀐다. 랜딩 작업 보조에 `design-references`가 들어간다. design-audit는 UX 라이팅 규칙 문서가 있으면 카탈로그에서도 용어를 `ux-writing-audit`로 넘기고, `## 문구` 절이 없어도 정직성과 `### 서비스` 톤 일관성으로 E를 잰다. design-system-builder의 문구 규칙 질문은 라운드당 3개 상한 안에서 묻는다. (#514 #533)
+
 ## v0.94.0 (2026-11-25)
 ### 새 기능
 
