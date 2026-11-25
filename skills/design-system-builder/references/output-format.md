@@ -13,13 +13,13 @@ Widths, breakpoints, and viewports in the document are referenced by token or co
 | # | Heading | design-audit axis | Must contain |
 |---|---|---|---|
 | 1 | `## 메타` | — | Status, sources, token file paths, themes, viewports (below) |
-| 2 | `## 원칙` | all | 3–5 principles, each a decision a reviewer can apply ("one primary action per screen"), not an adjective |
+| 2 | `## 원칙` | all | Leading subsection `### 서비스` (below), then 3–5 principles, each a decision a reviewer can apply ("one primary action per screen"), not an adjective |
 | 3 | `## 레이아웃` | **A** skeleton & hierarchy | Screen class table, skeleton per class, minimum width, breakpoints; subsections `### 여백 관계` and `### 묶기` (below) |
 | 4 | `## 색과 상태` | **B** color, emphasis & state | Role table, where the accent may appear and its share, status colors with their text/icon pairing, selection and open indicators, floating surfaces, elevation, dark-theme principle |
 | 5 | `## 타이포그래피` | A (title sizes), C | Type role table (size, line-height, weight token triples), language-specific rules |
 | 6 | `## 컴포넌트` | **C** component grammar | Purpose → component, size ladder, states, icons, focus, empty states (`components.md`) |
 | 7 | `## 형제 목록` | **D** sibling consistency | For each screen class, the screens that must match in the same places, and which places |
-| 8 | `## 문구` | **E** tone & honesty | Voice patterns and banned phrases (below) |
+| 8 | `## 문구` | **E** tone & honesty | Voice patterns and banned phrases, or a pointer to the UX writing rule document (below) |
 | 9 | `## 모션` | — | Motion token roles and rules (`motion-tokens.md`) |
 | 10 | `## 접근성` | B, C | Contrast targets, focus, target size, labels, color-not-alone rule |
 | 11 | `## 반응형` | A | Breakpoints and what changes at each; supported minimum width |
@@ -45,6 +45,7 @@ A project may add sections after these. It may not rename or drop a required one
 - Figma 라이브러리: <file URL> (libraryKey <key>) — 생성 <YYYY-MM-DD>, 기준 <token file path>@<commit>   ← Figma output을 만든 경우
 - Figma 라이브러리: <kit URL> (libraryKey <key>) — 원천   ← Figma 키트가 값의 원천인 경우
 - 브랜드 모드: <mode names> — 화면별 기본: <rule> (변수 모드가 테마가 아니라 브랜드일 때만)
+- 문구 규칙 미분리   ← `## 문구` is the full form because there is no UX writing rule document
 ```
 
 Status meaning:
@@ -54,6 +55,28 @@ Status meaning:
 - `confirmed` — every rule and value in the document has been confirmed by the user.
 
 Unconfirmed candidates and open questions are **not** written into the rule sections. They are counted in `확인 대기` and listed in the report. When the user confirms one, it becomes a rule in its section and an entry in `## 결정 기록`. (The same rule `fe-designer` follows: no open items inside the rule document.)
+
+### `### 서비스` (first subsection of `## 원칙`)
+
+What the product is for and how it should feel, so every design skill reads it instead of asking again. It is a `###` heading, so the 13 required sections keep their names and order; the principles follow it under their own `###` heading.
+
+```markdown
+### 서비스
+
+- 사용자와 상황: <who uses it, where, doing what — "a developer with the board open beside the editor while agents run">
+- 핵심 일: <the one job the product does for them>
+- 성격: <contrast pairs in the form "A보다 B" — "화려함보다 조용함", "설명보다 다음 행동">
+- 피할 것: <looks, words, or patterns that break the character>
+- 근거: <where each line came from — the user's answer (date), an existing brand guide, or the product's live screens>
+```
+
+- The five labels — `사용자와 상황`, `핵심 일`, `성격`, `피할 것`, `근거` — are fixed, in this order, so other skills find them.
+- `핵심 일` is one job, not a list.
+- `성격` is written as contrast pairs (`A보다 B`): each names what the product gives up, so a screen can be judged against it. A list of adjectives ("modern, clean, friendly") is not a character.
+- Write only sentences a reviewer could call violated by pointing at a screen. A line nobody could ever break is decoration; leave it out.
+- An item the user has not confirmed is written as a proposal in the report and counted in `확인 대기`, and the document stays `draft`.
+
+When `refresh` or `merge` meets an existing rule document whose `## 원칙` has no `### 서비스`, propose adding it from the answers and evidence and list it in `확인 대기`; do not rewrite the existing principles.
 
 ### `## 레이아웃` (axis A)
 
@@ -96,7 +119,22 @@ For each screen class, the sibling screens and the places that must match:
 
 ### `## 문구` (axis E)
 
-Derived from the product's real strings (`extract.md`), confirmed with the user:
+The UX writing rule document (`.ai-harness/docs/ux-writing.md` by default; found with the detection rule in `ux-writing-audit`) is the one source of copy rules. `## 문구` takes one of two forms:
+
+- **Pointer form** — when the UX writing rule document exists. Only the source and the honesty rule:
+
+  ```markdown
+  ## 문구
+
+  - 원본: <경로>
+  - 정직: <the honesty rule below>
+  ```
+
+- **Full form** — when there is no UX writing rule document. The minimum rules below, and `## 메타` carries the line `- 문구 규칙 미분리` so the next run knows the copy rules have not been split out.
+
+When `refresh` or `merge` finds the UX writing rule document and a full `## 문구`, propose reducing `## 문구` to the pointer form; rules missing from the UX writing rule document go there through `ux-writing-builder`, not into `## 문구`.
+
+The full form is derived from the product's real strings (`extract.md`), confirmed with the user:
 
 - **Errors** — cause, then the action the user can take. No blame, no bare codes.
 - **Labels** — the grammatical form for buttons, fields, menu items, and column headers (verb-first or noun-first; ending style).

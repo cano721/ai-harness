@@ -1328,6 +1328,59 @@ for tok in --color-border --color-surface --color-surface-sunken .ds-num; do
 done
 pass "design rule documents carry spacing relationships and grouping under the layout section"
 
+# 디자인 규칙 문서 `## 원칙` 첫머리에 `### 서비스`(사용자와 상황·핵심 일·성격·피할 것·근거)를 둔다. 서비스 성격이 문서에
+# 없어 디자인 Skill마다 다시 묻거나 화면마다 톤이 갈렸다. builder가 기록하고 design-screen·landing-page·design-polish·
+# design-reviewer가 근거로 읽는다. `###`라서 필수 13절의 이름과 순서는 그대로다. (#514)
+SV_OUT_FILE="$ROOT/skills/design-system-builder/references/output-format.md"
+SV_OUT="$(<"$SV_OUT_FILE")"
+# shellcheck disable=SC2016  # 표의 백틱을 문자 그대로 찾는다
+assert_eq "## 메타|## 원칙|## 레이아웃|## 색과 상태|## 타이포그래피|## 컴포넌트|## 형제 목록|## 문구|## 모션|## 접근성|## 반응형|## 토큰 변경 규칙|## 결정 기록|" \
+  "$(grep -E '^\| [0-9]+ \| `## ' "$SV_OUT_FILE" | sed -E 's/^\| [0-9]+ \| `([^`]+)`.*/\1/' | tr '\n' '|')" "output-format.md keeps the 13 required sections in order"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '### `### 서비스`' '`사용자와 상황`' '`핵심 일`' '`성격`' '`피할 것`' '`근거`' 'A보다 B' 'a reviewer could call violated' \
+  '원본: <경로>' '문구 규칙 미분리' 'propose reducing `## 문구` to the pointer form'; do
+  assert_contains "$SV_OUT" "$phrase" "output-format.md service and copy contract: $phrase"
+done
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+assert_contains "$(grep '^| 2 | `## 원칙` |' "$SV_OUT_FILE")" '### 서비스' "output-format.md principles row names the service subsection"
+SV_DSB="$(<"$ROOT/skills/design-system-builder/SKILL.md")"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '`### 서비스`' 'answers to questions 1 and 5' 'draft' '문구 규칙도 같이 만들까요?' '`ux-writing-builder`' 'do not reimplement' \
+  'Voice default' '문구 규칙 미분리' 'detection rule in `ux-writing-audit`'; do
+  assert_contains "$SV_DSB" "$phrase" "design-system-builder service and copy: $phrase"
+done
+SV_UWB="$(<"$UX_BUILDER")"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in 'design rule document'"'"'s `## 문구`' 'propose turning the design rule document'"'"'s `## 문구` into the pointer form' \
+  'Voice default' 'detection rule in `ux-writing-audit`'; do
+  assert_contains "$SV_UWB" "$phrase" "ux-writing-builder copy source: $phrase"
+done
+# 문구 규칙 문서 감지 순서는 ux-writing-audit 한 곳에만 적고, 저장소 기준(개인 설정 아님)이다. (#516)
+assert_contains "$(<"$UX_AUDIT")" "from the repository, never from personal settings" "ux-writing-audit detects the rule document from the repository"
+SV_ORDER_FILES="$(grep -rlF -e 'name another path' -e 'name another location' "$ROOT/skills" "$ROOT/templates" "$ROOT/agents" | sed "s#^$ROOT/##" | sort | tr '\n' '|')"
+assert_eq "skills/ux-writing-audit/SKILL.md|" "$SV_ORDER_FILES" "only ux-writing-audit spells out the rule document detection order"
+SV_SCREEN="$(<"$ROOT/skills/design-screen/SKILL.md")"
+SV_LANDING="$(cat "$ROOT/skills/landing-page/SKILL.md" "$ROOT/skills/landing-page/references/direction.md")"
+for SV_TEXT_NAME in design-screen landing-page; do
+  if [ "$SV_TEXT_NAME" = design-screen ]; then SV_TEXT="$SV_SCREEN"; else SV_TEXT="$SV_LANDING"; fi
+  # shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+  for phrase in '`### 서비스`' 'do not ask again' 'propose adding it to `### 서비스`' 'detection rule in `ux-writing-audit`' 'before writing copy'; do
+    assert_contains "$SV_TEXT" "$phrase" "$SV_TEXT_NAME service and copy: $phrase"
+  done
+done
+assert_contains "$SV_SCREEN" ".ai-harness/docs/ux-writing.md" "design-screen keeps the default UX writing path"
+assert_contains "$(awk '/^3\. \*\*Critique independently/{f=1} f&&/^4\. /{exit} f' "$ROOT/skills/design-polish/SKILL.md")" "### 서비스" "design-polish critique hands over the service section"
+assert_contains "$(awk '/^## 입력/{f=1;next} /^## /{f=0} f' "$ROOT/agents/design-reviewer.md")" "### 서비스" "design-reviewer reads the service section as evidence"
+# 이 저장소의 규칙 문서도 `## 원칙`이 `### 서비스`로 시작한다. ux-writing.md가 없으므로 `## 문구`는 가리키기 형태가 아니다.
+SV_DOC="$ROOT/docs/design-system.md"
+assert_eq "### 서비스" "$(awk '/^## 원칙/{f=1;next} /^## /{f=0} f && /^### /' "$SV_DOC" | head -1)" "docs/design-system.md principles open with the service subsection"
+SV_DOC_SERVICE="$(awk '/^### 서비스/{f=1;next} /^##/{f=0} f' "$SV_DOC")"
+for phrase in 사용자와\ 상황 핵심\ 일 성격 피할\ 것 근거 보다; do
+  assert_contains "$SV_DOC_SERVICE" "$phrase" "docs/design-system.md service subsection: $phrase"
+done
+[[ "$(awk '/^## 문구/{f=1;next} /^## /{f=0} f' "$SV_DOC")" != *"원본:"* ]] || fail "docs/design-system.md copy section stays full without ux-writing.md"
+pass "design rule documents open principles with a service section and copy rules have one source"
+
 # design-references 검사 틈(#529) (1): 검색 근거는 사용자가 직접 준 경쟁사(source user·direct)를 면제하고, 나머지는 도메인으로 맞춘다.
 # 같은 도메인의 다른 경로·www. 서브도메인은 같은 사이트다. 검색에 없는 search 경쟁사는 여전히 거부한다.
 RG_W="$TEST_TMP/rg-run"; mkdir -p "$RG_W"

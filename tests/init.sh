@@ -985,4 +985,19 @@ for SR_COPY in .claude/skills/design-audit/SKILL.md .agents/skills/design-audit/
 done
 pass "design-audit scores spacing relationships and grouping under axis A and its copies stay in sync"
 
+# design-audit 축 E는 `## 원칙`의 `### 서비스`(성격·피할 것)를 톤 근거로 함께 읽는다(#514). 문구 규칙 원본이 ux-writing.md면
+# 말투·어미·용어·금지어는 ux-writing-audit로 넘기고 E는 정직성과 서비스 톤 일관성만 잰다. 가리키기 형태 `## 문구`는
+# 절 없음이 아니고, 두 문서가 다 가득하면 감점 없이 규칙 결정으로 올린다. (#516)
+SV_AUDIT_FILE="$ROOT/templates/design-audit/SKILL.md"
+SV_AUDIT="$(<"$SV_AUDIT_FILE")"
+SV_EREAD="$(grep '^   | E\. 톤·정직성 |' "$SV_AUDIT_FILE")"
+assert_contains "$SV_EREAD" "### 서비스" "design-audit axis E reads the service section"
+assert_contains "$(grep '^| E\. 톤·정직성 | 15 |' "$SV_AUDIT_FILE")" "### 서비스" "design-audit axis E score row names the service section"
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in '`### 서비스`가 없으면 지금처럼 `## 문구`만으로 잰다' '`원본: <경로>`' '절 없음으로 보지 않는다' '말투·어미·용어·금지어' \
+  '`ux-writing-audit`로 넘긴다' 'E는 정직성과 `### 서비스` 톤 일관성만' '규칙 결정 필요: 문구 규칙 중복' '`ux-writing-audit`의 감지 규칙'; do
+  assert_contains "$SV_AUDIT" "$phrase" "design-audit axis E copy source: $phrase"
+done
+pass "design-audit axis E reads the service section and hands copy style to ux-writing-audit"
+
 finish_tests
