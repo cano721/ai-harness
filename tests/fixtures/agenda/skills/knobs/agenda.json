@@ -1,0 +1,16 @@
+{
+  "id": "knobs",
+  "name": "Knobs 메신저",
+  "fetch": ["bash", "act.sh", "fetch"],
+  "settings": {
+    "get": ["bash", "act.sh", "get"],
+    "set": ["bash", "act.sh", "set"],
+    "fields": [
+      {"id": "channels", "label": "살펴볼 채널", "type": "multi-select", "options": ["bash", "act.sh", "options-channels"],
+       "danger": true, "confirm": "고른 채널의 새 메시지를 어댑터가 읽어 갑니다. 이 채널을 더할까요?", "help": "고른 채널의 메시지를 답할 것으로 모읍니다."},
+      {"id": "digest", "label": "하루 요약 받기", "type": "toggle", "help": "아침마다 받은 메시지를 요약합니다."},
+      {"id": "forward", "label": "자동 전달", "type": "toggle", "danger": true},
+      {"id": "lookback", "label": "되돌아볼 날짜 수", "type": "number", "min": 1, "max": 30, "help": "1~30일"}
+    ]
+  }
+}

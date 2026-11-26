@@ -667,6 +667,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agacc { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-width: 0; }
 .b-agacc__name { min-width: 0; overflow-wrap: anywhere; }
 .b-agacc__acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+/* 소스 설정(이슈 632): 펼침 상세 안의 .ds-setting 행. 숫자 칸은 좁게 두고 오류는 다음 줄로 */
+.b-agset__fields > .ds-setting { padding-inline: 0; }
+.b-agset__num { width: 6rem; }
+.b-agset .ds-setting__control > .ds-field__error { flex-basis: 100%; justify-content: flex-end; }
 @media (max-width: 760px) {
   .b-agev__title { white-space: normal; }
 }
@@ -992,6 +996,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <h2 class="ds-title" id="ktitle">스킬 제거</h2>
     <p class="b-line" id="kdesc"></p>
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="kcancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" value="ok">제거 세션 띄우기</button></div>
+  </form>
+</dialog>
+<dialog class="b-dialog" id="agsetdlg" aria-labelledby="agsettitle" aria-describedby="agsetdesc">
+  <form method="dialog">
+    <h2 class="ds-title" id="agsettitle">설정 확인</h2>
+    <p class="b-line" id="agsetdesc"></p>
+    <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="agsetcancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" id="agsetok" value="ok">켜기</button></div>
   </form>
 </dialog>
 <dialog class="b-dialog" id="mdlg" aria-labelledby="mtitle">
@@ -2243,6 +2254,151 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     return ul;
   }
+  // ---- 내 일정 소스 설정(이슈 632) ----
+  // settings를 선언하고 연결된 소스 카드를 펼치면 GET /agenda/settings로 필드·선택지·현재값을 읽는다(폴링마다 읽지 않음).
+  // 칩 하나·토글 하나·숫자 [저장] 하나가 요청 하나다. 위험(danger) 필드를 켜거나 항목을 더하거나 숫자를 바꾸면 확인 대화 뒤 confirm:true로 보낸다.
+  const agSetOpen = new Set();  // 설정을 펼친 소스 id
+  const agSet = {};             // 소스 id → {loading, error, fields, values, busy: 필드 id, draft: {필드 id: 입력 중인 글}, numErr: {필드 id: 문구}}
+  let agSetAsk = null;          // 확인 대화가 묻고 있는 저장 {s, f, value, key}
+  async function agSettingsLoad(s) {
+    const st = agSet[s.id] || (agSet[s.id] = { draft: {}, numErr: {} });
+    st.loading = true; st.error = null; renderBoard();
+    let res;
+    try { res = await (await fetch(`/agenda/settings?t=${encodeURIComponent(TOKEN)}&source=${encodeURIComponent(s.id)}`, { cache: 'no-store' })).json(); }
+    catch (e) { res = { ok: false, message: `${s.name} 설정을 읽지 못했습니다. 보드 서버에 닿지 못했습니다.` }; }
+    st.loading = false;
+    if (res.ok) { st.fields = res.fields || []; st.values = res.values || {}; st.error = null; }
+    else st.error = res.message || `${s.name} 설정을 읽지 못했습니다.`;
+    renderBoard();
+  }
+  function agSettingsButton(s) {
+    const open = agSetOpen.has(s.id);
+    const b = btn('설정', 'ds-btn--sm ds-btn--ghost'); b.dataset.key = 'agsetbtn:' + s.id;
+    b.setAttribute('aria-label', `${s.name} 설정`); b.setAttribute('aria-expanded', String(open)); b.setAttribute('aria-controls', 'agset-' + s.id);
+    b.onclick = () => {
+      if (agSetOpen.has(s.id)) { agSetOpen.delete(s.id); renderBoard(); return; }
+      agSetOpen.add(s.id); agSettingsLoad(s);
+    };
+    return b;
+  }
+  function agSettingsAsk(s, f, value, key, optLabel) {
+    agSetAsk = { s, f, value, key };
+    const what = f.type === 'multi-select' ? ['추가', `${f.label}에 ${optLabel} 추가`] : f.type === 'toggle' ? ['켜기', `${f.label} 켜기`] : ['바꾸기', `${f.label}을(를) ${value}(으)로 바꾸기`];
+    $('agsettitle').textContent = `${s.name}: ${what[1]}`;
+    $('agsetdesc').textContent = f.confirm || `${s.name}이(가) 더 많은 일을 하게 되는 설정입니다. 바꾸기 전에 한 번 더 확인하세요.`;
+    $('agsetok').textContent = what[0];
+    $('agsetdlg').returnValue = '';
+    $('agsetdlg').showModal();
+    $('agsetcancel').focus();
+  }
+  async function agSettingsSave(s, f, value, key, confirmed, optLabel) {
+    const st = agSet[s.id];
+    if (!st || st.busy) return;
+    const old = st.values[f.id];
+    st.busy = f.id; st.values = { ...st.values, [f.id]: value }; renderBoard();
+    const values = { [f.id]: value };
+    let res;
+    try { res = await post('/agenda/settings', confirmed ? { source: s.id, values, confirm: true } : { source: s.id, values }); }
+    catch (e) { res = { ok: false, message: `${s.name} 설정을 저장하지 못했습니다. 보드 서버에 닿지 못했습니다.` }; }
+    st.busy = null;
+    if (!res.ok) {
+      st.values = { ...st.values, [f.id]: old }; renderBoard();
+      if (res.needs_confirm && !confirmed) { agSettingsAsk(s, f, value, key, optLabel); return; }
+      toast(res.message, false);
+    } else {
+      delete st.draft[f.id];
+      toast(res.message || '저장했습니다.', true);
+      await agSettingsLoad(s);
+    }
+    const back = document.querySelector(`[data-key="${CSS.escape(key)}"]`); if (back) back.focus({ preventScroll: true });
+  }
+  $('agsetdlg').addEventListener('click', (e) => { if (e.target === $('agsetdlg')) $('agsetdlg').close(); });
+  $('agsetdlg').addEventListener('close', () => {
+    const a = agSetAsk; agSetAsk = null;
+    if (!a) return;
+    if ($('agsetdlg').returnValue === 'ok') { agSettingsSave(a.s, a.f, a.value, a.key, true); return; }
+    const back = document.querySelector(`[data-key="${CSS.escape(a.key)}"]`); if (back) back.focus();
+  });
+  // 바꾸기 전 값과 비교한다 — 서버(agenda.py settings_save)와 같은 규칙. 서버가 409 needs_confirm을 주면 그때도 대화를 띄운다.
+  const agSettingsRisky = (f, cur, next) => !!f.danger && (f.type === 'toggle' ? next && !cur
+    : f.type === 'multi-select' ? next.some((x) => !(cur || []).includes(x)) : next !== cur);
+  function agSettingsChange(s, f, next, key, optLabel) {
+    const cur = agSet[s.id].values[f.id];
+    if (agSettingsRisky(f, cur, next)) agSettingsAsk(s, f, next, key, optLabel);
+    else agSettingsSave(s, f, next, key, false);
+  }
+  function agSettingsField(s, st, f) {
+    const row = el('div', 'ds-setting'); row.dataset.key = `agsetf:${s.id}:${f.id}`;
+    const busyNow = st.busy === f.id;
+    const info = el('div', 'ds-stack');
+    const name = el(f.type === 'number' ? 'label' : 'span', 'ds-setting__name', f.label);
+    if (f.danger) name.append(badge(['attention', '확인 후 저장', 'soft']));
+    info.append(name);
+    if (f.help) info.append(el('p', 'ds-setting__desc', f.help));
+    const ctl = el('div', 'ds-setting__control');
+    if (busyNow) ctl.setAttribute('aria-busy', 'true');
+    const cur = st.values[f.id];
+    if (f.type === 'multi-select') {
+      ctl.setAttribute('role', 'group'); ctl.setAttribute('aria-label', f.label);
+      if (!(f.options || []).length) ctl.append(el('span', 'ds-caption', '고를 수 있는 항목이 없습니다.'));
+      for (const o of f.options || []) {
+        const on = (cur || []).includes(o.value);
+        const c = el('button', 'ds-chip', o.label); c.type = 'button'; c.dataset.key = `agsetopt:${s.id}:${f.id}:${o.value}`;
+        c.setAttribute('aria-pressed', String(on)); c.title = o.value;
+        if (st.busy) c.disabled = true;
+        c.onclick = () => agSettingsChange(s, f, on ? (cur || []).filter((x) => x !== o.value) : [...(cur || []), o.value], c.dataset.key, o.label);
+        ctl.append(c);
+      }
+    } else if (f.type === 'toggle') {
+      const c = el('button', 'ds-chip', cur ? '켜짐' : '꺼짐'); c.type = 'button'; c.dataset.key = `agsetopt:${s.id}:${f.id}`;
+      c.setAttribute('aria-pressed', String(!!cur)); c.setAttribute('aria-label', f.label);
+      if (st.busy) c.disabled = true;
+      c.onclick = () => agSettingsChange(s, f, !cur, c.dataset.key);
+      ctl.append(c);
+    } else {
+      const inp = el('input', 'ds-input b-agset__num'); inp.type = 'number'; inp.step = '1'; inp.id = `agsetn-${s.id}-${f.id}`; name.htmlFor = inp.id;
+      if (f.min != null) inp.min = String(f.min);
+      if (f.max != null) inp.max = String(f.max);
+      inp.value = st.draft[f.id] != null ? st.draft[f.id] : cur == null ? '' : String(cur);
+      const err = el('span', 'ds-field__error'); err.id = inp.id + '-err'; err.append(icon('danger'), st.numErr[f.id] || ''); err.hidden = !st.numErr[f.id];
+      inp.setAttribute('aria-describedby', err.id); if (st.numErr[f.id]) inp.setAttribute('aria-invalid', 'true');
+      inp.oninput = () => { st.draft[f.id] = inp.value; };
+      const save = btn('저장', 'ds-btn--sm'); save.dataset.key = `agsetopt:${s.id}:${f.id}`; save.setAttribute('aria-label', `${f.label} 저장`);
+      if (busyNow) busy(save, '저장하는 중');
+      else if (st.busy) save.disabled = true;
+      const range = `${f.min != null ? f.min : ''}~${f.max != null ? f.max : ''}`;
+      save.onclick = () => {
+        if (st.busy) return;
+        const text = inp.value.trim(), n = Number(text);
+        const bad = !/^-?\d+$/.test(text) || (f.min != null && n < f.min) || (f.max != null && n > f.max);
+        st.numErr[f.id] = bad ? `${range === '~' ? '' : range + ' 사이의 '}정수를 넣으세요.` : '';
+        if (bad) { renderBoard(); return; }
+        if (n === cur) { delete st.draft[f.id]; renderBoard(); return; }
+        agSettingsChange(s, f, n, save.dataset.key);
+      };
+      inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); save.click(); } };
+      ctl.append(inp, save, err);
+    }
+    if (busyNow && f.type !== 'number') ctl.append(el('span', 'ds-caption', '저장하는 중'));
+    row.append(info, ctl);
+    return row;
+  }
+  function agSettingsDetail(s) {
+    const d = el('div', 'ds-row__detail b-agset'); d.id = 'agset-' + s.id; d.setAttribute('aria-label', `${s.name} 설정`);
+    const st = agSet[s.id];
+    if (!st || (st.loading && !st.fields)) {
+      const p = el('p', 'b-line ds-cluster'); p.append(icon('progress'), el('span', null, '설정을 읽는 중')); d.append(p);
+    } else if (st.error) {
+      const p = el('p', 'ds-field__error b-line'); p.append(icon('danger'), st.error);
+      const again = btn('다시 읽기', 'ds-btn--sm'); again.dataset.key = 'agsetretry:' + s.id; again.onclick = () => agSettingsLoad(s);
+      d.append(p, again);
+    } else {
+      const box = el('div', 'b-agset__fields'); box.append(...(st.fields || []).map((f) => agSettingsField(s, st, f)));
+      d.append(box);
+    }
+    return d;
+  }
+  // ---- 내 일정 소스 설정 끝 ----
   function sourceRow(s) {
     const row = el('div', 'ds-row'); row.dataset.key = 'agsrc:' + s.id;
     const head = el('div', 'ds-row__head');
@@ -2253,6 +2409,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (s.multi && s.connected && (s.accounts || []).length) side.append(el('span', 'ds-num', `계정 ${s.accounts.length}개`));
     const when = s.fetched_at ? `${ago(s.fetched_at)} 가져옴` : s.connected && s.state !== 'connecting' ? '아직 가져오지 않음' : '';
     if (when) side.append(el('span', 'ds-num', when));
+    const canSet = s.settings && s.connected && !s.invalid && s.state !== 'needs_setup' && s.state !== 'connecting';
+    if (canSet) side.append(agSettingsButton(s));
     const b = sourceButton(s); if (b) side.append(b);
     head.append(title, side); row.append(head);
     if (s.state === 'needs_setup' && s.setup_session) {
@@ -2277,6 +2435,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       if (s.error && s.state === 'connecting') d.append(el('p', 'ds-caption b-line', s.error));
       row.append(d);
     }
+    if (canSet && agSetOpen.has(s.id)) row.append(agSettingsDetail(s));
     return row;
   }
   // 무엇을 못 했는지 → 원인 → 할 일 + 동작 하나([다시 가져오기]).

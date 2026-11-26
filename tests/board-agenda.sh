@@ -888,6 +888,147 @@ assert_contains "$(sed -n '1,40p' "$ROOT/scripts/board/agenda.py")" "msteams:" "
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "msteams:" "the board skill documents msteams links"
 pass "app deep link schemes match across agenda, screen and window app"
 
+# 소스 설정(#632): settings를 선언한 소스는 settings:true, 없는 소스는 false. 잘못된 settings는 그 소스만 선언 오류다.
+AG_OUT="$(ag_get)"
+assert_eq "disconnected|true|null" "$(ag_src "$AG_OUT" knobs state)|$(ag_src "$AG_OUT" knobs settings)|$(ag_src "$AG_OUT" knobs invalid)" "a source with a valid settings declaration is discovered"
+assert_eq "false" "$(ag_src "$AG_OUT" acme settings)" "a source without settings says so"
+assert_eq "error|true" "$(ag_src "$AG_OUT" badknobs state)|$(ag_src "$AG_OUT" badknobs invalid)" "a broken settings declaration is a declaration error"
+case "$(ag_src "$AG_OUT" badknobs error)" in "선언 오류: "*options*) ;; *) fail "the settings declaration error names options: $(ag_src "$AG_OUT" badknobs error)" ;; esac
+pass "agenda accepts a settings declaration and isolates a broken one"
+
+# 소스 설정(#632): 선언 검사 — 변형마다 parse_declaration이 그 키를 짚는 오류를 내고, 보드에서는 그 소스만 선언 오류다.
+AG_DECL="$AG_T/decl"; mkdir -p "$AG_DECL"
+AG_KNOBS="$AG_FIX/skills/knobs/agenda.json"
+jq '.' "$AG_KNOBS" >"$AG_DECL/ok.json"
+jq '.settings.fields[0] |= del(.options)' "$AG_KNOBS" >"$AG_DECL/noopts.json"
+jq '.settings.fields[3].min = 40' "$AG_KNOBS" >"$AG_DECL/minmax.json"
+jq '.settings.fields[1].type = "text"' "$AG_KNOBS" >"$AG_DECL/type.json"
+jq 'del(.settings.set)' "$AG_KNOBS" >"$AG_DECL/noset.json"
+jq '.settings.fields[2].id = "digest"' "$AG_KNOBS" >"$AG_DECL/dup.json"
+jq '.settings.fields[1].min = 1' "$AG_KNOBS" >"$AG_DECL/minontoggle.json"
+jq '.settings.fields[1].options = ["true"]' "$AG_KNOBS" >"$AG_DECL/optsontoggle.json"
+jq '.settings.fields[3].max = 2.5' "$AG_KNOBS" >"$AG_DECL/floatmax.json"
+jq '.settings.fields = []' "$AG_KNOBS" >"$AG_DECL/nofields.json"
+jq '.settings.fields[0].danger = "yes"' "$AG_KNOBS" >"$AG_DECL/danger.json"
+jq '.settings.fields[0].label = " "' "$AG_KNOBS" >"$AG_DECL/label.json"
+AG_DECL_OUT="$(cd "$AG_DECL" && python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import agenda
+for p in sys.argv[2:]:
+    src, err = agenda.parse_declaration(p)
+    print(p[:-5] + "=" + (err or "OK|" + str(len(src["settings"]["fields"]))))' "$ROOT/scripts/board" \
+  ok.json noopts.json minmax.json type.json noset.json dup.json minontoggle.json optsontoggle.json floatmax.json nofields.json danger.json label.json)"
+assert_contains "$AG_DECL_OUT" "ok=OK|4" "a valid settings declaration keeps its four fields"
+for AG_W in "noopts=*options*" "minmax=*min*max*" "type=*type*" "noset=*set*" "dup=*id*" "minontoggle=*min*number*" \
+  "optsontoggle=*options*multi-select*" "floatmax=*max*정수*" "nofields=*fields*" "danger=*danger*" "label=*label*"; do
+  AG_LINE="$(grep "^${AG_W%%=*}=" <<<"$AG_DECL_OUT")"
+  # shellcheck disable=SC2254  # AG_W는 기대하는 글롭 패턴이다
+  case "$AG_LINE" in $AG_W) ;; *) fail "parse_declaration explains ${AG_W%%=*}: $AG_LINE" ;; esac
+  case "$AG_LINE" in *"OK|"*) fail "parse_declaration rejects ${AG_W%%=*}" ;; esac
+done
+mkdir -p "$HM_CLAUDE_SKILLS_DIR/knobs-minmax" "$HM_CLAUDE_SKILLS_DIR/knobs-noset"
+jq '.id = "knobs-minmax"' "$AG_DECL/minmax.json" >"$HM_CLAUDE_SKILLS_DIR/knobs-minmax/agenda.json"
+jq '.id = "knobs-noset"' "$AG_DECL/noset.json" >"$HM_CLAUDE_SKILLS_DIR/knobs-noset/agenda.json"
+AG_OUT="$(ag_get)"
+for AG_S in knobs-minmax knobs-noset; do
+  assert_eq "true" "$(ag_src "$AG_OUT" "$AG_S" invalid)" "$AG_S is a declaration error on the board"
+  case "$(ag_src "$AG_OUT" "$AG_S" error)" in "선언 오류: "*) ;; *) fail "$AG_S explains the declaration error" ;; esac
+done
+assert_eq "null|null" "$(ag_src "$AG_OUT" acme invalid)|$(ag_src "$AG_OUT" knobs invalid)" "other sources stay valid next to broken settings"
+rm -rf "$HM_CLAUDE_SKILLS_DIR/knobs-minmax" "$HM_CLAUDE_SKILLS_DIR/knobs-noset"
+pass "agenda validates every settings declaration rule"
+
+# 소스 설정(#632): 읽기 — 연결 전·선언 없는 소스·모르는 소스는 4xx, 연결한 뒤에는 필드·선택지(잘못된 줄은 건너뜀)·get 현재값.
+ag_sget() { curl -s -w '\n%{http_code}' "$AG_BASE/agenda/settings?t=${2-$AG_TOKEN}&source=$1"; }
+assert_eq "409" "$(ag_code "$(ag_sget knobs)")" "settings of a source that is not connected are refused"
+ag_post connect '{"source":"knobs"}' >/dev/null
+ag_wait '(.sources[] | select(.id == "knobs") | .state) == "connected"' >/dev/null || fail "knobs connects"
+AG_RES="$(ag_sget knobs)"
+assert_eq "200|true|4" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '"\(.ok)|\(.fields | length)"')" "settings read returns the declared fields"
+assert_eq '[{"value":"general","label":"#general"},{"value":"random","label":"#random"},{"value":"alerts","label":"#alerts"}]' \
+  "$(ag_body "$AG_RES" | jq -c '.fields[] | select(.id == "channels") | .options')" "multi-select options come from the options command and bad lines are skipped"
+assert_eq "multi-select|true|toggle|number|1|30" "$(ag_body "$AG_RES" | jq -r '[.fields[0].type, .fields[0].danger, .fields[1].type, .fields[3].type, .fields[3].min, .fields[3].max] | join("|")')" "field types, danger and range are served"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.fields[0].confirm')" "이 채널을 더할까요" "the confirm sentence is served"
+assert_eq '{"channels":["general"],"digest":false,"forward":false,"lookback":7}' "$(ag_body "$AG_RES" | jq -c '.values')" "current values come from the get command"
+assert_eq "403" "$(ag_code "$(ag_sget knobs wrong)")" "settings read needs the board token"
+assert_eq "404" "$(ag_code "$(ag_sget acme)")" "a source without settings has no settings to read"
+assert_eq "404" "$(ag_code "$(ag_sget nope)")" "an unknown source has no settings to read"
+pass "agenda reads source settings through get and options"
+
+# 소스 설정(#632): 저장 — values는 바꿀 필드만, 서버가 현재값에 합쳐 전체 객체를 set의 표준 입력으로 넘긴다.
+AG_KV="$AG_DATA/fixture-knobs/values.json"
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"digest":true}}')"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "turning on a non-danger toggle is saved"
+assert_eq '{"channels":["general"],"digest":true,"forward":false,"lookback":7}' "$(jq -cS '.' "$AG_KV")" "set receives every field as one JSON object on stdin"
+pass "agenda saves source settings through set with the merged object"
+
+# 소스 설정(#632): 목록 밖·범위 밖·타입이 틀린 값·모르는 필드는 400이고 set을 부르지 않는다.
+ag_kcalls() { wc -l <"$AG_DATA/fixture-knobs/calls" | tr -d ' '; }
+AG_CALLS="$(ag_kcalls)"
+for AG_V in '{"channels":["general","nope"]}' '{"channels":"general"}' '{"lookback":0}' '{"lookback":31}' '{"lookback":"5"}' '{"lookback":3.5}' \
+  '{"lookback":true}' '{"digest":"yes"}' '{"bogus":1}' '{}'; do
+  AG_BODY="$(jq -cn --argjson v "$AG_V" '{source: "knobs", values: $v}')"
+  assert_eq "400" "$(ag_code "$(ag_post settings "$AG_BODY")")" "settings value $AG_V is refused"
+done
+assert_eq "400" "$(ag_code "$(ag_post settings '{"source":"knobs","values":"digest"}')")" "values must be an object"
+assert_contains "$(ag_body "$(ag_post settings '{"source":"knobs","values":{"channels":["nope"]}}')" | jq -r '.message')" "목록에 없는 항목입니다: nope" "an option outside the list is named"
+assert_contains "$(ag_body "$(ag_post settings '{"source":"knobs","values":{"lookback":31}}')" | jq -r '.message')" "1~30" "an out-of-range number names the range"
+assert_eq "$AG_CALLS" "$(ag_kcalls)" "refused settings never reach set"
+assert_eq "true" "$(jq -r '.digest' "$AG_KV")" "refused settings leave the values unchanged"
+pass "agenda refuses settings outside the options, range or type"
+
+# 소스 설정(#632): 위험 필드 — 켜기·항목 추가는 confirm:true 없이 409 needs_confirm(set 미호출), 붙이면 저장. 끄기·빼기·danger 아닌 숫자는 바로.
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"forward":true}}')"
+assert_eq "409|true|forward" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '"\(.needs_confirm)|\(.fields | join(","))"')" "turning on a danger toggle needs confirmation"
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"channels":["general","alerts"],"digest":false}}')"
+assert_eq "409|channels" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.fields | join(",")')" "adding to a danger multi-select needs confirmation"
+assert_eq "409" "$(ag_code "$(ag_post settings '{"source":"knobs","values":{"forward":true},"confirm":"true"}')")" "only a boolean confirm counts"
+assert_eq "$AG_CALLS|false|true" "$(ag_kcalls)|$(jq -r '.forward' "$AG_KV")|$(jq -r '.digest' "$AG_KV")" "unconfirmed danger changes never reach set"
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"forward":true},"confirm":true}')"
+assert_eq "200|true|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')|$(jq -r '.forward' "$AG_KV")" "a confirmed danger toggle is saved"
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"channels":["general","alerts","alerts"]},"confirm":true}')"
+assert_eq "200|general,alerts" "$(ag_code "$AG_RES")|$(jq -r '.channels | join(",")' "$AG_KV")" "a confirmed addition is saved and duplicates collapse"
+assert_eq "200|false" "$(ag_code "$(ag_post settings '{"source":"knobs","values":{"forward":false}}')")|$(jq -r '.forward' "$AG_KV")" "turning off a danger toggle needs no confirmation"
+assert_eq "200|general" "$(ag_code "$(ag_post settings '{"source":"knobs","values":{"channels":["general"]}}')")|$(jq -r '.channels | join(",")' "$AG_KV")" "removing from a danger multi-select needs no confirmation"
+assert_eq "200|10" "$(ag_code "$(ag_post settings '{"source":"knobs","values":{"lookback":10}}')")|$(jq -r '.lookback' "$AG_KV")" "a non-danger number is saved without confirmation"
+pass "agenda enforces confirmation for danger settings on the server"
+
+# 소스 설정(#632): 보안 — 틀린 Origin·토큰은 403, 기록에는 소스와 결과만(설정값 없음).
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://attacker.example' -d "$(jq -cn --arg t "$AG_TOKEN" '{t: $t, source: "knobs", values: {digest: false}}')" "$AG_BASE/agenda/settings")" "settings save refuses a foreign Origin"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $AG_BASE" -d '{"t":"wrong","source":"knobs","values":{"digest":false}}' "$AG_BASE/agenda/settings")" "settings save needs the board token"
+assert_contains "$(grep agenda_settings "$AG_DATA/board/actions.jsonl" | tail -n 1)" '"source": "knobs"' "settings saves are logged by source"
+if grep -qs alerts "$AG_DATA/board/actions.jsonl" "$AG_DATA/board/server.log"; then fail "board logs carry no settings values"; fi
+pass "agenda settings save is guarded and logs no values"
+
+# 소스 설정(#632): set이 실패하면 ok:false와 사람 말 사유, 값은 그대로다.
+: >"$AG_DATA/fixture-knobs/fail-set"
+AG_RES="$(ag_post settings '{"source":"knobs","values":{"digest":false}}')"
+assert_eq "false" "$(ag_body "$AG_RES" | jq -r '.ok')" "a failing set is reported"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "설정 저장소에 닿지 못했습니다" "the failure carries the adapter's reason"
+assert_eq "true" "$(jq -r '.digest' "$AG_KV")" "a failing set leaves the values unchanged"
+rm -f "$AG_DATA/fixture-knobs/fail-set"
+pass "agenda reports a failing settings save"
+
+# 소스 설정(#632): 화면 — 연결한 소스 카드의 설정 폼은 목록 칩(aria-pressed)·숫자 입력만 쓰고, 위험한 변경은 확인 대화 뒤 confirm:true로 보낸다.
+AG_SET_FN="$(sed -n '/^  \/\/ ---- 내 일정 소스 설정(이슈 632) ----$/,/^  \/\/ ---- 내 일정 소스 설정 끝 ----$/p' "$ROOT/scripts/board/template.html")"
+[ -n "$AG_SET_FN" ] || fail "the settings form code is found in the template"
+for AG_W in "/agenda/settings" "ds-chip" "aria-pressed" "ds-setting" "confirm: true" "저장하는 중" "aria-busy" "ds-field__error" "showModal()" "'number'"; do
+  assert_contains "$AG_SET_FN" "$AG_W" "the settings form uses $AG_W"
+done
+case "$AG_SET_FN" in *"'text'"*|*"textarea"*) fail "the settings form has no free text input" ;; esac
+AG_DLG="$(grep -E '<dialog class="b-dialog" id="agsetdlg"' -A 6 "$ROOT/scripts/board/template.html")"
+assert_contains "$AG_DLG" "ds-btn--danger" "the settings confirm dialog has a danger button"
+assert_contains "$(sed -n '/^  function sourceRow(/,/^  }$/p' "$ROOT/scripts/board/template.html")" "s.settings" "the source card shows settings for sources that declare them"
+pass "the board renders a settings form with chips and a confirm dialog"
+
+# 소스 설정(#632): 계약은 범용 — settings 코드에 특정 서비스 이름 분기가 없고, 계약 문서에 settings가 적혀 있다.
+AG_SET_PY="$(sed -n '/^def _parse_settings(/,/^def parse_declaration(/p; /^    # ---- 소스 설정(#632) ----$/,/^    # ---- 할 일 ----$/p' "$ROOT/scripts/board/agenda.py")"
+[ -n "$AG_SET_PY" ] || fail "the settings code is found in agenda.py"
+AG_SET_SRV="$(grep -n 'settings' "$ROOT/scripts/board/board-server.py" | grep -i 'agenda')"
+if grep -qi 'teams' <<<"$AG_SET_PY$AG_SET_FN$AG_SET_SRV"; then fail "settings code has no service-specific branch"; fi
+assert_contains "$(sed -n '1,60p' "$ROOT/scripts/board/agenda.py")" "settings (#632)" "the adapter contract docstring documents settings"
+assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "knobs" "the UI doc names the settings fixture"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "/agenda/settings" "the board skill documents the settings API"
+pass "agenda settings stay service-agnostic and documented"
+
 ag_board stop >/dev/null
 unset TZ
 finish_tests
