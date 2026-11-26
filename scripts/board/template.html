@@ -1349,7 +1349,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const ex = pick.match(/^실행 실패 \((.*)\)$/);
     return ex ? '실행이 실패했습니다. 열어서 로그를 확인하세요.' : pick;
   }
-  const openable = (i) => i.resident || !(srcOf(i) === 'work' && !(SERVER && (i.actions || []).includes('view')));
+  // 워크플로 러너는 대화가 없는 작업 — 세션 서랍이 아니라 상세(상태·명령·로그·PR)로 연다.
+  const chatOf = (i) => srcOf(i) === 'work' && i.kind !== 'runner';
+  const openable = (i) => i.resident || !(srcOf(i) === 'work' && i.kind !== 'runner' && !(SERVER && (i.actions || []).includes('view')));
 
   // ---- 서버 동작 ----
   async function act(it, action, b) {
@@ -1420,9 +1422,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (lane === 'todo') {
       if (it.kind === 'references') { if (SERVER) box.append(btn('열기', 'ds-btn--sm ds-btn--primary', () => openRefs(it.run_id))); }
       else if (SERVER && it.permission) box.append(...permActions(it).childNodes);
-      else if (it.link && (it.kind === 'autofix' ? it.stage === 'pr' : srcOf(it) === 'harness')) box.append(linkBtn('PR 검토하기', it.link, 'ds-btn--sm'));
+      else if (it.link && (it.kind === 'autofix' ? it.stage === 'pr' : srcOf(it) === 'harness' || it.kind === 'runner')) box.append(linkBtn('PR 검토하기', it.link, 'ds-btn--sm'));
       else if (it.session_id && itemsAll().some((x) => x.id === it.session_id) && SERVER) { const b = btn('세션 열기', 'ds-btn--sm', () => openItem(itemsAll().find((x) => x.id === it.session_id))); box.append(b); }
-      else if (srcOf(it) === 'work' && SERVER) { const b = btn('답하기', 'ds-btn--sm ds-btn--primary', () => openItem(it, true)); box.append(b); }
+      else if (chatOf(it) && SERVER) { const b = btn('답하기', 'ds-btn--sm ds-btn--primary', () => openItem(it, true)); box.append(b); }
       else if (SERVER && (it.actions || []).includes('open_agent')) { const b = btn(ACTION_LABEL.open_agent, 'ds-btn--sm'); b.onclick = () => act(it, 'open_agent', b); box.append(b); }
       else if (it.cmd) box.append(copyBtn('명령 복사', it.cmd));
     } else if (lane === 'waiting' && SERVER && (it.actions || []).includes('harvest_now')) {
@@ -2659,7 +2661,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!$('drawer').contains(a)) opener = a && a.dataset ? (a.dataset.open ? ['open', a.dataset.open] : a.dataset.key ? ['key', a.dataset.key] : null) : null;
     stopChat();
     selected = it.id; current = it;
-    mode = srcOf(it) === 'work' ? 'session' : it.kind === 'autofix' ? 'autofix' : 'item';
+    mode = chatOf(it) ? 'session' : it.kind === 'autofix' ? 'autofix' : 'item';
     $('drawer').hidden = false; $('split').dataset.drawer = 'open';
     syncModal();
     renderDrawer(true); drawerSig = drawerKey();

@@ -255,10 +255,10 @@ for s in "$DATA"/runs/*/*/state.json; do
         else empty end
       elif .status == "baseline_changed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
-         detail: "멈춘 뒤 저장소가 바뀌어 이어 가지 않음: \(.message // .node)", link: null, log: $path, cmd: null}
+         detail: "멈춘 뒤 저장소가 바뀌어 이어 가지 않음: \(.message // .node)", link: (.publish.pr_url? // null), log: $path, cmd: null}
       elif .status == "invariant_violation" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
-         detail: "불변식 위반: \(.message // .node)", link: null, log: $path, cmd: null}
+         detail: "불변식 위반: \(.message // .node)", link: (.publish.pr_url? // null), log: $path, cmd: null}
       elif (.needs_user_decision // false) or (.node | tostring | test("^await"))
            or .status == "user_decision" or .status == "waiting_approval" then
         (.presented_at // .finished_at // .started_at) as $at
@@ -268,27 +268,27 @@ for s in "$DATA"/runs/*/*/state.json; do
            else "노드 \(.node)에서 사람 결정을 기다림" end) as $why
         | if $age != null and $age >= $decision_days then
             {kind: "runner", project: $proj, cwd: .repo, state: "blocked", stall: "decision_stale", at: $at, title: $title,
-             detail: "\($why) — \($age)일째 응답 없음", link: null, log: $path, cmd: $cmd}
+             detail: "\($why) — \($age)일째 응답 없음", link: (.publish.pr_url? // null), log: $path, cmd: $cmd}
           else
             {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: $at, title: $title,
-             detail: $why, link: null, log: $path, cmd: $cmd}
+             detail: $why, link: (.publish.pr_url? // null), log: $path, cmd: $cmd}
           end
       elif .status == "failed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
-         detail: "실패: \(.message // .node)", link: null, log: $path, cmd: null}
+         detail: "실패: \(.message // .node)", link: (.publish.pr_url? // null), log: $path, cmd: null}
       elif .status == "incomplete" or .status == "stopped" or (.status == "running" and $quiet) then
         (if .status == "running" then "no_activity" else .status end) as $why
         | {kind: "runner", project: $proj, cwd: .repo, state: "blocked", stall: $why, at: (.finished_at // .started_at), title: $title,
            detail: (if $why == "incomplete" then "노드 \(.node)에서 중단됨: \(.message // "이유 기록 없음")"
                     elif $why == "stopped" then "노드 \(.node)에서 stop으로 멈춤"
                     else "노드 \(.node)에서 \($stale_min)분 넘게 기록이 없음 — 러너 프로세스가 끝난 것으로 보임" end),
-           link: null, log: $path, cmd: "workflow-driver.sh resume --workflow \($wf)"}
+           link: (.publish.pr_url? // null), log: $path, cmd: "workflow-driver.sh resume --workflow \($wf)"}
       elif .status == "running" then
         {kind: "runner", project: $proj, cwd: .repo, state: "running", at: .started_at, title: $title,
-         detail: "현재 노드: \(.node)", link: null, log: $path, cmd: null}
+         detail: "현재 노드: \(.node)", link: (.publish.pr_url? // null), log: $path, cmd: null}
       else
         {kind: "runner", project: $proj, cwd: .repo, state: "blocked", at: (.finished_at // .started_at), title: $title,
-         detail: "알 수 없는 상태: \(.status) (노드 \(.node))", link: null, log: $path, cmd: null}
+         detail: "알 수 없는 상태: \(.status) (노드 \(.node))", link: (.publish.pr_url? // null), log: $path, cmd: null}
       end' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
 done
 jq -s . "$tmp/runner.jsonl" > "$tmp/runner.json"
