@@ -83,4 +83,21 @@ driver resume
 assert_eq "20:user_decision:2" "$DRIVER_RC:$(run_state .status):$(run_state .attempts)" "the escalation edge and repair limit come from the project graph"
 pass "feature delivery graph runner enforces the graph outside the model"
 
+# 러너 state의 branch(#605): publish 전에 멈춘 런도 보드가 작업 브랜치를 알도록 start가 현재 브랜치를 .branch에 남기고, detached HEAD면 null이다. publish가 끝나면 .publish.branch와 같다.
+new_driver_repo state_branch
+git -C "$DRIVER_REPO" checkout -q -b fix/592-x
+driver start --runtime codex --request "add feature"
+assert_eq "10:fix/592-x" "$DRIVER_RC:$(run_state .branch)" "start records the repository's current branch in state.json"
+new_driver_repo state_detached
+git -C "$DRIVER_REPO" checkout -q --detach
+driver start --runtime codex --request "add feature"
+assert_eq "10:null" "$DRIVER_RC:$(run_state .branch)" "start on a detached HEAD records a null branch"
+new_driver_repo state_published
+with_policy pr-only auto
+driver start --runtime codex --request "add feature"
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "the publish scenario reaches done"
+assert_eq "feat/add-feature" "$(run_state .publish.branch)" "publish records the work branch"
+assert_eq "feat/add-feature" "$(run_state .branch)" "state.branch follows the work branch after publish"
+pass "runner state records the current branch at start and after publish"
+
 finish_tests
