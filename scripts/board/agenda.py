@@ -22,6 +22,8 @@
   캘린더 일정이면 true. 화면이 할 일을 새로 맡겨진 것·쌓인 것으로 가르고 경과일·요청자를 보이며 공유 일정을 접는 데 쓴다.
 - done은 argv 뒤에 항목 id를 붙여 부른다. done이 없는 소스는 보드가 done.json에만 적고 숨긴다. event는 완료 대상이 아니다.
   reopen(#567)은 argv 뒤에 항목 id를 붙여 원본의 완료를 되돌린다. 선언한 소스만 완료 토스트·완료함에서 다시 열 수 있다.
+- 선택 delete(#637, argv): 뒤에 항목 id를 붙여 원본에서 그 항목을 지운다. todo·reply만 대상이고 event는 아니다.
+  실패하면 0이 아닌 종료 코드와 stderr 사유를 낸다. 선언한 소스의 할 일·답할 것에만 보드 [삭제]가 보인다.
 - 일정은 실제 시각순이다: (로컬 날짜, 종일 먼저, 시각, 제목). 종일(YYYY-MM-DD)은 그날 0시, 읽을 수 없는 start는 맨 뒤.
 - 선택 accounts(argv, #519): 한 소스에 계정을 여럿 잇는 어댑터. stdout JSONL 한 줄이 계정 하나 {id, name, error?}.
   선언한 소스는 연결된 뒤에도 connect를 다시 불러 계정을 더하고, 끊기는 disconnect argv 뒤에 계정 id를 붙여 그 계정만 끊는다
@@ -267,7 +269,7 @@ def parse_declaration(path):
         return None, "name이 없습니다."
     if not _argv(d.get("fetch")):
         return None, "fetch 명령(문자열 배열)이 없습니다."
-    for k in ("connect", "disconnect", "done", "reopen", "accounts"):
+    for k in ("connect", "disconnect", "done", "reopen", "delete", "accounts"):
         if k in d and not _argv(d[k]):
             return None, f"{k} 명령이 문자열 배열이 아닙니다."
     if "accounts" in d and "disconnect" not in d:
@@ -300,7 +302,7 @@ def parse_declaration(path):
     return {
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
-        "reopen": d.get("reopen"), "accounts": d.get("accounts"),
+        "reopen": d.get("reopen"), "delete": d.get("delete"), "accounts": d.get("accounts"),
         "interval": interval, "requires": req, "requires_env": req_env, "setup_hint": _short(hint, 300) if hint else None,
         "setup_prompt": _short(prompt, SETUP_PROMPT_MAX) if prompt and prompt.strip() else None,
         "settings": settings,
@@ -696,7 +698,7 @@ class Store:
                             "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"]),
                             "multi": bool(src["accounts"]), "accounts": self.accounts_of(sid) if on else [],
                             "connect_error": self.connect_error.get(sid), "setup_session": bool(self.setup_prompt(src)),
-                            "settings": bool(src["settings"])})
+                            "settings": bool(src["settings"]), "can_delete": bool(src["delete"])})
             if not on or st == "needs_setup":
                 continue
             hidden = local_done.get(sid) or {}
@@ -941,6 +943,35 @@ class Store:
             self._start_fetch(src, again=True)
         return 200, {"ok": True, "message": f"{src['name']}에서 다시 열었습니다."}
 
+    def delete(self, source_id, item_id):
+        """항목을 지운다(#637). 직접 적은 할 일은 todos.json에서, delete를 선언한 어댑터는 그 argv로 원본에서. 완료함에서도 뺀다."""
+        if not isinstance(item_id, str) or not item_id:
+            return 400, {"ok": False, "message": "지울 항목이 없습니다."}
+        if source_id == TODO_ID:
+            return (200, {"ok": True, "message": "할 일을 지웠습니다."}) if self.todo_delete(item_id) else \
+                (404, {"ok": False, "message": "그 할 일을 찾지 못했습니다."})
+        src = self.find(source_id)
+        if not src or src.get("invalid"):
+            return 404, {"ok": False, "message": "등록된 일정 소스가 아닙니다."}
+        c = self.cache(source_id)
+        item = next((i for i in c.get("items") or [] if i.get("id") == item_id), None)
+        if not item:
+            return 404, {"ok": False, "message": "그 항목을 찾지 못했습니다. 화면을 새로 고친 뒤 다시 시도하세요."}
+        if item["kind"] == "event":
+            return 400, {"ok": False, "message": "일정은 여기서 지우지 않습니다."}
+        if not src["delete"]:
+            return 409, {"ok": False, "message": f"{src['name']}은(는) 보드에서 지울 수 없습니다. 원본에서 지우세요."}
+        code, _out, err = self._run(src, src["delete"], [item_id], ACTION_TIMEOUT)
+        if code != 0:
+            return 200, {"ok": False, "message": f"{src['name']}에서 지우지 못했습니다. " + err}
+        if self.is_connected(source_id):
+            c["items"] = [i for i in c.get("items") or [] if i.get("id") != item_id]
+            _write_private(self.cache_path(source_id), c)
+        self._completed_remove(source_id, item_id)
+        if self.is_connected(source_id) and not self.missing(src):
+            self._start_fetch(src, again=True)
+        return 200, {"ok": True, "message": f"{src['name']}에서 지웠습니다."}
+
     # ---- 소스 설정(#632) ----
     def _settings_source(self, source_id):
         """설정을 읽고 쓸 수 있는 소스. 반환 (소스, None) 또는 (None, (코드, 응답))."""
@@ -1120,13 +1151,25 @@ class Store:
         self._completed_add(TODO_ID, "할 일", dict(hit, kind="todo"))
         return True
 
+    def todo_delete(self, tid):
+        """열린 할 일이든 끝낸 할 일이든 지우고 완료함에서도 뺀다(#637)."""
+        with _FileLock(self.todos_path):
+            items = self._todos()
+            left = [t for t in items if t["id"] != tid]
+            if len(left) == len(items):
+                return False
+            _write_private(self.todos_path, {"items": left})
+        self._completed_remove(TODO_ID, tid)
+        return True
+
     def todo_list(self, include_done=False):
         return [t for t in self._todos() if include_done or not t.get("done_at")]
 
 
 TODO_USAGE = """usage: board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>   할 일을 적고 새 id를 출력한다
        board.sh todo list [--all]        열린 할 일을 'id<TAB>내용'으로 (--all은 끝낸 것도, 셋째 칸에 완료 시각)
-       board.sh todo done <id>           할 일을 완료로 표시한다"""
+       board.sh todo done <id>           할 일을 완료로 표시한다
+       board.sh todo delete <id>         할 일을 지운다(끝낸 것도, 완료함에서도 뺀다)"""
 
 
 def _cli_todo(args, data_dir):
@@ -1162,6 +1205,13 @@ def _cli_todo(args, data_dir):
             return usage()
         if not store.todo_done(rest[0]):
             print(f"board: 열린 할 일 중에 id {rest[0]} 없음", file=sys.stderr)
+            return 1
+        return 0
+    if cmd == "delete":
+        if len(rest) != 1 or not rest[0]:
+            return usage()
+        if not store.todo_delete(rest[0]):
+            print(f"board: 할 일 중에 id {rest[0]} 없음", file=sys.stderr)
             return 1
         return 0
     return usage()

@@ -25,7 +25,7 @@ ai-harness 보드의 '내 일정' 화면이 무엇을 읽고 어디에 두는지
 | `~/.ai-harness/board/agenda/sources.json` | 어느 소스를 연결했는지 |
 | `~/.ai-harness/board/agenda/cache/<소스>.json` | 마지막으로 가져온 항목 |
 | `~/.ai-harness/board/agenda/done.json` | 보드에서만 완료로 표시한 항목 |
-| `~/.ai-harness/board/agenda/todos.json` | 직접 적은 할 일(기한 포함) |
+| `~/.ai-harness/board/agenda/todos.json` | 직접 적은 할 일(기한 포함). 보드 [삭제]나 `board.sh todo delete`로 지우면 이 파일과 완료함에서 빠집니다 |
 | `~/.ai-harness/board/agenda/brief.json` | 정기 작업이 남긴 마지막 아침 요약 글 |
 | `~/.ai-harness/board/agenda/completed.json` | 완료함: 최근 7일 동안 완료한 항목의 제목·출처·링크·완료 시각(본문은 남기지 않음). 7일이 지난 줄은 읽고 쓸 때 지우고, 다시 열면 그 줄을 지웁니다 |
 
