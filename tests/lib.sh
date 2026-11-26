@@ -21,6 +21,7 @@ cleanup() {
   # 보드 테스트가 중간에 실패해도 띄운 서버를 남기지 않는다.
   local board_pid conf
   for conf in "$TEST_TMP/board/data/board/server.json" "$TEST_TMP/board/impact/data/board/server.json" "$TEST_TMP/board/autofix/data/board/server.json" "$TEST_TMP/board-resident/data/board/server.json" "$TEST_TMP/board-resident/data/board/host/host.json"; do
+    [[ -f "$conf" ]] || continue
     board_pid="$(jq -r '.pid // empty' "$conf" 2>/dev/null || true)"
     [[ "$board_pid" =~ ^[0-9]+$ ]] && kill "$board_pid" 2>/dev/null
     if [[ "$conf" == */host/host.json && "$board_pid" =~ ^[0-9]+$ ]]; then
@@ -125,21 +126,30 @@ assert_not_file() {
   [[ ! -f "$1" ]] || fail "unexpected file: $1"
 }
 
+# macOS 기본 /usr/bin/git·/usr/bin/python3은 xcrun으로 실제 도구를 띄우는 껍데기라 호출마다 프로세스가 하나 더 들고
+# 느리다(#569·#614). 영역 프로세스와 그 아래 러너·보드·가짜 CLI가 모두 실제 도구를 부르게 PATH 앞에 링크를 둔다.
+# 링크로 부른 git은 내장 exec-path를 링크 위치로 잡으므로 GIT_EXEC_PATH로 실제 git-core를 알려 준다.
+if [[ "${OSTYPE:-}" == darwin* && "$(command -v git)" == /usr/bin/git ]]; then
+  TEST_REAL_GIT="$(xcrun -f git 2>/dev/null || true)"
+  if [[ -n "$TEST_REAL_GIT" && "$TEST_REAL_GIT" != /usr/bin/git && -x "$TEST_REAL_GIT" && -d "${TEST_REAL_GIT%/bin/git}/libexec/git-core" ]]; then
+    mkdir -p "$TEST_TMP/real-bin"
+    ln -s "$TEST_REAL_GIT" "$TEST_TMP/real-bin/git"
+    export GIT_EXEC_PATH="${TEST_REAL_GIT%/bin/git}/libexec/git-core"
+    if [[ "$(command -v python3)" == /usr/bin/python3 && -x "${TEST_REAL_GIT%/git}/python3" ]]; then
+      ln -s "${TEST_REAL_GIT%/git}/python3" "$TEST_TMP/real-bin/python3"
+    fi
+    export PATH="$TEST_TMP/real-bin:$PATH"
+  fi
+fi
+
 CLAUDE_FIXTURE="$ROOT/tests/fixtures/claude/aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
 CODEX_FIXTURE="$ROOT/tests/fixtures/codex/rollout-2026-07-29T12-00-00-bbbbbbbb-1111-2222-3333-cccccccccccc.jsonl"
 CODEX_FILE_SID="2026-07-29T12-00-00-bbbbbbbb-1111-2222-3333-cccccccccccc"
 CODEX_SESSION_ID="bbbbbbbb-1111-2222-3333-cccccccccccc"
 
-# stable project ID: origin과 삭제된 worktree 경로 fallback
+# stable project ID: origin과 삭제된 worktree 경로 fallback. 저장소는 쓰는 영역만 make_project_repo로 만든다(#614).
 PROJECT_REPO="$TEST_TMP/repos/service"
 PROJECT_WORKTREE="$TEST_TMP/worktrees/service-NMRS-999"
-mkdir -p "$PROJECT_REPO" "$TEST_TMP/worktrees"
-git -C "$PROJECT_REPO" init -q
-git -C "$PROJECT_REPO" config user.email test@example.com
-git -C "$PROJECT_REPO" config user.name test
-git -C "$PROJECT_REPO" commit -q --allow-empty -m init
-git -C "$PROJECT_REPO" remote add origin git@github.com:acme/service.git
-git -C "$PROJECT_REPO" worktree add -q -b test-worktree "$PROJECT_WORKTREE"
 HARNESS_METRICS_DIR="$TEST_TMP/lib-data"
 export HARNESS_METRICS_DIR
 # SessionStart가 실제 ~/.claude 전체를 백그라운드 backfill하지 않게 기본 비활성화. 전용 테스트만 켠다.
@@ -154,14 +164,22 @@ export HARNESS_CLAUDE_JSON="$TEST_TMP/claude.json"  # 보드 새 세션 저장�
 # shellcheck source=scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
 
-make_repo() {
+make_repo() { # dir [origin] — 빈 커밋 하나와 user 설정(test@example.com)을 가진 저장소
   local dir="$1" origin="${2:-}"
-  mkdir -p "$dir"
-  git -C "$dir" init -q
-  git -C "$dir" config user.email test@example.com
-  git -C "$dir" config user.name test
+  git init -q "$dir"
+  # git config user.*·remote add와 같은 내용을 프로세스 없이 쓴다. 설정 파일에서 따옴표가 필요한 주소만 git에 맡긴다.
+  printf '[user]\n\temail = test@example.com\n\tname = test\n' >>"$dir/.git/config"
+  case "$origin" in
+    "") ;;
+    *[\"\\\;\#]*) git -C "$dir" remote add origin "$origin" ;;
+    *) printf '[remote "origin"]\n\turl = %s\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n' "$origin" >>"$dir/.git/config" ;;
+  esac
   git -C "$dir" commit -q --allow-empty -m init
-  [[ -z "$origin" ]] || git -C "$dir" remote add origin "$origin"
+}
+
+make_project_repo() { # PROJECT_REPO(origin acme/service)와 그 링크된 worktree PROJECT_WORKTREE를 만든다
+  make_repo "$PROJECT_REPO" git@github.com:acme/service.git
+  git -C "$PROJECT_REPO" worktree add -q -b test-worktree "$PROJECT_WORKTREE"
 }
 
 # 테스트 서버 포트는 커널이 bind 0으로 고른 빈 포트를 쓴다 (병렬·동시 세션 충돌 방지)
@@ -171,6 +189,4 @@ free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.
 HARNESS_INIT_CONTENT="$(<"$ROOT/skills/harness-init/SKILL.md")"
 # shellcheck disable=SC2016  # hook JSON의 literal 변수 참조를 검사
 LITERAL_PLUGIN_ROOT='"${CLAUDE_PLUGIN_ROOT}'
-START_COMMAND="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
-START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd}')"
 DS_FONT_URL='https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2'
