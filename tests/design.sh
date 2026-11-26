@@ -268,15 +268,7 @@ for phrase in "Destination resolution" "destination resolution" "SKILL.md § 1";
     *"$phrase"*) fail "design-system-builder must not keep the #628 path fallback chain: $phrase" ;;
   esac
 done
-DSB_FRAGMENT="$(<"$ROOT/changelog.d/627-design-output-destination.md")"
-assert_contains "$DSB_FRAGMENT" "보여줄 곳" "changelog fragment describes the view destination"
-case "$DSB_FRAGMENT" in
-  *"사용자 명시 → 하네스 문서"*) fail "changelog fragment must not describe the #628 path fallback chain" ;;
-esac
-case "$(printf '%s\n' "$DSB_FRAGMENT" | tail -n 1)" in
-  *"(#627)") ;;
-  *) fail "changelog fragment must end with (#627)" ;;
-esac
+# changelog.d 조각은 릴리스 준비(release-prep.sh)가 합치고 지우는 일시 파일이라 여기서 읽지 않는다 (#649).
 pass "design-system-builder view destination question, fallback, and report (#627)"
 
 # 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
