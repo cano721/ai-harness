@@ -19,6 +19,7 @@ Claude Code와 Codex CLI에서 프로젝트별 AI 작업 규칙을 만들고, �
 - [Harness Board](#board)
 - [모니터링 기반 자동 수정](#autofix)
 - [DB 스캔 가드](#db-scan-guard)
+- [stale reset 가드](#stale-reset-guard)
 - [수집 데이터와 보관](#data-retention)
 - [업데이트](#updates)
 - [설정](#configuration)
@@ -178,7 +179,7 @@ ai-harness는 디자인 데이터셋(팔레트·폰트·사이트 갤러리)을 
 
 변경 이해(`/understand-change`)는 여기에 없습니다 — 프로젝트 사본 없이 플러그인이 직접 제공하며, 초기화는 프로젝트별 설명 정책 파일 `.ai-harness/workflows/understand-change.md`만 만듭니다(사람 소유, 동기화 대상 아님).
 
-Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄우고([자동 harvest](#auto-harvest)), `HM_SYNC_AUTO=1`을 켠 경우에만 뒤처진 저장소의 `/harness-init --sync`를 띄웁니다([자동 sync](#auto-sync)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다.
+Skill과 별개로 `SessionStart`·`Stop` hook이 정기 backfill을 깨웁니다(OS 스케줄러 불필요). 이 경로는 **기록, 누적량 판정, 알림**까지만 담당하며 `/harvest` 실행·코드 수정·PR 생성·업데이트를 자동으로 수행하지 않습니다. `HM_HARVEST_AUTO=1`을 켠 경우에만 batch가 생긴 시점에 `/harvest`를 백그라운드로 띄우고([자동 harvest](#auto-harvest)), `HM_SYNC_AUTO=1`을 켠 경우에만 뒤처진 저장소의 `/harness-init --sync`를 띄웁니다([자동 sync](#auto-sync)). `HM_DB_SCAN_GUARD=1`을 켜면 Bash 실행 전에 [DB 스캔 가드](#db-scan-guard)가 스키마 조건 없는 information_schema 조회를 막습니다. [stale reset 가드](#stale-reset-guard)는 기본으로 켜져 있어, HEAD의 조상이 아닌 커밋 위로 옮기는 `git reset --soft <ref>`를 막습니다.
 
 <a id="quick-start"></a>
 
@@ -337,7 +338,7 @@ deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --fe
 | 엣지 | 노드가 낸 결과와 같은 `when`을 가진 전이만 따릅니다. 저장소 그래프에 없는 전이는 `invariant_violation`입니다. 그래프를 고치면 러너 동작이 바뀝니다 |
 | human 노드 | `actor:"human"`인 approval에서 멈춥니다. 승인은 Brief를 보여 준 뒤 사용자가 대화에 직접 입력한 `승인`/`approve`(Claude·Codex 트랜스크립트의 사용자 메시지)나 터미널의 `approve`만 인정합니다. 도구 출력·모델 메시지는 해당하지 않고, Brief나 검증 명령이 바뀌면 이전 승인은 무효입니다 |
 | 정책 승인 | 개인 설정이 `HM_APPROVAL=auto`면 brief 노드는 열린 질문 대신 `decisions`(`{question, choice, rationale}` — 추천안과 근거)와 `needs_human`(범위를 바꾸는 제품 판단, 데이터 삭제·마이그레이션·인덱스 조작·배포처럼 되돌리기 어려운 선택, 외부 시스템 쓰기)을 냅니다. `needs_human`이 비어 있으면 `auto_approved_by_policy` 엣지로 통과하고 근거(`source:"auto-policy"`, Brief 파일)를 남깁니다. `decisions`는 실행 디렉터리 `brief.md`의 "결정 사항"으로 남아 deliver·review가 따르고, publish가 PR 본문(PR이 없으면 커밋 메시지)에 그대로 옮깁니다. `needs_human`이 있거나 Brief가 예전 형식(`open_questions`)으로 오면 사람을 기다립니다. 프로젝트 그래프에서 이 엣지를 지우면 auto여도 사람을 기다립니다. feature·bug-fix Brief는 요청과 요청이 인용·링크한 이슈의 완료 조건을 항목마다 `acceptance_map`(`{criterion, covered_by, out_of_scope_reason}`)으로 내고, `brief.md`의 "완료 조건 대응"에 남습니다. auto에서 대응표가 비었거나 대응(`covered_by`)도 범위 밖 사유도 없는 조건이 있으면 승인하지 않고 그 조건을 적어 Brief를 다시 쓰게 하며, 그래프 `limits.max_brief_rewrites`(기본 2)를 넘으면 `brief_coverage_incomplete` 엣지로 `user_decision`에 넘깁니다(엣지가 없는 예전 그래프는 사람 승인을 기다립니다). review는 승인된 Brief와 함께 원 요청의 완료 조건과 대조해, Brief가 사유와 함께 범위 밖으로 두지 않은 빠진 조건을 blocking으로 냅니다. 승인 모드는 `HM_APPROVAL_REPOS` > `HM_APPROVAL` > 기본 `human`으로 정하고, run state의 출처를 실행 끝까지 유지합니다. manifest의 기존 `approval`은 무시하며 러너가 개인 설정으로 옮기라는 notice를 남깁니다 |
-| git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, upstream에 push됨, pr-only면 PR URL. 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
+| git | `git_policy`가 `pr-only`·`direct`(예전 값 `merge`는 `pr-only`로 읽음)면 deliver와 각 repair 뒤 로컬 체크포인트 커밋(`wip(<워크플로>): …`, bug-fix는 regression·fix 뒤에도)을 남기고, `publish` 노드(쓰기 + 네트워크) 세션이 프로젝트 규칙대로 커밋 정리·일반 push·PR 생성을 합니다. 러너는 결과를 세션 보고가 아니라 git 상태로 판정합니다: 미커밋 없음, 커밋된 트리 = 리뷰한 트리, 실행 전 이력 보존, fork 지점 유지·base 되돌림 없음, upstream에 push됨, pr-only면 PR URL. 되돌림 검사(#601)는 기준 브랜치(`merge_policy.base` → `origin/HEAD`)를 새로 가져와, 브랜치가 그 최근 변경을 옛 내용으로 되돌렸거나(파일이 base에서 마지막으로 바뀌기 직전 내용과 같고 지금 base와 다름) base에 최근 추가된 다른 이슈의 `changelog.d/<이슈>-*.md`를 지웠는지 봅니다. 리뷰한 HEAD에서 걸리면 세션을 띄우지 않고 push하지 않으며, 세션 뒤에도 다시 보고, 어느 쪽이든 `publish_failed`(사람 판단)와 파일 목록(`.publish.revert_check`)을 남깁니다. base를 정할 수 없거나 원격에 없으면 건너뛴 사유만 남기고, 원격을 읽지 못하면 막습니다. 러너 밖 수동 병합 전에는 `workflow-driver.sh revert-check --base <branch>`로 같은 검사를 합니다(exit 1이면 되돌림). 그 밖의 정책이면 커밋하지 않고 publish를 건너뜁니다 |
 | 원격 CI | push했으면 `remote_ci` 노드(읽기 + 네트워크 — Codex는 read-only sandbox가 네트워크를 열 수 없어 workspace-write + 지문 비교, Claude는 `Read,Grep,Glob,Bash`)가 프로젝트 PR·CI 도구로 그 커밋의 원격 CI가 끝날 때까지 봅니다. 로컬에서 같은 명령이 통과해도 원격 CI를 대신하지 못합니다(OS·DB 정밀도 차이). `failed`는 실패 체크·로그를 finding으로 repair에 넘기고 같은 수리 한도 안에서 다시 push·확인, `none`(원격 CI 없음 — 저장소에 CI 설정 파일이 있으면 믿지 않음)·`passed`는 done, `unverified`(볼 수단 없음)와 다른 커밋의 결과는 `user_decision`, `pending`(약 60분 뒤에도 진행 중)은 `30`으로 멈춰 `resume`이 다시 봅니다. **원격 CI가 최종 관문**입니다: feature·bug-fix 런이 push하고(`git_policy` `pr-only`·`direct`, 개인 단계 merge·deploy 포함) 저장소에 CI 설정 파일이 있으면 시작 때 `policy.final_gate`를 `remote_ci`로 고정하고, Brief의 `final_checks`(전체 회귀 같은 넓은 검사)를 로컬에서 돌리지 않습니다(`sync_base`도 `checks`만 다시 돕니다). 미룬 검사는 progress.log의 `final checks left to remote CI:`, 상태 `final_gate`, PR 본문의 "Final checks left to remote CI"에 남습니다. 원격 CI가 없거나 push하지 않는 런은 지금처럼 리뷰가 깨끗해진 뒤 로컬에서 한 번 돕니다(`local`). 노드가 도는 동안 push한 원격 브랜치가 움직이면 `40`입니다. `remote_ci`가 없는 이전 프로젝트 그래프는 publish에서 done이 되지만 결과에 "remote CI: unverified"를 밝힙니다 |
 | 체크포인트 | 노드마다 `state.json`에 현재 노드·이력·승인 근거를 남기고, `resume`이 멈춘 노드부터 이어 갑니다. 상태는 저장소 밖 `~/.ai-harness/runs/`에 둡니다. 러너가 멈출 때(그리고 체크포인트 커밋·publish가 HEAD를 옮길 때) 기준점(HEAD + 작업 트리 지문)도 남기고, `resume`·`approve`·`revise`는 에이전트를 부르기 전에 그 기준점과 지금을 대조합니다. 멈춘 뒤 커밋이나 미커밋 수정이 생겼으면 아무것도 실행하지 않고 바뀐 커밋·파일과 남은 노드·검사를 보여 준 뒤 `20`으로 멈춥니다(실행 디렉터리 `baseline-changes.txt`). 되돌린 뒤 `resume`하거나, 바뀐 것을 이 실행에 넣을 때만 `resume --accept-changes`로 기준점을 옮깁니다(러너가 강제 종료돼 기준점을 남기지 못했으면 바뀐 것이 러너의 하다 만 작업일 수 있다고 안내합니다). 불변식 위반(`40`)으로 멈춘 상태는 기준점이 되지 않습니다. 리뷰를 지난 노드(publish·remote_ci·merge·post_merge_verify)와 끝난 실행(`done`·`user_decision`·polish `fix_list`)은 받아들인 변경이 검증·리뷰를 건너뛰므로 `--accept-changes`도 거부하고(`20`) 새 실행으로 검사하라고 안내합니다. 이미 `done`인 실행은 성공을 다시 돌려주지 않습니다 |
 | 검증 | Brief와 함께 승인된 검증 명령을 러너가 직접 실행합니다. 실패는 리뷰 전에 repair로 갑니다. 모든 검사에 동시 실행 수 `HM_TEST_JOBS`(기본 `min(ncpu/2, 6)`, `~/.ai-harness/config`로 조정)를 넘기고, 같은 트리에서 이미 통과한 검사는 재사용하며, 검사별 소요 시간을 progress.log와 `status`에 남깁니다 |
@@ -373,7 +374,7 @@ deliver 중에 Brief가 요청의 조건을 빠뜨린 것을 알면 `revise --fe
 | 단계 | 동작 |
 |---|---|
 | 병합 조건 | 원격 CI 뒤 `merge` 노드에서 **러너가** PR 호스트(GitHub `gh`, Bitbucket Cloud REST — `ATLASSIAN_USER`·`BITBUCKET_API_TOKEN`)에서 PR 상태를 직접 읽어 판정합니다. 모델의 보고로 판정하지 않습니다. PR이 이 저장소(origin)의 것이고, 이 실행이 push한 브랜치에서 `base`로 향하는지 먼저 확인합니다. 조건은 **저장소 호스트 규칙**입니다: 기준 브랜치 보호에 필수 승인이 있으면 작성자·봇이 아닌 쓰기 권한 있는 리뷰어가 **지금 head에** 남긴 승인 그 수만큼(Bitbucket은 승인이 커밋에 묶이지 않아 마지막 push 뒤에 참여한 승인만), 필수 체크가 있으면 remote_ci 노드의 결과와 호스트가 보고한 head의 체크가 모두 통과("CI 없음"은 통과 아님). 보호가 없으면 승인 없이 병합합니다. 충돌 없음·draft 아님·리뷰어의 변경 요청 없음은 항상 봅니다 |
-| 대기·막힘 | 충돌 계산 중은 약 2분(15초 간격) 동안 다시 묻고, 그래도 판정이 없거나 승인 대기·draft이면 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패는 `user_decision`(exit 20). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
+| 대기·막힘 | 충돌 계산 중은 약 2분(15초 간격) 동안 다시 묻고, 그래도 판정이 없거나 승인 대기·draft이면 exit 30으로 멈추고 `resume`이 다시 봅니다. 변경 요청·PR 닫힘·head 이동·호스트를 읽지 못함·병합 실패, 병합 직전 되돌림 검사(base를 새로 가져와 push한 head가 base의 최근 변경을 옛 내용으로 되돌리거나 다른 이슈의 changelog 조각을 지웠는지)에 걸림은 `merge_blocked` → `user_decision`(exit 20, 파일 목록은 `.merge.blocked`). 사람이 먼저 병합했으면 그 병합 커밋으로 검증을 이어 갑니다 |
 | 기준 브랜치 충돌 (`sync_base`) | 막힘이 기준 브랜치와의 **충돌뿐**이면 사람에게 넘기지 않고 `sync_base` 노드로 갑니다(feature·bug-fix 그래프). 러너가 최신 `origin/<base>`를 일반 merge로 들이고, 충돌이 나면 에이전트 세션이 양쪽 의도를 살려 충돌만 풉니다(커밋·push는 하지 않음). 러너가 충돌 표식이 남지 않았는지 확인해 merge 커밋을 만들고, 런의 검사(`checks`·`final_checks` — 원격 CI가 최종 관문인 런은 `checks`만)를 다시 통과해야 일반 push(fast-forward)한 뒤 `remote_ci` → `merge`를 다시 거칩니다 — 새 head의 승인·CI를 다시 요구합니다. 원격 CI를 기다리는 동안 바깥에서 들어온 기준 브랜치 병합 커밋 하나(GitHub "Update branch" 등)도 같은 경로로 받습니다. 반복 한도(그래프 `limits.max_base_syncs`, 기본 3)를 넘기거나, 풀지 못한 충돌(병합은 abort)이나 검사 실패(push하지 않음)가 남으면 `user_decision`입니다. 충돌과 다른 막힘이 같이 있으면 동기화하지 않고 사람에게 넘깁니다. rebase·force push·기준 브랜치 push는 하지 않습니다 |
 | 병합 | 모든 조건이 맞으면 리뷰하고 push한 head를 고정해(`gh pr merge --match-head-commit`) 저장소의 방식으로 병합합니다 — GitHub는 저장소가 허용한 방식 중 squash → merge → rebase 순(허용 방식을 읽지 못하면 사람에게), Bitbucket은 저장소 기본 전략. Bitbucket merge API는 head를 고정할 수 없어 판정 직전에 head를 다시 읽는 것으로 대신합니다 |
 | 병합 후 검증 | `target_ci`(병합 커밋의 원격 CI) → `deploy`(`deploy_check_cmd`가 0이면 배포됨, `deploy_timeout_minutes` 안에 안 보이면 사람에게) → `smoke`(`smoke_cmd`, 실패하면 한 번 더) → `monitor`(이 실행이 고친 운영 에러 — `start --monitor-error <파일>` — 를 병합된 PR과 함께 [`/autofix`](#autofix) 재발 추적에 올림. 재발 판정은 관찰 창이 길어 `/autofix`의 정기 검증이 이어 하고, 고친 에러가 없는 실행은 건너뜀). 명령은 저장소 루트에서 `HM_MERGE_COMMIT`·`HM_BASE_BRANCH`·`HM_PR_URL`과 함께 실행됩니다. 끝난 단계는 `resume`에서 다시 하지 않습니다 |
@@ -784,6 +785,17 @@ scripts/board/board.sh launcher install|remove|status   # macOS: 눌러서 여�
 - 차단: 구문(`;`)이나 `UNION` 분기가 `VIEWS`·`ROUTINES`·`TRIGGERS`·`EVENTS`·`PARAMETERS`를 읽는데(MySQL 계열은 `TABLES`·`COLUMNS` 등 메타 테이블도 포함), 문자열 리터럴·주석을 지운 WHERE 최상위에 `*_schema =`·`IN (...)` 조건이 없거나 `OR`가 있을 때
 - 한계: 명령 문자열에 보이는 쿼리만 검사합니다. 스크립트 파일, `bash -c`·`docker exec`·`ssh` 안의 명령은 보지 않습니다
 
+<a id="stale-reset-guard"></a>
+
+## stale reset 가드
+
+`git reset --soft <ref>`는 인덱스(옛 트리)를 그대로 두고 브랜치만 옮깁니다. `<ref>`가 그사이 앞서간 기준 브랜치(예: fetch한 `origin/develop`)면 다음 커밋이 그 새 커밋들을 옛 내용으로 되돌립니다. 부모가 최신이라 merge-base 기준 검사로는 보이지 않습니다(#594). Claude Code의 Bash 실행 전에 `PreToolUse` hook(`scripts/stale-reset-guard.sh`)이 이런 reset을 막습니다. 기본으로 켜져 있습니다.
+
+- 판정: 명령 위치의 `git`(전역 옵션 `-C <dir>`·`-c k=v` 등은 건너뜀) `reset --soft <ref>`에서 `<ref>`가 커밋으로 풀리는데 HEAD의 조상이 아니면 막고 `git rebase <ref>`를 안내합니다. `;`·`&&`·`||`·`|`·`&`·줄바꿈으로 이은 명령도 하나씩 봅니다
+- 허용: 자기 커밋을 합치는 `git reset --soft $(git merge-base HEAD <ref>)`·merge-base sha·`HEAD~N`, `git rebase`, `--hard`·`--mixed`, 치환(`$(...)`·백틱)이라 정적으로 풀 수 없는 ref, 없는 ref, git 저장소가 아닌 위치, `--` 뒤 경로 인자가 있는 형태. 판정할 수 없으면 통과합니다(fail-open)
+- 끄기: `HM_STALE_RESET_GUARD=0`을 [설정](#configuration)하거나 환경변수로 줍니다
+- 한계: Claude Code의 플러그인 hook이라 Codex 세션은 막지 못합니다. 그래프 러너는 publish 전후와 병합 직전에 [되돌림 검사](#merge-policy)로 같은 결과를 잡습니다
+
 <a id="data-retention"></a>
 
 ## 수집 데이터와 보관
@@ -938,6 +950,7 @@ HM_UPDATE_RETRY_MAX_MINUTES=360  # 연속 실패 시 백오프 상한
 HM_UPDATE_CONNECT_TIMEOUT=2      # 릴리스 조회 연결 타임아웃(초)
 HM_UPDATE_MAX_TIME=5             # 릴리스 조회 전체 타임아웃(초)
 HM_DB_SCAN_GUARD=0               # 1이면 DB 스캔 가드 활성화(기본 꺼짐)
+HM_STALE_RESET_GUARD=1           # 0이면 stale reset 가드 끔(기본 켬)
 HM_BACKGROUND_WATCHDOG=1         # 0이면 백그라운드 Bash 명령에 세션 종료 감시자를 붙이지 않음(Claude Code)
 HM_HEAVY_SLOTS=                  # 무거운 명령(빌드·dev 서버·전체 테스트·e2e)의 동시 실행 상한. 비우면 끔(Claude Code)
                                  # 남은 메모리 30% 미만이면 절반, 15% 미만이면 1개. 자리가 없으면 hook이 기다렸다 실행한다

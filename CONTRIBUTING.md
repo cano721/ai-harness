@@ -30,6 +30,14 @@ chore/bump-ci-shellcheck
 
 - base는 `develop`이다. `gh pr create --base develop` — 기본값이 `main`이므로 생략하면 릴리스 브랜치로 열린다
 - 작업 브랜치 → `develop` 머지는 **squash**, 머지 후 브랜치 삭제 (`gh pr merge <n> --squash --delete-branch`)
+- squash 머지 전에 브랜치가 `develop`의 최근 변경을 옛 내용으로 되돌리거나 다른 이슈의 changelog 조각을 지우지 않았는지 검사한다(#594·#601):
+
+  ```bash
+  git fetch origin develop
+  bash .ai-harness/workflows/workflow-driver.sh revert-check --base develop --issue <이슈>
+  ```
+
+  exit 1이면 병합하지 않는다. 출력된 파일 목록을 PR에 남기고 사람이 판단한다(러너의 `user_decision`과 같다). wip 커밋은 `git reset --soft $(git merge-base HEAD origin/develop)`로만 합치고, `develop`을 따라가려면 `git rebase origin/develop`을 쓴다
 - `develop` → `main` 릴리스 머지만 **merge commit** (`gh pr merge <n> --merge`). 이유는 [릴리스](#릴리스)에 있다
 - 여러 PR이 동시에 열려 있으면 머지된 순서대로 나머지를 `develop`에 리베이스한다
 

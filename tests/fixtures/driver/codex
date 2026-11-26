@@ -196,9 +196,23 @@ case "$node:$scenario" in
     printf 'delivered\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
   deliver:screen_backstop) mkdir -p templates; echo '<summary>반려하기</summary>' >templates/approve.html; printf 'delivered\n' >"$out" ;;
+  # 되돌림 검사(#601): deliver가 런 도중 develop을 merge하고(커밋은 러너 체크포인트가 한다) 그 develop이 추가한 남의 조각을 지운다.
+  deliver:stale_deliver_fragment*)
+    git fetch -q origin develop
+    git merge -q --no-ff --no-commit origin/develop
+    git rm -qf changelog.d/777-other.md
+    echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
   publish:publish_unpushed) git add -A; git commit -qm "feat: add feature" || true; jq -n '{summary:"x", branch:"main", pr_url:""}' >"$out" ;;
+  # 되돌림 검사(#601): stale_reset은 #594처럼 새 origin/develop 위로, stale_safe는 merge-base 위로 wip를 합쳐 커밋한다.
+  publish:stale_reset|publish:stale_safe)
+    git checkout -q -b feat/add-feature
+    git fetch -q origin
+    if [[ "$scenario" == stale_reset ]]; then git reset -q --soft origin/develop; else git reset -q --soft "$(git merge-base HEAD origin/develop)"; fi
+    git commit -qm "feat: add feature"
+    git push -q -u origin HEAD 2>/dev/null
+    jq -n '{summary:"opened", branch:"feat/add-feature", pr_url:"https://example.test/pr/7"}' >"$out" ;;
   publish:*)
     [[ "$(git rev-parse --abbrev-ref HEAD)" == feat/add-feature ]] || git checkout -q -b feat/add-feature
     git add -A
@@ -275,6 +289,23 @@ case "$node:$scenario" in
   ui_review:ui_fake_capture) echo note >"$adddir/notes.txt"
     jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  # #606: 증거 경로 해석(하위 폴더 basename·비브라우저 시나리오·모호·밖·사유 없음)
+  ui_review:ui_subdir) mkdir -p "$adddir/ui-review-1/shots"; echo capture >"$adddir/ui-review-1/shots/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_nonbrowser) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""},
+      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"터미널 출력이라 브라우저로 렌더링할 수 없다", alternative_verification:"CLI 실행 출력에서 반려됨 줄 확인"}],
+      blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_ambiguous) mkdir -p "$adddir/a" "$adddir/b"; echo capture >"$adddir/a/default.png"; echo capture >"$adddir/b/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_outside) outside="$(dirname "$adddir")/outside-606.png"; echo capture >"$outside"
+    jq -n --arg o "$outside" '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:[$o], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_no_reason) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"},
+      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"", alternative_verification:""}],
+      blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   *) exit 1 ;;
