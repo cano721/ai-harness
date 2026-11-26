@@ -980,7 +980,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 
     <section class="g-section" id="toast">
       <h2 class="ds-title">토스트</h2>
-      <p>방금 한 동작의 결과를 알립니다. 성공은 5초 뒤 사라지고, 실패는 닫을 때까지 남습니다.</p>
+      <p>방금 한 동작의 결과를 알립니다. 성공은 3초 뒤 사라지고, 실패는 닫을 때까지 남습니다.</p>
       <div class="g-demo">
         <div class="ds-cluster">
           <button type="button" class="ds-btn" data-toast="success">성공 토스트 띄우기</button>
@@ -1276,12 +1276,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
   });
 
-  // 토스트: 성공은 5초 뒤 사라지고, 실패는 닫을 때까지 남는다(role=alert 로 바로 읽힌다).
+  // 토스트: 성공은 3초 뒤 사라지고, 실패는 닫을 때까지 남는다(role=alert 로 바로 읽힌다).
   function toast(status, text) {
     var t = el("div", "ds-toast"), close = el("button", "ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon");
     var origin = document.activeElement, timer = null;
     function dismiss() { var had = t.contains(document.activeElement); t.remove(); if (had && origin && origin.focus) origin.focus(); }
-    function arm() { if (status !== "danger") timer = setTimeout(dismiss, 5000); }
+    function arm() { if (status !== "danger") timer = setTimeout(dismiss, 3000); }
     function hold() { clearTimeout(timer); }
     t.setAttribute("data-status", status); t.setAttribute("role", status === "danger" ? "alert" : "status");
     close.type = "button"; close.setAttribute("aria-label", "알림 닫기"); close.append(icon("i-close"));
