@@ -523,5 +523,11 @@ done
 assert_contains "$(<"$ROOT/skills/design-system-builder/SKILL.md")" "inside the three-question limit of a round" "design-system-builder asks the copy rule question inside the round limit"
 pass "design-audit axis E precedence with a UX writing rule document and the copy rule question limit (#533)"
 
+# output-format.md 기본 경로가 SKILL.md 대체 체인과 정합한다 (#627, AC-8).
+DR_OF="$(<"$ROOT/skills/design-system-builder/references/output-format.md")"
+assert_contains "$DR_OF" "docs/design-system.md" "output-format.md still names the default path docs/design-system.md"
+assert_contains "$DR_OF" "SKILL.md § 1" "output-format.md points to the SKILL.md destination resolution as the single source"
+pass "output-format.md default path aligns with the destination resolution fallback chain (#627)"
+
 
 finish_tests
