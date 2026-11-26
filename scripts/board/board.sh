@@ -37,6 +37,7 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh status                  떠 있는지와 주소
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
+       board.sh launcher auto-rebuild   보드 열기가 부르는 내부용: 낡은 창 앱을 지금 shim 그대로 다시 빌드한다
        board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
        board.sh brief set [--source <이름>] < 글 | brief show   '내 일정' 맨 위 아침 요약 글을 남기고·본다
        board.sh agenda summary                 오늘 일정·답할 것·기한순 할 일을 JSON으로(아침 요약 재료)
@@ -125,6 +126,7 @@ command_open() {
   if pid="$(board_pid)"; then
     url="$(conf_field url)"
     [[ -n "$url" ]] || die "보드 서버(pid $pid)가 떠 있지만 주소를 남기지 않는 이전 버전입니다. board.sh stop 뒤 다시 여세요."
+    maybe_autorebuild_launcher || true
     ((browser)) && open_board "$url"
     running_json "$pid" true
     return 0
@@ -169,6 +171,7 @@ subprocess.Popen([sys.executable, "-B", sys.argv[1], "--no-open"], stdin=subproc
     conf_port="$(conf_field port)"
     if pid="$(board_pid)" && [[ "$conf_port" =~ ^[0-9]+$ ]] && ((conf_port >= PORT && conf_port <= PORT_LAST)) && [[ -n "$(conf_field url)" ]]; then
       url="$(conf_field url)"
+      maybe_autorebuild_launcher || true
       ((browser)) && open_board "$url"
       running_json "$pid" false
       return 0
@@ -480,72 +483,122 @@ launcher_json() { # action
     '{installed: $i, app: $app, shim: $shim} + (if $k == "" then {} else {kind: $k} end) + (if $a == "" then {} else {action: $a} end)'
 }
 
+# 창 앱이 지금 소스와 다르게 빌드됐고, 같은 소스·같은 컴파일러로 실패한 기록도 없으면 참.
+swift_build_stale() {
+  [[ "$(cat "$LAUNCHER_APP/Contents/Resources/launcher-build" 2>/dev/null)" != "$(swift_stamp)" ]] \
+    && [[ "$(cat "$LAUNCHER_SWIFT_FAILED" 2>/dev/null)" != "$(swift_failed_stamp)" ]]
+}
+
+# 보드 열기가 창 앱을 다시 만들 조건(#622). 애플릿·남의 앱·런처 없음은 launcher_kind에서 걸러진다.
+launcher_rebuild_due() {
+  [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" == Darwin ]] || return 1
+  [[ "$(launcher_kind)" == window ]] || return 1
+  have_swiftc || return 1
+  swift_build_stale
+}
+
+# 플러그인을 업데이트하면 창 앱이 낡는다 — 사용자가 install을 다시 치지 않아도 되게 보드 열기가 뒤에서 다시 만든다.
+# 떼어 띄우므로 open(과 $(board.sh open)으로 받는 호출자)은 빌드를 기다리지 않는다. 새 앱은 다음 실행부터 쓰인다.
+maybe_autorebuild_launcher() {
+  launcher_rebuild_due || return 0
+  python3 -I -c 'import subprocess, sys
+log = open(sys.argv[2], "ab")
+subprocess.Popen(["bash", sys.argv[1], "launcher", "auto-rebuild"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                 start_new_session=True, close_fds=True)' "$DIR/board.sh" "$BOARD_DIR/launcher-rebuild.log"
+}
+
+# 보드 열기가 띄운 분리 프로세스. 동시에 연 open들이 한 번만 빌드하게 락 안에서 조건을 다시 본다.
+launcher_auto_rebuild() {
+  mkdir -p "$BOARD_DIR"
+  hm_acquire_lock "$BOARD_DIR/launcher-rebuild.lock" 1 || return 0
+  trap 'hm_release_lock "$BOARD_DIR/launcher-rebuild.lock"' EXIT
+  if launcher_rebuild_due; then
+    printf '%s launcher auto-rebuild\n' "$(date -u +%FT%TZ)"
+    # install은 자기 EXIT trap을 거므로 서브셸에서 돌려 락 해제 trap을 지킨다.
+    (launcher_install keep) || true
+  fi
+  hm_release_lock "$BOARD_DIR/launcher-rebuild.lock"
+  trap - EXIT
+}
+
+# $1=keep이면 지금 shim·AppleScript 소스를 그대로 쓴다: 보드 열기가 부른 셸의 PATH·BOARD_IDLE_EXIT가
+# 사용자가 install 때 담은 값을 덮어쓰지 않게 하고, 그러면 입력이 같아 빌드 기록이 다를 때만 다시 만든다.
+launcher_install() {
+  local mode="${1:-}" plugin_root action=unchanged
+  [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" == Darwin ]] || die "런처 앱은 macOS에서만 만듭니다. 다른 OS에서는 /ai-harness:board 또는 board.sh open으로 여세요."
+  if [[ -e "$LAUNCHER_APP" ]] && ! launcher_ours; then
+    die "같은 이름의 다른 앱이 있어 건드리지 않았습니다: $LAUNCHER_APP"
+  fi
+  plugin_root="$(cd "$DIR/../.." && pwd)"
+  mkdir -p "$BOARD_DIR/bin"
+  # 새 앱은 같은 폴더에서 만든 뒤 이름만 바꿔 넣는다(다른 볼륨 사이 mv는 복사라 중간 상태가 남는다). 중단돼도 임시본은 지운다.
+  mkdir -p "$(dirname "$LAUNCHER_APP")"
+  rm -rf "$(dirname "$LAUNCHER_APP")"/.harness-board.new.* # 강제 종료로 남은 지난 임시본
+  # osacompile은 이름이 .app으로 끝나야 애플릿을 만들고 앱 이름도 파일 이름에서 따므로, 임시 폴더 안에 같은 이름으로 만든다.
+  stage="$(dirname "$LAUNCHER_APP")/.harness-board.new.$$"
+  tmp="$stage/$(basename "$LAUNCHER_APP")"
+  trap 'rm -rf "$stage" "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_APP.old.$$"' EXIT
+  mkdir -p "$stage"
+  if [[ "$mode" == keep && -f "$LAUNCHER_SHIM" ]]; then
+    cp -p "$LAUNCHER_SHIM" "$LAUNCHER_SHIM.tmp.$$"
+  else
+    write_launcher_shim "$LAUNCHER_SHIM.tmp.$$"
+  fi
+  if [[ "$mode" == keep && -f "$LAUNCHER_SRC" ]]; then
+    cp -p "$LAUNCHER_SRC" "$LAUNCHER_SRC.tmp.$$"
+  else
+    write_launcher_script "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SHIM"
+  fi
+  # 컴파일한 앱은 매번 바이트가 달라, 입력(shim·AppleScript·Swift 소스·아이콘 생성기)이 같고 앱이 있으면 그대로 둔다.
+  # swiftc를 쓸 수 있으면 Swift 창 앱을, 없거나 빌드에 실패하면 AppleScript 애플릿을 둔다.
+  local rebuild=0 window_app=0 keep_window=0
+  [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]] && window_app=1
+  if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC" || ! launcher_ours; then
+    rebuild=1
+  elif have_swiftc; then
+    if swift_build_stale; then rebuild=1; fi
+  elif [[ ! -x "$LAUNCHER_APP/Contents/MacOS/applet" ]] && ((!window_app)); then
+    rebuild=1
+  fi
+  if ((rebuild)); then
+    SWIFT_FAILURE="" SWIFT_COMPILE_FAILED=0
+    if ! have_swiftc; then
+      SWIFT_FAILURE="swiftc를 쓸 수 없습니다. xcode-select --install로 Command Line Tools를 깐 뒤 다시 install하면 창 앱으로 바뀝니다"
+    elif write_swift_launcher_app "$tmp" "$LAUNCHER_SHIM"; then
+      rm -f "$LAUNCHER_SWIFT_FAILED"
+    else
+      ((SWIFT_COMPILE_FAILED)) && swift_failed_stamp >"$LAUNCHER_SWIFT_FAILED"
+      # 이미 쓰던 창 앱은 고정 경로 shim만 부르므로 shim이 바뀌어도 그대로 쓸 수 있다 — 애플릿으로 낮추지 않는다.
+      ((window_app)) && launcher_ours && keep_window=1
+    fi
+    if [[ -n "$SWIFT_FAILURE" ]]; then
+      if ((keep_window)); then
+        printf 'board: %s\n' "Swift 창 앱을 새로 만들지 못해 지금 앱을 그대로 둡니다: $SWIFT_FAILURE" >&2
+      else
+        printf 'board: %s\n' "Swift 창 앱을 만들지 못해 누를 때마다 브라우저로 여는 런처를 설치했습니다: $SWIFT_FAILURE" >&2
+        rm -rf "$tmp"
+        write_launcher_app "$tmp" "$LAUNCHER_SRC.tmp.$$"
+      fi
+    fi
+    mv "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM"
+    mv "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC"
+    if ((!keep_window)); then
+      if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
+      mv "$tmp" "$LAUNCHER_APP"
+    fi
+    action=installed
+  fi
+  # 보드 열기가 부른 재빌드는 그 체크아웃(지워질 수 있는 작업 폴더 등)을 대체 경로로 남기지 않는다.
+  [[ "$mode" == keep ]] || printf '%s\n' "$plugin_root" >"$LAUNCHER_ROOT_FILE"
+  launcher_json "$action"
+}
+
 command_launcher() {
-  local sub="${1:-status}" plugin_root action=unchanged
+  local sub="${1:-status}" action=unchanged
   case "$sub" in
     status) launcher_json "" ;;
-    install)
-      [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" == Darwin ]] || die "런처 앱은 macOS에서만 만듭니다. 다른 OS에서는 /ai-harness:board 또는 board.sh open으로 여세요."
-      if [[ -e "$LAUNCHER_APP" ]] && ! launcher_ours; then
-        die "같은 이름의 다른 앱이 있어 건드리지 않았습니다: $LAUNCHER_APP"
-      fi
-      plugin_root="$(cd "$DIR/../.." && pwd)"
-      mkdir -p "$BOARD_DIR/bin"
-      # 새 앱은 같은 폴더에서 만든 뒤 이름만 바꿔 넣는다(다른 볼륨 사이 mv는 복사라 중간 상태가 남는다). 중단돼도 임시본은 지운다.
-      mkdir -p "$(dirname "$LAUNCHER_APP")"
-      rm -rf "$(dirname "$LAUNCHER_APP")"/.harness-board.new.* # 강제 종료로 남은 지난 임시본
-      # osacompile은 이름이 .app으로 끝나야 애플릿을 만들고 앱 이름도 파일 이름에서 따므로, 임시 폴더 안에 같은 이름으로 만든다.
-      stage="$(dirname "$LAUNCHER_APP")/.harness-board.new.$$"
-      tmp="$stage/$(basename "$LAUNCHER_APP")"
-      trap 'rm -rf "$stage" "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_APP.old.$$"' EXIT
-      mkdir -p "$stage"
-      write_launcher_shim "$LAUNCHER_SHIM.tmp.$$"
-      write_launcher_script "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SHIM"
-      # 컴파일한 앱은 매번 바이트가 달라, 입력(shim·AppleScript·Swift 소스·아이콘 생성기)이 같고 앱이 있으면 그대로 둔다.
-      # swiftc를 쓸 수 있으면 Swift 창 앱을, 없거나 빌드에 실패하면 AppleScript 애플릿을 둔다.
-      local rebuild=0 window_app=0 keep_window=0
-      [[ -f "$LAUNCHER_APP/Contents/Resources/launcher-build" ]] && window_app=1
-      if ! cmp -s "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM" || ! cmp -s "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC" || ! launcher_ours; then
-        rebuild=1
-      elif have_swiftc; then
-        if [[ "$(cat "$LAUNCHER_APP/Contents/Resources/launcher-build" 2>/dev/null)" != "$(swift_stamp)" ]] \
-          && [[ "$(cat "$LAUNCHER_SWIFT_FAILED" 2>/dev/null)" != "$(swift_failed_stamp)" ]]; then
-          rebuild=1
-        fi
-      elif [[ ! -x "$LAUNCHER_APP/Contents/MacOS/applet" ]] && ((!window_app)); then
-        rebuild=1
-      fi
-      if ((rebuild)); then
-        SWIFT_FAILURE="" SWIFT_COMPILE_FAILED=0
-        if ! have_swiftc; then
-          SWIFT_FAILURE="swiftc를 쓸 수 없습니다. xcode-select --install로 Command Line Tools를 깐 뒤 다시 install하면 창 앱으로 바뀝니다"
-        elif write_swift_launcher_app "$tmp" "$LAUNCHER_SHIM"; then
-          rm -f "$LAUNCHER_SWIFT_FAILED"
-        else
-          ((SWIFT_COMPILE_FAILED)) && swift_failed_stamp >"$LAUNCHER_SWIFT_FAILED"
-          # 이미 쓰던 창 앱은 고정 경로 shim만 부르므로 shim이 바뀌어도 그대로 쓸 수 있다 — 애플릿으로 낮추지 않는다.
-          ((window_app)) && launcher_ours && keep_window=1
-        fi
-        if [[ -n "$SWIFT_FAILURE" ]]; then
-          if ((keep_window)); then
-            printf 'board: %s\n' "Swift 창 앱을 새로 만들지 못해 지금 앱을 그대로 둡니다: $SWIFT_FAILURE" >&2
-          else
-            printf 'board: %s\n' "Swift 창 앱을 만들지 못해 누를 때마다 브라우저로 여는 런처를 설치했습니다: $SWIFT_FAILURE" >&2
-            rm -rf "$tmp"
-            write_launcher_app "$tmp" "$LAUNCHER_SRC.tmp.$$"
-          fi
-        fi
-        mv "$LAUNCHER_SHIM.tmp.$$" "$LAUNCHER_SHIM"
-        mv "$LAUNCHER_SRC.tmp.$$" "$LAUNCHER_SRC"
-        if ((!keep_window)); then
-          if [[ -e "$LAUNCHER_APP" ]]; then mv "$LAUNCHER_APP" "$LAUNCHER_APP.old.$$"; fi
-          mv "$tmp" "$LAUNCHER_APP"
-        fi
-        action=installed
-      fi
-      printf '%s\n' "$plugin_root" >"$LAUNCHER_ROOT_FILE"
-      launcher_json "$action"
-      ;;
+    install) launcher_install ;;
+    auto-rebuild) launcher_auto_rebuild ;;
     remove)
       if launcher_ours; then
         rm -rf "$LAUNCHER_APP"
