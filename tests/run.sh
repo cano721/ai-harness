@@ -6,7 +6,7 @@
 #   bash tests/run.sh --changed        origin/develop 대비 바뀐 파일을 다루는 영역만 (평소 작업 중)
 #   bash tests/run.sh --changed --explain  실행하지 않고 파일별 선택 근거와 최종 선택만 낸다
 #   bash tests/run.sh --fast           느린 영역(tests/slow-areas.txt)을 뺀다. 다른 선택과 같이 쓸 수 있다
-#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 max(1, min(CPU/2, 4))). 직렬은 -j 1
+#   bash tests/run.sh -j 2             최대 2개 영역을 병렬 실행한다 (없으면 HM_TEST_JOBS, 그것도 없으면 max(1, min(CPU/2, 6))). 직렬은 -j 1
 #   bash tests/run.sh --profile        끝에 블록(직전 ok부터 그 ok까지)별 시간을 느린 순서로 30개 낸다
 #   bash tests/run.sh --shard 1/4      고른 영역을 느린 영역 먼저 순서로 4몫에 번갈아 나눈 첫째 몫만 (CI matrix용)
 #   bash tests/run.sh --lint           바뀐 셸 파일만 bash -n + shellcheck -S style -x + bash 3.2 중괄호 검사 (파일마다 따로)
@@ -192,7 +192,7 @@ default_jobs() {
   [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(nproc 2>/dev/null || true)"
   [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu=1
   jobs=$((ncpu / 2))
-  ((jobs <= 4)) || jobs=4
+  ((jobs <= 6)) || jobs=6
   ((jobs >= 1)) || jobs=1
   printf '%s\n' "$jobs"
 }

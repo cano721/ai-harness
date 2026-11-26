@@ -43,7 +43,7 @@ pass "HM_TARGET_CI_REPOS wins and an invalid HM_TARGET_CI is refused"
 
 # 러너 노드 실행 비용(#569): merge_ok와 같은 시나리오에서 러너(workflow-driver.sh와 그 서브셸)가 띄우는 jq 수에 상한을 둔다.
 # 상태·그래프를 노드마다 jq 한 번으로 묶어 읽은 것이 다시 늘지 않게 한다. 가짜 CLI·테스트 준비가 부르는 jq는 세지 않는다.
-# 기준값: 변경 전 원본 303회. 상한은 그 50%인 151회(변경 후 실측 145회). 폴링 없이 끝나는 시나리오라 실행마다 같은 수가 나온다.
+# 기준값: 변경 전 원본 303회, #569 뒤 실측 145회. #585가 상태 쓰기를 묶어 실측 141회 — 상한을 그 값으로 둔다. 폴링 없이 끝나는 시나리오라 실행마다 같은 수가 나온다.
 JQ_COUNT_BIN="$DRIVER_TMP/jq-count-bin"
 JQ_COUNT_LOG="$DRIVER_TMP/jq-count.log"
 mkdir -p "$JQ_COUNT_BIN"
@@ -56,7 +56,7 @@ export FAKE_PROTECTION=classic
 PATH="$JQ_COUNT_BIN:$PATH" merge_run merge_jq_count "$MP_BASIC"
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "the counted run merges and verifies like merge_ok"
 JQ_CALLS="$(wc -l <"$JQ_COUNT_LOG" | tr -d ' ')"
-((JQ_CALLS <= 151)) || fail "the runner starts at most 151 jq processes in the merge scenario (actual=$JQ_CALLS; 303 before #569)"
+((JQ_CALLS <= 141)) || fail "the runner starts at most 141 jq processes in the merge scenario (actual=$JQ_CALLS; 303 before #569, 145 before #585)"
 unset FAKE_PROTECTION
 pass "the runner reads state and graph with few jq processes per node"
 
