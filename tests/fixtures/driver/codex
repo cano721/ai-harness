@@ -275,6 +275,23 @@ case "$node:$scenario" in
   ui_review:ui_fake_capture) echo note >"$adddir/notes.txt"
     jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  # #606: 증거 경로 해석(하위 폴더 basename·비브라우저 시나리오·모호·밖·사유 없음)
+  ui_review:ui_subdir) mkdir -p "$adddir/ui-review-1/shots"; echo capture >"$adddir/ui-review-1/shots/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_nonbrowser) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""},
+      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"터미널 출력이라 브라우저로 렌더링할 수 없다", alternative_verification:"CLI 실행 출력에서 반려됨 줄 확인"}],
+      blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_ambiguous) mkdir -p "$adddir/a" "$adddir/b"; echo capture >"$adddir/a/default.png"; echo capture >"$adddir/b/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_outside) outside="$(dirname "$adddir")/outside-606.png"; echo capture >"$outside"
+    jq -n --arg o "$outside" '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:[$o], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_no_reason) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"},
+      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"", alternative_verification:""}],
+      blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   *) exit 1 ;;

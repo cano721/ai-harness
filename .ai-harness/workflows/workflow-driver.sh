@@ -1102,15 +1102,40 @@ transcript_approval() {
 }
 
 # verified의 캡처는 이름만 적은 것이 아니라 그 시도의 증거 디렉터리 안에 실제로 있어야 한다.
+# 상대 경로가 바로 아래에 없으면 증거 디렉터리 안(하위 폴더 포함)에서 같은 이름의 파일이 정확히 하나일 때만 인정한다(#588).
+# 걸린 캡처마다 "<시나리오>: <경로>: <이유>"를 한 줄씩 stdout에 낸다.
 captures_present() { # ui-review-output evidence-dir
-  local c n=0
-  while IFS= read -r c; do
-    [[ "$c" == /* ]] || c="$2/$c"
-    case "$c" in "$2"/*) ;; *) return 1 ;; esac
-    [[ "$c" != *..* && -s "$c" ]] || return 1
-    n=$((n + 1))
-  done <<<"$(jq -r '.scenarios[].captures[]' "$1")"
-  [[ "$n" -gt 0 ]]
+  local s c p hits k n=0 bad=0
+  while IFS=$'\t' read -r s c; do
+    [[ -n "$s$c" ]] || continue
+    if [[ -z "$c" ]]; then
+      printf '%s: (empty path): missing\n' "$s"; bad=1; continue
+    elif [[ "$c" == *..* ]]; then
+      printf '%s: %s: contains ..\n' "$s" "$c"; bad=1; continue
+    fi
+    p="$c"
+    [[ "$p" == /* ]] || p="$2/$p"
+    case "$p" in "$2"/?*) ;; *) printf '%s: %s: outside the evidence directory\n' "$s" "$c"; bad=1; continue ;; esac
+    if [[ ! -e "$p" && "$c" != /* ]]; then
+      hits="$(find "$2" -type f 2>/dev/null | B="${c##*/}" awk -F/ '$NF == ENVIRON["B"]')" || true
+      k="$(printf '%s' "$hits" | awk 'END { print NR }')"
+      if [[ "$k" -gt 1 ]]; then
+        printf '%s: %s: ambiguous (%s files named %s)\n' "$s" "$c" "$k" "${c##*/}"; bad=1; continue
+      fi
+      [[ -z "$hits" ]] || p="$hits"
+    fi
+    if [[ ! -e "$p" ]]; then
+      printf '%s: %s: missing\n' "$s" "$c"; bad=1
+    elif [[ ! -f "$p" || ! -s "$p" ]]; then
+      printf '%s: %s: empty\n' "$s" "$c"; bad=1
+    else
+      n=$((n + 1))
+    fi
+  done <<<"$(jq -r '.scenarios[] | .scenario as $s | .captures[] | "\($s)\t\(.)"' "$1")"
+  if [[ "$n" -eq 0 && "$bad" -eq 0 ]] && ! jq -e '(.scenarios | length) > 0 and all(.scenarios[]; ((.not_renderable_reason // "") != "") and ((.alternative_verification // "") != ""))' "$1" >/dev/null; then
+    printf 'no capture file recorded\n'; bad=1
+  fi
+  [[ "$bad" -eq 0 ]]
 }
 
 record_approval() { # evidence-json
@@ -3377,7 +3402,8 @@ $APP_SERVER_RULE
 $APP_BUILD_RULE
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
-Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence.
+Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence. Write each capture path relative to $evidence (for example shots/default.png), and set not_renderable_reason and alternative_verification to empty strings for these scenarios.
+A scenario that a browser or simulator cannot render (terminal output, a downloaded file, an email, and the like) may leave captures empty: set not_renderable_reason to why it cannot be rendered and alternative_verification to what you checked instead; you may save that check's output under $evidence and list it in captures. Do not put such a scenario in unverified.
 status: verified when you rendered and operated every scenario, found no blocking UI issue, and have nothing in unverified; issues when there is at least one; unverified when you could not start the app, could not use a browser, or could not check any required scenario, viewport, or theme. A blocking UI issue means a user cannot find or misreads a key action, an action's name does not match its result, a required input or an error cannot be recovered from, a scenario cannot be finished with a keyboard or in a supported viewport or theme, a shared component exists for the role but a one-off was built, or a hard-to-reverse action has no confirmation.
 Return only JSON matching the schema.
 
@@ -3391,12 +3417,24 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         state_set '.ui_review = ($r[0] | {status, summary, unverified, evidence_dir: $e})' --slurpfile r "$ui_out" --arg e "$evidence"
         # 검증하지 못했는데 문제만 적은 경우도 사람에게 넘긴다. issues인데 발견 사항이 비면 검증 근거가 없는 것이다.
         # verified는 발견 없음·미검증 없음·시나리오마다 조작 기록이 있을 때만 믿는다. 기록 없는 verified는 근거 없는 통과다.
-        if [[ "$(state .ui_review.status)" == verified ]] \
-          && jq -e --argjson n "$(state '.ui_scenarios | length')" \
-            '(.blocking_findings | length) == 0 and (.unverified | length) == 0 and (.scenarios | length) >= $n
-              and all(.scenarios[]; (.captures | length) > 0)' "$ui_out" >/dev/null \
-          && captures_present "$ui_out" "$evidence"; then
-          state_set '.reviewed_tree = $t' --arg t "$(worktree_tree)"
+        # 브라우저로 렌더링할 수 없는 시나리오는 캡처 대신 이유와 대체 검증을 남긴다(#592). 걸린 이유는 시나리오·경로별로 남긴다(#606).
+        local ui_gaps=""
+        if [[ "$(state .ui_review.status)" == verified ]]; then
+          ui_gaps="$(jq -r --argjson n "$(state '.ui_scenarios | length')" '
+            (if (.scenarios | length) < $n then ["\(.scenarios | length)/\($n) scenarios recorded"] else [] end)
+            + [.scenarios[] | select((.captures | length) == 0
+                and (((.not_renderable_reason // "") == "") or ((.alternative_verification // "") == "")))
+              | "\(.scenario): no capture and no reason with an alternative verification"]
+            | .[]' "$ui_out")"
+          ui_gaps="$(printf '%s\n%s' "$ui_gaps" "$(captures_present "$ui_out" "$evidence" || true)" | grep . || true)"
+        fi
+        if [[ "$(state .ui_review.status)" == verified && -z "$ui_gaps" ]] \
+          && jq -e '(.blocking_findings | length) == 0 and (.unverified | length) == 0' "$ui_out" >/dev/null; then
+          state_set '.reviewed_tree = $t
+            | .ui_review.summary = ([$r[0].scenarios[] | select(((.not_renderable_reason // "") != "") and ((.alternative_verification // "") != ""))
+                | .scenario + " — " + .alternative_verification] as $alt
+              | (.ui_review.summary | sub("\\s+\\z"; "")) + (if ($alt | length) > 0 then "; not rendered in a browser: " + ($alt | join("; ")) else "" end))' \
+            --arg t "$(worktree_tree)" --slurpfile r "$ui_out"
           go ui_review ui_verified
         elif [[ "$(state .ui_review.status)" == issues && "$(jq '.blocking_findings | length' "$ui_out")" -gt 0 ]]; then
           state_set '.findings = ($r[0].blocking_findings + ($r[0].unverified | map("not yet verified: " + .))) | .needs_user_decision = false' --slurpfile r "$ui_out"
@@ -3408,8 +3446,14 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
             await_repair ui_review "$(edge_when ui_review repair)"
           fi
         else
-          state_set '.ui_review.status = "unverified" | .ui_review.summary = (if $r[0].status == "verified" then "reported verified without a record for every scenario or with unverified items: " else "" end + $r[0].summary)
-            | .findings = ($r[0].blocking_findings + $r[0].unverified + [$e])' --slurpfile r "$ui_out" --arg e "evidence: $evidence"
+          state_set '($g | split("\n") | map(select(. != ""))) as $gaps
+            | .ui_review.status = "unverified"
+            | .ui_review.summary = (if $r[0].status == "verified" then "reported verified without a record for every scenario or with unverified items: " else "" end + ($r[0].summary | sub("\\s+\\z"; ""))
+              + (if $r[0].status == "verified" then
+                  ([$r[0].blocking_findings[] | "blocking: " + .] + [$r[0].unverified[] | "unverified: " + .] + $gaps) as $why
+                  | if ($why | length) > 0 then " — failed: " + ($why | join("; ")) else "" end
+                else "" end))
+            | .findings = ($r[0].blocking_findings + $r[0].unverified + $gaps + [$e])' --slurpfile r "$ui_out" --arg e "evidence: $evidence" --arg g "$ui_gaps"
           go ui_review "$(edge_when ui_review user_decision)"
         fi
         ;;
@@ -3902,9 +3946,10 @@ EOF
 cat >"$UI_REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","scenarios","blocking_findings","non_blocking_findings","unverified"],
  "properties":{"status":{"type":"string","enum":["verified","issues","unverified"]},"summary":{"type":"string"},
-  "scenarios":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["scenario","viewport","theme","actions","captures","result"],
+  "scenarios":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["scenario","viewport","theme","actions","captures","result","not_renderable_reason","alternative_verification"],
    "properties":{"scenario":{"type":"string"},"viewport":{"type":"string"},"theme":{"type":"string"},"actions":{"type":"string"},
-    "captures":{"type":"array","items":{"type":"string"}},"result":{"type":"string"}}}},
+    "captures":{"type":"array","items":{"type":"string"}},"result":{"type":"string"},
+    "not_renderable_reason":{"type":"string"},"alternative_verification":{"type":"string"}}}},
   "blocking_findings":{"type":"array","items":{"type":"string"}},"non_blocking_findings":{"type":"array","items":{"type":"string"}},
   "unverified":{"type":"array","items":{"type":"string"}}}}
 EOF

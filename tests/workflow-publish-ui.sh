@@ -23,4 +23,13 @@ assert_eq "ui_review;repair;review;ui_review" "$(grep -E '^(ui_review|repair|rev
 assert_contains "$(<"$FAKE_LOG.repair.prompt")" "펼침 표시가 없어" "repair receives the UI finding"
 pass "ui_review verifies screens and a blocking UI issue is repaired and re-verified"
 
+# 캡처를 증거 폴더 하위 폴더에 저장해도(basename이 하나뿐이면) 증거로 인정하고, 브라우저로 못 보는 시나리오는 대체 검증을 따로 보여 준다. (#606)
+start_and_approve ui_subdir
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a capture saved in a subdirectory of the evidence directory is found by its unique basename"
+start_and_approve ui_nonbrowser
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a scenario that cannot be rendered in a browser passes with a reason and an alternative verification"
+assert_contains "$DRIVER_OUT" "CLI 출력" "the outcome names the scenario that was not rendered in a browser"
+assert_contains "$DRIVER_OUT" "CLI 실행 출력에서 반려됨 줄 확인" "the alternative verification is shown separately in the verified summary"
+pass "ui_review accepts subdirectory captures and non-browser scenarios with an alternative verification"
+
 finish_tests
