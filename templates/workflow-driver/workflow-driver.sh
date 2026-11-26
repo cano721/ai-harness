@@ -2762,12 +2762,19 @@ release_plan() {
   fi
 }
 release_prepare() {
-  local src branch
+  local src branch other
   release_require_approval prepare
   src="$(state .policy.release.source)"
   branch="$(state .release.branch)"
   if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "$src" >"$RUN/prepare-fetch.log" 2>&1 </dev/null; then
     release_fail prepare prepare_failed "git fetch origin $src failed: $(tail -c 300 "$RUN/prepare-fetch.log")"
+    return
+  fi
+  # git switch -C는 다른 worktree에 체크아웃된 브랜치도 말없이 옮겨 그쪽 HEAD를 바꾼다(#617). 그 브랜치를 쓰는 다른 worktree가 있으면 멈춘다.
+  other="$(git -C "$REPO" worktree list --porcelain 2>/dev/null | awk -v b="branch refs/heads/$branch" -v me="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" \
+    '/^worktree /{p=substr($0, 10)} $0 == b && p != me {print p; exit}')"
+  if [[ -n "$other" ]]; then
+    release_fail prepare prepare_failed "$branch is checked out in another worktree ($other), likely another release run of the same version; cutting it here would move that worktree's HEAD. Finish or remove that run and its worktree, then start the release again"
     return
   fi
   fp_invalidate
