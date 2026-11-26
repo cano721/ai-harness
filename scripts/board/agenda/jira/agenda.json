@@ -1,0 +1,27 @@
+{
+  "id": "jira",
+  "name": "Jira",
+  "fetch": ["python3", "-I", "jira_agenda.py", "fetch"],
+  "interval_minutes": 15,
+  "requires_env": ["JIRA_BASE_URL", "ATLASSIAN_USER", "ATLASSIAN_API_TOKEN"],
+  "setup_hint": "Jira 사이트 주소·계정 이메일·API 토큰을 /ai-harness:setup으로 넣은 뒤 다시 여세요.",
+  "setup_prompt": "보드 '내 일정'의 Jira 소스는 나에게 배정된 미완료 이슈를 할 일로 읽는다. /ai-harness:setup의 '접속 정보' 절차로 Jira 키 JIRA_BASE_URL(Jira 사이트 주소)·ATLASSIAN_USER(Atlassian 계정 이메일)·ATLASSIAN_API_TOKEN을 넣도록 안내한다. 이미 있는 키는 다시 묻지 않는다. API 토큰은 사용자가 별도 터미널에서 setup.sh set으로 직접 넣는다. 끝나면 /myself 연결 확인 결과를 알려 준다.",
+  "settings": {
+    "get": ["python3", "-I", "jira_agenda.py", "settings-get"],
+    "set": ["python3", "-I", "jira_agenda.py", "settings-set"],
+    "fields": [
+      {
+        "id": "projects",
+        "label": "프로젝트",
+        "type": "multi-select",
+        "options": ["python3", "-I", "jira_agenda.py", "projects"],
+        "help": "고르지 않으면 모든 프로젝트"
+      },
+      {
+        "id": "watching",
+        "label": "지켜보는 이슈 포함",
+        "type": "toggle"
+      }
+    ]
+  }
+}

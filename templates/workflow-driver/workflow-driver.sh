@@ -509,6 +509,31 @@ read_head() {
   if REPO_HEAD_OUT="$(git -C "$REPO" rev-parse HEAD 2>/dev/null)"; then REPO_HEAD="$REPO_HEAD_OUT"; else REPO_HEAD="${REPO_HEAD_OUT:+$REPO_HEAD_OUT$'\n'}none"; fi
 }
 
+# 시작 때 뒤처진 작업 브랜치를 기준 브랜치로 fast-forward한다(#653). 에이전트가 base를 merge하면 guard_head가 런을 끝내므로
+# 러너가 안전할 때만 따라잡는다: 깨끗한 트리 · origin/<base>에 없는 자기 커밋 0개 · 뒤처짐. fetch하지 않고 로컬 origin/<base> ref만 본다.
+# 기준은 merge_policy.base → origin/HEAD. 못 정하거나 detached·기준 브랜치 자체면 건너뛴다. ff가 실패해도 HEAD는 그대로고 런은 이어 간다.
+start_catch_up() {
+  local base branch ahead behind old new
+  [[ "$WORKFLOW" == feature || "$WORKFLOW" == bug-fix || "$WORKFLOW" == polish ]] || return 0
+  base="${manifest_base:-}"
+  [[ -n "$base" ]] || base="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  base="${base#origin/}"
+  [[ -n "$base" ]] && git -C "$REPO" rev-parse --quiet --verify "refs/remotes/origin/$base^{commit}" >/dev/null 2>&1 || return 0
+  branch="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  [[ -n "$branch" && "$branch" != "$base" ]] || return 0
+  [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all 2>/dev/null)" ]] || return 0
+  ahead="$(git -C "$REPO" rev-list --count "origin/$base..HEAD" 2>/dev/null || true)"
+  behind="$(git -C "$REPO" rev-list --count "HEAD..origin/$base" 2>/dev/null || true)"
+  [[ "$ahead" == 0 && "$behind" =~ ^[1-9][0-9]*$ ]] || return 0
+  old="$(git -C "$REPO" rev-parse --short=7 HEAD)"
+  if git -C "$REPO" merge --ff-only --quiet "origin/$base" >/dev/null 2>&1; then
+    new="$(git -C "$REPO" rev-parse --short=7 HEAD)"
+    log "fast-forwarded $branch to origin/$base ($old..$new, $behind commit(s))"
+  else
+    log "could not fast-forward $branch to origin/$base; starting from $old"
+  fi
+}
+
 guard_head() { # node [read_head로 방금 읽은 REPO_HEAD [상태에서 미리 읽은 .head // .start_head]]
   local head expected
   if (($# > 1)); then head="$2"; else head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf 'none')"; fi
@@ -2426,6 +2451,9 @@ FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas you
 # checks가 테스트 실행기의 병렬 옵션에 드라이버가 넘기는 동시 실행 수를 쓰게 한다(#513).
 TEST_JOBS_RULE="The driver decides the test runner's concurrency and exports it as \$HM_TEST_JOBS to every check. When the runner reads HM_TEST_JOBS itself (as a tests/run.sh does when -j is absent), leave its parallelism option out of checks and final_checks; otherwise pass it \"\${HM_TEST_JOBS:-2}\" (for example -n, --workers, --parallel), never a literal number."
 # base 대비 '건드리지 않았다' 검사를 merge-base 기준으로 쓰게 한다(#543). base tip 비교는 런 도중 base에 들어온 커밋을 브랜치 변경으로 센다.
+HEAD_RULE="Do not run git operations that move HEAD (commit, merge, rebase, pull, reset, checkout, switch, stash pop); the driver's sync_base catches the work branch up with the base branch."
+BEHIND_BASE_RULE="If you find the work branch behind the base branch, state it as a fact in the brief; do not plan git steps to catch it up."
+
 MERGE_BASE_RULE="A check that the branch did not change certain files (version files, generated files) compares against the merge base: git diff --quiet origin/<base>...HEAD -- <files> (three dots), never the base tip, so commits that land on the base during the run do not count as branch changes."
 
 # brief 노드가 state_vars로 한 번에 읽어 둔 bp_*(request·approval·feedback·revised·start_head)를 쓴다(#640).
@@ -2436,7 +2464,9 @@ brief_prompt() {
 Write a Bug Fix Brief in Markdown: observed and expected behavior, impact, the reproduction evidence below, the cause hypothesis and what would prove it wrong, the regression verification the project test policy calls for (a regression test, or equivalent evidence when the policy allows it), and the smallest change scope.
 Put the exact shell commands that must pass before the fix is done in checks and final_checks; the regression check goes in checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. When the run pushes to a repository with remote CI, the remote CI is the final gate and the driver leaves final_checks to it instead of running them locally; list them anyway, because they still run locally where there is no remote CI. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
 $TEST_JOBS_RULE
-$MERGE_BASE_RULE"
+$MERGE_BASE_RULE
+$HEAD_RULE
+$BEHIND_BASE_RULE"
     inputs="Bug report:
 $(state .request)
 
@@ -2450,7 +2480,9 @@ $(cat "$RUN/reproduce.out")"
 Write an Implementation Brief in Markdown: scope, out of scope, observable acceptance cases, expected change areas, and verification.
 Put the exact shell commands that must pass before the feature is done in checks and final_checks. Split the verification commands in two. checks: fast, targeted commands for the changed area (its tests, lint, a type check); they run before every review round and after every repair. final_checks: the project's broad commands that it asks to run once before a pull request (a full regression suite, a full build); the driver runs them once, after a review finds nothing blocking. When the run pushes to a repository with remote CI, the remote CI is the final gate and the driver leaves final_checks to it instead of running them locally; list them anyway, because they still run locally where there is no remote CI. Do not repeat a command in both. When the project draws no such line or the broad check is fast, put everything in checks and leave final_checks empty. All commands run from the repository root with bash -c.
 $TEST_JOBS_RULE
-$MERGE_BASE_RULE"
+$MERGE_BASE_RULE
+$HEAD_RULE
+$BEHIND_BASE_RULE"
     inputs="Request:
 $bp_request
 
@@ -3373,7 +3405,7 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
 
 You are the deliver node. Implement the approved Implementation Brief below in this repository. Follow the project workflow and test policy (Red -> Green -> Refactor only when TDD is required), delegating to the project's role agents when the workflow says so.
 $NODE_TEST_RULE
-Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $dl_checks
+Do not commit, push, create a PR, or change scope. $HEAD_RULE After you finish, the driver itself runs these checks: $dl_checks
 $FULL_REGRESSION_RULE
 Return a concise summary of changed areas and the commands you ran.
 
@@ -3393,7 +3425,7 @@ $(brief_context)"
         run_node regression regression "$CONTEXT
 
 You are the regression node of the bug-fix graph. Establish the regression verification the approved brief names, following the project test policy: add or change tests (or the equivalent verification the policy allows), not production code. When the policy expects a failing test first, run it, confirm it fails for the reported reason, and say so. Delegate test work to the project's test role when the workflow says so.
-Do not commit, push, create a PR, or change scope; the driver commits checkpoints itself.
+Do not commit, push, create a PR, or change scope; the driver commits checkpoints itself. $HEAD_RULE
 Return a concise summary of the regression evidence and the commands you ran.
 
 $(brief_context)"
@@ -3416,7 +3448,7 @@ $(brief_context)"
 
 You are the fix node of the design-polish graph. Fix the selected items below in the existing screens, and nothing else. Use the project's design rule document, semantic tokens, and shared components; prefer fixing a shared component or token over a one-off override, and when you change one, keep every screen that uses it right (the measure node captures those screens again).
 Test-first is not required for spacing, color, or hierarchy changes. Add a check only for a violation a machine can catch (an item marked mechanical): extend the project's existing lint or check script so it fails on the violation, and keep it passing.
-Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")'), then measures the screens again and has an independent reviewer compare them with the baseline.
+Do not commit, push, create a PR, or change scope. $HEAD_RULE After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")'), then measures the screens again and has an independent reviewer compare them with the baseline.
 Return a concise summary of what you changed for each item and the commands you ran.
 $(polish_findings_text)
 
@@ -3440,7 +3472,7 @@ $(brief_context)"
         run_node fix fix "$CONTEXT
 
 You are the fix node of the bug-fix graph. Fix the cause in production code within the approved scope, delegating to the project's role agents when the workflow says so. Do not weaken, skip, or delete the regression verification.
-Do not commit, push, create a PR, or change scope. After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
+Do not commit, push, create a PR, or change scope. $HEAD_RULE After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 $FULL_REGRESSION_RULE
 Return a concise summary of the cause, the changed areas, and the commands you ran.
 
@@ -3707,7 +3739,7 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         before_fix="$FP"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
-You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
+You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows. $HEAD_RULE
 $NODE_TEST_RULE
 After you finish, the driver itself runs these checks: $(state '.checks | join(" ; ")')
 
@@ -3939,10 +3971,11 @@ case "$CMD" in
       fi
     fi
     # manifest에서 시작 판단에 쓰는 값을 jq 한 번에 읽는다. 읽지 못하면(파일 없음·객체 아님) 모두 빈 값·false다.
-    manifest_git_policy="" manifest_has_approval="" manifest_legacy_merge=""
+    manifest_git_policy="" manifest_has_approval="" manifest_legacy_merge="" manifest_base=""
     [[ ! -f "$REPO/.ai-harness/harness.json" ]] \
-      || IFS=$'\037' read -r manifest_git_policy manifest_has_approval manifest_legacy_merge <<<"$(jq -r '[(.git_policy // ""), (has("approval") and .approval != null),
-      ((.merge_policy | objects | has("require") or has("min_approvals") or has("method")) // false)] | map(tostring) | join("\u001f")' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+      || IFS=$'\037' read -r manifest_git_policy manifest_has_approval manifest_legacy_merge manifest_base <<<"$(jq -r '[(.git_policy // ""), (has("approval") and .approval != null),
+      ((.merge_policy | objects | has("require") or has("min_approvals") or has("method")) // false),
+      ((.merge_policy | objects | .base) // "")] | map(tostring) | join("\u001f")' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
     git_policy="$manifest_git_policy"
     # 저장소 차원의 "병합까지"는 없다. 예전 git_policy merge는 pr-only와 같은 PR 범위로 읽고, 저장소 merge_policy와 개인 HM_MERGE_*의
     # 병합 조건(require·min_approvals·method)은 쓰지 않는다(병합은 호스트 규칙을 따른다). 시작은 막지 않고 결과에 안내를 남긴다.
@@ -4065,6 +4098,7 @@ case "$CMD" in
       monitor_error="$(jq -c --argjson h "$(jq '.window_hours // 24' <<<"${monitor:-null}" 2>/dev/null || echo 24)" '{window_hours: $h} + .' <<<"$monitor_error")"
     fi
     mkdir -p "$RUN"
+    start_catch_up
     # 보고 파일이 실행 중에 바뀌거나 지워져도 같은 내용으로 이어 가게 실행 디렉터리에 복사해 둔다.
     [[ -z "$INVESTIGATION_FILE" ]] || cp "$INVESTIGATION_FILE" "$RUN/investigation.md"
     printf '%s\n' "$RUN_ID" >"$(latest_file)"
