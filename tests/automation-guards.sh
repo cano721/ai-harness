@@ -289,7 +289,7 @@ pass "rule quality gates and measured effect"
 
 # PreToolUse(Bash) DB 스캔 가드(opt-in)는 명령 위치의 DB 클라이언트·드라이버 쿼리 중 스키마 조건 없는 information_schema 정의·메타 조회만 막는다.
 DB_GUARD_HOOK="$(jq -c '.hooks.PreToolUse[] | select(.hooks[0].command | contains("db-scan-guard"))' "$ROOT/hooks/hooks.json")"
-assert_eq "4" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array (edit guard, db scan, background watchdog, heavy slot)"
+assert_eq "5" "$(jq '.hooks.PreToolUse | length' "$ROOT/hooks/hooks.json")" "db scan guard joins the existing PreToolUse array (edit guard, db scan, stale reset, background watchdog, heavy slot)"
 assert_eq "3" "$(jq -r '.hooks[0].timeout' <<<"$DB_GUARD_HOOK")" "db scan guard stays inside a short budget"
 GUARD_COMMAND="$(jq -r '.hooks[0].command' <<<"$DB_GUARD_HOOK")"
 assert_contains "$GUARD_COMMAND" "$LITERAL_PLUGIN_ROOT" "db scan guard quoted plugin root"

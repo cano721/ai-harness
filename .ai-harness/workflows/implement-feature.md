@@ -56,6 +56,7 @@ scripts/release-prep.sh --check
 - PR: `gh pr create --base develop` (기본값이 `main`이라 `--base` 생략 금지). draft가 아닌 일반 PR. 본문에 `Closes #<이슈>`, 열린 다음 릴리스 마일스톤이 있으면 `--milestone`으로 단다
 - 원격 CI: GitHub Actions `test` 워크플로 — `gh pr checks <PR> --watch`
 - 병합: 하지 않는다(사람, 또는 개인 자동화 단계를 고른 사용자의 러너 `merge` 노드). 기능 PR은 squash 병합이 저장소 규칙이다
+- 수동 병합 전 되돌림 검사: `git fetch origin develop` 뒤 `bash .ai-harness/workflows/workflow-driver.sh revert-check --base develop --issue <이슈>`. exit 1이면 병합하지 않고 출력된 파일 목록을 PR에 남겨 사람이 판단한다(`CONTRIBUTING.md` PR 절)
 - 기준 브랜치 충돌: 병합이 `develop`과의 충돌만으로 막히면 러너의 `sync_base` 노드가 `origin/develop`을 일반 merge로 들이고(충돌은 에이전트가 풀되 커밋·push하지 않는다), 4절 검사를 다시 통과해야 일반 push한 뒤 원격 CI → 병합을 다시 거친다. rebase·force push는 하지 않는다. 한도(`limits.max_base_syncs`)·풀지 못한 충돌·검사 실패는 사람에게 넘긴다
 
 ## 6. 이슈 트래커

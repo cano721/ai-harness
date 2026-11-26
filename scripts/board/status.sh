@@ -238,10 +238,23 @@ for s in "$DATA"/runs/*/*/state.json; do
     && [ -z "$(find "${s%/*}" -maxdepth 1 -type f -mmin "-$RUNNER_STALE_MIN" 2>/dev/null | head -n 1)" ]; then
     quiet=true
   fi
+  # 작업 브랜치(#605): 기록이 없는 옛 상태 파일이고 끝나지도 도는 중도 아니면 저장소의 현재 브랜치를 쓴다. 보드가 그 브랜치의 PR로 판정한다.
+  repo_branch=""
+  IFS=$'\037' read -r st_status st_branch st_repo <<<"$(jq -r '[(.status // ""), (.branch // .publish.branch? // ""), (.repo // "")] | join("\u001f")' "$s" 2>/dev/null || true)"
+  case "$st_status" in
+    done|abandoned|fix_list) ;;
+    *)
+      if [ -z "$st_branch" ] && { [ "$st_status" != running ] || [ "$quiet" = true ]; } && [ -n "$st_repo" ] && [ -d "$st_repo" ]; then
+        repo_branch="$(git -C "$st_repo" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+      fi
+      ;;
+  esac
   jq -c --arg since "$since" --arg path "$s" --argjson quiet "$quiet" --arg stale_min "$RUNNER_STALE_MIN" \
-    --argjson now "$now_e" --argjson decision_days "$DECISION_STALE_DAYS" '
+    --argjson now "$now_e" --argjson decision_days "$DECISION_STALE_DAYS" --arg repo_branch "$repo_branch" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
-    (.repo | split("/") | map(select(. != "")) | .[-1]) as $proj
+    . as $st
+    | (.branch // .publish.branch? // (if $repo_branch == "" then null else $repo_branch end)) as $branch
+    | (.repo | split("/") | map(select(. != "")) | .[-1]) as $proj
     | ((.repo | capture("worktrees/(?<k>[A-Z]+-[0-9]+)/") | .k)? // null) as $issue
     | (.request // "" | split("\n")[0] | sub("^#+ *"; "")) as $title0
     | (if $issue != null and ($title0 | startswith($issue) | not) then "\($issue) \($title0)" else $title0 end) as $title
@@ -289,7 +302,8 @@ for s in "$DATA"/runs/*/*/state.json; do
       else
         {kind: "runner", project: $proj, cwd: .repo, state: "blocked", at: (.finished_at // .started_at), title: $title,
          detail: "알 수 없는 상태: \(.status) (노드 \(.node))", link: (.publish.pr_url? // null), log: $path, cmd: null}
-      end' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
+      end
+    | . + {branch: $branch, workflow: $wf, release_tag: ($st.release.tag? // null)}' "$s" >> "$tmp/runner.jsonl" 2>/dev/null || true
 done
 jq -s . "$tmp/runner.jsonl" > "$tmp/runner.json"
 
