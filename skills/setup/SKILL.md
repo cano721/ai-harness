@@ -100,6 +100,8 @@ $ROOT/scripts/setup.sh update
 
 값을 출력하거나 `echo $KEY`로 확인하지 않는다.
 
+Jira 키 세 개(`JIRA_BASE_URL`·`ATLASSIAN_USER`·`ATLASSIAN_API_TOKEN`)는 보드 '내 일정'의 Jira 소스도 같은 순서(프로세스 환경 → `settings.json` `env` → `secrets.env`)로 읽는다. 보드의 Jira [설정하기]로 열린 세션이면 jira 스킬을 설치하지 않아도 이 세 키만 넣고 6단계 연결 확인을 하면 된다 — 그 뒤 보드에서 Jira [연결]을 누른다.
+
 ### Langfuse 키
 
 키는 개인이 아니라 프로젝트 단위다. 여기서는 기본 프로젝트 한 쌍만 넣고, 다른 프로젝트는 같은 스크립트에 별칭을 주어 더한다고 안내한다. `setup.sh set` 대신 설치된 스킬의 `register.py`를 쓴다 — 리전(host)을 자동으로 찾아 저장하므로 EU 밖 계정이 `LANGFUSE_HOST`를 따로 넣지 않아도 된다. 아래 `<lf>`는 설치된 사본의 `scripts/` 절대 경로(Claude `~/.claude/skills/langfuse/scripts`, Codex `~/.agents/skills/langfuse/scripts`).

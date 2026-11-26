@@ -4,8 +4,11 @@
 일정·답할 것·할 일은 캘린더·메신저·메일에 흩어져 있다. 보드는 이것들을 '어댑터'(명령)로 받아 한 화면에 모은다.
 어댑터 계약(#492):
 - 소스 선언 agenda.json: id(소문자·숫자·-), name, fetch(argv). 선택 interval_minutes(기본 15, 최소 1),
-  connect·disconnect·done·reopen(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침), setup_hint(사람 말 한 줄),
-  setup_prompt(#525. requires가 없을 때 보드 [설정하기]가 띄우는 설정 세션에 넘길 안내. 공백을 정리해 1000자까지).
+  connect·disconnect·done·reopen(argv), requires(있어야 하는 파일. ~와 $HM_DATA_DIR를 펼침),
+  requires_env(#648. 있어야 하는 키 이름 — 문자열 하나 또는 배열, 대문자·숫자·_. setup.sh와 같은 순서로 찾는다: 프로세스 환경 →
+  HARNESS_CLAUDE_SETTINGS(기본 ~/.claude/settings.json)의 env → <data>/secrets.env의 export KEY='…' 줄. 빈 값은 없는 것으로 본다.
+  보드는 키가 있는지만 보고 값은 읽어 넘기지 않는다 — 어댑터가 같은 순서로 직접 읽는다), setup_hint(사람 말 한 줄),
+  setup_prompt(#525. requires·requires_env가 채워지지 않았을 때 보드 [설정하기]가 띄우는 설정 세션에 넘길 안내. 공백을 정리해 1000자까지).
   argv의 상대 경로는 agenda.json 폴더 기준이다(그 폴더를 작업 폴더로 삼아 실행한다).
 - 발견 순서: 플러그인 scripts/board/agenda/*/ → HM_CLAUDE_SKILLS_DIR/*/ → HM_CODEX_SKILLS_DIR/*/. 같은 id는 먼저 찾은
   쪽이 쓴다(기본 어댑터를 사용자 파일이 가로채지 못한다). 잘못된 선언은 그 소스만 '선언 오류'로 보인다.
@@ -50,6 +53,7 @@ BUILTIN_DIR = os.path.join(DIR, "agenda")
 KINDS = ("event", "reply", "todo")
 KIND_ALIAS = {"message": "reply"}  # 이슈 초안의 이름도 받는다
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # 내 일정 url로 여는 앱 딥링크 스킴(#592). template.html·BoardLauncher.swift의 목록과 같아야 한다(tests/board-agenda.sh가 비교).
 APP_LINK_SCHEMES = ("msteams",)
 LINK_RE = re.compile(r"^(?:https?://|(?i:%s):\S)" % "|".join(map(re.escape, APP_LINK_SCHEMES)))  # 앱 스킴만 대소문자 무시
@@ -164,6 +168,17 @@ class _FileLock:
         os.close(self.fd)
 
 
+def secrets_value(path, key):
+    """secrets.env에서 setup.sh가 쓴 `export KEY='값'` 줄만 읽는다(source하지 않음, '\\'' 이스케이프를 푼다). 없으면 None."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    m = next((m for m in (re.match(r"^export %s='(.*)'$" % re.escape(key), x) for x in lines) if m), None)
+    return m.group(1).replace("'\\''", "'") if m else None
+
+
 def _argv(v):
     return isinstance(v, list) and v and all(isinstance(x, str) and x for x in v)
 
@@ -265,6 +280,12 @@ def parse_declaration(path):
         req = [req]
     if not isinstance(req, list) or not all(isinstance(x, str) and x for x in req):
         return None, "requires는 파일 경로(문자열 또는 문자열 배열)여야 합니다."
+    req_env = d.get("requires_env", [])
+    if isinstance(req_env, str):
+        req_env = [req_env]
+    if not isinstance(req_env, list) or ("requires_env" in d and not req_env) or \
+            not all(isinstance(x, str) and ENV_KEY_RE.match(x) for x in req_env):
+        return None, "requires_env는 키 이름(대문자·숫자·_, 문자열 또는 비어 있지 않은 문자열 배열)이어야 합니다."
     hint = d.get("setup_hint")
     if hint is not None and not isinstance(hint, str):
         return None, "setup_hint는 문자열이어야 합니다."
@@ -280,7 +301,7 @@ def parse_declaration(path):
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
         "reopen": d.get("reopen"), "accounts": d.get("accounts"),
-        "interval": interval, "requires": req, "setup_hint": _short(hint, 300) if hint else None,
+        "interval": interval, "requires": req, "requires_env": req_env, "setup_hint": _short(hint, 300) if hint else None,
         "setup_prompt": _short(prompt, SETUP_PROMPT_MAX) if prompt and prompt.strip() else None,
         "settings": settings,
     }, None
@@ -405,7 +426,23 @@ class Store:
         return os.path.expanduser(path)
 
     def missing(self, src):
-        return [p for p in src["requires"] if not os.path.exists(self._expand(p))]
+        """채워지지 않은 준비물: 없는 requires 파일 + 찾지 못한 requires_env 키 이름(값은 다루지 않는다)."""
+        out = [p for p in src["requires"] if not os.path.exists(self._expand(p))]
+        keys = src.get("requires_env") or []
+        if keys:
+            out += [k for k in keys if not self._has_env(k)]
+        return out
+
+    def _has_env(self, key):
+        """setup.sh resolve_value와 같은 순서: 프로세스 환경 → Claude settings.json env → secrets.env(빈 값 제외)."""
+        if os.environ.get(key):
+            return True
+        path = os.environ.get("HARNESS_CLAUDE_SETTINGS") or os.path.expanduser("~/.claude/settings.json")
+        settings = _read_json(path, {})
+        env = settings.get("env") if isinstance(settings, dict) else None
+        if isinstance(env, dict) and isinstance(env.get(key), str) and env[key]:
+            return True
+        return bool(secrets_value(os.path.join(self.data, "secrets.env"), key))
 
     def setup_prompt(self, src):
         """[설정하기] 세션 지시문. 브라우저 문자열은 받지 않고 소스 선언·고정 문구로만 만든다. 없으면 None."""
