@@ -5,6 +5,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/lib-driver.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib-driver.sh"
+make_project_repo
 
 
 # 누적량 hook: 멱등 pending → analysis batch → 다음 세션 1회 알림 → 묶음 단위 검토 완료

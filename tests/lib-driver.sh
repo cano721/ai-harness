@@ -8,14 +8,6 @@ DRIVER="$ROOT/templates/workflow-driver/workflow-driver.sh"
 DRIVER_SHIM="$ROOT/templates/implement-feature/references/implement-feature-driver.sh"
 DRIVER_TMP="$TEST_TMP/driver"
 mkdir -p "$DRIVER_TMP"
-# macOS 기본 /usr/bin/git은 xcrun으로 실제 git을 띄우는 껍데기라 호출마다 프로세스가 하나 더 든다. 러너처럼 테스트 셸의
-# 저장소 준비도 실제 git을 부른다(#569). 함수라서 러너·가짜 CLI에는 넘어가지 않는다.
-if [[ "${OSTYPE:-}" == darwin* && "$(command -v git)" == /usr/bin/git ]]; then
-  TEST_GIT_REAL="$(xcrun -f git 2>/dev/null || true)"
-  if [[ -n "$TEST_GIT_REAL" && "$TEST_GIT_REAL" != /usr/bin/git && -x "$TEST_GIT_REAL" ]]; then
-    git() { "$TEST_GIT_REAL" "$@"; }
-  fi
-fi
 driver() { # args... → DRIVER_RC, DRIVER_OUT
   DRIVER_RC=0
   DRIVER_DATA="${DRIVER_DATA_OVERRIDE:-$DRIVER_TMP/data}"

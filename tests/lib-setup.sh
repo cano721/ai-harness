@@ -3,11 +3,13 @@
 # SETUP_T·SETUP_CATALOG는 블록마다 정한다. tests/lib.sh 다음에 source한다. 단독 실행하지 않는다.
 # shellcheck disable=SC2034  # 여기서 정한 값은 영역 파일이 쓴다
 CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | paste -sd' ' -)"
-CATALOG_ENV_KEYS="$(jq -r '[.skills[].env[]?.any[]?] | unique | join(" ")' "$ROOT/catalog/catalog.json")"
+# 카탈로그가 읽는 모든 자격 증명 키. 실행하는 셸에 값이 있으면(예: CONFLUENCE_BASE_URL) 결과가 바뀌므로 setup_cmd가 지운다(#629).
+SETUP_UNSET=()
+while IFS= read -r k; do SETUP_UNSET+=(-u "$k"); done < <(jq -r '[.skills[].env[]?.any[]?] | unique[]' "$ROOT/catalog/catalog.json")
 setup_cmd() {
-  # 사용자 환경의 카탈로그 키(CONFLUENCE_BASE_URL 등)와 LANGFUSE_* 별칭 키(LANGFUSE_PUBLIC_KEY_<S> 등)를 모두 비운다.
-  local k env_unset=()
-  for k in $CATALOG_ENV_KEYS $(compgen -e | grep '^LANGFUSE_' || true); do env_unset+=(-u "$k"); done
+  # LANGFUSE_* 별칭 키(LANGFUSE_PUBLIC_KEY_<S> 등)는 이름을 고정할 수 없어 실행할 때마다 찾아 비운다(#621).
+  local k env_unset=("${SETUP_UNSET[@]}")
+  for k in $(compgen -e | grep '^LANGFUSE_' || true); do env_unset+=(-u "$k"); done
   env "${env_unset[@]}" \
     HARNESS_METRICS_DIR="$SETUP_T/data" HM_SETUP_CATALOG_DIR="$SETUP_CATALOG" HARNESS_CLAUDE_SETTINGS="$SETUP_T/settings.json" \
     HM_CLAUDE_SKILLS_DIR="$SETUP_T/claude" HM_CODEX_SKILLS_DIR="$SETUP_T/codex" HM_SETUP_HINT=1 \

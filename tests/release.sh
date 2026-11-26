@@ -3,6 +3,9 @@
 # 실행: bash tests/run.sh release
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_project_repo
+START_COMMAND="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/hooks/hooks.json")"
+START_INPUT="$(jq -cn --arg cwd "$PROJECT_REPO" '{cwd:$cwd}')"
 
 # 버전 확인은 캐시된 release metadata로만 판단하고 SessionStart는 설치를 실행하지 않는다.
 UPDATE_DATA="$TEST_TMP/update-data"

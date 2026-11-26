@@ -2,7 +2,7 @@
 
 ## Rule document
 
-Default path: `docs/design-system.md`. Use an existing path instead when the project already has a rule document or when `.ai-harness/docs/frontend.md` / `ui.md` names one.
+Default path: `docs/design-system.md`. This default is step (d) of the destination resolution fallback chain in SKILL.md § 1 (### Destination resolution); earlier steps — user-specified path, harness docs, or an existing file — take precedence when they yield a path.
 
 ### Required sections — the design-audit input contract
 
