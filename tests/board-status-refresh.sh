@@ -236,8 +236,8 @@ exit 1
 FAKE
 chmod +x "$BA_T/bin/claude"
 # 워크플로 러너: incomplete로 멈춘 것, running인데 실행 폴더에 오래 기록이 없는 것, 방금 기록이 있는 running.
-ba_run() { # $1=run 폴더 $2=status $3=node
-  mkdir -p "$BA_DATA/runs/$1"
+ba_run() { # $1=run 폴더 $2=status $3=node — 작업 폴더 $BA_T/repo-<run 폴더>도 만든다(#615)
+  mkdir -p "$BA_DATA/runs/$1" "$BA_T/repo-$1"
   jq -cn --arg s "$2" --arg n "$3" --arg r "$BA_T/repo-$1" '{run_id: "r1", workflow: "feature", status: $s, node: $n, repo: $r, request: "가짜 요청", started_at: "2026-11-01T00:00:00Z"}' \
     >"$BA_DATA/runs/$1/state.json"
   printf 'x\n' >"$BA_DATA/runs/$1/progress.log"
@@ -277,8 +277,8 @@ pass "board status shows a dead or incomplete workflow runner as stopped"
 
 # 러너 상태(#564): 아는 status마다 알맞은 칸·명령으로 분류한다. 사람 결정·승인·불변식 위반은 사람 필요, stopped는 이어 가기, 포기·fix_list는 끝남, 모르는 status는 막힘이고 어느 것도 '작업 중'이 아니다.
 B5_T="$BA_T/data564"
-b5_run() { # $1=데이터 폴더 $2=run 폴더 $3=status $4=node $5=추가 jq
-  mkdir -p "$1/runs/$2"
+b5_run() { # $1=데이터 폴더 $2=run 폴더 $3=status $4=node $5=추가 jq — 작업 폴더 $BA_T/repo-<run 폴더>도 만든다(#615)
+  mkdir -p "$1/runs/$2" "$BA_T/repo-$2"
   jq -cn --arg s "$3" --arg n "$4" --arg r "$BA_T/repo-$2" '{run_id: "r1", workflow: "feature", status: $s, node: $n, repo: $r, request: "가짜 요청", started_at: "2026-11-01T00:00:00Z"}' \
     | jq -c "${5:-.}" >"$1/runs/$2/state.json"
   printf 'x\n' >"$1/runs/$2/progress.log"
@@ -505,28 +505,43 @@ pass "work.sh keeps a delegated session after its tab closes"
 # (끝나지도 도는 중도 아닐 때만) 저장소의 현재 브랜치 순으로 카드에 싣는다. release 런은 .release.tag를 release_tag로 싣는다.
 B6_T="$BA_T/data605"
 mkdir -p "$B6_T"
-b6_repo() { # $1=run 폴더 $2=그 저장소의 브랜치 — b5_run이 쓰는 $BA_T/repo-<run 폴더>에 git 저장소를 만든다
+b6_repo() { # $1=run 폴더 $2=그 저장소의 브랜치 — b5_run이 쓰는 $BA_T/repo-<run 폴더>에 커밋 하나짜리 git 저장소를 만들고 그 커밋을 출력한다
   mkdir -p "$BA_T/repo-$1"
   git init -q -b "$2" "$BA_T/repo-$1"
+  git -C "$BA_T/repo-$1" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "run $1"
+  git -C "$BA_T/repo-$1" rev-parse HEAD
 }
 b5_run "$B6_T" br/1 user_decision user_decision ".message = \"결정\" | .finished_at = \"$B5_NOW\" | .branch = \"fix/592-state\""
 b5_run "$B6_T" pb/1 stopped fix ".finished_at = \"$B5_NOW\" | .publish = {branch: \"fix/592-publish\"}"
-b6_repo pb/1 fix/592-other
+b6_repo pb/1 fix/592-other >/dev/null
 b5_run "$B6_T" bp/1 stopped fix ".finished_at = \"$B5_NOW\" | .branch = \"fix/592-state\" | .publish = {branch: \"fix/592-publish\"}"
-b6_repo bp/1 fix/592-other
-b5_run "$B6_T" gi/1 stopped fix ".finished_at = \"$B5_NOW\""
-b6_repo gi/1 fix/592-x
+b6_repo bp/1 fix/592-other >/dev/null
+# 현재 브랜치는 런이 만든 커밋(head ≠ start_head)을 담을 때만 쓴다(#615).
+B6_HEAD="$(b6_repo gi/1 fix/592-x)"
+b5_run "$B6_T" gi/1 stopped fix ".finished_at = \"$B5_NOW\" | .head = \"$B6_HEAD\" | .start_head = \"base\""
+b6_repo wb/1 feat/unrelated >/dev/null
+b5_run "$B6_T" wb/1 stopped fix ".finished_at = \"$B5_NOW\" | .head = \"$B6_HEAD\" | .start_head = \"base\""
+B6_SAME="$(b6_repo ns/1 feat/unrelated)"
+b5_run "$B6_T" ns/1 stopped fix ".finished_at = \"$B5_NOW\" | .head = \"$B6_SAME\" | .start_head = \"$B6_SAME\""
 b5_run "$B6_T" nr/1 stopped fix ".finished_at = \"$B5_NOW\""
+rmdir "$BA_T/repo-nr/1"
+b5_run "$B6_T" ng/1 user_decision user_decision ".finished_at = \"$B5_NOW\" | .publish = {pr_url: \"https://github.com/acme/shop/pull/615\"}"
+rmdir "$BA_T/repo-ng/1"
 b5_run "$B6_T" ru/1 running discover ".started_at = \"$B5_NOW\""
-b6_repo ru/1 fix/592-x
+b6_repo ru/1 fix/592-x >/dev/null
 b5_run "$B6_T" dn/1 "done" brief ".finished_at = \"$B5_NOW\""
-b6_repo dn/1 fix/592-x
+b6_repo dn/1 fix/592-x >/dev/null
 b5_run "$B6_T" re/1 user_decision user_decision ".message = \"결정\" | .finished_at = \"$B5_NOW\" | .workflow = \"release\" | .release = {tag: \"v0.95.0\", version: \"0.95.0\"}"
 assert_eq "fix/592-state" "$(b5_item "$B6_T" br/1 .branch)" "a runner card carries the branch recorded in state.json"
 assert_eq "fix/592-publish" "$(b5_item "$B6_T" pb/1 .branch)" "without state.branch the card falls back to publish.branch before the repository's current branch"
 assert_eq "fix/592-state" "$(b5_item "$B6_T" bp/1 .branch)" "state.branch wins over publish.branch"
 assert_eq "fix/592-x" "$(b5_item "$B6_T" gi/1 .branch)" "a stopped runner with no recorded branch reads its repository's current branch"
+assert_eq "null" "$(b5_item "$B6_T" wb/1 .branch)" "the repository's current branch is not used when it does not contain the run's head commit"
+assert_eq "null" "$(b5_item "$B6_T" ns/1 .branch)" "the repository's current branch is not used when the run made no commit"
 assert_eq "null" "$(b5_item "$B6_T" nr/1 .branch)" "a runner whose repository folder is gone has a null branch"
+assert_eq "done|null" "$(b5_item "$B6_T" nr/1 '"\(.state)|\(.cmd)"')" "an unfinished runner whose folder is gone and has no PR is done"
+assert_eq "true" "$(b5_item "$B6_T" nr/1 '.detail | test("작업 폴더가 지워져")')" "the done card says the work folder is gone"
+assert_eq "needs_human" "$(b5_item "$B6_T" ng/1 .state)" "a runner whose folder is gone but has a PR is still judged by that PR"
 assert_eq "null" "$(b5_item "$B6_T" ru/1 .branch)" "a running runner does not read the repository's current branch"
 assert_eq "null" "$(b5_item "$B6_T" dn/1 .branch)" "a done runner does not read the repository's current branch"
 assert_eq "feature|null" "$(b5_item "$B6_T" br/1 '"\(.workflow)|\(.release_tag)"')" "a feature runner card carries its workflow and a null release_tag"

@@ -239,18 +239,28 @@ for s in "$DATA"/runs/*/*/state.json; do
     quiet=true
   fi
   # 작업 브랜치(#605): 기록이 없는 옛 상태 파일이고 끝나지도 도는 중도 아니면 저장소의 현재 브랜치를 쓴다. 보드가 그 브랜치의 PR로 판정한다.
+  # 그 브랜치가 런이 만든 커밋(head ≠ start_head)을 담을 때만 쓴다. 폴더가 다른 브랜치로 바뀌었으면 상관없는 PR로 판정하게 된다(#615).
+  # 작업 폴더가 지워졌으면(gone) resume할 수 없어, PR 주소가 없는 한 끝남으로 정리한다(#615).
   repo_branch=""
-  IFS=$'\037' read -r st_status st_branch st_repo <<<"$(jq -r '[(.status // ""), (.branch // .publish.branch? // ""), (.repo // "")] | join("\u001f")' "$s" 2>/dev/null || true)"
+  gone=false
+  IFS=$'\037' read -r st_status st_branch st_repo st_head st_start <<<"$(jq -r '[(.status // ""), (.branch // .publish.branch? // ""), (.repo // ""), (.head // ""), (.start_head // "")] | join("\u001f")' "$s" 2>/dev/null || true)"
   case "$st_status" in
     done|abandoned|fix_list) ;;
     *)
-      if [ -z "$st_branch" ] && { [ "$st_status" != running ] || [ "$quiet" = true ]; } && [ -n "$st_repo" ] && [ -d "$st_repo" ]; then
-        repo_branch="$(git -C "$st_repo" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+      if { [ "$st_status" != running ] || [ "$quiet" = true ]; } && [ -n "$st_repo" ]; then
+        if [ ! -d "$st_repo" ]; then
+          gone=true
+        elif [ -z "$st_branch" ] && [ -n "$st_head" ] && [ "$st_head" != "$st_start" ]; then
+          repo_branch="$(git -C "$st_repo" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+          if [ -n "$repo_branch" ] && ! git -C "$st_repo" merge-base --is-ancestor "$st_head" "$repo_branch" 2>/dev/null; then
+            repo_branch=""
+          fi
+        fi
       fi
       ;;
   esac
   jq -c --arg since "$since" --arg path "$s" --argjson quiet "$quiet" --arg stale_min "$RUNNER_STALE_MIN" \
-    --argjson now "$now_e" --argjson decision_days "$DECISION_STALE_DAYS" --arg repo_branch "$repo_branch" '
+    --argjson now "$now_e" --argjson decision_days "$DECISION_STALE_DAYS" --arg repo_branch "$repo_branch" --argjson gone "$gone" '
     def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
     . as $st
     | (.branch // .publish.branch? // (if $repo_branch == "" then null else $repo_branch end)) as $branch
@@ -265,6 +275,11 @@ for s in "$DATA"/runs/*/*/state.json; do
            detail: (if .status == "done" then "워크플로 완료 · 정책 \(.policy.git // "?")"
                     else "워크플로 끝남(\(.status)) · 노드 \(.node)" end),
            link: (.publish.pr_url? // null), log: $path, cmd: null}
+        else empty end
+      elif $gone and (.publish.pr_url? // null) == null then
+        if (.finished_at // .started_at) >= $since then
+          {kind: "runner", project: $proj, cwd: .repo, state: "done", at: (.finished_at // .started_at), title: $title,
+           detail: "작업 폴더가 지워져 이어 갈 수 없음(\(.status) · 노드 \(.node))", link: null, log: $path, cmd: null}
         else empty end
       elif .status == "baseline_changed" then
         {kind: "runner", project: $proj, cwd: .repo, state: "needs_human", at: (.finished_at // .started_at), title: $title,
