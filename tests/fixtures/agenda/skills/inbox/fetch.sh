@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 가짜 어댑터(#567): created·from이 있는 할 일, 오래된 할 일, 읽을 수 없는 created, 기한 있는 할 일, 답할 것 1건.
-# act.sh done으로 끝낸 id는 빼고 내고, act.sh reopen으로 다시 연 id는 다시 낸다.
+# act.sh done으로 끝낸 id·act.sh delete로 지운 id(#637)는 빼고 내고, act.sh reopen으로 다시 연 id는 다시 낸다.
 set -euo pipefail
 state="$HM_DATA_DIR/fixture-inbox"; mkdir -p "$state"
-done_ids="$(cat "$state/done" 2>/dev/null || true)"
+done_ids="$(cat "$state/done" "$state/deleted" 2>/dev/null || true)"
 emit() { case $'\n'"$done_ids"$'\n' in *$'\n'"$1"$'\n'*) ;; *) printf '%s\n' "$2" ;; esac; }
 ago() { python3 -I -c 'import sys, datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=float(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
 due="$(python3 -I -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=2))')"

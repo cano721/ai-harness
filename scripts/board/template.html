@@ -730,9 +730,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agtask__meta > * { flex: none; }
 .b-agtask__meta > .b-agtask__who, .b-agtask__meta > .ds-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .b-agtask__meta > .ds-chip { display: block; max-width: 7rem; }
-.b-agtask__open { opacity: 0; }
-.b-agtask:hover .b-agtask__open, .b-agtask:focus-within .b-agtask__open { opacity: 1; }
-@media (hover: none) { .b-agtask__open { opacity: 1; } }
+.b-agtask__open, .b-agtask__del { opacity: 0; }
+.b-agtask:hover .b-agtask__open, .b-agtask:focus-within .b-agtask__open, .b-agtask:hover .b-agtask__del, .b-agtask:focus-within .b-agtask__del { opacity: 1; }
+@media (hover: none) { .b-agtask__open, .b-agtask__del { opacity: 1; } }
 @media (max-width: 760px) {
   .b-agtask { column-gap: var(--space-2); padding-left: var(--space-3); padding-right: var(--space-3); }
   .b-agtask__meta > .ds-chip { max-width: 4.5rem; }
@@ -1003,6 +1003,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     <h2 class="ds-title" id="agsettitle">설정 확인</h2>
     <p class="b-line" id="agsetdesc"></p>
     <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="agsetcancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" id="agsetok" value="ok">켜기</button></div>
+  </form>
+</dialog>
+<dialog class="b-dialog" id="adlg" aria-labelledby="atitle" aria-describedby="adesc">
+  <form method="dialog">
+    <h2 class="ds-title" id="atitle">할 일 삭제</h2>
+    <p class="b-line" id="adesc"></p>
+    <div class="b-dialog__foot"><button type="submit" class="ds-btn" id="acancel" value="cancel" formnovalidate>취소</button><button type="submit" class="ds-btn ds-btn--danger" value="ok">삭제</button></div>
   </form>
 </dialog>
 <dialog class="b-dialog" id="mdlg" aria-labelledby="mtitle">
@@ -1847,6 +1854,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const side = el('span', 'b-agev__side');
     const open = agOpenLink(it.url, it.title, false, 'b-agtask__open');
     if (open) side.append(open);
+    const del = agDeleteBtn(it);
+    if (del) side.append(del);
     r.append(SERVER ? check : el('span'), t, meta, side);
     if (more) r.append(more);
     return r;
@@ -2319,6 +2328,46 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if ($('agsetdlg').returnValue === 'ok') { agSettingsSave(a.s, a.f, a.value, a.key, true); return; }
     const back = document.querySelector(`[data-key="${CSS.escape(a.key)}"]`); if (back) back.focus();
   });
+  // ---- 내 일정 할 일 삭제(이슈 637) ----
+  // 직접 적은 할 일과 delete를 선언한 소스의 할 일·답할 것만 지운다. 확정은 대화의 빨간 [삭제] 한 번 — 초점은 취소에 둔다.
+  let agDel = null;
+  function agDeleteBtn(it) {
+    const srcs = (agData && agData.sources) || [];
+    if (!SERVER || (it.kind !== 'todo' && it.kind !== 'reply')) return null;
+    if (!it.local && !srcs.some((s) => s.id === it.source && s.can_delete)) return null;
+    const b = btn('삭제', 'ds-btn--sm ds-btn--ghost b-agtask__del', () => agDeleteAsk(it, b));
+    b.dataset.key = `agdel:${it.source}:${it.id}`;
+    b.setAttribute('aria-label', `삭제: ${it.title}`);
+    return b;
+  }
+  function agDeleteAsk(it, b) {
+    if (agDel || $('adlg').open) return;
+    const sec = b.closest('section');
+    agDel = { source: it.source, id: it.id, key: b.dataset.key, head: sec ? sec.getAttribute('aria-labelledby') : null };
+    $('adesc').textContent = `'${it.title}'을(를) 지웁니다. ` + (it.local ? '목록과 완료 기록에서 빠집니다.' : `${it.source_name} 원본에서도 지워집니다.`);
+    $('adlg').returnValue = '';
+    $('adlg').showModal();
+    $('acancel').focus();
+  }
+  // 닫힌 뒤 초점: 원래 [삭제] 버튼, 줄이 사라졌으면 그 목록 제목, 목록도 사라졌으면 화면 제목.
+  function agDeleteBack(a) {
+    const t = document.querySelector(`[data-key="${CSS.escape(a.key)}"]`) || (a.head && document.getElementById(a.head)) || document.getElementById('vtitle');
+    if (!t) return;
+    if (!t.matches || !t.matches('button, a')) t.tabIndex = -1;
+    t.focus();
+  }
+  $('adlg').addEventListener('click', (e) => { if (e.target === $('adlg')) $('adlg').close(); });
+  $('adlg').addEventListener('close', async () => {
+    const a = agDel; agDel = null;
+    if (!a) return;
+    if ($('adlg').returnValue !== 'ok') { agDeleteBack(a); return; }
+    let res; try { res = await post('/agenda/delete', { source: a.source, id: a.id }); } catch (e) { res = { ok: false, message: '지우지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    if (!res.ok) { toast(res.message, false); agDeleteBack(a); return; }
+    toast(res.message || '지웠습니다.', true);
+    await loadAgenda(true);
+    agDeleteBack(a);
+  });
+  // ---- 내 일정 할 일 삭제 끝 ----
   // 바꾸기 전 값과 비교한다 — 서버(agenda.py settings_save)와 같은 규칙. 서버가 409 needs_confirm을 주면 그때도 대화를 띄운다.
   const agSettingsRisky = (f, cur, next) => !!f.danger && (f.type === 'toggle' ? next && !cur
     : f.type === 'multi-select' ? next.some((x) => !(cur || []).includes(x)) : next !== cur);
