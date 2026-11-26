@@ -38,7 +38,7 @@ usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, �
        board.sh hook on|off|status      권한 요청 훅(~/.claude/settings.json PermissionRequest) 연결
        board.sh launcher install|remove|status   눌러서 여는 macOS 앱(~/Applications/Harness Board.app)
        board.sh launcher auto-rebuild   보드 열기가 부르는 내부용: 낡은 창 앱을 지금 shim 그대로 다시 빌드한다
-       board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>|list [--all]|done <id>   보드 '내 일정'의 할 일을 적고·보고·끝낸다
+       board.sh todo add [--due YYYY-MM-DD[THH:MM]] <내용...>|list [--all]|done <id>|delete <id>   보드 '내 일정'의 할 일을 적고·보고·끝내고·지운다
        board.sh brief set [--source <이름>] < 글 | brief show   '내 일정' 맨 위 아침 요약 글을 남기고·본다
        board.sh agenda summary                 오늘 일정·답할 것·기한순 할 일을 JSON으로(아침 요약 재료)
 env:   BOARD_PORT (정하면 그 포트만, 안 정하면 8765부터 빈 포트 10개 안에서), BOARD_IDLE_EXIT (분, 기본 30, 0이면 끄지 않음), HARNESS_METRICS_DIR, HARNESS_CLAUDE_SETTINGS
@@ -622,7 +622,7 @@ command_todo() {
       [[ -n "${text//[[:space:]]/}" ]] || usage
       ;;
     list) [[ $# -eq 1 || ($# -eq 2 && "$2" == --all) ]] || usage ;;
-    done) [[ $# -eq 2 && -n "$2" ]] || usage ;;
+    done|delete) [[ $# -eq 2 && -n "$2" ]] || usage ;;
     *) usage ;;
   esac
   HARNESS_METRICS_DIR="$HM_DATA_DIR" python3 -I "$DIR/agenda.py" todo "$@"

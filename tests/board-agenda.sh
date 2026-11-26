@@ -1029,6 +1029,139 @@ assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "knobs" "the UI doc names t
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "/agenda/settings" "the board skill documents the settings API"
 pass "agenda settings stay service-agnostic and documented"
 
+# 할 일 삭제(#637): 직접 적은 할 일은 열린 것이든 끝낸 것이든 todos.json·completed.json에서 빠진다.
+AG_DID="$(ag_board todo add 지울 할 일)"
+AG_RES="$(ag_post delete "$(jq -cn --arg i "$AG_DID" '{source: "todo", id: $i}')")"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "deleting a written to-do succeeds"
+case "$(ag_board todo list --all)" in *"$AG_DID"*) fail "a deleted to-do leaves todos.json" ;; esac
+AG_DID2="$(ag_board todo add 끝내고 지울 할 일)"
+ag_board todo "done" "$AG_DID2"
+assert_eq "1" "$(jq -r --arg i "$AG_DID2" '[.items[] | select(.id == $i)] | length' "$AG_DATA/board/agenda/completed.json")" "the finished to-do is in the completed list first"
+assert_eq "200" "$(ag_code "$(ag_post delete "$(jq -cn --arg i "$AG_DID2" '{source: "todo", id: $i}')")")" "deleting a finished to-do succeeds"
+assert_eq "0|0" "$(jq -r --arg i "$AG_DID2" '[.items[] | select(.id == $i)] | length' "$AG_DATA/board/agenda/todos.json")|$(jq -r --arg i "$AG_DID2" '[.items[] | select(.id == $i)] | length' "$AG_DATA/board/agenda/completed.json")" "a deleted finished to-do leaves todos.json and completed.json"
+assert_eq "404" "$(ag_code "$(ag_post delete '{"source":"todo","id":"nope"}')")" "deleting an unknown to-do is 404"
+assert_eq "400|400" "$(ag_code "$(ag_post delete '{"source":"todo"}')")|$(ag_code "$(ag_post delete '{"source":"todo","id":7}')")" "a delete without a string id is 400"
+pass "agenda deletes written to-dos from the list and the completed list"
+
+# 할 일 삭제(#637): board.sh todo delete — 성공 0, 없는 id 1, 인자 없음·둘·빈 id는 usage 2.
+ag_del_rc() { local rc=0; ag_board todo delete "$@" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
+AG_DID3="$(ag_board todo add CLI로 지울 할 일)"
+assert_eq "0 1 2 2 2" "$(ag_del_rc "$AG_DID3") $(ag_del_rc "$AG_DID3") $(ag_del_rc) $(ag_del_rc a b) $(ag_del_rc "")" "todo delete exit codes"
+case "$(ag_board todo list --all)" in *"$AG_DID3"*) fail "todo delete removes the to-do" ;; esac
+assert_contains "$(ag_board todo 2>&1 || true)" "|delete <id>" "the todo usage lists delete"
+pass "board.sh todo delete removes a to-do with the documented exit codes"
+
+# 할 일 삭제(#637): delete를 선언한 어댑터의 할 일·답할 것은 그 argv에 id를 붙여 지우고, 다시 수집하면 사라진다.
+AG_OUT="$(ag_get)"
+assert_eq "true|false|false" "$(ag_src "$AG_OUT" inbox can_delete)|$(ag_src "$AG_OUT" localdone can_delete)|$(ag_src "$AG_OUT" cal can_delete)" "can_delete follows the delete declaration"
+for AG_I in i-due i-reply; do
+  AG_RES="$(ag_post delete "$(jq -cn --arg i "$AG_I" '{source: "inbox", id: $i}')")"
+  assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "deleting inbox $AG_I succeeds"
+  grep -qxF "delete $AG_I" "$AG_DATA/fixture-inbox/calls" || fail "the adapter delete command ran with $AG_I"
+done
+AG_OUT="$(ag_wait '[.items[][] | select(.source == "inbox" and (.id == "i-due" or .id == "i-reply"))] | length == 0')" || fail "deleted inbox items leave the agenda: $AG_OUT"
+pass "agenda deletes adapter items through the declared delete command"
+
+# 할 일 삭제(#637): delete 명령이 실패하면 ok:false와 사유, 항목은 남는다.
+: >"$AG_DATA/fixture-inbox/fail-delete"
+AG_RES="$(ag_post delete '{"source":"inbox","id":"i-bad"}')"
+assert_eq "200|false" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "a failing delete command is reported"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "Example 요청함에서 지우지 못했습니다" "a failing delete names the source"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "원본 요청함에 닿지 못했습니다" "a failing delete carries the adapter's reason"
+assert_eq "1" "$(ag_get | jq -r '[.items.todo[] | select(.id == "i-bad")] | length')" "a failed delete keeps the item"
+rm -f "$AG_DATA/fixture-inbox/fail-delete"
+pass "agenda keeps an item when the delete command fails"
+
+# 할 일 삭제(#637): 일정 400, delete 미선언 409, 모르는 소스·항목 404, 토큰 없음 403.
+ag_post connect '{"source":"cal"}' >/dev/null
+ag_wait '[.items.event[] | select(.source == "cal" and .id == "e1")] | length == 1' >/dev/null || fail "cal still lists e1"
+assert_eq "400" "$(ag_code "$(ag_post delete '{"source":"cal","id":"e1"}')")" "an event cannot be deleted"
+AG_RES="$(ag_post delete '{"source":"localdone","id":"n1"}')"
+assert_eq "409" "$(ag_code "$AG_RES")" "a source without delete refuses"
+assert_contains "$(ag_body "$AG_RES" | jq -r '.message')" "원본에서" "the refusal points to the original"
+assert_eq "404|404" "$(ag_code "$(ag_post delete '{"source":"nope","id":"x"}')")|$(ag_code "$(ag_post delete '{"source":"inbox","id":"never"}')")" "unknown sources and items are 404"
+assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $AG_BASE" -d '{"source":"todo","id":"x"}' "$AG_BASE/agenda/delete")" "delete needs the board token"
+pass "agenda refuses deleting events, undeclared sources and unknown items"
+
+# 할 일 삭제(#637): delete가 문자열 배열이 아니면 그 소스만 선언 오류다. 계약 문서에 delete가 적혀 있다.
+mkdir -p "$HM_CLAUDE_SKILLS_DIR/baddelete"
+jq -n '{id: "baddelete", name: "삭제 오류", fetch: ["true"], delete: "rm.sh"}' >"$HM_CLAUDE_SKILLS_DIR/baddelete/agenda.json"
+AG_OUT="$(ag_get)"
+assert_eq "true" "$(ag_src "$AG_OUT" baddelete invalid)" "a non-array delete is a declaration error"
+assert_contains "$(ag_src "$AG_OUT" baddelete error)" "delete" "the error names delete"
+rm -rf "$HM_CLAUDE_SKILLS_DIR/baddelete"
+assert_contains "$(sed -n '1,60p' "$ROOT/scripts/board/agenda.py")" "선택 delete(#637" "the adapter contract docstring documents delete"
+assert_contains "$(sed -n '1,60p' "$ROOT/scripts/board/board-server.py")" "/agenda/delete" "the server path comment documents delete"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "todo delete <id>" "the board skill documents todo delete"
+assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "fail-delete" "the UI doc names the delete fixture switch"
+pass "agenda validates and documents the delete declaration"
+
+# 할 일 삭제(#637): 화면 — 할 일·답할 것 줄의 [삭제]는 확인 대화(취소 초점·danger 확정)를 한 번 거쳐 /agenda/delete로 보낸다.
+AG_TPLF="$ROOT/scripts/board/template.html"
+AG_TPL="$(<"$AG_TPLF")"
+assert_contains "$AG_TPL" "/agenda/delete" "the screen posts to /agenda/delete"
+AG_ADLG="$(grep -E '<dialog class="b-dialog" id="adlg"' -A 6 "$AG_TPLF")"
+[ -n "$AG_ADLG" ] || fail "the delete dialog adlg exists"
+assert_contains "$AG_ADLG" "ds-btn--danger" "the delete dialog confirms with a danger button"
+assert_contains "$AG_ADLG" 'id="acancel"' "the delete dialog has a cancel button"
+AG_DEL_FN="$(sed -n '/^  \/\/ ---- 내 일정 할 일 삭제(이슈 637) ----$/,/^  \/\/ ---- 내 일정 할 일 삭제 끝 ----$/p' "$AG_TPLF")"
+[ -n "$AG_DEL_FN" ] || fail "the delete code is found in the template"
+assert_contains "$AG_DEL_FN" "\$('acancel').focus()" "the delete dialog focuses cancel"
+if command -v node >/dev/null 2>&1; then
+  AG_TROW="$(sed -n '/function taskRow(/,/^  }$/p' "$AG_TPLF")"
+  AG_DSTUB='class E { constructor(t) { this.tag = t; this.attrs = {}; this.children = []; this.dataset = {}; this.textContent = ""; this.className = ""; }
+    setAttribute(k, v) { this.attrs[k] = String(v); } getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } removeAttribute(k) { delete this.attrs[k]; }
+    append(...c) { this.children.push(...c.filter((x) => x != null)); } addEventListener() {} focus() { focused = this.id || this.dataset.key; } closest() { return null; } }
+  let focused = null;
+  const el = (t, c, x) => { const e = new E(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+  const btn = (label, cls, f) => { const b = el("button", "ds-btn" + (cls ? " " + cls : ""), label); if (f) b.onclick = f; return b; };
+  const icon = () => el("svg"); const badge = () => el("span"); const chip = (x) => el("span", "ds-chip", x);
+  const agTitle = (c, k, f, title) => [el("button", c, title), null];
+  const dueInfo = () => null; const agOpenLink = () => null; const agAge = () => ""; const agKey = (it) => it.source + ":" + it.id;
+  const agFresh = new Set(); let SERVER = true;
+  let agData = { sources: [{ id: "inbox", name: "Example 요청함", can_delete: true }, { id: "localdone", name: "Local 알림", can_delete: false }] };
+  const dlg = { listeners: {}, open: false, shows: 0, returnValue: "x", addEventListener(k, f) { this.listeners[k] = f; },
+    showModal() { this.open = true; this.shows++; }, close() { this.open = false; return this.listeners.close && this.listeners.close(); } };
+  const D = { adlg: dlg }; const $ = (id) => D[id] || (D[id] = new E("x"), D[id].id = id, D[id]);
+  const posts = []; const post = async (p, b) => { posts.push(p + " " + JSON.stringify(b)); return { ok: true, message: "지웠습니다." }; };
+  const toasts = []; const toast = (m, ok) => toasts.push(ok + ":" + m); const loadAgenda = async () => {};
+  const CSS = { escape: (s) => s }; const document = { querySelector: () => null, getElementById: () => null };
+  const all = (n, f, out = []) => { if (n instanceof E) { if (f(n)) out.push(n); n.children.forEach((c) => all(c, f, out)); } return out; };
+  const delBtn = (r) => all(r, (x) => (x.getAttribute("aria-label") || "").startsWith("삭제: "))[0];'
+  AG_DOUT="$(AG_JS="$AG_DSTUB
+$AG_TROW
+$AG_DEL_FN" node -e 'eval(process.env.AG_JS + `
+    (async () => {
+      const rows = [["local", { source: "todo", id: "t1", kind: "todo", title: "직접", local: true }],
+        ["inbox-reply", { source: "inbox", source_name: "Example 요청함", id: "r1", kind: "reply", title: "답장" }],
+        ["inbox-todo", { source: "inbox", source_name: "Example 요청함", id: "i1", kind: "todo", title: "요청" }],
+        ["localdone", { source: "localdone", id: "n1", kind: "reply", title: "알림" }],
+        ["event", { source: "inbox", id: "e1", kind: "event", title: "회의" }]];
+      console.log(rows.map(([n, it]) => { const b = delBtn(taskRow(it, 0, {})); return n + "=" + (b ? b.className + "|" + b.textContent + "|" + b.getAttribute("aria-label") : "none"); }).join("\\n"));
+      SERVER = false; console.log("static=" + (delBtn(taskRow(rows[0][1], 0, {})) ? "button" : "none")); SERVER = true;
+      const b = delBtn(taskRow(rows[1][1], 0, {}));
+      b.onclick(); b.onclick();
+      console.log("open=" + dlg.open + " shows=" + dlg.shows + " rv=" + JSON.stringify(dlg.returnValue) + " focus=" + focused + " desc=" + D.adesc.textContent);
+      dlg.returnValue = "cancel"; await dlg.close();
+      console.log("cancel posts=" + posts.length);
+      const l = delBtn(taskRow(rows[0][1], 0, {})); l.onclick(); console.log("local desc=" + D.adesc.textContent);
+      dlg.returnValue = "ok"; await dlg.close();
+      console.log("ok posts=" + posts.join(",") + " toasts=" + toasts.join(","));
+    })();
+  `)')"
+  assert_eq "local=ds-btn ds-btn--sm ds-btn--ghost b-agtask__del|삭제|삭제: 직접
+inbox-reply=ds-btn ds-btn--sm ds-btn--ghost b-agtask__del|삭제|삭제: 답장
+inbox-todo=ds-btn ds-btn--sm ds-btn--ghost b-agtask__del|삭제|삭제: 요청
+localdone=none
+event=none
+static=none
+open=true shows=1 rv=\"\" focus=acancel desc='답장'을(를) 지웁니다. Example 요청함 원본에서도 지워집니다.
+cancel posts=0
+local desc='직접'을(를) 지웁니다. 목록과 완료 기록에서 빠집니다.
+ok posts=/agenda/delete {\"source\":\"todo\",\"id\":\"t1\"} toasts=true:지웠습니다." "$AG_DOUT" "delete buttons follow can_delete and the dialog opens once, cancels without a request and confirms with one"
+fi
+pass "the board asks once before deleting a to-do or reply"
+
 ag_board stop >/dev/null
 unset TZ
 finish_tests
