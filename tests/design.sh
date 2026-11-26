@@ -245,6 +245,24 @@ assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/de
 assert_contains "$(<"$ROOT/README.md")" "| \`/design-system-builder\` |" "README lists design-system-builder"
 pass "design-system-builder plugin skill"
 
+# design-system-builder 경로 해석(#627): 세 산출물(규칙 문서·토큰 파일·기준 화면)의 대체 체인을 SKILL.md에 표로 정리하고,
+# output-format.md의 기본 경로가 대체 체인과 정합한다.
+# AC-1: 대체 체인이 SKILL.md에 표로 존재한다 — 세 산출물 각각에 최소 네 단계
+assert_contains "$DSB_CONTENT" "### Destination resolution" "design-system-builder has a destination resolution subsection under §1"
+for DSB_ARTIFACT in "rule document" "token file" "reference screen"; do
+  assert_contains "$DSB_CONTENT" "| $DSB_ARTIFACT |" "destination resolution table lists the $DSB_ARTIFACT artifact"
+done
+# AC-2: 최종 대체에서 질문한다
+assert_contains "$DSB_CONTENT" "ask in the current round" "destination resolution falls back to asking when all steps fail"
+# AC-3: 질문은 세 질문 상한을 존중한다
+assert_contains "$DSB_CONTENT" "three-question limit" "destination resolution respects the three-question limit"
+# AC-4: 하네스 없는 저장소 지원 — (b) 건너뛰기
+assert_contains "$DSB_CONTENT" "skip step (b)" "destination resolution skips the harness step when there is no harness"
+# AC-5: output-format.md 기본 경로가 대체 체인과 정합
+assert_contains "$DSB_FORMAT" "SKILL.md § 1" "output-format.md refers to the SKILL.md destination resolution as the authority"
+# AC-6: 기존 파일이 있으면 덮어쓰지 않는다
+assert_contains "$DSB_CONTENT" "refresh/merge/leave" "destination resolution defers to the existing-document question when a file is found"
+pass "design-system-builder destination resolution fallback chain (#627)"
 
 # 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
 # 규칙 문서·토큰·공용 부품·기준 화면이 있고, design-audit가 읽는 고정 섹션 순서를 지킨다.

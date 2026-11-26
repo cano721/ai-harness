@@ -3,6 +3,7 @@
 # 실행: bash tests/run.sh core
 # shellcheck source=tests/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_project_repo
 
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_REPO")" "origin project id"
 assert_eq "service" "$(project_id_for_cwd "$PROJECT_WORKTREE")" "worktree project id"
@@ -528,5 +529,50 @@ B32_FILES=()
 while IFS= read -r f; do B32_FILES+=("$f"); done < <(find "$ROOT/scripts" "$ROOT/tests" "$ROOT/hooks" "$ROOT/templates" "$ROOT/skills" "$ROOT/.ai-harness" -name '*.sh' -not -path '*/fixtures/*' 2>/dev/null)
 python3 -I "$ROOT/tests/bash32-check.py" "${B32_FILES[@]}" || fail "shell files avoid braces that bash 3.2 expands inside quoted command substitutions"
 pass "bash 3.2 brace expansion safety"
+
+# 저장소 헬퍼(#614): 설정을 프로세스 없이 써도 git이 읽는 user·origin·커밋 하나는 그대로이고, 저장소끼리 .git을 나누지 않는다.
+REPO_HELPER="$TEST_TMP/repo-helper"
+make_repo "$REPO_HELPER/a" "git@github.com:acme/a.git"
+make_repo "$REPO_HELPER/b"
+make_repo "$REPO_HELPER/c" "/path/with;semicolon/r.git"
+for r in a b c; do
+  assert_eq "test@example.com" "$(git -C "$REPO_HELPER/$r" config user.email)" "make_repo $r sets the test user email"
+  assert_eq "test" "$(git -C "$REPO_HELPER/$r" config user.name)" "make_repo $r sets the test user name"
+  assert_eq "1" "$(git -C "$REPO_HELPER/$r" log --oneline | wc -l | tr -d ' ')" "make_repo $r makes exactly one commit"
+done
+assert_eq "git@github.com:acme/a.git" "$(git -C "$REPO_HELPER/a" remote get-url origin)" "make_repo writes the origin url"
+assert_eq "/path/with;semicolon/r.git" "$(git -C "$REPO_HELPER/c" remote get-url origin)" "make_repo keeps an origin url that needs quoting"
+assert_eq "" "$(git -C "$REPO_HELPER/b" remote)" "make_repo without origin adds no remote"
+[[ "$(git -C "$REPO_HELPER/a" rev-parse --absolute-git-dir)" != "$(git -C "$REPO_HELPER/b" rev-parse --absolute-git-dir)" ]] \
+  || fail "two make_repo repositories share a .git"
+assert_eq "true" "$(git -C "$PROJECT_WORKTREE" rev-parse --is-inside-work-tree)" "make_project_repo makes the linked worktree"
+assert_eq "git@github.com:acme/service.git" "$(git -C "$PROJECT_REPO" remote get-url origin)" "make_project_repo keeps the acme/service origin"
+pass "repository helpers keep the user, origin, single commit and a separate .git"
+
+# 실패로 끝난 영역도 cleanup이 자기 $TEST_TMP와 그 경로를 인자에 가진 백그라운드 프로세스를 남기지 않는다(#614 정리 경로 축소 뒤).
+cat >"$TEST_TMP/cleanup-fail.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=tests/lib.sh
+source "$2/tests/lib.sh"
+printf '%s\n' "$TEST_TMP" >"$1"
+bash -c 'while :; do sleep 1; done' "$TEST_TMP/left-running" >/dev/null 2>&1 &
+fail "intentional failure"
+EOF
+chmod +x "$TEST_TMP/cleanup-fail.sh"
+CLEANUP_FAIL_RC=0
+TMPDIR="$TEST_TMP" "$TEST_TMP/cleanup-fail.sh" "$TEST_TMP/cleanup-fail.path" "$ROOT" >/dev/null 2>&1 || CLEANUP_FAIL_RC=$?
+assert_eq "1" "$CLEANUP_FAIL_RC" "a failing area exits 1"
+CLEANUP_FAIL_TMP="$(<"$TEST_TMP/cleanup-fail.path")"
+assert_contains "$CLEANUP_FAIL_TMP" "/ai-harness-tests." "the failing area used its own test temp"
+[[ ! -e "$CLEANUP_FAIL_TMP" ]] || fail "a failing area leaves its test temp: $CLEANUP_FAIL_TMP"
+CLEANUP_FAIL_LEFT=""
+for _ in $(seq 1 30); do
+  CLEANUP_FAIL_LEFT="$(pgrep -f "$CLEANUP_FAIL_TMP/left-running" || true)"
+  [[ -n "$CLEANUP_FAIL_LEFT" ]] || break
+  sleep 0.1
+done
+assert_eq "" "$CLEANUP_FAIL_LEFT" "a failing area leaves no process with its test temp in the arguments"
+pass "a failing area removes its test temp and background processes"
 
 finish_tests

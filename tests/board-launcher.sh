@@ -219,4 +219,135 @@ assert_eq "$(jq -r '.url' <<<"$BO_OUT")" "$(<"$BO_LOG")" "open without the windo
 bo_reset
 pass "harness board open prefers the window app"
 
+# 창 앱 자동 재빌드(#622): 플러그인을 업데이트해 launcher-build가 지금 swift_stamp와 다르면 보드 열기가 분리 프로세스로
+# 창 앱을 다시 만든다. open은 기다리지 않고, 실패 기록·락·런처 종류·플랫폼이 맞지 않으면 아무것도 하지 않는다.
+AR_LOG="$BOARD_DATA/board/launcher-rebuild.log"
+AR_LOCK="$BOARD_DATA/board/launcher-rebuild.lock"
+AR_BUILD="$BL_APP/Contents/Resources/launcher-build"
+ar_open() {
+  PATH="${AR_PATH:-$BL_PATH}" BOARD_LAUNCHER_SWIFTC="${BL_SWIFTC_OVERRIDE-$BL_SWIFTC}" BOARD_LAUNCHER_TOOL_LOG="$BL_TOOL_LOG" \
+    board_open_sh open --no-browser
+}
+ar_calls() { grep -c '^swiftc ' "$BL_TOOL_LOG" 2>/dev/null || true; }
+ar_build() { cat "$AR_BUILD" 2>/dev/null || true; }
+ar_stale_window() { # 창 앱의 빌드 기록만 낡게 만든다(창 앱이 아니면 새로 깐다)
+  if [[ "$(launcher_sh status | jq -r '.kind')" != window ]]; then
+    launcher_sh remove >/dev/null
+    launcher_sh install >/dev/null
+  fi
+  printf 'stale\n' >"$AR_BUILD"
+  rm -f "$AR_LOG" "$BOARD_DATA/board/bin/launcher-swift-failed"
+}
+ar_wait_rebuilt() {
+  local _
+  for _ in $(seq 1 100); do
+    [[ "$(ar_build)" == "v1 swift"* && ! -d "$AR_LOCK" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# A1: 낡은 창 앱이면 open은 평소처럼 JSON 한 줄로 끝나고, 뒤에서 창 앱이 다시 만들어진다.
+ar_stale_window
+AR_BEFORE="$(ar_calls)"
+AR_OUT="$(ar_open)" || fail "open with a stale window app exits 0"
+assert_eq "1" "$(printf '%s\n' "$AR_OUT" | wc -l | tr -d ' ')" "open with a stale window app prints one JSON line"
+assert_eq "true" "$(jq -r '.running' <<<"$AR_OUT")" "open with a stale window app reports the running board"
+ar_wait_rebuilt || fail "open rebuilds a stale window app in the background (build=$(ar_build))"
+assert_eq "$((AR_BEFORE + 1))" "$(ar_calls)" "the background rebuild compiles the window app once"
+assert_file "$AR_LOG"
+assert_eq "window" "$(launcher_sh status | jq -r '.kind')" "the rebuilt launcher is still the window app"
+# A2·A4: gate가 열릴 때까지 기다리는 swiftc로 open이 재빌드를 기다리지 않음과, 연달아 연 두 번이 한 번만 빌드함을 본다.
+AR_GATE="$BOARD_T/swiftc-gate-open"
+AR_GATED="$BOARD_T/swiftc-gated"
+cat >"$AR_GATED" <<EOF
+#!/bin/bash
+[[ "\${1:-}" == --version ]] && exec "$BL_SWIFTC" "\$@"
+for _ in \$(seq 1 300); do [[ -f "$AR_GATE" ]] && break; sleep 0.1; done
+exec "$BL_SWIFTC" "\$@"
+EOF
+chmod +x "$AR_GATED"
+ar_stale_window
+rm -f "$AR_GATE"
+AR_BEFORE="$(ar_calls)"
+BL_SWIFTC_OVERRIDE="$AR_GATED" ar_open >/dev/null || fail "open does not wait for the background rebuild"
+assert_eq "stale" "$(ar_build)" "open returns before the rebuild finishes"
+BL_SWIFTC_OVERRIDE="$AR_GATED" ar_open >/dev/null || fail "a second open during the rebuild exits 0"
+touch "$AR_GATE"
+ar_wait_rebuilt || fail "the gated rebuild finishes once the compiler continues"
+assert_eq "$((AR_BEFORE + 1))" "$(ar_calls)" "two opens during one rebuild compile only once"
+# A3: 같은 소스·같은 컴파일러로 실패한 기록이 있으면 다시 시도하지 않는다(분리 프로세스도 띄우지 않는다).
+ar_stale_window
+BOARD_LAUNCHER_SWIFTC_FAIL=1 launcher_sh install >/dev/null 2>&1
+assert_file "$BOARD_DATA/board/bin/launcher-swift-failed"
+AR_BEFORE="$(ar_calls)"
+ar_open >/dev/null || fail "open with a recorded Swift failure exits 0"
+assert_not_file "$AR_LOG"
+assert_eq "$AR_BEFORE|stale" "$(ar_calls)|$(ar_build)" "open does not retry a recorded Swift failure"
+# A4: 다른 프로세스가 락을 쥐고 있으면 재빌드하지 않는다. 락이 풀리면 다음 open이 다시 만든다.
+ar_stale_window
+mkdir -p "$AR_LOCK" && printf '%s\n' "$$" >"$AR_LOCK/pid"
+AR_BEFORE="$(ar_calls)"
+ar_open >/dev/null || fail "open with a held rebuild lock exits 0"
+assert_file "$AR_LOG"
+# 분리 프로세스가 락을 못 잡고 끝나는 것은 밖에서 볼 신호가 없다 — 빌드가 일어났다면 이 시간 안에 끝난다(A1 실측 1초 미만).
+sleep 1
+assert_eq "$AR_BEFORE|stale" "$(ar_calls)|$(ar_build)" "a held lock skips the rebuild"
+rm -rf "$AR_LOCK"
+ar_open >/dev/null || fail "open after the lock is released exits 0"
+ar_wait_rebuilt || fail "open rebuilds once the lock is released"
+# A5: 재빌드는 사용자가 설치할 때 담은 shim(PATH·BOARD_IDLE_EXIT)을 이 셸 값으로 덮어쓰지 않는다.
+ar_stale_window
+cp "$BL_SHIM" "$BOARD_T/shim-before"
+cp "$BOARD_DATA/board/bin/launcher.applescript" "$BOARD_T/applescript-before"
+mkdir -p "$BOARD_T/other-path"
+AR_PATH="$BOARD_T/other-path:$BL_PATH" BOARD_IDLE_EXIT=77 ar_open >/dev/null || fail "open from another shell exits 0"
+ar_wait_rebuilt || fail "open from another shell rebuilds the window app"
+cmp -s "$BOARD_T/shim-before" "$BL_SHIM" || fail "the background rebuild keeps the installed shim"
+cmp -s "$BOARD_T/applescript-before" "$BOARD_DATA/board/bin/launcher.applescript" || fail "the background rebuild keeps the AppleScript source"
+# A6: 런처 없음·애플릿·남의 앱·swiftc 없음·macOS 아님·이미 최신이면 아무것도 하지 않는다.
+ar_untouched() { # 설명
+  local before
+  before="$(ar_calls)"
+  ar_open >/dev/null || fail "open exits 0: $1"
+  assert_not_file "$AR_LOG"
+  assert_eq "$before" "$(ar_calls)" "open does not rebuild: $1"
+}
+launcher_sh remove >/dev/null
+rm -f "$AR_LOG"
+ar_untouched "no launcher"
+assert_not_file "$BL_APP/Contents/Info.plist"
+BL_SWIFTC_OVERRIDE="$BOARD_T/no-swiftc" launcher_sh install >/dev/null 2>&1
+ar_untouched "applet"
+[[ -x "$BL_APP/Contents/MacOS/applet" && ! -e "$BL_APP/Contents/MacOS/harness-board" ]] || fail "open keeps the applet"
+launcher_sh remove >/dev/null
+mkdir -p "$BL_APP/Contents/Resources"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>\n' >"$BL_APP/Contents/Info.plist"
+printf 'stale\n' >"$AR_BUILD"
+ar_untouched "another app with the same name"
+assert_contains "$(<"$BL_APP/Contents/Info.plist")" "com.example.other" "open leaves another app alone"
+rm -rf "$BL_APP"
+ar_stale_window
+BL_SWIFTC_OVERRIDE="$BOARD_T/no-swiftc" ar_untouched "no swiftc"
+assert_eq "stale" "$(ar_build)" "open without swiftc keeps the stale window app"
+BO_PLATFORM=Linux ar_untouched "outside macOS"
+assert_eq "stale" "$(ar_build)" "open outside macOS keeps the window app"
+launcher_sh remove >/dev/null
+launcher_sh install >/dev/null
+rm -f "$AR_LOG"
+ar_untouched "an up-to-date window app"
+# A7: 재빌드가 실패해도 open 출력은 그대로이고, 쓰던 창 앱을 애플릿으로 낮추지 않는다.
+ar_stale_window
+AR_OUT="$(BOARD_LAUNCHER_SWIFTC_FAIL=1 ar_open)" || fail "open exits 0 when the background rebuild fails"
+assert_eq "1" "$(printf '%s\n' "$AR_OUT" | wc -l | tr -d ' ')" "a failing rebuild keeps open to one JSON line"
+assert_eq "true" "$(jq -r '.running' <<<"$AR_OUT")" "a failing rebuild keeps the open JSON"
+for _ in $(seq 1 100); do
+  [[ -f "$BOARD_DATA/board/bin/launcher-swift-failed" && ! -d "$AR_LOCK" ]] && break
+  sleep 0.1
+done
+assert_file "$BOARD_DATA/board/bin/launcher-swift-failed"
+[[ -x "$BL_APP/Contents/MacOS/harness-board" && ! -e "$BL_APP/Contents/MacOS/applet" ]] || fail "a failed background rebuild keeps the window app"
+launcher_sh remove >/dev/null
+bo_reset
+pass "harness board open rebuilds a stale window app in the background"
+
 finish_tests

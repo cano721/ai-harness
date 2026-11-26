@@ -300,7 +300,9 @@ assert_contains "$BRUN_FN" "a.dataset.key = 'why:' + it.id" "each blocked card's
 assert_contains "$BRUN_FN" "if (SERVER && it.run)" "a screen opened without the board server shows no run button"
 assert_contains "$BRUN_FN" "'세션을 띄웠습니다 — 작업 현황에서 진행을 봅니다'" "a launched card says where to follow it"
 assert_contains "$BRUN_FN" "goLink('작업 현황 열기', 'list')" "the launch toast links to the work list"
-assert_contains "$BRUN_TPL" "if (ok && !action) timer = setTimeout(dismiss, 5000)" "a toast with an action stays until closed"
+assert_contains "$BRUN_TPL" "if (ok) timer = setTimeout(dismiss, 3000)" "a success toast closes after 3 seconds, with or without an action"
+case "$BRUN_TPL" in *"if (ok && !action)"*) fail "a toast with an action no longer stays until closed" ;; esac
+assert_contains "$BRUN_TPL" "if (action) for (const old of \$('toasts').querySelectorAll('.ds-toast[data-action]')) old.remove()" "a new toast with an action replaces the earlier one"
 assert_contains "$(<"$ROOT/docs/design-system.md")" "동작이 든 토스트" "the design rules say how long a toast with an action stays"
 assert_contains "$BRUN_TPL" "보드가 고른 저장소에서 Claude 세션을 띄웁니다. 질문과 권한 요청은 작업 현황에서 답합니다." "the reused new-session form explains where questions go"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "저장소 없이(홈에서)" "board skill documents the launch scopes"

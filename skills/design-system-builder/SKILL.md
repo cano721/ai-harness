@@ -32,6 +32,23 @@ Look, do not guess. Record what you find; it decides the mode and the output for
 - **Themes** in use (light only, light + dark, high contrast) and how the theme is switched (attribute, class, media query, platform API).
 - **Screens** — routes or templates grouped by what they are (list, detail, form, dashboard, auth, settings…). Axis A and D of the rule document need this.
 
+### Destination resolution
+
+Before building, resolve where each artifact goes. Walk the fallback chain top to bottom; the first step that yields a path wins.
+
+| Artifact | (a) User-specified | (b) Harness docs | (c) Existing file search | (d) Stack default |
+|---|---|---|---|---|
+| rule document | path the user named | `frontend.md` / `ui.md` points to it | `DESIGN.md`, `docs/design-system.md`, `docs/design/*.md` | `docs/design-system.md` |
+| token file | path the user named | `frontend.md` / `ui.md` names it | a file matching the stack format in the project root or `docs/` | stack table in `references/tokens.md` |
+| reference screen | path the user named | `ui.md` names it | a `/design-system` route, Storybook, or component gallery | stack table in `references/components.md` |
+
+Rules:
+
+- When `.ai-harness/` does not exist, skip step (b) and proceed with (c) → (d). This is consistent with the paragraph above: "A repository without a harness is a supported case."
+- When step (c) finds an existing file, use that path but do not overwrite the content silently — the refresh/merge/leave question in § 2 still applies.
+- When all four steps yield nothing, ask in the current round. Bundle the three paths into a single question that shows the recommended defaults from step (d) and lets the user change any of them. This question counts toward the three-question limit of the round (§ 3). If the round already has three questions, put it in the next round as one question.
+- When a harness-free repository reaches step (d) and all three defaults are determined by the stack, the question may be skipped — the defaults are used and listed in the report.
+
 ## 2. Pick the mode
 
 | Mode | When | Reference |
