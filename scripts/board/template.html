@@ -1078,6 +1078,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const btn = (label, cls, onClick) => { const b = el('button', 'ds-btn' + (cls ? ' ' + cls : ''), label); b.type = 'button'; if (onClick) b.onclick = onClick; return b; };
   const linkBtn = (label, href, cls) => { const a = el('a', 'ds-btn' + (cls ? ' ' + cls : ''), label); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
   const safeHref = (href) => /^https?:\/\//.test(href || '') || String(href || '').startsWith('/autofix/log?') || String(href || '').startsWith('/impact/report?');
+  // 내 일정 url만 허용한 앱 딥링크도 연다(이슈 592). agenda.py·BoardLauncher.swift의 목록과 같아야 한다.
+  const APP_LINK_SCHEMES = ['msteams'];
+  const isAppLink = (href) => APP_LINK_SCHEMES.some((s) => new RegExp(`^${s}:\\S`, 'i').test(String(href || '')));
+  const agendaHref = (href) => safeHref(href) || isAppLink(href);
   const textLink = (text, href) => { if (!safeHref(href)) return el('span', null, text); const a = el('a', null, text); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
   const ago = (iso) => {
     if (!iso) return '';
@@ -1826,14 +1830,22 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (o && o.sources) meta.append(chip(it.source_name));
     const side = el('span', 'b-agev__side');
-    if (it.url && safeHref(it.url)) {
-      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon b-agtask__open'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
-      side.append(a);
-    }
+    const open = agOpenLink(it.url, it.title, false, 'b-agtask__open');
+    if (open) side.append(open);
     r.append(SERVER ? check : el('span'), t, meta, side);
     if (more) r.append(more);
     return r;
+  }
+  // 내 일정 원본 열기. 앱 링크는 target 없이 같은 프레임으로 넘긴다 — 브라우저는 OS가 앱을 열고 페이지는 남으며(_blank면 빈 탭이 남는다),
+  // 창 앱은 decidePolicyFor → openOutside가 받는다. 웹 링크는 지금처럼 새 창.
+  function agOpenLink(url, title, again, cls) {
+    if (!url || !agendaHref(url)) return null;
+    const app = isAppLink(url);
+    const label = app ? (again ? '앱에서 다시 열기' : '앱에서 열기') : (again ? '원본에서 다시 열기(새 창)' : '원본에서 보기(새 창)');
+    const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon' + (cls ? ` ${cls}` : '')); a.href = url; a.rel = 'noopener noreferrer';
+    if (!app) a.target = '_blank';
+    a.setAttribute('aria-label', `${label}: ${title}`); a.title = label; a.append(icon('external'));
+    return a;
   }
   function taskList(list, label, o) {
     const now = Date.now(), ul = el('ul', 'ds-rows b-agtasks'); ul.setAttribute('aria-label', `${label} ${list.length}건`);
@@ -1940,11 +1952,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (sub) { const c = el('span', 'b-agev__cal', sub); c.title = sub; main.append(c); }
     const side = el('div', 'b-agev__side');
     if (phase === 'now') side.append(badge(['progress', '진행 중']));
-    if (it.url && safeHref(it.url)) {
-      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
-      side.append(a);
-    }
+    const open = agOpenLink(it.url, it.title, false, '');
+    if (open) side.append(open);
     r.append(time, main, side);
     return r;
   }
@@ -2066,11 +2075,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
           side.append(b);
         } else {
           side.append(el('span', null, '원본에서 다시 열기'));
-          if (r.url && safeHref(r.url)) {
-            const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-            a.setAttribute('aria-label', `원본에서 다시 열기(새 창): ${r.title}`); a.title = '원본에서 다시 열기(새 창)'; a.append(icon('external'));
-            side.append(a);
-          }
+          const open = agOpenLink(r.url, r.title, true, '');
+          if (open) side.append(open);
         }
         li.append(main, side); ul.append(li);
       }

@@ -806,6 +806,88 @@ if command -v node >/dev/null 2>&1; then
 fi
 pass "the to-do due date is a button with quick picks"
 
+# 앱 딥링크(#592): 어댑터 url은 http(s) 또는 허용 앱 스킴(msteams:, 대소문자 무시, 뒤가 비지 않음)만 남긴다.
+# 그 밖의 스킴은 url만 버리고 항목은 남긴다. link 필드로 받아도 같다.
+AG_LINKS="$(python3 -I - "$ROOT/scripts/board" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import agenda
+cases = ["msteams:/l/message/example", "MSTEAMS:/l/x", "https://chat.example.com/r1", "javascript:alert(1)",
+         "data:text/html,x", "file:///etc/passwd", "vbscript:x", "msteams", "msteams:", "msteams: x", "slack://x"]
+lines = [json.dumps({"id": "u%d" % i, "kind": "reply", "title": "x", "url": u}) for i, u in enumerate(cases)]
+lines.append(json.dumps({"id": "l1", "kind": "reply", "title": "x", "link": "msteams:/l/message/link"}))
+items, skipped = agenda.parse_jsonl("\n".join(lines), "s")
+print("%d|%d" % (len(items), skipped))
+for it in items:
+    print(it.get("url", "-"))
+PY
+)"
+assert_eq "12|0
+msteams:/l/message/example
+MSTEAMS:/l/x
+https://chat.example.com/r1
+-
+-
+-
+-
+-
+-
+-
+-
+msteams:/l/message/link" "$AG_LINKS" "agenda keeps http(s) and msteams: links and drops every other scheme but keeps the item"
+pass "agenda keeps allowed app deep links only"
+
+# 앱 딥링크(#592): fixture applink를 연결하면 /agenda 응답에서 msteams 항목은 url을 갖고 javascript 항목은 url이 없다.
+ag_post connect '{"source":"applink"}' >/dev/null
+AG_OUT="$(ag_wait '[.items.reply[] | select(.source == "applink")] | length == 2')" || fail "applink fetches its items: $AG_OUT"
+assert_eq "msteams:/l/message/example|-|msteams:/l/meetup-join/example" \
+  "$(jq -r '[(.items.reply[] | select(.id == "m2") | .url // "-"), (.items.reply[] | select(.id == "m3") | .url // "-"), (.items.event[] | select(.id == "m1") | .url // "-")] | join("|")' <<<"$AG_OUT")" \
+  "the board serves msteams links and drops javascript links"
+pass "the board serves app deep links from an adapter"
+
+# 앱 딥링크(#592): 화면은 내 일정 세 곳만 agendaHref로 거른다. safeHref(다른 화면)는 그대로 http(s)·보드 경로만.
+# 앱 링크는 target 없이(같은 프레임) '앱에서 열기'로, http(s) 링크는 지금처럼 _blank·'원본에서 보기(새 창)'로 연다.
+AG_TPL="$(<"$ROOT/scripts/board/template.html")"
+case "$AG_TPL" in *"safeHref(it.url)"*|*"safeHref(r.url)"*) fail "the agenda rows do not use safeHref for item links" ;; esac
+AG_OPEN_FN="$(sed -n '/function agOpenLink(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
+[ -n "$AG_OPEN_FN" ] || fail "agOpenLink is found in the template"
+for AG_W in "agendaHref(" "isAppLink(" "'앱에서 열기'" "'앱에서 다시 열기'" "'원본에서 보기(새 창)'" "'원본에서 다시 열기(새 창)'" "noopener noreferrer" "icon('external')"; do
+  assert_contains "$AG_OPEN_FN" "$AG_W" "the agenda open link has $AG_W"
+done
+assert_eq "3" "$(grep -c 'agOpenLink(' <<<"$AG_TPL" | awk '{print $1 - 1}')" "the to-do, event and done rows use agOpenLink"
+if command -v node >/dev/null 2>&1; then
+  AG_HREF="$(grep -E '^  const (safeHref|APP_LINK_SCHEMES|isAppLink|agendaHref) = ' "$ROOT/scripts/board/template.html")"
+  assert_eq "4" "$(grep -c . <<<"$AG_HREF")" "the link guards are found in the template"
+  AG_HOUT="$(AG_SRC="$AG_HREF
+$AG_OPEN_FN" node -e 'const el = (tag, cls) => ({ cls, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, append() {} }); const icon = () => null;
+    eval(process.env.AG_SRC + `
+    console.log(["msteams:/l/x", "MSTEAMS:/l/x", "https://a", "javascript:x", "data:x", "slack://x", "msteams:", "msteams"].map((h) => h + "=" + agendaHref(h)).join(","));
+    console.log("safeHref(msteams)=" + safeHref("msteams:/l/x"));
+    for (const [u, again] of [["msteams:/l/x", false], ["msteams:/l/x", true], ["https://a", false], ["https://a", true]]) {
+      const a = agOpenLink(u, "T", again, "");
+      console.log((a.target || "none") + "|" + a.title + "|" + a.attrs["aria-label"]);
+    }
+    console.log(agOpenLink("javascript:x", "T", false, ""));`);')"
+  assert_eq "msteams:/l/x=true,MSTEAMS:/l/x=true,https://a=true,javascript:x=false,data:x=false,slack://x=false,msteams:=false,msteams=false
+safeHref(msteams)=false
+none|앱에서 열기|앱에서 열기: T
+none|앱에서 다시 열기|앱에서 다시 열기: T
+_blank|원본에서 보기(새 창)|원본에서 보기(새 창): T
+_blank|원본에서 다시 열기(새 창)|원본에서 다시 열기(새 창): T
+null" "$AG_HOUT" "app links open in the same frame with an app label and web links keep a new tab"
+fi
+pass "the agenda opens app deep links without a new tab"
+
+# 앱 딥링크(#592): Python·화면·창 앱이 같은 허용 목록을 쓰고, 어댑터 계약 문서에 적혀 있다.
+ag_schemes() { grep -E "$1" "$2" | head -n 1 | sed 's/^[^=]*=//' | grep -oE "[a-z0-9+.-]+" | sort | paste -sd' ' -; }
+AG_PY_S="$(ag_schemes '^APP_LINK_SCHEMES = ' "$ROOT/scripts/board/agenda.py")"
+assert_eq "msteams" "$AG_PY_S" "agenda.py allows msteams links"
+assert_eq "$AG_PY_S" "$(ag_schemes '^  const APP_LINK_SCHEMES = ' "$ROOT/scripts/board/template.html")" "the board screen uses the same app schemes"
+assert_eq "$AG_PY_S" "$(ag_schemes 'static let appLinkSchemes = ' "$ROOT/scripts/board/BoardLauncher.swift")" "the window app uses the same app schemes"
+assert_contains "$(sed -n '1,40p' "$ROOT/scripts/board/agenda.py")" "msteams:" "the adapter contract docstring names msteams links"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "msteams:" "the board skill documents msteams links"
+pass "app deep link schemes match across agenda, screen and window app"
+
 ag_board stop >/dev/null
 unset TZ
 finish_tests
