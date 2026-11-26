@@ -1846,6 +1846,7 @@ def hold_permission(req):
     _perms[pid] = {"info": {"pid": pid, "sid": req.get("session_id"), "cwd": req.get("cwd"), "tool": tool,
                             "input": _perm_summary(tool, req.get("tool_input")), "at": utc()},
                    "event": ev, "decision": None}
+    log({"action": "permission", "tool": tool, "held": True})  # 붙잡기 시작(테스트가 자동 종료 보류를 이 기록 뒤에 본다)
     tpath = req.get("transcript_path")
     start = os.path.getsize(tpath) if isinstance(tpath, str) and os.path.isfile(tpath) else None
     end = time.time() + PERM_WAIT

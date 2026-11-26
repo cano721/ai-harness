@@ -23,7 +23,7 @@
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "da1ae3d960f7473fa0c4091a9904a3997d15803cad40d1d878e19941ba39d7b5",
+      "content_sha256": "8b69c3e460816ee761482bc7e732145541f136cb3314be546e461c5bbebd43b3",
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -39,12 +39,12 @@
       "template_version": "0.96.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "d767588f2ad011eaf7512e934c271e87d70cfe010ac5022abb6b9a890d5b95ea",
+      "content_sha256": "e538719ad3cae83f5defb32038e9e0622c4a20dee1396e62d33f973d46a8aab1",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "763c3f8a8eb3bf4abd34de4fcdbc81fe90d93340329d7bff80940f15e4554797",
+      "content_sha256": "656338faac66d319aaea825c4e98876f1f1c2b44cdad0ba258712ac9df723736",
       "template_version": "0.96.0",
       "renderer": 1
     },
@@ -54,12 +54,12 @@
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "f06e0ca06aaf78ff8c6149f719cdfb22fc5780593ca7d79f101df7c5008eb78e",
+      "content_sha256": "b6ef8126bd680830c0be2918cb14dbc1781583e6df7a7dc61fc56e9b772f69f0",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "70a5ef3ee7fcb78f650bac03d15b14746cd370d950af51e90bad0d00cbfc8cd4",
+      "content_sha256": "ec6a123df142636a35e9165088e2cc12e4805451e2aca6e419eba5104ecdbf7c",
       "template_version": "0.96.0",
       "renderer": 1
     },

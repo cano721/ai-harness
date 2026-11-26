@@ -107,8 +107,11 @@ final class HarnessBoardApp: NSObject, NSApplicationDelegate, NSWindowDelegate, 
             && (url.host == board.host || url.host == "localhost" || url.host == "127.0.0.1")
     }
 
+    // 내 일정이 target 없이 넘기는 앱 딥링크(#592). OS에 넘겨 그 앱(Teams)을 연다. agenda.py·template.html의 목록과 같아야 한다.
+    private static let appLinkSchemes = ["msteams"]
+
     private func openOutside(_ url: URL) {
-        if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+        if let scheme = url.scheme?.lowercased(), (["http", "https", "mailto"] + Self.appLinkSchemes).contains(scheme) {
             NSWorkspace.shared.open(url)
         }
     }

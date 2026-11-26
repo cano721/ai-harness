@@ -1,0 +1,5 @@
+{
+  "id": "applink",
+  "name": "Example 앱 링크",
+  "fetch": ["bash", "fetch.sh"]
+}
