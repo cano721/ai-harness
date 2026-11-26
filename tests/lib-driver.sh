@@ -22,11 +22,13 @@ new_driver_repo() { # scenario → DRIVER_REPO, FAKE_LOG, FAKE_SCENARIO
   FAKE_LOG="$DRIVER_TMP/$1.log"
   mkdir -p "$DRIVER_TMP/data"
   : >"$DRIVER_TMP/data/config"
-  mkdir -p "$DRIVER_REPO"
-  git -C "$DRIVER_REPO" init -q
-  # git config user.email·user.name과 같은 내용을 프로세스 없이 쓴다.
-  printf '[user]\n\temail = t@t\n\tname = t\n' >>"$DRIVER_REPO/.git/config"
-  git -C "$DRIVER_REPO" commit -q --allow-empty -m init
+  # 빈 커밋 init과 user t@t를 갖춘 기준 템플릿을 복사한다(lib.sh copy_repo_template, #614).
+  # 이미 저장소면(같은 시나리오로 다시 부름) 예전처럼 그 위에 init 커밋을 하나 더 쌓는다 — 기존 기록을 템플릿으로 덮지 않게.
+  if [[ -d "$DRIVER_REPO/.git" ]]; then
+    git -C "$DRIVER_REPO" commit -q --allow-empty -m init
+  else
+    copy_repo_template "$DRIVER_REPO"
+  fi
   DRIVER_REPO="$(cd "$DRIVER_REPO" && pwd -P)"
   if [[ -n "${NEW_REPO_LINKED:-}" ]]; then # 병합 뒤 worktree 판정 테스트용: 작업 저장소를 링크된 worktree로 둔다(원본은 DRIVER_MAIN)
     DRIVER_MAIN="$DRIVER_REPO"

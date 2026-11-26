@@ -177,6 +177,28 @@ make_repo() { # dir [origin] — 빈 커밋 하나와 user 설정(test@example.c
   git -C "$dir" commit -q --allow-empty -m init
 }
 
+# shellcheck source=tests/lib-repo-template.sh
+source "$ROOT/tests/lib-repo-template.sh"
+# 기준 저장소 템플릿(빈 커밋 init·user t@t)을 dst로 복사한다 — git init·commit 두 번 대신 복사 한 번(#614).
+# run.sh가 만든 실행 캐시 HM_TEST_REPO_TEMPLATE를 먼저 쓰고, 없거나 무효하면 처음 쓸 때 $TEST_TMP/repo-template에 한 번 만든다.
+# dst가 이미 있는 디렉토리(미리 넣어 둔 미추적 파일)면 그 안에 템플릿 내용을 넣는다 — cp -R이 하위 디렉토리로 복사하지 않게.
+TEST_REPO_TEMPLATE=""
+copy_repo_template() { # dst
+  if [[ -z "$TEST_REPO_TEMPLATE" ]]; then
+    if [[ -n "${HM_TEST_REPO_TEMPLATE:-}" && -d "$HM_TEST_REPO_TEMPLATE/.git" ]]; then
+      TEST_REPO_TEMPLATE="$HM_TEST_REPO_TEMPLATE"
+    else
+      ensure_repo_template "$TEST_TMP/repo-template"
+      TEST_REPO_TEMPLATE="$TEST_TMP/repo-template"
+    fi
+  fi
+  if [[ -d "$1" ]]; then
+    cp -R "$TEST_REPO_TEMPLATE/." "$1"
+  else
+    cp -R "$TEST_REPO_TEMPLATE" "$1"
+  fi
+}
+
 make_project_repo() { # PROJECT_REPO(origin acme/service)와 그 링크된 worktree PROJECT_WORKTREE를 만든다
   make_repo "$PROJECT_REPO" git@github.com:acme/service.git
   git -C "$PROJECT_REPO" worktree add -q -b test-worktree "$PROJECT_WORKTREE"

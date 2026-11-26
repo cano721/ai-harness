@@ -23,6 +23,16 @@
 - 선택 accounts(argv, #519): 한 소스에 계정을 여럿 잇는 어댑터. stdout JSONL 한 줄이 계정 하나 {id, name, error?}.
   선언한 소스는 연결된 뒤에도 connect를 다시 불러 계정을 더하고, 끊기는 disconnect argv 뒤에 계정 id를 붙여 그 계정만 끊는다
   (마지막 계정을 끊으면 소스 연결도 끊긴다). 계정 목록은 연결·끊기·수집 뒤에 다시 읽어 sources.json에 둔다.
+- 선택 settings (#632): 사람이 보드 '연결한 곳' 카드에서 바꾸는 소스 설정. {get(argv), set(argv), fields: [{id, label,
+  type: multi-select|toggle|number, options?(argv, multi-select에만 필수), min?·max?(정수, number에만), danger?(bool),
+  confirm?(사람 말 확인 문구), help?}]}. 하나라도 잘못되면 그 소스만 '선언 오류'다.
+  get은 stdout에 JSON 객체 하나 {필드 id: 값}(multi-select는 문자열 배열, toggle은 bool, number는 정수)을 낸다.
+  options는 stdout JSONL 한 줄이 선택지 하나 {value, label}(둘 다 문자열, 잘못된 줄은 건너뜀, 필드당 200개까지)다.
+  set은 표준 입력으로 모든 필드를 담은 JSON 객체 하나를 받고, 종료 코드 0이 저장 성공이다. 보드는 바꾼 필드만 받아
+  get 현재값에 합쳐 넘긴다. 세 명령 모두 연결된 소스에서만, 소스 폴더에서 60초 한도로 부른다.
+  자유 입력은 없다: multi-select 값은 options 목록 안에서만, number는 min~max 정수만 받고 나머지는 거부한다.
+  danger 필드는 현재값과 비교해 켜기(toggle false→true)·항목 추가(multi-select)·값 바꾸기(number)일 때 요청에
+  confirm:true가 없으면 set을 부르지 않고 거부한다(화면이 확인 대화를 띄운다). 끄기·빼기만 있는 변경은 바로 저장한다.
 데이터는 <data>/board/agenda/ 아래(sources.json·cache/<id>.json·done.json·todos.json·brief.json·completed.json, 모두 600)에 둔다.
 완료함(#567) completed.json은 최근 7일 완료(직접 적은 할 일·보드에만 숨긴 항목·어댑터 done)의 출처·id·제목·url·시각만
 남기고 본문(detail)은 남기지 않는다. 7일이 지난 줄은 읽고 쓸 때 지우고, 다시 열면 그 줄을 지운다.
@@ -55,6 +65,8 @@ FETCH_TIMEOUT = float(os.environ.get("BOARD_AGENDA_FETCH_TIMEOUT") or 60)
 CONNECT_TIMEOUT = 300
 ACTION_TIMEOUT = 60
 WAIT_ON_READ = 1.5  # 화면이 읽을 때 막 시작한 수집을 기다리는 최대 시간. 느린 소스는 다음 읽기에 보인다
+SETTING_TYPES = ("multi-select", "toggle", "number")
+MAX_OPTIONS = 200
 
 
 def utc():
@@ -169,6 +181,60 @@ def skill_dirs():
     ]
 
 
+def _int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _parse_settings(s):
+    """settings 선언(#632) → (정리한 선언, 오류). 오류 문구는 parse_declaration과 같은 '<키>는 … 여야 합니다.' 꼴."""
+    if not isinstance(s, dict):
+        return None, "settings는 get·set·fields를 가진 객체여야 합니다."
+    for k in ("get", "set"):
+        if not _argv(s.get(k)):
+            return None, f"settings.{k}는 명령(문자열 배열)이어야 합니다."
+    raw = s.get("fields")
+    if not isinstance(raw, list) or not raw:
+        return None, "settings.fields는 비어 있지 않은 배열이어야 합니다."
+    fields, ids = [], set()
+    for i, f in enumerate(raw):
+        key = f"settings.fields[{i}]"
+        if not isinstance(f, dict):
+            return None, f"{key}는 객체여야 합니다."
+        fid, ftype = f.get("id"), f.get("type")
+        if not isinstance(fid, str) or not ID_RE.match(fid):
+            return None, f"{key}.id는 소문자·숫자·- 로 된 이름이어야 합니다."
+        if fid in ids:
+            return None, f"{key}.id는 다른 필드와 달라야 합니다('{fid}'가 겹칩니다)."
+        ids.add(fid)
+        if not isinstance(f.get("label"), str) or not f["label"].strip():
+            return None, f"{key}.label은 빈 문자열이 아니어야 합니다."
+        if ftype not in SETTING_TYPES:
+            return None, f"{key}.type은 multi-select·toggle·number 중 하나여야 합니다."
+        if ftype == "multi-select" and not _argv(f.get("options")):
+            return None, f"{key}.options는 multi-select 필드에 꼭 있는 명령(문자열 배열)이어야 합니다."
+        if ftype != "multi-select" and "options" in f:
+            return None, f"{key}.options는 multi-select 필드에만 쓰여야 합니다."
+        for k in ("min", "max"):
+            if k in f and ftype != "number":
+                return None, f"{key}.{k}은 number 필드에만 쓰여야 합니다."
+            if k in f and not _int(f[k]):
+                return None, f"{key}.{k}은 정수여야 합니다."
+        if _int(f.get("min")) and _int(f.get("max")) and f["min"] > f["max"]:
+            return None, f"{key}.min은 max보다 크지 않아야 합니다."
+        if "danger" in f and not isinstance(f["danger"], bool):
+            return None, f"{key}.danger는 true 또는 false여야 합니다."
+        for k in ("confirm", "help"):
+            if f.get(k) is not None and not isinstance(f[k], str):
+                return None, f"{key}.{k}는 문자열이어야 합니다."
+        fields.append({
+            "id": fid, "label": _short(f["label"], 60), "type": ftype, "options": f.get("options"),
+            "min": f.get("min"), "max": f.get("max"), "danger": f.get("danger") is True,
+            "confirm": _short(f["confirm"], 300) if (f.get("confirm") or "").strip() else None,
+            "help": _short(f["help"], 300) if (f.get("help") or "").strip() else None,
+        })
+    return {"get": s["get"], "set": s["set"], "fields": fields}, None
+
+
 def parse_declaration(path):
     """agenda.json 하나를 읽어 (소스, 오류)를 돌려준다. 오류가 있으면 소스는 None."""
     try:
@@ -205,12 +271,18 @@ def parse_declaration(path):
     prompt = d.get("setup_prompt")
     if prompt is not None and not isinstance(prompt, str):
         return None, "setup_prompt는 문자열이어야 합니다."
+    settings = None
+    if "settings" in d:
+        settings, err = _parse_settings(d["settings"])
+        if err:
+            return None, err
     return {
         "id": d["id"], "name": _short(d["name"], 60), "folder": os.path.dirname(os.path.abspath(path)),
         "fetch": d["fetch"], "connect": d.get("connect"), "disconnect": d.get("disconnect"), "done": d.get("done"),
         "reopen": d.get("reopen"), "accounts": d.get("accounts"),
         "interval": interval, "requires": req, "setup_hint": _short(hint, 300) if hint else None,
         "setup_prompt": _short(prompt, SETUP_PROMPT_MAX) if prompt and prompt.strip() else None,
+        "settings": settings,
     }, None
 
 
@@ -314,6 +386,7 @@ class Store:
         self.refetch = set()  # 수집 중에 다시 모아야 할 일이 생긴 소스(계정을 끊음 등)
         self.connecting = {}  # id -> 시작 시각
         self.connect_error = {}  # id -> 사람 말 오류(연결 실패)
+        self.settings_lock = threading.Lock()  # 설정 저장(get → 합치기 → set)이 서로 끼어들어 값을 잃지 않게
 
     # ---- 경로·환경 ----
     def _warn_once(self, msg):
@@ -355,19 +428,21 @@ class Store:
         env["HARNESS_METRICS_DIR"] = self.data
         return env
 
-    def _run(self, src, argv, extra, timeout):
-        """어댑터 명령 하나. 반환 (종료 코드 또는 None(시간 초과·실행 못 함), stdout, 사람 말 오류)."""
+    def _run(self, src, argv, extra, timeout, stdin_text=None):
+        """어댑터 명령 하나. stdin_text를 주면 표준 입력으로 넘긴다(없으면 DEVNULL).
+        반환 (종료 코드 또는 None(시간 초과·실행 못 함), stdout, 사람 말 오류)."""
         argv = list(argv)
         first = os.path.join(src["folder"], argv[0])
         if not os.path.isabs(argv[0]) and os.path.exists(first):
             argv[0] = first
         try:  # 자기 프로세스 그룹으로 띄워, 시간 초과면 손자 프로세스까지 끈다(파이프를 쥔 손자가 기다림을 늘리지 않게)
-            p = subprocess.Popen(argv + list(extra), cwd=src["folder"], env=self._env(), stdin=subprocess.DEVNULL,
+            p = subprocess.Popen(argv + list(extra), cwd=src["folder"], env=self._env(),
+                                 stdin=subprocess.DEVNULL if stdin_text is None else subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         except OSError as e:
             return None, "", f"명령을 실행하지 못했습니다({e.strerror or e})."
         try:
-            out, err = p.communicate(timeout=timeout)
+            out, err = p.communicate(input=stdin_text, timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(p.pid, signal.SIGKILL)
@@ -565,7 +640,7 @@ class Store:
             if src.get("invalid"):
                 sources.append({"id": src["id"], "name": src["name"], "state": "error", "connected": False,
                                 "invalid": True, "error": "선언 오류: " + src["invalid"], "fetched_at": None, "setup_hint": None,
-                                "setup_session": False})
+                                "setup_session": False, "settings": False})
                 continue
             sid = src["id"]
             on = bool((connected.get(sid) or {}).get("connected"))
@@ -583,7 +658,8 @@ class Store:
                             "fetched_at": c.get("fetched_at"), "error": c.get("error") or self.connect_error.get(sid),
                             "skipped": c.get("skipped", 0), "setup_hint": src["setup_hint"], "can_done": bool(src["done"]),
                             "multi": bool(src["accounts"]), "accounts": self.accounts_of(sid) if on else [],
-                            "connect_error": self.connect_error.get(sid), "setup_session": bool(self.setup_prompt(src))})
+                            "connect_error": self.connect_error.get(sid), "setup_session": bool(self.setup_prompt(src)),
+                            "settings": bool(src["settings"])})
             if not on or st == "needs_setup":
                 continue
             hidden = local_done.get(sid) or {}
@@ -827,6 +903,147 @@ class Store:
         if self.is_connected(source_id) and not self.missing(src):
             self._start_fetch(src, again=True)
         return 200, {"ok": True, "message": f"{src['name']}에서 다시 열었습니다."}
+
+    # ---- 소스 설정(#632) ----
+    def _settings_source(self, source_id):
+        """설정을 읽고 쓸 수 있는 소스. 반환 (소스, None) 또는 (None, (코드, 응답))."""
+        src = self.find(source_id) if isinstance(source_id, str) else None
+        if not src:
+            return None, (404, {"ok": False, "message": "등록된 일정 소스가 아닙니다."})
+        if not src["settings"]:
+            return None, (404, {"ok": False, "message": f"{src['name']}은(는) 보드에서 바꿀 설정을 선언하지 않았습니다."})
+        if not self.is_connected(source_id) or self.missing(src):
+            return None, (409, {"ok": False, "message": f"{src['name']}에 연결돼 있지 않습니다. 먼저 연결한 뒤 설정을 바꾸세요."})
+        return src, None
+
+    @staticmethod
+    def _setting_value(field, v):
+        """get이 낸 값 하나를 필드 타입에 맞춘다. 맞지 않으면 빈 값(빈 목록·false·null)."""
+        if field["type"] == "multi-select":
+            return list(dict.fromkeys(x for x in v if isinstance(x, str))) if isinstance(v, list) else []
+        if field["type"] == "toggle":
+            return v is True
+        return v if _int(v) else None
+
+    def _settings_current(self, src):
+        """get → {필드 id: 값}. 반환 (값, 사람 말 오류)."""
+        code, out, err = self._run(src, src["settings"]["get"], [], ACTION_TIMEOUT)
+        if code != 0:
+            return None, f"{src['name']}의 현재 설정을 읽지 못했습니다. " + err
+        try:
+            raw = json.loads(out or "")
+        except ValueError:
+            raw = None
+        if not isinstance(raw, dict):
+            return None, f"{src['name']}의 현재 설정을 읽지 못했습니다. get 명령이 JSON 객체를 내지 않았습니다."
+        return {f["id"]: self._setting_value(f, raw.get(f["id"])) for f in src["settings"]["fields"]}, None
+
+    def _settings_options(self, src, field):
+        """options → [{value, label}]. 반환 (선택지, 사람 말 오류)."""
+        code, out, err = self._run(src, field["options"], [], ACTION_TIMEOUT)
+        if code != 0:
+            return None, f"{field['label']} 선택지를 읽지 못했습니다. " + err
+        rows, seen = [], set()
+        for line in (out or "").splitlines():
+            try:
+                raw = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            value, label = raw.get("value"), raw.get("label")
+            if not isinstance(value, str) or not value or len(value) > 200 or value in seen or not isinstance(label, str):
+                continue
+            seen.add(value)
+            rows.append({"value": value, "label": _short(label, 120) or value})
+            if len(rows) >= MAX_OPTIONS:
+                break
+        return rows, None
+
+    def settings_read(self, source_id):
+        """설정 폼: 필드 선언·선택지·현재값. get·options가 실패하면 ok:false와 사유."""
+        src, refused = self._settings_source(source_id)
+        if refused:
+            return refused
+        values, err = self._settings_current(src)
+        if err:
+            return 200, {"ok": False, "message": err}
+        fields = []
+        for f in src["settings"]["fields"]:
+            row = {k: f[k] for k in ("id", "label", "type", "min", "max", "danger", "confirm", "help")}
+            row["options"] = []
+            if f["type"] == "multi-select":
+                row["options"], err = self._settings_options(src, f)
+                if err:
+                    return 200, {"ok": False, "message": err}
+            fields.append(row)
+        return 200, {"ok": True, "fields": fields, "values": values}
+
+    @staticmethod
+    def _setting_check(field, v):
+        """요청 값 하나를 검사한다(선택지 목록은 따로). 반환 (정리한 값, 사람 말 오류)."""
+        label = field["label"]
+        if field["type"] == "toggle":
+            return (v, None) if isinstance(v, bool) else (None, f"{label}은(는) 켜기·끄기(true/false)로만 바꿉니다.")
+        if field["type"] == "multi-select":
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                return None, f"{label}은(는) 목록에서 고른 항목들로만 바꿉니다."
+            return list(dict.fromkeys(v)), None
+        lo, hi = field["min"], field["max"]
+        if not _int(v) or (lo is not None and v < lo) or (hi is not None and v > hi):
+            span = f" {lo if lo is not None else ''}~{hi if hi is not None else ''} 사이" if lo is not None or hi is not None else ""
+            return None, f"{label}은(는){span} 정수로만 바꿉니다."
+        return v, None
+
+    def settings_save(self, source_id, values, confirm=False):
+        """바꿀 필드만 받아 검사하고, 위험한 변경은 confirm을 요구한 뒤, get 현재값에 합친 전체 객체를 set 표준 입력으로 넘긴다."""
+        src, refused = self._settings_source(source_id)
+        if refused:
+            return refused
+        if not isinstance(values, dict) or not values:
+            return 400, {"ok": False, "message": "바꿀 설정 값(values)을 필드 id와 값의 객체로 보내야 합니다."}
+        by_id = {f["id"]: f for f in src["settings"]["fields"]}
+        unknown = [k for k in values if k not in by_id]
+        if unknown:
+            return 400, {"ok": False, "message": f"{src['name']}에 없는 설정입니다: {_short(', '.join(unknown), 100)}"}
+        wanted = {}
+        for fid, v in values.items():
+            wanted[fid], err = self._setting_check(by_id[fid], v)
+            if err:
+                return 400, {"ok": False, "message": err}
+        with self.settings_lock:
+            for fid, v in wanted.items():
+                f = by_id[fid]
+                if f["type"] != "multi-select":
+                    continue
+                opts, err = self._settings_options(src, f)
+                if err:
+                    return 200, {"ok": False, "message": err}
+                allowed = {o["value"] for o in opts}
+                outside = [x for x in v if x not in allowed]
+                if outside:
+                    return 400, {"ok": False, "message": f"{f['label']}의 목록에 없는 항목입니다: {_short(', '.join(outside), 100)}"}
+            current, err = self._settings_current(src)
+            if err:
+                return 200, {"ok": False, "message": err}
+            risky = []
+            for fid, v in wanted.items():
+                f, cur = by_id[fid], current[fid]
+                if not f["danger"]:
+                    continue
+                if (f["type"] == "toggle" and v and not cur) or (f["type"] == "number" and v != cur) or \
+                        (f["type"] == "multi-select" and set(v) - set(cur)):
+                    risky.append(fid)
+            if risky and confirm is not True:
+                return 409, {"ok": False, "needs_confirm": True, "fields": risky,
+                             "message": "위험한 설정을 켜거나 더하는 변경입니다. 확인한 뒤 다시 저장하세요: "
+                                        + ", ".join(by_id[x]["label"] for x in risky)}
+            merged = dict(current, **wanted)
+            code, _out, err = self._run(src, src["settings"]["set"], [], ACTION_TIMEOUT,
+                                        stdin_text=json.dumps(merged, ensure_ascii=False))
+        if code != 0:
+            return 200, {"ok": False, "message": f"{src['name']} 설정을 저장하지 못했습니다. " + err}
+        return 200, {"ok": True, "message": f"{src['name']} 설정을 저장했습니다."}
 
     # ---- 할 일 ----
     def _todos(self):

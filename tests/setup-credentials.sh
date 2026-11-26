@@ -275,4 +275,92 @@ kill "$LF_SRV" 2>/dev/null || true
 wait "$LF_SRV" 2>/dev/null || true
 pass "langfuse catalog skill installs with scripts and enforces risk classes offline"
 
+# 별칭 키(#621): LANGFUSE_PUBLIC_KEY_<S>·_CMD_<S>만 있어도 list는 키가 있다고 하고 check는 별칭마다 자기 host로 확인한다.
+# 별칭 규칙은 lf.py aliases()와 같다 — 사용자 파일(settings·secrets.env)의 _CMD만 인정하고 프로세스 환경의 _CMD는 실행하지 않는다.
+SETUP_T="$TEST_TMP/setup-lf-alias"
+SETUP_CATALOG="$ROOT/catalog"
+mkdir -p "$SETUP_T/data"
+cat >"$SETUP_T/http.sh" <<'STUB'
+#!/usr/bin/env bash
+conf="$(cat)"
+printf '%s\n' "$*" >>"${0%/*}/argv.log"
+case "$conf" in *bad*) printf 'HTTP 401\n' >&2; exit 1 ;; esac
+tag="$(sed -nE 's/.*pk-lf-([a-z0-9]+):.*/\1/p' <<<"$conf" | head -1)"
+printf '{"data":[{"id":"p","name":"proj-%s"}]}' "$tag"
+STUB
+chmod +x "$SETUP_T/http.sh"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+LF_AGENT_HOST="https://agent.example.test"; LF_DEFAULT_HOST="https://us.example.test"
+: >"$SETUP_T/argv.log"
+lf_settings() { jq -n --argjson e "$1" '{env: $e}' >"$SETUP_T/settings.json"; }
+lf_check() { setup_cmd check langfuse | tee -a "$SETUP_T/outputs.log"; }
+lf_alias_names() { jq -r '[.projects[]?.alias] | join(",")' <<<"$1"; }
+lf_settings "$(jq -n --arg ah "$LF_AGENT_HOST" --arg dh "$LF_DEFAULT_HOST" '{
+  LANGFUSE_PUBLIC_KEY_AGENT:"pk-lf-agent", LANGFUSE_SECRET_KEY_AGENT:"sk-lf-agent", LANGFUSE_HOST_AGENT:$ah,
+  LANGFUSE_PUBLIC_KEY_TALENT_POOL:"pk-lf-talent", LANGFUSE_SECRET_KEY_TALENT_POOL:"sk-lf-talent", LANGFUSE_HOST:$dh}')"
+LF_LIST="$(setup_cmd list | tee -a "$SETUP_T/outputs.log" | jq -c 'select(.name == "langfuse")')"
+assert_eq "LANGFUSE_PUBLIC_KEY_AGENT settings" "$(jq -r '.env[0] | "\(.found) \(.source)"' <<<"$LF_LIST")" "list finds the public key through the first alias"
+assert_eq "LANGFUSE_SECRET_KEY_AGENT settings" "$(jq -r '.env[1] | "\(.found) \(.source)"' <<<"$LF_LIST")" "list finds the secret key through the first alias"
+LF_CHECK="$(lf_check)"
+assert_eq "true" "$(jq -r '.ok' <<<"$LF_CHECK")" "langfuse check passes when every alias passes"
+assert_eq "agent,talent-pool" "$(lf_alias_names "$LF_CHECK")" "langfuse check reports one project entry per alias"
+assert_eq "agent: proj-agent, talent-pool: proj-talent" "$(jq -r '.as' <<<"$LF_CHECK")" "langfuse check joins the alias projects"
+assert_eq "true true" "$(jq -r '[.projects[]?.ok] | map(tostring) | join(" ")' <<<"$LF_CHECK")" "every alias entry is ok"
+assert_eq "2" "$(wc -l <"$SETUP_T/argv.log" | tr -d ' ')" "langfuse check calls once per alias"
+assert_contains "$(<"$SETUP_T/argv.log")" "$LF_AGENT_HOST/api/public/projects" "an alias follows its own LANGFUSE_HOST_<S>"
+assert_contains "$(<"$SETUP_T/argv.log")" "$LF_DEFAULT_HOST/api/public/projects" "an alias without its own host follows LANGFUSE_HOST"
+
+# 별칭 쌍이 secrets.env에만 있거나 설정의 _CMD 쌍이어도 인정한다.
+: >"$SETUP_T/argv.log"
+printf "export LANGFUSE_PUBLIC_KEY_OPS='pk-lf-ops'\nexport LANGFUSE_SECRET_KEY_OPS='sk-lf-ops'\n" >"$SETUP_T/data/secrets.env"
+lf_settings '{"LANGFUSE_PUBLIC_KEY_CMD_VAULT":"printf pk-lf-vault","LANGFUSE_SECRET_KEY_CMD_VAULT":"printf sk-lf-vault"}'
+LF_LIST="$(setup_cmd list | tee -a "$SETUP_T/outputs.log" | jq -c 'select(.name == "langfuse")')"
+assert_eq "LANGFUSE_PUBLIC_KEY_OPS secrets" "$(jq -r '.env[0] | "\(.found) \(.source)"' <<<"$LF_LIST")" "list reads an alias pair from secrets.env"
+LF_CHECK="$(lf_check)"
+assert_eq "true ops,vault" "$(jq -r '"\(.ok) \([.projects[]?.alias] | join(","))"' <<<"$LF_CHECK")" "secrets.env aliases and saved key command pairs are checked"
+assert_eq "ops: proj-ops, vault: proj-vault" "$(jq -r '.as' <<<"$LF_CHECK")" "key commands of an alias resolve to the key value"
+
+# 프로세스 환경의 _CMD는 별칭이 아니고 실행하지 않는다(설정 파일에 쓴 명령만 신뢰한다).
+: >"$SETUP_T/argv.log"; rm -f "$SETUP_T/planted"; : >"$SETUP_T/data/secrets.env"
+lf_settings '{"LANGFUSE_PUBLIC_KEY_AGENT":"pk-lf-agent","LANGFUSE_SECRET_KEY_AGENT":"sk-lf-agent"}'
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh" LANGFUSE_PUBLIC_KEY_CMD_EVIL="touch $SETUP_T/planted; printf pk-lf-evil" LANGFUSE_SECRET_KEY_CMD_EVIL="printf sk-lf-evil")
+LF_CHECK="$(lf_check)"
+assert_eq "agent" "$(lf_alias_names "$LF_CHECK")" "an alias command in the process env is not an alias"
+assert_not_file "$SETUP_T/planted" "an alias command in the process env is never executed"
+SETUP_ENV=(HM_SETUP_HTTP="$SETUP_T/http.sh")
+
+# 별칭 하나만 키가 틀리면 전체는 실패하되 그 별칭만 원인을 달고, 나머지는 통과한다.
+lf_settings "$(jq -n --arg ah "$LF_AGENT_HOST" '{
+  LANGFUSE_PUBLIC_KEY_AGENT:"pk-lf-agent", LANGFUSE_SECRET_KEY_AGENT:"sk-lf-bad", LANGFUSE_HOST_AGENT:$ah,
+  LANGFUSE_PUBLIC_KEY_TALENT_POOL:"pk-lf-talent", LANGFUSE_SECRET_KEY_TALENT_POOL:"sk-lf-talent"}')"
+LF_CHECK="$(lf_check)"
+assert_eq "false" "$(jq -r '.ok' <<<"$LF_CHECK")" "one failing alias fails the check"
+assert_contains "$(jq -r '.error' <<<"$LF_CHECK")" "agent" "the error names the failing alias"
+assert_eq "false true" "$(jq -r '[.projects[]?.ok] | map(tostring) | join(" ")' <<<"$LF_CHECK")" "only the failing alias is not ok"
+LF_HINT="$(jq -r '.projects[]? | select(.alias == "agent") | .hint' <<<"$LF_CHECK")"
+assert_contains "$LF_HINT" "LANGFUSE_HOST_AGENT" "the alias 401 hint points at its host key"
+assert_contains "$LF_HINT" "register.py agent" "the alias 401 hint points at register.py"
+assert_contains "$(jq -r '.projects[]? | select(.alias == "talent-pool") | .as' <<<"$LF_CHECK")" "proj-talent" "the other alias still reports its project"
+
+# 공개 키만 있는 별칭은 비밀 키 이름을 대며 실패하고, 짝이 있는 별칭이 list의 found가 된다.
+lf_settings '{"LANGFUSE_PUBLIC_KEY_AGENT":"pk-lf-agent","LANGFUSE_PUBLIC_KEY_TALENT_POOL":"pk-lf-talent","LANGFUSE_SECRET_KEY_TALENT_POOL":"sk-lf-talent"}'
+LF_LIST="$(setup_cmd list | tee -a "$SETUP_T/outputs.log" | jq -c 'select(.name == "langfuse")')"
+assert_eq "LANGFUSE_PUBLIC_KEY_TALENT_POOL" "$(jq -r '.env[0].found' <<<"$LF_LIST")" "list skips an alias that lacks its secret key"
+LF_CHECK="$(lf_check)"
+assert_eq "false" "$(jq -r '.ok' <<<"$LF_CHECK")" "an alias with only a public key fails the check"
+assert_contains "$(jq -r '.error' <<<"$LF_CHECK")" "missing LANGFUSE_SECRET_KEY_AGENT" "the error names the missing secret key"
+assert_eq "false" "$(jq -r '.projects[]? | select(.alias == "agent") | .ok' <<<"$LF_CHECK")" "the incomplete alias entry is not ok"
+
+# 기본 키와 별칭이 함께 있으면 둘 다 확인한다.
+: >"$SETUP_T/argv.log"
+lf_settings '{"LANGFUSE_PUBLIC_KEY":"pk-lf-main","LANGFUSE_SECRET_KEY":"sk-lf-main","LANGFUSE_PUBLIC_KEY_AGENT":"pk-lf-agent","LANGFUSE_SECRET_KEY_AGENT":"sk-lf-agent","LANGFUSE_HOST_AGENT":"https://agent.example.test"}'
+LF_CHECK="$(lf_check)"
+assert_eq "true agent,default" "$(jq -r '"\(.ok) \([.projects[]?.alias] | sort | join(","))"' <<<"$LF_CHECK")" "the default key and an alias are both checked"
+assert_eq "2" "$(wc -l <"$SETUP_T/argv.log" | tr -d ' ')" "one call per key pair when the default and an alias coexist"
+assert_contains "$(jq -r '.as' <<<"$LF_CHECK")" "default: proj-main" "the default alias is named default in the summary"
+
+# 키 값은 호출 인자·check·list 출력 어디에도 남지 않는다. (카탈로그 안내문의 `pk-lf-…` 자리표시자는 값이 아니므로 접두사 뒤 영숫자가 있을 때만 값으로 본다.)
+if grep -qE '[ps]k-lf-[a-z0-9]' "$SETUP_T/argv.log" "$SETUP_T/outputs.log"; then fail "alias key values leaked into argv or output"; fi
+pass "langfuse alias keys: list finds them, check verifies each alias with its own host, keys stay out of argv and output (#621)"
+
 finish_tests
