@@ -132,11 +132,15 @@ while [ "$i" -lt "$n" ]; do
 done
 agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((map(select(.pid != null)) | first) // first)' <<<"$agents")
 # 위임한 세션 되살리기(#465): 대화형 세션은 살아 있는 동안만 claude agents 목록에 있어, 맡긴 세션이 PR까지 내고 탭이 닫히면
-# 결과와 함께 사라졌다. 부모 대화 기록에서 띄운 것으로 확인된 터미널(groups.py가 links.json scan handles에 남김)의 세션만
-# 끝난 항목으로 되살린다 — 사람이 직접 열었다 닫은 세션은 그대로 뺀다. 오래된 것은 아래 DONE_HOURS 규칙으로 걸러진다.
+# 결과와 함께 사라졌다. 부모 대화 기록에서 띄운 것으로 확인된 터미널(groups.py가 links.json scan handles에 남김)의 자식
+# (links.json kids — 띄운 직후 처음 붙은 세션, #634)만 끝난 항목으로 되살린다. 같은 터미널을 나중에 재사용한 세션과
+# 사람이 직접 열었다 닫은 세션은 뺀다. kids가 아직 없는 옛 형식(handles 값이 문자열)은 그 짝을 쓴다.
+# 오래된 것은 아래 DONE_HOURS 규칙으로 걸러진다.
 if [ -f "$CACHE_DIR/links.json" ] && revived=$(jq -c --slurpfile l "$CACHE_DIR/links.json" '
     ($l[0] // {}) as $links | map(.sessionId) as $have
-    | ([($links.scan // {})[]? | (.handles // [])[]?] | unique | map(($links.handles // {})[.] // empty) | unique
+    | ([($links.scan // {})[]? | (.handles // [])[]?] | unique
+       | map(. as $h | (($links.kids // {})[$h] | select(type == "string"))
+             // (($links.handles // {})[$h] | select(type == "string")) // empty) | unique
        | map(select(. as $sid | $have | index($sid) | not))) as $gone
     | . + ($gone | map({sessionId: ., id: .[0:8], kind: "interactive", pid: null, cwd: null}))' <<<"$agents" 2>/dev/null); then
   agents=$revived
