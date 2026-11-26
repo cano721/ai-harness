@@ -38,6 +38,9 @@ POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 �
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text, due?}  직접 적는 할 일(#539 기한)
                                  · POST /agenda/reopen {t, source, id}  완료 되돌리기(직접 적은 할 일·보드에만 숨긴 항목,
                                    reopen을 선언한 어댑터 — 그 argv에 항목 id를 붙여 부름). 완료함에서 그 줄을 지움
+POST /agenda/delete {t, source, id}  항목 삭제(#637): 직접 적은 할 일(열린 것·끝낸 것)은 todos.json에서, delete를 선언한
+                                   어댑터의 todo·reply는 그 argv에 항목 id를 붙여 원본에서 지우고 캐시·완료함에서 뺌.
+                                   event 400 · delete 미선언 409 · 없는 소스·항목 404 · 어댑터 실패는 200 ok:false
 GET  /agenda/settings?t&source    소스 설정 폼(#632): settings를 선언하고 연결된 소스의 필드·선택지(options)·현재값(get)
 POST /agenda/settings {t, source, values, confirm?}  바꿀 필드만 받아 검사(목록·범위·타입)하고 get 현재값에 합쳐 set 표준 입력으로.
                                  danger 필드를 켜거나 항목을 더하는데 confirm:true가 없으면 409 needs_confirm. 기록에 설정값은 남기지 않음
@@ -2732,6 +2735,8 @@ class Handler(BaseHTTPRequestHandler):
             code, res = AGENDA.refresh(source)
         elif kind == "reopen":
             code, res = AGENDA.reopen(source, req.get("id"))
+        elif kind == "delete":
+            code, res = AGENDA.delete(source, req.get("id"))
         elif kind == "settings":
             code, res = AGENDA.settings_save(source, req.get("values"), req.get("confirm") is True)
         else:
@@ -2827,7 +2832,7 @@ class Handler(BaseHTTPRequestHandler):
             log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
             return self._send(code, res)
         if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/done", "/agenda/todo", "/agenda/reopen",
-                    "/agenda/settings"):
+                    "/agenda/settings", "/agenda/delete"):
             return self._agenda_post(path.rsplit("/", 1)[1], req)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))

@@ -245,24 +245,31 @@ assert_contains "$HARNESS_INIT_CONTENT" "플러그인 전역 Skill**(\`skills/de
 assert_contains "$(<"$ROOT/README.md")" "| \`/design-system-builder\` |" "README lists design-system-builder"
 pass "design-system-builder plugin skill"
 
-# design-system-builder 경로 해석(#627): 세 산출물(규칙 문서·토큰 파일·기준 화면)의 대체 체인을 SKILL.md에 표로 정리하고,
-# output-format.md의 기본 경로가 대체 체인과 정합한다.
-# AC-1: 대체 체인이 SKILL.md에 표로 존재한다 — 세 산출물 각각에 최소 네 단계
-assert_contains "$DSB_CONTENT" "### Destination resolution" "design-system-builder has a destination resolution subsection under §1"
-for DSB_ARTIFACT in "rule document" "token file" "reference screen"; do
-  assert_contains "$DSB_CONTENT" "| $DSB_ARTIFACT |" "destination resolution table lists the $DSB_ARTIFACT artifact"
+# design-system-builder 보여줄 곳(#627): 결과물을 사람이 어디서 눈으로 볼지 첫 라운드에서 묻고, 고른 곳이 막히면
+# 문서만 남기고 끝내지 않고 다른 곳을 먼저 만들어 보여 주며, 규칙 문서 메타와 최종 보고에 그 장소를 남긴다.
+# #628이 이 요구를 파일 경로 대체 체인으로 잘못 읽었으므로, 그 흔적이 다시 들어오지 않는지도 본다.
+# shellcheck disable=SC2016  # 백틱을 문자 그대로 찾는다
+for phrase in "Where to view the result" "multiple choice" "in the first round" "Code reference screen" "Host share page" \
+  "Figma library" "Local single HTML" "references/figma-output.md" \
+  "one place that works in this session right now, plus the canonical code reference screen" \
+  "A view destination is a place a person looks at, not a file path" "Design System artifact" "no code change" \
+  "answers to questions 1 and 5" "inside the three-question limit of a round" \
+  "### When a view destination is blocked" "Figma MCP is not authenticated or not enabled" \
+  "the session cannot change code" "the host has no artifact" "Do not end with documents only" \
+  "build the next available place first and show it" "Where it can be viewed (required)" \
+  "Open every chosen view destination" "정적 재현"; do
+  assert_contains "$DSB_CONTENT" "$phrase" "design-system-builder view destination: $phrase"
 done
-# AC-2: 최종 대체에서 질문한다
-assert_contains "$DSB_CONTENT" "ask in the current round" "destination resolution falls back to asking when all steps fail"
-# AC-3: 질문은 세 질문 상한을 존중한다
-assert_contains "$DSB_CONTENT" "three-question limit" "destination resolution respects the three-question limit"
-# AC-4: 하네스 없는 저장소 지원 — (b) 건너뛰기
-assert_contains "$DSB_CONTENT" "skip step (b)" "destination resolution skips the harness step when there is no harness"
-# AC-5: output-format.md 기본 경로가 대체 체인과 정합
-assert_contains "$DSB_FORMAT" "SKILL.md § 1" "output-format.md refers to the SKILL.md destination resolution as the authority"
-# AC-6: 기존 파일이 있으면 덮어쓰지 않는다
-assert_contains "$DSB_CONTENT" "refresh/merge/leave" "destination resolution defers to the existing-document question when a file is found"
-pass "design-system-builder destination resolution fallback chain (#627)"
+for phrase in "- 보여줄 곳:" "### 어디서 볼 수 있는지" "- 기준 화면:" "- Figma 라이브러리:" "view destinations:" "정적 재현"; do
+  assert_contains "$DSB_FORMAT" "$phrase" "output-format records the view destination: $phrase"
+done
+for phrase in "Destination resolution" "destination resolution" "SKILL.md § 1"; do
+  case "$DSB_CONTENT$DSB_FORMAT" in
+    *"$phrase"*) fail "design-system-builder must not keep the #628 path fallback chain: $phrase" ;;
+  esac
+done
+# changelog.d 조각은 릴리스 준비(release-prep.sh)가 합치고 지우는 일시 파일이라 여기서 읽지 않는다 (#649).
+pass "design-system-builder view destination question, fallback, and report (#627)"
 
 # 디자인 시스템(#287): 보드·리포트가 화면마다 다른 색·부품을 쓰다 대비 미달·키보드 불가가 생겼다.
 # 규칙 문서·토큰·공용 부품·기준 화면이 있고, design-audit가 읽는 고정 섹션 순서를 지킨다.

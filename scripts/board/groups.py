@@ -5,15 +5,22 @@
 2. 부모 대화 기록의 띄우기 명령 결과: `orca terminal create|agent launch|worktree create`가 돌려준 터미널 ID,
    `claude --bg`가 돌려준 `backgrounded · <id>`
 터미널 ID ↔ 세션은 살아 있는 claude 프로세스의 ORCA_TERMINAL_HANDLE로 짝짓고, 끝난 뒤에도 쓰도록 저장한다.
+같은 터미널을 나중에 다른 세션이 재사용하므로 짝은 덮어쓰지 않고 붙은 순서대로 쌓는다. 띄운 세션의 자식은
+띄운 때 가까이 시작해 그 터미널에 붙은 세션 하나로 정하고 고정한다(#634).
 """
 import glob, json, os, re, shutil, subprocess, threading, time
+from datetime import datetime, timedelta, timezone
 
 HANDLE = re.compile(r"term_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 BG = re.compile(r"backgrounded · ([0-9a-f]{8})")
 SPAWN = re.compile(r"orca\s+(terminal\s+create|agent\s+launch|worktree\s+create)|claude\b[^\n|;&]*--bg")
 PR = re.compile(r"https://(?:bitbucket\.org/[\w.-]+/[\w.-]+/pull-requests|github\.com/[\w.-]+/[\w.-]+/pull)/\d+")
 ISSUE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
-SCAN_VERSION = 2
+SCAN_VERSION = 3
+HANDLE_HISTORY = 10  # 터미널마다 남기는 붙은 세션 수
+SPAWN_LEAD = timedelta(minutes=2)  # 띄운 기록보다 이만큼 먼저 시작한 세션까지 자식 후보(기록 시각 오차)
+SPAWN_WINDOW = timedelta(minutes=10)  # 띄운 뒤 이 안에 시작한 세션만 자식 후보
+START_LINES = 50  # 세션 시작 시각을 찾을 때 읽는 transcript 앞 줄 수
 _lock = threading.Lock()
 _orca = {"at": 0.0, "runs": {}, "workers": []}
 
@@ -25,9 +32,15 @@ class Store:
             self.data = json.load(open(path))
         except Exception:
             self.data = {}
-        self.data.setdefault("handles", {})  # handle -> sid
+        handles = self.data.get("handles")
+        handles = handles if isinstance(handles, dict) else {}
+        # handle -> [sid, …] 붙은 순서. 옛 형식(handle -> sid)은 한 개짜리 이력으로 읽는다
+        self.data["handles"] = {h: ([v] if isinstance(v, str) else [s for s in v if isinstance(s, str)])
+                                for h, v in handles.items() if isinstance(v, (str, list))}
+        self.data.setdefault("kids", {})  # handle -> 그 터미널을 띄운 부모의 자식 sid(한번 정하면 고정)
+        self.data.setdefault("starts", {})  # sid -> 세션 시작 시각(ISO)
         self.data.setdefault("verified", {})  # "sid|id" -> True | 확인한 파일 크기
-        self.data.setdefault("scan", {})  # transcript -> {offset, pending, handles, bg}
+        self.data.setdefault("scan", {})  # transcript -> {offset, pending, handles, created, bg}
 
     def save(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -52,6 +65,44 @@ def _handles_of(pids):
     return found
 
 
+def _when(ts):
+    """ISO 시각 → datetime. Python 3.9 fromisoformat은 Z를 못 읽는다."""
+    try:
+        at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _start_of(path):
+    """transcript 앞부분에서 처음 나오는 최상위 timestamp."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f):
+                if n >= START_LINES:
+                    break
+                try:
+                    ts = json.loads(line).get("timestamp")
+                except Exception:
+                    continue
+                if isinstance(ts, str) and _when(ts):
+                    return ts
+    except OSError:
+        pass
+    return None
+
+
+def _spawned_kid(store, handle, created):
+    """부모가 handle을 띄운 시각(created) 가까이 시작해 그 터미널에 붙은 세션 중 가장 먼저 시작한 것. 모르면 None."""
+    at = _when(created) if created else None
+    if not at:
+        return None
+    starts = store.data["starts"]
+    found = [(_when(starts.get(sid) or ""), sid) for sid in store.data["handles"].get(handle, [])]
+    found = [(t, sid) for t, sid in found if t and at - SPAWN_LEAD <= t <= at + SPAWN_WINDOW]
+    return min(found)[1] if found else None
+
+
 def _scan_transcript(path, st):
     """부모 대화 기록에서 '띄우기 명령의 결과'로 받은 터미널 ID·bg ID만 뽑는다(새로 붙은 부분만)."""
     size = os.path.getsize(path)
@@ -66,6 +117,7 @@ def _scan_transcript(path, st):
     chunk = chunk[: chunk.rfind(b"\n") + 1]
     pending = set(st.get("pending", []))
     handles, bgs = set(st.get("handles", [])), set(st.get("bg", []))
+    created = st.get("created", {})  # handle -> 띄우기 결과를 받은 레코드의 timestamp(처음 값)
     prs, keys, seq = st.get("prs", {}), st.get("keys", {}), st.get("seq", 0)
     for line in chunk.decode("utf-8", "replace").splitlines():
         if '"type":"user"' not in line and '"type":"assistant"' not in line:
@@ -117,14 +169,18 @@ def _scan_transcript(path, st):
                 pending.discard(c.get("tool_use_id"))
                 text = c.get("content")
                 text = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
-                handles.update(HANDLE.findall(text))
+                found = HANDLE.findall(text)
+                handles.update(found)
+                if isinstance(r.get("timestamp"), str):
+                    for h in found:
+                        created.setdefault(h, r["timestamp"])
                 bgs.update(BG.findall(text))
     if len(prs) > 30:
         prs = dict(sorted(prs.items(), key=lambda x: x[1])[-30:])
     if len(keys) > 60:
         keys = dict(sorted(keys.items(), key=lambda x: x[1]["seq"])[-60:])
     st.update(offset=st.get("offset", 0) + len(chunk), pending=sorted(pending)[-50:], handles=sorted(handles), bg=sorted(bgs),
-              prs=prs, keys=keys, seq=seq)
+              created=created, prs=prs, keys=keys, seq=seq)
 
 
 def _mentions(store, item, token):
@@ -175,25 +231,41 @@ def annotate(items, store_path):
         live = {i["pid"]: i["sid"] for i in work if i.get("pid")}
         fresh = _handles_of(list(live))
         for pid, h in fresh.items():
-            store.data["handles"][h] = live[pid]
+            seen = store.data["handles"].setdefault(h, [])
+            if live[pid] not in seen:
+                seen.append(live[pid])
+                del seen[:-HANDLE_HISTORY]
         for i in work:  # 지금 이 프로세스가 붙어 있는 터미널(입력 보내기에 쓴다). 저장된 짝이 아니라 방금 읽은 값만
             if i.get("pid") in fresh:
                 i["orca_handle"] = fresh[i["pid"]]
         handles = store.data["handles"]
         by_sid = {i["sid"]: i for i in work}
+        attached = {sid for seen in handles.values() for sid in seen}
+        starts = store.data["starts"]
+        for i in work:
+            if i["sid"] in attached and i["sid"] not in starts and i.get("transcript"):
+                ts = _start_of(i["transcript"])
+                if ts:
+                    starts[i["sid"]] = ts
+        store.data["starts"] = {sid: ts for sid, ts in starts.items() if sid in attached}
+
+        def recent(handle, token):
+            """그 터미널에 붙었던 세션 중 대화에 token이 나오는 가장 최근 세션."""
+            for sid in reversed(handles.get(handle) or []):
+                if sid in by_sid and _mentions(store, by_sid[sid], token):
+                    return sid
+            return None
         by_short = {i.get("short_id"): i["sid"] for i in work}
 
         groups, member = {}, {}  # gid -> {title, coord, source}; sid -> gid
         orca = _orca_state()
         for w in orca["workers"]:
             run = orca["runs"].get(w.get("runId"))
-            sid = handles.get(w.get("agentTerminalHandle"))
-            if not run or sid not in by_sid or not _mentions(store, by_sid[sid], w.get("taskId")):
+            sid = recent(w.get("agentTerminalHandle"), w.get("taskId")) if run else None
+            if not sid:
                 continue
             gid = "orca|" + run["id"]
-            coord = handles.get(run.get("coordinator_handle"))
-            if coord not in by_sid or not _mentions(store, by_sid[coord], run["id"]):
-                coord = None
+            coord = recent(run.get("coordinator_handle"), run["id"])
             groups.setdefault(gid, {"title": run.get("objective") or run["id"], "coord": coord, "source": "orca"})
             member[sid] = gid
         for parent in work:
@@ -205,7 +277,13 @@ def annotate(items, store_path):
                 _scan_transcript(path, st)
             except OSError:
                 continue
-            kids = [handles.get(h) for h in st.get("handles", [])] + [by_short.get(b) for b in st.get("bg", [])]
+            fixed = store.data["kids"]
+            for h in st.get("handles", []):
+                if h not in fixed:
+                    kid = _spawned_kid(store, h, st.get("created", {}).get(h))
+                    if kid and kid != parent["sid"]:
+                        fixed[h] = kid
+            kids = [fixed.get(h) for h in st.get("handles", [])] + [by_short.get(b) for b in st.get("bg", [])]
             for kid in kids:
                 if kid in by_sid and kid != parent["sid"] and kid not in member:
                     gid = "spawn|" + parent["sid"]

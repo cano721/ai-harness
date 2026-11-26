@@ -32,23 +32,6 @@ Look, do not guess. Record what you find; it decides the mode and the output for
 - **Themes** in use (light only, light + dark, high contrast) and how the theme is switched (attribute, class, media query, platform API).
 - **Screens** — routes or templates grouped by what they are (list, detail, form, dashboard, auth, settings…). Axis A and D of the rule document need this.
 
-### Destination resolution
-
-Before building, resolve where each artifact goes. Walk the fallback chain top to bottom; the first step that yields a path wins.
-
-| Artifact | (a) User-specified | (b) Harness docs | (c) Existing file search | (d) Stack default |
-|---|---|---|---|---|
-| rule document | path the user named | `frontend.md` / `ui.md` points to it | `DESIGN.md`, `docs/design-system.md`, `docs/design/*.md` | `docs/design-system.md` |
-| token file | path the user named | `frontend.md` / `ui.md` names it | a file matching the stack format in the project root or `docs/` | stack table in `references/tokens.md` |
-| reference screen | path the user named | `ui.md` names it | a `/design-system` route, Storybook, or component gallery | stack table in `references/components.md` |
-
-Rules:
-
-- When `.ai-harness/` does not exist, skip step (b) and proceed with (c) → (d). This is consistent with the paragraph above: "A repository without a harness is a supported case."
-- When step (c) finds an existing file, use that path but do not overwrite the content silently — the refresh/merge/leave question in § 2 still applies.
-- When all four steps yield nothing, ask in the current round. Bundle the three paths into a single question that shows the recommended defaults from step (d) and lets the user change any of them. This question counts toward the three-question limit of the round (§ 3). If the round already has three questions, put it in the next round as one question.
-- When a harness-free repository reaches step (d) and all three defaults are determined by the stack, the question may be skipped — the defaults are used and listed in the report.
-
 ## 2. Pick the mode
 
 | Mode | When | Reference |
@@ -76,6 +59,13 @@ Ask only what inspection cannot answer. At most **three questions per round**, e
 3. Elevation philosophy: flat (lines and tone only), layered (shadows carry depth), or hybrid — and how much of a screen the accent color may occupy.
 4. Density: one density, or compact / standard / comfortable modes.
 5. Brand inputs: an existing brand color, typeface, or tone of voice to honor.
+6. Where to view the result — multiple choice; always ask it in the first round, inside its three-question limit. A view destination is a place a person looks at, not a file path. Choices:
+   - **Code reference screen** — Storybook or an example page in the project (kind by stack in `references/components.md`). It is the canonical place.
+   - **Host share page** — a page the host renders, such as the claude.ai Design System artifact type; no code change.
+   - **Figma library** — `references/figma-output.md`.
+   - **Local single HTML** — one self-contained file opened in a browser.
+
+   Recommended default: one place that works in this session right now, plus the canonical code reference screen — the user sees the result now, and the code stays the one source.
 
 Never ask for something the code already answers. Values the user does not confirm stay marked as proposals and keep the document in `draft`.
 
@@ -102,6 +92,16 @@ Follow the references in this order — later steps reference earlier names:
 
 Write values only in the token file. The rule document names tokens and states rules; it does not repeat values.
 
+### When a view destination is blocked
+
+Do not end with documents only. Say why the chosen place is blocked, then build the next available place first and show it. Keep the blocked place in the report as `못 만듦 — <reason>`.
+
+| Blocked | Why | Build instead, in order |
+|---|---|---|
+| Figma library | Figma MCP is not authenticated or not enabled | host share page → local single HTML |
+| Code reference screen | the session cannot change code | host share page or local single HTML |
+| Host share page | the host has no artifact | local single HTML or code reference screen |
+
 ## 5. Hand off to the harness (only when one exists)
 
 `.ai-harness/docs/frontend.md` (its `## 디자인 점검` section) and `.ai-harness/docs/ui.md` are protected, human-owned files. **Show the proposed diff and apply it only after the user approves.** Never edit `AGENTS.md` or harness workflows from this skill.
@@ -112,7 +112,7 @@ If the project has a rule document and a reference screen but the harness does n
 
 - Every token the rule document names exists in the token file, and every semantic token resolves to a primitive in every supported theme.
 - Contrast for every documented foreground/background pair meets WCAG 2.2 AA in every theme: 4.5:1 for body text, 3:1 for large text, UI component boundaries, and focus indicators. Compute it; do not eyeball it.
-- The reference screen renders with the new tokens. Open it in a browser (or the platform preview) when one is available and look at both themes; if you cannot, say so instead of claiming it renders.
+- Open every chosen view destination and look at it with the new tokens in every supported theme — the reference screen in a browser (or the platform preview), the host share page, the local single HTML, the Figma library. If you cannot open one, say so instead of claiming it renders. A page that reproduces the screens statically instead of running the real app is marked `정적 재현` (static reproduction) on the page itself and in the report.
 - Run the project's existing build, lint, and test commands for the files you changed.
 - When a Figma library was written, the read-back checks in `references/figma-output.md` passed, or the report says which failed.
 
@@ -120,6 +120,7 @@ If the project has a rule document and a reference screen but the harness does n
 
 End with:
 
+- Where it can be viewed (required): every chosen place with its link or command, and whether it was opened, is a `정적 재현`, or could not be built and why.
 - Mode used, and the rule document status (`seed` / `draft` / `confirmed`).
 - Files created or changed, and files deliberately left untouched.
 - Proposed values still awaiting confirmation, and excluded values with the reason (for example, a mockup color that failed contrast).
