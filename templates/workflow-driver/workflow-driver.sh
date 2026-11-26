@@ -1329,7 +1329,7 @@ $(brief_context)" "$PUBLISH_SCHEMA"
     || problems="$(jq -c '. + ["HEAD is not pushed to its upstream"]' <<<"$problems")"
   [[ "$policy" == direct || -n "$pr_url" ]] \
     || problems="$(jq -c --arg g "$policy" '. + ["git_policy \($g) requires a pull request, but pr_url is empty"]' <<<"$problems")"
-  save_baseline --have-head '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
+  save_baseline --have-head '.head = $h | .branch = $b | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
     --arg h "$head_now" --arg u "$pr_url" \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
   if [[ "$problems" == "[]" ]]; then
@@ -3798,8 +3798,10 @@ case "$CMD" in
       --arg git "$git_policy" --argjson merge "$merge_policy" --argjson delivery "$delivery" --argjson notices "$notices" --argjson mon "$monitor_error" --arg unattended "${HM_INTERNAL_SESSION:-}" \
       --arg appr "$approval" --arg appr_source "$approval_source" --arg rt_source "$runtime_source" --arg inv "$INVESTIGATION_FILE" --arg gate "$final_gate_mode" \
       --argjson rel "$release_policy" --arg ver "$VERSION_ARG" --arg stage "$release_stage" \
+      --arg br "$(git -C "$REPO" symbolic-ref --short -q HEAD 2>/dev/null || true)" \
       --argjson cli "$(printf '%s\n' "${CLI_CHECKS[@]+"${CLI_CHECKS[@]}"}" | jq -R . | jq -s 'map(select(length > 0))')" \
       '{run_id:$id, workflow:$wf, repo:$repo, runtime:$rt, request:$req, graph:$graph, node:$node, start_head:$head, head:$head, started_at:$t,
+        branch:(if $br == "" then null else $br end),
         policy:{git:$git, approval:$appr, approval_source:$appr_source, runtime_source:$rt_source, commits:(($git | IN("pr-only", "direct", "merge")) and ($wf | IN("review", "investigate", "release") | not)),
           merge:$merge, delivery:$delivery, notices:$notices, unattended:($unattended == "1"), release:$rel, final_gate:$gate},
         release:(if $wf == "release" then {version:(if $ver == "" then null else $ver end), version_source:(if $ver == "" then null else "flag" end), stage:$stage,

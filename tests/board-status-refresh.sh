@@ -501,4 +501,206 @@ assert_contains "$WD_TPL" '`끝남 · PR #${n}`' "a finished worker in a group r
 assert_contains "$WD_TPL" "memberStatus(it), ago(it.at)" "group member rows use the worker status"
 pass "work.sh keeps a delegated session after its tab closes"
 
+# 러너 카드 branch·workflow·release_tag(#605): publish 전에 멈춘 런은 .publish.branch가 없으므로 state의 .branch → .publish.branch →
+# (끝나지도 도는 중도 아닐 때만) 저장소의 현재 브랜치 순으로 카드에 싣는다. release 런은 .release.tag를 release_tag로 싣는다.
+B6_T="$BA_T/data605"
+mkdir -p "$B6_T"
+b6_repo() { # $1=run 폴더 $2=그 저장소의 브랜치 — b5_run이 쓰는 $BA_T/repo-<run 폴더>에 git 저장소를 만든다
+  mkdir -p "$BA_T/repo-$1"
+  git init -q -b "$2" "$BA_T/repo-$1"
+}
+b5_run "$B6_T" br/1 user_decision user_decision ".message = \"결정\" | .finished_at = \"$B5_NOW\" | .branch = \"fix/592-state\""
+b5_run "$B6_T" pb/1 stopped fix ".finished_at = \"$B5_NOW\" | .publish = {branch: \"fix/592-publish\"}"
+b6_repo pb/1 fix/592-other
+b5_run "$B6_T" bp/1 stopped fix ".finished_at = \"$B5_NOW\" | .branch = \"fix/592-state\" | .publish = {branch: \"fix/592-publish\"}"
+b6_repo bp/1 fix/592-other
+b5_run "$B6_T" gi/1 stopped fix ".finished_at = \"$B5_NOW\""
+b6_repo gi/1 fix/592-x
+b5_run "$B6_T" nr/1 stopped fix ".finished_at = \"$B5_NOW\""
+b5_run "$B6_T" ru/1 running discover ".started_at = \"$B5_NOW\""
+b6_repo ru/1 fix/592-x
+b5_run "$B6_T" dn/1 "done" brief ".finished_at = \"$B5_NOW\""
+b6_repo dn/1 fix/592-x
+b5_run "$B6_T" re/1 user_decision user_decision ".message = \"결정\" | .finished_at = \"$B5_NOW\" | .workflow = \"release\" | .release = {tag: \"v0.95.0\", version: \"0.95.0\"}"
+assert_eq "fix/592-state" "$(b5_item "$B6_T" br/1 .branch)" "a runner card carries the branch recorded in state.json"
+assert_eq "fix/592-publish" "$(b5_item "$B6_T" pb/1 .branch)" "without state.branch the card falls back to publish.branch before the repository's current branch"
+assert_eq "fix/592-state" "$(b5_item "$B6_T" bp/1 .branch)" "state.branch wins over publish.branch"
+assert_eq "fix/592-x" "$(b5_item "$B6_T" gi/1 .branch)" "a stopped runner with no recorded branch reads its repository's current branch"
+assert_eq "null" "$(b5_item "$B6_T" nr/1 .branch)" "a runner whose repository folder is gone has a null branch"
+assert_eq "null" "$(b5_item "$B6_T" ru/1 .branch)" "a running runner does not read the repository's current branch"
+assert_eq "null" "$(b5_item "$B6_T" dn/1 .branch)" "a done runner does not read the repository's current branch"
+assert_eq "feature|null" "$(b5_item "$B6_T" br/1 '"\(.workflow)|\(.release_tag)"')" "a feature runner card carries its workflow and a null release_tag"
+assert_eq "release|v0.95.0" "$(b5_item "$B6_T" re/1 '"\(.workflow)|\(.release_tag)"')" "a release runner card carries workflow release and its tag"
+pass "board status carries branch, workflow and release_tag on runner cards"
+
+# 러너 카드 PR·태그 판정(#605): PR 링크가 없는 멈춘 러너도 작업 브랜치 PR이 밖에서 끝났거나 release 태그가 원격에 있으면 prstate.apply가 done으로 내린다.
+# 캐시 키는 "branch\t<cwd>\t<branch>"·"tag\t<cwd>\t<tag>", 값은 기존 URL 캐시와 같은 {"state": ..., "at": t}다.
+B6_PS="$(python3 -I -B -c '
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import prstate
+now = time.time()
+cmd = "workflow-driver.sh resume --workflow feature"
+bk = lambda cwd, b: "\t".join(["branch", cwd, b])
+tk = lambda cwd, t: "\t".join(["tag", cwd, t])
+def card(n, state="needs_human", **kw):
+    d = {"section": "work", "kind": "runner", "state": state, "title": "t%d" % n, "link": None, "cwd": "/work/shop-%d" % n, "cmd": cmd,
+         "actions": ["open_agent"], "workflow": "feature", "branch": "fix/592-x", "release_tag": None}
+    if state == "blocked":
+        d["stall"] = "stopped"
+    d.update(kw)
+    return d
+def put(c, st, at=None, key=None):
+    prstate._cache[key or bk(c["cwd"], c["branch"])] = {"state": st, "at": now if at is None else at}
+cases = []
+def add(name, c):
+    cases.append((name, c))
+    return c
+put(add("merged", card(1)), "MERGED")
+put(add("closed", card(2, "blocked")), "CLOSED")
+put(add("declined", card(3)), "DECLINED")
+put(add("open", card(4)), "OPEN")
+put(add("none", card(5)), "NONE")
+add("uncached", card(6, "blocked"))
+put(add("open-stale", card(7)), "OPEN", now - prstate.OPEN_TTL - 10)
+put(add("none-stale", card(8)), "NONE", now - prstate.OPEN_TTL - 10)
+put(add("develop", card(9, branch="develop")), "MERGED")
+put(add("main", card(10, branch="main")), "MERGED")
+add("master", card(11, branch="master"))
+add("trunk", card(12, branch="trunk"))
+put(add("nobranch", card(13, branch=None)), "MERGED", key=bk("/work/shop-13", "None"))
+put(add("running", card(14, "running")), "MERGED")
+put(add("agent", card(15, kind="agent")), "MERGED")
+put(add("rel-tagged", card(16, workflow="release", release_tag="v0.95.0", branch="release/0.95.0")), "TAGGED", key=tk("/work/shop-16", "v0.95.0"))
+put(add("rel-untagged", card(17, workflow="release", release_tag="v0.95.0", branch="release/0.95.0")), "UNTAGGED", key=tk("/work/shop-17", "v0.95.0"))
+put(add("rel-branch-only", card(18, workflow="release", release_tag="v0.95.0", branch="release/0.95.0")), "MERGED")
+add("rel-notag", card(19, workflow="release", release_tag=None, branch="release/0.95.0"))
+put(add("rel-untagged-stale", card(20, workflow="release", release_tag="v0.95.0")), "UNTAGGED", now - prstate.OPEN_TTL - 10, key=tk("/work/shop-20", "v0.95.0"))
+url = "https://github.com/acme/shop/pull/21"
+prstate._cache[url] = {"state": "OPEN", "at": now}
+put(add("link-open", card(21, link=url)), "MERGED")
+url22 = "https://github.com/acme/shop/pull/22"
+prstate._cache[url22] = {"state": "MERGED", "at": now}
+add("link-merged", card(22, link=url22))
+wanted = {n: c for n, c in cases}
+before = set(prstate._want)
+prstate.apply([c for _, c in cases])
+for name, c in cases:
+    print("%s|%s|%s|%s|%s|%s" % (name, c["state"], c["title"], c.get("cmd"), "stall" in c, "open_agent" in c["actions"]))
+def wants(c):
+    return sorted(k for k in prstate._want if c["cwd"] in k)
+for name, c in cases:
+    print("want-%s|%s" % (name, wants(c)))
+' "$ROOT/scripts/board" 2>&1)"
+b6_ps() { grep "^$1|" <<<"$B6_PS" || true; }
+CMD6="workflow-driver.sh resume --workflow feature"
+BK6="'branch\\t/work/shop-6\\tfix/592-x'"
+assert_eq "merged|done|t1 → PR 병합됨|None|False|False" "$(b6_ps merged)" "a merged work-branch PR moves a person-waiting runner card without a PR link to done"
+assert_eq "closed|done|t2 → PR 닫힘|None|False|False" "$(b6_ps closed)" "a closed work-branch PR moves a stopped runner card to done and drops stall and command"
+assert_eq "declined|done|t3 → PR 거절됨|None|False|False" "$(b6_ps declined)" "a declined work-branch PR moves the runner card to done"
+assert_eq "open|needs_human|t4|$CMD6|False|True" "$(b6_ps open)" "an open work-branch PR leaves the runner card as it is"
+assert_eq "none|needs_human|t5|$CMD6|False|True" "$(b6_ps none)" "a branch with no PR leaves the runner card as it is"
+assert_eq "uncached|blocked|t6|$CMD6|True|True" "$(b6_ps uncached)" "a branch card without a cached state is unchanged"
+assert_eq "want-uncached|[$BK6]" "$(b6_ps want-uncached)" "a branch card without a cached state asks for a lookup by its branch key"
+assert_eq "want-open-stale|['branch\\t/work/shop-7\\tfix/592-x']" "$(b6_ps want-open-stale)" "an OPEN branch state past OPEN_TTL is asked again"
+assert_eq "want-none-stale|['branch\\t/work/shop-8\\tfix/592-x']" "$(b6_ps want-none-stale)" "a NONE branch state past OPEN_TTL is asked again"
+assert_eq "want-open|[]" "$(b6_ps want-open)" "a fresh OPEN branch state is not asked again"
+assert_eq "want-none|[]" "$(b6_ps want-none)" "a fresh NONE branch state is not asked again"
+assert_eq "develop|needs_human|t9|$CMD6|False|True" "$(b6_ps develop)" "a card on develop is unchanged even when the cache says MERGED"
+assert_eq "main|needs_human|t10|$CMD6|False|True" "$(b6_ps main)" "a card on main is unchanged even when the cache says MERGED"
+for B6_NAME in develop main master trunk nobranch rel-notag; do
+  assert_eq "want-$B6_NAME|[]" "$(b6_ps "want-$B6_NAME")" "a $B6_NAME card never asks for a lookup"
+done
+assert_eq "nobranch|needs_human|t13|$CMD6|False|True" "$(b6_ps nobranch)" "a card with no branch is unchanged"
+assert_eq "running|running|t14|$CMD6|False|True" "$(b6_ps running)" "a running runner card is unchanged even when its branch PR is merged"
+assert_eq "agent|needs_human|t15|$CMD6|False|True" "$(b6_ps agent)" "an agent work card is unchanged"
+assert_eq "rel-tagged|done|t16 → 릴리스 태그 v0.95.0 있음|None|False|False" "$(b6_ps rel-tagged)" "a release runner whose tag exists on the remote moves to done"
+assert_eq "rel-untagged|needs_human|t17|$CMD6|False|True" "$(b6_ps rel-untagged)" "a release runner whose tag is not on the remote is unchanged"
+assert_eq "want-rel-untagged|[]" "$(b6_ps want-rel-untagged)" "a fresh UNTAGGED state is not asked again"
+assert_eq "want-rel-untagged-stale|['tag\\t/work/shop-20\\tv0.95.0']" "$(b6_ps want-rel-untagged-stale)" "an UNTAGGED state past OPEN_TTL is asked again by its tag key"
+assert_eq "rel-branch-only|needs_human|t18|$CMD6|False|True" "$(b6_ps rel-branch-only)" "a release runner is judged by its tag, never by its branch PR"
+assert_eq "want-rel-branch-only|['tag\\t/work/shop-18\\tv0.95.0']" "$(b6_ps want-rel-branch-only)" "a release runner asks for its tag key, not a branch key"
+assert_eq "link-open|needs_human|t21|$CMD6|False|True" "$(b6_ps link-open)" "a card with a PR link keeps using the PR url state, not its branch"
+assert_eq "want-link-open|[]" "$(b6_ps want-link-open)" "a card with a PR link does not ask for its branch"
+assert_eq "link-merged|done|t22 → PR 병합됨|None|False|False" "$(b6_ps link-merged)" "a card with a merged PR link keeps the existing behavior"
+pass "prstate moves stopped runner cards to done by work-branch PR state or release tag when there is no PR link"
+
+# 러너 카드 조회 worker(#605): _fetch가 브랜치 키는 gh(GitHub)·curl(Bitbucket)로, 태그 키는 git ls-remote로 묻는다. 가짜 gh·curl을 PATH 앞에 두고 원격은 로컬 bare 저장소.
+B6_W="$(mkdir -p "$TEST_TMP/prstate-fetch/bin" && cd "$TEST_TMP/prstate-fetch" && pwd -P)"
+cat >"$B6_W/bin/gh" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$PWD" "$*" >>"$FAKE_GH_LOG"
+[[ "$1 $2" == "pr list" ]] || exit 64
+[[ " $* " == *" --head fix/592-x "* ]] || { echo '[]'; exit 0; }
+case "$FAKE_GH_MODE" in
+  merged) echo '[{"state":"MERGED","headRefName":"fix/592-x","url":"https://github.com/acme/shop/pull/9"},{"state":"OPEN","headRefName":"fix/592-xy","url":"https://github.com/acme/shop/pull/10"}]' ;;
+  open) echo '[{"state":"MERGED","headRefName":"fix/592-x","url":"https://github.com/acme/shop/pull/9"},{"state":"OPEN","headRefName":"fix/592-x","url":"https://github.com/acme/shop/pull/11"}]' ;;
+  closed) echo '[{"state":"CLOSED","headRefName":"fix/592-x","url":"https://github.com/acme/shop/pull/9"}]' ;;
+  empty) echo '[]' ;;
+  *) exit 1 ;;
+esac
+FAKE
+cat >"$B6_W/bin/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_CURL_LOG"
+cat >>"$FAKE_CURL_LOG"
+echo '{"values":[{"state":"MERGED","source":{"branch":{"name":"fix/592-x"}}}]}'
+FAKE
+chmod +x "$B6_W/bin/gh" "$B6_W/bin/curl"
+git init -q --bare "$B6_W/origin.git"
+git init -q -b main "$B6_W/tagged"
+git -C "$B6_W/tagged" remote add origin "$B6_W/origin.git"
+git -C "$B6_W/tagged" -c user.email=test@example.com -c user.name=test commit -q --allow-empty -m init
+git -C "$B6_W/tagged" tag v0.95.0
+git -C "$B6_W/tagged" push -q origin main v0.95.0
+git init -q -b main "$B6_W/gh-repo"
+git -C "$B6_W/gh-repo" remote add origin https://github.com/acme/shop.git
+git init -q -b main "$B6_W/bb-repo"
+git -C "$B6_W/bb-repo" remote add origin https://bitbucket.org/acme/shop.git
+git init -q -b main "$B6_W/bad-origin"
+git -C "$B6_W/bad-origin" remote add origin "$B6_W/missing.git"
+git init -q -b main "$B6_W/no-origin"
+B6_FETCH="$(env -u ATLASSIAN_USER -u BITBUCKET_API_TOKEN PATH="$B6_W/bin:$PATH" FAKE_GH_LOG="$B6_W/gh.log" FAKE_CURL_LOG="$B6_W/curl.log" GIT_TERMINAL_PROMPT=0 \
+  python3 -I -B -c '
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import prstate
+w = sys.argv[2]
+bk = lambda d, b: "\t".join(["branch", os.path.join(w, d), b])
+tk = lambda d, t: "\t".join(["tag", os.path.join(w, d), t])
+def show(name, v):
+    print("%s|%s" % (name, v))
+for mode in ("merged", "open", "closed", "empty", "fail"):
+    os.environ["FAKE_GH_MODE"] = mode
+    show("gh-" + mode, prstate._fetch(bk("gh-repo", "fix/592-x")))
+os.environ["FAKE_GH_MODE"] = "merged"
+show("gh-other-branch", prstate._fetch(bk("gh-repo", "fix/592-y")))
+show("tag-yes", prstate._fetch(tk("tagged", "v0.95.0")))
+show("tag-no", prstate._fetch(tk("tagged", "v9.9.9")))
+show("tag-bad-origin", prstate._fetch(tk("bad-origin", "v0.95.0")))
+show("tag-no-origin", prstate._fetch(tk("no-origin", "v0.95.0")))
+show("branch-no-origin", prstate._fetch(bk("no-origin", "fix/592-x")))
+show("bb-no-creds", prstate._fetch(bk("bb-repo", "fix/592-x")))
+os.environ.update(ATLASSIAN_USER="u", BITBUCKET_API_TOKEN="t")
+show("bb-merged", prstate._fetch(bk("bb-repo", "fix/592-x")))
+' "$ROOT/scripts/board" "$B6_W" 2>&1)"
+b6_fetch() { grep "^$1|" <<<"$B6_FETCH" || true; }
+assert_eq "gh-merged|MERGED" "$(b6_fetch gh-merged)" "a GitHub branch key with only merged PRs for that exact head reads MERGED"
+assert_eq "gh-open|OPEN" "$(b6_fetch gh-open)" "any open PR for the branch makes the state OPEN"
+assert_eq "gh-closed|CLOSED" "$(b6_fetch gh-closed)" "a closed-only branch reads CLOSED"
+assert_eq "gh-empty|NONE" "$(b6_fetch gh-empty)" "a branch with no PR reads NONE"
+assert_eq "gh-fail|None" "$(b6_fetch gh-fail)" "a failing gh gives no state"
+assert_eq "gh-other-branch|NONE" "$(b6_fetch gh-other-branch)" "PRs of other head branches are ignored"
+assert_contains "$(<"$B6_W/gh.log")" "$B6_W/gh-repo|pr list --head fix/592-x --state all" "gh is asked from the card's repository for that branch and all states"
+assert_eq "tag-yes|TAGGED" "$(b6_fetch tag-yes)" "a tag on the remote reads TAGGED"
+assert_eq "tag-no|UNTAGGED" "$(b6_fetch tag-no)" "a tag missing on a reachable remote reads UNTAGGED"
+assert_eq "tag-bad-origin|None" "$(b6_fetch tag-bad-origin)" "an unreachable remote gives no tag state"
+assert_eq "tag-no-origin|None" "$(b6_fetch tag-no-origin)" "a repository without origin gives no tag state"
+assert_eq "branch-no-origin|None" "$(b6_fetch branch-no-origin)" "a branch key in a repository without origin gives no state"
+assert_eq "bb-no-creds|None" "$(b6_fetch bb-no-creds)" "a Bitbucket branch key without credentials gives no state"
+assert_eq "bb-merged|MERGED" "$(b6_fetch bb-merged)" "a Bitbucket branch key reads the merged state through curl"
+assert_contains "$(<"$B6_W/curl.log")" 'user = "u:t"' "the Bitbucket credentials go to curl on stdin, not the command line"
+assert_contains "$(<"$B6_W/curl.log")" "pullrequests" "Bitbucket is asked for the pull requests list"
+pass "prstate worker looks up work-branch PRs through gh or Bitbucket and release tags through git ls-remote"
+
 finish_tests
