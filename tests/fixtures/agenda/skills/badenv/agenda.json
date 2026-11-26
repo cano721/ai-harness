@@ -1,0 +1,6 @@
+{
+  "id": "badenv",
+  "name": "잘못된 키 선언",
+  "fetch": ["true"],
+  "requires_env": ["lower_key", 3]
+}

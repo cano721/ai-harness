@@ -46,8 +46,10 @@ google_env() {
 }
 
 AG_PORT="$(free_port)"
+# 사용자 셸의 Jira 키가 내장 jira 소스(#648)로 새지 않게 뺀다. 키는 블록이 settings.json·secrets.env로만 준다.
 ag_board() {
-  google_env PATH="$AG_T/bin:$PATH" HARNESS_METRICS_DIR="$AG_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$AG_T/projects" \
+  google_env env -u ATLASSIAN_USER -u ATLASSIAN_API_TOKEN JIRA_BASE_URL= \
+    PATH="$AG_T/bin:$PATH" HARNESS_METRICS_DIR="$AG_DATA" HARNESS_CLAUDE_PROJECTS_DIR="$AG_T/projects" \
     HARNESS_CLAUDE_SETTINGS="$AG_T/settings.json" BOARD_PORT="$AG_PORT" BOARD_NO_BROWSER=1 BOARD_IDLE_EXIT=0 \
     BOARD_AGENDA_FETCH_TIMEOUT=3 BOARD_FULL_REFRESH_SECONDS=2 bash "$ROOT/scripts/board/board.sh" "$@"
 }
@@ -1028,6 +1030,177 @@ assert_contains "$(sed -n '1,60p' "$ROOT/scripts/board/agenda.py")" "settings (#
 assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "knobs" "the UI doc names the settings fixture"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "/agenda/settings" "the board skill documents the settings API"
 pass "agenda settings stay service-agnostic and documented"
+
+# 15. Jira 기본 소스(#648): 가짜 Jira 서버(인자에 $TEST_TMP)로 키 해석(requires_env)·페이지·필드 매핑·설정·오류·비밀 미노출을 본다.
+AJ_ADAPTER="$ROOT/scripts/board/agenda/jira/jira_agenda.py"
+AJ_STATE="$AG_T/jira-state"; mkdir -p "$AJ_STATE"
+AJ_PORT="$(free_port)"
+python3 -I "$AG_FIX/fake-jira.py" "$AJ_STATE" "$AJ_PORT" >/dev/null 2>&1 &
+track_test_process "$!"
+AJ_URL="http://127.0.0.1:$AJ_PORT"
+for _ in $(seq 1 50); do curl -s -o /dev/null "$AJ_URL/" && break; sleep 0.1; done
+AJ_SECRET="fake-jira-SECRET-648"
+AJ_USER="tester@example.com"
+printf 'Basic %s' "$(printf '%s:%s' "$AJ_USER" "$AJ_SECRET" | base64 | tr -d '\n')" >"$AJ_STATE/expected-auth"
+AJ_LOG="$AJ_STATE/requests.log"
+AJ_SETTINGS_FILE="$AG_DATA/board/agenda/jira-settings.json"
+AJ_OUT_DIR="$AG_T/jira-out"; mkdir -p "$AJ_OUT_DIR"
+jq -n '[
+  {key: "ACME-1", fields: {summary: "요약", status: {name: "진행 중"}, priority: {name: "High"}, project: {key: "ACME", name: "Acme 프로젝트"},
+    duedate: "2026-12-01", created: "2026-11-20T10:15:30.000+0900", reporter: {displayName: "Pat Reporter"}}},
+  {key: "ACME-2", fields: {summary: "기한 없는 일", status: {name: "할 일"}, priority: null, project: {key: "ACME", name: "Acme 프로젝트"},
+    duedate: null, created: "2026-11-21T09:00:00.000+0000", reporter: {displayName: "Pat Reporter"}}},
+  {key: "OPS-3", fields: {summary: "운영 점검", status: {name: "할 일"}, priority: {name: "Low"}, project: {key: "OPS", name: "운영"},
+    duedate: "2026-12-03", created: "2026-11-22T09:00:00.000-0500", reporter: null}}
+]' >"$AJ_STATE/issues.json"
+printf '2\n' >"$AJ_STATE/page_size"
+aj_keys_settings() { jq -n --arg u "$1" --arg s "$AJ_SECRET" --arg n "$AJ_USER" '{env: {JIRA_BASE_URL: $u, ATLASSIAN_USER: $n, ATLASSIAN_API_TOKEN: $s}}' >"$AG_T/settings.json"; }
+aj_secrets() {
+  { printf "export JIRA_BASE_URL='%s'\n" "$AJ_URL"; printf "export ATLASSIAN_USER='%s'\n" "$AJ_USER"
+    printf "export ATLASSIAN_API_TOKEN='%s'\n" "$AJ_SECRET"; } >"$AG_DATA/secrets.env"
+  chmod 600 "$AG_DATA/secrets.env"
+}
+# 어댑터를 보드 밖에서 부른다: 사용자 셸 키를 빼고, 키는 settings.json·secrets.env로만. stdout·stderr는 A13이 다시 본다.
+aj_run() { # name args... → stdout은 $AJ_OUT_DIR/<name>.out, stderr는 .err, 종료 코드를 돌려준다
+  local name="$1"; shift
+  env -u ATLASSIAN_USER -u ATLASSIAN_API_TOKEN -u JIRA_BASE_URL HM_DATA_DIR="$AG_DATA" HARNESS_CLAUDE_SETTINGS="$AG_T/settings.json" \
+    python3 -I "$AJ_ADAPTER" "$@" >"$AJ_OUT_DIR/$name.out" 2>"$AJ_OUT_DIR/$name.err"
+}
+aj_search() { jq -sc '[.[] | select(.path == "/rest/api/3/search/jql")]' "$AJ_LOG"; }
+
+# A1 키 없음: 환경·settings.json env·secrets.env 어디에도 없으면 내장 jira 소스는 '설정 필요'와 설정 세션, 연결은 409.
+printf '{}\n' >"$AG_T/settings.json"
+rm -f "$AG_DATA/secrets.env"
+AG_OUT="$(ag_get)"
+assert_eq "needs_setup|true|Jira" "$(ag_src "$AG_OUT" jira state)|$(ag_src "$AG_OUT" jira setup_session)|$(ag_src "$AG_OUT" jira name)" "the built-in jira source needs setup without keys"
+assert_eq "409" "$(ag_code "$(ag_post connect '{"source":"jira"}')")" "jira cannot connect without keys"
+assert_contains "$(jq -r '.setup_prompt' "$ROOT/scripts/board/agenda/jira/agenda.json")" "/ai-harness:setup" "the jira setup prompt points to /ai-harness:setup"
+AJ_RC=0; aj_run nokeys fetch --since a --until b || AJ_RC=$?
+assert_eq "2|1" "$AJ_RC|$(grep -c . "$AJ_OUT_DIR/nokeys.err")" "the adapter without keys exits 2 with one line"
+assert_contains "$(<"$AJ_OUT_DIR/nokeys.err")" "ATLASSIAN_API_TOKEN" "the missing-key line names the keys"
+pass "jira asks for setup until its keys exist"
+
+# A2 키 해석: settings.json env만, secrets.env만 있어도 설정 충족이다.
+aj_keys_settings "$AJ_URL"
+assert_eq "disconnected" "$(ag_src "$(ag_get)" jira state)" "keys in settings.json env satisfy jira"
+printf '{}\n' >"$AG_T/settings.json"
+aj_secrets
+assert_eq "disconnected" "$(ag_src "$(ag_get)" jira state)" "keys in secrets.env satisfy jira"
+: >"$AJ_LOG"
+aj_run secrets fetch --since a --until b || fail "the adapter reads keys from secrets.env: $(<"$AJ_OUT_DIR/secrets.err")"
+assert_eq "3|true" "$(grep -c . "$AJ_OUT_DIR/secrets.out")|$(aj_search | jq -r 'length > 0 and all(.auth_ok)')" "the adapter fetches with secrets.env keys"
+grep -v ATLASSIAN_API_TOKEN "$AG_DATA/secrets.env" >"$AG_T/secrets.tmp" && mv "$AG_T/secrets.tmp" "$AG_DATA/secrets.env"
+assert_eq "needs_setup" "$(ag_src "$(ag_get)" jira state)" "a missing token alone keeps jira in setup"
+rm -f "$AG_DATA/secrets.env"
+pass "jira resolves keys from settings.json env and secrets.env like setup"
+
+# A3 requires_env 선언: 소문자 키·숫자 값은 그 소스만 선언 오류, 문자열 하나도 받고 빈 값은 없는 것으로 본다. 기존 소스는 그대로.
+AG_OUT="$(ag_get)"
+assert_eq "error|true" "$(ag_src "$AG_OUT" badenv state)|$(ag_src "$AG_OUT" badenv invalid)" "a lowercase requires_env key is a declaration error"
+assert_contains "$(ag_src "$AG_OUT" badenv error)" "requires_env" "the declaration error names requires_env"
+mkdir -p "$HM_CODEX_SKILLS_DIR/badenv2" "$HM_CODEX_SKILLS_DIR/envone"
+jq -n '{id: "badenv2", name: "숫자 키", fetch: ["true"], requires_env: ["OK_KEY", 3]}' >"$HM_CODEX_SKILLS_DIR/badenv2/agenda.json"
+jq -n '{id: "envone", name: "키 하나", fetch: ["true"], requires_env: "AJ_TEST_KEY_648"}' >"$HM_CODEX_SKILLS_DIR/envone/agenda.json"
+AG_OUT="$(ag_get)"
+assert_eq "true" "$(ag_src "$AG_OUT" badenv2 invalid)" "a non-string requires_env value is a declaration error"
+assert_eq "needs_setup" "$(ag_src "$AG_OUT" envone state)" "a single requires_env key that is missing needs setup"
+assert_eq "connected|needs_setup" "$(ag_src "$AG_OUT" acme state)|$(ag_src "$AG_OUT" duo state)" "sources without requires_env keep their state"
+jq -n '{env: {AJ_TEST_KEY_648: ""}}' >"$AG_T/settings.json"
+assert_eq "needs_setup" "$(ag_src "$(ag_get)" envone state)" "an empty settings.json value counts as missing"
+printf "export AJ_TEST_KEY_648='it'\\\\''s'\n" >"$AG_DATA/secrets.env"
+assert_eq "disconnected" "$(ag_src "$(ag_get)" envone state)" "an escaped secrets.env value satisfies requires_env"
+rm -rf "$HM_CODEX_SKILLS_DIR/badenv2" "$HM_CODEX_SKILLS_DIR/envone" "$AG_DATA/secrets.env"
+pass "agenda validates requires_env and leaves other sources alone"
+
+# A4·A5·A6·A7 연결·수집: Basic 인증, nextPageToken 페이지(2건씩 → 두 번), 필드 매핑, 기한 없는 이슈. 기본 JQL.
+aj_keys_settings "$AJ_URL/"
+: >"$AJ_LOG"
+assert_eq "200" "$(ag_code "$(ag_post connect '{"source":"jira"}')")" "jira connects once keys exist"
+AG_OUT="$(ag_wait '(.sources[] | select(.id == "jira") | .state) == "connected" and ([.items.todo[] | select(.source == "jira")] | length) == 3')" || fail "jira connects and fetches: $AG_OUT"
+AJ_REQ="$(aj_search)"
+assert_eq "2|true" "$(jq -r 'length' <<<"$AJ_REQ")|$(jq -r 'all(.auth_ok)' <<<"$AJ_REQ")" "two pages are requested with the Basic auth header"
+assert_eq "null|2" "$(jq -r '"\(.[0].query.nextPageToken)|\(.[1].query.nextPageToken)"' <<<"$AJ_REQ")" "the second request carries nextPageToken"
+assert_eq "assignee = currentUser() AND statusCategory != Done ORDER BY duedate ASC, updated DESC" "$(jq -r '.[0].query.jql' <<<"$AJ_REQ")" "the default JQL lists my open issues"
+assert_eq "100|summary,status,priority,project,duedate,created,reporter" "$(jq -r '"\(.[0].query.maxResults)|\(.[0].query.fields)"' <<<"$AJ_REQ")" "the search asks for the mapped fields"
+AJ_I="$(jq -c '.items.todo[] | select(.id == "ACME-1")' <<<"$AG_OUT")"
+assert_eq "ACME-1 요약|2026-12-01|2026-11-20T10:15:30+09:00|Pat Reporter" "$(jq -r '"\(.title)|\(.due)|\(.created)|\(.from)"' <<<"$AJ_I")" "title, due, created and reporter are mapped"
+assert_eq "진행 중 · High · Acme 프로젝트|$AJ_URL/browse/ACME-1|Jira" "$(jq -r '"\(.detail)|\(.url)|\(.source_name)"' <<<"$AJ_I")" "detail and browse url are mapped"
+assert_eq "false|할 일 · Acme 프로젝트" "$(jq -r '.items.todo[] | select(.id == "ACME-2") | "\(has("due"))|\(.detail)"' <<<"$AG_OUT")" "an issue without a due date stays without due"
+assert_eq "false|2026-11-22T09:00:00-05:00" "$(jq -r '.items.todo[] | select(.id == "OPS-3") | "\(has("from"))|\(.created)"' <<<"$AG_OUT")" "an issue without a reporter has no from"
+pass "jira fetches my open issues page by page and maps their fields"
+
+# A8 상한: 1200건·한 페이지 100건이면 500줄에서 멈추고 요청은 5번 이하다.
+cp "$AJ_STATE/issues.json" "$AG_T/jira-issues.json"
+jq -n '[range(1; 1201) | {key: "BIG-\(.)", fields: {summary: "큰 목록 \(.)"}}]' >"$AJ_STATE/issues.json"
+printf '100\n' >"$AJ_STATE/page_size"
+: >"$AJ_LOG"
+aj_run big fetch --since a --until b || fail "a big fetch succeeds: $(<"$AJ_OUT_DIR/big.err")"
+assert_eq "500" "$(grep -c . "$AJ_OUT_DIR/big.out")" "the adapter stops at 500 issues"
+(($(aj_search | jq 'length') <= 5)) || fail "a big fetch makes at most 5 requests"
+mv "$AG_T/jira-issues.json" "$AJ_STATE/issues.json"
+printf '2\n' >"$AJ_STATE/page_size"
+pass "jira stops at 500 issues"
+
+# A9 설정: 프로젝트 선택지는 가짜 서버 목록, 저장값은 600 파일, 다음 수집 JQL에 project in·watcher가 들어간다.
+AG_RES="$(ag_sget jira)"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "jira settings are readable once connected"
+assert_eq "ACME,OPS|ACME Acme 프로젝트|[]|false" "$(ag_body "$AG_RES" | jq -r '"\([.fields[] | select(.id == "projects") | .options[].value] | join(","))|\(.fields[] | select(.id == "projects") | .options[0].label)|\(.values.projects | tojson)|\(.values.watching)"')" "project options come from Jira and the defaults are empty"
+assert_eq "false|false|고르지 않으면 모든 프로젝트" "$(ag_body "$AG_RES" | jq -r '"\(.fields[0].danger)|\(.fields[1].danger)|\(.fields[0].help)"')" "jira settings are not danger fields"
+AG_RES="$(ag_post settings '{"source":"jira","values":{"projects":["ACME","OPS"],"watching":true}}')"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "jira settings save without confirmation"
+assert_eq "600" "$(filemode "$AJ_SETTINGS_FILE")" "the jira settings file is private"
+aj_run sget settings-get || fail "settings-get runs"
+assert_eq '{"projects":["ACME","OPS"],"watching":true}' "$(jq -cS '.' "$AJ_OUT_DIR/sget.out")" "settings-get returns the saved values"
+: >"$AJ_LOG"
+assert_eq "true" "$(ag_body "$(ag_post refresh '{"source":"jira"}')" | jq -r '.ok')" "jira refetches after a settings change"
+AJ_JQL="$(aj_search | jq -r '.[0].query.jql')"
+assert_eq '(assignee = currentUser() OR watcher = currentUser()) AND statusCategory != Done AND project in ("ACME","OPS") ORDER BY duedate ASC, updated DESC' "$AJ_JQL" "the settings shape the JQL"
+pass "jira settings pick projects and watched issues"
+
+# A10 주입 거부: 프로젝트 키가 아닌 값·타입이 틀린 값은 settings-set이 거부하고 파일은 그대로다.
+AJ_BEFORE="$(shasum -a 256 "$AJ_SETTINGS_FILE" 2>/dev/null || sha256sum "$AJ_SETTINGS_FILE")"
+for AJ_V in '{"projects":["a\" OR 1=1"],"watching":false}' '{"projects":["acme"],"watching":false}' '{"projects":"ACME","watching":false}' \
+  '{"projects":[],"watching":"yes"}' '[]' 'not json'; do
+  AJ_RC=0; aj_run sset settings-set <<<"$AJ_V" || AJ_RC=$?
+  [[ "$AJ_RC" != 0 ]] || fail "settings-set refuses $AJ_V"
+done
+assert_eq "$AJ_BEFORE" "$(shasum -a 256 "$AJ_SETTINGS_FILE" 2>/dev/null || sha256sum "$AJ_SETTINGS_FILE")" "refused settings leave the file unchanged"
+pass "jira settings refuse values outside project keys"
+
+# A11·A12 오류: 401·403은 토큰·권한 안내, 그 밖은 HTTP 상태 한 줄. 이전 항목은 남는다.
+for AJ_CODE in 401 403; do
+  printf '%s\n' "$AJ_CODE" >"$AJ_STATE/status"
+  ag_post refresh '{"source":"jira"}' >/dev/null
+  AG_OUT="$(ag_get)"
+  assert_eq "error" "$(ag_src "$AG_OUT" jira state)" "jira shows an error on HTTP $AJ_CODE"
+  assert_contains "$(ag_src "$AG_OUT" jira error)" "Jira 인증이 거부됐습니다(HTTP $AJ_CODE)" "HTTP $AJ_CODE is explained"
+  assert_contains "$(ag_src "$AG_OUT" jira error)" "ATLASSIAN_API_TOKEN" "HTTP $AJ_CODE points to the token"
+done
+printf '500\n' >"$AJ_STATE/status"
+AJ_RC=0; aj_run e500 fetch --since a --until b || AJ_RC=$?
+assert_eq "1|Jira 요청 실패: HTTP 500" "$AJ_RC|$(tail -n 1 "$AJ_OUT_DIR/e500.err")" "the adapter reports other HTTP errors in one line"
+ag_post refresh '{"source":"jira"}' >/dev/null
+assert_contains "$(ag_src "$(ag_get)" jira error)" "Jira 요청 실패: HTTP 500" "the board shows the HTTP status"
+rm -f "$AJ_STATE/status"
+assert_eq "true" "$(ag_body "$(ag_post refresh '{"source":"jira"}')" | jq -r '.ok')" "jira recovers after the error"
+pass "jira explains auth and HTTP errors"
+
+# A14 [완료]: 보드에만 숨기고 done.json에 적는다. 가짜 서버에는 쓰기 요청이 없다.
+AG_RES="$(ag_post "done" '{"source":"jira","id":"ACME-1"}')"
+assert_eq "200|true" "$(ag_code "$AG_RES")|$(ag_body "$AG_RES" | jq -r '.ok')" "a jira item can be marked done"
+[[ -n "$(jq -r '.jira["ACME-1"] // empty' "$AG_DATA/board/agenda/done.json")" ]] || fail "done.json records the jira completion"
+assert_eq "" "$(ag_get | jq -r '.items.todo[] | select(.id == "ACME-1") | .id')" "the finished jira item leaves the list"
+assert_eq "0" "$(jq -s '[.[] | select(.method != "GET")] | length' "$AJ_LOG")" "jira receives no write request"
+pass "jira done hides the item on the board only"
+
+# A13 비밀 미노출: 토큰은 어댑터 출력·보드 데이터·선언 argv에 없고, 어댑터는 프로세스를 띄우지 않는다.
+if grep -rqs "$AJ_SECRET" "$AJ_OUT_DIR" "$AG_DATA/board" "$ROOT/scripts/board/agenda/jira/agenda.json"; then fail "the jira token never reaches outputs or board data"; fi
+assert_eq "0" "$(grep -c subprocess "$AJ_ADAPTER" || true)" "the jira adapter starts no process"
+assert_contains "$(sed -n '1,60p' "$ROOT/scripts/board/agenda.py")" "requires_env" "the adapter contract documents requires_env"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "Jira" "the board skill names the jira source"
+assert_contains "$(<"$ROOT/docs/privacy.md")" "Jira" "the privacy note covers jira"
+assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "fake-jira.py" "the UI doc names the fake jira server"
+pass "jira keeps the token out of outputs and data"
 
 # 할 일 삭제(#637): 직접 적은 할 일은 열린 것이든 끝낸 것이든 todos.json·completed.json에서 빠진다.
 AG_DID="$(ag_board todo add 지울 할 일)"
