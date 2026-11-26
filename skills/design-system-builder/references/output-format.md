@@ -2,7 +2,7 @@
 
 ## Rule document
 
-Default path: `docs/design-system.md`. This default is step (d) of the destination resolution fallback chain in SKILL.md § 1 (### Destination resolution); earlier steps — user-specified path, harness docs, or an existing file — take precedence when they yield a path.
+Default path: `docs/design-system.md`. Use an existing path instead when the project already has a rule document or when `.ai-harness/docs/frontend.md` / `ui.md` names one.
 
 ### Required sections — the design-audit input contract
 
@@ -39,6 +39,7 @@ A project may add sections after these. It may not rename or drop a required one
 - 원천: <extract from code | design | mockup <link or file>>, <date>
 - 토큰 파일: <path>[, <path>]
 - 기준 화면: <URL path or Storybook command and address>
+- 보여줄 곳: <place> — <link or command>[; <place> — <link or command>]
 - 테마: <light | light, dark | …> — 전환 방식: <attribute/class/media/platform>
 - 뷰포트: <supported minimum width>, <breakpoints by token or px>
 - 확인 대기: <count> — 목록은 마지막 보고에 있다
@@ -155,7 +156,7 @@ Format and location by stack: `tokens.md`. Put a header comment naming the rule 
 
 ## Reference screen
 
-`components.md`. Record its address in `## 메타`.
+`components.md`. Record its address in `## 메타`, and record every chosen view destination (SKILL.md step 3, question 6) in the `보여줄 곳` line of `## 메타`.
 
 ## Harness handoff (only when `.ai-harness/` exists)
 
@@ -174,8 +175,13 @@ If the harness does not yet run `design-audit`, mention `/harness-init --reconfi
 
 ## Final report
 
+`### 어디서 볼 수 있는지` is required and comes first; never omit it. List every chosen place, including one that could not be built.
+
 ```markdown
 ## 디자인 시스템 — <mode> · 상태 <seed|draft|confirmed>
+
+### 어디서 볼 수 있는지
+- <place>: <link or command> — <열어 봄 | 정적 재현 | 못 만듦 — 이유>
 
 ### 만든 것 / 바꾼 것
 - <path> — <what>
@@ -195,7 +201,7 @@ If the harness does not yet run `design-audit`, mention `/harness-init --reconfi
 ### 검증
 - contrast: <pairs checked, failures>
 - token references: <resolved / missing>
-- reference screen: <opened in which themes and widths | not opened — why>
+- view destinations: <each chosen place — opened in which themes and widths | 정적 재현 | not opened — why>
 - project checks: <commands and results>
 
 ### 지키기 자동화 제안 (선택)
