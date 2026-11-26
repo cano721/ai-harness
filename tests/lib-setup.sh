@@ -7,7 +7,10 @@ CATALOG_NAMES="$(jq -r '.skills[].name' "$ROOT/catalog/catalog.json" | sort | pa
 SETUP_UNSET=()
 while IFS= read -r k; do SETUP_UNSET+=(-u "$k"); done < <(jq -r '[.skills[].env[]?.any[]?] | unique[]' "$ROOT/catalog/catalog.json")
 setup_cmd() {
-  env "${SETUP_UNSET[@]}" \
+  # LANGFUSE_* 별칭 키(LANGFUSE_PUBLIC_KEY_<S> 등)는 이름을 고정할 수 없어 실행할 때마다 찾아 비운다(#621).
+  local k env_unset=("${SETUP_UNSET[@]}")
+  for k in $(compgen -e | grep '^LANGFUSE_' || true); do env_unset+=(-u "$k"); done
+  env "${env_unset[@]}" \
     HARNESS_METRICS_DIR="$SETUP_T/data" HM_SETUP_CATALOG_DIR="$SETUP_CATALOG" HARNESS_CLAUDE_SETTINGS="$SETUP_T/settings.json" \
     HM_CLAUDE_SKILLS_DIR="$SETUP_T/claude" HM_CODEX_SKILLS_DIR="$SETUP_T/codex" HM_SETUP_HINT=1 \
     "${SETUP_ENV[@]+"${SETUP_ENV[@]}"}" "$ROOT/scripts/setup.sh" "$@"

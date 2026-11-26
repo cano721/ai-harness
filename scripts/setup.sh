@@ -171,6 +171,13 @@ env_report() { # name → [{keys, required, note, found:<key|null>, source}]
       src="$(env_source "$key")"
       if [[ "$src" != missing ]]; then found="$key"; source="$src"; break; fi
     done < <(jq -r '.any[]' <<<"$entry")
+    if [[ -z "$found" && "$1" == langfuse ]]; then # 기본 키가 없으면 PUBLIC·SECRET이 다 있는 첫 별칭 쌍으로 찾는다(#621)
+      case "$(jq -r '.any[0]' <<<"$entry")" in
+        LANGFUSE_PUBLIC_KEY) read -r found source _ _ <<<"$(lf_alias_pair)" || true ;;
+        LANGFUSE_SECRET_KEY) read -r _ _ found source <<<"$(lf_alias_pair)" || true ;;
+      esac
+      [[ -n "$found" ]] || source="missing"
+    fi
     out="$(jq -c --argjson e "$entry" --arg f "$found" --arg s "$source" \
       '. + [{keys:$e.any, required:($e.required // false), secret:($e.secret // false), note:($e.note // null), issue:($e.issue // null),
              found:(if $f == "" then null else $f end), source:$s}]' <<<"$out")"
@@ -667,19 +674,89 @@ dd_base() { printf 'https://api.%s' "$(first_value DATADOG_SITE DD_SITE || echo 
 atl_conf() { printf 'user = "%s:%s"\n' "$(resolve_value ATLASSIAN_USER)" "$(resolve_value ATLASSIAN_API_TOKEN)"; }
 st_conf() { printf 'header = "Authorization: Bearer %s"\n' "$(resolve_value SENTRY_AUTH_TOKEN)"; }
 st_base() { local u; u="$(resolve_value SENTRY_URL || echo https://sentry.io)"; printf '%s/api/0/organizations/%s' "${u%/}" "$(resolve_value SENTRY_ORG)"; }
-# Langfuse 키: 저장된 값, 없으면 사용자 파일의 <KEY>_CMD 명령 출력(SSM·Vault 등). 값은 출력하지 않는다.
-lf_key() {
-  local cmd value
-  resolve_value "$1" && return 0
-  cmd="$(settings_value "$1_CMD" || secrets_value "$1_CMD")" || return 1
+# Langfuse 별칭(#621): 규칙은 lf.py aliases()와 같다. LANGFUSE_PUBLIC_KEY[_CMD][_<S>] 이름을 프로세스 환경·settings.json env·
+# secrets.env에서 모으고, _CMD는 사용자 파일에 있을 때만 센다. 기본 키는 default, 별칭은 <S>를 소문자·'-'로 바꾼 이름.
+lf_aliases() { # → default 먼저, 나머지는 정렬해 한 줄에 하나
+  local src n rest lf_found=""
+  while read -r src n; do
+    [[ "$n" == LANGFUSE_PUBLIC_KEY* ]] || continue
+    rest="${n#LANGFUSE_PUBLIC_KEY}"
+    if [[ "$rest" == _CMD || "$rest" == _CMD_* ]]; then
+      [[ "$src" == file ]] || continue
+      rest="${rest#_CMD}"
+    fi
+    if [[ -z "$rest" ]]; then lf_found="$lf_found"$'\n'default; continue; fi
+    [[ "$rest" =~ ^_[A-Z0-9_]+$ ]] || continue
+    rest="$(printf '%s' "${rest#_}" | tr 'A-Z_' 'a-z-')"
+    [[ "$rest" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
+    case "$rest" in cmd|cmd-*) continue ;; esac
+    lf_found="$lf_found"$'\n'"$rest"
+  done <<<"$(
+    compgen -e | sed 's/^/env /'
+    if [[ -f "$CLAUDE_SETTINGS" ]]; then jq -r '.env // {} | keys[]' "$CLAUDE_SETTINGS" 2>/dev/null | sed 's/^/file /' || true; fi
+    if [[ -f "$SECRETS_FILE" ]]; then sed -nE 's/^export (LANGFUSE_PUBLIC_KEY[A-Z0-9_]*)=.*/file \1/p' "$SECRETS_FILE"; fi
+  )"
+  lf_found="$(printf '%s\n' "$lf_found" | sed '/^$/d' | sort -u)"
+  if grep -qx default <<<"$lf_found"; then printf 'default\n'; fi
+  grep -vx default <<<"$lf_found" || true
+}
+lf_suffix() { [[ "$1" == default ]] || printf '_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
+lf_key_found() { # BASE suffix → "<키 이름> <출처>" (값 또는 사용자 파일의 _CMD)
+  local k src
+  for k in "$1$2" "$1_CMD$2"; do
+    src="$(env_source "$k")"
+    if [[ "$src" != missing ]]; then printf '%s %s\n' "$k" "$src"; return 0; fi
+  done
+  return 1
+}
+lf_alias_pair() { # → PUBLIC·SECRET이 다 있는 첫 별칭의 "<공개 키 이름> <출처> <비밀 키 이름> <출처>"
+  local alias s pub sec
+  while IFS= read -r alias; do
+    [[ -n "$alias" ]] || continue
+    s="$(lf_suffix "$alias")"
+    if pub="$(lf_key_found LANGFUSE_PUBLIC_KEY "$s")" && sec="$(lf_key_found LANGFUSE_SECRET_KEY "$s")"; then
+      printf '%s %s\n' "$pub" "$sec"; return 0
+    fi
+  done <<<"$(lf_aliases)"
+  return 1
+}
+# Langfuse 키: 저장된 값, 없으면 사용자 파일의 <KEY>_CMD<S> 명령 출력(SSM·Vault 등). 값은 출력하지 않는다.
+lf_key() { # BASE [suffix]
+  local cmd value s="${2:-}"
+  resolve_value "$1$s" && return 0
+  cmd="$(settings_value "$1_CMD$s" || secrets_value "$1_CMD$s")" || return 1
   value="$(/bin/sh -c "$cmd" </dev/null 2>/dev/null)" || return 1
   [[ -n "$value" && "$value" != *$'\n'* ]] || return 1
   printf '%s' "$value"
 }
-lf_base() { local u; u="$(resolve_value LANGFUSE_HOST || echo https://cloud.langfuse.com)"; printf '%s' "${u%/}"; }
+lf_base() { # [suffix] → LANGFUSE_HOST<S> → LANGFUSE_HOST → 기본값
+  local u
+  u="$(resolve_value "LANGFUSE_HOST${1:-}" || resolve_value LANGFUSE_HOST || echo https://cloud.langfuse.com)"
+  printf '%s' "${u%/}"
+}
+lf_check_one() { # alias → {alias, ok, as} | {alias, ok, error, hint}
+  local alias="$1" s pk sk body ok=true who="" err=""
+  s="$(lf_suffix "$alias")"
+  if ! lf_key_found LANGFUSE_PUBLIC_KEY "$s" >/dev/null; then ok=false; err="missing LANGFUSE_PUBLIC_KEY$s"
+  elif ! lf_key_found LANGFUSE_SECRET_KEY "$s" >/dev/null; then ok=false; err="missing LANGFUSE_SECRET_KEY$s"
+  elif ! pk="$(lf_key LANGFUSE_PUBLIC_KEY "$s")" || ! sk="$(lf_key LANGFUSE_SECRET_KEY "$s")"; then ok=false; err="key command failed"
+  elif body="$(printf 'user = "%s:%s"\n' "$pk" "$sk" | http_get "$(lf_base "$s")/api/public/projects" 2>"$STATE_DIR/.err")"; then
+    who="$(jq -r '[.data[]?.name] | join(", ")' <<<"$body")"
+  else ok=false; err="$(head -1 "$STATE_DIR/.err")"; fi
+  rm -f "$STATE_DIR/.err"
+  jq -cn --arg a "$alias" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$( [[ $ok == true ]] || check_hint langfuse "$err" "$alias")" \
+    '{alias:$a, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
+}
 mask_email() { sed -E 's/^(.).*@/\1***@/'; }
 
-check_hint() { # skill, http 오류 → 원인 안내
+check_hint() { # skill, http 오류, [langfuse 별칭] → 원인 안내
+  local alias="${3:-default}"
+  if [[ "$1" == langfuse && "$alias" != default ]]; then
+    case "$2" in
+      "HTTP 401") printf '별칭 %s의 키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST%s를 그 주소로 set하거나 scripts/register.py %s로 다시 등록한다' "$alias" "$(lf_suffix "$alias")" "$alias"; return ;;
+      missing\ *) printf '별칭 %s의 키 쌍 중 하나가 없음 — scripts/register.py %s로 키 쌍을 다시 등록한다' "$alias" "$alias"; return ;;
+    esac
+  fi
   case "$1:$2" in
     langfuse:"key command failed") printf 'LANGFUSE_*_KEY_CMD 명령이 실패했거나 키 한 줄을 출력하지 않음 — 별도 터미널에서 그 명령을 직접 실행해 로그인·권한(SSM이면 ssm:GetParameter·kms:Decrypt)을 확인한다' ;;
     langfuse:"HTTP 401") printf '키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST를 그 주소로 set한다' ;;
@@ -694,7 +771,7 @@ check_hint() { # skill, http 오류 → 원인 안내
 }
 
 command_check() {
-  local name="${1:-}" body err="" ok=true who=""
+  local name="${1:-}" body err="" ok=true who="" hint="" projects=""
   in_catalog "$name" || usage
   local missing
   missing="$(env_report "$name" | jq -r '[.[] | select(.required and .found == null) | .keys[0]] | join(",")')"
@@ -723,17 +800,29 @@ command_check() {
         && [[ "$(jq -r '.type' <<<"$body" 2>/dev/null)" != anonymous ]]; then who="$(jq -r '.displayName // ""' <<<"$body")"
       else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
       ;;
-    langfuse)
-      local pk sk
-      if ! pk="$(lf_key LANGFUSE_PUBLIC_KEY)" || ! sk="$(lf_key LANGFUSE_SECRET_KEY)"; then ok=false; err="key command failed"
-      elif body="$(printf 'user = "%s:%s"\n' "$pk" "$sk" | http_get "$(lf_base)/api/public/projects" 2>"$STATE_DIR/.err")"; then who="$(jq -r '[.data[]?.name] | join(", ")' <<<"$body")"
-      else ok=false; err="$(cat "$STATE_DIR/.err")"; fi
+    langfuse) # 기본 키와 별칭마다 확인한다(#621). 기본 키 하나뿐이면 as·error·hint는 예전 형식 그대로.
+      local alias
+      projects='[]'
+      while IFS= read -r alias; do
+        [[ -n "$alias" ]] || continue
+        projects="$(jq -c --argjson p "$(lf_check_one "$alias")" '. + [$p]' <<<"$projects")"
+      done <<<"$(lf_aliases)"
+      if [[ "$projects" == '[]' ]]; then ok=false; err="missing LANGFUSE_PUBLIC_KEY"
+      elif [[ "$(jq -r 'map(.alias) == ["default"]' <<<"$projects")" == true ]]; then
+        ok="$(jq -r '.[0].ok' <<<"$projects")"; who="$(jq -r '.[0].as // ""' <<<"$projects")"; err="$(jq -r '.[0].error // ""' <<<"$projects")"
+      else
+        ok="$(jq -r 'all(.ok)' <<<"$projects")"
+        who="$(jq -r '[.[] | select(.ok) | "\(.alias): \(.as)"] | join(", ")' <<<"$projects")"
+        err="$(jq -r '[.[] | select(.ok | not) | "\(.alias): \(.error)"] | join(", ")' <<<"$projects")"
+        hint="$(jq -r 'first(.[] | select(.ok | not) | .hint) // ""' <<<"$projects")"
+      fi
       ;;
   esac
   rm -f "$STATE_DIR/.err"
   err="$(printf '%s' "$err" | head -1)"
-  jq -cn --arg n "$name" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$( [[ $ok == true ]] || check_hint "$name" "$err")" \
-    '{name:$n, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
+  if [[ $ok == true ]]; then hint=""; else hint="${hint:-$(check_hint "$name" "$err")}"; fi
+  jq -cn --arg n "$name" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$hint" --argjson p "${projects:-null}" \
+    '{name:$n, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end) + (if $p then {projects:$p} else {} end)'
 }
 
 # 프로필 질문의 선택지를 계정에서 읽어 온다. 실패하면 빈 값 — 셋업은 사람에게 물어 진행한다.

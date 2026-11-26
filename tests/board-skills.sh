@@ -33,7 +33,7 @@ BSK_KEYS="DATADOG_API_KEY DD_API_KEY DATADOG_APP_KEY DD_APP_KEY DATADOG_SITE DD_
 bsk_env() { # 사용자 환경의 키가 섞이지 않게 카탈로그 키를 모두 비운다. 보는 화면 없이 /settings/skills만 읽으므로
   # 작업 목록 캐시가 1초 지나면 그 자리에서 다시 모으게 한다(기본 30초) — 끝난 setup 세션이 바로 보인다.
   local k unset_args=()
-  for k in $BSK_KEYS; do unset_args+=(-u "$k"); done
+  for k in $BSK_KEYS $(compgen -e | grep '^LANGFUSE_' || true); do unset_args+=(-u "$k"); done
   env "${unset_args[@]}" PATH="$BSK_T/bin:$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BSK_DATA" \
     HARNESS_CLAUDE_PROJECTS_DIR="$BSK_T/projects" HARNESS_CLAUDE_SETTINGS="$BSK_T/settings.json" \
     HM_CLAUDE_SKILLS_DIR="$BSK_CL" HM_CODEX_SKILLS_DIR="$BSK_CX" BOARD_SKILLS_TTL=0 BOARD_STALE_SYNC_SECONDS=1 "$@"
@@ -161,5 +161,55 @@ assert_contains "$BSK_TPL" "'/settings/skills/session'" "the launcher posts to t
 assert_contains "$BSK_TPL" "'/settings/skills/check'" "the skills tab checks connections on demand"
 assert_contains "$(<"$ROOT/skills/setup/SKILL.md")" "보드" "setup skill mentions board-started sessions"
 pass "harness board settings: skills tab state from setup.sh, setup sessions from the board, refresh after the session (#494)"
+
+# 별칭 키(#621): 별칭 키만 있는 langfuse도 no_token이 아니라 unverified이고, 연결 확인은 별칭마다 자기 host로 한 뒤
+# 프로젝트별 결과 [{alias, ok, error?}]만 기록한다(프로젝트 이름·hint·키 값은 기록하지 않는다). 모든 별칭이 통과해야 verified.
+bsk_setup install --tool claude langfuse
+BSK_LF_PK="pk-lf-bsk-alias"; BSK_LF_SK="sk-lf-bsk-alias"
+mkdir -p "$BSK_T/lf-ok-a/api/public" "$BSK_T/lf-ok-b/api/public" "$BSK_T/lf-bad"
+printf '{"data":[{"name":"Agent Proj"}]}\n' >"$BSK_T/lf-ok-a/api/public/projects"
+printf '{"data":[{"name":"Talent Proj"}]}\n' >"$BSK_T/lf-ok-b/api/public/projects"
+BSK_LF_PORTS=""
+for d in lf-ok-a lf-ok-b lf-bad; do
+  BSK_LF_P="$(free_port)"; BSK_LF_PORTS="$BSK_LF_PORTS $BSK_LF_P"
+  python3 -I -m http.server "$BSK_LF_P" --bind 127.0.0.1 --directory "$BSK_T/$d" >/dev/null 2>&1 &
+  track_test_process "$!"
+  for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$BSK_LF_P/" && break; sleep 0.1; done
+done
+read -r BSK_LF_A BSK_LF_B BSK_LF_BAD <<<"$BSK_LF_PORTS"
+bsk_lf_settings() { # 에이전트 별칭 host, 인재풀 별칭 host
+  jq -n --arg u "http://127.0.0.1:$BSK_JPORT" --arg s "$BSK_SECRET" --arg pk "$BSK_LF_PK" --arg sk "$BSK_LF_SK" \
+    --arg ha "http://127.0.0.1:$1" --arg hb "http://127.0.0.1:$2" '{env: {
+      JIRA_BASE_URL: $u, ATLASSIAN_USER: "tester@example.com", ATLASSIAN_API_TOKEN: $s,
+      LANGFUSE_PUBLIC_KEY_AGENT: $pk, LANGFUSE_SECRET_KEY_AGENT: $sk, LANGFUSE_HOST_AGENT: $ha,
+      LANGFUSE_PUBLIC_KEY_TALENT_POOL: $pk, LANGFUSE_SECRET_KEY_TALENT_POOL: $sk, LANGFUSE_HOST_TALENT_POOL: $hb}}' >"$BSK_T/settings.json"
+}
+bsk_lf_settings "$BSK_LF_A" "$BSK_LF_BAD"
+BSK="$(bsk_get)"
+assert_eq "unverified" "$(jq -r '.catalog[] | select(.name == "langfuse") | .state' <<<"$BSK")" "alias-only langfuse keys are unverified, not no_token"
+BSK_CHECK="$(bsk_post check '{"name":"langfuse"}')"
+assert_eq "true false" "$(jq -r '"\(.ok) \(.check.ok)"' <<<"$BSK_CHECK")" "a check with one failing alias is recorded as failed"
+assert_eq "agent:true talent-pool:false" "$(jq -r '[.check.projects[]? | "\(.alias):\(.ok)"] | join(" ")' <<<"$BSK_CHECK")" "the check answer lists each alias result"
+assert_contains "$(jq -r '.check.projects[]? | select(.alias == "talent-pool") | .error' <<<"$BSK_CHECK")" "404" "the failing alias carries its error"
+assert_eq "true" "$(jq -r '.langfuse | has("projects")' "$BSK_DATA/board/skill-checks.json")" "skill-checks.json keeps the per-alias results"
+assert_eq "alias ok|alias error ok" "$(jq -r '.langfuse.projects | map(keys | join(" ")) | join("|")' "$BSK_DATA/board/skill-checks.json")" "a project record has only alias, ok and error"
+assert_eq "unverified" "$(bsk_get | jq -r '.catalog[] | select(.name == "langfuse") | .state')" "a failing alias leaves langfuse unverified"
+assert_eq "talent-pool:false" "$(bsk_get | jq -r '[.catalog[] | select(.name == "langfuse") | .check.projects[]? | select(.ok == false) | "\(.alias):\(.ok)"] | join(" ")')" "the skills view shows the failing alias"
+for f in "$BSK_DATA/board/skill-checks.json" "$BSK_DATA/board/actions.jsonl"; do
+  case "$(cat "$f" 2>/dev/null)$BSK_CHECK$BSK" in
+    *"$BSK_LF_PK"*|*"$BSK_LF_SK"*|*"Agent Proj"*) fail "no key value or project name in $f or the answers" ;;
+  esac
+done
+bsk_lf_settings "$BSK_LF_A" "$BSK_LF_B"
+BSK_CHECK="$(bsk_post check '{"name":"langfuse"}')"
+assert_eq "true true" "$(jq -r '"\(.ok) \(.check.ok)"' <<<"$BSK_CHECK")" "a check with every alias passing is recorded as ok"
+assert_eq "verified" "$(bsk_get | jq -r '.catalog[] | select(.name == "langfuse") | .state')" "every alias passing makes langfuse verified"
+printf '{"displayName":"Board Tester"}\n' >"$BSK_T/jira/rest/api/3/myself"
+bsk_post check '{"name":"jira"}' >/dev/null
+assert_eq "at ok" "$(jq -r '.jira | keys | join(" ")' "$BSK_DATA/board/skill-checks.json")" "other skills keep only ok and at"
+BSK_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$BSK_TPL" "c.projects" "the skills row renders the per-alias results"
+assert_contains "$BSK_TPL" "확인한 프로젝트" "the skills row captions the checked projects"
+pass "board skills: alias-only langfuse is unverified, per-alias check results are recorded without keys, all aliases must pass (#621)"
 
 finish_tests

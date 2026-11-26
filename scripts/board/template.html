@@ -3700,6 +3700,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (kind === 'design' && r.state === 'superseded') descs.push(descLine('하네스에 같은 스킬이 내장돼 예전에 받은 사본은 지워도 됩니다.', 'info'));
     if (kind === 'design' && r.state === 'unavailable' && r.note) descs.push(r.note);
     const c = r.check;
+    const cp = c && Array.isArray(c.projects) && c.projects.length && (c.projects.length > 1 || c.projects[0].alias !== 'default') ? c.projects : null;
     if (c && c.ok === false) {
       const p = el('p', 'ds-setting__desc ds-cluster'); p.append(icon('danger'), el('span', null, `연결 확인 실패 ${ago(c.at)}: ${c.error || '원인 모름'}`));
       const h = khint[r.name];
@@ -3709,7 +3710,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
         more.onclick = () => { if (expanded.has(hid)) expanded.delete(hid); else expanded.add(hid); renderAll(); };
         p.append(more); descs.push(p, box);
       } else descs.push(p);
-    } else if (c && c.ok) descs.push(`연결 확인 ${ago(c.at)}`);
+      if (cp) descs.push(el('p', 'ds-setting__desc ds-caption', `확인한 프로젝트: ${cp.map((x) => `${x.alias} ${x.ok ? '성공' : '실패'}`).join(' · ')}`));
+    } else if (c && c.ok) descs.push(`연결 확인 ${ago(c.at)}${cp ? ` · 프로젝트 ${cp.map((x) => x.alias).join(' · ')}` : ''}`);
     const live = r.session;
     if (live) {
       const p = el('p', 'ds-setting__desc ds-cluster'); p.append(icon('progress'), el('span', null, '설정 세션 진행 중 — 끝나면 상태를 다시 읽습니다.'));
