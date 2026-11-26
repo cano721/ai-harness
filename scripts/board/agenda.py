@@ -12,6 +12,8 @@
 - fetch는 `--since ISO --until ISO`를 덧붙여 부르고, stdout JSONL 한 줄이 항목 하나다
   {id, kind: event|reply|todo, title, start?, end?, due?, created?, from?, shared?, url?, detail?, done?}.
   잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
+  url(link도 받는다)은 http(s) 또는 허용한 앱 딥링크(#592. APP_LINK_SCHEMES — 지금은 `msteams:`)만 남긴다. 그 밖의 스킴
+  (javascript:·file:·data: 등)은 url만 버리고 항목은 남긴다. 앱이 없는 사용자를 위해 웹 링크를 줄지는 어댑터가 정한다.
   due(#539)는 reply·todo의 기한: 날짜(YYYY-MM-DD) 또는 날짜·시각(ISO 8601). 읽을 수 없는 기한은 버리고 항목은 남긴다.
   created(#567)는 받은·만든 시각(ISO 8601, 읽을 수 없으면 버린다), from은 요청자(60자까지), shared는 event가 팀·공유
   캘린더 일정이면 true. 화면이 할 일을 새로 맡겨진 것·쌓인 것으로 가르고 경과일·요청자를 보이며 공유 일정을 접는 데 쓴다.
@@ -38,6 +40,9 @@ BUILTIN_DIR = os.path.join(DIR, "agenda")
 KINDS = ("event", "reply", "todo")
 KIND_ALIAS = {"message": "reply"}  # 이슈 초안의 이름도 받는다
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+# 내 일정 url로 여는 앱 딥링크 스킴(#592). template.html·BoardLauncher.swift의 목록과 같아야 한다(tests/board-agenda.sh가 비교).
+APP_LINK_SCHEMES = ("msteams",)
+LINK_RE = re.compile(r"^(?:https?://|(?i:%s):\S)" % "|".join(map(re.escape, APP_LINK_SCHEMES)))  # 앱 스킴만 대소문자 무시
 TODO_ID = "todo"
 MAX_ITEMS = 500
 SETUP_PROMPT_MAX = 1000
@@ -259,7 +264,7 @@ def _normalize(raw, source_id):
     if kind == "event" and raw.get("shared") is True:
         item["shared"] = True
     url = raw.get("url") if isinstance(raw.get("url"), str) else raw.get("link")
-    if isinstance(url, str) and re.match(r"^https?://", url):
+    if isinstance(url, str) and LINK_RE.match(url):
         item["url"] = url[:2000]
     if isinstance(raw.get("detail"), str) and raw["detail"].strip():
         item["detail"] = _short(raw["detail"], 500)
