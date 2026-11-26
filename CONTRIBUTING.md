@@ -171,6 +171,8 @@ bash -n scripts/*.sh scripts/board/*.sh tests/*.sh
 shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh     # 미설치 시 npx --yes shellcheck
 ```
 
+CI 필수 체크는 집계 job `test` 하나다. `test`는 `lint`와 `shard (1)`~`shard (4)`(`.github/workflows/test.yml`의 matrix job `shard`)를 `needs`로 묶어 `if: always()`로 돌고, 그중 하나라도 실패·취소·건너뜀이면 실패한다. 브랜치 보호에는 `test`만 필수 체크로 등록하고 `shard (n)`·`lint`는 등록하지 않는다 — 샤드 수를 바꿔도 보호 규칙은 그대로 둔다. 워크플로에 job을 새로 추가하면 `test`의 `needs`에도 넣는다(`tests/core.sh`가 검사).
+
 CI의 shellcheck는 **info 레벨도 실패로 다룬다**. 로컬 버전이 CI보다 관대할 수 있으니 경고가 나오면 구조를 바꿔 없앤다 — `# shellcheck disable`은 근거를 주석으로 남길 수 있을 때만 쓴다.
 
 `scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지와 `changelog.d/` 조각 형식을 본다. 형식이 틀린 조각은 `changelog.d/<file>: <이유>`로 알리고 실패한다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다. `## Unreleased` 머리가 없으면 실패하지 않고 stderr에 경고만 한다.

@@ -539,15 +539,22 @@ assert_eq "2" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl")" "NFC edit
 assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/read-nfc.jsonl")" "NFC edit path passes after reading the conventions by NFC path"
 assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl")" "NFD edit path is guarded when the conventions were not read"
 assert_eq "0" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/read-nfc.jsonl")" "NFD edit path passes after reading the conventions by NFC path"
-# python3가 없으면 정규화 못 하고 원래 값으로 비교한다 — NFC 입력은 예전처럼 통과(fail-open), NFD 입력은 막는다.
+# python3가 없거나 실패하면 perl Unicode::Normalize로 맞춘다 — NFC·NFD 입력 모두 막고, NFC로 읽은 기록이면 통과한다(#576).
+# python3·perl이 모두 없으면 정규화 못 하고 원래 값으로 비교한다 — NFC 입력은 예전처럼 통과(fail-open), NFD 입력은 막는다.
 # macOS의 /usr/bin/python3는 스텁이라 PATH에서 디렉토리를 빼는 것으로는 부족하다. 가드가 쓰는 명령만 링크한 PATH를 쓴다.
 NF_BIN="$TEST_TMP/nopy"
-mkdir -p "$NF_BIN"
+NF_PERL_BIN="$TEST_TMP/nopy-perl"
+mkdir -p "$NF_BIN" "$NF_PERL_BIN"
 for nf_cmd in jq git cat dirname basename; do
   ln -sf "$(command -v "$nf_cmd")" "$NF_BIN/$nf_cmd"
+  ln -sf "$(command -v "$nf_cmd")" "$NF_PERL_BIN/$nf_cmd"
 done
-assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFC edit path keeps the old fail-open verdict"
-assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 an NFD edit path is still guarded"
+ln -sf "$(command -v perl)" "$NF_PERL_BIN/perl"
+assert_eq "2" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_PERL_BIN")" "without python3 but with perl an NFC edit path is guarded when the conventions were not read"
+assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_PERL_BIN")" "without python3 but with perl an NFD edit path is guarded"
+assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/read-nfc.jsonl" "$NF_PERL_BIN")" "without python3 but with perl an NFC edit path passes after reading the conventions by NFC path"
+assert_eq "0" "$(nf_guard "$NF_NFC_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 and perl an NFC edit path keeps the old fail-open verdict"
+assert_eq "2" "$(nf_guard "$NF_NFD_ROOT/src/a.sh" "$NF/t/none.jsonl" "$NF_BIN")" "without python3 and perl an NFD edit path is still guarded"
 pass "direct edit guard compares paths across unicode normalization"
 
 # 릴리스 방식 감지(#493): harness-init이 태그 방식 근거를 보고 manifest release_policy에 근거와 확장점을 남기고, sync가 사람 확인 뒤에만 쓴다.
