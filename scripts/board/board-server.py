@@ -38,6 +38,9 @@ POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 �
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text, due?}  직접 적는 할 일(#539 기한)
                                  · POST /agenda/reopen {t, source, id}  완료 되돌리기(직접 적은 할 일·보드에만 숨긴 항목,
                                    reopen을 선언한 어댑터 — 그 argv에 항목 id를 붙여 부름). 완료함에서 그 줄을 지움
+GET  /agenda/settings?t&source    소스 설정 폼(#632): settings를 선언하고 연결된 소스의 필드·선택지(options)·현재값(get)
+POST /agenda/settings {t, source, values, confirm?}  바꿀 필드만 받아 검사(목록·범위·타입)하고 get 현재값에 합쳐 set 표준 입력으로.
+                                 danger 필드를 켜거나 항목을 더하는데 confirm:true가 없으면 409 needs_confirm. 기록에 설정값은 남기지 않음
 GET  /settings/skills?t=...      하네스 설정 > 스킬(#494): setup.sh list·design list 상태 + 진행 중 setup 세션. 끝난 세션은 지우고 다시 읽음
 POST /settings/skills/check {t, name}  setup.sh check(외부 API) — 버튼으로만, 결과(ok·at·error)만 기록
 POST /settings/skills/session {t, kind, name, action}  카탈로그·디자인 스킬 하나에 setup 세션(install·setup·remove)을 띄움.
@@ -2623,6 +2626,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, launch_state())
         if u.path == "/agenda":
             return self._send(200, agenda_state())
+        if u.path == "/agenda/settings":
+            code, res = AGENDA.settings_read(q.get("source", [None])[0])
+            return self._send(code, res)
         if u.path == "/references":
             return self._send(200, {"ok": True, "runs": REFS.listing()})
         if u.path == "/references/run":
@@ -2709,7 +2715,7 @@ class Handler(BaseHTTPRequestHandler):
             HUB.unsubscribe(q)
 
     def _agenda_post(self, kind, req):
-        """내 일정 동작. 기록에는 소스·항목 id와 결과만 남긴다(제목·토큰은 남기지 않는다)."""
+        """내 일정 동작. 기록에는 소스·항목 id와 결과만 남긴다(제목·토큰·설정값은 남기지 않는다)."""
         source = req.get("source") if isinstance(req.get("source"), str) else ""
         if kind == "todo":
             text = req.get("text") if isinstance(req.get("text"), str) else ""
@@ -2726,6 +2732,8 @@ class Handler(BaseHTTPRequestHandler):
             code, res = AGENDA.refresh(source)
         elif kind == "reopen":
             code, res = AGENDA.reopen(source, req.get("id"))
+        elif kind == "settings":
+            code, res = AGENDA.settings_save(source, req.get("values"), req.get("confirm") is True)
         else:
             code, res = AGENDA.done(source, req.get("id"))
         log({"action": "agenda_" + kind, "source": source or None, "ok": res["ok"]})
@@ -2818,7 +2826,8 @@ class Handler(BaseHTTPRequestHandler):
                 _cache["data"] = None
             log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
             return self._send(code, res)
-        if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/done", "/agenda/todo", "/agenda/reopen"):
+        if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/done", "/agenda/todo", "/agenda/reopen",
+                    "/agenda/settings"):
             return self._agenda_post(path.rsplit("/", 1)[1], req)
         if path == "/impact/refresh":
             res = impact_refresh(req.get("repo"))

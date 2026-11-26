@@ -1,0 +1,10 @@
+{
+  "id": "badknobs",
+  "name": "선택지 없는 설정",
+  "fetch": ["true"],
+  "settings": {
+    "get": ["true"],
+    "set": ["true"],
+    "fields": [{"id": "rooms", "label": "방", "type": "multi-select"}]
+  }
+}

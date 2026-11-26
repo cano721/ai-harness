@@ -718,4 +718,151 @@ assert_contains "$(<"$B6_W/curl.log")" 'user = "u:t"' "the Bitbucket credentials
 assert_contains "$(<"$B6_W/curl.log")" "pullrequests" "Bitbucket is asked for the pull requests list"
 pass "prstate worker looks up work-branch PRs through gh or Bitbucket and release tags through git ls-remote"
 
+# 터미널 재사용 묶음(#634): 부모가 띄운 터미널을 며칠 뒤 무관한 세션이 재사용해도 그 세션을 자식으로 묶지 않는다.
+# 자식은 띄운 때 가까이 시작한 세션이고, 한번 묶인 자식은 프로세스가 사라져도 그대로 남는다. 옛 형식 links.json(핸들→문자열)도 같다.
+GR_T="$TEST_TMP/groups-reuse"
+mkdir -p "$GR_T/a" "$GR_T/c"
+GR_OUT="$(python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("groups", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+root = sys.argv[2]
+P, X, Y = ["aaaaaaaa-0000-4000-8000-00000000000%d" % n for n in (1, 2, 3)]
+T = "term_aaaaaaaa-0000-4000-8000-0000000000a1"
+T0, TX, TY = "2026-11-01T10:00:00.000Z", "2026-11-01T10:00:40.000Z", "2026-11-03T10:00:00.000Z"
+def write(path, recs):
+    with open(path, "w") as f:
+        for r in recs:
+            f.write(json.dumps(r, separators=(",", ":")) + "\n")
+    return path
+def first(ts):
+    return {"type": "user", "timestamp": ts, "message": {"content": "hello"}}
+def launch(ts):
+    return [{"type": "assistant", "timestamp": ts, "message": {"content": [{"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "orca terminal create --json"}}]}},
+            {"type": "user", "timestamp": ts, "message": {"content": [{"type": "tool_result", "tool_use_id": "tu1", "content": json.dumps({"handle": T})}]}}]
+def item(sid, path, pid=None):
+    return {"section": "work", "sid": sid, "pid": pid, "transcript": path, "short_id": sid[:8], "title": "t-" + sid[-1]}
+def run(items, attached, store):
+    g._handles_of = lambda pids: {p: attached[p] for p in pids if p in attached}
+    g._orca_state = lambda: {"at": 0, "runs": {}, "workers": []}
+    g.annotate(items, store)
+    for i in items:
+        gr = i.get("group")
+        print("%s|%s|%s" % (store.rsplit("/", 2)[-2], i["sid"][-1], "%s/%s" % (gr["id"], gr["role"]) if gr else "-"))
+d = root + "/a"
+pp = write(d + "/p.jsonl", [first(T0)] + launch(T0))
+px = write(d + "/x.jsonl", [first(TX)])
+py = write(d + "/y.jsonl", [first(TY)])
+st = d + "/links.json"
+# A: 부모가 띄운 터미널에 자식이 붙는다
+run([item(P, pp, 100), item(X, px, 200)], {200: T}, st)
+# B: 자식은 프로세스 없이 목록에 남고, 며칠 뒤 무관한 세션이 같은 터미널을 쓴다
+print("B")
+run([item(P, pp, 100), item(X, px), item(Y, py, 300)], {300: T}, st)
+# C: 옛 형식 links.json(핸들→문자열, created 없는 v2 scan)에서 시작해도 창 밖에 시작한 세션은 묶지 않는다
+d = root + "/c"
+pp = write(d + "/p.jsonl", [first(T0)] + launch(T0))
+py = write(d + "/y.jsonl", [first(TY)])
+json.dump({"handles": {T: Y}, "scan": {pp: {"v": 2, "offset": 0, "handles": [T]}}}, open(d + "/links.json", "w"))
+print("C")
+run([item(P, pp, 100), item(Y, py)], {}, d + "/links.json")
+' "$ROOT/scripts/board/groups.py" "$GR_T" 2>&1)"
+GR_B="$(sed -n '/^B$/,/^C$/p' <<<"$GR_OUT")"
+GR_C="$(sed -n '/^C$/,$p' <<<"$GR_OUT")"
+GR_A="$(sed -n '1,/^B$/p' <<<"$GR_OUT")"
+GR_SP="spawn|aaaaaaaa-0000-4000-8000-000000000001"
+assert_eq "a|1|$GR_SP/coord a|2|$GR_SP/member" "$(grep '^a|' <<<"$GR_A" | tr '\n' ' ' | sed 's/ $//')" "a session attached to the terminal its parent created joins the parent's spawn group"
+assert_eq "a|1|$GR_SP/coord a|2|$GR_SP/member a|3|-" "$(grep '^a|' <<<"$GR_B" | tr '\n' ' ' | sed 's/ $//')" "an unrelated session reusing the terminal days later is not grouped and the original child stays a member"
+assert_eq "c|1|- c|3|-" "$(grep '^c|' <<<"$GR_C" | tr '\n' ' ' | sed 's/ $//')" "a session started outside the spawn window is not grouped from an old-format links.json"
+pass "groups.py ties a spawned child by start time near the launch, not by whoever holds the terminal now"
+
+# 묶는 다른 경로(#634): bg 세션은 띄운 결과의 짧은 ID로, orca 오케스트레이션 worker는 핸들 이력과 상관없이 run 묶음으로 남는다.
+GR_T2="$TEST_TMP/groups-other"
+mkdir -p "$GR_T2/d" "$GR_T2/e"
+GR_OUT2="$(python3 -I -B -c '
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("groups", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+root = sys.argv[2]
+NOW = "2026-11-01T10:00:00.000Z"
+def write(path, recs):
+    with open(path, "w") as f:
+        for r in recs:
+            f.write(json.dumps(r, separators=(",", ":")) + "\n")
+    return path
+def text(t):
+    return {"type": "user", "timestamp": NOW, "message": {"content": t}}
+def item(sid, path, pid=None):
+    return {"section": "work", "sid": sid, "pid": pid, "transcript": path, "short_id": sid[:8], "title": "t-" + sid[-1]}
+def run(items, attached, store, state):
+    g._handles_of = lambda pids: {p: attached[p] for p in pids if p in attached}
+    g._orca_state = lambda: state
+    g.annotate(items, store)
+    for i in items:
+        gr = i.get("group")
+        print("%s|%s|%s" % (store.rsplit("/", 2)[-2], i["sid"][-1], "%s/%s" % (gr["id"], gr["role"]) if gr else "-"))
+none = {"at": 0, "runs": {}, "workers": []}
+# D: claude --bg가 돌려준 backgrounded 결과의 8자리로 찾는 자식
+d = root + "/d"
+P, K = "dddddddd-0000-4000-8000-000000000001", "eeeeeeee-0000-4000-8000-000000000002"
+pp = write(d + "/p.jsonl", [text("go"),
+    {"type": "assistant", "timestamp": NOW, "message": {"content": [{"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "claude --bg run it"}}]}},
+    {"type": "user", "timestamp": NOW, "message": {"content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "backgrounded · eeeeeeee"}]}}])
+pk = write(d + "/k.jsonl", [text("work")])
+pi = {"section": "work", "sid": P, "pid": 100, "transcript": pp, "short_id": "dddddddd", "title": "p"}
+ki = {"section": "work", "sid": K, "pid": None, "transcript": pk, "short_id": "eeeeeeee", "title": "k"}
+run([pi, ki], {}, d + "/links.json", none)
+# E: orca run의 worker. 그 터미널에 앞서 다른 세션이 붙었던 이력이 있어도 run 묶음과 coordinator가 그대로다
+d = root + "/e"
+C, W, Z = ["bbbbbbbb-0000-4000-8000-00000000000%d" % n for n in (1, 2, 3)]
+TC, TW = "term_bbbbbbbb-0000-4000-8000-0000000000c1", "term_bbbbbbbb-0000-4000-8000-0000000000c2"
+pc = write(d + "/c.jsonl", [text("orchestrate run_634")])
+pw = write(d + "/w.jsonl", [text("do task_634")])
+pz = write(d + "/z.jsonl", [text("unrelated")])
+state = {"at": 0, "runs": {"run_634": {"id": "run_634", "objective": "obj", "coordinator_handle": TC}},
+         "workers": [{"runId": "run_634", "agentTerminalHandle": TW, "taskId": "task_634"}]}
+st = d + "/links.json"
+run([item(Z, pz, 600)], {600: TW}, st, state)
+print("E")
+run([item(C, pc, 400), item(W, pw, 500)], {400: TC, 500: TW}, st, state)
+' "$ROOT/scripts/board/groups.py" "$GR_T2" 2>&1)"
+GR_SP2="spawn|dddddddd-0000-4000-8000-000000000001"
+assert_eq "d|1|$GR_SP2/coord d|2|$GR_SP2/member" "$(grep '^d|' <<<"$GR_OUT2" | tr '\n' ' ' | sed 's/ $//')" "a session found by the backgrounded id in the parent's record is still a spawn member"
+GR_OR="orca|run_634"
+assert_eq "e|1|$GR_OR/coord e|2|$GR_OR/member" "$(sed -n '/^E$/,$p' <<<"$GR_OUT2" | grep '^e|' | tr '\n' ' ' | sed 's/ $//')" "an orca worker keeps its run group and coordinator even when another session was on its terminal before"
+pass "groups.py keeps bg children and orca run groups"
+
+# 되살리기도 같은 원인(#634): work.sh는 탭이 닫힌 위임 세션을 scan 핸들의 '지금 짝'이 아니라 부모가 띄운 자식(links.json kids)으로 되살린다.
+# 같은 터미널을 나중에 재사용한 무관한 세션은 되살리지 않는다.
+WK_T="$(mkdir -p "$TEST_TMP/work-delegated-634" && cd "$TEST_TMP/work-delegated-634" && pwd -P)"
+mkdir -p "$WK_T/bin" "$WK_T/projects/parent" "$WK_T/projects/child" "$WK_T/metrics/board" "$WK_T/member"
+cat >"$WK_T/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+[[ "$1" == agents ]] || exit 1
+cat "$FAKE_AGENTS"
+FAKE
+chmod +x "$WK_T/bin/claude"
+WK_PARENT="aaaaaaaa-0000-4000-8000-000000000011"
+WK_KID="aaaaaaaa-0000-4000-8000-000000000012"
+WK_OTHER="aaaaaaaa-0000-4000-8000-000000000013"
+WK_TERM="term_aaaaaaaa-0000-4000-8000-0000000000b1"
+WK_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg sid "$WK_PARENT" --arg cwd "$WK_T" --argjson t "$(($(date +%s) * 1000))" \
+  '[{sessionId: $sid, id: $sid[0:8], kind: "interactive", status: "idle", pid: 4242, cwd: $cwd, startedAt: $t}]' >"$WK_T/agents.json"
+jq -cn --arg t "$WK_NOW" '{type: "user", message: {content: "작업 맡겨줘"}, timestamp: $t}' >"$WK_T/projects/parent/$WK_PARENT.jsonl"
+for WK_SID in "$WK_KID" "$WK_OTHER"; do
+  { jq -cn --arg t "$WK_NOW" --arg cwd "$WK_T/member" '{type: "user", cwd: $cwd, message: {content: "#12 고쳐줘"}, timestamp: $t}'
+    jq -cn '{type: "ai-title", aiTitle: "Fix the example issue"}'
+    jq -cn --arg t "$WK_NOW" '{type: "assistant", message: {content: [{type: "text", text: "PR을 열었습니다."}]}, timestamp: $t}'
+  } >"$WK_T/projects/child/$WK_SID.jsonl"
+done
+jq -cn --arg p "$WK_T/projects/parent/$WK_PARENT.jsonl" --arg k "$WK_KID" --arg o "$WK_OTHER" --arg h "$WK_TERM" \
+  '{handles: {($h): [$k, $o]}, kids: {($h): $k},
+    scan: {($p): {v: 3, offset: 0, handles: [$h]}}}' >"$WK_T/metrics/board/links.json"
+WK_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$WK_T/bin:$PATH" FAKE_AGENTS="$WK_T/agents.json" HARNESS_METRICS_DIR="$WK_T/metrics" \
+  HARNESS_CLAUDE_PROJECTS_DIR="$WK_T/projects" BOARD_CLAUDE_PROFILE_GLOBS="$WK_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")" || WK_OUT=""
+assert_eq "done|false|member|Fix the example issue" \
+  "$(jq -r --arg s "$WK_KID" '.[] | select(.sid == $s) | "\(.state)|\(.live)|\(.project)|\(.title)"' <<<"$WK_OUT")" \
+  "the child the parent spawned comes back after its tab closed"
+assert_eq "" "$(jq -r --arg s "$WK_OTHER" '.[] | select(.sid == $s) | .sid' <<<"$WK_OUT")" "an unrelated session that reused the terminal is not revived"
+pass "work.sh revives the spawned child, not whoever reused its terminal later"
+
 finish_tests

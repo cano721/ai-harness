@@ -42,7 +42,7 @@ all_areas() {
 areas_for_file() {
   local file="$1" probe="$1" hits hit n
   case "$file" in
-    tests/lib.sh | tests/run.sh | scripts/lib.sh) all_areas; return ;;
+    tests/lib.sh | tests/run.sh | tests/lib-repo-template.sh | scripts/lib.sh) all_areas; return ;; # lib-repo-template.sh: lib.sh·run.sh가 source
     tests/slow-areas.txt) slow_list_areas; return ;;
     tests/fixtures/*) ;;
     tests/lib-*.sh)
@@ -311,9 +311,26 @@ fi
 
 # --profile: 영역마다 tests/profile-blocks.py 하나가 영역을 띄워 출력을 그대로 흘리며 ok 줄 도착 시각을 기록한다.
 PROFILE_DIR=""
+# 실행 캐시: 영역이 복사해 쓰는 기준 저장소 템플릿을 영역을 띄우기 전에 직렬로 한 번 만들어 HM_TEST_REPO_TEMPLATE로 넘긴다(#614).
+# 실행마다 다른 디렉토리라 -j·여러 세션이 섞이지 않고, 이름이 영역 정리 패턴(ai-harness-tests.*)에 걸리지 않는다. 끝나거나 끊기면 지운다.
+RUN_CACHE_DIR=""
+cleanup_run() {
+  [[ -z "$PROFILE_DIR" ]] || rm -rf "$PROFILE_DIR"
+  case "$RUN_CACHE_DIR" in */ai-harness-testcache.*) rm -rf "$RUN_CACHE_DIR" ;; esac
+}
+trap cleanup_run EXIT
 if [[ "$profile" == 1 ]]; then
   PROFILE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-test-profile.XXXXXX")"
-  trap 'rm -rf "$PROFILE_DIR"' EXIT
+fi
+if [[ -f "$TESTS_DIR/lib-repo-template.sh" ]]; then
+  # shellcheck source=tests/lib-repo-template.sh
+  source "$TESTS_DIR/lib-repo-template.sh"
+  RUN_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ai-harness-testcache.XXXXXX")"
+  if ensure_repo_template "$RUN_CACHE_DIR/repo-template" >/dev/null 2>&1; then
+    export HM_TEST_REPO_TEMPLATE="$RUN_CACHE_DIR/repo-template"
+  else
+    unset HM_TEST_REPO_TEMPLATE # 만들지 못하면 영역이 자기 $TEST_TMP에 만든다
+  fi
 fi
 run_area() { # area — 영역을 돌린다(stderr는 stdout으로)
   if [[ -n "$PROFILE_DIR" ]]; then
@@ -386,7 +403,7 @@ else
       [[ -z "${out_files[$j]:-}" ]] || rm -f "${out_files[$j]}"
       j=$((j + 1))
     done
-    [[ -z "$PROFILE_DIR" ]] || rm -rf "$PROFILE_DIR"
+    cleanup_run
     printf '# interrupted: %d of %d areas finished\n' "$shown" "$area_count" >&2
     exit "$code"
   }
@@ -436,7 +453,8 @@ else
       wait "$!" || true
     fi
   done
-  trap - INT TERM EXIT
+  trap - INT TERM
+  trap cleanup_run EXIT
   for a in $areas; do
     i=0
     while [[ "${area_list[$i]}" != "$a" ]]; do i=$((i + 1)); done
