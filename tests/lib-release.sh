@@ -18,11 +18,11 @@ rel_repo() { # scenario [release_policy-jq-filter] [delivery level]
     "$DRIVER_REPO/.ai-harness/harness.json" | jq "$filter" >"$DRIVER_TMP/m.json"
   mv "$DRIVER_TMP/m.json" "$DRIVER_REPO/.ai-harness/harness.json"
   git -C "$DRIVER_REPO" commit -q --allow-empty -am "release policy"
-  git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/main HEAD:refs/tags/v1.2.0
   printf 'feature\n' >"$DRIVER_REPO/feature.txt"
   git -C "$DRIVER_REPO" add feature.txt
   git -C "$DRIVER_REPO" commit -qm "feat: feature"
-  git -C "$DRIVER_REPO" push -q origin HEAD:refs/heads/develop
+  # main·태그는 릴리스 정책 커밋, develop은 기능 커밋 — push 한 번으로 보낸다(#614).
+  git -C "$DRIVER_REPO" push -q origin HEAD~1:refs/heads/main HEAD~1:refs/tags/v1.2.0 HEAD:refs/heads/develop
   git -C "$DRIVER_REPO" checkout -q -b work
   { printf 'HM_APPROVAL=auto\n'; [[ -z "$level" ]] || printf 'HM_DELIVERY_LEVEL=%s\n' "$level"; } >"$DRIVER_TMP/data/config"
   REL_CHECKS="$DRIVER_TMP/checks-$s.log"
