@@ -143,7 +143,7 @@ HM_TEST_JOBS=1 bash "$SHARD_FIXTURE/tests/run.sh" --shard >"$TEST_TMP/shard-bad.
 assert_eq "2" "$shard_rc" "--shard without a value is rejected"
 pass "run.sh --shard splits the selected areas into disjoint shards"
 
-# CI는 lint job과 test matrix 샤드로 나뉜다: matrix shard 목록은 1..N이고 run.sh --shard가 같은 N을 쓴다. (#556)
+# CI는 lint job과 shard matrix 샤드로 나뉜다: matrix shard 목록은 1..N이고 run.sh --shard가 같은 N을 쓴다. (#556)
 CI_YML="$ROOT/.github/workflows/test.yml"
 shard_line="$(grep -E -- '--shard \$\{\{ *matrix\.shard *\}\}/[0-9]+' "$CI_YML" || true)"
 [[ -n "$shard_line" ]] || fail "test.yml runs run.sh --shard \${{ matrix.shard }}/N"
@@ -154,6 +154,24 @@ lint_job="$(sed -n '/^  lint:/,/^  [a-z]/p' "$CI_YML")"
 assert_contains "$lint_job" "bash -n" "the lint job checks bash syntax"
 assert_contains "$lint_job" "shellcheck -x" "the lint job runs shellcheck"
 pass "CI shards the regression tests with a separate lint job"
+
+# 브랜치 보호의 필수 체크는 집계 job `test` 하나다: matrix job은 `test`가 아니고, `test`는 if: always()로
+# 워크플로의 다른 모든 job을 needs로 묶어 success가 아닌 결과를 실패로 본다. (#572)
+agg_job="$(sed -n '/^  test:/,/^  [a-z]/p' "$CI_YML")"
+[[ -n "$agg_job" ]] || fail "test.yml has an aggregate job named test"
+[[ "$agg_job" != *matrix* ]] || fail "the matrix job is not the job named test"
+assert_contains "$agg_job" "if: always()" "the test job runs even when a needed job fails"
+agg_needs="$(sed -nE 's/^    needs:[[:space:]]*\[(.*)\][[:space:]]*$/\1/p' <<<"$agg_job" | tr -d ' ')"
+ci_job_ids="$(sed -n '/^jobs:/,$p' "$CI_YML" | sed -nE 's/^  ([a-z][a-z0-9_-]*):.*/\1/p')"
+for ci_job in $ci_job_ids; do
+  [[ "$ci_job" == "test" ]] && continue
+  [[ ",$agg_needs," == *",$ci_job,"* ]] || fail "the test job needs $ci_job (needs=[$agg_needs])"
+done
+assert_contains "$agg_job" "needs.*.result" "the test job reads the results of its needed jobs"
+assert_contains "$agg_job" "success" "the test job treats any non-success result as failure"
+agg_name="$(sed -nE 's/^    name:[[:space:]]*(.*)$/\1/p' <<<"$agg_job" | tr -d "\"' ")"
+[[ -z "$agg_name" || "$agg_name" == "test" ]] || fail "the test job's check name is test (name=$agg_name)"
+pass "CI aggregates lint and shard jobs into one required check named test"
 
 # CHANGELOG·changelog.d·harness.json 해시 스탬프·생성물 사본은 메타 파일이다. --changed가 이 파일들 때문에
 # 영역을 넓히지 않아야 평소 검사가 바뀐 코드에 맞게 좁게 돈다. 사본은 원본의 영역으로 옮긴다. (#559)
