@@ -190,6 +190,37 @@ class RouterTest(unittest.TestCase):
                 self.assertNotIn(squash(phrase), seen, "%s: %s / %s" % (phrase, action, seen.get(squash(phrase))))
                 seen[squash(phrase)] = action
 
+    def test_misheard_wake_words(self):
+        for wake in ["페이 클로드", "테이클로드", "테이 클로드", "헤드 클로드"]:
+            self.assertEqual(self.kind(wake + " 중단"), "interrupt", wake)
+        self.assertEqual(self.kind("페이 클로드"), "wake_only")
+        self.assertEqual(self.kind("페이 클로드는 좋더라"), "ignore")
+
+    def test_misheard_interrupt(self):
+        self.assertEqual(self.kind("헤이 클로드 송단"), "interrupt")
+        self.assertEqual(self.kind("헤이 클로드 종단"), "interrupt")
+        targeted = self.t("헤이 클로드 3번 세션 송단")
+        self.assertEqual((targeted["type"], targeted["index"]), ("interrupt", 3))
+
+    def test_misheard_pause(self):
+        for text in ["오픈시어", "오픈시오", "오픈 시어", "5분 쉬어"]:
+            self.assertEqual(self.t("헤이 클로드 " + text), {"type": "pause", "minutes": 5}, text)
+
+    def test_misrecognition_does_not_widen_approval(self):
+        self.assertEqual(self.kind("헤이 클로드 이 번"), "prompt")
+        self.assertEqual(self.kind("헤이 클로드 스윙"), "prompt")
+        self.assertNotIn(self.kind("페이 클로드 스윙"), ("approve", "approve_force"))
+        for text in ["스윙", "이 번"]:
+            self.assertNotIn(self.kind(text, armed=True), ("approve", "approve_force", "choose"), text)
+        two = self.t("헤이 클로드 2번")
+        self.assertEqual((two["type"], two["number"]), ("choose", 2))
+
+    def test_default_wake_words_pass_validation(self):
+        import ui
+        clean = ui.validate_wake(CFG["wake_words"], CFG)
+        for wake in ["페이 클로드", "테이 클로드", "헤드 클로드"]:
+            self.assertIn(wake, clean)
+
     def test_aliases(self):
         cfg = dict(CFG, aliases={"결제": "결제 리팩터링", "문서": 4})
         self.assertEqual(route("헤이 클로드 결제에 테스트 돌려 줘", cfg),

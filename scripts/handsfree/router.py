@@ -22,6 +22,8 @@ SEPARATORS = r"[\s\.,!\?]*"
 LEADING = r"^[\s\.,!\?\-\"'“‘]*"
 # 다른 세션을 가리켜 말할 수 있는 조작. 나머지는 현재 세션에만 한다.
 TARGETABLE = ("approve", "approve_force", "deny", "interrupt", "explain_dialog", "read_last", "read_more", "read_all")
+# 받아쓰기가 "5분 쉬어"를 붙여 적은 모양 → 쉴 분. 관찰된 모양만 정확히 받는다(넓은 정규식은 다른 말을 잡는다).
+PAUSE_MISHEARD = {"오픈시어": 5, "오픈시오": 5}
 
 
 # 받아쓰기가 자주 헷갈리는 소리. 초성 ㄱㄲㅋ·ㄷㄸㅌ·ㅂㅃㅍ·ㅈㅉㅊ·ㅅㅆ, 중성 ㅐㅔ·ㅒㅖ·ㅙㅚㅞ, ㅢ→ㅣ, 단어 첫 ㅎ→ㅇ.
@@ -191,6 +193,8 @@ def _route(rest, cfg):
     m = re.fullmatch(NUM + r"분(?:만|간|동안)?(?:쉬어|쉬자|꺼|꺼둬|멈춰|듣지마|조용히해|조용)(?:줘|해줘)?", key)
     if m:
         return {"type": "pause", "minutes": to_number(m.group(1))}
+    if key in PAUSE_MISHEARD:
+        return {"type": "pause", "minutes": PAUSE_MISHEARD[key]}
 
     # "3번 세션 승인": 다른 세션의 창에 답한다. "3번 세션에 ~해 줘": 그 세션으로만 보낸다.
     m = re.match(r"^" + SESSION_NUM + r"\s*번\s*세션\s*" + PARTICLE + r"?\s+(.+)$", rest)
