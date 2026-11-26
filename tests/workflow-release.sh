@@ -79,4 +79,17 @@ assert_contains "$DRIVER_OUT" "git merge --ff-only origin/main" "the done report
 assert_eq "$dev_before" "$(remote_ref refs/heads/develop)" "the runner never pushes develop"
 pass "release stage merge publishes, records, and leaves the sync"
 
+# 5. 다른 worktree가 쓰는 릴리스 브랜치(#617): git switch -C는 다른 worktree에 체크아웃된 브랜치도 말없이 옮겨
+# 그쪽(같은 버전의 다른 런)의 HEAD를 바꾼다. prepare는 브랜치를 옮기지 않고 사람에게 넘긴다.
+rel_repo rel_other_wt
+git -C "$DRIVER_REPO" branch -q release/v1.3.0 HEAD
+git -C "$DRIVER_REPO" worktree add -q "$DRIVER_TMP/other-wt" release/v1.3.0
+other_before="$(git -C "$DRIVER_TMP/other-wt" rev-parse HEAD)"
+driver start --runtime codex --workflow release --version 1.3.0
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .status)" "prepare stops when another worktree has the release branch checked out"
+assert_contains "$(run_state .release.blocked)" "other-wt" "the reason names the other worktree"
+assert_eq "$other_before" "$(git -C "$DRIVER_TMP/other-wt" rev-parse HEAD)" "the other worktree's branch is not moved"
+assert_eq "" "$(git -C "$DRIVER_TMP/other-wt" status --porcelain)" "the other worktree is left clean"
+pass "release prepare does not move a release branch checked out in another worktree"
+
 finish_tests
