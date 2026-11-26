@@ -5,7 +5,8 @@
   스킬 폴더도 setup.sh 규칙(HM_CLAUDE_SKILLS_DIR·HM_CODEX_SKILLS_DIR)을 따른다. 결과는 짧게 캐시하고 세션이 끝나면 비운다.
 - 카탈로그 스킬은 missing(미설치) · no_token(설치됨·필수 키 없음) · unverified(키는 있는데 연결 확인 없음·실패) ·
   verified(마지막 연결 확인 성공) 중 하나. 연결 확인(`setup.sh check`)은 외부 API라 버튼을 눌렀을 때만 부르고
-  결과는 {ok, at, error}만 board/skill-checks.json에 남긴다(as·hint는 응답에만).
+  결과는 {ok, at, error, projects(별칭·ok·error)}만 board/skill-checks.json에 남긴다(as·hint는 응답에만). projects는
+  별칭마다 확인하는 langfuse(#621)만 낸다.
 - 디자인 스킬은 토큰이 없어 installed · missing · builtin(내장) · superseded(내장으로 대체된 예전 사본) ·
   unavailable(설치 불가: 이 도구엔 없음·원본 미고정) 중 하나.
 - setup 세션의 지시문은 서버가 카탈로그 이름과 고정 문구로만 만든다. 브라우저가 보낸 문자열은 넣지 않는다.
@@ -31,6 +32,24 @@ STATUS_RE = re.compile(r"[a-z]{1,20}")
 
 def utc():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clean_projects(items):
+    """setup.sh check의 별칭별 결과 → [{alias, ok, error?}] (최대 20개). 프로젝트 이름·hint는 남기지 않는다."""
+    if not isinstance(items, list):
+        return None
+    out = []
+    for p in items:
+        if len(out) >= 20:
+            break
+        alias = p.get("alias") if isinstance(p, dict) else None
+        if not isinstance(alias, str) or not NAME_RE.fullmatch(alias):
+            continue
+        rec = {"alias": alias, "ok": p.get("ok") is True}
+        if not rec["ok"]:
+            rec["error"] = str(p.get("error") or "원인 모름")[:200]
+        out.append(rec)
+    return out
 
 
 def catalog_state(row, check):
@@ -135,7 +154,7 @@ class Store:
                 "name": name, "summary": r.get("summary") or "", "state": state, "status": r.get("status") or {},
                 "flags": _flags(r), "has_env": bool(env),
                 "missing": [(e.get("keys") or ["?"])[0] for e in env if e.get("required") and not e.get("found")],
-                "check": {k: check.get(k) for k in ("ok", "at", "error") if k in check} if check and state in ("verified", "unverified") else None,
+                "check": {k: check.get(k) for k in ("ok", "at", "error", "projects") if k in check} if check and state in ("verified", "unverified") else None,
                 "session": sessions.get(f"catalog:{name}"),
             })
         design = []
@@ -177,6 +196,9 @@ class Store:
         rec = {"ok": ok, "at": utc()}
         if error:
             rec["error"] = error
+        projects = clean_projects(res.get("projects"))
+        if projects is not None:
+            rec["projects"] = projects
         with self.lock:
             checks = self._load(self.checks_path)
             checks[name] = rec

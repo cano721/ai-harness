@@ -124,7 +124,7 @@ $ROOT/scripts/setup.sh update
 $ROOT/scripts/setup.sh check <name>
 ```
 
-읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회, Langfuse 키가 가리키는 프로젝트 조회 — 401이면 키나 리전(`LANGFUSE_HOST`) 불일치). 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
+읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회, Langfuse 키가 가리키는 프로젝트 조회 — 401이면 키나 리전(`LANGFUSE_HOST`) 불일치). Langfuse는 기본 키와 `register.py`로 더한 별칭마다(host는 `LANGFUSE_HOST_<별칭>` → `LANGFUSE_HOST` 순) 확인해 별칭별 결과를 `projects`로 내고, 하나라도 실패하면 `ok:false`다 — 별칭 401의 hint는 `LANGFUSE_HOST_<별칭>`이나 `register.py <별칭>` 재등록을 가리킨다. 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
 
 - `ok:true` — `as`(누구로 접속했는지)를 보여 준다. 다른 계정이면 사용자에게 확인한다.
 - `ok:false` — `error`와 `hint`를 보여 주고 5단계로 돌아가 해당 키를 다시 넣는다. 두 번 실패하면 멈추고 사용자에게 넘긴다.
