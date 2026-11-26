@@ -332,6 +332,64 @@ assert_eq "needs_human" "$(b5_item "$B5_CACHE" old/1 .state BOARD_CACHE_SECONDS=
   "changing only BOARD_DECISION_STALE_DAYS does not reuse the cached result"
 pass "board status input cache key includes BOARD_DECISION_STALE_DAYS"
 
+# 러너 카드 link(#588): 끝나지 않은 러너도 publish.pr_url이 있으면 카드 link로 실어야 보드가 PR 상태(병합·닫힘)를 읽을 수 있다. pr_url이 없으면 null.
+B5_LINK="$BA_T/data588"
+b5_pr() { printf '.publish.pr_url = "https://github.com/acme/shop/pull/%s" | .finished_at = "%s"' "$1" "$B5_NOW"; }
+mkdir -p "$B5_LINK"
+b5_run "$B5_LINK" ud/1 user_decision user_decision "$(b5_pr 601)"
+b5_run "$B5_LINK" st/1 stopped fix "$(b5_pr 602)"
+b5_run "$B5_LINK" fa/1 failed fix "$(b5_pr 603)"
+b5_run "$B5_LINK" iv/1 invariant_violation invariant_violation "$(b5_pr 604)"
+b5_run "$B5_LINK" np/1 stopped fix ".finished_at = \"$B5_NOW\""
+for B5_CASE in ud/1:601:needs_human st/1:602:blocked fa/1:603 iv/1:604:needs_human; do
+  B5_DIR="${B5_CASE%%:*}"
+  B5_N="$(cut -d: -f2 <<<"$B5_CASE")"
+  assert_eq "https://github.com/acme/shop/pull/$B5_N" "$(b5_item "$B5_LINK" "$B5_DIR" .link)" "an unfinished runner ($B5_DIR) carries its publish.pr_url as link"
+done
+assert_eq "null" "$(b5_item "$B5_LINK" np/1 .link)" "an unfinished runner without publish.pr_url has a null link"
+pass "board status carries publish.pr_url as the link of unfinished runner cards"
+
+# 러너 카드 PR 상태(#588): 멈춘 러너(needs_human·blocked)의 PR이 러너 밖에서 병합·닫히면 prstate.apply가 done으로 내려야 한다. 열림·캐시 없음·running·agent·bg는 그대로, harness는 기존 동작.
+B5_PS="$(python3 -I -B -c '
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import prstate
+url = lambda n: "https://github.com/acme/shop/pull/%d" % n
+now = time.time()
+prstate._cache.update({url(701): {"state": "MERGED", "at": now}, url(702): {"state": "CLOSED", "at": now},
+                       url(703): {"state": "OPEN", "at": now}, url(705): {"state": "MERGED", "at": now},
+                       url(706): {"state": "MERGED", "at": now}, url(707): {"state": "MERGED", "at": now},
+                       url(708): {"state": "MERGED", "at": now}})
+cmd = "workflow-driver.sh resume --workflow feature"
+def card(n, kind, state, **kw):
+    d = {"section": "work", "kind": kind, "state": state, "title": "t%d" % n, "link": url(n), "cmd": cmd, "actions": ["open_agent"]}
+    d.update(kw)
+    return d
+cases = [("runner-needs-human-merged", card(701, "runner", "needs_human")),
+         ("runner-blocked-closed", card(702, "runner", "blocked", stall="stopped")),
+         ("runner-needs-human-open", card(703, "runner", "needs_human")),
+         ("runner-blocked-uncached", card(704, "runner", "blocked", stall="stopped")),
+         ("runner-running-merged", card(705, "runner", "running")),
+         ("agent-merged", card(706, "agent", "needs_human")),
+         ("bg-merged", card(707, "bg", "needs_human")),
+         ("harness-merged", {"section": "harness", "state": "needs_human", "title": "t708", "link": url(708), "actions": ["open_agent"]})]
+prstate.apply([c for _, c in cases])
+for name, c in cases:
+    print("%s|%s|%s|%s|%s" % (name, c["state"], c["title"], c.get("cmd"), "stall" in c))
+print("want704|%s" % (url(704) in prstate._want))
+' "$ROOT/scripts/board")"
+b5_ps() { grep "^$1|" <<<"$B5_PS" || true; }
+assert_eq "runner-needs-human-merged|done|t701 → PR 병합됨|None|False" "$(b5_ps runner-needs-human-merged)" "a merged PR moves a person-waiting runner card to done and drops its command"
+assert_eq "runner-blocked-closed|done|t702 → PR 닫힘|None|False" "$(b5_ps runner-blocked-closed)" "a closed PR moves a stopped runner card to done and drops stall and command"
+assert_eq "runner-needs-human-open|needs_human|t703|workflow-driver.sh resume --workflow feature|False" "$(b5_ps runner-needs-human-open)" "an open PR leaves the runner card as it is"
+assert_eq "runner-blocked-uncached|blocked|t704|workflow-driver.sh resume --workflow feature|True" "$(b5_ps runner-blocked-uncached)" "a runner card without a cached PR state is unchanged"
+assert_eq "want704|True" "$(b5_ps want704)" "a runner card without a cached PR state asks for a lookup"
+assert_eq "runner-running-merged|running|t705|workflow-driver.sh resume --workflow feature|False" "$(b5_ps runner-running-merged)" "a running runner card is unchanged even when its PR is merged"
+assert_eq "agent-merged|needs_human|t706|workflow-driver.sh resume --workflow feature|False" "$(b5_ps agent-merged)" "an agent work card is unchanged"
+assert_eq "bg-merged|needs_human|t707|workflow-driver.sh resume --workflow feature|False" "$(b5_ps bg-merged)" "a background work card is unchanged"
+assert_eq "harness-merged|done|t708 → PR 병합됨|None|False" "$(b5_ps harness-merged)" "a harness card keeps moving to done when its PR is merged"
+pass "prstate moves stopped runner cards to done when their PR ended outside the runner"
+
 # 세션: 마지막 답이 API 오류인 세션은 '멈춤 — 다시 시작 필요', 작업 중인데 프로세스가 없는 세션은 '중단됨'. 정상 작업 중은 그대로.
 mkdir -p "$BA_T/projects/p"
 BA_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

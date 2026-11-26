@@ -703,7 +703,6 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agdone { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-3); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-border); min-width: 0; }
 .b-agdone:first-child { border-top: 0; }
 .b-agdone__main { min-width: 0; display: grid; }
-.b-agdone__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .b-agdone__meta { color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .b-agdone__side { display: flex; align-items: center; gap: var(--space-1); color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); }
 .b-agbrief__text { margin: 0; white-space: pre-line; }
@@ -715,7 +714,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agcheck > .ds-icon { width: var(--size-icon-sm); height: var(--size-icon-sm); }
 .b-agcheck:hover, .b-agcheck:focus-visible { color: var(--color-text-muted); background: var(--color-surface-hover); }
 .b-agcheck[aria-busy="true"] { color: var(--color-text); cursor: progress; }
-.b-agtask__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--font-weight-label); }
+.b-agtask__title { font-weight: var(--font-weight-label); }
+/* 제목 펼치기: 바탕 없는 버튼. 접히면 한 줄 말줄임, 펼치면 줄바꿈하고 화살표가 아래를 본다. */
+.b-agtitle { display: flex; align-items: center; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.b-agtitle__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-agtitle > .ds-icon { flex: none; color: var(--color-text-muted); transition: transform var(--motion-duration-medium) var(--motion-ease-standard); }
+.b-agtitle[aria-expanded="true"] > .b-agtitle__text { white-space: normal; overflow-wrap: anywhere; }
+.b-agtitle[aria-expanded="true"] > .ds-icon { transform: rotate(90deg); }
+.b-agtask__detail { grid-column: 2 / -1; margin: var(--space-1) 0 0; min-width: 0; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: pre-line; overflow-wrap: anywhere; }
 .b-agtask__meta { display: flex; align-items: center; gap: var(--space-2); max-width: 16rem; min-width: 0; overflow: hidden; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); white-space: nowrap; }
 .b-agtask__meta > * { flex: none; }
 .b-agtask__meta > .b-agtask__who, .b-agtask__meta > .ds-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -1072,6 +1078,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const btn = (label, cls, onClick) => { const b = el('button', 'ds-btn' + (cls ? ' ' + cls : ''), label); b.type = 'button'; if (onClick) b.onclick = onClick; return b; };
   const linkBtn = (label, href, cls) => { const a = el('a', 'ds-btn' + (cls ? ' ' + cls : ''), label); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
   const safeHref = (href) => /^https?:\/\//.test(href || '') || String(href || '').startsWith('/autofix/log?') || String(href || '').startsWith('/impact/report?');
+  // 내 일정 url만 허용한 앱 딥링크도 연다(이슈 592). agenda.py·BoardLauncher.swift의 목록과 같아야 한다.
+  const APP_LINK_SCHEMES = ['msteams'];
+  const isAppLink = (href) => APP_LINK_SCHEMES.some((s) => new RegExp(`^${s}:\\S`, 'i').test(String(href || '')));
+  const agendaHref = (href) => safeHref(href) || isAppLink(href);
   const textLink = (text, href) => { if (!safeHref(href)) return el('span', null, text); const a = el('a', null, text); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
   const ago = (iso) => {
     if (!iso) return '';
@@ -1339,7 +1349,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const ex = pick.match(/^실행 실패 \((.*)\)$/);
     return ex ? '실행이 실패했습니다. 열어서 로그를 확인하세요.' : pick;
   }
-  const openable = (i) => i.resident || !(srcOf(i) === 'work' && !(SERVER && (i.actions || []).includes('view')));
+  // 워크플로 러너는 대화가 없는 작업 — 세션 서랍이 아니라 상세(상태·명령·로그·PR)로 연다.
+  const chatOf = (i) => srcOf(i) === 'work' && i.kind !== 'runner';
+  const openable = (i) => i.resident || !(srcOf(i) === 'work' && i.kind !== 'runner' && !(SERVER && (i.actions || []).includes('view')));
 
   // ---- 서버 동작 ----
   async function act(it, action, b) {
@@ -1410,9 +1422,9 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (lane === 'todo') {
       if (it.kind === 'references') { if (SERVER) box.append(btn('열기', 'ds-btn--sm ds-btn--primary', () => openRefs(it.run_id))); }
       else if (SERVER && it.permission) box.append(...permActions(it).childNodes);
-      else if (it.link && (it.kind === 'autofix' ? it.stage === 'pr' : srcOf(it) === 'harness')) box.append(linkBtn('PR 검토하기', it.link, 'ds-btn--sm'));
+      else if (it.link && (it.kind === 'autofix' ? it.stage === 'pr' : srcOf(it) === 'harness' || it.kind === 'runner')) box.append(linkBtn('PR 검토하기', it.link, 'ds-btn--sm'));
       else if (it.session_id && itemsAll().some((x) => x.id === it.session_id) && SERVER) { const b = btn('세션 열기', 'ds-btn--sm', () => openItem(itemsAll().find((x) => x.id === it.session_id))); box.append(b); }
-      else if (srcOf(it) === 'work' && SERVER) { const b = btn('답하기', 'ds-btn--sm ds-btn--primary', () => openItem(it, true)); box.append(b); }
+      else if (chatOf(it) && SERVER) { const b = btn('답하기', 'ds-btn--sm ds-btn--primary', () => openItem(it, true)); box.append(b); }
       else if (SERVER && (it.actions || []).includes('open_agent')) { const b = btn(ACTION_LABEL.open_agent, 'ds-btn--sm'); b.onclick = () => act(it, 'open_agent', b); box.append(b); }
       else if (it.cmd) box.append(copyBtn('명령 복사', it.cmd));
     } else if (lane === 'waiting' && SERVER && (it.actions || []).includes('harvest_now')) {
@@ -1773,6 +1785,21 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const days = Math.round((localDay(now) - localDay(at)) / 86400000);
     return days <= 0 ? '오늘' : `${days}일 전`;
   }
+  // 제목은 펼쳐 보는 버튼: 접히면 한 줄 말줄임, 펼치면 제목 전체가 줄바꿈되고 detail이 있으면 줄 아래에 보인다.
+  // 상태는 접힌 줄과 같은 agExp(새로 고치면 사라짐). detail이 없으면 빈 펼침 영역을 만들지 않는다.
+  function agTitle(cls, key, focus, title, detail) {
+    const open = agExp.has(key), id = 'agx-' + encodeURIComponent(key);
+    const b = el('button', 'b-agtitle ' + cls); b.type = 'button'; b.dataset.key = focus;
+    b.title = detail ? `${title}\n${detail}` : title;
+    const tx = el('span', 'b-agtitle__text', title);
+    b.append(tx, icon('chevron'));
+    b.setAttribute('aria-expanded', String(open));
+    let box = null;
+    if (detail) { box = el('p', 'b-agtask__detail', detail); box.id = id; box.hidden = !open; } else tx.id = id;
+    b.setAttribute('aria-controls', id);
+    b.onclick = () => { if (agExp.has(key)) agExp.delete(key); else agExp.add(key); renderBoard(); };
+    return [b, box];
+  }
   // 할 일 줄은 한 줄: 완료 원 | 제목 | 요청자·경과일 또는 기한 | ↗(hover·포커스 때만). 출처 칩은 o.sources일 때만.
   function taskRow(it, now, o) {
     const r = el('li', 'b-agtask'); r.dataset.key = `ag:${it.source}:${it.id}`;
@@ -1792,7 +1819,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       toast(it.local ? `'${it.title}'을(를) 마쳤습니다.` : res.message, true, undo);
       loadAgenda(true);
     };
-    const t = el('span', 'b-agtask__title', it.title); t.title = it.detail ? `${it.title}\n${it.detail}` : it.title;
+    const [t, more] = agTitle('b-agtask__title', `task:${it.source}:${it.id}`, `agtitle:${it.source}:${it.id}`, it.title, it.detail);
     const meta = el('span', 'b-agtask__meta');
     if (agFresh.has(agKey(it))) meta.append(badge(['info', '새로']));
     const d = dueInfo(it.due, now);
@@ -1805,13 +1832,22 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     }
     if (o && o.sources) meta.append(chip(it.source_name));
     const side = el('span', 'b-agev__side');
-    if (it.url && safeHref(it.url)) {
-      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon b-agtask__open'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
-      side.append(a);
-    }
+    const open = agOpenLink(it.url, it.title, false, 'b-agtask__open');
+    if (open) side.append(open);
     r.append(SERVER ? check : el('span'), t, meta, side);
+    if (more) r.append(more);
     return r;
+  }
+  // 내 일정 원본 열기. 앱 링크는 target 없이 같은 프레임으로 넘긴다 — 브라우저는 OS가 앱을 열고 페이지는 남으며(_blank면 빈 탭이 남는다),
+  // 창 앱은 decidePolicyFor → openOutside가 받는다. 웹 링크는 지금처럼 새 창.
+  function agOpenLink(url, title, again, cls) {
+    if (!url || !agendaHref(url)) return null;
+    const app = isAppLink(url);
+    const label = app ? (again ? '앱에서 다시 열기' : '앱에서 열기') : (again ? '원본에서 다시 열기(새 창)' : '원본에서 보기(새 창)');
+    const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon' + (cls ? ` ${cls}` : '')); a.href = url; a.rel = 'noopener noreferrer';
+    if (!app) a.target = '_blank';
+    a.setAttribute('aria-label', `${label}: ${title}`); a.title = label; a.append(icon('external'));
+    return a;
   }
   function taskList(list, label, o) {
     const now = Date.now(), ul = el('ul', 'ds-rows b-agtasks'); ul.setAttribute('aria-label', `${label} ${list.length}건`);
@@ -1918,11 +1954,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (sub) { const c = el('span', 'b-agev__cal', sub); c.title = sub; main.append(c); }
     const side = el('div', 'b-agev__side');
     if (phase === 'now') side.append(badge(['progress', '진행 중']));
-    if (it.url && safeHref(it.url)) {
-      const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = it.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      a.setAttribute('aria-label', `원본에서 보기(새 창): ${it.title}`); a.title = '원본에서 보기(새 창)'; a.append(icon('external'));
-      side.append(a);
-    }
+    const open = agOpenLink(it.url, it.title, false, '');
+    if (open) side.append(open);
     r.append(time, main, side);
     return r;
   }
@@ -1999,17 +2032,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       });
     }, true);
   }
-  // 쌓인 요청: 오래된 순 + 경과일. 요청자가 있는 항목이 하나라도 있으면 [요청자별 묶기](hb-ag-group).
+  // 쌓인 요청: 오래된 순 + 경과일. 요청자가 있는 항목이 하나라도 있으면 [전체 | 요청자별](hb-ag-group '1'=요청자별).
   function staleFold(list, o) {
     if (!list.length) return null;
     return agFoldBlock('stale', `쌓인 요청 ${list.length}`, () => {
       const out = [];
       if (list.some((it) => it.from)) {
         const on = store('hb-ag-group') === '1';
-        const g = el('button', 'ds-chip', '요청자별 묶기'); g.type = 'button'; g.dataset.key = 'aggroup';
-        g.setAttribute('aria-pressed', String(on));
-        g.onclick = () => { store('hb-ag-group', on ? '0' : '1'); renderBoard(); };
-        const row = el('div', 'ds-cluster'); row.append(g); out.push(row);
+        const lab = el('span', 'ds-sr', '쌓인 요청 보기'); lab.id = 'aggroup';
+        const g = segment('aggroup', [['0', '전체'], ['1', '요청자별']], on ? '1' : '0', (v) => { store('hb-ag-group', v); renderBoard(); });
+        const row = el('div', 'ds-cluster'); row.append(lab, g); out.push(row);
         if (on) {
           const by = new Map();
           for (const it of list) { const k = it.from || ''; if (!by.has(k)) by.set(k, []); by.get(k).push(it); }
@@ -2029,7 +2061,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       for (const r of rows) {
         const li = el('li', 'b-agdone'); li.dataset.key = `agc:${r.source}:${r.id}`;
         const main = el('div', 'b-agdone__main');
-        const t = el('span', 'b-agdone__title', r.title); t.title = r.title;
+        const [t] = agTitle('b-agdone__title', `done:${r.source}:${r.id}`, `agctitle:${r.source}:${r.id}`, r.title);
         main.append(t, el('span', 'b-agdone__meta ds-num', `${r.source_name || r.source} · ${ago(r.done_at)} 완료`));
         const side = el('div', 'b-agdone__side');
         if (r.can_reopen) {
@@ -2045,11 +2077,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
           side.append(b);
         } else {
           side.append(el('span', null, '원본에서 다시 열기'));
-          if (r.url && safeHref(r.url)) {
-            const a = el('a', 'ds-btn ds-btn--sm ds-btn--ghost ds-btn--icon'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-            a.setAttribute('aria-label', `원본에서 다시 열기(새 창): ${r.title}`); a.title = '원본에서 다시 열기(새 창)'; a.append(icon('external'));
-            side.append(a);
-          }
+          const open = agOpenLink(r.url, r.title, true, '');
+          if (open) side.append(open);
         }
         li.append(main, side); ul.append(li);
       }
@@ -2632,7 +2661,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (!$('drawer').contains(a)) opener = a && a.dataset ? (a.dataset.open ? ['open', a.dataset.open] : a.dataset.key ? ['key', a.dataset.key] : null) : null;
     stopChat();
     selected = it.id; current = it;
-    mode = srcOf(it) === 'work' ? 'session' : it.kind === 'autofix' ? 'autofix' : 'item';
+    mode = chatOf(it) ? 'session' : it.kind === 'autofix' ? 'autofix' : 'item';
     $('drawer').hidden = false; $('split').dataset.drawer = 'open';
     syncModal();
     renderDrawer(true); drawerSig = drawerKey();
