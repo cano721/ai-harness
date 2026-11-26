@@ -19,11 +19,17 @@ BOARD_IDLE_EXIT=0 board_sh open >/dev/null
 sleep 2  # 일어나지 않음 확인: 위 0.02분 보드가 꺼지는 시간(약 1.7초)보다 길게
 board_alive || fail "BOARD_IDLE_EXIT=0 keeps the board running"
 board_sh stop >/dev/null
-BOARD_IDLE_EXIT=0.02 BOARD_PERMISSION_WAIT=4 board_sh open >/dev/null
+# 서버가 요청을 붙잡은 것(actions.jsonl의 held 기록)을 본 뒤에 창을 연다 — curl이 늦게 도착해 창이 붙잡는 시간을 넘지 않게(#585).
+BI_LOG="$BOARD_DATA/board/actions.jsonl"
+BI_LOG_LINES="$(wc -l <"$BI_LOG" 2>/dev/null || echo 0)"
+BOARD_IDLE_EXIT=0.02 BOARD_PERMISSION_WAIT=8 board_sh open >/dev/null
 BI_TOKEN="$(jq -r '.token' "$BOARD_DATA/board/server.json")"
-curl -s -m 10 -X POST -H "X-Board-Hook: $BI_TOKEN" -d '{"tool_name":"Bash","session_id":"s-idle"}' "http://127.0.0.1:$BOARD_PORT_T/hook/permission" >/dev/null &
+curl -s -m 15 -X POST -H "X-Board-Hook: $BI_TOKEN" -d '{"tool_name":"Bash","session_id":"s-idle"}' "http://127.0.0.1:$BOARD_PORT_T/hook/permission" >/dev/null &
 BI_HOLD=$!
-sleep 3  # 일어나지 않음 확인: 권한 요청이 없으면 꺼졌을 시간(약 1.7초)보다 길고, 붙잡는 시간(4초)보다 짧게
+bi_held() { tail -n "+$((BI_LOG_LINES + 1))" "$BI_LOG" 2>/dev/null | grep -q '"held": true'; }
+for _ in $(seq 1 100); do bi_held && break; sleep 0.1; done
+bi_held || fail "the board holds the permission request"
+sleep 2  # 일어나지 않음 확인: 권한 요청이 없으면 꺼졌을 시간(약 1.7초)보다 길게. 붙잡는 시간(8초)은 이 창보다 넉넉히 길다
 board_alive || fail "board does not exit while it holds a permission request"
 wait "$BI_HOLD" 2>/dev/null || true
 for _ in $(seq 100); do board_alive || break; sleep 0.1; done

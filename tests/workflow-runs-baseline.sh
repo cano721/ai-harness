@@ -62,4 +62,58 @@ driver resume --accept-changes
 assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "an accepted commit becomes the run's head, so the write nodes do not see HEAD as moved"
 pass "resume compares the saved baseline before any agent runs (same, uncommitted, and other-commit baselines)"
 
+# 러너는 한 프로세스 안에서 외부 실행이 없는 동안 지문을 재사용하고, 미추적 파일 해시를 한 번에 구한다(#585).
+# 재사용이 쓰기 감시를 약하게 만들지 않고, 지문 값은 예전 구현(파일마다 hash-object)과 같아 저장된 기준점과 resume이 맞는다.
+old_fingerprint() { # repo → 예전 구현의 지문
+  {
+    git -C "$1" rev-parse HEAD 2>/dev/null || true
+    git -C "$1" diff HEAD --binary 2>/dev/null || true
+    git -C "$1" ls-files --others --exclude-standard -z \
+      | while IFS= read -r -d '' f; do printf '%s\0' "$f"; git -C "$1" hash-object -- "$f"; done
+  } | git hash-object --stdin
+}
+# (i) deliver가 이미 있던 미추적 파일의 내용만 바꿔도 변경으로 본다.
+new_driver_repo fp_deliver_edit
+echo v0 >"$DRIVER_REPO/feature.txt"
+start_and_approve fp_deliver_edit
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a deliver that only rewrites an untracked file counts as a change"
+assert_eq "v1" "$(<"$DRIVER_REPO/feature.txt")" "deliver rewrote the untracked file"
+# (ii) read-only 노드가 이미 있던 미추적 파일 내용을 바꾸면 시작 기준점 지문을 재사용한 앞 지문과 달라 멈춘다.
+for fp_node in fp_discover_edits fp_review_edits; do
+  new_driver_repo "$fp_node"
+  echo orig >"$DRIVER_REPO/scratch.txt"
+  start_and_approve "$fp_node"
+  assert_eq "40" "$DRIVER_RC" "$fp_node: a read-only node that rewrites an untracked file stops the run"
+  assert_contains "$DRIVER_OUT" "changed the working tree" "$fp_node: the stop names the read-only write"
+done
+# (iii) 노드 사이에 사람이 미추적 파일 내용만 바꾼 뒤 resume하면 기준점 대조가 막는다.
+new_driver_repo fp_hand_edit
+echo orig >"$DRIVER_REPO/notes.txt"
+driver start --runtime codex --request "add feature"
+assert_eq "10" "$DRIVER_RC" "the run waits for approval"
+echo edited >"$DRIVER_REPO/notes.txt"
+say_in_claude "승인"
+driver resume
+assert_eq "20:approval" "$DRIVER_RC:$(run_state .node)" "an untracked file edited between nodes halts resume"
+assert_contains "$DRIVER_OUT" "notes.txt" "the stop names the edited untracked file"
+# (iv) 미추적 파일 여러 개(공백·줄바꿈이 든 이름 포함)의 지문 값이 예전 구현과 같다.
+new_driver_repo fp_same_value
+mkdir -p "$DRIVER_REPO/dir"
+echo a >"$DRIVER_REPO/a.txt"
+echo b >"$DRIVER_REPO/b c.txt"
+echo d >"$DRIVER_REPO/dir/d.txt"
+start_and_approve fp_same_value
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run over several untracked files reaches done"
+assert_eq "$(old_fingerprint "$DRIVER_REPO")" "$(run_state .repo_baseline.fingerprint)" "the saved fingerprint equals the per-file implementation"
+new_driver_repo fp_newline_value
+echo a >"$DRIVER_REPO/a.txt"
+echo n >"$DRIVER_REPO/line"$'\n'"break.txt"
+start_and_approve fp_newline_value
+assert_eq "0:done" "$DRIVER_RC:$(run_state .status)" "a run with a newline in an untracked name reaches done"
+assert_eq "$(old_fingerprint "$DRIVER_REPO")" "$(run_state .repo_baseline.fingerprint)" "a newline name falls back to the per-file value"
+echo changed >"$DRIVER_REPO/line"$'\n'"break.txt"
+driver resume
+assert_eq "20" "$DRIVER_RC" "rewriting the newline-named file is a change"
+pass "the runner reuses the fingerprint only between outside runs and keeps its value"
+
 finish_tests

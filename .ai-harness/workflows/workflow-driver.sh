@@ -256,12 +256,25 @@ state() { jq -r "$1" "$STATE"; }
 # 값마다 state와 같은 문자열(문자열은 그대로, null은 "null")이다. 줄바꿈이 들어갈 수 있는 값에는 쓰지 않는다.
 state_fields() { jq -r "[$1] | map(tostring) | join(\"\\u001f\")" "$STATE"; }
 json_fields() { jq -r "[$1] | map(tostring) | join(\"\\u001f\")" <<<"$2"; } # filter json-text
-# 다음 state_set이 같은 쓰기에서 먼저 적용할 필터(#569). 노드 자식 그룹 기록을 지우는 것처럼 바로 쓰지 않아도 되는 것만 둔다.
+# 다음 state_set이 같은 쓰기에서 먼저 적용할 필터와 그 jq 인자(#569, #585). 노드 자식 그룹 기록을 지우는 것처럼 바로 쓰지 않아도 되는 것만 둔다:
+# 다음 state_set 전까지 이 러너가 읽지 않고, 다른 프로세스(보드·watch-target-ci·status)가 곧바로 볼 필요가 없는 기록.
+# status·process·finished_at처럼 밖에서 바로 읽는 값은 state_set으로 바로 쓴다. 서브셸에서 부르면 기록이 사라진다.
 STATE_PENDING=""
+STATE_PENDING_ARGS=()
+state_defer() { # jq-filter [jq args...] — 인자 이름은 뒤따르는 쓰기와 겹치지 않게 고유하게 짓는다
+  STATE_PENDING="${STATE_PENDING:+($STATE_PENDING) | }($1)"
+  shift
+  STATE_PENDING_ARGS+=("$@")
+}
 state_set() { # jq-filter [jq args...]
   local filter="$1"
   shift
-  if [[ -n "$STATE_PENDING" ]]; then filter="($STATE_PENDING) | ($filter)"; STATE_PENDING=""; fi
+  if [[ -n "$STATE_PENDING" ]]; then
+    filter="($STATE_PENDING) | ($filter)"
+    set -- ${STATE_PENDING_ARGS[@]+"${STATE_PENDING_ARGS[@]}"} "$@"
+    STATE_PENDING=""
+    STATE_PENDING_ARGS=()
+  fi
   # 분리 감시(watch-target-ci)도 같은 상태를 쓴다. 임시 파일을 프로세스마다 따로 둬 서로의 반쯤 쓴 파일을 옮기지 않게 한다.
   jq "$@" "$filter" "$STATE" >"$STATE.tmp.$$" && mv "$STATE.tmp.$$" "$STATE"
 }
@@ -356,13 +369,44 @@ finish() { # status exit_code message
 }
 
 # 추적 파일 diff + 미추적 파일 내용까지 포함한 작업 트리 지문. .gitignore 대상(빌드 산출물)은 제외된다.
+# 매번 새로 구한다. 노드 사이 재사용은 fp_now가 맡는다.
 fingerprint() { # [rev-parse HEAD 출력] — 방금 read_head로 읽은 값을 넘기면 HEAD를 다시 읽지 않는다
   {
     if (($#)); then [[ -z "$1" ]] || printf '%s\n' "$1"; else git -C "$REPO" rev-parse HEAD 2>/dev/null || true; fi
     git -C "$REPO" diff HEAD --binary 2>/dev/null || true
-    git -C "$REPO" ls-files --others --exclude-standard -z \
-      | while IFS= read -r -d '' f; do printf '%s\0' "$f"; git -C "$REPO" hash-object -- "$f"; done
+    git -C "$REPO" ls-files --others --exclude-standard -z | untracked_hashes
   } | git hash-object --stdin
+}
+# NUL로 끊은 미추적 파일 이름을 받아 파일마다 "<이름>\0<해시>\n"을 낸다. 해시는 hash-object --stdin-paths 한 번으로 구한다(#585).
+# 줄바꿈이 든 이름이 있거나 한 번에 다 구하지 못하면 예전처럼 파일마다 구한다 — 바이트열이 같아야 저장된 기준점 지문과 맞는다.
+untracked_hashes() {
+  local names=() f h i=0 hashes newlines
+  while IFS= read -r -d '' f; do names+=("$f"); done
+  ((${#names[@]})) || return 0
+  if [[ "${names[*]}" != *$'\n'* ]] && hashes="$(printf '%s\n' "${names[@]}" | git -C "$REPO" hash-object --stdin-paths 2>/dev/null)"; then
+    newlines="${hashes//[!$'\n']/}"
+    if ((${#newlines} + 1 == ${#names[@]})); then
+      while IFS= read -r h; do printf '%s\0%s\n' "${names[i]}" "$h"; i=$((i + 1)); done <<<"$hashes"
+      return 0
+    fi
+  fi
+  for f in "${names[@]}"; do printf '%s\0' "$f"; git -C "$REPO" hash-object -- "$f"; done
+}
+
+# 지문 캐시(#585): 이 러너 프로세스가 마지막으로 구한 지문. 두 지문 계산 사이에 러너 밖 코드가 돌지 않았을 때만 다시 쓴다.
+# 러너 밖 코드가 작업 트리를 바꿀 수 있는 지점(에이전트·검사·확장점 명령 실행, 호스트 병합, 러너의 git 쓰기, 폴링 대기)마다 fp_invalidate로 비운다.
+# HEAD가 캐시를 만들 때와 다르면 쓰지 않는다. 서브셸에서 부르면 캐시가 남지 않으므로 fp_now는 서브셸 없이 부른다.
+FP="" FP_CACHE="" FP_CACHE_HEAD=""
+fp_invalidate() { FP_CACHE=""; }
+fp_now() { # [rev-parse HEAD 출력] → FP
+  local head
+  if (($#)); then head="$1"; else head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"; fi
+  if [[ -n "$FP_CACHE" && "$head" == "$FP_CACHE_HEAD" ]]; then
+    FP="$FP_CACHE"
+    return 0
+  fi
+  FP="$(fingerprint "$head")"
+  FP_CACHE="$FP" FP_CACHE_HEAD="$head"
 }
 
 # HEAD를 한 번 읽어 둘 다 남긴다: REPO_HEAD_OUT은 rev-parse 출력 그대로(지문용), REPO_HEAD는 실패면 none을 붙인 값
@@ -459,6 +503,7 @@ checkpoint() { # node
   [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]] || return 0
   { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "wip($TEMPLATE): $1 · run $RUN_ID"; } >"$RUN/checkpoint.log" 2>&1 \
     || finish incomplete 30 "checkpoint commit after $1 failed; see $RUN/checkpoint.log. Fix the cause and run resume"
+  fp_invalidate
   read_head
   save_baseline --have-head '.head = $h | .checkpoints += [$h]' --arg h "$REPO_HEAD_OUT"
   log "checkpoint commit after $1: $(git -C "$REPO" rev-parse --short HEAD)"
@@ -471,8 +516,9 @@ save_baseline() { # [--have-head] [jq-filter [jq args...]]
   local pre=.
   if [[ "${1:-}" == --have-head ]]; then shift; else read_head; fi
   if (($#)); then pre="$1"; shift; fi
+  fp_now "$REPO_HEAD_OUT"
   state_set "($pre) | .repo_baseline = {head: \$bl_head, fingerprint: \$bl_fp, tree: \$bl_tree, at: \$bl_at}" --arg bl_head "$REPO_HEAD" \
-    --arg bl_fp "$(fingerprint "$REPO_HEAD_OUT")" --arg bl_tree "$(worktree_tree 2>/dev/null || true)" --arg bl_at "$(now_utc)" "$@"
+    --arg bl_fp "$FP" --arg bl_tree "$(worktree_tree 2>/dev/null || true)" --arg bl_at "$(now_utc)" "$@"
 }
 
 # 이어 가기 전에 기준점과 지금을 대조한다. 같으면 그대로, 다르면 에이전트를 부르기 전에 차이·남은 검사를 보이고 멈춘다.
@@ -483,7 +529,11 @@ check_baseline() {
   saved_fp="$(state '.repo_baseline.fingerprint // ""')"
   saved_tree="$(state '.repo_baseline.tree // ""')"
   head="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || printf none)"
-  [[ "$head" != "$saved_head" || ( -n "$saved_fp" && "$(fingerprint)" != "$saved_fp" ) ]] || return 0
+  if [[ "$head" == "$saved_head" ]]; then
+    [[ -z "$saved_fp" ]] && return 0
+    fp_now
+    [[ "$FP" != "$saved_fp" ]] || return 0
+  fi
   node="$(state .node)"
   report="$RUN/baseline-changes.txt"
   {
@@ -561,6 +611,7 @@ terminate() { # target... (pid 또는 -pgid) → TERM, 최대 5초 기다린 뒤
 CHILD_PGID=""
 run_in_group() { # command... → 그 명령의 종료 코드
   local rc=0
+  fp_invalidate
   set -m
   "$@" &
   CHILD_PGID=$!
@@ -569,7 +620,7 @@ run_in_group() { # command... → 그 명령의 종료 코드
   wait "$CHILD_PGID" || rc=$?
   CHILD_PGID=""
   # 끝난 자식 그룹 기록은 다음 상태 쓰기와 함께 지운다. 그 사이에 stop·resume이 보아도 child_alive가 그룹이 없다고 판정한다.
-  STATE_PENDING='del(.process.child_pgid, .process.child_lstart)'
+  state_defer 'del(.process.child_pgid, .process.child_lstart)'
   return "$rc"
 }
 on_stop_signal() {
@@ -661,6 +712,7 @@ stream_progress() { # label → stdout: result 이벤트 한 줄
 run_agent() {
   local node="$1" label="$2" prompt="$3" schema="${4:-}" rc=0 writable
   local out="$RUN/$label.out" network browser commands reads_run runtime
+  fp_invalidate
   # 화면 검증(browser)은 앱 서버를 띄우고 브라우저를 조종해야 하므로 네트워크 노드처럼 명령과 로컬 네트워크를 연다.
   # 재현(commands)은 테스트·명령을 실행해야 하므로 명령만 연다. 둘 다 쓰기는 지문 비교가 막는다.
   read -r writable browser network commands reads_run <<<"$(node_attrs "$node")"
@@ -729,19 +781,21 @@ run_node() { # node label prompt [schema]: 읽기 전용 노드는 지문으로,
     run_agent "$@"
     guard_head "$node"
   else
-    before="$(fingerprint)"
+    fp_now
+    before="$FP"
     run_agent "$@"
     # 에이전트가 끝난 뒤 HEAD를 한 번 읽어 지문 비교와 HEAD 감시에 같이 쓴다.
     read_head
+    fp_now "$REPO_HEAD_OUT"
     # remote_ci 도중 깨끗한 작업 트리에 base 병합 커밋 하나만 더해진 것은 remote_ci가 sync_base로 넘긴다(#508).
-    [[ "$(fingerprint "$REPO_HEAD_OUT")" == "$before" ]] \
+    [[ "$FP" == "$before" ]] \
       || { [[ "$node" == remote_ci ]] && outside_base_merge "$REPO_HEAD_OUT"; } \
       || finish invariant_violation 40 "read-only node '$node' changed the working tree: $(git -C "$REPO" status --porcelain | head -n 10 | paste -sd ';' -). Remove those changes before starting again"
     guard_head "$node" "$REPO_HEAD"
   fi
 }
 
-# 검사 프로세스에 넘기는 테스트 동시 실행 수(HM_TEST_JOBS, #513). 사용자 설정이 1 이상의 정수가 아니면 max(1, min(ncpu/2, 4)).
+# 검사 프로세스에 넘기는 테스트 동시 실행 수(HM_TEST_JOBS, #513). 사용자 설정이 1 이상의 정수가 아니면 max(1, min(ncpu/2, 6)).
 # 테스트 실행기가 병렬 옵션의 기본값으로 읽거나, Brief의 checks가 그 옵션에 넘긴다. 러너는 명령 문자열을 고쳐 쓰지 않는다.
 # 값은 이 프로세스에서 한 번 정해 CHECK_JOBS에 둔다(잘못된 설정 안내도 한 번). 서브셸에서 부르지 않는다.
 CHECK_JOBS=""
@@ -758,7 +812,7 @@ resolve_check_jobs() {
       [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu="$(nproc 2>/dev/null || true)"
       [[ "$ncpu" =~ ^[0-9]+$ ]] || ncpu=1
       CHECK_JOBS=$((ncpu / 2))
-      ((CHECK_JOBS <= 4)) || CHECK_JOBS=4
+      ((CHECK_JOBS <= 6)) || CHECK_JOBS=6
       ((CHECK_JOBS >= 1)) || CHECK_JOBS=1
       [[ -z "$(user_config HM_TEST_JOBS)" ]] \
         || log "HM_TEST_JOBS $(config_origin HM_TEST_JOBS) is not a positive integer; checks use $CHECK_JOBS"
@@ -786,6 +840,7 @@ is_narrow_regression() {
 
 run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문자열은 한 번만 실행한다
   local label="$1" commands="${2:-$(state '.checks // []')}" i=0 failed=0 cmd rc results="[]" full="" tree after start seconds lines
+  local passes="" pass_args=()
   # 중복을 뺀 명령 줄을 jq 한 번에 얻는다. 끝의 x는 명령 치환이 지우는 마지막 줄바꿈을 지킨다.
   lines="$(jq -r 'reduce .[] as $command ([]; if index($command) then . else . + [$command] end) | .[]' <<<"$commands" && printf x)"
   lines="${lines%x}"
@@ -820,14 +875,20 @@ run_checks() { # label [commands-json] → $RUN/<label>.checks.json; 명령 문�
       log "check failed: $cmd (exit $rc, ${seconds}s)"
     else
       log "check passed: $cmd (${seconds}s)"
+      # 통과 기록은 끝에서 last_checks와 한 번에 쓴다. 명령은 중복을 뺐으므로 이 반복 안의 재사용 판정에는 영향이 없다.
       if [[ -n "$tree" && "$after" == "$tree" ]]; then
-        state_set '.check_passes = ((.check_passes // []) + [{tree: $t, command: $c}] | unique)' --arg t "$tree" --arg c "$cmd"
+        passes+=" + [{tree: \$cp_t$i, command: \$cp_c$i}]"
+        pass_args+=(--arg "cp_t$i" "$tree" --arg "cp_c$i" "$cmd")
       fi
     fi
     tree="$after"
   done < <(printf '%s' "$lines")
   printf '%s\n' "$results" >"$RUN/$label.checks.json"
-  state_set '.last_checks = $l' --arg l "$label"
+  if [[ -n "$passes" ]]; then
+    state_set ".check_passes = ((.check_passes // [])$passes | unique) | .last_checks = \$l" --arg l "$label" "${pass_args[@]}"
+  else
+    state_set '.last_checks = $l' --arg l "$label"
+  fi
   return "$failed"
 }
 
@@ -887,7 +948,7 @@ verify_checks() { # label → 통과면 0. 실패면 findings·다음에 다시 
     fi
     run_checks "$label"
   }; then
-    state_set '.repair_checks = [] | .repair_failure_signature = "" | .repair_failure_streak = 0'
+    state_defer '.repair_checks = [] | .repair_failure_signature = "" | .repair_failure_streak = 0'
     return 0
   else
     file="$RUN/$label.checks.json"
@@ -1568,6 +1629,7 @@ merge() {
     pending_try=$((pending_try + 1))
     log "the host has not finished checking for conflicts on $url; asking again in ${pending_wait}s ($pending_try/$pending_max)"
     sleep "$pending_wait"
+    fp_invalidate
   done
   printf '%s\n' "$facts" >"$RUN/merge-facts.json"
   # 병합할 PR은 publish가 보고한 URL이다. 이 저장소·이 실행이 push한 브랜치·시작 때 정한 기준 브랜치의 PR인지 확인한다.
@@ -1608,7 +1670,7 @@ merge() {
       blocked="$(jq -c --arg e "$(head -c 300 "$RUN/method.why")" \
         '. + ["cannot read which merge methods the repository allows (\($e)); merge by hand"]' <<<"$blocked")"
     else
-      state_set '.protection = ($p + {base: $b, checked_at: $t})' --argjson p "$protection" --arg b "$mp_base" --arg t "$(now_utc)"
+      state_defer '.protection = ($pr_p + {base: $pr_b, checked_at: $pr_t})' --argjson pr_p "$protection" --arg pr_b "$mp_base" --arg pr_t "$(now_utc)"
       mp="$(jq -c --argjson p "$protection" '.min_approvals = $p.approvals
         | .require = ([if $p.approvals > 0 then "human_approval" else empty end, if $p.checks > 0 then "remote_ci" else empty end]
             + ["no_conflict", "not_draft"])' <<<"$mp")"
@@ -1668,6 +1730,8 @@ merge() {
     state_set '.merge = {waiting: $u, facts: $f, checked_at: $t}' --argjson u "$unmet" --argjson f "$facts" --arg t "$(now_utc)"
     finish incomplete 30 "waiting for merge conditions on $url: $(jq -r 'join("; ")' <<<"$unmet"); run resume to check again"
   fi
+  # 호스트 병합 명령(gh·curl)도 러너 밖 실행이라 그 뒤의 지문은 새로 구한다.
+  fp_invalidate
   if ! pr_merge "$url" "$method" "$head" >"$RUN/merge.log" 2>&1; then
     state_set '.findings = [$m] | .merge = {blocked: [$m]}' --arg m "merging failed: $(tail -c 300 "$RUN/merge.log")"
     go merge merge_blocked
@@ -1681,6 +1745,7 @@ merge() {
     IFS=$'\037' read -r f_state f_commit f_merged_at <<<"$(json_fields '(.state // ""), (.merge_commit // ""), .merged_at' "$facts")"
     [[ "$f_state" == MERGED && -n "$f_commit" ]] && break
     ((i == 5)) || sleep "${HM_MERGE_POLL_SECONDS:-5}"
+    fp_invalidate
   done
   [[ "$f_state" == MERGED && -n "$f_commit" ]] \
     || finish incomplete 30 "the merge of $url was requested but the host does not report it merged yet; run resume to check again"
@@ -1737,7 +1802,8 @@ sync_base() {
     base_sync_fail "no base branch (merge_policy.base) or pushed branch to sync"
     return
   fi
-  # 앞 시도가 끊겨 남은 병합은 버리고 처음부터 한다.
+  # 앞 시도가 끊겨 남은 병합은 버리고 처음부터 한다. 여기부터 러너가 작업 트리를 바꾸므로 지문 캐시를 비운다.
+  fp_invalidate
   if git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
     git -C "$REPO" merge --abort >/dev/null 2>&1 || true
   fi
@@ -2034,6 +2100,7 @@ post_merge_verify() {
       deploy|smoke)
         cmd="$(jq -r --arg s "$step" 'if $s == "deploy" then .policy.merge.deploy_check_cmd else .policy.merge.smoke_cmd end' "$STATE")"
         rc=0
+        fp_invalidate
         (cd "$REPO" && HM_MERGE_COMMIT="$commit" HM_BASE_BRANCH="$base" HM_PR_URL="$(state .publish.pr_url)" bash -c "$cmd") \
           >"$RUN/post-merge-$step.log" 2>&1 </dev/null || rc=$?
         if ((rc != 0)) && [[ "$step" == smoke ]]; then
@@ -2427,6 +2494,7 @@ release_version_problem() { # version tags → stdout: 문제(없으면 빈 값)
 }
 # 릴리스 확장점 명령(prepare·notes·verify·record)을 저장소 루트에서 같은 환경변수로 실행한다.
 release_run() { # command
+  fp_invalidate
   (cd "$REPO" && HM_RELEASE_VERSION="$(state .release.version)" HM_RELEASE_TAG="$(state .release.tag)" \
     HM_MERGE_COMMIT="$(state '.merge.commit // ""')" HM_BASE_BRANCH="$(state .policy.release.base)" bash -c "$1") </dev/null
 }
@@ -2450,6 +2518,7 @@ release_prepare_commit() { # label
     ((rc == 0)) || { printf 'prepare_cmd failed (exit %s): %s — %s' "$rc" "$cmd" "$(tail -n 5 "$RUN/$1-prepare.log" | paste -sd ' ' -)" >"$RUN/release-step.why"; return 1; }
   fi
   if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all)" ]]; then
+    fp_invalidate
     { git -C "$REPO" add -A && git -C "$REPO" commit -q -m "chore: release v$(state .release.version)"; } >"$RUN/$1-commit.log" 2>&1 \
       || { printf 'the release commit failed: %s' "$(tail -c 300 "$RUN/$1-commit.log")" >"$RUN/release-step.why"; return 1; }
   fi
@@ -2543,6 +2612,7 @@ release_prepare() {
     release_fail prepare prepare_failed "git fetch origin $src failed: $(tail -c 300 "$RUN/prepare-fetch.log")"
     return
   fi
+  fp_invalidate
   if ! git -C "$REPO" switch -q -C "$branch" "origin/$src" >"$RUN/prepare-switch.log" 2>&1; then
     release_fail prepare prepare_failed "cannot cut $branch from origin/$src: $(tail -c 300 "$RUN/prepare-switch.log")"
     return
@@ -2563,6 +2633,7 @@ release_revalidate() {
   src="$(state .policy.release.source)"
   branch="$(state .release.branch)"
   from="$(git -C "$REPO" rev-parse HEAD)"
+  fp_invalidate
   if [[ -n "$(GIT_TERMINAL_PROMPT=0 git -C "$REPO" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null </dev/null)" ]]; then
     method=merge
     GIT_EDITOR=true git -C "$REPO" merge --no-edit "origin/$src" >"$RUN/revalidate.log" 2>&1 || rc=$?
@@ -2975,7 +3046,8 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
           | .final_checked_tree = null
           | .ui_scenarios = ($b[0].ui_scenarios // [] | map(select(length > 0)))
           | .presented_at = $t | .feedback = null | .approval = null' --slurpfile b "$RUN/brief.json" --arg t "$(now_utc)"
-        state_set '.brief_hash = $h' --arg h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
+        # brief_hash는 전이(go)나 finish의 쓰기와 함께 쓴다. 그 사이에는 검증 명령 수만 읽는다.
+        state_defer '.brief_hash = $bh_h' --arg bh_h "$({ cat "$RUN/brief.md"; state '.checks[], (.final_checks // [])[]'; } | git hash-object --stdin)"
         [[ "$(state '.checks | length')" -gt 0 ]] \
           || finish incomplete 30 "the brief has no verification command; revise with a check or start again with --check"
         go brief ""
@@ -3041,7 +3113,8 @@ $(investigate_inputs)" "$REPORT_SCHEMA"
           go deliver brief_revised
           continue
         fi
-        before="$(fingerprint)"
+        fp_now
+        before="$FP"
         run_node deliver deliver "$CONTEXT
 
 You are the deliver node. Implement the approved Implementation Brief below in this repository. Follow the project workflow and test policy (Red -> Green -> Refactor only when TDD is required), delegating to the project's role agents when the workflow says so.
@@ -3057,7 +3130,8 @@ $(brief_context)"
           go deliver brief_revised
           continue
         fi
-        [[ "$(fingerprint)" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
+        fp_now
+        [[ "$FP" != "$before" ]] || finish incomplete 30 "deliver changed nothing; an approved feature cannot be done without a change"
         checkpoint deliver
         go deliver ""
         ;;
@@ -3082,7 +3156,8 @@ $(brief_context)"
             continue
           fi
           state_set '.attempts += 1'
-          before_fix="$(fingerprint)"
+          fp_now
+          before_fix="$FP"
           run_node fix "fix-$(state .attempts)" "$CONTEXT
 
 You are the fix node of the design-polish graph. Fix the selected items below in the existing screens, and nothing else. Use the project's design rule document, semantic tokens, and shared components; prefer fixing a shared component or token over a one-off override, and when you change one, keep every screen that uses it right (the measure node captures those screens again).
@@ -3092,7 +3167,8 @@ Return a concise summary of what you changed for each item and the commands you 
 $(polish_findings_text)
 
 $(brief_context)"
-          if [[ "$(fingerprint)" == "$before_fix" ]]; then
+          fp_now
+          if [[ "$FP" == "$before_fix" ]]; then
             denied="$(session_denials "fix-$(state .attempts)")"
             if [[ -n "$denied" ]]; then
               # 권한에 막혀 아무것도 못 바꾼 세션은 수리 시도가 아니다. 횟수를 되돌려 원인을 고친 뒤 resume이 같은 회차로 다시 고친다.
@@ -3105,7 +3181,8 @@ $(brief_context)"
           go fix ""
           continue
         fi
-        before_fix="$(fingerprint)"
+        fp_now
+        before_fix="$FP"
         run_node fix fix "$CONTEXT
 
 You are the fix node of the bug-fix graph. Fix the cause in production code within the approved scope, delegating to the project's role agents when the workflow says so. Do not weaken, skip, or delete the regression verification.
@@ -3114,7 +3191,8 @@ $FULL_REGRESSION_RULE
 Return a concise summary of the cause, the changed areas, and the commands you ran.
 
 $(brief_context)"
-        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+        fp_now
+        if [[ "$FP" == "$before_fix" ]]; then
           denied="$(session_denials fix)"
           [[ -z "$denied" ]] || finish incomplete 30 "fix changed nothing because the session was denied: $denied. Allow those paths (or move the repository out of a protected folder) and run resume"
           finish incomplete 30 "fix changed nothing; an approved bug fix cannot be done without a change to the cause"
@@ -3351,7 +3429,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
           continue
         fi
         state_set '.attempts += 1 | .repaired_findings = .findings'
-        before_fix="$(fingerprint)"
+        fp_now
+        before_fix="$FP"
         run_node repair "repair-$(state .attempts)" "$CONTEXT
 
 You are the repair node. Fix only these blocking findings. Follow the project test policy. Do not commit, push, create a PR, or change unrelated files; the driver commits checkpoints itself when git_policy allows.
@@ -3362,7 +3441,8 @@ Blocking findings:
 $(state '.findings')
 
 $(brief_context)"
-        if [[ "$(fingerprint)" == "$before_fix" ]]; then
+        fp_now
+        if [[ "$FP" == "$before_fix" ]]; then
           denied="$(session_denials "repair-$(state .attempts)")"
           if [[ -n "$denied" ]]; then
             state_set '.attempts -= 1'
