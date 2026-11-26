@@ -62,11 +62,14 @@ threading.Thread(target=_worker, daemon=True).start()
 
 
 def apply(items):
-    """사람 확인을 기다리는 하네스 항목 중 PR이 이미 끝난 것은 done으로 내린다."""
+    """사람 확인을 기다리는 하네스 항목과 멈춘 러너 카드 중 PR이 이미 끝난 것은 done으로 내린다."""
     now, ask = time.time(), False
     for i in items:
         url = i.get("link") or ""
-        if i.get("section") == "work" or i.get("state") != "needs_human" or not (BB.match(url) or GH.match(url)):
+        work = i.get("section") == "work"
+        runner = work and i.get("kind") == "runner" and i.get("state") in ("needs_human", "blocked")
+        other = not work and i.get("state") == "needs_human"
+        if not (runner or other) or not (BB.match(url) or GH.match(url)):
             continue
         if i.get("section") == "autofix" and i.get("stage") != "pr":  # 포기·실패 카드의 지난 PR은 상태를 바꾸는 근거가 아니다
             continue
@@ -87,5 +90,8 @@ def apply(items):
                 continue
             i["state"] = "done"
             i["title"] = f"{i.get('title') or ''} → PR {done}"
+            if runner:  # 끝난 런에 이어 가기·승인 명령과 '중단됨' 배지가 남지 않게
+                i["cmd"] = None
+                i.pop("stall", None)
     if ask:
         _wake.set()

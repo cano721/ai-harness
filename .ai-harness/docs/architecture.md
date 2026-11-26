@@ -48,4 +48,4 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 
 - `main` = 릴리스된 상태만(설치 경로가 그대로 읽는다). `develop` = 통합 브랜치. 작업 브랜치는 `develop`에서 따고 `develop`으로 PR.
 - 배포 단계는 없다: 릴리스 PR(`develop` → `main`, merge commit) 머지 뒤 태그·GitHub 릴리스 발행이 곧 배포다. 절차는 `CONTRIBUTING.md`의 "릴리스".
-- CI: `.github/workflows/test.yml`(push·PR마다 `lint` job이 bash 문법·shellcheck, `shard` job이 matrix 4샤드로 `tests/run.sh --shard <i>/4`, 집계 job `test`가 둘을 `needs`로 묶어 하나라도 success가 아니면 실패 — 브랜치 보호 필수 체크는 `test` 하나), `.github/workflows/release.yml`(태그·릴리스 메타데이터 검증).
+- CI: `.github/workflows/test.yml`(push·PR마다 `lint` job이 bash 문법·shellcheck, `test` job이 matrix 4샤드로 `tests/run.sh --shard <i>/4`), `.github/workflows/release.yml`(태그·릴리스 메타데이터 검증).

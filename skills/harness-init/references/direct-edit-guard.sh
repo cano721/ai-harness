@@ -10,7 +10,7 @@ set -euo pipefail
 # 사용자 메시지 속 경로에도 맞아 문서를 쓰기만 한 세션이 통과한다.
 # 서브에이전트(입력에 agent_id)는 부모 transcript와 자기 transcript(<세션>/subagents/agent-<id>.jsonl)를 함께 본다.
 # 기준 경로는 CLAUDE_PROJECT_DIR이 아니라 hook 입력 cwd의 git root다. jq·git root·transcript가 없으면 막지 않는다(fail-open).
-# 경로는 NFC로 맞춰 비교한다(macOS는 폴더 이름을 NFD로 보존해 git과 도구 입력의 정규화가 다르다). python3가 없거나 실패하면 perl Unicode::Normalize로 맞추고, python3·perl이 모두 없으면 그대로 비교한다.
+# 경로는 NFC로 맞춰 비교한다(macOS는 폴더 이름을 NFD로 보존해 git과 도구 입력의 정규화가 다르다). python3가 없으면 그대로 비교한다.
 
 SOURCE_RE='^(src|lib|app)/'
 TEST_RE='(^|/)(tests?|__tests__)/|\.(test|spec)\.[^/]+$'
@@ -31,13 +31,8 @@ agent="$(field .agent_id)"
 
 nfc() { # 비ASCII 경로만 NFC로 바꾼다. 파일시스템 조회는 원래 값으로 하고 비교할 출력에만 쓴다(Linux에선 NFC 경로가 다른 경로다).
   local LC_ALL=C
-  if [[ "$1" == *[$'\x80'-$'\xff']* ]]; then
-    if command -v python3 >/dev/null 2>&1; then
-      python3 -I -X utf8 -c 'import sys,unicodedata;sys.stdout.write(unicodedata.normalize("NFC",sys.argv[1]))' "$1" 2>/dev/null && return
-    fi
-    if command -v perl >/dev/null 2>&1; then
-      perl -CSA -MUnicode::Normalize -e 'print NFC($ARGV[0])' "$1" 2>/dev/null && return
-    fi
+  if [[ "$1" == *[$'\x80'-$'\xff']* ]] && command -v python3 >/dev/null 2>&1; then
+    python3 -I -X utf8 -c 'import sys,unicodedata;sys.stdout.write(unicodedata.normalize("NFC",sys.argv[1]))' "$1" 2>/dev/null && return
   fi
   printf '%s' "$1"
 }

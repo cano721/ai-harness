@@ -689,95 +689,12 @@ pass "agenda rejects a non-array reopen declaration"
 AG_TPL="$(<"$ROOT/scripts/board/template.html")"
 case "$AG_TPL" in *todayLine*) fail "the agenda has no today count line" ;; esac
 for AG_W in "line('지금'" "line('다음'" "오늘 남은 일정 없음" "내일 첫 일정" "'⚙ 연결 '" "새로 맡겨진 요청" "기한 있음" "쌓인 요청" "완료함" \
-  "다시 열기" "이번 주" "요청자별" "hb-ag-group" "원본에서 다시 열기" "agSeenLoad"; do
+  "다시 열기" "이번 주" "요청자별 묶기" "hb-ag-group" "원본에서 다시 열기" "agSeenLoad"; do
   assert_contains "$AG_TPL" "$AG_W" "the agenda screen has $AG_W"
 done
 assert_contains "$AG_TPL" "Array.isArray(raw)" "hb-ag-seen migrates the old array form"
 case "$AG_TPL" in *"<h3>연결한 곳</h3>"*|*"sec('연결한 곳'"*) fail "the connected sources section moves into the header" ;; esac
 pass "agenda screen leads with now and next and folds the rest"
-
-# #590: 쌓인 요청 보기는 [전체 | 요청자별] radiogroup, 할 일·완료함 제목은 펼쳐 보는 버튼(aria-expanded).
-AG_TPLF="$ROOT/scripts/board/template.html"
-AG_STALE="$(sed -n '/function staleFold(/,/^  }$/p' "$AG_TPLF")"
-[ -n "$AG_STALE" ] || fail "staleFold is found in the template"
-for AG_W in "segment(" "'전체'" "'요청자별'" "hb-ag-group" "ds-sr"; do
-  assert_contains "$AG_STALE" "$AG_W" "the stale fold view picker has $AG_W"
-done
-case "$AG_STALE" in *ds-chip*|*aria-pressed*|*"요청자별 묶기"*) fail "the stale fold has no toggle chip" ;; esac
-AG_TROW="$(sed -n '/function taskRow(/,/^  }$/p' "$AG_TPLF")"
-AG_DONE="$(sed -n '/function completedFold(/,/^  }$/p' "$AG_TPLF")"
-assert_contains "$AG_TROW" "agTitle(" "task rows use the expandable title"
-assert_contains "$AG_TROW" "task:\${it.source}:\${it.id}" "task title state is keyed by source and id"
-assert_contains "$AG_TROW" "agtitle:\${it.source}:\${it.id}" "task title keeps focus across renders"
-assert_contains "$AG_DONE" "agTitle(" "completed rows use the expandable title"
-assert_contains "$AG_DONE" "done:\${r.source}:\${r.id}" "completed title state is keyed by source and id"
-case "$AG_TROW$AG_DONE" in *"'b-agtask__title', it.title"*|*"'b-agdone__title', r.title"*) fail "titles are no longer plain spans" ;; esac
-assert_contains "$AG_TPL" '.b-agtitle[aria-expanded="true"] > .b-agtitle__text { white-space: normal;' "an expanded title wraps"
-assert_contains "$AG_TPL" "white-space: pre-line" "the detail keeps its line breaks"
-assert_contains "$AG_TPL" ".b-agtask__detail { grid-column: 2 / -1;" "the detail spans from the title column to the end"
-if command -v node >/dev/null 2>&1; then
-  AG_FOLDS="$(sed -n '/function agFold(/,/^  }$/p;/function agFoldBlock(/,/^  }$/p' "$AG_TPLF")"
-  AG_SEG="$(sed -n '/function segment(/,/^  }$/p' "$AG_TPLF")"
-  AG_ATITLE="$(sed -n '/function agTitle(/,/^  }$/p' "$AG_TPLF")"
-  [ -n "$AG_SEG" ] && [ -n "$AG_ATITLE" ] || fail "segment and agTitle are found in the template"
-  AG_STUB='class E { constructor(t) { this.tag = t; this.attrs = {}; this.children = []; this.dataset = {}; this.hidden = false; this.textContent = ""; this.className = ""; this.id = ""; }
-    setAttribute(k, v) { this.attrs[k] = String(v); } getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
-    append(...c) { this.children.push(...c.filter((x) => x != null)); } addEventListener() {} }
-  const el = (t, c, x) => { const e = new E(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
-  const icon = (n, c) => el("svg", "ds-icon" + (c ? " " + c : ""));
-  const all = (n, f, out = []) => { if (n instanceof E) { if (f(n)) out.push(n); n.children.forEach((c) => all(c, f, out)); } return out; };
-  const allOf = (ns, f) => [].concat(...ns.map((n) => all(n, f)));
-  let LS = {}; const store = (k, v) => { if (v === undefined) return k in LS ? LS[k] : null; LS[k] = v; return null; };
-  let renders = 0; const renderBoard = () => { renders++; };
-  const sameVal = (a, b) => String(a ?? "") === String(b ?? "");
-  const taskList = (rows, label) => { const u = el("ul", "b-agtasks"); u.setAttribute("aria-label", label); return u; };
-  const agExp = new Set();'
-  AG_SEGOUT="$(AG_JS="$AG_STUB
-$AG_FOLDS
-$AG_SEG
-$AG_STALE" node -e 'eval(process.env.AG_JS + `
-    agExp.add("stale");
-    const list = [{ id: 1, from: "가" }, { id: 2, from: "나" }, { id: 3 }];
-    const radios = (n) => all(n, (x) => x.attrs.role === "radio");
-    const show = (n) => radios(n).map((b) => b.textContent + "=" + b.getAttribute("aria-checked")).join(",") + " who=" + all(n, (x) => x.className === "b-agwho").length + " lists=" + all(n, (x) => x.tag === "ul").length;
-    LS = { "hb-ag-group": "1" }; let n = staleFold(list, {}); console.log(show(n));
-    const g = all(n, (x) => x.attrs.role === "radiogroup")[0]; const lab = all(n, (x) => x.id && x.id === g.getAttribute("aria-labelledby"))[0];
-    console.log("label=" + (lab ? lab.className + ":" + lab.textContent : "none"));
-    radios(n).find((b) => b.textContent === "전체").onclick(); console.log("saved=" + LS["hb-ag-group"]);
-    n = staleFold(list, {}); console.log(show(n));
-    LS = {}; n = staleFold(list, {}); console.log(show(n));
-    radios(n).find((b) => b.textContent === "요청자별").onclick(); console.log("saved=" + LS["hb-ag-group"]);
-    LS = { "hb-ag-group": "1" }; n = staleFold([{ id: 1 }, { id: 2 }], {}); console.log("nofrom " + show(n));
-  `)')"
-  assert_eq "전체=false,요청자별=true who=3 lists=3
-label=ds-sr:쌓인 요청 보기
-saved=0
-전체=true,요청자별=false who=0 lists=1
-전체=true,요청자별=false who=0 lists=1
-saved=1
-nofrom  who=0 lists=1" "$AG_SEGOUT" "the stale view picker maps hb-ag-group 1 to 요청자별 and saves each pick"
-  AG_TOUT="$(AG_JS="$AG_STUB
-$AG_ATITLE" node -e 'eval(process.env.AG_JS + `
-    const show = (r) => { const b = r[0], d = r[1], ctl = b.getAttribute("aria-controls"), tx = all(b, (x) => x.className === "b-agtitle__text")[0];
-      const tgt = d && d.id === ctl ? "detail" : tx && tx.id === ctl ? "text" : "none";
-      return [b.tag, b.className, b.dataset.key, b.getAttribute("aria-expanded"), tgt, tx.textContent, d ? (d.hidden ? "hidden" : "shown:" + d.textContent) : "nodetail", b.title.replace(/\\n/g, "|")].join(" "); };
-    const mk = (detail) => agTitle("b-agtask__title", "task:s:1", "agtitle:s:1", "긴 제목", detail);
-    let r = mk("첫 줄\\n둘째 줄"); console.log(show(r));
-    r[0].onclick(); console.log(agExp.has("task:s:1") + " renders=" + renders); console.log(show(mk("첫 줄\\n둘째 줄")));
-    console.log(show(mk("")));
-    mk("x")[0].onclick(); console.log(agExp.has("task:s:1") + " " + show(mk("x")));
-    const ids = [agTitle("c", "task:s:가", "k", "t", "d"), agTitle("c", "task:s:나", "k", "t", "d")].map((x) => x[1].id);
-    console.log("unique=" + (ids[0] !== ids[1] && !/\\s/.test(ids.join(""))));
-  `)')"
-  assert_eq "button b-agtitle b-agtask__title agtitle:s:1 false detail 긴 제목 hidden 긴 제목|첫 줄|둘째 줄
-true renders=1
-button b-agtitle b-agtask__title agtitle:s:1 true detail 긴 제목 shown:첫 줄
-둘째 줄 긴 제목|첫 줄|둘째 줄
-button b-agtitle b-agtask__title agtitle:s:1 true text 긴 제목 nodetail 긴 제목
-false button b-agtitle b-agtask__title agtitle:s:1 false detail 긴 제목 hidden 긴 제목|x
-unique=true" "$AG_TOUT" "the title button toggles aria-expanded and shows the detail only when expanded"
-fi
-pass "stale requests pick a view with a segment and task titles expand in place"
 
 # #581: 할 일 기한은 폼 줄의 [기한] 버튼 → 팝오버(빠른 선택 넷 + 날짜 직접 고르기). date 칸은 팝오버 안에만 있다.
 AG_FORM="$(sed -n '/function todoForm(/,/^  }$/p' "$ROOT/scripts/board/template.html")"
