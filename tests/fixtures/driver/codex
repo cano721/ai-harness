@@ -196,9 +196,23 @@ case "$node:$scenario" in
     printf 'delivered\n' >"$out" ;;
   deliver:commit) echo v1 >feature.txt; git add feature.txt; git commit -qm sneaky; printf 'done\n' >"$out" ;;
   deliver:screen_backstop) mkdir -p templates; echo '<summary>반려하기</summary>' >templates/approve.html; printf 'delivered\n' >"$out" ;;
+  # 되돌림 검사(#601): deliver가 런 도중 develop을 merge하고(커밋은 러너 체크포인트가 한다) 그 develop이 추가한 남의 조각을 지운다.
+  deliver:stale_deliver_fragment*)
+    git fetch -q origin develop
+    git merge -q --no-ff --no-commit origin/develop
+    git rm -qf changelog.d/777-other.md
+    echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   deliver:*) echo v1 >feature.txt; printf 'delivered\n' >"$out" ;;
   repair:*) echo fixed >feature.txt; printf 'repaired\n' >"$out" ;;
   publish:publish_unpushed) git add -A; git commit -qm "feat: add feature" || true; jq -n '{summary:"x", branch:"main", pr_url:""}' >"$out" ;;
+  # 되돌림 검사(#601): stale_reset은 #594처럼 새 origin/develop 위로, stale_safe는 merge-base 위로 wip를 합쳐 커밋한다.
+  publish:stale_reset|publish:stale_safe)
+    git checkout -q -b feat/add-feature
+    git fetch -q origin
+    if [[ "$scenario" == stale_reset ]]; then git reset -q --soft origin/develop; else git reset -q --soft "$(git merge-base HEAD origin/develop)"; fi
+    git commit -qm "feat: add feature"
+    git push -q -u origin HEAD 2>/dev/null
+    jq -n '{summary:"opened", branch:"feat/add-feature", pr_url:"https://example.test/pr/7"}' >"$out" ;;
   publish:*)
     [[ "$(git rev-parse --abbrev-ref HEAD)" == feat/add-feature ]] || git checkout -q -b feat/add-feature
     git add -A

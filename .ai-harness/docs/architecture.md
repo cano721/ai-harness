@@ -17,7 +17,7 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 | `.codex-plugin/plugin.json` | Codex 플러그인 매니페스트(`skills: ./skills/`) | Codex 설치 |
 | `.agents/plugins/marketplace.json` | Codex 마켓플레이스 | Codex 설치 |
 | `release.json` | 배포 버전·릴리스 URL. `scripts/check-update.sh`가 `main`의 이 파일로 최신 버전을 판단 | 업데이트 확인 |
-| `hooks/hooks.json` | SessionStart(`session-start.sh`)·Stop(`tick.sh`)·PreToolUse(`member-edit-guard.sh`, `db-scan-guard.sh`, `background-watchdog-hook.sh`) | Claude Code |
+| `hooks/hooks.json` | SessionStart(`session-start.sh`)·Stop(`tick.sh`)·PreToolUse(`member-edit-guard.sh`, `db-scan-guard.sh`, `stale-reset-guard.sh`, `background-watchdog-hook.sh`) | Claude Code |
 | `skills/<name>/SKILL.md` | 플러그인 전역 Skill. Claude·Codex가 같은 파일을 읽는다(`agents/openai.yaml`은 Codex 표시용, 일부 Skill만) | 두 도구 |
 | `agents/` | 플러그인 전역 에이전트(`harvest-reviewer`, `design-reviewer`) | Claude Code |
 | `scripts/` | 수집·집계·보관·업데이트·sync·그래프 검증. `scripts/lib.sh`가 공용 변수·함수(데이터 디렉토리 `~/.ai-harness`, 설정 로드, `project_id_for_cwd`) | hook·Skill |

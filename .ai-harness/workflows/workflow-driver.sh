@@ -94,6 +94,11 @@ usage: workflow-driver.sh <command> [--workflow feature|bug-fix|review|polish|in
   watch                                                 실행의 노드 전환·도구 호출을 따라 본다. 호출 때의 최근 실행을 계속 보고, 끝나도 대기한다 (Ctrl+C)
   watch-target-ci                                       병합된 런의 병합 커밋 CI를 기다려 .post_merge.target_ci에 남긴다(HM_TARGET_CI=notify가 띄우는 분리 감시).
                                                         실패·미확인은 progress.log ALERT·상태 alerts·데스크톱 알림(HM_DESKTOP_NOTIFY=0이면 끔). 런의 status는 바꾸지 않는다
+  revert-check --base <branch> [--since <commit>] [--issue <n>]...
+                                                        HEAD가 origin/<branch>의 최근 변경을 옛 내용으로 되돌리거나 다루지 않는 이슈의 changelog.d 조각을
+                                                        지웠는지 본다(#601, 수동 병합 전 검사). fetch하지 않는다 — 먼저 git fetch origin <branch>.
+                                                        --since는 브랜치를 시작한 커밋(그 뒤에 base에 들어온 변경만 본다), --issue는 PR이 다루는 이슈.
+                                                        exit 0 깨끗함 · 1 되돌림 있음(한 줄에 하나) · 2 사용법 오류·ref 없음
 
   워크플로: feature(기능 개발, 기본) · bug-fix(버그 수정) · review(변경 검토) · polish(기존 화면 품질 개선) · investigate(수정 전 원인 조사)
           · release(태그 방식 릴리스 — manifest release_policy가 있어야 시작한다).
@@ -133,6 +138,9 @@ ACCEPT_CHANGES=""
 SELECT=""
 REASON=""
 VERSION_ARG=""
+REVERT_BASE=""
+REVERT_SINCE=""
+REVERT_ISSUES=""
 while (($#)); do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || usage; REPO="$2"; shift 2 ;;
@@ -146,6 +154,9 @@ while (($#)); do
     --select) [[ $# -ge 2 && -n "$2" ]] || usage; SELECT="$2"; shift 2 ;;
     --reason) [[ $# -ge 2 ]] || usage; REASON="$2"; shift 2 ;;
     --version) [[ $# -ge 2 ]] || usage; VERSION_ARG="$2"; shift 2 ;;
+    --base) [[ $# -ge 2 && -n "$2" ]] || usage; REVERT_BASE="$2"; shift 2 ;;
+    --since) [[ $# -ge 2 && -n "$2" ]] || usage; REVERT_SINCE="$2"; shift 2 ;;
+    --issue) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || usage; REVERT_ISSUES+="$2 "; shift 2 ;;
     --check) [[ $# -ge 2 ]] || usage; CLI_CHECKS+=("$2"); shift 2 ;;
     --monitor-error) [[ $# -ge 2 && -f "$2" ]] || usage; MONITOR_ERROR="$(<"$2")"; shift 2 ;;
     --investigation) [[ $# -ge 2 && -s "$2" ]] || usage; INVESTIGATION_FILE="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"; shift 2 ;;
@@ -176,6 +187,65 @@ fi
 
 command -v jq >/dev/null || { printf 'jq is required\n' >&2; exit 2; }
 REPO="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { printf 'not a git repository: %s\n' "$REPO" >&2; exit 2; }
+
+# 되돌림 검사(#601): head가 base의 최근 변경을 옛 내용으로 되돌리거나(규칙 a) base에 최근 추가된 남의 changelog.d 조각을 지웠는지(규칙 b).
+# soft reset·오래된 작업 트리로 만든 커밋은 부모가 최신이라 merge-base 기준 검사로는 보이지 않는다(#594).
+blob_at() { git -C "$REPO" rev-parse -q --verify "$1:$2" 2>/dev/null || true; } # commit path → blob(없으면 빈 값)
+is_fragment() { [[ "$1" =~ ^changelog\.d/([0-9]+)-[^/]*\.md$ ]]; }
+stale_reverts() { # base-ref head since issues base-name → stdout: JSON 배열 [{rule, path, message}]
+  local b="$1" head="$2" since="$3" issues=" $4 " name="$5" mb old="" p c n prev head_blob mb_blob out="[]"
+  mb="$(git -C "$REPO" merge-base "$head" "$b" 2>/dev/null)" || { printf '[]'; return 0; }
+  [[ -z "$since" ]] || old="$(git -C "$REPO" merge-base "$since" "$b" 2>/dev/null || true)"
+  # 브랜치가 스스로 추가한 조각의 이슈도 브랜치가 다루는 이슈다.
+  while IFS= read -r p; do
+    if is_fragment "$p"; then issues+="${BASH_REMATCH[1]} "; fi
+  done <<<"$(git -C "$REPO" diff --no-renames --name-only --diff-filter=A "$mb" "$head" -- changelog.d)"
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    head_blob="$(blob_at "$head" "$p")"
+    mb_blob="$(blob_at "$mb" "$p")"
+    # 규칙 b: base에 최근(old 뒤) 추가된 조각을 지웠고, 그 이슈를 이 브랜치가 다루지 않는다. 조각 삭제는 규칙 a로 다시 보지 않는다.
+    if [[ -z "$head_blob" ]] && is_fragment "$p"; then
+      n="${BASH_REMATCH[1]}"
+      [[ -n "$mb_blob" && "$issues" != *" $n "* ]] || continue
+      [[ -z "$old" || -z "$(blob_at "$old" "$p")" ]] || continue
+      out="$(jq -c --arg p "$p" --arg b "$name" '. + [{rule: "fragment", path: $p,
+        message: "deletes changelog fragment added on origin/\($b) for an issue this branch does not handle: \($p)"}]' <<<"$out")"
+      continue
+    fi
+    # 규칙 a: base에서 P를 마지막으로 바꾼 커밋 C 직전 내용과 head가 같고, base의 지금 내용과는 다르다(브랜치 시작 뒤의 C만).
+    c="$(git -C "$REPO" log -1 --first-parent --format=%H "$mb" -- "$p" 2>/dev/null || true)"
+    [[ -n "$c" ]] || continue
+    if [[ -n "$old" ]] && git -C "$REPO" merge-base --is-ancestor "$c" "$old" 2>/dev/null; then continue; fi
+    prev="$(blob_at "$c^" "$p")"
+    [[ "$head_blob" == "$prev" && "$mb_blob" != "$prev" ]] || continue
+    out="$(jq -c --arg p "$p" --arg b "$name" --arg c "${c:0:7}" '. + [{rule: "stale_blob", path: $p,
+      message: "reverts origin/\($b) change: \($p) (back to its content before \($c))"}]' <<<"$out")"
+  done <<<"$(git -C "$REPO" diff --no-renames --name-only "$mb" "$head")"
+  printf '%s' "$out"
+}
+issues_of_branch() { # → 현재 브랜치 이름 <type>/<N>-…의 N
+  local br
+  br="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$br" =~ ^[^/]+/([0-9]+)- ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
+if [[ "$CMD" == revert-check ]]; then
+  [[ -n "$REVERT_BASE" ]] || usage
+  git -C "$REPO" rev-parse -q --verify "refs/remotes/origin/$REVERT_BASE^{commit}" >/dev/null 2>&1 \
+    || { printf 'origin/%s not found; run git fetch origin %s first\n' "$REVERT_BASE" "$REVERT_BASE" >&2; exit 2; }
+  if [[ -n "$REVERT_SINCE" ]]; then
+    REVERT_SINCE="$(git -C "$REPO" rev-parse -q --verify "$REVERT_SINCE^{commit}" 2>/dev/null)" \
+      || { printf -- '--since is not a commit\n' >&2; exit 2; }
+  fi
+  rc_found="$(stale_reverts "origin/$REVERT_BASE" HEAD "$REVERT_SINCE" "$REVERT_ISSUES $(issues_of_branch)" "$REVERT_BASE")"
+  if [[ "$rc_found" == "[]" ]]; then
+    printf 'no stale reverts against origin/%s\n' "$REVERT_BASE" >&2
+    exit 0
+  fi
+  jq -r '.[].message' <<<"$rc_found"
+  exit 1
+fi
+[[ -z "$REVERT_BASE$REVERT_SINCE$REVERT_ISSUES" ]] || { printf -- '--base, --since, and --issue are options of revert-check\n' >&2; exit 2; }
 
 # 실행 상태는 저장소 밖에 둔다. 저장소 안에 쓰면 읽기 전용 노드의 지문 비교가 무의미해진다.
 RUNS_DIR="${HM_FEATURE_RUNS_DIR:-$HOME/.ai-harness/runs}/$(basename "$REPO")-$(printf '%s' "$REPO" | git hash-object --stdin | cut -c1-8)"
@@ -1256,6 +1326,37 @@ review_output() { # out-file → 상태의 findings·needs_user_decision(·ui_sc
     | if ($r[0].ui_scenarios | type) == "array" then .ui_scenarios = ($r[0].ui_scenarios | map(select(length > 0))) else . end' --slurpfile r "$1"
 }
 
+# 되돌림 검사(#601): head를 새로 가져온 origin/<base>와 대조한다. 결과는 전역 RV_*에 둔다(깨끗한 경로에서 jq를 띄우지 않는다 — #569).
+# base는 병합 정책 → 저장소 merge_policy.base → origin/HEAD. 못 정하거나 원격에 없으면(ls-remote 2) 건너뛰고, 그 밖에 읽지 못하면 막는다.
+RV_STATE_JQ='(.start_head // ""), (.request // "" | [scan("#[0-9]+") | ltrimstr("#")] | join(" "))'
+RV_JQ='(if $rv_skipped != "" then {skipped: $rv_skipped} + (if $rv_base != "" then {base: $rv_base} else {} end)
+  else {base: $rv_base, head: $rv_head} + (if $rv_error != "" then {error: $rv_error} else {findings: $rv_f} end) end)'
+revert_scan() { # head base since issues → RV_BASE·RV_SKIPPED·RV_ERROR·RV_FINDINGS·RV_PROBLEMS(JSON 배열)·RV_ARGS(RV_JQ의 jq 인자)
+  local rc=0 since="$3"
+  RV_BASE="$2" RV_SKIPPED="" RV_ERROR="" RV_FINDINGS="[]" RV_PROBLEMS="[]"
+  [[ -n "$RV_BASE" ]] || RV_BASE="$(jq -r '.merge_policy.base // ""' "$REPO/.ai-harness/harness.json" 2>/dev/null || true)"
+  if [[ -z "$RV_BASE" ]]; then
+    RV_BASE="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    RV_BASE="${RV_BASE#origin/}"
+  fi
+  [[ "$since" != none ]] || since=""
+  if [[ -z "$RV_BASE" ]]; then
+    RV_SKIPPED="no base branch (merge_policy.base or origin/HEAD) to check for stale reverts"
+  else
+    GIT_TERMINAL_PROMPT=0 git -C "$REPO" ls-remote --exit-code origin "refs/heads/$RV_BASE" >/dev/null 2>&1 </dev/null || rc=$?
+    if ((rc == 2)); then
+      RV_SKIPPED="origin has no branch $RV_BASE to check for stale reverts"
+    elif ((rc != 0)) || ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" fetch -q origin "+refs/heads/$RV_BASE:refs/remotes/origin/$RV_BASE" </dev/null >/dev/null 2>&1; then
+      RV_ERROR="cannot read origin/$RV_BASE to check for stale reverts"
+      RV_PROBLEMS="$(jq -cn --arg e "$RV_ERROR" '[$e]')"
+    else
+      RV_FINDINGS="$(stale_reverts "origin/$RV_BASE" "$1" "$since" "$4 $(issues_of_branch)" "$RV_BASE")"
+      [[ "$RV_FINDINGS" == "[]" ]] || RV_PROBLEMS="$(jq -c 'map(.message)' <<<"$RV_FINDINGS")"
+    fi
+  fi
+  RV_ARGS=(--arg rv_base "$RV_BASE" --arg rv_skipped "$RV_SKIPPED" --arg rv_error "$RV_ERROR" --arg rv_head "$1" --argjson rv_f "$RV_FINDINGS")
+}
+
 # publish: git_policy가 허용할 때만 세션을 띄워 커밋·일반 push·PR을 맡기고, 결과를 이 스크립트가 git으로 확인한다.
 publish() {
   local policy problems="[]" out pr_url
@@ -1267,8 +1368,9 @@ publish() {
     go publish changed_after_review
     return
   fi
-  local approved start_head head_now
-  IFS=$'\037' read -r policy approved <<<"$(state_fields '(.policy.git // ""), ((.approval.brief_hash // "" | tostring) == (.brief_hash | tostring))')"
+  local approved start_head head_now head_pre="" rv_merge_base rv_since rv_issues fork_pre fork_post
+  IFS=$'\037' read -r policy approved rv_merge_base rv_since rv_issues \
+    <<<"$(state_fields '(.policy.git // ""), ((.approval.brief_hash // "" | tostring) == (.brief_hash | tostring)), (.policy.merge.base // ""), '"$RV_STATE_JQ")"
   case "$policy" in
     pr-only|direct|merge) ;;
     *)
@@ -1294,11 +1396,21 @@ $(checks_ran_text)
 
 $(brief_context)" "$PUBLISH_SCHEMA"
   else
+  # 리뷰한 HEAD가 이미 base 변경을 되돌렸으면(deliver·repair가 base를 들인 뒤 남의 조각을 지운 경우 등) 세션을 띄우지 않고 push하지 않는다(#601).
+  head_pre="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  revert_scan "$head_pre" "$rv_merge_base" "$rv_since" "$rv_issues"
+  if [[ "$RV_PROBLEMS" != "[]" ]]; then
+    state_set '.findings = $p | .publish = {revert_check: '"$RV_JQ"', problems: $p}' --argjson p "$RV_PROBLEMS" "${RV_ARGS[@]}"
+    log "refused to publish: the reviewed head reverts recent base changes ($(jq -r 'join("; ")' <<<"$RV_PROBLEMS"))"
+    go publish publish_failed
+    return
+  fi
   run_agent publish publish "$CONTEXT
 
 You are the publish node. The approved change below passed the checks the driver ran and a review with no blocking findings. git_policy in .ai-harness/harness.json is \"$policy\". Deliver it without asking anyone anything:
 - Use the git conventions, base branch, and PR tool that AGENTS.md and the project workflow name (for example /bitbucket or gh). Reviewers, labels, and similar settings come from the project's default rules.
 - Commit any remaining change. The driver's unpushed checkpoint commits (wip($TEMPLATE): ...) may be squashed or reworded into the project's commit convention; never rewrite $(state .start_head) or anything before it.
+- Squash wip commits only with git reset --soft \$(git merge-base HEAD origin/${RV_BASE:-<base>}). Never git reset --soft origin/${RV_BASE:-<base>} or any commit that is not an ancestor of HEAD: that commits the old tree on top of newer base commits and reverts them. Following the base is a rebase, not a reset, and publish keeps the reviewed fork point anyway. Breaking this fails publish.
 - pr-only or merge: push the work branch with a normal push that sets its upstream, then open a pull request against the base branch. Put the approved brief and the checks below in the PR body. If a pull request for this branch is already open (a repair after remote CI failed), push to it and return its URL instead of opening another.
 - direct: push the current branch with a normal push that sets its upstream; open a pull request only when the project workflow requires one.
 - If the brief has a \"결정 사항\" section, the agent made those choices without asking a person. Copy it unchanged into a PR body section titled \"결정 사항\" so a person can overturn them before merging; when no PR is opened, put it in the body of the last commit message instead.
@@ -1329,8 +1441,23 @@ $(brief_context)" "$PUBLISH_SCHEMA"
     || problems="$(jq -c '. + ["HEAD is not pushed to its upstream"]' <<<"$problems")"
   [[ "$policy" == direct || -n "$pr_url" ]] \
     || problems="$(jq -c --arg g "$policy" '. + ["git_policy \($g) requires a pull request, but pr_url is empty"]' <<<"$problems")"
-  save_baseline --have-head '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}' --arg t "$(now_utc)" \
-    --arg h "$head_now" --arg u "$pr_url" \
+  # 세션 뒤 HEAD를 새로 가져온 base와 다시 대조하고, fork 지점이 리뷰한 HEAD의 것과 같은지 본다(#594: 트리가 같아도 base를 되돌린다).
+  local rv_filter="" rv_args=()
+  if [[ "$WORKFLOW" != release ]]; then
+    revert_scan "$head_now" "$rv_merge_base" "$rv_since" "$rv_issues"
+    [[ "$RV_PROBLEMS" == "[]" ]] || problems="$(jq -c --argjson r "$RV_PROBLEMS" '. + $r' <<<"$problems")"
+    if [[ -z "$RV_SKIPPED$RV_ERROR" && -n "$head_pre" ]]; then
+      fork_pre="$(git -C "$REPO" merge-base "$head_pre" "origin/$RV_BASE" 2>/dev/null || true)"
+      fork_post="$(git -C "$REPO" merge-base "$head_now" "origin/$RV_BASE" 2>/dev/null || true)"
+      [[ "$fork_pre" == "$fork_post" ]] \
+        || problems="$(jq -c --arg b "$RV_BASE" --arg a "${fork_pre:0:7}" --arg z "${fork_post:0:7}" \
+          '. + ["publish moved the branch onto a different point of origin/\($b) (fork \($a) → \($z)); squash wip commits with git reset --soft $(git merge-base HEAD origin/\($b)), never onto origin/\($b) itself"]' <<<"$problems")"
+    fi
+    rv_filter=" | .publish.revert_check = $RV_JQ"
+    rv_args=("${RV_ARGS[@]}")
+  fi
+  save_baseline --have-head '.head = $h | .publish = {pr_url: $u, branch: $b, problems: $p, pushed_at: $t}'"$rv_filter" --arg t "$(now_utc)" \
+    --arg h "$head_now" --arg u "$pr_url" ${rv_args[@]+"${rv_args[@]}"} \
     --arg b "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" --argjson p "$problems"
   if [[ "$problems" == "[]" ]]; then
     go publish published_or_not_required
@@ -1605,9 +1732,10 @@ branch_protection() { # pr-url base
 merge() {
   local url head facts blocked="[]" unmet="[]" mp err origin method="" i merged_epoch protection conflict=""
   local pending_max="${HM_MERGE_PENDING_RETRIES:-8}" pending_wait="${HM_MERGE_PENDING_POLL_SECONDS:-15}" pending_try=0
-  local git_pol unattended branch mp_base mp_min f_state f_mergeable f_base f_head_ref f_head f_changes f_ci f_draft f_commit f_merged_at f_approvals f_napprovals
+  local git_pol unattended branch mp_base mp_min rv_since rv_issues f_state f_mergeable f_base f_head_ref f_head f_changes f_ci f_draft f_commit f_merged_at f_approvals f_napprovals
   # 이 노드가 읽는 상태 값은 jq 한 번에 읽는다. 아래 state_set 전에만 쓴다.
-  IFS=$'\037' read -r url head git_pol unattended branch mp <<<"$(state_fields '(.publish.pr_url // ""), .head, .policy.git, (.policy.unattended // false), (.publish.branch // ""), (.policy.merge | tojson)')"
+  IFS=$'\037' read -r url head git_pol unattended branch mp rv_since rv_issues \
+    <<<"$(state_fields '(.publish.pr_url // ""), .head, .policy.git, (.policy.unattended // false), (.publish.branch // ""), (.policy.merge | tojson), '"$RV_STATE_JQ")"
   [[ "$git_pol" == merge && "$mp" != null && "$unattended" != true ]] \
     || finish invariant_violation 40 "merge node reached although the run has no merge delivery level or is unattended"
   # push 직후에는 호스트가 충돌 여부를 아직 계산 중(pending)일 때가 많다. 사람의 resume 없이 잠깐 기다렸다 다시 읽는다(#542).
@@ -1714,6 +1842,11 @@ merge() {
         [[ "$f_draft" != true ]] || unmet="$(jq -c '. + ["the pull request is a draft"]' <<<"$unmet")" ;;
     esac
   done <<<"$(jq -r '.require[]?' <<<"$mp")"
+  # 병합 직전에 base를 새로 가져와 push한 head가 base의 최근 변경을 되돌리지 않는지 본다(#601). sync_base로 base를 다시 들여도 되돌림은 남으므로 사람에게 넘긴다.
+  if [[ "$WORKFLOW" != release ]]; then
+    revert_scan "$head" "$mp_base" "$rv_since" "$rv_issues"
+    [[ "$RV_PROBLEMS" == "[]" ]] || blocked="$(jq -c --argjson r "$RV_PROBLEMS" '. + $r' <<<"$blocked")"
+  fi
   # 충돌이 유일한 막힘이고 그래프에 sync_base가 있으면 base를 따라잡는다. 다른 막힘이 같이 있으면 어차피 사람이 풀어야 한다(#508).
   if [[ -n "$conflict" && "$(jq length <<<"$blocked")" == 1 ]] && has_edge merge base_conflict; then
     state_set '.findings = $b | .merge = {blocked: $b, facts: $f, base_conflict: true}' --argjson b "$blocked" --argjson f "$facts"
