@@ -592,7 +592,42 @@ command_design() {
   esac
 }
 
-key_is_known() { jq -e --arg k "$1" 'any(.skills[].env[]?; .any | index($k))' "$CATALOG" >/dev/null; }
+key_is_known() {
+  [[ "$1" =~ ^GA_PROPERTY_[A-Z0-9][A-Z0-9_]*$ ]] && return 0 # GA 속성 별칭(GA_PROPERTY_<별칭>)
+  jq -e --arg k "$1" 'any(.skills[].env[]?; .any | index($k))' "$CATALOG" >/dev/null
+}
+expand_home() { # 경로 앞의 ~/를 $HOME으로 (set 인자로 따옴표째 받은 경로)
+  if [[ "${1:0:1}" == "~" && "${1:1:1}" == / ]]; then printf '%s/%s' "$HOME" "${1:2}"; else printf '%s' "$1"; fi
+}
+key_file_dest() { jq -er --arg k "$1" 'first(.skills[].env[]? | select(.any | index($k)) | .file // empty)' "$CATALOG" 2>/dev/null; }
+
+# 키 파일(GA 서비스 계정 JSON 등)은 경로를 받아 하네스 데이터 디렉터리의 고정 위치(0600)로 복사하고 그 경로를 저장한다.
+# 내용은 형식만 확인하고 출력하지 않는다. 원본은 지우지 않는다 — 복사본이 원본과 같은 내용으로 생긴 것을 확인했을 때만
+# 결과에 원본 경로를 내 사용자가 지우게 한다. 이미 저장된 그 파일을 다시 넣으면(~/·상대 경로·링크 포함) 복사하지 않는다.
+# '|| exit 1' 문맥에서 불려 set -e가 꺼지므로 단계마다 실패를 직접 확인한다.
+import_key_file() { # KEY src → "<copied|same> <저장 경로>"
+  local src rel dest tmp
+  rel="$(key_file_dest "$1")"
+  src="$(expand_home "$2")"
+  [[ -f "$src" ]] || { printf 'key file not found: %s\n' "$src" >&2; return 1; }
+  jq -e '.type == "service_account" and (.client_email | type == "string") and (.private_key | type == "string") and (.token_uri | type == "string")' \
+    "$src" >/dev/null 2>&1 || { printf 'not a service account JSON key (content not shown): %s\n' "$src" >&2; return 1; }
+  dest="$HM_DATA_DIR/$rel"
+  (umask 077 && mkdir -p "$(dirname "$dest")") || { printf 'cannot create %s\n' "$(dirname "$dest")" >&2; return 1; }
+  if [[ -e "$dest" && "$src" -ef "$dest" ]]; then
+    chmod 600 "$dest" || return 1
+    printf 'same %s' "$dest"
+    return 0
+  fi
+  tmp="$dest.tmp.$$"
+  if ! (umask 077 && cp "$src" "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$dest"); then
+    rm -f "$tmp"
+    printf 'cannot copy the key file to %s (original kept)\n' "$dest" >&2
+    return 1
+  fi
+  if [[ ! -f "$dest" ]] || ! cmp -s "$src" "$dest"; then printf 'copy check failed: %s (original kept)\n' "$dest" >&2; return 1; fi
+  printf 'copied %s' "$dest"
+}
 key_is_secret() { [[ "$1" != *_CMD* ]] && jq -e --arg k "$1" 'any(.skills[].env[]?; (.any | index($k)) and (.secret // false))' "$CATALOG" >/dev/null; }
 
 write_claude_env() { # KEY, 값은 stdin — jq 인자에 값을 싣지 않는다
@@ -644,6 +679,16 @@ command_set() {
     IFS= read -r value || true
   fi
   [[ -n "$value" ]] || { printf 'empty value, nothing saved\n' >&2; exit 1; }
+  local tools imported how
+  tools="$(tools_for "$tool")" || exit 2
+  if key_file_dest "$key" >/dev/null; then
+    imported="$(import_key_file "$key" "$value")" || exit 1
+    how="${imported%% *}"
+    if [[ "$how" == copied ]]; then
+      jq -cn --arg k "$key" --arg d "${imported#* }" --arg s "$(expand_home "$value")" '{key:$k, imported:$d, original:$s, remove_original:true}'
+    fi
+    value="${imported#* }"
+  fi
   while IFS= read -r t; do
     case "$t" in
       claude) printf '%s' "$value" | write_claude_env "$key"; jq -cn --arg k "$key" --arg p "$CLAUDE_SETTINGS" '{key:$k, tool:"claude", saved:$p}' ;;
@@ -652,7 +697,7 @@ command_set() {
         jq -cn --arg k "$key" --arg p "$SECRETS_FILE" '{key:$k, tool:"codex", saved:$p, shell_profile_line:"[ -f \"\($p)\" ] && . \"\($p)\""}'
         ;;
     esac
-  done < <(tools_for "$tool")
+  done <<<"$tools"
 }
 
 # 연결 확인과 자동 감지는 읽기 전용 호출만 한다. 자격 증명은 curl 설정(stdin)으로 넘긴다.
@@ -747,6 +792,15 @@ lf_check_one() { # alias → {alias, ok, as} | {alias, ok, error, hint}
   jq -cn --arg a "$alias" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$( [[ $ok == true ]] || check_hint langfuse "$err" "$alias")" \
     '{alias:$a, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
 }
+# GA(#639): 키 파일 존재·권한은 여기서, 서명·토큰·속성 metadata 조회는 카탈로그의 ga.py check가 한다(같은 설정 파일을 읽는다).
+ga_check() { # → ga.py check --json 한 줄
+  local cmd="${HM_SETUP_GA:-}"
+  if [[ -z "$cmd" ]]; then
+    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" python3 -I "$CATALOG_DIR/ga/scripts/ga.py" check --json
+  else
+    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" "$cmd" check --json
+  fi
+}
 mask_email() { sed -E 's/^(.).*@/\1***@/'; }
 
 check_hint() { # skill, http 오류, [langfuse 별칭] → 원인 안내
@@ -759,6 +813,16 @@ check_hint() { # skill, http 오류, [langfuse 별칭] → 원인 안내
   fi
   case "$1:$2" in
     langfuse:"key command failed") printf 'LANGFUSE_*_KEY_CMD 명령이 실패했거나 키 한 줄을 출력하지 않음 — 별도 터미널에서 그 명령을 직접 실행해 로그인·권한(SSM이면 ssm:GetParameter·kms:Decrypt)을 확인한다' ;;
+    ga:*SERVICE_DISABLED*) printf '키를 만든 GCP 프로젝트에서 Google Analytics Data API가 사용 설정되지 않음 — API 및 서비스 → 라이브러리에서 사용 설정하고 몇 분 뒤 다시 확인한다' ;;
+    ga:"HTTP 403"*) printf '서비스 계정이 이 GA 속성에 없음 — GA 관리 → 속성 액세스 관리에 서비스 계정 이메일을 뷰어로 추가한다 (속성 ID가 맞는지도 확인)' ;;
+    ga:"HTTP 404"* | ga:"HTTP 400"* | ga:"bad property"*) printf '속성 ID가 틀림 — GA 관리 → 속성 세부정보의 숫자 속성 ID를 GA_PROPERTY_ID로 set한다 (G-XXXX 측정 ID 아님)' ;;
+    ga:"token request failed"*) printf '키가 폐기됐거나 컴퓨터 시계가 어긋남 — 새 JSON 키를 받아 set --tool <도구> GA_KEY_FILE <경로>로 다시 저장한다' ;;
+    ga:"key file not found") printf 'GA_KEY_FILE 경로에 파일이 없음 — set --tool <도구> GA_KEY_FILE <내려받은 JSON 경로>로 다시 저장한다' ;;
+    ga:"key file permissions") printf '키 파일을 다른 사용자가 읽을 수 있음 — chmod 600 <GA_KEY_FILE 경로>' ;;
+    ga:"HTTP 401"*) printf '토큰이 거부됨 — 키가 폐기됐을 수 있다. 새 JSON 키를 받아 set --tool <도구> GA_KEY_FILE <경로>로 다시 저장한다' ;;
+    ga:"openssl failed"*) printf '키로 서명하지 못함 — openssl이 있는지, 키 파일이 손상되지 않았는지 확인하고 필요하면 새 JSON 키로 다시 저장한다' ;;
+    ga:"bad key file") printf '서비스 계정 JSON 키가 아님 — GCP 서비스 계정 → 키 → JSON으로 새로 받는다' ;;
+    ga:"ga.py failed"*) printf 'ga.py를 실행하지 못함 — python3·openssl이 있는지 확인한다' ;;
     langfuse:"HTTP 401") printf '키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST를 그 주소로 set한다' ;;
     *:"HTTP 401") printf '자격 증명이 틀렸거나 만료됨 — 토큰을 다시 발급해 set으로 넣는다' ;;
     datadog:"HTTP 403") printf 'Application key scope 부족 — user_access_read 등 읽기 scope를 더한다' ;;
@@ -799,6 +863,22 @@ command_check() {
       if body="$(atl_conf | http_get "$(resolve_value CONFLUENCE_BASE_URL | sed 's:/*$::')/rest/api/user/current" 2>"$STATE_DIR/.err")" \
         && [[ "$(jq -r '.type' <<<"$body" 2>/dev/null)" != anonymous ]]; then who="$(jq -r '.displayName // ""' <<<"$body")"
       else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
+      ;;
+    ga)
+      local kf mode
+      kf="$(resolve_value GA_KEY_FILE)"
+      kf="$(expand_home "$kf")"
+      if [[ ! -f "$kf" ]]; then ok=false; err="key file not found"
+      elif mode="$(filemode "$kf")" && [[ ! "$mode" =~ 00$ ]]; then ok=false; err="key file permissions"
+      else
+        body="$(ga_check 2>/dev/null || true)"
+        if [[ "$(jq -r '.ok' <<<"$body" 2>/dev/null)" == true ]]; then who="$(jq -r '"\(.as) (property \(.property))"' <<<"$body")"
+        else
+          ok=false
+          err="$(jq -r '[.error, (.reason // "" | select(. != ""))] | join(" ")' <<<"$body" 2>/dev/null || true)"
+          [[ -n "$err" ]] || err="ga.py failed"
+        fi
+      fi
       ;;
     langfuse) # 기본 키와 별칭마다 확인한다(#621). 기본 키 하나뿐이면 as·error·hint는 예전 형식 그대로.
       local alias

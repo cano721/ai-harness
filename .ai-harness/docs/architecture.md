@@ -5,7 +5,7 @@ ai-harness는 Claude Code·Codex CLI 공용 플러그인의 **원본 저장소**
 ## 기술 스택 (실측)
 
 - bash + `jq`가 본체. macOS 기본 `/bin/bash` 3.2와 Linux(CI `ubuntu-latest`) 양쪽에서 돈다.
-- Python 3 **표준 라이브러리만**: `scripts/board/*.py`(`/board` 로컬 서버), `catalog/langfuse/scripts/*.py`, `evals/ab/`의 검사기.
+- Python 3 **표준 라이브러리만**: `scripts/board/*.py`(`/board` 로컬 서버), `catalog/langfuse/scripts/*.py`·`catalog/ga/scripts/ga.py`, `evals/ab/`의 검사기.
 - Node.js 18+: `/diagram`(`vendor/archify/`)만.
 - 외부 패키지 매니저 파일(`package.json`·`pyproject.toml` 등)이 저장소 루트에 없다.
 

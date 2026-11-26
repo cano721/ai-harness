@@ -1,6 +1,6 @@
 ---
 name: setup
-description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙·이슈 타입 계층)을 팀 규칙 원본에서 차이를 확인해 가져오거나 물어서 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
+description: ai-harness 설치 후 사용자 전역 셋업. 기본 스킬 카탈로그(datadog·sentry·jira·confluence·langfuse·ga)에서 고른 것만 ~/.claude/skills·~/.agents/skills에 설치·갱신·제거하고, 외부 디자인 스킬(impeccable 등)을 원본 저장소의 고정 커밋으로 설치하며(대화형 셋업에서 함께 묻는다), 토큰 발급을 안내해 대화에 남기지 않고 저장한 뒤 연결을 확인하며, 회사·팀 전용 값(기본 프로젝트·필드 ID·생성 규칙·이슈 타입 계층)을 팀 규칙 원본에서 차이를 확인해 가져오거나 물어서 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켠다. 플러그인을 처음 설치했을 때, 세션 시작 안내가 셋업을 권할 때, 또는 기본 스킬을 추가·제거하고 싶을 때 쓴다.
 ---
 
 # /setup — ai-harness 전역 셋업
@@ -84,7 +84,7 @@ $ROOT/scripts/setup.sh update
 
 설치한 스킬마다 `list`의 `env[]`를 본다. `found:null`이고 `required:true`인 키를 하나씩 처리한다. 이미 있는 키도 6단계 연결 확인에서 실패하면 같은 절차로 다시 넣는다.
 
-1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다. Langfuse는 아래 [Langfuse 키](#langfuse-키)를 따른다.
+1. **발급 안내** — `issue.url`(있으면 링크), `issue.steps`, `issue.scopes`를 그대로 보여 준다. scope가 있으면 "읽기 전용 scope만 고르세요"를 덧붙인다. 같은 키를 쓰는 스킬이 여럿이면(jira·confluence의 `ATLASSIAN_*`) 한 번만 묻는다. Langfuse는 아래 [Langfuse 키](#langfuse-키), GA는 [GA 서비스 계정 키](#ga-서비스-계정-키)를 따른다.
 2. **저장 대상** — 2단계에서 고른 도구: Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600).
 3. **비밀 아닌 값**(`secret:false` — base URL·이메일·조직 slug·사이트): 대화로 받아 바로 저장한다.
    ```bash
@@ -118,13 +118,25 @@ $ROOT/scripts/setup.sh update
 
 `register.py`는 Claude `settings.json`에 저장하고 `secrets.env`가 있으면 그곳에도 저장한다. `~/.claude`가 없으면(Codex만 사용) `secrets.env`를 만들어 저장한다. 스킬 스크립트는 두 파일을 모두 직접 읽는다. 저장소 종류·경로 규칙은 7단계 사용자 규칙(`key_source`)에 남긴다.
 
+### GA 서비스 계정 키
+
+GA는 토큰이 아니라 서비스 계정 JSON **키 파일**을 쓴다. 경로는 비밀이 아니지만 파일 내용은 비밀이다 — 파일을 Read·`cat`으로 열거나 내용을 대화에 옮기지 않는다.
+
+1. 발급 안내(`issue.steps` ①~④)를 보여 준다. 조직 공용 서비스 계정이 있으면 관리자에게 키를 받는다. ③ Data API 사용 설정과 ④ GA 속성에 서비스 계정 이메일을 **뷰어**로 추가하는 단계를 빼먹기 쉬우니 짚는다.
+2. 내려받은 파일 경로를 대화로 받아 저장한다. `set`이 서비스 계정 키 형식만 확인하고(내용은 출력하지 않음) `~/.ai-harness/keys/ga.json`(600, 폴더 700)으로 복사한 뒤 그 경로를 `GA_KEY_FILE`로 저장한다:
+   ```bash
+   $ROOT/scripts/setup.sh set --tool <claude|codex|both> GA_KEY_FILE ~/Downloads/<내려받은 키>.json
+   ```
+   결과에 `remove_original:true`와 `original` 경로가 나오면, 복사본이 생겼으니 **내려받은 원본은 사용자가 지우라고** 안내한다(`rm <original>` — 휴지통·다운로드 폴더에 키가 남지 않게). 이 세션이 대신 지우지 않는다.
+3. 속성 ID: GA 관리 → 속성 세부정보의 숫자 ID(`G-XXXX` 측정 ID 아님)를 받아 `set ... GA_PROPERTY_ID 123456789`. 속성이 여럿이면 `set ... GA_PROPERTY_<별칭> <ID>`(별칭은 대문자·숫자·`_`)로 더하고 7단계 `properties`에 별칭의 용도를 적는다.
+
 ## 6. 연결 확인
 
 ```bash
 $ROOT/scripts/setup.sh check <name>
 ```
 
-읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회, Langfuse 키가 가리키는 프로젝트 조회 — 401이면 키나 리전(`LANGFUSE_HOST`) 불일치). Langfuse는 기본 키와 `register.py`로 더한 별칭마다(host는 `LANGFUSE_HOST_<별칭>` → `LANGFUSE_HOST` 순) 확인해 별칭별 결과를 `projects`로 내고, 하나라도 실패하면 `ok:false`다 — 별칭 401의 hint는 `LANGFUSE_HOST_<별칭>`이나 `register.py <별칭>` 재등록을 가리킨다. 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
+읽기 전용 호출 하나로 자격 증명을 확인한다(Datadog `/api/v1/validate`+현재 사용자, Jira `/myself`, Confluence 현재 사용자, Sentry 조직 조회, Langfuse 키가 가리키는 프로젝트 조회 — 401이면 키나 리전(`LANGFUSE_HOST`) 불일치, GA 기본 속성(`GA_PROPERTY_ID`)의 metadata 조회 — 키 파일이 없거나 권한이 600보다 넓으면 호출 전에 실패, 403은 서비스 계정이 속성 뷰어에 없음, `SERVICE_DISABLED`는 GCP 프로젝트에서 Google Analytics Data API 미사용 설정, `as`는 서비스 계정 이메일). Langfuse는 기본 키와 `register.py`로 더한 별칭마다(host는 `LANGFUSE_HOST_<별칭>` → `LANGFUSE_HOST` 순) 확인해 별칭별 결과를 `projects`로 내고, 하나라도 실패하면 `ok:false`다 — 별칭 401의 hint는 `LANGFUSE_HOST_<별칭>`이나 `register.py <별칭>` 재등록을 가리킨다. 방금 저장한 값은 이 세션 환경에 아직 없으므로 스크립트가 settings.json·secrets.env에서 직접 읽는다.
 
 - `ok:true` — `as`(누구로 접속했는지)를 보여 준다. 다른 계정이면 사용자에게 확인한다.
 - `ok:false` — `error`와 `hint`를 보여 주고 5단계로 돌아가 해당 키를 다시 넣는다. 두 번 실패하면 멈추고 사용자에게 넘긴다.
