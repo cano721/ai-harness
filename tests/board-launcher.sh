@@ -48,6 +48,11 @@ assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "WKWebView" "the
 assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "--app" "the Swift launcher asks the shim to open without a browser"
 assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "alive" "the Swift launcher exits when the board stops"
 assert_contains "$(<"$ROOT/scripts/board/BoardLauncher.swift")" "stop" "the Swift launcher stops the board on quit"
+# 내 일정의 앱 딥링크(#592): 창 앱은 허용 앱 스킴(msteams)을 OS에 넘겨 앱으로 연다. 목록 밖 스킴은 열지 않는다.
+BL_OUTSIDE="$(sed -n '/func openOutside(/,/^    }$/p' "$ROOT/scripts/board/BoardLauncher.swift")"
+assert_contains "$BL_OUTSIDE" "Self.appLinkSchemes" "openOutside opens the allowed app link schemes"
+assert_contains "$(grep -E 'static let appLinkSchemes = ' "$ROOT/scripts/board/BoardLauncher.swift")" '"msteams"' "the window app allows msteams links"
+case "$BL_OUTSIDE" in *'"javascript"'*|*'"file"'*|*'"data"'*) fail "openOutside does not open script or file schemes" ;; esac
 python3 -I - "$BL_APP/Contents/Resources/applet.icns" <<'ICNS' || fail "the icon holds PNG images up to 512px"
 import struct, sys
 data = open(sys.argv[1], "rb").read()
