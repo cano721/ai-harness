@@ -123,7 +123,7 @@ EOF
 }
 
 CMD="${1:-}"
-[[ -n "$CMD" ]] || usage
+[[ -n "$CMD" && "$CMD" != -h && "$CMD" != --help ]] || usage
 shift
 REPO="."
 RUN_ID=""
