@@ -730,12 +730,20 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
 .b-agtask__meta > * { flex: none; }
 .b-agtask__meta > .b-agtask__who, .b-agtask__meta > .ds-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .b-agtask__meta > .ds-chip { display: block; max-width: 7rem; }
+/* 제목 바로 옆 원본 상태 칩(이슈 668). 진행 중(indeterminate)만 진행 상태 토큰, 나머지는 중립 칩. */
+.b-agtask__lead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.b-agtask__status { flex: none; display: block; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; }
+.b-agtask__status[data-category="indeterminate"] { border-color: var(--color-progress-border); background: var(--color-progress-subtle); color: var(--color-progress); }
 .b-agtask__open, .b-agtask__del { opacity: 0; }
 .b-agtask:hover .b-agtask__open, .b-agtask:focus-within .b-agtask__open, .b-agtask:hover .b-agtask__del, .b-agtask:focus-within .b-agtask__del { opacity: 1; }
 @media (hover: none) { .b-agtask__open, .b-agtask__del { opacity: 1; } }
 @media (max-width: 760px) {
   .b-agtask { column-gap: var(--space-2); padding-left: var(--space-3); padding-right: var(--space-3); }
   .b-agtask__meta > .ds-chip { max-width: 4.5rem; }
+  /* 좁은 폭에서는 상태 칩이 제목 폭을 빼앗지 않도록 제목 아래 줄로 내린다. */
+  .b-agtask__lead { flex-wrap: wrap; row-gap: var(--space-1); }
+  .b-agtask__lead > .b-agtitle { flex: 1 1 100%; }
+  .b-agtask__status { max-width: 100%; }
 }
 .b-agwho { margin: var(--space-2) 0 0; color: var(--color-text-muted); font-size: var(--font-size-caption); line-height: var(--font-line-caption); font-weight: var(--font-weight-label); }
 .b-agsrc .ds-row__side { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
@@ -1841,6 +1849,12 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       loadAgenda(true);
     };
     const [t, more] = agTitle('b-agtask__title', `task:${it.source}:${it.id}`, `agtitle:${it.source}:${it.id}`, it.title, it.detail);
+    let lead = t;
+    if (it.status) {
+      const st = el('span', 'ds-chip b-agtask__status', it.status); st.title = it.status;
+      if (it.status_category) st.dataset.category = it.status_category;
+      lead = el('span', 'b-agtask__lead'); lead.append(t, st);
+    }
     const meta = el('span', 'b-agtask__meta');
     if (agFresh.has(agKey(it))) meta.append(badge(['info', '새로']));
     const d = dueInfo(it.due, now);
@@ -1857,7 +1871,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (open) side.append(open);
     const del = agDeleteBtn(it);
     if (del) side.append(del);
-    r.append(SERVER ? check : el('span'), t, meta, side);
+    r.append(SERVER ? check : el('span'), lead, meta, side);
     if (more) r.append(more);
     return r;
   }
@@ -2084,6 +2098,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     for (const it of list) n.set(it.source, (n.get(it.source) || 0) + 1);
     if (n.size < 2) return '';
     return opts.filter(([id]) => n.has(id)).map(([id, name]) => ` · ${name} ${n.get(id)}`).join('');
+  }
+  // [Jira] 출처의 상태 묶음(이슈 668): [진행 중, 할 일]. statusCategory가 indeterminate면 진행 중, 그 밖(new·없음·모름)은 할 일.
+  // 묶음 안은 기한 있는 것을 기한 오름차순으로 먼저, 기한 없는 것은 받은 시각 최신순으로 그 뒤에 둔다.
+  function agStatusGroups(list) {
+    const order = (a, b) => {
+      const da = dueAt(a.due), db = dueAt(b.due), na = Number.isNaN(da), nb = Number.isNaN(db);
+      if (na !== nb) return na ? 1 : -1;
+      return na ? agReceived(b) - agReceived(a) : da - db;
+    };
+    return [list.filter((it) => it.status_category === 'indeterminate').sort(order), list.filter((it) => it.status_category !== 'indeterminate').sort(order)];
   }
   // 할 일 위 출처 필터 줄. 일정·답할 것에는 걸지 않는다.
   function agSourceFilter(opts, cur) {
@@ -2628,9 +2652,16 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const o = { sources: new Set(mine.map((x) => x.source)).size > 1, opts: sopts };
     const rs = agSection('reply', '답할 것', replies, { sources: true }, true); if (rs) page.append(rs);
     if (sopts.length >= 2) page.append(agSourceFilter(sopts, scur));
-    for (const sec of [agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)]) if (sec) page.append(sec);
+    // [Jira] 출처를 고르면 진행 중·할 일 묶음이 새로 맡겨진 요청·기한 있음·쌓인 요청을 대신한다(이슈 668). 다른 출처·전체는 그대로.
+    const jira = scur === 'jira';
+    let secs;
+    if (jira) {
+      const [prog, rest] = agStatusGroups(mine);
+      secs = [agSection('jira-progress', '진행 중', prog, o), agSection('jira-todo', '할 일', rest, o)];
+    } else secs = [agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)];
+    for (const sec of secs) if (sec) page.append(sec);
     page.append(todoForm());
-    const bottom = [staleFold(stale, o), weekFold(events, now, many), completedFold(agData.completed || [])].filter(Boolean);
+    const bottom = [jira ? null : staleFold(stale, o), weekFold(events, now, many), completedFold(agData.completed || [])].filter(Boolean);
     if (bottom.length) {
       page.append(el('hr', 'b-agsep'));
       const b = el('div', 'b-agbottom'); b.append(...bottom); page.append(b);

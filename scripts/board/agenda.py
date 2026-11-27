@@ -13,8 +13,10 @@
 - 발견 순서: 플러그인 scripts/board/agenda/*/ → HM_CLAUDE_SKILLS_DIR/*/ → HM_CODEX_SKILLS_DIR/*/. 같은 id는 먼저 찾은
   쪽이 쓴다(기본 어댑터를 사용자 파일이 가로채지 못한다). 잘못된 선언은 그 소스만 '선언 오류'로 보인다.
 - fetch는 `--since ISO --until ISO`를 덧붙여 부르고, stdout JSONL 한 줄이 항목 하나다
-  {id, kind: event|reply|todo, title, start?, end?, due?, created?, from?, shared?, url?, detail?, done?}.
+  {id, kind: event|reply|todo, title, start?, end?, due?, created?, from?, shared?, url?, detail?, done?, status?, status_category?}.
   잘못된 줄은 건너뛰고 센다. 소스당 500개까지.
+  status(#668)는 원본의 상태 이름(40자까지), status_category는 그 분류 new|indeterminate|done(그 밖의 값은 필드만 버린다).
+  화면은 status가 있으면 제목 옆 칩으로 보이고(분류가 indeterminate면 진행 색), [Jira] 출처 필터에서 진행 중/할 일로 묶는다.
   url(link도 받는다)은 http(s) 또는 허용한 앱 딥링크(#592. APP_LINK_SCHEMES — 지금은 `msteams:`)만 남긴다. 그 밖의 스킴
   (javascript:·file:·data: 등)은 url만 버리고 항목은 남긴다. 앱이 없는 사용자를 위해 웹 링크를 줄지는 어댑터가 정한다.
   due(#539)는 reply·todo의 기한: 날짜(YYYY-MM-DD) 또는 날짜·시각(ISO 8601). 읽을 수 없는 기한은 버리고 항목은 남긴다.
@@ -63,6 +65,8 @@ TODO_ID = "todo"
 MAX_ITEMS = 500
 SETUP_PROMPT_MAX = 1000
 FROM_MAX = 60
+STATUS_MAX = 40
+STATUS_CATEGORIES = ("new", "indeterminate", "done")
 COMPLETED_DAYS = 7
 BRIEF_MAX = 4000
 DEFAULT_INTERVAL = 15
@@ -356,6 +360,10 @@ def _normalize(raw, source_id):
         item["created"] = created
     if isinstance(raw.get("from"), str) and raw["from"].strip():
         item["from"] = _short(raw["from"], FROM_MAX)
+    if isinstance(raw.get("status"), str) and raw["status"].strip():
+        item["status"] = _short(raw["status"], STATUS_MAX)
+    if raw.get("status_category") in STATUS_CATEGORIES:
+        item["status_category"] = raw["status_category"]
     if kind == "event" and raw.get("shared") is True:
         item["shared"] = True
     url = raw.get("url") if isinstance(raw.get("url"), str) else raw.get("link")

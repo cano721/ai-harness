@@ -18,6 +18,10 @@ AND project in ("A","B")를 더한다. 키는 저장할 때와 JQL을 만들 때
 종료 시각(정규화한 ISO, 예: 2026-12-05T09:00:00Z)을 due로 쓰고 detail에 '스프린트 <이름> 종료'를 붙인다.
 closed·future 스프린트나 dict가 아닌 구형 문자열 표현은 보지 않는다.
 
+상태(#668): status는 status.name(공백 정리), status_category는 status.statusCategory.key가 new·indeterminate·done일 때만
+싣는다. 보드는 이 두 필드로 제목 옆 상태 칩과 [Jira] 출처의 진행 중/할 일 묶음을 그린다. detail에는 상태를 넣지 않고
+'우선순위 · 프로젝트[ · 스프린트 X 종료]'만 남긴다.
+
 키 JIRA_BASE_URL·ATLASSIAN_USER·ATLASSIAN_API_TOKEN은 setup.sh와 같은 순서로 찾는다: 프로세스 환경 → HARNESS_CLAUDE_SETTINGS
 (기본 ~/.claude/settings.json)의 env → $HM_DATA_DIR/secrets.env의 export KEY='…' 줄(source하지 않는다). 빈 값은 없는 것으로 본다.
 python3 -I는 이 폴더를 import 경로에 넣지 않으므로 보드(agenda.py)의 같은 해석을 가져오지 않고 여기 따로 둔다.
@@ -38,6 +42,7 @@ MAX_PROJECTS = 200
 PAGE = 100
 HTTP_TIMEOUT = 20
 DEFAULTS = {"projects": [], "watching": False}
+STATUS_CATEGORIES = ("new", "indeterminate", "done")
 CREATED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$")
 SETUP = "/ai-harness:setup"
 SPRINT_SCHEMA = "com.pyxis.greenhopper.jira:gh-sprint"
@@ -245,7 +250,13 @@ def to_item(issue, base, sprint_id=None):
     reporter = _name(f.get("reporter"), "displayName")
     if reporter:
         item["from"] = reporter
-    parts = [_name(f.get("status"), "name"), _name(f.get("priority"), "name"), _name(f.get("project"), "name")]
+    status = " ".join(_name(f.get("status"), "name").split())
+    if status:
+        item["status"] = status
+        category = _name(f["status"].get("statusCategory"), "key")
+        if category in STATUS_CATEGORIES:
+            item["status_category"] = category
+    parts = [_name(f.get("priority"), "name"), _name(f.get("project"), "name")]
     if sprint:
         parts.append(f"스프린트 {sprint[1]} 종료" if sprint[1] else "스프린트 종료")
     detail = " · ".join(x for x in parts if x)

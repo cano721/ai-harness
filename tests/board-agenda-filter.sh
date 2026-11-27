@@ -33,8 +33,8 @@ done
 pass "the board skill documents the source filter and fetch-now"
 
 if command -v node >/dev/null 2>&1; then
-  AF_FNS="$(sed -n '/function agFold(/,/^  }$/p;/function agFoldBlock(/,/^  }$/p;/function segment(/,/^  }$/p;/function agSourceOptions(/,/^  }$/p;/function agSourcePick(/,/^  }$/p;/function agSourceAfterAdd(/,/^  }$/p;/function agSourceCounts(/,/^  }$/p;/function agSourceFilter(/,/^  }$/p;/function agRefreshAll(/,/^  }$/p;/function staleFold(/,/^  }$/p' "$AF_TPLF")"
-  for AF_W in "function agSourceOptions(" "function agSourcePick(" "function agSourceAfterAdd(" "function agSourceCounts(" "function agSourceFilter(" "function agRefreshAll(" "function staleFold(" "function segment("; do
+  AF_FNS="$(sed -n '/function agFold(/,/^  }$/p;/function agFoldBlock(/,/^  }$/p;/function segment(/,/^  }$/p;/function agSourceOptions(/,/^  }$/p;/function agSourcePick(/,/^  }$/p;/function agSourceAfterAdd(/,/^  }$/p;/function agSourceCounts(/,/^  }$/p;/function agSourceFilter(/,/^  }$/p;/function agRefreshAll(/,/^  }$/p;/function staleFold(/,/^  }$/p;/function agStatusGroups(/,/^  }$/p' "$AF_TPLF")"
+  for AF_W in "function agSourceOptions(" "function agSourcePick(" "function agSourceAfterAdd(" "function agSourceCounts(" "function agSourceFilter(" "function agRefreshAll(" "function staleFold(" "function segment(" "function agStatusGroups("; do
     assert_contains "$AF_FNS" "$AF_W" "the template has $AF_W"
   done
   AF_STUB='class E { constructor(t) { this.tag = t; this.attrs = {}; this.children = []; this.dataset = {}; this.hidden = false; this.textContent = ""; this.className = ""; this.id = ""; }
@@ -125,7 +125,70 @@ $AF_FNS" node -e 'eval(process.env.AF_JS + `
 toasts=ok:3곳에서 새로 가져왔습니다. flag=false loads=1 renders=1
 fail:Broken 메일에서 가져오지 못했습니다./fail:가져오지 못했습니다. 보드 서버에 닿지 못했습니다. posts=3" "$AF_OUT" "fetch-now posts once while busy and toasts the result"
   pass "agenda fetch-now button is busy once and toasts"
+
+  # 4-b. Jira 상태 묶음(#668): 진행 중(indeterminate)과 할 일(그 밖)로 가르고, 묶음 안은 기한 오름차순 다음 기한 없는 것 최신순.
+  AF_OUT="$(AF_JS="$AF_STUB
+$AF_FNS" node -e 'eval(process.env.AF_JS + `
+    const dueAt = (d) => (d ? Date.parse(d) : NaN); const agReceived = (it) => it.r || 0;
+    const list = [{ id: "a", status_category: "new", r: 1 }, { id: "b", status_category: "indeterminate", due: "2026-12-05" },
+      { id: "c", r: 5 }, { id: "d", status_category: "indeterminate", due: "2026-12-01" }, { id: "e", status_category: "weird", due: "2026-12-02", r: 9 },
+      { id: "f", status_category: "done", r: 3 }];
+    const [prog, todo] = agStatusGroups(list);
+    console.log(prog.map((x) => x.id).join(",") + "|" + todo.map((x) => x.id).join(",") + "|" + list.map((x) => x.id).join(""));
+    console.log(agStatusGroups([]).map((g) => g.length).join(","));
+  `)')"
+  assert_eq "d,b|e,c,f,a|abcdef
+0,0" "$AF_OUT" "jira status groups put in-progress first and keep due-then-received order"
+  pass "agenda groups jira to-dos by status category"
+
+  # 4-c. 상태 칩(#668): status가 있는 항목만 제목 바로 뒤에 칩(글자 = 상태 이름, data-category = 분류)을 붙인다.
+  AF_TROW="$(sed -n '/function taskRow(/,/^  }$/p' "$AF_TPLF")"
+  AF_OUT="$(AF_JS="$AF_STUB
+$AF_TROW" node -e 'eval(process.env.AF_JS + `
+    const btn = (label, cls, f) => { const b = el("button", "ds-btn" + (cls ? " " + cls : ""), label); if (f) b.onclick = f; return b; };
+    const badge = () => el("span", "ds-badge"); const chip = (x) => el("span", "ds-chip", x);
+    const agTitle = (c, k, f, title) => [el("button", c, title), null];
+    const dueInfo = () => null; const agOpenLink = () => null; const agAge = () => ""; const agKey = (it) => it.source + ":" + it.id;
+    const agDeleteBtn = () => null; const agFresh = new Set(); const SERVER = true;
+    const show = (it) => {
+      const r = taskRow(it, 0, {});
+      const st = all(r, (x) => / b-agtask__status$/.test(x.className));
+      if (!st.length) return "none|" + r.children.map((c) => c.className.split(" ")[0]).join(",");
+      const par = all(r, (x) => x.children.includes(st[0]))[0], i = par.children.indexOf(st[0]);
+      return st.length + "|" + st[0].className + "|" + st[0].textContent + "|" + (st[0].dataset.category || "-") + "|after=" + par.children[i - 1].className;
+    };
+    console.log(show({ source: "jira", id: "A-1", title: "A-1 일", status: "진행 중", status_category: "indeterminate" }));
+    console.log(show({ source: "jira", id: "A-2", title: "A-2 일", status: "할 일", status_category: "new" }));
+    console.log(show({ source: "jira", id: "A-3", title: "A-3 일", status: "검토" }));
+    console.log(show({ source: "todo", id: "t1", title: "직접" }));
+  `)')"
+  assert_eq "1|ds-chip b-agtask__status|진행 중|indeterminate|after=b-agtask__title
+1|ds-chip b-agtask__status|할 일|new|after=b-agtask__title
+1|ds-chip b-agtask__status|검토|-|after=b-agtask__title
+none|b-agcheck,b-agtask__title,b-agtask__meta,b-agev__side" "$AF_OUT" "a status chip follows the title only when the item has a status"
+  pass "agenda to-do rows show a status chip next to the title"
 fi
+
+# 4-d. Jira 상태 묶음 배치(#668): [Jira] 출처일 때만 진행 중 → 할 일 절이 새로 맡겨진 요청·기한 있음·쌓인 요청을 대신한다.
+assert_contains "$AF_RENDER" "scur === 'jira'" "the status groups apply to the jira filter only"
+assert_contains "$AF_RENDER" "agStatusGroups(mine)" "the groups split the picked jira to-dos"
+assert_contains "$AF_RENDER" "agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)" "other filters keep the new and due sections"
+assert_contains "$AF_RENDER" "jira ? null : staleFold(stale, o)" "jira items do not repeat in the stale fold"
+case "$AF_RENDER" in
+  *"agSection('jira-progress', '진행 중', prog, o)"*"agSection('jira-todo', '할 일', rest, o)"*) ;;
+  *) fail "the in-progress group comes before the to-do group" ;;
+esac
+# 칩 색은 statusCategory로: 진행 중은 진행 상태 토큰, 할 일은 중립 칩 그대로.
+AF_CSS="$(grep -n 'b-agtask__status' "$AF_TPLF")"
+assert_contains "$AF_CSS" '.b-agtask__status[data-category="indeterminate"]' "the in-progress chip has its own colour rule"
+assert_contains "$AF_CSS" "var(--color-progress)" "the in-progress chip uses the progress tokens"
+# 좁은 폭(≤760px)에서는 칩을 제목 아래 줄로 내려 제목 폭을 빼앗지 않는다: lead가 줄바꿈하고 제목은 한 줄을 다 쓴다.
+AF_NARROW="$(awk '/@media \(max-width: 760px\)/{m=1} m&&/b-agtask__/{print} m&&/^}/{m=0}' "$AF_TPLF")"
+assert_contains "$AF_NARROW" '.b-agtask__lead { flex-wrap: wrap;' "the status chip wraps below the title on narrow screens"
+assert_contains "$AF_NARROW" '.b-agtask__lead > .b-agtitle { flex: 1 1 100%; }' "the title keeps the full line on narrow screens"
+assert_contains "$AF_NARROW" '.b-agtask__status { max-width: 100%; }' "the status chip never overflows its cell on narrow screens"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "status_category" "the board skill documents the status fields"
+pass "agenda shows jira status groups only under the jira filter"
 
 # 5. 서버 POST /agenda/refresh-all: 격리 보드(빈 사용자 스킬 폴더 + fixture 소스).
 AF_T="$TEST_TMP/board-agenda-filter"
