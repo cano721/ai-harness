@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash) 가드(opt-in): 스키마 조건 없는 information_schema 정의·메타 테이블 조회를 실행 전에 막는다.
-# 켜기: HM_DB_SCAN_GUARD=1. 판정 기준은 README "DB 스캔 가드". 어떤 오류든 통과(fail-open)한다.
+# 켜기: HM_DB_SCAN_GUARD=1. 판정 기준은 docs/guards-and-data.md "DB 스캔 가드". 어떤 오류든 통과(fail-open)한다.
 set -uo pipefail
 trap 'exit 0' ERR
 

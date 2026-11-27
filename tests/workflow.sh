@@ -345,7 +345,7 @@ assert_contains "$RELEASE_SKILL_CONTENT" "start --workflow release --version <x.
 assert_contains "$RELEASE_SKILL_CONTENT" "release_policy" "release skill names the manifest facts"
 assert_contains "$RELEASE_SKILL_CONTENT" "merge commit only" "release skill keeps merge commits only"
 assert_contains "$HARNESS_INIT_CONTENT" "templates/release/" "harness init uses the local release template"
-assert_contains "$(<"$ROOT/README.md")" "--workflow release" "README documents the release runner"
+assert_contains "$(<"$ROOT/docs/workflows.md")" "--workflow release" "docs/workflows.md documents the release runner"
 for f in "$ROOT/.ai-harness/workflows/release-graph.json:$ROOT/templates/release/references/release-graph.json" "$ROOT/.ai-harness/workflows/workflow-driver.sh:$ROOT/templates/workflow-driver/workflow-driver.sh"; do
   cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
 done
@@ -379,11 +379,11 @@ if "$ROOT/scripts/validate-bug-fix-graph.sh" "$COVERAGE_GRAPH" >/dev/null 2>&1; 
 for f in "$ROOT/.ai-harness/workflows/feature-delivery-graph.json:$FEATURE_GRAPH" "$ROOT/.ai-harness/workflows/bug-fix-graph.json:$BUG_FIX_GRAPH"; do
   cmp -s "${f%%:*}" "${f#*:}" || fail "${f%%:*} is the template copy"
 done
-for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md"; do
+for f in "$ROOT/docs/workflows.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md"; do
   assert_contains "$(<"$f")" "acceptance_map" "$(basename "$(dirname "$f")")/$(basename "$f") documents the completion-condition map"
   assert_contains "$(<"$f")" "brief_coverage_incomplete" "$(basename "$(dirname "$f")")/$(basename "$f") documents the coverage gate"
 done
-for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md"; do
+for f in "$ROOT/docs/workflows.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md"; do
   assert_contains "$(<"$f")" "brief_revised" "$(basename "$(dirname "$f")")/$(basename "$f") documents revise during deliver"
 done
 pass "completion-condition map: graphs, validators, and docs"
@@ -408,12 +408,12 @@ for pair in "validate-feature-graph.sh:$FEATURE_GRAPH" "validate-bug-fix-graph.s
   jq 'del(.nodes.sync_base) | .transitions |= map(select(.from != "sync_base" and .to != "sync_base")) | del(.limits.max_base_syncs)' "$graph" >"$TEST_TMP/sync-graph.json"
   "$validator" "$TEST_TMP/sync-graph.json" >/dev/null || fail "$name: a graph synced before sync_base stays valid"
 done
-README_CONTENT="$(<"$ROOT/README.md")"
+README_CONTENT="$(<"$ROOT/docs/workflows.md")"
 assert_contains "$README_CONTENT" "merge --> sync_base" "README graph shows merge -> sync_base"
 assert_contains "$README_CONTENT" "sync_base --> remote_ci" "README graph shows sync_base -> remote_ci"
 assert_contains "$README_CONTENT" "sync_base --> user_decision" "README graph shows sync_base -> user_decision"
-[[ "$(grep -E 'merge -->.*user_decision' "$ROOT/README.md")" != *충돌* ]] || fail "README graph no longer sends a conflict from merge straight to a person"
-for f in "$ROOT/README.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md" \
+[[ "$(grep -E 'merge -->.*user_decision' "$ROOT/docs/workflows.md")" != *충돌* ]] || fail "README graph no longer sends a conflict from merge straight to a person"
+for f in "$ROOT/docs/workflows.md" "$ROOT/skills/harness-init/SKILL.md" "$ROOT/templates/implement-feature/SKILL.md" "$ROOT/templates/fix-bug/SKILL.md" \
   "$ROOT/.ai-harness/workflows/implement-feature.md" "$ROOT/.ai-harness/workflows/fix-bug.md"; do
   assert_contains "$(<"$f")" "sync_base" "$(basename "$(dirname "$f")")/$(basename "$f") documents sync_base"
 done

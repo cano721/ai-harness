@@ -12,7 +12,7 @@ assert_eq "2" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "one sweep chai
 assert_eq "daily_max" "$(jq -sr 'last | .reason' "$CHAIN_DATA/harvest-auto/runs.jsonl")" "the chain stops at the daily cap"
 chain_sweep
 assert_eq "3" "$(wc -l <"$TEST_TMP/chain-stub.out" | tr -d ' ')" "default daily cap leaves room for the rest"
-assert_contains "$(<"$ROOT/README.md")" "HM_SYNC_AUTO_DAILY_MAX=6" "README documents the new default cap"
+assert_contains "$(<"$ROOT/docs/configuration.md")" "HM_SYNC_AUTO_DAILY_MAX=6" "docs/configuration.md documents the new default cap"
 assert_contains "$(<"$ROOT/scripts/harvest-auto.sh")" 'HM_SYNC_AUTO_DAILY_MAX:-6}' "code default cap is 6"
 # 사용량 한도로 끝난 실행 뒤에는 잇지 않는다.
 CHAIN_LIMIT="$TEST_TMP/chain-limit.sh"

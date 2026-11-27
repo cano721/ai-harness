@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash) 가드(#601): HEAD의 조상이 아닌 커밋 위로 옮기는 git reset --soft <ref>를 실행 전에 막는다.
 # soft reset은 인덱스(옛 트리)를 그대로 두므로 남의 새 커밋 위에서 커밋하면 그 변경을 옛 내용으로 되돌린다(#594).
-# 기본 켬, 끄기: HM_STALE_RESET_GUARD=0. 판정 기준은 README "stale reset 가드". 어떤 오류든 통과(fail-open)한다.
+# 기본 켬, 끄기: HM_STALE_RESET_GUARD=0. 판정 기준은 docs/guards-and-data.md "stale reset 가드". 어떤 오류든 통과(fail-open)한다.
 set -uo pipefail
 trap 'exit 0' ERR
 

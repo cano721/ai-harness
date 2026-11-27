@@ -98,6 +98,8 @@ PR 본문에는 `Closes #38`을 쓴다. 이슈가 자동으로 닫히고, 릴리
 
 `develop`에 쌓인 `changelog.d/` 조각(과 `## Unreleased`에 남은 항목)이 릴리스할 만큼 쌓였을 때 한다.
 
+작업은 `develop`에 쌓이고, `main`은 릴리스된 상태만 담는다. 설치(`plugin marketplace add`)와 업데이트 확인(`check-update.sh`)이 모두 `main`을 읽으므로, `main`에 릴리스되지 않은 변경이 섞이면 사용자가 그대로 받는다.
+
 ### 러너로 릴리스 (1순위)
 
 ```bash
@@ -130,6 +132,8 @@ squash로 넣으면 `main`에 새 커밋 하나가 생기고 `develop`의 커밋
 merge commit이면 `develop`의 tip이 `main`의 조상이 되므로 아래 동기화가 fast-forward로 끝난다. 기능 PR은 이 문제가 없으므로 계속 squash한다 — 작업 브랜치는 머지 후 버리기 때문이다.
 
 머지 뒤 태그와 릴리스 노트를 발행한다. 노트 없이 태그만 올리면 `release` 워크플로가 실패한다 — `notes_url`이 404가 되고 `/harness-update`가 변경점을 설명하지 못하기 때문이다.
+
+태그를 밀거나 릴리스를 발행하면 `release` 워크플로가 태그명과 `release.json`의 버전·태그 URL 일치를 확인하고, 그 태그에 실제로 릴리스 노트가 발행됐는지 검사한다.
 
 ```bash
 git switch main && git pull

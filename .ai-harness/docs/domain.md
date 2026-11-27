@@ -6,4 +6,4 @@
 |---|---|---|
 | | | |
 
-용어의 출처: 사용자에게 보이는 개념(하네스, 관리 생성물, sync, harvest, 개인 자동화 단계 등)은 `README.md`와 각 `skills/<name>/SKILL.md`가 원본이다.
+용어의 출처: 사용자에게 보이는 개념(하네스, 관리 생성물, sync, harvest, 개인 자동화 단계 등)은 `README.md`·`docs/*.md`(흐름·자동화·보드·가드와 데이터·설정·스킬 상세)와 각 `skills/<name>/SKILL.md`가 원본이다.
