@@ -14,7 +14,7 @@
 - shellcheck 경고는 구조를 바꿔 없앤다. `# shellcheck disable=SCxxxx`는 같은 줄에 근거 주석을 남길 때만 쓴다(예: `# shellcheck disable=SC2016  # 정규식·백틱을 문자 그대로 쓴다`).
 - 가드 hook의 차단 메시지 첫 줄은 `[Direct edit guard] `처럼 대괄호 접두어로 시작한다 — `extract-claude.jq`·`extract-codex.sh`가 이 접두어로만 차단을 집계한다.
 
-## Python (`scripts/board/*.py`, `catalog/langfuse/scripts/*.py`)
+## Python (`scripts/board/*.py`, `catalog/langfuse/scripts/*.py`, `catalog/ga/scripts/*.py`)
 
 - 표준 라이브러리만 쓴다. 모듈 머리에 한국어 docstring으로 책임과 근거를 적는다.
 - 외부 프로세스는 `subprocess.run([...], capture_output=True, text=True, timeout=...)` — 셸 문자열을 만들지 않는다.

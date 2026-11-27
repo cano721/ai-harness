@@ -29,11 +29,11 @@ fi
 exit 1
 EOF
 chmod +x "$BSK_T/bin/claude"
-BSK_KEYS="DATADOG_API_KEY DD_API_KEY DATADOG_APP_KEY DD_APP_KEY DATADOG_SITE DD_SITE SENTRY_AUTH_TOKEN SENTRY_ORG SENTRY_URL JIRA_BASE_URL ATLASSIAN_USER ATLASSIAN_API_TOKEN CONFLUENCE_BASE_URL LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY LANGFUSE_HOST"
+BSK_KEYS="DATADOG_API_KEY DD_API_KEY DATADOG_APP_KEY DD_APP_KEY DATADOG_SITE DD_SITE SENTRY_AUTH_TOKEN SENTRY_ORG SENTRY_URL JIRA_BASE_URL ATLASSIAN_USER ATLASSIAN_API_TOKEN CONFLUENCE_BASE_URL LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY LANGFUSE_HOST GA_KEY_FILE GA_PROPERTY_ID"
 bsk_env() { # 사용자 환경의 키가 섞이지 않게 카탈로그 키를 모두 비운다. 보는 화면 없이 /settings/skills만 읽으므로
   # 작업 목록 캐시가 1초 지나면 그 자리에서 다시 모으게 한다(기본 30초) — 끝난 setup 세션이 바로 보인다.
   local k unset_args=()
-  for k in $BSK_KEYS $(compgen -e | grep '^LANGFUSE_' || true); do unset_args+=(-u "$k"); done
+  for k in $BSK_KEYS $(compgen -e | grep -E '^(LANGFUSE|GA_PROPERTY)_' || true); do unset_args+=(-u "$k"); done
   env "${unset_args[@]}" PATH="$BSK_T/bin:$BOARD_T/bin:$PATH" ORCA_CLI_COMMAND=orca HARNESS_METRICS_DIR="$BSK_DATA" \
     HARNESS_CLAUDE_PROJECTS_DIR="$BSK_T/projects" HARNESS_CLAUDE_SETTINGS="$BSK_T/settings.json" \
     HM_CLAUDE_SKILLS_DIR="$BSK_CL" HM_CODEX_SKILLS_DIR="$BSK_CX" BOARD_SKILLS_TTL=0 BOARD_STALE_SYNC_SECONDS=1 "$@"
@@ -56,10 +56,10 @@ assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' "$BSK_BASE/settings/sk
 assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d "$(jq -cn --arg t "$BSK_TOKEN" '{t: $t, kind: "catalog", name: "jira", action: "install"}')" "$BSK_BASE/settings/skills/session")" "skill session checks the Origin"
 assert_eq "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: $BSK_BASE" -d '{"t":"wrong","name":"jira"}' "$BSK_BASE/settings/skills/check")" "skill check checks the token"
 
-# A1 빈 스킬 폴더: 카탈로그 5종 모두 미설치, 디자인은 내장·설치 불가를 빼고 미설치
+# A1 빈 스킬 폴더: 카탈로그 6종 모두 미설치, 디자인은 내장·설치 불가를 빼고 미설치
 BSK="$(bsk_get)"
 assert_eq "true" "$(jq -r '.ok' <<<"$BSK")" "skills view answers"
-assert_eq "datadog=missing sentry=missing jira=missing confluence=missing langfuse=missing" "$(bsk_states "$BSK" catalog)" "an empty skill folder shows every catalog skill as missing"
+assert_eq "datadog=missing sentry=missing jira=missing confluence=missing langfuse=missing ga=missing" "$(bsk_states "$BSK" catalog)" "an empty skill folder shows every catalog skill as missing"
 assert_eq "impeccable=missing dataviz=builtin design-taste-frontend=missing ui-ux-pro-max=missing design-system-patterns=builtin emil-design-eng=builtin web-design-guidelines=builtin awesome-design=unavailable motion=unavailable" \
   "$(bsk_states "$BSK" design)" "design skills: builtin and not installable are not missing"
 
@@ -77,7 +77,7 @@ assert_not_file "$BSK_T/claude.log" "refused skill sessions never start claude"
 # A2 setup.sh로 claude 폴더에 jira를 깔고 키가 없으면 '토큰 없음', 나머지는 그대로 미설치
 bsk_setup install --tool claude jira
 BSK="$(bsk_get)"
-assert_eq "datadog=missing sentry=missing jira=no_token confluence=missing langfuse=missing" "$(bsk_states "$BSK" catalog)" "an installed skill without keys is no_token"
+assert_eq "datadog=missing sentry=missing jira=no_token confluence=missing langfuse=missing ga=missing" "$(bsk_states "$BSK" catalog)" "an installed skill without keys is no_token"
 assert_eq "current absent" "$(jq -r '.catalog[] | select(.name == "jira") | "\(.status.claude) \(.status.codex)"' <<<"$BSK")" "tool statuses come from setup.sh list"
 assert_contains "$(jq -r '.catalog[] | select(.name == "jira") | .missing | join(",")' <<<"$BSK")" "ATLASSIAN_API_TOKEN" "the row names the missing keys"
 

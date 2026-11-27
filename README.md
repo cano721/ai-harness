@@ -69,7 +69,7 @@ flowchart LR
 | `/board` | 작업 세션·하네스 자동 실행·개인 자동화 설정을 한 화면에서 보고 답하고 싶을 때 ("보드 열어줘") | [Harness Board](#board)를 필요할 때 띄워 브라우저로 엽니다. 이미 떠 있으면 그 주소를 다시 열고, `stop`·`status`로 끄거나 확인합니다. 세션 대화 보기·입력 보내기·질문과 권한 요청 답하기·끝난 세션 정리, 자동 harvest·sync 결과와 대기 harvest 실행, `~/.ai-harness/config` 개인 설정 변경, 저장소별 하네스 효과(반영한 개선의 재발 여부·설치 전후 지표)와 `/autofix` 진행·실행 이력 보기를 합니다. 데몬 없이 `127.0.0.1`에만 뜹니다. Python 3(표준 라이브러리)이 필요합니다. | 사용자 실행 |
 | `/handsfree` | 손을 쓸 수 없을 때(아이를 안고 있을 때 등) 말로 Claude Code 세션을 부리고 싶을 때 ("핸즈프리 켜줘") | "헤이 클로드, ~"로 시작한 말만 기기 안에서 받아써(whisper.cpp) 승인·거절·번호·중단·세션 이동·읽어 주기 같은 조작을 하고, 나머지는 현재 Orca 세션에 프롬프트로 보냅니다. 입력 칸이 보일 때만 보내고, "앞으로 묻지 않음" 선택지와 위험 명령은 음성 한마디로 통과시키지 않습니다. `setup`이 녹음 도구·받아쓰기 서버·모델을 설치하고, `hooks`·`statusline`(선택)이 읽어 주기 훅과 상태 표시줄을 넣습니다. macOS·Orca·Python 3이 필요합니다. | 사용자 실행 |
 | `/handsfree-ui` | 핸즈프리가 무엇을 들었는지 보거나 설정을 바꿀 때 ("핸즈프리 화면 열어줘") | 듣기 프로그램이 `127.0.0.1`에 띄운 상태 화면을 Orca 탭으로 엽니다. 지금 상태·마이크 음량·방금 들은 말과 결과·세션별 상태·기록을 보고, 말 끝 기다림·읽어 주기·소리·조용한 시간·호출어(알아듣지 못한 호출 추천)·세션 별명·단축 명령을 바꿉니다. | 사용자 실행 |
-| `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence·langfuse)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
+| `/setup` | 플러그인을 처음 설치했거나 기본 스킬을 추가·제거할 때 | [기본 스킬 카탈로그](#skill-catalog)(datadog·sentry·jira·confluence·langfuse·ga)에서 고른 것만 사용자 전역 스킬 폴더에 설치하고, 토큰 발급·저장·연결 확인을 안내하며, 회사·팀 전용 값을 사용자 규칙 파일로 남기고, 선택형 자동화 옵션을 켭니다. | 사용자 실행 (설치 후 첫 세션에 한 번 안내) |
 | `/diagram` | 시스템 구조·요청 흐름·API 시퀀스·데이터 파이프라인·상태 전이를 그림으로 봐야 할 때 | 내장된 [Archify](https://github.com/tt-a1i/archify) 엔진으로 타입 검증된 다이어그램을 인터랙티브 HTML로 만듭니다. 실제 코드를 그릴 때는 커밋된 소스를 근거로 검증합니다. Node.js 18+가 필요하고, 브라우저 검증 단계는 Chrome/Chromium을 씁니다. | 사용자 실행, `.archify/`에 산출물 생성 |
 | `/landing-page` | 소개 페이지·랜딩·회사 홈페이지·캠페인 페이지 같은 마케팅용 웹 페이지를 만들거나 다듬을 때, 또는 그 시안(Figma·이미지·HTML·영상)을 코드로 옮길 때 | 브리프 → 방향 → 레이아웃·타이포(한글 포함) → 모션 → 브라우저 검증 순서로 진행합니다. 저장소 디자인 시스템이 있으면 항상 그 값을 우선하고, 감소 모션·스크립트 실패 시에도 콘텐츠가 보이게 하며, 외부 컴포넌트 코드는 기억이 아니라 원본에서 받아옵니다. 하네스가 있으면 `.ai-harness/workflows/landing-page.md`를 우선합니다. 업무 화면(제품 UI)이나 디자인 시스템 생성에는 쓰지 않습니다. | 요청 시 자동 선택·사용자 실행 |
 | `/design-references` | 페이지·화면·모바일 청첩장·인쇄물·그래픽을 만들기 전에 같은 분야 사이트·경쟁사·인터랙션 레퍼런스를 모아 보고 싶을 때 ("경쟁사랑 레퍼런스 모아줘", "모바일 청첩장 레퍼런스 모아줘") | 검색을 한 턴에 동시에 보내고, 모든 페이지를 한 번에 캡처하며(봇 확인 화면은 실제 브라우저로 다시 열어 바꾸거나 다른 사이트로 교체), 톤·구성요소·레이아웃·인터랙션·경쟁사 다섯 종류로 나눠 테이크 라인과 경쟁사 분석을 붙입니다. 매체(`--medium web-page|mobile-page|print|graphic`, 기본 웹페이지)에 따라 캡처 폭·종류별 최소치·탭 이름이 바뀌고, 이미지 원본 주소를 그대로 레퍼런스로 쓰며, Pinterest·Behance 같은 모음 사이트는 작품 단위로 셉니다. 한 사이트는 한 종류에만, 캡처가 비거나 막힌 레퍼런스는 남기지 않는 검사(`scripts/design-refs.sh check`)를 통과해야 보드를 http로 띄웁니다. `/landing-page`의 레퍼런스 단계도 같은 절차·검사를 씁니다. Node.js와 Playwright Chromium이 필요합니다. | 요청 시 자동 선택·사용자 실행 |
@@ -125,7 +125,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 
 ### 기본 스킬 카탈로그 (`/setup`으로 선택 설치)
 
-외부 도구를 curl(langfuse는 표준 라이브러리만 쓰는 Python 스크립트)로 다루는 범용 Skill입니다. 플러그인 Skill로 넣으면 쓰지 않는 도구의 설명까지 모든 세션에 실리므로, 플러그인은 원본(`catalog/`)만 들고 있고 `/setup`에서 고른 것만 사용자 전역 폴더(Claude `~/.claude/skills/`, Codex `~/.agents/skills/`)에 복사합니다.
+외부 도구를 curl(langfuse·ga는 표준 라이브러리만 쓰는 Python 스크립트)로 다루는 범용 Skill입니다. 플러그인 Skill로 넣으면 쓰지 않는 도구의 설명까지 모든 세션에 실리므로, 플러그인은 원본(`catalog/`)만 들고 있고 `/setup`에서 고른 것만 사용자 전역 폴더(Claude `~/.claude/skills/`, Codex `~/.agents/skills/`)에 복사합니다.
 
 | Skill | 하는 일 | 필요한 환경변수 |
 |---|---|---|
@@ -134,6 +134,7 @@ React Native·Expo(`package.json`), Flutter(`pubspec.yaml`), iOS(`*.xcodeproj`·
 | `jira` | 이슈 조회·JQL 검색·생성·수정·상태 전환·코멘트 | `JIRA_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
 | `confluence` | 페이지 조회·CQL 검색·생성·수정·코멘트·첨부 | `CONFLUENCE_BASE_URL`, `ATLASSIAN_USER`, `ATLASSIAN_API_TOKEN` |
 | `langfuse` | trace·비용·지연·프롬프트·점수·데이터셋 조회, 변경은 확인 뒤 (공식 MCP 도구를 서버 등록 없이 Python 스크립트로 호출, 여러 프로젝트는 별칭) | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (프로젝트 키) 또는 그 키를 비밀 저장소(AWS SSM·Vault 등)에서 꺼내는 명령 `LANGFUSE_PUBLIC_KEY_CMD`, `LANGFUSE_SECRET_KEY_CMD`, 선택 `LANGFUSE_HOST` (등록 스크립트가 리전 자동 탐지) |
+| `ga` | Google Analytics 4 사용자·세션·이벤트·전환·실시간 지표 조회 (읽기 전용, Data API를 서비스 계정 키로 호출, 여러 속성은 별칭) | `GA_KEY_FILE` (서비스 계정 JSON 키 경로 — `/setup`이 `~/.ai-harness/keys/ga.json`(600)으로 복사해 저장, 원본은 사용자가 삭제), `GA_PROPERTY_ID` (숫자 속성 ID), 선택 `GA_PROPERTY_<별칭>` |
 
 - **접속 정보**: `/setup`이 키마다 발급 주소·순서·필요한 읽기 scope를 안내합니다. base URL·이메일 같은 값은 대화로 받아 저장하고, 토큰은 대화에 남지 않도록 사용자가 별도 터미널에서 `scripts/setup.sh set --tool claude <KEY>`(숨김 입력)로 넣습니다. Claude Code는 `~/.claude/settings.json`의 `env`, Codex는 `~/.ai-harness/secrets.env`(권한 600, 셸 프로파일에서 source)에 저장됩니다. 저장 뒤 `setup.sh check <skill>`이 읽기 전용 호출 하나로 연결과 접속 계정을 확인하고, 401·403·404면 원인을 짚습니다. 각 Skill은 자격 증명을 명령 인자가 아니라 stdin(`curl -K -`)으로 넘깁니다.
 - **회사·팀 전용 값**: 기본 프로젝트·스페이스·필터, Jira 스프린트·에픽 필드 ID, 이슈 생성 필수 항목, 작성 관례는 Skill 본문이 아니라 `~/.ai-harness/skills/<name>.md`에 둡니다. `/setup`이 계정에서 선택지를 읽어 와(`setup.sh detect`) 묻고 저장하며, 같은 이름의 개인 Skill이 있으면 거기서 회사 전용 값을 뽑아 초안으로 제안합니다. 카탈로그 Skill은 호출 전에 이 파일을 먼저 읽으므로, 본문을 고치지 않아 자동 갱신이 유지됩니다. 조직이 규칙을 한 곳(git 저장소나 공유 폴더의 `skills/<name>.md`)에 두면 `/setup team`이 개인 설정 `HM_TEAM_RULES` 또는 저장소 표식(`harness.json`·`workspace.json`의 `team_rules`)으로 원본을 찾아, 개인 파일과의 차이를 보여 주고 확인받은 뒤 팀 블록으로 넣습니다. 다시 가져오면 팀 블록만 바뀌고 개인 블록은 그대로이며, 원본이 바뀌면 세션 시작 안내가 알립니다(자동으로 덮어쓰지 않음).
@@ -994,7 +995,7 @@ tests/            회귀 테스트: 영역 파일 <영역>.sh, 공용 lib.sh, fi
 CONTRIBUTING.md   브랜치·버전·릴리스 규칙
 ```
 
-macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/board`·`langfuse`는 Python 3(표준 라이브러리)을 씁니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
+macOS/Linux에서 bash와 `jq`가 필요합니다. `curl`은 릴리스 확인에만 사용합니다. `/board`·`langfuse`·`ga`는 Python 3(표준 라이브러리)을, `ga`는 키 서명에 `openssl`을 씁니다. `/diagram`만 Node.js 18+를 쓰고, 브라우저 검증 단계에 Chrome/Chromium이 필요합니다.
 
 개발 시 회귀 테스트는 아래와 같습니다. 작업 중에는 `bash tests/run.sh --changed`로 바뀐 영역만 돌리고, PR 전에 전체를 돌립니다. `shellcheck`이 설치되어 있으면 shell 검사도 권장합니다.
 
