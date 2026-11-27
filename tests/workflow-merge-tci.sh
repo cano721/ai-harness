@@ -19,12 +19,15 @@ assert_eq "null" "$(run_state '.post_merge.target_ci.watcher // null')" "wait st
 pass "HM_TARGET_CI wait keeps waiting for the merge commit CI"
 
 # B2: notify에서 한 번 읽은 결과가 진행 중이면 tracked로 두고 감시를 띄운 뒤 done. 감시는 끝나면 결과를 상태에 남긴다.
-FAKE_TCI_ONCE=pending FAKE_TCI_WATCH=passed tci_run pm_tci_notify "HM_TARGET_CI=notify"
+# 감시는 게이트 파일이 생길 때까지 결과를 내지 않는다. 러너가 남긴 tracked를 본 뒤 게이트를 연다(#658).
+TCI_GATE="$DRIVER_TMP/tci-watch.gate"
+FAKE_TCI_ONCE=pending FAKE_TCI_WATCH=passed FAKE_TCI_WATCH_GATE="$TCI_GATE" tci_run pm_tci_notify "HM_TARGET_CI=notify"
 assert_eq "0:done:notify:HM_TARGET_CI" "$DRIVER_RC:$(run_state .status):$(run_state .policy.merge.target_ci):$(run_state .policy.merge.target_ci_source)" "notify finishes the run while the merge CI is still running"
 assert_eq "tracked" "$(run_state .post_merge.target_ci.status)" "the pending merge CI is tracked"
 [[ "$(run_state '.post_merge.target_ci.watcher.pid')" =~ ^[0-9]+$ ]] || fail "the watcher pid is recorded (actual=$(run_state '.post_merge.target_ci.watcher.pid'))"
 assert_contains "$(<"$(tci_dir)/post-merge-ci.prompt")" "Do not wait" "the notify read is told not to wait"
 assert_contains "$DRIVER_OUT" "target_ci tracked" "done reports the tracked merge CI"
+touch "$TCI_GATE"
 for _ in $(seq 1 100); do
   [[ "$(run_state '.post_merge.target_ci.watched_at // ""')" == "" ]] || break
   sleep 0.2
