@@ -42,6 +42,7 @@ ga raw '<runReport JSON 본문>'               # 옵션으로 표현이 안 되�
 
 - 공통 옵션: `--prop <별칭>`, `--filter`, `--order <이름>`(앞에 `-`면 내림차순, `--order -activeUsers`), `--limit N`(기본 50), `--json`(원본 응답), `--dry-run`(보낼 본문만 출력, 호출 안 함).
 - 필터: `field==value`(일치) · `field!=value`(제외) · `field=~value`(포함) · `field^=value`(시작), 쉼표는 AND. 예: `--filter "eventName==sign_up,platform^=Android"`. OR·숫자 비교는 `raw`로 `dimensionFilter`·`metricFilter`를 직접 쓴다.
+- 값에 쉼표가 들어 있으면(쉼표는 AND로 쪼개진다) `--filter` 대신 `raw`로 `dimensionFilter`를 직접 쓴다.
 - 기간을 안 주면 최근 7일(오늘 포함). `--end`는 `--start`와 함께만 쓴다. 날짜는 GA 속성의 시간대 기준이다.
 - 출력은 탭 구분 표, stderr에 행 수·합계(`TOTAL`)와 임계값·샘플링 표시.
 
@@ -61,6 +62,8 @@ ga raw '<runReport JSON 본문>'               # 옵션으로 표현이 안 되�
 | `SERVICE_DISABLED` · "has not been used" · "is disabled" | 키를 만든 GCP 프로젝트에서 Google Analytics Data API를 사용 설정하지 않음 — API 및 서비스 → 라이브러리에서 사용 설정 후 몇 분 기다림 |
 | `token request failed` · `invalid_grant` | 키가 폐기됐거나 컴퓨터 시계가 어긋남 — 새 JSON 키를 받아 `/ai-harness:setup`으로 다시 저장 |
 | `key file permissions` | `chmod 600 <키 파일>` |
-| `openssl failed` | openssl이 없거나 키 파일이 손상됨 — 새 JSON 키로 다시 저장 |
+| `openssl failed` | 키 파일 손상(서명 실패) — 새 JSON 키를 받아 `/ai-harness:setup`으로 다시 저장 |
+| `openssl not available` | openssl을 실행하지 못함 — openssl을 설치하고 PATH에 있는지 확인 |
+| `key temp file failed` | 서명용 임시 키 파일을 쓰지 못함 — 하네스 데이터 폴더의 `cache/ga-sign` 권한과 디스크 공간 확인 |
 | `bad property` | `G-XXXX`(측정 ID)를 넣음 — 숫자 속성 ID로 바꾼다 |
 | `HTTP 400` | dimension·metric 조합이 호환되지 않거나 이름이 틀림 — 메시지를 보고 `ga meta`로 확인 |

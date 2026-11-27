@@ -793,18 +793,55 @@ lf_check_one() { # alias → {alias, ok, as} | {alias, ok, error, hint}
     '{alias:$a, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
 }
 # GA(#639): 키 파일 존재·권한은 여기서, 서명·토큰·속성 metadata 조회는 카탈로그의 ga.py check가 한다(같은 설정 파일을 읽는다).
-ga_check() { # → ga.py check --json 한 줄
-  local cmd="${HM_SETUP_GA:-}"
+# 별칭(#655): 규칙은 ga.py aliases()와 같다. GA_PROPERTY_ID는 default, GA_PROPERTY_<S>는 <S>를 소문자·'-'로 바꾼 이름. 값이 빈 키는 건너뛴다.
+ga_aliases() { # → default 먼저, 나머지는 정렬해 한 줄에 하나
+  local n rest ga_found=""
+  while read -r n; do
+    [[ "$n" =~ ^GA_PROPERTY_[A-Z0-9_]+$ ]] || continue
+    resolve_value "$n" >/dev/null || continue
+    rest="${n#GA_PROPERTY_}"
+    if [[ "$rest" == ID ]]; then ga_found="$ga_found"$'\n'default; continue; fi
+    ga_found="$ga_found"$'\n'"$(printf '%s' "$rest" | tr 'A-Z_' 'a-z-')"
+  done <<<"$(
+    compgen -e
+    if [[ -f "$CLAUDE_SETTINGS" ]]; then jq -r '.env // {} | keys[]' "$CLAUDE_SETTINGS" 2>/dev/null || true; fi
+    if [[ -f "$SECRETS_FILE" ]]; then sed -nE 's/^export (GA_PROPERTY_[A-Z0-9_]*)=.*/\1/p' "$SECRETS_FILE"; fi
+  )"
+  ga_found="$(printf '%s\n' "$ga_found" | sed '/^$/d' | sort -u)"
+  if grep -qx default <<<"$ga_found"; then printf 'default\n'; fi
+  grep -vx default <<<"$ga_found" || true
+}
+ga_check() { # [alias] → ga.py check --json 한 줄 (default·빈 값은 --prop 없이)
+  local cmd="${HM_SETUP_GA:-}" args=(check --json)
+  [[ -z "${1:-}" || "$1" == default ]] || args+=(--prop "$1")
   if [[ -z "$cmd" ]]; then
-    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" python3 -I "$CATALOG_DIR/ga/scripts/ga.py" check --json
+    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" python3 -I "$CATALOG_DIR/ga/scripts/ga.py" "${args[@]}"
   else
-    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" "$cmd" check --json
+    HARNESS_METRICS_DIR="$HM_DATA_DIR" HARNESS_CLAUDE_SETTINGS="$CLAUDE_SETTINGS" "$cmd" "${args[@]}"
   fi
+}
+ga_check_one() { # alias → {alias, ok, as} | {alias, ok, error, hint}
+  local alias="$1" body ok=true who="" err=""
+  body="$(ga_check "$alias" 2>/dev/null || true)"
+  if [[ "$(jq -r '.ok' <<<"$body" 2>/dev/null)" == true ]]; then who="$(jq -r '"\(.as) (property \(.property))"' <<<"$body")"
+  else
+    ok=false
+    err="$(jq -r '[.error, (.reason // "" | select(. != ""))] | join(" ")' <<<"$body" 2>/dev/null || true)"
+    [[ -n "$err" ]] || err="ga.py failed"
+    err="$(printf '%s' "$err" | head -1)"
+  fi
+  jq -cn --arg a "$alias" --argjson ok "$ok" --arg who "$who" --arg err "$err" --arg hint "$( [[ $ok == true ]] || check_hint ga "$err" "$alias")" \
+    '{alias:$a, ok:$ok} + (if $ok then {as:$who} else {error:$err, hint:$hint} end)'
 }
 mask_email() { sed -E 's/^(.).*@/\1***@/'; }
 
-check_hint() { # skill, http 오류, [langfuse 별칭] → 원인 안내
+check_hint() { # skill, http 오류, [langfuse·ga 별칭] → 원인 안내
   local alias="${3:-default}"
+  if [[ "$1" == ga && "$alias" != default ]]; then
+    case "$2" in
+      "HTTP 404"* | "HTTP 400"* | "bad property"*) printf '별칭 %s의 속성 ID가 틀림 — GA 관리 → 속성 세부정보의 숫자 속성 ID를 GA_PROPERTY%s로 set한다 (G-XXXX 측정 ID 아님)' "$alias" "$(lf_suffix "$alias")"; return ;;
+    esac
+  fi
   if [[ "$1" == langfuse && "$alias" != default ]]; then
     case "$2" in
       "HTTP 401") printf '별칭 %s의 키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST%s를 그 주소로 set하거나 scripts/register.py %s로 다시 등록한다' "$alias" "$(lf_suffix "$alias")" "$alias"; return ;;
@@ -820,7 +857,9 @@ check_hint() { # skill, http 오류, [langfuse 별칭] → 원인 안내
     ga:"key file not found") printf 'GA_KEY_FILE 경로에 파일이 없음 — set --tool <도구> GA_KEY_FILE <내려받은 JSON 경로>로 다시 저장한다' ;;
     ga:"key file permissions") printf '키 파일을 다른 사용자가 읽을 수 있음 — chmod 600 <GA_KEY_FILE 경로>' ;;
     ga:"HTTP 401"*) printf '토큰이 거부됨 — 키가 폐기됐을 수 있다. 새 JSON 키를 받아 set --tool <도구> GA_KEY_FILE <경로>로 다시 저장한다' ;;
-    ga:"openssl failed"*) printf '키로 서명하지 못함 — openssl이 있는지, 키 파일이 손상되지 않았는지 확인하고 필요하면 새 JSON 키로 다시 저장한다' ;;
+    ga:"openssl failed"*) printf '키로 서명하지 못함 — 키 파일이 손상됐을 수 있다. 새 JSON 키를 받아 set --tool <도구> GA_KEY_FILE <경로>로 다시 저장한다' ;;
+    ga:"openssl not available"*) printf 'openssl을 실행하지 못함 — openssl을 설치하고 PATH에서 찾을 수 있는지 확인한다' ;;
+    ga:"key temp file failed"*) printf '서명용 임시 키 파일을 쓰지 못함 — 하네스 데이터 폴더(~/.ai-harness)의 cache/ga-sign 폴더 권한과 디스크 공간을 확인한다' ;;
     ga:"bad key file") printf '서비스 계정 JSON 키가 아님 — GCP 서비스 계정 → 키 → JSON으로 새로 받는다' ;;
     ga:"ga.py failed"*) printf 'ga.py를 실행하지 못함 — python3·openssl이 있는지 확인한다' ;;
     langfuse:"HTTP 401") printf '키가 틀렸거나 리전(host)이 다름 — 키를 만든 주소가 us.·jp.cloud.langfuse.com이면 LANGFUSE_HOST를 그 주소로 set한다' ;;
@@ -864,19 +903,26 @@ command_check() {
         && [[ "$(jq -r '.type' <<<"$body" 2>/dev/null)" != anonymous ]]; then who="$(jq -r '.displayName // ""' <<<"$body")"
       else ok=false; err="$(cat "$STATE_DIR/.err" 2>/dev/null)"; [[ -n "$err" ]] || err="HTTP 401"; fi
       ;;
-    ga)
-      local kf mode
+    ga) # 키 파일은 모든 속성이 같이 쓰므로 한 번만 먼저 보고, 통과하면 기본 속성과 별칭마다 확인한다(#655).
+      local kf mode alias
       kf="$(resolve_value GA_KEY_FILE)"
       kf="$(expand_home "$kf")"
       if [[ ! -f "$kf" ]]; then ok=false; err="key file not found"
       elif mode="$(filemode "$kf")" && [[ ! "$mode" =~ 00$ ]]; then ok=false; err="key file permissions"
       else
-        body="$(ga_check 2>/dev/null || true)"
-        if [[ "$(jq -r '.ok' <<<"$body" 2>/dev/null)" == true ]]; then who="$(jq -r '"\(.as) (property \(.property))"' <<<"$body")"
+        projects='[]'
+        while IFS= read -r alias; do
+          [[ -n "$alias" ]] || continue
+          projects="$(jq -c --argjson p "$(ga_check_one "$alias")" '. + [$p]' <<<"$projects")"
+        done <<<"$(ga_aliases)"
+        if [[ "$projects" == '[]' ]]; then ok=false; err="missing GA_PROPERTY_ID"
+        elif [[ "$(jq -r 'map(.alias) == ["default"]' <<<"$projects")" == true ]]; then
+          ok="$(jq -r '.[0].ok' <<<"$projects")"; who="$(jq -r '.[0].as // ""' <<<"$projects")"; err="$(jq -r '.[0].error // ""' <<<"$projects")"
         else
-          ok=false
-          err="$(jq -r '[.error, (.reason // "" | select(. != ""))] | join(" ")' <<<"$body" 2>/dev/null || true)"
-          [[ -n "$err" ]] || err="ga.py failed"
+          ok="$(jq -r 'all(.ok)' <<<"$projects")"
+          who="$(jq -r '[.[] | select(.ok) | "\(.alias): \(.as)"] | join(", ")' <<<"$projects")"
+          err="$(jq -r '[.[] | select(.ok | not) | "\(.alias): \(.error)"] | join(", ")' <<<"$projects")"
+          hint="$(jq -r 'first(.[] | select(.ok | not) | .hint) // ""' <<<"$projects")"
         fi
       fi
       ;;
