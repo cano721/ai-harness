@@ -35,6 +35,8 @@ GET  /agenda?t=...               내 일정(#492): 일정 소스(agenda.json) �
 POST /agenda/connect {t, source} · /agenda/disconnect {t, source, account?}  소스 연결·끊기(connect는 뒤에서, 최대 5분).
                                     계정을 여럿 잇는 소스는 연결된 뒤 connect가 계정을 더하고, account를 주면 그 계정만 끊는다
 POST /agenda/refresh {t, source}  주기와 상관없이 그 소스 하나만 바로 다시 모음(실패 알림의 [다시 가져오기])
+POST /agenda/refresh-all {t}     머리 [지금 가져오기](#663): 연결된 소스를 한꺼번에 다시 모음. 이미 수집 중인 소스는 skipped,
+                                   {ok(실패 없음), refreshed·skipped(이름), failed[{source, name, error}], message}. 연결 0곳이면 409
 POST /agenda/done {t, source, id}  항목 완료(어댑터 done 또는 보드 기록) · POST /agenda/todo {t, text, due?}  직접 적는 할 일(#539 기한)
                                  · POST /agenda/reopen {t, source, id}  완료 되돌리기(직접 적은 할 일·보드에만 숨긴 항목,
                                    reopen을 선언한 어댑터 — 그 argv에 항목 id를 붙여 부름). 완료함에서 그 줄을 지움
@@ -2733,6 +2735,10 @@ class Handler(BaseHTTPRequestHandler):
             code, res = AGENDA.disconnect(source, account)
         elif kind == "refresh":
             code, res = AGENDA.refresh(source)
+        elif kind == "refresh-all":
+            code, res, ids = AGENDA.refresh_all()
+            log({"action": "agenda_refresh-all", "ok": res["ok"], **ids})
+            return self._send(code, res)
         elif kind == "reopen":
             code, res = AGENDA.reopen(source, req.get("id"))
         elif kind == "delete":
@@ -2831,7 +2837,7 @@ class Handler(BaseHTTPRequestHandler):
                 _cache["data"] = None
             log({"action": "references_pick", "run": req.get("run"), "ok": res["ok"], "message": res["message"]})
             return self._send(code, res)
-        if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/done", "/agenda/todo", "/agenda/reopen",
+        if path in ("/agenda/connect", "/agenda/disconnect", "/agenda/refresh", "/agenda/refresh-all", "/agenda/done", "/agenda/todo", "/agenda/reopen",
                     "/agenda/settings", "/agenda/delete"):
             return self._agenda_post(path.rsplit("/", 1)[1], req)
         if path == "/impact/refresh":
