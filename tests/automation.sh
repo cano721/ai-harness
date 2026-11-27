@@ -388,11 +388,11 @@ pass "internal auto-harvest sessions stay out of the queue"
 
 # open-pr.sh: 원격을 보고 GitHub/Bitbucket draft PR 요청을 만든다.
 PR_REPO="$TEST_TMP/pr-repo"
-make_repo "$PR_REPO" "git@bitbucket.org:acme/jobda-agent.git"
+make_repo "$PR_REPO" "git@bitbucket.org:acme/acme-agent.git"
 git -C "$PR_REPO" checkout -q -b feature/NJ-1-harvest
 printf 'body\n' >"$TEST_TMP/pr-body.md"
 PR_BB="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base develop)"
-assert_eq "bitbucket|acme/jobda-agent|true|feature/NJ-1-harvest|develop|body" \
+assert_eq "bitbucket|acme/acme-agent|true|feature/NJ-1-harvest|develop|body" \
   "$(jq -r '[.provider,.slug,.draft,.source.branch.name,.destination.branch.name,(.description|rtrimstr("\n"))] | map(tostring) | join("|")' <<<"$PR_BB")" "Bitbucket draft PR request"
 git -C "$PR_REPO" remote set-url origin https://github.com/acme/woorinal.git
 PR_GH="$(cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" --base main)"
@@ -401,7 +401,7 @@ git -C "$PR_REPO" remote set-url origin git@gitlab.com:acme/x.git
 if (cd "$PR_REPO" && HM_OPEN_PR_DRY_RUN=1 "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" 2>/dev/null); then
   fail "unsupported host must fail"
 fi
-git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/jobda-agent.git
+git -C "$PR_REPO" remote set-url origin git@bitbucket.org:acme/acme-agent.git
 PR_NOAUTH_RC=0
 (cd "$PR_REPO" && ATLASSIAN_USER="" BITBUCKET_API_TOKEN="" HARNESS_CLAUDE_SETTINGS="$TEST_TMP/no-settings.json" "$ROOT/scripts/open-pr.sh" --title t --body-file "$TEST_TMP/pr-body.md" >/dev/null 2>&1) || PR_NOAUTH_RC=$?
 assert_eq "4" "$PR_NOAUTH_RC" "Bitbucket without credentials fails before any request"
@@ -773,11 +773,11 @@ assert_contains "$(run_hard_digest)" "실패 1" "failed digest is reported"
 assert_contains "$(run_hard_digest)" "정리 0, 실패 0" "recently failed session is not picked again"
 # 이름 재판정은 경로가 살아 있고 git·workspace로 판정될 때만.
 mkdir -p "$HARD_DIR/rl/events"
-jq -cn '{v:3,kind:"session",src:"claude",sid:"gone-1",project:"jobda",cwd:"/gone/orca/workspaces/jobda/fix-login-bug",transcript:"/gone/t.jsonl"}' \
+jq -cn '{v:3,kind:"session",src:"claude",sid:"gone-1",project:"acme",cwd:"/gone/orca/workspaces/acme/fix-login-bug",transcript:"/gone/t.jsonl"}' \
   >"$HARD_DIR/rl/events/claude-gone-1.jsonl"
 HARNESS_METRICS_DIR="$HARD_DIR/rl" HARNESS_CLAUDE_PROJECTS_DIR="$HARD_DIR/none" HARNESS_CODEX_SESSIONS_DIR="$HARD_DIR/none" \
   "$ROOT/scripts/backfill.sh" >/dev/null
-assert_eq "jobda" "$(jq -r '.project' "$HARD_DIR/rl/events/claude-gone-1.jsonl")" "a heuristic name never overwrites a git-derived one"
+assert_eq "acme" "$(jq -r '.project' "$HARD_DIR/rl/events/claude-gone-1.jsonl")" "a heuristic name never overwrites a git-derived one"
 # 프로젝트 실행 권한: 데이터·transcript는 읽기만, 위험한 git은 금지.
 HARD_ARGS="$(sed -n '/local deny_args=/,/done < <(codex_session_roots)/p' "$ROOT/scripts/harvest-auto.sh")"
 # shellcheck disable=SC2016

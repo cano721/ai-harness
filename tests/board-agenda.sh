@@ -444,7 +444,7 @@ AG_CLIENT="$ROOT/scripts/board/agenda/google/client.json"
 assert_eq "true" "$(jq -r '.installed | (.client_id | endswith(".apps.googleusercontent.com")) and (.client_secret | length > 0)' "$AG_CLIENT")" "the built-in client is a desktop (installed) client"
 AG_LEAK="$(grep -rlE 'apps\.googleusercontent\.com|GOCSPX-' "$ROOT/scripts" "$ROOT/skills" "$ROOT/docs" "$ROOT/tests" "$ROOT/README.md" | grep -vxF "$AG_CLIENT" | grep -v '/tests/board-agenda.sh$' || true)"
 assert_eq "" "$AG_LEAK" "client values live only in client.json"
-if grep -rqiE 'midas|jobda|khb1122' "$ROOT/scripts/board/agenda.py" "$ROOT/scripts/board/agenda" "$ROOT/docs/privacy.md" "$AG_FIX"; then
+if ! bash "$ROOT/scripts/identifier-scan.sh" "$ROOT/scripts/board/agenda.py" "$ROOT/scripts/board/agenda" "$ROOT/docs/privacy.md" "$AG_FIX" >/dev/null; then
   fail "agenda files carry no organization identifiers"
 fi
 pass "agenda files keep client values in one place and carry no identifiers"

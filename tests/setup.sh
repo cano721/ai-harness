@@ -15,7 +15,7 @@ for name in $CATALOG_NAMES; do
   assert_eq "description" "$(sed -n '3p' "$skill_md" | cut -d: -f1)" "catalog $name frontmatter description"
   assert_eq "---" "$(sed -n '4p' "$skill_md")" "catalog $name frontmatter has only name and description"
   [[ ! -e "$ROOT/skills/$name" ]] || fail "catalog skill $name must not be a plugin skill"
-  if grep -qiE 'midas|jobda|khb1122' "$skill_md"; then fail "catalog $name carries organization-specific values"; fi
+  if ! bash "$ROOT/scripts/identifier-scan.sh" "$skill_md" >/dev/null; then fail "catalog $name carries organization-specific values"; fi
   if grep -qE 'curl[^|]*(-u |-H .(DD-API-KEY|Authorization))' "$skill_md"; then fail "catalog $name puts credentials on argv"; fi
 done
 pass "skill catalog is generic and stays out of plugin skills"

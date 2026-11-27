@@ -494,7 +494,7 @@ agent_command() { # $1=project $2=work_dir $3=agent $4=base $5=scope → 실행�
       # 설치 경로 대신 공백 없는 고정 링크로 허용하고, 에이전트에게도 그 경로를 --scripts로 넘긴다(#400).
       scripts_dir="$(hm_auto_plugin_link "$plugin_root")/scripts"
       # 이벤트·큐(데이터 디렉토리)와 transcript는 작업 worktree 밖이라, 열어 주지 않으면 읽기가 거부돼
-      # 건수만 보고 판단하게 된다(실측: jobda·jobda-agent·jobda-scheduler).
+      # 건수만 보고 판단하게 된다(실측: 사내 저장소 3곳).
       local read_dirs=(--add-dir "$HM_DATA_DIR" --add-dir "$HM_CLAUDE_PROJECTS_DIR" --add-dir "$plugin_root") codex_root=""
       # 읽기 위해 연 디렉토리는 쓰지 못하게 한다. 데이터 디렉토리의 config·shim은 이후 실행이 source·실행하므로
       # 여기를 고칠 수 있으면 transcript 속 지시가 샌드박스 밖 코드 실행으로 이어진다.

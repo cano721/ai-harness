@@ -139,8 +139,8 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(self.t("헤이 클로드, 세 번 세션으로 가줘")["index"], 3)
         self.assertEqual(self.kind("헤이 클로드 다음 세션"), "next_session")
         self.assertEqual(self.kind("헤이 클로드 다음"), "prompt")
-        named = self.t("헤이 클로드 잡다로그 세션으로 이동")
-        self.assertEqual((named["type"], named["name"]), ("goto_session_named", "잡다로그"))
+        named = self.t("헤이 클로드 학교로그 세션으로 이동")
+        self.assertEqual((named["type"], named["name"]), ("goto_session_named", "학교로그"))
 
     def test_wake_variants(self):
         found = wake_variants("헤이 클로드")

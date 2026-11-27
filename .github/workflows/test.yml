@@ -18,6 +18,10 @@ jobs:
         run: bash -n scripts/*.sh scripts/board/*.sh tests/*.sh
       - name: ShellCheck
         run: shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh
+      - name: Identifier scan
+        env:
+          HM_IDENTIFIER_DENYLIST: ${{ secrets.HM_IDENTIFIER_DENYLIST }}
+        run: bash scripts/identifier-scan.sh
   shard:
     runs-on: ubuntu-latest
     strategy:

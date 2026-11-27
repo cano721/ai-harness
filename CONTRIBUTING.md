@@ -181,6 +181,12 @@ shellcheck -x scripts/*.sh scripts/board/*.sh tests/*.sh     # 미설치 시 npx
 
 CI 필수 체크는 집계 job `test` 하나다. `test`는 `lint`와 `shard (1)`~`shard (4)`(`.github/workflows/test.yml`의 matrix job `shard`)를 `needs`로 묶어 `if: always()`로 돌고, 그중 하나라도 실패·취소·건너뜀이면 실패한다. 브랜치 보호에는 `test`만 필수 체크로 등록하고 `shard (n)`·`lint`는 등록하지 않는다 — 샤드 수를 바꿔도 보호 규칙은 그대로 둔다. 워크플로에 job을 새로 추가하면 `test`의 `needs`에도 넣는다(`tests/core.sh`가 검사).
 
+공개 저장소라 회사명·사용자 ID·실명 같은 식별자를 커밋하지 않는다. `scripts/identifier-scan.sh`가 저장소 밖의 금지어 목록 `HM_IDENTIFIER_DENYLIST`로 추적 파일 전체(`git ls-files`, 바이너리 제외)를 대소문자 무시 고정 문자열로 검사한다. 경로를 인자로 주면 그 파일·디렉토리만 본다. 목록은 소스에 두지 않는다.
+
+- 로컬: `~/.ai-harness/config`에 `HM_IDENTIFIER_DENYLIST="a|b"`(config는 `|` 구분, 따옴표로 감싼다). 환경변수 `HM_IDENTIFIER_DENYLIST`가 있으면 config보다 먼저 쓴다(`|` 또는 줄바꿈 구분).
+- CI: 저장소 Settings → Secrets and variables → Actions에 secret `HM_IDENTIFIER_DENYLIST`(값은 `|` 또는 줄바꿈 구분)를 등록하면 `lint` job의 `Identifier scan` 단계가 검사한다. secret이 없으면(fork PR 등) "건너뜀"을 출력하고 통과한다.
+- 출력은 `파일:줄`뿐이다. CI 로그도 공개이므로 금지어와 줄 내용은 찍지 않는다. 매치가 있으면 exit 1이다.
+
 CI의 shellcheck는 **info 레벨도 실패로 다룬다**. 로컬 버전이 CI보다 관대할 수 있으니 경고가 나오면 구조를 바꿔 없앤다 — `# shellcheck disable`은 근거를 주석으로 남길 수 있을 때만 쓴다.
 
 `scripts/release-prep.sh --check`는 네 곳의 버전·태그 URL·CHANGELOG 절이 맞는지와 `changelog.d/` 조각 형식을 본다. 형식이 틀린 조각은 `changelog.d/<file>: <이유>`로 알리고 실패한다. `## Unreleased`가 있어도 통과하므로 `develop`에서도 그대로 돌릴 수 있다. `## Unreleased` 머리가 없으면 실패하지 않고 stderr에 경고만 한다.

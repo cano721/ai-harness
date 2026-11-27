@@ -50,7 +50,7 @@ for role in fe-architect fe-implementer fe-designer; do
 done
 # 공개 템플릿에는 원본 팀의 실명·사내 패키지·디자인 시스템 이름이 남지 않는다.
 for f in "$ROOT"/templates/frontend-team/SKILL.md "$ROOT"/templates/frontend-team/personas/*.md "$ROOT"/templates/design-audit/SKILL.md; do
-  if grep -nE 'jobda|Astryx|astryx|ingyu|sunwoong|seonyoung|인규|선웅|선영|@jobda' "$f"; then
+  if ! bash "$ROOT/scripts/identifier-scan.sh" "$f"; then
     fail "internal name leaked into public template: $f"
   fi
 done

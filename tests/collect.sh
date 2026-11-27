@@ -100,7 +100,7 @@ assert_eq ".ai-harness/docs/testing.md=1 .ai-harness/docs/한글문서.md=1 .ai-
   "$(jq -r 'select(.kind=="doc_read") | "\(.target)=\(.n)"' "$EXTRACT_DATA/events/claude-ffffffff-1111-2222-3333-aaaaaaaaaaaa.jsonl" | sort | paste -sd " " -)" \
   "Claude doc_read counts harness docs read through Bash read commands, not searches, redirects, heredocs or sed -i"
 assert_eq "bbbbbbbb-1111-2222-3333-cccccccccccc" "$(jq -r 'select(.kind=="session") | .sid' "$CODEX_EVENT")" "Codex real session id"
-assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
+assert_eq "acme-agent" "$(jq -r 'select(.kind=="session") | .project' "$CODEX_EVENT")" "Codex project normalization"
 assert_eq "gpt-test-model" "$(jq -r 'select(.kind=="session") | .model' "$CODEX_EVENT")" "Codex model"
 assert_eq "openai" "$(jq -r 'select(.kind=="session") | .provider' "$CODEX_EVENT")" "Codex provider"
 assert_eq "11" "$(jq -r 'select(.kind=="session") | .cache_write' "$CODEX_EVENT")" "Codex cache write"
@@ -122,7 +122,7 @@ CODEX_LEGACY_DATA="$TEST_TMP/codex-legacy"
 mkdir -p "$CODEX_LEGACY_DATA/events"
 jq -c 'if .kind=="session" then .coverage -= ["context"] | .tok_in = 100 | del(.ctx_first,.ctx_peak,.ctx_last,.ctx_window) else . end' "$CODEX_EVENT" \
   >"$CODEX_LEGACY_DATA/events/codex-legacy.jsonl"
-assert_contains "$(HARNESS_METRICS_DIR="$CODEX_LEGACY_DATA" "$ROOT/scripts/stats.sh")" "| jobda-agent | 1 | 3 | 40 |" "stats normalizes legacy Codex input that still included cached input"
+assert_contains "$(HARNESS_METRICS_DIR="$CODEX_LEGACY_DATA" "$ROOT/scripts/stats.sh")" "| acme-agent | 1 | 3 | 40 |" "stats normalizes legacy Codex input that still included cached input"
 CODEX_CTX_REPORT="$(HARNESS_METRICS_DIR="$TEST_TMP/codex-ctx-data" HARNESS_CLAUDE_PROJECTS_DIR="$TEST_TMP/none" \
   HARNESS_CODEX_SESSIONS_DIR="$TEST_TMP/codex-ctx" "$ROOT/scripts/session.sh" eeeeeeee)"
 assert_contains "$CODEX_CTX_REPORT" "최대 3000 / 마지막 2000 · 창 10000의 30%" "session report shows peak share of the Codex context window"
@@ -146,7 +146,7 @@ jq -n --arg tp "$CODEX_FIXTURE" '{transcript_path:$tp,reason:"other"}' \
   | HARNESS_METRICS_DIR="$HOOK_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/collect.sh"
 assert_not_file "$HOOK_DATA/events/claude-rollout-${CODEX_FILE_SID}.jsonl"
 assert_file "$HOOK_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
-assert_file "$HOOK_DATA/harvest-queue/p-jobda-agent/sessions/codex-${CODEX_SESSION_ID}.json"
+assert_file "$HOOK_DATA/harvest-queue/p-acme-agent/sessions/codex-${CODEX_SESSION_ID}.json"
 jq -n --arg tp "$CLAUDE_FIXTURE" '{transcript_path:$tp,reason:"user_exit"}' \
   | HARNESS_METRICS_DIR="$HOOK_DATA" HM_UPDATE_CHECK_ENABLED=0 "$ROOT/scripts/collect.sh"
 assert_file "$HOOK_DATA/events/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.jsonl"
@@ -577,7 +577,7 @@ assert_contains "$BACKFILL_OUTPUT" "유령 정리 1" "legacy ghost cleanup"
 [[ ! -e "$BACKFILL_DATA/events/claude-rollout-legacy.jsonl" ]] || fail "legacy ghost event not removed"
 assert_file "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
 assert_file "$BACKFILL_DATA/harvest-queue/p-service/sessions/claude-aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb.json"
-assert_file "$BACKFILL_DATA/harvest-queue/p-jobda-agent/sessions/codex-${CODEX_SESSION_ID}.json"
+assert_file "$BACKFILL_DATA/harvest-queue/p-acme-agent/sessions/codex-${CODEX_SESSION_ID}.json"
 assert_eq "success" "$(jq -r '.components.backfill.last_result' "$BACKFILL_DATA/health.json")" "backfill health"
 cp "$ROOT/tests/fixtures/stale-codex-event.jsonl" "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
 touch -t 203001010000 "$BACKFILL_DATA/events/codex-${CODEX_FILE_SID}.jsonl"
@@ -744,10 +744,10 @@ REPO_URL_DATA="$TEST_TMP/repo-url-data"
 REPO_URL_ROLLOUT="$TEST_TMP/repo-url/rollout-2026-07-29T12-00-00-dddddddd-1111-2222-3333-cccccccccccc.jsonl"
 mkdir -p "${REPO_URL_ROLLOUT%/*}"
 jq -cR 'fromjson? | if .type=="session_meta" then .payload.cwd="/gone/workspaces/x/feature-NJ-612"
-  | .payload.git={repository_url:"https://github.com/acme/jobda-agent.git"} else . end' \
+  | .payload.git={repository_url:"https://github.com/acme/acme-agent.git"} else . end' \
   "$CODEX_FIXTURE" >"$REPO_URL_ROLLOUT"
 HARNESS_METRICS_DIR="$REPO_URL_DATA" "$ROOT/scripts/extract-codex.sh" "$REPO_URL_ROLLOUT"
-assert_eq "jobda-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_URL_DATA"/events/codex-*dddddddd*.jsonl)" "Codex extractor uses recorded repo URL"
+assert_eq "acme-agent" "$(jq -r 'select(.kind=="session") | .project' "$REPO_URL_DATA"/events/codex-*dddddddd*.jsonl)" "Codex extractor uses recorded repo URL"
 
 # 프로젝트 ID가 바뀐 재추출 세션은 이전 큐의 검토 상태를 이어받는다.
 MOVE_DATA="$TEST_TMP/move-data"

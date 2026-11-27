@@ -32,7 +32,7 @@
 
 ## 공개 저장소
 
-- 회사명·사내 도메인·사내 URL·개인 이름·이메일·토큰을 코드·예시·fixture·문서·CHANGELOG에 넣지 않는다. 예시는 `acme`, `example.com`, 가짜 UUID를 쓴다. 일부 경로는 `tests/run.sh`가 조직 식별자를 grep으로 막는다.
+- 회사명·사내 도메인·사내 URL·개인 이름·이메일·토큰을 코드·예시·fixture·문서·CHANGELOG에 넣지 않는다. 예시는 `acme`, `example.com`, 가짜 UUID를 쓴다. `scripts/identifier-scan.sh`가 저장소 밖 금지어 목록(`HM_IDENTIFIER_DENYLIST` 환경변수 → `~/.ai-harness/config`)으로 추적 파일 전체를 검사하고 `파일:줄`만 출력한다(CI `lint` job은 같은 이름의 secret, 목록이 없으면 건너뜀). 경로별로 보호하는 테스트도 금지어를 소스에 적지 않고 이 스크립트를 경로 인자로 부른다.
 
 ## 커밋·PR
 
