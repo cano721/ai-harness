@@ -82,7 +82,7 @@ hm_run_with_timeout() {
 }
 
 # 하네스를 고칠 기준 브랜치. origin/HEAD가 하네스 없는 초기 브랜치(master)이고 실제 개발은 develop인
-# 저장소가 많아서(실측 jobda-*), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
+# 저장소가 많아서(실측 사내 저장소들), 하네스 파일이 실제로 들어 있는 브랜치를 고른다.
 # 순서: harness.json의 base_branch → develop → origin/HEAD → main → master. origin이 없으면 HEAD.
 hm_resolve_base() { # $1=repo_root [$2=--no-fetch] → "origin/<branch>" 또는 "HEAD"
   local repo_root="$1" candidate="" head="" configured=""

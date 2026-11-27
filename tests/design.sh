@@ -374,7 +374,7 @@ for DS_PART in ds-btn ds-card ds-row ds-badge ds-chip ds-tabs ds-drawer ds-toast
   assert_contains "$DS_REF_HTML" "$DS_PART" "reference screen shows $DS_PART"
 done
 # 공개 저장소: 예시 데이터에 조직·개인 식별자를 넣지 않는다.
-if grep -rqiE 'midas|jobda|khb1122' "$DS" "$DS_DOC"; then fail "design system files carry organization-specific values"; fi
+if ! bash "$ROOT/scripts/identifier-scan.sh" "$DS" "$DS_DOC" >/dev/null; then fail "design system files carry organization-specific values"; fi
 # 토큰 적용: 보드의 채운 면 위 글자는 테마마다 대비가 맞는 토큰을 쓴다(흰색 고정 금지).
 case "$(<"$ROOT/scripts/board/template.html")" in *"color: #fff"*) fail "board filled surfaces use --color-text-on-solid, not fixed white" ;; esac
 pass "design system: offline reference screen with every shared part, no identifiers"
@@ -563,7 +563,7 @@ for UX_CONSUMER in templates/implement-feature/SKILL.md templates/fix-bug/SKILL.
   assert_contains "$(<"$ROOT/$UX_CONSUMER")" ".ai-harness/docs/ux-writing.md" "$UX_CONSUMER reads the UX writing document"
 done
 assert_contains "$(<"$ROOT/README.md")" "| \`/ux-writing-audit\` |" "README lists ux-writing-audit"
-if grep -rqiE 'midas|jobda|khb1122|toss' "$ROOT/skills/ux-writing-builder" "$ROOT/skills/ux-writing-audit" "$UX_LINT"; then fail "UX writing files carry organization-specific values"; fi
+if ! bash "$ROOT/scripts/identifier-scan.sh" "$ROOT/skills/ux-writing-builder" "$ROOT/skills/ux-writing-audit" "$UX_LINT" >/dev/null; then fail "UX writing files carry organization-specific values"; fi
 pass "ux-writing: deterministic lint, builder template, audit contract, consumers"
 
 finish_tests

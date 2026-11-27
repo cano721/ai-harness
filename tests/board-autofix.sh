@@ -690,7 +690,7 @@ for BOARD_PART in '끝난 일 정리…' "openTool('hidden')" '/cleanup-bulk' '/
   assert_contains "$BOARD_TPL" "$BOARD_PART" "the board uses $BOARD_PART"
 done
 # 가짜 데이터 미리보기(디자인 검토·스크린샷용)는 조직·개인 식별자를 싣지 않는다.
-if grep -qiE 'midas|jobda|khb1122' "$ROOT/tests/fixtures/board-preview/serve.py"; then fail "the board preview fixture carries no identifiers"; fi
+if ! bash "$ROOT/scripts/identifier-scan.sh" "$ROOT/tests/fixtures/board-preview/serve.py" >/dev/null; then fail "the board preview fixture carries no identifiers"; fi
 python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("pv", sys.argv[1]); pv = importlib.util.module_from_spec(spec); spec.loader.exec_module(pv)

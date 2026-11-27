@@ -17,7 +17,7 @@ printf '%s\n' '---' 'name: reviewer' 'model: opus' '---' >"$ORPHAN_ROOT/.claude/
   --file .claude/agents/developer.md --file .claude/agents/reviewer.md
 ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
 assert_eq "0" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned | length')" "artifacts inside the current config are not orphaned"
-jq '.stacks = [] | .roles = {developer: {source: "existing", integrations: ["claude"], agents: ["sunwoong"]}}' \
+jq '.stacks = [] | .roles = {developer: {source: "existing", integrations: ["claude"], agents: ["alice"]}}' \
   "$ORPHAN_ROOT/.ai-harness/harness.json" >"$ORPHAN_ROOT/manifest.tmp" && mv "$ORPHAN_ROOT/manifest.tmp" "$ORPHAN_ROOT/.ai-harness/harness.json"
 ORPHAN_PLAN="$("$ROOT/scripts/harness-sync-state.sh" plan --root "$ORPHAN_ROOT" --catalog "$ROOT/templates/managed-files.json")"
 assert_eq "stack_removed" "$(printf '%s' "$ORPHAN_PLAN" | jq -r '.orphaned[] | select(.path==".agents/skills/frontend-testing/SKILL.md") | .reason')" "dropped stack orphans its artifacts"
@@ -43,9 +43,9 @@ printf '%s\n' '.claude/' >"$ASSET_ROOT/.gitignore"
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
 printf '%s\n' '# Team rules' 'Route edits through `orchestrator`.' 'Dev server runs on `localhost:8080`.' >"$ASSET_ROOT/.claude/CLAUDE.md"
 printf '%s\n' '# Conventions' >"$ASSET_ROOT/TEAM_CONVENTIONS.md"
-printf '%s\n' '---' 'name: sunwoong' 'description: >' '  Builds screens fast.' 'model: opus' 'skills:' '  - frontend-testing' '---' 'body' >"$ASSET_ROOT/.claude/agents/sunwoong.md"
+printf '%s\n' '---' 'name: alice' 'description: >' '  Builds screens fast.' 'model: opus' 'skills:' '  - frontend-testing' '---' 'body' >"$ASSET_ROOT/.claude/agents/alice.md"
 # shellcheck disable=SC2016  # 백틱은 마크다운 리터럴, 확장 의도 아님
-printf '%s\n' '---' 'name: orchestrator' 'description: Routes work to sunwoong.' '---' '| review | `sunwoong` | own code goes to `oh-my-claudecode:code-reviewer` |' >"$ASSET_ROOT/.claude/skills/orchestrator/SKILL.md"
+printf '%s\n' '---' 'name: orchestrator' 'description: Routes work to alice.' '---' '| review | `alice` | own code goes to `oh-my-claudecode:code-reviewer` |' >"$ASSET_ROOT/.claude/skills/orchestrator/SKILL.md"
 printf '%s\n' '---' 'name: frontend-testing' '---' >"$ASSET_ROOT/.claude/skills/frontend-testing/SKILL.md"
 printf '%s\n' '# deploy' >"$ASSET_ROOT/.claude/commands/deploy.md"
 printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"fmt"}]}]},"permissions":{"allow":["Bash(ls)"]}}' >"$ASSET_ROOT/.claude/settings.json"
@@ -54,9 +54,9 @@ assert_eq ".claude/CLAUDE.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] 
 assert_eq "../AGENTS.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="claude_md") | .agents_import')" "import path is relative to the CLAUDE.md location"
 assert_eq "false" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="claude_md") | .imports_agents')" "missing AGENTS.md import is reported"
 assert_eq "TEAM_CONVENTIONS.md" "$(printf '%s' "$ASSETS" | jq -r '.instructions[] | select(.kind=="convention_doc") | .path')" "root convention docs are listed"
-assert_eq "opus" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .model')" "agent model is read from frontmatter"
-assert_eq "Builds screens fast." "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .description')" "folded description is read"
-assert_eq "frontend-testing" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="sunwoong") | .skills[0]')" "agent skill list is read"
+assert_eq "opus" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="alice") | .model')" "agent model is read from frontmatter"
+assert_eq "Builds screens fast." "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="alice") | .description')" "folded description is read"
+assert_eq "frontend-testing" "$(printf '%s' "$ASSETS" | jq -r '.agents[] | select(.name=="alice") | .skills[0]')" "agent skill list is read"
 assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="frontend-testing") | .template_collision')" "skill sharing a template name is flagged"
 assert_eq "false" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="orchestrator") | .template_collision')" "team-only skill is not a collision"
 assert_eq "true" "$(printf '%s' "$ASSETS" | jq -r '.skills[] | select(.name=="orchestrator") | .routes_agents')" "skill naming local agents is a router candidate"
@@ -75,12 +75,12 @@ pass "existing agent asset inventory"
 # 역할 매핑 계약: roles가 가리키는 기존 에이전트·라우터가 사라지면 위임이 조용히 깨진다.
 ROLE_ROOT="$TEST_TMP/role-contract"
 mkdir -p "$ROLE_ROOT/.ai-harness" "$ROLE_ROOT/.claude/agents"
-printf '%s\n' '{"project_id":"role-contract","level":"standard","integrations":["claude"],"roles":{"developer":{"source":"existing","integrations":["claude"],"agents":["sunwoong","ghost"],"router":".claude/skills/orchestrator/SKILL.md"}}}' >"$ROLE_ROOT/.ai-harness/harness.json"
-printf '%s\n' '---' 'name: sunwoong' '---' >"$ROLE_ROOT/.claude/agents/sunwoong.md"
+printf '%s\n' '{"project_id":"role-contract","level":"standard","integrations":["claude"],"roles":{"developer":{"source":"existing","integrations":["claude"],"agents":["alice","ghost"],"router":".claude/skills/orchestrator/SKILL.md"}}}' >"$ROLE_ROOT/.ai-harness/harness.json"
+printf '%s\n' '---' 'name: alice' '---' >"$ROLE_ROOT/.claude/agents/alice.md"
 ROLE_SCAN="$("$ROOT/scripts/workflow-contract.sh" scan --root "$ROLE_ROOT")"
 assert_eq "ghost" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.check=="role_agent_missing")][0].token')" "missing mapped agent is a contract finding"
 assert_eq ".claude/skills/orchestrator/SKILL.md" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.check=="role_router_missing")][0].token')" "missing router is a contract finding"
-assert_eq "0" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.token=="sunwoong")] | length')" "existing mapped agent passes"
+assert_eq "0" "$(printf '%s' "$ROLE_SCAN" | jq -r '[.findings[] | select(.token=="alice")] | length')" "existing mapped agent passes"
 pass "role mapping contract"
 
 finish_tests
