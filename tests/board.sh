@@ -603,4 +603,46 @@ assert_contains "$(<"$ROOT/scripts/board/template.html")" "다시 계산 실패"
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "하네스 효과" "board skill documents the impact view"
 pass "harness board impact view: background cache, refresh, failure reason, verdicts from impact"
 
+# 조율 세션 유지(#670): 작업자를 띄운 부모 세션이 claude agents 목록에서 빠져도 보드 항목으로 남고, 그 항목의 대화(/transcript)가 열린다.
+# 서버는 끝난 대화형 세션을 idle(끝난 일)로 보인다. 갱신을 한 번 더 지난 뒤에도 남아야 한다(groups.py가 scan 기록을 정리해도 부모가 사라지지 않음).
+# 앞 블록이 메인 보드를 이미 멈췄으므로 같은 데이터·포트로 다시 띄운다. 이 시점의 links.json은 아래 값으로 덮는다(뒤에 읽는 블록 없음).
+BC_PARENT="eeeeeeee-0000-4000-8000-000000000001"
+BC_CHILD="eeeeeeee-0000-4000-8000-000000000002"
+BC_HANDLE="term_eeeeeeee-1111-4111-8111-000000000001"
+BC_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+jq -cn --arg t "$BC_TS" --arg h "$BC_HANDLE" '{type:"user",message:{content:"조율 세션 요청"},timestamp:$t},
+  {type:"assistant",message:{content:[{type:"tool_use",id:"toolu_bc1",name:"Bash",input:{command:"orca terminal create --json"}}]},timestamp:$t},
+  {type:"user",message:{content:[{type:"tool_result",tool_use_id:"toolu_bc1",content:("{\"handle\":\"" + $h + "\"}")}]},timestamp:$t},
+  {type:"assistant",message:{content:[{type:"text",text:"작업자를 띄웠습니다"}]},timestamp:$t}' >"$BOARD_T/projects/p/$BC_PARENT.jsonl"
+jq -cn --arg t "$BC_TS" '{type:"user",message:{content:"#12 고쳐줘"},timestamp:$t},
+  {type:"assistant",message:{content:[{type:"text",text:"PR을 열었습니다"}]},timestamp:$t}' >"$BOARD_T/projects/p/$BC_CHILD.jsonl"
+mkdir -p "$BOARD_DATA/board"
+jq -cn --arg p "$BOARD_T/projects/p/$BC_PARENT.jsonl" --arg h "$BC_HANDLE" --arg c "$BC_CHILD" \
+  '{handles: {($h): $c}, scan: {($p): {v: 3, offset: 0, handles: [$h]}}}' >"$BOARD_DATA/board/links.json"
+rm -f "$BOARD_DATA/board/server.json"
+BC_OPEN="$(BOARD_REFRESH_SECONDS=0.2 BOARD_FULL_REFRESH_SECONDS=1 BOARD_STALE_SYNC_SECONDS=1 board_sh open)"
+BC_TOKEN="$(jq -r '.url' <<<"$BC_OPEN")"
+BC_TOKEN="${BC_TOKEN#*t=}"
+BC_BASE="http://127.0.0.1:$BOARD_PORT_T"
+BC_STATUS=""
+for _ in $(seq 1 100); do
+  BC_STATUS="$(curl -s "$BC_BASE/status.json?t=$BC_TOKEN")"
+  jq -e --arg s "$BC_PARENT" 'any(.items[]?; .sid == $s)' <<<"$BC_STATUS" >/dev/null 2>&1 && break
+  sleep 0.1
+done
+assert_eq "idle|false" "$(jq -r --arg s "$BC_PARENT" '[.items[] | select(.sid == $s)] | first | "\(.state)|\(.live)"' <<<"$BC_STATUS")" "the coordinating parent session is on the board as an ended item"
+BC_ID="$(jq -r --arg s "$BC_PARENT" '[.items[] | select(.sid == $s)] | first | .id' <<<"$BC_STATUS")"
+BC_HTTP="$(curl -s -o "$BOARD_T/bc-transcript.json" -w '%{http_code}' "$BC_BASE/transcript?t=$BC_TOKEN&id=$(jq -rn --arg v "$BC_ID" '$v | @uri')&offset=0")"
+assert_eq "200" "$BC_HTTP" "the parent item's transcript opens instead of answering 404"
+assert_eq "조율 세션 요청|작업자를 띄웠습니다" "$(jq -r '[.messages[] | select(.role != "tool") | .text] | join("|")' "$BOARD_T/bc-transcript.json")" "the parent item's transcript carries its messages"
+BC_AT="$(jq -r '.generated_at' <<<"$BC_STATUS")"
+for _ in $(seq 1 100); do
+  BC_STATUS="$(curl -s "$BC_BASE/status.json?t=$BC_TOKEN")"
+  [[ "$(jq -r '.generated_at' <<<"$BC_STATUS")" != "$BC_AT" ]] && break
+  sleep 0.1
+done
+assert_eq "1" "$(jq -r --arg s "$BC_PARENT" '[.items[] | select(.sid == $s)] | length' <<<"$BC_STATUS")" "the parent item is still listed after another refresh"
+assert_eq "true" "$(board_sh stop | jq -r '.stopped')" "the coordinating-session board stops"
+pass "board keeps a coordinating parent session as an ended item whose transcript opens, across refreshes"
+
 finish_tests
