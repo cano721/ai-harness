@@ -1046,11 +1046,11 @@ AJ_LOG="$AJ_STATE/requests.log"
 AJ_SETTINGS_FILE="$AG_DATA/board/agenda/jira-settings.json"
 AJ_OUT_DIR="$AG_T/jira-out"; mkdir -p "$AJ_OUT_DIR"
 jq -n '[
-  {key: "ACME-1", fields: {summary: "요약", status: {name: "진행 중"}, priority: {name: "High"}, project: {key: "ACME", name: "Acme 프로젝트"},
+  {key: "ACME-1", fields: {summary: "요약", status: {name: " 진행  중 ", statusCategory: {key: "indeterminate"}}, priority: {name: "High"}, project: {key: "ACME", name: "Acme 프로젝트"},
     duedate: "2026-12-01", created: "2026-11-20T10:15:30.000+0900", reporter: {displayName: "Pat Reporter"}}},
-  {key: "ACME-2", fields: {summary: "기한 없는 일", status: {name: "할 일"}, priority: null, project: {key: "ACME", name: "Acme 프로젝트"},
+  {key: "ACME-2", fields: {summary: "기한 없는 일", status: {name: "할 일", statusCategory: {key: "new"}}, priority: null, project: {key: "ACME", name: "Acme 프로젝트"},
     duedate: null, created: "2026-11-21T09:00:00.000+0000", reporter: {displayName: "Pat Reporter"}}},
-  {key: "OPS-3", fields: {summary: "운영 점검", status: {name: "할 일"}, priority: {name: "Low"}, project: {key: "OPS", name: "운영"},
+  {key: "OPS-3", fields: {summary: "운영 점검", status: {name: "검토 대기", statusCategory: {key: "weird"}}, priority: {name: "Low"}, project: {key: "OPS", name: "운영"},
     duedate: "2026-12-03", created: "2026-11-22T09:00:00.000-0500", reporter: null}}
 ]' >"$AJ_STATE/issues.json"
 printf '2\n' >"$AJ_STATE/page_size"
@@ -1124,8 +1124,12 @@ assert_eq "assignee = currentUser() AND statusCategory != Done ORDER BY duedate 
 assert_eq "100|summary,status,priority,project,duedate,created,reporter" "$(jq -r '"\(.[0].query.maxResults)|\(.[0].query.fields)"' <<<"$AJ_REQ")" "the search asks for the mapped fields"
 AJ_I="$(jq -c '.items.todo[] | select(.id == "ACME-1")' <<<"$AG_OUT")"
 assert_eq "ACME-1 요약|2026-12-01|2026-11-20T10:15:30+09:00|Pat Reporter" "$(jq -r '"\(.title)|\(.due)|\(.created)|\(.from)"' <<<"$AJ_I")" "title, due, created and reporter are mapped"
-assert_eq "진행 중 · High · Acme 프로젝트|$AJ_URL/browse/ACME-1|Jira" "$(jq -r '"\(.detail)|\(.url)|\(.source_name)"' <<<"$AJ_I")" "detail and browse url are mapped"
-assert_eq "false|할 일 · Acme 프로젝트" "$(jq -r '.items.todo[] | select(.id == "ACME-2") | "\(has("due"))|\(.detail)"' <<<"$AG_OUT")" "an issue without a due date stays without due"
+assert_eq "High · Acme 프로젝트|$AJ_URL/browse/ACME-1|Jira" "$(jq -r '"\(.detail)|\(.url)|\(.source_name)"' <<<"$AJ_I")" "detail and browse url are mapped"
+assert_eq "false|Acme 프로젝트" "$(jq -r '.items.todo[] | select(.id == "ACME-2") | "\(has("due"))|\(.detail)"' <<<"$AG_OUT")" "an issue without a due date stays without due"
+# 상태(#668): 이름과 statusCategory key를 구조화 필드로 싣고 detail에는 상태가 없다. 모르는 분류 키는 status만 남긴다.
+assert_eq "진행 중|indeterminate" "$(jq -r '"\(.status)|\(.status_category)"' <<<"$AJ_I")" "the status name and category are structured fields"
+assert_eq "할 일|new" "$(jq -r '.items.todo[] | select(.id == "ACME-2") | "\(.status)|\(.status_category)"' <<<"$AG_OUT")" "a to-do issue carries the new category"
+assert_eq "검토 대기|false|Low · 운영" "$(jq -r '.items.todo[] | select(.id == "OPS-3") | "\(.status)|\(has("status_category"))|\(.detail)"' <<<"$AG_OUT")" "an unknown category keeps only the status name"
 assert_eq "false|2026-11-22T09:00:00-05:00" "$(jq -r '.items.todo[] | select(.id == "OPS-3") | "\(has("from"))|\(.created)"' <<<"$AG_OUT")" "an issue without a reporter has no from"
 pass "jira fetches my open issues page by page and maps their fields"
 
@@ -1225,8 +1229,10 @@ jq -n '[
 aj_run sprint fetch --since a --until b || fail "a fetch with sprints succeeds: $(<"$AJ_OUT_DIR/sprint.err")"
 aj_item() { jq -c --arg k "$2" 'select(.id == $k)' "$AJ_OUT_DIR/$1.out"; }
 assert_eq "2026-12-01|false" "$(aj_item sprint SPR-1 | jq -r '"\(.due)|\(.detail // "" | contains("스프린트"))"')" "duedate wins over the sprint end"
-assert_eq "2026-12-05T09:00:00Z|할 일 · 스프린트 Acme 7 종료" "$(aj_item sprint SPR-2 | jq -r '"\(.due)|\(.detail)"')" "an issue without duedate takes its active sprint end"
+assert_eq "2026-12-05T09:00:00Z|스프린트 Acme 7 종료" "$(aj_item sprint SPR-2 | jq -r '"\(.due)|\(.detail)"')" "an issue without duedate takes its active sprint end"
 assert_eq "2026-12-04T09:00:00Z|스프린트 Acme 8 종료" "$(aj_item sprint SPR-3 | jq -r '"\(.due)|\(.detail)"')" "the earliest active sprint wins and closed ones are ignored"
+assert_eq "할 일|false" "$(aj_item sprint SPR-1 | jq -r '"\(.status)|\(has("status_category"))"')" "a status without statusCategory gives only the name"
+assert_eq "false|false" "$(aj_item sprint SPR-3 | jq -r '"\(has("status"))|\(has("status_category"))"')" "an issue without status has no status fields"
 assert_eq "false|false" "$(aj_item sprint SPR-4 | jq -r '"\(has("due"))|\(.detail // "" | contains("스프린트"))"')" "closed and future sprints give no due date"
 assert_eq "summary,status,priority,project,duedate,created,reporter,customfield_10020" "$(aj_search | jq -r '[.[].query.fields] | unique | join(";")')" "the search asks for the sprint field it found"
 assert_eq "1|GET" "$(jq -sr '[.[] | select(.path == "/rest/api/3/field")] | "\(length)|\([.[].method] | unique | join(","))"' "$AJ_LOG")" "the field list is read once with GET"
@@ -1375,6 +1381,35 @@ local desc='직접'을(를) 지웁니다. 목록과 완료 기록에서 빠집�
 ok posts=/agenda/delete {\"source\":\"todo\",\"id\":\"t1\"} toasts=true:지웠습니다." "$AG_DOUT" "delete buttons follow can_delete and the dialog opens once, cancels without a request and confirms with one"
 fi
 pass "the board asks once before deleting a to-do or reply"
+
+# Jira 상태(#668): _normalize는 status를 공백 정리·40자로, status_category는 new|indeterminate|done만 남긴다.
+# 허용하지 않는 값은 그 필드만 버리고 항목은 남긴다. 다른 출처도 같은 선택 필드를 쓸 수 있다.
+AG_STATUS="$(python3 -I - "$ROOT/scripts/board" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import agenda
+cases = [{"status": " 진행  중 ", "status_category": "indeterminate"}, {"status": "할 일", "status_category": "new"},
+         {"status": "끝", "status_category": "done"}, {"status": "x", "status_category": "bogus"},
+         {"status": "x", "status_category": 3}, {"status": "가" * 41}, {"status": "  "}, {"status": 7, "status_category": "new"}]
+lines = [json.dumps(dict(c, id="s%d" % i, kind="todo", title="t")) for i, c in enumerate(cases)]
+items, skipped = agenda.parse_jsonl("\n".join(lines), "s")
+print("%d|%d" % (len(items), skipped))
+for it in items:
+    st = it.get("status", "-")
+    print("%s|%s" % (st if len(st) < 30 else "len%d" % len(st), it.get("status_category", "-")))
+PY
+)"
+assert_eq "8|0
+진행 중|indeterminate
+할 일|new
+끝|done
+x|-
+x|-
+len40|-
+-|-
+-|new" "$AG_STATUS" "agenda keeps a short status and only known status categories"
+grep -q 'status_category' "$ROOT/scripts/board/agenda.py" || fail "the adapter contract documents status_category"
+pass "agenda normalizes the structured status fields"
 
 ag_board stop >/dev/null
 unset TZ
