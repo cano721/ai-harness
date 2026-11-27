@@ -6,11 +6,14 @@ usage: fake-jira.py <state-dir> <port>
     issues.json     search/jql이 돌려줄 이슈 배열(Jira 응답의 issues[] 모양 {key, fields}). 없으면 빈 배열
     projects.json   project/search가 돌려줄 프로젝트 배열 [{key, name}]. 없으면 ACME·OPS 두 개
     page_size       한 페이지 최대 개수(없으면 50). 요청 maxResults와 작은 쪽을 쓴다
+    fields.json     /rest/api/3/field가 돌려줄 필드 배열 [{id, name, schema}]. 없으면 404
+    field_status    있으면 /rest/api/3/field만 그 HTTP 코드로 실패한다
     status          있으면 그 HTTP 코드로 모든 요청에 실패한다
     expected-auth   Authorization 헤더 기대값. 요청마다 일치 여부를 requests.log에 적는다
   requests.log      요청마다 JSON 한 줄 {method, path, query(디코드한 값), auth_ok}
   GET /rest/api/3/search/jql       nextPageToken(시작 위치)으로 페이지를 나누고 isLast·nextPageToken을 돌려준다
   GET /rest/api/3/project/search   startAt·maxResults로 나눈 values·isLast
+  GET /rest/api/3/field            fields.json 배열(스프린트 필드 찾기, #662)
   그 밖의 메서드는 적기만 하고 405 — 어댑터가 쓰기 요청을 하지 않는지 본다.
 """
 import json, os, sys
@@ -64,6 +67,14 @@ class H(BaseHTTPRequestHandler):
         status = read("status", None)
         if status:
             return self._json(int(status), {"errorMessages": ["forced"]})
+        if u.path == "/rest/api/3/field":
+            field_status = read("field_status", None)
+            if field_status:
+                return self._json(int(field_status), {"errorMessages": ["forced"]})
+            fields = read("fields.json", None)
+            if fields is None:
+                return self._json(404, {"errorMessages": ["not found"]})
+            return self._json(200, fields)
         size = int(read("page_size", 50))
         want = min(size, int(q.get("maxResults") or size))
         if u.path == "/rest/api/3/search/jql":
