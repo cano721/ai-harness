@@ -1202,6 +1202,47 @@ assert_contains "$(<"$ROOT/docs/privacy.md")" "Jira" "the privacy note covers ji
 assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "fake-jira.py" "the UI doc names the fake jira server"
 pass "jira keeps the token out of outputs and data"
 
+# A15 스프린트 기한(#662): duedate가 없으면 가장 이른 활성 스프린트의 endDate를 due로 쓰고 detail에 출처를 붙인다.
+# 스프린트 필드는 /rest/api/3/field의 gh-sprint 항목에서 찾고, 그 조회가 실패하면 기한만 비운다.
+cp "$AJ_STATE/issues.json" "$AG_T/jira-issues.json"
+jq -n '[{id: "summary", name: "Summary", schema: {type: "string"}},
+  {id: "customfield_10020", name: "Sprint", schema: {type: "array", custom: "com.pyxis.greenhopper.jira:gh-sprint"}}]' >"$AJ_STATE/fields.json"
+jq -n '[
+  {key: "SPR-1", fields: {summary: "기한 우선", status: {name: "할 일"}, duedate: "2026-12-01",
+    customfield_10020: [{name: "Acme 7", state: "active", endDate: "2026-12-10T09:00:00.000Z"}]}},
+  {key: "SPR-2", fields: {summary: "스프린트 기한", status: {name: "할 일"}, duedate: null,
+    customfield_10020: [{name: "Acme 7", state: "active", endDate: "2026-12-05T09:00:00.000Z"}]}},
+  {key: "SPR-3", fields: {summary: "여러 스프린트", duedate: null, customfield_10020: [
+    {name: "Acme 9", state: "active", endDate: "2026-12-12T09:00:00.000Z"},
+    "com.atlassian.greenhopper.service.sprint.Sprint@1[state=ACTIVE]",
+    {name: "Acme 8", state: "active", endDate: "2026-12-04T09:00:00.000Z"},
+    {name: "Acme 6", state: "closed", endDate: "2026-11-01T09:00:00.000Z"}]}},
+  {key: "SPR-4", fields: {summary: "닫힌 스프린트만", status: {name: "할 일"}, duedate: null, customfield_10020: [
+    {name: "Acme 5", state: "closed", endDate: "2026-11-01T09:00:00.000Z"},
+    {name: "Acme 10", state: "future", endDate: "2026-12-20T09:00:00.000Z"}]}}
+]' >"$AJ_STATE/issues.json"
+: >"$AJ_LOG"
+aj_run sprint fetch --since a --until b || fail "a fetch with sprints succeeds: $(<"$AJ_OUT_DIR/sprint.err")"
+aj_item() { jq -c --arg k "$2" 'select(.id == $k)' "$AJ_OUT_DIR/$1.out"; }
+assert_eq "2026-12-01|false" "$(aj_item sprint SPR-1 | jq -r '"\(.due)|\(.detail // "" | contains("스프린트"))"')" "duedate wins over the sprint end"
+assert_eq "2026-12-05T09:00:00Z|할 일 · 스프린트 Acme 7 종료" "$(aj_item sprint SPR-2 | jq -r '"\(.due)|\(.detail)"')" "an issue without duedate takes its active sprint end"
+assert_eq "2026-12-04T09:00:00Z|스프린트 Acme 8 종료" "$(aj_item sprint SPR-3 | jq -r '"\(.due)|\(.detail)"')" "the earliest active sprint wins and closed ones are ignored"
+assert_eq "false|false" "$(aj_item sprint SPR-4 | jq -r '"\(has("due"))|\(.detail // "" | contains("스프린트"))"')" "closed and future sprints give no due date"
+assert_eq "summary,status,priority,project,duedate,created,reporter,customfield_10020" "$(aj_search | jq -r '[.[].query.fields] | unique | join(";")')" "the search asks for the sprint field it found"
+assert_eq "1|GET" "$(jq -sr '[.[] | select(.path == "/rest/api/3/field")] | "\(length)|\([.[].method] | unique | join(","))"' "$AJ_LOG")" "the field list is read once with GET"
+# 필드 메타 실패(500)·필드 없음(404): fetch는 성공하고 항목은 그대로, 기한만 없다.
+printf '500\n' >"$AJ_STATE/field_status"
+AJ_RC=0; aj_run sprint500 fetch --since a --until b || AJ_RC=$?
+assert_eq "0|4|false" "$AJ_RC|$(grep -c . "$AJ_OUT_DIR/sprint500.out")|$(aj_item sprint500 SPR-2 | jq -r 'has("due")')" "a failing field list keeps the items without sprint dates"
+rm -f "$AJ_STATE/field_status" "$AJ_STATE/fields.json"
+: >"$AJ_LOG"
+AJ_RC=0; aj_run sprint404 fetch --since a --until b || AJ_RC=$?
+assert_eq "0|4|false" "$AJ_RC|$(grep -c . "$AJ_OUT_DIR/sprint404.out")|$(aj_item sprint404 SPR-2 | jq -r 'has("due")')" "a missing field list keeps the items without sprint dates"
+assert_eq "summary,status,priority,project,duedate,created,reporter" "$(aj_search | jq -r '[.[].query.fields] | unique | join(";")')" "without a sprint field the search fields stay the same"
+if grep -rqs "$AJ_SECRET" "$AJ_OUT_DIR"; then fail "the jira token stays out of sprint fetch outputs"; fi
+mv "$AG_T/jira-issues.json" "$AJ_STATE/issues.json"
+pass "jira uses the earliest active sprint end when an issue has no due date"
+
 # 할 일 삭제(#637): 직접 적은 할 일은 열린 것이든 끝낸 것이든 todos.json·completed.json에서 빠진다.
 AG_DID="$(ag_board todo add 지울 할 일)"
 AG_RES="$(ag_post delete "$(jq -cn --arg i "$AG_DID" '{source: "todo", id: $i}')")"
