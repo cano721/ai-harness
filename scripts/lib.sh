@@ -295,7 +295,11 @@ hm_acquire_lock() { # $1=lock_dir $2=max_attempts(기본 50)
     fi
     unowned_attempts=0
     if ! kill -0 "$owner" 2>/dev/null; then
-      find "$lock_dir" -depth -delete 2>/dev/null || true
+      # owner가 정상 release 뒤 끝났으면 그 사이 다른 프로세스가 새 lock을 잡았을 수 있다.
+      # pid가 여전히 죽은 owner일 때만 지운다 — 아니면 남의 살아 있는 lock을 지워 둘이 동시에 들어간다.
+      if [[ "$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)" == "$owner" ]]; then
+        find "$lock_dir" -depth -delete 2>/dev/null || true
+      fi
       continue
     fi
     sleep 0.02

@@ -66,4 +66,16 @@ assert_eq "3" "$(grep -c '^fix ' "$FAKE_LOG")" "fix runs at most limits.max_repa
 assert_contains "$(run_state '.findings | join(";")')" "axis E fell below the baseline: 15 -> 12" "the driver, not the reviewer, compares each axis with the baseline"
 pass "design-polish graph runner: validators, fix list selection, auto approval, missing rules, axis drop"
 
+# measure도 화면마다 렌더 엔진을 남긴다. 엔진이 빈 화면은 측정이 아니다. (#678)
+new_driver_repo polish_no_engine
+driver start --workflow polish --runtime codex --request "다듬어줘"
+assert_eq "20:user_decision" "$DRIVER_RC:$(run_state .node)" "a measured screen without its render engine is unmeasured"
+PNE_RUN="$(dirname "$(find "$DRIVER_TMP/runs" -path "*repo-polish_no_engine-*" -name state.json | head -n 1)")"
+assert_eq "true" "$(jq '.properties.screens.items.required | index("engine") != null' "$PNE_RUN/measure-schema.json")" "measure screens require engine"
+assert_eq "true" "$(jq '.properties.scenarios.items.required | index("engine") != null' "$PNE_RUN/ui-review-schema.json")" "ui_review scenarios require engine"
+assert_contains "$(<"$FAKE_LOG.measure.prompt")" "render target" "measure is told to use the render target ui.md declares"
+PE_STATE="$(find "$DRIVER_TMP/runs" -path "*repo-polish_ok-*" -name state.json | head -n 1)"
+assert_eq "chromium" "$(jq -r '.baseline.screens[0].engine' "$PE_STATE")" "the baseline keeps the engine so the re-measure uses the same one"
+pass "design-polish measure records the render engine per screen"
+
 finish_tests

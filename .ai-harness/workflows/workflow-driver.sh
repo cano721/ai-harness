@@ -2445,6 +2445,8 @@ APP_SERVER_RULE="App server: start any server with the tool's background run, no
 NODE_TEST_RULE="Tests: the driver runs the broad regression itself after you finish (the checks it lists); do not run the full suite yourself. Run only the tests for the areas you changed (for example bash tests/run.sh <area> where the project has it) in the foreground and wait for them to finish. Never start tests or other long-running commands in the background and end your reply while they are still running."
 # 한 번 렌더링해 판정하는 노드(ui_review·measure)만 운영 빌드를 우선한다. 재현은 dev 전용 동작일 수 있어 붙이지 않는다.
 APP_BUILD_RULE="For a one-shot render prefer the project's production build and start/preview commands over a dev server: a dev server holds the compiler and grows with every page. Use a dev server only when the project documents no production start or you iterate on fixes. Do not build into an output folder a running dev server uses (for example .next), and keep build output in ignored paths; if git status shows a change after the build, restore it before you finish."
+# 렌더 대상(#678): 사용자가 보는 엔진으로 검증한다. 선언한 엔진을 못 쓰면 다른 엔진으로 대신하지 않고 미검증으로 드러낸다.
+RENDER_TARGET_RULE="Render target: .ai-harness/docs/ui.md declares per screen the engine users actually see it in (chromium, webkit, or firefox through Playwright; simulator:<device> or emulator:<device> for native screens). When ui.md declares none for a screen, use chromium and say so in the summary. With Playwright pick the engine (for example launchBrowser({ engine: \"webkit\" }) in scripts/landing-browser.mjs when the project has it, or playwright.webkit). If the declared engine is not installed or does not start, do not render in another engine instead: install it only with the user's approval (for example npx playwright install webkit), otherwise report the screen as unverified (unmeasured in a measure) with that reason."
 
 # 구현 노드(deliver·fix)가 전체 회귀를 직접 돌리지 않게 한다(#513). 전체 회귀는 리뷰 뒤 final_checks로 드라이버가 한 번 돈다.
 FULL_REGRESSION_RULE="Tests while you work: run only the tests for the areas your Red/Green steps target. Do not run the full regression suite yourself; the driver runs the full regression (final_checks) once after the review finds nothing blocking, or leaves it to the remote CI: when the run pushes to a repository with remote CI, the remote CI is the final gate and the driver does not run final_checks locally."
@@ -2529,8 +2531,8 @@ polish_has_rules() { [[ "$(state '(.baseline.rules.document // "") != "" and (.b
 measure_prompt() { # evidence-dir
   local ev="$1" same=""
   if [[ "$(state '.baseline // null')" != null ]]; then
-    same="This is a re-measure after a fix. Render exactly the screens, viewports, and themes of the baseline below (same names), so each capture has a baseline twin, and score them the same way:
-$(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.theme) · \(.url)") | join("\n")')"
+    same="This is a re-measure after a fix. Render exactly the screens, viewports, and themes of the baseline below (same names) in the same engine, so each capture has a baseline twin, and score them the same way:
+$(state '.baseline.screens | map("- \(.role) \(.screen) · \(.viewport) · \(.theme) · \(.engine // "") · \(.url)") | join("\n")')"
   else
     same="This is the baseline before any change. Choose the screens: every target screen the request names, plus the screens that share the components or tokens those screens use (role sibling; .ai-harness/docs/ui.md may list them, otherwise find them in the code) — a later fix to a shared component is checked on them."
   fi
@@ -2539,7 +2541,9 @@ Start the app the way .ai-harness/docs/ui.md (and the project ui-review skill, .
 $APP_SERVER_RULE
 $APP_BUILD_RULE
 $same
-Open each screen in a real browser at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
+Open each screen in the render target .ai-harness/docs/ui.md declares for that screen at every viewport and theme the project supports (ui.md), in its default state before hovering or focusing anything, and save a full-page capture under $ev named <screen>-<viewport>-<theme>.png. Captures are evidence; a screenshot file that does not show the screen is not.
+$RENDER_TARGET_RULE
+Set each screen's engine to the engine or device you actually rendered it in; a screen without one is unmeasured.
 Layout check: in the same page and state, right before each capture and scrolled to the top, evaluate the expression in $LAYOUT_PROBE in the page (for example Playwright: await page.evaluate(fs.readFileSync('$LAYOUT_PROBE', 'utf8'))) and put the object it returns, unchanged, in that screen's layout. Do not edit, filter, or explain away its issues; the driver reads them. A screen without the probe's result is unmeasured.
 Rules: find the design rule document and the reference screen (.ai-harness/docs/frontend.md or ui.md section \"## 디자인 점검\", DESIGN.md, docs/design-system.md). Put their paths in rules, or empty strings when missing. When both exist, score every target screen with the project design-audit skill (.agents/skills/design-audit/SKILL.md or .claude/skills/design-audit/SKILL.md) exactly as its rubric says, using the captures for what the rubric marks as needing a render, and save the report as $ev/audit.md. audit.total is the lowest total among the target screens and audit.axes the lowest score per axis A-E (-1 for an axis the rubric leaves 미확인); audit.report is the report path. When either rule source is missing or the skill is absent, set audit.scored false, total -1, every axis -1, report empty.
 checks: the exact shell commands the project names for checking screens mechanically (design lint, contrast, token-copy checks, the UI test suite) from ui.md, AGENTS.md, or the testing docs. Do not run them; the driver runs them from the repository root with bash -c.
@@ -3114,10 +3118,10 @@ execute() {
           || finish incomplete 30 "measure output does not match the schema ($m_out)"
         # 캡처가 없거나 증거 디렉터리 밖이면 측정하지 않은 것이다. 측정 없는 비교·판정은 하지 않는다.
         if [[ "$(jq -r .status "$m_out")" != measured ]] || ! measure_captures_present "$m_out" "$m_ev" \
-          || ! jq -e --arg p "$LAYOUT_PROBE_ID" 'all(.screens[]; .layout.probe == $p and .layout.viewport.w > 0)' "$m_out" >/dev/null \
+          || ! jq -e --arg p "$LAYOUT_PROBE_ID" 'all(.screens[]; .layout.probe == $p and .layout.viewport.w > 0 and (.engine // "") != "")' "$m_out" >/dev/null \
           || ! jq -e --slurpfile s "$STATE" '[.screens[] | [.screen, .viewport, .theme]] as $now
             | all(($s[0].baseline.screens // [])[]; [.screen, .viewport, .theme] as $b | $now | index([$b]) != null)' "$m_out" >/dev/null; then
-          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again, or the layout probe did not run on every screen): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
+          state_set '.findings = (["screens unmeasured (or a baseline screen, viewport, or theme was not captured again, or the layout probe did not run on every screen, or a screen has no render engine): " + $r[0].summary] + $r[0].unmeasured + ["evidence: " + $e]) | .needs_user_decision = true' \
             --slurpfile r "$m_out" --arg e "$m_ev"
           go measure "$(edge_when measure user_decision)"
           continue
@@ -3126,7 +3130,7 @@ execute() {
             layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})]' \
           --slurpfile r "$m_out" --arg l "$m_label" --arg e "$m_ev" --arg t "$(now_utc)"
         if [[ "$(state '.baseline // null')" == null ]]; then
-          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme}], summary, evidence_dir: $e,
+          state_set '.baseline = ($r[0] | {rules, audit, screens: [.screens[] | {screen, role, url, viewport, theme, engine}], summary, evidence_dir: $e,
             layout: [.screens[] | {screen, role, viewport, theme, issues: .layout.issues}]})
             | .checks = ([.cli_checks[], $r[0].checks[]] | map(select(length > 0)) | unique)' --slurpfile r "$m_out" --arg e "$m_ev"
           # 검사 명령은 측정 세션이 고른 것이라 승인 전에는 실행하지 않는다. 고칠 목록과 함께 승인받은 뒤 verify가 실행한다.
@@ -3658,15 +3662,16 @@ $(brief_context)" "$REVIEW_SCHEMA"
 
 You are the ui_review node. Do not edit, create, or delete any file in the repository. Follow the project ui-review skill (.agents/skills/ui-review/SKILL.md or .claude/skills/ui-review/SKILL.md, with its references/checklist.md) and .ai-harness/docs/ui.md when they exist; project design documents, semantic tokens, shared components, and reference screens come first.
 If the project has a native-ui skill (.agents/skills/native-ui/SKILL.md or .claude/skills/native-ui/SKILL.md) and the screens belong to a native app, follow it: render and operate them in a simulator or emulator instead of a browser, with the same evidence rules.
-A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in a real browser (a simulator or emulator for native screens, as above), and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
+$RENDER_TARGET_RULE
+A code review found no blocking findings. You review the rendered screens, not the code: start the app as the project documents say, open every scenario below in the render target .ai-harness/docs/ui.md declares for that screen (a simulator or emulator for native screens, as above), and operate it as a first-time user with mouse, keyboard, and a mobile-width viewport, in each supported theme. Look at the default and collapsed states before hovering or focusing anything.
 Save captures and notes only under $evidence. Run the app with the local or test configuration the project documents, never production credentials, and point anything it writes (database files, uploads, logs, browser profiles) at $evidence or a temporary directory: a new file in the repository stops the run.
 $APP_SERVER_RULE
 $APP_BUILD_RULE
 If the change added or changed a design-system example or reference screen, open and operate that example too.
 These are not evidence of a usable screen: a test that found and clicked an element by its text, a shared class or token in the markup, an attribute such as data-theme or aria-expanded being set, a screenshot file existing, or an earlier claim that something was fixed.
-Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence. Write each capture path relative to $evidence (for example shots/default.png), and set not_renderable_reason and alternative_verification to empty strings for these scenarios.
-A scenario that a browser or simulator cannot render (terminal output, a downloaded file, an email, and the like) may leave captures empty: set not_renderable_reason to why it cannot be rendered and alternative_verification to what you checked instead; you may save that check's output under $evidence and list it in captures. Do not put such a scenario in unverified.
-status: verified when you rendered and operated every scenario, found no blocking UI issue, and have nothing in unverified; issues when there is at least one; unverified when you could not start the app, could not use a browser, or could not check any required scenario, viewport, or theme. A blocking UI issue means a user cannot find or misreads a key action, an action's name does not match its result, a required input or an error cannot be recovered from, a scenario cannot be finished with a keyboard or in a supported viewport or theme, a shared component exists for the role but a one-off was built, or a hard-to-reverse action has no confirmation.
+Report one scenarios entry per scenario, viewport, and theme you actually rendered and operated, with the URL you opened and the capture files you saved under $evidence. Write each capture path relative to $evidence (for example shots/default.png), set engine to the engine or device you actually rendered it in (for example webkit, chromium, simulator:iPhone 16), and set not_renderable_reason and alternative_verification to empty strings for these scenarios.
+A scenario that a browser or simulator cannot render (terminal output, a downloaded file, an email, and the like) may leave captures and engine empty: set not_renderable_reason to why it cannot be rendered and alternative_verification to what you checked instead; you may save that check's output under $evidence and list it in captures. Do not put such a scenario in unverified.
+status: verified when you rendered and operated every scenario, found no blocking UI issue, and have nothing in unverified; issues when there is at least one; unverified when you could not start the app, could not use the declared render target, or could not check any required scenario, viewport, or theme. A blocking UI issue means a user cannot find or misreads a key action, an action's name does not match its result, a required input or an error cannot be recovered from, a scenario cannot be finished with a keyboard or in a supported viewport or theme, a shared component exists for the role but a one-off was built, or a hard-to-reverse action has no confirmation.
 Return only JSON matching the schema.
 
 UI scenarios:
@@ -3676,7 +3681,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
         ui_out="$RUN/$ui_label.out"
         jq -e '(.status | IN("verified", "issues", "unverified")) and (.blocking_findings | type) == "array" and (.unverified | type) == "array"' "$ui_out" >/dev/null 2>&1 \
           || finish incomplete 30 "ui_review output does not match the schema; the change is not done ($ui_out)"
-        state_set '.ui_review = ($r[0] | {status, summary, unverified, evidence_dir: $e})' --slurpfile r "$ui_out" --arg e "$evidence"
+        state_set '.ui_review = ($r[0] | {status, summary, unverified, evidence_dir: $e,
+          engines: ([.scenarios[]? | select((.not_renderable_reason // "") == "") | .engine // "" | select(. != "")] | unique)})' --slurpfile r "$ui_out" --arg e "$evidence"
         # 검증하지 못했는데 문제만 적은 경우도 사람에게 넘긴다. issues인데 발견 사항이 비면 검증 근거가 없는 것이다.
         # verified는 발견 없음·미검증 없음·시나리오마다 조작 기록이 있을 때만 믿는다. 기록 없는 verified는 근거 없는 통과다.
         # 브라우저로 렌더링할 수 없는 시나리오는 캡처 대신 이유와 대체 검증을 남긴다(#592). 걸린 이유는 시나리오·경로별로 남긴다(#606).
@@ -3687,6 +3693,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
             + [.scenarios[] | select((.captures | length) == 0
                 and (((.not_renderable_reason // "") == "") or ((.alternative_verification // "") == "")))
               | "\(.scenario): no capture and no reason with an alternative verification"]
+            + [.scenarios[] | select(((.not_renderable_reason // "") == "") and ((.engine // "") == ""))
+              | "\(.scenario): no render engine recorded"]
             | .[]' "$ui_out")"
           ui_gaps="$(printf '%s\n%s' "$ui_gaps" "$(captures_present "$ui_out" "$evidence" || true)" | grep . || true)"
         fi
@@ -3695,7 +3703,8 @@ $(brief_context)" "$UI_REVIEW_SCHEMA"
           state_set '.reviewed_tree = $t
             | .ui_review.summary = ([$r[0].scenarios[] | select(((.not_renderable_reason // "") != "") and ((.alternative_verification // "") != ""))
                 | .scenario + " — " + .alternative_verification] as $alt
-              | (.ui_review.summary | sub("\\s+\\z"; "")) + (if ($alt | length) > 0 then "; not rendered in a browser: " + ($alt | join("; ")) else "" end))' \
+              | (.ui_review.summary | sub("\\s+\\z"; "")) + (if ($alt | length) > 0 then "; not renderable: " + ($alt | join("; ")) else "" end)
+                + (if (.ui_review.engines | length) > 0 then "; rendered in: " + (.ui_review.engines | join(", ")) else "" end))' \
             --arg t "$(worktree_tree)" --slurpfile r "$ui_out"
           go ui_review ui_verified
         elif [[ "$(state .ui_review.status)" == issues && "$(jq '.blocking_findings | length' "$ui_out")" -gt 0 ]]; then
@@ -4222,8 +4231,8 @@ EOF
 cat >"$UI_REVIEW_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","scenarios","blocking_findings","non_blocking_findings","unverified"],
  "properties":{"status":{"type":"string","enum":["verified","issues","unverified"]},"summary":{"type":"string"},
-  "scenarios":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["scenario","viewport","theme","actions","captures","result","not_renderable_reason","alternative_verification"],
-   "properties":{"scenario":{"type":"string"},"viewport":{"type":"string"},"theme":{"type":"string"},"actions":{"type":"string"},
+  "scenarios":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["scenario","viewport","theme","engine","actions","captures","result","not_renderable_reason","alternative_verification"],
+   "properties":{"scenario":{"type":"string"},"viewport":{"type":"string"},"theme":{"type":"string"},"engine":{"type":"string"},"actions":{"type":"string"},
     "captures":{"type":"array","items":{"type":"string"}},"result":{"type":"string"},
     "not_renderable_reason":{"type":"string"},"alternative_verification":{"type":"string"}}}},
   "blocking_findings":{"type":"array","items":{"type":"string"}},"non_blocking_findings":{"type":"array","items":{"type":"string"}},
@@ -4232,9 +4241,9 @@ EOF
 cat >"$MEASURE_SCHEMA" <<'EOF'
 {"type":"object","additionalProperties":false,"required":["status","summary","screens","rules","audit","checks","unmeasured"],
  "properties":{"status":{"type":"string","enum":["measured","unmeasured"]},"summary":{"type":"string"},
-  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","captures","layout"],
+  "screens":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["screen","role","url","viewport","theme","engine","captures","layout"],
    "properties":{"screen":{"type":"string"},"role":{"type":"string","enum":["target","sibling"]},"url":{"type":"string"},
-    "viewport":{"type":"string"},"theme":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}},
+    "viewport":{"type":"string"},"theme":{"type":"string"},"engine":{"type":"string"},"captures":{"type":"array","items":{"type":"string"}},
     "layout":{"type":"object","additionalProperties":false,"required":["probe","viewport","document","issues"],
      "properties":{"probe":{"type":"string"},
       "viewport":{"type":"object","additionalProperties":false,"required":["w","h"],"properties":{"w":{"type":"number"},"h":{"type":"number"}}},

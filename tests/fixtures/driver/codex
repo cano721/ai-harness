@@ -56,7 +56,7 @@ uncovered='[{"criterion":"add feature","covered_by":"feature.txt exists (checks)
 # design-polish: 기준선 80점(축 A16 B18 C16 D15 E15), 수정 뒤 93점. polish_axis_drop은 총점은 넘지만 E가 기준선보다 낮다.
 # 레이아웃 검사(layout-probe): polish_layout_band는 대상 화면의 본문 앞 빈 띠가 수정 뒤에도 남는다(채점·검토는 통과).
 # polish_layout_sibling은 형제 화면의 잘린 글자가 기준선부터 있었다(회귀 아님). polish_layout_sibling_new는 수정 뒤에 생겼다.
-# polish_layout_missing은 probe를 돌리지 않았다.
+# polish_layout_missing은 probe를 돌리지 않았다. polish_no_engine은 대상 화면의 렌더 엔진을 적지 않았다(#678).
 polish_measure() {
   local after=yes total=93 e=15 status=measured doc="docs/design-system.md" ref="docs/design-system/reference.html"
   case "$prompt" in *"This is the baseline"*) after="" total=80 ;; esac
@@ -71,12 +71,14 @@ polish_measure() {
   [[ "$scenario" == polish_layout_sibling || ( -n "$after" && "$scenario" == polish_layout_sibling_new ) ]] \
     && clip='[{"kind":"clipped","key":"clipped:main > div.card.tile","detail":"main > div.card.tile cuts the text at its bottom edge"}]'
   [[ "$scenario" == polish_layout_missing ]] && probe=""
+  local engine=chromium
+  [[ "$scenario" == polish_no_engine ]] && engine=""
   jq -n --arg s "$status" --arg c "$check" --arg doc "$doc" --arg ref "$ref" --argjson t "$total" --argjson e "$e" --arg r "$adddir/audit.md" \
-    --argjson band "$band" --argjson clip "$clip" --arg probe "$probe" --arg sib "$sibling" '
+    --argjson band "$band" --argjson clip "$clip" --arg probe "$probe" --arg sib "$sibling" --arg engine "$engine" '
     def layout($i): {probe:$probe, viewport:{w:1280, h:900}, document:{w:1280, h:900}, issues:$i};
     {status:$s, summary:"보드 작업 현황 1280 라이트", unmeasured:(if $s == "measured" then [] else ["브라우저를 띄우지 못했다"] end),
-     screens:(if $s == "measured" then [{screen:"board", role:"target", url:"http://127.0.0.1:9/", viewport:"1280", theme:"light", captures:["board-1280-light.png"], layout:layout($band)}]
-       + (if $sib == "yes" then [{screen:"settings", role:"sibling", url:"http://127.0.0.1:9/#settings", viewport:"1280", theme:"light", captures:["settings-1280-light.png"], layout:layout($clip)}] else [] end)
+     screens:(if $s == "measured" then [{screen:"board", role:"target", url:"http://127.0.0.1:9/", viewport:"1280", theme:"light", engine:$engine, captures:["board-1280-light.png"], layout:layout($band)}]
+       + (if $sib == "yes" then [{screen:"settings", role:"sibling", url:"http://127.0.0.1:9/#settings", viewport:"1280", theme:"light", engine:"chromium", captures:["settings-1280-light.png"], layout:layout($clip)}] else [] end)
        else [] end),
      rules:{document:$doc, reference_screen:$ref},
      audit:(if $doc == "" then {scored:false, total:-1, axes:{A:-1,B:-1,C:-1,D:-1,E:-1}, report:""}
@@ -276,7 +278,7 @@ case "$node:$scenario" in
   ui_review:ui_issues_once)
     if [[ -f "$FAKE_LOG.ui_failed" ]]; then
       echo capture >"$adddir/default.png"
-      jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
+      jq -n '{status:"verified", summary:"반려 버튼이 기본 상태에서 버튼으로 보인다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out"
     else
       touch "$FAKE_LOG.ui_failed"
       jq -n '{status:"issues", summary:"반려하기가 일반 텍스트처럼 보인다", scenarios:[], non_blocking_findings:[], unverified:[],
@@ -285,28 +287,33 @@ case "$node:$scenario" in
   ui_review:ui_unverified) jq -n '{status:"unverified", summary:"앱 서버를 띄우지 못했다", scenarios:[], blocking_findings:[], non_blocking_findings:[],
     unverified:["모든 시나리오: 로그인 계정이 문서에 없다"]}' >"$out" ;;
   ui_review:ui_hollow) jq -n '{status:"verified", summary:"looks fine", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
-  ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
+  ui_review:ui_partial) jq -n '{status:"verified", summary:"desktop ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:["390px: 브라우저 에뮬레이션 실패"]}' >"$out" ;;
   ui_review:ui_fake_capture) echo note >"$adddir/notes.txt"
-    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_empty_issues) jq -n '{status:"issues", summary:"뭔가 이상하다", scenarios:[], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   # #606: 증거 경로 해석(하위 폴더 basename·비브라우저 시나리오·모호·밖·사유 없음)
   ui_review:ui_subdir) mkdir -p "$adddir/ui-review-1/shots"; echo capture >"$adddir/ui-review-1/shots/default.png"
-    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_nonbrowser) echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"ok", scenarios:[
-      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""},
-      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"터미널 출력이라 브라우저로 렌더링할 수 없다", alternative_verification:"CLI 실행 출력에서 반려됨 줄 확인"}],
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""},
+      {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", engine:"", captures:[], result:"ok", not_renderable_reason:"터미널 출력이라 브라우저로 렌더링할 수 없다", alternative_verification:"CLI 실행 출력에서 반려됨 줄 확인"}],
       blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_ambiguous) mkdir -p "$adddir/a" "$adddir/b"; echo capture >"$adddir/a/default.png"; echo capture >"$adddir/b/default.png"
-    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_outside) outside="$(dirname "$adddir")/outside-606.png"; echo capture >"$outside"
-    jq -n --arg o "$outside" '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:[$o], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n --arg o "$outside" '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:[$o], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:ui_no_reason) echo capture >"$adddir/default.png"
     jq -n '{status:"verified", summary:"ok", scenarios:[
-      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"},
+      {scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"},
       {scenario:"CLI 출력", viewport:"-", theme:"-", actions:"run", captures:[], result:"ok", not_renderable_reason:"", alternative_verification:""}],
       blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  # #678: 렌더링한 시나리오에 엔진 기록이 없으면 증거가 아니다. webkit으로 렌더링하면 그 엔진이 요약·상태에 남는다.
+  ui_review:ui_no_engine) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"ok", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+  ui_review:ui_webkit) echo capture >"$adddir/default.png"
+    jq -n '{status:"verified", summary:"창 앱과 같은 엔진으로 렌더링했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"webkit", captures:["default.png"], result:"ok", not_renderable_reason:"", alternative_verification:""}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   ui_review:*) [[ -n "$adddir" ]] && echo capture >"$adddir/default.png"
-    jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
+    jq -n '{status:"verified", summary:"모든 시나리오를 렌더링·조작했다", scenarios:[{scenario:"반려", viewport:"1440", theme:"light", actions:"click", engine:"chromium", captures:["default.png"], result:"ok"}], blocking_findings:[], non_blocking_findings:[], unverified:[]}' >"$out" ;;
   *) exit 1 ;;
 esac
