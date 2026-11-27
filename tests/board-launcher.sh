@@ -241,7 +241,7 @@ ar_stale_window() { # 창 앱의 빌드 기록만 낡게 만든다(창 앱이 �
 ar_wait_rebuilt() {
   local _
   for _ in $(seq 1 100); do
-    [[ "$(ar_build)" == "v1 swift"* && ! -d "$AR_LOCK" ]] && return 0
+    [[ "$(ar_build)" == "v2 swift"* && ! -d "$AR_LOCK" ]] && return 0
     sleep 0.1
   done
   return 1
@@ -349,5 +349,103 @@ assert_file "$BOARD_DATA/board/bin/launcher-swift-failed"
 launcher_sh remove >/dev/null
 bo_reset
 pass "harness board open rebuilds a stale window app in the background"
+
+# 격리(시험용) 보드 보기(#677): board.sh view <로컬 url>은 떠 있는 격리 보드를 창 앱의 시험용 창으로 띄운다.
+# 서버를 켜거나 끄지 않고, 창 앱이 없거나 낡았거나 macOS가 아니면 브라우저 없이 안내만 한다(exit 1). 인자 오류는 exit 2.
+BV_ISO="$BOARD_T/iso-data"
+mkdir -p "$BV_ISO"
+board_view_sh() { # 격리 데이터 디렉터리·BOARD_NO_BROWSER=1(격리 절 관례)에서 부른다
+  env PATH="$BO_BIN:$BOARD_T/bin:$PATH" HARNESS_METRICS_DIR="$BV_ISO" BOARD_LAUNCHER_DIR="$BL_APPS" \
+    BOARD_LAUNCHER_PLATFORM="${BO_PLATFORM:-Darwin}" BOARD_NO_BROWSER=1 bash "$ROOT/scripts/board/board.sh" view "$@"
+}
+bv_sum() { if [[ -f "$1" ]]; then cksum <"$1"; else echo none; fi; }
+# V5: 창 앱은 시험용 창 요청을 받는 URL 스킴을 등록하고, 스킴이 들어간 빌드는 v2 stamp다.
+launcher_sh remove >/dev/null
+BL_PATH="$BO_BIN:$BL_PATH" launcher_sh install >/dev/null
+assert_contains "$(<"$BL_APP/Contents/Info.plist")" "<string>harness-board-view</string>" "the window app registers the harness-board-view URL scheme"
+assert_contains "$(<"$BL_APP/Contents/Info.plist")" "CFBundleURLSchemes" "the URL scheme is declared in CFBundleURLTypes"
+assert_eq "v2 swift " "$(head -c 9 "$BL_APP/Contents/Resources/launcher-build")" "the window app with the view scheme is built with the v2 stamp"
+# V1·V2: 사용자 보드(테스트 서버)가 떠 있는 상태에서 view는 open -a 한 번만 부르고 server.json을 건드리지 않는다.
+bo_reset
+board_sh open >/dev/null
+BV_URL="http://127.0.0.1:$BOARD_PORT_T/?token=x"
+BV_USER_BEFORE="$(bv_sum "$BOARD_DATA/board/server.json")"
+BV_ISO_BEFORE="$(bv_sum "$BV_ISO/board/server.json")"
+BV_OUT="$(board_view_sh "$BV_URL")" || fail "board.sh view with the window app exits 0"
+assert_eq "1" "$(printf '%s\n' "$BV_OUT" | wc -l | tr -d ' ')" "view prints one JSON line"
+assert_eq "window|$BV_URL|$BL_APP" "$(jq -r '[.view, .url, .app] | join("|")' <<<"$BV_OUT")" "view reports the window and the url"
+assert_eq "-a $BL_APP harness-board-view://open?url=http%3A%2F%2F127.0.0.1%3A$BOARD_PORT_T%2F%3Ftoken%3Dx" "$(<"$BO_LOG")" \
+  "view asks the window app for a trial window once"
+assert_eq "" "$(<"$BO_XLOG")" "view does not use xdg-open"
+assert_eq "$BV_USER_BEFORE" "$(bv_sum "$BOARD_DATA/board/server.json")" "view leaves the user server.json alone"
+assert_eq "$BV_ISO_BEFORE" "$(bv_sum "$BV_ISO/board/server.json")" "view leaves the isolated server.json alone"
+assert_eq "true" "$(board_sh status | jq -r '.running')" "view keeps the running board"
+: >"$BO_LOG"
+BV_OUT="$(board_view_sh "http://localhost:$BOARD_PORT_T/")" || fail "view accepts localhost"
+assert_eq "window" "$(jq -r '.view' <<<"$BV_OUT")" "view opens a localhost url"
+# V4: 로컬 http + 포트가 아니면 사용법(exit 2)이고 아무것도 열지 않는다.
+bv_bad() { # 설명 인자...
+  local what="$1" code=0
+  shift
+  : >"$BO_LOG"; : >"$BO_XLOG"
+  board_view_sh "$@" >/dev/null 2>&1 || code=$?
+  assert_eq "2" "$code" "view rejects $what with usage"
+  assert_eq "|" "$(<"$BO_LOG")|$(<"$BO_XLOG")" "view opens nothing for $what"
+}
+bv_bad "https" "https://127.0.0.1:1/"
+bv_bad "a remote host" "http://example.com:80/"
+bv_bad "a url without a port" "http://127.0.0.1/"
+bv_bad "no argument"
+bv_bad "two arguments" "http://127.0.0.1:1/" "http://127.0.0.1:2/"
+bv_bad "a file url" "file:///etc/passwd"
+bv_bad "a userinfo host" "http://127.0.0.1:80@example.com/"
+# V3: 창 앱으로 띄울 수 없으면 브라우저 없이 주소와 설치 안내만 내고 exit 1.
+bv_refused() { # 설명 [open 로그 기대값]
+  local code=0 err
+  : >"$BO_LOG"; : >"$BO_XLOG"
+  err="$(board_view_sh "$BV_URL" 2>&1 >/dev/null)" || code=$?
+  assert_eq "1" "$code" "view exits 1: $1"
+  assert_contains "$err" "launcher install" "view tells how to install the window app: $1"
+  assert_contains "$err" "$BV_URL" "view shows the url: $1"
+  assert_eq "${2:-}|" "$(<"$BO_LOG")|$(<"$BO_XLOG")" "view does not open a browser: $1"
+}
+BO_STUB_FAIL_APP=1 bv_refused "open -a fails" "-a $BL_APP harness-board-view://open?url=http%3A%2F%2F127.0.0.1%3A$BOARD_PORT_T%2F%3Ftoken%3Dx"
+BO_PLATFORM=Linux bv_refused "outside macOS"
+printf 'stale\n' >"$AR_BUILD"
+bv_refused "a stale window app"
+assert_eq "stale" "$(ar_build)" "view does not rebuild the stale window app from an isolated data directory"
+launcher_sh remove >/dev/null
+bv_refused "no launcher"
+BL_SWIFTC_OVERRIDE="$BOARD_T/no-swiftc" launcher_sh install >/dev/null 2>&1
+bv_refused "an applet"
+launcher_sh remove >/dev/null
+mkdir -p "$BL_APP/Contents/MacOS" "$BL_APP/Contents/Resources"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>\n' >"$BL_APP/Contents/Info.plist"
+printf '#!/bin/bash\n' >"$BL_APP/Contents/MacOS/harness-board" && chmod +x "$BL_APP/Contents/MacOS/harness-board"
+bv_refused "another app with the same name"
+rm -rf "$BL_APP"
+# V6: Swift 창 앱의 시험용 창 — URL 요청을 받고, 창마다 자기 기준으로 링크를 나누고, 닫거나 감시할 때 서버를 끄지 않는다.
+BV_SWIFT="$ROOT/scripts/board/BoardLauncher.swift"
+assert_contains "$(<"$BV_SWIFT")" "application(_ application: NSApplication, open urls:" "the window app receives view URLs"
+assert_contains "$(<"$BV_SWIFT")" '"harness-board-view"' "the window app handles the harness-board-view scheme"
+assert_contains "$(grep -F 'title:' "$BV_SWIFT")" "시험용" "trial windows are titled as trial boards"
+BV_TERM="$(sed -n '/func applicationWillTerminate(/,/^    }$/p' "$BV_SWIFT")"
+assert_contains "$BV_TERM" 'if board != nil { _ = runShim(["stop"]' "quitting stops only the user board it opened"
+BV_TRIAL="$(sed -n '/\/\/ MARK: 시험용 창/,/\/\/ MARK: 링크/p' "$BV_SWIFT")"
+assert_contains "$BV_TRIAL" "cannotConnectToHost" "a trial window watches its own server"
+case "$BV_TRIAL$(sed -n '/func windowWillClose(/,/^    }$/p' "$BV_SWIFT")" in
+  *'runShim(["stop"]'* | *'runShim(["alive"]'*) fail "trial windows neither stop nor check the user board" ;;
+esac
+assert_contains "$(grep -F 'func isBoard(' "$BV_SWIFT")" "base: URL?" "isBoard compares with the base of each window"
+case "$(sed -n '/func isBoard(/,/^    }$/p' "$BV_SWIFT")" in *'guard let board'*) fail "isBoard does not use the global user board alone" ;; esac
+# V7: 문서와 사용법.
+assert_contains "$(<"$ROOT/.ai-harness/docs/ui.md")" "board.sh view" "ui.md shows isolated boards with board.sh view"
+assert_contains "$(sed -n '/^## 보드를 격리해 띄우기/,/^## /p' "$ROOT/.ai-harness/docs/ui.md")" "브라우저로 열지 않는다" "ui.md says not to open isolated boards in a browser"
+assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh view" "the board skill documents board.sh view"
+assert_contains "$(bash "$ROOT/scripts/board/board.sh" --help 2>&1 || true)" "board.sh view" "usage lists view"
+# V8: changelog 조각.
+assert_contains "$(cat "$ROOT"/changelog.d/677-*.md 2>/dev/null)" "(#677)" "changelog fragment for #677"
+bo_reset
+pass "harness board view opens an isolated board in a trial window"
 
 finish_tests

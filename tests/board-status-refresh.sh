@@ -501,6 +501,43 @@ assert_contains "$WD_TPL" '`끝남 · PR #${n}`' "a finished worker in a group r
 assert_contains "$WD_TPL" "memberStatus(it), ago(it.at)" "group member rows use the worker status"
 pass "work.sh keeps a delegated session after its tab closes"
 
+# 조율 세션 유지(#670): 작업자를 띄운 부모(조율) 세션이 claude agents 목록에서 빠지면 자식만 남고 부모가 보드에서 사라졌다.
+# scan 키(부모 transcript 경로)에 handles 또는 bg가 있으면 부모 sid도 끝난 항목으로 남긴다. 띄운 기록이 없는 세션은 계속 뺀다.
+# 세션 서랍 항목이 목록에서 빠지면 서버 404 문구 대신 "목록에서 빠진 세션" 안내와 이어 가기 명령을 보여야 한다.
+WC_T="$(mkdir -p "$TEST_TMP/work-coord" && cd "$TEST_TMP/work-coord" && pwd -P)"
+mkdir -p "$WC_T/bin" "$WC_T/projects/parent" "$WC_T/projects/child" "$WC_T/metrics/board" "$WC_T/member"
+cp "$WD_T/bin/claude" "$WC_T/bin/claude"
+WC_PARENT="dddddddd-0000-4000-8000-000000000001"
+WC_CHILD="dddddddd-0000-4000-8000-000000000002"
+WC_SOLO="dddddddd-0000-4000-8000-000000000003"
+WC_BGPARENT="dddddddd-0000-4000-8000-000000000004"
+WC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo '[]' >"$WC_T/agents.json"
+for WC_SID in "$WC_PARENT" "$WC_BGPARENT"; do
+  jq -cn --arg t "$WC_NOW" --arg cwd "$WC_T/member" '{type: "user", cwd: $cwd, message: {content: "작업 맡겨줘"}, timestamp: $t}' >"$WC_T/projects/parent/$WC_SID.jsonl"
+done
+for WC_SID in "$WC_CHILD" "$WC_SOLO"; do
+  { jq -cn --arg t "$WC_NOW" --arg cwd "$WC_T/member" '{type: "user", cwd: $cwd, message: {content: "#12 고쳐줘"}, timestamp: $t}'
+    jq -cn --arg t "$WC_NOW" '{type: "assistant", message: {content: [{type: "text", text: "PR을 열었습니다."}]}, timestamp: $t}'
+  } >"$WC_T/projects/child/$WC_SID.jsonl"
+done
+jq -cn --arg p "$WC_T/projects/parent/$WC_PARENT.jsonl" --arg q "$WC_T/projects/parent/$WC_BGPARENT.jsonl" --arg c "$WC_CHILD" --arg s "$WC_SOLO" \
+  '{handles: {"term_11111111-2222-3333-4444-555555555555": $c, "term_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": $s},
+    scan: {($p): {v: 3, offset: 0, handles: ["term_11111111-2222-3333-4444-555555555555"]},
+           ($q): {v: 3, offset: 0, handles: [], bg: ["abcdef01"]}}}' >"$WC_T/metrics/board/links.json"
+WC_OUT="$(env -u CLAUDE_CONFIG_DIR PATH="$WC_T/bin:$PATH" FAKE_AGENTS="$WC_T/agents.json" HARNESS_METRICS_DIR="$WC_T/metrics" \
+  HARNESS_CLAUDE_PROJECTS_DIR="$WC_T/projects" BOARD_CLAUDE_PROFILE_GLOBS="$WC_T/none/*" BOARD_CLAUDE_CONFIG_DIRS= bash "$ROOT/scripts/board/work.sh")"
+assert_eq "1" "$(jq -r --arg s "$WC_PARENT" '[.[] | select(.sid == $s)] | length' <<<"$WC_OUT")" "the coordinating parent session stays listed once after it leaves claude agents"
+assert_eq "done|false" "$(jq -r --arg s "$WC_PARENT" '.[] | select(.sid == $s) | "\(.state)|\(.live)"' <<<"$WC_OUT")" "the coordinating parent comes back as an ended item"
+assert_eq "done|false" "$(jq -r --arg s "$WC_CHILD" '.[] | select(.sid == $s) | "\(.state)|\(.live)"' <<<"$WC_OUT")" "the spawned worker still comes back as an ended item"
+assert_eq "" "$(jq -r --arg s "$WC_SOLO" '.[] | select(.sid == $s) | .sid' <<<"$WC_OUT")" "a closed session no parent spawned stays out"
+assert_eq "done|false" "$(jq -r --arg s "$WC_BGPARENT" '.[] | select(.sid == $s) | "\(.state)|\(.live)"' <<<"$WC_OUT")" "a parent that only spawned --bg workers (scan bg) also stays as an ended item"
+WC_TPL="$(<"$ROOT/scripts/board/template.html")"
+assert_contains "$WC_TPL" "목록에서 빠진 세션" "the session drawer explains an item that left the list"
+# 이어 가기 복사 버튼은 이미 한 곳(살아 있지 않은 상주 세션)에 있다 — 서랍 안내가 하나 더 둔다.
+assert_eq "2" "$(grep -c '이어 가기 명령 복사' "$ROOT/scripts/board/template.html" | awk '{print ($1 >= 2) ? 2 : $1}')" "the drawer notice offers a copy button for the claude --resume command"
+pass "work.sh keeps the coordinating parent session and the drawer explains a session that left the list"
+
 # 러너 카드 branch·workflow·release_tag(#605): publish 전에 멈춘 런은 .publish.branch가 없으므로 state의 .branch → .publish.branch →
 # (끝나지도 도는 중도 아닐 때만) 저장소의 현재 브랜치 순으로 카드에 싣는다. release 런은 .release.tag를 release_tag로 싣는다.
 B6_T="$BA_T/data605"

@@ -161,21 +161,29 @@ def cached_token(path):
 def sign(private_key, data):
     # 개인키는 하네스 데이터 디렉터리의 0700 폴더 안 0600 임시 파일로만 openssl 에 넘기고 바로 지운다
     # (명령 인자·환경·공용 /tmp 에 싣지 않는다).
+    # 임시 파일 쓰기 실패·openssl 실행 불가·서명 실패는 조치가 달라 오류 코드를 나눈다(#655).
     tmp_dir = os.path.join(DATA_DIR, "cache", "ga-sign")  # ga 전용 폴더 — 공용 cache 폴더 권한은 건드리지 않는다
     try:
         os.makedirs(tmp_dir, mode=0o700, exist_ok=True)
         os.chmod(tmp_dir, 0o700)
         fd, kp = tempfile.mkstemp(prefix="ga_", suffix=".pem", dir=tmp_dir)
     except OSError as e:
-        raise GaError("openssl failed", f"cannot create a private temp file in {tmp_dir}: {e.strerror}")
+        raise GaError("key temp file failed", f"cannot write a private temp key file in {tmp_dir}: {e.strerror}")
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(private_key)
-        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", kp], input=data, capture_output=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise GaError("openssl failed", f"openssl not available: {e}")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(private_key)
+        except OSError as e:
+            raise GaError("key temp file failed", f"cannot write a private temp key file in {tmp_dir}: {e.strerror}")
+        try:
+            r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", kp], input=data, capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise GaError("openssl not available", f"openssl not available: {e}")
     finally:
-        os.remove(kp)
+        try:
+            os.remove(kp)
+        except FileNotFoundError:
+            pass
     if r.returncode:
         raise GaError("openssl failed", "openssl could not sign with the key (content not shown)")
     return r.stdout

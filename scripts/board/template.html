@@ -1307,7 +1307,8 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       case 'running': return ['progress', srcOf(i) === 'work' ? '작업 중' : '실행 중'];
       case 'queued': return ['waiting', '대기'];
       case 'blocked': return ['waiting', '막힘'];
-      case 'idle': return ['info', '쉬는 중'];
+      // 터미널이 닫힌(live:false) 작업 세션은 살아서 쉬는 세션과 구분한다(이슈 670 되살린 조율 세션).
+      case 'idle': return srcOf(i) === 'work' && i.live === false ? ['success', '끝남'] : ['info', '쉬는 중'];
       case 'done': return ['success', srcOf(i) === 'work' ? '끝남' : '완료'];
       default: return ['info', '확인 못 함'];
     }
@@ -2972,7 +2973,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   function closeDrawer() {
     if ($('drawer').hidden) return;
     const was = selected;
-    stopChat();
+    stopChat(); goneNotice(null);
     selected = null; current = null; mode = null;
     $('drawer').hidden = true; $('split').dataset.drawer = 'closed';
     syncModal();
@@ -3000,6 +3001,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const kvList = (pairs) => { const kv = el('dl', 'ds-kv'); for (const [k, v] of pairs) { if (v == null || v === '') continue; kv.append(el('dt', null, k)); const d = el('dd'); d.append(v); kv.append(d); } return kv; };
   const block = (label, ...children) => { const b = el('div', 'ds-stack'); b.append(el('h3', 'ds-label', label), ...children); return b; };
   function renderDrawer(fresh) {
+    if (mode !== 'session') goneNotice(null);
     if (mode === 'cleanup') return renderCleanup();
     if (mode === 'hidden') return renderHidden();
     const it = itemsAll().find((x) => x.id === selected) || current; if (!it) return;
@@ -3063,7 +3065,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
 
   // 세션 서랍: 대화(바디가 스크롤) + 바닥에 권한·질문·입력.
-  let offset = 0, topOffset = 0, olderBusy = false, polling = false, qKey = null;
+  let offset = 0, topOffset = 0, olderBusy = false, polling = false, qKey = null, chatLoaded = false;
   const STATE_KO = { needs_human: '답 대기', review: '결과 확인', running: '작업 중', idle: '쉬는 중', done: '끝남' };
   function stopChat() { clearInterval(pollTimer); pollTimer = null; qKey = null; }
   function msgEl(m) {
@@ -3071,12 +3073,30 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     if (m.role === 'assistant') d.append(md(m.text)); else d.textContent = m.text;
     return d;
   }
+  // 열어 둔 세션이 목록에서 빠지면(이슈 670) 서버는 그 id에 404를 준다 — 서버 문구 대신 빠졌다고 알리고 이어 가는 명령을 준다.
+  const isGone = (id) => !itemsAll().some((x) => x.id === id);
+  function goneNotice(it) {
+    const old = $('dgone');
+    if (!it) { if (old) old.remove(); return; }
+    if (old && old.dataset.id === it.id) return;
+    const n = el('div', 'ds-notice'); n.id = 'dgone'; n.dataset.id = it.id; n.setAttribute('role', 'status');
+    const inner = el('div', 'ds-stack');
+    if (it.sid) {
+      const cmd = `claude --resume ${it.sid}`;
+      const c = el('div', 'ds-cluster'); c.append(el('code', 'b-raw', cmd), copyBtn('이어 가기 명령 복사', cmd));
+      inner.append(el('p', null, '목록에서 빠진 세션입니다. 터미널에서 이어 가려면:'), c);
+      if (it.cwd) inner.append(el('p', 'ds-caption b-raw', `${it.cwd}에서 실행`));
+    } else inner.append(el('p', null, '목록에서 빠진 세션입니다. 띄운 터미널에서 이어 가세요.'));
+    n.append(icon('info'), inner);
+    if (old) old.replaceWith(n); else $('dsub').after(n);
+  }
   function renderSession(it, fresh) {
+    const gone = isGone(it.id);
     const gctx = it.group ? `${it.group.title} 묶음의 ${it.group.role === 'coord' ? '내가 시킨 세션' : '작업자'} · ` : '';
-    $('dsub').textContent = `${gctx}${it.term && it.term !== it.title ? it.term + ' · ' : ''}${it.project} · ${KIND[it.kind] || it.kind} · ${STATE_KO[it.state] || '상태 모름'}${it.live === false ? ' · 끝난 세션' : ''}`;
+    $('dsub').textContent = `${gctx}${it.term && it.term !== it.title ? it.term + ' · ' : ''}${it.project} · ${KIND[it.kind] || it.kind} · ${it.live === false && it.state === 'idle' ? '끝남' : STATE_KO[it.state] || '상태 모름'}${it.live === false ? ' · 끝난 세션' : ''}`;
     const body = $('dbody'), foot = $('dfoot');
     if (fresh) {
-      offset = 0; topOffset = 0; olderBusy = false; qKey = null;
+      offset = 0; topOffset = 0; olderBusy = false; qKey = null; chatLoaded = false;
       const chat = el('div', 'b-chat'); chat.id = 'dchat'; chat.setAttribute('aria-live', 'off');
       const sr = el('p', 'ds-sr', '대화를 불러오는 중'); sr.setAttribute('role', 'status'); sr.id = 'dchat-status';
       chat.append(...skeleton(2).childNodes);
@@ -3103,8 +3123,18 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       });
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
       if (SERVER) autocomplete(ta, () => current && current.cwd);
-      pollChat(); pollTimer = setInterval(pollChat, 1000);
     }
+    goneNotice(gone ? it : null);
+    if (gone) {
+      stopChat();
+      if (!chatLoaded) { $('dchat').replaceChildren(); $('dchat-status').textContent = '목록에서 빠진 세션이라 대화를 불러오지 않았습니다'; }
+      else for (const e of $('dchat').querySelectorAll(':scope > .ds-field__error')) e.remove();
+      for (const id of ['dperm', 'dq', 'dnote', 'dform', 'dtools']) $(id).hidden = true;
+      foot.hidden = true;
+      return;
+    }
+    if (!pollTimer) { pollChat(); pollTimer = setInterval(pollChat, 1000); }
+    foot.hidden = false; $('dperm').hidden = false; $('dnote').hidden = false;
     const dp = $('dperm'), pk = it.permission ? it.permission.pid : '';
     if (dp.dataset.pid !== pk) {
       dp.dataset.pid = pk; dp.replaceChildren();
@@ -3148,9 +3178,13 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       const res = await r.json();
       if (id !== selected || from !== offset || mode !== 'session') return;
       const chat = $('dchat'), body = $('dbody');
+      // 404는 목록 갱신보다 먼저 올 수 있다(SSE가 끊겨 폴링으로 대체된 동안은 거의 항상) — 목록을 맞춘 뒤 빠짐을 다시 판정한다
+      if (!res.ok && r.status === 404 && !isGone(id)) { try { await refresh(); } catch (e) { /* 다음 폴링이 다시 시도한다 */ } if (id !== selected || mode !== 'session') return; }
+      if (!res.ok && isGone(id)) { keepFocus(() => renderDrawer()); drawerSig = drawerKey(); return; }
+      if (!res.ok && r.status === 404 && chatLoaded) return;
       if (!res.ok) { chat.replaceChildren(el('p', 'ds-field__error b-line', res.message || '대화를 읽지 못했습니다.')); return; }
       const atBottom = res.reset || body.scrollHeight - body.scrollTop - body.clientHeight < 60;
-      if (res.reset) { chat.replaceChildren(); topOffset = res.start; olderBusy = false; if (topOffset === 0) chat.append(el('p', 'ds-caption b-chatedge b-line', '대화 처음')); $('dchat-status').textContent = '대화를 불러왔습니다'; }
+      if (res.reset) { chatLoaded = true; chat.replaceChildren(); topOffset = res.start; olderBusy = false; if (topOffset === 0) chat.append(el('p', 'ds-caption b-chatedge b-line', '대화 처음')); $('dchat-status').textContent = '대화를 불러왔습니다'; }
       res.messages.forEach((m) => chat.append(msgEl(m)));
       offset = res.offset;
       renderQuestion(res.question, res.question_pid);
@@ -3579,7 +3613,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   }
   // 서랍은 내용이 바뀔 때만 다시 그린다 — 5초마다 다시 그리면 서랍 안의 포커스와 스크롤을 잃는다.
   let drawerSig = '';
-  const drawerKey = () => { if (mode === 'cleanup' || mode === 'hidden') return `${mode}:${toolRev}`; const it = itemsAll().find((x) => x.id === selected) || current; const repo = mode === 'autofix' && adata && it ? adata.repos.find((r) => r.project === it.project) : null; return JSON.stringify([mode, it, repo && (repo.details || {})[it.signature], it && it.session_id && itemsAll().find((x) => x.id === it.session_id)]); };
+  const drawerKey = () => { if (mode === 'cleanup' || mode === 'hidden') return `${mode}:${toolRev}`; const it = itemsAll().find((x) => x.id === selected) || current; const repo = mode === 'autofix' && adata && it ? adata.repos.find((r) => r.project === it.project) : null; return JSON.stringify([mode, it, mode === 'session' && !!selected && isGone(selected), repo && (repo.details || {})[it.signature], it && it.session_id && itemsAll().find((x) => x.id === it.session_id)]); };
   function renderAll() {
     keepFocus(() => {
       renderSidebar(); renderBoard();

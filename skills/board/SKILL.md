@@ -19,6 +19,7 @@ $ROOT/scripts/board/board.sh open
 - 출력 한 줄 JSON의 `url`(토큰 포함)을 사용자에게 그대로 보여 준다. 브라우저가 열리지 않는 환경이면 그 주소를 직접 열라고 안내한다. 이 주소의 토큰은 보드를 조작할 수 있는 열쇠이므로 PR·이슈·공유 문서에는 적지 않는다.
 - 실패하면(종료 코드 1) stderr 이유를 그대로 전한다. `BOARD_PORT`를 정하지 않으면 8765가 막혀 있어도 다음 빈 포트(최대 8774)로 띄운다 — 실제 주소는 출력 JSON의 `url`을 쓴다. 10개가 모두 막혔거나 정한 `BOARD_PORT`가 막혔을 때만 멈춘다 — 그때 다른 포트로 띄울지 사용자에게 묻고, 원하면 `BOARD_PORT=<포트> $ROOT/scripts/board/board.sh open`. 이전 버전 서버가 주소 없이 떠 있다는 메시지면 `stop` 뒤 다시 열지 묻는다.
 - 창 앱도 브라우저도 열지 않고 주소만 원하면 `--no-browser`.
+- 격리·시험 보드(`HARNESS_METRICS_DIR` 임시 데이터·다른 포트로 띄운 보드)를 사용자에게 보여 줄 때는 `$ROOT/scripts/board/board.sh view "<그 보드의 url>"`만 쓴다. 사용자 브라우저(ego·Chrome 등)로 그 주소를 열지 않는다 — 진짜 보드로 착각한다. 기계 확인은 헤드리스 Playwright로 한다. 자세한 규칙은 아래 런처 절.
 
 ## 끄기 (`stop`) · 상태 (`status`)
 
@@ -38,6 +39,8 @@ $ROOT/scripts/board/board.sh status
 ## 런처 앱 (macOS, 선택)
 
 `/ai-harness:board` 없이 눌러서 여는 앱 `~/Applications/Harness Board.app`은 `/ai-harness:setup`의 자동화 옵션(8-3)으로 사용자가 고를 때만 만든다. 이 스킬은 몰래 만들지 않는다. 상태 확인·지우기는 `$ROOT/scripts/board/board.sh launcher status|remove`. 앱은 고정 경로 `~/.ai-harness/board/bin/open-board`를 부르고, 그 스크립트가 열 때마다 가장 새 플러그인 설치본의 `board.sh open`을 부른다 — 플러그인을 업데이트해도 다시 설치할 필요가 없다. 열지 못하면 이유를 대화상자로 보이고 `~/.ai-harness/board/launcher.log`에 남긴다(보드 주소·토큰은 남기지 않는다). 앱은 보드를 자기 창(WKWebView) 하나에 띄우고 보드가 떠 있는 동안 Dock에 남는다 — Dock 아이콘을 다시 누르면 새 탭 없이 그 창을 앞으로 가져오고, 창을 닫거나 앱을 종료하면 보드 서버도 끄며, 보드가 자동 종료나 `board.sh stop`으로 꺼지면 몇 초 안에 따라 끝난다. 설치 때 `swiftc`가 없으면 누를 때마다 브라우저로 여는 AppleScript 앱이 대신 설치된다(`launcher status`의 `kind`: `window`/`applet`). `kind=window`가 설치돼 있으면 `/ai-harness:board`·`board.sh open`도 그 창으로 연다(떠 있으면 앞으로). 플러그인 업데이트로 창 앱 소스가 바뀌면 `board.sh open`이 낡은 창 앱을 백그라운드에서 다시 만든다(내부 `launcher auto-rebuild`, 로그 `~/.ai-harness/board/launcher-rebuild.log`, 설치 때 shim은 그대로) — 다시 install할 필요가 없고 새 앱은 다음 실행부터 쓰인다.
+
+`board.sh view <url>`(#677)은 이미 떠 있는 격리 보드 주소(`http://127.0.0.1|localhost:<포트>/…`만, 아니면 exit 2)를 창 앱의 시험용 창(`Harness Board — 시험용 :<포트>`)으로 띄운다. 사용자 보드 창·서버는 그대로 두고, 서버를 켜거나 끄지 않는다 — 시험용 창을 닫아도 격리 서버는 남으므로 같은 환경 변수로 `board.sh stop`을 따로 부른다. 격리 서버가 꺼지면 그 시험용 창만 닫힌다. 링크는 창마다 자기 보드 주소를 기준으로 안/밖을 나눈다. 창 앱이 없거나(미설치·애플릿·macOS 아님) 낡았으면 브라우저를 열지 않고 주소와 `board.sh launcher install` 안내만 내고 exit 1이다.
 
 ## 보드가 하는 일과 하지 않는 일
 
@@ -59,7 +62,7 @@ $ROOT/scripts/board/board.sh status
 - **끝난 일 정리**: 끝난 일 칸 머리의 "끝난 일 정리…"가 범위(하루·일주일 넘은 것, 전체)별로 정리할 항목과 각각 일어날 일(숨김 / 쉬는 세션 닫기 / worktree 삭제 가능·불가와 이유)을 미리 보이고, 확인하면 `POST /cleanup-bulk`로 카드별 정리(`cleanup`)를 한꺼번에 돌린다. 기본은 목록에서 숨기기 + 쉬는 세션 닫기이고, worktree 삭제는 체크박스를 켰을 때만 기존 확인(변경·올리지 않은 커밋·다른 살아 있는 세션 없음)을 통과한 것만 지운다(강제 없음). 작업 중·답 대기·권한 대기 세션은 대상이 아니고 대화 기록은 지우지 않는다. 하네스 동작·자동 수정의 끝난 항목은 숨기기만 하고, 그 항목에 새 일이 생기면 다시 보인다. 같은 정리가 동시에 두 번 돌지 않는다. 숨긴 항목은 "숨긴 항목 N개"(`GET /hidden`, `POST /hidden/restore`)에서 다시 보이게 한다 — 닫은 세션·지운 worktree는 되돌리지 않는다.
 - **세션 정리(카드 하나)**: 보드가 닫을 수 있는 세션(백그라운드, Orca 터미널의 대화형 세션)이면 상태와 관계없이 언제나 보인다. 상태는 확인창의 문구와 무게만 정한다 — 쉬는 중·결과 확인은 그대로, 본문 질문 답 대기는 "답하지 않고 닫습니다", 질문 도구·권한 요청 대기는 "그 요청은 거절된 것으로 끝납니다", 작업 중은 "진행 중인 작업이 중간에 끊깁니다"(취소에 기본 포커스, worktree 삭제 불가). 화면은 고른 확인 수준(`confirm`: `idle`·`ask`·`waiting`·`busy`)을 정리 요청에 싣고, 서버는 정리 직전 실제 상태가 그보다 무거우면 거부하며 새 수준을 돌려준다 — 화면은 새 경고로 다시 묻는다. 확인 대화상자는 최근 목록의 항목으로 worktree를 바로 판정한다. 확인하면 카드가 먼저 빠지고, 서버는 정리 직전에 그 세션의 설정 폴더로 `claude agents`를 다시 불러 작업 중·답 대기 여부와 worktree(변경·올리지 않은 커밋·다른 살아 있는 세션)를 다시 확인한 뒤 세션 닫기·worktree 삭제를 뒤에서 한다. 실패하면 숨김을 되돌리고 `status.json`의 `cleanup_failed`로 이유를 알린다. 상태 수집(`work.sh`)은 대화 기록의 제목·요약을 경로·크기·수정 시각 기준으로 `~/.ai-harness/board/work-cache.json`(0600)에 두고 바뀐 것만 다시 읽는다.
 - 보드는 다른 세션의 질문·권한에 **사람 없이 답하지 않는다**. 대화 기록(transcript)은 지우지 않는다. 세션 정리와 끝난 일 정리에서 worktree는 변경·원격에 없는 커밋이 없고, 그 폴더를 쓰는 살아 있는 세션(Orca 터미널·에이전트, 보드에서 숨긴 세션 포함)이 없으며 확인에 실패하지 않았을 때만 지운다. Orca 삭제가 실패하면 강제 없이 `git worktree remove`로 넘어간다. 워크플로 러너는 worktree를 지우지 않고 정리 가능 여부만 기록한다.
-- 세션이 띄운 세션(부모 대화 기록의 `orca terminal create|agent launch|worktree create` 결과 터미널, `claude --bg` ID)은 부모 아래 묶인다. 대화형 세션은 살아 있는 동안만 `claude agents` 목록에 있으므로, 띄운 기록이 있는 세션이 목록에서 빠지면 `work.sh`가 `links.json`에 고정한 자식(부모가 터미널을 띄운 직후 처음 붙은 세션 — 같은 터미널을 나중에 재사용한 세션은 묶지도 되살리지도 않는다)과 대화 기록으로 끝난 항목을 되살려 묶음과 PR 바로가기를 남긴다(`BOARD_DONE_HOURS` 이내). 사람이 직접 열었다 닫은 세션은 되살리지 않는다.
+- 세션이 띄운 세션(부모 대화 기록의 `orca terminal create|agent launch|worktree create` 결과 터미널, `claude --bg` ID)은 부모 아래 묶인다. 대화형 세션은 살아 있는 동안만 `claude agents` 목록에 있으므로, 띄운 기록이 있는 세션이 목록에서 빠지면 `work.sh`가 `links.json`에 고정한 자식(부모가 터미널을 띄운 직후 처음 붙은 세션 — 같은 터미널을 나중에 재사용한 세션은 묶지도 되살리지도 않는다)과 작업자를 띄운 조율 세션도(`links.json` scan에 띄운 기록이 남은 부모) 대화 기록으로 끝난 항목을 되살려 묶음과 PR 바로가기를 남긴다(`BOARD_DONE_HOURS` 이내). 열어 둔 세션 서랍의 항목이 목록에서 빠지면 서랍은 "목록에서 빠진 세션" 안내와 복사할 수 있는 `claude --resume <sid>`를 보이고 대화 폴링·입력·동작 버튼을 멈춘다. 사람이 직접 열었다 닫은 세션은 되살리지 않는다.
 - Orca는 선택이다. 없으면 세션 묶음과 대화형 터미널 입력만 빠진다.
 
 ## 할 일 적기 (`todo`)

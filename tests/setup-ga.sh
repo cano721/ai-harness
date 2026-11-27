@@ -20,12 +20,16 @@ jq -n '{type:"service_account", project_id:"demo-proj", client_email:"bot@demo-p
 chmod 644 "$GA_KEY_SRC"
 cat >"$SETUP_T/ga.sh" <<'STUB'
 #!/usr/bin/env bash
-# setup.sh check ga가 부르는 ga.py check --json 대역. ga-reply.json 내용을 그대로 낸다.
+# setup.sh check ga가 부르는 ga.py check --json 대역. --prop <별칭>이 있으면 ga-reply-<별칭>.json, 없으면 ga-reply.json을 그대로 낸다.
 printf '%s %s\n' "$*" "$HARNESS_CLAUDE_SETTINGS" >>"${0%/*}/ga-argv.log"
-cat "${0%/*}/ga-reply.json"
+reply=ga-reply.json
+all="$*"
+case " $all " in *" --prop "*) a="${all#*--prop }"; reply="ga-reply-${a%% *}.json" ;; esac
+cat "${0%/*}/$reply"
 STUB
 chmod +x "$SETUP_T/ga.sh"
 ga_reply() { printf '%s\n' "$1" >"$SETUP_T/ga-reply.json"; }
+ga_reply_for() { printf '%s\n' "$2" >"$SETUP_T/ga-reply-$1.json"; } # 별칭, 응답
 SETUP_ENV=(HM_SETUP_GA="$SETUP_T/ga.sh")
 
 # 설치: 스크립트까지 디렉터리째, 표준 라이브러리만.
@@ -84,6 +88,8 @@ setup_cmd set --tool claude GA_PROPERTY_ID 123456789 >/dev/null
 setup_cmd set --tool claude GA_PROPERTY_CHECKOUT_WEB 987654321 >/dev/null
 assert_eq "987654321" "$(jq -r '.env.GA_PROPERTY_CHECKOUT_WEB' "$SETUP_T/settings.json")" "an alias property is saved"
 if setup_cmd set --tool claude GA_PROPERTY_bad 1 >/dev/null 2>&1; then fail "a lowercase env name is refused"; fi
+# 아래 check 분기는 기본 속성만 있을 때의 형식을 본다. 별칭 속성 확인은 끝 블록(#655)에서 다시 넣어 본다.
+jq 'del(.env.GA_PROPERTY_CHECKOUT_WEB)' "$SETUP_T/settings.json" >"$SETUP_T/s.tmp" && mv "$SETUP_T/s.tmp" "$SETUP_T/settings.json"
 
 # check 분기: 성공은 서비스 계정 이메일과 속성, 실패는 원인별 hint.
 ga_reply '{"ok":true,"property":"123456789","as":"bot@demo-proj.iam.gserviceaccount.com","dimensions":3,"metrics":2}'
@@ -195,5 +201,99 @@ print(ga.error_reason("{\"error\":{\"code\":403,\"status\":\"PERMISSION_DENIED\"
 assert_eq "SERVICE_DISABLED PERMISSION_DENIED SERVICE_DISABLED invalid_grant True" "$GA_REASONS" "Google error bodies map to one reason word"
 [[ ! -e "$ROOT/catalog/ga/scripts/__pycache__" ]] || fail "tests leave no bytecode in the catalog (it would ship with installed copies)"
 pass "ga.py: config lookup order, aliases, property ID check, key file guards, filters and --order -metric, error reasons (#639)"
+
+
+# check ga 별칭별 확인(#655): 기본 속성만 있으면 예전 형식·인자 그대로, GA_PROPERTY_<별칭>이 있으면 별칭마다 ga.py check --prop을 불러
+# langfuse(#621)처럼 projects에 모은다. 키 파일 검사는 한 번만 먼저 한다.
+SETUP_ENV=(HM_SETUP_GA="$SETUP_T/ga.sh")
+GA_OK='{"ok":true,"property":"123456789","as":"bot@demo-proj.iam.gserviceaccount.com","dimensions":3,"metrics":2}'
+ga_reply "$GA_OK"
+: >"$SETUP_T/ga-argv.log"
+GA_CHECK="$(setup_cmd check ga)"
+assert_eq "true bot@demo-proj.iam.gserviceaccount.com (property 123456789)" "$(jq -r '"\(.ok) \(.as)"' <<<"$GA_CHECK")" "default only keeps the old as format"
+assert_eq "true" "$(jq -r '.projects == null or (.projects | map(.alias)) == ["default"]' <<<"$GA_CHECK")" "default only has no alias rows"
+assert_eq "check --json $SETUP_T/settings.json" "$(tail -1 "$SETUP_T/ga-argv.log")" "default only calls ga.py without --prop"
+# 서명 단계 오류는 원인별 hint: 임시 키 파일 실패는 openssl을 말하지 않고, openssl 없음은 openssl을 말한다.
+ga_reply '{"ok":false,"error":"key temp file failed"}'
+GA_HINT="$(setup_cmd check ga | jq -r '.hint')"
+assert_contains "$GA_HINT" "cache/ga-sign" "a temp key file failure points at the harness data folder"
+if grep -qi openssl <<<"$GA_HINT"; then fail "a temp key file failure does not blame openssl"; fi
+ga_reply '{"ok":false,"error":"openssl not available"}'
+assert_contains "$(setup_cmd check ga | jq -r '.hint')" "openssl" "a missing openssl points at installing it"
+
+ga_reply "$GA_OK"
+setup_cmd set --tool claude GA_PROPERTY_CHECKOUT_WEB 987654321 >/dev/null
+ga_reply_for checkout-web '{"ok":true,"property":"987654321","as":"bot@demo-proj.iam.gserviceaccount.com","dimensions":3,"metrics":2}'
+GA_CHECK="$(setup_cmd check ga)"
+assert_eq 'true ["default","checkout-web"] true' "$(jq -c '[.ok, (.projects | map(.alias)), (.projects | all(.ok))]' <<<"$GA_CHECK" | jq -r '"\(.[0]) \(.[1] | tojson) \(.[2])"')" "every alias is checked"
+assert_contains "$(jq -r '.as' <<<"$GA_CHECK")" "default: bot@demo-proj.iam.gserviceaccount.com (property 123456789)" "as names the default property"
+assert_contains "$(jq -r '.as' <<<"$GA_CHECK")" "checkout-web: bot@demo-proj.iam.gserviceaccount.com (property 987654321)" "as names the alias property"
+assert_contains "$(cat "$SETUP_T/ga-argv.log")" "check --json --prop checkout-web" "the alias is checked with --prop"
+ga_reply_for checkout-web '{"ok":false,"error":"HTTP 403","reason":"PERMISSION_DENIED"}'
+GA_CHECK="$(setup_cmd check ga)"
+assert_eq "false" "$(jq -r '.ok' <<<"$GA_CHECK")" "one failing alias fails the check"
+assert_contains "$(jq -r '.error' <<<"$GA_CHECK")" "checkout-web: HTTP 403 PERMISSION_DENIED" "the error names the failing alias"
+assert_contains "$(jq -r '.hint' <<<"$GA_CHECK")" "뷰어" "the hint comes from the failing alias"
+assert_eq "true true true" "$(jq -r '[(.projects[] | select(.alias == "default") | .ok), (.projects[] | select(.alias == "checkout-web") | (.error != null), (.hint != null))] | map(tostring) | join(" ")' <<<"$GA_CHECK")" "the failing row carries its error and hint, the default row stays ok"
+ga_reply_for checkout-web '{"ok":false,"error":"bad property"}'
+assert_contains "$(setup_cmd check ga | jq -r '.projects[] | select(.alias == "checkout-web") | .hint')" "GA_PROPERTY_CHECKOUT_WEB" "a bad alias property points at its own key"
+chmod 644 "$GA_DEST"
+: >"$SETUP_T/ga-argv.log"
+GA_CHECK="$(setup_cmd check ga)"
+assert_eq "false key file permissions null" "$(jq -r '"\(.ok) \(.error) \(.projects)"' <<<"$GA_CHECK")" "a too-open key file fails once, without alias rows"
+assert_eq "0" "$(wc -l <"$SETUP_T/ga-argv.log" | tr -d ' ')" "ga.py is not run for any alias when the key file is too open"
+chmod 600 "$GA_DEST"
+printf "export GA_PROPERTY_APP='333'\n" >>"$SETUP_T/data/secrets.env"
+ga_reply_for checkout-web '{"ok":true,"property":"987654321","as":"bot@demo-proj.iam.gserviceaccount.com","dimensions":3,"metrics":2}'
+ga_reply_for app '{"ok":true,"property":"333","as":"bot@demo-proj.iam.gserviceaccount.com","dimensions":3,"metrics":2}'
+assert_eq '["default","app","checkout-web"]' "$(setup_cmd check ga | jq -c '.projects | map(.alias)')" "aliases in secrets.env are checked too, default first"
+SETUP_ENV=()
+pass "setup check ga: per-alias projects, default-only format kept, key file checked once, sign error hints (#655)"
+
+# ga.py sign(): 임시 키 파일 쓰기 실패·openssl 실행 불가·서명 실패를 다른 오류로 낸다. 어느 경로든 임시 키 파일을 남기지 않는다.
+GA_SIGN="$(env -i PATH="$PATH" HOME="$GA_T/home" HARNESS_METRICS_DIR="$GA_T/sign" python3 -I -B -c '
+import glob, importlib.util, os, subprocess, sys, tempfile
+spec = importlib.util.spec_from_file_location("ga", sys.argv[1]); ga = importlib.util.module_from_spec(spec); spec.loader.exec_module(ga)
+d = os.path.join(ga.DATA_DIR, "cache", "ga-sign")
+def nospace(*a, **k): raise OSError(28, "No space left on device")
+def noopenssl(*a, **k): raise FileNotFoundError(2, "No such file or directory", "openssl")
+def attempt(obj, attr, fake):
+    orig = getattr(obj, attr); setattr(obj, attr, fake)
+    try:
+        ga.sign("-----BEGIN PRIVATE KEY-----\nX\n-----END PRIVATE KEY-----\n", b"x"); res = "no-error"
+    except ga.GaError as e:
+        res = e.code + ("|openssl-in-message" if "openssl" in str(e).lower() else "|clean")
+    except Exception as e:
+        res = type(e).__name__
+    finally:
+        setattr(obj, attr, orig)
+    print(res + "|" + str(len(glob.glob(os.path.join(d, "ga_*.pem")))))
+attempt(os, "fdopen", nospace)
+attempt(tempfile, "mkstemp", nospace)
+attempt(subprocess, "run", noopenssl)
+' "$GA_PY")"
+assert_eq "key temp file failed|clean|0 key temp file failed|clean|0 openssl not available|openssl-in-message|0" "$(paste -sd' ' - <<<"$GA_SIGN")" "sign tells a temp key file failure from a missing openssl and leaves no key file"
+GA_SKILL="$ROOT/catalog/ga/SKILL.md"
+assert_contains "$(<"$GA_SKILL")" "| \`key temp file failed\` |" "SKILL.md lists the temp key file error"
+assert_contains "$(<"$GA_SKILL")" "| \`openssl not available\` |" "SKILL.md lists the missing openssl error"
+grep -E '쉼표.*raw|raw.*쉼표' "$GA_SKILL" | grep -v '^- 필터:' | grep -q . || fail "SKILL.md says to use raw when a filter value has a comma"
+[[ ! -e "$ROOT/catalog/ga/scripts/__pycache__" ]] || fail "tests leave no bytecode in the catalog"
+pass "ga.py sign error codes, SKILL.md error table and comma filter note (#655)"
+
+# 기존 사용자 안내 회귀 고정(#655): 카탈로그 version 3·ga since 3이라 version 2까지 본 사용자에게 ga만 한 번 새 기본 스킬로 안내한다.
+assert_eq "3 3" "$(jq -r '"\(.version) \(.skills[] | select(.name == "ga") | .since)"' "$ROOT/catalog/catalog.json")" "the catalog version and ga since are 3"
+SETUP_T="$TEST_TMP/setup-ga-notify"
+SETUP_CATALOG="$SETUP_T/catalog"
+mkdir -p "$SETUP_T/data/setup"
+cp -R "$ROOT/catalog" "$SETUP_CATALOG"
+printf '{"catalog_version":2}\n' >"$SETUP_T/data/setup/state.json"
+GA_HINT="$(printf '{"transcript_path":"/x/a.jsonl"}' | setup_cmd notify | jq -r '.systemMessage')"
+assert_contains "$GA_HINT" "새 기본 스킬이 추가됐습니다: ga." "a user who saw catalog 2 is told about ga alone"
+assert_eq "" "$(printf '{}' | setup_cmd notify)" "the ga hint is shown once"
+SETUP_T="$TEST_TMP/setup-ga-notify-seen"
+mkdir -p "$SETUP_T/data/setup"
+printf '{"catalog_version":3}\n' >"$SETUP_T/data/setup/state.json"
+if printf '{}' | setup_cmd notify | grep -q '새 기본 스킬'; then fail "a user who saw catalog 3 gets no new-skill hint"; fi
+pass "setup notify: users of catalog 2 are told about ga once (#655)"
 
 finish_tests

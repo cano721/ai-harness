@@ -6,7 +6,7 @@
 - 카탈로그 스킬은 missing(미설치) · no_token(설치됨·필수 키 없음) · unverified(키는 있는데 연결 확인 없음·실패) ·
   verified(마지막 연결 확인 성공) 중 하나. 연결 확인(`setup.sh check`)은 외부 API라 버튼을 눌렀을 때만 부르고
   결과는 {ok, at, error, projects(별칭·ok·error)}만 board/skill-checks.json에 남긴다(as·hint는 응답에만). projects는
-  별칭마다 확인하는 langfuse(#621)만 낸다.
+  별칭마다 확인하는 langfuse(#621)·ga(#655)만 낸다.
 - 디자인 스킬은 토큰이 없어 installed · missing · builtin(내장) · superseded(내장으로 대체된 예전 사본) ·
   unavailable(설치 불가: 이 도구엔 없음·원본 미고정) 중 하나.
 - setup 세션의 지시문은 서버가 카탈로그 이름과 고정 문구로만 만든다. 브라우저가 보낸 문자열은 넣지 않는다.
