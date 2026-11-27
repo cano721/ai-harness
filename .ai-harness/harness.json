@@ -19,11 +19,11 @@
   "harness_version": "0.96.0",
   "managed_files": {
     ".ai-harness/workflows/feature-delivery-graph.json": {
-      "content_sha256": "6a2c8132b335f170a83de3d4df707ece3c060fa01167697a2b128db2daf6bb39",
+      "content_sha256": "75bf659caff406c8a71537cbce3851ecaf111c895d1ae0b478fb53f998ac5b52",
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/workflow-driver.sh": {
-      "content_sha256": "8b69c3e460816ee761482bc7e732145541f136cb3314be546e461c5bbebd43b3",
+      "content_sha256": "bb6bc2b16a1dff71c8bd794884d59ed08cd2886f02285f1457784e241f6ac8da",
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/implement-feature-driver.sh": {
@@ -31,40 +31,40 @@
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/bug-fix-graph.json": {
-      "content_sha256": "c366c1ce869b9f99340fa2a5404830f0003f75d4b7a0d1c1c41f3c8a6e902ded",
+      "content_sha256": "383058e7017d9679de9bc57a8a9d2f9ad769022c4a3398d0eaa7397005d55018",
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/review-graph.json": {
-      "content_sha256": "045e6c2ef978aa0261e2b5a89f3b4840965663e22c253f6ba901b153a793bfb9",
+      "content_sha256": "3cc5c0ecf9c8a6897bf54d97bbb6b1095ccd215d2ebd2787a80aeb7d4978304e",
       "template_version": "0.96.0"
     },
     ".agents/skills/implement-feature/SKILL.md": {
-      "content_sha256": "e538719ad3cae83f5defb32038e9e0622c4a20dee1396e62d33f973d46a8aab1",
+      "content_sha256": "8fe9be09002b9570de6af372b09f3f652a59603d76fde14f9aa6c1a06ba076c3",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".agents/skills/fix-bug/SKILL.md": {
-      "content_sha256": "656338faac66d319aaea825c4e98876f1f1c2b44cdad0ba258712ac9df723736",
+      "content_sha256": "280b3bee5b0c587d53275356fb1a20e8d992e589080c9479a6d092beef2c1d9c",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".agents/skills/review/SKILL.md": {
-      "content_sha256": "af2dde9e6543ee4782db2e641f71404ede74ee0fb9cc47b936430700d1f07b9b",
+      "content_sha256": "ff989f60a2435ba84327b0134f8ff4e428ff96858104b20c721dbbafd3bc1c50",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/implement-feature.md": {
-      "content_sha256": "b6ef8126bd680830c0be2918cb14dbc1781583e6df7a7dc61fc56e9b772f69f0",
+      "content_sha256": "77fd868a65754735fc3222f5cbfa10c0d54acb50c9c690da50ef9c60afb3079a",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/fix-bug.md": {
-      "content_sha256": "ec6a123df142636a35e9165088e2cc12e4805451e2aca6e419eba5104ecdbf7c",
+      "content_sha256": "175680fe5472f561b66795b5b6779cc8f561b62a1d452038b81afcddd72d4899",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/review.md": {
-      "content_sha256": "e76fe66f484a4b17663a1c2b576a531a9dc90ad4e1bec5047d5e066154fbad4c",
+      "content_sha256": "62bc1adc35a86ce00dc03b69ed74a3795f5b5deef41258455a10d93b720ef59e",
       "template_version": "0.96.0",
       "renderer": 1
     },
@@ -83,11 +83,11 @@
       "renderer": 1
     },
     ".ai-harness/workflows/ui-review-graph.json": {
-      "content_sha256": "55d69ca4212da6cdabe3eab31bf2e05d651a467aaedf6ff967d8006786ea8143",
+      "content_sha256": "0569a030dca736f391f1892691bfc6df50a3014d511ef446a025c65a45bb8254",
       "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/SKILL.md": {
-      "content_sha256": "09866b1fd7939a575b4fbad17f20f9cd26653c47f9fad052cf73e4df343bbcfc",
+      "content_sha256": "d3ab09a324b5e33281a10406d1c2cac5e2f6a1cfd44d1ff704769a0d88974f1f",
       "template_version": "0.96.0"
     },
     ".agents/skills/ui-review/references/checklist.md": {
@@ -95,7 +95,7 @@
       "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/SKILL.md": {
-      "content_sha256": "09866b1fd7939a575b4fbad17f20f9cd26653c47f9fad052cf73e4df343bbcfc",
+      "content_sha256": "d3ab09a324b5e33281a10406d1c2cac5e2f6a1cfd44d1ff704769a0d88974f1f",
       "template_version": "0.96.0"
     },
     ".claude/skills/ui-review/references/checklist.md": {
@@ -151,16 +151,16 @@
       "template_version": "0.96.0"
     },
     ".ai-harness/workflows/design-polish-graph.json": {
-      "content_sha256": "685e42c11dee418be0d6af857b45e40426937841e2b627d634eff45991662874",
+      "content_sha256": "86c4557bee11fc11c3cad49f58958988fce359ed5903acec40dfa8903063fbfc",
       "template_version": "0.96.0"
     },
     ".agents/skills/design-polish/SKILL.md": {
-      "content_sha256": "c6d5eb3d799c7cead4d668ca8a0db0993d4f4b7bc26a402f849ad4fb10bcfa29",
+      "content_sha256": "271fa238e2b0832b26c1c037dd0b54b3dea817357c348eaabbbf77b570acdbe7",
       "template_version": "0.96.0",
       "renderer": 1
     },
     ".claude/commands/design-polish.md": {
-      "content_sha256": "684f8c7f7f1a6767ecf17f4c3375bc75c6418a0a975b2611948ed8ae659c3b71",
+      "content_sha256": "a260c62c5317f9a69a0d89952fcc016bfea9a82fd1f8bf0c04bdeeb6b8189e2c",
       "template_version": "0.96.0",
       "renderer": 1
     },

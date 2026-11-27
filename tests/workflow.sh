@@ -484,4 +484,26 @@ MB_BRIEF_USES="$(printf '%s\n' "$MB_BRIEF_BODY" | grep -o '\$MERGE_BASE_RULE' | 
 assert_eq "2" "$MB_BRIEF_USES" "both brief roles append MERGE_BASE_RULE"
 pass "merge-base version check: document command and brief rule (#543)"
 
+# 렌더 대상(#678): 화면 검증 문구는 "real browser"가 아니라 ui.md가 화면에 선언한 렌더 대상이다. 이 저장소 ui.md는 화면마다 엔진을 적는다.
+RT_UI="$(<"$ROOT/.ai-harness/docs/ui.md")"
+assert_contains "$(grep '^| Harness Board' <<<"$RT_UI")" "webkit" "Harness Board renders in webkit like its window app"
+assert_contains "$(grep '^| 하네스 효과 리포트' <<<"$RT_UI")" "chromium" "the impact report renders in chromium"
+assert_contains "$RT_UI" "## 렌더 대상" "ui.md has a render target section"
+RT_SECTION="$(sed -n '/^## 렌더 대상/,/^## /p' "$ROOT/.ai-harness/docs/ui.md")"
+assert_contains "$RT_SECTION" "launchBrowser({ engine" "the section says how to pick the engine"
+assert_contains "$RT_SECTION" "사용자 승인 뒤에만" "a missing engine is installed only after the user approves"
+assert_contains "$RT_SECTION" "다른 엔진으로 대신" "the section forbids rendering with another engine"
+for f in "$ROOT"/templates/{implement-feature,fix-bug,review,ui-review,design-polish}/references/*-graph.json \
+  "$ROOT"/templates/{design-polish,fix-bug,implement-feature,review}/SKILL.md "$ROOT/templates/workflow-driver/workflow-driver.sh"; do
+  if grep -nE 'real browser|in a browser \(a simulator' "$f"; then fail "$f still says real browser instead of the render target"; fi
+done
+for f in "$ROOT"/templates/{implement-feature,fix-bug,review,ui-review,design-polish}/references/*-graph.json; do
+  assert_contains "$(jq -r '.invariants // .rules | if type == "array" then join("\n") else tostring end' "$f")" "render target" "$f invariant names the render target"
+done
+RT_DRIVER="$(<"$ROOT/templates/workflow-driver/workflow-driver.sh")"
+assert_contains "$RT_DRIVER" "the render target .ai-harness/docs/ui.md declares" "the driver prompts point at the ui.md render target"
+assert_contains "$RT_DRIVER" "use chromium and say so" "without a declaration the prompts fall back to chromium and record it"
+cmp -s "$ROOT/.ai-harness/workflows/workflow-driver.sh" "$ROOT/templates/workflow-driver/workflow-driver.sh" || fail "the generated runner is the template copy"
+pass "render target wording in graphs, skills, and the runner (#678)"
+
 finish_tests
