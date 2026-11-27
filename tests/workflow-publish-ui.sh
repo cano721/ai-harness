@@ -32,4 +32,17 @@ assert_contains "$DRIVER_OUT" "CLI 출력" "the outcome names the scenario that 
 assert_contains "$DRIVER_OUT" "CLI 실행 출력에서 반려됨 줄 확인" "the alternative verification is shown separately in the verified summary"
 pass "ui_review accepts subdirectory captures and non-browser scenarios with an alternative verification"
 
+# 증거에 렌더 엔진을 남긴다: 렌더링한 시나리오에 엔진이 없으면 근거 없는 통과이고, 쓴 엔진은 요약·상태에 남는다. (#678)
+start_and_approve ui_no_engine
+assert_eq "20:user_decision:unverified" "$DRIVER_RC:$(run_state .node):$(run_state .ui_review.status)" "a rendered scenario without its render engine is not verified"
+assert_contains "$(run_state '.findings | join(";")')" "반려: no render engine recorded" "the finding names the scenario that did not record its engine"
+start_and_approve ui_webkit
+assert_eq "0:done:verified" "$DRIVER_RC:$(run_state .status):$(run_state .ui_review.status)" "a scenario rendered in webkit is verified"
+assert_contains "$DRIVER_OUT" "rendered in: webkit" "the verified summary names the engine it rendered in"
+assert_eq '["webkit"]' "$(run_state '.ui_review.engines | tojson')" "the run state keeps the engines used"
+assert_contains "$(<"$FAKE_LOG.ui_review.prompt")" "render target" "ui_review is told to use the render target ui.md declares"
+UE_STATE="$(find "$DRIVER_TMP/runs" -path "*repo-ui_ok-*" -name state.json | head -n 1)"
+assert_contains "$(jq -r '.ui_review.summary' "$UE_STATE")" "rendered in: chromium" "a default run records chromium"
+pass "ui_review records the render engine as evidence and refuses a rendered scenario without one"
+
 finish_tests

@@ -139,4 +139,18 @@ for MOTION_RULE in "100–150ms" "150–250ms" "200–400ms" "퇴장은 진입�
 done
 pass "ui review checklist covers motion and WCAG 2.2 numbers"
 
+# 렌더 대상(#678): harness-init이 ui.md에 화면별 렌더 대상을 실측해 적고, ui-review 계약은 대체 렌더링을 막고 승인 뒤에만 설치한다.
+RT_INIT="$(<"$ROOT/skills/harness-init/SKILL.md")"
+RT_UIMD_LINE="$(grep -n 'ui.md' "$ROOT/skills/harness-init/SKILL.md" | grep '렌더 대상' || true)"
+[[ -n "$RT_UIMD_LINE" ]] || fail "harness-init describes the render target in the ui.md item"
+for v in chromium webkit firefox simulator emulator WKWebView; do
+  assert_contains "$RT_UIMD_LINE" "$v" "the ui.md render target lists $v"
+done
+assert_contains "$RT_INIT" "실측" "harness-init measures the engine the app really uses"
+RT_UIR="$(<"$ROOT/templates/ui-review/SKILL.md")"
+for RT_ITEM in "렌더 대상" "다른 엔진으로 대신 렌더링했다" "선언한 렌더 대상을 쓸 수 없었" "사용자 승인 뒤에만"; do
+  assert_contains "$RT_UIR" "$RT_ITEM" "ui-review contract covers: $RT_ITEM"
+done
+pass "harness-init and the ui-review contract declare and keep the render target (#678)"
+
 finish_tests

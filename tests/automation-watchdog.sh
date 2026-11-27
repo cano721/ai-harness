@@ -261,6 +261,21 @@ mkdir -p "$HS_DIR/.lock" && printf '%s\n' "$HS_DEAD_LOCK" >"$HS_DIR/.lock/pid"
 hs_call pre "$(hs_in l1 "yarn build")"
 assert_eq "l1" "$(hs_slots)" "a stale lock from a dead hook is taken over"
 rm -f "$HS_DIR"/*.json
+# owner를 읽은 뒤 그 owner가 release하고 끝나 다른 프로세스가 새 lock을 잡았으면, 죽은 owner를 근거로 새 lock을 지우지 않는다.
+# (지우면 둘이 동시에 lock 안에 들어가 상한보다 많은 슬롯을 쓴다 — CI flaky 'expected=2 actual=3'.)
+HS_RACE_LOCK="$TEST_TMP/race.lock"
+mkdir -p "$HS_RACE_LOCK" && printf '%s\n' "$HS_DEAD_LOCK" >"$HS_RACE_LOCK/pid"
+HS_RACE_ROUND="$TEST_TMP/race.round"
+: >"$HS_RACE_ROUND"
+assert_eq "1|$$" "$(
+  sed() { # 첫 owner 읽기 직후 다른 살아 있는 프로세스(이 테스트)가 lock을 새로 잡은 상황을 만든다
+    command sed "$@"
+    if [[ ! -s "$HS_RACE_ROUND" ]]; then printf x >"$HS_RACE_ROUND"; printf '%s\n' "$$" >"$HS_RACE_LOCK/pid"; fi
+  }
+  hm_acquire_lock "$HS_RACE_LOCK" 3 && r=0 || r=1
+  printf '%s|%s' "$r" "$(command sed -n '1p' "$HS_RACE_LOCK/pid" 2>/dev/null)"
+)" "a lock re-acquired after its dead owner was read is not deleted"
+rm -rf "$HS_RACE_LOCK" "$HS_RACE_ROUND"
 
 # 깨진 입력·tool_use_id 없음은 그대로 통과한다.
 hs_call pre '{broken'
