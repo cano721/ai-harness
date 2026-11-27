@@ -255,7 +255,13 @@ case "$node:$scenario" in
   # HM_TARGET_CI(#557): notify의 한 번 읽기(Do not wait)는 FAKE_TCI_ONCE(기본 pending), 기다리는 읽기(wait 모드·분리 감시)는 FAKE_TCI_WATCH(기본 passed).
   post_merge_verify:pm_tci_*)
     tci="${FAKE_TCI_WATCH:-passed}"
-    case "$prompt" in *"Do not wait"*) tci="${FAKE_TCI_ONCE:-pending}" ;; esac
+    case "$prompt" in
+      *"Do not wait"*) tci="${FAKE_TCI_ONCE:-pending}" ;;
+      # FAKE_TCI_WATCH_GATE: 분리 감시가 러너보다 먼저 결과를 덮어쓰지 않게, 테스트가 이 파일을 만들 때까지 기다린다(#658).
+      *) if [[ -n "${FAKE_TCI_WATCH_GATE:-}" ]]; then
+           for _ in $(seq 1 300); do [[ -e "$FAKE_TCI_WATCH_GATE" ]] && break; sleep 0.1; done
+         fi ;;
+    esac
     jq -n --arg s "$tci" '{status:$s, commit:"1111111111111111111111111111111111111111", summary:("main is " + $s), failures:(if $s == "failed" then ["integration: db migration timed out"] else [] end)}' >"$out" ;;
   post_merge_verify:pm_ci_fail) jq -n '{status:"failed", commit:"1111111111111111111111111111111111111111", summary:"build on main failed", failures:["integration: db migration timed out"]}' >"$out" ;;
   post_merge_verify:pm_ci_other) jq -n '{status:"passed", commit:"3333333", summary:"green", failures:[]}' >"$out" ;;
