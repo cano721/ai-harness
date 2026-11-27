@@ -23,7 +23,7 @@
 
 - Skill은 `skills/<name>/SKILL.md`(frontmatter `name`·`description`)와 선택적 `references/`·`agents/openai.yaml`. Claude·Codex가 같은 파일을 읽으므로 한쪽 도구 전용 문법을 본문에 쓰지 않는다.
 - 다른 프로젝트에 생성되는 파일은 `templates/`에 두고 `templates/managed-files.json`에 등록한다(`mode: copy`는 바이트 그대로, `render`는 렌더링). 같은 내용을 여러 곳에 두는 사본(예: `design-handoff.md`, `design-skills.md`, `figma-mcp.md`)은 바이트 동일을 유지한다 — `tests/run.sh`가 검사한다.
-- 생성물 계약(그래프 노드·러너 동작)을 바꾸면 `skills/harness-init/SKILL.md`·README 서술도 함께 맞춘다.
+- 생성물 계약(그래프 노드·러너 동작)을 바꾸면 `skills/harness-init/SKILL.md`·`docs/workflows.md` 서술도 함께 맞춘다.
 
 ## 듀얼 매니페스트
 

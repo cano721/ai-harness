@@ -647,10 +647,10 @@ for TM_COPY in skills/landing-page/references/design-skills.md skills/design-sys
   .claude/skills/design-audit/references/design-skills.md .agents/skills/design-audit/references/design-skills.md; do
   cmp -s "$ROOT/$TM_COPY" "$TM_SRC" || fail "$TM_COPY must match templates/ui-review/references/design-skills.md byte for byte"
 done
-TM_README="$(grep '^| 제품 화면 다듬기 |' "$ROOT/README.md")"
+TM_README="$(grep '^| 제품 화면 다듬기 |' "$ROOT/docs/skills.md")"
 assert_contains "$TM_README" "| \`/design-polish\` |" "README polish row is led by /design-polish"
 assert_contains "$TM_README" "\`impeccable\`(비평)" "README polish row keeps impeccable as critique"
-assert_contains "$(grep '^| 랜딩·소개 |' "$ROOT/README.md")" "\`design-references\`" "README landing row lists design-references"
+assert_contains "$(grep '^| 랜딩·소개 |' "$ROOT/docs/skills.md")" "\`design-references\`" "README landing row lists design-references"
 pass "design skill map defines design terms and design-polish leads polishing (#514)"
 
 finish_tests

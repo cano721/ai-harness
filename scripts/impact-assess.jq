@@ -7,7 +7,7 @@
 #   - 저장소 상태: 좋은 신호(개선 사라짐·줄어듦, 줄어드는 추세, 비교 가능한 감소)와 나쁜 신호(재발, 느는 추세, 비교 가능한 증가)로 정하고,
 #     신호가 없으면 gaps에 왜 모르는지 남긴다.
 # 기준값을 바꾸면 보드(scripts/board/template.html)·리포트(skills/harness-impact/report-template.html)의 판정 기준 문구와
-# skills/harness-impact/SKILL.md·README도 함께 고친다.
+# skills/harness-impact/SKILL.md·README·docs/skills.md도 함께 고친다.
 
 def min_digests: 5;
 def min_prs: 10;

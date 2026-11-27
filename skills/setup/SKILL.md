@@ -223,18 +223,18 @@ $ROOT/scripts/setup.sh team list
 | `HM_HARVEST_AUTO_MERGE` | `0` | 자동 harvest PR 중 작은 문서 변경이고 worker가 띄운 독립 검토를 통과한 것을 병합한다(검토 1회 LLM 비용). `HM_HARVEST_AUTO=1`과 함께 쓴다 |
 | `HM_DB_SCAN_GUARD` | `0` | 스키마 조건 없는 information_schema 조회를 Bash 실행 전에 막는다 |
 
-자세한 동작은 README의 해당 절을 가리킨다. 백그라운드 실행 옵션은 draft PR까지만 하고, 병합은 자동 병합 옵션을 켠 경우에만 한다는 점을 함께 알린다.
+자세한 동작은 해당 docs 문서(`docs/automation.md`의 자동 harvest·자동 sync·자동 병합 절, `docs/guards-and-data.md`의 DB 스캔 가드 절)를 가리킨다. 백그라운드 실행 옵션은 draft PR까지만 하고, 병합은 자동 병합 옵션을 켠 경우에만 한다는 점을 함께 알린다.
 
 자동 병합 옵션을 고르면 세 가지를 더 알린다.
 - 이 설정만으로 동작한다. 저장소 `harness.json`에 허용 스위치를 넣는 팀 PR은 필요 없다(예전 `auto_merge.sync`·`harvest`는 읽지 않는다). 내용 조건과 병합 직전 호스트 조건(사람 활동 없음·CI 통과·head 고정)은 그대로 확인한다.
-- 조정값은 같은 파일의 `HM_AUTO_MERGE_METHOD`(`squash`·`merge`·`default`)·`HM_AUTO_MERGE_SYNC_PARTIAL`·`HM_AUTO_MERGE_REQUIRE_CI`·`HM_AUTO_MERGE_WAIT_HOURS`·`HM_AUTO_MERGE_HARVEST_MAX_FILES`·`HM_AUTO_MERGE_HARVEST_MAX_LINES`로 바꿀 수 있다. 묻지 않고 기본값을 두며, 사용자가 원할 때만 적는다. 저장소 기준 브랜치에 같은 키(`auto_merge.<key>`)가 있으면 안전한 쪽을 쓴다(README 자동 병합 절).
+- 조정값은 같은 파일의 `HM_AUTO_MERGE_METHOD`(`squash`·`merge`·`default`)·`HM_AUTO_MERGE_SYNC_PARTIAL`·`HM_AUTO_MERGE_REQUIRE_CI`·`HM_AUTO_MERGE_WAIT_HOURS`·`HM_AUTO_MERGE_HARVEST_MAX_FILES`·`HM_AUTO_MERGE_HARVEST_MAX_LINES`로 바꿀 수 있다. 묻지 않고 기본값을 두며, 사용자가 원할 때만 적는다. 저장소 기준 브랜치에 같은 키(`auto_merge.<key>`)가 있으면 안전한 쪽을 쓴다(`docs/automation.md` 자동 병합 절, `#auto-merge`).
 - 처음에는 sync만 켜고 지켜본 뒤 넓히기를 권한다. harvest 자동 병합은 팀 에이전트 지침을 사람 검토 없이 바꾸므로 sync가 안정적으로 돈 뒤에 고려한다.
 
 ### 8-0. 워크플로 승인 모드 (선택)
 
 승인 게이트를 사용자 개인 설정으로 고른다. `~/.ai-harness/config`를 읽어 현재 값을 보여 주고 선택한 키만 기록한다. 기본은 `human`이며, 저장소 manifest의 기존 `approval`은 더 이상 적용되지 않는다.
 
-1. 먼저 위험을 알린다: `auto`는 Brief에 추천 결정과 근거를 남기고, 사람이 정할 사항이 없을 때 승인 게이트를 통과한다. 그래서 Brief의 검증 명령과 쓰기 단계가 사람 확인 없이 돈다. 전체 설정 `HM_APPROVAL=auto`는 이 사용자의 **모든 저장소**에 적용되므로, 신뢰하지 않는 저장소(외부 기여 브랜치, 처음 받은 저장소)에서도 저장소가 정한 명령이 확인 없이 실행된다(README "한계" 절).
+1. 먼저 위험을 알린다: `auto`는 Brief에 추천 결정과 근거를 남기고, 사람이 정할 사항이 없을 때 승인 게이트를 통과한다. 그래서 Brief의 검증 명령과 쓰기 단계가 사람 확인 없이 돈다. 전체 설정 `HM_APPROVAL=auto`는 이 사용자의 **모든 저장소**에 적용되므로, 신뢰하지 않는 저장소(외부 기여 브랜치, 처음 받은 저장소)에서도 저장소가 정한 명령이 확인 없이 실행된다(`docs/workflows.md`의 개인 자동화 단계 절 `#delivery-level`의 "한계").
 2. 그래서 전체 설정은 `HM_APPROVAL=human`(기본, 줄 없음과 같다)으로 두고, 신뢰하는 저장소만 `HM_APPROVAL_REPOS="<project_id>=auto,…"`로 골라 켜기를 권한다. 일치하는 저장소별 항목이 전체 설정보다 우선한다. 키는 manifest `project_id` 또는 origin 저장소 이름이며, 현재 저장소에서 고르는 중이면 그 값을 읽어 제안한다. 사용자가 그래도 전체 `auto`를 고르면 위 위험을 다시 확인받은 뒤 기록하고, 예외로 둘 저장소는 `HM_APPROVAL_REPOS`에 `=human`으로 남긴다.
 3. 설정 파일의 다른 줄·주석·권한을 보존한다. 기존 manifest에 `approval`이 있으면 자동 삭제하지 말고 사용자에게 개인 설정으로 옮기도록 안내한다.
 
