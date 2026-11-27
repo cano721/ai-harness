@@ -136,12 +136,16 @@ agents=$(jq -c 'map(select(.sessionId != null)) | group_by(.sessionId) | map((ma
 # (links.json kids — 띄운 직후 처음 붙은 세션, #634)만 끝난 항목으로 되살린다. 같은 터미널을 나중에 재사용한 세션과
 # 사람이 직접 열었다 닫은 세션은 뺀다. kids가 아직 없는 옛 형식(handles 값이 문자열)은 그 짝을 쓴다.
 # 오래된 것은 아래 DONE_HOURS 규칙으로 걸러진다.
+# 작업자를 띄운 조율 세션(#670)도 되살린다: scan 키(부모 transcript)에 handles나 bg가 남은 부모 sid(파일 이름).
 if [ -f "$CACHE_DIR/links.json" ] && revived=$(jq -c --slurpfile l "$CACHE_DIR/links.json" '
     ($l[0] // {}) as $links | map(.sessionId) as $have
-    | ([($links.scan // {})[]? | (.handles // [])[]?] | unique
-       | map(. as $h | (($links.kids // {})[$h] | select(type == "string"))
-             // (($links.handles // {})[$h] | select(type == "string")) // empty) | unique
-       | map(select(. as $sid | $have | index($sid) | not))) as $gone
+    | (([($links.scan // {})[]? | (.handles // [])[]?] | unique
+        | map(. as $h | (($links.kids // {})[$h] | select(type == "string"))
+              // (($links.handles // {})[$h] | select(type == "string")) // empty))
+       + [($links.scan // {}) | to_entries[]? | select((.value | type) == "object")
+          | select(((.value.handles // []) | length) > 0 or ((.value.bg // []) | length) > 0)
+          | .key | split("/") | last | select(endswith(".jsonl")) | rtrimstr(".jsonl") | select(length > 0)]
+       | unique | map(select(. as $sid | $have | index($sid) | not))) as $gone
     | . + ($gone | map({sessionId: ., id: .[0:8], kind: "interactive", pid: null, cwd: null}))' <<<"$agents" 2>/dev/null); then
   agents=$revived
 fi
