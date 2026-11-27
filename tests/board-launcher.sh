@@ -444,7 +444,8 @@ assert_contains "$(sed -n '/^## 보드를 격리해 띄우기/,/^## /p' "$ROOT/.
 assert_contains "$(<"$ROOT/skills/board/SKILL.md")" "board.sh view" "the board skill documents board.sh view"
 assert_contains "$(bash "$ROOT/scripts/board/board.sh" --help 2>&1 || true)" "board.sh view" "usage lists view"
 # V8: changelog 조각.
-assert_contains "$(cat "$ROOT"/changelog.d/677-*.md 2>/dev/null)" "(#677)" "changelog fragment for #677"
+# 릴리스 준비가 조각을 CHANGELOG.md로 옮기므로 둘 중 한 곳에 있으면 된다.
+assert_contains "$(cat "$ROOT"/changelog.d/677-*.md "$ROOT/CHANGELOG.md" 2>/dev/null)" "(#677)" "changelog entry for #677"
 bo_reset
 pass "harness board view opens an isolated board in a trial window"
 
