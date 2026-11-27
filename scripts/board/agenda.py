@@ -863,6 +863,45 @@ class Store:
             return 200, {"ok": False, "message": f"{src['name']}에서 또 가져오지 못했습니다. {err}"}
         return 200, {"ok": True, "message": f"{src['name']}에서 새로 가져왔습니다."}
 
+    def refresh_all(self):
+        """머리 [지금 가져오기](#663): 연결된 모든 소스를 주기와 상관없이 한꺼번에 다시 모은다.
+
+        소스마다 스레드를 함께 띄우고 같은 마감까지 기다린다 — 하나씩 refresh를 부르면 N×시간 초과까지 늘어진다.
+        이미 수집 중인 소스는 그 스레드를 기다리지 않고 건너뛴다(그 결과는 다음 읽기에 보인다). 진행 여부는 서버만 정확히 안다.
+        돌려주는 세 번째 값은 기록용 소스 id 목록이다(이름·제목은 기록에 남기지 않는다).
+        """
+        targets = [s for s in self.sources()
+                   if not s.get("invalid") and s["id"] not in self.connecting
+                   and self.is_connected(s["id"]) and not self.missing(s)]
+        if not targets:
+            return 409, {"ok": False, "message": "연결된 곳이 없습니다."}, {}
+        with self.lock:
+            busy_ids = {s["id"] for s in targets
+                        if self.fetching.get(s["id"]) and self.fetching[s["id"]].is_alive()}
+        skipped = [s for s in targets if s["id"] in busy_ids]
+        run = [s for s in targets if s["id"] not in busy_ids]
+        threads = [self._start_fetch(s) for s in run]
+        deadline = time.time() + FETCH_TIMEOUT + 5
+        for t in threads:
+            t.join(max(0.0, deadline - time.time()))
+        refreshed, failed = [], []
+        for s in run:
+            err = self.cache(s["id"]).get("error")
+            if err:
+                failed.append({"source": s["id"], "name": s["name"], "error": err})
+            else:
+                refreshed.append(s)
+        parts = []
+        if refreshed:
+            parts.append(f"{len(refreshed)}곳에서 새로 가져왔습니다.")
+        parts += [f"{f['name']}에서 가져오지 못했습니다. {f['error']}" for f in failed]
+        parts += [f"{s['name']}은(는) 이미 가져오는 중이라 건너뛰었습니다." for s in skipped]
+        res = {"ok": not failed, "refreshed": [s["name"] for s in refreshed], "skipped": [s["name"] for s in skipped],
+               "failed": failed, "message": " ".join(parts)}
+        ids = {"refreshed": [s["id"] for s in refreshed], "skipped": [s["id"] for s in skipped],
+               "failed": [f["source"] for f in failed]}
+        return 200, res, ids
+
     def done(self, source_id, item_id):
         if not isinstance(item_id, str) or not item_id:
             return 400, {"ok": False, "message": "완료할 항목이 없습니다."}

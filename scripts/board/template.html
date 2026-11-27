@@ -1709,6 +1709,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
   const agOpen = new Set();        // 펼친 설정 안내(소스 id)
   const agConnecting = new Set();  // 연결을 누르고 결과를 기다리는 소스 — 끝나면 토스트 한 번
   const agRefreshing = new Set();  // [다시 가져오기]를 누르고 기다리는 소스 — 다시 그려도 버튼이 바쁜 상태를 잃지 않게
+  let agRefreshingAll = false;     // 머리 [지금 가져오기]를 누르고 기다리는 중 — 연속 클릭은 한 번만, 다시 그려도 바쁜 상태 유지
   const AG_STATE = {
     needs_setup: ['attention', '설정 필요', 'soft'], disconnected: ['info', '연결 안 됨'], connecting: ['progress', '연결하는 중'],
     connected: ['success', '연결됨'], error: ['danger', '가져오기 실패'],
@@ -2054,10 +2055,58 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       });
     }, true);
   }
+  // 할 일 출처 필터: 할 일이 1건 이상인 출처만 [id, 이름]으로 — 연결한 곳은 agData.sources 순서, 직접 적은 할 일은 맨 끝.
+  function agSourceOptions(todos, srcs) {
+    const names = new Map();
+    for (const it of todos) if (!names.has(it.source)) names.set(it.source, it.source_name || '');
+    const out = [];
+    for (const s of srcs) if (s.id !== 'todo' && names.has(s.id)) out.push([s.id, names.get(s.id) || s.name || s.id]);
+    if (names.has('todo')) out.push(['todo', '할 일']);
+    return out;
+  }
+  // 고른 출처(hb-ag-source, ''=전체). 그 출처의 할 일이 사라졌으면 전체로 돌아가고 저장값도 지운다 — 나중에 출처가 다시 생겨도 저절로 걸러진 화면이 되지 않게.
+  function agSourcePick(todos, opts) {
+    const cur = store('hb-ag-source') || '';
+    if (!cur || opts.some(([id]) => id === cur)) return cur;
+    store('hb-ag-source', '');
+    return '';
+  }
+  // 직접 적은 할 일은 출처가 'todo'라 다른 출처로 걸러 둔 화면에서는 안 보인다. 추가했다는 토스트 뒤 항목을 못 찾지 않게 전체로 돌리고 그렇게 알린다.
+  function agSourceAfterAdd() {
+    const cur = store('hb-ag-source') || '';
+    if (!cur || cur === 'todo') return '할 일을 추가했습니다.';
+    store('hb-ag-source', '');
+    return '할 일을 추가했습니다. 보이도록 할 일 출처를 [전체]로 바꿨습니다.';
+  }
+  // 쌓인 요청 요약 줄 접미(' · Jira 12 · Teams 16'). 출처가 하나뿐이면 같은 수를 되풀이하므로 붙이지 않는다.
+  function agSourceCounts(list, opts) {
+    const n = new Map();
+    for (const it of list) n.set(it.source, (n.get(it.source) || 0) + 1);
+    if (n.size < 2) return '';
+    return opts.filter(([id]) => n.has(id)).map(([id, name]) => ` · ${name} ${n.get(id)}`).join('');
+  }
+  // 할 일 위 출처 필터 줄. 일정·답할 것에는 걸지 않는다.
+  function agSourceFilter(opts, cur) {
+    const lab = el('span', 'ds-sr', '할 일 출처'); lab.id = 'agsource';
+    const row = el('div', 'ds-cluster');
+    row.append(lab, segment('agsource', [['', '전체'], ...opts], cur, (v) => { store('hb-ag-source', v); renderBoard(); }));
+    return row;
+  }
+  // 머리 [지금 가져오기]: 연결한 모든 곳을 주기와 상관없이 다시 모은다. 도는 동안 다시 눌러도 요청은 한 번만.
+  async function agRefreshAll(b) {
+    if (agRefreshingAll) return;
+    agRefreshingAll = true; busy(b, '가져오는 중');
+    let res; try { res = await post('/agenda/refresh-all', {}); } catch (e) { res = { ok: false, message: '가져오지 못했습니다. 보드 서버에 닿지 못했습니다.' }; }
+    toast(res.message, !!res.ok);
+    agRefreshingAll = false;
+    loadAgenda(true);
+    renderBoard();
+  }
   // 쌓인 요청: 오래된 순 + 경과일. 요청자가 있는 항목이 하나라도 있으면 [전체 | 요청자별](hb-ag-group '1'=요청자별).
   function staleFold(list, o) {
     if (!list.length) return null;
-    return agFoldBlock('stale', `쌓인 요청 ${list.length}`, () => {
+    const counts = o && o.opts ? agSourceCounts(list, o.opts) : '';
+    return agFoldBlock('stale', `쌓인 요청 ${list.length}${counts}`, () => {
       const out = [];
       if (list.some((it) => it.from)) {
         const on = store('hb-ag-group') === '1';
@@ -2186,7 +2235,7 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
       unbusy(add);
       if (!res.ok) { toast(res.message, false); return; }
       agDraft = ''; agDraftDue = ''; agDueOpen = false; inp.value = ''; paint(); setErr(false);
-      toast('할 일을 추가했습니다.', true);
+      toast(agSourceAfterAdd(), true);
       await loadAgenda(true);
       const again = $('ag-todo'); if (again) again.focus();
     };
@@ -2535,7 +2584,14 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     sb.append(el('span', null, '⚙ 연결 ' + linked)); sb.setAttribute('aria-label', `연결한 곳 ${linked}곳`);
     sb.setAttribute('aria-expanded', String(open)); sb.setAttribute('aria-controls', 'ag-sources');
     sb.onclick = () => { agSrcOpen = !open; renderBoard(); };
-    head.append(sb);
+    const acts = el('div', 'ds-cluster'); acts.append(sb);
+    if (linked) {
+      const rb = btn('지금 가져오기', 'ds-btn--sm ds-btn--ghost'); rb.dataset.key = 'agrefreshall';
+      if (agRefreshingAll) busy(rb, '가져오는 중');
+      rb.onclick = () => agRefreshAll(rb);
+      acts.append(rb);
+    }
+    head.append(acts);
     page.append(head);
     const panel = el('section', 'ds-stack'); panel.id = 'ag-sources'; panel.setAttribute('aria-label', '연결한 곳'); panel.hidden = !open;
     if (open) {
@@ -2557,9 +2613,11 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     const tf = todayFold(events, now, many); if (tf) top.append(tf);
     const bf = briefFold(agData.brief); if (bf) top.append(bf);
     page.append(top);
-    // 할 일 셋으로 가르기: 기한 있음 > 받은 지 24시간 이내(새로 맡겨진 요청) > 나머지(쌓인 요청)
+    // 할 일 셋으로 가르기: 기한 있음 > 받은 지 24시간 이내(새로 맡겨진 요청) > 나머지(쌓인 요청). 고른 출처의 할 일만.
+    const sopts = agSourceOptions(todos, srcs), scur = agSourcePick(todos, sopts);
+    const mine = scur ? todos.filter((it) => it.source === scur) : todos;
     const due = [], fresh = [], stale = [];
-    for (const it of todos) {
+    for (const it of mine) {
       if (!Number.isNaN(dueAt(it.due))) due.push(it);
       else if (now - agReceived(it) < 86400000) fresh.push(it);
       else stale.push(it);
@@ -2567,8 +2625,10 @@ button.ds-row__head:focus-visible { outline: 2px solid var(--color-focus); outli
     due.sort((a, b) => dueAt(a.due) - dueAt(b.due));
     fresh.sort((a, b) => agReceived(b) - agReceived(a));
     stale.sort((a, b) => agReceived(a) - agReceived(b));
-    const o = { sources: new Set(todos.map((x) => x.source)).size > 1 };
-    for (const sec of [agSection('reply', '답할 것', replies, { sources: true }, true), agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)]) if (sec) page.append(sec);
+    const o = { sources: new Set(mine.map((x) => x.source)).size > 1, opts: sopts };
+    const rs = agSection('reply', '답할 것', replies, { sources: true }, true); if (rs) page.append(rs);
+    if (sopts.length >= 2) page.append(agSourceFilter(sopts, scur));
+    for (const sec of [agSection('fresh', '새로 맡겨진 요청', fresh, o), agSection('due', '기한 있음', due, o)]) if (sec) page.append(sec);
     page.append(todoForm());
     const bottom = [staleFold(stale, o), weekFold(events, now, many), completedFold(agData.completed || [])].filter(Boolean);
     if (bottom.length) {
