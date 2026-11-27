@@ -21,6 +21,11 @@ bash scripts/board/board.sh status    # running·url
 bash scripts/board/board.sh stop      # 끝나면 반드시 끈다 (같은 환경 변수로)
 ```
 
+- 격리·시험 보드를 사람(사용자)에게 보여 줄 때는 `bash scripts/board/board.sh view "<open이 낸 url>"`만 쓴다(#677). macOS 창 앱(`Harness Board.app`, `kind=window`)이 `Harness Board — 시험용 :<포트>` 제목의 별도 창으로 띄우고, 사용자 보드 창·서버는 그대로 둔다. 격리 보드 주소는 브라우저로 열지 않는다(사용자 브라우저 `open <url>`·ego·Chrome 등) — 사용자가 진짜 보드로 착각한다. 주소는 `http://127.0.0.1|localhost:<포트>/…`만 받는다(아니면 exit 2).
+- `view`는 서버를 켜거나 끄지 않는다. 시험용 창을 닫아도 격리 서버는 남으므로 위 `stop`으로 끈다. 격리 서버가 꺼지면 그 시험용 창만 몇 초 안에 닫힌다.
+- 창 앱이 없거나(미설치·애플릿·macOS 아님) 플러그인보다 낡았으면 `view`는 브라우저를 열지 않고 주소와 설치 안내(`board.sh launcher install`, 낡았으면 사용자 보드를 한 번 열면 다시 만들어짐)만 stderr에 내고 exit 1이다. 격리 환경에서는 창 앱을 다시 만들지 않는다.
+- 기계 확인(렌더·캡처·조작)은 지금처럼 헤드리스 Playwright로 한다. `view`는 사람에게 보이는 용도다.
+
 - 로그인·시드 없음. 빈 데이터 디렉터리면 각 화면이 빈 상태로 그려진다. 항목이 있는 상태를 보려면 데이터 디렉터리에 `events/*.jsonl` 등을 넣는다(`tests/run.sh`의 보드 블록이 만드는 형태).
 - 보드 서버가 쓰는 것(`board/server.json`·로그)은 `HARNESS_METRICS_DIR` 아래에만 생긴다. 저장소에는 아무것도 쓰지 않는다.
 - 화면 쿼리 `?theme=light|dark`로 테마를 고정할 수 있다(보드·기준 화면).

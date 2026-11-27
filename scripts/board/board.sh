@@ -32,6 +32,7 @@ LAUNCHER_SRC="$BOARD_DIR/bin/launcher.applescript"
 usage() {
   cat >&2 <<'EOF'
 usage: board.sh [open] [--no-browser]   서버가 떠 있으면 그 주소를, 없으면 띄운 뒤 연다 — macOS 창 앱(Harness Board.app, kind=window)이 있으면 그 창, 없으면 브라우저. --no-browser면 열지 않는다
+       board.sh view <url>              떠 있는 격리(시험용) 보드 주소(http://127.0.0.1|localhost:<포트>/…)를 창 앱의 시험용 창으로 연다. 서버는 켜거나 끄지 않는다. 창 앱이 없으면 브라우저 없이 안내만(exit 1)
        board.sh stop                    서버를 끈다(상주 세션 호스트는 그대로)
        board.sh host-stop               상주 세션 호스트를 끈다(대화 기록 유지, 다음 호스트가 같은 id로 이어 쥠)
        board.sh status                  떠 있는지와 주소
@@ -439,7 +440,7 @@ have_swiftc() {
 }
 
 # 앱을 다시 만들지 정하는 입력. 아래 Info.plist·설정 파일 모양을 바꾸면 앞의 v 번호를 올린다.
-swift_stamp() { printf 'v1 swift %s icon %s\n' "$(cksum <"$DIR/BoardLauncher.swift")" "$(cksum <"$DIR/launcher-icon.py")"; }
+swift_stamp() { printf 'v2 swift %s icon %s\n' "$(cksum <"$DIR/BoardLauncher.swift")" "$(cksum <"$DIR/launcher-icon.py")"; }
 # 컴파일 실패를 기억하는 값 — 같은 소스·같은 컴파일러면 install마다 다시 시도하지 않는다.
 swift_failed_stamp() { printf '%s %s\n' "$(swift_stamp)" "$("${BOARD_LAUNCHER_SWIFTC:-swiftc}" --version 2>/dev/null | head -n 1)"; }
 
@@ -456,6 +457,10 @@ write_swift_launcher_app() { # $1=앱 경로 $2=shim 경로. 실패하면 SWIFT_
 <key>CFBundleIdentifier</key><string>$LAUNCHER_ID</string>
 <key>CFBundleName</key><string>Harness Board</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>$LAUNCHER_ID.view</string>
+<key>CFBundleURLSchemes</key><array><string>harness-board-view</string></array>
+</dict></array>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
@@ -614,6 +619,30 @@ command_launcher() {
   esac
 }
 
+# 격리(시험용) 보드 보기(#677): 이미 떠 있는 격리 보드를 창 앱의 시험용 창으로 띄운다. 서버·server.json은 건드리지 않는다.
+# 창 앱 판정은 launcher_kind를 쓰지 않는다 — shim을 $HM_DATA_DIR에서 찾으므로 격리 HARNESS_METRICS_DIR에서는 늘 없음이 된다.
+# 낡은 창 앱은 URL 스킴이 없어 요청을 버리므로 실패로 본다. 격리 데이터 디렉터리로 재빌드하면 shim·plugin-root가 임시 경로로
+# 써져 사용자 앱을 망치므로 다시 만들지 않고 안내만 한다. 명시적으로 창을 여는 명령이라 BOARD_NO_BROWSER와 상관없다.
+VIEW_URL_RE='^http://(127\.0\.0\.1|localhost):([0-9]{1,5})([/?#][^[:space:]]*)?$'
+command_view() {
+  if [[ $# -ne 1 ]] || ! [[ "$1" =~ $VIEW_URL_RE ]] || ((10#${BASH_REMATCH[2]} < 1 || 10#${BASH_REMATCH[2]} > 65535)); then
+    usage
+  fi
+  local url="$1" why="" request
+  request="harness-board-view://open?url=$(jq -rn --arg u "$url" '$u | @uri')"
+  if [[ "${BOARD_LAUNCHER_PLATFORM:-$(uname -s)}" != Darwin ]] || ! command -v open >/dev/null 2>&1; then
+    why="창 앱은 macOS에서만 씁니다"
+  elif ! launcher_ours || [[ ! -x "$LAUNCHER_APP/Contents/MacOS/harness-board" ]]; then
+    why="Harness Board 창 앱이 없습니다(미설치·브라우저로 여는 애플릿·같은 이름의 다른 앱)"
+  elif [[ "$(cat "$LAUNCHER_APP/Contents/Resources/launcher-build" 2>/dev/null)" != "$(swift_stamp)" ]]; then
+    why="창 앱이 이 플러그인보다 낡아 시험용 창을 열 수 없습니다. 사용자 보드를 한 번 열면(board.sh open) 다시 만들어집니다"
+  elif ! open -a "$LAUNCHER_APP" "$request" >/dev/null 2>&1; then
+    why="창 앱을 열지 못했습니다"
+  fi
+  [[ -z "$why" ]] || die "$why. 브라우저로 열지 않았습니다: $url — 창 앱은 /ai-harness:setup 또는 board.sh launcher install로 설치하고, 화면 확인은 헤드리스 Playwright로 하세요."
+  jq -cn --arg url "$url" --arg app "$LAUNCHER_APP" '{view: "window", url: $url, app: $app}'
+}
+
 # 할 일 저장(fcntl 잠금·600)은 보드 서버와 같은 agenda.py가 한다 — 셸과 서버가 동시에 써도 깨지지 않는다.
 command_todo() {
   case "${1:-}" in
@@ -646,6 +675,7 @@ cmd="${1:-open}"
 (($#)) && shift
 case "$cmd" in
   open) command_open "$@" ;;
+  view) command_view "$@" ;;
   stop) command_stop ;;
   host-stop) command_host_stop ;;
   status) command_status ;;
